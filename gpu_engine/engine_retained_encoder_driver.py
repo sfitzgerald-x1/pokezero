@@ -5,11 +5,13 @@ new lifecycle frame once, in the same call that invokes the real core. Two
 owners retain separate B-row observer states; physical stream IDs are never
 duplicated into an ambiguous2B observer batch.
 
-Current public callbacks cover only a basic consumer composition. The driver
-also calls the actual full retained fold and encode and reports their real
-errors/coverage. It does not copy basic public state into the full context or
-use an old observation after refusal. All current full/B4 flags remain false.
-Only a pure FAKE forward interface is exposed for source integration tests.
+The default basic path reports its actual retained-format refusal. An explicit
+retained-full path consumes source-derived raw controls and the full retained
+fold. Neither path copies basic public state into the full context or reuses an
+old observation after refusal. Raw unwritten-mask totals include intentional
+role-specific zero defaults; they are descriptive, not a completeness verdict.
+All current full/B4 flags remain false. Only a pure FAKE forward interface is
+exposed for source integration tests.
 """
 from dataclasses import dataclass
 import hashlib
@@ -33,7 +35,7 @@ SOURCE, PUBLIC_COMPONENT, FULL_PUBLIC, REQUEST, OWN, ENCODER, PENDING, CELLS, PU
 REASONS = {SOURCE:'source-lifecycle-unknown', PUBLIC_COMPONENT:'basic-public-consumer-refusal',
     FULL_PUBLIC:'retained-public-consumer-refusal', REQUEST:'actual-own-request-refusal',
     OWN:'own-facts-refusal', ENCODER:'retained-logical-writer-refusal', PENDING:'pending-numeric-columns',
-    CELLS:'unwritten-attended-writer-cells', PUBLIC_COVERAGE:'incomplete-public-line-consumers'}
+    CELLS:'nonzero-cell-without-writer', PUBLIC_COVERAGE:'incomplete-public-line-consumers'}
 
 
 class Core(NamedTuple):
@@ -191,6 +193,15 @@ def _public(observer, frame, tables, context, catalog):
         retained_healthy=healthy), p.projection, error
 
 
+def _full_public(observer, frame, tables, catalog, consume):
+    """Consume genuine full-format controls without relabeling basic state."""
+    result = consume(observer.projection, frame, tables, observer.retained, catalog)
+    projection = result.projection
+    healthy = observer.retained_healthy & (projection.error == 0) & projection.component_admitted
+    return observer._replace(projection=projection.state, retained=result.public,
+        retained_healthy=healthy), projection, projection.error
+
+
 def _own_encode(core, observer, catalog, own_tables):
     facts = own._device(core.engine, core.orders, core.requests, observer.owner, own_tables)
     encoded = own._encode(observer.retained, facts.facts, observer.owner, core.cursor.stream_id, catalog)
@@ -202,12 +213,19 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
     attended = a.attention_mask[:, :, None]
     numeric_missing = jnp.sum(attended & ~a.numeric_written, axis=(1, 2))
     categorical_missing = jnp.sum(attended & ~a.categorical_written, axis=(1, 2))
+    # These masks track explicit role-specific writes, not dense tensor
+    # completeness. The retained source initializes every row to zero; fields
+    # outside that token's role intentionally remain unwritten zero defaults.
+    # Column implementation is checked separately by pending columns/parity;
+    # never count these descriptive mask totals as missing encoder columns.
+    invalid_numeric = jnp.any(attended & ~a.numeric_written & (a.numeric_features != 0), axis=(1, 2))
+    invalid_categorical = jnp.any(attended & ~a.categorical_written & (a.categorical_ids != 0), axis=(1, 2))
     pending = jnp.full_like(core_admitted, encoded.pending_numeric_columns.shape[0] != 0)
     gates = ((SOURCE, ~core_admitted), (PUBLIC_COMPONENT, projection.error != 0),
         (FULL_PUBLIC, (public_error != 0) | ~observer.retained_healthy),
         (REQUEST, (facts.reason & own.SOURCE) != 0), (OWN, ~facts.admitted),
         (ENCODER, ~a.admitted), (PENDING, pending),
-        (CELLS, (numeric_missing != 0) | (categorical_missing != 0)),
+        (CELLS, invalid_numeric | invalid_categorical),
         (PUBLIC_COVERAGE, ~projection.full_line_consumers_complete))
     reason = jnp.zeros_like(observer.owner)
     for bit, missing in gates:
@@ -236,12 +254,16 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
         projection.full_line_consumers_complete, encoded.full_encoder_admitted, no)
 
 
-def prepare(request_compiled, own_compiled, *, fake_forward):
+def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
     The checked host API reruns guards before every cached device invocation.
+    The explicit retained-full mode consumes the full-format device adapter;
+    its remaining coverage and scientific qualification flags stay unchanged.
     """
+    if type(public_mode) is not str or public_mode not in ('basic', 'retained-full'):
+        raise ValueError('explicit basic or retained-full public mode required')
     record = own._checked(own_compiled)
     if record['request_compiled'] is not request_compiled or not callable(fake_forward):
         raise ValueError('same original request/OwnFacts producer and pure fake forward required')
@@ -253,21 +275,30 @@ def prepare(request_compiled, own_compiled, *, fake_forward):
         items=catalog.items, field_catalog=catalog.field, damage_tables=catalog.damage)
     public_handle = public.compile_projector(json.loads(request['metadata']), base_handle,
         species_catalog=catalog.species, source=catalog.source, context_tables=context)
+    check_public, register_public = public.check_projector, public.register
+    public_fast = lambda obs, frame: _public(obs, frame, public_handle.device, context, catalog)
+    if public_mode == 'retained-full':
+        from . import engine_full_v4_event_device as full
+        public_handle = full.compile_adapter(json.loads(request['metadata']), base_handle, catalog=catalog)
+        check_public, register_public = full.check_adapter, full.register
+        public_fast = lambda obs, frame: _full_public(obs, frame, public_handle.device,
+            catalog, full.project_and_fold)
     static = (request['rules'].device, request['adapter'].device,
         team._checked_tables(request['private_team']), request['catalog'].device, request['engine_table'])
     payload = dict(schema=SCHEMA, metadata=json.loads(request['metadata']), lifecycle=request['lifecycle'].binding,
         request=np.asarray(request_compiled.binding).tolist(), own=np.asarray(own_compiled.device.binding).tolist(),
-        encoder=np.asarray(catalog.binding).tolist(), forward='FAKE_ONLY')
+        encoder=np.asarray(catalog.binding).tolist(), forward='FAKE_ONLY', public_mode=public_mode)
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = Prepared(binding)
     _PREPARED[result] = dict(binding=binding, request_compiled=request_compiled, own_compiled=own_compiled,
         own=record, request=request, catalog=catalog, context=context, public=public_handle, fake=fake_forward,
+        public_mode=public_mode, check_public=check_public, register_public=register_public,
         frame=jax.jit(lambda core, act, chance: _frame(core, (None, base_handle.device, request['engine_table']), act, chance)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
         unsafe=jax.jit(lambda unsafe, state: unsafe | source._unsafe_history(state, request['rules'].device)),
-        public_fast=jax.jit(lambda obs, frame: _public(obs, frame, public_handle.device, context, catalog)),
+        public_fast=jax.jit(public_fast),
         encode_fast=jax.jit(lambda core, obs: _own_encode(core, obs, catalog, own_compiled.device)),
         score_fast=jax.jit(lambda obs, facts, encoded, projection, error, admitted:
             _score(obs, facts, encoded, projection, error, admitted, fake_forward)))
@@ -280,7 +311,7 @@ def _checked(prepared):
         raise ValueError('original prepared driver required')
     own._checked(r['own_compiled'])
     source._checked(r['request_compiled'])
-    public.check_projector(r['public'])
+    r['check_public'](r['public'])
     return r
 
 
@@ -312,7 +343,7 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
     observers = []
     for side in (0, 1):
         owners = jnp.full((b,), side, jnp.int32)
-        observers.append(Observer(owners, public.register(stream_ids, owners, compiled=r['public']),
+        observers.append(Observer(owners, r['register_public'](stream_ids, owners, compiled=r['public']),
             _basic_initialize(r['catalog'], r['context'], stream_ids),
             v4_encoder.initialize(r['catalog'], stream_ids=stream_ids, owner_sides=owners),
             jnp.ones(b, bool), jnp.zeros(b, jnp.int32)))
