@@ -85,20 +85,23 @@ def swap_own_view(actor, peer, vocab, *, move_facts=None):
     if move_facts is not None:
         from .showdown import (CATEGORY_BELIEF_MOVE_OFFSET, BELIEF_MOVE_BUCKET_COUNT,
             NUMERIC_OPP_MOVE_PP_OFFSET, NUMERIC_REVEALED_MOVE_COUNT,
-            NUMERIC_POSSIBLE_MOVE_COUNT)
+            NUMERIC_POSSIBLE_MOVE_COUNT, NUMERIC_OPP_MOVE_PP_VALID_OFFSET, v4_numeric_index)
         if len(move_facts) != 6:
             raise ValueError("six peer move records required")
         for index, facts in enumerate(move_facts, 7):
             categories[index, CATEGORY_BELIEF_MOVE_OFFSET:CATEGORY_BELIEF_MOVE_OFFSET + BELIEF_MOVE_BUCKET_COUNT] = 0
-            numeric[index, NUMERIC_OPP_MOVE_PP_OFFSET:NUMERIC_OPP_MOVE_PP_OFFSET + BELIEF_MOVE_BUCKET_COUNT] = 0
+            for bucket in range(BELIEF_MOVE_BUCKET_COUNT):
+                numeric[index, v4_numeric_index(NUMERIC_OPP_MOVE_PP_OFFSET + bucket)] = 0
+                numeric[index, v4_numeric_index(NUMERIC_OPP_MOVE_PP_VALID_OFFSET + bucket)] = 0
             for bucket, (move, pp_fraction) in enumerate(sorted(facts.items())):
                 label = "belief:possible_move:" + move
                 if bucket >= BELIEF_MOVE_BUCKET_COUNT or not vocab.is_enumerated(label):
                     raise ValueError("true move must have an exact champion vocabulary entry: " + label)
                 categories[index, CATEGORY_BELIEF_MOVE_OFFSET + bucket] = vocab.encode(label)
-                numeric[index, NUMERIC_OPP_MOVE_PP_OFFSET + bucket] = pp_fraction
-            numeric[index, NUMERIC_REVEALED_MOVE_COUNT] = len(facts)
-            numeric[index, NUMERIC_POSSIBLE_MOVE_COUNT] = len(facts)
+                numeric[index, v4_numeric_index(NUMERIC_OPP_MOVE_PP_OFFSET + bucket)] = pp_fraction
+                numeric[index, v4_numeric_index(NUMERIC_OPP_MOVE_PP_VALID_OFFSET + bucket)] = 1
+            numeric[index, v4_numeric_index(NUMERIC_REVEALED_MOVE_COUNT)] = len(facts)
+            numeric[index, v4_numeric_index(NUMERIC_POSSIBLE_MOVE_COUNT)] = len(facts)
     return replace(actor, categorical_ids=tuple(tuple(map(int, r)) for r in categories),
                    numeric_features=tuple(tuple(map(float, r)) for r in numeric),
                    attention_mask=tuple(map(bool, attention)),

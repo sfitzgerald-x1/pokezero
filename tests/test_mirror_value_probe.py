@@ -59,6 +59,23 @@ def observation(seat, marker):
 
 
 class MirrorContractTests(unittest.TestCase):
+    def test_privileged_move_patch_maps_v4_columns_and_preserves_other_facts(self):
+        from pokezero import showdown as s
+        vocab = CategoryVocabulary(("pokemon:self", "pokemon:opponent", "belief:possible_move:icebeam", "belief:possible_move:surf"))
+        actor, peer = observation("p1", 3), observation("p2", 7)
+        facts = [{"surf": 0., "icebeam": .6}] * 6
+        got = swap_own_view(actor, peer, vocab, move_facts=facts)
+        expected = np.asarray(peer.numeric_features[1:7]).copy()
+        for i in range(s.BELIEF_MOVE_BUCKET_COUNT):
+            expected[:, s.v4_numeric_index(s.NUMERIC_OPP_MOVE_PP_OFFSET+i)] = .6 if i == 0 else 0.
+            expected[:, s.v4_numeric_index(s.NUMERIC_OPP_MOVE_PP_VALID_OFFSET+i)] = 1. if i < 2 else 0.
+        expected[:, s.v4_numeric_index(s.NUMERIC_REVEALED_MOVE_COUNT)] = 2.
+        expected[:, s.v4_numeric_index(s.NUMERIC_POSSIBLE_MOVE_COUNT)] = 2.
+        np.testing.assert_array_equal(got.numeric_features[7:13], expected)
+        for row in got.categorical_ids[7:13]:
+            self.assertEqual(row[s.CATEGORY_BELIEF_MOVE_OFFSET:s.CATEGORY_BELIEF_MOVE_OFFSET+2],
+                (vocab.encode("belief:possible_move:icebeam"), vocab.encode("belief:possible_move:surf")))
+
     def test_champion_warmstart_preserves_exact_masked_mean_predictions(self):
         import torch
         from types import SimpleNamespace
