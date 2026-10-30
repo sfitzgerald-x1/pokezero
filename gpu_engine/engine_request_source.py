@@ -127,7 +127,8 @@ def load_source_rules(showdown_root, metadata, *, node='node'):
     origin=VerifiedRulesOrigin(str(Path(showdown_root).resolve()),str(node),
         json.dumps(payload['source_tree'],sort_keys=True),
         json.dumps(payload['compiled_tree'],sort_keys=True),payload['generator_sha256'])
-    _RULE_ORIGINS[rules]=(origin,rules.device,_RULES[rules][2])
+    _RULE_ORIGINS[rules]=(origin,rules.device,_RULES[rules][2],
+        (origin.root,origin.node,origin.source_tree_json,origin.compiled_tree_json,origin.generator_sha256))
     return rules
 
 
@@ -154,7 +155,10 @@ def _rules_origin(rules):
     if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('verified source rule origin must remain outside outer JIT')
     record=_rules(rules);origin=_RULE_ORIGINS.get(rules)
-    if (origin is None or origin[1] is not rules.device or origin[2]!=record[2]
+    if (origin is None or type(origin[0]) is not VerifiedRulesOrigin
+            or origin[1] is not rules.device or origin[2]!=record[2]
+            or (origin[0].root,origin[0].node,origin[0].source_tree_json,
+                origin[0].compiled_tree_json,origin[0].generator_sha256)!=origin[3]
             or origin[0].generator_sha256!=hashlib.sha256(Path(__file__).with_name('request_source_rules.cjs').read_bytes()).hexdigest()):
         raise ValueError('original rules from verified pinned-source loader required')
     return origin[0]
