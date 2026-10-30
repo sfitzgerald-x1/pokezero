@@ -66,6 +66,12 @@ def compile_species(source, dex, vocabulary, abilities, *, extra_species=()):
     # for an unaliased checkpoint category).
     spelling = {normalize_id(name): name for name in source.species_names if name}
     spelling.update({normalize_id(name): info.name for name,info in dex.species.items()})
+    if 'unown' in spelling:
+        # These source-enumerated wire forms are absent as separate dex rows.
+        # Keep the literal form for checkpoint categories; the existing source
+        # fallback supplies base stats/types and belief identities separately.
+        from pokezero.randbat_vocab import UNOWN_FORMES
+        spelling.update({normalize_id(name): name for name in UNOWN_FORMES})
     spelling.update({normalize_id(name): name for name in extra_species if name})
     names = ('',) + tuple(spelling[key] for key in sorted(spelling) if key)
     bases, hp, cats, types = [], [], [], []
