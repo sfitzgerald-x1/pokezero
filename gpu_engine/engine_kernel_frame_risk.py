@@ -5,9 +5,9 @@ already registered weather/Leftovers transports. Selection reads ORIGINAL
 immutable kernel columns, never a move-name roster or original simulator hooks.
 Other literal branch observations stick even after HP/effects revert.
 
-This NEW-only module is not wired into the kernel. Compilation binds identity
-and declared cutpoints ONLY. Root must wire/audit every actual caller, retain
-this SAME carry and compose genuine accounting and BOTH-owner drains. Zero risk,
+The optional actual kernel callers record these declared cutpoints. Compilation
+binds identity ONLY. The owning constructor/Core must retain this SAME carry
+and compose genuine accounting and BOTH-owner drains. Zero risk,
 all observed bits or a copied carry cannot establish exhaustive source coverage.
 There is deliberately no complete/admitted/exhaustive/qualification boolean API.
 """
@@ -55,6 +55,7 @@ class Branch(IntEnum):
 
 NON_WEATHER, SELF_EFFECT, BOOST, FIELD_VOLATILE, TARGET_OUTCOME, SELF_HP, BLOCKED_ACTION, TERMINAL, CONSTRUCTOR_STATE, NAMESPACE, ORDER, OVERFLOW, UPSTREAM = (1<<n for n in range(13))
 SCHEMA='pokezero.actual_kernel.frame_risk.declared.v1'
+UNKNOWN_KERNEL_RISK=1024
 _COMPILED=weakref.WeakKeyDictionary()
 
 
@@ -83,6 +84,12 @@ class Carry(NamedTuple):
     risk: object
     observed: object                   # bitset of declared cutpoints CALLED
     counts: object                     # [B,24], not public-event counts
+
+
+class Context(NamedTuple):
+    """PRIVATE execution.Context.risks carry; owning Core retains it explicitly."""
+    carry: Carry
+    tables: Tables
 
 
 class Outcome(NamedTuple):
@@ -292,3 +299,41 @@ def commit_rows(active,before,after):
     active=_vector(active,len(before.stream_id),jnp.bool_)
     return before._replace(**{name:jnp.where(active.reshape((len(active),)+(1,)*(old.ndim-1)),new,old)
         for name,old,new in zip(before._fields,before,after) if name not in ('binding','accounting_binding')})
+
+
+def context_on_tape(tape):
+    """Absent opt-in is inert; original execution ledger/tables are preserved."""
+    execution=getattr(tape,'execution',None)
+    context=getattr(execution,'risks',None)
+    if context is not None and type(context) is not Context:
+        raise ValueError('typed actual kernel risk context required')
+    return context
+
+
+def _on_tape(tape,observe,*args,**kwargs):
+    context=context_on_tape(tape)
+    if context is None:return tape
+    carry=observe(context.carry,tape,*args,context.tables,**kwargs)
+    active=_vector(kwargs['active'],len(carry.stream_id),jnp.bool_)
+    return tape._replace(execution=tape.execution._replace(risks=context._replace(carry=carry)),
+        refusal=tape.refusal|jnp.where(active&(carry.risk!=0),UNKNOWN_KERNEL_RISK,0))
+
+
+def pre_move_on_tape(tape,state,side,before,*,eligible,active):
+    return _on_tape(tape,observe_pre_move_device,state,side,before,eligible=eligible,active=active)
+
+
+def selected_on_tape(tape,move,*,eligible,active):
+    return _on_tape(tape,observe_selected_device,move,eligible=eligible,active=active)
+
+
+def outcome_on_tape(tape,outcome,*,eligible,active):
+    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active)
+
+
+def branch_on_tape(tape,branch,attempted,*,active):
+    return _on_tape(tape,observe_branch_device,branch,attempted,active=active)
+
+
+def end_on_tape(tape,state,*,active):
+    return _on_tape(tape,observe_end_device,state,active=active)
