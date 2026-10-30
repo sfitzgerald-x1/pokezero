@@ -30,7 +30,7 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
     def same(self,a,b):
         for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b)):np.testing.assert_array_equal(x,y)
 
-    def start(self,*,toxic=False,lethal=False,tie=False):
+    def start(self,*,toxic=False,lethal=False,tie=False,warmup=True):
         session=fixtures.WeatherHPRuntimeTests.construct(self,tie=tie)
         core=session.state.core
         # Establish the nonphysical current target with an ACTUAL clean
@@ -38,16 +38,20 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         # correctly trigger the separate uninstrumented entry-status family.
         clean=core.engine._replace(item=j.zeros_like(core.engine.item),
             moves=core.engine.moves.at[:,:,:,0].set(self.f.ids['raindance']))
-        warm=t.step_with_chance(clean,j.tile(j.array([[0,8]],j.int32),(2,1)),self.f.table,
-            self.f().chance(),_public_trace=life._tape(core.cursor,self.f.producer,64),
-            _lifecycle_trace=True,_weather_hp_context=(core.weather_profile,self.profile.device))
+        if warmup:
+            warm=t.step_with_chance(clean,j.tile(j.array([[0,8]],j.int32),(2,1)),self.f.table,
+                self.f().chance(),_public_trace=life._tape(core.cursor,self.f.producer,64),
+                _lifecycle_trace=True,_weather_hp_context=(core.weather_profile,self.profile.device))
+            current,birth,raw=warm.callbacks.cursor,warm.weather_profile,warm.step.state
+        else:
+            current,birth,raw=core.cursor,core.weather_profile,clean
         # Explicit component pre-state after a real installation. This proves
         # the next kernel write, not original Showdown status-hook history.
-        state=warm.step.state._replace(
-            status=warm.step.state.status.at[:,0,0].set(m.TOX if toxic else m.BRN).at[:,1,5].set(m.PSN),
-            status_counter=warm.step.state.status_counter.at[:,0,0].set(15 if toxic else 0))
+        state=raw._replace(
+            status=raw.status.at[:,0,0].set(m.TOX if toxic else m.BRN).at[:,1,5].set(m.PSN),
+            status_counter=raw.status_counter.at[:,0,0].set(15 if toxic else 0))
         if lethal:state=state._replace(hp=state.hp.at[:,0,0].set(1))
-        return state,warm.callbacks.cursor,warm.weather_profile
+        return state,current,birth
 
     def run_step(self,state,cursor,record,*,registered=True,prior=1,capacity=64,context=None,weather_data=None,actions=None):
         tape=life._tape(cursor,self.f.producer,capacity)._replace(refusal=j.full_like(cursor.turn,prior))
@@ -184,10 +188,10 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
             for row in range(2):self.assertTrue(bool((self.status_entries(result,row)==1).all()))
             self.assertFalse(bool(e.report(result.callbacks.execution.ledger,tables=self.accounting.device).scoped_drained.any()))
         # A different actual kernel family remains unhandled: newly arriving
-        # status on physical4 emits UNKNOWN_STATUS128 before residuals. The
-        # selected observer must preserve it and may not claim either span.
-        incoming=state._replace(status=state.status.at[:,1,4].set(m.PSN))
-        blocked=self.run_step(incoming,cursor,record,actions=[0,7])
+        # status on the original physical5 arrival emits UNKNOWN_STATUS128.
+        # The selected observer must preserve it and claim neither span.
+        incoming,entry_cursor,entry_record=self.start(warmup=False)
+        blocked=self.run_step(incoming,entry_cursor,entry_record,actions=[0,8])
         self.assertTrue(bool((blocked.callbacks.refusal&128).all()))
         for row in range(2):self.assertTrue(bool((self.status_entries(blocked,row)==1).all()))
         result=self.run_step(state,cursor,record,capacity=1)
