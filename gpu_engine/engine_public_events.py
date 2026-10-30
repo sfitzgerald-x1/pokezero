@@ -14,6 +14,7 @@ remain untrimmed but cannot manufacture target/called/locked lexical provenance.
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+from types import MappingProxyType
 from typing import NamedTuple
 import weakref
 
@@ -143,14 +144,37 @@ def _binding(value):
     return tuple(int(x) for x in a)
 
 
+def _immutable_tables(engine_table, public_moves):
+    """Require the real compiled types and immutable numerical leaves.
+
+    Object-edge identity cannot bind a writable NumPy buffer's contents.
+    No implicit coercion, copying, content fingerprinting or duck-typed holder
+    can stand in for the original compiled JAX tables at this host boundary.
+    """
+    from .transition import MoveTable
+    from .public_moves import MoveCatalog, MoveTables
+    def immutable(value):
+        if isinstance(value,jax.Array) and not isinstance(value,jax.core.Tracer):
+            return True
+        return value is None or (isinstance(value,tuple) and hasattr(value,'_fields')
+            and all(immutable(field) for field in value))
+    if (type(engine_table) is not MoveTable or not immutable(engine_table)
+            or type(public_moves) is not MoveCatalog or type(public_moves.device) is not MoveTables
+            or not immutable(public_moves.device) or type(public_moves.names) is not tuple
+            or type(public_moves.ids) is not MappingProxyType):
+        raise ValueError('real compiled holders with immutable JAX array leaves required')
+
+
 def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
     """Exact ID mapping; unsupported rows retain their original engine ID.
 
-    The constructor/metadata/engine-table relationship is a trusted host
-    boundary. Basic move table columns are checked here; this component does
-    not attest all engine mechanics tables or a live constructor. Retaining
-    exact array edges prevents a copied binding from admitting a replaced row.
+    The constructor/metadata/engine-table relationship and upstream public
+    compiler provenance are trusted host boundaries. Real compiled types and
+    immutable JAX leaves are required; these guards do not attest which upstream
+    factory minted them. Basic engine columns are checked, not every mechanic.
+    Retained exact array edges reject copied bindings on replaced runtime rows.
     """
+    _immutable_tables(engine_table,public_moves)
     if (type(exposure) is not HealthExposure or exposure.showdown_revision != SHOWDOWN
             or exposure.format_id != 'gen3randombattle' or exposure.report_percentages is not True
             or exposure.report_exact_hp is not False):
@@ -163,7 +187,7 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
             or len({normalize_id(s) for s in names}) != len(names)
             or len(metadata['moves']) != len(names)):
         raise ValueError('exact ordered engine move namespace required')
-    ids, targets = [0], [-1]
+    ids, targets, wire_names = [0], [-1], ['']
     for i, name in enumerate(names[1:], 1):
         row = metadata['moves'][i]
         if not isinstance(row, dict) or row.get('id') != name:
@@ -172,18 +196,29 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
         if info is not None and (normalize_id(info.id) != normalize_id(name)
                 or normalize_id(info.name) != normalize_id(name)):
             raise ValueError('dex move identity drift: ' + name)
-        public_id = public_moves.ids.get(normalize_id(name), 0)
+        # The engine's variable_moves treats Hidden Power suffixes as metadata
+        # aliases, not public move names. Pinned dex-data BasicEffect.realMove
+        # canonicalizes their runtime ID; Gen3 scripts.ts163-166 then prints
+        # literal 'Hidden Power', hiding type/power from both owners' MOVE.
+        key=normalize_id(name)
+        wire_key='hiddenpower' if key.startswith('hiddenpower') else key
+        wire_info=dex.move_info(wire_key) if wire_key!=key else info
+        if wire_info is not None and (normalize_id(wire_info.id)!=wire_key
+                or normalize_id(wire_info.name)!=wire_key):
+            raise ValueError('source lexical move identity drift: '+wire_key)
+        public_id = public_moves.ids.get(wire_key, 0)
         if type(public_id) is not int or public_id and (not 0 < public_id < len(public_moves.names)
-                or public_moves.names[public_id] != normalize_id(name)):
+                or public_moves.names[public_id] != wire_key):
             raise ValueError('public move namespace row drift')
-        target = (0 if info.target == 'self' else 1 if info.target in
-            ('normal', 'adjacentFoe', 'any', 'allAdjacentFoes', 'allAdjacent', 'randomNormal') else -1) if info else -1
+        target = (0 if wire_info.target == 'self' else 1 if wire_info.target in
+            ('normal', 'adjacentFoe', 'any', 'allAdjacentFoes', 'allAdjacent', 'randomNormal') else -1) if wire_info else -1
         # The source resolver documents the one Gen3 type-dependent case.
         # Never infer its target rewrite from a static row or physical types.
-        dynamic = bool(info and resolve_move_effect(info,()) != resolve_move_effect(info,('Ghost',)))
-        supported = bool(public_id and info and target >= 0 and not dynamic)
+        dynamic = bool(wire_info and resolve_move_effect(wire_info,()) != resolve_move_effect(wire_info,('Ghost',)))
+        supported = bool(public_id and info and wire_info and target >= 0 and not dynamic)
         ids.append(int(public_id) if supported else 0)
         targets.append(target if supported else -1)
+        wire_names.append(wire_key)
     checks = dict(power=[0]+[r['base_power'] for r in metadata['moves'][1:]],
         type=[0]+[r['type'] for r in metadata['moves'][1:]],
         physical=[False]+[r['category']=='Physical' for r in metadata['moves'][1:]])
@@ -195,7 +230,8 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
     engine = _binding(engine_metadata_binding(metadata))
     source, moves = _binding(public_moves.device.source_binding), _binding(public_moves.device.binding)
     payload = dict(schema=SCHEMA, exposure=asdict(exposure), engine=engine, source=source,
-        moves=moves, names=names, ids=ids, targets=targets, hp='gen3_percentage_mod_owner_exact_nearfull99_faint0fnt')
+        moves=moves, names=names, wire_names=wire_names, ids=ids, targets=targets,
+        hp='gen3_percentage_mod_owner_exact_nearfull99_faint0fnt')
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     catalog = Catalog(engine, source, moves, binding, tuple(ids), tuple(targets), engine_table, public_moves)
     _COMPILED[catalog] = (tuple(jax.tree.leaves(engine_table)), tuple(public_moves.device),
@@ -207,6 +243,8 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
 
 def check_catalog(catalog, engine_table, *, expected_binding, expected_engine_binding):
     record = _COMPILED.get(catalog) if type(catalog) is Catalog else None
+    if record is not None:
+        _immutable_tables(engine_table,catalog.public_moves)
     if (record is None or engine_table is not catalog.engine_table or expected_binding != catalog.binding
             or _binding(expected_engine_binding) != catalog.engine_binding
             or len(jax.tree.leaves(engine_table)) != len(record[0])

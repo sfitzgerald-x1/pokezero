@@ -1,6 +1,7 @@
 """Tiny authored callback/component fixtures, never games or B4 qualification."""
 from dataclasses import replace
 from copy import deepcopy
+from types import SimpleNamespace
 import unittest
 import numpy as np
 
@@ -58,6 +59,123 @@ class EnginePublicEventsTests(unittest.TestCase):
     def same_state(self,a,b):
         for key in a._fields:
             np.testing.assert_array_equal(getattr(a,key),getattr(b,key),err_msg=key)
+
+    def hp_fixture(self):
+        from pokezero.dex import ShowdownDex
+        from gpu_engine import variable_moves
+        names=['hiddenpower','hiddenpowerice','hiddenpowerfire']
+        dex=ShowdownDex(dict(self.dex.moves,**{name:replace(self.dex.moves['surf'],id=name,
+            name=label,type=typ,target='normal') for name,label,typ in zip(names,
+                ['Hidden Power','Hidden Power Ice','Hidden Power Fire'],['Normal','Ice','Fire'])}),{}, {})
+        public=self.p.compile_moves(self.host,dex,self.vocab)
+        metadata=deepcopy(self.metadata)
+        metadata['vocabulary']['types']=['_none','normal','fighting','flying','poison','ground','rock','bug','ghost',
+            'steel','fire','water','grass','electric','psychic','ice','dragon','dark']
+        metadata['vocabulary']['moves'].extend(names)
+        metadata['moves'].extend(dict(id=name,base_power=50,type=1,category='Physical') for name in names)
+        n=len(metadata['moves'])
+        table=self.engine_table._replace(power=self.j.array([0]+[r['base_power'] for r in metadata['moves'][1:]],self.j.int32),
+            type=self.j.array([0]+[1]*(n-1),self.j.int32),physical=self.j.array([False]+[True]*(n-1)),
+            accuracy=self.j.full((n,),100,self.j.int32),always_hit=self.j.ones((n,),bool),priority=self.j.zeros((n,),self.j.int32),
+            variable_moves=variable_moves.from_metadata(metadata))
+        catalog=self.e.compile_catalog(metadata,table,public_moves=public,dex=dex,exposure=self.exposure)
+        return metadata,table,dex,public,catalog
+
+    def test_compile_refuses_mutable_numpy_and_duck_typed_table_inputs(self):
+        for field,value in zip(self.engine_table._fields,self.engine_table):
+            if value is None:continue
+            table=self.engine_table._replace(**{field:np.array(value)})
+            with self.subTest(engine=field),self.assertRaises(ValueError):
+                self.e.compile_catalog(self.metadata,table,public_moves=self.catalog,dex=self.dex,exposure=self.exposure)
+        for field,value in zip(self.catalog.device._fields,self.catalog.device):
+            public=replace(self.catalog,device=self.catalog.device._replace(**{field:np.array(value)}))
+            with self.subTest(public=field),self.assertRaises(ValueError):
+                self.e.compile_catalog(self.metadata,self.engine_table,public_moves=public,dex=self.dex,exposure=self.exposure)
+        for table,public in ((SimpleNamespace(**self.engine_table._asdict()),self.catalog),
+            (self.engine_table,SimpleNamespace(**self.catalog.__dict__)),
+            (self.engine_table._replace(struggle=5),self.catalog)):
+            with self.subTest(duck=True),self.assertRaises(ValueError):self.e.compile_catalog(self.metadata,table,
+                public_moves=public,dex=self.dex,exposure=self.exposure)
+        readonly=np.array(self.engine_table.power);readonly.setflags(write=False)
+        with self.assertRaises(ValueError):self.e.compile_catalog(self.metadata,
+            self.engine_table._replace(power=readonly),public_moves=self.catalog,dex=self.dex,exposure=self.exposure)
+
+    def test_hot_jit_cannot_launder_replaced_public_edges_under_copied_binding(self):
+        public=self.p.compile_moves(self.host,self.dex,self.vocab)
+        catalog=self.e.compile_catalog(self.metadata,self.engine_table,public_moves=public,dex=self.dex,exposure=self.exposure)
+        expected=np.array(catalog.engine_binding,np.uint32)
+        compiled=self.jax.jit(lambda s,a,c:self.e.trace_step(s,a,self.engine_table,catalog=catalog,
+            expected_binding=catalog.binding,expected_engine_binding=expected,chance_inputs=c))
+        args=(self.state(),self.j.zeros((1,2),self.j.int32),self.chance())
+        compiled(*args)
+        original=public.device
+        for value in (np.array(original.max_pp),original.max_pp.at[1].add(999)):
+            counterfeit=original._replace(max_pp=value)
+            np.testing.assert_array_equal(counterfeit.binding,original.binding)
+            object.__setattr__(public,'device',counterfeit)
+            try:
+                with self.assertRaises(ValueError):self.e.check_catalog(catalog,self.engine_table,
+                    expected_binding=catalog.binding,expected_engine_binding=expected)
+                # The host projector must guard every returned tape even when
+                # an outer compiled closure reused its earlier traced code.
+                result=compiled(*args)
+                with self.assertRaises(ValueError):self.e.project(result.callbacks,battle=0,stream_id=1,owner=0,
+                    next_sequence=1,catalog=catalog,registry=self.registry(),expected_binding=catalog.binding,
+                    expected_engine_binding=expected)
+            finally:object.__setattr__(public,'device',original)
+        self.e.check_catalog(catalog,self.engine_table,expected_binding=catalog.binding,expected_engine_binding=expected)
+        self.assertEqual(compiled._cache_size(),1)
+
+    def test_hidden_power_missing_canonical_entry_refuses_without_variant_fallback(self):
+        from pokezero.dex import ShowdownDex
+        metadata,table,dex,public,_=self.hp_fixture()
+        no_base=ShowdownDex({k:v for k,v in dex.moves.items() if k!='hiddenpower'}, {}, {})
+        public_no_base=self.p.compile_moves(self.host,no_base,self.vocab)
+        for source,labels in ((no_base,public),(dex,public_no_base)):
+            catalog=self.e.compile_catalog(metadata,table,public_moves=labels,dex=source,exposure=self.exposure)
+            self.assertEqual(catalog.ids[-3:],(0,0,0))
+            self.assertEqual(len(catalog.ids),len(metadata['vocabulary']['moves']))
+
+    def test_hidden_power_actual_callbacks_canonical_name_privacy_hot_jit_and_consumer(self):
+        from gpu_engine import public_context_protocol as wire
+        metadata,table,dex,public,catalog=self.hp_fixture()
+        offset=len(self.metadata['moves'])
+        expected=np.array(catalog.engine_binding,np.uint32)
+        compiled=self.jax.jit(lambda s,a,c:self.e.trace_step(s,a,table,catalog=catalog,
+            expected_binding=catalog.binding,expected_engine_binding=expected,chance_inputs=c))
+        all_moves=[]
+        for move_id,hp_type,hp_power in ((offset,17,70),(offset+1,15,55),(offset+2,10,63)):
+            state=self.state()._replace(moves=self.j.full_like(self.state().moves,move_id),
+                hidden_power_type=self.j.full_like(self.state().hidden_power_type,hp_type),
+                hidden_power_power=self.j.full_like(self.state().hidden_power_power,hp_power))
+            result=compiled(state,self.j.zeros((1,2),self.j.int32),self.chance())
+            for owner in (0,1):
+                projection=self.e.project(result.callbacks,battle=0,stream_id=1,owner=owner,next_sequence=1,
+                    catalog=catalog,registry=self.registry(),expected_binding=catalog.binding,expected_engine_binding=expected)
+                moves=[event for event in projection.events if event.kind==self.i.Kind.MOVE]
+                self.assertEqual([public.names[event.payload[1]] for event in moves],['hiddenpower','hiddenpower'])
+                all_moves.append(np.array([event.words() for event in moves]))
+                addresses=wire.PublicAddresses({s:wire.PublicAddress(s,0,1) for s in (0,1)}, {})
+                for event in moves:
+                    actor='p1a: Snorlax' if event.actor_side==0 else 'p2a: Absol'
+                    target='p1a: Snorlax' if event.target_side==0 else 'p2a: Absol'
+                    source=wire.project_line(f'|move|{actor}|Hidden Power|{target}',sequence=event.sequence,
+                        turn=1,addresses=addresses,moves=public,abilities=self.abilities)
+                    np.testing.assert_array_equal(event.words(),source.events[0].words())
+                # Canonical source ID enters the existing PP/last-move consumer;
+                # typed metadata names never become public reveal facts.
+                moves_state=self.p.initialize(1,public.device)
+                for side in (0,1):moves_state,_=self.p.arrive(moves_state,public.device,side=side)
+                _,beliefs,mons=self.fixtures.PublicMovesTests.initial(self)
+                event=moves[0]
+                update=self.p.record_move(moves_state,beliefs,mons,public.device,self.host.device,
+                    side=0,slot=0,encounter=1,move_id=event.payload[1],caller=0,has_from=False,
+                    transformed=False,opposing_pressure=False,wire_target_side=1)
+                self.assertEqual(update.admitted.tolist(),[True])
+                self.assertEqual(int(update.state.move_ids[0,0,0,0]),public.move_id('hiddenpower'))
+                self.assertEqual(int(update.state.uses[0,0,0,0]),1)
+        self.assertEqual(compiled._cache_size(),1)
+        for moves in all_moves[1:]:np.testing.assert_array_equal(moves,all_moves[0])
 
     def test_same_real_core_and_actual_callback_order_without_private_slot_alias(self):
         state,chance=self.state(),self.chance()
