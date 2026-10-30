@@ -154,6 +154,40 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         for name in ('engine_binding','source_binding','move_binding','producer_binding'):
             self.assertEqual(getattr(result.callbacks,name).shape,(8,))
             self.same(getattr(result.callbacks,name),getattr(self.helper.device,name))
+    def test_default_numeric_ast_parent_identity_and_detect_changed_residual_input(self):
+        old=ast.parse(subprocess.check_output(['git','show','df4c0dc5:gpu_engine/transition.py'],text=True))
+        new=ast.parse(Path(t.__file__).read_text())
+        private={'_public_trace':None,'_lifecycle_trace':False,'_weather_trace':None,
+            '_status_trace':None,'_weather_hp_context':None,'_leftovers_context':None,
+            '_status_residual_context':None}
+        class Normalize(ast.NodeTransformer):
+            def truth(self,test):
+                names={v.id for v in ast.walk(test) if isinstance(v,ast.Name)}
+                if not names or not names<=set(private):return None
+                if any(isinstance(v,(ast.Call,ast.Attribute,ast.Subscript)) for v in ast.walk(test)):return None
+                return bool(eval(compile(ast.Expression(test),'<private-default-proof>','eval'),{'__builtins__':{}},private))
+            def visit_If(self,node):
+                result=self.truth(node.test)
+                if result is not None:
+                    out=[]
+                    for statement in node.body if result else node.orelse:
+                        value=self.visit(statement)
+                        if isinstance(value,list):out.extend(value)
+                        elif value is not None:out.append(value)
+                    return out
+                return self.generic_visit(node)
+            def visit_IfExp(self,node):
+                result=self.truth(node.test)
+                return self.visit(node.body if result else node.orelse) if result is not None else self.generic_visit(node)
+        dump=lambda tree:ast.dump(Normalize().visit(tree),include_attributes=False)
+        baseline=dump(old);self.assertEqual(dump(new),baseline)
+        # Negative control: the proof cannot silently erase changed NUMERICAL
+        # input outside the observer guards.
+        changed=ast.parse(Path(t.__file__).read_text())
+        call=next(v for v in ast.walk(changed) if isinstance(v,ast.Call) and isinstance(v.func,ast.Attribute)
+            and v.func.attr=='major_status_residual')
+        call.args[0]=ast.BinOp(call.args[0],ast.Add(),ast.Constant(1))
+        self.assertNotEqual(dump(changed),baseline)
 
 
 if __name__=='__main__':unittest.main()
