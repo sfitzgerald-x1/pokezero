@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 import pickle
 import random
+import subprocess
+import sys
 import tempfile
 import time
 from types import SimpleNamespace
@@ -533,6 +535,44 @@ class TrajectoryReferenceBridgeTests(unittest.TestCase):
         self.assertEqual(policy.stats.last_decision["phase"], "pool_startup")
         self.assertEqual(policy.stats.trajectories, 0)
         policy.close()
+
+
+class DependencyLightLegacyBridgeTest(unittest.TestCase):
+    def test_reference_bridge_runs_without_optional_numeric_dependencies(self):
+        # A fresh interpreter cannot borrow an optional module already imported
+        # by another test. Exercise the original reference suite as well as
+        # legacy configuration and serialization under the blocked imports.
+        script = r'''
+import importlib.abc
+import json
+import sys
+import unittest
+class NoNumericExtras(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in ('numpy', 'jax', 'torch'):
+            raise ModuleNotFoundError('optional dependency blocked: '+fullname, name=fullname)
+sys.meta_path.insert(0, NoNumericExtras())
+from pathlib import Path
+import pokezero.foulplay_bridge as bridge
+from pokezero.live_protocol_bridge import encoder_provenance
+config = bridge.ControlledFoulPlayConfig(checkpoint=Path('authored.pt'),
+    showdown_root=Path('authored-showdown'), policy_mode='raw')
+assert config.encoder_kind == 'legacy-mixed'
+assert encoder_provenance(config.encoder_kind)['public_wire_qualified'] is False
+from test_foulplay_trajectory_reference import TrajectoryReferenceBridgeTests
+result = unittest.TextTestRunner(verbosity=1).run(
+    unittest.defaultTestLoader.loadTestsFromTestCase(TrajectoryReferenceBridgeTests))
+assert result.testsRun > 0 and not result.skipped
+assert not any(name in sys.modules for name in ('numpy', 'jax', 'torch'))
+print(json.dumps(dict(tests=result.testsRun, skips=len(result.skipped))))
+raise SystemExit(not result.wasSuccessful())
+'''
+        root = Path(__file__).resolve().parents[1]
+        completed = subprocess.run([sys.executable, "-B", "-W", "error", "-c", script],
+            cwd=root, env={**bridge.os.environ, "PYTHONPATH": f"{root / 'src'}:{root / 'tests'}"},
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(json.loads(completed.stdout.splitlines()[-1])["skips"], 0)
 
 
 if __name__ == "__main__":

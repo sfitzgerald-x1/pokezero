@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import random
 import subprocess
@@ -786,8 +787,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         )
 
     def test_capture_cli_requires_showdown_root(self) -> None:
-        with self.assertRaises(SystemExit):
-            asyncio.run(async_capture_main(["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl"]))
+        with patch.dict(os.environ):
+            os.environ.pop("POKEZERO_SHOWDOWN_ROOT", None)
+            with self.assertRaises(SystemExit):
+                asyncio.run(async_capture_main(["--checkpoint", "checkpoint.pt", "--out", "pool.jsonl"]))
 
     def test_player_state_can_request_turn_merged_transitions(self) -> None:
         state = _ControlledBattleState(

@@ -33,6 +33,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from .actions import ACTION_COUNT
 from .belief import PublicBattleBeliefEngine
 from .category_vocab import CategoryVocabulary
+from .live_protocol_bridge import (OwningActorFactory, OwningWireSession,
+    encoder_provenance, require_actor_factory, require_session, validate_encoder_config)
 from .collection import RolloutRecord, write_rollout_record
 from .determinization import gen3_randbat_belief_start_override_planner
 from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION, protocol_signature_counts
@@ -957,7 +959,12 @@ class ControlledFoulPlayConfig:
     # action-only lifecycle records here; generic snapshots never reach disk.
     live_continuation_oracle_progress_dir: Path | None = None
 
+    # Source-only programmatic opt-in; no owning backend is assembled by CLI.
+    encoder_kind: str = "legacy-mixed"
+    owning_terminal_timeout_seconds: float = 5.0
+
     def __post_init__(self) -> None:
+        validate_encoder_config(self)
         if type(self.engine_policy_opponent) is not bool:
             raise ValueError("engine_policy_opponent must be boolean.")
         if self.engine_policy_opponent:
@@ -1887,6 +1894,8 @@ class ControlledFoulPlayGameResult:
     # Public terminal evidence only. Legacy callers without a witness remain explicit
     # by omission; a generic null-winner termination is not proof of a genuine draw.
     terminal_witness: Mapping[str, Any] | None = None
+    encoder_kind: str = "legacy-mixed"
+    encoder_provenance: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def outcome_score(self) -> float:
@@ -1901,6 +1910,8 @@ class ControlledFoulPlayGameResult:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "battle_id": self.battle_id,
+            "encoder_kind": self.encoder_kind,
+            "encoder_provenance": dict(self.encoder_provenance or encoder_provenance(self.encoder_kind)),
             "seed": self.seed,
             "winner": self.winner,
             "pokezero_won": self.pokezero_won,
@@ -2305,6 +2316,8 @@ class ControlledFoulPlayBenchmarkResult:
         )
         payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
+            "encoder_kind": self.config.encoder_kind,
+            "encoder_provenance": encoder_provenance(self.config.encoder_kind),
             "checkpoint": _checkpoint_path_label(self.config),
             "checkpoint_sha256": self.checkpoint_sha256,
             "capture_driver": self.config.capture_driver,
@@ -5865,11 +5878,13 @@ async def run_controlled_foulplay_benchmark(
     progress_callback: ControlledFoulPlayProgressCallback | None = None,
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
     phase_progress: FullgamePhaseProgress | None = None,
+    owning_actor_factory: OwningActorFactory | None = None,
     live_continuation_oracle_successor_capture_callback: Callable[[Mapping[str, Any]], None]
     | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run PokeZero vs foul-play with a known BattleStream seed and context-aware policy."""
 
+    actor_factory = require_actor_factory(config, owning_actor_factory)
     _validate_external_paths(config)
     if (
         live_continuation_oracle_successor_capture_callback is not None
@@ -5902,6 +5917,8 @@ async def run_controlled_foulplay_benchmark(
     if checkpoint is None:
         raise AssertionError("checkpoint driver validation must reject a missing checkpoint")
     checkpoint_sha256 = _checkpoint_sha256(config)
+    if actor_factory is not None and checkpoint_sha256 != actor_factory.contract.checkpoint_sha256:
+        raise ValueError("owning actor checkpoint differs from raw champion")
     model, result = load_transformer_checkpoint(checkpoint, map_location=config.device)
     value_model, value_result = model, result
     value_leaf_provenance: Mapping[str, object] | None = None
@@ -6033,6 +6050,8 @@ async def run_controlled_foulplay_benchmark(
             live_continuation_probe=live_continuation_probe,
             live_continuation_oracle_controller=live_continuation_oracle_controller,
             phase_progress=phase_progress,
+            **({"owning_actor_factory": actor_factory, "actor_runtime": (model, result, env_config)}
+               if actor_factory is not None else {}),
         )
         if config.policy_mode == "trajectory-reference":
             reference_result = benchmark_result
@@ -6083,6 +6102,8 @@ async def _run_controlled_foulplay_games(
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
     live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
     phase_progress: FullgamePhaseProgress | None = None,
+    owning_actor_factory: OwningActorFactory | None = None,
+    actor_runtime: tuple[Any, Any, Any] | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run a preconstructed legal policy through the shared FoulPlay bridge.
 
@@ -6092,6 +6113,9 @@ async def _run_controlled_foulplay_games(
     raw model directly instead of through a third opponent.
     """
 
+    actor_factory = require_actor_factory(config, owning_actor_factory)
+    if actor_factory is not None and (type(actor_runtime) is not tuple or len(actor_runtime) != 3):
+        raise ValueError("owning actor requires an explicit bound runtime")
     foulplay_random_seed_schedule = _per_seed_foulplay_random_seed_schedule(config, count=config.games)
 
     # ONCE PER RUN, before any game, and only when there IS a foul-play process: whether its
@@ -6168,6 +6192,8 @@ async def _run_controlled_foulplay_games(
                         live_continuation_probe=live_continuation_probe,
                         live_continuation_oracle_controller=live_continuation_oracle_controller,
                         phase_progress=phase_progress,
+                        **({"owning_actor_factory": actor_factory, "actor_runtime": actor_runtime}
+                           if actor_factory is not None else {}),
                     )
                 )
             finally:
@@ -7440,6 +7466,71 @@ async def _stop_foulplay_process(
 
 
 async def _run_single_game(
+    *, config: ControlledFoulPlayConfig,
+    owning_actor_factory: OwningActorFactory | None = None,
+    actor_runtime: tuple[Any, Any, Any] | None = None,
+    **kwargs: Any,
+) -> ControlledFoulPlayGameResult:
+    """Preserve the legacy loop; own every opt-in actor through final cleanup."""
+    factory = require_actor_factory(config, owning_actor_factory)
+    if factory is None:
+        if actor_runtime is not None:
+            raise ValueError("legacy-mixed cannot silently use an owning runtime")
+        return await _run_single_game_body(config=config, **kwargs)
+    seed = kwargs["seed"]
+    session = OwningWireSession(config, factory, actor_runtime, seed=seed,
+        battle_id=f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}", start_seed=showdown_seed_from_int(seed))
+    callback = kwargs.get("trajectory_callback")
+    captured: list[BattleTrajectory] = []
+    error: BaseException | None = None
+    try:
+        session.begin()
+        result = await _run_single_game_body(config=config, **{
+            **kwargs, "trajectory_callback": captured.append if callback is not None else None,
+            "owning_session": session,
+        })
+        session.check_terminal_deadline()
+    except BaseException as failure:
+        error = failure
+        raise
+    finally:
+        try:
+            provenance = session.close(failed=error is not None)
+            if error is not None:
+                error.owning_encoder_receipt = provenance
+        except BaseException as cleanup_error:
+            receipt = session.provenance(failed=True)
+            if error is None:
+                cleanup_error.owning_encoder_receipt = receipt
+                raise
+            error.owning_encoder_receipt = receipt
+            error.add_note(f"owning actor close error: {type(cleanup_error).__name__}")
+    try:
+        session.check_terminal_deadline()
+        terminal = _terminal_from_public_lines(session.owner_lines, config)
+        if terminal is None:
+            raise RuntimeError("actual owner terminal missing after actor close")
+        result = replace(result, encoder_kind=config.encoder_kind, encoder_provenance=provenance,
+            terminal_witness=_controlled_terminal_witness(session.owner_lines, terminal, config,
+                decision_rounds=result.decision_rounds))
+        session.check_terminal_deadline()
+        if callback is not None:
+            if len(captured) != 1:
+                raise RuntimeError("owning trajectory was not captured exactly once")
+            session.check_terminal_deadline()
+            callback(captured[0])
+        session.check_terminal_deadline()
+    except BaseException as publication_error:
+        receipt = session.provenance(failed=True)
+        if session.trajectory is not None:
+            session.trajectory.metadata = {**dict(session.trajectory.metadata),
+                'encoder_provenance': receipt}
+        publication_error.owning_encoder_receipt = receipt
+        raise
+    return result
+
+
+async def _run_single_game_body(
     *,
     config: ControlledFoulPlayConfig,
     bridge: _BattleBridge,
@@ -7458,7 +7549,9 @@ async def _run_single_game(
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
     live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
     phase_progress: FullgamePhaseProgress | None = None,
+    owning_session: OwningWireSession | None = None,
 ) -> ControlledFoulPlayGameResult:
+    require_session(config, owning_session)
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
     if phase_progress is not None:
         phase_progress.emit("game", "started", seed=seed, seat=config.pokezero_player)
@@ -7478,6 +7571,8 @@ async def _run_single_game(
             },
         ),
     )
+    if owning_session is not None:
+        owning_session.trajectory = state.trajectory
     await server.send_room_lines(
         battle_id,
         ["|init|battle", f"|title|{config.pokezero_username} vs. {config.foulplay_username}"],
@@ -7502,23 +7597,39 @@ async def _run_single_game(
     while terminal is None:
         if phase_progress is not None:
             phase_progress.emit("bridge_wait", "started", seed=seed, decision_round=decision_round)
-        event = await bridge.next_event()
+        event = (await bridge.next_event() if owning_session is None else
+                 await asyncio.wait_for(bridge.next_event(), timeout=owning_session.wait_timeout()))
         if phase_progress is not None:
             phase_progress.emit("bridge_wait", "returned", seed=seed, decision_round=decision_round)
         if event.get("battleId") != battle_id:
+            if owning_session is not None:
+                raise ValueError("foreign battle event in owning stream")
             continue
         event_type = event.get("type")
+        if owning_session is not None and event_type == "started":
+            owning_session.mark_started(event)
+            continue
         if event_type == "stream":
-            await _handle_stream_event(state, server, event, config=config)
-            terminal = _terminal_from_public_lines(state.public_lines, config)
+            await _handle_stream_event(state, server, event, config=config,
+                **({"owning_session": owning_session} if owning_session is not None else {}))
+            if owning_session is None:
+                terminal = _terminal_from_public_lines(state.public_lines, config)
+            else:
+                terminal = (_terminal_from_public_lines(owning_session.owner_lines, config)
+                            if owning_session.terminal_ready else None)
+                if terminal is None and _terminal_from_public_lines(state.public_lines, config) is not None:
+                    owning_session.wait_for_owner_terminal()
             continue
         if event_type == "ready":
-            requested_players = tuple(str(player) for player in event.get("requested") or ())
+            requested_players = (tuple(str(player) for player in event.get("requested") or ())
+                if owning_session is None else owning_session.requested(event))
             if not requested_players:
                 continue
             # Let protocol output from the final permitted choice settle before deciding this
             # battle exceeded the cap. A terminal win/tie follows that choice as a later event.
             if decision_round >= config.max_decision_rounds:
+                if owning_session is not None:
+                    raise RuntimeError("owning game round cap without actual owner terminal")
                 terminal = TerminalState(winner=None, turn_count=config.max_decision_rounds, capped=True)
                 break
             if phase_progress is not None:
@@ -7541,17 +7652,25 @@ async def _run_single_game(
                 live_continuation_probe=live_continuation_probe,
                 live_continuation_oracle_controller=live_continuation_oracle_controller,
                 phase_progress=phase_progress,
+                **({"owning_session": owning_session} if owning_session is not None else {}),
             )
             if phase_progress is not None:
                 phase_progress.emit("decision", "returned", seed=seed, decision_round=decision_round)
             decision_round += 1
             continue
         if event_type == "terminal":
+            if owning_session is not None:
+                owning_session.mark_terminal(event)
+                terminal = (_terminal_from_public_lines(owning_session.owner_lines, config)
+                            if owning_session.terminal_ready else None)
+                continue
             terminal = _terminal_from_public_lines(state.public_lines, config) or TerminalState(
                 winner=None,
                 turn_count=decision_round,
             )
             break
+        if owning_session is not None:
+            raise ValueError("unknown active-battle event in owning stream")
 
     if config.live_continuation_smoke and state.live_continuation_smoke_proof is None:
         raise LiveFoulPlayContinuationError(
@@ -7561,12 +7680,11 @@ async def _run_single_game(
         raise LiveFoulPlayContinuationError(
             "source game ended without a successful live FoulPlay continuation-oracle decision"
         )
-    await _notify_foulplay_terminal(
-        state=state,
-        server=server,
-        terminal=terminal,
-        config=config,
-    )
+    if owning_session is None:
+        await _notify_foulplay_terminal(state=state, server=server, terminal=terminal, config=config)
+    else:
+        await owning_session.terminal_io(lambda: _notify_foulplay_terminal(
+            state=state, server=server, terminal=terminal, config=config))
     winner_name = _winner_name(terminal, config)
     if state.trajectory is not None:
         state.trajectory.record_terminal(terminal)
@@ -7815,6 +7933,8 @@ async def _run_single_game(
                 "omniscient_protocol": list(state.public_lines),
                 "request_history": [[seat, line] for seat, line in state.request_history],
             }
+        if owning_session is not None:
+            owning_session.check_terminal_deadline()
         trajectory_callback(state.trajectory)
     if phase_progress is not None:
         phase_progress.emit("game", "returned", seed=seed, seat=config.pokezero_player,
@@ -8098,7 +8218,11 @@ async def _handle_stream_event(
     event: Mapping[str, Any],
     *,
     config: ControlledFoulPlayConfig,
+    owning_session: OwningWireSession | None = None,
 ) -> None:
+    require_session(config, owning_session)
+    if owning_session is not None:
+        owning_session.route_stream(event)
     stream = event.get("stream")
     raw_lines = event.get("lines")
     if not isinstance(stream, str) or not isinstance(raw_lines, list):
@@ -8114,7 +8238,10 @@ async def _handle_stream_event(
         if stream == config.foulplay_player:
             forwarded = [_line_for_foulplay(state, line) for line in lines]
             for chunk in _line_chunks_safe_for_foulplay(forwarded):
-                await server.send_room_lines(state.battle_id, chunk)
+                if owning_session is None:
+                    await server.send_room_lines(state.battle_id, chunk)
+                else:
+                    await owning_session.terminal_io(lambda: server.send_room_lines(state.battle_id, chunk))
                 if any(line.startswith("|request|") for line in chunk):
                     # THE START OF THE OPPONENT'S CLOCK, as precisely as the bridge can
                     # know it: the request that this round's choice answers has now been
@@ -8346,6 +8473,63 @@ async def _select_live_foulplay_decision(
     return choice, decision
 
 
+async def _handle_owning_decision_boundary(
+    *, config, bridge, server, state, session, decision_round, requested_players,
+    foulplay_process, foulplay_logs, phase_progress,
+) -> None:
+    """Raw own policy sees only its actor snapshot; FP coordination is separate."""
+    if state.battle_id != session.battle_id or state.seed != session.seed:
+        raise ValueError("owning boundary battle/seed mismatch")
+    snapshot = session.boundary(requested_players=requested_players,
+        decision_round=decision_round, requests=state.request_lines)
+    state.previous_requested_players = requested_players
+    choices = {}
+    owner = config.pokezero_player
+    if owner in requested_players:
+        if phase_progress is not None:
+            phase_progress.emit("candidate_policy", "started", seed=state.seed,
+                                seat=owner, decision_round=decision_round)
+        started = time.perf_counter()
+        decision = await asyncio.to_thread(session.actor.decide, snapshot,
+            rng=random.Random(f"{state.seed}:{owner}:{decision_round}"))
+        elapsed = time.perf_counter() - started
+        observation = session.actor.decision_observation(snapshot)
+        choices[owner] = session.actor.choice(snapshot)
+        if phase_progress is not None:
+            phase_progress.emit("candidate_policy", "returned", seed=state.seed,
+                                seat=owner, decision_round=decision_round)
+        decision = replace(decision, metadata={**dict(decision.metadata),
+            "policy_elapsed_seconds": elapsed,
+            "policy_elapsed_scope": "owning-encode-and-raw-selection",
+            "encoder_kind": config.encoder_kind,
+            "owner_prefix_sha256": snapshot.prefix_sha256,
+            "actor_namespace": snapshot.namespace})
+        state.trajectory.append(TrajectoryStep(player_id=owner,turn_index=decision_round,
+            observation=observation,legal_action_mask=observation.legal_action_mask,
+            action_index=decision.action_index,
+            metadata={"policy_id":decision.policy_id,**dict(decision.metadata)}))
+        state.decisions.append(decision)
+        state.pokezero_decision_players.append(owner)
+    if config.foulplay_player in requested_players:
+        # This legacy state is solely the external opponent's choice decoder;
+        # it never enters the owning actor, own context, tensor or trajectory.
+        player_state = _player_state(state, config.foulplay_player,
+            set_source=_resolved_belief_set_source(config))
+        choice, _ = await _select_live_foulplay_decision(config=config,server=server,
+            state=state,player_state=player_state,decision_round=decision_round,
+            foulplay_process=foulplay_process,foulplay_logs=foulplay_logs,
+            phase_progress=phase_progress)
+        choices[config.foulplay_player] = choice
+    if phase_progress is not None:
+        phase_progress.emit("submission", "started", seed=state.seed, decision_round=decision_round)
+    await bridge.send({"type":"choices","battleId":state.battle_id,"choices":choices})
+    if phase_progress is not None:
+        phase_progress.emit("submission", "returned", seed=state.seed, decision_round=decision_round)
+    if owner in choices:
+        state.pokezero_submitted_choice_players.append(owner)
+    session.next_round += 1
+
+
 async def _handle_decision_boundary(
     *,
     config: ControlledFoulPlayConfig,
@@ -8365,7 +8549,18 @@ async def _handle_decision_boundary(
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
     live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
     phase_progress: FullgamePhaseProgress | None = None,
+    owning_session: OwningWireSession | None = None,
 ) -> TerminalState | None:
+    require_session(config, owning_session)
+    if owning_session is not None:
+        if (opponent_policy is not None or live_continuation_probe is not None
+                or live_continuation_oracle_controller is not None):
+            raise ValueError("owning path forbids alternate opponents and continuation probes")
+        await _handle_owning_decision_boundary(config=config,bridge=bridge,server=server,
+            state=state,session=owning_session,decision_round=decision_round,
+            requested_players=requested_players,foulplay_process=foulplay_process,
+            foulplay_logs=foulplay_logs,phase_progress=phase_progress)
+        return None
     assert state.trajectory is not None
     pokezero_player = config.pokezero_player
     foulplay_player = config.foulplay_player
