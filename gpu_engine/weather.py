@@ -40,16 +40,28 @@ def effective(table,weather,abilities,hp):
     return jnp.where(suppressed,NONE,weather)
 
 
-def set_move(weather,counter,requested,*,eligible=True):
+def set_move(weather,counter,requested,*,eligible=True,_weather_trace=None,
+             _actor_side=None,_actor_physical=None,_move_id=None):
     # Gen 3 same-weather moves fail without refreshing either temporary or
     # permanent weather. A different weather replaces the current condition.
     change = jnp.asarray(eligible) & (requested != NONE) & (requested != weather)
+    if _weather_trace is not None:
+        from . import engine_weather_progress_callbacks as callbacks
+        new_weather,new_counter=jnp.where(change,requested,weather),jnp.where(change,5,counter)
+        trace=callbacks.move_weather(_weather_trace,_actor_side,_actor_physical,_move_id,
+            weather,new_weather,counter,new_counter,eligible=change)
+        return new_weather,new_counter,trace
     return jnp.where(change,requested,weather),jnp.where(change,5,counter)
 
 
-def residual_clock(weather,counter,*,eligible=True):
+def residual_clock(weather,counter,*,eligible=True,_weather_trace=None):
     ticking = jnp.asarray(eligible) & (weather != NONE) & (counter > 0)
     next_counter = jnp.where(ticking,counter-1,counter)
+    if _weather_trace is not None:
+        from . import engine_weather_progress_callbacks as callbacks
+        new_weather=jnp.where(ticking & (next_counter == 0),NONE,weather)
+        trace=callbacks.weather_clock(_weather_trace,weather,new_weather,counter,next_counter,eligible=eligible)
+        return new_weather,next_counter,trace
     return jnp.where(ticking & (next_counter == 0),NONE,weather),next_counter
 
 
