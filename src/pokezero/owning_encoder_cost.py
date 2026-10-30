@@ -21,6 +21,7 @@ from .recorded_encoder_corpus import _Prefix
 SCHEMA = 'pokezero.B3-owning-cost-prespec.v1'
 LEDGER_SCHEMA = 'pokezero.B3-owning-cost-ledger.v1'
 COUNT = 20
+PUBLIC_DISPATCH = 'one_literal_line_per_call_terminal_suffix_atomic'
 SOURCE_FILES = ('src/pokezero/owning_encoder_cost.py', 'scripts/owning_encoder_cost.py')
 META_FIELDS = {'event', 'battle_id', 'seed', 'root_id', 'decision_round_index', 'requested_players'}
 require, canonical, digest = study.require, study.canonical, study.digest
@@ -109,7 +110,7 @@ def validate_controls(spec, *, config_class=None):
     require(spec['controls'].get('owning_decision_timeout_seconds') == limit
         and type(spec['controls'].get('owning_decision_timeout_seconds')) in (int, float)
         and spec['controls'].get('owning_public_single_line') is True
-        and spec['execution'].get('public_dispatch') == 'one_literal_line_per_call',
+        and spec['execution'].get('public_dispatch') == PUBLIC_DISPATCH,
         'configured learner limit and canonical one-line dispatch must match')
     if config_class is None:
         from .foulplay_bridge import ControlledFoulPlayConfig
@@ -266,7 +267,8 @@ def prepare_cost(*, study_prespec, collection, selection, selection_metadata, so
         roster=roster, roster_sha256=digest(roster), roots=COUNT, seats=dict(p1=10,p2=10),
         decision_limit_seconds=spec['owning_decision_timeout_seconds'],
         timer_scope='selected_delta_single_lines_live_boundary_guard_173jax_encode_raw_FP32_selection_choice',
-        dispatch='configured_prospective_one_literal_per_call_not_historical_transport_chunks',
+        dispatch=PUBLIC_DISPATCH,
+        transport_scope='configured_prospective_dispatch_not_historical_transport_chunks',
         policy_history='fresh_per_root_zero_transition_tokens_window1_mean',
         setup_and_prior_prefix_priming='record_separately_no_warmup_or_discarded_selected_samples',
         factory_lifecycle='one_model_factory_catalog_both_owners_fresh_per_root_registration_config_and_session',

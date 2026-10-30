@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -94,7 +95,7 @@ class CostTests(unittest.TestCase):
         self.study_spec = dict(schema='pokezero.B3-owning-study-prespec.v2',
             owning_decision_timeout_seconds=.25,
             controls=dict(owning_decision_timeout_seconds=.25,owning_public_single_line=True),
-            execution=dict(public_dispatch='one_literal_line_per_call'),
+            execution=dict(public_dispatch='one_literal_line_per_call_terminal_suffix_atomic'),
             admission=dict(collection_sha256='c'*64,selection_sha256='a'*64,selection_metadata_sha256='b'*64))
         self.study_ref = self.put('study.json',self.study_spec)
         self.selection = dict(path='/authored/selection',sha256='a'*64)
@@ -188,6 +189,7 @@ class CostTests(unittest.TestCase):
 
     def test_fixed_hash_selection_distinct_battles_seat_balance_order_independent(self):
         rows = self.spec['roster']
+        self.assertEqual(self.spec['dispatch'],'one_literal_line_per_call_terminal_suffix_atomic')
         self.assertEqual(len({r['battle_id'] for r in rows}),20)
         self.assertEqual(sum(r['seat'] == 'p1' for r in rows),10)
         self.assertEqual(self.prepare(),self.spec)
@@ -225,6 +227,9 @@ class CostTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'must match'):cost.validate_controls(spec)
         spec = deepcopy(self.study_spec); spec['schema']='pokezero.B3-owning-study-prespec.v1'
         with self.assertRaisesRegex(ValueError,'prespec v2'):cost.validate_controls(spec)
+        for dispatch in ('one_literal_line_per_call','anything_else'):
+            spec=deepcopy(self.study_spec);spec['execution']['public_dispatch']=dispatch
+            with self.assertRaisesRegex(ValueError,'must match'):cost.validate_controls(spec)
 
     def test_real_entry_refuses_unmerged_control_api_before_any_runtime(self):
         @dataclass
@@ -391,6 +396,43 @@ class CostTests(unittest.TestCase):
             self.put('input.json',{})
             self.assertEqual(cli.main(['prepare','--input',str(self.root/'input.json'),'--out',str(self.root/'prepared.json')]),0)
             prepare.assert_called_once_with();run.assert_not_called()
+
+
+class ReviewedControlsIntegrationTests(unittest.TestCase):
+    def test_actual_v2_constructor_dispatch_is_accepted_exactly_without_runtime(self):
+        """Use the integrated v2 constructor or an explicit hash-bound source.
+
+        The optional source path supports review before the controls merge; it
+        never loads a model or invokes any runtime/encoder. CI uses its own
+        integrated constructor once v2 is present.
+        """
+        module=study
+        path=os.environ.get('POKEZERO_B3_REVIEWED_CONTROLS_STUDY_PATH')
+        if path:
+            expected=os.environ.get('POKEZERO_B3_REVIEWED_CONTROLS_STUDY_SHA256')
+            self.assertIsNotNone(expected,'explicit reviewed source hash required')
+            self.assertEqual(cost.file_sha(path),expected,'reviewed control source bytes drift')
+            spec=importlib.util.spec_from_file_location('pokezero._reviewed_cost_controls_fixture',path)
+            module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        if module.SPEC_SCHEMA != 'pokezero.B3-owning-study-prespec.v2':
+            self.skipTest('v2 controls not merged; supply explicit hash-bound reviewed source for integration test')
+        reference=dict(path='/authored/no-artifact-read',sha256='a'*64)
+        admission=dict(comparison=reference,scientific_review=reference,source_commit='b'*40,
+            selection_sha256='c'*64,selection_metadata_sha256='d'*64,collection_sha256='e'*64)
+        with (patch('subprocess.Popen',side_effect=AssertionError('no process')),
+              patch('subprocess.run',side_effect=AssertionError('no runtime')),
+              patch.object(cost,'_runtime',side_effect=AssertionError('no model/encoding')),
+              patch('pokezero.foulplay_bridge.ControlledFoulPlayConfig',Controls)):
+            prespec=module.make_prespec(study_id='authored-cost-controls-integration',
+                runtime={key:'/authored/'+key for key in module.RUNTIME_KEYS},admission=admission,
+                owning_decision_timeout_seconds=.25)
+            module.validate_prespec(prespec)
+            self.assertEqual(prespec['execution']['public_dispatch'],
+                'one_literal_line_per_call_terminal_suffix_atomic')
+            self.assertEqual(cost.validate_controls(prespec),.25)
+            for bad in ('one_literal_line_per_call','one_literal_line_per_call_with_arbitrary_exception'):
+                changed=deepcopy(prespec);changed['execution']['public_dispatch']=bad
+                with self.assertRaisesRegex(ValueError,'must match'):cost.validate_controls(changed)
 
 
 if __name__ == '__main__':unittest.main()

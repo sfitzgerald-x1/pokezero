@@ -12,7 +12,11 @@ by this producer.
 references, `collection` as the remote corrected-A2 collection directory and
 `source_commit` as the exact clean producer commit. The study must be the v2
 prespec with explicit positive `owning_decision_timeout_seconds`, identical
-control value and `owning_public_single_line=true`. Component timeouts such as
+control value, `owning_public_single_line=true`, and the exact reviewed
+`execution.public_dispatch=one_literal_line_per_call_terminal_suffix_atomic`.
+The cost prespec binds that same descriptor. The atomic terminal suffix
+exception does not affect these selected actionable, preterminal roots.
+Component timeouts such as
 FoulPlay's 1000 ms or the owner terminal timeout cannot substitute. Missing
 merged runtime fields refuse before loading the model.
 
