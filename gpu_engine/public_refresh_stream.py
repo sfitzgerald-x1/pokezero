@@ -19,7 +19,18 @@ STATUS,CANT,CURE,TEAM,FAINT,HP,CANT_OTHER=range(8,15)
 ITEM=15
 UPKEEP=16
 LAST_FAMILY=UPKEEP
-SCHEMA='pokezero.public_refresh_stream.v6'
+SCHEMA='pokezero.public_refresh_stream.v7'
+# HP keeps its CONDITION flags in bits0..1. An absorb heal additionally binds
+# the literal ability proc and healed address to its OUTCOME0 frame closure.
+HP_ABSORB=4
+
+
+def hp_absorb(word):
+    return (word&HP_ABSORB)!=0
+
+
+def hp_absorb_address(word):
+    return (word>>6)&1,(word>>3)&7,word>>7
 FAMILIES=('noop','arrival','move','turn','ability','trace','transform','status','sleep-cant','cure','team','faint','hp','other-cant','item','upkeep')
 
 
@@ -140,7 +151,15 @@ def metadata(code,line,events,lifecycle_tables,*,addresses=None,clause=False):
                 parser_match=int(_normalize_identifier(_species_from_ident(parts[2])) in registered)
             return (int(exact),bench,statuses[parts[3]],parser_match)
         common=next(e for e in events if e.kind==Kind.CONDITION)
-        return (control.payload[3],*common.payload[1:4])
+        flags=control.payload[3]
+        if parts[1]=='-heal' and all(confirmed) and normalize_id(confirmed[1]) in ('waterabsorb','voltabsorb'):
+            proc=next(e for e in events if e.kind==Kind.ABILITY)
+            if (confirmed[0]!=parts[2] or flags!=0 or proc.payload[2]!=0
+                    or (proc.target_side,proc.target_slot,proc.payload[0])!=(control.target_side,control.target_slot,control.payload[0])
+                    or not 0<proc.payload[1]<2**24):
+                raise ValueError('absorb HP closure requires its exact living healed ability proc')
+            flags=HP_ABSORB|(proc.target_slot<<3)|(proc.target_side<<6)|(proc.payload[1]<<7)
+        return (flags,*common.payload[1:4])
     return (0,0,0,0)
 
 
@@ -152,9 +171,12 @@ def metadata_ok(code,meta,*,lifecycle,clause=False):
     status=(flags>=0)&(flags<=6)&((flags&1)==0)&(a>=mon.SLEEP)&(a<=mon.TOXIC)&(b==0)&(c==0)
     status &= ((flags&2)==0)|(a==mon.SLEEP)
     cure=((flags==0)|(flags==1))&((a==0)|(a==1))&((flags==0)|(a==1))&(b>=mon.SLEEP)&(b<=mon.TOXIC)&jnp.where(clause,(c==0)|(c==1),c==0)
-    hp=((flags==0)|(flags==2)|(flags==3))&(a>=0)&(b>=0)&(a<=b)&(c>=mon.NONE)&(c<=mon.TOXIC)
+    absorb=hp_absorb(flags);_,slot,aid=hp_absorb_address(flags)
+    hp_flags=jnp.where(absorb,flags&3,flags)
+    hp=((hp_flags==0)|(hp_flags==2)|(hp_flags==3))&(a>=0)&(b>=0)&(a<=b)&(c>=mon.NONE)&(c<=mon.TOXIC)
+    hp &= ~absorb|((flags>=0)&(hp_flags==0)&(slot<6)&(aid>0))
     hp &= (b>0)|((a==0)&(c==mon.NONE))
-    hp &= (b==0)==(flags!=0)
+    hp &= (b==0)==(hp_flags!=0)
     return (code>=NOOP)&(code<=LAST_FAMILY)&jnp.where(code==NOOP,zero|shed,
         jnp.where(code==STATUS,status,jnp.where(code==CURE,cure,jnp.where(code==HP,hp,zero))))
 
@@ -165,7 +187,10 @@ def metadata_words_ok(code,meta):
     if code==NOOP:return zero or flags==1 and 0<=a<2 and 0<=b<6 and c>0
     if code==STATUS:return flags in (0,2,4,6) and mon.SLEEP<=a<=mon.TOXIC and b==c==0 and (not flags&2 or a==mon.SLEEP)
     if code==CURE:return flags in (0,1) and a in (0,1) and (flags==0 or a==1) and mon.SLEEP<=b<=mon.TOXIC and c in (0,1)
-    if code==HP:return flags in (0,2,3) and 0<=a<=b and mon.NONE<=c<=mon.TOXIC and (b>0 or a==c==0) and ((b==0)==(flags!=0))
+    if code==HP:
+        absorb=hp_absorb(flags);_,slot,aid=hp_absorb_address(flags);low=flags&3 if absorb else flags
+        return (low in (0,2,3) and (not absorb or flags>=0 and low==0 and slot<6 and aid>0)
+            and 0<=a<=b and mon.NONE<=c<=mon.TOXIC and (b>0 or a==c==0) and ((b==0)==(low!=0)))
     return zero
 
 
@@ -175,6 +200,8 @@ def common(state,row,*,status_kind,condition_kind,valid):
     ok=(state.common_seen==0)&jnp.where(hp,row[:,0]==condition_kind,status&(row[:,0]==status_kind))
     expected=jnp.where(code==CURE,mon.NONE,state.raw_meta[:,1])
     ok &= jnp.where(hp,jnp.all(data[:,1:4]==state.raw_meta[:,1:4],axis=-1),data[:,1]==expected)
+    marked=hp&hp_absorb(state.raw_meta[:,0]);side,slot,_=hp_absorb_address(state.raw_meta[:,0])
+    ok &= ~marked|((state.proc_seen==1)&(row[:,6]==side)&(row[:,7]==slot))
     use=valid&ok
     proof=jnp.concatenate((row[:,6:8],data),axis=-1)
     return state._replace(common_seen=jnp.where(use,1,state.common_seen),
@@ -291,12 +318,14 @@ def close_frame(state,beliefs,source_tables,control,control_side,valid,*,pending
     unsupported=(control_kind==tendency.FAINT)|(control_kind==tendency.CANT)|(control_kind==tendency.UPKEEP)
     expected_common=(state.family==STATUS)|(state.family==CURE)|(state.family==HP)
     ok &= state.common_seen==expected_common.astype(jnp.int32)
-    ok &= state.proc_seen==((state.family==NOOP)&((state.raw_meta[:,0]&1)!=0)).astype(jnp.int32)
+    absorb_hp=(state.family==HP)&hp_absorb(state.raw_meta[:,0])
+    ok &= state.proc_seen==(((state.family==NOOP)&((state.raw_meta[:,0]&1)!=0))|absorb_hp).astype(jnp.int32)
     expected=jnp.where(state.family==ARRIVAL,arrival,jnp.where(state.family==MOVE,control_kind==tendency.MOVE,
         jnp.where(state.family==TURN,control_kind==tendency.TURN,
         jnp.where(state.family==NOOP,~callback_main&~unsupported,
         jnp.where(state.family==UPKEEP,control_kind==tendency.UPKEEP,jnp.where(state.family==FAINT,control_kind==tendency.FAINT,
-        jnp.where((state.family==CANT)|(state.family==CANT_OTHER),control_kind==tendency.CANT,control_kind==tendency.OTHER)))))))
+        jnp.where((state.family==CANT)|(state.family==CANT_OTHER),control_kind==tendency.CANT,
+        jnp.where(absorb_hp,(control_kind==tendency.OUTCOME)&(control[:,7]==0),control_kind==tendency.OTHER))))))))
     ok &= expected
     proof=jnp.stack((control_side,control_kind,jnp.where(arrival,control[:,1],control[:,2]),
         control[:,3],control[:,5],control[:,4]),axis=-1)
