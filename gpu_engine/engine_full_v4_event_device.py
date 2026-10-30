@@ -9,7 +9,8 @@ It never reads a final BattleState or reconstructs a raw line.
 This is a format/component adapter, not complete engine instrumentation. Missing
 callbacks and UNKNOWN remain missing. Frames are consumed once by the owning
 driver; this lower primitive does not attest their origin or prevent replay.
-An expanded frame exceeding 64 events refuses the WHOLE row, without truncation.
+Expanded frames drain through fixed64-event chunks without truncation. A later
+chunk failure refuses the WHOLE frame, including its earlier accepted chunks.
 All scientific/full-encoder/B4 qualification flags remain false.
 """
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ class Tables(NamedTuple):
     conditions: object
     statuses: object
     cures: object
+    lum: object
     namespaces: Bindings
     binding: object
 
@@ -69,7 +71,7 @@ def compile_adapter(metadata, projector, *, catalog):
         raise ValueError('original engine/public FULL catalog move edge required')
     simple = public_context.compile_context(catalog.source, catalog.abilities, catalog.moves)
     lower = causal.compile_projector(metadata, projector, species_catalog=catalog.species,
-        source=catalog.source, context_tables=simple, status_events=True)
+        source=catalog.source, context_tables=simple, status_events=True, items=catalog.items)
     kwargs = v4_encoder.wire_kwargs(catalog)
     name = catalog.species.names[1]
     ident = ('p1a: '+name, 'p2a: '+name)
@@ -84,12 +86,16 @@ def compile_adapter(metadata, projector, *, catalog):
     allowed = {int(k) for k in (inputs.Kind.RAW_BEGIN, inputs.Kind.SWITCH_PRELUDE,
         inputs.Kind.MUDSHOT, inputs.Kind.NONPROC, inputs.Kind.TENDENCY,
         inputs.Kind.ACTIVE, inputs.Kind.TYPES, inputs.Kind.FIELD,
-        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC)}
+        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS)}
 
     def add(line, main_kind, before=prior):
         try:
-            _, projection = public_wire.project_line(before, line, **kwargs)
-            words = np.array([e.words() for e in projection.events], np.int32)
+            if isinstance(line, tuple):
+                _, projections = public_wire.project_lines(before, line, **kwargs)
+            else:
+                _, projection = public_wire.project_line(before, line, **kwargs)
+                projections = (projection,)
+            words = np.array([e.words() for p in projections for e in p.events], np.int32)
             indices = np.flatnonzero(words[:, 0] == int(main_kind))
             if (len(indices) != 1 or not 1 <= len(words) <= 64
                     or any(int(k) not in allowed | {int(main_kind)} for k in words[:, 0])):
@@ -112,6 +118,23 @@ def compile_adapter(metadata, projector, *, catalog):
     tokens=('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')
     statuses=np.array([0]+[add(f'|-status|{ident[0]}|{token}',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
     cures=np.array([0]+[add(f'|-curestatus|{ident[0]}|{token}|[msg]',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
+    lum = np.zeros((7, 2), np.int32)
+    if bool(lower.device.lum_events):
+        # Effective Gen3 inherited eatItem/onEat emits these genuine source
+        # lines in this order. Keep every raw begin/closure from the original
+        # writer, including multiple semantic events in one consume receipt.
+        for old_status in range(7):
+            for confusion in range(2):
+                if old_status == 0 and not confusion:
+                    continue
+                lines = [f'|-enditem|{ident[0]}|Lum Berry|[eat]']
+                if old_status:
+                    lines.append(f'|-curestatus|{ident[0]}|{tokens[old_status]}|[msg]')
+                if confusion:
+                    lines.append(f'|-end|{ident[0]}|confusion')
+                lum[old_status, confusion] = add(tuple(lines), inputs.Kind.ITEM)
+        if not np.all(lum[1:]) or lum[0, 1] == 0:
+            raise ValueError('FULL writer lacks exact Lum raw schemas')
     moves = np.zeros(len(catalog.moves.names), np.int32)
     targets = {}
     for pid, target in zip(projector.catalog.ids, projector.catalog.targets):
@@ -128,11 +151,11 @@ def compile_adapter(metadata, projector, *, catalog):
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
     payload = packed.tobytes()+np.array(lengths, np.int32).tobytes()+np.array(mains, np.int32).tobytes()
-    payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
+    payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
-        jnp.array(statuses), jnp.array(cures), ns, binding)
+        jnp.array(statuses), jnp.array(cures), jnp.array(lum), ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -169,6 +192,12 @@ def register(stream_ids, owners, *, compiled):
         jnp.zeros((stream_ids.shape[0], 2, 6), jnp.int32))
 
 
+class FrameChunks(NamedTuple):
+    words: object               # [bounded chunks,B,64,16]
+    valid: object               # [bounded chunks,B,64]
+    more: object                # [bounded chunks,B]
+
+
 class Projection(NamedTuple):
     state: StreamState
     chunk: inputs.EventChunk
@@ -178,6 +207,7 @@ class Projection(NamedTuple):
     full_line_consumers_complete: object
     full_encoder_admitted: object
     B4_qualified: object
+    frames: FrameChunks
 
 
 def _commit(ok, old, new):
@@ -212,6 +242,9 @@ def project_device(state, tape, before_registry, after_registry, tables):
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     width = tables.templates.shape[1]
+    # At most64 causal receipts, each expanding to at mostwidth events. This
+    # is a proven finite storage bound, not a smaller roster/cap/truncation.
+    capacity = 64*width
 
     def step(carry, index):
         words, count, sequence, turn, phase, slots, live, species, statuses, error, overflow = carry
@@ -225,6 +258,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
         ci = jnp.where(semantic[:, 12] == 1, 7, semantic[:, 11])
         key = jnp.where(condition, tables.conditions[jnp.clip(ci, 0, 7)], key)
         status_event = kind == int(inputs.Kind.STATUS)
+        lum_event = kind == int(inputs.Kind.ITEM)
         # This is a SAME-index causal receipt join, not a final-state join:
         # status-enabled lower mode forbids RAW_BEGIN and emits exactly one
         # semantic per accepted input. It never drops a receipt. The actual
@@ -233,9 +267,13 @@ def project_device(state, tape, before_registry, after_registry, tables):
         old_public_status = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(old_engine_status,0,6)]
         status_key=jnp.where(semantic[:,9]>0,tables.statuses[jnp.clip(semantic[:,9],0,6)],tables.cures[old_public_status])
         key=jnp.where(status_event,status_key,key)
+        lum_old_engine = tape.words[:,index,6]
+        lum_old_public = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(lum_old_engine,0,6)]
+        lum_key = tables.lum[lum_old_public,jnp.clip(tape.words[:,index,8],0,1)]
+        key=jnp.where(lum_event,lum_key,key)
         size = tables.length[key]; main = tables.main[key]
-        enough = (count <= 64-size) & (sequence <= 2**31-1-size)
-        overflow |= present & (error == 0) & (count > 64-size)
+        enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
+        overflow |= present & (error == 0) & (count > capacity-size)
         good = (key > 0) & enough
         error = jnp.where(present & (error == 0) & ~good, int(inputs.Error.PAYLOAD), error)
         schema = tables.templates[key]
@@ -256,13 +294,14 @@ def project_device(state, tape, before_registry, after_registry, tables):
         # lexical metadata or silently erase a different observed condition.
         previous_status=statuses[rows,safe,safe_slot]
         identity &= ~status_event | (old_public_status==previous_status)
+        identity &= ~lum_event | ((lum_old_public==previous_status) & live[rows,safe])
         error = jnp.where(present & (error == 0) & ~identity, int(inputs.Error.IDENTITY), error)
         use = present & (error == 0)
         next_species = species.at[rows, safe, safe_slot].set(
             jnp.where(arrival, semantic[:, 9], prior_species))
         next_status=jnp.where(arrival,semantic[:,15],jnp.where(condition,semantic[:,11],
-            jnp.where(status_event,semantic[:,9],jnp.where(faint,0,previous_status))))
-        status_written=arrival|condition|status_event|faint
+            jnp.where(status_event,semantic[:,9],jnp.where(faint|lum_event,0,previous_status))))
+        status_written=arrival|condition|status_event|faint|lum_event
         next_statuses=statuses.at[rows,safe,safe_slot].set(jnp.where(status_written,next_status,previous_status))
         current_slots = slots.at[rows, safe].set(jnp.where(arrival, new_slot, slots[rows, safe]))
         current_live = live.at[rows, safe].set(jnp.where(arrival, True, live[rows, safe]))
@@ -287,7 +326,8 @@ def project_device(state, tape, before_registry, after_registry, tables):
         target_side = result[:, :, 6]
         target_enc = current_slots[rows[:, None], jnp.clip(target_side, 0, 1)]+1
         addressed = ((kinds == int(inputs.Kind.ACTIVE)) | (kinds == int(inputs.Kind.TYPES))
-            | (kinds == int(inputs.Kind.SLEEP)))
+            | (kinds == int(inputs.Kind.SLEEP)) | (kinds == int(inputs.Kind.STATUS))
+            | (kinds == int(inputs.Kind.ITEM)))
         result = result.at[:, :, 8].set(jnp.where(addressed, target_enc, result[:, :, 8]))
         mud = kinds == int(inputs.Kind.MUDSHOT)
         ms, sl = address(schema[:, :, 9]); enc = jnp.where(ms >= 0, sl+1, 0)
@@ -302,9 +342,13 @@ def project_device(state, tape, before_registry, after_registry, tables):
             result = result.at[:, :, col].set(jnp.where(mud, value, result[:, :, col]))
         non = kinds == int(inputs.Kind.NONPROC)
         targeted = non & ((schema[:, :, 8] == 1) | (schema[:, :, 8] == 2))
+        berry = non & ((schema[:, :, 15] & 2) != 0)
         hp = jnp.where(arrival, semantic[:, 13], semantic[:, 9])
         maximum = jnp.where(arrival, semantic[:, 14], semantic[:, 10])
-        for col, value in ((9, subject), (10, new_slot), (11, semantic[:, 8]), (12, hp), (13, maximum)):
+        for col, value in ((9, subject), (10, new_slot), (11, semantic[:, 8])):
+            result = result.at[:, :, col].set(jnp.where(targeted | berry, value[:, None], result[:, :, col]))
+        # Berry NOTE addresses are targeted, but contain no condition HP data.
+        for col, value in ((12, hp), (13, maximum)):
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
         result = result.at[:, :, 9].set(jnp.where(toxic, semantic[:, 8, None], result[:, :, 9]))
@@ -323,7 +367,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
 
         def write(buffer, offset):
             valid = use & (offset < size)
-            at = jnp.minimum(count+offset, 63)
+            at = jnp.minimum(count+offset, capacity-1)
             return buffer.at[rows, at].set(jnp.where(valid[:, None], result[:, offset], buffer[rows, at])), None
         words, _ = jax.lax.scan(write, words, jnp.arange(width))
         live_next = current_live.at[rows, safe].set(jnp.where(faint, False, current_live[rows, safe]))
@@ -333,7 +377,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
             jnp.where(use[:, None, None], next_species, species),
             jnp.where(use[:, None, None],next_statuses,statuses),error, overflow), None
 
-    init = (jnp.zeros((b, 64, 16), jnp.int32), jnp.zeros(b, jnp.int32), state.sequence,
+    init = (jnp.zeros((b, capacity, 16), jnp.int32), jnp.zeros(b, jnp.int32), state.sequence,
         state.causal.cursor.turn, state.causal.cursor.phase, state.causal.cursor.public_slot,
         state.live, state.species, state.status,error, jnp.zeros(b, bool))
     (words, count, sequence, _, _, _, live, species,statuses,error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
@@ -341,10 +385,16 @@ def project_device(state, tape, before_registry, after_registry, tables):
     next_state = _commit(ok, state, StreamState(lower.state, sequence, live, species,statuses))
     next_state = next_state._replace(causal=next_state.causal._replace(admitted=state.causal.admitted & ok,
         cursor=next_state.causal.cursor._replace(admitted=state.causal.cursor.admitted & ok)))
-    valid = (jnp.arange(64)[None, :] < count[:, None]) & ok[:, None]
+    valid = (jnp.arange(capacity)[None, :] < count[:, None]) & ok[:, None]
     no = jnp.zeros(b, bool)
-    chunk = inputs.EventChunk(tape.stream_id, jnp.where(valid[:, :, None], words, 0), valid, no, *tables.namespaces)
-    return Projection(next_state, chunk, error, lower.refusal | jnp.where(overflow, engine.OVERFLOW, 0), ok, no, no, no)
+    packed = jnp.where(valid[:, :, None], words, 0).reshape((b,width,64,16)).transpose(1,0,2,3)
+    masks = valid.reshape((b,width,64)).transpose(1,0,2)
+    more = (count[None,:] > (jnp.arange(width)[:,None]+1)*64) & ok[None,:]
+    frames = FrameChunks(packed,masks,more)
+    # Compatibility view of the FIRST chunk. Consumers must drain frames;
+    # needs_more forbids encoding this prefix as a complete observation.
+    chunk = inputs.EventChunk(tape.stream_id, packed[0], masks[0], more[0], *tables.namespaces)
+    return Projection(next_state, chunk, error, lower.refusal | jnp.where(overflow, engine.OVERFLOW, 0), ok, no, no, no, frames)
 
 
 def project_frame(state, frame, tables):
@@ -361,7 +411,16 @@ class Consumed(NamedTuple):
 def project_and_fold(state, frame, tables, public, catalog):
     """Trusted device path into the ORIGINAL full retained public consumers."""
     projection = project_frame(state, frame, tables)
-    candidate, fold_error = v4_encoder.fold_chunk(public, projection.chunk, catalog)
+    def fold(carry, data):
+        current,error=carry
+        words,valid,more=data
+        def consume(_):
+            chunk=projection.chunk._replace(words=words,valid=valid,more=more)
+            candidate,failed=v4_encoder.fold_chunk(current,chunk,catalog)
+            return candidate,jnp.where(error!=0,error,failed)
+        # Padding slots are not protocol input and must not finalize a prefix.
+        return jax.lax.cond(jnp.any(valid),consume,lambda _:carry,None),None
+    (candidate,fold_error),_=jax.lax.scan(fold,(public,jnp.zeros_like(projection.error)),projection.frames)
     visibility = jnp.where(jnp.arange(2)[None, :] == state.causal.owner[:, None],
         public_toxic.EXACT, public_toxic.PERCENTAGE)
     same = ((public.cursor.sequence == state.sequence) & (public.cursor.stream_id == state.causal.cursor.stream_id)
@@ -377,7 +436,9 @@ def project_and_fold(state, frame, tables, public, catalog):
         cursor=next_state.causal.cursor._replace(admitted=state.causal.cursor.admitted & ok)))
     projection = projection._replace(state=next_state, error=error, component_admitted=ok,
         chunk=projection.chunk._replace(words=jnp.where(ok[:, None, None], projection.chunk.words, 0),
-            valid=projection.chunk.valid & ok[:, None]))
+            valid=projection.chunk.valid & ok[:, None],more=projection.chunk.more & ok),
+        frames=FrameChunks(jnp.where(ok[None,:,None,None],projection.frames.words,0),
+            projection.frames.valid & ok[None,:,None],projection.frames.more & ok[None,:]))
     return Consumed(projection, _commit_public(ok, public, candidate))
 
 

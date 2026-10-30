@@ -145,13 +145,16 @@ def _lum_update(state,table,eligible,_status_trace=None):
         if _status_trace is not None:return state,_status_trace
         return state
     for side in range(2):
-        if _status_trace is not None:
-            from . import engine_status_callbacks as callbacks
-            _status_trace=callbacks.unknown(_status_trace,eligible & (_active(state.hp,state,side)>0)
-                & table.items.lum[_active(state.item,state,side)] & (_active(state.status,state,side)!=m.NONE))
         result = held.consume_lum(table.items,_active(state.item,state,side),
             _active(state.status,state,side),_active(state.status_counter,state,side),
             _active(state.confusion_counter,state,side),_active(state.hp,state,side),eligible=eligible)
+        if _status_trace is not None:
+            from . import engine_item_callbacks as item_callbacks
+            old_item=_active(state.item,state,side)
+            _status_trace=item_callbacks.lum_consumed(_status_trace,side,state.active[:,side],
+                old_item,_active(state.status,state,side),result.status,
+                (_active(state.confusion_counter,state,side)>0) & (result.confusion==0),
+                eligible=result.item!=old_item)
         for name,value in zip(("item","status","status_counter","confusion_counter"),result):
             state = state._replace(**{name:_set_active(getattr(state,name),state,side,value)})
         state=state._replace(sleep_skipped=_set_active(state.sleep_skipped,state,side,
