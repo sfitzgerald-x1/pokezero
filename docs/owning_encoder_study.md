@@ -1,8 +1,9 @@
 # B3 owning Python versus JAX study
 
 This is source preparation for the objective's end-to-end encoder comparison.
-It does not authorize collection. The root workstream controls B2 admission,
-independent scientific reviews, runtime/cost admission and the eventual launch.
+It does not authorize collection. The root workstream controls the existing B2
+numeric gate, independent scientific producer/results reviews, prescribed
+compute/runtime controls and the eventual launch.
 A4 remains closed. Preparing a prespec consumes no games.
 
 The study uses the unchanged raw champion iteration 9375 (file SHA256
@@ -79,8 +80,10 @@ settings. The factory retains its source/Node/checkpoint and drift refusals.
 The output records observed precision/library versions. Node selected through
 PATH must match the configured executable because the Dex loader uses PATH.
 
-No command in this document is a launch request. The study wrapper does not
-grant the separate governing offline cost/runtime admission or merge authority.
+No command in this document is a launch request. This wrapper introduces no
+additional cost study or approval gate. The existing B2 numeric gate,
+independent scientific producer/results reviews and prescribed compute/runtime
+controls remain in force; the root workstream owns launches and merges.
 
 ## Durable outcomes and failure semantics
 
