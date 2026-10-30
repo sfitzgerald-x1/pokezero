@@ -6,6 +6,8 @@ actual-wire/runtime/B2 admission before any B3 scientific interpretation.
 """
 from dataclasses import dataclass
 import asyncio
+import hashlib
+import json
 import math
 import os
 import time
@@ -16,6 +18,18 @@ from .live_protocol_actor import (ActorContract, JaxBackend, LiveProtocolActor,
 
 
 ENCODERS = ('legacy-mixed', 'python-owning', 'jax-owning')
+
+
+def bridge_event_snapshot(event):
+    """Failure-only bounded envelope; never an actor input or feature."""
+    try:payload=json.dumps(event,sort_keys=True,separators=(',',':'),ensure_ascii=True)
+    except Exception:payload='[unserializable bridge event]'
+    def field(name,limit):
+        value=event.get(name) if isinstance(event,dict) else None
+        return value[:limit] if type(value) is str else None
+    return dict(event_type=field('type',128),battle_id=field('battleId',256),
+        message=field('message',2048),payload_json=payload[:8192],
+        payload_truncated=len(payload)>8192,payload_sha256=hashlib.sha256(payload.encode()).hexdigest())
 
 
 def encoder_provenance(kind):
@@ -125,6 +139,56 @@ class OwningWireSession:
         self.terminal_marker=False
         self.trajectory=None
         self.receipt=None
+        self.pending_choices={}
+        self.submission_id=None
+        self.submissions=0
+        self.acknowledged=0
+        self.ack_deadline=None
+        self.first_bridge_failure_event=None
+
+    def capture_event_failure(self,error,event=None,*,snapshot=None):
+        if self.first_bridge_failure_event is None:
+            self.first_bridge_failure_event=snapshot if snapshot is not None else bridge_event_snapshot(event)
+        error.add_note('owning bridge event: '+json.dumps(self.first_bridge_failure_event,sort_keys=True))
+
+    def reject_event(self,reason,event,*,error_type=ValueError):
+        error=error_type(reason)
+        self.capture_event_failure(error,event)
+        raise error
+
+    def prepare_submission(self,choices,*,requested_players,decision_round):
+        _require(not self.pending_choices and self.started and self.terminal_deadline is None
+            and type(decision_round) is int and 0<=decision_round<2**31
+            and decision_round==self.next_round==self.submissions,
+            'stale or overlapping owning submission')
+        _require(type(choices) is dict and set(choices)==set(requested_players) and bool(choices)
+            and set(choices)<={'p1','p2'} and all(type(choice) is str and choice.strip()
+                and len(choice)<=4096 and '\n' not in choice and '\r' not in choice for choice in choices.values()),
+            'exact bounded requested-player submissions required')
+        self.pending_choices=dict(choices)
+        self.submission_id=decision_round
+        self.submissions+=1
+        self.ack_deadline=time.monotonic()+120.  # Existing transport wait bound, never refreshed by events.
+        return self.submission_id
+
+    def acknowledge(self,event):
+        try:
+            _require(type(event) is dict and set(event)=={'type','battleId','player','choice','submissionId'}
+                and event['type']=='choice_ack' and event['battleId']==self.battle_id,
+                'literal owning choice acknowledgement envelope required')
+            _require(type(event['submissionId']) is int and 0<=event['submissionId']<2**31
+                and event['submissionId']==self.submission_id
+                and type(event['player']) is str and event['player'] in self.pending_choices
+                and type(event['choice']) is str and event['choice']==self.pending_choices[event['player']],
+                'foreign, stale, duplicate or mismatched owning choice acknowledgement')
+            self.wait_timeout()
+            del self.pending_choices[event['player']]
+            self.acknowledged+=1
+            if not self.pending_choices:self.ack_deadline=None
+            self.check_terminal_deadline()
+        except BaseException as error:
+            self.capture_event_failure(error,event)
+            raise
 
     def begin(self):
         self.actor.begin_game(battle_id=self.battle_id,owner=self.owner,seed=self.seed,
@@ -220,14 +284,16 @@ class OwningWireSession:
 
     @property
     def terminal_ready(self):
-        return self.started and set(self.terminal_streams)=={'p1','p2','omniscient'} and self.terminal_marker
+        return (self.started and set(self.terminal_streams)=={'p1','p2','omniscient'}
+            and self.terminal_marker and not self.pending_choices)
 
     def wait_timeout(self):
-        if self.terminal_deadline is None:
+        deadlines=[d for d in (self.terminal_deadline,self.ack_deadline) if d is not None]
+        if not deadlines:
             return 120.
-        remaining=self.terminal_deadline-time.monotonic()
+        remaining=min(deadlines)-time.monotonic()
         if remaining <= 0:
-            raise TimeoutError('actual owning terminal drain deadline expired')
+            raise TimeoutError('actual owning terminal/acknowledgement deadline expired')
         return remaining
 
     def check_terminal_deadline(self):
@@ -278,4 +344,7 @@ class OwningWireSession:
             owner_terminal_timeout_seconds=self.config.owning_terminal_timeout_seconds,
             owning_decision_timeout_seconds=self.config.owning_decision_timeout_seconds,
             owning_public_single_line=self.config.owning_public_single_line,
+            choice_acknowledgements=dict(submissions=self.submissions,acknowledged=self.acknowledged,
+                pending_players=sorted(self.pending_choices),last_submission_id=self.submission_id),
+            first_bridge_failure_event=self.first_bridge_failure_event,
             actor_receipt=self.receipt)

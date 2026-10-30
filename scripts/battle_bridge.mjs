@@ -1870,7 +1870,15 @@ async function sendChoice(command) {
   emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
 }
 
-async function submitChoices(battle, choices, receivedAt) {
+function choiceSubmissionId(command) {
+  if (!Object.prototype.hasOwnProperty.call(command, "submissionId")) return undefined;
+  if (!Number.isSafeInteger(command.submissionId) || command.submissionId < 0 || command.submissionId >= 2 ** 31) {
+    throw new Error("submissionId must be a bounded nonnegative control-plane integer.");
+  }
+  return command.submissionId;
+}
+
+async function submitChoices(battle, choices, receivedAt, submissionId = undefined) {
   if (!choices || typeof choices !== "object") {
     throw new Error("Choices must be an object keyed by player.");
   }
@@ -1882,13 +1890,14 @@ async function submitChoices(battle, choices, receivedAt) {
       throw new Error(`Choice for ${player} must be a non-empty string.`);
     }
     await battle.streams[player].write(choice);
-    emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
+    emit({ type: "choice_ack", battleId: battle.battleId, player, choice,
+      ...(submissionId === undefined ? {} : {submissionId}) });
   }
 }
 
 async function sendChoices(command) {
   const battle = requireBattle(command);
-  await submitChoices(battle, command.choices, process.hrtime.bigint());
+  await submitChoices(battle, command.choices, process.hrtime.bigint(), choiceSubmissionId(command));
 }
 
 async function endBattle(command) {
