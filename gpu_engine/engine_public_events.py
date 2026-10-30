@@ -93,12 +93,18 @@ def initialize(batch, capacity=64, *, catalog):
 def _append(tape, kind, actor_side, actor_slot, target_side, target_slot, values, eligible):
     """Trusted device callback primitive; never a caller's state-diff adapter."""
     rows = jnp.arange(tape.count.shape[0])
+    lifecycle=hasattr(tape,'event_turn')
+    if lifecycle:
+        eligible=eligible&tape.cursor.admitted
     columns = [jnp.full_like(tape.count, kind), actor_side, actor_slot, target_side, target_slot, *values]
     value = jnp.stack(columns, axis=-1)
     room = tape.count < tape.words.shape[1]
     index = jnp.minimum(tape.count, tape.words.shape[1]-1)
     previous = tape.words[rows, index]
     words = tape.words.at[rows, index].set(jnp.where((eligible & room)[:, None], value, previous))
+    if lifecycle:
+        from .engine_lifecycle_callbacks import stamp
+        tape=stamp(tape,index,eligible&room)
     return tape._replace(words=words, count=tape.count+(eligible & room).astype(jnp.int32),
         refusal=tape.refusal | jnp.where(eligible & ~room, OVERFLOW, 0))
 
