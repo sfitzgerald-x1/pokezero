@@ -59,10 +59,16 @@ def projected_pair_arrays(pair):
 
 class ProjectedParityTally:
     """Atomic per-view accumulation, separate from trusted-source ParityTally."""
-    def __init__(self, *, expected_views):
+    def __init__(self, *, expected_views, pair_arrays=None, reference_json=None,
+                 reference_hash_key='regenerated_reference_sha256'):
         if type(expected_views) is not int or expected_views <= 0:
             raise ValueError('fixed positive expected view count required')
         self.expected_views = expected_views
+        # Saved actual captures use their own strict envelope validator and
+        # reference accessor; the projected default remains unchanged.
+        self.pair_arrays = pair_arrays or projected_pair_arrays
+        self.reference_json = reference_json or (lambda pair: pair.regenerated_reference_json)
+        self.reference_hash_key = reference_hash_key
         self.ids, self.roles, self.rounds, self.latest = set(), set(), {}, {}
         self.rows = 0
         self.numeric_bad = np.zeros(132, np.int64)
@@ -75,7 +81,7 @@ class ProjectedParityTally:
         self.lineage = _Prefix()
 
     def add(self, pair, *, actual_forward=None, reference_forward=None):
-        got, ref = projected_pair_arrays(pair)
+        got, ref = self.pair_arrays(pair)
         role = (pair.battle_id, pair.seat, pair.decision_round_index)
         root = (pair.battle_id, pair.decision_round_index)
         owner = (pair.battle_id, pair.seat)
@@ -102,7 +108,7 @@ class ProjectedParityTally:
         lineage = self.lineage.append([dict(decision_id=pair.decision_id, battle_id=pair.battle_id,
             seat=pair.seat, decision_round_index=pair.decision_round_index,
             source_prefix_sha256=pair.source_prefix_sha256, own_request_sha256=digest(_packet(pair.own_request_json)),
-            regenerated_reference_sha256=digest(_packet(pair.regenerated_reference_json)),
+            **{self.reference_hash_key: digest(_packet(self.reference_json(pair)))},
             original_reference_sha256=pair.original_reference_sha256)])
         # All refusal paths precede accumulator mutation.
         self.ids.add(pair.decision_id)
