@@ -272,13 +272,15 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 
 
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
-                     chance_inputs: ChanceInputs, *, _public_trace=None) -> StepResult:
+                     chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
     This seam does not itself enumerate or certify probabilities. PRNG keys
     advance identically to the sampled API but do not choose semantic outcomes.
     """
+    if _lifecycle_trace and _public_trace is None:
+        raise ValueError('lifecycle mode requires its actual registered callback tape')
     batch = state.hp.shape[0]
     shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,))
     for value,shape in zip(chance_inputs,shapes,strict=True):
@@ -299,8 +301,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         from . import engine_public_events as public_callbacks
         # Diagnostic receipts only. Uninstrumented consumers keep every trace
         # partial; this must never authorize a full observation or B4 gate.
+        if _lifecycle_trace:
+            from . import engine_lifecycle_callbacks as lifecycle_callbacks
+            _public_trace=lifecycle_callbacks.begin(_public_trace,state,live,invalid)
         _public_trace = _public_trace._replace(
-            turn=state.turn+(live & ~replacement).astype(jnp.int32),
+            turn=_public_trace.turn if _lifecycle_trace else state.turn+(live & ~replacement).astype(jnp.int32),
             refusal=_public_trace.refusal | jnp.where(live,public_callbacks.UNINSTRUMENTED,0)
                 | jnp.where(invalid,public_callbacks.INVALID_ACTION,0))
     resuming = live & state.pending_residual
@@ -370,6 +375,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         old_active = work.active[rows,side]
         continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         do_switch = switches[rows,side] & continues & (~switch_faint | replacement)
+        if _lifecycle_trace:
+            switch_baton=work.baton_pass[rows,side]
         installed = installed.at[rows,side].set(do_switch)
         work = passing.copy_to_recipient(work,side,target[rows,side],
             eligible=do_switch & work.baton_pass[rows,side])
@@ -378,6 +385,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             baton_pass=work.baton_pass.at[rows,side].set(work.baton_pass[rows,side] & ~do_switch),
             forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])),
             active_turns=work.active_turns.at[rows,side].set(jnp.where(do_switch,0,work.active_turns[rows,side])))
+        if _lifecycle_trace:
+            _public_trace=lifecycle_callbacks.installed(_public_trace,work,side,old_active,target[rows,side],
+                eligible=do_switch,replacement=replacement,baton=switch_baton)
         work=history.record_switch(work,side,target[rows,side],eligible=do_switch)
         # insertChoice snapshots each incoming callback's Speed now; a later
         # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
@@ -836,6 +846,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     active_alive = jnp.all(work.hp[rows[:,None],sides,work.active]>0,axis=1)
     defer_residual = turn_context & parties_alive & (~active_alive | paused)
     residual_ready = turn_context & parties_alive & active_alive & ~paused
+    if _lifecycle_trace:
+        # Source runAction('residual') adds its blank separator before handlers.
+        _public_trace=lifecycle_callbacks.action_end(_public_trace,residual_ready)
     # Snapshot before Wish(order7), weather(order8), and order10 handlers.
     end_speed = _speeds(work,table)
     if table.sustain is not None:
@@ -946,6 +959,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work=work._replace(truant_loaf=work.truant_loaf.at[rows,side,active].set(jnp.where(tick,~old,old)))
     if table.solar_beam is not None:
         work=charging.residual(work,eligible=ordinary)
+    if _lifecycle_trace:
+        _public_trace=lifecycle_callbacks.finish(_public_trace,work,live=live,replacement=replacement,
+            pending_before=state.pending_residual,residual_ready=residual_ready,
+            defer_residual=defer_residual,turn_context=turn_context)
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
         work.volatile & jnp.uint32(~(FLINCH|FOCUS_PUNCH|FOCUS_LOST) & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
