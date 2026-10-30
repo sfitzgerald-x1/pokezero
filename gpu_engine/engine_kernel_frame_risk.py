@@ -240,9 +240,14 @@ def observe_constructor_device(carry,tape,state,tables,*,active):
 def observe_pre_move_device(carry,tape,state,side,before,tables,*,eligible,active):
     if type(before) is not mechanics.BeforeMove:raise ValueError('literal actual BeforeMove result required')
     b=len(carry.stream_id);side=_vector(side,b);eligible=_vector(eligible,b,jnp.bool_)
-    confusion=state.confusion_counter[jnp.arange(b),jnp.clip(side,0,1),state.active[jnp.arange(b),jnp.clip(side,0,1)]]
-    bad=eligible&(~before.can_act|before.confusion_self_hit|(confusion>0))
-    return _observe(carry,tape,tables,Branch.PRE_MOVE,jnp.where(bad,BLOCKED_ACTION,0)|jnp.where((side<0)|(side>1),NAMESPACE,0),active=active)
+    accounting._shape(state.active,(b,2),jnp.int32)
+    accounting._shape(state.confusion_counter,(b,2,6),jnp.int32)
+    rows=jnp.arange(b);safe_side=jnp.clip(side,0,1);physical=state.active[rows,safe_side]
+    address=(side>=0)&(side<2)&(physical>=0)&(physical<6)
+    confusion=state.confusion_counter[rows,safe_side,jnp.clip(physical,0,5)]
+    bad=eligible&address&(~before.can_act|before.confusion_self_hit|(confusion>0))
+    return _observe(carry,tape,tables,Branch.PRE_MOVE,jnp.where(bad,BLOCKED_ACTION,0)
+        |jnp.where(eligible&~address,NAMESPACE,0),active=active)
 
 
 def observe_selected_device(carry,tape,move,tables,*,eligible,active):

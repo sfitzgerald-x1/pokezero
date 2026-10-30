@@ -105,6 +105,26 @@ class KernelFrameRiskTests(unittest.TestCase):
         self.assertTrue(bool((observed.risk&r.OVERFLOW).all()))
         self.assertEqual(observed.counts[:,int(r.Branch.RECOIL)-1].tolist(),[2**31-1]*2)
 
+    def test_pre_move_physical_bounds_typed_storage_eligible_rows_and_hot_jit(self):
+        carry,tape,state=self.boundary(8)
+        before=mechanics.BeforeMove(j.zeros(8,j.int32),j.zeros(8,j.int32),j.zeros(8,j.int32),
+            j.ones(8,bool),j.zeros(8,bool))
+        active=state.active.at[0,0].set(-1).at[1,0].set(6).at[2,0].set(2**31-1)
+        active=active.at[3,1].set(-1).at[4,1].set(6).at[5,1].set(2**31-1)
+        actual=state._replace(active=active)
+        sides=j.array([0,0,0,1,1,1,0,1],j.int32)
+        call=lambda c,s,e:r.observe_pre_move_device(c,tape,s,sides,before,self.tables,eligible=e,active=True)
+        eligible=j.ones(8,bool);expected=call(carry,actual,eligible);fast=jax.jit(call)
+        self.assertEqual(expected.risk.tolist(),[r.NAMESPACE]*6+[0,0])
+        for _ in range(2):self.same(fast(carry,actual,eligible),expected)
+        self.assertEqual(fast._cache_size(),1)
+        eligible=eligible.at[1].set(False).at[4].set(False)
+        masked=call(carry,actual,eligible)
+        self.assertEqual(masked.risk.tolist(),[r.NAMESPACE,0,r.NAMESPACE,r.NAMESPACE,0,r.NAMESPACE,0,0])
+        for value in (state.active.astype(j.float32),state.active[:,0],state.active[:,:1]):
+            with self.subTest(shape=value.shape),self.assertRaises(ValueError):
+                call(carry,state._replace(active=value),j.ones(8,bool))
+
     def test_b8_inactive_global_commit_and_hot_jit_no_host_callbacks(self):
         carry,tape,_=self.boundary(8);active=j.array([True,False]*4)
         call=lambda c,t:r.observe_branch_device(c,t,r.Branch.SECONDARY_STATS,True,self.tables,active=active)
