@@ -257,6 +257,11 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     addresses = _bench_alias(candidate.addresses(), parts)
     if annotation=='target':
         public_mon_protocol._exact_active(addresses,candidate.active_idents(),parts[2])
+    if annotation=='attract':
+        # The consumed V4 belief leaves sleep attempts pending here; the
+        # parser's separate simulator Rest ledger is not a feature writer.
+        for ident in public_annotations.attract_idents(line):
+            public_mon_protocol._exact_active(addresses,candidate.active_idents(),ident)
     if annotation=='fainted_target':
         holder=addresses.known_idents.get(parts[2])
         if (holder is None or candidate.live[holder.side]
