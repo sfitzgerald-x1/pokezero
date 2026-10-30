@@ -130,6 +130,16 @@ class WeatherProgressTests(unittest.TestCase):
             j.array([1], j.int32), j.array([0], j.int32), eligible=j.array([True]))
         self.assertEqual(invalid.count.tolist(), [0]); self.assertEqual(invalid.refusal.tolist(), [256])
 
+    def test_malformed_empty_to_weather_clock_is_unknown_but_empty_noop_is_not(self):
+        # Mixed rows distinguish a malformed unsolicited weather creation, the
+        # legitimate empty no-op, and an ineligible row outside this operation.
+        trace = callbacks.weather_clock(self.tape(3), j.zeros(3, j.int32),
+            j.array([weather.RAIN, weather.NONE, weather.RAIN], j.int32),
+            j.zeros(3, j.int32), j.zeros(3, j.int32), eligible=j.array([True, True, False]))
+        self.assertEqual(trace.count.tolist(), [0, 0, 0])
+        self.assertEqual(trace.refusal.tolist(), [256, 0, 0])
+        self.assertFalse(bool(trace.words.any()))
+
     def test_suppression_and_suppressor_life_do_not_stop_raw_weather_clock_messages(self):
         types = ['_none', 'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug',
             'ghost', 'steel', 'fire', 'water', 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark']

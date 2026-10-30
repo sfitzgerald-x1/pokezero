@@ -78,5 +78,6 @@ def weather_clock(tape, old_weather, new_weather, old_counter, new_counter, *, e
         (old_weather, new_weather, old_counter, new_counter, mode), eligible & has_weather & valid)
     # Empty zero-clock storage is a legitimate no-event; inconsistent empty
     # clocks remain unknown without inventing a weather identity or line.
-    attempted = eligible & (has_weather | (old_counter != 0) | (new_counter != 0))
+    attempted = eligible & (has_weather | (new_weather != weather.NONE)
+        | (old_counter != 0) | (new_counter != 0))
     return _unknown(tape, attempted)
