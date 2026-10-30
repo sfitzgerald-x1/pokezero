@@ -9,12 +9,169 @@ import tarfile
 import unittest
 from unittest import mock
 from types import SimpleNamespace
+import random
+from pokezero import failure_capture as fc
 
 P=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('action_screen',P/'scripts/screen_value_head_actions.py')
 s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
 
 class ScreenTests(unittest.TestCase):
+    def capture_context(self):
+        return SimpleNamespace(battle_id='synthetic',seed=7,player_id='p1',decision_round_index=0,
+            observation=SimpleNamespace(categorical_ids=((1,),),numeric_features=((.5,),),token_type_ids=(0,),
+                attention_mask=(True,),legal_action_mask=(True,False),perspective='p1',metadata={},schema_version=1))
+
+    def test_native_batch_links_all_witnesses_once_with_exact_counts_rng_and_lazy_evidence(self):
+        class Fold:
+            def to_payload(self):return {'fold':'immutable'}
+        events=[dict(reason_codes=['crate.prior.unmapped_action'],engine_state='state-'+str(i),instruction_list=[i],action_map=[None]) for i in range(100)]
+        reply=json.dumps(dict(prior_fallbacks=100,capture_refusals=events));calls=[]
+        class Native:
+            def search_batched_multi_encoded(self,*args,**kwargs):calls.append((args,kwargs));return reply
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);q=fc.Quarantine(root/'quarantine',build={'fingerprint':'synthetic'});directory=root/'query';directory.mkdir()
+            original=s.install_native_refusal_batches(fc,root);rng=random.Random(2);before=rng.getstate();lazy=[]
+            try:
+                with fc.decision_scope(q,self.capture_context(),rng) as capture:
+                    capture.update(engine_state='current-world',world_spec={'sampled':'world'})
+                    capture.defer('active_batch',lambda:lazy.append(1) or {'row':9})
+                    witness=s.NativeWitness(Native(),directory,fc.canonical,capture_module=fc,evidence_root=root)
+                    args=('state',2048,64,'tables',{},'ctx',Fold(),8,1.4,3)
+                    self.assertEqual(witness.search_batched_multi_encoded(*args,flag=True),reply)
+                    fc.record_native_refusals(json.loads(reply))
+                    expected_fields=fc.snapshot(capture.fields);expected_fields.pop('input_receipt')
+                self.assertEqual(calls,[(args,{'flag':True})]);self.assertIs(calls[0][0][6],args[6]);self.assertEqual(rng.getstate(),before)
+                self.assertEqual(lazy,[1]);self.assertEqual((q.events,q.successes,q.failures),(100,100,0))
+                self.assertEqual(q.reason_counts,{'crate.prior.unmapped_action':100})
+                self.assertEqual(len(list(q.directory.iterdir())),3)  # input + one batch + terminal
+                batches=list(q.directory.glob('native-refusal-batch-*.json'));self.assertEqual(len(batches),1)
+                batch=json.loads(batches[0].read_bytes());self.assertEqual(batch['event_count'],100)
+                actual_events=s.read_link(batch['native_reply'],root)['capture_refusals'];self.assertEqual(actual_events,events)
+                self.assertEqual(batch['event_index'],[dict(index=i,reason_codes=e['reason_codes']) for i,e in enumerate(events)])
+                reconstructed=s.read_link(batch['root_input'],root);reconstructed.pop('build');reconstructed.pop('schema');reconstructed.update(batch['field_updates'])
+                self.assertEqual(reconstructed,expected_fields);self.assertEqual(batch['lazy_evidence'],{'active_batch':{'row':9}})
+                self.assertNotIn('observation',batch);self.assertNotIn('inline_events',batch)
+            finally:fc._capture_native_events=original
+
+    def test_native_exception_batch_keeps_full_inline_witnesses_and_single_failure_compatibility(self):
+        with tempfile.TemporaryDirectory() as d:
+            q=fc.Quarantine(Path(d)/'q',build={'fingerprint':'toy'});original=s.install_native_refusal_batches(fc,d)
+            events=[dict(reason_codes=['crate.prior.other'],engine_state='origin',instruction_list=['exact'])]
+            try:
+                with fc.decision_scope(q,self.capture_context(),random.Random(1)) as capture:
+                    fc._capture_native_events(capture,events)
+                    capture.capture('ordinary',codes=['ordinary.contract_failure'],witness={'engine_state':'single'})
+                self.assertEqual((q.events,q.successes,q.failures),(2,2,0))
+                batch=json.loads(next(q.directory.glob('native-refusal-batch-*')).read_bytes());self.assertEqual(batch['inline_events'],events)
+                single=json.loads(next(q.directory.glob('failure-*')).read_bytes());self.assertEqual(single['schema'],'pokezero.quarantined-failure.v1');self.assertIn('observation',single)
+            finally:fc._capture_native_events=original
+
+    def test_batch_rejects_bad_witness_links_arrays_lazy_or_writer_without_false_success(self):
+        for failure in ('malformed','missing-input','reply-mismatch','reply-tamper','lazy-error','write-error'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as d:
+                root=Path(d);q=fc.Quarantine(root/'q',build={'fingerprint':'toy'});original=s.install_native_refusal_batches(fc,root)
+                events=[dict(reason_codes=['crate.prior.unmapped_action'],engine_state='origin')]
+                try:
+                    with self.assertRaises(fc.CaptureFailed):
+                        with fc.decision_scope(q,self.capture_context(),random.Random(1)) as capture:
+                            if failure=='malformed':events.append({'reason_codes':[]})
+                            if failure=='missing-input':capture.fields.pop('input_receipt')
+                            if failure.startswith('reply-'):
+                                p=root/'reply.json';s.write(p,{'capture_refusals':[] if failure=='reply-mismatch' else events})
+                                capture._screen_native_reply=s.evidence_link(p,root)
+                                if failure=='reply-tamper':p.write_bytes(b'{}\n')
+                            if failure=='lazy-error':capture.defer('bad',lambda:(_ for _ in ()).throw(ValueError('lazy')))
+                            if failure=='write-error':
+                                write=q.write
+                                def fail(kind,payload):
+                                    if kind=='native-refusal-batch':raise OSError('disk full')
+                                    return write(kind,payload)
+                                q.write=fail
+                            fc._capture_native_events(capture,events)
+                    self.assertEqual(q.successes,0);self.assertEqual(q.failures,1)
+                finally:fc._capture_native_events=original
+
+    def test_original_prior_count_validation_is_still_fatal(self):
+        with tempfile.TemporaryDirectory() as d:
+            q=fc.Quarantine(Path(d)/'q',build={});original=s.install_native_refusal_batches(fc,d)
+            try:
+                with self.assertRaises(fc.CaptureFailed):
+                    with fc.decision_scope(q,self.capture_context(),random.Random(1)):
+                        fc.record_native_refusals({'prior_fallbacks':2,'capture_refusals':[{'reason_codes':['x']}]})
+                self.assertEqual(q.successes,0);self.assertEqual(q.failures,1)
+            finally:fc._capture_native_events=original
+
+    def test_failed_next_native_call_cannot_reuse_previous_reply_link(self):
+        class Fold:
+            def to_payload(self):return {}
+        calls=[];events=[{'reason_codes':['crate.prior.unmapped_action'],'engine_state':'first'}]
+        class Native:
+            def search_batched_multi_encoded(self,*args):
+                calls.append(args)
+                if len(calls)==1:return json.dumps({'prior_fallbacks':1,'capture_refusals':events})
+                error=ValueError('native failure');error.pokezero_refusal_events=[dict(events[0],engine_state='second')];raise error
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);q=fc.Quarantine(root/'q',build={});query=root/'query';query.mkdir();original=s.install_native_refusal_batches(fc,root)
+            try:
+                with fc.decision_scope(q,self.capture_context(),random.Random(1)):
+                    witness=s.NativeWitness(Native(),query,fc.canonical,capture_module=fc,evidence_root=root)
+                    args=('state',1,1,'tables',{},'ctx',Fold(),8,1.4,1)
+                    fc.record_native_refusals(json.loads(witness.search_batched_multi_encoded(*args)))
+                    try:witness.search_batched_multi_encoded(*args)
+                    except ValueError as error:fc.record_refusal('crate.model_search',error)
+                    else:self.fail('missing native failure')
+                batches=[json.loads(p.read_bytes()) for p in q.directory.glob('native-refusal-batch-*')]
+                self.assertEqual(len(calls),2);self.assertEqual(len(batches),2)
+                inline=next(b for b in batches if 'inline_events' in b)
+                self.assertEqual(inline['inline_events'][0]['engine_state'],'second');self.assertNotIn('native_reply',inline)
+                self.assertEqual((q.events,q.successes,q.failures),(3,3,0))
+            finally:fc._capture_native_events=original
+
+    def checkpoint_fixture(self,root):
+        prior=root/'prior';prior.mkdir();result=dict(status='SEARCHED_WITH_NATIVE_PRIOR_REFUSALS',action=0,native_calls=[dict(started=True,completed=True,input_sha256='a',semantic_sha256='b',prior_fallbacks=1)])
+        for ordinal,head,label in [(0,h,l) for h in ('champion','refit') for l in ('primary','determinism')]+[(1,'champion','primary'),(1,'refit','primary'),(1,'champion','determinism')]:
+            p=prior/f'root-{ordinal:03d}-{head}-{label}';p.mkdir();value=copy.deepcopy(result)
+            if ordinal==1 and label=='determinism':value.update(status='CAPTURE_FAILED',action=None)
+            s.write(p/'decision.json',value);s.write(p/'native-00-input.json',{'input':'fixed'});s.write(p/'native-00-reply.json',{'witness':'fixed'})
+        bank={'roots':[dict(root_id=str(i),cost_seat='p1',search_seed=i) for i in range(2)]};s.write(prior/'root-bank.json',bank)
+        for i in range(2):s.write(prior/f'row-{i:03d}.json',dict(ordinal=i,root_id=str(i),seat='p1',search_seed=i,paired_clean_search=False,chosen_actions_differ=None,heads={h:copy.deepcopy(result) for h in ('champion','refit')}))
+        runtime=dict(build={'fingerprint':'toy'},search_config={'worlds':1},numeric_mode='FP32_MHAOFF_TF32OFF_HIGHEST',models={'champion.pt':'model-sha'})
+        s.write(prior/'runtime-and-config.json',runtime)
+        files={p.relative_to(prior).as_posix():{'bytes':p.stat().st_size,'sha256':s.file_sha(p)} for p in prior.rglob('*') if p.is_file()}
+        checkpoint=dict(prior_output=str(prior),fixed_bank_sha256=s.file_sha(prior/'root-bank.json'),completed_root_ordinals=[0],consumed_partial_root_ordinals=[1],continue_only_root_ordinals=list(range(2,256)),
+            slots=[{'directory':p.name} for p in prior.glob('root-*') if p.is_dir()],files=files,prior_terminal_summary={'completed_root_rows':2,'failure_capture_telemetry':{'capture_failures':1}})
+        p=root/'checkpoint.json';s.write(p,checkpoint)
+        plan=dict(root_bank_sha256=checkpoint['fixed_bank_sha256'],runtime_capture_build=runtime['build'],search_config=runtime['search_config'],immutable_inputs={'champion.pt':{'sha256':'model-sha'}},continuation=dict(checkpoint=str(p),checkpoint_sha256=s.file_sha(p),prior_output=str(prior)))
+        return plan,bank,prior,p
+
+    def test_checkpoint_retains_both_primaries_and_exact_interrupted_repeat_without_reexecution(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan,bank,prior,p=self.checkpoint_fixture(Path(d));before={q:s.file_sha(q) for q in prior.rglob('*') if q.is_file()}
+            rows,repeats,checkpoint=s.restore_checkpoint(plan,bank)
+            self.assertEqual([r['ordinal'] for r in rows],[0,1]);self.assertEqual([r['heads']['champion']['action'] for r in rows],[0,0])
+            self.assertEqual(len(repeats),4);self.assertEqual(sum(r['native_calls'] for r in repeats),3)
+            self.assertEqual([r['status'] for r in repeats[2:]],['CAPTURE_FAILED_CONSUMED_ROOT_UNKNOWN','NOT_ATTEMPTED_CONSUMED_ROOT_UNKNOWN'])
+            self.assertEqual(before,{q:s.file_sha(q) for q in before})
+            self.assertEqual(checkpoint['continue_only_root_ordinals'],list(range(2,256)))
+            full_bank={'roots':bank['roots']+[{'root_id':str(i)} for i in range(2,256)]}
+            self.assertEqual([r['root_id'] for r in s.remaining_fixed_roots(full_bank,rows)],[str(i) for i in range(2,256)])
+            with self.assertRaises(ValueError):s.remaining_fixed_roots(full_bank,rows[:1])
+            changed=copy.deepcopy(rows);changed[1]['ordinal']=2
+            with self.assertRaises(ValueError):s.remaining_fixed_roots(full_bank,changed)
+
+    def test_checkpoint_refuses_mutation_foreign_attempt_missing_slot_or_runtime_drift(self):
+        for failure in ('bytes','new-file','new-slot','missing-slot','bank','runtime'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as d:
+                plan,bank,prior,p=self.checkpoint_fixture(Path(d))
+                if failure=='bytes':(prior/'root-000-champion-primary/decision.json').write_bytes(b'{}')
+                if failure=='new-file':s.write(prior/'root-000-champion-primary/native-01-input.json',{})
+                if failure=='new-slot':(prior/'root-002-champion-primary').mkdir()
+                if failure=='missing-slot':(prior/'root-001-refit-primary').rename(prior/'moved')
+                if failure=='bank':plan['root_bank_sha256']='other'
+                if failure=='runtime':plan['search_config']={'worlds':2}
+                with self.assertRaises((ValueError,FileNotFoundError)):s.restore_checkpoint(plan,bank)
+
     def test_later_history_is_hash_disclosed_without_bypassing_library_admission(self):
         with tempfile.TemporaryDirectory() as directory:
             base=Path(directory);legacy=base/'legacy';fresh=base/'fresh';output=base/'new-screen'

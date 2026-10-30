@@ -18,6 +18,7 @@ from pathlib import Path
 import random
 import sys
 import tarfile
+import time
 
 SALT='a4-head-action-screen-20261029-v1'
 COUNT=256
@@ -136,22 +137,171 @@ def freeze(plan,output):
 
 class NativeWitness:
     """Observe exact ABI arguments and reply, then delegate once without edits/RNG."""
-    def __init__(self,native,directory,canonical_native):
+    def __init__(self,native,directory,canonical_native,*,capture_module=None,evidence_root=None):
         self.native=native;self.directory=Path(directory);self.canonical_native=canonical_native;self.rows=[]
+        self.capture_module=capture_module;self.evidence_root=evidence_root
     def __getattr__(self,name):return getattr(self.native,name)
     def search_batched_multi_encoded(self,*args,**kwargs):
         values=list(args);values[6]=values[6].to_payload()
         blob=self.canonical_native(dict(args=values,kwargs=kwargs));number=len(self.rows)
         record=dict(input_sha256=hashlib.sha256(blob).hexdigest(),native_seed=args[9],started=False,completed=False)
         self.rows.append(record)
-        with (self.directory/f'native-{number:02d}-input.json').open('xb') as f:f.write(blob+b'\n');f.flush();os.fsync(f.fileno())
+        input_path=self.directory/f'native-{number:02d}-input.json'
+        with input_path.open('xb') as f:f.write(blob+b'\n');f.flush();os.fsync(f.fileno())
+        capture=self.capture_module.current() if self.capture_module is not None else None
+        if self.capture_module is not None:
+            if capture is None:raise self.capture_module.CaptureFailed('screen native invocation has no decision capture')
+            capture._screen_native_input=evidence_link(input_path,self.evidence_root)
+            capture._screen_native_reply=None
         record['started']=True
         reply=self.native.search_batched_multi_encoded(*args,**kwargs)
-        parsed=json.loads(reply);write(self.directory/f'native-{number:02d}-reply.json',parsed)
+        parsed=json.loads(reply);reply_path=self.directory/f'native-{number:02d}-reply.json';write(reply_path,parsed)
+        if capture is not None:capture._screen_native_reply=evidence_link(reply_path,self.evidence_root)
         record.update(completed=True,reply_sha256=digest(parsed),semantic_sha256=digest({k:parsed.get(k) for k in
             ('side_one','side_two','root_value','iterations','model_evals','prior_branches','prior_fallbacks','depth_reached','capture_refusals')}),
             prior_fallbacks=parsed.get('prior_fallbacks',0),capture_refusal_codes=[c for r in parsed.get('capture_refusals',[]) for c in r['reason_codes']])
         return reply
+
+def evidence_link(path,root):
+    path=Path(path);root=Path(root).resolve()
+    require(path.resolve().is_relative_to(root) and not path.is_symlink(),'evidence outside owned output')
+    fd=os.open(path.parent,os.O_RDONLY)
+    try:os.fsync(fd)
+    finally:os.close(fd)
+    return dict(file=path.resolve().relative_to(root).as_posix(),sha256=file_sha(path))
+
+def read_link(link,root):
+    root=Path(root).resolve();path=root/link['file']
+    require(not Path(link['file']).is_absolute() and path.resolve().is_relative_to(root)
+        and not path.is_symlink() and file_sha(path)==link['sha256'],'capture evidence link missing, foreign, or changed')
+    return json.loads(path.read_bytes())
+
+def install_native_refusal_batches(fc,output):
+    """Screen-only capture transport, explicitly distinct from the base build.
+
+    Keep the production single-error path. Native refusals reference the already
+    durable full reply once, with one event-index batch instead of N full-root
+    files. No callback, policy, RNG, native argument, or reply is changed.
+    """
+    output=Path(output).resolve();original=fc._capture_native_events
+    def batch(capture,events):
+        q=capture.quarantine
+        try:
+            require(type(events) is list,'native refusal events are not an array')
+            for e in events:
+                require(type(e) is dict and type(e.get('reason_codes')) is list and bool(e['reason_codes'])
+                    and all(type(c) is str and c for c in e['reason_codes']),'malformed native refusal event')
+            if not events:return
+            entry=capture.fields.get('input_receipt');require(type(entry) is dict,'missing once-per-decision input receipt')
+            root_link=dict(entry,file=(q.directory/entry['file']).relative_to(Path(output)).as_posix())
+            root_input=read_link(root_link,output)
+            fields=fc.snapshot(capture.fields)
+            updates={k:v for k,v in fields.items() if k!='input_receipt' and (k not in root_input or v!=root_input[k])}
+            payload=dict(schema='pokezero.screen-native-refusal-batch.v1',build=q.build,
+                captured_unix=time.time(),event_time_semantics='one batch timestamp; no individual event times claimed',
+                root_input=root_link,root=fields['root'],field_updates=updates,
+                lazy_evidence={name:fc.snapshot(provider()) for name,provider in capture._lazy.items()},
+                event_count=len(events),event_index=[dict(index=i,reason_codes=e['reason_codes']) for i,e in enumerate(events)],
+                events_sha256=digest(events),evidence_root=str(Path(output)))
+            reply_link=getattr(capture,'_screen_native_reply',None)
+            input_link=getattr(capture,'_screen_native_input',None)
+            if input_link is not None:read_link(input_link,output);payload['native_input']=input_link
+            if reply_link is not None:
+                reply=read_link(reply_link,output)
+                require(reply.get('capture_refusals')==events,'native reply/event array mismatch')
+                payload.update(native_reply=reply_link,events_json_pointer='/capture_refusals')
+            else:
+                # Native exceptions can supply witnesses without a returned reply.
+                # Preserve that entire event array once, never omit its witnesses.
+                payload['inline_events']=fc.snapshot(events)
+            q.events+=len(events)
+            for e in events:q.reason_counts.update(e['reason_codes'])
+            link=q.write('native-refusal-batch',payload)
+            link.update(reason_codes=sorted({c for e in events for c in e['reason_codes']}),
+                event_count=len(events),event_indices=list(range(len(events))))
+            q.successes+=len(events);capture.receipts.append(link)
+        except BaseException as error:
+            if isinstance(error,fc.CaptureFailed):raise fc._count_capture_loss(q,error)
+            raise fc._count_capture_loss(q,fc.CaptureFailed('screen native refusal batch capture failed: '+str(error))) from error
+    fc._capture_native_events=batch
+    return original
+
+def decision_signature(result):
+    return (result['status'],result['action'],[(x['input_sha256'],x.get('semantic_sha256')) for x in result['native_calls']])
+
+def repeat_record(ordinal,head,original,again):
+    return dict(ordinal=ordinal,head=head,status='ATTEMPTED',native_calls=sum(x['started'] for x in again['native_calls']),
+        both_clean_search=original['status']==again['status']=='SEARCHED',
+        action_and_root_arm_repeat_equal=decision_signature(original)==decision_signature(again))
+
+def restore_checkpoint(plan,bank):
+    """Restore immutable facts only; consumed roots are never reconstructed."""
+    c=plan['continuation'];blob=Path(c['checkpoint']).read_bytes()
+    require(hashlib.sha256(blob).hexdigest()==c['checkpoint_sha256'],'checkpoint bytes changed')
+    checkpoint=json.loads(blob);prior=Path(c['prior_output'])
+    require(checkpoint['prior_output']==str(prior) and checkpoint['fixed_bank_sha256']==plan['root_bank_sha256']
+        and checkpoint['completed_root_ordinals']==[0] and checkpoint['consumed_partial_root_ordinals']==[1]
+        and checkpoint['continue_only_root_ordinals']==list(range(2,COUNT)),'fixed stopped-run continuation scope')
+    require(checkpoint['prior_terminal_summary']['completed_root_rows']==2
+        and checkpoint['prior_terminal_summary']['failure_capture_telemetry']['capture_failures']==1,'stopped run failure provenance')
+    actual_slots=sorted(p.name for p in prior.glob('root-*') if p.is_dir())
+    require(actual_slots==sorted(s['directory'] for s in checkpoint['slots']),'prior attempt roster changed')
+    require(all(not (prior/name).is_symlink() and all(p.is_file() and not p.is_symlink() for p in (prior/name).iterdir())
+        for name in actual_slots),'prior query contains a foreign link or nested attempt')
+    actual_query_files={p.relative_to(prior).as_posix() for name in actual_slots for p in (prior/name).iterdir() if p.is_file()}
+    require(actual_query_files=={n for n in checkpoint['files'] if n.split('/')[0] in actual_slots},'prior query file roster changed')
+    for name,item in checkpoint['files'].items():
+        path=prior/name
+        require(not Path(name).is_absolute() and path.resolve().is_relative_to(prior.resolve())
+            and not path.is_symlink() and path.stat().st_size==item['bytes'] and file_sha(path)==item['sha256'],'prior immutable evidence changed: '+name)
+    require(file_sha(prior/'root-bank.json')==plan['root_bank_sha256'],'prior bank differs')
+    runtime=json.loads((prior/'runtime-and-config.json').read_bytes())
+    require(runtime['build']==plan['runtime_capture_build'] and runtime['search_config']==plan['search_config']
+        and runtime['numeric_mode']=='FP32_MHAOFF_TF32OFF_HIGHEST'
+        and runtime['models']=={n:v['sha256'] for n,v in plan['immutable_inputs'].items()},'prior runtime/model/numeric/search identity changed')
+    expected_slots={f'root-000-{h}-{label}' for h in ('champion','refit') for label in ('primary','determinism')}|{
+        'root-001-champion-primary','root-001-refit-primary','root-001-champion-determinism'}
+    require(set(actual_slots)==expected_slots,'unexpected consumed head/repeat slots; never infer a retry')
+    row=json.loads((prior/'row-000.json').read_bytes())
+    require(row['ordinal']==0 and row['root_id']==bank['roots'][0]['root_id'],'completed root identity')
+    repeats=[]
+    for head in ('champion','refit'):
+        original=json.loads((prior/f'root-000-{head}-primary/decision.json').read_bytes())
+        again=json.loads((prior/f'root-000-{head}-determinism/decision.json').read_bytes())
+        require(original==row['heads'][head],'completed primary/row mismatch')
+        repeats.append(repeat_record(0,head,original,again))
+    root=bank['roots'][1];interrupted=json.loads((prior/'root-001-champion-determinism/decision.json').read_bytes())
+    require(interrupted['status']=='CAPTURE_FAILED','interrupted root must stay unknown')
+    unknown=json.loads((prior/'row-001.json').read_bytes())
+    require(unknown['ordinal']==1 and unknown['root_id']==root['root_id'],'interrupted repeat root identity')
+    for head in ('champion','refit'):
+        original=json.loads((prior/f'root-001-{head}-primary/decision.json').read_bytes())
+        require(original==unknown['heads'][head] and type(original['action']) is int,'completed interrupted-root primary mismatch')
+    unknown.update(continuation_status='INTERRUPTED_REPEAT_PRIMARY_COMPLETE_WITH_NATIVE_REFUSALS',
+        prior_row_sha256=checkpoint['files']['row-001.json']['sha256'],prior_evidence_root=str(prior))
+    for head in ('champion','refit'):repeats.append(dict(ordinal=1,head=head,
+        status='CAPTURE_FAILED_CONSUMED_ROOT_UNKNOWN' if head=='champion' else 'NOT_ATTEMPTED_CONSUMED_ROOT_UNKNOWN',
+        native_calls=sum(x['started'] for x in interrupted['native_calls']) if head=='champion' else 0,
+        both_clean_search=False,action_and_root_arm_repeat_equal=None))
+    return [row,unknown],repeats,checkpoint
+
+def remaining_fixed_roots(bank,retained_rows):
+    require([r['ordinal'] for r in retained_rows]==[0,1]
+        and [r['root_id'] for r in retained_rows]==[r['root_id'] for r in bank['roots'][:2]],'never restart a consumed fixed root')
+    return bank['roots'][2:]
+
+def persist_row(output,row,*,retained=False):
+    write(output/f"row-{row['ordinal']:03d}.json",row)
+    compact={k:row[k] for k in ('ordinal','root_id','seat','search_seed','paired_clean_search','chosen_actions_differ')}
+    compact['heads']={h:{'status':v['status'],'action':v['action'],
+        'native_input_sha256':[x['input_sha256'] for x in v['native_calls']],
+        'native_calls_started':sum(x['started'] for x in v['native_calls']),
+        'native_prior_refusals':sum(x.get('prior_fallbacks',0) for x in v['native_calls'])} for h,v in row['heads'].items()}
+    compact['row_sha256']=file_sha(output/f"row-{row['ordinal']:03d}.json")
+    with (output/'actions.jsonl').open('ab') as stream:
+        stream.write(canonical(compact)+b'\n');stream.flush();os.fsync(stream.fileno())
+    print(json.dumps(dict(event='SCREEN_ROOT_RETAINED' if retained else 'SCREEN_ROOT_COMPLETED',ordinal=row['ordinal'],
+        paired_clean=row['paired_clean_search'],diff=row['chosen_actions_differ'])),flush=True)
 
 def summarize(rows,count=COUNT):
     require(len(rows)==count and [r['ordinal'] for r in rows]==list(range(count)),'whole frozen roster denominator')
@@ -232,6 +382,7 @@ def run(plan):
     sys.path[:0]=[str(Path(plan['runtime'])/'repo/src'),str(Path(plan['runtime'])/'repo')]
     os.environ['POKEZERO_SOURCE_COMMIT']=plan['runtime_source_commit']
     import torch
+    from pokezero import failure_capture as fc
     from pokezero.failure_capture import runtime_build,canonical as native_canonical,CaptureFailed
     from pokezero.engine_search import EngineMctsConfig,EngineMctsPolicy
     from pokezero.recorded_mirror_roots import reconstruct_cost_root
@@ -243,8 +394,9 @@ def run(plan):
     from pokezero.policy import PolicyContext
     from pokezero.trajectory import BattleTrajectory
     output=Path(plan['output']);output.mkdir(exist_ok=False)
-    summary={'status':'FAILED_OR_PARTIAL_NO_RETRY','fixed_roots':COUNT,'no_foulplay_panel':True};rows=[];repeats=[];quarantine=None
+    summary={'status':'FAILED_OR_PARTIAL_NO_RETRY','fixed_roots':COUNT,'no_foulplay_panel':True};rows=[];repeats=[];quarantine=None;original_capture=None
     try:
+        require(type(plan.get('continuation')) is dict,'this fixed bank requires its stopped-run checkpoint; never restart consumed roots')
         require(all(os.environ.get(k) is None for k in ('TORCH_ALLOW_TF32_CUBLAS_OVERRIDE','NVIDIA_TF32_OVERRIDE')),'precision override present')
         torch.set_num_threads(plan['cpu_threads']);torch.set_default_dtype(torch.float32)
         torch.set_float32_matmul_precision('highest');torch.backends.cuda.matmul.allow_tf32=False
@@ -252,6 +404,8 @@ def run(plan):
         require(torch.__version__=='2.13.0+cu130' and torch.version.cuda=='13.0' and torch.cuda.device_count()==1,'qualified CUDA ABI/device count')
         require('B300' in torch.cuda.get_device_name(0) or 'GB300' in torch.cuda.get_device_name(0),'one GB300')
         build=runtime_build();require(build==plan['runtime_capture_build'],'qualified runtime source/binaries changed')
+        summary.update(base_qualified_runtime_fingerprint=build['fingerprint'],scientific_producer_sha256=file_sha(__file__),
+            capture_transport=plan.get('capture_transport'),capture_adapter_is_new_source=True)
         compiled=Path(plan['showdown'])/'dist';tree=hashlib.sha256();files=sorted(p for p in compiled.rglob('*') if p.is_file() and not p.is_symlink() and p.suffix in ('.js','.json'))
         for path in files:
             tree.update(path.relative_to(compiled).as_posix().encode()+b'\0');tree.update(bytes.fromhex(file_sha(path)))
@@ -274,6 +428,15 @@ def run(plan):
         require(len({r['root_id'] for r in bank['roots']})==COUNT and [r['cost_ordinal'] for r in bank['roots']]==list(range(COUNT))
             and [r['cost_seat'] for r in bank['roots']]==['p1','p2']*(COUNT//2),'fixed distinct root/seat roster')
         write(output/'root-bank.json',bank)
+        require(plan.get('capture_transport')=='native-refusal-batch-v1','screen capture adapter must be explicit')
+        original_capture=install_native_refusal_batches(fc,output)
+        if plan.get('continuation'):
+            rows,repeats,checkpoint=restore_checkpoint(plan,bank)
+            write(output/'prior-checkpoint.json',checkpoint)
+            for row in rows:persist_row(output,row,retained=True)
+            summary.update(continuation_checkpoint_sha256=plan['continuation']['checkpoint_sha256'],
+                prior_capture_telemetry=checkpoint['prior_terminal_summary']['failure_capture_telemetry'],
+                continued_only_root_ordinals=list(range(2,COUNT)),never_reexecuted_roots=[0,1])
         checkpoint=private['checkpoint.pt'];cfg=parse_transformer_model_config(load_transformer_checkpoint_payload(checkpoint))
         config=env_config_from_checkpoint_provenance(LocalShowdownConfig(showdown_root=Path(plan['showdown']),node_binary=plan['node'],set_belief_source=True),
             feature_masks_from_model_config(cfg),context='A4 fixed TRAIN chosen-action screen trusted saved source',
@@ -289,12 +452,15 @@ def run(plan):
             policy.warm_model_runtime();policies[head]=policy;handles[head]=policy._native_model
         write(output/'runtime-and-config.json',dict(build=build,device=torch.cuda.get_device_name(0),
             models={k:file_sha(v) for k,v in private.items()},numeric_mode='FP32_MHAOFF_TF32OFF_HIGHEST',
-            search_config=plan['search_config'],historical_config_sha256=plan['historical_config_sha256']))
+            search_config=plan['search_config'],historical_config_sha256=plan['historical_config_sha256'],
+            scientific_producer_sha256=file_sha(__file__),capture_transport=plan['capture_transport'],
+            capture_adapter_scope='Screen-only native refusal transport differs from untouched qualified base package/native/model build.',
+            continuation_checkpoint_sha256=summary.get('continuation_checkpoint_sha256')))
 
         def evaluate(root,head,base_context,run_label):
             directory=output/f"root-{root['cost_ordinal']:03d}-{head}-{run_label}";directory.mkdir()
             policy=policies[head];policy.reset();context=copy.deepcopy(base_context)
-            witness=NativeWitness(handles[head],directory,native_canonical);policy._native_model=witness
+            witness=NativeWitness(handles[head],directory,native_canonical,capture_module=fc,evidence_root=output);policy._native_model=witness
             result=dict(status='REFUSED',action=None,native_calls=[],reason=None)
             try:
                 decision=policy.select_action_with_context(context,rng=random.Random(root['search_seed']))
@@ -317,7 +483,7 @@ def run(plan):
                 result['native_calls']=witness.rows;write(directory/'decision.json',result);policy._native_model=handles[head]
             return result
 
-        for root in bank['roots']:
+        for root in remaining_fixed_roots(bank,rows):
             row=dict(ordinal=root['cost_ordinal'],root_id=root['root_id'],seat=root['cost_seat'],search_seed=root['search_seed'],
                 paired_clean_search=False,chosen_actions_differ=None,heads={})
             env=None
@@ -341,27 +507,24 @@ def run(plan):
                     for head in ('champion','refit'):
                         again=evaluate(root,head,context,'determinism')
                         original=row['heads'][head]
-                        fields=lambda r:(r['status'],r['action'],[(x['input_sha256'],x.get('semantic_sha256')) for x in r['native_calls']])
-                        repeats.append(dict(ordinal=root['cost_ordinal'],head=head,native_calls=sum(x['started'] for x in again['native_calls']),both_clean_search=original['status']==again['status']=='SEARCHED',
-                            action_and_root_arm_repeat_equal=fields(original)==fields(again)))
+                        repeats.append(repeat_record(root['cost_ordinal'],head,original,again))
             except CaptureFailed:raise
             except Exception as error:
                 row['root_refusal']=type(error).__name__+': '+str(error)[:400]
             finally:
                 if env is not None:env.close()
                 for head in ('champion','refit'):row['heads'].setdefault(head,dict(status='NOT_COMPLETED_SEE_REMOTE_FAILURE_CAPTURE',action=None,native_calls=[]))
-                write(output/f"row-{root['cost_ordinal']:03d}.json",row);rows.append(row)
-                compact={k:row[k] for k in ('ordinal','root_id','seat','search_seed','paired_clean_search','chosen_actions_differ')}
-                compact['heads']={h:{'status':v['status'],'action':v['action'],
-                    'native_input_sha256':[x['input_sha256'] for x in v['native_calls']],
-                    'native_calls_started':sum(x['started'] for x in v['native_calls']),
-                    'native_prior_refusals':sum(x.get('prior_fallbacks',0) for x in v['native_calls'])} for h,v in row['heads'].items()}
-                compact['row_sha256']=file_sha(output/f"row-{root['cost_ordinal']:03d}.json")
-                with (output/'actions.jsonl').open('ab') as stream:
-                    stream.write(canonical(compact)+b'\n');stream.flush();os.fsync(stream.fileno())
-                print(json.dumps(dict(event='SCREEN_ROOT_COMPLETED',ordinal=root['cost_ordinal'],paired_clean=row['paired_clean_search'],diff=row['chosen_actions_differ'])),flush=True)
+                persist_row(output,row);rows.append(row)
+        repeat_keys={(r['ordinal'],r['head']) for r in repeats}
+        require(len(repeat_keys)==len(repeats) and repeat_keys<={(i,h) for i in range(8) for h in ('champion','refit')},'duplicate/foreign repeat address')
+        for ordinal in range(8):
+            for head in ('champion','refit'):
+                if (ordinal,head) not in repeat_keys:repeats.append(dict(ordinal=ordinal,head=head,status='NOT_ATTEMPTED_AFTER_ROOT_REFUSAL',native_calls=0,both_clean_search=False,action_and_root_arm_repeat_equal=None))
+        repeats.sort(key=lambda r:(r['ordinal'],r['head']))
         summary.update(summarize(rows),status='COMPLETE_FIXED_ROOT_SCREEN',determinism_controls=repeats,
             all_fixed_repeats_equal=len(repeats)==16 and all(r['both_clean_search'] and r['action_and_root_arm_repeat_equal'] for r in repeats),
+            fixed_repeat_denominator=16,completed_repeat_cells=sum(r.get('status')=='ATTEMPTED' for r in repeats),
+            native_started_repeat_cells=sum(r['native_calls']>0 for r in repeats),
             selected_root_sha256=bank['selected_root_sha256'],native_search_calls_primary=sum(x['started'] for r in rows for v in r['heads'].values() for x in v['native_calls']),
             native_search_calls_repeats=sum(r['native_calls'] for r in repeats),
             full_rows_sha256=digest(rows),no_new_games=True,no_strength_claim=True)
@@ -373,7 +536,9 @@ def run(plan):
             unattempted_or_incomplete_roots=COUNT-len(rows),no_retry=True)
         raise
     finally:
+        if original_capture is not None:fc._capture_native_events=original_capture
         if quarantine is not None:summary['failure_capture_telemetry']=quarantine.telemetry()
+        summary['determinism_controls']=repeats;summary['fixed_repeat_denominator']=16
         summary['completed_root_rows']=len(rows);write(output/'summary.json',summary)
         print(json.dumps(dict(event='A4_ACTION_SCREEN_TERMINAL',**summary)),flush=True)
 
