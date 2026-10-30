@@ -425,7 +425,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     if execution_compiled is not None:payload['execution_inventory']=np.asarray(execution_compiled.device.inventory_binding).tolist()
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = Prepared(binding)
-    _PREPARED[result] = dict(binding=binding, prepared=result,request_compiled=request_compiled, own_compiled=own_compiled,
+    _PREPARED[result] = dict(binding=binding, prepared=weakref.ref(result),request_compiled=request_compiled, own_compiled=own_compiled,
         own=record, request=request, catalog=catalog, context=context, public=public_handle, fake=fake_forward,
         public_mode=public_mode, check_public=check_public, register_public=register_public,
         speed_profile=speed_profile,leftovers_compiled=leftovers_compiled,
@@ -480,13 +480,13 @@ def _consume_accounted(r,state,frame,active,timing_callback,previous_reports):
     # BOTH original full folds finish before any own encoding or fake scoring.
     candidates=[];projections=[];errors=[]
     for side,before in enumerate(state.observers,1):
-        _checked(r['prepared'])
+        _checked(r['prepared']())
         def public_phase(observer,frame,active):
             after,projection,error=r['public_fast'](observer,frame,state.core.weather_profile,active)
             return _observer_rows(active,observer,after),projection,error
         candidate,projection,error=_timed(timing_callback,f'public_p{side}',public_phase,before,frame,active)
         candidates.append(candidate);projections.append(projection);errors.append(error)
-    _checked(r['prepared'])
+    _checked(r['prepared']())
     joined,joint=r['join_execution'](candidates[0].accounting,candidates[1].accounting)
     ledger=execution.commit_rows(active,state.core.execution,joined)
     core=state.core._replace(execution=ledger,admitted=state.core.admitted & (~active|joint))
@@ -495,14 +495,14 @@ def _consume_accounted(r,state,frame,active,timing_callback,previous_reports):
         observer=_observer_rows(active & joint,before,candidate)
         observer=observer._replace(accounting=execution.commit_rows(active,before.accounting,joined),
             retained_healthy=observer.retained_healthy & (~active|joint))
-        _checked(r['prepared'])
+        _checked(r['prepared']())
         facts,encoded=_timed(timing_callback,f'encode_p{index+1}',r['encode_fast'],core,observer)
         def admission_phase(obs,facts,encoded,projection,error,admitted,active,previous):
             after,report=r['score_fast'](obs,facts,encoded,projection,error,admitted,active)
             if previous is not None:report=_report_rows(active,previous,report)
             return after,report
         previous=None if previous_reports is None else previous_reports[index]
-        _checked(r['prepared'])
+        _checked(r['prepared']())
         observer,report=_timed(timing_callback,f'admission_p{index+1}',admission_phase,
             observer,facts,encoded,projection,error,core.admitted,active,previous)
         observers.append(observer);reports.append(report)
