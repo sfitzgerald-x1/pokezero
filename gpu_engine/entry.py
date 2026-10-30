@@ -95,7 +95,7 @@ def depart(state,side,table,*,eligible):
         jnp.where(eligible[:,None] & (linked==active[:,None]),-1,linked)))
 
 
-def enter(state,side,table,*,eligible,hazards=True,startup=False):
+def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=None):
     """One entry event; the caller owns ordering and queued-action cancellation."""
     rows = jnp.arange(state.hp.shape[0])
     active = state.active[rows,side]
@@ -115,6 +115,10 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False):
     # Gen3 runs status SwitchIn even after a hazard KO, before faintMessages.
     state=restore_sleep(state,side,eligible=eligible)
     starts = eligible & (next_hp > 0)
+    if _weather_trace is not None:
+        from . import engine_weather_callbacks as callbacks
+        _weather_trace=callbacks.unattributed_ability(_weather_trace,
+            eligible=starts & (ability!=state.base_ability[rows,side,active]))
     if table.truant is not None:
         old_clock=state.truant_loaf[rows,side,active]
         # Gen3 onSwitchIn: turn0 starts ACT; every later entry starts LOAF.
@@ -131,6 +135,8 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False):
         copied=starts & table.trace[ability] & (foe_hp>0)
         state=state._replace(ability=state.ability.at[rows,side,active].set(jnp.where(
             copied,state.ability[rows,foe,foe_active],ability)))
+        if _weather_trace is not None:
+            _weather_trace=callbacks.unattributed_ability(_weather_trace,eligible=copied)
     current=state.ability[rows,side,active]
     status=state.status[rows,side,active]
     if table.status_cure is not None:
@@ -148,13 +154,21 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False):
     requested = table.weather_ability[ability]
     change = (starts & (requested != weather.NONE)
         & ((state.weather != requested) | (state.weather_counter > 0)))
+    if _weather_trace is not None:
+        old_weather,old_counter=state.weather,state.weather_counter
     state = state._replace(weather=jnp.where(change,requested,state.weather),
         weather_counter=jnp.where(change,0,state.weather_counter))
+    if _weather_trace is not None:
+        from . import engine_weather_callbacks as callbacks
+        _weather_trace=callbacks.entry_weather(_weather_trace,side,active,old_weather,state.weather,
+            old_counter,state.weather_counter,eligible=change)
     blocked = ((state.substitute_hp[rows,foe,foe_active] > 0)
         | table.attack_drop_immune[state.ability[rows,foe,foe_active]])
     drops = starts & table.intimidate[ability] & (foe_hp > 0) & ~blocked
     old = state.boosts[rows,foe,foe_active,0]
     boosts = state.boosts.at[rows,foe,foe_active,0].set(jnp.where(drops,jnp.maximum(-6,old-1),old))
+    if _weather_trace is not None:
+        return state._replace(boosts=boosts),knocked_out,_weather_trace
     return state._replace(boosts=boosts),knocked_out
 
 
