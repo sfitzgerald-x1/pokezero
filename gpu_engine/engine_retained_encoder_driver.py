@@ -176,13 +176,22 @@ def _risk_rows(active,before,after):
     if before is None and after is None:return None
     if type(before) is not kernel_risks.Carry or type(after) is not kernel_risks.Carry:
         raise ValueError('actual typed risk carry must survive every owning phase')
+    b=before.stream_id.shape[0]
+    execution._shape(active,(b,),jnp.bool_)
+    for carry in (before,after):
+        for name in ('stream_id','frame','risk','observed'):
+            execution._shape(getattr(carry,name),(b,),jnp.int32)
+        execution._shape(carry.opened,(b,),jnp.bool_)
+        execution._shape(carry.counts,(b,len(kernel_risks.Branch)),jnp.int32)
     selected=kernel_risks.commit_rows(active,before,after)
     same=jnp.array(True)
     for name in ('binding','accounting_binding'):
         old,new=getattr(before,name),getattr(after,name)
         execution._shape(old,(8,),jnp.uint32);execution._shape(new,(8,),jnp.uint32)
         same &= jnp.all(old==new)
-    return selected._replace(risk=selected.risk|jnp.where(active&~same,kernel_risks.NAMESPACE,0))
+    same &= before.stream_id==after.stream_id
+    return selected._replace(stream_id=before.stream_id,
+        risk=before.risk|selected.risk|jnp.where(active&~same,kernel_risks.NAMESPACE,0))
 
 
 def _observer_rows(ok, before, after):

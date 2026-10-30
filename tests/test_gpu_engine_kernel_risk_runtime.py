@@ -54,5 +54,17 @@ class KernelRiskDriverPreparationTests(unittest.TestCase):
         np.testing.assert_array_equal(result.risks.risk,j.where(active,risks.NAMESPACE,0))
         with self.assertRaises(ValueError):driver._risk_rows(active,carry,None)
 
+    def test_row_reducer_keeps_lifetime_risk_and_original_stream_after_corrupt_return(self):
+        runtime=driver._checked(self.prepared);tables=runtime['kernel_risk_compiled'].device
+        original=risks.initialize_device(j.array([3501,3502],j.int32),tables)
+        original=original._replace(risk=j.array([risks.NON_WEATHER,risks.UPSTREAM],j.int32))
+        returned=original._replace(risk=j.zeros(2,j.int32),stream_id=j.array([9999,3502],j.int32))
+        result=jax.jit(driver._risk_rows)(j.ones(2,bool),original,returned)
+        np.testing.assert_array_equal(result.stream_id,original.stream_id)
+        self.assertEqual(result.risk.tolist(),[risks.NON_WEATHER|risks.NAMESPACE,risks.UPSTREAM])
+        frozen=driver._risk_rows(j.array([False,True]),original,returned)
+        for old,new in zip(jax.tree.leaves(original),jax.tree.leaves(frozen)):
+            if old.ndim and old.shape[0]==2:np.testing.assert_array_equal(old[0],new[0])
+
 
 if __name__=='__main__':unittest.main()
