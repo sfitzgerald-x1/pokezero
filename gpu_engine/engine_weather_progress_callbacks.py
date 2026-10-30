@@ -1,4 +1,4 @@
-"""INTERNAL move-weather/clock diagnostics, pending original public controls.
+"""Causal move-weather/clock receipts for original public controls.
 
 Kinds13/14 never serialize uncalled move slots or manufacture protocol lines.
 Clock numbers are diagnostic INTERNAL fields, not public duration assertions.
@@ -33,8 +33,8 @@ def _int_rows(value, template):
 def move_weather(tape, side, physical, move_id, old_weather, new_weather, old_counter, new_counter, *, eligible):
     """Append only for the actual change, with its exact already-called move.
 
-    Missing/unsupported source identity is unknown-only. Even a recognized
-    diagnostic keeps the helper's own unsupported latch until full registration.
+    Missing/unsupported source identity is unknown-only. Valid typed receipts
+    require the bound full consumer's original move/clock source proof.
     """
     if not hasattr(tape, 'event_turn'):
         return tape
@@ -50,7 +50,7 @@ def move_weather(tape, side, physical, move_id, old_weather, new_weather, old_co
     absent = jnp.full_like(tape.count, -1)
     tape = public._append(tape, MOVE_WEATHER, side, physical, absent, absent,
         (old_weather, new_weather, move_id, old_counter, new_counter), eligible & valid)
-    return _unknown(tape, eligible)
+    return _unknown(tape, eligible & ~valid)
 
 
 def weather_clock(tape, old_weather, new_weather, old_counter, new_counter, *, eligible):
@@ -80,4 +80,4 @@ def weather_clock(tape, old_weather, new_weather, old_counter, new_counter, *, e
     # clocks remain unknown without inventing a weather identity or line.
     attempted = eligible & (has_weather | (new_weather != weather.NONE)
         | (old_counter != 0) | (new_counter != 0))
-    return _unknown(tape, attempted)
+    return _unknown(tape, attempted & ~valid)

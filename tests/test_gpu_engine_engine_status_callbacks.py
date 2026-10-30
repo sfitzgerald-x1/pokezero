@@ -111,10 +111,11 @@ class StatusCallbacksTests(unittest.TestCase):
                     if old:lines.append(f'|-curestatus|{active[target]}|{tokens[old]}|[msg]')
                     if int(frame.callbacks.words[row,index,8]):lines.append(f'|-end|{active[target]}|confusion')
                 elif k==inputs.Kind.FIELD:
-                    proc=int(frame.callbacks.words[row,index,7]);source=int(frame.callbacks.words[row,index,1])
-                    label=('', 'RainDance','SunnyDay','Sandstorm')[proc]
-                    ability=('', 'Drizzle','Drought','Sand Stream')[proc]
-                    lines.append(f'|-weather|{label}|[from] ability: {ability}|[of] {active[source]}')
+                    raw=frame.callbacks.words[row,index];label=('none','RainDance','SunnyDay','Sandstorm','Hail')[int(raw[6])]
+                    if int(raw[0])==12:
+                        proc=int(raw[7]);source=int(raw[1]);ability=('', 'Drizzle','Drought','Sand Stream')[proc]
+                        lines.append(f'|-weather|{label}|[from] ability: {ability}|[of] {active[source]}')
+                    else:lines.append(f'|-weather|{label}'+('|[upkeep]' if int(raw[0])==14 and int(raw[9])==1 else ''))
                 elif k==inputs.Kind.TURN:lines.append(f'|turn|{turn}')
                 elif k==inputs.Kind.ACTION_CHUNK_END:lines.append('|')
                 elif k==inputs.Kind.UPKEEP:lines.append('|upkeep')

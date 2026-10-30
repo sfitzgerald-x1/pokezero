@@ -1,5 +1,7 @@
 """Causal entry weather -> original full public controls; tiny source fixtures."""
 from copy import deepcopy
+from dataclasses import replace
+from pokezero.dex import ShowdownDex
 import unittest
 from types import MappingProxyType
 import jax
@@ -25,10 +27,20 @@ class WeatherPublicTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         fixture.StatusCallbacksTests.setUpClass();f=fixture.StatusCallbacksTests
-        cls.f,cls.ids=f.f,f.ids
+        cls.f,cls.ids=f.f,dict(f.ids)
         cls.metadata=deepcopy(f.metadata)
         for name in ('drizzle','drought','sandstream','pressure','trace'):
             if name not in cls.metadata['vocabulary']['abilities']:cls.metadata['vocabulary']['abilities'].append(name)
+        moves=dict(f.catalog.dex.moves)
+        for name,typ in (('raindance','Water'),('sunnyday','Fire'),('sandstorm','Rock'),('hail','Ice')):
+            cls.ids[name]=len(cls.metadata['moves'])
+            cls.metadata['vocabulary']['moves'].append(name)
+            cls.metadata['moves'].append(dict(id=name,base_power=0,
+                type=cls.metadata['vocabulary']['types'].index(typ.lower()),source_type=typ,
+                category='Status',pp=20,accuracy=True,priority=0,flags={}))
+            moves[name]=replace(f.catalog.dex.moves['surf'],id=name,name=name,type=typ,category='Status',
+                gen3_category='Status',base_power=0,pp=20,target='all',status=None)
+        dex=ShowdownDex(moves,f.catalog.dex.species,f.catalog.dex.type_chart)
         names=cls.metadata['vocabulary']['species'][1:]
         variants={name:Gen3RandbatSpeciesUniverse(name,80,tuple(Gen3RandbatVariant(
             name+'-'+a,'fixture',name,'fixture',80,('Surf','Hidden Power Ice'),a,'Leftovers')
@@ -39,8 +51,9 @@ class WeatherPublicTests(unittest.TestCase):
         labels=set(f.catalog.vocabulary.tokens)
         for name in ('drizzle','drought','sandstream','pressure','trace'):
             labels|={'ability:'+name,'belief:possible_ability:'+name}
+        for name in cls.ids:labels|={'move:'+name,'belief:possible_move:'+name}
         labels|={'weather:raindance','weather:sunnyday','weather:sandstorm','weather:hail'}
-        cls.catalog=v4.compile_encoder(host,f.catalog.dex,CategoryVocabulary(tuple(sorted(labels))),
+        cls.catalog=v4.compile_encoder(host,dex,CategoryVocabulary(tuple(sorted(labels))),
             checkpoint_sha256='a'*64,feature_masks=f.catalog.masks.__dict__)
         cls.table=t.tables_from_metadata(cls.metadata)
         cls.producer=events.compile_catalog(cls.metadata,cls.table,public_moves=cls.catalog.moves,dex=cls.catalog.dex,
@@ -86,6 +99,28 @@ class WeatherPublicTests(unittest.TestCase):
             self.assertFalse(bool(failed.projection.frames.valid[:,0].any()))
             self.assertEqual(int(failed.public.cursor.sequence[0]),int(initial.public.cursor.sequence[0]))
             self.same(full._commit_public(j.array([False,True]),initial.public,failed.public),failed.public)
+
+    def test_actual_called_move_then_upkeep_and_expiry_exact_both_owners(self):
+        frame=self.initial('raindance',arrays=self.arrays('pressure','pressure'))
+        s,p=self.start(frame,j.array([0,1],j.int32))
+        result,wire=self.compare(s,frame,p,[public_wire.WireState()]*2)
+        for turn in range(5):
+            # Turn1 actually calls Rain Dance; later Surf uses avoid the
+            # deliberately still-unknown same-weather failed-move outcome.
+            actions=[0,8] if turn==0 else ([8,4] if turn%2 else [4,8])
+            changed=self.step(frame,[actions]*2)
+            raw=np.asarray(changed.callbacks.words[0,:int(changed.callbacks.count[0])])
+            self.assertEqual((raw[:,0]==13).sum(),int(turn==0))
+            clock=raw[raw[:,0]==14]
+            self.assertEqual(len(clock),1,msg=str(dict(turn=turn,actions=actions,
+                weather=changed.state.weather.tolist(),counter=changed.state.weather_counter.tolist(),
+                pending=changed.state.pending_residual.tolist(),raw=raw.tolist())))
+            self.assertEqual(int(clock[0,9]),2 if turn==4 else 1)
+            result,wire=self.compare(result.projection.state,changed,result.public,wire)
+            self.assertEqual(result.projection.state.weather_remaining.tolist(),[max(0,4-turn)]*2)
+            frame=changed
+        self.assertEqual(result.public.context.field.weather.tolist(),[0,0])
+        self.assertFalse(bool(result.public.context.field.weather_set.any()))
 
     def test_namespace_edge_drift_and_unattributed_copy_stay_closed(self):
         catalog=self.compiled.causal.weather_catalog

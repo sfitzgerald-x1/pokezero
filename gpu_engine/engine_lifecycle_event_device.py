@@ -31,6 +31,7 @@ from . import public_belief, public_context, public_team
 from . import engine_status_callbacks as status_callbacks, engine_item_callbacks as item_callbacks
 from . import public_items
 from . import engine_weather_callbacks as weather_callbacks, weather, public_field, v4_encoder
+from . import engine_weather_progress_callbacks as weather_progress
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -56,6 +57,8 @@ class Tables(NamedTuple):
     weather_guard_species: object
     weather_guard_item_possible: object
     weather_events: object
+    weather_moves: object
+    weather_duration_safe: object
     binding: object
 
 
@@ -159,6 +162,12 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     lum_public = 0 if items is None else items.ids.get('lumberry', 0)
     lum = items is not None and lum_engine > 0 and lum_public > 0
     weather_ids = [0]*5; ability_ids = [0]*4; guard_species = [0]*4; guard_item = [False]*4
+    weather_moves=np.array([{'raindance':weather.RAIN,'sunnyday':weather.SUN,
+        'sandstorm':weather.SAND,'hail':weather.HAIL}.get(normalize_id(n),0)
+        for n in metadata['vocabulary']['moves']],np.int32)
+    # Original Gen3 generator excludes these Gen4 duration items. Supplied
+    # metadata provenance alone does not establish that generation constraint.
+    duration_safe=not any(normalize_id(n) in ('damprock','heatrock','smoothrock','icyrock') for n in item_names)
     if weather_catalog is not None:
         for code, name in ((weather.RAIN,'raindance'),(weather.SUN,'sunnyday'),
                 (weather.SAND,'sandstorm'),(weather.HAIL,'hail')):
@@ -182,6 +191,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         lum_events=lum, item_binding=None if items is None else np.asarray(items.device.binding).tolist(),
         weather_public=weather_ids,weather_ability=ability_ids,weather_guard_species=guard_species,
         weather_guard_item_possible=guard_item,
+        weather_moves=weather_moves.tolist(),weather_duration_safe=duration_safe,
         weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
@@ -194,6 +204,8 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(lum_public, jnp.int32), jnp.array(lum),
         jnp.array(weather_ids,jnp.int32),jnp.array(ability_ids,jnp.int32),
         jnp.array(guard_species,jnp.int32),jnp.array(guard_item),jnp.array(weather_catalog is not None),
+        jnp.array(weather_moves,jnp.int32),
+        jnp.array(duration_safe),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -339,6 +351,8 @@ def project_device(state, tape, before_registry, after_registry, tables):
     base._shape(tables.lum_engine_item, (), jnp.int32)
     base._shape(tables.lum_public_item, (), jnp.int32)
     base._shape(tables.weather_events, (), jnp.bool_)
+    base._shape(tables.weather_moves,tables.base.public_ids.shape,jnp.int32)
+    base._shape(tables.weather_duration_safe,(),jnp.bool_)
     for value,shape,dtype in ((tables.weather_public,(5,),jnp.int32),
             (tables.weather_ability,(4,),jnp.int32),(tables.weather_guard_species,(4,),jnp.int32),
             (tables.weather_guard_item_possible,(4,),jnp.bool_)):
@@ -373,6 +387,9 @@ def project_device(state, tape, before_registry, after_registry, tables):
         status_event = applied | cured
         lum = kind == item_callbacks.LUM_CONSUMED
         entry_weather = kind == weather_callbacks.ENTRY_WEATHER
+        move_weather = kind == weather_progress.MOVE_WEATHER
+        clock_weather = kind == weather_progress.WEATHER_CLOCK
+        any_weather=entry_weather|move_weather|clock_weather
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
         slot = jnp.where(old < 0, cursor.next_slot[rows, safe_side], old)
@@ -432,9 +449,27 @@ def project_device(state, tape, before_registry, after_registry, tables):
             & ((raw[:,8]==0)|(raw[:,8]==1))&(raw[:,9]==1)
             & ((raw[:,5]!=raw[:,6])|(raw[:,8]==1))
             & (tables.weather_public[jnp.clip(raw[:,6],0,4)]>0)&(tables.weather_ability[proc]>0)&~orb_ambiguous)
+        move_index=jnp.clip(raw[:,7],0,tables.weather_moves.shape[0]-1)
+        move_weather_ok=(tables.weather_events & tables.weather_duration_safe & tables.status_events & ~tables.raw_begin & actor_ok
+            & (phase==0) & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            & jnp.all(raw[:,3:5]==-1,axis=1)&(raw[:,5]>=weather.NONE)&(raw[:,5]<=weather.HAIL)
+            & (raw[:,6]>=weather.RAIN)&(raw[:,6]<=weather.HAIL)&(raw[:,5]!=raw[:,6])
+            & (raw[:,7]>0)&(raw[:,7]<tables.weather_moves.shape[0])
+            & (tables.weather_moves[move_index]==raw[:,6])&(tables.base.public_ids[move_index]>0)
+            & (raw[:,8]>=0)&(raw[:,8]<=5)&(raw[:,9]==5)
+            & (tables.weather_public[jnp.clip(raw[:,6],0,4)]>0))
+        upkeep=(raw[:,9]==weather_progress.UPKEEP)&(raw[:,6]==raw[:,5])&(
+            ((raw[:,7]==0)&(raw[:,8]==0))|((raw[:,7]>1)&(raw[:,8]==raw[:,7]-1)))
+        expires=(raw[:,9]==weather_progress.EXPIRE)&(raw[:,7]==1)&(raw[:,8]==0)&(raw[:,6]==weather.NONE)
+        clock_weather_ok=(tables.weather_events & tables.status_events & ~tables.raw_begin & (phase==0)
+            & (tables.weather_duration_safe|(raw[:,7]==0))
+            & jnp.all(raw[:,1:5]==-1,axis=1)&(raw[:,5]>=weather.RAIN)&(raw[:,5]<=weather.HAIL)
+            & (raw[:,7]>=0)&(raw[:,7]<=5)&(upkeep|expires)
+            & (tables.weather_public[jnp.clip(raw[:,5],0,4)]>0))
         event_ok = generation_ok & clock_ok & jnp.where(arrival, arrival_ok,
             jnp.where(clock, clock_payload, jnp.where(status_event,status_ok,
-                jnp.where(lum,lum_ok,jnp.where(entry_weather,weather_ok,component & component_ok)))))
+                jnp.where(lum,lum_ok,jnp.where(entry_weather,weather_ok,
+                    jnp.where(move_weather,move_weather_ok,jnp.where(clock_weather,clock_weather_ok,component & component_ok)))))))
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -469,10 +504,12 @@ def project_device(state, tape, before_registry, after_registry, tables):
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),item_payload),axis=1)
         semantic=jnp.where(lum[:,None],item_semantic,semantic)
         weather_payload=jnp.stack((jnp.full_like(z,public_field.WEATHER),
-            tables.weather_public[jnp.clip(raw[:,6],0,4)],z,jnp.ones_like(z),z,z,z,z),axis=1)
+            tables.weather_public[jnp.clip(raw[:,6],0,4)],
+            (clock_weather&(raw[:,9]==weather_progress.UPKEEP)).astype(jnp.int32),
+            entry_weather.astype(jnp.int32),z,z,z,z),axis=1)
         weather_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.FIELD)),
             semantic_sequence,turn,phase,absent,absent,absent,absent),axis=1),weather_payload),axis=1)
-        semantic=jnp.where(entry_weather[:,None],weather_semantic,semantic)
+        semantic=jnp.where(any_weather[:,None],weather_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)

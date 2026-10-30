@@ -61,7 +61,7 @@ class WeatherProgressTests(unittest.TestCase):
         for row in range(4):
             self.assertEqual(self.words(trace, row).tolist(),
                 [[13, row % 2, [2, 4, 3, 1][row], -1, -1, 0, row + 1, int(moves[row]), 0, 5]])
-        self.assertEqual(trace.refusal.tolist(), [256] * 4)
+        self.assertEqual(trace.refusal.tolist(), [0] * 4)
 
     def test_same_weather_temporary_permanent_none_and_ineligible_do_not_reveal_uncalled_ids(self):
         old = j.array([0, 1, 1, 3, 4, 0, 2, 0], j.int32)
@@ -73,7 +73,7 @@ class WeatherProgressTests(unittest.TestCase):
             _weather_trace=self.tape(8), _actor_side=0, _actor_physical=2, _move_id=moves)
         self.same((actual, counter), weather.set_move(old, counters, requested, eligible=eligible))
         self.assertEqual(trace.count.tolist(), [1, 0, 0, 1, 0, 0, 1, 0])
-        self.assertEqual(trace.refusal.tolist(), [256, 0, 0, 256, 0, 0, 256, 0])
+        self.assertEqual(trace.refusal.tolist(), [0, 256, 256, 0, 256, 0, 0, 0])
         self.assertFalse(np.isin(np.asarray(trace.words), [999998, 999997, 999996, 999995, 999994]).any())
         self.assertEqual(counter.tolist(), [5, 2, 0, 5, 1, 0, 5, 0])
 
@@ -105,7 +105,7 @@ class WeatherProgressTests(unittest.TestCase):
         self.assertEqual(self.words(trace, 0).tolist(), [[14, -1, -1, -1, -1, 1, 1, 2, 1, 1]])
         self.assertEqual(self.words(trace, 1).tolist(), [[14, -1, -1, -1, -1, 2, 0, 1, 0, 2]])
         self.assertEqual(self.words(trace, 2).tolist(), [[14, -1, -1, -1, -1, 3, 3, 0, 0, 1]])
-        self.assertEqual(trace.refusal.tolist(), [256, 256, 256, 256, 0, 0, 0])
+        self.assertEqual(trace.refusal.tolist(), [0] * 7)
 
     def test_missing_or_invalid_source_identity_stays_unknown_without_fabricated_move(self):
         old, count, request = j.array([0], j.int32), j.array([0], j.int32), j.array([1], j.int32)
@@ -119,7 +119,7 @@ class WeatherProgressTests(unittest.TestCase):
                 self.assertEqual((w.tolist(), c.tolist()), ([1], [5]))
                 self.assertEqual(trace.count.tolist(), [0]); self.assertEqual(trace.refusal.tolist(), [256])
         _, _, no_op = weather.set_move(request, count, request, _weather_trace=self.tape())
-        self.assertEqual(no_op.refusal.tolist(), [0]); self.assertFalse(bool(no_op.words.any()))
+        self.assertEqual(no_op.refusal.tolist(), [256]); self.assertFalse(bool(no_op.words.any()))
 
     def test_invalid_weather_or_clock_operation_is_unknown_not_a_lexical_event(self):
         old = j.array([6, 1, 0], j.int32); counters = j.array([2, -1, 2], j.int32)
@@ -179,7 +179,7 @@ class WeatherProgressTests(unittest.TestCase):
         w, c, trace = weather.set_move(j.array([0], j.int32), j.array([0], j.int32), j.array([1], j.int32),
             _weather_trace=initial, _actor_side=0, _actor_physical=2, _move_id=91)
         _, _, trace = weather.residual_clock(w, c, _weather_trace=trace)
-        self.assertEqual(trace.count.tolist(), [1]); self.assertEqual(trace.refusal.tolist(), [128 | 256 | public.OVERFLOW])
+        self.assertEqual(trace.count.tolist(), [1]); self.assertEqual(trace.refusal.tolist(), [128 | public.OVERFLOW])
         with patch.object(callbacks, '_unknown', side_effect=lambda trace, eligible: trace):
             _, _, preserved = weather.set_move(j.array([0], j.int32), j.array([0], j.int32), j.array([1], j.int32),
                 _weather_trace=initial, _actor_side=0, _actor_physical=2, _move_id=91)

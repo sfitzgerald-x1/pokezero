@@ -883,8 +883,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         hp = jnp.maximum(0,_active(work.hp,work,side)-recoil)
         work = work._replace(hp=_set_active(work.hp,work,side,hp))
         if table.weather is not None:
-            weather,counter = climate.set_move(work.weather,work.weather_counter,
-                table.weather.move_weather[move],eligible=acts)
+            if _lifecycle_trace:
+                weather,counter,_public_trace = climate.set_move(work.weather,work.weather_counter,
+                    table.weather.move_weather[move],eligible=acts,_weather_trace=_public_trace,
+                    _actor_side=side,_actor_physical=work.active[rows,side],_move_id=move)
+            else:
+                weather,counter = climate.set_move(work.weather,work.weather_counter,
+                    table.weather.move_weather[move],eligible=acts)
             work = work._replace(weather=weather,weather_counter=counter)
         if table.entry is not None:
             old_layers = work.spikes[rows,foe]
@@ -935,7 +940,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 wish_counter=work.wish_counter.at[:,side].set(wish.counter))
     if table.weather is not None:
         ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
-        weather,counter = climate.residual_clock(work.weather,work.weather_counter,eligible=ordinary)
+        if _lifecycle_trace:
+            weather,counter,_public_trace = climate.residual_clock(work.weather,work.weather_counter,
+                eligible=ordinary,_weather_trace=_public_trace)
+        else:
+            weather,counter = climate.residual_clock(work.weather,work.weather_counter,eligible=ordinary)
         work = work._replace(weather=weather,weather_counter=counter)
         active_abilities = work.ability[rows[:,None],sides,work.active]
         active_hp = work.hp[rows[:,None],sides,work.active]

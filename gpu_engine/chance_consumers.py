@@ -47,7 +47,7 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "1ceb6f9497af5b442cf63bce3a47e87651d65133b382857838e13243412647d0",
+    "transition.py": "103198cc5d2e8c2943193ed244710d620bdd767013a804bf5ad91c49fd3415fe",
     "mechanics.py": "e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661",
     "pursuit.py": "2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309",
     "effects.py": "0138f0e90811c4829666960a106d80ed2d59f6cd06a8ff83324d189465f73104",
@@ -56,13 +56,13 @@ SOURCE_PINS = {
     "sleep_talk.py": "968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154",
     "encore.py": "63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd",
     "phazing.py": "8f82d4894f03b39936de0e79b17f0b7715fdfe2f0edb6a7a42d44f1840671bee",
-    "weather.py": "a5014e990f08bfb0cf04ac4aba5bc4cbc44717071601f80d3c340bfac79cade5",
+    "weather.py": "78ab2d2c7bb67147402a1e60bedeada1081b52747576114027b23872bcaa0865",
     "state.py": "e657242e2d7191c4c7c1acb265d8f5751a6f00acaa08c08998af208d90124fe6",
     "entry.py": "cec6ccabba4bd585c9dcdbcb3ec5ffcc4d26f37a88e7f6d3ba1cb64a6e39bdae",
     "action_history.py": "a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407",
 }
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "c00f2ea0f1bb33637efb9583e7097e832e1c83d3ed2e75b6d6954b7ecc2e984a"
+DOMAIN_SHA256 = "65e782a004d2a512480a97d43f055628788d5c50345be57847bac7ca3f8ebe4a"
 
 
 def _host(value):
