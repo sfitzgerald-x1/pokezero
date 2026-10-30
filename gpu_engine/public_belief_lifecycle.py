@@ -29,6 +29,7 @@ class LifecycleTables(NamedTuple):
     ability_binding: jax.Array
     move_binding: jax.Array
     binding: jax.Array
+    absorb_heal: jax.Array        # frozen semantic Water Absorb / Volt Absorb IDs
 
 
 def _binding(x,shape=(8,)):
@@ -51,13 +52,15 @@ def compile_lifecycle(species_catalog,abilities,move_catalog,sleep_tables):
     ids=[abilities.ids.get(name,0) for name in ('naturalcure','earlybird','shedskin')]
     if any(x<=0 for x in ids):raise ValueError('lifecycle requires semantic Natural Cure, Early Bird and Shed Skin ability rows')
     cures=[name in ('healbell','aromatherapy') for name in move_catalog.names]
-    payload=dict(schema='pokezero.public_belief_lifecycle.v1',abilities=ids,cure_moves=cures,
+    absorb_heal=[name in ('waterabsorb','voltabsorb') for name in abilities.names]
+    payload=dict(schema='pokezero.public_belief_lifecycle.v2',abilities=ids,cure_moves=cures,absorb_heal=absorb_heal,
         species=np.asarray(species_catalog.device.binding).tolist(),sleep=np.asarray(sleep_tables.binding).tolist(),
         ability=np.asarray(abilities.device.binding).tolist(),move=np.asarray(move_catalog.device.binding).tolist())
     digest=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).digest()
     return LifecycleTables(*(jnp.asarray(x,jnp.int32) for x in ids),jnp.asarray(cures,bool),
         jnp.asarray(len(abilities.names),jnp.int32),species_catalog.device.binding,sleep_tables.binding,
-        abilities.device.binding,move_catalog.device.binding,jnp.asarray(np.frombuffer(digest,dtype='>u4').astype(np.uint32)))
+        abilities.device.binding,move_catalog.device.binding,jnp.asarray(np.frombuffer(digest,dtype='>u4').astype(np.uint32)),
+        jnp.asarray(absorb_heal,bool))
 
 
 class LifecycleState(NamedTuple):
@@ -95,7 +98,9 @@ def apply(state,sleep,abilities,mons,tables,*,operation,side=-1,slot=-1,encounte
             ('exit_cure_count',(2,6),jnp.int32),('exit_status',(2,6),jnp.bool_),('shed_skin',(2,6),jnp.bool_)):
         value=getattr(state,name)
         if value.shape!=(batch,*tail) or value.dtype!=dtype:raise ValueError('lifecycle state shape/dtype: '+name)
-    for x in tables[5:]:_binding(x)
+    for x in (tables.species_binding,tables.sleep_binding,tables.ability_binding,tables.move_binding,tables.binding):_binding(x)
+    if tables.absorb_heal.ndim!=1 or not tables.absorb_heal.shape[0] or tables.absorb_heal.dtype!=jnp.bool_:
+        raise ValueError('HP absorb semantic mask requires nonempty boolean ability rows')
     _binding(producer_binding)
     for x in tables[:3]+(tables.ability_count,):
         if x.shape!=() or x.dtype!=jnp.int32:raise ValueError('lifecycle ability scalar requires int32')
@@ -119,6 +124,7 @@ def apply(state,sleep,abilities,mons,tables,*,operation,side=-1,slot=-1,encounte
     global_fact=op==UPKEEP;team=op==CURE_TEAM;targeted=~global_fact&~team
     ok=jnp.all(state.binding==tables.binding,axis=-1)&jnp.all(sleep.binding==tables.sleep_binding,axis=-1)
     ok &= jnp.all(producer_binding==tables.binding)
+    ok &= (tables.ability_count==tables.absorb_heal.shape[0])&~tables.absorb_heal[0]
     ok &= jnp.all(abilities.binding==tables.ability_binding,axis=-1)
     for binding in (sleep.species_binding,abilities.species_binding,mons.species_binding):ok &= jnp.all(binding==tables.species_binding,axis=-1)
     ok &= (op>=ARRIVE)&(op<=UPKEEP)&jnp.all(state.cure_count>=0,axis=-1)&jnp.all(state.exit_cure_count>=-1,axis=(1,2))

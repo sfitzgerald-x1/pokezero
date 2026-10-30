@@ -80,6 +80,10 @@ class ContextState(NamedTuple):
 
 
 def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None, lifecycle_tables=None, clause_tables=None, switch_tables=None, nonproc_tables=None,mudshot_tables=None,mudshot_move_id=0):
+    if lifecycle_tables is not None:
+        if (lifecycle_tables.absorb_heal.shape!=(len(abilities.names),)
+                or lifecycle_tables.absorb_heal.dtype!=jnp.bool_):
+            raise ValueError('HP absorb semantics require the frozen B-less boolean ability namespace')
     if mudshot_tables is not None:
         if nonproc_tables is None or sleep_tables is None or refresh_tables is None:
             raise ValueError('Mud Shot requires ordered non-proc/sleep/source consumers')
@@ -651,6 +655,18 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         life,_,ok=life_step(life,a,lifecycle_api.SHED_SKIN_ACTIVATE,shed&shed_ok&summary_ok,aid=data[:,1])
         summary_ok &= ok
         summary=summary._replace(proc_seen=jnp.where(shed&shed_ok&summary_ok,1,summary.proc_seen))
+        # HP absorb outcomes require the real proc, not a generic permission to
+        # close any HP frame with OUTCOME. Bind both directions so removing the
+        # header marker cannot erase the outcome while retaining its ability.
+        hp_proc=valid&is_ability&(summary.family==refresh_stream.HP)&(data[:,2]==0)
+        word=summary.raw_meta[:,0];marked=refresh_stream.hp_absorb(word)
+        hp_side,hp_slot,hp_aid=refresh_stream.hp_absorb_address(word)
+        aid=jnp.clip(data[:,1],0,tables.lifecycle.absorb_heal.shape[0]-1)
+        absorb=hp_proc&tables.lifecycle.absorb_heal[aid]
+        checked=hp_proc&(absorb|marked)
+        proc_ok=marked&absorb&(summary.proc_seen==0)&(side==hp_side)&(slot==hp_slot)&(data[:,1]==hp_aid)
+        summary_ok &= ~checked|proc_ok
+        summary=summary._replace(proc_seen=jnp.where(checked&proc_ok&summary_ok,1,summary.proc_seen))
     before_ability=a
     rev = ability.reveal(a, mons, tables.abilities, side=side, slot=slot, encounter=data[:, 0],
         ability_id=data[:, 1], authoritative=data[:, 2] == 1, valid=valid & is_ability)
@@ -706,7 +722,11 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         summary_ok &= ~status|((summary.family==refresh_stream.STATUS)&(data[:,2]==summary.raw_meta[:,1])&
             (2*data[:,3]==(summary.raw_meta[:,0]&2)))
         summary_ok &= ~cure|((summary.family==refresh_stream.CURE)&(data[:,2]==summary.raw_meta[:,1]))
-        summary_ok &= ~hp|((summary.family==refresh_stream.HP)&(data[:,2]==summary.raw_meta[:,3])&(data[:,3]==summary.raw_meta[:,0]))
+        hp_marked=refresh_stream.hp_absorb(summary.raw_meta[:,0])
+        hp_side,hp_slot,_=refresh_stream.hp_absorb_address(summary.raw_meta[:,0])
+        summary_ok &= ~hp|((summary.family==refresh_stream.HP)&(data[:,2]==summary.raw_meta[:,3])&
+            (data[:,3]==jnp.where(hp_marked,summary.raw_meta[:,0]&3,summary.raw_meta[:,0]))&
+            (~hp_marked|((side==hp_side)&(slot==hp_slot)&(summary.proc_seen==1))))
         summary_ok &= ~cant|(summary.family==refresh_stream.CANT)
         # A sleep attempt upserts before replacing its counter; both calls
         # see the same candidate-set predicates, including a standing pin.
@@ -731,7 +751,9 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
                 (refresh_stream.CANT,cant),(refresh_stream.TEAM,team),(refresh_stream.FAINT,valid&faint)):
             closing_kind=jnp.full(batch,tendency_api.CANT if code==refresh_stream.CANT else
                 tendency_api.FAINT if code==refresh_stream.FAINT else tendency_api.OTHER,jnp.int32)
-            proof=jnp.stack((side,closing_kind,jnp.zeros(batch,jnp.int32),jnp.full(batch,-1,jnp.int32),
+            absorb_hp=(code==refresh_stream.HP)&hp_marked
+            closing_kind=jnp.where(absorb_hp,tendency_api.OUTCOME,closing_kind)
+            proof=jnp.stack((side,closing_kind,jnp.zeros(batch,jnp.int32),jnp.where(absorb_hp,side,-1),
                 jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32)),axis=-1)
             summary,ok=refresh_stream.main(summary,code,proof,use&summary_ok);summary_ok &= ok
     accepted = jnp.where(arrival, aa & ma, jnp.where(faint, fa, jnp.where(is_move, update.admitted,
