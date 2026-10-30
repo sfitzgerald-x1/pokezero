@@ -35,6 +35,14 @@ def run_suite(suite, *, stream=None) -> int:
     return int(not result.wasSuccessful() or bool(result.skipped) or result.testsRun == 0)
 
 
+def _case_identity(test):
+    # Component fixtures legitimately use id(name) as a lookup helper. Do not
+    # invoke that unrelated override when identifying the discovered method.
+    if isinstance(test, unittest.FunctionTestCase):
+        return unittest.FunctionTestCase.id(test)
+    return unittest.TestCase.id(test)
+
+
 def _manifest(test):
     """Describe discovery without replacing any suite's original run method."""
     count = test.countTestCases()
@@ -42,7 +50,7 @@ def _manifest(test):
         raise ValueError("invalid discovery test count")
     name = type(test).__module__ + "." + type(test).__qualname__
     if isinstance(test, unittest.TestCase):
-        identity = test.id()
+        identity = _case_identity(test)
         if count != 1 or type(identity) is not str or not identity:
             raise ValueError("case requires one stable discovery identity")
         return dict(kind="case", type=name, count=1, id=identity)
@@ -74,7 +82,7 @@ class _ObservedResult(unittest.TextTestResult):
         self.observed_ids = []
 
     def startTest(self, test):
-        self.observed_ids.append(test.id())
+        self.observed_ids.append(_case_identity(test))
         super().startTest(test)
 
 

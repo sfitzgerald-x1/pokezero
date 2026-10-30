@@ -108,6 +108,22 @@ class Case(unittest.TestCase):
             self.assertEqual(terminal['tests_run'], 4)
             self.assertNotIn('beta', [json.loads(line)['label'] for line in log.read_text().splitlines()])
 
+    def test_real_case_lookup_helper_named_id_does_not_override_discovered_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            (root/'test_gpu_engine_control.py').write_text(textwrap.dedent('''
+                import unittest
+                class Case(unittest.TestCase):
+                 def id(self, name):return {'fixture': 7}[name]
+                 def test_a(self):self.assertEqual(self.id('fixture'),7)
+                 def test_b(self):pass
+            '''))
+            result,terminal=self.isolated(root)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue(terminal['passed'])
+            self.assertEqual(terminal['expected_test_cases'],2)
+            self.assertEqual(terminal['tests_run'],2)
+
     def test_real_process_skip_failure_empty_and_abrupt_exits_fail_closed(self):
         for label, body in [('skip', "self.skipTest('deliberate control')"),
                 ('failure', "self.fail('deliberate control')"), ('exit_zero', 'os._exit(0)'),
