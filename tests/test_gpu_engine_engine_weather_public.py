@@ -122,6 +122,34 @@ class WeatherPublicTests(unittest.TestCase):
         self.assertEqual(result.public.context.field.weather.tolist(),[0,0])
         self.assertFalse(bool(result.public.context.field.weather_set.any()))
 
+    def test_permanent_clock_requires_one_actual_residual_boundary_and_whole_row_rollback(self):
+        frame=self.initial(arrays=self.arrays('drizzle','pressure'))
+        s,p=self.start(frame,j.array([0,1],j.int32))
+        initial=self.fast(s,frame,p)
+        changed=self.step(frame,[[8,8],[8,8]])
+        baseline=self.fast(initial.projection.state,changed,initial.public)
+        self.assertEqual(baseline.projection.error.tolist(),[0,0])
+        kinds=np.asarray(changed.callbacks.words[0,:,0])
+        clock=int(np.flatnonzero(kinds==14)[0]);blank=int(np.flatnonzero(kinds==7)[0])
+        self.assertGreater(clock,blank)
+        for duplicate in (True,False):
+            indices=np.arange(64)
+            if duplicate:
+                indices[clock+1:]=np.arange(clock,63)
+            else:indices[clock],indices[blank]=indices[blank],indices[clock]
+            updates={}
+            for name in ('words','event_turn','event_phase','event_generation','switch_details'):
+                a=np.array(getattr(changed.callbacks,name));a[0]=a[0,indices];updates[name]=j.array(a)
+            updates['count']=changed.callbacks.count.at[0].add(int(duplicate))
+            bad=changed._replace(callbacks=changed.callbacks._replace(**updates))
+            failed=self.fast(initial.projection.state,bad,initial.public)
+            self.assertNotEqual(int(failed.projection.error[0]),0)
+            self.assertEqual(int(failed.projection.error[1]),0)
+            self.assertFalse(bool(failed.projection.frames.valid[:,0].any()))
+            self.assertEqual(int(failed.public.context.field.weather_upkeeps[0]),0)
+            self.assertEqual(int(failed.public.cursor.sequence[0]),int(initial.public.cursor.sequence[0]))
+            self.same(full._commit_public(j.array([False,True]),initial.public,failed.public),failed.public)
+
     def test_namespace_edge_drift_and_unattributed_copy_stay_closed(self):
         catalog=self.compiled.causal.weather_catalog
         before=catalog.field.weather_ids

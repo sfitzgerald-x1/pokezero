@@ -276,7 +276,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
     capacity = 64*width
 
     def step(carry, index):
-        words, count, sequence, turn, phase, slots, live, species, statuses, current_weather,permanent,remaining,called,error, overflow = carry
+        words, count, sequence, turn, phase, slots, live, species, statuses, current_weather,permanent,remaining,called,weather_window,weather_seen,error, overflow = carry
         semantic = lower.chunk.words[:, index]; kind = semantic[:, 0]
         present = lower.chunk.valid[:, index]
         move = kind == int(inputs.Kind.MOVE); condition = kind == int(inputs.Kind.CONDITION)
@@ -344,7 +344,8 @@ def project_device(state, tape, before_registry, after_registry, tables):
         identity &= ~move_weather | ((old_weather==current_weather)&
             (tape.words[:,index,8]==remaining)&called_match&live[rows,safe])
         identity &= ~clock_weather | ((old_weather==current_weather)&
-            (tape.words[:,index,7]==remaining)&((remaining==0)==permanent))
+            (tape.words[:,index,7]==remaining)&((remaining==0)==permanent)
+            & weather_window & ~weather_seen)
         error = jnp.where(present & (error == 0) & ~identity, int(inputs.Error.IDENTITY), error)
         use = present & (error == 0)
         next_species = species.at[rows, safe, safe_slot].set(
@@ -438,13 +439,17 @@ def project_device(state, tape, before_registry, after_registry, tables):
                 jnp.where(move_weather,5,tape.words[:,index,8])),remaining),
             jnp.where((use&move)[:,None],jnp.stack((semantic[:,4],semantic[:,5],semantic[:,9],semantic[:,2]),axis=1),
                 jnp.where((use&(arrival|faint|(kind==int(inputs.Kind.ACTION_CHUNK_END))|clock_weather))[:,None],-1,called)),
+            jnp.where(use&(kind==int(inputs.Kind.ACTION_CHUNK_END)),True,
+                jnp.where(use&(move|arrival|faint|clock_weather|(kind==int(inputs.Kind.TURN))|
+                    (kind==int(inputs.Kind.UPKEEP))),False,weather_window)),
+            jnp.where(use&(kind==int(inputs.Kind.TURN)),False,weather_seen|(use&clock_weather)),
             error, overflow), None
 
     init = (jnp.zeros((b, capacity, 16), jnp.int32), jnp.zeros(b, jnp.int32), state.sequence,
         state.causal.cursor.turn, state.causal.cursor.phase, state.causal.cursor.public_slot,
         state.live, state.species, state.status,state.weather,state.weather_permanent,state.weather_remaining,
-        jnp.full((b,4),-1,jnp.int32),error, jnp.zeros(b, bool))
-    (words, count, sequence, _, _, _, live, species,statuses,current_weather,permanent,remaining,_,error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
+        jnp.full((b,4),-1,jnp.int32),jnp.zeros(b,bool),jnp.zeros(b,bool),error, jnp.zeros(b, bool))
+    (words, count, sequence, _, _, _, live, species,statuses,current_weather,permanent,remaining,_,_,_,error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
     ok = error == 0
     next_state = _commit(ok, state, StreamState(lower.state, sequence, live, species,statuses,current_weather,permanent,remaining))
     next_state = next_state._replace(causal=next_state.causal._replace(admitted=state.causal.admitted & ok,
