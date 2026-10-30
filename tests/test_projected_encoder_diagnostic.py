@@ -17,11 +17,28 @@ from pokezero.projected_encoder_diagnostic import (
 
 class DiagnosticsTests(unittest.TestCase):
     def run_fixture(self, *, adapter_type=FakeAdapter, feed=fake_feed, forward=True,
-                    projector_type=FakeProjector):
+                    projector_type=FakeProjector, checkpoint=None, interleaved_line=None):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = collection_fixtures.ProjectedCollectionTests()
-            kwargs = fixture.prepare(root)
+            if interleaved_line is None:
+                kwargs = fixture.prepare(root)
+            else:
+                from pokezero.mirror_value_probe import digest
+                cls = collection_fixtures.fixtures.RecordedEncoderInventoryTests
+                original_rows = cls.rows
+                def rows(self, battle):
+                    first, end = original_rows(self, battle)
+                    if battle['index'] == 0:
+                        first['protocol_delta'].append(interleaved_line)
+                        first['protocol_end'] += 1
+                        first['public_prefix_sha256'] = digest(first['protocol_delta'])
+                        first['root_id'] = digest([battle['battle_id'], 0,
+                            first['public_prefix_sha256'], first['requests']])
+                        end['protocol_start'] += 1; end['protocol_end'] += 1
+                    return first, end
+                with patch.object(cls, 'rows', rows):
+                    kwargs = fixture.prepare(root)
             adapters = {seat: adapter_type(seat) for seat in ('p1', 'p2')}
             def factory(config, *, battle_id):
                 return {seat: FakeEnvironment(battle_id, seat) for seat in ('p1', 'p2')}
@@ -37,7 +54,7 @@ class DiagnosticsTests(unittest.TestCase):
                 stack.enter_context(patch(module+'new_player_reference_environments', side_effect=factory))
                 stack.enter_context(patch(module+'compare_diagnostic_battle', side_effect=battle))
                 result = compare_diagnostic_collection(root, **kwargs, adapters=adapters,
-                    reference_config={}, with_forward=forward)
+                    reference_config={}, with_forward=forward, checkpoint=checkpoint)
             return result, adapters
 
     def test_complete_positive_all_columns_and_paired_forward(self):
@@ -80,6 +97,39 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertFalse(m['model_forward_complete'])
         self.assertEqual(m['policy_argmax_full_roster_identification_bounds'][1], 1.)
         self.assertGreater(len(adapters['p2'].forwards), 0)
+
+    def test_interleaved_public_request_order_refuses_prefix_but_keeps_later_battles(self):
+        for line, kind in (('|', 'SEPARATOR'), ('|upkeep', 'upkeep')):
+            with self.subTest(kind=kind):
+                result, adapters = self.run_fixture(interleaved_line=line)
+                metrics = result['metrics']
+                self.assertEqual(metrics['processed_views'], 24)
+                self.assertEqual(metrics['refused_input_views'], 3)
+                self.assertEqual(metrics['views'], 21)
+                self.assertEqual(metrics['refusals_by_line_kind'], {kind: 3})
+                self.assertEqual(metrics['refusals_by_stage'], {'request_order': 3})
+                records = metrics['refusal_records']
+                self.assertEqual([r['propagated_prefix_refusal'] for r in records], [False, False, True])
+                self.assertTrue(all(r['line_sha256'] and r['line_offset'] == 4 for r in records))
+                self.assertEqual([len(a.feeds) for a in adapters.values()], [14, 14])
+                self.assertEqual([len(a.forwards) for a in adapters.values()], [28, 14])
+                for row in metrics['numeric_columns'] + metrics['categorical_columns']:
+                    self.assertEqual(row['compared_cells'] + row['refused_cells'], row['expected_cells'])
+
+    def test_partial_checkpoint_keeps_unknown_unprocessed_roster_without_weakening_final(self):
+        reports = []
+        result, _ = self.run_fixture(checkpoint=reports.append)
+        self.assertEqual(len(reports), 8)
+        first, last = reports[0]['metrics'], reports[-1]['metrics']
+        self.assertEqual((first['processed_views'], first['unprocessed_views']), (3, 21))
+        self.assertFalse(first['complete_roster_processed'])
+        self.assertEqual(first['policy_argmax_full_roster_identification_bounds'], [3/24, 1.])
+        self.assertTrue(all(row['unprocessed_cells'] == 21*23 for row in first['numeric_columns']))
+        self.assertEqual(last, result['metrics'])
+        tally = DiagnosticTally(2)
+        self.assertEqual(tally.report(require_complete=False)['unprocessed_views'], 2)
+        with self.assertRaises(ValueError):
+            tally.report()
 
     def test_one_decision_encode_refusal_does_not_taint_next_decision(self):
         class Refuses(FakeAdapter):
@@ -217,6 +267,24 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(self.cli(output, error=ValueError('source integrity failure')), 1)
             self.assertFalse((output/'column-table.csv').exists())
             self.assertFalse((output/'comparison.json').exists())
+
+    def test_cli_preserves_atomic_partial_metrics_after_a_later_fatal_failure(self):
+        checkpoints = []
+        self.run_fixture(checkpoint=checkpoints.append)
+        def fail_later(*args, checkpoint, **kwargs):
+            checkpoint(checkpoints[0])
+            checkpoint(checkpoints[1])
+            raise ValueError('authored later source-integrity failure')
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'output'
+            self.assertEqual(self.cli(output, error=fail_later), 1)
+            kept = json.loads((output/'progress.json').read_text())
+            self.assertEqual(kept, checkpoints[1])
+            self.assertEqual(kept['battles_processed'], 2)
+            self.assertEqual(kept['metrics']['unprocessed_views'], 18)
+            self.assertFalse(kept['metrics']['complete_roster_processed'])
+            self.assertFalse((output/'column-table.csv').exists())
+            self.assertFalse((output/'.progress-next.json').exists())
 
 
 if __name__ == '__main__':

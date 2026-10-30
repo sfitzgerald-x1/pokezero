@@ -97,10 +97,11 @@ class DiagnosticTally:
         if kwargs:
             self.value_abs_sum += float(abs(np.float64(av) - np.float64(rv)))
 
-    def report(self):
+    def report(self, *, require_complete=True):
         metrics = self.parity.report()
         expected, seen = self.parity.expected_views, len(self.seen)
-        if seen != expected or self.parity.rows + self.input_refusals != seen:
+        if ((require_complete and seen != expected)
+                or self.parity.rows + self.input_refusals != seen):
             raise ValueError('every fixed-roster decision must be compared or refused exactly once')
         if self.parity.forward_rows + self.forward_refusals not in (0, self.parity.rows):
             raise ValueError('paired forward denominator is incomplete')
@@ -108,6 +109,7 @@ class DiagnosticTally:
             for row in metrics[family]:
                 row.update(expected_cells=expected*23, compared_cells=row['cells'],
                     refused_decisions=self.input_refusals, refused_cells=self.input_refusals*23,
+                    unprocessed_decisions=expected-seen, unprocessed_cells=(expected-seen)*23,
                     refusal_scope='unknown_whole_observation_not_writer_specific',
                     compared_cell_mismatch_rate=(row['mismatched_cells']/row['cells']
                                                  if row['cells'] else None))
@@ -117,7 +119,8 @@ class DiagnosticTally:
                 raise ValueError('all 173 input columns required')
         n = self.parity.forward_rows
         metrics.update(processed_views=seen, refused_input_views=self.input_refusals,
-            refused_forward_views=self.forward_refusals, complete_roster_processed=True,
+            refused_forward_views=self.forward_refusals, complete_roster_processed=seen == expected,
+            unprocessed_views=expected-seen,
             model_forward_complete=n == expected,
             policy_argmax_agreement_on_compared_views=metrics['policy_argmax_agreement'],
             policy_argmax_full_roster_identification_bounds=[self.parity.argmax_equal/expected,
@@ -155,7 +158,33 @@ def compare_diagnostic_battle(rows, *, battle, stream_id, adapters, environments
             cursor.close(row)
             continue
         original = cursor.advance(row)
-        requests = _own_request_deltas(row)
+        try:
+            requests = _own_request_deltas(row)
+        except ValueError as error:
+            # The cursor has already validated source hashes and owning request
+            # identities. Valid interleaving is unsupported by this split driver;
+            # it is not corrupt source and must not end the fixed roster.
+            if str(error) != 'interleaved public/request boundary requires ordered projection':
+                raise
+            requests = {seat: [] for seat in SEATS}
+            private_seen = False
+            cause = None
+            for offset, line in enumerate(row['protocol_delta']):
+                if line.startswith('|request|'):
+                    private_seen = True
+                    packet = json.loads(line[len('|request|'):])
+                    requests[packet['side']['id']].append(line)
+                elif private_seen and cause is None:
+                    cause = dict(stage='request_order', line_kind=line.split('|')[1] or 'SEPARATOR',
+                        line_offset=offset, line_sha256=hashlib.sha256(line.encode()).hexdigest(),
+                        error_type=type(error).__name__,
+                        origin_decision_round_index=row['decision_round_index'])
+            if cause is None:
+                raise ValueError('request-order refusal lacks its offending source line')
+            requests = {seat: tuple(lines) for seat, lines in requests.items()}
+            reference_taint = reference_taint or cause
+            for seat in SEATS:
+                device_taint[seat] = device_taint[seat] or cause
         seats = tuple(view.seat for view in original.views)
         references, batch = {}, None
         if projection_taint is None:
@@ -231,7 +260,7 @@ def compare_diagnostic_battle(rows, *, battle, stream_id, adapters, environments
 
 def compare_diagnostic_collection(collection, *, expected_collection_sha256,
                                   expected_cohort_sha256, adapters, reference_config,
-                                  with_forward, progress=None):
+                                  with_forward, progress=None, checkpoint=None):
     if type(with_forward) is not bool or set(adapters) != set(SEATS) or adapters['p1'] is adapters['p2']:
         raise ValueError('two independent adapters and explicit forward mode required')
     root = Path(collection).resolve(strict=True)
@@ -261,6 +290,14 @@ def compare_diagnostic_collection(collection, *, expected_collection_sha256,
                     raise ValueError('boundary artifact hash mismatch')
         finally:
             _close_environments(environments)
+        if checkpoint is not None:
+            checkpoint(dict(schema='pokezero.B2-projected-diagnostic-checkpoint.v1',
+                status='PARTIAL_FIXED_ROSTER_NOT_A_COMPLETE_RESULT',
+                collection_sha256=expected_collection_sha256,
+                cohort_sha256=expected_cohort_sha256,
+                battles_processed=i+1, expected_battles=inventory['battle_count'],
+                metrics=tally.report(require_complete=False),
+                actual_captured_wire=False, full_encoder_admitted=False))
         if progress is not None:
             progress(dict(battles_processed=i+1, expected_battles=inventory['battle_count'],
                 processed_views=len(tally.seen), compared_views=tally.parity.rows,
