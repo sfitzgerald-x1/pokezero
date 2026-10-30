@@ -257,6 +257,12 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     addresses = _bench_alias(candidate.addresses(), parts)
     if annotation=='target':
         public_mon_protocol._exact_active(addresses,candidate.active_idents(),parts[2])
+    if annotation=='fainted_target':
+        holder=addresses.known_idents.get(parts[2])
+        if (holder is None or candidate.live[holder.side]
+                or candidate.active[holder.side]!=holder.slot
+                or candidate.encounters[holder.side][holder.slot].ident!=parts[2]):
+            raise ValueError('Destiny Bond activation requires the exact registered fainted active ident')
     if annotation=='miss':
         for ident in parts[2:4]:
             public_mon_protocol._exact_active(addresses,candidate.active_idents(),ident)
