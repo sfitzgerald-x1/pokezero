@@ -308,12 +308,15 @@ def finish(tape,state,*,live,replacement,pending_before,residual_ready,defer_res
 
 def trace_step(state,actions,table,*,cursor,catalog,expected_binding,expected_engine_binding,
                chance_inputs=None,capacity=64,leftovers_compiled=None):
+    # A checked host boundary cannot be captured even when only cursor/chance
+    # (or no meaningful argument) is dynamic. Inspect this FRESH scalar, not
+    # selected input leaves, before any host guard or cached core invocation.
+    if leftovers_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('checked Leftovers lifecycle API must remain outside outer JIT')
     from . import transition
     public.check_catalog(catalog,table,expected_binding=expected_binding,expected_engine_binding=expected_engine_binding)
     leftovers_context=None
     if leftovers_compiled is not None:
-        if any(isinstance(value,jax.core.Tracer) for value in jax.tree.leaves((state,actions))):
-            raise ValueError('checked Leftovers lifecycle API must remain outside outer JIT')
         from . import engine_leftovers_callbacks as leftovers_callbacks
         data=leftovers_callbacks.check_compiled(leftovers_compiled)
         if leftovers_callbacks._COMPILED[leftovers_compiled][4] is not catalog:
