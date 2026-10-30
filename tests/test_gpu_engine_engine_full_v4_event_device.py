@@ -177,7 +177,7 @@ class FullV4EventDeviceTests(unittest.TestCase):
         result, _ = self.compare(result.projection.state, frame, result.public, wire)
         self.assertEqual(result.public.mons.active[:, 1].tolist(), [1, 1])
 
-    def test_expansion_overflow_and_unknown_details_are_whole_row_refusals(self):
+    def test_long_expansion_drains_and_unknown_details_remain_whole_row_refusals(self):
         frame = self.initial(); stream, current = self.observer(frame, j.array([0, 1], j.int32))
         result, _ = self.compare(stream, frame, current, [public_wire.WireState()]*2)
         frame = self.step(frame, [[0, 0], [0, 0]])
@@ -198,7 +198,7 @@ class FullV4EventDeviceTests(unittest.TestCase):
         self.assertGreater(isolated.public.cursor.sequence[1].item(), result.public.cursor.sequence[1].item())
         # Adversarial capacity fixture: repeat one actual declaration's words,
         # with the real closing clock receipts. Not claimed as a genuine core
-        # trace. This isolates expansion overflow from upstream payload errors.
+        # trace. This verifies lossless expansion beyond one public chunk.
         tape = frame.callbacks
         move = int(np.flatnonzero(np.array(tape.words[0, :, 0]) == d.engine.MOVE)[0])
         closing = np.flatnonzero(np.isin(np.array(tape.words[0, :, 0]), [life.ACTION_END, life.UPKEEP, life.TURN]))
@@ -209,15 +209,20 @@ class FullV4EventDeviceTests(unittest.TestCase):
             event_phase=repeated(tape.event_phase), event_generation=repeated(tape.event_generation),
             switch_details=repeated(tape.switch_details), count=j.full(2, len(selected), j.int32))
         over = d.project_frame(result.projection.state, frame._replace(callbacks=expanded), self.compiled.device)
-        self.assertTrue(bool((over.refusal & d.engine.OVERFLOW).all()))
-        self.assertFalse(bool(over.chunk.valid.any()))
-        self.assertFalse(bool(over.chunk.words.any()))
-        self.assertEqual(over.state.sequence.tolist(), result.projection.state.sequence.tolist())
+        self.assertFalse(bool((over.refusal & d.engine.OVERFLOW).any()))
+        self.assertEqual(over.error.tolist(),[0,0])
+        self.assertTrue(bool(over.chunk.more.all()))
+        for row in range(2):
+            words=np.asarray(over.frames.words[:,row])[np.asarray(over.frames.valid[:,row])]
+            self.assertGreater(len(words),64)
+            np.testing.assert_array_equal(words[:,1],np.arange(int(result.projection.state.sequence[row])+1,
+                int(over.state.sequence[row])+1))
         # Sequence bound refuses ALL generated rows, including a valid prefix.
         huge = result.projection.state._replace(sequence=j.full(2, 2**31-3, j.int32))
         refused = d.project_frame(huge, frame, self.compiled.device)
         self.assertFalse(bool(refused.chunk.words.any()))
         self.assertFalse(bool(refused.chunk.valid.any()))
+        self.assertFalse(bool(refused.frames.valid.any()))
 
     def test_off_owner_hidden_sets_health_and_stats_do_not_enter_admitted_public_state(self):
         baseline = self.initial()

@@ -105,6 +105,11 @@ class StatusCallbacksTests(unittest.TestCase):
                     lines.append(f'|-status|{active[target]}|{tokens[p[1]]}'+
                         ('|[from] move: Sleep Powder' if p[1]==1 else '') if p[1] else
                         f'|-curestatus|{active[target]}|{tokens[old]}|[msg]')
+                elif k==inputs.Kind.ITEM:
+                    old=status_map[int(frame.callbacks.words[row,index,6])]
+                    lines.append(f'|-enditem|{active[target]}|Lum Berry|[eat]')
+                    if old:lines.append(f'|-curestatus|{active[target]}|{tokens[old]}|[msg]')
+                    if int(frame.callbacks.words[row,index,8]):lines.append(f'|-end|{active[target]}|confusion')
                 elif k==inputs.Kind.TURN:lines.append(f'|turn|{turn}')
                 elif k==inputs.Kind.ACTION_CHUNK_END:lines.append('|')
                 elif k==inputs.Kind.UPKEEP:lines.append('|upkeep')
@@ -113,11 +118,18 @@ class StatusCallbacksTests(unittest.TestCase):
             new,ps=public_wire.project_lines(wire[row],lines,**v4.wire_kwargs(self.catalog))
             rows.append([e for p in ps for e in p.events]);next_wire.append(new)
         ns={k:np.array(getattr(self.compiled.device.namespaces,k)) for k in full._NAMES if k!='source_binding'}
-        expected=next(inputs.pack_chunks(np.array(frame.cursor.stream_id),rows,
+        expected=list(inputs.pack_chunks(np.array(frame.cursor.stream_id),rows,
             source_binding=np.array(self.catalog.source.device.binding),**ns))
-        want,error=v4.fold_chunk(current,expected,self.catalog);self.assertEqual(error.tolist(),[0,0])
+        want=current
+        for chunk in expected:
+            want,error=v4.fold_chunk(want,chunk,self.catalog);self.assertEqual(error.tolist(),[0,0])
         result=self.fast(state,frame,current);self.assertEqual(result.projection.error.tolist(),[0,0])
-        self.same(result.projection.chunk,expected);self.same(result.public,want)
+        self.same(result.projection.chunk,expected[0]);self.same(result.public,want)
+        for i,chunk in enumerate(expected):
+            self.same(result.projection.frames.words[i],chunk.words)
+            self.same(result.projection.frames.valid[i],chunk.valid)
+            self.same(result.projection.frames.more[i],chunk.more)
+        self.assertFalse(bool(result.projection.frames.valid[len(expected):].any()))
         self.assertFalse(bool(result.projection.full_encoder_admitted.any()))
         self.assertFalse(bool(result.projection.B4_qualified.any()))
         return result,next_wire
@@ -207,7 +219,7 @@ class StatusCallbacksTests(unittest.TestCase):
         arrays['item'][1,0]=self.metadata['vocabulary']['items'].index('lumberry')
         frame=self.initial(arrays=arrays)
         actual=self.step(frame,[[0,0],[0,0]])
-        self.assertTrue(bool((actual.callbacks.refusal & status.UNKNOWN_STATUS).all()))
+        self.assertFalse(bool((actual.callbacks.refusal & status.UNKNOWN_STATUS).any()))
         self.assertEqual(actual.state.status[:,1,0].tolist(),[0,0])
         state,current=self.start(frame,j.array([0,1],j.int32))
         initial=self.fast(state,frame,current)
@@ -245,7 +257,7 @@ class StatusCallbacksTests(unittest.TestCase):
         frame=self.initial(arrays=arrays)
         state,p=self.start(frame,j.array([0,1],j.int32));initial=self.fast(state,frame,p)
         mixed=self.step(frame,[[0,0],[1,0]])
-        self.assertEqual((mixed.callbacks.refusal & status.UNKNOWN_STATUS).tolist(),[status.UNKNOWN_STATUS,0])
+        self.assertEqual((mixed.callbacks.refusal & status.UNKNOWN_STATUS).tolist(),[0,0])
         result=self.fast(initial.projection.state,mixed,initial.public)
         self.assertNotEqual(result.projection.error[0].item(),0)
         self.assertEqual(result.projection.error[1].item(),0)
