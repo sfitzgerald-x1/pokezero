@@ -7,12 +7,50 @@ from pathlib import Path
 import tempfile
 import tarfile
 import unittest
+from unittest import mock
+from types import SimpleNamespace
 
 P=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('action_screen',P/'scripts/screen_value_head_actions.py')
 s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
 
 class ScreenTests(unittest.TestCase):
+    def test_later_history_is_hash_disclosed_without_bypassing_library_admission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory);legacy=base/'legacy';fresh=base/'fresh';output=base/'new-screen'
+            legacy.mkdir();fresh.mkdir();output.mkdir();history=legacy/'quarantine/engine-mcts-history';history.mkdir(parents=True)
+            known=['decision.contract_failure','renderer.sleeptalk_marker_missing_or_conflicting']
+            extra=['fallback.crate_search_failed','renderer.confusion_selfhit_ambiguous_executed_self_damage']
+            for i,code in enumerate(known+extra):s.write(history/f'failure-{i}.json',{'reason_codes':[code]})
+            inventory=dict(reason_codes=known,source_runs=[{k:{'file':k+'.json','sha256':'original-'+k} for k in ('bundle','diagnostic_receipt','terminal')}])
+            s.write(legacy/'gate0-inventory-r2.json',inventory);build={'fingerprint':'synthetic-build'};fixtures=[]
+            for i,code in enumerate(known):
+                row=dict(reason_codes=[code],original_bundle={'file':f'bundle-{i}.json','sha256':'original-bundle'},original_diagnostic={'sha256':'original-diagnostic'})
+                for field in ('fixture','verification'):
+                    p=fresh/f'{field}-{i}.json';s.write(p,{'synthetic':field});row[field]={'file':p.name,'sha256':s.file_sha(p)}
+                fixtures.append(row)
+            s.write(fresh/'current-capture-source-verification.json',dict(build=build,fixtures=fixtures))
+            plan=dict(admission_parent=str(base),legacy_capture_relative_root='legacy',legacy_inventory_sha256=s.file_sha(legacy/'gate0-inventory-r2.json'),
+                fresh_capture_fixtures=str(fresh),fresh_capture_verification_sha256=s.file_sha(fresh/'current-capture-source-verification.json'))
+            calls=[]
+            def library(path,**kwargs):
+                calls.append((path,kwargs));v=json.loads(path.read_bytes())
+                self.assertEqual(v['observed_reason_codes'],sorted(known));self.assertEqual(len(v['fixtures']),2)
+                self.assertEqual(kwargs,dict(build=build,scientific_path='engine-mcts',capture_directory=output/'quarantine'))
+                return {'sha256':s.file_sha(path)}
+            module=SimpleNamespace(require_capture_admission=library)
+            with mock.patch.dict('sys.modules',{'pokezero.failure_capture':module}),mock.patch.dict('os.environ'):
+                proof=s.prepare_capture_admission(plan,build,output)
+            self.assertEqual(len(calls),1);self.assertFalse(proof['all_historical_classes_qualified'])
+            self.assertEqual(proof['additional_historical_reason_codes_not_requalified'],sorted(extra))
+            disclosure=json.loads((output/'capture-history-disclosure.json').read_bytes())
+            self.assertEqual(len(disclosure['history_files']),4)
+            for row in disclosure['history_files']:self.assertEqual(row['sha256'],s.file_sha(legacy/row['file']))
+            # A real library refusal is still fatal; no substituted success proof.
+            another=base/'another-screen';another.mkdir()
+            with mock.patch.dict('sys.modules',{'pokezero.failure_capture':SimpleNamespace(require_capture_admission=mock.Mock(side_effect=ValueError('library refuses')))}):
+                with self.assertRaisesRegex(ValueError,'library refuses'):s.prepare_capture_admission(plan,build,another)
+
     def candidates(self):
         return [dict(root_id=str(i),battle_id='battle-'+str(i//3),cost_seat=seat,split='train') for i in range(12) for seat in ('p1','p2')]
 

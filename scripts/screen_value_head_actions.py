@@ -183,10 +183,22 @@ def prepare_capture_admission(plan,build,output):
     original=legacy/'gate0-inventory-r2.json'
     require(file_sha(original)==plan['legacy_inventory_sha256'],'closed inventory identity')
     inventory=json.loads(original.read_bytes());known=set(inventory['reason_codes'])
-    # Metadata inspection only. No old root, helper, policy or game is executed.
+    # Ordinary library admission validates its declared, build-qualified classes.
+    # Later historical classes are disclosed, not silently claimed qualified or
+    # made an extra screen veto. Every actual screen refusal stays in its roster.
+    history=[]
     for p in (legacy/'quarantine/engine-mcts-history').rglob('failure-*.json'):
-        require(set(json.loads(p.read_bytes())['reason_codes'])<=known,'unrepresented historical refusal class')
+        blob=p.read_bytes();codes=json.loads(blob)['reason_codes']
+        require(type(codes) is list and bool(codes) and all(type(c) is str and c for c in codes),'invalid historical refusal metadata')
+        history.append(dict(file=str(p.relative_to(legacy)),sha256=hashlib.sha256(blob).hexdigest(),reason_codes=codes))
+    history.sort(key=lambda row:row['file'])
+    extra=sorted({c for row in history for c in row['reason_codes']}-known)
+    disclosure=dict(history_files=history,qualified_fixture_reason_codes=sorted(known),
+        additional_historical_reason_codes_not_requalified=extra,all_historical_classes_qualified=not extra,
+        no_historical_replay=True,scope='Declared R4 fixture admission; additional historical classes remain unqualified. Actual screen refusals are retained, not scored as clean searches.')
+    write(output/'capture-history-disclosure.json',disclosure)
     inventory=copy.deepcopy(inventory)
+    inventory['history_scope']='Closed Gate0-r1 declared two-class inventory only; later history is separately hash-disclosed without a qualification claim.'
     for row in inventory['source_runs']:
         for key in ('bundle','diagnostic_receipt','terminal'):
             row[key]['file']=plan['legacy_capture_relative_root']+'/'+row[key]['file']
@@ -210,7 +222,8 @@ def prepare_capture_admission(plan,build,output):
     path=base/(output.name+'-capture-admission.json');write(path,admission)
     proof=require_capture_admission(path,build=build,scientific_path='engine-mcts',capture_directory=output/'quarantine')
     os.environ['POKEZERO_CAPTURE_ADMISSION']=str(path)
-    return proof
+    return dict(proof,history_disclosure_sha256=file_sha(output/'capture-history-disclosure.json'),
+        additional_historical_reason_codes_not_requalified=extra,all_historical_classes_qualified=not extra)
 
 
 def run(plan):
