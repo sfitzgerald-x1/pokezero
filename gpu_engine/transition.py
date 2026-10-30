@@ -968,7 +968,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         active_abilities = work.ability[rows[:,None],sides,work.active]
         active_hp = work.hp[rows[:,None],sides,work.active]
         effective_weather = climate.effective(table.weather,weather,active_abilities,active_hp)
-        if _lifecycle_trace:_weather_segment_before_count=_public_trace.count
+        if _lifecycle_trace:
+            _weather_segment_before_count=_public_trace.count
+            _weather_pre_writes=work  # actual AFTER Wish/clock, BEFORE either HP write
         # The field weather handler runs Weather on BOTH actives before
         # faintMessages/checkWin. A double last-mon weather KO is a Gen 3 tie.
         for side in range(2):
@@ -989,7 +991,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _weather_hp_context is not None:
                 _weather_segment=weather_hp_segment.order_segment_device(_public_trace,
                     _weather_segment_before_count,_weather_pre_wish,work,end_speed,
-                    _weather_hp_context[0],_weather_hp_context[1],eligible=ordinary)
+                    _weather_hp_context[0],_weather_hp_context[1],eligible=ordinary,
+                    pre_writes_state=_weather_pre_writes)
                 _public_trace=_weather_segment.tape
                 _weather_hp_record=_weather_segment.record
     # Selected order10/priority0 handlers snapshot SPEED before suborder.

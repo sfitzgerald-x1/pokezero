@@ -104,5 +104,20 @@ class WeatherHPRuntimeTests(unittest.TestCase):
             self.assertEqual(later.state.core.weather_profile.qualified_birth.tolist(),[False,False])
         finally:r['frame'].clear_cache()
 
+    def test_missing_both_actual_hp_receipts_refuses_and_rolls_back_public(self):
+        from gpu_engine import engine_weather_hp_segment as segment
+        session=self.construct();before=session.state
+        r=driver._checked(self.prepared);r['frame'].clear_cache();actual=segment.order_segment_device
+        def omit(tape,before_count,*args,**kwargs):
+            # Fault injection at the real post-write seam, with actual states.
+            return actual(tape._replace(count=before_count),before_count,*args,**kwargs)
+        try:
+            with patch.object(segment,'order_segment_device',side_effect=omit):
+                result,frame=self.advance(session)
+            self.assertTrue(bool(((frame.callbacks.refusal&256)!=0).all()))
+            self.assertEqual(result.state.core.admitted.tolist(),[False,False])
+            for old,new in zip(before.observers,result.state.observers):self.f().same(old.retained,new.retained)
+        finally:r['frame'].clear_cache()
+
 
 if __name__=='__main__':unittest.main()
