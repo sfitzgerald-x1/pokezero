@@ -223,6 +223,21 @@ class ExecutionAccountingTests(unittest.TestCase):
         self.assertEqual(int(out.public.cursor.sequence[0]),int(public.cursor.sequence[0]))
         self.assertEqual(int(result.refusal[1]),0)
 
+    def test_rejected_consume_retains_latest_source_reasons_but_freezes_inactive_peer(self):
+        ledger,frame,stream,public=self.transport_fixture()
+        ledger=ledger._replace(stage=ledger.stage.at[0,0].set(1))
+        frame=frame._replace(callbacks=frame.callbacks._replace(
+            refusal=frame.callbacks.refusal|j.full(2,256|a.UNKNOWN_EXECUTION,j.int32)))
+        result,out=a.consume_frame(ledger,frame,stream,public,active=j.array([True,False]),compiled=self.compiled)
+        self.assertTrue(int(result.refusal[0])&a.UNRESOLVED)
+        self.assertFalse(bool(out.projection.component_admitted.any()))
+        self.assertEqual(int(result.upstream_refusal[0]),int(ledger.upstream_refusal[0])|256|a.UNKNOWN_EXECUTION)
+        self.assertEqual(int(result.upstream_refusal[1]),int(ledger.upstream_refusal[1]))
+        self.same(public,out.public)
+        for name in ledger._fields:
+            if name=='inventory_binding':self.same(getattr(ledger,name),getattr(result,name))
+            else:self.same(getattr(ledger,name)[1],getattr(result,name)[1])
+
     def test_original_compiler_and_no_exhaustiveness_or_no_output_escape(self):
         from dataclasses import replace
         with self.assertRaises(ValueError):a.initialize(j.array([1,2],j.int32),compiled=replace(self.compiled))
