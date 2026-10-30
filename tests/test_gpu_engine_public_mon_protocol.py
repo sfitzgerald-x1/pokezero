@@ -122,7 +122,7 @@ class PublicMonProtocolTests(unittest.TestCase):
         lines=['|switch|p1a: Snorlax|Snorlax, L80|100/100 par',
             '|switch|p2a: Gardevoir|Gardevoir, L80|100/100 tox',
             '|-boost|p1a: Snorlax|atk|2','|-boost|p2a: Gardevoir|spe|-3',
-            '|-cureteam|p1a: Snorlax','|-clearallboost']
+            '|-cureteam|p1a: Snorlax|[from] move: Aromatherapy','|-clearallboost']
         projections=[self.project(line,n+1) for n,line in enumerate(lines)]
         result=self.fold(projections);parser=self.reference.parse_showdown_replay(lines,battle_id='fixture')
         self.assertEqual(parser.public_active['p1'].condition,'100/100')

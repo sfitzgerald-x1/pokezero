@@ -139,6 +139,28 @@ class V4EncoderTests(unittest.TestCase):
             '|-status|p2a: Absol|slp|[from] move: Rest']
         self.compare_source(lines,exact_ability_case=True)
 
+    def test_default_encoder_unown_s_wire_arrival_matches_all_source_columns(self):
+        from pokezero.dex import SpeciesInfo,ShowdownDex
+        species=dict(self.inputdex.species)
+        species['unown']=SpeciesInfo('unown','Unown',('Psychic',),
+            dict(zip(('hp','atk','def','spa','spd','spe'),(48,72,48,72,48,48))))
+        dex=ShowdownDex(self.inputdex.moves,species,self.inputdex.type_chart)
+        catalog=self.e.compile_encoder(self.source,dex,self.vocab,
+            checkpoint_sha256='a'*64,feature_masks=self.masks)
+        old=self.catalog;request=self.request
+        def owning_request(owner=0):
+            raw=request(owner)
+            if owner==1:
+                raw['side']['pokemon'][0].update(ident='p2: Absol',details='Absol, L80')
+                mon=raw['side']['pokemon'][1]
+                mon.update(ident='p2: Unown',details='Unown-S',condition='258/258')
+            return raw
+        try:
+            self.catalog=catalog;self.request=owning_request
+            self.compare_source([*self.public.prefix,
+                '|switch|p2a: Unown|Unown-S|258/258','|turn|1'])
+        finally:self.catalog=old;self.request=request
+
     def test_contract_rollback_at_batch8_preserves_global_namespaces(self):
         import numpy as np
         from gpu_engine import public_inputs

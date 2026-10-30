@@ -20,6 +20,12 @@ def classify(line):
     # manufacture a source ability/item reveal under this annotation contract.
     if any(tag in line for tag in ('[from]','[of]')):return None
     ident=len(parts)>2 and re.fullmatch(r'p[12]a: \S(?:[^|]*\S)?',parts[2])
+    if (kind, parts[3] if len(parts)>3 else '') in (
+            ('-activate','move: Heal Bell'), ('-singleturn','move: Focus Punch')):
+        # These observed Gen3 announcements have no additional V4 feature
+        # writer. Keep the exact active target and every shared raw consumer;
+        # healing statuses and actual move use still require their own events.
+        return 'target' if len(parts)==4 and ident else None
     if kind=='-miss':
         # The pinned Gen3 emitter names both the move user and its target.
         # Both identities must remain explicit; raw bookkeeping still runs.

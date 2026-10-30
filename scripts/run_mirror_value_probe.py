@@ -18,7 +18,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pokezero.mirror_value_probe import (CHAMPION_SHA, cohort, collect_battle, digest,
-    file_sha, load_runtime, paired_battle_interval, write_new)
+    file_sha, load_runtime, paired_battle_interval, write_new, champion_linear_head)
 
 _RUNTIME = None
 _INITIALIZATION_ERROR = None
@@ -87,6 +87,8 @@ def load_collection(root, expected_sha):
     m = json.loads((root / "collection.json").read_text())
     if m["status"] != "COMPLETE_FIXED_COHORT" or m["config"]["champion_sha256"] != CHAMPION_SHA:
         raise ValueError("completed exact champion collection required")
+    if m["config"].get("probe_contract") != "owning-wire-true-moves-champion-linear-v2":
+        raise ValueError("corrected owning-wire and true-move collection required")
     expected_roster = cohort(m["config"]["root"], m["config"]["battles"])
     if len(m["battles"]) != len(expected_roster):
         raise ValueError("all fixed battles required, including unknowns")
@@ -103,7 +105,8 @@ def load_collection(root, expected_sha):
             if file_sha(dest / name) != receipt["files"][name]:
                 raise ValueError("battle artifact binding")
         with np.load(dest / "features.npz", allow_pickle=False) as data:
-            block = {name: data[name] for name in data.files}
+            block = {name: data[name] for name in data.files if not name.endswith("_tokens")}
+            token_shapes = {arm: data[arm + "_tokens"].shape for arm in ("public", "privileged")}
         n = row["paired_rows"]
         if n % 2 or len(receipt["identities"]) != n:
             raise ValueError("paired row count")
@@ -116,8 +119,8 @@ def load_collection(root, expected_sha):
             raise ValueError("actual terminal labels required")
         width = receipt["contract"]["width"]
         for arm in ("public", "privileged"):
-            x, mask, pred = (block[arm + suffix] for suffix in ("_tokens", "_mask", "_values"))
-            if (x.shape != (n, 23, width) or x.dtype != np.float32 or not np.isfinite(x).all()
+            x, mask, pred = (block[arm + suffix] for suffix in ("_pooled", "_mask", "_values"))
+            if (x.shape != (n, width) or token_shapes[arm] != (n, 23, width) or x.dtype != np.float32 or not np.isfinite(x).all()
                 or mask.shape != (n, 23) or mask.dtype != bool or not mask.any(1).all()
                 or pred.shape != (n,) or not np.isfinite(pred).all()):
                 raise ValueError("frozen feature shape/dtype/finiteness")
@@ -144,7 +147,7 @@ def predict(head, blocks, arm, split, batch_size=256):
                 parts = []
                 for start in range(0, len(b["outcomes"]), batch_size):
                     stop = start + batch_size
-                    parts.append(head(torch.from_numpy(b[arm + "_tokens"][start:stop]),
+                    parts.append(head(torch.from_numpy(b[arm + "_pooled"][start:stop]),
                         torch.from_numpy(b[arm + "_mask"][start:stop]))[0].numpy())
                 p = np.concatenate(parts)
             if not np.isfinite(p).all():
@@ -171,7 +174,7 @@ def evaluate(predictions):
 
 def fit(collection_root, output, *, collection_sha, epochs=20, batch_size=256, seed=20261029, threads=8):
     import torch
-    from pokezero.value_precision_probe import make_value_head, hl_gauss_targets
+    from pokezero.neural_policy import load_transformer_checkpoint
     torch.set_num_threads(threads)
     torch.set_num_interop_threads(1)
     if output.exists():
@@ -179,18 +182,37 @@ def fit(collection_root, output, *, collection_sha, epochs=20, batch_size=256, s
     manifest, blocks = load_collection(collection_root, collection_sha)
     output.mkdir(exist_ok=False)
     result = dict(schema="pokezero.mirror_value_refit.v1", collection_sha256=collection_sha,
-        head_kind="attention_hl_gauss", epochs=epochs, batch_size=batch_size, learning_rate=.001,
-        seed=seed, selection="minimum validation MSE separately per arm; earliest epoch ties; fixed head architecture from A1; no test selection",
-        training="actual uncapped terminal outcomes only, HL-Gauss loss; no PPO/GAE/value clipping",
+        head_kind="champion_linear_tanh_warmstart", epochs=epochs, batch_size=batch_size, learning_rate=.001,
+        seed=seed, selection="minimum validation MSE separately per arm; earliest epoch ties; matched champion linear+tanh architecture; no test selection",
+        training="actual uncapped terminal outcomes only, MSE loss; no PPO/GAE/value clipping",
         split_unit="whole battle, both seats and all turns together", new_games=manifest["new_games"],
         paired_rows=manifest["paired_rows"], known_rows=manifest["known_rows"], unknown_rows=manifest["unknown_rows"],
         arms={}, baseline={})
     selected = {}
-    width = blocks[0]["public_tokens"].shape[-1]
+    checkpoint = Path(manifest["config"]["checkpoint"])
+    if file_sha(checkpoint) != CHAMPION_SHA:
+        raise ValueError("exact champion warm-start checkpoint required")
+    champion, _ = load_transformer_checkpoint(checkpoint, map_location="cpu")
+    champion.float().eval()
+    width = blocks[0]["public_pooled"].shape[-1]
+    result["initialization"] = dict(checkpoint_sha256=CHAMPION_SHA, parameters=width+1,
+        copied_weight_and_bias=True, verified_before_any_optimizer_step=True, arms={})
     for arm in ("public", "privileged"):
         torch.manual_seed(seed)
         rng = np.random.default_rng(seed)
-        head = make_value_head("attention_hl_gauss", width).float()
+        head = champion_linear_head(champion)
+        initial_max_difference, bitwise = 0., True
+        with torch.no_grad():
+            for b in blocks:
+                for start in range(0, len(b["outcomes"]), 128):
+                    p = head(torch.from_numpy(b[arm + "_pooled"][start:start+128]), None)[0].numpy()
+                    expected = b[arm + "_values"][start:start+128]
+                    initial_max_difference = max(initial_max_difference, float(np.max(np.abs(p - expected))))
+                    bitwise = bitwise and np.array_equal(p, expected)
+        if initial_max_difference > 2e-7:
+            raise ValueError("warm start predictions differ from champion: " + str(initial_max_difference))
+        result["initialization"]["arms"][arm] = dict(max_abs_difference=initial_max_difference,
+            bitwise_equal=bitwise, tolerance=2e-7, compared_rows=sum(len(b["outcomes"]) for b in blocks))
         optimizer = torch.optim.Adam(head.parameters(), lr=.001)
         history = []
         best, best_mse, best_epoch = None, math.inf, 0
@@ -202,9 +224,9 @@ def fit(collection_root, output, *, collection_sha, epochs=20, batch_size=256, s
                 rows = np.flatnonzero(b["label_status"] == 0); rng.shuffle(rows)
                 for start in range(0, len(rows), batch_size):
                     ix = rows[start:start + batch_size]
-                    values, logits = head(torch.from_numpy(b[arm + "_tokens"][ix]), torch.from_numpy(b[arm + "_mask"][ix]))
-                    target = hl_gauss_targets(torch.from_numpy(b["outcomes"][ix]))
-                    loss = -(target * logits.log_softmax(-1)).sum(-1).mean()
+                    values, logits = head(torch.from_numpy(b[arm + "_pooled"][ix]), torch.from_numpy(b[arm + "_mask"][ix]))
+                    target = torch.from_numpy(b["outcomes"][ix])
+                    loss = (values - target).square().mean()
                     if not torch.isfinite(loss):
                         raise ValueError("nonfinite training loss")
                     optimizer.zero_grad(); loss.backward(); optimizer.step()
@@ -216,11 +238,11 @@ def fit(collection_root, output, *, collection_sha, epochs=20, batch_size=256, s
             print(json.dumps(dict(event="head_epoch", arm=arm, epoch=epoch, validation_mse=validation)), flush=True)
         head.load_state_dict(best, strict=True)
         selected[arm] = head
-        torch.save(dict(state_dict=best, kind="attention_hl_gauss", width=width, selected_epoch=best_epoch,
+        torch.save(dict(state_dict=best, kind="champion_linear_tanh_warmstart", width=width, selected_epoch=best_epoch,
             collection_sha256=collection_sha, arm=arm), output / (arm + "-head.pt"))
         result["arms"][arm] = dict(selected_epoch=best_epoch, validation_mse=best_mse,
             history=history, artifact_sha256=file_sha(output / (arm + "-head.pt")))
-    # Both heads and epoch choices are frozen before reading any test outcomes.
+    # Both heads and epoch choices are frozen before computing test results.
     test = {}
     for arm in ("public", "privileged"):
         test[arm] = predict(selected[arm], blocks, arm, "test")
@@ -241,9 +263,28 @@ def fit(collection_root, output, *, collection_sha, epochs=20, batch_size=256, s
     result["paired_test"] = paired_battle_interval(losses["public"], losses["privileged"])
     public_mse = result["arms"]["public"]["test"]["mse"]
     privileged_mse = result["arms"]["privileged"]["test"]["mse"]
-    result["observed_relative_mse_reduction"] = (public_mse - privileged_mse) / public_mse
+    result["observed_position_weighted_relative_mse_reduction"] = (public_mse - privileged_mse) / public_mse
+    public_losses, privileged_losses = np.asarray(losses["public"]), np.asarray(losses["privileged"])
+    rng = np.random.default_rng(seed)
+    ix = rng.integers(0, len(public_losses), (10000, len(public_losses)))
+    shares = (public_losses[ix].mean(1) - privileged_losses[ix].mean(1)) / public_losses[ix].mean(1)
+    result["paired_test"]["relative_mse_reduction"] = float((public_losses.mean() - privileged_losses.mean()) / public_losses.mean())
+    result["paired_test"]["relative_reduction_interval90"] = np.quantile(shares, [.05, .95]).tolist()
+    result["paired_test"]["preassigned_test_battles"] = sum(b["split"] == "test" for b in blocks)
+    result["paired_test"]["unknown_test_battles"] = result["paired_test"]["preassigned_test_battles"] - len(public_losses)
+    bounds = []
+    for a, b in zip(test["public"], test["privileged"]):
+        known = a["status"] == 0
+        delta = b["values"] - a["values"]
+        base = b["values"] ** 2 - a["values"] ** 2
+        actual = (b["values"][known] - b["outcomes"][known]) ** 2 - (a["values"][known] - a["outcomes"][known]) ** 2
+        lower, upper = base - 2 * np.abs(delta), base + 2 * np.abs(delta)
+        lower[known] = actual; upper[known] = actual
+        bounds.append([float(lower.mean()), float(upper.mean())])
+    result["paired_test"]["full_roster_difference_identification_bounds"] = np.mean(bounds, axis=0).tolist()
+    result["paired_test"]["identification_bounds_interpretation"] = "Equal-battle point-estimand bounds over unknown outcomes in [-1,1]; not confidence intervals. Bootstrap intervals describe terminal-known battles only."
     result.update(status="TWO_MATCHED_OUTCOME_REFITS_COMPLETE", model_fits=2,
-        limitations=["Literal own-view swap includes exact stats/current item/ability and unseen roster, but self token writer omits true move-set buckets.",
+        limitations=["Privileged rows include true current move identities and PP; no token-budget or architecture expansion.",
             "Only simultaneous requested-seat roots enter A2; forced replacement boundaries retained separately as provenance.",
             "Outcome residuals combine randomness and model error; this is no identified hidden-information fraction.",
             "Unrefit privileged champion baseline is out of distribution, not a learned full-information evaluator.",

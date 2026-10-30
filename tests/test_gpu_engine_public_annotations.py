@@ -6,7 +6,8 @@ SETUP=('|player|p1|One|1','|player|p2|Two|2|1000','|teamsize|p1|6','|teamsize|p2
        '|gametype|singles','|gen|3','|tier|[Gen 3] Random Battle','|rule|Species Clause: Limit one of each species','|start')
 ANNOTATIONS=('|-miss|p1a: Nick|p2a: Absol','|-crit|p2a: Absol','|-supereffective|p2a: Absol','|-resisted|p2a: Absol',
              '|-hitcount|p2a: Absol|1','|-hitcount|p2a: Absol|5','|-hint|Sleep Clause Mod activated.',
-             '|-message|A public announcement.','|-fieldactivate|move: Perish Song')
+             '|-message|A public announcement.','|-fieldactivate|move: Perish Song',
+             '|-activate|p2a: Absol|move: Heal Bell','|-singleturn|p1a: Nick|move: Focus Punch')
 
 
 class AnnotationLexicalTests(unittest.TestCase):
@@ -21,6 +22,10 @@ class AnnotationLexicalTests(unittest.TestCase):
                 '|-crit','|-crit|p2: Absol','|-crit|p2a: Absol|extra','|-hitcount|p2a: Absol|0',
                 '|-hitcount|p2a: Absol|6','|-hitcount|p2a: Absol|01','|-hint|','|-message|x|extra',
                 '|-fieldactivate|move: Mud Sport','|-fieldactivate|move: Perish Song|extra',
+                '|-activate|p2: Absol|move: Heal Bell','|-activate|p2a: Absol|move: Heal Bell|extra',
+                '|-activate|p2a: Absol|move: Heal Bell|[from] ability: Pressure',
+                '|-activate|p2a: Absol|move: Unknown','|-singleturn|p1a: Nick|move: Unknown',
+                '|-singleturn|p1: Nick|move: Focus Punch','|-singleturn|p1a: Nick|move: Focus Punch|extra',
                 '|-hint|[from] ability: Pressure|[of] p2a: Absol','|request|{}','|UNSUPPORTED|x'):
             self.assertIsNone(classify(line),line)
         for line in ('|-crit|p2a: Absol\n','|-hint|two\rlines','|gen|3 '):self.assertIsNone(classify(line),line)

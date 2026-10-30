@@ -38,9 +38,9 @@ class PublicTeamTests(unittest.TestCase):
         mons,_=self.m.boost_update(mons,side=1,stat=4,amount=-6)
         return mons,self.a.initialize(1,self.abilities.device,species_binding=self.catalog.device.binding)
 
-    def project(self,mons,abilities,observer=0):
+    def project(self,mons,abilities,observer=0,**kwargs):
         return self.public.project_opponent(mons,abilities,self.catalog.device,observer_side=observer,
-                                           expected_binding=self.catalog.device.binding)
+                                           expected_binding=self.catalog.device.binding,**kwargs)
 
     def compare(self,got,candidates,**kwargs):
         numeric,categories=[[0.0]*200 for _ in range(6)],[['']*60 for _ in range(6)]
@@ -57,6 +57,29 @@ class PublicTeamTests(unittest.TestCase):
         details=f'{name}, L{level}'+(f', {gender}' if gender else '')
         return self.reference.ShowdownPokemon(ident=f'p2a: {name}',showdown_slot='p2',species=name,
             condition=condition,active=active,details=details)
+
+    def test_default_namespace_carries_source_unown_forms_without_category_relabeling(self):
+        from pokezero.randbat_vocab import UNOWN_FORMES
+        catalog=self.public.compile_species(self.host,self.dex,self.vocab,self.abilities)
+        for name in UNOWN_FORMES:
+            identity=catalog.species_id(name)
+            self.assertEqual(catalog.names[identity],name)
+            self.assertEqual(int(catalog.device.species_category[identity]),self.vocab.encode('species:'+name))
+            self.assertEqual(catalog.device.base_stats[identity].tolist(),[48,72,48,72,48,48])
+            # Source's exact-dex HP lookup intentionally stays distinct from
+            # its base-form fallback; do not silently repair that old quirk.
+            self.assertEqual(float(catalog.device.original_hp[identity]),0)
+        with self.assertRaises(ValueError):catalog.species_id('Unown-A')
+        with self.assertRaises(ValueError):catalog.species_id('Unown-Unknown')
+        mons=self.m.initialize(1,species_binding=catalog.device.binding)
+        mons,ok=self.m.arrive(mons,side=1,slot=0,encounter=1,species=catalog.species_id('Unown-S'),
+            source_species=self.host.species_id('Unown-S'),level=80,gender=0,
+            hp_numerator=258,hp_denominator=258,status=self.m.NONE)
+        self.assertTrue(bool(ok.all()))
+        abilities=self.a.initialize(1,self.abilities.device,species_binding=catalog.device.binding)
+        got=self.public.project_opponent(mons,abilities,catalog.device,observer_side=0,expected_binding=catalog.device.binding)
+        self.assertTrue(bool(got.admitted.all()))
+        self.compare(got,[self.mon('Unown-S','258/258',True)])
 
     def test_all18_numeric_five_category_columns_and_padding_match_actual_writer(self):
         mons,abilities=self.state();got=self.project(mons,abilities)
@@ -88,6 +111,33 @@ class PublicTeamTests(unittest.TestCase):
             source_species=0,level=80,gender=0,hp_numerator=17,hp_denominator=31,status=0)
         self.compare(self.project(mons,abilities),[self.mon('Absol','70/100 par',False,gender='F'),
             self.mon('Gardevoir','0 fnt',False,level=100),self.mon('Unown-Z','17/31',True)])
+
+    def test_opponent_writer_retains_explicit_belief_status_after_raw_faint(self):
+        from pokezero.belief import PublicBattleBeliefEngine
+        mons,abilities=self.state()
+        mons,_=self.m.status_update(mons,side=1,slot=1,encounter=2,status=self.m.SLEEP)
+        retained=mons.status
+        mons,_=self.m.faint(mons,side=1,slot=1,encounter=2)
+        self.assertEqual(int(mons.status[0,1,1]),self.m.NONE)
+        engine=PublicBattleBeliefEngine()
+        for line in ('|switch|p2a: Gardevoir|Gardevoir, L100|100/100',
+                     '|-status|p2a: Gardevoir|slp',
+                     '|-damage|p2a: Gardevoir|0 fnt', '|faint|p2a: Gardevoir'):
+            engine.ingest_event(self.reference._public_event_from_line(line))
+        belief=engine.snapshot().side('p2')[0]
+        self.assertEqual((belief.condition,belief.status),('0 fnt','slp'))
+        candidates=[self.mon('Absol','70/100 par',False,gender='F'),
+            self.mon('Gardevoir','0 fnt',True,level=100)]
+        got=self.project(mons,abilities,belief_status=retained)
+        self.compare(got,candidates,beliefs_by_species={'gardevoir':belief},
+            active_boosts={'atk':2,'spe':-6})
+        cured=retained.at[0,1,1].set(self.m.NONE)
+        self.assertEqual(int(self.project(mons,abilities,belief_status=cured).categorical[0,1,1]),
+                         self.vocab.encode('status:none'))
+        for invalid in (retained.astype(self.j.bool_),retained[0]):
+            with self.assertRaises(ValueError):self.project(mons,abilities,belief_status=invalid)
+        bad=retained.at[0,1,1].set(7)
+        self.assertFalse(bool(self.project(mons,abilities,belief_status=bad).admitted.any()))
 
     def test_jit_both_observers_refuse_invalid_namespace_and_hide_all_rows(self):
         mons,abilities=self.state()

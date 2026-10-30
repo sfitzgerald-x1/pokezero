@@ -389,7 +389,7 @@ class JaxBackend(OwnedProvider):
             and tuple((k,getattr(catalog.masks,k)) for k in MASK_NAMES) == contract.feature_masks,
             'JAX encoder contract differs')
         self.catalog, self.owner = catalog, owner
-        self.adapter = JaxRecordedAdapter(catalog)
+        self.adapter = JaxRecordedAdapter(catalog, owner_side=int(owner[1])-1)
         _require(not self.adapter.jax.config.jax_enable_x64
             and self.adapter.jax.config.jax_default_matmul_precision == 'highest', 'JAX precision differs')
         self.adapter.reset(stream_id=stream_id, battle_id=battle_id)

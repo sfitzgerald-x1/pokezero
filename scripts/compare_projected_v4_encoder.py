@@ -55,7 +55,7 @@ def build_runtime(args):
     catalog = v4_encoder.compile_encoder(public_belief.compile_source(source),
         load_showdown_dex_cached(args.showdown), vocab,
         checkpoint_sha256=CHAMPION_SHA, feature_masks=contract['feature_masks'])
-    adapters = {seat: JaxRecordedAdapter(catalog, model=model if args.forward else None,
+    adapters = {seat: JaxRecordedAdapter(catalog, owner_side=int(seat[1])-1, model=model if args.forward else None,
         torch_module=torch if args.forward else None) for seat in ('p1', 'p2')}
     receipt = dict(checkpoint=checkpoint, contract=contract,
         devices=[str(device) for device in jax.devices()], torch_version=torch.__version__,

@@ -66,6 +66,12 @@ def compile_species(source, dex, vocabulary, abilities, *, extra_species=()):
     # for an unaliased checkpoint category).
     spelling = {normalize_id(name): name for name in source.species_names if name}
     spelling.update({normalize_id(name): info.name for name,info in dex.species.items()})
+    if 'unown' in spelling:
+        # These source-enumerated wire forms are absent as separate dex rows.
+        # Keep the literal form for checkpoint categories; the existing source
+        # fallback supplies base stats/types and belief identities separately.
+        from pokezero.randbat_vocab import UNOWN_FORMES
+        spelling.update({normalize_id(name): name for name in UNOWN_FORMES})
     spelling.update({normalize_id(name): name for name in extra_species if name})
     names = ('',) + tuple(spelling[key] for key in sorted(spelling) if key)
     bases, hp, cats, types = [], [], [], []
@@ -94,7 +100,8 @@ def compile_species(source, dex, vocabulary, abilities, *, extra_species=()):
             jnp.asarray(opponent,jnp.int32), source.device.binding, vb, abilities.device.binding, binding))
 
 
-def project_opponent(mons, abilities, tables, *, observer_side, expected_binding):
+def project_opponent(mons, abilities, tables, *, observer_side, expected_binding,
+                     belief_status=None):
     """Write the public base patch for the opponent of each observer.
 
     Transform uses the publicly recorded donor identity; original HP, level and
@@ -118,7 +125,18 @@ def project_opponent(mons, abilities, tables, *, observer_side, expected_binding
     present = mons.encounter[address] > 0
     valid_ids = (species > 0) & (species < len(tables.species_category)) & (effective > 0) & (effective < len(tables.species_category))
     statuses = mons.status[address]
+    status_ok = jnp.ones((batch,), bool)
+    if belief_status is not None:
+        if belief_status.shape != mons.status.shape or belief_status.dtype != jnp.int32:
+            raise ValueError('retained public belief status requires B,2,6 int32 facts')
+        status_ok = jnp.all((belief_status >= 0) & (belief_status < 7), axis=(1, 2))
+        retained = belief_status[address]
+        # The Python opponent writer prefers the belief's explicit status to
+        # the current condition suffix. Faint clears the raw condition but
+        # deliberately retains that belief fact; a cure clears the ledger.
+        statuses = jnp.where(retained != 0, retained, statuses)
     admitted = ((observer>=0) & (observer<=1) & jnp.all(tables.binding==expected_binding)
+        & status_ok
         & jnp.all(abilities.binding==tables.ability_binding,axis=-1)
         & jnp.all(mons.species_binding==tables.binding,axis=-1)
         & jnp.all(abilities.species_binding==tables.binding,axis=-1)

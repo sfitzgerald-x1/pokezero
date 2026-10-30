@@ -62,7 +62,9 @@ def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents
     if line=="|-clearallboost":
         event=PublicEvent(Kind.CLEAR_ALL_BOOSTS,sequence,turn,phase)
         event.words();return ContextProjection(line,(event,))
-    if kind=="-cureteam" and len(parts)==3:
+    if kind=="-cureteam" and len(parts)>=3:
+        # The source's team-wide clear uses the side in parts[2] and ignores
+        # trailing provenance, including Showdown's Aromatherapy [from] tag.
         side=_slot_from_ident(parts[2])
         if side not in ("p1","p2"):raise ValueError("team cure requires a public side")
         event=PublicEvent(Kind.CURE_TEAM,sequence,turn,phase,target_side=int(side[1])-1)
