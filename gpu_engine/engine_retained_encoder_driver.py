@@ -16,6 +16,7 @@ exposed for source integration tests.
 from dataclasses import dataclass
 import hashlib
 import json
+import time
 from typing import NamedTuple
 import weakref
 
@@ -106,6 +107,13 @@ class Result(NamedTuple):
     owners: tuple
 
 
+class FrameDiagnostics(NamedTuple):
+    invalid_actions: object
+    placeholder_moves: object
+    active_rows: object
+    executed_rows: object
+
+
 @dataclass(frozen=True, eq=False)
 class Prepared:
     binding: object
@@ -131,7 +139,44 @@ def _basic_initialize(catalog, context, streams):
         beliefs, mons, public_context.initialize(beliefs, context, species_binding=catalog.species.device.binding))
 
 
-def _frame(core, statics, engine_actions, chance):
+def _rows(ok, before, after):
+    """Select explicitly row-only trees. Global namespaces must be detached."""
+    def choose(a, b):
+        if a.ndim == 0 or a.shape[0] != ok.shape[0] or a.shape != b.shape:
+            raise ValueError('declared row tree contains a non-row leaf')
+        return jnp.where(ok.reshape((ok.shape[0],)+(1,)*(a.ndim-1)), b, a)
+    return jax.tree.map(choose, before, after)
+
+
+def _public_rows(ok, before, after):
+    from . import public_refresh_stream
+    old_refresh, new_refresh = before.context.refresh, after.context.refresh
+    refresh = None if old_refresh is None and new_refresh is None else public_refresh_stream.commit(
+        ok, old_refresh, new_refresh)
+    selected = _rows(ok, before._replace(context=before.context._replace(refresh=None)),
+        after._replace(context=after.context._replace(refresh=None)))
+    return selected._replace(context=selected.context._replace(refresh=refresh))
+
+
+def _observer_rows(ok, before, after):
+    basic = _public_rows(ok, before.basic, after.basic)
+    retained = _public_rows(ok, before.retained, after.retained)
+    selected = _rows(ok, before._replace(basic=None, retained=None), after._replace(basic=None, retained=None))
+    return selected._replace(basic=basic, retained=retained)
+
+
+def _report_rows(ok, before, after):
+    # These two leaves are schema-wide, including when B happens to equal8.
+    def detach(report):
+        return report._replace(encoded=report.encoded._replace(pending_numeric_columns=None,
+            observation=report.encoded.observation._replace(category_count=None)))
+    selected = _rows(ok, detach(before), detach(after))
+    return selected._replace(encoded=selected.encoded._replace(
+        pending_numeric_columns=before.encoded.pending_numeric_columns,
+        observation=selected.encoded.observation._replace(category_count=before.encoded.observation.category_count)))
+
+
+def _frame(core, statics, engine_actions, chance, active_rows=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -144,13 +189,21 @@ def _frame(core, statics, engine_actions, chance):
         jnp.zeros((b, 64, 2), jnp.int32), jnp.zeros((b, 64, 6), jnp.int32), core.cursor)
     # Refused source rows are frozen, never advanced using an unproved request.
     source_ready = core.admitted & core.requests[0].actions.admitted & core.requests[1].actions.admitted
+    if active_rows is not None:
+        source_ready &= active_rows
     masked = core.engine._replace(done=core.engine.done | ~source_ready)
     result = transition.step_with_chance(masked, engine_actions, engine_table, chance,
         _public_trace=tape, _lifecycle_trace=True)
-    engine = jax.tree.map(lambda old, new: jnp.where(source_ready.reshape((b,)+(1,)*(old.ndim-1)), new, old),
-        core.engine, result.step.state)
-    return life.LifecycleResult(engine, result.callbacks.cursor, result.callbacks, before,
-        life.snapshot(result.callbacks.cursor), result.step.invalid_actions, result.step.placeholder_moves)
+    engine = _rows(source_ready, core.engine, result.step.state)
+    cursor = _rows(source_ready, core.cursor, result.callbacks.cursor)
+    # Bindings are GLOBAL [8], never row-select them by a coincidental B=8.
+    globals_ = {'engine_binding', 'source_binding', 'move_binding', 'producer_binding'}
+    callbacks = result.callbacks._replace(**{name: _rows(source_ready, getattr(tape, name),
+        getattr(result.callbacks, name)) for name in tape._fields if name not in globals_})
+    callbacks = callbacks._replace(cursor=cursor)
+    return life.LifecycleResult(engine, cursor, callbacks, before,
+        life.snapshot(cursor), jnp.where(source_ready, result.step.invalid_actions, False),
+        jnp.where(source_ready, result.step.placeholder_moves, 0))
 
 
 def _request(engine, ledger, original, retained, unsafe, arrival, admitted, statics):
@@ -208,7 +261,7 @@ def _own_encode(core, observer, catalog, own_tables):
     return facts, encoded
 
 
-def _score(observer, facts, encoded, projection, public_error, core_admitted, fake_forward):
+def _score(observer, facts, encoded, projection, public_error, core_admitted, fake_forward, active_rows=None):
     a = encoded.observation
     attended = a.attention_mask[:, :, None]
     numeric_missing = jnp.sum(attended & ~a.numeric_written, axis=(1, 2))
@@ -231,6 +284,8 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
     for bit, missing in gates:
         reason |= jnp.where(missing, bit, 0)
     allowed = reason == 0
+    if active_rows is not None:
+        allowed &= active_rows
     # This is FAKE-only component eligibility. Scientific qualification stays
     # separate and false; it must not become a permanent false logical gate.
     inputs = FakeInputs(a.numeric_features, a.categorical_ids, a.token_type_ids, a.attention_mask, a.legal_action_mask)
@@ -293,15 +348,16 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     _PREPARED[result] = dict(binding=binding, request_compiled=request_compiled, own_compiled=own_compiled,
         own=record, request=request, catalog=catalog, context=context, public=public_handle, fake=fake_forward,
         public_mode=public_mode, check_public=check_public, register_public=register_public,
-        frame=jax.jit(lambda core, act, chance: _frame(core, (None, base_handle.device, request['engine_table']), act, chance)),
+        frame=jax.jit(lambda core, act, chance, active=None:
+            _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
         unsafe=jax.jit(lambda unsafe, state: unsafe | source._unsafe_history(state, request['rules'].device)),
         public_fast=jax.jit(public_fast),
         encode_fast=jax.jit(lambda core, obs: _own_encode(core, obs, catalog, own_compiled.device)),
-        score_fast=jax.jit(lambda obs, facts, encoded, projection, error, admitted:
-            _score(obs, facts, encoded, projection, error, admitted, fake_forward)))
+        score_fast=jax.jit(lambda obs, facts, encoded, projection, error, admitted, active=None:
+            _score(obs, facts, encoded, projection, error, admitted, fake_forward, active)))
     return result
 
 
@@ -315,12 +371,26 @@ def _checked(prepared):
     return r
 
 
-def _consume(r, state, frame):
+def _timed(callback, name, function, *args):
+    if callback is None:
+        return function(*args)
+    jax.block_until_ready(args)
+    start = time.perf_counter_ns()
+    result = function(*args)
+    jax.block_until_ready(result)
+    callback(name, (time.perf_counter_ns()-start)/1e6)
+    return result
+
+
+def _consume(r, state, frame, active_rows=None, timing_callback=None):
+    if active_rows is None:
+        active_rows = jnp.ones_like(state.core.admitted)
     observers, reports = [], []
-    for observer in state.observers:
-        observer, projection, error = r['public_fast'](observer, frame)
-        facts, encoded = r['encode_fast'](state.core, observer)
-        observer, report = r['score_fast'](observer, facts, encoded, projection, error, state.core.admitted)
+    for side, observer in enumerate(state.observers, 1):
+        observer, projection, error = _timed(timing_callback, f'public_p{side}', r['public_fast'], observer, frame)
+        facts, encoded = _timed(timing_callback, f'encode_p{side}', r['encode_fast'], state.core, observer)
+        observer, report = _timed(timing_callback, f'admission_p{side}', r['score_fast'], observer,
+            facts, encoded, projection, error, state.core.admitted, active_rows)
         observers.append(observer); reports.append(report)
     return Result(state._replace(observers=tuple(observers)), tuple(reports))
 
@@ -349,37 +419,88 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
             jnp.ones(b, bool), jnp.zeros(b, jnp.int32)))
     result = _consume(r, DriverState(core, tuple(observers)), frame)
     session = Session(prepared, result.state, result)
-    _SESSIONS[session] = dict(prepared=prepared, state=result.state, result=result, constructed=snapshot)
+    _SESSIONS[session] = dict(prepared=prepared, state=result.state, result=result, constructed=snapshot,
+        advancing=False, diagnostics=FrameDiagnostics(jnp.zeros(b, bool), jnp.zeros(b, jnp.int32),
+            jnp.zeros(b, bool), jnp.zeros(b, bool)))
     return session
 
 
-def advance(session, engine_actions, *, chance_inputs=None):
+def _session(session):
+    record = _SESSIONS.get(session) if type(session) is Session else None
+    if (record is None or session.prepared is not record['prepared'] or session.state is not record['state']
+            or session.result is not record['result']):
+        raise ValueError('original current driver session required')
+    return record
+
+
+def latest_diagnostics(session):
+    record = _session(session)
+    _checked(session.prepared)
+    return record['diagnostics']
+
+
+def advance(session, engine_actions, *, active_rows=None, timing_callback=None, chance_inputs=None):
     """Source component advance; never a model rollout or implicit CLI enable.
 
     The API takes no external frame: its sole core result is consumed here once.
     A host Session retains one current carry; cached kernels cannot bypass the
     original static guards or let a replaced/stale carry resume silently.
     """
-    record = _SESSIONS.get(session) if type(session) is Session else None
-    if (record is None or session.prepared is not record['prepared'] or session.state is not record['state']
-            or session.result is not record['result']):
-        raise ValueError('original current driver session required')
-    if isinstance(engine_actions, jax.core.Tracer):
+    record = _session(session)
+    if record['advancing']:
+        raise ValueError('driver advance is not reentrant')
+    if isinstance(engine_actions, jax.core.Tracer) or isinstance(active_rows, jax.core.Tracer):
         raise ValueError('checked host driver cannot be wrapped in an outer JIT')
+    if timing_callback is not None and not callable(timing_callback):
+        raise ValueError('host timing callback must be callable')
     r = _checked(session.prepared)
     source._constructed(record['constructed'])
     core = session.state.core
-    chance = transition.sample_chance_inputs(core.engine) if chance_inputs is None else chance_inputs
-    frame = r['frame'](core, engine_actions, chance)
-    orders = tuple(r['installations'](ledger, frame) for ledger in core.orders)
-    unsafe = tuple(r['unsafe'](value, frame.state) for value in core.unsafe)
-    admitted = core.admitted & frame.cursor.admitted & ((frame.callbacks.refusal & ~events.UNINSTRUMENTED) == 0)
-    requests = tuple(r['request_fast'](frame.state, ledger, original, retained, history,
-        frame.after_registry, admitted) for ledger, original, retained, history in
-        zip(orders, core.originals, core.constructors, unsafe))
-    next_core = core._replace(engine=frame.state, cursor=frame.cursor, orders=orders, unsafe=unsafe,
-        requests=requests, admitted=admitted, frame_number=core.frame_number+1)
-    result = _consume(r, session.state._replace(core=next_core), frame)
-    session.state, session.result = result.state, result
-    record.update(state=result.state, result=result)
-    return result
+    b = core.frame_number.shape[0]
+    if active_rows is None:
+        active = jnp.ones(b, bool)
+    else:
+        if getattr(active_rows, 'shape', None) != (b,) or getattr(active_rows, 'dtype', None) != jnp.dtype(bool):
+            raise ValueError('exact bool[B] active rows required')
+        active = jnp.asarray(active_rows)
+    executed = active & core.admitted & ~core.engine.done
+    for request in core.requests:
+        executed &= request.actions.admitted
+    for observer in session.state.observers:
+        if r['public_mode'] == 'basic':
+            executed &= observer.projection.admitted
+        else:
+            executed &= observer.projection.causal.admitted & observer.retained_healthy
+    old_state, old_result = session.state, session.result
+    record['advancing'] = True
+    try:
+        chance = transition.sample_chance_inputs(core.engine) if chance_inputs is None else chance_inputs
+        frame = _timed(timing_callback, 'engine', r['frame'], core, engine_actions, chance, executed)
+        def requests_phase(core, frame):
+            orders = tuple(r['installations'](ledger, frame) for ledger in core.orders)
+            unsafe = tuple(r['unsafe'](value, frame.state) for value in core.unsafe)
+            admitted = core.admitted & frame.cursor.admitted & ((frame.callbacks.refusal & ~events.UNINSTRUMENTED) == 0)
+            requests = tuple(r['request_fast'](frame.state, ledger, original, retained, history,
+                frame.after_registry, admitted) for ledger, original, retained, history in
+                zip(orders, core.originals, core.constructors, unsafe))
+            candidate = core._replace(engine=frame.state, cursor=frame.cursor, orders=orders, unsafe=unsafe,
+                requests=requests, admitted=admitted, frame_number=core.frame_number+executed.astype(jnp.int32))
+            # Originals and constructor snapshots are immutable source constants.
+            chosen = _rows(executed, core._replace(originals=None, constructors=None),
+                candidate._replace(originals=None, constructors=None))
+            return chosen._replace(originals=core.originals, constructors=core.constructors)
+        next_core = _timed(timing_callback, 'requests', requests_phase, core, frame)
+        candidate = _consume(r, old_state._replace(core=next_core), frame, executed, timing_callback)
+        observers = tuple(_observer_rows(executed, old, new) for old, new in
+            zip(old_state.observers, candidate.state.observers))
+        reports = tuple(_report_rows(executed, old, new) for old, new in zip(old_result.owners, candidate.owners))
+        result = Result(candidate.state._replace(observers=observers), reports)
+        # Callbacks can observe timing but cannot replace or replay the carry.
+        if _session(session) is not record or session.state is not old_state or session.result is not old_result:
+            raise ValueError('timing callback changed the driver session')
+        session.state, session.result = result.state, result
+        record.update(state=result.state, result=result,
+            diagnostics=FrameDiagnostics(frame.invalid_actions, frame.placeholder_moves, active, executed))
+        return result
+    finally:
+        record['advancing'] = False
