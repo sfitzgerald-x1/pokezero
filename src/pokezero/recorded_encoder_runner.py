@@ -43,7 +43,7 @@ def compare_battle(rows,*,battle,stream_id,adapter,tally,with_forward):
 
 class JaxRecordedAdapter:
     """Actual device fold/encode with atomic public-boundary host commitment."""
-    def __init__(self,catalog,*,model=None,torch_module=None,owner_side=None):
+    def __init__(self,catalog,*,model=None,torch_module=None,owner_side=None,compiled_functions=None):
         import jax
         from gpu_engine import v4_encoder
         self.jax=jax;self.encoder=v4_encoder;self.catalog=catalog
@@ -55,11 +55,24 @@ class JaxRecordedAdapter:
         if model is not None:
             if model.training or any(p.dtype!=torch_module.float32 or p.device.type!='cpu' for p in model.parameters()):
                 raise ValueError('CPU eval FP32 champion required')
-        self.step=jax.jit(lambda state,chunk:v4_encoder.fold_chunk(state,chunk,catalog))
-        self.encode_step=jax.jit(lambda state,own,side:v4_encoder.encode(state,own,catalog,observer_sides=side))
+        self.compiled_functions=compiled_functions
+        if compiled_functions is None:
+            self.step=jax.jit(lambda state,chunk:v4_encoder.fold_chunk(state,chunk,catalog))
+            self.encode_step=jax.jit(lambda state,own,side:v4_encoder.encode(state,own,catalog,observer_sides=side))
+        else:
+            compiled_functions.require_catalog(catalog)
+            self.step,self.encode_step=compiled_functions.step,compiled_functions.encode_step
+
+    def _check_compiled_functions(self):
+        if self.compiled_functions is not None:
+            self.compiled_functions.require_catalog(self.catalog)
+            if (self.step is not self.compiled_functions.step
+                    or self.encode_step is not self.compiled_functions.encode_step):
+                raise ValueError('compiled encoder function binding drift')
 
     def reset(self,*,stream_id,battle_id):
         from gpu_engine import public_wire
+        self._check_compiled_functions()
         if (type(stream_id) is not int or not 0<stream_id<2**31 or stream_id in self.registered
                 or not isinstance(battle_id,str) or not battle_id.strip() or battle_id in self.registered.values()):
             raise ValueError('fresh unique stream/battle registration required')
@@ -70,6 +83,7 @@ class JaxRecordedAdapter:
 
     def feed(self,lines):
         from gpu_engine import public_inputs,public_wire
+        self._check_compiled_functions()
         if not isinstance(lines,tuple) or any(not isinstance(line,str) or line.startswith('|request|') for line in lines):
             raise ValueError('non-request source delta required')
         host=self.host;projections=[]
@@ -94,6 +108,7 @@ class JaxRecordedAdapter:
         self.state,self.host,self.bindings=state,host,bindings
 
     def encode(self,request,*,owner_side):
+        self._check_compiled_functions()
         if self.owner_side is not None and owner_side != self.owner_side:
             raise ValueError('request owner differs from owning stream')
         own=self.encoder.parse_own_requests(self.catalog,[request],owner_sides=[owner_side])
