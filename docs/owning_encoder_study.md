@@ -131,3 +131,24 @@ Normal process completion and provenance still require external independent
 review. There is no equivalence margin, automatic pass rule, or automatic B3
 qualification from an interval crossing zero. The readout always leaves
 `B3_qualified: false` and `equivalence_claim: false`.
+
+## Owning transport acknowledgements
+
+The owning bridge registers the exact per-player submission before writing it.
+Its bounded integer `submissionId` is control-plane correlation only: Node
+echoes it on each `choice_ack`, and it never enters the actor, observation or
+policy features. Acknowledgements must match the battle, submission, player and
+literal choice. Duplicate, stale, foreign or missing acknowledgements fail
+closed. Legacy submissions omit the ID and retain their original ACK bytes.
+
+Streams may interleave with acknowledgements. A ready event received while ACKs
+are pending is deferred with its request-cache and owner-prefix identity; it
+cannot later be evaluated against changed context. Actual terminal witnesses
+may arrive before the final ACK, but completion requires both the existing
+terminal lifecycle and all pending ACKs within the existing bounded clocks.
+
+Unknown or explicit error events remain failures. Their first bounded envelope
+is retained in the owning failure receipt and exception notes. The pinned
+Showdown `keepAlive` stream ignores the simulator's `end` message; player streams
+reach EOF only when the underlying stream closes. Thus `stream_end` is not
+silently accepted as an ordinary active-game control event.
