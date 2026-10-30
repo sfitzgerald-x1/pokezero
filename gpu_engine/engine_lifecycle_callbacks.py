@@ -324,13 +324,18 @@ def finish(tape,state,*,live,replacement,pending_before,residual_ready,defer_res
 
 
 def trace_step(state,actions,table,*,cursor,catalog,expected_binding,expected_engine_binding,
-               chance_inputs=None,capacity=64,leftovers_compiled=None,status_residual_compiled=None):
+               chance_inputs=None,capacity=64,leftovers_compiled=None,status_residual_compiled=None,
+               status_residual_mode='diagnostic'):
     # A checked host boundary cannot be captured even when only cursor/chance
     # (or no meaningful argument) is dynamic. Inspect this FRESH scalar, not
     # selected input leaves, before any host guard or cached core invocation.
     if (leftovers_compiled is not None or status_residual_compiled is not None) and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('checked lifecycle helper API must remain outside outer JIT')
     from . import transition
+    if type(status_residual_mode) is not str or status_residual_mode not in ('diagnostic','retained'):
+        raise ValueError('explicit diagnostic or retained status residual mode required')
+    if status_residual_mode=='retained':
+        raise ValueError('retained status residual requires the actual owning birth/profile runtime')
     public.check_catalog(catalog,table,expected_binding=expected_binding,expected_engine_binding=expected_engine_binding)
     leftovers_context=None
     if leftovers_compiled is not None:
