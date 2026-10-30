@@ -351,6 +351,14 @@ def summarize(spec, ledger):
         equivalence_claim=False, interpretation='Unknown bounds are identification bounds, not confidence intervals; no automatic qualification.')
 
 
+def _sync_directory(path):
+    directory_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 def atomic_json(path, document):
     """Publish durable bytes and name: file fsync, replace, directory fsync."""
     path = Path(path)
@@ -359,11 +367,7 @@ def atomic_json(path, document):
         with os.fdopen(fd, 'wb') as stream:
             stream.write(canonical(document) + b'\n'); stream.flush(); os.fsync(stream.fileno())
         os.replace(name, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        _sync_directory(path.parent)
     finally:
         Path(name).unlink(missing_ok=True)
 
@@ -419,7 +423,8 @@ async def run_study(spec, output, *, benchmark=None, factory_builder=None, confi
     validate_prespec(spec)
     spec = json.loads(canonical(spec))
     output = Path(output)
-    output.mkdir(parents=True, exist_ok=False)
+    output.mkdir(exist_ok=False)
+    _sync_directory(output.parent)
     atomic_json(output/'prespec.json', spec)
     ledger = dict(schema=LEDGER_SCHEMA, prespec_sha256=prespec_file_sha256(spec), status='PREPARING',
         cells=planned_cells(), invocations=[dict(item, status='NOT_ATTEMPTED') for item in spec['invocations']],

@@ -74,7 +74,9 @@ cannot satisfy admission. Broader `full_encoder_admitted` and raw-chunk flags
 remain honest metadata; false values are not additional numerical gate failures.
 
 The explicit `run` subcommand accepts the prepared file and its byte SHA256,
-and requires a fresh output directory. It configures CPU FP32, MHA/TF32 off,
+and requires a fresh output directory under an existing parent. The new output
+name is synced in that parent; each initial publication syncs its bytes and
+directory entry before setup proceeds. It configures CPU FP32, MHA/TF32 off,
 highest Torch/JAX matmul precision, JAX x64 off, and matched one-thread CPU
 settings. The factory retains its source/Node/checkpoint and drift refusals.
 The output records observed precision/library versions. Node selected through

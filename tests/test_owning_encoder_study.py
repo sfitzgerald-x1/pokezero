@@ -320,6 +320,27 @@ class StudyTests(unittest.TestCase):
                     factory_builder=lambda _:self.fail('no factory'),configure=lambda:self.fail('no precision setup')))
         self.assertEqual(len(failed),1);self.assertEqual(closed,failed)
 
+    def test_new_output_parent_and_initial_publications_sync_before_setup(self):
+        events=[];original_sync=study._sync_directory;original_write=study.atomic_json
+        output=self.root/'durable-output'
+        def sync(path):
+            events.append(('sync',Path(path)));return original_sync(path)
+        def write(path,document):
+            events.append(('publish',Path(path).name));return original_write(path,document)
+        def configure():events.append(('configure',None))
+        def factory(_):events.append(('factory',None));return object()
+        async def benchmark(*args,**kwargs):
+            events.append(('benchmark',None));raise RuntimeError('authored stop')
+        with patch.object(study,'_sync_directory',side_effect=sync),patch.object(study,'atomic_json',side_effect=write):
+            ledger=asyncio.run(study.run_study(self.spec,output,benchmark=benchmark,
+                factory_builder=factory,configure=configure))
+        self.assertEqual(events[:6],[('sync',self.root),('publish','prespec.json'),('sync',output),
+            ('publish','ledger.json'),('sync',output),('configure',None)])
+        self.assertEqual(ledger['actual_exit'],1)
+        with self.assertRaises(FileNotFoundError):
+            asyncio.run(study.run_study(self.spec,self.root/'missing-parent'/'output',
+                benchmark=benchmark,factory_builder=factory,configure=configure))
+
     def test_changed_prefix_wrong_fp_seed_and_wrong_seat_cannot_publish_scored_cells(self):
         for mode in ('changed','fp-seed','foreign-seat','duplicate','cap'):
             with self.subTest(mode=mode):
