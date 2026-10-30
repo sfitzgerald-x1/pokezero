@@ -91,7 +91,7 @@ def family(line,*,lifecycle=False,nonproc=False,mudshot=False):
     if kind=='-transform':return TRANSFORM
     if line=='|' or kind in ('t:','-weather','-sidestart','-sideend','-boost','-unboost','-setboost',
             '-clearboost','-clearpositiveboost','-clearnegativeboost','-clearallboost','-copyboost',
-            '-start','-end','-activate','-immune','-fail','-block','-miss','-crit','-supereffective',
+            '-start','-end','-activate','-formechange','-immune','-fail','-block','-miss','-crit','-supereffective',
             '-resisted','-anim','-mustrecharge','-singleturn','-singlemove','-prepare'):
         return NOOP
     raise ValueError('raw source summary family still requires its ordered evidence consumer: '+kind)
