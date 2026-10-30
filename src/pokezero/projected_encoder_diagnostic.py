@@ -23,7 +23,7 @@ from .recorded_player_encoder_runner import (
     ProjectedEncoderPair, _own_request_deltas, _reference, _snapshot_batch, VISIBILITY)
 from .saved_player_projection import (
     SavedSourcePlayerProjector, new_player_reference_environments,
-    feed_player_reference_boundary, PROJECTION_SCOPE)
+    feed_player_reference_boundary, PROJECTION_SCOPE, STRUGGLE_WARNING_POLICY)
 
 SEATS = ('p1', 'p2')
 INPUT_COLUMNS = tuple([f'numeric_features[{i}]' for i in range(132)] +
@@ -160,11 +160,17 @@ def compare_diagnostic_battle(rows, *, battle, stream_id, adapters, environments
         references, batch = {}, None
         if projection_taint is None:
             try:
-                batch = _snapshot_batch(projector.project_nonrequest_delta(
-                    original.trusted_nonrequest_delta), original=original, start=source_end)
+                projected = projector.project_nonrequest_delta(original.trusted_nonrequest_delta)
             except Exception as error:
                 projection_taint = refusal(error, 'projection', original.trusted_nonrequest_delta)
                 projection_taint['origin_decision_round_index'] = row['decision_round_index']
+            else:
+                # Refusals of a protocol family are measurements. A foreign
+                # identity, chronology or projection contract is not a measurement.
+                if (projected.scope != PROJECTION_SCOPE
+                        or projected.struggle_warning_policy != STRUGGLE_WARNING_POLICY):
+                    raise ValueError('exact projected source scope and policy required')
+                batch = _snapshot_batch(projected, original=original, start=source_end)
         if batch is not None:
             if reference_taint is None:
                 try:

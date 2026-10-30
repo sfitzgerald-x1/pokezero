@@ -16,7 +16,8 @@ from pokezero.projected_encoder_diagnostic import (
 
 
 class DiagnosticsTests(unittest.TestCase):
-    def run_fixture(self, *, adapter_type=FakeAdapter, feed=fake_feed, forward=True):
+    def run_fixture(self, *, adapter_type=FakeAdapter, feed=fake_feed, forward=True,
+                    projector_type=FakeProjector):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture = collection_fixtures.ProjectedCollectionTests()
@@ -28,7 +29,7 @@ class DiagnosticsTests(unittest.TestCase):
             import pokezero.projected_encoder_diagnostic as diagnostic
             original = diagnostic.compare_diagnostic_battle
             def battle(*a, **k):
-                return original(*a, **k, projector=FakeProjector(battle_id=k['battle']['battle_id']),
+                return original(*a, **k, projector=projector_type(battle_id=k['battle']['battle_id']),
                                 reference_feed=feed)
             with ExitStack() as stack:
                 for target in ('subprocess.run', 'subprocess.Popen', 'numpy.load'):
@@ -149,6 +150,35 @@ class DiagnosticsTests(unittest.TestCase):
         r = refusal(e, 'jax_feed', ('|damage|private-body',))
         self.assertEqual(r['line_kind'], 'damage')
         self.assertNotIn('private', json.dumps(r))
+
+    def test_foreign_snapshot_identity_is_fatal_not_a_refusal(self):
+        class Foreign(FakeProjector):
+            def project_nonrequest_delta(self, lines):
+                result = super().project_nonrequest_delta(lines)
+                result.battle_id = 'FOREIGN'
+                return result
+        with self.assertRaises(ValueError):
+            self.run_fixture(projector_type=Foreign)
+
+    def test_ordinary_projector_refusal_is_nonfatal(self):
+        class Refuses(FakeProjector):
+            def project_nonrequest_delta(self, lines):
+                raise ValueError('unsupported source protocol family')
+        result, adapters = self.run_fixture(projector_type=Refuses)
+        metrics = result['metrics']
+        self.assertEqual(metrics['processed_views'], metrics['expected_views'])
+        self.assertEqual(metrics['refused_input_views'], metrics['expected_views'])
+        self.assertFalse(any(a.forwards for a in adapters.values()))
+
+    def test_foreign_projection_scope_or_policy_is_fatal(self):
+        for field in ('scope', 'struggle_warning_policy'):
+            class Foreign(FakeProjector):
+                def project_nonrequest_delta(self, lines):
+                    result = super().project_nonrequest_delta(lines)
+                    setattr(result, field, 'FOREIGN')
+                    return result
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.run_fixture(projector_type=Foreign)
 
     def test_missing_or_duplicate_roster_is_not_a_complete_measurement(self):
         t = DiagnosticTally(2)
