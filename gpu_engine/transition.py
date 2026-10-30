@@ -272,7 +272,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 
 
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
-                     chance_inputs: ChanceInputs) -> StepResult:
+                     chance_inputs: ChanceInputs, *, _public_trace=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -295,6 +295,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     valid = jnp.take_along_axis(action_mask(state,table), jnp.clip(actions, 0, 8)[..., None], axis=2)[..., 0]
     invalid = ~state.done & jnp.any(requested & (~valid | (actions < 0) | (actions > 8)), axis=1)
     live = ~state.done & ~invalid
+    if _public_trace is not None:
+        from . import engine_public_events as public_callbacks
+        # Diagnostic receipts only. Uninstrumented consumers keep every trace
+        # partial; this must never authorize a full observation or B4 gate.
+        _public_trace = _public_trace._replace(
+            turn=state.turn+(live & ~replacement).astype(jnp.int32),
+            refusal=_public_trace.refusal | jnp.where(live,public_callbacks.UNINSTRUMENTED,0)
+                | jnp.where(invalid,public_callbacks.INVALID_ACTION,0))
     resuming = live & state.pending_residual
     splits = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
     draws = chance_inputs.draws
@@ -511,6 +519,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
             acts &= ~blocked
             explodes=acts & table.self_destruct.move[move]
+        if _public_trace is not None:
+            # A genuine ordinary declaration is known here, after the actual
+            # suppression/preparation gates and before any main-hit callback.
+            _public_trace = public_callbacks.move(_public_trace,side,work.active[rows,side],
+                work.active[rows,foe],caller_move,eligible=caller_acts,
+                unsupported=charge_locked | sleep_usable | ~acts)
         attack_stats = _active(work.stats, work, side)
         defense_stats = _active(work.stats, work, foe)
         attack_boosts = _active(work.boosts, work, side)
@@ -620,6 +634,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
             substitute_hp=_set_active(work.substitute_hp,work,foe,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
+        if _public_trace is not None:
+            _public_trace = public_callbacks.condition(_public_trace,foe,work.active[rows,foe],
+                foe_hp,_active(work.max_hp,work,foe),_active(work.status,work,foe),
+                eligible=acts & hit & ~hits_sub & (dealt>0))
         if table.focus_punch is not None:
             work=focusing.hit(work,side,move,table.focus_punch,eligible=acts & hit & ~immune & ~hits_sub)
         # Gen 3 floors recoil from actual damage, including capped sub damage.
@@ -789,6 +807,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
+        if _public_trace is not None:
+            _public_trace = public_callbacks.faint(_public_trace,foe,work.active[rows,foe],
+                eligible=acts & hit & ~hits_sub & (dealt>0) & (foe_hp==0))
         if table.phazing is not None:
             work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],
                 table.phazing,table.entry,eligible=acts & hit & (hp>0))
@@ -928,4 +949,5 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
         work.volatile & jnp.uint32(~(FLINCH|FOCUS_PUNCH|FOCUS_LOST) & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
-    return StepResult(work, invalid, placeholders)
+    result = StepResult(work, invalid, placeholders)
+    return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)
