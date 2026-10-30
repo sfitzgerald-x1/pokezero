@@ -34,6 +34,7 @@ from . import engine_weather_callbacks as weather_callbacks, weather, public_fie
 from . import engine_weather_progress_callbacks as weather_progress
 from . import engine_weather_effect_callbacks as weather_effects
 from . import engine_weather_speed_profile as weather_speed
+from . import engine_leftovers_callbacks as leftovers_callbacks
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -61,6 +62,8 @@ class Tables(NamedTuple):
     weather_events: object
     weather_moves: object
     weather_duration_safe: object
+    leftovers_engine_item: object
+    leftovers_public_item: object
     binding: object
 
 
@@ -163,6 +166,8 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     lum_engine = next((i for i, name in enumerate(item_names) if normalize_id(name) == 'lumberry'), 0)
     lum_public = 0 if items is None else items.ids.get('lumberry', 0)
     lum = items is not None and lum_engine > 0 and lum_public > 0
+    leftovers_engine = next((i for i, name in enumerate(item_names) if normalize_id(name) == 'leftovers'), 0)
+    leftovers_public = 0 if items is None else items.ids.get('leftovers', 0)
     weather_ids = [0]*5; ability_ids = [0]*4; guard_species = [0]*4; guard_item = [False]*4
     weather_moves=np.array([{'raindance':weather.RAIN,'sunnyday':weather.SUN,
         'sandstorm':weather.SAND,'hail':weather.HAIL}.get(normalize_id(n),0)
@@ -194,7 +199,8 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         weather_public=weather_ids,weather_ability=ability_ids,weather_guard_species=guard_species,
         weather_guard_item_possible=guard_item,
         weather_moves=weather_moves.tolist(),weather_duration_safe=duration_safe,
-        weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),admission=False)
+        weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),
+        leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
@@ -208,6 +214,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(guard_species,jnp.int32),jnp.array(guard_item),jnp.array(weather_catalog is not None),
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
+        jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -312,7 +319,7 @@ def _snapshot_shape(snapshot, batch):
     base._shape(snapshot.revealed_species_id, (batch, 2), jnp.int32)
 
 
-def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None):
+def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None):
     """Trusted device primitive: real LifecycleTape and causal source snapshots.
 
     All host guards are separate. No host reads, string reconstruction or event
@@ -355,6 +362,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     base._shape(tables.weather_events, (), jnp.bool_)
     base._shape(tables.weather_moves,tables.base.public_ids.shape,jnp.int32)
     base._shape(tables.weather_duration_safe,(),jnp.bool_)
+    base._shape(tables.leftovers_engine_item,(),jnp.int32)
+    base._shape(tables.leftovers_public_item,(),jnp.int32)
     for value,shape,dtype in ((tables.weather_public,(5,),jnp.int32),
             (tables.weather_ability,(4,),jnp.int32),(tables.weather_guard_species,(4,),jnp.int32),
             (tables.weather_guard_item_possible,(4,),jnp.bool_)):
@@ -380,6 +389,22 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & jnp.all(record.profile_binding == data.binding,axis=1)
             & jnp.all(data.engine_binding == tape.engine_binding)
             & jnp.all(data.source_binding == tape.source_binding))
+    # Optional original helper data is supplied only by the owning host guard.
+    # A canonical item integer or a caller boolean is not a registration.
+    leftovers_profile=jnp.zeros(b,bool)
+    if leftovers is not None:
+        if type(leftovers) is not leftovers_callbacks.Data:
+            raise ValueError('original checked Leftovers helper data required')
+        for value in (leftovers.binding,leftovers.engine_binding,leftovers.source_binding,
+                leftovers.move_binding,leftovers.producer_binding):
+            base._shape(value,(8,),jnp.uint32)
+        base._shape(leftovers.leftovers_item,(),jnp.int32)
+        leftovers_profile=(hp_profile & (tables.leftovers_engine_item>0)&(tables.leftovers_public_item>0)
+            & (leftovers.leftovers_item==tables.leftovers_engine_item)
+            & jnp.all(leftovers.engine_binding==tape.engine_binding)
+            & jnp.all(leftovers.source_binding==tape.source_binding)
+            & jnp.all(leftovers.move_binding==tape.move_binding)
+            & jnp.all(leftovers.producer_binding==tape.producer_binding))
     rows = jnp.arange(b)
     known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK | status_callbacks.UNKNOWN_STATUS | weather_callbacks.UNKNOWN_WEATHER
     fatal = (tape.refusal & ~public.UNINSTRUMENTED) != 0
@@ -414,6 +439,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         clock_weather = kind == weather_progress.WEATHER_CLOCK
         failed_weather = kind == weather_effects.SAME_WEATHER_FAILURE
         weather_chip = kind == weather_effects.WEATHER_CHIP
+        leftovers_heal = kind == leftovers_callbacks.LEFTOVERS_HEAL
         any_weather=entry_weather|move_weather|clock_weather
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
@@ -503,11 +529,17 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (raw[:,1]>0)&(raw[:,2]>0)&(raw[:,1]!=raw[:,2])
             & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5])&(raw[:,7]<=1_000_000)
             & (raw[:,8]>=0)&(raw[:,8]<=6)&((raw[:,9]==weather.SAND)|(raw[:,9]==weather.HAIL)))
+        leftovers_ok=(leftovers_profile & tables.status_events & ~tables.raw_begin & status_identity
+            & (phase==0)&(incoming==cursor.physical_active[rows,safe_side])
+            & jnp.all(raw[:,1:3]==-1,axis=1)
+            & (raw[:,5]>0)&(raw[:,6]>raw[:,5])&(raw[:,7]>=raw[:,6])&(raw[:,7]<=1_000_000)
+            & (raw[:,8]>=0)&(raw[:,8]<=6)&(raw[:,9]==tables.leftovers_engine_item))
         event_ok = generation_ok & clock_ok & jnp.where(arrival, arrival_ok,
             jnp.where(clock, clock_payload, jnp.where(status_event,status_ok,
                 jnp.where(lum,lum_ok,jnp.where(entry_weather,weather_ok,
                     jnp.where(move_weather,move_weather_ok,jnp.where(clock_weather,clock_weather_ok,
-                        jnp.where(failed_weather,failed_weather_ok,jnp.where(weather_chip,chip_ok,component & component_ok)))))))))
+                        jnp.where(failed_weather,failed_weather_ok,jnp.where(weather_chip,chip_ok,
+                            jnp.where(leftovers_heal,leftovers_ok,component & component_ok))))))))))
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -556,10 +588,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_percent=jnp.where((raw[:,6]<raw[:,7])&(chip_percent==100),99,chip_percent)
         chip_payload=jnp.stack((status_enc,jnp.where(own,raw[:,6],chip_percent),
             jnp.where(own,raw[:,7],100),jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,8],0,6)],
-            z,jnp.ones_like(z),jnp.ones_like(z),z),axis=1)  # damage, explicit [from], no Spikes
+            z,jnp.where(leftovers_heal,0,1),jnp.where(leftovers_heal,0,1),z),axis=1)  # heal tags are not damage metadata
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
-        semantic=jnp.where(weather_chip[:,None],chip_semantic,semantic)
+        semantic=jnp.where((weather_chip|leftovers_heal)[:,None],chip_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)
@@ -606,11 +638,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     return Projection(next_state, chunk, error, refusal, admitted, no, no, no)
 
 
-def project_frame(state, frame, tables, *, weather_hp=None):
+def project_frame(state, frame, tables, *, weather_hp=None, leftovers=None):
     """Device connection from an actual lifecycle result; never reads its state."""
     if type(frame) is not life.LifecycleResult:
         raise ValueError('actual lifecycle result required')
-    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,weather_hp=weather_hp)
+    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,
+        weather_hp=weather_hp,leftovers=leftovers)
 
 
 class Consumed(NamedTuple):
