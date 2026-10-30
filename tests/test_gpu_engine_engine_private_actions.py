@@ -274,5 +274,88 @@ class EnginePrivateActionsTests(unittest.TestCase):
         object.__setattr__(catalog, 'device', catalog.device._replace(numeric=j.array(catalog.device.numeric)))
         with self.assertRaises(ValueError): fast(self.state(), o, self.source(), self.constructor(), engine_binding=o.engine_binding)
 
+    def test_every_static_catalog_leaf_refuses_foreign_storage_even_when_readonly(self):
+        # Equal contents and copied binding words do not make foreign storage immutable.
+        for field in p.ActionTables._fields:
+            for writable in (True, False):
+                with self.subTest(field=field, writable=writable):
+                    value = np.array(getattr(self.catalog.device, field), copy=True)
+                    value.setflags(write=writable)
+                    catalog = replace(self.catalog, device=self.catalog.device._replace(**{field: value}))
+                    with self.assertRaises(ValueError):
+                        e.compile_engine_actions(self.metadata, catalog=catalog, vocabulary=self.vocab,
+                            private_team=self.team, exposure=self.exposure)
+
+    def test_mutable_numeric_cannot_change_projection_after_warmed_jit(self):
+        state, ledger, source, retained = self.state(), self.ledger(), self.source(), self.constructor()
+        before = self.encoder(state, ledger, source, retained, engine_binding=ledger.engine_binding)
+        baseline = np.array(before.features.numeric, copy=True)  # synchronize cached execution
+        numeric = np.array(self.catalog.device.numeric, copy=True)
+        catalog = replace(self.catalog, device=self.catalog.device._replace(numeric=numeric))
+        try:
+            compiled = e.compile_engine_actions(self.metadata, catalog=catalog, vocabulary=self.vocab,
+                private_team=self.team, exposure=self.exposure)
+        except ValueError:
+            # Rejection is the intended boundary. Mutating the rejected input cannot
+            # affect the valid, already-warmed original encoder either.
+            fast = self.encoder
+        else:
+            fast = e.prepare_engine_actions(compiled, expected_binding=compiled.device.binding)
+            warm = fast(state, ledger, source, retained, engine_binding=ledger.engine_binding)
+            np.testing.assert_array_equal(np.asarray(warm.features.numeric), baseline)
+        numeric[catalog.ids['surf'], 0, 0] = 195
+        after = fast(state, ledger, source, retained, engine_binding=ledger.engine_binding)
+        self.assertEqual(after.admitted.tolist(), [True, True])
+        np.testing.assert_array_equal(np.asarray(after.features.numeric), baseline)
+
+    def test_caller_registration_mutation_cannot_rebind_warmed_constructor(self):
+        for field in ('stream_id', 'owner_side'):
+            with self.subTest(field=field):
+                state, ledger, source = self.state(), self.ledger(), self.source()
+                streams = np.array(ledger.stream_id, copy=True)
+                owners = np.array(ledger.owner_side, copy=True)
+                retained = e.retain_constructor_pp(self.pool, np.array([[0, 1], [0, 1]], np.int64),
+                    stream_ids=streams, owner_sides=owners)
+                binding = np.array(retained.device.binding, copy=True)
+                warm = self.encoder(state, ledger, source, retained, engine_binding=ledger.engine_binding)
+                baseline = np.array(warm.features.numeric, copy=True)
+                self.assertEqual(warm.admitted.tolist(), [True, True])
+                if field == 'stream_id':
+                    streams[0] = 171
+                    attempted_ledger = ledger._replace(stream_id=j.array(streams, j.int32))
+                    attempted_state = state
+                else:
+                    owners[0] = 1
+                    attempted_ledger = ledger._replace(owner_side=j.array(owners, j.int32))
+                    # A plausible owning physical packet prevents empty opponent
+                    # storage from incidentally hiding the registration defect.
+                    changed = {name: value.at[0, 1].set(value[0, 0])
+                        for name, value in zip(BattleState._fields, state) if value is not None}
+                    attempted_state = state._replace(**changed)
+                attempted_source = source._replace(boundary=source.boundary._replace(
+                    stream_id=attempted_ledger.stream_id, owner_side=attempted_ledger.owner_side))
+                attempted = self.encoder(attempted_state, attempted_ledger, attempted_source, retained,
+                    engine_binding=attempted_ledger.engine_binding)
+                self.assertEqual(attempted.admitted.tolist(), [False, True])
+                np.testing.assert_array_equal(retained.device.binding, binding)
+                np.testing.assert_array_equal(retained.device.stream_id, ledger.stream_id)
+                np.testing.assert_array_equal(retained.device.owner_side, ledger.owner_side)
+                original = self.encoder(state, ledger, source, retained, engine_binding=ledger.engine_binding)
+                self.assertEqual(original.admitted.tolist(), [True, True])
+                np.testing.assert_array_equal(original.features.numeric, baseline)
+
+    def test_all_retained_static_arrays_have_immutable_jax_storage(self):
+        ledger = self.ledger()
+        retained = e.retain_constructor_pp(self.pool, np.array([[0, 1], [0, 1]], np.int64),
+            stream_ids=np.array(ledger.stream_id, copy=True), owner_sides=np.array(ledger.owner_side, copy=True))
+        for name, arrays in (('action catalog', self.catalog.device), ('adapter tables', self.compiled.device),
+                ('constructor', retained.device), ('private team', self.team.device)):
+            for field, value in zip(arrays._fields, arrays):
+                with self.subTest(holder=name, field=field):
+                    self.assertIsInstance(value, jax.Array)
+                    view = np.asarray(value)
+                    self.assertFalse(view.flags.writeable)
+                    with self.assertRaises(ValueError): view.setflags(write=True)
+
 
 if __name__ == '__main__': unittest.main()

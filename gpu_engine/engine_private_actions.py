@@ -100,6 +100,14 @@ def _shape(value, shape, dtype, name):
         raise ValueError('exact action shape/dtype required: ' + name)
 
 
+def _immutable_arrays(arrays, name):
+    # Equality and object identity do not freeze NumPy or foreign array storage,
+    # even when its current writeable flag is false. The existing source
+    # compilers produce genuine immutable JAX arrays for every static field.
+    if any(not isinstance(value, jax.Array) for value in arrays):
+        raise ValueError('immutable JAX static arrays required: ' + name)
+
+
 class ConstructorData(NamedTuple):
     binding: object
     stream_id: object
@@ -121,6 +129,8 @@ def retain_constructor_pp(pool, team_indices, *, stream_ids, owner_sides):
     Call beside actual construction, before mutable state.pp loses maxPP.
     This never initializes/steps an engine or reads the unselected team's data.
     It does not certify that a caller actually used those construction inputs.
+    Registration arrays are owned copies before hashing and retention; caller
+    mutation can neither change this lifetime nor reuse its original binding.
     """
     receipt = provenance._pool(pool, rehash=True)
     indices = np.asarray(team_indices)
@@ -130,6 +140,8 @@ def retain_constructor_pp(pool, team_indices, *, stream_ids, owner_sides):
     b = indices.shape[0]
     _shape(stream_ids, (b,), jnp.int32, 'constructor streams')
     _shape(owner_sides, (b,), jnp.int32, 'constructor owners')
+    stream_ids = jnp.array(stream_ids, jnp.int32, copy=True)
+    owner_sides = jnp.array(owner_sides, jnp.int32, copy=True)
     streams, owners = np.asarray(stream_ids), np.asarray(owner_sides)
     count = pool.arrays['species'].shape[0]
     if (np.any(indices < 0) or np.any(indices >= count) or np.any(streams <= 0)
@@ -170,6 +182,7 @@ def _constructor(retained):
     record = _CONSTRUCTORS.get(retained) if type(retained) is ConstructorPP else None
     if record is None or retained.device is not record[0] or any(a is not b for a, b in zip(retained.device, record[1])):
         raise ValueError('original retained constructor maxPP holder required')
+    _immutable_arrays(retained.device, 'retained constructor')
     return retained.device
 
 
@@ -180,6 +193,8 @@ def _checked(compiled):
             or record['catalog'].device is not record['action_tables']
             or any(a is not b for a, b in zip(record['catalog'].device, record['action_edges']))):
         raise ValueError('original compiled action holder and immutable catalog edges required')
+    _immutable_arrays(compiled.device, 'compiled adapter')
+    _immutable_arrays(record['action_tables'], 'original action catalog')
     return record
 
 
@@ -188,10 +203,14 @@ def compile_engine_actions(metadata, *, catalog, vocabulary, private_team, expos
 
     Retain the original guarded private-team handle and original action catalog.
     Recompile its frozen source snapshot once to reject a catalog whose copied
-    binding words conceal replaced tables. All later calls check array identity.
+    binding words conceal replaced tables. Foreign/mutable static array leaves
+    are refused before capture. All later calls check array identity and storage.
     """
     if type(catalog) is not actions.ActionCatalog or type(exposure) is not Exposure:
         raise ValueError('original ActionCatalog and explicit Exposure required')
+    if type(catalog.device) is not actions.ActionTables:
+        raise ValueError('original typed action tables required')
+    _immutable_arrays(catalog.device, 'action catalog')
     team_fn = team.prepare_team_facts(private_team, expected_binding=private_team.binding)
     rebuilt = actions.compile_actions(catalog.dex, vocabulary, hp_limit=catalog.device.hp_power.shape[1]-1)
     if (catalog.names != rebuilt.names or dict(catalog.ids) != dict(rebuilt.ids)
