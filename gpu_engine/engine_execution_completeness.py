@@ -144,6 +144,105 @@ class Report(NamedTuple):
     unresolved: object
 
 
+class Context(NamedTuple):
+    """PRIVATE actual lifecycle carry; never an exhaustive-source certificate."""
+    ledger: Ledger
+    tables: Tables
+
+
+UNKNOWN_EXECUTION = 512
+
+
+def commit_rows(active, before, after):
+    """Ledger has one GLOBAL eight-word binding, including when B happens to8."""
+    if type(before) is not Ledger or type(after) is not Ledger:
+        raise ValueError('typed private ledgers required')
+    _shape(active,before.stream_id.shape,jnp.bool_)
+    fields={name:jnp.where(active.reshape((active.shape[0],)+(1,)*(getattr(before,name).ndim-1)),
+        getattr(after,name),getattr(before,name)) for name in before._fields if name!='inventory_binding'}
+    return before._replace(**fields)
+
+
+def begin_on_tape(tape, ledger, tables, *, active):
+    """Begin BEFORE the actual constructor/step source handlers execute."""
+    if not hasattr(tape,'execution'):
+        raise ValueError('owning lifecycle accounting field required')
+    ledger=begin_frame(ledger,tape,frame=ledger.frame+1,active=active,tables=tables)
+    return tape._replace(execution=Context(ledger,tables))
+
+
+def _context(tape):
+    context=getattr(tape,'execution',None)
+    if context is not None and type(context) is not Context:
+        raise ValueError('original private lifecycle accounting context required')
+    return context
+
+
+def _put_context(tape, ledger, context):
+    # Immediate sticky source refusal; no successful later emitter/consumer
+    # clears a previously unsupported or malformed attempt.
+    return tape._replace(execution=context._replace(ledger=ledger),
+        refusal=tape.refusal | jnp.where(ledger.refusal!=0,UNKNOWN_EXECUTION,0))
+
+
+def open_attempt(tape, site, side, *, active):
+    """Actual callsite BEFORE dispatch/write. False loop masks enter nothing."""
+    context=_context(tape)
+    if context is None:return tape,None
+    b=tape.count.shape
+    _shape(active,b,jnp.bool_)
+    side=jnp.broadcast_to(jnp.asarray(side,jnp.int32),b)
+    site=jnp.full(b,int(site),jnp.int32)
+    ledger,ticket=enter(context.ledger,tape,site,side,active=active,tables=context.tables)
+    return _put_context(tape,ledger,context),ticket
+
+
+def unhandled_attempt(tape, site, side, *, active):
+    """No no-op exemption: record unsupported blocked/capped attempts too."""
+    tape,ticket=open_attempt(tape,site,side,active=active)
+    context=_context(tape)
+    if context is None:return tape
+    ledger=unhandled(context.ledger,ticket,active=active,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def capture_leftovers_write(tape, ticket, *, requested, positive_write):
+    """Reviewed LEFTOVERS site maps ONLY to its single literal kind17 receipt.
+
+    The owning caller supplies its actual numerical write guard. This checks
+    exact source-site/emitter identity, then snapshots the original stamped
+    span. Full-HP/blocked/no-output attempts remain unsupported; the consumer
+    must later drain this span before credit is granted.
+    """
+    context=_context(tape)
+    if context is None:return tape
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);rows=jnp.arange(tape.count.shape[0])
+    _shape(requested,tape.count.shape,jnp.bool_);_shape(positive_write,tape.count.shape,jnp.bool_)
+    start=ledger.start[rows,slot];index=jnp.clip(start,0,tape.words.shape[1]-1)
+    raw=tape.words[rows,index]
+    semantic=(same & (ledger.site[rows,slot]==int(Site.LEFTOVERS)) & (tape.count==start+1)
+        & (raw[:,0]==17)&(raw[:,3]==ledger.side[rows,slot]))
+    accepted=requested & positive_write & semantic
+    ledger=unhandled(ledger,ticket,active=requested&~(positive_write&semantic),tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=accepted,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def join_consumed_owners(first, second, *, tables):
+    """Credit comes from TWO genuine consume_frame calls, never an input bool."""
+    a,b=report(first,tables=tables),report(second,tables=tables)
+    same=((first.frame==second.frame)&(first.stream_id==second.stream_id)
+        & (first.count==second.count)&(first.next_serial==second.next_serial))
+    for name in ('site','side','serial','start','end','turn','phase','generation','claimed','words',
+                 'event_turn','event_phase','event_generation'):
+        same &= jnp.all((getattr(first,name)==getattr(second,name)).reshape((first.stream_id.shape[0],-1)),axis=1)
+    good=a.scoped_drained & b.scoped_drained & same
+    joined=first._replace(stage=jnp.minimum(first.stage,second.stage),opened=first.opened|second.opened,
+        refusal=first.refusal|second.refusal|jnp.where(good,0,CONSUMPTION),
+        upstream_refusal=first.upstream_refusal|second.upstream_refusal)
+    return joined,good
+
+
 def initialize(stream_ids, *, compiled, capacity=16, receipt_capacity=64):
     """Private allocation only. Does NOT establish actual source origin."""
     tables, _, _ = _checked(compiled)
