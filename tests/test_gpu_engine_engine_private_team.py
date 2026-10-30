@@ -36,9 +36,9 @@ class EnginePrivateTeamTests(unittest.TestCase):
         cls.vocab = CategoryVocabulary(tuple(sorted(labels)), aliases={
             'belief:possible_item:lightball': 'belief:possible_item:light_ball'})
 
-    def tables(self, exposure=None, metadata=None, vocabulary=None, checkpoint='a'*64):
+    def tables(self, exposure=None, metadata=None, vocabulary=None, checkpoint='a'*64, dex=None):
         return self.e.compile_engine_private_team(metadata or self.metadata,
-            vocabulary=vocabulary or self.vocab, dex=self.dex, checkpoint_sha256=checkpoint,
+            vocabulary=vocabulary or self.vocab, dex=dex or self.dex, checkpoint_sha256=checkpoint,
             exposure=exposure or self.e.RequestExposure('current', 'physical', True, True))
 
     def state(self):
@@ -178,9 +178,15 @@ class EnginePrivateTeamTests(unittest.TestCase):
             result = self.e.team_facts(self.owned(), changed_tables, expected_binding=tables.binding)
             self.assertEqual(result.admitted.tolist(), [False, False])
         reduced = CategoryVocabulary(tuple(x for x in self.vocab.tokens if x != 'type:psychic'))
-        with self.assertRaisesRegex(ValueError, 'unmapped checkpoint'):
-            self.tables(vocabulary=reduced)
+        partial = self.tables(vocabulary=reduced)
+        self.assertFalse(bool(partial.species_supported[2]))
+        refused = self.e.team_facts(self.owned(), partial, expected_binding=partial.binding)
+        self.assertEqual(refused.admitted.tolist(), [False, False])
         self.assertEqual(reduced.observed_oov_tokens, frozenset())
+        duplicate_zero = copy.deepcopy(self.metadata)
+        duplicate_zero['vocabulary']['abilities'].append('_none')
+        with self.assertRaisesRegex(ValueError, 'ordered engine namespace'):
+            self.tables(metadata=duplicate_zero)
         for owners in (self.j.array([True, False]), self.j.array([0., 1.]), self.j.array([0], self.j.int32)):
             with self.assertRaises(ValueError): self.owned(owners=owners)
         with self.assertRaises(ValueError): self.owned(binding=self.j.zeros((2, 8), self.j.int32))
@@ -241,6 +247,68 @@ class EnginePrivateTeamTests(unittest.TestCase):
         # Punctuation is an identity-preserving spelling, not a species alias.
         tables = self.tables()
         self.assertEqual(int(tables.species_categories[3]), self.vocab.encode('species:Ho-Oh'))
+
+    def test_full_id_order_retains_unsupported_rows_and_selected_rows_refuse(self):
+        from pokezero.category_vocab import CategoryVocabulary
+        from pokezero.dex import ShowdownDex, SpeciesInfo
+        metadata = copy.deepcopy(self.metadata)
+        metadata['vocabulary']['species'] += ['abra', 'unownz', 'missingno']
+        metadata['vocabulary']['abilities'] += ['damp']
+        metadata['vocabulary']['items'] += ['aguavberry']
+        dex = ShowdownDex({}, dict(self.dex.species,
+            abra=SpeciesInfo('abra', 'Abra', ('Psychic',), dict(hp=25)),
+            missingno=SpeciesInfo('missingno', 'MissingNo.', ('Bird', 'Normal'), dict(hp=33))), {})
+        vocab = CategoryVocabulary(tuple(sorted((*self.vocab.tokens, 'species:missingno.', 'type:normal'))),
+            aliases=self.vocab.aliases)
+        compiled = self.tables(metadata=metadata, dex=dex, vocabulary=vocab)
+        self.assertEqual(compiled.species_categories.shape, (7,))
+        self.assertEqual(compiled.species_supported.tolist(), [False, True, True, True, False, False, False])
+        self.assertEqual(compiled.ability_supported.tolist(), [True, True, True, True, False])
+        self.assertEqual(compiled.item_supported.tolist(), [True, True, True, False])
+        self.assertEqual(compiled.status_supported.tolist(), [True]*7)
+        self.assertEqual(vocab.observed_oov_tokens, frozenset())
+        # Original engine IDs1..3 are still exactly the same rows, not a
+        # compacted supported-species namespace.
+        self.np.testing.assert_array_equal(compiled.species_categories[:4], self.tables(vocabulary=vocab).species_categories)
+        owned = self.owned(binding=self.j.broadcast_to(self.e.engine_metadata_binding(metadata), (2, 8)))
+        fast = self.e.prepare_team_facts(compiled, expected_binding=compiled.binding)
+        self.assertEqual(fast(owned).admitted.tolist(), [True, True])
+        for field, indices in (('species', (4, 5, 6)), ('ability', (4,)), ('item', (3,))):
+            for index in indices:
+                bad = owned._replace(**{field: getattr(owned, field).at[0, 0].set(index)})
+                result = fast(bad)
+                self.assertEqual(result.admitted.tolist(), [False, True])
+                patch = self.p.project_team(result.facts, observer_side=self.j.array([0, 1], self.j.int32),
+                    expected_vocabulary_binding=compiled.vocabulary_binding)
+                self.assertFalse(bool(self.j.any(patch.numeric[0])))
+                self.assertFalse(bool(self.j.any(patch.categorical[0])))
+
+    def test_hidden_and_unused_owner_fields_do_not_invent_exposure_or_refusal(self):
+        owned = self.owned()
+        for mode, field in (('base', 'ability'), ('current', 'base_ability'), ('hidden', 'ability')):
+            compiled = self.tables(self.e.RequestExposure(mode, 'absent', False, False))
+            baseline = self.e.team_facts(owned, compiled, expected_binding=compiled.binding)
+            changed = owned._replace(**{field: getattr(owned, field).at[0, 0].set(999999)},
+                item=owned.item.at[0, 0].set(999999), gender=owned.gender.at[0, 0].set(999999),
+                stats=owned.stats.at[0, 0].set(-999))
+            if mode == 'hidden':
+                changed = changed._replace(base_ability=changed.base_ability.at[0, 0].set(999999))
+            result = self.e.team_facts(changed, compiled, expected_binding=compiled.binding)
+            for left, right in zip(self.jax.tree.leaves(result), self.jax.tree.leaves(baseline)):
+                self.np.testing.assert_array_equal(left, right)
+        compiled = self.tables()
+        baseline = self.e.team_facts(owned, compiled, expected_binding=compiled.binding)
+        # Physical maxHP/status of a canonical 0 fnt row are not source facts;
+        # nor is the physical stats[HP], which requests derive from condition.
+        changed = owned._replace(max_hp=owned.max_hp.at[:, 1].set(-1),
+            status=owned.status.at[:, 1].set(999), stats=owned.stats.at[..., 0].set(-1))
+        result = self.e.team_facts(changed, compiled, expected_binding=compiled.binding)
+        for left, right in zip(self.jax.tree.leaves(result), self.jax.tree.leaves(baseline)):
+            self.np.testing.assert_array_equal(left, right)
+        removed = owned._replace(item=owned.item.at[:, 0].set(0))
+        result = self.e.team_facts(removed, compiled, expected_binding=compiled.binding)
+        self.assertEqual(result.admitted.tolist(), [True, True])
+        self.assertEqual(result.facts.item_known[:, 0].tolist(), [False, False])
 
 
 if __name__ == '__main__': unittest.main()
