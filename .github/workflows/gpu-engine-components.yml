@@ -37,9 +37,9 @@ jobs:
       PYTHONPATH: src:.
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '2'
-      # JAXLIB 0.12.0 accepts this CPU flag (default split count: 32).
-      # Limit concurrent LLVM codegen parts; retain the same test workload.
-      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1'
+      # JAXLIB 0.12.0 CPU correctness checks retain their complete JIT workload.
+      # Bound codegen concurrency and reduce backend optimizer memory pressure.
+      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=0'
       POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
       POKEZERO_GPU_TEAM_POOL: ${{ github.workspace }}/.ci/gpu-component-teams.npz
     steps:
