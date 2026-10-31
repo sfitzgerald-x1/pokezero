@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 import numpy as np
 from gpu_engine import finite_gameplay_comparison as c
+from gpu_engine import engine_gameplay_trace as trace
 from test_gpu_engine_gameplay_saved_reference import fixture, SavedGameplayTests, Owner
 
 
@@ -73,6 +74,33 @@ class BadCellTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'diagnostic reference drift'):
                 SavedGameplayTests().run_saved(args)
             self.assertEqual(before,{name:args[name].read_bytes()for name in before})
+
+    def test_compensating_frame_drift_cannot_move_original_bad_cells(self):
+        original_observation=Owner.observation
+        def observations(error_root):
+            def observe(owner):
+                result={k:np.asarray(v).copy()for k,v in original_observation(owner).items()}
+                if owner.root==error_root and owner.owner=='p1' and owner.frame==1:
+                    result['numeric_features'][2,38]+=1.
+                return result
+            return observe
+        with tempfile.TemporaryDirectory()as tmp:
+            args=fixture(Path(tmp));Owner.fail_p2=False
+            with patch.object(Owner,'observation',observations(101)):
+                baseline=SavedGameplayTests().run_saved(args)
+            baseline_rows={(r['stream_id'],r['request']):r for r in map(json.loads,args['out_path'].read_text().splitlines())}
+            rows=list(map(json.loads,args['native_decisions_path'].read_text().splitlines()))
+            for row in rows:
+                if row.get('kind')!='INITIAL':row['owners']=baseline_rows[row['stream_id'],row['request']]['owners']
+            args['native_decisions_path'].write_text(''.join(json.dumps(r)+'\n'for r in rows))
+            args['expected_native_decisions_sha256']=trace.digest_file(args['native_decisions_path'])
+            native=json.loads(args['native_result_path'].read_text())
+            native['summary']=baseline['summary'];native['decisions_artifact']['sha256']=args['expected_native_decisions_sha256']
+            args['native_result_path'].write_text(json.dumps(native));args['expected_native_result_sha256']=trace.digest_file(args['native_result_path'])
+            args['out_path']=Path(tmp)/'diagnostic';args['record_bad_cells']=True
+            with patch.object(Owner,'observation',observations(102)):
+                with self.assertRaisesRegex(ValueError,'diagnostic reference drift: original owner/frame'):
+                    SavedGameplayTests().run_saved(args)
 
 
 if __name__=='__main__':unittest.main()

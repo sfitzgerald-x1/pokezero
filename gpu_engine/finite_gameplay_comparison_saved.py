@@ -160,6 +160,11 @@ def reanalyse(*, measurement_path, expected_measurement_sha256, trace_path, expe
                                     if unresolved:
                                         owner['refusals'].append(dict(kind='UNRESOLVED_CHANCE', reason='original coupling audit'))
                                         owner['columns'] = dict(status='UNKNOWN', reason='UNRESOLVED_CHANCE')
+                                    if record_bad_cells:
+                                        unchanged = deepcopy(owner)
+                                        unchanged.get('columns', {}).pop('bad_cells', None)
+                                        if unchanged != old['owners'][side]:
+                                            raise ValueError('diagnostic reference drift: original owner/frame result must reproduce')
                                     row['owners'].append(owner)
                             reducer.add(row)
                             output.write(json.dumps(row, sort_keys=True, allow_nan=False) + '\n')
