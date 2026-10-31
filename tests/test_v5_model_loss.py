@@ -129,6 +129,15 @@ class V5ModelLossTests(unittest.TestCase):
         with self.assertRaises(TypeError):model(**{name: tensors[name] for name in
             ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask', 'history_mask')}, privileged_view=True)
 
+    def test_every_declared_belief_token_must_remain_attended(self):
+        cfg = config(); model = build_v5_model(cfg, enable_v5=True)
+        original = v5_batch_to_torch(batch_columns(), cfg)
+        for slot in range(6):
+            tensors = dict(original); tensors['attention_mask'] = original['attention_mask'].clone()
+            tensors['attention_mask'][1, 0, 23 + slot] = False
+            with self.subTest(slot=slot), self.assertRaises(ValueError):
+                forward_v5(model, tensors)
+
     def test_role_experts_route_pokemon_actions_and_field_belief_without_gating(self):
         cfg = config(); model = build_v5_model(cfg, enable_v5=True)
         experts = model.encoder.layers[0].role_experts

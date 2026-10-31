@@ -220,6 +220,8 @@ def build_v5_model(config, *, enable_v5=False):
                     or (categorical_ids >= config.category_vocab_size).any()
                     or not history_mask.all() or not attention_mask.any(-1).all()):
                 raise ValueError('finite original public categories and active frame required')
+            if not attention_mask[:, :, 23:29].all():
+                raise ValueError('all six declared v5 belief tokens must be attended')
             expected_roles = torch.tensor(TOKEN_ROLES, dtype=torch.long, device=token_type_ids.device)
             if not (token_type_ids == expected_roles).all():
                 raise ValueError('original v4 roles plus six belief role7 tokens required')
