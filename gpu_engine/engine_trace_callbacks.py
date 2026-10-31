@@ -1,6 +1,7 @@
 """Literal Gen3 Trace copy at the actual entry assignment, partial only.
 
-The finite capability is canonical Trace -> Sturdy/Natural Cure/Oblivious. The receipt carries both
+The finite capability is canonical Trace -> Sturdy/Natural Cure/Oblivious,
+plus the measured Levitate/Pressure copies. The receipt carries both
 actual physical identities and the old/new/foe ability reads from that SAME
 call. It never invokes the copied ability Start. Other copies remain UNKNOWN.
 Public names/encounters are resolved by the original owning FULL consumers.
@@ -27,7 +28,14 @@ def entry_trace(tape, side, physical, foe_physical, old_ability, new_ability,
     if table.trace_copy is None:
         valid &= False
     else:
-        valid &= table.trace_copy[jnp.clip(new_ability,0,n-1)]
+        copied=jnp.clip(new_ability,0,n-1)
+        # These original engine masks name only the two measured targets.
+        # Gen3 setAbility emits the same Trace line and never starts the copy.
+        # Names alone do not admit arbitrary/banned/unmapped ability families.
+        supported=table.trace_copy[copied] | table.levitate[copied]
+        if table.pressure is not None:
+            supported |= table.pressure[copied]
+        valid &= supported
     inside=(tape.count>=0)&(tape.count<tape.words.shape[1])
     at=jnp.clip(tape.count,0,tape.words.shape[1]-1)
     valid &= ~inside|jnp.all(tape.switch_details[rows,at]==0,axis=1)

@@ -79,8 +79,8 @@ class TraceOwningEventTests(unittest.TestCase):
   mask=j.array([True]*4+[False]*4);s,after,out,before,d,born=self.copied(8,mask)
   self.assertEqual(out.count.tolist(),[3]*4+[2]*4)
   kept=speed.retain_frame_device(born,after,out.stream_id,d,out);self.assertTrue(bool(kept.qualified_birth.all()))
-  # Actual unsupported Trace->Pressure is numerically unchanged yet UNKNOWN.
-  original,t,_,d,birth=self.fixture(8);original=original._replace(ability=original.ability.at[0,1,5].set(1),base_ability=original.base_ability.at[0,1,5].set(1))
+  # Actual unsupported Trace->Trace is numerically unchanged yet UNKNOWN.
+  original,t,_,d,birth=self.fixture(8);original=original._replace(ability=original.ability.at[0,1,5].set(2),base_ability=original.base_ability.at[0,1,5].set(2))
   t=t._replace(refusal=t.refusal.at[1].set(65));result,_,bad=entry.enter(original,0,self.table,eligible=mask,hazards=False,_weather_trace=t)
   self.assertTrue(bool(bad.refusal[0]&256));self.assertTrue(bool(bad.refusal[1]&64))
   for changed in (out._replace(event_generation=out.event_generation.at[0,2,0].add(1)),
@@ -177,7 +177,7 @@ process.stdout.write(JSON.stringify({ability:p.ability,lines,calls,update:typeof
 
  def test_frozen_source_pins_and_legacy_copy_path_stay_closed(self):
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),59)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),61)
   s,t,_,_,_=self.fixture()
   legacy=events.initialize(2,64,catalog=self.producer)
   self.assertIs(trace.entry_trace(legacy,0,s.active[:,0],s.active[:,1],j.full(2,2,j.int32),

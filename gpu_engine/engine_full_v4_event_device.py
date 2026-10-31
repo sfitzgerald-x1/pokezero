@@ -278,7 +278,8 @@ def compile_adapter(metadata, projector, *, catalog):
         sleep_powder_status=add(f'|-status|{ident[0]}|slp|[from] move: Sleep Powder',inputs.Kind.STATUS)
         if not sleep_powder_status:raise ValueError('FULL writer lacks exact Sleep Powder source status schema')
     trace_copy=np.zeros(len(metadata['vocabulary']['abilities']),np.int32)
-    trace_names={'sturdy':'Sturdy','naturalcure':'Natural Cure','oblivious':'Oblivious'}
+    trace_names={'sturdy':'Sturdy','naturalcure':'Natural Cure','oblivious':'Oblivious',
+        'levitate':'Levitate','pressure':'Pressure'}
     if int(lower.device.trace_engine_ability)>0:
         for ability_id,name in enumerate(metadata['vocabulary']['abilities']):
             copied=trace_names.get(normalize_id(name))

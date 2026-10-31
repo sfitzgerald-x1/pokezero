@@ -224,7 +224,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     # Closed source-specific copy vocabulary, indexed in the ORIGINAL engine
     # ability namespace. Never infer support from arbitrary copied IDs.
     trace_public=np.array([weather_catalog.abilities.ids.get(normalize_id(n),0)
-        if weather_catalog is not None and normalize_id(n) in ('sturdy','naturalcure','oblivious') else 0
+        if weather_catalog is not None and normalize_id(n) in ('sturdy','naturalcure','oblivious','levitate','pressure') else 0
         for n in ability_names],np.int32)
     substitute_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='substitute'),0)
     toxic_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='toxic'),0)
