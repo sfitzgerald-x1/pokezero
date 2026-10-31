@@ -9,6 +9,14 @@ from gpu_engine import finite_stream_comparison_saved as saved
 
 
 class SavedConstructorComparisonTests(unittest.TestCase):
+    def test_actual_checkpoint_mask_names_build_exact_public_encoder_masks(self):
+        from pokezero.recorded_mirror_roots import CHAMPION_CONTRACT
+        masks = CHAMPION_CONTRACT['feature_masks']
+        actual = saved.champion_feature_masks(masks)
+        for name, value in masks.items():
+            self.assertEqual(getattr(actual,
+                'opponent_tendency_stats_block' if name == 'stats_block' else name), value)
+
     def packet(self):
         actual={name:[[0],[0]] for name in saved.BattleState._fields}
         actual['hp']=[[[341]*6,[287]*6],[[193]*6,[211]*6]]

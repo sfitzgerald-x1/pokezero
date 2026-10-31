@@ -15,6 +15,14 @@ from . import finite_stream_comparison as comparison
 from .state import BattleState
 
 
+def champion_feature_masks(masks):
+    """Translate the checkpoint metadata alias to the public encoder field."""
+    from pokezero.observation import ObservationFeatureMasks
+    return ObservationFeatureMasks(**{
+        'opponent_tendency_stats_block' if name == 'stats_block' else name: value
+        for name, value in masks.items()})
+
+
 def compare_saved(measured, pool, catalog, *, showdown_root, node, native_seed_start, env_config=None):
     cohort = measured['cohort']
     ids = [row['stream_id'] for row in cohort]
@@ -78,7 +86,6 @@ def main(argv=None):
     # no checkpoint archive or champion graph is loaded/executed.
     from pokezero.randbat import load_gen3_randbat_source_cached
     from pokezero.dex import load_showdown_dex_cached
-    from pokezero.observation import ObservationFeatureMasks
     from pokezero.recorded_mirror_roots import CHAMPION_CONTRACT
     from pokezero.category_vocab import CategoryVocabulary
     from . import public_belief, source_provenance, v4_encoder
@@ -91,7 +98,7 @@ def main(argv=None):
         load_showdown_dex_cached(args.showdown_root),vocab,
         checkpoint_sha256=vocabulary['checkpoint_sha256'],feature_masks=masks)
     config=comparison.LocalShowdownConfig(showdown_root=args.showdown_root,node_binary=args.node,
-        category_vocab=vocab,feature_masks=ObservationFeatureMasks(**dict(masks)))
+        category_vocab=vocab,feature_masks=champion_feature_masks(masks))
     result=compare_saved(measured,source_provenance.load_constructor_pool(args.team_pool),catalog,
         showdown_root=args.showdown_root,node=args.node,native_seed_start=args.native_seed_start,
         env_config=config)
