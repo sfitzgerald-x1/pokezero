@@ -43,6 +43,7 @@ from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
+from . import engine_encore_callbacks as encore_callbacks
 from . import engine_color_change_callbacks as color_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
@@ -112,6 +113,7 @@ class Tables(NamedTuple):
     wonder_guard_immune: object
     belly_drum_setboost: object
     sleep_blocked: object
+    encore: object
     namespaces: Bindings
     binding: object
 
@@ -270,6 +272,7 @@ def compile_adapter(metadata, projector, *, catalog):
     bulk_up=np.array([add(f'|-boost|{ident[0]}|{stat}|1',inputs.Kind.BOOST)for stat in ('atk','def')],np.int32)
     belly_drum_setboost=add(f'|-setboost|{ident[0]}|atk|6|[from] move: Belly Drum',inputs.Kind.BOOST)
     sleep_blocked=add(f'|cant|{ident[0]}|slp',inputs.Kind.SLEEP)
+    encore=np.array([add(f'|-start|{ident[0]}|Encore',inputs.Kind.ACTIVE),add(f'|-end|{ident[0]}|Encore',inputs.Kind.ACTIVE)],np.int32)
     protect_success=add(f'|-singleturn|{ident[0]}|Protect',inputs.Kind.ACTIVE)
     protect_block=add(f'|-activate|{ident[0]}|Protect',inputs.Kind.NONPROC)
     # Exact source-tagged damage schemas; no generic direct-damage relabeling.
@@ -423,6 +426,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
     payload += pinch_items.tobytes()
     payload += sub_damage_keys.tobytes()+rough_skin_damage.tobytes()
+    payload += encore.tobytes()
     payload += np.array(sleep_blocked,np.int32).tobytes()+np.array(belly_drum_setboost,np.int32).tobytes()+self_heal.tobytes()+np.array(wonder_guard_immune,np.int32).tobytes()+no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
     payload += ident_species.tobytes()
@@ -432,7 +436,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(sleep_blocked,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -543,6 +547,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.wonder_guard_immune,(),jnp.int32)
     causal.base._shape(tables.belly_drum_setboost,(),jnp.int32)
     causal.base._shape(tables.sleep_blocked,(),jnp.int32)
+    causal.base._shape(tables.encore,(2,),jnp.int32)
     causal.base._shape(tables.primary_sleep_status,(len(tables.causal.base.public_ids),),jnp.int32)
     causal.base._shape(tables.sleep_powder_status,(),jnp.int32)
     causal.base._shape(tables.trace_copy,tables.causal.trace_public_ability.shape,jnp.int32)
@@ -603,6 +608,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         raw_kind=tape.words[:,index,0]
         sub_damage=raw_kind==substitute_damage.SUBSTITUTE_DAMAGE
         secondary_cont=raw_kind==secondary_callbacks.SECONDARY_STATUS
+        encore=raw_kind==encore_callbacks.ENCORE
+        encore_tick=encore&(tape.words[:,index,3]==encore_callbacks.TICK)
         flash_ended=raw_kind==flash_end.FLASH_FIRE_END
         color_change=raw_kind==color_callbacks.COLOR_CHANGE
         protect_attempt=raw_kind==protect_callbacks.PROTECT_ATTEMPT
@@ -687,6 +694,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(bulk_up,tables.bulk_up[jnp.clip(tape.words[:,index,4],0,1)],key)
         key=jnp.where(belly_boost,tables.belly_drum_setboost,key)
         key=jnp.where(sleep_blocked,tables.sleep_blocked,key)
+        key=jnp.where(encore,tables.encore[jnp.clip(tape.words[:,index,3],0,1)],key)
         key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
         key=jnp.where(swords_dance,tables.swords_dance,key)
         nd_miss_safe=tables.no_damage_miss[jnp.clip(nd_raw[:,5],0,len(tables.no_damage_miss)-1)]
@@ -701,7 +709,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             jnp.clip(sub_raw[:,8],0,1),jnp.clip(sub_raw[:,9]+1,0,2)],key)
         key=jnp.where(protect_attempt,jnp.where((tape.words[:,index,6]&protect_callbacks.SUCCESS)!=0,tables.protect_success,tables.weather_failure),key)
         key=jnp.where(protect_block,tables.protect_block,key)
-        size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
+        size = jnp.where((pressure & ~pressure_visible)|encore_tick,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
         good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont) & enough
@@ -825,6 +833,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~bulk_up | (bulk_up_callbacks.owned_pair(tape,index)&live[rows,safe]
             &(called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==tables.causal.base.public_ids[bulk_move])
             &(called[:,3]==semantic[:,2])&(called[:,4]+1+tape.words[:,index,4]==index))
+        identity &= ~encore | (encore_callbacks.owned(tape,index)&live[rows,safe])
         identity &= ~sleep_blocked | (sleep_blocked_callbacks.owned(tape,index)&live[rows,safe]
             &(previous_status==1))
         belly_a,belly_z,belly_owned=belly_callbacks.pair(tape,index)
@@ -980,7 +989,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # and its raw species spelling, rather than schema-fixture encounter1.
         for col,value in ((11,new_slot+1),(13,tables.ident_species[jnp.clip(prior_species,0,tables.ident_species.shape[0]-1)])):
             result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
-        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block|rough|color_change)[:,None]&(schema[:,:,10]>0)))
+        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block|rough|color_change|encore)[:,None]&(schema[:,:,10]>0)))
         lexical_side=jnp.clip(result[:,:,4],0,1)
         lexical_slot=current_slots[rows[:,None],lexical_side]
         result=result.at[:,:,11].set(jnp.where(trace_prelude,lexical_slot+1,result[:,:,11]))
@@ -1021,6 +1030,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             result = result.at[:, :, col].set(jnp.where(tendency & active[:, None], value[:, None], result[:, :, col]))
         result=result.at[:,:,11].set(jnp.where(tendency & toxic_attempt[:,None]
             & (toxic_code==toxic_callbacks.PLAIN_TYPE_IMMUNITY)[:,None],subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&encore[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&color_change[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&protect_block[:,None],subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&no_damage_header[:,None]&((nd_code==no_damage.TYPE_IMMUNE)|(nd_code==no_damage.WATER_FULL)|(nd_code==no_damage.VOLT_FULL)|(nd_code==no_damage.FLASH_REPEAT)|(nd_code==no_damage.FLASH_START)|nd_heal)[:,None],subject[:,None],result[:,:,11]))

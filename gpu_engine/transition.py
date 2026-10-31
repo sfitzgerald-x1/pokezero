@@ -1318,9 +1318,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # a dispatched Encore cannot also inflict a primary sleep status.
             queued=(order==0) & ~state.pending_residual & ~switches[rows,foe] & ~displaced[rows,foe]
             if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
-                    acts & hit & table.encore.move[move],active=live)
+                from . import engine_encore_callbacks as encore_callbacks
+                _encore_pending=None;_encore_capture=None
+                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.encore is not None:
+                    _public_trace,_encore_pending=encore_callbacks.begin(_public_trace,work,foe,move,_direct_hit_context,
+                        table.encore,eligible=acts & hit & (caller_move==move),secondary=acts & hit & ~immune,roll=chance[:,7],queued=queued)
             work=repeating.apply(work,foe,move,chance[:,7],table.encore,eligible=acts & hit,queued=queued)
+            if _lifecycle_trace:
+                _public_trace,_encore_capture=encore_callbacks.finish(_public_trace,_encore_pending,work)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
+                    acts & hit & table.encore.move[move],active=live,captured_encore=_encore_capture)
         if table.secondary is not None:
             effective_weather=work.weather
             if table.weather is not None:
@@ -1724,10 +1731,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
         if table.encore is not None:
             if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
-                    eligible & (event>=8) & (_active(work.hp,work,side)>0)
-                    & (_active(work.encore_counter,work,side)>0),active=live)
+                from . import engine_encore_callbacks as encore_callbacks
+                _encore_residual_pending=None;_encore_residual_capture=None
+                _encore_attempt=eligible & (event>=8) & (_active(work.hp,work,side)>0) & (_active(work.encore_counter,work,side)>0)
+                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.encore is not None:
+                    _public_trace,_encore_residual_pending=encore_callbacks.begin(_public_trace,work,side,
+                        jnp.zeros_like(side),_direct_hit_context,table.encore,eligible=_encore_attempt,residual=True)
             work=repeating.residual(work,side,eligible=eligible & (event>=8))
+            if _lifecycle_trace:
+                _public_trace,_encore_residual_capture=encore_callbacks.finish(_public_trace,_encore_residual_pending,work)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
+                    _encore_attempt,active=live,captured_encore=_encore_residual_capture)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
     work=linking.prune(work)
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,

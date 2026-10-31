@@ -273,7 +273,7 @@ def _advance_registration(registration,state,rules):
     return value
 
 
-def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules, adapter_binding, engine_table, current_types=None):
+def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules, adapter_binding, engine_table, current_types=None, current_encore=None):
     """Server-only primitive. Hidden foe cells never become feature fields."""
     b = ledger.owner_side.shape[0]
     rows = jnp.arange(b); own = jnp.clip(ledger.owner_side,0,1); foe = 1-own
@@ -335,8 +335,11 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     disabled = slot_present & ((pp<=0)|(choice_active[:,None]&(moves!=choice[:,None])))
     source_disable_unknown = jnp.any(state.disabled[rows,own]&present[...,None],axis=(-1,-2))
     unsafe_history = unsafe_origin|_unsafe_history(state,rules)
-    locked = (state.charge_move[rows,own,safe_active]!=0)|(state.encore_move[rows,own,safe_active]!=0)|(
-        state.encore_counter[rows,own,safe_active]!=0)|unsafe_history
+    from . import engine_encore_callbacks as encore_callbacks
+    encore_slot,encore_known=encore_callbacks.request_slot(current_encore,state,ledger,rules,arrival)
+    disabled |= encore_known[:,None] & (jnp.arange(4)[None,:]!=encore_slot[:,None])
+    locked = (state.charge_move[rows,own,safe_active]!=0)|(((state.encore_move[rows,own,safe_active]!=0)|
+        (state.encore_counter[rows,own,safe_active]!=0))&~encore_known)|unsafe_history
     own_ability = state.ability[rows,own,safe_active]
     foe_ability = state.ability[rows,foe,foe_active]
     good_ab = ((own_ability>0)&(own_ability<rules.ability_supported.shape[0])
@@ -386,7 +389,7 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     packet = actions.SourceRequest(boundary,jnp.broadcast_to(adapter_binding,(b,8)),constructor.binding,
         jnp.full(b,-1,jnp.int32),jnp.where(ok,mode,actions.UNKNOWN),ok,same,
         jnp.where(ok[:,None]&ordinary[:,None],disabled,False),trapped&ok&ordinary,
-        transition.action_mask(state,engine_table)[rows,own])
+        transition.action_mask(state,engine_table)[rows,own],None if current_encore is None else jnp.where(encore_known,encore_slot,-1))
     return packet,reason
 
 

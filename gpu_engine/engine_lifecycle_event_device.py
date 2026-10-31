@@ -48,6 +48,7 @@ from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
+from . import engine_encore_callbacks as encore_callbacks
 from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
 from . import engine_color_change_callbacks as color_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
@@ -580,6 +581,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         rough = kind == rough_callbacks.ROUGH_SKIN_HP
         belly = kind == belly_callbacks.BELLY_DRUM
         sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
+        encore = kind == encore_callbacks.ENCORE
         intimidate = kind == intimidate_callbacks.INTIMIDATE
         calm_mind = kind == calm_mind_callbacks.CALM_MIND
         pinch = kind == pinch_callbacks.PINCH_ITEM
@@ -754,6 +756,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         belly_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)&belly_owned
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)]))
         event_ok=jnp.where(belly,generation_ok&clock_ok&belly_ok,event_ok)
+        encore_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&encore_callbacks.owned(tape,index))
+        event_ok=jnp.where(encore,generation_ok&clock_ok&encore_ok,event_ok)
         sleep_blocked_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&sleep_blocked_callbacks.owned(tape,index))
         event_ok=jnp.where(sleep_blocked,generation_ok&clock_ok&sleep_blocked_ok,event_ok)
@@ -932,6 +937,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),belly_boost_payload),axis=1)
         semantic=jnp.where((belly&(raw[:,4]==0))[:,None],belly_hp_semantic,semantic)
         semantic=jnp.where((belly&(raw[:,4]==1))[:,None],belly_boost_semantic,semantic)
+        encore_payload=jnp.stack((actor_enc,jnp.where(raw[:,3]==encore_callbacks.END,public_active.REMOVE,public_active.ADD),jnp.full_like(z,public_active.NAMES.index('encore')),z,z,z,z,z),axis=1)
+        encore_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),encore_payload),axis=1)
+        semantic=jnp.where(encore[:,None],encore_semantic,semantic)
         from . import public_sleep
         sleep_payload=jnp.stack((actor_enc,jnp.full_like(z,public_sleep.CANT_SLEEP),z,z,z,z,z,z),axis=1)
         sleep_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.SLEEP)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),sleep_payload),axis=1)
