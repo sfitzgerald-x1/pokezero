@@ -91,5 +91,7 @@ class AbilityIdentLexicalTests(unittest.TestCase):
   from gpu_engine_default_observer_ast import dump_default_program
   old_entry=subprocess.check_output(['git','show','813ec81d:gpu_engine/entry.py'],text=True)
   self.assertEqual(dump_default_program(ast.parse(old_entry)),dump_default_program(ast.parse(Path('gpu_engine/entry.py').read_text())))
-  for name in ('transition.py','mechanics.py','engine_pressure_callbacks.py','engine_trace_callbacks.py'):
+  old_transition=subprocess.check_output(['git','show','813ec81d:gpu_engine/transition.py'],text=True)
+  self.assertEqual(dump_default_program(ast.parse(old_transition)),dump_default_program(ast.parse(Path('gpu_engine/transition.py').read_text())))
+  for name in ('mechanics.py','engine_pressure_callbacks.py','engine_trace_callbacks.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','813ec81d:gpu_engine/'+name]))
