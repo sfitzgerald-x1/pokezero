@@ -874,9 +874,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),
                 _active(work.status,work,side),_recoil_context,eligible=acts)
         if _lifecycle_trace:
-            _public_trace=kernel_risks.outcome_on_tape(_public_trace,
-                kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
-                    hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes),
+            _literal_outcome=kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
+                hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes)
+            from . import engine_outcome_diagnostics as outcome_diagnostics
+            _public_trace=outcome_diagnostics.record_on_tape(_public_trace,_literal_outcome,move,side,
+                work.active[rows,side],work.active[rows,foe],eligible=acts,active=live)
+            _public_trace=kernel_risks.outcome_on_tape(_public_trace,_literal_outcome,
                 eligible=acts,active=live,captured_direct=(kernel_risks.CapturedDirectHit(
                     _direct_hit_context,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,_direct_write)
                     if _direct_hit_context is not None and _direct_hit_registered else None),
@@ -1072,7 +1075,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_thunder_wave_ticket=execution_accounting.open_attempt(_public_trace,
                     execution_accounting.Site.PRIMARY_PARALYSIS,foe,active=_thunder_wave_requested)
             if _sleep_powder_context is not None:
-                _sleep_powder_requested=acts & (move==_sleep_powder_context.data.move_id)
+                _sleep_powder_requested=acts & powder_callbacks.selected_device(_sleep_powder_context.data,move)
                 _sleep_powder_old_status=_active(work.status,work,foe)
                 _sleep_powder_old_counter=_active(work.status_counter,work,foe)
                 _sleep_powder_live=_active(work.hp,work,foe)>0

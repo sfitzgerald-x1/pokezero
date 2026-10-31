@@ -241,9 +241,9 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         from . import engine_sleep_powder_callbacks as powder
         data=powder.check_compiled(sleep_powder_compiled)
         if powder._COMPILED[sleep_powder_compiled][2] is not engine_catalog:raise ValueError('same original Sleep Powder/kernel catalog required')
-        move=int(data.move_id)
-        if not 0<move<m:raise ValueError('canonical Sleep Powder row required')
-        powder_binding=np.asarray(data.binding,np.uint32);powder_candidate[move]=True
+        mask=np.asarray(data.move_mask)
+        if mask.shape!=(m,) or mask.dtype!=np.dtype(bool) or not mask.any():raise ValueError('canonical primary sleep mask required')
+        powder_binding=np.asarray(data.binding,np.uint32);powder_candidate=mask.copy()
     risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
