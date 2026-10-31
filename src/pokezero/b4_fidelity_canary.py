@@ -85,6 +85,7 @@ class Plan:
     prepared_binding:str
     max_requests:int
     fp_configs:tuple[dict,dict]
+    fp_cpu_pairs:tuple[tuple[int,int],...]=()
     champion_sha256:str=CHAMPION_SHA
     stall_floor_seconds:float=1800.
     stall_multiplier:float=5.
@@ -93,6 +94,10 @@ class Plan:
     def __post_init__(self):
         object.__setattr__(self,'iterations',tuple(tuple(x) for x in self.iterations))
         object.__setattr__(self,'fp_configs',tuple(dict(x) for x in self.fp_configs))
+        object.__setattr__(self,'fp_cpu_pairs',tuple(tuple(x) for x in self.fp_cpu_pairs))
+        require(1<=len(self.fp_cpu_pairs)<=4 and all(len(pair)==2 and all(type(cpu) is int and cpu>=0 for cpu in pair)
+            for pair in self.fp_cpu_pairs) and len({cpu for pair in self.fp_cpu_pairs for cpu in pair})==2*len(self.fp_cpu_pairs),
+            'one to four explicit disjoint actor/FoulPlay CPU pairs')
         games=[g for iteration in self.iterations for batch in iteration for g in batch.games]
         require(self.iterations and all(iteration for iteration in self.iterations) and len(games)==DECLARED_GAMES,
                 'exact prospective 200k declared games, no outcome-based budget')
@@ -125,6 +130,7 @@ class Plan:
         return dict(schema='pokezero.b4.original_champion_fidelity_canary.v1',**asdict(self),
                     schedule='Original mit-thesis fresh0..1 over declared200k',optimizer='fresh AdamW: original checkpoint has no optimizer',
                     unknown_training='Exclude caps/refusals/failures, retain full declared denominator; no refill',
+                    endpoint_dispatch='Original ordinal order;slot=(ordinal+seed_offset)%workers, fixed physical-core rotation, no work-stealing',
                     evaluation='Final declared checkpoint only;1000games/model paired against untouched9375; no automatic pass/equivalence margin')
 
 
@@ -303,47 +309,14 @@ async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canar
     require(file_sha(champion_checkpoint)==CHAMPION_SHA,'untouched paired control checkpoint')
     book=Journal(path,plan,resume=True)
     final=book.matching('CANARY_TRAINING_END')
-    require(final and file_sha(final_checkpoint)==final[-1]['checkpoint_sha256'],'final declared checkpoint only, no selection')
-    from . import foulplay_bridge as fp,v5_foulplay
-    progress=Progress(plan);rows=[];book.emit('BATCH_STARTED',stage='FP_ENDPOINT')
-    for offset in range(PANEL_SEEDS):
-        for seat,raw in enumerate(plan.fp_configs):
-            for arm,checkpoint in (('CONTROL',champion_checkpoint),('CANARY',final_checkpoint)):
-                key=dict(arm=arm,offset=offset,seat=seat);done=book.matching('FP_END',**key)
-                if done:require(len(done)==1,'duplicate FP cell');rows.append(done[0]);continue
-                if book.matching('FP_START',**key):
-                    row=dict(**key,status='UNKNOWN',score=None,reason='attempted interrupted cell; no replay');book.emit('FP_END',**row);rows.append(row);continue
-                progress.check();values={**raw,'checkpoint':Path(checkpoint),'games':1,
-                    'seed_start':raw['seed_start']+offset,'foulplay_random_seed':raw['foulplay_random_seed']+offset}
-                for field in fields(fp.ControlledFoulPlayConfig):
-                    if field.name in values and values[field.name] is not None and 'Path' in str(field.type):values[field.name]=Path(values[field.name])
-                config=fp.ControlledFoulPlayConfig(**values)
-                book.emit('FP_START',**key,seed=config.seed_start,checkpoint_sha256=file_sha(checkpoint));start=time.monotonic()
-                game=None
-                try:
-                    result=await fp.run_controlled_foulplay_benchmark(config)
-                    require(len(result.games)==1,'one original declared FP cell')
-                    game=result.games[0].to_dict();score=v5_foulplay._score(config,game)
-                    row=dict(**key,status='COMPLETE' if score is not None else 'UNKNOWN',score=score,source_game=game)
-                    if score is not None:
-                        duration=time.monotonic()-start;progress.completed(duration)
-                        book.emit('GAME_END',phase='FP',**key,status='COMPLETE',duration_seconds=duration,source_sha256=sha(game))
-                except Exception as error:row=dict(**key,status='UNKNOWN',score=None,source_game=game,reason=type(error).__name__+': '+str(error))
-                book.emit('FP_END',**row);rows.append(row)
-    paired=[]
-    for offset in range(PANEL_SEEDS):
-        for seat in (0,1):
-            pair={r['arm']:r for r in rows if r['offset']==offset and r['seat']==seat}
-            paired.append(None if any(x['status']!='COMPLETE' for x in pair.values()) else pair['CANARY']['score']-pair['CONTROL']['score'])
-    known=[x for x in paired if x is not None];unknown=len(paired)-len(known)
-    report=dict(status='ENDPOINT_RECORDED',original_paired_cells=PANEL_SEEDS*2,known_pairs=len(known),unknown_pairs=unknown,
-                paired_mean=sum(known)/len(known) if known else None,
-                identification_bounds=[(sum(known)-unknown)/len(paired),(sum(known)+unknown)/len(paired)],
-                automatic_fidelity_pass=False,uncertainty='No equivalence margin or significance pass inferred; paired interval/result review required',rows=rows)
-    report['paired_seed_means']=[None if paired[2*i] is None or paired[2*i+1] is None else
-        (paired[2*i]+paired[2*i+1])/2 for i in range(PANEL_SEEDS)]
-    report['interval_unit']='Original paired seed block (both seats); no IID-cell significance claim'
-    book.emit('FP_ENDPOINT',report=report);return report
+    require(len(final)==1 and final[0]['declared_games']==DECLARED_GAMES and
+        file_sha(final_checkpoint)==final[0]['checkpoint_sha256'],'final declared checkpoint only, no selection')
+    from .b4_canary_endpoint import evaluate_declared
+    import fcntl
+    with (book.path/'fp-invocation.lock').open('a+b') as lock:
+        fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+        try:return await evaluate_declared(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint)
+        finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN)
 
 
 def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep):

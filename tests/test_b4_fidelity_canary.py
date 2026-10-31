@@ -36,7 +36,7 @@ def plan():
     configs=tuple(dict(checkpoint='/untouched',showdown_root='/unit-showdown',games=2,seed_start=6000,
         foulplay_random_seed=7000,pokezero_player=side,policy_mode='raw',search_time_ms=1000,
         pokezero_username='Learner',foulplay_username='Peer') for side in ('p1','p2'))
-    return c.Plan(tuple((b,) for b in batches),'a'*64,'b'*40,'c'*64,1024,configs)
+    return c.Plan(tuple((b,) for b in batches),'a'*64,'b'*40,'c'*64,1024,configs,fp_cpu_pairs=((0,1),(2,3)))
 
 
 class CanaryTests(unittest.TestCase):
@@ -163,18 +163,23 @@ class CanaryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'optimizer attempt UNKNOWN'):self._run(root,recipe,resume=True)
 
     def test_final_fp_fixed_order_both_seats_untouched_control_no_replay(self):
-        from pokezero import foulplay_bridge as fp
+        from pokezero import b4_canary_endpoint as endpoint,owning_encoder_continuation as continuation
         with tempfile.TemporaryDirectory() as temp:
             recipe=plan();root=Path(temp)/'run';result,_,_=self._run(root,recipe);calls=[];real=c.file_sha
-            async def fake(config):
+            async def fake(request_path):
+                request=json.loads(Path(request_path).read_bytes());cell=request['cell'];config=endpoint.configuration(recipe,cell,request['checkpoint'])
                 self.assertIsInstance(config.showdown_root,Path)
                 calls.append((str(config.checkpoint),config.seed_start,config.foulplay_random_seed,config.pokezero_player))
                 win=str(config.checkpoint)!='/untouched';name='Learner' if win else 'Peer';side=config.pokezero_player if win else ('p2' if config.pokezero_player=='p1' else 'p1')
                 item=dict(seed=config.seed_start,capped=False,tied=False,winner=name,pokezero_won=win,
                     terminal_witness=dict(status='PUBLIC_WIN',winner_player=side,public_terminal_line='|win|'+name))
-                return NS(games=[NS(to_dict=lambda:item)])
+                value=dict(schema='pokezero.b4.canary.fp-cell.v1',request_sha256=c.sha(request),cell=cell,cpu_pair=request['cpu_pair'],
+                    checkpoint_sha256=request['checkpoint_sha256'],duration_seconds=2.,status='COMPLETE',score=float(win),error=None,source_game=item,
+                    benchmark=dict(checkpoint_sha256=request['checkpoint_sha256'],policy_mode='raw',seed_start=config.seed_start,pokezero_player=config.pokezero_player,
+                        foulplay_random_seed_schedule={'seeds':[config.foulplay_random_seed]},game_results=[item]))
+                endpoint._write(root/'fp-results'/Path(request_path).name,value);return value
             with patch.object(c,'file_sha',side_effect=lambda p:c.CHAMPION_SHA if str(p)=='/untouched' else real(p)),\
-                 patch.object(fp,'run_controlled_foulplay_benchmark',side_effect=fake):
+                 patch.object(endpoint,'check_placement',return_value={}),patch.object(endpoint,'launch',side_effect=fake):
                 report=asyncio.run(c.evaluate(recipe,root,champion_checkpoint='/untouched',final_checkpoint=result['checkpoint'],enable_canary=True))
                 asyncio.run(c.evaluate(recipe,root,champion_checkpoint='/untouched',final_checkpoint=result['checkpoint'],enable_canary=True))
             self.assertEqual(len(calls),8)
