@@ -46,6 +46,7 @@ from . import engine_recoil_callbacks as recoil_callbacks
 from . import engine_swords_dance_callbacks as swords_dance_callbacks
 from . import engine_intimidate_callbacks as intimidate_callbacks
 from . import engine_spikes_callbacks as spikes_callbacks
+from . import engine_thunder_wave_callbacks as thunder_callbacks
 from . import public_mon_state
 from . import engine_calm_mind_callbacks as calm_mind_callbacks
 from .engine_private_team import engine_metadata_binding
@@ -90,6 +91,7 @@ class Tables(NamedTuple):
     calm_mind_move: object
     swords_dance_move: object
     spikes_move: object
+    thunder_wave_move: object
     binding: object
 
 
@@ -202,6 +204,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     calm_mind_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='calmmind' and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==0),0)
     swords_dance_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='swordsdance' and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==0),0)
     spikes_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='spikes'),0)
+    thunder_wave_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='thunderwave'),0)
     ability_names=metadata['vocabulary'].get('abilities',[])
     trace_engine=next((i for i,n in enumerate(ability_names) if normalize_id(n)=='trace'),0)
     sturdy_engine=next((i for i,n in enumerate(ability_names) if normalize_id(n)=='sturdy'),0)
@@ -243,7 +246,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),
         leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,
         trace_engine_ability=trace_engine,sturdy_engine_ability=sturdy_engine,sturdy_public_ability=sturdy_public,
-        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,swords_dance_move=swords_dance_move,spikes_move=spikes_move,admission=False)
+        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,swords_dance_move=swords_dance_move,spikes_move=spikes_move,thunder_wave_move=thunder_wave_move,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
@@ -258,7 +261,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
-        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),
+        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -387,6 +390,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     base._shape(tables.calm_mind_move,(),jnp.int32)
     base._shape(tables.swords_dance_move,(),jnp.int32)
     base._shape(tables.spikes_move,(),jnp.int32)
+    base._shape(tables.thunder_wave_move,(),jnp.int32)
     base._shape(tables.substitute_move, (), jnp.int32)
     base._shape(tables.pressure_engine_ability, (), jnp.int32)
     base._shape(tables.pressure_public_ability, (), jnp.int32)
@@ -709,8 +713,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         event_ok=jnp.where(substitute,generation_ok & clock_ok & substitute_ok,event_ok)
         toxic_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity & (phase==0)
             & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
-            & (incoming==cursor.physical_active[rows,safe_side])&toxic_callbacks.supported_raw(raw)
-            & (tables.toxic_move>0)&(raw[:,5]==tables.toxic_move))
+            & (incoming==cursor.physical_active[rows,safe_side])
+            & ((toxic_callbacks.supported_raw(raw)&(tables.toxic_move>0)&(raw[:,5]==tables.toxic_move))
+                |(thunder_callbacks.supported_raw(raw)&(tables.thunder_wave_move>0)&(raw[:,5]==tables.thunder_wave_move))))
         event_ok=jnp.where(toxic,generation_ok & clock_ok & toxic_ok,event_ok)
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount

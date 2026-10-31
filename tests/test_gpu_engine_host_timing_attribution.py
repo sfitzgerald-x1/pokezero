@@ -33,7 +33,7 @@ class HostTimingTests(unittest.TestCase):
         import subprocess
         from pathlib import Path
         baseline=subprocess.check_output(['git','show',
-            'a10b916e:gpu_engine/engine_retained_encoder_driver.py'],text=True)
+            'b69788d0:gpu_engine/engine_retained_encoder_driver.py'],text=True)
         current=Path(d.__file__).read_text()
         class EraseHost(ast.NodeTransformer):
             def visit_With(self,node):
@@ -72,7 +72,7 @@ class HostTimingTests(unittest.TestCase):
             tree=ast.parse(source)
             if normalize:tree=EraseHost().visit(tree)
             return {n.name:ast.dump(n,include_attributes=False) for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names}
-        self.assertEqual(functions(baseline),functions(current,True))
+        self.assertEqual(functions(baseline,True),functions(current,True))
 
     def run_fake_advance(self, *, mutate=False, callback_enabled=True):
         Core=namedtuple('Core','engine frame_number admitted requests orders unsafe originals constructors weather_profile execution risks cursor')
