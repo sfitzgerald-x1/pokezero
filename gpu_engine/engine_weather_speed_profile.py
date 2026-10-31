@@ -228,13 +228,25 @@ def retain_device(record, state, stream_ids, data):
             (record.source_binding, (b, 8), jnp.uint32), (record.profile_binding, (b, 8), jnp.uint32),
             (record.birth_spe, (b, 2, 6), jnp.int32), (record.birth_ability, (b, 2, 6), jnp.int32)):
         _typed(value, shape, dtype)
-    bound = ((record.stream_id == stream_ids) & (stream_ids > 0)
-        & jnp.all(record.engine_binding == data.engine_binding, axis=1)
-        & jnp.all(record.source_binding == data.source_binding, axis=1)
-        & jnp.all(record.profile_binding == data.binding, axis=1))
-    unchanged = (jnp.all(state.stats[..., 5] == record.birth_spe, axis=(1, 2))
-        & jnp.all(state.base_ability == record.birth_ability, axis=(1, 2)))
-    return record._replace(qualified_birth=record.qualified_birth & bound & unchanged & _members(state, data, birth=False))
+    return record._replace(qualified_birth=_retention_mask_device(state,stream_ids,data,
+        record.qualified_birth,record.stream_id,record.engine_binding,record.source_binding,
+        record.profile_binding,record.birth_spe,record.birth_ability))
+
+
+def _retention_mask_device(state,stream_ids,data,qualified,original_stream,engine_binding,
+                          source_binding,profile_binding,original_spe,original_ability):
+    """Original conditional arithmetic shared with separately typed hypotheses.
+
+    Both callers check their own exact record shape/type. This pure calculation
+    creates no record, provenance or new qualification from a current state.
+    """
+    bound = ((original_stream == stream_ids) & (stream_ids > 0)
+        & jnp.all(engine_binding == data.engine_binding, axis=1)
+        & jnp.all(source_binding == data.source_binding, axis=1)
+        & jnp.all(profile_binding == data.binding, axis=1))
+    unchanged = (jnp.all(state.stats[..., 5] == original_spe, axis=(1, 2))
+        & jnp.all(state.base_ability == original_ability, axis=(1, 2)))
+    return qualified & bound & unchanged & _members(state, data, birth=False)
 
 
 def qualify_birth(state, stream_ids, *, profile):

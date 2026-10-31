@@ -67,11 +67,17 @@ class RegisteredStatusResidualContext(NamedTuple):
     hook_context: object = None
 
 
-def retain_profile_device(record,state,streams,data,*,eligible):
+def retain_profile_device(record,state,streams,data,*,eligible,hypothetical=False):
     """Retain intermediate physical state; inactive rows preserve old carry."""
     from . import engine_weather_speed_profile as speed_profile
-    retained=speed_profile.retain_device(record,state,streams,data)
-    mask=_eligible(eligible,record.qualified_birth);b=mask.shape[0]
+    if hypothetical:
+        from . import v5_hypothetical_profile as hypothesis
+        retained=hypothesis.retain_device(record,state,streams,data)
+        mask=_eligible(eligible,record.qualified_origin)
+    else:
+        retained=speed_profile.retain_device(record,state,streams,data)
+        mask=_eligible(eligible,record.qualified_birth)
+    b=mask.shape[0]
     return jax.tree.map(lambda old,new:jnp.where(mask.reshape((b,)+(1,)*(old.ndim-1)),new,old),record,retained)
 
 

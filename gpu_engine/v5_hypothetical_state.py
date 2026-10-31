@@ -24,6 +24,8 @@ class Mapping:
 def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
     """Trusted lower mapping; the public-root factory supplies source inputs.
 
+    ``turn`` is the displayed public request turn. ORIGINAL BattleState.turn
+    counts completed ordinary turns, so its exact value here is turn-1.
     ``active_turns`` and happiness are absent from BattleSpec. They must be
     supplied by actual public arrival/TURN chronology and sampled packed-set
     semantics respectively, never recovered from neural numeric features.
@@ -161,6 +163,6 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
         if spec.weather!='none':
             if type(spec.weather_turns_remaining) is not int or not -1<=spec.weather_turns_remaining<=5:raise ValueError('weather-clock')
             arrays['weather_counter'][0]=max(0,spec.weather_turns_remaining)
-        arrays['turn'][0]=turn;arrays['done'][0]=False;arrays['winner'][0]=-1
+        arrays['turn'][0]=turn-1;arrays['done'][0]=False;arrays['winner'][0]=-1
     except (ValueError,KeyError,IndexError) as error:return Mapping(None,(str(error),))
     return Mapping(type(state)(**{name:j.asarray(value) for name,value in arrays.items()}),())

@@ -225,7 +225,7 @@ def _report_rows(ok, before, after):
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
            leftovers_context=None,execution_tables=None,status_residual_context=None,kernel_risk_tables=None,
-           direct_hit_context=None):
+           direct_hit_context=None,hypothetical_profile=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -253,7 +253,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         _public_trace=tape, _lifecycle_trace=True,
         _weather_hp_context=None if weather_profile_data is None else (core.weather_profile,weather_profile_data),
         _leftovers_context=leftovers_context,_status_residual_context=status_residual_context,
-        _direct_hit_context=direct_hit_context)
+        _direct_hit_context=direct_hit_context,_hypothetical_profile=hypothetical_profile)
     engine = _rows(source_ready, core.engine, result.step.state)
     cursor = _rows(source_ready, core.cursor, result.callbacks.cursor)
     # Bindings are GLOBAL [8], never row-select them by a coincidental B=8.
@@ -273,7 +273,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
             callbacks=callbacks._replace(refusal=callbacks.refusal|jnp.where(
                 source_ready&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
         callbacks=callbacks._replace(execution=context)
-    profile=None if weather_profile_data is None else _rows(source_ready,
+    profile=None if weather_profile_data is None and hypothetical_profile is None else _rows(source_ready,
         core.weather_profile,result.weather_profile)
     return life.LifecycleResult(engine, cursor, callbacks, before,
         life.snapshot(cursor), jnp.where(source_ready, result.step.invalid_actions, False),

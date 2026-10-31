@@ -62,7 +62,7 @@ def core(branch, runtime):
     active=np.asarray(state.active);slots=mapping[np.arange(1)[:,None],np.arange(2)[None,:],active]
     if np.any(slots<0):raise ValueError('unobserved-active-hypothesis')
     binding=j.broadcast_to(runtime['request']['rules'].device.engine_binding,(1,8))
-    cursor=life.Cursor(streams,binding,j.asarray(generation),state.turn,j.zeros(1,j.int32),j.ones(1,bool),j.ones(1,bool),
+    cursor=life.Cursor(streams,binding,j.asarray(generation),state.turn+1,j.zeros(1,j.int32),j.ones(1,bool),j.ones(1,bool),
         state.active,j.asarray(slots),j.asarray(slots+1),j.ones((1,2),bool),
         j.take_along_axis(state.species,state.active[...,None],axis=2)[...,0],j.asarray(mapping),
         j.sum(public.mons.encounter>0,axis=2,dtype=j.int32))
@@ -205,15 +205,17 @@ class Step:
     diagnostics: tuple[tuple[str,int],...]=()
 
 
-def step(branch, choices, *, chance_inputs):
+def step(branch, choices, *, chance_inputs,hypothetical_profiles=False):
     """One actual original numerical step and both FULL folds, no model.
 
-    Birth-only residual/weather profiles are not fabricated. Those paths retain
-    their original refusals. This is a component branch API, NOT a ready D
+    Ordinary birth profiles are never fabricated. The explicit hypothetical
+    mode uses its own current-origin record and original conditional math.
+    Unsupported histories retain refusals. This component is NOT a ready D
     provider or a claim of full counterfactual-clock/profile coverage.
     """
     runtime=driver._checked(branch.prepared)
     try:
+        if type(hypothetical_profiles) is not bool:raise ValueError('explicit hypothetical observer mode required')
         current=core(branch,runtime)
         if len(choices)!=2 or any(type(choice) is not int or not 0<=choice<9 for choice in choices):raise ValueError('two exact root/reply action slots required')
         routes=[actions.route_choice(current.requests[owner].actions,current.orders[owner],j.array([choices[owner]],j.int32)) for owner in (0,1)]
@@ -221,26 +223,45 @@ def step(branch, choices, *, chance_inputs):
         publics=[branch.public if owner==branch.history.owner else _opponent_public(branch,current,runtime) for owner in (0,1)]
         streams=[_stream(public,current.cursor,owner,runtime) for owner,public in enumerate(publics)]
         left=runtime['leftovers_context'];status=runtime['status_residual_context']
+        profile=None;silent=None
+        if hypothetical_profiles:
+            from . import v5_hypothetical_profile as hypothesis
+            profile=hypothesis.qualify_origin(branch)
+            current=current._replace(weather_profile=profile.record)
+            silent=None if runtime['no_output_compiled'] is None else runtime['no_output_compiled'].device
+            left=None if left is None else hypothesis.LeftoversContext(left.data,profile.data,silent)
+            status=None if status is None else hypothesis.StatusContext(status.data,profile.data)
         frame=driver._frame(current,(None,runtime['public'].causal.projector.device,runtime['request']['engine_table']),
             j.stack([route.engine_action for route in routes],axis=1),chance_inputs,j.ones(1,bool),
-            leftovers_context=None if left is None else life.LeftoversContext(left.data),
-            status_residual_context=None if status is None else life.StatusResidualContext(status.data),
+            leftovers_context=None if left is None else left if hypothetical_profiles else life.LeftoversContext(left.data),
+            status_residual_context=None if status is None else status if hypothetical_profiles else life.StatusResidualContext(status.data),
             execution_tables=runtime['execution_compiled'].device,kernel_risk_tables=runtime['kernel_risk_compiled'].device,
-            direct_hit_context=runtime['direct_hit_context'])
+            direct_hit_context=runtime['direct_hit_context'],hypothetical_profile=profile)
+        if profile is not None:profile=profile._replace(record=frame.weather_profile)
         consumed=[];ledgers=[]
         for stream,public in zip(streams,publics):
             ledger,result=execution.consume_frame_device(frame.callbacks.execution.ledger,frame,stream,public,
                 active=j.ones(1,bool),tables=runtime['execution_compiled'].device,
                 adapter_tables=runtime['public'].device,catalog=runtime['catalog'],
-                leftovers=None if left is None else left.data,status_residual=None if status is None else status.data)
+                leftovers=None if left is None else left.data,status_residual=None if status is None else status.data,
+                leftovers_no_output=silent,hypothetical_hp=profile)
             consumed.append(result);ledgers.append(ledger)
         joined,complete=execution.join_consumed_owners(*ledgers,tables=runtime['execution_compiled'].device)
         raw=witness._raw_complete(frame.callbacks,runtime['frame_witness_compiled'].device)
+        # The SAME-call risk frame is an actual ordinary hypothetical step,
+        # not an invented ordinary constructor/witness carry. Reuse ORIGINAL
+        # cutpoint geometry; a missing dispatch remains UNKNOWN even if no
+        # unsupported write happened to emit a callback.
+        actual_risks=frame.callbacks.execution.risks.carry
+        expected,observed,geometry=witness._geometry(actual_risks,frame.callbacks)
+        cutpoints=geometry&j.all(actual_risks.counts==expected,axis=1)&(actual_risks.observed==observed)
         good=complete&raw&~frame.invalid_actions&(frame.callbacks.execution.risks.carry.risk==0)
+        good &= cutpoints
         good &= (frame.callbacks.refusal & ~events.UNINSTRUMENTED)==0
         diagnostic=(('callback_refusal',int(frame.callbacks.refusal[0])),
             ('kernel_risk',int(frame.callbacks.execution.risks.carry.risk[0])),
             ('accounting_refusal',int(joined.refusal[0])),('raw_complete',int(raw[0])),
+            ('cutpoints_complete',int(cutpoints[0])),
             *((f'owner{owner}_FULL_error',int(value.projection.error[0])) for owner,value in enumerate(consumed)))
         if not bool(np.asarray(good).all()):
             return Step(frame.state,tuple(value.public for value in consumed),(),('actual-hypothetical-kernel-or-FULL-refused',),frame,diagnostic)

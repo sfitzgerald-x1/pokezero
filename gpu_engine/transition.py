@@ -296,13 +296,25 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
                      _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
-                     _direct_hit_context=None) -> StepResult:
+                     _direct_hit_context=None, _hypothetical_profile=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
     This seam does not itself enumerate or certify probabilities. PRNG keys
     advance identically to the sampled API but do not choose semantic outcomes.
     """
+    _hypothetical = _hypothetical_profile is not None
+    _weather_observer_context = _weather_hp_context
+    if _hypothetical:
+        from . import v5_hypothetical_profile as hypothesis_profile
+        if not _lifecycle_trace or _weather_hp_context is not None:
+            raise ValueError('hypothetical observer is separate from ordinary birth context')
+        hypothesis_profile.check_context(_hypothetical_profile,state.hp.shape[0])
+        if (_leftovers_context is not None and type(_leftovers_context) is not hypothesis_profile.LeftoversContext
+                or _status_residual_context is not None and type(_status_residual_context) is not hypothesis_profile.StatusContext):
+            raise ValueError('hypothetical residual statics require their separate context types')
+        _weather_observer_context=(_hypothetical_profile.record,_hypothetical_profile.data)
+    _profile_qualified=(lambda record:record.qualified_origin) if _hypothetical else (lambda record:record.qualified_birth)
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
     if _direct_hit_context is not None:
@@ -315,17 +327,19 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if _status_residual_context is not None:
         from . import engine_lifecycle_callbacks as lifecycle_callbacks
         from . import engine_status_residual_callbacks as status_residual_callbacks
-        _status_registered=type(_status_residual_context) is status_residual_callbacks.RegisteredStatusResidualContext
+        _status_registered=(type(_status_residual_context) is status_residual_callbacks.RegisteredStatusResidualContext
+            or (_hypothetical and type(_status_residual_context) is hypothesis_profile.StatusContext))
         if (not _lifecycle_trace or type(_status_residual_context) not in
                 (lifecycle_callbacks.StatusResidualContext,status_residual_callbacks.RegisteredStatusResidualContext)
+                    + ((hypothesis_profile.StatusContext,) if _hypothetical else ())
                 or type(_status_residual_context.data) is not status_residual_callbacks.Data):
             raise ValueError('typed owning lifecycle status residual context required')
         if _status_registered:
             from . import engine_weather_speed_profile as weather_speed_profile
             if (type(_status_residual_context.weather_profile_data) is not weather_speed_profile.ProfileData
-                    or type(_weather_hp_context) is not tuple or len(_weather_hp_context)!=2
-                    or type(_weather_hp_context[0]) is not weather_speed_profile.BirthRecord
-                    or _weather_hp_context[1] is not _status_residual_context.weather_profile_data):
+                    or type(_weather_observer_context) is not tuple or len(_weather_observer_context)!=2
+                    or (not _hypothetical and type(_weather_observer_context[0]) is not weather_speed_profile.BirthRecord)
+                    or _weather_observer_context[1] is not _status_residual_context.weather_profile_data):
                 raise ValueError('registered status residual requires actual birth and same original profile')
             if _status_residual_context.hook_context is not None:
                 raise ValueError('kernel-event observer does not accept original hook/history context')
@@ -335,9 +349,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if _leftovers_context is not None:
         from . import engine_lifecycle_callbacks as lifecycle_callbacks
         from . import engine_leftovers_callbacks as leftovers_callbacks
-        _leftovers_registered=type(_leftovers_context) is leftovers_callbacks.RegisteredLeftoversContext
+        _leftovers_registered=(type(_leftovers_context) is leftovers_callbacks.RegisteredLeftoversContext
+            or (_hypothetical and type(_leftovers_context) is hypothesis_profile.LeftoversContext))
         if (not _lifecycle_trace or type(_leftovers_context) not in
                 (lifecycle_callbacks.LeftoversContext,leftovers_callbacks.RegisteredLeftoversContext)
+                    + ((hypothesis_profile.LeftoversContext,) if _hypothetical else ())
                 or type(_leftovers_context.data) is not leftovers_callbacks.Data):
             raise ValueError('typed owning lifecycle Leftovers context required')
         if _leftovers_registered:
@@ -350,9 +366,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     raise ValueError('original no-output metadata and actual owning accounting required')
             from . import engine_weather_speed_profile as weather_speed_profile
             if (type(_leftovers_context.weather_profile_data) is not weather_speed_profile.ProfileData
-                    or type(_weather_hp_context) is not tuple or len(_weather_hp_context)!=2
-                    or type(_weather_hp_context[0]) is not weather_speed_profile.BirthRecord
-                    or _weather_hp_context[1] is not _leftovers_context.weather_profile_data):
+                    or type(_weather_observer_context) is not tuple or len(_weather_observer_context)!=2
+                    or (not _hypothetical and type(_weather_observer_context[0]) is not weather_speed_profile.BirthRecord)
+                    or _weather_observer_context[1] is not _leftovers_context.weather_profile_data):
                 raise ValueError('registered Leftovers requires actual owning birth and same original profile')
     if _lifecycle_trace:
         from . import engine_execution_completeness as execution_accounting
@@ -360,14 +376,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         from . import engine_status_callbacks as status_callbacks
         from . import engine_weather_effect_callbacks as weather_effect_callbacks
         from . import engine_weather_order_callbacks as weather_order_callbacks
-        if _weather_hp_context is not None:
+        if _weather_observer_context is not None:
             from . import engine_weather_hp_segment as weather_hp_segment
             from . import engine_weather_speed_profile as weather_speed_profile
-            if (type(_weather_hp_context) is not tuple or len(_weather_hp_context)!=2
-                    or type(_weather_hp_context[0]) is not weather_speed_profile.BirthRecord
-                    or type(_weather_hp_context[1]) is not weather_speed_profile.ProfileData):
+            if (type(_weather_observer_context) is not tuple or len(_weather_observer_context)!=2
+                    or (not _hypothetical and type(_weather_observer_context[0]) is not weather_speed_profile.BirthRecord)
+                    or type(_weather_observer_context[1]) is not weather_speed_profile.ProfileData):
                 raise ValueError('owning birth record and original static weather profile required')
-            _weather_hp_record=_weather_hp_context[0]
+            _weather_hp_record=_weather_observer_context[0]
     batch = state.hp.shape[0]
     shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,))
     for value,shape in zip(chance_inputs,shapes,strict=True):
@@ -1088,7 +1104,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if _status_residual_context is not None:
         if _status_registered:
             _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
-                work,_public_trace.stream_id,_status_residual_context.weather_profile_data,eligible=residual_ready)
+                work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,eligible=residual_ready)
             _status_cached_speed_ok=(jnp.all((end_speed>0)&(end_speed<=10000),axis=1)
                 & (end_speed[:,0]!=end_speed[:,1])
                 & jnp.all(_status_residual_context.data.engine_binding==_status_residual_context.weather_profile_data.engine_binding)
@@ -1096,7 +1112,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if _leftovers_context is not None:
         if _leftovers_registered:
             _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
-                work,_public_trace.stream_id,_leftovers_context.weather_profile_data,eligible=residual_ready)
+                work,_public_trace.stream_id,_leftovers_context.weather_profile_data,hypothetical=_hypothetical,eligible=residual_ready)
             # Actual source cache, not a resample after Speed Boost/pinch.
             # The cap guard keeps original getStat's 10000 clamp inactive even
             # when an installed weather ability doubles a bounded live Speed.
@@ -1141,16 +1157,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _weather_before_count=_public_trace.count
                 _public_trace=weather_effect_callbacks.weather_chip(_public_trace,side,work.active[rows,side],
                     _weather_old_hp,hp,_active(work.max_hp,work,side),_active(work.status,work,side),weather,
-                    eligible=ordinary&(hp<_weather_old_hp),_defer_own_unknown=_weather_hp_context is not None)
+                    eligible=ordinary&(hp<_weather_old_hp),_defer_own_unknown=_weather_observer_context is not None)
                 _public_trace=weather_order_callbacks.annotate_weather_chip(_public_trace,_weather_before_count,
                     side,work.active[rows,side],end_speed[:,0],end_speed[:,1],
-                    eligible=ordinary&(hp<_weather_old_hp),_defer_own_unknown=_weather_hp_context is not None)
+                    eligible=ordinary&(hp<_weather_old_hp),_defer_own_unknown=_weather_observer_context is not None)
         if _lifecycle_trace:
-            if _weather_hp_context is not None:
+            if _weather_observer_context is not None:
                 _weather_segment=weather_hp_segment.order_segment_device(_public_trace,
                     _weather_segment_before_count,_weather_pre_wish,work,end_speed,
-                    _weather_hp_context[0],_weather_hp_context[1],eligible=ordinary,
-                    pre_writes_state=_weather_pre_writes)
+                    _weather_observer_context[0],_weather_observer_context[1],eligible=ordinary,
+                    pre_writes_state=_weather_pre_writes,hypothetical=_hypothetical)
                 _public_trace=_weather_segment.tape
                 _weather_hp_record=_weather_segment.record
     # Selected order10/priority0 handlers snapshot SPEED before suborder.
@@ -1176,7 +1192,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _status_residual_context is not None:
             if _status_registered:
                 _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
-                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,eligible=eligible)
+                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,eligible=eligible)
         if table.entry is not None:
             boosts = _active(work.boosts,work,side)
             speed_boost = (eligible & ability_event & (hp > 0)
@@ -1199,7 +1215,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _leftovers_status=_active(work.status,work,side)
             if _leftovers_registered:
                 _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
-                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,eligible=eligible)
+                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,hypothetical=_hypothetical,eligible=eligible)
         if table.items is not None:
             if _lifecycle_trace:
                 _execution_item=_active(work.item,work,side)
@@ -1218,7 +1234,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                         _execution_full_hp_before=_leftovers_no_output.capture_before_device(
                             _public_trace,_execution_leftovers_ticket,work,event,_weather_hp_record,
                             _leftovers_context.no_output_tables,
-                            requested=_execution_leftovers_requested&(hp==_active(work.max_hp,work,side)))
+                            requested=_execution_leftovers_requested&(hp==_active(work.max_hp,work,side)),hypothetical=_hypothetical)
             healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
                 _active(work.max_hp,work,side),eligible=eligible & heal_event)
             item,boosts=held.consume_pinch(table.items,_active(work.item,work,side),
@@ -1229,7 +1245,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _leftovers_context is not None:
                 if _leftovers_registered:
                     _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
-                        work,_public_trace.stream_id,_leftovers_context.weather_profile_data,
+                        work,_public_trace.stream_id,_leftovers_context.weather_profile_data,hypothetical=_hypothetical,
                         eligible=eligible & heal_event)
         if _lifecycle_trace:
             _execution_status=_active(work.status,work,side)
@@ -1252,7 +1268,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _status_old_counter=_active(work.status_counter,work,side)
             if _status_registered:
                 _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
-                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,
+                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,
                     eligible=_execution_status_requested)
         residual = m.major_status_residual(hp,
             _active(work.max_hp, work, side), _active(work.status, work, side),
@@ -1263,7 +1279,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _leftovers_registered and _leftovers_context.no_output_tables is not None:
                 if table.items is not None:
                     _execution_full_hp_after=_leftovers_no_output.finish_device(_execution_full_hp_before,
-                        _public_trace,work,_weather_hp_record,_leftovers_context.no_output_tables)
+                        _public_trace,work,_weather_hp_record,_leftovers_context.no_output_tables,hypothetical=_hypothetical)
                     _public_trace=execution_accounting.capture_leftovers_full_hp(_public_trace,
                         _execution_full_hp_after,no_output_tables=_leftovers_context.no_output_tables)
                     # Only this exact entered full-HP branch uses its typed
@@ -1276,11 +1292,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _status_defer=False
             if _status_registered:
                 _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
-                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,
+                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,
                     eligible=_execution_status_requested)
                 # Selected kernel-event coverage only. Original-hook/history
                 # equivalence is deliberately not inferred from speed membership.
-                _status_guard_valid=(_weather_hp_record.qualified_birth & _status_cached_speed_ok
+                _status_guard_valid=(_profile_qualified(_weather_hp_record) & _status_cached_speed_ok
                     & ((_public_trace.refusal&~public_callbacks.UNINSTRUMENTED)==0))
                 _status_defer=_status_guard_valid
             _public_trace=status_residual_callbacks.record_status_residual_device(_public_trace,
@@ -1307,9 +1323,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _leftovers_defer=False
             if _leftovers_registered:
                 _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
-                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,
+                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,hypothetical=_hypothetical,
                     eligible=eligible & heal_event)
-                _leftovers_defer=_weather_hp_record.qualified_birth & _leftovers_cached_speed_ok
+                _leftovers_defer=_profile_qualified(_weather_hp_record) & _leftovers_cached_speed_ok
             _public_trace=leftovers_callbacks.record_leftovers_heal_device(_public_trace,
                 side,_leftovers_physical,_leftovers_item,_leftovers_old_hp,_leftovers_new_hp,
                 _leftovers_maximum,_leftovers_status,_leftovers_context.data,
@@ -1391,6 +1407,6 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     result = StepResult(work, invalid, placeholders)
     if _lifecycle_trace:
-        if _weather_hp_context is not None:
+        if _weather_observer_context is not None:
             return WeatherProfileTracedStep(result,_public_trace,_weather_hp_record)
     return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)

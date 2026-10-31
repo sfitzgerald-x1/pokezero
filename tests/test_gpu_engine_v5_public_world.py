@@ -52,6 +52,7 @@ class TypedMappingTests(unittest.TestCase):
         self.assertEqual(int(state.status_counter[0,0,0]),3)
         self.assertEqual(int(state.protect_counter[0,0,0]),1)
         self.assertEqual(state.wish_counter.tolist(),[[1,1]])
+        self.assertEqual(state.turn.tolist(),[6]) # public turn7, six completed turns
 
     def test_unrepresentable_fields_refuse_without_approximating(self):
         spec,metadata=self.fixture()
@@ -114,7 +115,7 @@ class PublicWorldTests(unittest.TestCase):
         cls.contract=replace(ActorContract.champion(),category_vocab_sha256=_vocab_sha(cls.config.category_vocab),
             categorical_vocab_size=cls.config.category_vocab.size,belief_set_source_hash=rows.source_hash)
 
-    def fixture(self,*,spent=False,foe_damage100=False):
+    def fixture(self,*,spent=False,foe_damage100=False,slow_own=False):
         metadata=self.f.metadata;names=metadata['vocabulary']['species'][1:]
         pp=[self.catalog.dex.move_info(name).max_pp for name in self.f.names]
         teams=[];own=[]
@@ -162,6 +163,24 @@ class PublicWorldTests(unittest.TestCase):
             result=capture.public_root(history,config=self.config,contract=self.contract,battle_id='literal-component',seed=31)
         self.assertIsNotNone(result.root,result.decoded.refusal_counts)
         start=BattleStartOverride(player_teams={'p1':pack_team(teams),'p2':pack_team(teams)},observation_format_id='gen3randombattle')
+        if slow_own:
+            # A coherent literal own source set with a different raw Speed.
+            # The opponent's full source-ordered sampled set stays unchanged.
+            ivs={**teams[0].ivs,'spe':0};own_team=[replace(teams[0],ivs=ivs),*teams[1:]]
+            request['side']['pokemon'][0]['stats']['spe']=gen3_stat(
+                self.catalog.dex.species_info(name).base_stats['spe'],0,teams[0].evs['spe'],80)
+            frames=[replace(frame,request_json=json.dumps({**json.loads(frame.request_json),
+                'side':{**json.loads(frame.request_json)['side'],'pokemon':[
+                    {**row,'stats':request['side']['pokemon'][i]['stats']} for i,row in enumerate(json.loads(frame.request_json)['side']['pokemon'])]}},
+                sort_keys=True,separators=(',',':'))) for frame in frames]
+            history=replace(history,frames=tuple(frames))
+            with ExitStack() as stack:
+                stack.enter_context(patch('subprocess.Popen',side_effect=AssertionError('no simulator')))
+                stack.enter_context(patch('pokezero.local_showdown.load_gen3_randbat_source_cached',return_value=self.source))
+                stack.enter_context(patch('pokezero.local_showdown.load_showdown_dex_cached',return_value=self.catalog.dex))
+                result=capture.public_root(history,config=self.config,contract=self.contract,battle_id='literal-component',seed=31)
+            self.assertIsNotNone(result.root,result.decoded.refusal_counts)
+            start=replace(start,player_teams={'p1':pack_team(own_team),'p2':pack_team(teams)})
         static=world.OwnStatic(history.stream_id,0,(0,)*8,tuple(range(7,13)))
         return result.root,start,history,static
 

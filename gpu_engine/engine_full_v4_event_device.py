@@ -303,7 +303,7 @@ def _commit_public(ok, before, after):
     return candidate._replace(context=candidate.context._replace(refresh=refresh))
 
 
-def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None,status_residual=None):
+def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None,status_residual=None,hypothetical_hp=None):
     """Trusted, pure device closure; genuine same-core frame delivered ONCE.
 
     The causal scan resolves BEFORE identities. This second device scan expands
@@ -313,7 +313,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     """
     if type(state) is not StreamState or type(tables) is not Tables:
         raise ValueError('typed FULL raw stream and static tables required')
-    lower = causal.project_device(state.causal, tape, before_registry, after_registry, tables.causal,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
+    lower = causal.project_device(state.causal, tape, before_registry, after_registry, tables.causal,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual,hypothetical_hp=hypothetical_hp)
     b = tape.stream_id.shape[0]; rows = jnp.arange(b)
     causal.base._shape(state.sequence, (b,), jnp.int32)
     causal.base._shape(state.live, (b, 2), jnp.bool_)
@@ -615,10 +615,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     return Projection(next_state, chunk, error, lower.refusal | jnp.where(overflow, engine.OVERFLOW, 0), ok, no, no, no, frames)
 
 
-def project_frame(state, frame, tables, *, weather_hp=None, leftovers=None,status_residual=None):
+def project_frame(state, frame, tables, *, weather_hp=None, leftovers=None,status_residual=None,hypothetical_hp=None):
     if type(frame) is not causal.life.LifecycleResult:
         raise ValueError('genuine same-core lifecycle result required')
-    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
+    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual,hypothetical_hp=hypothetical_hp)
 
 
 class Consumed(NamedTuple):
@@ -626,9 +626,9 @@ class Consumed(NamedTuple):
     public: v4_encoder.State
 
 
-def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, leftovers=None,status_residual=None):
+def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, leftovers=None,status_residual=None,hypothetical_hp=None):
     """Trusted device path into the ORIGINAL full retained public consumers."""
-    projection = project_frame(state, frame, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
+    projection = project_frame(state, frame, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual,hypothetical_hp=hypothetical_hp)
     def fold(carry, data):
         current,error=carry
         words,valid,more=data

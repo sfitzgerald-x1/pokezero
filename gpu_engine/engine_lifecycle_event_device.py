@@ -322,7 +322,7 @@ def _snapshot_shape(snapshot, batch):
 
 
 def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None,
-                   status_residual=None):
+                   status_residual=None,hypothetical_hp=None):
     """Trusted device primitive: real LifecycleTape and causal source snapshots.
 
     All host guards are separate. No host reads, string reconstruction or event
@@ -392,6 +392,18 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & jnp.all(record.profile_binding == data.binding,axis=1)
             & jnp.all(data.engine_binding == tape.engine_binding)
             & jnp.all(data.source_binding == tape.source_binding))
+    if hypothetical_hp is not None:
+        from . import v5_hypothetical_profile as hypothesis
+        if weather_hp is not None:raise ValueError('hypothetical HP observer cannot replace ordinary birth carry')
+        hypothesis.check_context(hypothetical_hp,b)
+        record,data=hypothetical_hp
+        hp_profile=(record.qualified_origin & jnp.any(record.origin_binding!=0,axis=1)
+            & (record.stream_id==tape.stream_id)
+            & jnp.all(record.engine_binding==tape.engine_binding,axis=1)
+            & jnp.all(record.source_binding==tape.source_binding,axis=1)
+            & jnp.all(record.profile_binding==data.binding,axis=1)
+            & jnp.all(data.engine_binding==tape.engine_binding)
+            & jnp.all(data.source_binding==tape.source_binding))
     # Optional original helper data is supplied only by the owning host guard.
     # A canonical item integer or a caller boolean is not a registration.
     leftovers_profile=jnp.zeros(b,bool)
