@@ -14,7 +14,7 @@ OBSERVER_DEFAULTS = {
     '_public_trace': None, '_lifecycle_trace': False, '_weather_trace': None,
     '_status_trace': None, '_weather_hp_context': None,
     '_leftovers_context': None, '_status_residual_context': None,
-    '_thunder_wave_context': None, '_spikes_context': None, '_calm_mind_context': None, '_swords_dance_context': None, '_direct_hit_context': None, '_substitute_context': None, '_recoil_context': None,
+    '_sleep_powder_context': None, '_thunder_wave_context': None, '_spikes_context': None, '_calm_mind_context': None, '_swords_dance_context': None, '_direct_hit_context': None, '_substitute_context': None, '_recoil_context': None,
 }
 
 

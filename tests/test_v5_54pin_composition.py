@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-CONTEXTS=('direct_hit','substitute','toxic','recoil','calm_mind','swords_dance','spikes','thunder_wave')
+CONTEXTS=('direct_hit','substitute','toxic','recoil','calm_mind','swords_dance','spikes','thunder_wave','sleep_powder')
 
 
 class CompositionTests(unittest.TestCase):
@@ -24,12 +24,12 @@ class CompositionTests(unittest.TestCase):
 
     def test_exact_ordinary_inventory_plus_existing_hypothesis_and_matching_schema(self):
         from gpu_engine import engine_source_frame_witness as witness
-        witness._source();self.assertEqual(len(witness.SOURCE_PINS),57)
-        old=subprocess.check_output(['git','show','552bd326:gpu_engine/engine_source_frame_witness.py'],text=True)
+        witness._source();self.assertEqual(len(witness.SOURCE_PINS),58)
+        old=subprocess.check_output(['git','show','7c6c6042:gpu_engine/engine_source_frame_witness.py'],text=True)
         inventory=next(ast.literal_eval(n.value) for n in ast.parse(old).body if isinstance(n,ast.Assign)
             and any(isinstance(t,ast.Name) and t.id=='SOURCE_PINS' for t in n.targets))
         self.assertEqual(set(witness.SOURCE_PINS)-set(inventory),{'v5_hypothetical_profile.py'})
-        for file,expected in [('engine_full_v4_event_device.py',32),('engine_lifecycle_event_device.py',38),('engine_kernel_frame_risk.py',26)]:
+        for file,expected in [('engine_full_v4_event_device.py',33),('engine_lifecycle_event_device.py',40),('engine_kernel_frame_risk.py',28)]:
             tree=ast.parse(Path('gpu_engine',file).read_text());table=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Tables')
             self.assertEqual(sum(isinstance(n,ast.AnnAssign) for n in table.body),expected)
             for call in ast.walk(tree):
@@ -55,8 +55,13 @@ class CompositionTests(unittest.TestCase):
             self.assertIsInstance(captured['hypothetical_profile'],batch.hypothesis.Context)
             self.assertIs(captured['hypothetical_profile'].data,r['speed_profile'].device)
             executor.check()
-            r['spikes_context']=object()
-            with self.assertRaisesRegex(ValueError,'edges changed'):executor.check()
+            for name in CONTEXTS:
+                original=r[name+'_context']
+                for replacement in (None,object()):
+                    r[name+'_context']=replacement
+                    with self.subTest(name=name,cleared=replacement is None),self.assertRaisesRegex(ValueError,'edges changed'):executor.check()
+                r[name+'_context']=original
+            executor.check()
 
     def test_scalar_original_kernel_seam_forwards_all_contexts_without_enabling_profiles(self):
         from gpu_engine import v5_public_branch as branch
@@ -74,6 +79,48 @@ class CompositionTests(unittest.TestCase):
             with self.assertRaises(AtKernel):branch.step(root,(0,0),chance_inputs=object())
         for name in CONTEXTS:self.assertIs(captured[name+'_context'],r[name+'_context'])
         self.assertIsNone(captured['hypothetical_profile'])
+
+
+    def test_whole_ordinary_driver_and_exact_private_adapter_extension(self):
+        class Driver(ast.NodeTransformer):
+            def visit_FunctionDef(self,n):
+                if n.name=='_frame':
+                    pairs=list(zip(n.args.kwonlyargs,n.args.kw_defaults))
+                    extra=[d for a,d in pairs if a.arg=='hypothetical_profile']
+                    if extra:self_case.assertEqual(ast.dump(extra[0]),'Constant(value=None)')
+                    pairs=[(a,d)for a,d in pairs if a.arg!='hypothetical_profile']
+                    n.args.kwonlyargs=[a for a,d in pairs];n.args.kw_defaults=[d for a,d in pairs]
+                return self.generic_visit(n)
+            def visit_Call(self,n):
+                n=self.generic_visit(n)
+                for k in n.keywords:
+                    if k.arg=='_hypothetical_profile':self_case.assertEqual(ast.unparse(k.value),'hypothetical_profile')
+                n.keywords=[k for k in n.keywords if k.arg!='_hypothetical_profile'];return n
+            def visit_BoolOp(self,n):
+                if ast.unparse(n)=='weather_profile_data is None and hypothetical_profile is None':return n.values[0]
+                return self.generic_visit(n)
+        self_case=self
+        old=subprocess.check_output(['git','show','7c6c6042:gpu_engine/engine_retained_encoder_driver.py'],text=True)
+        new=Path('gpu_engine/engine_retained_encoder_driver.py').read_text()
+        normalize=lambda s:ast.dump(Driver().visit(ast.parse(s)),include_attributes=False)
+        self.assertEqual(normalize(old),normalize(new))
+        changed=new.replace('engine = _rows(source_ready, core.engine, result.step.state)','engine = _rows(~source_ready, core.engine, result.step.state)')
+        self.assertNotEqual(normalize(old),normalize(changed))
+        class Adapter(ast.NodeTransformer):
+            def visit_Call(self,n):
+                n=self.generic_visit(n)
+                for k in n.keywords:
+                    if k.arg=='sleep_powder_context':self_case.assertIn(ast.unparse(k.value),("r['sleep_powder_context']","runtime['sleep_powder_context']"))
+                n.keywords=[k for k in n.keywords if k.arg!='sleep_powder_context'];return n
+            def visit_Assign(self,n):
+                if any(isinstance(t,ast.Name)and t.id=='names'for t in n.targets)and isinstance(n.value,ast.Tuple):
+                    n.value.elts=[x for x in n.value.elts if not(isinstance(x,ast.Constant)and x.value=='sleep_powder_context')]
+                return self.generic_visit(n)
+        for file in ('v5_public_branch.py','v5_hypothetical_batch.py'):
+            old=subprocess.check_output(['git','show','dc981dd8:gpu_engine/'+file],text=True)
+            new=Path('gpu_engine',file).read_text()
+            normalize=lambda s:ast.dump(Adapter().visit(ast.parse(s)),include_attributes=False)
+            self.assertEqual(normalize(old),normalize(new))
 
 
 if __name__=='__main__':unittest.main()

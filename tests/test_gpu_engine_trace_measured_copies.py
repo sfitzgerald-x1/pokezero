@@ -122,8 +122,21 @@ class MeasuredCopies(unittest.TestCase):
   self.assertEqual(np.nonzero(mapping)[0].tolist(),[3,4,5])
   for engine_id,name in ((3,'sturdy'),(4,'naturalcure'),(5,'oblivious')):self.assertEqual(int(mapping[engine_id]),self.catalog.abilities.ids[name])
   self.assertEqual(np.nonzero(np.asarray(self.adapter.device.trace_copy))[0].tolist(),[3,4,5])
-  for file in ('transition.py','mechanics.py','engine_execution_completeness.py','engine_weather_speed_profile.py'):
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','48f95a3d:gpu_engine/'+file]))
+  for file in ('mechanics.py','engine_weather_speed_profile.py'):
+   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','dc981dd8:gpu_engine/'+file]))
+  # The newly reviewed Sleep Powder observer and distinct hypothetical seam
+  # intentionally change transition bytes. Preserve whole ordinary AST identity
+  # after ONLY hypothetical normalization, rather than dropping that assertion.
+  from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
+  ordinary=subprocess.check_output(['git','show','7c6c6042:gpu_engine/transition.py'],text=True)
+  self.assertEqual(normalized_hypothetical_default(ordinary),normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text()))
+  old_account=subprocess.check_output(['git','show','dc981dd8:gpu_engine/engine_execution_completeness.py'],text=True)
+  current_account=ast.parse(Path('gpu_engine/engine_execution_completeness.py').read_text())
+  sites=next(n for n in current_account.body if isinstance(n,ast.ClassDef)and n.name=='Site')
+  added=[n for n in sites.body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='PRIMARY_SLEEP'for t in n.targets)]
+  self.assertEqual(len(added),1);self.assertEqual(ast.dump(added[0].value),'Constant(value=20)')
+  sites.body.remove(added[0])
+  self.assertEqual(ast.dump(ast.parse(old_account),include_attributes=False),ast.dump(current_account,include_attributes=False))
   old_entry=subprocess.check_output(['git','show','552bd326:gpu_engine/entry.py'],text=True)
   enter=lambda source:next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)and n.name=='enter')
   self.assertEqual(dump_default_program(enter(old_entry)),dump_default_program(enter(Path('gpu_engine/entry.py').read_text())))

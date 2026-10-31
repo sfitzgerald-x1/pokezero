@@ -158,7 +158,7 @@ class _Executor:
         self.runtime=r
         names=('request_fast','installations','encode_fast','public','execution_compiled','kernel_risk_compiled',
             'speed_profile','frame_witness_compiled','leftovers_context','status_residual_context','direct_hit_context',
-            'substitute_context','toxic_context','recoil_context','calm_mind_context','swords_dance_context','spikes_context','thunder_wave_context')
+            'substitute_context','toxic_context','recoil_context','calm_mind_context','swords_dance_context','spikes_context','thunder_wave_context','sleep_powder_context')
         self.edges=tuple((name,r[name]) for name in names)
         data=r['speed_profile'].device
         silent=None if r['no_output_compiled'] is None else r['no_output_compiled'].device
@@ -176,7 +176,7 @@ class _Executor:
             leftovers_context=left,status_residual_context=status,execution_tables=r['execution_compiled'].device,
             kernel_risk_tables=r['kernel_risk_compiled'].device,direct_hit_context=r['direct_hit_context'],
             substitute_context=r['substitute_context'],toxic_context=r['toxic_context'],recoil_context=r['recoil_context'],
-            calm_mind_context=r['calm_mind_context'],swords_dance_context=r['swords_dance_context'],spikes_context=r['spikes_context'],thunder_wave_context=r['thunder_wave_context'],
+            calm_mind_context=r['calm_mind_context'],swords_dance_context=r['swords_dance_context'],spikes_context=r['spikes_context'],thunder_wave_context=r['thunder_wave_context'],sleep_powder_context=r['sleep_powder_context'],
             hypothetical_profile=hypothesis.Context(record,data)))
         consume_fast=jax.jit(lambda ledger,frame,stream,public,record,active:execution.consume_frame_device(
             ledger,frame,stream,public,active=active,tables=r['execution_compiled'].device,
