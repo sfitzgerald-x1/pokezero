@@ -997,8 +997,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             creates_sub = (acts & effects.substitute[move] & (sub_hp == 0)
                 & (max_hp > 1) & (hp * 4 > max_hp))
             if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_HEAL,
-                    acts & (effects.heal_half[move] | effects.weather_heal[move] | effects.rest[move]),active=live)
+                from . import engine_self_heal_callbacks as self_heal_callbacks
+                _public_trace,_self_heal_pending=self_heal_callbacks.begin(_public_trace,work,side,move,
+                    _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table,eligible=acts&caller_acts&(caller_move==move))
             if _substitute_context is not None:
                 _substitute_old_hp=hp
                 _substitute_requested=acts & effects.substitute[move]
@@ -1031,6 +1032,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(rest,0,_active(work.sleep_skipped,work,side))),
                 rest_origin=_set_active(work.rest_origin,work,side,
                     jnp.where(rest,True,_active(work.rest_origin,work,side))))
+            if _lifecycle_trace:
+                _public_trace,_self_heal_capture=self_heal_callbacks.finish(_public_trace,_self_heal_pending,work,heal_weather,acts&hit&~immune)
+                _public_trace=kernel_risks.self_heal_on_tape(_public_trace,
+                    acts & (effects.heal_half[move] | effects.weather_heal[move] | effects.rest[move]),active=live,captured=_self_heal_capture)
             if _substitute_context is not None:
                 _substitute_write=substitute_callbacks.Write(_substitute_old_hp,_active(work.hp,work,side),
                     max_hp,_active(work.status,work,side),sub_hp,_active(work.substitute_hp,work,side))

@@ -40,6 +40,7 @@ from . import engine_flash_fire_end_callbacks as flash_end
 from . import engine_protect_callbacks as protect_callbacks
 from . import engine_pinch_item_callbacks as pinch_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
+from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_color_change_callbacks as color_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
@@ -105,6 +106,7 @@ class Tables(NamedTuple):
     protect_still_moves: object
     pinch_items: object
     rough_skin_damage: object
+    self_heal: object
     wonder_guard_immune: object
     namespaces: Bindings
     binding: object
@@ -360,6 +362,10 @@ def compile_adapter(metadata, projector, *, catalog):
     no_damage_keys=np.zeros((9,7),np.int32)
     no_damage_keys[no_damage.MISS,:]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
     no_damage_keys[no_damage.TYPE_IMMUNE,:]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
+    self_heal=np.zeros(7,np.int32)
+    for status,suffix in enumerate(('',' par',' psn',' tox',' brn',' slp',' frz')):
+        self_heal[status]=add(f'|-heal|{ident[0]}|71/100{suffix}',inputs.Kind.CONDITION)
+        if not self_heal[status]:raise ValueError('FULL writer lacks original bare move heal schema')
     wonder_guard_immune=0
     if int(lower.device.wonder_guard_engine_ability)>0 and int(lower.device.wonder_guard_public_ability)>0:
         wonder_guard_immune=add(f'|-immune|{ident[0]}|[from] ability: Wonder Guard',inputs.Kind.NONPROC)
@@ -409,7 +415,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
     payload += pinch_items.tobytes()
     payload += sub_damage_keys.tobytes()+rough_skin_damage.tobytes()
-    payload += np.array(wonder_guard_immune,np.int32).tobytes()+no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
+    payload += self_heal.tobytes()+np.array(wonder_guard_immune,np.int32).tobytes()+no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()+np.array([protect_success,protect_block],np.int32).tobytes()+protect_still_moves.tobytes()
@@ -418,7 +424,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(wonder_guard_immune,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -525,6 +531,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.protect_still_moves,tables.moves.shape,jnp.bool_)
     causal.base._shape(tables.no_damage_miss,tables.causal.no_damage.candidates.shape,jnp.bool_)
     causal.base._shape(tables.no_damage,(9,7),jnp.int32)
+    causal.base._shape(tables.self_heal,(7,),jnp.int32)
     causal.base._shape(tables.wonder_guard_immune,(),jnp.int32)
     causal.base._shape(tables.primary_sleep_status,(len(tables.causal.base.public_ids),),jnp.int32)
     causal.base._shape(tables.sleep_powder_status,(),jnp.int32)
@@ -603,6 +610,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         weather_event=entry_weather|move_weather|clock_weather
         weather_chip=condition & (raw_kind==weather_effects.WEATHER_CHIP)
         leftovers_heal=condition & (raw_kind==leftovers_callbacks.LEFTOVERS_HEAL)
+        self_heal=condition & (raw_kind==self_heal_callbacks.SELF_HEAL)
         status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
         recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
         rough=condition & (raw_kind==rough_callbacks.ROUGH_SKIN_HP)
@@ -642,6 +650,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,8],0,6)]
         key=jnp.where(weather_chip,tables.weather_chip[jnp.clip(tape.words[:,index,9],0,4),chip_status],key)
         key=jnp.where(leftovers_heal,tables.leftovers_heal[chip_status],key)
+        key=jnp.where(self_heal,tables.self_heal[chip_status],key)
         key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,3),chip_status],key)
         key=jnp.where(recoil,tables.recoil_damage[jnp.clip(semantic[:,11],0,6)],key)
         key=jnp.where(rough,tables.rough_skin_damage[jnp.clip(semantic[:,11],0,6)],key)
@@ -886,6 +895,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~substitute | (substitute_called & live[rows,safe] & (chip_status==previous_status)
             &(observed_hp[rows,safe,safe_slot]==old_visible)
             &(observed_maximum[rows,safe,safe_slot]==max_visible))
+        heal_move=jnp.clip(raw[:,1],0,len(tables.causal.base.public_ids)-1)
+        heal_called=(called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==tables.causal.base.public_ids[heal_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
+        identity &= ~self_heal | (heal_called&live[rows,safe]&(chip_status==previous_status)
+            &(observed_hp[rows,safe,safe_slot]==old_visible)&(observed_maximum[rows,safe,safe_slot]==max_visible))
         identity &= ~leftovers_heal | (leftovers_open & ~leftovers_seen[rows,safe] & live[rows,safe]
             & (chip_status==previous_status)
             & (observed_hp[rows,safe,safe_slot]==old_visible)
