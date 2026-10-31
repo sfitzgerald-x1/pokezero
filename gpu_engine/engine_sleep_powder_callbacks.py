@@ -2,7 +2,9 @@
 
 The status write is made by the original numerical kernel. This observer emits
 its literal private guard continuation, then requires the same current MOVE/status
-span and both original consumers. Every non-success remains UNKNOWN. Private duration is not a public fact.
+span and both original consumers. The explicit pure-SLP capability also captures
+ordinary accuracy misses; the legacy one-hot remains success-only. Other
+non-successes remain UNKNOWN. Private duration is not a public fact.
 """
 from dataclasses import dataclass
 import hashlib
@@ -29,6 +31,7 @@ class Data(NamedTuple):
     move_id:object
     move_mask:object
     primary_sleep:object
+    miss_mask:object # explicit verified ordinary accuracy-miss capability
 class Context(NamedTuple):
     data:Data
     accounting:object
@@ -58,7 +61,7 @@ def compile_sleep_powder(*,engine_catalog,metadata):
     words=lambda x:j.asarray(x,j.uint32)
     data=Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(move,j.int32),j.arange(len(table.power))==move,j.array(False))
+        words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(move,j.int32),j.arange(len(table.power))==move,j.array(False),j.zeros(len(table.power),j.bool_))
     result=Compiled(data);_COMPILED[result]=(data,tuple(data),engine_catalog);return result
 
 def compile_primary_sleep(*,engine_catalog,metadata,source_rules):
@@ -85,7 +88,7 @@ const verified=require(process.argv[2]).build(root,meta);
 const {Dex}=require(path.join(root,'dist/sim/dex.js'));const d=Dex.mod('gen3');
 const rows=meta.vocabulary.moves.map(id=>{const m=d.moves.get(id);
 return {id:m.id,name:m.name,exists:m.exists,gen:m.gen,type:m.type,category:m.category,power:m.basePower,
-accuracy:m.accuracy,priority:m.priority,target:m.target,status:m.status||null,
+accuracy:m.accuracy,priority:m.priority,target:m.target,status:m.status||null,ignoreImmunity:m.ignoreImmunity,
 callbacks:Object.keys(m).filter(k=>/^on/.test(k)&&m[k]!==undefined).sort(),
 mixed:!!(m.secondary||m.secondaries||m.self||m.boosts||m.volatileStatus||m.sideCondition||m.slotCondition||
 m.condition||m.weather||m.terrain||m.pseudoWeather||m.recoil||m.drain||m.heal||m.selfdestruct||m.forceSwitch||m.selfSwitch)};});
@@ -113,13 +116,14 @@ process.stdout.write(JSON.stringify({rows,source_tree:verified.source_tree,compi
             and not bool(table.effects.thunderwave[i]) and not bool(table.effects.bypass_sub[i])
             and engine_catalog.ids[i]>0 and engine_catalog.targets[i]==1)
     if not mask.any():raise ValueError('no original implemented pure primary sleep rows')
-    payload=dict(schema='pokezero.primary-sleep-actual-slp.v1',scope='original-pure-primary-setter',mask=mask.tolist(),
+    miss_mask=mask & np.asarray([info.get('ignoreImmunity') in (None,True) for info in descriptor['rows']],bool)
+    payload=dict(schema='pokezero.primary-sleep-actual-slp.v2',scope='original-pure-primary-setter-and-accuracy-miss',mask=mask.tolist(),miss_mask=miss_mask.tolist(),
         descriptors=descriptor,engine=engine_catalog.engine_binding,source=engine_catalog.source_binding,
         moves=engine_catalog.move_binding,producer=engine_catalog.binding)
     words=lambda x:j.asarray(x,j.uint32)
     data=Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(0,j.int32),j.array(mask),j.array(True))
+        words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(0,j.int32),j.array(mask),j.array(True),j.array(miss_mask))
     compiled=Compiled(data);_COMPILED[compiled]=(data,tuple(data),engine_catalog,source_rules,tuple(row['name']for row in descriptor['rows']));return compiled
 
 
@@ -167,6 +171,7 @@ def _bound(tape,context):
     primary._shape(context.data.move_id,(),j.int32)
     primary._shape(context.data.primary_sleep,(),j.bool_)
     primary._shape(context.data.move_mask,(len(context.data.move_mask),),j.bool_)
+    primary._shape(context.data.miss_mask,context.data.move_mask.shape,j.bool_)
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):
         primary._shape(getattr(tape,name),(8,),j.uint32)
     actual=ex._context(tape)
@@ -179,6 +184,9 @@ def _bound(tape,context):
     if type(actual.risks) is not risk.Context:return good&False
     primary._shape(context.data.move_mask,actual.risks.tables.sleep_powder_candidates.shape,j.bool_)
     good &= j.all(context.data.move_mask==actual.risks.tables.sleep_powder_candidates)
+    primary._shape(actual.risks.tables.primary_sleep_miss_candidates,context.data.move_mask.shape,j.bool_)
+    good &= j.all(context.data.miss_mask==actual.risks.tables.primary_sleep_miss_candidates)
+    good &= j.all(~context.data.miss_mask|context.data.move_mask)&(context.data.primary_sleep|~j.any(context.data.miss_mask))
     good &= j.where(context.data.primary_sleep,context.data.move_id==0,
         (context.data.move_id>0)&j.all(context.data.move_mask==(j.arange(len(context.data.move_mask))==context.data.move_id)))
     rbound,_=risk._bound(actual.risks.carry,tape,actual.risks.tables)
@@ -208,7 +216,7 @@ def span_matches(tape,ticket,side,physical,target,move,attempt,context):
     for index in (prefix,first,at):
         good &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])&(tape.event_phase[rows,index]==ledger.phase[rows,slot])
             &j.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
-    return good
+    return good|miss_span_matches(tape,ticket,side,physical,target,move,attempt,context)
 
 def record_device(tape,ticket,side,physical,target,move,attempt,context,*,requested):
     from . import engine_execution_completeness as ex
@@ -216,7 +224,9 @@ def record_device(tape,ticket,side,physical,target,move,attempt,context,*,reques
     if actual is None:return tape
     primary._shape(requested,tape.count.shape,j.bool_)
     raw=primary.words_device(side,physical,target,move,attempt)
-    valid=_bound(tape,context)&supported_raw(raw,primary_sleep=context.data.primary_sleep)&selected_device(context.data,move)&(attempt.old_counter==0)&(attempt.new_counter>=2)&(attempt.new_counter<=5)
+    success=supported_raw(raw,primary_sleep=context.data.primary_sleep)&(attempt.old_counter==0)&(attempt.new_counter>=2)&(attempt.new_counter<=5)
+    miss=supported_miss_raw(raw)&selected_miss_device(context.data,move)&(attempt.old_counter==0)&(attempt.new_counter==0)
+    valid=_bound(tape,context)&selected_device(context.data,move)&(success|miss)
     tape=public._append(tape,primary.TOXIC_ATTEMPT,side,physical,1-side,target,tuple(raw[:,i] for i in range(5,10)),requested&valid)
     same=span_matches(tape,ticket,side,physical,target,move,attempt,context)
     actual=ex._context(tape);ledger=ex.unhandled(actual.ledger,ticket,active=requested&~same,tables=actual.tables)
@@ -266,4 +276,69 @@ def status_pair_device(tape,index,move_id):
     for i in (previous,index,at):
         good &= ((tape.event_turn[:,i]==ledger.turn[rows,slot])&(tape.event_phase[:,i]==ledger.phase[rows,slot])
             &j.all(tape.event_generation[:,i]==ledger.generation[rows,slot],axis=1))
+    return good
+
+
+def selected_miss_device(data,move):
+    primary._shape(data.miss_mask,data.move_mask.shape,j.bool_)
+    return data.primary_sleep & selected_device(data,move) & data.miss_mask[j.clip(move,0,len(data.miss_mask)-1)]
+
+
+def supported_miss_raw(raw):
+    """Ordinary live NONE/counter0 accuracy miss, not a blocked status write.
+
+    DAMAGE_IMMUNE is the literal unused damaging-type result for this status
+    primitive. It cannot turn this into a damaging immunity or a setter hit.
+    """
+    flags=raw[:,6]
+    return (primary.literal_valid(raw)&((flags==primary.LIVE)|(flags==(primary.LIVE|primary.DAMAGE_IMMUNE)))
+        &(raw[:,7]==m.NONE)&(raw[:,8]==m.NONE)&(raw[:,9]==0))
+
+
+def miss_span_matches(tape,ticket,side,physical,target,move,attempt,context):
+    from . import engine_execution_completeness as ex
+    actual=ex._context(tape)
+    if actual is None:return j.zeros_like(tape.count,bool)
+    ledger=actual.ledger;rows=j.arange(len(side));slot,same=ex._ticket(ledger,ticket)
+    raw=primary.words_device(side,physical,target,move,attempt);start=ledger.start[rows,slot]
+    at=j.clip(start,0,tape.words.shape[1]-1);prefix=j.clip(start-1,0,tape.words.shape[1]-1);decl=tape.words[rows,prefix]
+    good=(_bound(tape,context)&same&selected_miss_device(context.data,move)&supported_miss_raw(raw)
+        &(attempt.old_counter==0)&(attempt.new_counter==0)&(start>0)&(tape.count==start+1)
+        &(ledger.site[rows,slot]==int(ex.Site.PRIMARY_SLEEP))&(ledger.side[rows,slot]==1-side)
+        &(physical==tape.cursor.physical_active[rows,j.clip(side,0,1)])&(target==tape.cursor.physical_active[rows,j.clip(1-side,0,1)])
+        &(ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)&j.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1)
+        &j.all(tape.words[rows,at]==raw,axis=1)&j.all(tape.switch_details[rows,at]==0,axis=1)
+        &(decl[:,0]==public.MOVE)&j.all(decl[:,1:6]==raw[:,1:6],axis=1)&j.all(decl[:,6:]==0,axis=1))
+    for index in (prefix,at):good &= (tape.event_turn[rows,index]==ledger.turn[rows,slot])&(tape.event_phase[rows,index]==ledger.phase[rows,slot])&j.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1)
+    return good
+
+
+def owned_miss_device(tape,index):
+    """Exact completed Site20 one-word miss snapshot at original FULL drain.
+
+    END/TURN may already have advanced the current cursor. Use captured word
+    clocks/generation, not the after-frame clock or a reconstructed outcome.
+    """
+    from . import engine_execution_completeness as ex
+    actual=ex._context(tape);b=len(tape.count);rows=j.arange(b)
+    if actual is None or actual.risks is None:return j.zeros(b,bool)
+    ledger=actual.ledger;risk=actual.risks.tables
+    primary._shape(risk.sleep_powder_binding,(8,),j.uint32)
+    primary._shape(risk.primary_sleep_miss_candidates,risk.sleep_powder_candidates.shape,j.bool_)
+    if type(index)is int:where=j.full((b,),index,j.int32)
+    else:
+        primary._shape(index,(),j.int32);where=j.broadcast_to(index,(b,))
+    at=j.clip(where,0,tape.words.shape[1]-1);previous=j.clip(where-1,0,tape.words.shape[1]-1);raw=tape.words[rows,at];decl=tape.words[rows,previous]
+    claim=ledger.claimed[rows,at];slot=j.clip(claim-1,0,ledger.site.shape[1]-1);move=raw[:,5];safe=j.clip(move,0,len(risk.sleep_powder_candidates)-1)
+    good=(ex._validate(ledger,actual.tables)&ex._tape(ledger,tape,actual.tables)&ledger.opened
+        &(where>0)&(where<tape.count)&(claim>0)&(claim<=ledger.count)&j.any(risk.sleep_powder_binding!=0)
+        &(ledger.site[rows,slot]==int(ex.Site.PRIMARY_SLEEP))&(ledger.side[rows,slot]==raw[:,3])&(ledger.stage[rows,slot]==2)
+        &(ledger.start[rows,slot]==where)&(ledger.end[rows,slot]==where+1)&(ledger.no_output_kind[rows,slot]==0)
+        &(move>0)&(move<len(risk.sleep_powder_candidates))&risk.sleep_powder_candidates[safe]&risk.primary_sleep_miss_candidates[safe]
+        &supported_miss_raw(raw)&j.all(ledger.words[rows,at]==raw,axis=1)&j.all(tape.switch_details[rows,at]==0,axis=1)
+        &(decl[:,0]==public.MOVE)&j.all(decl[:,1:6]==raw[:,1:6],axis=1)&j.all(decl[:,6:]==0,axis=1))
+    for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+        primary._shape(getattr(tape,name),(8,),j.uint32);primary._shape(getattr(risk,name),(8,),j.uint32);good &= j.all(getattr(tape,name)==getattr(risk,name))
+    good &= (ledger.event_turn[rows,at]==tape.event_turn[rows,at])&(ledger.event_phase[rows,at]==tape.event_phase[rows,at])&j.all(ledger.event_generation[rows,at]==tape.event_generation[rows,at],axis=1)
+    for pos in (previous,at):good &= (tape.event_turn[rows,pos]==ledger.turn[rows,slot])&(tape.event_phase[rows,pos]==ledger.phase[rows,slot])&j.all(tape.event_generation[rows,pos]==ledger.generation[rows,slot],axis=1)
     return good

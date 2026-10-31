@@ -791,6 +791,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic_ok |= (tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&(incoming==cursor.physical_active[rows,safe_side])
             &plain_primary_callbacks.owned_pair(tape,index))
+        toxic_ok |= (tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&(incoming==cursor.physical_active[rows,safe_side])
+            &powder_callbacks.owned_miss_device(tape,index))
         event_ok=jnp.where(toxic,generation_ok & clock_ok & toxic_ok,event_ok)
         secondary_cont=kind==secondary_callbacks.SECONDARY_STATUS
         following=tape.words[:,jnp.minimum(index+1,capacity-1)]
