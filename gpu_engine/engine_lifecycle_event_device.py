@@ -584,9 +584,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
                             jnp.where(leftovers_heal,leftovers_ok,component & component_ok))))))))))
         status_damage_ok=(status_profile & tables.status_events & ~tables.raw_begin & status_identity
             & (phase==0)&(incoming==cursor.physical_active[rows,safe_side])
-            & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]==raw[:,1])
+            & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]>=0)&(raw[:,2]<=15)
             & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5])&(raw[:,7]<=1_000_000)
-            & (((raw[:,8]==2)&(raw[:,9]==1))|((raw[:,8]==3)&(raw[:,9]==2))))
+            & ((((raw[:,8]==2)&(raw[:,9]==1))|((raw[:,8]==3)&(raw[:,9]==2)))
+                &(raw[:,2]==raw[:,1])
+                |((raw[:,8]==4)&(raw[:,9]==3)&(raw[:,2]==jnp.minimum(raw[:,1]+1,15)))))
         event_ok=jnp.where(status_damage,generation_ok & clock_ok & status_damage_ok,event_ok)
         direct_move=jnp.clip(raw[:,5],0,tables.base.public_ids.shape[0]-1)
         direct_ok=(tables.status_events & ~tables.raw_begin & status_identity & actor_ok

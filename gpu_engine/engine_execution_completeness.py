@@ -241,9 +241,9 @@ def capture_leftovers_write(tape, ticket, *, requested, positive_write):
 
 
 def capture_status_residual_write(tape, ticket, *, requested, positive_write):
-    """Map this actual STATUS attempt only to one nonlethal BRN/PSN kind20.
+    """Map this actual STATUS attempt only to one literal nonlethal BRN/PSN/TOX kind20.
 
-    This is exact span capture, not consumption credit. TOX, no-output, lethal,
+    This is exact span capture, not consumption credit. No-output, lethal,
     malformed and missing spans stay unhandled. Genuine full consumption by
     both owning perspectives is still required; prior refusals never clear.
     """
@@ -254,9 +254,11 @@ def capture_status_residual_write(tape, ticket, *, requested, positive_write):
     start=ledger.start[rows,slot];index=jnp.clip(start,0,tape.words.shape[1]-1)
     raw=tape.words[rows,index]
     brn_psn=((raw[:,8]==2)&(raw[:,9]==1))|((raw[:,8]==3)&(raw[:,9]==2))
+    toxic=(raw[:,8]==4)&(raw[:,9]==3)&(raw[:,2]==jnp.minimum(raw[:,1]+1,15))
     semantic=(same & (ledger.site[rows,slot]==int(Site.STATUS_RESIDUAL)) & (tape.count==start+1)
-        & (raw[:,0]==20)&(raw[:,3]==ledger.side[rows,slot])&brn_psn
-        & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]==raw[:,1])
+        & (raw[:,0]==20)&(raw[:,3]==ledger.side[rows,slot])
+        & (brn_psn|toxic)&jnp.where(brn_psn,raw[:,2]==raw[:,1],True)
+        & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]>=0)&(raw[:,2]<=15)
         & (raw[:,4]>=0)&(raw[:,4]<6)
         & (raw[:,4]==tape.cursor.physical_active[rows,jnp.clip(raw[:,3],0,1)])
         & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5]))

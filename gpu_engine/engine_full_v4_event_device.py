@@ -209,8 +209,8 @@ def compile_adapter(metadata, projector, *, catalog):
             suffix=(' '+token) if token else ''
             leftovers_heal[status]=add(f'|-heal|{ident[0]}|81/100{suffix}|[from] item: Leftovers',inputs.Kind.CONDITION)
             if not leftovers_heal[status]:raise ValueError('FULL writer lacks exact Leftovers heal schema')
-    status_damage=np.zeros((3,7),np.int32)
-    for reason,tag in ((status_residual_callbacks.BURN,'brn'),(status_residual_callbacks.POISON,'psn')):
+    status_damage=np.zeros((4,7),np.int32)
+    for reason,tag in ((status_residual_callbacks.BURN,'brn'),(status_residual_callbacks.POISON,'psn'),(status_residual_callbacks.TOXIC,'psn')):
         for status,token in enumerate(tokens):
             suffix=(' '+token) if token else ''
             status_damage[reason,status]=add(f'|-damage|{ident[0]}|71/100{suffix}|[from] {tag}',inputs.Kind.CONDITION)
@@ -351,7 +351,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(state.weather,(b,),jnp.int32)
     causal.base._shape(state.weather_permanent,(b,),jnp.bool_)
     causal.base._shape(state.weather_remaining,(b,),jnp.int32)
-    causal.base._shape(tables.status_damage,(3,7),jnp.int32)
+    causal.base._shape(tables.status_damage,(4,7),jnp.int32)
     causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
     causal.base._shape(tables.pressure_start,(),jnp.int32)
     causal.base._shape(tables.substitute_created,(7,),jnp.int32)
@@ -414,7 +414,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,8],0,6)]
         key=jnp.where(weather_chip,tables.weather_chip[jnp.clip(tape.words[:,index,9],0,4),chip_status],key)
         key=jnp.where(leftovers_heal,tables.leftovers_heal[chip_status],key)
-        key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,2),chip_status],key)
+        key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,3),chip_status],key)
         key=jnp.where(direct_control,tables.direct_hit_control[jnp.clip(
             raw_kind-direct_hit_controls.CRITICAL,0,2)],key)
         key=jnp.where(toxic_attempt,tables.toxic_no_effect[jnp.clip(toxic_code,0,2)],key)

@@ -9,11 +9,11 @@ HP/counter assignment. No damage, counter progression or faint is reconstructed.
 
 Diagnostic attempts always latch UNKNOWN256. A PRIVATE registered owning
 kernel-event observer may defer ONLY this new emitter latch on literal,
-nonlethal BRN/PSN writes after sticky birth and actual cached-speed checks.
+nonlethal BRN/PSN/TOX writes after sticky birth and actual cached-speed checks.
 This observes this kernel's executed write; it does not prove original
 Showdown hooks, physical equivalence, exhaustive source events or no-output
 paths. Original-hook/history diagnostics remain separate. Prior bits and
-invalid/no-output/TOX/lethal/overflow claims remain unknown. Positive lethal
+invalid/no-output/lethal/overflow claims remain unknown. Positive lethal
 writes are explicitly UNQUALIFIED diagnostics; this helper emits no faint.
 Legacy tapes are unchanged. Only the pure device seam belongs inside a cached
 JIT; original host compiler/metadata/catalog guards must run outside every
@@ -208,7 +208,9 @@ def record_status_residual_device(tape,side,physical,old_hp,new_hp,maximum,old_s
         &(~room|jnp.all(tape.switch_details[rows,index]==0,axis=1)))
     # Internal deferral is not public acceptance: only this emitter's NEW bit
     # is omitted. Existing refusals are never cleared or reclassified.
-    can_defer=(defer&valid&room&(new_hp>0)&((status==mechanics.BRN)|(status==mechanics.PSN))
+    selected=((status==mechanics.BRN)|(status==mechanics.PSN)
+        |((status==mechanics.TOX)&(new_counter==jnp.minimum(old_counter+1,15))))
+    can_defer=(defer&valid&room&(new_hp>0)&selected
         &((tape.refusal&~public.UNINSTRUMENTED)==0))
     tape=public._append(tape,STATUS_RESIDUAL,old_counter,new_counter,side,physical,
         (old_hp,new_hp,maximum,status,reason),eligible&valid)
