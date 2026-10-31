@@ -71,6 +71,7 @@ class Tables(NamedTuple):
     branch_risk: object
     direct_hit_binding: object       # GLOBAL8; zero means weather-only mode
     direct_candidates: object        # [M] immutable original table capability
+    seismic_toss_move: object        # scalar exact original fixed-level source row
     substitute_binding: object      # GLOBAL8, original selected self-write helper
     substitute_candidates: object   # [M], prospective only; actual Site11 REQUIRED
     toxic_binding: object
@@ -143,7 +144,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         expected_engine_binding=np.asarray(engine_catalog.engine_binding,np.uint32))
     table=engine_catalog.engine_table;m=len(table.power);risk=np.zeros(m,np.int32)
     weather=np.asarray(table.weather.move_weather) if table.weather is not None else np.zeros(m,np.int32)
-    direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool)
+    direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool);seismic=0
     if direct_hit_compiled is not None:
         from . import engine_direct_hit_controls as direct
         direct_data=direct.check_compiled(direct_hit_compiled)
@@ -162,6 +163,8 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
                 variable=np.asarray(getattr(table.variable_moves,name))
                 if variable.shape!=(m,):raise ValueError('exact selected variable move columns required')
                 positive |= variable
+        seismic=int(direct_data.seismic_toss_move)
+        if seismic>0:positive[seismic]=True
         candidate=positive&(np.asarray(engine_catalog.ids)>0)&(np.asarray(engine_catalog.targets)==1)
     substitute_binding=np.zeros(8,np.uint32);substitute_candidate=np.zeros(m,bool)
     if substitute_compiled is not None:
@@ -229,13 +232,13 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
-        direct_candidates=candidate.tolist(),substitute_binding=substitute_binding.tolist(),
+        direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
         substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled)
     return result
 
@@ -299,6 +302,7 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.substitute_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.direct_hit_binding,(8,),jnp.uint32)
     accounting._shape(tables.direct_candidates,(len(tables.selected_risk),),jnp.bool_)
+    accounting._shape(tables.seismic_toss_move,(),jnp.int32)
     context=accounting._context(tape)
     if context is None:return jnp.zeros(b,bool),None
     if type(context.tables) is not accounting.Tables:raise ValueError('typed actual accounting context required')
@@ -383,6 +387,7 @@ def _captured_direct_matches(tape,outcome,tables,captured):
     data=captured.context.data
     if not direct._check(tape,data):return no
     move=_vector(captured.move,b)
+    same &= (data.seismic_toss_move==tables.seismic_toss_move)
     same &= (data.move_count==len(tables.selected_risk))&(move>0)&(move<data.move_count)
     same &= jnp.any(tables.direct_hit_binding!=0)&jnp.all(data.binding==tables.direct_hit_binding)
     same &= jnp.all(captured.context.accounting.inventory_binding==tables.accounting_binding)
@@ -392,7 +397,7 @@ def _captured_direct_matches(tape,outcome,tables,captured):
     same &= jnp.all(data.move_binding==tables.move_binding)&ledger.opened&(ledger.refusal==0)
     same &= (ledger.stage[rows,slot]==2)&(ledger.end[rows,slot]==tape.count)
     same &= accounting._direct_hit_span_matches(tape,captured.ticket,captured.actor,captured.actor_physical,
-        captured.target_physical,captured.move,captured.write)
+        captured.target_physical,captured.move,captured.write,data=data)
     w=captured.write
     for key in ('power','critical','hit','immune','numerator','denominator','substitute','protected','enduring'):
         same &= getattr(outcome,key)==getattr(w,key)

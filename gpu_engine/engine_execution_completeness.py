@@ -48,6 +48,7 @@ class Site(IntEnum):
     TOXIC_ATTEMPT = 12
     TRACE_COPY = 13
     RECOIL_HP = 14
+    INTIMIDATE_INITIAL = 15
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -289,7 +290,7 @@ def capture_status_residual_write(tape, ticket, *, requested, positive_write):
     return _put_context(tape,ledger,context)
 
 
-def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write):
+def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write,*,data=None):
     """Read-only literal Site10 span check shared by capture and risk observer.
 
     This computes facts from the SAME source ticket/write/tape, not a caller
@@ -301,7 +302,7 @@ def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,mo
     ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=tape.count.shape[0];rows=jnp.arange(b)
     if type(write) is not direct.HitWrite:raise ValueError('literal direct-hit write required')
     for value in (actor,actor_physical,target_physical,move):_shape(value,(b,),jnp.int32)
-    valid=direct.validate_write_device(write,b)
+    valid=direct.validate_write_device(write,b,data=data,move=move)
     start=ledger.start[rows,slot]
     declaration=tape.words[rows,jnp.clip(start-1,0,tape.words.shape[1]-1)]
     safe_actor=jnp.clip(actor,0,1)
@@ -318,8 +319,9 @@ def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,mo
     declared &= ((tape.event_turn[rows,prefix]==ledger.turn[rows,slot])
         &(tape.event_phase[rows,prefix]==ledger.phase[rows,slot])
         &jnp.all(tape.event_generation[rows,prefix]==ledger.generation[rows,slot],axis=1))
-    critical=jnp.broadcast_to(write.critical,(b,));num=jnp.broadcast_to(write.numerator,(b,))
-    den=jnp.broadcast_to(write.denominator,(b,));effect=num!=den
+    critical,effect=direct.annotation_flags_device(write,data=data,move=move)
+    critical=jnp.broadcast_to(critical,(b,));effect=jnp.broadcast_to(effect,(b,))
+    num=jnp.broadcast_to(write.numerator,(b,));den=jnp.broadcast_to(write.denominator,(b,))
     length=critical.astype(jnp.int32)+effect.astype(jnp.int32)+1
     first=tape.words[rows,jnp.clip(start,0,tape.words.shape[1]-1)]
     second=tape.words[rows,jnp.clip(start+critical.astype(jnp.int32),0,tape.words.shape[1]-1)]
@@ -337,12 +339,12 @@ def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,mo
     return semantic
 
 
-def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,move,write,*,requested):
+def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,move,write,*,requested,data=None):
     """Capture the complete literal positive span; BOTH owners must drain it."""
     context=_context(tape)
     if context is None:return tape
     _shape(requested,tape.count.shape,jnp.bool_)
-    semantic=_direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write)
+    semantic=_direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write,data=data)
     ledger=context.ledger
     ledger=unhandled(ledger,ticket,active=requested&~semantic,tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)

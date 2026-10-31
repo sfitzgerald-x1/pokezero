@@ -819,7 +819,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         dealt = jnp.where(acts & hit,jnp.minimum(capacity,damage),0)
         foe_hp = hp - jnp.where(hits_sub,0,dealt)
         if _direct_hit_context is not None and _direct_hit_registered:
-            _direct_requested=acts & (power>0)
+            _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move))
             _public_trace,_direct_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.DIRECT_HIT,foe,active=_direct_requested)
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
@@ -833,7 +833,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=_direct_record(
                 _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
                 _direct_write,_direct_hit_context if _direct_hit_registered else _direct_hit_context.data,
-                eligible=acts & (power>0))
+                eligible=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)))
         if _public_trace is not None:
             _public_trace = public_callbacks.condition(_public_trace,foe,work.active[rows,foe],
                 foe_hp,_active(work.max_hp,work,foe),_active(work.status,work,foe),
@@ -841,7 +841,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _direct_hit_context is not None and _direct_hit_registered:
             _public_trace=execution_accounting.capture_direct_hit_write(_public_trace,_direct_ticket,
                 side,work.active[rows,side],work.active[rows,foe],move,_direct_write,
-                requested=_direct_requested)
+                requested=_direct_requested,data=_direct_hit_context.data)
         if table.focus_punch is not None:
             work=focusing.hit(work,side,move,table.focus_punch,eligible=acts & hit & ~immune & ~hits_sub)
         # Gen 3 floors recoil from actual damage, including capped sub damage.

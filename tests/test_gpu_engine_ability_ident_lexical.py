@@ -5,7 +5,7 @@ components exercise original writer words; no Battle/Native/model is created.
 """
 from copy import deepcopy
 from pathlib import Path
-import json,subprocess,shutil,unittest
+import ast,json,subprocess,shutil,unittest
 import jax
 import jax.numpy as j
 import numpy as np
@@ -88,5 +88,9 @@ class AbilityIdentLexicalTests(unittest.TestCase):
    public=self.catalog.species.species_id(row['name']);mapped=int(self.adapter.device.ident_species[public]);base_id=self.catalog.species.species_id(row['baseSpecies'])
    self.assertEqual(mapped,base_id)
    if row['id'] in ('hooh','nidoranf','nidoranm'):self.assertEqual(public,mapped)
-  for name in ('transition.py','entry.py','mechanics.py','engine_pressure_callbacks.py','engine_trace_callbacks.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','e3307cf8:gpu_engine/'+name]))
+  from gpu_engine_default_observer_ast import dump_default_program
+  from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
+  before=subprocess.check_output(['git','show','ad445ae1:gpu_engine/transition.py'],text=True)
+  self.assertEqual(dump_default_program(ast.parse(before)),dump_default_program(normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True)))
+  for name in ('entry.py','mechanics.py','engine_pressure_callbacks.py','engine_trace_callbacks.py'):
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','ad445ae1:gpu_engine/'+name]))
