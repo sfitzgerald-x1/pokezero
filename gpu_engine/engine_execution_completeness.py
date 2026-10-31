@@ -45,6 +45,7 @@ class Site(IntEnum):
     INTIMIDATE_ATTEMPT = 9
     DIRECT_HIT = 10
     SUBSTITUTE_SELF = 11
+    TOXIC_ATTEMPT = 12
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -358,6 +359,39 @@ def capture_substitute_write(tape,ticket,side,physical,move,write,*,requested):
     if context is None:return tape
     _shape(requested,tape.count.shape,jnp.bool_)
     same=_substitute_span_matches(tape,ticket,side,physical,move,write)
+    ledger=unhandled(context.ledger,ticket,active=requested&~same,tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=requested&same,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def _toxic_span_matches(tape,ticket,side,physical,target,move,attempt):
+    from . import engine_toxic_callbacks as toxic
+    context=_context(tape)
+    if context is None:return jnp.zeros_like(tape.count,bool)
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=len(tape.count);rows=jnp.arange(b)
+    expected=toxic.words_device(side,physical,target,move,attempt)
+    start=ledger.start[rows,slot];at=jnp.clip(start,0,tape.words.shape[1]-1);prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
+    raw=tape.words[rows,at];decl=tape.words[rows,prefix];safe=jnp.clip(side,0,1)
+    same &= (_validate(ledger,context.tables)&_tape(ledger,tape,context.tables)&toxic.supported_raw(expected)
+        &(attempt.old_counter>=0)&(attempt.old_counter<=15)&(attempt.new_counter>=0)&(attempt.new_counter<=15)
+        &(ledger.site[rows,slot]==int(Site.TOXIC_ATTEMPT))&(ledger.side[rows,slot]==1-side)
+        &(tape.count==start+1)&jnp.all(raw==expected,axis=1)&(start>0)
+        &(decl[:,0]==toxic.public.MOVE)&(decl[:,1]==side)&(decl[:,2]==physical)
+        &(decl[:,3]==1-side)&(decl[:,4]==target)&(decl[:,5]==move)&jnp.all(decl[:,6:]==0,axis=1)
+        &life._valid(tape.cursor)&(physical==tape.cursor.physical_active[rows,safe])
+        &(target==tape.cursor.physical_active[rows,1-safe])
+        &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
+        &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
+    for index in (prefix,at):
+        same &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])&(tape.event_phase[rows,index]==ledger.phase[rows,slot])
+            &jnp.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
+    return same
+
+
+def capture_toxic_attempt(tape,ticket,side,physical,target,move,attempt,*,requested):
+    context=_context(tape)
+    if context is None:return tape
+    _shape(requested,tape.count.shape,jnp.bool_);same=_toxic_span_matches(tape,ticket,side,physical,target,move,attempt)
     ledger=unhandled(context.ledger,ticket,active=requested&~same,tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=requested&same,tables=context.tables)
     return _put_context(tape,ledger,context)
