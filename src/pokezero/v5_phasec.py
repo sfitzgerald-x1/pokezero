@@ -14,6 +14,7 @@ from . import v5_contract as c,v5_run as runs,v5_training as training
 from .v5_model import V5ModelConfig
 from .v5_loss import V5LossConfig
 from .live_protocol_actor import ActorContract
+from .category_vocab import CategoryVocabulary
 
 SCHEMA='pokezero.phasec.preparation.v1'
 GAMES_PER_ARM=2_000_000
@@ -32,6 +33,11 @@ CHOICES=(
 
 
 def _sha(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+
+def category_binding(vocabulary):
+    if type(vocabulary) is not CategoryVocabulary:raise ValueError('original category vocabulary required')
+    return _sha(dict(tokens=vocabulary.tokens,oov_buckets=vocabulary.oov_buckets,aliases=dict(vocabulary.aliases)))
+
 
 def _role(arm,replicate):
     if (arm,replicate) not in ARMS:raise ValueError('initial A/B/D/Brep1 only')
@@ -69,10 +75,12 @@ class ChampionProfile:
     @property
     def metadata(self):return json.loads(self.payload)['metadata']
 
-    def configurations(self,vocabulary,*,arm,replicate=0):
+    def configurations(self,vocabulary,*,category_vocabulary,arm,replicate=0):
         role=_role(arm,replicate);meta=self.metadata;old=meta['training_config'];contract=ActorContract.champion()
         if type(vocabulary) is not c.LabelVocabulary:raise ValueError('original public source label vocabulary required')
-        model=V5ModelConfig(meta['model_config']['categorical_vocab_size'],contract.category_vocab_sha256,vocabulary,
+        category_sha=category_binding(category_vocabulary)
+        if category_vocabulary.size!=meta['model_config']['categorical_vocab_size']:raise ValueError('original category size differs')
+        model=V5ModelConfig(category_vocabulary.size,category_sha,vocabulary,
             arm=arm,replicate=replicate,width=512,layers=3,attention_heads=8,expert_width=512,
             dropout=meta['model_config']['dropout'])
         loss=V5LossConfig(arm=arm,clip_epsilon=old['clip_epsilon'],value_weight=old['value_loss_weight'],
@@ -88,9 +96,9 @@ class ChampionProfile:
             games=GAMES_PER_ARM,historical_fraction=0. if arm=='A' else .5,historical_window=32)
 
 
-def bind_plan(profile,vocabulary,*,run_id,arm,replicate,iterations,pool_sha256,selection_seed):
+def bind_plan(profile,vocabulary,*,category_vocabulary,run_id,arm,replicate,iterations,pool_sha256,selection_seed):
     """Bind only an already declared full bank, never create/redraw its cells."""
-    config=profile.configurations(vocabulary,arm=arm,replicate=replicate)
+    config=profile.configurations(vocabulary,category_vocabulary=category_vocabulary,arm=arm,replicate=replicate)
     iterations=tuple(tuple(batch for batch in iteration) for iteration in iterations)
     if sum(len(batch.games) for iteration in iterations for batch in iteration)!=GAMES_PER_ARM:
         raise ValueError('complete predeclared2M game bank required; no refill or smaller production substitute')
@@ -113,11 +121,11 @@ def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,ge
     return v5_selfplay.EngineBackend(prepared,pool,gender_policy=gender_policy,compute_dtype='bfloat16',teacher=teacher)
 
 
-def preparation(profile,vocabulary):
+def preparation(profile,vocabulary,*,category_vocabulary):
     """Compact PREPONLY declaration, with undiscovered runtime bindings explicit."""
     arms=[]
     for arm,replicate in ARMS:
-        row=profile.configurations(vocabulary,arm=arm,replicate=replicate)
+        row=profile.configurations(vocabulary,category_vocabulary=category_vocabulary,arm=arm,replicate=replicate)
         arms.append(dict(row,model=row['model'].metadata(),loss=row['loss'].metadata()))
     missing=['four disjoint fixed game banks/poolSHA/gender declarations',
         'actual original prepared runtime/category/source handles','fixed FP panel/pairedendpoint/position-set bindings',
