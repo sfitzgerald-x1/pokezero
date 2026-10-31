@@ -81,7 +81,7 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
     if learner.config.arm=='D':
         if type(teacher) is not depth1.Provider or teacher.prepared is not session.prepared:
             raise MissingDependency('D requires the connected original public-root depth1 provider')
-        teacher.require_ready()
+        teacher.require_batched()
     elif teacher is not None:raise ValueError('teacher labels belong only to D; A/B actor path stays raw')
     record,r,current=base._checked(learner,session)
     actors=tuple(tuple(pair) for pair in actors);streams=np.asarray(session.state.core.cursor.stream_id);b=len(streams)

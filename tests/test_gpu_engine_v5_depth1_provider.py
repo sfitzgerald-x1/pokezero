@@ -20,6 +20,24 @@ from gpu_engine import v5_observation,private_team,public_field
 import test_gpu_engine_v5_public_world as fixtures
 
 
+class GridTransportTests(unittest.TestCase):
+    def test_unknown_cells_have_no_model_rows_and_scatter_cannot_relabel_them(self):
+        cell=p.GridCell(c.DecisionAddress(1,0,0),0,0,0,0)
+        p.GridChunk((cell,),(),None,np.array([False]),(('unknown',),))
+        with self.assertRaises(ValueError):p.GridChunk((cell,),(0,),None,np.array([False]),(('unknown',),))
+        with self.assertRaises(ValueError):p.GridChunk((cell,),(),{'view':'PUBLIC'},np.array([False]),(('unknown',),))
+        with self.assertRaises(ValueError):p.GridChunk((cell,),(0,),{'view':'PRIVILEGED'},np.array([True]),((),))
+        with self.assertRaises(ValueError):p.GridChunk((cell,),(),None,np.array([False]),(('unknown',),),device_rows=8,active_rows=1,padding=8)
+
+    def test_ordinary_objects_and_ambiguous_action_ids_cannot_be_hypothetical_grid_roots(self):
+        address=c.DecisionAddress(1,0,0)
+        for changes in (dict(world=True),dict(root_index=-1),dict(root_action=9),dict(reply_action=False)):
+            fields=dict(address=address,world=0,root_index=0,root_action=0,reply_action=0);fields.update(changes)
+            with self.assertRaises(ValueError):p.GridCell(**fields)
+        cell=p.GridCell(address,0,0,0,0)
+        with self.assertRaises(ValueError):p.GridBatch((object(),),(None,),(cell,))
+
+
 class ProviderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
