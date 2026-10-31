@@ -160,7 +160,15 @@ def _memory(policy,*,apply):
     tf=policy['torch_fraction']
     if tf is not None and (type(tf) not in (int,float) or not math.isfinite(tf) or not 0<tf<=1):raise ValueError('explicit Torch memory fraction required')
     if apply:
-        if any(name in sys.modules for name in ('jax','torch')):raise ValueError('bound memory policy must precede JAX/Torch imports')
+        if sys.modules.get('jax') is not None:raise ValueError('bound memory policy must precede JAX imports')
+        # pokezero.__init__ legitimately imports Torch through neural_policy.
+        # A cold module import allocates no CUDA state; initialized/unknown
+        # device state cannot accept a late memory policy.
+        torch_module=sys.modules.get('torch')
+        if torch_module is not None:
+            initialized=getattr(getattr(torch_module,'cuda',None),'is_initialized',None)
+            if not callable(initialized) or initialized() is not False:
+                raise ValueError('bound memory policy must precede Torch CUDA initialization')
         for key,value in env.items():
             if key in os.environ and os.environ[key]!=value:raise ValueError('runtime memory environment differs from declaration')
             if value is not None:os.environ[key]=value
