@@ -193,10 +193,19 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
         # branches. The source can print controls with zero numeric change.
         from . import engine_intimidate_callbacks as intimidate_callbacks
         _intimidate_requested=starts & table.intimidate[ability]
-        _weather_trace,_intimidate_ticket=execution_accounting.open_attempt(_weather_trace,
-            execution_accounting.Site.INTIMIDATE_INITIAL,side,active=_intimidate_requested)
         _intimidate_target_ability=state.ability[rows,foe,foe_active]
         _intimidate_substitute=state.substitute_hp[rows,foe,foe_active]
+        _intimidate_initial=(intimidate_callbacks._constructor(_weather_trace)&(foe_hp>0)
+            &(_intimidate_substitute==0)&~table.attack_drop_immune[_intimidate_target_ability]
+            &(state.boosts[rows,foe,foe_active,0]==0))
+        # Preserve historical ordinary/blocked attempts under their own site.
+        # Constructor-only credit and legacy attempts are disjoint per row.
+        _weather_trace=execution_accounting.unhandled_attempt(_weather_trace,
+            execution_accounting.Site.INTIMIDATE_ATTEMPT,side,
+            active=_intimidate_requested&~_intimidate_initial)
+        _weather_trace,_intimidate_ticket=execution_accounting.open_attempt(_weather_trace,
+            execution_accounting.Site.INTIMIDATE_INITIAL,side,
+            active=_intimidate_requested&_intimidate_initial)
     blocked = ((state.substitute_hp[rows,foe,foe_active] > 0)
         | table.attack_drop_immune[state.ability[rows,foe,foe_active]])
     drops = starts & table.intimidate[ability] & (foe_hp > 0) & ~blocked
@@ -205,7 +214,7 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     if _weather_trace is not None:
         _weather_trace=intimidate_callbacks.record_device(_weather_trace,_intimidate_ticket,side,active,foe_active,
             intimidate_callbacks.Write(ability,_intimidate_target_ability,foe_hp,_intimidate_substitute,
-                old,boosts[rows,foe,foe_active,0]),table,requested=_intimidate_requested)
+                old,boosts[rows,foe,foe_active,0]),table,requested=_intimidate_requested&_intimidate_initial)
         return state._replace(boosts=boosts),knocked_out,_weather_trace
     return state._replace(boosts=boosts),knocked_out
 

@@ -76,13 +76,13 @@ class InitialIntimidateOwningTests(unittest.TestCase):
   _,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
  def test_blocked_capped_nonzero_and_later_entry_stay_unknown_without_empty_span(self):
   s=self.state(8);bad=s._replace(substitute_hp=s.substitute_hp.at[0,1,0].set(5),ability=s.ability.at[1,1,0].set(3),boosts=s.boosts.at[2,1,0,0].set(-6).at[3,1,0,0].set(1))
-  actual=self.initial(bad);self.assertTrue(bool(((actual.callbacks.refusal[:4]&~1)!=0).all()));self.assertEqual(actual.callbacks.execution.ledger.stage[:4,0].tolist(),[1]*4)
-  self.assertEqual(actual.callbacks.execution.ledger.stage[4:,0].tolist(),[2]*4)
+  actual=self.initial(bad);self.assertTrue(bool(((actual.callbacks.refusal[:4]&~1)!=0).all()));self.assertEqual(actual.callbacks.execution.ledger.stage[:4,0].tolist(),[1]*4);self.assertEqual(actual.callbacks.execution.ledger.site[:4,0].tolist(),[int(ex.Site.INTIMIDATE_ATTEMPT)]*4)
+  self.assertEqual(actual.callbacks.execution.ledger.stage[4:,0].tolist(),[2]*4);self.assertEqual(actual.callbacks.execution.ledger.site[4:,0].tolist(),[int(ex.Site.INTIMIDATE_INITIAL)]*4)
   later=actual.callbacks._replace(cursor=actual.cursor,words=j.zeros_like(actual.callbacks.words),count=j.zeros(8,j.int32),turn=actual.cursor.turn)
   # An ordinary entry retains no fresh-constructor exemption, even 0->-1.
   ledger=ex.initialize(later.stream_id,compiled=self.account);later=ex.begin_on_tape(later,ledger,self.account.device,active=j.ones(8,bool))
   _,_,out=entry.enter(self.state(8),0,self.table.entry,eligible=j.ones(8,bool),hazards=False,_weather_trace=later)
-  self.assertTrue(bool((out.refusal&256).all()));self.assertTrue(bool((out.refusal&512).all()));self.assertEqual(out.count.tolist(),[0]*8)
+  self.assertTrue(bool((out.refusal&512).all()));self.assertEqual(out.count.tolist(),[0]*8)
  def before_entry(self,b=8):
   s=self.state(b);cursor=life.register(j.arange(1201,1201+b,dtype=j.int32),**self.kw)
   tape=life._tape(cursor,self.producer,64)._replace(refusal=j.ones(b,j.int32))
@@ -98,7 +98,7 @@ class InitialIntimidateOwningTests(unittest.TestCase):
   tape=tape._replace(refusal=tape.refusal.at[1].set(257),count=tape.count.at[2].set(64),
       switch_details=tape.switch_details.at[2,63,0].set(1),event_generation=tape.event_generation.at[3,0,1].set(1))
   _,_,out=jax.jit(lambda t:entry.enter(s,0,self.table.entry,eligible=mask,hazards=False,_weather_trace=t))(tape)
-  self.assertEqual(out.count.tolist(),[3,3,64,2,2,2,2,2]);self.assertTrue(bool(out.refusal[1]&256));self.assertTrue(bool(out.refusal[2]&events.OVERFLOW));self.assertTrue(bool(out.refusal[3]&256))
+  self.assertEqual(out.count.tolist(),[3,3,64,2,2,2,2,2]);self.assertTrue(bool(out.refusal[1]&256));self.assertTrue(bool(out.refusal[2]&events.OVERFLOW));self.assertTrue(bool(out.refusal[3]&512))
   for before,after in zip(jax.tree.leaves(tape),jax.tree.leaves(out)):
    if getattr(before,'ndim',0) and before.shape[0]==8:np.testing.assert_array_equal(before[4:],after[4:])
   for name,bad in (('global',tape._replace(execution=tape.execution._replace(risks=tape.execution.risks._replace(carry=tape.execution.risks.carry._replace(binding=tape.execution.risks.carry.binding.at[0].add(1)))))),
@@ -106,7 +106,7 @@ class InitialIntimidateOwningTests(unittest.TestCase):
                    ('generation',tape._replace(cursor=tape.cursor._replace(generation=j.ones((8,2),j.int32))))):
    with self.subTest(name=name):
     _,_,rejected=entry.enter(s,0,self.table.entry,eligible=mask,hazards=False,_weather_trace=bad)
-    self.assertEqual(rejected.count.tolist(),bad.count.tolist());self.assertTrue(bool((rejected.refusal[:4]&256).all()))
+    self.assertEqual(rejected.count.tolist(),bad.count.tolist());self.assertTrue(bool((rejected.refusal[:4]&512).all()))
  def test_default_entry_ast_unchanged_and_original_gen3_callback_pair(self):
   def body(text):return next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=='enter')
   before=subprocess.check_output(['git','show','ad6f1d9e:gpu_engine/entry.py'],text=True);self.assertEqual(dump_default_program(body(before)),dump_default_program(body(Path('gpu_engine/entry.py').read_text())))
