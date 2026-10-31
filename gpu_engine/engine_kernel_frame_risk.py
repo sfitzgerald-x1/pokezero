@@ -161,7 +161,13 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None)
     for name in ('seed','wish','spin'):flag(table.sustain,name,FIELD_VOLATILE)
     flag(table.entry,'spikes_move',FIELD_VOLATILE)
     flag(table.linked_traps,'move',FIELD_VOLATILE);flag(table.encore,'move',FIELD_VOLATILE)
-    flag(table.secondary,'chance',FIELD_VOLATILE)
+    if table.secondary is not None:
+        chance=np.asarray(table.secondary.chance)
+        if chance.shape!=(m,):raise ValueError('exact selected kernel move columns required')
+        # Registered direct hits already visit the original secondary guards.
+        # A possible proc is not an actual write: status/reflection callbacks
+        # and stats/flinch branch guards retain their existing sticky refusals.
+        risk[(chance!=0)&~candidate]|=FIELD_VOLATILE
     flag(table.self_destruct,'move',SELF_HP);flag(table.damage_moves,'recoil_den',SELF_HP)
     flag(table.solar_beam,'move',BLOCKED_ACTION);flag(table.focus_punch,'move',BLOCKED_ACTION)
     branch=np.zeros(len(Branch)+1,np.int32)
