@@ -147,7 +147,9 @@ def build_v5_model(config, *, enable_v5=False):
             result = torch.zeros_like(x)
             for role, expert in enumerate(self.experts):
                 indices = (self.roles == role).nonzero().flatten()
-                result = result.index_copy(1, indices, expert(x.index_select(1, indices)))
+                # Autocast may return BF16 while the residual remains FP32.
+                values = expert(x.index_select(1, indices)).to(result.dtype)
+                result = result.index_copy(1, indices, values)
             return result
 
     class Block(nn.Module):
