@@ -7327,9 +7327,10 @@ async def _probe_foulplay_start_method(
             start_new_session=True,
         )
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-    except Exception as error:  # noqa: BLE001 -- a probe must never fail a run
+    except (Exception, asyncio.CancelledError) as error:  # cancellation must clean the separately owned group
         reaped: bool | None = None
-        if process is not None and process.returncode is None:
+        cancelled=isinstance(error,asyncio.CancelledError)
+        if process is not None and (cancelled or process.returncode is None):
             # `wait_for` cancels `communicate()` without killing the child, which otherwise
             # outlives the probe as an orphan (plus an "Event loop is closed" complaint at
             # interpreter shutdown). A probe that leaks a process is not a free diagnostic.
@@ -7339,8 +7340,13 @@ async def _probe_foulplay_start_method(
             # natural lifetime -- measured at 30.1 s against a 0.3 s timeout, turning a
             # leaked process into a stalled run, which is the worse failure. Reaping is
             # best-effort and its outcome is reported rather than assumed.
-            with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            if cancelled:
+                # start_new_session above fixes PGID to pid, even if the leader
+                # already exited while a descendant still holds our pipe.
+                with contextlib.suppress(ProcessLookupError):os.killpg(process.pid,signal.SIGKILL)
+            else:
+                with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
             try:
@@ -7359,6 +7365,15 @@ async def _probe_foulplay_start_method(
                 if transport is not None:
                     with contextlib.suppress(Exception):
                         transport.close()
+        if cancelled:
+            if process is not None:
+                until=time.monotonic()+1.
+                while True:
+                    try:os.killpg(process.pid,0)
+                    except ProcessLookupError:break
+                    if time.monotonic()>=until:raise RuntimeError(f'owned FP probe group {process.pid} remains after cancellation') from error
+                    await asyncio.sleep(.01)
+            raise
         return {
             "status": "probe_failed",
             "error": f"{type(error).__name__}: {error}",
