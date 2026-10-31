@@ -16,6 +16,12 @@ from collections import namedtuple
 import jax
 import numpy as np
 
+try:
+    from jaxlib import _jax as _jax_extension
+    _CANONICAL_JAX_ARRAY_IMPL = _jax_extension.ArrayImpl
+except (ImportError, AttributeError):
+    _CANONICAL_JAX_ARRAY_IMPL = None  # Unavailable implementation: fresh capture.
+
 from .state import BattleState
 from pokezero.recorded_encoder_parity import SHAPES
 
@@ -28,7 +34,7 @@ def _boundary_proof(result):
 
     Unserialized private constructor/static holders are deliberately excluded.
     Every traversed container must be an ordinary immutable tuple record; every
-    captured leaf must be a live immutable JAX array or an immutable scalar.
+    captured leaf must be the exact live native JAX ArrayImpl or an immutable scalar.
     NumPy fixtures, mutable wrappers and unfamiliar types always use fresh data.
     """
     from . import engine_retained_encoder_driver as driver
@@ -48,7 +54,7 @@ def _boundary_proof(result):
     def field(value, name):
         return tuple.__getitem__(value, record(value).index(name))
     def leaf(value):
-        if isinstance(value, jax.Array) and not isinstance(value, jax.core.Tracer):
+        if type(value) is _CANONICAL_JAX_ARRAY_IMPL:
             if value.is_deleted():raise ValueError('deleted boundary array')
             edges.append(('array', value, (tuple(value.shape), str(value.dtype))))
         elif type(value) in (type(None), bool, int, str, bytes):

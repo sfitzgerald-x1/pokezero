@@ -142,6 +142,39 @@ class TraceReuseTests(unittest.TestCase):
                 self.assertEqual(writer._before_boundary(initial,0),{'deleted_fresh_attempt':True});fresh.assert_called_once()
             writer.finish([])
 
+    def test_mutable_python_jax_subclass_and_missing_native_type_are_fresh(self):
+        class MutableArray(jax.Array):
+            def __init__(self, value):self.value=np.array(value,copy=True)
+            @property
+            def shape(self):return self.value.shape
+            @property
+            def dtype(self):return self.value.dtype
+            def is_deleted(self):return False
+            def __getitem__(self,index):return self.value[index]
+        original=result();self.assertIs(type(original.state.core.engine.hp),trace._CANONICAL_JAX_ARRAY_IMPL)
+        # Matching name/module text is not an implementation identity.
+        MutableArray.__name__=type(original.state.core.engine.hp).__name__
+        MutableArray.__module__=type(original.state.core.engine.hp).__module__
+        fake=MutableArray(np.full((2,2,6),100,np.int32))
+        value=original._replace(state=original.state._replace(core=original.state.core._replace(
+            engine=original.state.core.engine._replace(hp=fake))))
+        self.assertIsInstance(fake,jax.Array)
+        self.assertIsNone(trace._boundary_proof(value))
+        with TemporaryDirectory()as directory:
+            writer=self.writer(Path(directory)/'trace',value)
+            self.assertEqual(writer._boundary_packets,{})
+            fake.value[0,0,0]=7
+            with patch.object(trace,'boundary',wraps=trace.boundary)as fresh:
+                self.assertEqual(writer._before_boundary(value,0)['state']['hp'][0][0][0],7)
+                fresh.assert_called_once()
+            writer.finish([])
+            path=Path(directory)/'unavailable'
+            fresh,summary,_=trace_run(path,False);path.rename(Path(directory)/'fresh-preserved')
+            with patch.object(trace,'_CANONICAL_JAX_ARRAY_IMPL',None),patch.object(trace,'boundary',wraps=trace.boundary)as calls:
+                actual,result_summary,_=trace_run(path,True)
+            self.assertEqual(actual,fresh);self.assertEqual(trace.encoded(result_summary),trace.encoded(summary))
+            self.assertEqual(calls.call_count,10)
+
     def test_only_latest_result_active_rows_retained_and_capacity_same(self):
         with TemporaryDirectory()as directory:
             initial=result();after=result(frame=1);writer=self.writer(Path(directory)/'trace',initial)
