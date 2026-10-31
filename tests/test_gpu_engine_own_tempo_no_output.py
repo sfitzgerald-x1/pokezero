@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import shutil
+import os
 import unittest
 
 import jax
@@ -104,7 +105,9 @@ class OwnTempoNoOutputTests(unittest.TestCase):
         self.assertEqual(out.execution.risks.carry.counts[4].tolist(),context.carry.counts[4].tolist())
 
     def test_effective_original_callback_empty_has_no_line_and_default_AST_unchanged(self):
-        root=Path('/tmp/pokezero-showdown-provenance-20261026')
+        root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT','/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'))
+        self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
+        self.assertTrue((root/'dist/sim/dex.js').is_file(),'pinned compiled Showdown root required')
         script=r'''
 const path=require('node:path');const {Dex}=require(path.join(process.argv[1],'dist/sim/dex.js'));
 const ability=Dex.mod('gen3').abilities.get('owntempo');const result=[];
