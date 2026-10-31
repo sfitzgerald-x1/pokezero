@@ -198,7 +198,7 @@ class Store:
             if path.name!=f'{index:09d}.json' or event['sequence']!=index or event['previous']!=previous or _sha(event)!=digest:
                 raise ValueError('original ordered run journal changed')
             event['sha256']=digest;self.events.append(event);previous=digest
-        if not self.events:self.emit('RUN_STARTED',declaration_sha256=_sha(plan.manifest()))
+        if not self.events:self.emit('RUN_STARTED',declaration_sha256=_sha(json.loads(declaration.read_bytes())))
 
     def emit(self,kind,**payload):
         event=dict(sequence=len(self.events),previous=self.events[-1]['sha256'] if self.events else None,

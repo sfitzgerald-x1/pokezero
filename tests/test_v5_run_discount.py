@@ -31,6 +31,16 @@ class DiscountTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'original immutable'):
                 run.Store(root,replace(plan,discount=.9999),resume=True)
 
+    def test_accepted_old_declaration_before_first_journal_owns_start_digest(self):
+        plan=fixture.plan();legacy=plan.manifest();legacy.pop('discount')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);blob=run._json(legacy).encode();(root/'declaration.json').write_bytes(blob)
+            restored=run.Store(root,plan,resume=True)
+            self.assertEqual(len(restored.events),1)
+            self.assertEqual(restored.events[0]['payload']['declaration_sha256'],run._sha(legacy))
+            self.assertNotEqual(restored.events[0]['payload']['declaration_sha256'],run._sha(plan.manifest()))
+            self.assertEqual((root/'declaration.json').read_bytes(),blob)
+
     def test_engine_cache_gets_exact_plan_discount_without_changing_targets(self):
         from gpu_engine import v5_selfplay as engine
         plan=replace(fixture.plan(),discount=.9999);batch=plan.iterations[0][0]
