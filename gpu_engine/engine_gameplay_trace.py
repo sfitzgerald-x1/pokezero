@@ -41,6 +41,61 @@ def state_packet(state, row):
     return {name: _row(getattr(state, name), row).tolist() for name in BattleState._fields}
 
 
+def _unsafe(core, row):
+    values = getattr(core, 'unsafe', None)
+    if values is None:
+        return None
+    if type(values) is not tuple or len(values) != 2:
+        raise ValueError('two original per-owner unsafe carries required')
+    result = []
+    for value in values:
+        scalar = np.asarray(value[row])
+        if scalar.shape != () or scalar.dtype != np.bool_:
+            raise ValueError('literal bool unsafe carry required')
+        result.append(bool(scalar))
+    return result
+
+
+def request_history_rules(compiled):
+    """Original static lookup namespace, for diagnostics only; never admission."""
+    from . import engine_request_source as request
+    from .engine_private_team import engine_metadata_binding
+    record = request._checked(compiled)
+    rules = record['rules']; origin = request._rules_origin(rules)
+    metadata = json.loads(record['metadata'])
+    if not np.array_equal(np.asarray(engine_metadata_binding(metadata)), np.asarray(rules.device.engine_binding)):
+        raise ValueError('original request history vocabulary binding differs')
+    flags = np.asarray(rules.device.unsupported_history)
+    names = metadata['vocabulary']
+    if flags.dtype != np.bool_ or flags.shape != (len(names['moves']),):
+        raise ValueError('original bool unsupported-history namespace required')
+    return dict(schema='pokezero.request-history-diagnostic.v1',
+        request_binding=np.asarray(compiled.binding).tolist(),
+        rules_binding=np.asarray(rules.device.binding).tolist(),
+        engine_binding=np.asarray(rules.device.engine_binding).tolist(),
+        source_revision=request.SHOWDOWN, generator_sha256=origin.generator_sha256,
+        source_tree_sha256=hashlib.sha256(origin.source_tree_json.encode()).hexdigest(),
+        compiled_tree_sha256=hashlib.sha256(origin.compiled_tree_json.encode()).hexdigest(),
+        unsupported_history=flags.tolist(), unsupported_history_sha256=hashlib.sha256(flags.tobytes()).hexdigest(),
+        engine_move_names=list(names['moves']), engine_species_names=list(names['species']),
+        namespace='Literal BattleState indices, not public or request-mechanics IDs')
+
+
+def _history_lookup(packet, rules):
+    """Static lookup only; actual unsafe carries are copied separately."""
+    flags = rules['unsupported_history']; state = packet['state']
+    members = []
+    for side in (0, 1):
+        for physical, species in enumerate(state['species'][0][side]):
+            if species <= 0:
+                continue
+            move = state['last_move'][0][side][physical]
+            valid = 0 <= move < len(flags)
+            members.append(dict(side=side, physical=physical, species=species, last_move=move,
+                last_move_valid=valid, unsupported_history=flags[move] if valid else None))
+    return members
+
+
 def _full(report, row, owner):
     if report is None:
         return dict(available=False, reason='MISSING_ACTUAL_FULL_REPORT')
@@ -80,6 +135,7 @@ def boundary(result, row):
                 switch_details=np.asarray(report.switch_details[row, :count]).tolist(),
                 witness_refusal=int(np.asarray(report.refusal[row])))
     return dict(state=state_packet(core.engine, row),
+        unsafe=_unsafe(core, row),
         frame=int(np.asarray(core.frame_number[row])),
         cursor={name: np.asarray(getattr(core.cursor, name)[row]).tolist() for name in
             ('stream_id', 'turn', 'phase', 'generation')},
@@ -135,6 +191,7 @@ class TraceWriter:
         self.failures = []; self.disabled = False; self.closed = False
         self.header = None; self.attempts = {}; self.written = {}; self.terminals = {}
         self.initial_ms = 0.; self.advancing_ms = 0.
+        self.unsafe_first = set()
 
     def _write(self, kind, payload, *, final=False):
         if self.disabled and not final:
@@ -155,7 +212,7 @@ class TraceWriter:
             return False
 
     def begin(self, *, initial, runtime_binding, source, pool_receipt, team_indices,
-              stream_ids, max_requests, constructor_seed, sampling_seed, action_names):
+              stream_ids, max_requests, constructor_seed, sampling_seed, action_names, request_compiled=None):
         start = time.perf_counter_ns()
         try:
             if self.header is not None or self.closed:
@@ -169,6 +226,8 @@ class TraceWriter:
                 action_names=list(action_names), state_layout=layout,
                 reference_chance='ORIGINAL_CAPTURED_CHANCE_INPUTS; existing fidelity semantic coupling; unmapped roles UNKNOWN',
                 max_bytes=self.max_bytes, max_record_bytes=self.max_record_bytes)
+            if request_compiled is not None:
+                self.header['request_history_rules'] = request_history_rules(request_compiled)
             self.attempts = {int(s): 0 for s in stream_ids}; self.written = dict(self.attempts)
             self._write('HEADER', self.header)
             for row, stream in enumerate(stream_ids):
@@ -207,7 +266,20 @@ class TraceWriter:
                     chance={name:_row(value,row).tolist() for name,value in chance._asdict().items()},
                     selected=selected_actions(before, actions, row, self.header['action_names']),
                     executed=bool(executed[row]), invalid=bool(invalid[row]))
-                if self._write('DECISION', payload): self.written[stream] += 1
+                first = []
+                old, new = payload['before']['unsafe'], payload['after']['unsafe']
+                if old is not None and new is not None:
+                    first = [owner for owner in (0, 1) if not old[owner] and new[owner]
+                        and (stream, owner) not in self.unsafe_first]
+                rules = self.header.get('request_history_rules')
+                if first:
+                    payload['unsafe_history_first_transition'] = dict(owners=first,
+                        before_lookup=None if rules is None else _history_lookup(payload['before'], rules),
+                        after_lookup=None if rules is None else _history_lookup(payload['after'], rules),
+                        rules_available=rules is not None)
+                if self._write('DECISION', payload):
+                    self.written[stream] += 1
+                    self.unsafe_first.update((stream, owner) for owner in first)
             except Exception as error:
                 self.disabled = True
                 if not self.failures: self.failures.append(dict(type=type(error).__name__, message=str(error)))

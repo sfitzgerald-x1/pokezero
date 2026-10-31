@@ -359,7 +359,8 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         gameplay_trace.begin(initial=initial, runtime_binding=runtime.binding, source=source,
             pool_receipt=receipt, team_indices=indices, stream_ids=ids, max_requests=max_requests,
             constructor_seed=constructor_seed, sampling_seed=sampling_seed,
-            action_names=prepared_record['request']['catalog'].names)
+            action_names=prepared_record['request']['catalog'].names,
+            request_compiled=prepared_record.get('request_compiled'))
     completed, refused = np.zeros(batch, bool), np.zeros(batch, bool)
     details = [dict(stream_id=int(x), team_indices=pair.tolist(), refusal=None) for x, pair in zip(ids, indices)]
     full_steps, forward, compiles, phases, decisions = [], [], [], {}, []
