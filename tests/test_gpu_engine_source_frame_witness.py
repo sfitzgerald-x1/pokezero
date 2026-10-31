@@ -118,6 +118,15 @@ class SourceFrameWitnessTests(unittest.TestCase):
         self.assertEqual(result.report.frame_inputs_complete.tolist(),[False,True])
         self.assertTrue(int(result.carry.refusal[0])&w.CUTPOINTS)
         for before,after in zip(streams,result.owners):self.same(before.sequence[0],after.projection.state.sequence[0])
+
+        # The actual tape cursor must be exactly the owning frame cursor,
+        # including generation even when no selected span mentions it.
+        cursor=frame.callbacks.cursor._replace(generation=frame.callbacks.cursor.generation.at[0,0].add(1))
+        changed=frame._replace(callbacks=frame.callbacks._replace(cursor=cursor))
+        drift=fast(carry,core,changed,streams,publics)
+        self.assertEqual(drift.report.frame_inputs_complete.tolist(),[False,True])
+        self.assertTrue(int(drift.report.refusal[0])&w.SOURCE)
+        for before,after in zip(streams,drift.owners):self.same(before.sequence[0],after.projection.state.sequence[0])
         result=fast(carry,core,frame,(streams[0],streams[0]),publics)
         self.assertFalse(bool(result.report.frame_inputs_complete.any()))
         self.assertTrue(bool((result.carry.refusal&w.DRAIN).all()))

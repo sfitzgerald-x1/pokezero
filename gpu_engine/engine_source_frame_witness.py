@@ -298,7 +298,7 @@ def consume_pair_device(carry, core, frame, streams, publics, tables, catalog, *
     tape = frame.callbacks; b = len(carry.stream_id)
     if (type(tape) is not life.LifecycleTape or type(core.engine) is not BattleState
             or type(frame.state) is not BattleState or type(core.cursor) is not life.Cursor
-            or type(frame.cursor) is not life.Cursor
+            or type(frame.cursor) is not life.Cursor or type(tape.cursor) is not life.Cursor
             or type(frame.before_registry) is not life.PublicArrivalSnapshot
             or type(frame.after_registry) is not life.PublicArrivalSnapshot
             or type(tables.accounting) is not execution.Tables or type(tables.risk) is not risks.Tables
@@ -324,6 +324,7 @@ def consume_pair_device(carry, core, frame, streams, publics, tables, catalog, *
     valid &= _same_ledger(core.execution,ledger)
     for a,z in zip(jax.tree.leaves(core.engine),jax.tree.leaves(frame.state),strict=True):valid &= _rows_equal(a,z)
     for a,z in zip(core.cursor,frame.cursor,strict=True):valid &= _rows_equal(a,z)
+    for a,z in zip(tape.cursor,frame.cursor,strict=True):valid &= _rows_equal(a,z)
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):
         valid &= jnp.all(getattr(tape,name)==getattr(tables,name))
     valid &= jnp.all(catalog.binding==tables.encoder_binding)
