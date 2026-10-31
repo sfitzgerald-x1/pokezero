@@ -236,9 +236,19 @@ def compile_adapter(metadata, projector, *, catalog):
         for row in np.flatnonzero(np.asarray(effects.protect)):
             pid=projector.catalog.ids[row]
             if pid<=0 or targets.get(pid)!=0:continue
-            still=add(f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[0]}|[still]',inputs.Kind.MOVE)
+            # Battle.attrLastMove('[still]') erases the declaration target.
+            # Bind the original parser's exact blank-target schema, including
+            # all unchanged prelude/payload words and the exact tendency target default.
+            still=add(f'|move|{ident[0]}|{catalog.moves.names[pid]}||[still]',inputs.Kind.MOVE)
             plain=int(moves[pid])
-            protect_still_moves[pid]=bool(plain and still and mains[plain]==mains[still] and np.array_equal(templates[plain],templates[still]))
+            patched=templates[plain].copy()
+            patched[mains[plain],6:8]=-1
+            # The original tendency codec defaults an absent MOVE target to
+            # the opposing side.  It is the last event of this same line.
+            from . import public_tendency
+            has_tendency=(patched[-1,0]==int(inputs.Kind.TENDENCY) and patched[-1,8]==public_tendency.MOVE)
+            patched[-1,11]=1
+            protect_still_moves[pid]=bool(plain and still and has_tendency and mains[plain]==mains[still] and np.array_equal(patched,templates[still]))
     protect_success=add(f'|-singleturn|{ident[0]}|Protect',inputs.Kind.ACTIVE)
     protect_block=add(f'|-activate|{ident[0]}|Protect',inputs.Kind.NONPROC)
     # Exact source-tagged damage schemas; no generic direct-damage relabeling.
@@ -685,6 +695,28 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_called=(called[:,0]==tape.words[:,index,1])&(called[:,1]==new_slot)&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
         protect_failed=(tape.words[:,index,6]&protect_callbacks.SUCCESS)==0
         identity &= ~protect_attempt | (live[rows,safe]&protect_called&(~protect_failed|tables.protect_still_moves[jnp.clip(protect_pid,0,len(tables.protect_still_moves)-1)]))
+        # The validated receipt immediately follows its original MOVE.  Match
+        # that exact emitted declaration before applying the same retroactive
+        # target erasure as original Battle.attrLastMove; no comparison change.
+        protect_move_key=tables.moves[jnp.clip(protect_pid,0,len(tables.moves)-1)]
+        protect_declaration=count-tables.length[protect_move_key]+tables.main[protect_move_key]
+        protect_declaration_at=jnp.clip(protect_declaration,0,capacity-1)
+        protect_previous=words[rows,protect_declaration_at]
+        protect_erases_target=protect_attempt&protect_failed
+        protect_previous_ok=(protect_declaration>=0)&(protect_declaration<count)
+        protect_previous_ok &= (protect_previous[:,0]==int(inputs.Kind.MOVE))
+        protect_previous_ok &= (protect_previous[:,4]==called[:,0])&(protect_previous[:,5]==called[:,1])
+        protect_previous_ok &= (protect_previous[:,6]==called[:,0])&(protect_previous[:,7]==called[:,1])
+        protect_previous_ok &= (protect_previous[:,9]==protect_pid)
+        protect_previous_ok &= (protect_previous[:,2]==semantic[:,2])&(protect_previous[:,3]==semantic[:,3])
+        protect_tendency_at=jnp.clip(count-1,0,capacity-1)
+        protect_previous_tendency=words[rows,protect_tendency_at]
+        from . import public_tendency
+        protect_previous_ok &= protect_declaration<count-1
+        protect_previous_ok &= (protect_previous_tendency[:,0]==int(inputs.Kind.TENDENCY))&(protect_previous_tendency[:,8]==public_tendency.MOVE)
+        protect_previous_ok &= (protect_previous_tendency[:,6]==called[:,0])&(protect_previous_tendency[:,10]==protect_pid)&(protect_previous_tendency[:,11]==called[:,0])
+        protect_previous_ok &= (protect_previous_tendency[:,2]==semantic[:,2])&(protect_previous_tendency[:,3]==semantic[:,3])
+        identity &= ~protect_erases_target | protect_previous_ok
         identity &= ~protect_block | (live[rows,safe]&live[rows,1-safe]&(called[:,0]==tape.words[:,index,1])&(called[:,1]==slots[rows,1-safe])&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
         spikes_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
         spikes_called=(called[:,0]==subject)&(called[:,1]==slots[rows,safe])&(called[:,2]==tables.causal.base.public_ids[spikes_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
@@ -906,6 +938,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         semantic=jnp.where(sub_damage[:,None],result[rows,main],semantic)
         semantic = semantic.at[:, 1].set(sequence+main+1)
         result = result.at[rows, main].set(semantic)
+        protect_blank=protect_previous.at[:,6].set(-1).at[:,7].set(-1)
+        words=words.at[rows,protect_declaration_at].set(jnp.where((use&protect_erases_target)[:,None],protect_blank,protect_previous))
+        protect_tendency=protect_previous_tendency.at[:,11].set(1-called[:,0])
+        words=words.at[rows,protect_tendency_at].set(jnp.where((use&protect_erases_target)[:,None],protect_tendency,protect_previous_tendency))
 
         def write(buffer, offset):
             valid = use & (offset < size)

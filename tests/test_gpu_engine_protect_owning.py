@@ -73,6 +73,16 @@ out.push({id,lines,queue:m.onPrepareHit.call({queue:{willAct:()=>false},runEvent
   changed=cb.compile_data(replace(self.producer,targets=tuple(targets),engine_table=self.table._replace(effects=effects)),self.metadata,self.rules)
   self.assertFalse(bool(changed.block_candidates[weather]))
   with self.assertRaises(ValueError):direct.compile_direct_hit_controls(engine_catalog=replace(self.producer),metadata=self.metadata,source_rules=self.rules)
+ def test_original_attr_last_move_erases_failed_protect_target(self):
+  # Invoke the pinned original logger, not a reimplementation of its strings.
+  script="""const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');const out=[];
+for(const name of ['Protect','Detect'])for(const side of ['p1','p2']){
+const b={lastMoveLine:0,log:['|move|'+side+'a: Actor|'+name+'|'+side+'a: Actor']};
+Battle.prototype.attrLastMove.call(b,'[still]');out.push(b.log[0]);}
+process.stdout.write(JSON.stringify(out));"""
+  original=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True))
+  self.assertEqual(original,[f'|move|{side}a: Actor|{name}||[still]'for name in ('Protect','Detect')for side in ('p1','p2')])
+
  def component(self):
   b=8;rows=j.arange(b);yes=j.ones(b,bool);zero=j.zeros(b,j.int32);actor=rows%2
   state=jax.tree.map(j.asarray,literal_state(b));active=j.stack((zero+3,zero+4),axis=1)
@@ -121,7 +131,7 @@ out.push({id,lines,queue:m.onPrepareHit.call({queue:{willAct:()=>false},runEvent
     wire,_=public_wire.project_lines(public_wire.WireState(),[f'|switch|{ids[side]}|{names[side]}, L80, M|100/100'for side in (0,1)]+['|turn|1'],**v4.wire_kwargs(self.catalog))
     protector=row%2;attacker=1-protector
     success=row<2
-    lines=[f'|move|{ids[protector]}|Protect|{ids[protector]}'+(''if success else '|[still]'),f'|-singleturn|{ids[protector]}|Protect'if success else f'|-fail|{ids[protector]}',f'|move|{ids[attacker]}|Surf|{ids[protector]}']
+    lines=[f'|move|{ids[protector]}|Protect|'+(ids[protector]if success else '|[still]'),f'|-singleturn|{ids[protector]}|Protect'if success else f'|-fail|{ids[protector]}',f'|move|{ids[attacker]}|Surf|{ids[protector]}']
     if success:lines.append(f'|-activate|{ids[protector]}|Protect')
     _,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog))
     wanted=np.asarray([e.words()for p in packets for e in p.events],np.int32);actual=np.asarray(result.projection.frames.words[:,row])[np.asarray(result.projection.frames.valid[:,row])]
