@@ -225,7 +225,7 @@ def _report_rows(ok, before, after):
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
            leftovers_context=None,execution_tables=None,status_residual_context=None,kernel_risk_tables=None,
-           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None):
+           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -253,7 +253,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         _public_trace=tape, _lifecycle_trace=True,
         _weather_hp_context=None if weather_profile_data is None else (core.weather_profile,weather_profile_data),
         _leftovers_context=leftovers_context,_status_residual_context=status_residual_context,
-        _direct_hit_context=direct_hit_context,_substitute_context=substitute_context,_toxic_context=toxic_context,_recoil_context=recoil_context)
+        _direct_hit_context=direct_hit_context,_substitute_context=substitute_context,_toxic_context=toxic_context,_recoil_context=recoil_context,_calm_mind_context=calm_mind_context)
     engine = _rows(source_ready, core.engine, result.step.state)
     cursor = _rows(source_ready, core.cursor, result.callbacks.cursor)
     # Bindings are GLOBAL [8], never row-select them by a coincidental B=8.
@@ -419,7 +419,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
             status_residual_mode='diagnostic',track_kernel_risks=False,
             direct_hit_compiled=None,direct_hit_mode='diagnostic',frame_input_mode='closed',
             substitute_compiled=None,substitute_mode='diagnostic',toxic_compiled=None,toxic_mode='diagnostic',
-            recoil_compiled=None,recoil_mode='closed'):
+            recoil_compiled=None,recoil_mode='closed',calm_mind_compiled=None,calm_mind_mode='closed'):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
@@ -437,6 +437,12 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     the actual pinned source and both consumers before encoding. Its default is
     closed; it grants no global B4, physics or strength qualification.
     """
+    if type(calm_mind_mode) is not str or calm_mind_mode not in ('closed','kernel-event'):
+        raise ValueError('explicit closed or kernel-event Calm Mind mode required')
+    if calm_mind_mode=='kernel-event' and (calm_mind_compiled is None or not account_source_sites or public_mode!='retained-full'):
+        raise ValueError('kernel-event Calm Mind requires original helper/full/accounting runtime')
+    if calm_mind_compiled is not None and calm_mind_mode!='kernel-event':raise ValueError('Calm Mind helper requires explicit kernel-event mode')
+    if calm_mind_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked Calm Mind driver must remain outside outer JIT')
     if type(recoil_mode) is not str or recoil_mode not in ('closed','kernel-event'):
         raise ValueError('explicit closed or kernel-event recoil mode required')
     if recoil_mode=='kernel-event' and (recoil_compiled is None or direct_hit_compiled is None
@@ -504,12 +510,16 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         raise ValueError('same original request/OwnFacts producer and pure fake forward required')
     request = source._checked(request_compiled)
     catalog = record['catalog']
-    leftovers_context=None;status_residual_context=None;direct_hit_context=None;substitute_context=None;toxic_context=None;recoil_context=None
+    leftovers_context=None;status_residual_context=None;direct_hit_context=None;substitute_context=None;toxic_context=None;recoil_context=None;calm_mind_context=None
     if recoil_compiled is not None:
         from . import engine_recoil_callbacks as recoil_callbacks
         recoil_data=recoil_callbacks.check_compiled(recoil_compiled)
         if recoil_callbacks._COMPILED[recoil_compiled][2] is not request['lifecycle']:
             raise ValueError('same original request engine catalog required for recoil caller')
+    if calm_mind_compiled is not None:
+        from . import engine_calm_mind_callbacks as calm_callbacks
+        calm_data=calm_callbacks.check_compiled(calm_mind_compiled)
+        if calm_callbacks._COMPILED[calm_mind_compiled][2] is not request['lifecycle']:raise ValueError('same original Calm Mind/request engine catalog required')
     if toxic_compiled is not None:
         from . import engine_toxic_callbacks as toxic_callbacks
         toxic_data=toxic_callbacks.check_compiled(toxic_compiled)
@@ -571,7 +581,9 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                     direct_hit_compiled=direct_hit_compiled if direct_hit_mode=='kernel-event' else None,
                     substitute_compiled=substitute_compiled if substitute_mode=='kernel-event' else None,
                     toxic_compiled=toxic_compiled if toxic_mode=='kernel-event' else None,
-                    recoil_compiled=recoil_compiled if recoil_mode=='kernel-event' else None)
+                    recoil_compiled=recoil_compiled if recoil_mode=='kernel-event' else None,
+                    calm_mind_compiled=calm_mind_compiled if calm_mind_mode=='kernel-event' else None)
+            if calm_mind_mode=='kernel-event':calm_mind_context=calm_callbacks.Context(calm_data,execution_compiled.device)
             if toxic_mode=='kernel-event':
                 toxic_context=toxic_callbacks.RegisteredContext(toxic_data,execution_compiled.device)
             if substitute_mode=='kernel-event':
@@ -606,6 +618,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         payload['direct_hit_mode']=direct_hit_mode
     if toxic_context is not None:
         payload['toxic_binding']=np.asarray(toxic_context.data.binding).tolist();payload['toxic_mode']=toxic_mode
+    if calm_mind_context is not None:
+        payload['calm_mind_binding']=np.asarray(calm_mind_context.data.binding).tolist();payload['calm_mind_mode']=calm_mind_mode
     if substitute_context is not None:
         payload['substitute_binding']=np.asarray(substitute_context.data.binding).tolist()
         payload['substitute_mode']=substitute_mode
@@ -629,6 +643,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         substitute_compiled=substitute_compiled,substitute_context=substitute_context,substitute_mode=substitute_mode,
         toxic_compiled=toxic_compiled,toxic_context=toxic_context,toxic_mode=toxic_mode,
         recoil_compiled=recoil_compiled,recoil_context=recoil_context,recoil_mode=recoil_mode,
+        calm_mind_compiled=calm_mind_compiled,calm_mind_context=calm_mind_context,calm_mind_mode=calm_mind_mode,
         status_residual_compiled=status_residual_compiled,status_residual_context=status_residual_context,
         status_residual_mode=status_residual_mode,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
@@ -639,7 +654,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                 leftovers_context=leftovers_context,status_residual_context=status_residual_context,
                 execution_tables=None if execution_compiled is None else execution_compiled.device,
                 kernel_risk_tables=None if kernel_risk_compiled is None else kernel_risk_compiled.device,
-                direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context)),
+                direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context,calm_mind_context=calm_mind_context)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
@@ -673,6 +688,9 @@ def _checked(prepared):
         from . import engine_leftovers_no_output as no_output
         no_output.check_compiled(r['no_output_compiled'])
     if r['kernel_risk_compiled'] is not None:kernel_risks.check_compiled(r['kernel_risk_compiled'])
+    if r['calm_mind_compiled'] is not None:
+        from . import engine_calm_mind_callbacks as calm_callbacks
+        calm_callbacks.check_compiled(r['calm_mind_compiled'])
     if r['recoil_compiled'] is not None:
         from . import engine_recoil_callbacks as recoil_callbacks
         recoil_callbacks.check_compiled(r['recoil_compiled'])
