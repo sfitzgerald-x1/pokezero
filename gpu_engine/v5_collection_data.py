@@ -96,6 +96,11 @@ def matching_hidden_set(species, *, level, moves, ability, item, hidden_power_ty
     """
     sid = source.species_id(species)
     if not sid:return None
+    literal_type = normalize_id(hidden_power_type)
+    normalized_moves = tuple(normalize_id(value) for value in moves)
+    if any(value.startswith('hiddenpower') and value != 'hiddenpower'
+            and (not literal_type or value != 'hiddenpower' + literal_type) for value in normalized_moves):
+        return None
     def move_id(value):
         value = normalize_id(value)
         return 'hiddenpower' + normalize_id(hidden_power_type) if value == 'hiddenpower' and hidden_power_type else value
@@ -213,6 +218,11 @@ def cache_batches(decisions, *, loss_config, batch_size, discount=1.):
     examples = [None] * len(decisions)
     for indices in groups.values():
         rows = [decisions[i].row for i in indices]
+        identity = lambda row:(row.battle_id,row.seed,row.format_id,
+            row.observation.category_vocabulary_sha256,row.observation.label_vocabulary.sha256,
+            row.terminal_source_sha256)
+        if any(identity(row)!=identity(rows[0]) for row in rows):
+            raise ValueError('same original battle/seed/format/source namespace and terminal capture required for GAE')
         frames = [r.observation.address.frame for r in rows]
         if frames != sorted(set(frames)):raise ValueError('one ordered actual decision per source frame/owner required')
         if len({r.labels.terminal_status for r in rows}) != 1:raise ValueError('one original ending per trajectory required')

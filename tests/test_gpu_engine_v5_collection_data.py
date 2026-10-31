@@ -42,7 +42,8 @@ class CollectionCaptureTests(unittest.TestCase):
         vocabulary=c.LabelVocabulary('a'*64,('surf',),(('swalot',4),))
         self.assertEqual(label.probabilities(vocabulary)[:4],(.5,.5,0,0))
         for change in (dict(level=81),dict(item=''),dict(ability='liquidooze'),dict(hidden_power_type=''),
-                dict(moves=('surf','rest','protect'))):
+                dict(moves=('surf','rest','protect')),
+                dict(moves=('hiddenpowerice','surf','rest','protect'),hidden_power_type='Bug')):
             self.assertIsNone(data.matching_hidden_set('Swalot',**dict(arguments,**change)))
 
     def test_literal_terminal_targets_use_saved_input_physical_order_and_unknown_masks(self):
@@ -117,6 +118,23 @@ class CollectionCacheTests(unittest.TestCase):
         with self.assertRaises(ValueError):data.capture_decision(row.row.step.observation,row.row.observation,
             battle_id='b',seed=3,turn=1,choice=0,probability=float('nan'),value=.2,
             physical=row.physical,hidden_sets=(None,)*6,source_frame_sha256='e'*64,capture_metadata={})
+
+    def test_gae_requires_one_literal_trajectory_source_namespace_and_terminal(self):
+        from pokezero.v5_loss import V5LossConfig
+        from unittest.mock import patch
+        first,second=data.finish((captured(),captured(10)),(data.TerminalCapture(100,12,'COMPLETE','e'*64,
+            0,((100,)*6,)*2,((100,)*6,)*2),))
+        different_source=replace(second.row.observation.label_vocabulary,source_binding_sha256='9'*64)
+        observation=replace(second.row.observation,posteriors=tuple(replace(p,vocabulary=different_source)
+            for p in second.row.observation.posteriors))
+        for row in (replace(second.row,battle_id='other'),replace(second.row,seed=second.row.seed+1),
+                replace(second.row,format_id='other'),replace(second.row,observation=observation),
+                replace(second.row,observation=replace(second.row.observation,category_vocabulary_sha256='8'*64)),
+                replace(second.row,terminal_source_sha256='f'*64)):
+            with self.subTest(identity=(row.battle_id,row.seed,row.format_id)),patch('pokezero.v5_loss.gae_targets') as gae:
+                with self.assertRaisesRegex(ValueError,'same original battle'):
+                    tuple(data.cache_batches((first,replace(second,row=row)),loss_config=V5LossConfig(),batch_size=2))
+                gae.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

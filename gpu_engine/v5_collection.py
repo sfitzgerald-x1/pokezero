@@ -260,6 +260,9 @@ def collect_session(session, *, actor, pool, team_indices, ledger, max_requests,
     if len(set(map(int,streams))) != b or any(int(stream) not in by_stream for stream in streams):
         raise ValueError('actual session differs from declared stream roster')
     positions = [by_stream[int(stream)] for stream in streams]
+    expected = [index for index,value in enumerate(status) if value=='NOT_ATTEMPTED'][:b]
+    if positions != expected:
+        raise ValueError('session must use the next not-attempted declared prefix in original order')
     for row,pos in enumerate(positions):
         if status[pos] != 'NOT_ATTEMPTED' or tuple(map(int,indices[row])) != ledger.cells[pos].team_indices:
             raise ValueError('declared attempted cells cannot be replayed/refilled or replaced')
