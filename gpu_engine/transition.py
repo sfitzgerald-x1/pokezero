@@ -296,7 +296,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
                      _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
-                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _hypothetical_profile=None) -> StepResult:
+                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None, _hypothetical_profile=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -330,6 +330,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 (substitute_callbacks.Context,substitute_callbacks.RegisteredContext)
                 or type(_substitute_context.data) is not substitute_callbacks.Data):
             raise ValueError('typed actual lifecycle Substitute context required')
+    if _recoil_context is not None:
+        from . import engine_recoil_callbacks as recoil_callbacks
+        from . import engine_direct_hit_controls as direct_hit_controls
+        if (not _lifecycle_trace or type(_recoil_context) is not recoil_callbacks.Context
+            or _direct_hit_context is not _recoil_context.direct
+            or type(_direct_hit_context) is not direct_hit_controls.RegisteredContext):
+            raise ValueError('typed SAME original registered recoil/direct-hit context required')
     if _direct_hit_context is not None:
         from . import engine_direct_hit_controls as direct_hit_controls
         _direct_hit_registered=type(_direct_hit_context) is direct_hit_controls.RegisteredContext
@@ -841,13 +848,20 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         recoil=jnp.where(is_struggle & (dealt>0),jnp.maximum(1,dealt//4),0)
         if table.damage_moves is not None:
             recoil=special_hits.recoil_damage(table.damage_moves,move,_active(work.ability,work,side),dealt)
+        if _recoil_context is not None:
+            _recoil_captured=kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
+                work.active[rows,side],work.active[rows,foe],move,_direct_write)
+            _public_trace,_recoil_pending=recoil_callbacks.prepare_device(_public_trace,_recoil_captured,recoil,
+                _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),
+                _active(work.status,work,side),_recoil_context,eligible=acts)
         if _lifecycle_trace:
             _public_trace=kernel_risks.outcome_on_tape(_public_trace,
                 kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
                     hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes),
                 eligible=acts,active=live,captured_direct=(kernel_risks.CapturedDirectHit(
                     _direct_hit_context,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,_direct_write)
-                    if _direct_hit_context is not None and _direct_hit_registered else None))
+                    if _direct_hit_context is not None and _direct_hit_registered else None),
+                pending_recoil=_recoil_pending if _recoil_context is not None else None)
         if table.effects is not None:
             effects = table.effects
             # Protect/Endure fail if there is no queued move left (including
@@ -1104,11 +1118,20 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         else:work = _lum_update(work,table,live & move_context)
         # Gen3 applies contact DamagingHit (and immediate Lum cure) before
         # recoil. A source about to faint can still consume its berry first.
-        if _lifecycle_trace:
+        if _recoil_context is not None:
+            _recoil_before=recoil_callbacks.Before(work.active[rows,side],work.active[rows,foe],
+                _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),_active(work.status,work,side))
+            _public_trace=kernel_risks.recoil_on_tape(_public_trace,recoil,active=live,
+                pending=_recoil_pending,before=_recoil_before)
+        elif _lifecycle_trace:
             _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.RECOIL,
                 recoil>0,active=live)
         hp = jnp.maximum(0,_active(work.hp,work,side)-recoil)
         work = work._replace(hp=_set_active(work.hp,work,side,hp))
+        if _recoil_context is not None:
+            _public_trace=recoil_callbacks.record_device(_public_trace,_recoil_pending,recoil_callbacks.Write(
+                _recoil_before.actor_physical,_recoil_before.target_physical,_recoil_before.ability,
+                _recoil_before.old_hp,_active(work.hp,work,side),_recoil_before.maximum,_recoil_before.status))
         if table.weather is not None:
             if _lifecycle_trace:
                 weather,counter,_public_trace = climate.set_move(work.weather,work.weather_counter,

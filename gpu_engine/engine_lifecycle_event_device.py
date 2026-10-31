@@ -41,6 +41,7 @@ from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
+from . import engine_recoil_callbacks as recoil_callbacks
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -77,6 +78,7 @@ class Tables(NamedTuple):
     sturdy_public_ability: object
     substitute_move: object
     toxic_move: object
+    recoil_move: object
     binding: object
 
 
@@ -190,6 +192,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     sturdy_public=0 if weather_catalog is None else weather_catalog.abilities.ids.get('sturdy',0)
     substitute_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='substitute'),0)
     toxic_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='toxic'),0)
+    recoil_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='doubleedge'),0)
     weather_ids = [0]*5; ability_ids = [0]*4; guard_species = [0]*4; guard_item = [False]*4
     weather_moves=np.array([{'raindance':weather.RAIN,'sunnyday':weather.SUN,
         'sandstorm':weather.SAND,'hail':weather.HAIL}.get(normalize_id(n),0)
@@ -224,7 +227,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),
         leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,
         trace_engine_ability=trace_engine,sturdy_engine_ability=sturdy_engine,sturdy_public_ability=sturdy_public,
-        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,admission=False)
+        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
@@ -239,7 +242,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
-        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),
+        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -362,6 +365,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     if b <= 0 or not 1 <= capacity <= 64:
         raise ValueError('bounded lifecycle tape required')
     base._shape(tables.toxic_move, (), jnp.int32)
+    base._shape(tables.recoil_move, (), jnp.int32)
     base._shape(tables.substitute_move, (), jnp.int32)
     base._shape(tables.pressure_engine_ability, (), jnp.int32)
     base._shape(tables.pressure_public_ability, (), jnp.int32)
@@ -496,6 +500,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         trace_copy = kind == trace_callbacks.TRACE_COPY
         substitute = kind == substitute_callbacks.SUBSTITUTE_CREATED
         toxic = kind == toxic_callbacks.TOXIC_ATTEMPT
+        recoil = kind == recoil_callbacks.RECOIL_HP
         lum = kind == item_callbacks.LUM_CONSUMED
         entry_weather = kind == weather_callbacks.ENTRY_WEATHER
         move_weather = kind == weather_progress.MOVE_WEATHER
@@ -621,6 +626,13 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (incoming==cursor.physical_active[rows,safe_side])
             & (raw[:,5]<tables.base.public_ids.shape[0]) & (tables.base.public_ids[direct_move]>0))
         event_ok=jnp.where(direct_control,generation_ok & clock_ok & direct_ok,event_ok)
+        recoil_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity & (phase==0)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            &(side==1-actor_side)&(incoming==cursor.physical_active[rows,safe_side])
+            &(tables.recoil_move>0)&(raw[:,5]==tables.recoil_move)
+            &(raw[:,6]>raw[:,7])&(raw[:,7]>0)&(raw[:,8]>=raw[:,6])&(raw[:,8]<=1_000_000)
+            &(raw[:,9]>=0)&(raw[:,9]<=6))
+        event_ok=jnp.where(recoil,generation_ok & clock_ok & recoil_ok,event_ok)
         pressure_ok=(tables.status_events & ~tables.raw_begin & status_identity & (phase==0)
             & (incoming==cursor.physical_active[rows,safe_side])
             & jnp.all(raw[:,1:3]==-1,axis=1) & jnp.all(raw[:,6:]==0,axis=1)
@@ -698,6 +710,14 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
         semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute)[:,None],chip_semantic,semantic)
+        recoil_own=state.owner==actor_side
+        recoil_percent=(100*raw[:,7]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8])
+        recoil_percent=jnp.where((raw[:,7]<raw[:,8])&(recoil_percent==100),99,recoil_percent)
+        recoil_payload=jnp.stack((actor_enc,jnp.where(recoil_own,raw[:,7],recoil_percent),jnp.where(recoil_own,raw[:,8],100),
+            jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,9],0,6)],z,jnp.ones_like(z),jnp.ones_like(z),z),axis=1)
+        recoil_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),semantic_sequence,
+            turn,phase,absent,absent,actor_side,actor_slot),axis=1),recoil_payload),axis=1)
+        semantic=jnp.where(recoil[:,None],recoil_semantic,semantic)
         # Annotation-only lines still enter every original raw consumer. Their
         # main NONPROC word has no public target; the full adapter resolves the
         # lexical target independently from this literal raw receipt.
