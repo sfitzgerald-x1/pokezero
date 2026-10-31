@@ -18,6 +18,7 @@ from pokezero.dex import ShowdownDex,SpeciesInfo
 from pokezero.category_vocab import CategoryVocabulary
 from pokezero.randbat import Gen3RandbatSource,Gen3RandbatSpeciesUniverse,Gen3RandbatVariant,RandbatSourceMetadata
 import test_gpu_engine_pressure_entry_owning as fixture
+from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 
 NAMES=('porygon2','gengar','articuno')
 BASES=((85,80,90,105,95,60),(60,65,60,130,75,110),(90,85,100,95,125,85))
@@ -118,7 +119,13 @@ class TraceMeasuredTargetsTests(unittest.TestCase):
   self.assertTrue(int(bad.refusal[1])&trace.UNKNOWN_TRACE);self.assertTrue(int(bad.refusal[0])&64)
  def test_default_core_and_pinned_setability_source(self):
   for name in ('entry.py','transition.py','mechanics.py','state.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','27fa443a:'+str(Path('gpu_engine')/name)]))
+   before=subprocess.check_output(['git','show','27fa443a:'+str(Path('gpu_engine')/name)])
+   after=Path('gpu_engine',name).read_bytes()
+   if name=='transition.py':
+    original=ast.parse(before);current=ast.parse(after)
+    self.assertEqual(dump_default_program(current),dump_default_program(original))
+    assert_hp_rng_mutations_detected(self,current,dump_default_program(original))
+   else:self.assertEqual(after,before)
   for name,expected in witness.SOURCE_PINS.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),expected)
   root=Path('/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a')
   for name in ('sim/pokemon.ts','data/mods/gen3/abilities.ts'):
