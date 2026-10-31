@@ -42,12 +42,16 @@ class SelfHealOwningTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared);cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
 
  def test_original_source_callback_closed_scope_and_default_ast(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),70)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),71)
   ids=self.metadata['vocabulary']['moves'];mask=self.helper.device.self_heal.candidates
   self.assertEqual(set(ids[i]for i in np.flatnonzero(mask)),{'recover','synthesis','softboiled'})
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.self_heal)
   for n in self.names[:3]:self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[ids.index(n)]),0)
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old)
+  # The composed source adds exactly this independently reviewed observer
+  # import; its numerical statements and RNG expressions remain in the oracle.
+  observers=[n for n in new.body if isinstance(n,ast.ImportFrom) and n.level==1 and n.module is None and len(n.names)==1 and n.names[0].name=='engine_pinch_item_callbacks' and n.names[0].asname=='pinch_callbacks']
+  self.assertEqual(len(observers),1);new.body.remove(observers[0]);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
   self.assertIn('eligible=acts&caller_acts&(caller_move==move)',Path('gpu_engine/transition.py').read_text())
   script=r'''const root=process.argv[1],{Dex}=require(root+'/dist/sim/dex.js'),{Battle}=require(root+'/dist/sim/battle.js'),d=Dex.mod('gen3'),out=[];
 for(const id of ['recover','softboiled','synthesis'])for(const weather of ['','sunnyday','raindance','sandstorm','hail']){
