@@ -103,8 +103,17 @@ class OwningActorFactory:
             policy_factory=lambda contract:self.policy_factory(contract,model=model,result=result))
 
 
-def require_actor_factory(config, factory):
+def require_actor_factory(config, factory, *, actor_version='champion-v4'):
     validate_encoder_config(config)
+    _require(type(actor_version) is str and actor_version in ('champion-v4','v5'), 'explicit owning actor version required')
+    if actor_version=='v5':
+        from gpu_engine.v5_live_protocol import Factory, check_factory
+        _require(config.encoder_kind=='jax-owning' and type(factory) is Factory
+            and config.owning_decision_timeout_seconds==60. and factory.learner_seconds==60.,
+            'explicit v5 JAX owning actor and60s learner bound required')
+        check_factory(factory)
+        _require(not os.environ.get('POKEZERO_TRAIT_CAPTURE'), 'omniscient trait capture forbidden in owning path')
+        return factory
     if config.encoder_kind=='legacy-mixed':
         _require(factory is None, 'legacy-mixed cannot silently use an owning actor factory')
         return None
@@ -123,8 +132,10 @@ def require_session(config, session):
 
 
 class OwningWireSession:
-    def __init__(self, config, factory, runtime, *, seed, battle_id, start_seed):
-        self.config,self.factory=config,require_actor_factory(config,factory)
+    def __init__(self, config, factory, runtime, *, seed, battle_id, start_seed,actor_version='champion-v4'):
+        self.config,self.factory=config,(require_actor_factory(config,factory) if actor_version=='champion-v4'
+            else require_actor_factory(config,factory,actor_version=actor_version))
+        self.actor_version=actor_version
         _require(self.factory is not None, 'owning session requires opt-in')
         self.actor=self.factory.actor(runtime)
         self.seed=seed
@@ -335,6 +346,11 @@ class OwningWireSession:
 
     def provenance(self, *, failed=False):
         return dict(encoder_provenance(self.config.encoder_kind),
+            **(dict(actor_version='v5',v5_archive_sha256=json.loads(self.factory.metadata)['weights_archive_sha256'],
+                v5_category_vocabulary_sha256=self.factory.config.category_vocabulary_sha256,
+                v5_label_vocabulary_sha256=self.factory.config.label_vocabulary.sha256,
+                v4_routing_tokens_sha256=self.factory.contract.category_vocab_sha256)
+                if self.actor_version=='v5' else {}),
             actor_namespace=self.factory.contract.namespace,
             status='FAILED_CLOSED_UNQUALIFIED' if failed else 'CLOSED_UNQUALIFIED',
             actual_owner_terminal_seen=self.terminal_seen,
