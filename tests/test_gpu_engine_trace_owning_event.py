@@ -92,7 +92,17 @@ class TraceOwningEventTests(unittest.TestCase):
   self.assertFalse(bool(speed.retain_frame_device(failed,after,out.stream_id,d,out).qualified_birth[0]))
  def test_default_numerical_AST_and_pinned_trace_grammar(self):
   old=subprocess.check_output(['git','show','cc42bce4:gpu_engine/transition.py'],text=True)
-  current=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(ast.parse(old))
+  current_text=Path('gpu_engine/transition.py').read_text()
+  # Private assembly may also include the separately tested hypothetical-only
+  # observer seam. Normalize that explicit extension before the unchanged
+  # default-observer proof; real HP/RNG/keywords remain in both checks.
+  if '_hypothetical_profile' in current_text:
+   from test_gpu_engine_v5_hypothetical_profile import normalized_hypothetical_default
+   def normalized(text):
+    return normalized_hypothetical_default(text,as_tree=True)
+   current=normalized(current_text);old_tree=normalized(old)
+  else:current=ast.parse(current_text);old_tree=ast.parse(old)
+  baseline=dump_default_program(old_tree)
   self.assertEqual(baseline,dump_default_program(current))
   assert_hp_rng_mutations_detected(self,current,baseline)
   def enter_body(text):

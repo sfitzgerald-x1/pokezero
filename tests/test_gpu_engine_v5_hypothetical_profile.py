@@ -110,50 +110,56 @@ class ProfileTests(unittest.TestCase):
             _weather_hp_context=(context.record,context.data))
 
 
+def normalized_hypothetical_default(text,*,as_tree=False):
+    """Normalize only the explicit hypothetical observer extension, preserving numerics."""
+    class Default(ast.NodeTransformer):
+        def visit_FunctionDef(self,node):
+            if node.name=='step_with_chance':
+                keep=[(a,d) for a,d in zip(node.args.kwonlyargs,node.args.kw_defaults) if a.arg!='_hypothetical_profile']
+                node.args.kwonlyargs=[a for a,d in keep];node.args.kw_defaults=[d for a,d in keep]
+            return self.generic_visit(node)
+        def visit_Assign(self,node):
+            if any(isinstance(a,ast.Name) and a.id in ('_hypothetical','_weather_observer_context','_profile_qualified') for a in node.targets):return None
+            return self.generic_visit(node)
+        def visit_Name(self,node):
+            if node.id=='_hypothetical':return ast.Constant(False)
+            if node.id=='_weather_observer_context':node.id='_weather_hp_context'
+            return node
+        def visit_UnaryOp(self,node):
+            node=self.generic_visit(node)
+            if isinstance(node.op,ast.Not) and isinstance(node.operand,ast.Constant):return ast.Constant(not node.operand.value)
+            return node
+        def visit_BoolOp(self,node):
+            node=self.generic_visit(node);isand=isinstance(node.op,ast.And)
+            for a in node.values:
+                if isinstance(a,ast.Constant) and bool(a.value)!=isand:return ast.Constant(not isand)
+            node.values=[a for a in node.values if not isinstance(a,ast.Constant)]
+            return node.values[0] if len(node.values)==1 else node
+        def visit_IfExp(self,node):
+            node=self.generic_visit(node)
+            return (node.body if node.test.value else node.orelse) if isinstance(node.test,ast.Constant) else node
+        def visit_If(self,node):
+            node=self.generic_visit(node)
+            return (node.body if node.test.value else node.orelse) if isinstance(node.test,ast.Constant) else node
+        def visit_BinOp(self,node):
+            node=self.generic_visit(node)
+            if isinstance(node.op,ast.Add) and isinstance(node.right,ast.Tuple) and not node.right.elts:return node.left
+            return node
+        def visit_Call(self,node):
+            node=self.generic_visit(node)
+            node.keywords=[k for k in node.keywords if k.arg!='hypothetical']
+            if isinstance(node.func,ast.Name) and node.func.id=='_profile_qualified':
+                return ast.Attribute(node.args[0],'qualified_birth',ast.Load())
+            return node
+    tree=Default().visit(ast.parse(text))
+    return tree if as_tree else ast.dump(tree,include_attributes=False)
+
+
 class DefaultAST(unittest.TestCase):
     def test_whole_default_transition_ast_and_mutations(self):
-        original=subprocess.check_output(['git','show','82f56911:gpu_engine/transition.py'],text=True)
+        original=subprocess.check_output(['git','show','2fb83da5:gpu_engine/transition.py'],text=True)
         current=Path('gpu_engine/transition.py').read_text()
-        class Default(ast.NodeTransformer):
-            def visit_FunctionDef(self,node):
-                if node.name=='step_with_chance':
-                    keep=[(a,d) for a,d in zip(node.args.kwonlyargs,node.args.kw_defaults) if a.arg!='_hypothetical_profile']
-                    node.args.kwonlyargs=[a for a,d in keep];node.args.kw_defaults=[d for a,d in keep]
-                return self.generic_visit(node)
-            def visit_Assign(self,node):
-                if any(isinstance(a,ast.Name) and a.id in ('_hypothetical','_weather_observer_context','_profile_qualified') for a in node.targets):return None
-                return self.generic_visit(node)
-            def visit_Name(self,node):
-                if node.id=='_hypothetical':return ast.Constant(False)
-                if node.id=='_weather_observer_context':node.id='_weather_hp_context'
-                return node
-            def visit_UnaryOp(self,node):
-                node=self.generic_visit(node)
-                if isinstance(node.op,ast.Not) and isinstance(node.operand,ast.Constant):return ast.Constant(not node.operand.value)
-                return node
-            def visit_BoolOp(self,node):
-                node=self.generic_visit(node);isand=isinstance(node.op,ast.And)
-                for a in node.values:
-                    if isinstance(a,ast.Constant) and bool(a.value)!=isand:return ast.Constant(not isand)
-                node.values=[a for a in node.values if not isinstance(a,ast.Constant)]
-                return node.values[0] if len(node.values)==1 else node
-            def visit_IfExp(self,node):
-                node=self.generic_visit(node)
-                return (node.body if node.test.value else node.orelse) if isinstance(node.test,ast.Constant) else node
-            def visit_If(self,node):
-                node=self.generic_visit(node)
-                return (node.body if node.test.value else node.orelse) if isinstance(node.test,ast.Constant) else node
-            def visit_BinOp(self,node):
-                node=self.generic_visit(node)
-                if isinstance(node.op,ast.Add) and isinstance(node.right,ast.Tuple) and not node.right.elts:return node.left
-                return node
-            def visit_Call(self,node):
-                node=self.generic_visit(node)
-                node.keywords=[k for k in node.keywords if k.arg!='hypothetical']
-                if isinstance(node.func,ast.Name) and node.func.id=='_profile_qualified':
-                    return ast.Attribute(node.args[0],'qualified_birth',ast.Load())
-                return node
-        normalize=lambda text:ast.dump(Default().visit(ast.parse(text)),include_attributes=False)
+        normalize=normalized_hypothetical_default
         self.assertEqual(normalize(original),normalize(current))
         self.assertNotEqual(normalize(original),normalize(current.replace('2 + chance[:,7]','3 + chance[:,7]')))
         self.assertNotEqual(normalize(original),normalize(current.replace('compound_eyes=compound_eyes','compound_eyes=sand_veil')))
