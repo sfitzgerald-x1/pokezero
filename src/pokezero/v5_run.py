@@ -163,7 +163,7 @@ class Plan:
 
     def manifest(self):
         return dict(schema=SCHEMA,run_id=self.run_id,model=self.model.metadata(),loss=self.loss.metadata(),
-            train=asdict(self.train),iterations=[[asdict(b) for b in x] for x in self.iterations],pool_sha256=self.pool_sha256,
+            train=training.train_config_metadata(self.train),iterations=[[asdict(b) for b in x] for x in self.iterations],pool_sha256=self.pool_sha256,
             selection_seed=self.selection_seed,historical_fraction=self.historical_fraction,historical_window=self.historical_window,
             max_requests=self.max_requests,watchdog=asdict(self.watchdog),checkpoint_updates=self.checkpoint_updates,discount=self.discount,
             contract_sha256=_sha(c.contract_descriptor()),opponent_rule='UNIFORM_RECENT_PAST_SNAPSHOTS_NO_OUTCOME_ADAPTATION',
@@ -276,6 +276,15 @@ class Progress:
         if now-self.last>window:raise TimeoutError('no actual completed game within adaptive stall window')
 
 
+def learning_rate_window(plan,iteration):
+    """Progress uses every DECLARED game ordinal, never accepted/cache rows."""
+    if type(plan) is not Plan or type(iteration) is not int or not 0<=iteration<len(plan.iterations):
+        raise ValueError('original declared iteration required for schedule window')
+    counts=[sum(len(batch.games) for batch in batches) for batches in plan.iterations]
+    start=sum(counts[:iteration])
+    return training.DeclaredGameWindow(start,start+counts[iteration],sum(counts))
+
+
 def run(plan,path,*,backend,resume=False,enable_v5=False):
     """Bounded collect/cache/train iterations, with explicit original RNG resume.
 
@@ -294,8 +303,11 @@ def run(plan,path,*,backend,resume=False,enable_v5=False):
         with tempfile.TemporaryDirectory(prefix='v5-resume-') as directory:
             snapshot=Path(directory)/'snapshot.pt';snapshot.write_bytes(verified.read_bytes())
             if _file_sha(snapshot)!=checkpoint['sha256']:raise ValueError('checkpoint snapshot digest differs')
+            scheduled=plan.train.learning_rate_schedule!='constant'
+            options=(dict(expected_learning_rate_window=learning_rate_window(plan,checkpoint['iteration']))
+                if scheduled and checkpoint['iteration']>=0 else {})
             runtime=training.load_checkpoint(snapshot,enable_v5=True,expected_model_config=plan.model,
-                expected_loss_config=plan.loss,expected_train_config=plan.train)
+                expected_loss_config=plan.loss,expected_train_config=plan.train,**options)
     else:
         runtime=training.create(plan.model,plan.loss,plan.train,enable_v5=True)
         checkpoint=store.checkpoint(runtime,iteration=-1)
@@ -357,9 +369,13 @@ def run(plan,path,*,backend,resume=False,enable_v5=False):
         if not existing:
             if runtime.progress is not None and runtime.progress['complete'] and checkpoint['iteration']!=iteration:
                 store.emit('DATASET_TRANSITION',iteration=iteration,prior_complete_cursor=runtime.progress)
-                runtime.progress=None  # Only after the exact previous finite cursor completed.
-            while runtime.progress is None or not runtime.progress['complete']:
-                report=training.train_caches(runtime,paths,max_updates=plan.checkpoint_updates)
+                if plan.train.learning_rate_schedule=='constant':
+                    runtime.progress=None  # Only after the exact previous finite cursor completed.
+            options=(dict(learning_rate_window=learning_rate_window(plan,iteration))
+                if plan.train.learning_rate_schedule!='constant' else {})
+            while (runtime.progress is None or not runtime.progress['complete']
+                    or options and checkpoint['iteration']!=iteration):
+                report=training.train_caches(runtime,paths,max_updates=plan.checkpoint_updates,**options)
                 store.emit('TRAIN_PROGRESS',iteration=iteration,steps=runtime.steps,rows=runtime.rows)
                 checkpoint=store.checkpoint(runtime,iteration=iteration)
                 if report['complete']:break
