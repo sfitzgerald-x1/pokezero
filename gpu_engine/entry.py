@@ -30,6 +30,7 @@ class EntryTable(NamedTuple):
     trace: jax.Array | None = None
     status_cure: jax.Array | None = None
     own_tempo: jax.Array | None = None
+    pressure: jax.Array | None = None
 
 
 def from_metadata(metadata):
@@ -44,7 +45,7 @@ def from_metadata(metadata):
         jnp.asarray(vocab["types"].index("flying")),jnp.asarray(vocab["types"].index("ground")),
         jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}),flag({"truant"}),
         flag({"trace"}),jnp.asarray([[status in cures.get(name,set()) for status in range(7)]
-            for name in vocab["abilities"]]),flag({"owntempo"}))
+            for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
@@ -126,6 +127,12 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
         from . import engine_weather_callbacks as callbacks
         _weather_trace=callbacks.unattributed_ability(_weather_trace,
             eligible=starts & (ability!=state.base_ability[rows,side,active]))
+    if _weather_trace is not None and table.pressure is not None:
+        from . import engine_pressure_callbacks as pressure_callbacks
+        # Effective Gen3 onStart is owner-only addSplit. Use the actual
+        # pre-Trace Start ability, after hazards/status SwitchIn, never a copy.
+        _weather_trace=pressure_callbacks.entry_pressure(_weather_trace,side,active,ability,
+            eligible=starts & table.pressure[ability])
     if table.truant is not None:
         old_clock=state.truant_loaf[rows,side,active]
         # Gen3 onSwitchIn: turn0 starts ACT; every later entry starts LOAF.

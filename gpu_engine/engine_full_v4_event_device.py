@@ -31,6 +31,7 @@ from . import engine_weather_effect_callbacks as weather_effects
 from . import engine_leftovers_callbacks as leftovers_callbacks
 from . import engine_status_residual_callbacks as status_residual_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
+from . import engine_pressure_callbacks as pressure_callbacks
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -60,6 +61,7 @@ class Tables(NamedTuple):
     leftovers_heal: object
     status_damage: object
     direct_hit_control: object
+    pressure_start: object
     namespaces: Bindings
     binding: object
 
@@ -215,6 +217,10 @@ def compile_adapter(metadata, projector, *, catalog):
         for label in ('-crit','-supereffective','-resisted')],np.int32)
     if not np.all(direct_hit_control):
         raise ValueError('FULL writer lacks exact direct-hit annotation schemas')
+    pressure_start=0
+    if int(lower.device.pressure_engine_ability)>0 and int(lower.device.pressure_public_ability)>0:
+        pressure_start=add(f'|-ability|{ident[0]}|Pressure|[silent]',inputs.Kind.ABILITY)
+        if not pressure_start:raise ValueError('FULL writer lacks exact owner-only Pressure schema')
     width = max(lengths)
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
@@ -222,13 +228,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
-    payload += direct_hit_control.tobytes()
+    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -326,6 +332,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(state.weather_remaining,(b,),jnp.int32)
     causal.base._shape(tables.status_damage,(3,7),jnp.int32)
     causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
+    causal.base._shape(tables.pressure_start,(),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     width = tables.templates.shape[1]
@@ -347,6 +354,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_event = kind == int(inputs.Kind.STATUS)
         lum_event = kind == int(inputs.Kind.ITEM)
         raw_kind=tape.words[:,index,0]
+        pressure=(kind==int(inputs.Kind.ABILITY)) & (raw_kind==pressure_callbacks.PRESSURE_START)
+        pressure_visible=pressure & (state.causal.owner==semantic[:,6])
         entry_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_callbacks.ENTRY_WEATHER)
         move_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_progress.MOVE_WEATHER)
         clock_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_progress.WEATHER_CLOCK)
@@ -382,7 +391,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,2),chip_status],key)
         key=jnp.where(direct_control,tables.direct_hit_control[jnp.clip(
             raw_kind-direct_hit_controls.CRITICAL,0,2)],key)
-        size = tables.length[key]; main = tables.main[key]
+        key=jnp.where(pressure,tables.pressure_start,key)
+        size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
         good = (key > 0) & enough
@@ -404,6 +414,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # public ledger. An enum-valid false WAKE/THAW cannot rewrite CURE
         # lexical metadata or silently erase a different observed condition.
         previous_status=statuses[rows,safe,safe_slot]
+        identity &= ~pressure | live[rows,safe]
         identity &= ~status_event | (old_public_status==previous_status)
         identity &= ~lum_event | ((lum_old_public==previous_status) & live[rows,safe])
         old_weather=tables.causal.weather_public[jnp.clip(tape.words[:,index,5],0,4)]
@@ -513,7 +524,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             | (kinds == int(inputs.Kind.SLEEP)) | (kinds == int(inputs.Kind.STATUS))
             | (kinds == int(inputs.Kind.ITEM)) | (kinds == int(inputs.Kind.ABILITY)))
         result = result.at[:, :, 8].set(jnp.where(addressed, target_enc, result[:, :, 8]))
-        prelude = (kinds == int(inputs.Kind.SWITCH_PRELUDE)) & entry_weather[:,None]
+        prelude = (kinds == int(inputs.Kind.SWITCH_PRELUDE)) & (entry_weather|pressure)[:,None]
         # Confirmed ability lexical facts use the already observed exact ident
         # and its raw species spelling, rather than schema-fixture encounter1.
         for col,value in ((11,new_slot+1),(13,prior_species)):
