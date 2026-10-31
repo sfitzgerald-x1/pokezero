@@ -38,8 +38,9 @@ jobs:
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '2'
       # JAXLIB 0.12.0 CPU correctness checks retain their complete JIT workload.
-      # Bound codegen concurrency and reduce backend optimizer memory pressure.
-      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=0'
+      # Bound codegen concurrency while retaining normal optimized execution
+      # of the complete large frames in these correctness checks.
+      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3'
       POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
       POKEZERO_GPU_TEAM_POOL: ${{ github.workspace }}/.ci/gpu-component-teams.npz
     steps:
@@ -89,11 +90,12 @@ jobs:
         run: |
           set -o pipefail
           python -c 'import jax; print("Component test devices:", jax.devices())'
-          # Keep original custom suites intact. This one heavy plain class has
+          # Keep original custom suites intact. These heavy plain classes have
           # independent cases: release its process heap before the next case,
           # including fresh original module/class fixtures for every case.
           python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 16 --process-blocks \
             --isolate-standard-class test_gpu_engine_execution_runtime_plumbing.ExecutionRuntimePlumbingTests \
+            --isolate-standard-class test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests \
             --resource-interval-seconds 30 2>&1 \
             | tee /tmp/gpu-components.log
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then

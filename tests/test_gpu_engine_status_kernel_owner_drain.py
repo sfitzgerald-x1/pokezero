@@ -6,6 +6,7 @@ not attest original Showdown status-hook history or physics equivalence.
 """
 import gc
 import unittest
+from unittest.mock import patch
 import jax
 import jax.numpy as j
 import numpy as np
@@ -22,9 +23,30 @@ class StatusKernelOwnerDrainTests(unittest.TestCase):
         jax.clear_caches()
         gc.collect()
 
-    construct=fixtures.StatusResidualRuntimeTests.construct
     chance=fixtures.StatusResidualRuntimeTests.chance
     same=fixtures.StatusResidualRuntimeTests.same
+
+    @staticmethod
+    def release_compilers(*completed):
+        # Arrays remain the exact original inputs. Completed executable heaps
+        # need not coexist with the next large CPU compilation in this test.
+        jax.block_until_ready(completed)
+        jax.clear_caches()
+        gc.collect()
+
+    def completed_phase(self,name,_milliseconds):
+        if name in ('engine','requests','public_p2','admission_p2'):
+            self.release_compilers()
+
+    def construct(self):
+        original=d._consume
+        def initial_consume(runtime,state,frame,*args,**kwargs):
+            self.release_compilers(state,frame)
+            return original(runtime,state,frame,*args,**dict(kwargs,timing_callback=self.completed_phase))
+        # Only supply the original supported timing callback to the genuine
+        # constructor's original consume. No source, event or result replacement.
+        with patch.object(d,'_consume',side_effect=initial_consume):
+            return fixtures.StatusResidualRuntimeTests.construct(self)
 
     @classmethod
     def setUpClass(cls):
@@ -37,7 +59,8 @@ class StatusKernelOwnerDrainTests(unittest.TestCase):
 
     def component_before(self):
         session=self.construct();r=d._checked(self.prepared)
-        warm=d.advance(session,j.tile(j.array([[0,8]],j.int32),(2,1)),chance_inputs=self.chance())
+        warm=d.advance(session,j.tile(j.array([[0,8]],j.int32),(2,1)),chance_inputs=self.chance(),
+            timing_callback=self.completed_phase)
         self.assertEqual(warm.state.core.admitted.tolist(),[True,True])
         before=warm.state;core=before.core
         self.assertEqual(core.engine.active.tolist(),[[0,5],[0,5]])
@@ -61,6 +84,7 @@ class StatusKernelOwnerDrainTests(unittest.TestCase):
             observers.append(observer._replace(projection=result.projection.state,
                 retained=result.public,retained_healthy=observer.retained_healthy))
         before=before._replace(core=core._replace(engine=engine),observers=tuple(observers))
+        self.release_compilers(before)
         return r,before
 
     def actual_frame(self,r,before):
@@ -83,6 +107,7 @@ class StatusKernelOwnerDrainTests(unittest.TestCase):
         # Same trusted requests-stage input used by the real consume path.
         core=before.core._replace(engine=frame.state,cursor=frame.cursor,
             weather_profile=frame.weather_profile,execution=ledger)
+        self.release_compilers(frame,ordinary)
         return frame,before._replace(core=core)
 
     def final_hp(self,result):
@@ -100,7 +125,7 @@ class StatusKernelOwnerDrainTests(unittest.TestCase):
 
     def test_actual_kernel_status_spans_drain_both_original_owner_consumers(self):
         r,before=self.component_before();frame,pending=self.actual_frame(r,before)
-        result=d._consume(r,pending,frame,j.ones(2,bool))
+        result=d._consume(r,pending,frame,j.ones(2,bool),timing_callback=self.completed_phase)
         ledger=result.state.core.execution;tables=r['execution_compiled'].device
         self.assertEqual(result.state.core.admitted.tolist(),[True,True])
         self.assertEqual(e.report(ledger,tables=tables).scoped_drained.tolist(),[True,True])
@@ -129,7 +154,7 @@ class StatusKernelOwnerDrainTests(unittest.TestCase):
             self.assertEqual(core.admitted.tolist(),[False,True])
             return actual_encode(core,observer)
         r.update(public_fast=public,encode_fast=encode)
-        try:result=d._consume(r,pending,frame,j.ones(2,bool))
+        try:result=d._consume(r,pending,frame,j.ones(2,bool),timing_callback=self.completed_phase)
         finally:r.update(public_fast=actual_public,encode_fast=actual_encode)
         ledger=result.state.core.execution
         self.assertEqual(result.state.core.admitted.tolist(),[False,True])

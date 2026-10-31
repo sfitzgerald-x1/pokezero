@@ -22,6 +22,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComponentShardTests(unittest.TestCase):
+    def test_status_phase_cleanup_synchronizes_before_releasing_and_keeps_original_consume(self):
+        path=ROOT/'tests/test_gpu_engine_status_kernel_owner_drain.py'
+        case=next(node for node in ast.parse(path.read_text()).body if isinstance(node,ast.ClassDef))
+        selected=[node for node in case.body if isinstance(node,ast.FunctionDef)
+            and node.name in ('release_compilers','completed_phase','construct')]
+        events=[];sentinel=object()
+        def original(runtime,state,frame,**kwargs):
+            self.assertEqual((runtime,state,frame),('runtime','state','frame'))
+            self.assertIs(kwargs['timing_callback'],sentinel);events.append('original_consume');return 'unchanged_result'
+        driver=types.SimpleNamespace(_consume=original)
+        def construct(owner):
+            events.append('source_construct')
+            return driver._consume('runtime','state','frame')
+        namespace=dict(jax=types.SimpleNamespace(block_until_ready=lambda values:events.append(('ready',values)),
+                clear_caches=lambda:events.append('clear')),gc=types.SimpleNamespace(collect=lambda:events.append('collect')),
+            patch=mock.patch,d=driver,fixtures=types.SimpleNamespace(StatusResidualRuntimeTests=types.SimpleNamespace(construct=construct)))
+        exec(compile(ast.Module(body=selected,type_ignores=[]),str(path),'exec'),namespace)
+        release=namespace['release_compilers'].__func__
+        release('physical','rng');self.assertEqual(events,[('ready',('physical','rng')),'clear','collect'])
+        events.clear();owner=types.SimpleNamespace(release_compilers=release,completed_phase=sentinel)
+        self.assertEqual(namespace['construct'](owner),'unchanged_result')
+        self.assertEqual(events,['source_construct',('ready',('state','frame')),'clear','collect','original_consume'])
+        self.assertIs(driver._consume,original)
+        events.clear();owner.release_compilers=lambda:events.append('release')
+        for name in ('engine','requests','public_p1','public_p2','encode_p1','admission_p1','encode_p2','admission_p2'):
+            namespace['completed_phase'](owner,name,0.)
+        self.assertEqual(events,['release']*4)
+
     def test_heavy_runtime_cache_boundaries_keep_class_inputs_and_failed_cases(self):
         # Exercise the real fixture hook through unittest without importing JAX,
         # constructing a source session, or executing the scientific test body.
