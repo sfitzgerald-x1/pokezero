@@ -221,6 +221,7 @@ def prepare_runtime(inputs):
         engine_recoil_callbacks as recoil,engine_calm_mind_callbacks as calm,engine_swords_dance_callbacks as sword,
         engine_spikes_callbacks as spikes,engine_thunder_wave_callbacks as thunder,engine_sleep_powder_callbacks as powder,engine_retained_encoder_driver as driver)
     import jax.numpy as j
+    from gpu_engine.mechanics import SLP
     runtime=inputs.runtime;show=runtime['showdown'];contract=ActorContract.champion();v=inputs.vocabulary
     vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases'])
     belief=load_gen3_randbat_source_cached(show['root']);dex=load_showdown_dex_cached(show['root'])
@@ -246,9 +247,17 @@ def prepare_runtime(inputs):
         toxic_compiled=toxic.compile_toxic(engine_catalog=lifecycle,metadata=metadata),toxic_mode='kernel-event')
     for name,move,module,function in (('recoil','doubleedge',recoil,'compile_recoil'),('calm_mind','calmmind',calm,'compile_calm_mind'),
             ('swords_dance','swordsdance',sword,'compile_swords_dance'),('spikes','spikes',spikes,'compile_spikes'),
-            ('thunder_wave','thunderwave',thunder,'compile_thunder_wave'),('sleep_powder','sleeppowder',powder,'compile_sleep_powder')):
+            ('thunder_wave','thunderwave',thunder,'compile_thunder_wave')):
         helper=getattr(module,function)(engine_catalog=lifecycle,metadata=metadata) if move in metadata['vocabulary']['moves'] else None
         helpers[name+'_compiled']=helper;helpers[name+'_mode']='kernel-event' if helper is not None else 'closed'
+    # Explicit family compiler: actual numerical SLP setters determine whether
+    # there is a capability to compile; verified source descriptors determine
+    # its exact supported rows. Never fall back to the legacy one-hot helper.
+    sleep_helper=None
+    if tables.effects is not None and bool(j.any(tables.effects.status==SLP)):
+        sleep_helper=powder.compile_primary_sleep(engine_catalog=lifecycle,metadata=metadata,source_rules=rules)
+    helpers['sleep_powder_compiled']=sleep_helper
+    helpers['sleep_powder_mode']='kernel-event' if sleep_helper is not None else 'closed'
     def source_spy(_):return driver.FakeScores(j.zeros(9,j.float32),j.array(0,j.int32))
     prepared=driver.prepare(request,facts,fake_forward=source_spy,public_mode='retained-full',account_source_sites=True,
         track_kernel_risks=True,frame_input_mode='source-witness',**helpers)

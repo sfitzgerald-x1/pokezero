@@ -83,6 +83,7 @@ class Tables(NamedTuple):
     ident_species: object
     intimidate: object
     spikes: object
+    primary_sleep_status: object
     sleep_powder_status: object
     namespaces: Bindings
     binding: object
@@ -258,6 +259,12 @@ def compile_adapter(metadata, projector, *, catalog):
     if int(lower.device.swords_dance_move)>0:
         swords_dance=add(f'|-boost|{ident[0]}|atk|2',inputs.Kind.BOOST)
         if not swords_dance:raise ValueError('FULL writer lacks exact Swords Dance schema')
+    primary_sleep_status=np.zeros(len(metadata['moves']),np.int32)
+    for i,enabled in enumerate(np.asarray(lower.device.primary_sleep_moves)):
+        if enabled:
+            info=catalog.dex.move_info(metadata['vocabulary']['moves'][i])
+            if info is not None and info.status=='slp' and info.target=='normal' and info.category=='Status' and info.base_power==0:
+                primary_sleep_status[i]=add(f'|-status|{ident[0]}|slp|[from] move: {info.name}',inputs.Kind.STATUS)
     sleep_powder_status=0
     if int(lower.device.sleep_powder_move)>0:
         sleep_powder_status=add(f'|-status|{ident[0]}|slp|[from] move: Sleep Powder',inputs.Kind.STATUS)
@@ -304,7 +311,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
-    payload += np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
+    payload += primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()
@@ -313,7 +320,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(sleep_powder_status,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -412,6 +419,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.status_damage,(4,7),jnp.int32)
     causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
     causal.base._shape(tables.pressure_start,(),jnp.int32)
+    causal.base._shape(tables.primary_sleep_status,(len(tables.causal.base.public_ids),),jnp.int32)
     causal.base._shape(tables.sleep_powder_status,(),jnp.int32)
     causal.base._shape(tables.trace_copy,tables.causal.trace_public_ability.shape,jnp.int32)
     causal.base._shape(tables.substitute_created,(7,),jnp.int32)
@@ -480,9 +488,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(status_event,status_key,key)
         next_raw=tape.words[:,jnp.minimum(index+1,tape.words.shape[1]-1)]
         sleep_status=status_event&(raw_kind==status_callbacks.STATUS_APPLIED)&(tape.words[:,index,6]==5)
-        sleep_status &= (next_raw[:,0]==toxic_callbacks.TOXIC_ATTEMPT)&(next_raw[:,5]==tables.causal.sleep_powder_move)&(tables.causal.sleep_powder_move>0)
-        sleep_pair=powder_callbacks.status_pair_device(tape,index,tables.causal.sleep_powder_move)
-        key=jnp.where(sleep_status,jnp.where(sleep_pair,tables.sleep_powder_status,0),key)
+        sleep_move=next_raw[:,5];sleep_safe=jnp.clip(sleep_move,0,len(tables.primary_sleep_status)-1)
+        sleep_status &= (next_raw[:,0]==toxic_callbacks.TOXIC_ATTEMPT)&(sleep_move>0)&(sleep_move<len(tables.primary_sleep_status))
+        sleep_pair=powder_callbacks.status_pair_device(tape,index,sleep_move)
+        key=jnp.where(sleep_status,jnp.where(sleep_pair,tables.primary_sleep_status[sleep_safe],0),key)
         lum_old_engine = tape.words[:,index,6]
         lum_old_public = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(lum_old_engine,0,6)]
         lum_key = tables.lum[lum_old_public,jnp.clip(tape.words[:,index,8],0,1)]

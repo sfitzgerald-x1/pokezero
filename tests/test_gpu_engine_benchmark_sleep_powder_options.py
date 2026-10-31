@@ -27,4 +27,9 @@ class ReviewedTimingCompositionTests(unittest.TestCase):
   current=pathlib.Path(benchmark.__file__).read_text()
   reviewed=subprocess.check_output(["git","show","4baa33e96d8d0c944374c81fd8cd44cc8b6bd26a:gpu_engine/benchmark_retained_games.py"],text=True)
   def measure(text):return ast.dump(next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=="measure"),include_attributes=False)
+  additions=(" if name!='outcome_diagnostics'",
+   "    from . import engine_outcome_diagnostics as outcome_diagnostics\n    refusal_outcomes=outcome_diagnostics.refused_rows(getattr(witness,'outcome_diagnostics',None),refused)\n",
+   "        refusal_outcomes=refusal_outcomes,\n")
+  for addition in additions:
+   self.assertEqual(current.count(addition),1);current=current.replace(addition,'')
   self.assertEqual(measure(current),measure(reviewed))
