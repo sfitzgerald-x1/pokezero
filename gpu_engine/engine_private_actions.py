@@ -260,7 +260,9 @@ def compile_engine_actions(metadata, *, catalog, vocabulary, private_team, expos
             values = [info.base_stats.get(k, 0) for k in ('hp', 'atk', 'def', 'spa', 'spd', 'spe')]
             if not np.array_equal(np.asarray(private_team.base_stats[index]), np.asarray(values, np.float32)):
                 raise ValueError('action and private-team source species snapshots differ')
-            kinds = [_static_category(vocabulary, 'type:' + info.types[i]) if i < len(info.types) else 0 for i in (0, 1)]
+            kinds = [_static_category(vocabulary, 'type:' + info.types[i])
+                if i < len(info.types) and vocabulary.is_enumerated('type:' + info.types[i]) else 0
+                for i in (0, 1)]
             if not np.array_equal(np.asarray(private_team.type_categories[index]), np.asarray(kinds, np.int32)):
                 raise ValueError('action and private-team source species types differ')
     struggle_mechanics = catalog.ids.get('struggle',0)
