@@ -177,13 +177,16 @@ class ContinuationTests(unittest.TestCase):
         from types import SimpleNamespace
         receipt=self.root/'cell.json';receipt.write_text(json.dumps(self.receipt(326,[0,1])))
         process=SimpleNamespace(pid=12345,returncode=0,wait=AsyncMock(return_value=0))
+        def kill(pid,sig):
+            if sig==0:raise ProcessLookupError()
         with patch.object(asyncio,'create_subprocess_exec',AsyncMock(return_value=process)) as spawn, \
-                patch.object(cont.os,'killpg') as stop:
+                patch.object(cont.os,'killpg',side_effect=kill) as stop:
             actual=asyncio.run(cont._child('plan.json',326,[0,1],receipt))
         self.assertEqual(actual['index'],326)
         self.assertEqual(spawn.call_args.args[1:3],('-m','pokezero.owning_encoder_continuation'))
         self.assertTrue(spawn.call_args.kwargs['start_new_session'])
-        stop.assert_called_once_with(12345,cont.signal.SIGTERM)
+        self.assertEqual(stop.call_args_list[0].args,(12345,cont.signal.SIGTERM))
+        self.assertEqual(stop.call_args_list[1].args,(12345,0))
 
     def test_child_claim_requires_durable_attempt_and_cannot_reexecute(self):
         plan=self.plan();output=self.root/'claim';output.mkdir()
@@ -207,6 +210,29 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(ledger['cells'][326]['status'],'CAPPED')
         self.assertEqual(ledger['failure']['worker_receipt']['index'],326)
         self.assertIsNone(ledger['cells'][326]['score'])
+
+    def test_group_cleanup_escalates_after_leader_exit_and_fails_closed_if_group_persists(self):
+        from types import SimpleNamespace
+        for disappears in (True,False):
+            process=SimpleNamespace(pid=12345,returncode=0,wait=AsyncMock())
+            alive=True;signals=[]
+            def kill(pid,sig):
+                nonlocal alive
+                self.assertEqual(pid,12345)
+                if sig==0:
+                    if not alive:raise ProcessLookupError()
+                else:
+                    signals.append(sig)
+                    if sig==cont.signal.SIGKILL and disappears:alive=False
+            ticks=iter((0,6,6,12))
+            with self.subTest(disappears=disappears),patch.object(cont.os,'killpg',side_effect=kill), \
+                    patch.object(cont,'time',SimpleNamespace(monotonic=lambda:next(ticks,12))):
+                if disappears:asyncio.run(cont._stop_owned_group(process))
+                else:
+                    with self.assertRaisesRegex(ValueError,'bounded SIGKILL'):
+                        asyncio.run(cont._stop_owned_group(process))
+            self.assertEqual(signals,[cont.signal.SIGTERM,cont.signal.SIGKILL])
+            process.wait.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

@@ -217,6 +217,38 @@ async def worker_game(plan, index, pair, receipt):
         timing=dict(started_epoch=started_epoch, completed_epoch=time.time(), duration_seconds=time.monotonic()-started))
 
 
+async def _stop_owned_group(process):
+    """Bound cleanup by the owned group, independently of the leader's exit.
+
+    Fail closed if group disappearance cannot be confirmed: the scheduler must
+    not reuse that slot/core while a descendant might still be running.
+    """
+    def exists():
+        try:
+            os.killpg(process.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+    def send(sig):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+    async def gone_within(seconds):
+        deadline = time.monotonic() + seconds
+        while exists():
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
+        return True
+    send(signal.SIGTERM)
+    if not await gone_within(5):
+        send(signal.SIGKILL)
+        require(await gone_within(5), 'owned worker group still exists after bounded SIGKILL cleanup')
+    if process.returncode is None:
+        await asyncio.wait_for(process.wait(), 5)
+
+
 async def _child(plan_path, index, pair, receipt):
     process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'pokezero.owning_encoder_continuation',
         'worker', str(plan_path), str(index), str(pair[0]), str(pair[1]), str(receipt),
@@ -231,18 +263,7 @@ async def _child(plan_path, index, pair, receipt):
             return result
         raise RuntimeError('cell worker failed without a terminal receipt; no retry')
     finally:
-        # A dead interpreter may still have descendants. Stop only this owned
-        # process group even when the group leader has already exited.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        if process.returncode is None:
-            try:
-                await asyncio.wait_for(process.wait(), 5)
-            except asyncio.TimeoutError:
-                os.killpg(process.pid, signal.SIGKILL)
-                await process.wait()
+        await _stop_owned_group(process)
 
 
 async def run_continuation(plan, output, *, worker=None, clock=time.monotonic, epoch=time.time):
