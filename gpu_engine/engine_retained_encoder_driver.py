@@ -14,6 +14,7 @@ The explicit source-witness mode can establish logical input coverage for one
 actual frame, after both full folds. Global B4/physics qualification stays false.
 Only a pure FAKE forward interface is exposed for source integration tests.
 """
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
@@ -123,6 +124,8 @@ class FrameDiagnostics(NamedTuple):
     placeholder_moves: object
     active_rows: object
     executed_rows: object
+    # Optional host-only measurements; never part of Core or a device kernel.
+    host_timings: object = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -713,10 +716,24 @@ def _checked(prepared):
     return r
 
 
-def _timed(callback, name, function, *args):
+@contextmanager
+def _host_span(timings, name):
+    """Read-only host attribution, separate from the original phase callback."""
+    if timings is None:
+        yield
+        return
+    start = time.perf_counter_ns()
+    try:
+        yield
+    finally:
+        timings[name] = timings.get(name, 0.) + (time.perf_counter_ns()-start)/1e6
+
+
+def _timed(callback, name, function, *args, _host_timings=None):
     if callback is None:
         return function(*args)
-    jax.block_until_ready(args)
+    with _host_span(_host_timings, f'input_block_wait.{name}_ms'):
+        jax.block_until_ready(args)
     start = time.perf_counter_ns()
     result = function(*args)
     jax.block_until_ready(result)
@@ -735,15 +752,17 @@ def _checked_witness(r, *, constructed=None, session=None):
             frame_witness.check_host_origin(compiled,constructed=constructed,session=session)
 
 
-def _consume_accounted(r,state,frame,active,timing_callback,previous_reports):
+def _consume_accounted(r,state,frame,active,timing_callback,previous_reports,host_timings=None):
     # BOTH original full folds finish before any own encoding or fake scoring.
     candidates=[];projections=[];errors=[]
     if r['frame_witness_compiled'] is not None:
-        _checked_witness(r)
+        with _host_span(host_timings, 'extra_guards_ms'):
+            _checked_witness(r)
         paired=_timed(timing_callback,'public_pair',r['frame_witness_fast'],state.core.frame_inputs,
             state.core,frame,tuple(x.projection for x in state.observers),
-            tuple(x.retained for x in state.observers),active)
-        _checked_witness(r)
+            tuple(x.retained for x in state.observers),active, _host_timings=host_timings)
+        with _host_span(host_timings, 'extra_guards_ms'):
+            _checked_witness(r)
         joint=paired.report.frame_inputs_complete
         joined=paired.ledger
         evidence=paired.report if state.core.frame_input_report is None else _rows(
@@ -758,13 +777,15 @@ def _consume_accounted(r,state,frame,active,timing_callback,previous_reports):
             projections.append(projection);errors.append(projection.error)
     else:
         for side,before in enumerate(state.observers,1):
-            _checked(r['prepared']())
+            with _host_span(host_timings, 'extra_guards_ms'):
+                _checked(r['prepared']())
             def public_phase(observer,frame,active):
                 after,projection,error=r['public_fast'](observer,frame,state.core.weather_profile,active)
                 return _observer_rows(active,observer,after),projection,error
-            candidate,projection,error=_timed(timing_callback,f'public_p{side}',public_phase,before,frame,active)
+            candidate,projection,error=_timed(timing_callback,f'public_p{side}',public_phase,before,frame,active, _host_timings=host_timings)
             candidates.append(candidate);projections.append(projection);errors.append(error)
-        _checked(r['prepared']())
+        with _host_span(host_timings, 'extra_guards_ms'):
+            _checked(r['prepared']())
         joined,joint=r['join_execution'](candidates[0].accounting,candidates[1].accounting)
         ledger=execution.commit_rows(active,state.core.execution,joined)
         core=state.core._replace(execution=ledger,admitted=state.core.admitted & (~active|joint))
@@ -773,33 +794,35 @@ def _consume_accounted(r,state,frame,active,timing_callback,previous_reports):
         observer=_observer_rows(active & joint,before,candidate)
         observer=observer._replace(accounting=execution.commit_rows(active,before.accounting,joined),
             retained_healthy=observer.retained_healthy & (~active|joint))
-        _checked(r['prepared']())
-        facts,encoded=_timed(timing_callback,f'encode_p{index+1}',r['encode_fast'],core,observer)
+        with _host_span(host_timings, 'extra_guards_ms'):
+            _checked(r['prepared']())
+        facts,encoded=_timed(timing_callback,f'encode_p{index+1}',r['encode_fast'],core,observer, _host_timings=host_timings)
         def admission_phase(obs,facts,encoded,projection,error,admitted,active,previous):
             after,report=r['score_fast'](obs,facts,encoded,projection,error,admitted,active)
             if previous is not None:report=_report_rows(active,previous,report)
             return after,report
         previous=None if previous_reports is None else previous_reports[index]
-        _checked(r['prepared']())
+        with _host_span(host_timings, 'extra_guards_ms'):
+            _checked(r['prepared']())
         observer,report=_timed(timing_callback,f'admission_p{index+1}',admission_phase,
-            observer,facts,encoded,projection,error,core.admitted,active,previous)
+            observer,facts,encoded,projection,error,core.admitted,active,previous, _host_timings=host_timings)
         observers.append(observer);reports.append(report)
     return Result(DriverState(core,tuple(observers)),tuple(reports))
 
 
-def _consume(r, state, frame, active_rows=None, timing_callback=None, previous_reports=None):
+def _consume(r, state, frame, active_rows=None, timing_callback=None, previous_reports=None,host_timings=None):
     if active_rows is None:
         active_rows = jnp.ones_like(state.core.admitted)
     if r['execution_compiled'] is not None:
-        return _consume_accounted(r,state,frame,active_rows,timing_callback,previous_reports)
+        return _consume_accounted(r,state,frame,active_rows,timing_callback,previous_reports,host_timings)
     observers, reports = [], []
     for side, observer in enumerate(state.observers, 1):
         def public_phase(before, frame, active):
             candidate, projection, error = r['public_fast'](before, frame,state.core.weather_profile)
             return _observer_rows(active, before, candidate), projection, error
         observer, projection, error = _timed(timing_callback, f'public_p{side}', public_phase,
-            observer, frame, active_rows)
-        facts, encoded = _timed(timing_callback, f'encode_p{side}', r['encode_fast'], state.core, observer)
+            observer, frame, active_rows, _host_timings=host_timings)
+        facts, encoded = _timed(timing_callback, f'encode_p{side}', r['encode_fast'], state.core, observer, _host_timings=host_timings)
         def admission_phase(obs, facts, encoded, projection, error, admitted, active, previous):
             candidate, report = r['score_fast'](obs, facts, encoded, projection, error, admitted, active)
             if previous is not None:
@@ -807,7 +830,7 @@ def _consume(r, state, frame, active_rows=None, timing_callback=None, previous_r
             return candidate, report
         previous = None if previous_reports is None else previous_reports[side-1]
         observer, report = _timed(timing_callback, f'admission_p{side}', admission_phase, observer,
-            facts, encoded, projection, error, state.core.admitted, active_rows, previous)
+            facts, encoded, projection, error, state.core.admitted, active_rows, previous, _host_timings=host_timings)
         observers.append(observer); reports.append(report)
     return Result(state._replace(observers=tuple(observers)), tuple(reports))
 
@@ -880,16 +903,19 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
     A host Session retains one current carry; cached kernels cannot bypass the
     original static guards or let a replaced/stale carry resume silently.
     """
-    record = _session(session)
-    if record['advancing']:
-        raise ValueError('driver advance is not reentrant')
-    if isinstance(engine_actions, jax.core.Tracer) or isinstance(active_rows, jax.core.Tracer):
-        raise ValueError('checked host driver cannot be wrapped in an outer JIT')
-    if timing_callback is not None and not callable(timing_callback):
-        raise ValueError('host timing callback must be callable')
-    r = _checked(session.prepared)
-    source._constructed(record['constructed'])
-    _checked_witness(r,session=session)
+    host_timings = {} if timing_callback is not None else None
+    advance_start = time.perf_counter_ns() if host_timings is not None else None
+    with _host_span(host_timings, 'initial_guards_ms'):
+        record = _session(session)
+        if record['advancing']:
+            raise ValueError('driver advance is not reentrant')
+        if isinstance(engine_actions, jax.core.Tracer) or isinstance(active_rows, jax.core.Tracer):
+            raise ValueError('checked host driver cannot be wrapped in an outer JIT')
+        if timing_callback is not None and not callable(timing_callback):
+            raise ValueError('host timing callback must be callable')
+        r = _checked(session.prepared)
+        source._constructed(record['constructed'])
+        _checked_witness(r,session=session)
     core = session.state.core
     b = core.frame_number.shape[0]
     if active_rows is None:
@@ -910,16 +936,18 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
     record['advancing'] = True
     try:
         def checked_timing(name, milliseconds):
-            timing_callback(name, milliseconds)
+            with _host_span(host_timings, 'timing_observer_ms'):
+                timing_callback(name, milliseconds)
             # A host observer runs between cached phases. Revalidate at that
             # boundary so a mutated static holder cannot reach the next phase.
-            _session(session)
-            _checked(session.prepared)
-            source._constructed(record['constructed'])
-            _checked_witness(r,session=session)
+            with _host_span(host_timings, 'post_observer_guards_ms'):
+                _session(session)
+                _checked(session.prepared)
+                source._constructed(record['constructed'])
+                _checked_witness(r,session=session)
         observe = None if timing_callback is None else checked_timing
         chance = transition.sample_chance_inputs(core.engine) if chance_inputs is None else chance_inputs
-        frame = _timed(observe, 'engine', r['frame'], core, engine_actions, chance, executed)
+        frame = _timed(observe, 'engine', r['frame'], core, engine_actions, chance, executed, _host_timings=host_timings)
         def requests_phase(core, frame):
             orders = tuple(r['installations'](ledger, frame) for ledger in core.orders)
             unsafe = tuple(r['unsafe'](value, frame.state) for value in core.unsafe)
@@ -938,15 +966,20 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
             chosen = _core_rows(executed, core._replace(originals=None, constructors=None),
                 candidate._replace(originals=None, constructors=None))
             return chosen._replace(originals=core.originals, constructors=core.constructors)
-        if r['execution_compiled'] is not None:_checked(session.prepared)
-        next_core = _timed(observe, 'requests', requests_phase, core, frame)
-        result = _consume(r, old_state._replace(core=next_core), frame, executed, observe, old_result.owners)
+        if r['execution_compiled'] is not None:
+            with _host_span(host_timings, 'extra_guards_ms'):
+                _checked(session.prepared)
+        next_core = _timed(observe, 'requests', requests_phase, core, frame, _host_timings=host_timings)
+        result = _consume(r, old_state._replace(core=next_core), frame, executed, observe, old_result.owners,host_timings)
         # Callbacks can observe timing but cannot replace or replay the carry.
-        if _session(session) is not record or session.state is not old_state or session.result is not old_result:
-            raise ValueError('timing callback changed the driver session')
+        with _host_span(host_timings, 'final_session_guard_ms'):
+            if _session(session) is not record or session.state is not old_state or session.result is not old_result:
+                raise ValueError('timing callback changed the driver session')
         session.state, session.result = result.state, result
+        if host_timings is not None:
+            host_timings['advance_wall_ms'] = (time.perf_counter_ns()-advance_start)/1e6
         record.update(state=result.state, result=result,
-            diagnostics=FrameDiagnostics(frame.invalid_actions, frame.placeholder_moves, active, executed))
+            diagnostics=FrameDiagnostics(frame.invalid_actions, frame.placeholder_moves, active, executed,host_timings))
         return result
     finally:
         record['advancing'] = False

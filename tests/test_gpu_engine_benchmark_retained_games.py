@@ -321,6 +321,32 @@ class RetainedBenchmarkTests(unittest.TestCase):
         self.assertEqual([x['executed_steps'] for x in measured['cohort']], [0, 1])
         self.assertEqual(measured['engine_placeholder_moves'], 1)
 
+    def test_host_attribution_is_separate_and_inclusive_wall_is_not_added(self):
+        first, config = result(batch=1)
+        def model(_, args):
+            return champion.Output(j.zeros((2, 9)), j.zeros(2), j.zeros((2, 9))), 0., 1.
+        original_names=('engine', 'requests', 'public_p1', 'public_p2',
+            'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2')
+        def advance(session, actions, *, active_rows, timing_callback):
+            out, _ = result(batch=1, frames=[1], done=[True], reasons=np.full((1, 2), driver.REQUEST))
+            session.state, session.result = out.state, out
+            session.diagnostics = driver.FrameDiagnostics(j.zeros(1,bool),j.zeros(1,j.int32),
+                active_rows,active_rows,{'advance_wall_ms':999999.,'initial_guards_ms':.001,
+                    'post_observer_guards_ms':.002,'timing_observer_ms':.003})
+            for name in original_names:timing_callback(name,.001)
+            return out
+        measured, _, _ = self.measure(first,config,network=model,advance=advance,cap=1)
+        self.assertEqual(set(measured['driver_components']),set(original_names))
+        attribution=measured['host_attribution'];self.assertFalse(attribution['complete'])
+        self.assertEqual(len(attribution['samples']),1)
+        sample=attribution['samples'][0]
+        self.assertEqual(sample['driver']['advance_wall_ms'],999999.)
+        self.assertEqual(set(sample['benchmark']),{'outer_guard_ms','before_frames_transfer_ms',
+            'advance_result_wait_ms','latest_diagnostics_guard_ms','diagnostics_wait_ms'})
+        self.assertAlmostEqual(sample['unattributed_wall_ms'],sample['full_step_wall_ms']
+            -sum(sample['benchmark'].values())-.008-.006)
+        self.assertEqual(measured['completed_games'],1)
+
     def test_terminal_public_frame_refusal_prevents_completion(self):
         first, config = result(batch=2)
         def model(_, args):
