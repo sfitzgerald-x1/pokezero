@@ -55,6 +55,7 @@ class Site(IntEnum):
     PRIMARY_PARALYSIS = 19
     PRIMARY_SLEEP = 20
     TURNLOOP_PREFIX = 21
+    SECONDARY_STATUS = 22
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -170,6 +171,7 @@ class Context(NamedTuple):
     risks: object = None  # PRIVATE actual-kernel diagnostics; never a coverage certificate
     diagnostics: object = None  # Optional literal operands; never read by admission
     terminal: object = None  # PRIVATE literal final direct-KO observer
+    secondary_status: object = None # ephemeral SAME-call registered context
 
 
 UNKNOWN_EXECUTION = 512

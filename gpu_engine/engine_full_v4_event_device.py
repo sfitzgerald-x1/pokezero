@@ -35,6 +35,7 @@ from . import engine_status_callbacks as status_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
 from . import engine_direct_ko_callbacks as direct_ko_callbacks
 from . import engine_no_damage_callbacks as no_damage
+from . import engine_secondary_status_callbacks as secondary_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -501,6 +502,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_event = kind == int(inputs.Kind.STATUS)
         lum_event = kind == int(inputs.Kind.ITEM)
         raw_kind=tape.words[:,index,0]
+        secondary_cont=raw_kind==secondary_callbacks.SECONDARY_STATUS
         substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
         toxic_attempt=(kind==int(inputs.Kind.NONPROC)) & (raw_kind==toxic_callbacks.TOXIC_ATTEMPT)
         toxic_code=toxic_callbacks.outcome_device(tape.words[:,index])
@@ -569,10 +571,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         nd_miss_safe=tables.no_damage_miss[jnp.clip(nd_raw[:,5],0,len(tables.no_damage_miss)-1)]
         key=jnp.where(no_damage_header,jnp.where((nd_code!=no_damage.MISS)|nd_miss_safe,tables.no_damage[jnp.clip(nd_code,0,8),jnp.clip(nd_status,0,6)],0),key)
         key=jnp.where(no_damage_facts,0,key)
+        key=jnp.where(secondary_cont,0,key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
-        good = ((key > 0)|toxic_write|no_damage_facts) & enough
+        good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont) & enough
         error = jnp.where(present & (error == 0) & ~good, int(inputs.Error.PAYLOAD), error)
         schema = tables.templates[key]
         subject = jnp.where(direct_control,tape.words[:,index,3],jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6])))

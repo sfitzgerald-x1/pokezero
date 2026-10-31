@@ -175,7 +175,7 @@ def status_allowed(table, status, types, ability, *, effective_weather=0):
 
 
 def apply(state, side, move, roll, table, *, eligible, effective_weather=0, substitute_hit=False,
-          item_table=None, _status_trace=None):
+          item_table=None, _status_trace=None, _secondary_status_context=None):
     rows = jnp.arange(state.hp.shape[0]); foe = 1 - side
     own, target = state.active[rows, side], state.active[rows, foe]
     get = lambda value: value[rows, foe, target]
@@ -189,7 +189,16 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0, subs
         & status_allowed(table, status, get(state.types), ability, effective_weather=effective_weather))
     if _status_trace is not None:
         from . import engine_status_callbacks as callbacks
-        _status_trace=callbacks.unknown(_status_trace,changes)
+        if _secondary_status_context is not None:
+            from . import engine_secondary_status_callbacks as secondary_status
+            _secondary_write=secondary_status.Write(jnp.asarray(eligible),trigger,proc,changes,get(state.hp)>0,
+                jnp.broadcast_to(jnp.asarray(substitute_hit),(state.hp.shape[0],)),table.dust[ability],
+                get(state.status),get(state.status),get(state.status_counter),get(state.status_counter),
+                state.ability[rows,side,own],ability,get(state.item))
+            _status_trace,_secondary_ticket=secondary_status.begin(_status_trace,
+                _secondary_status_context,table,side,own,target,move,_secondary_write)
+        else:
+            _status_trace=callbacks.unknown(_status_trace,changes)
         from . import engine_kernel_frame_risk as kernel_risks
     boosts = get(state.boosts)
     drops = proc & table.spd_drop[move] & ~table.clear_body[ability]
@@ -222,5 +231,10 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0, subs
         volatile=state.volatile.at[rows, foe, target].set(
             get(state.volatile) | jnp.where(flinch, jnp.uint32(FLINCH), jnp.uint32(0))))
     if _status_trace is not None:
+        if _secondary_status_context is not None:
+            _secondary_write=_secondary_write._replace(new_status=state.status[rows,foe,target],
+                new_counter=state.status_counter[rows,foe,target])
+            _status_trace=secondary_status.finish(_status_trace,_secondary_ticket,side,own,target,move,
+                _secondary_write,_secondary_status_context,table)
         return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table,_status_trace=_status_trace)
     return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table)

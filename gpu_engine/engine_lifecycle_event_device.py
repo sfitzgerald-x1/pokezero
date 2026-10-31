@@ -27,6 +27,7 @@ import numpy as np
 from pokezero.dex import normalize_id
 from . import engine_lifecycle_callbacks as life, engine_public_event_device as base
 from . import engine_public_events as public, public_inputs as inputs, public_toxic
+from . import engine_secondary_status_callbacks as secondary_callbacks
 from . import public_belief, public_context, public_team
 from . import engine_status_callbacks as status_callbacks, engine_item_callbacks as item_callbacks
 from . import public_items, public_active
@@ -757,6 +758,15 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
                 |(thunder_callbacks.supported_raw(raw)&(tables.thunder_wave_move>0)&(raw[:,5]==tables.thunder_wave_move))
                 |(powder_callbacks.supported_raw(raw,primary_sleep=True)&(raw[:,5]>0)&(raw[:,5]<len(tables.primary_sleep_moves))&tables.primary_sleep_moves[jnp.clip(raw[:,5],0,len(tables.primary_sleep_moves)-1)])))
         event_ok=jnp.where(toxic,generation_ok & clock_ok & toxic_ok,event_ok)
+        secondary_cont=kind==secondary_callbacks.SECONDARY_STATUS
+        following=tape.words[:,jnp.minimum(index+1,capacity-1)]
+        secondary_write=applied&(following[:,0]==secondary_callbacks.SECONDARY_STATUS)
+        secondary_pair=secondary_callbacks.owned_pair(tape,jnp.where(secondary_cont,index,index+1))
+        secondary_ok=(tables.status_events&~tables.raw_begin&(phase==0)&secondary_pair
+            &jnp.where(secondary_cont,actor_ok&status_identity
+                &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+                &(incoming==cursor.physical_active[rows,safe_side]),status_ok))
+        event_ok=jnp.where(secondary_cont|secondary_write,generation_ok&clock_ok&secondary_ok,event_ok)
         prefix_ok=(tables.status_events&~tables.raw_begin&clock_payload&(index==0)
             &jnp.all(cursor.established,axis=1)&jnp.all(details==0,axis=1))
         event_ok=jnp.where(turnloop_prefix,generation_ok&clock_ok&prefix_ok,event_ok)
@@ -860,6 +870,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         prefix_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.TOXIC)),
             semantic_sequence,turn,phase,absent,absent,absent,absent),axis=1),prefix_payload),axis=1)
         semantic=jnp.where(turnloop_prefix[:,None],prefix_semantic,semantic)
+        secondary_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,turn,phase,
+            absent,absent,absent,absent,z,z,z,z,z,z,z,z),axis=1)
+        semantic=jnp.where(secondary_cont[:,None],secondary_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)
