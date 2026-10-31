@@ -154,6 +154,35 @@ class V5ContractTests(unittest.TestCase):
         self.assertEqual(catalog.sha256, binding)
         self.assertEqual(p.numeric_row(), row)
 
+    def test_numeric_cells_require_real_values_and_store_one_immutable_snapshot(self):
+        original = observation()
+        class MutableFloat:
+            def __init__(self):self.value = 0.25
+            def __float__(self):return self.value
+        for value in ('0.25', MutableFloat(), True, math.nan, math.inf):
+            rows = list(original.numeric_features)
+            rows[0] = (value,) + rows[0][1:]
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                replace(original, numeric_features=rows)
+        class MutableReal(float):
+            def __new__(cls):
+                result = super().__new__(cls, 0.25)
+                result.calls = 0
+                return result
+            def __float__(self):
+                self.calls += 1
+                return 0.25 if self.calls == 1 else float('nan')
+        value = MutableReal(); rows = list(original.numeric_features)
+        rows[0] = (value, -5.5, 123.0) + rows[0][3:]
+        frozen = replace(original, numeric_features=rows)
+        self.assertEqual(value.calls, 1)
+        self.assertIs(type(frozen.numeric_features[0][0]), float)
+        self.assertEqual(frozen.numeric_features[0][:3], (0.25, -5.5, 123.0))
+        float(value)
+        self.assertEqual(frozen.model_inputs()['numeric_features'][0][0], 0.25)
+        batch = c.batch_columns((frozen,), (c.V5Labels(frozen.address),))
+        self.assertEqual(batch['numeric_features'][0][0][0][0], 0.25)
+
     def test_privileged_surface_swaps_only_explicit_opponent_rows(self):
         public = observation(); actor = public.model_inputs()
         peer = v4(owner=1, offset=300); slots = (5, 4, 3, 2, 1, 0)

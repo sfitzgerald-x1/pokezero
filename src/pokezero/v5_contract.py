@@ -227,14 +227,20 @@ class V5Observation:
             rows = tuple(tuple(row) for row in _list(getattr(self, name)))
             if len(rows) != V5_TOKENS or any(len(row) != width for row in rows):
                 raise ValueError('v5 requires29tokens with unchanged v4 feature widths')
+            immutable_rows = []
             for row in rows:
+                immutable_row = []
                 for value in row:
                     if name == 'categorical_ids':
                         if type(value) is not int or value < 0:
                             raise ValueError('nonnegative original category row required')
-                    elif isinstance(value, bool) or not math.isfinite(float(value)):
-                        raise ValueError('finite numeric observation required')
-            object.__setattr__(self, name, rows)
+                        immutable_row.append(value)
+                    else:
+                        # Convert a permitted real exactly once, then retain
+                        # that immutable finite value, never caller objects.
+                        immutable_row.append(_real(value, low=-math.inf, high=math.inf))
+                immutable_rows.append(tuple(immutable_row))
+            object.__setattr__(self, name, tuple(immutable_rows))
         for name, count, kind in (('token_type_ids', V5_TOKENS, int), ('attention_mask', V5_TOKENS, bool),
                 ('legal_action_mask', ACTION_COUNT, bool)):
             row = tuple(_list(getattr(self, name)))
