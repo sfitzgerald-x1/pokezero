@@ -49,8 +49,8 @@ class Site(IntEnum):
     TRACE_COPY = 13
     RECOIL_HP = 14
     INTIMIDATE_INITIAL = 15
-    CALM_MIND = 16  # reserved separately reviewed source
-    SPIKES_WRITE = 17  # reserved independent source lane
+    CALM_MIND = 16
+    SPIKES_WRITE = 17
     SWORDS_DANCE = 18
 
 
