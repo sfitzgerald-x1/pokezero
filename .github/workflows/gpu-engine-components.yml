@@ -71,6 +71,20 @@ jobs:
           python -m gpu_engine.team_pool --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
             --source-commit-label f76228a1354b5d0f307ca2d16101294ad3a2308b \
             --teams 1024 --seed-start 650200000 --out "$POKEZERO_GPU_TEAM_POOL"
+      - name: Add swap headroom for complete CPU JIT compilation
+        run: |
+          awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
+          swapon --show --bytes
+          available_kib=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
+          test "$available_kib" -ge $((10 * 1024 * 1024))
+          swap_file=$(mktemp "$RUNNER_TEMP/pokezero-components-swap.XXXXXX")
+          sudo chown root:root "$swap_file"
+          sudo chmod 600 "$swap_file"
+          sudo fallocate --length 8G "$swap_file"
+          sudo mkswap "$swap_file"
+          sudo swapon "$swap_file"
+          awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
+          swapon --show --bytes
       - name: Run component shard without optional skips
         run: |
           set -o pipefail
