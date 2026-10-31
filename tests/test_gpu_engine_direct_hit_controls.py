@@ -9,6 +9,8 @@ import numpy as np
 
 from gpu_engine import engine_direct_hit_controls as c, critical, mechanics
 from gpu_engine import engine_lifecycle_callbacks as life, engine_public_events as public
+from gpu_engine import engine_execution_completeness as accounting
+from gpu_engine import engine_public_event_device as lower, engine_full_v4_event_device as full
 import test_gpu_engine_engine_own_facts as fixture
 import test_gpu_engine_engine_item_callbacks as tapes
 
@@ -20,6 +22,9 @@ class DirectHitControlsTests(unittest.TestCase):
         cls.compiled = c.compile_direct_hit_controls(engine_catalog=cls.f.lifecycle)
         cls.data = c.check_compiled(cls.compiled)
         cls.move = int(np.flatnonzero(np.asarray(cls.f.table.power) > 0)[0])
+        projector = lower.compile_projector(cls.f.lifecycle, expected_binding=cls.f.lifecycle.binding,
+            expected_engine_binding=np.asarray(cls.f.lifecycle.engine_binding,np.uint32))
+        cls.account = accounting.compile_accounting(full.compile_adapter(cls.f.metadata,projector,catalog=cls.f.catalog))
 
     def same(self, x, y):
         for a, b in zip(jax.tree.leaves(x), jax.tree.leaves(y)):
@@ -55,6 +60,13 @@ class DirectHitControlsTests(unittest.TestCase):
             kwargs.pop('side', 0), kwargs.pop('actor', 2), kwargs.pop('target', 4),
             kwargs.pop('move', self.move), self.write() if write is None else write,
             kwargs.pop('data', self.data), eligible=kwargs.pop('eligible', True), **kwargs)
+
+    def registered(self, b=1, capacity=8, prior=0):
+        tape = self.tape(b,capacity=capacity,prior=prior)
+        ledger = accounting.initialize(tape.stream_id,compiled=self.account,receipt_capacity=capacity)
+        ledger = accounting.begin_frame(ledger,tape,frame=j.ones(b,j.int32),
+            active=j.ones(b,bool),tables=self.account.device)
+        return tape._replace(execution=accounting.Context(ledger,self.account.device)), c.RegisteredContext(self.data,self.account.device)
 
     def test_actual_numerical_helpers_literal_payload_and_control_order(self):
         for roll, num, den, expected in ((0,2,1,[21,22]), (0,1,2,[21,23]),
@@ -166,6 +178,101 @@ class DirectHitControlsTests(unittest.TestCase):
         self.assertEqual(int(self.record(stale,write).count[0]), 0)
         legacy = self.tape(legacy=True)
         self.assertIs(self.record(legacy,write), legacy)
+
+    def test_capacity_diagnostic_ignores_existing_prefix_switch_details(self):
+        tape = self.tape(2,capacity=1,prior=512)
+        tape = tape._replace(count=j.ones(2,j.int32), words=tape.words.at[:,0,0].set(life.SWITCH_INSTALLED),
+            switch_details=tape.switch_details.at[0,0,0].set(1))
+        write = self.write(2)._replace(critical=True,numerator=1,denominator=1)
+        out = self.record(tape,write)
+        self.same(out.words,tape.words)
+        self.same(out.switch_details,tape.switch_details)
+        self.same(out.event_turn,tape.event_turn)
+        self.same(out.event_generation,tape.event_generation)
+        self.assertEqual(out.count.tolist(), [1,1])
+        self.assertEqual(out.refusal.tolist(), [512|256|public.OVERFLOW]*2)
+        # Even stale NEW-slot details cannot hide simultaneous capacity loss.
+        partial = self.tape(capacity=2)._replace(count=j.ones(1,j.int32),
+            switch_details=j.zeros((1,2,6),j.int32).at[0,1,0].set(1))
+        result = self.record(partial,self.write(numerator=2))
+        self.assertEqual(int(result.refusal[0]), 256|public.OVERFLOW)
+        self.same(result.words,partial.words)
+        self.assertEqual(int(result.count[0]),1)
+
+    def test_registered_literal_write_and_diagnostic_are_separate_without_clearing_prior(self):
+        for crit, num, den, expected in ((True,2,1,[21,22]),(True,1,2,[21,23]),(False,1,1,[])):
+            with self.subTest(critical=crit,num=num,den=den):
+                tape, context = self.registered(2,prior=128)
+                write = self.write(2)._replace(critical=crit,numerator=num,denominator=den)
+                result = c.record_registered_direct_hit_controls_device(tape,0,2,4,self.move,write,context,eligible=True)
+                self.assertEqual(result.count.tolist(),[len(expected)]*2)
+                self.assertEqual(result.words[0,:len(expected),0].tolist(),expected)
+                self.assertEqual(result.refusal.tolist(),[128]*2)
+                self.same(result.execution,tape.execution) # no ticket or consumption credit
+                prior = tape._replace(refusal=j.array([1|256,512],j.int32))
+                retained = c.record_registered_direct_hit_controls_device(prior,0,2,4,self.move,write,context,eligible=True)
+                self.assertEqual(retained.refusal.tolist(),[1|256,512])
+                diagnostic = self.record(tape,write)
+                self.assertEqual(diagnostic.refusal.tolist(),[128|256]*2)
+
+    def test_registered_unbound_mixed_streams_frames_globals_and_unsupported_stay_unknown(self):
+        tape, context = self.registered(8,prior=1)
+        requested = j.array([True,False]*4)
+        call = lambda t,w,ctx:c.record_registered_direct_hit_controls_device(t,0,2,4,self.move,w,ctx,eligible=requested)
+        write = self.write(8,numerator=2)
+        variants = [tape._replace(execution=None),
+            tape._replace(execution=tape.execution._replace(ledger=tape.execution.ledger._replace(
+                opened=j.zeros(8,bool)))),
+            tape._replace(execution=tape.execution._replace(ledger=tape.execution.ledger._replace(
+                frame=j.zeros(8,j.int32)))),
+            tape._replace(execution=tape.execution._replace(ledger=tape.execution.ledger._replace(
+                count=j.full(8,-1,j.int32)))),
+            tape._replace(execution=tape.execution._replace(ledger=tape.execution.ledger._replace(
+                inventory_binding=tape.execution.ledger.inventory_binding.at[7].add(1))))]
+        for bad in variants:
+            result = call(bad,write,context)
+            self.assertEqual(result.count.tolist(),[0]*8)
+            self.assertEqual(result.refusal.tolist(),[257,1]*4)
+        mixed = tape._replace(execution=tape.execution._replace(ledger=tape.execution.ledger._replace(
+            stream_id=tape.stream_id.at[0].add(100))))
+        result = call(mixed,write,context)
+        self.assertEqual(result.count.tolist(),[0,0,2,0,2,0,2,0])
+        self.assertEqual(result.refusal.tolist(),[257,1,1,1,1,1,1,1])
+        for name in self.account.device._fields:
+            with self.subTest(accounting_namespace=name):
+                other = context._replace(accounting=context.accounting._replace(
+                    **{name:getattr(context.accounting,name).at[7].add(1)}))
+                self.assertEqual(call(tape,write,other).refusal.tolist(),[257,1]*4)
+                actual = tape._replace(execution=tape.execution._replace(tables=tape.execution.tables._replace(
+                    **{name:getattr(tape.execution.tables,name).at[7].add(1)})))
+                self.assertEqual(call(actual,write,context).count.tolist(),[0]*8)
+        invalid = write._replace(hit=j.array([False,True]*4))
+        result = call(tape,invalid,context)
+        self.assertEqual(result.count.tolist(),[0]*8)
+        self.assertEqual(result.refusal.tolist(),[257,1]*4)
+        self.same(result.words,tape.words)
+        with self.assertRaises(ValueError):
+            c.record_registered_direct_hit_controls_device(self.tape(legacy=True),0,2,4,self.move,self.write(),context,eligible=True)
+
+    def test_registered_capacity_and_hot_jit_and_pure_write_validator(self):
+        tape, context = self.registered(8,capacity=1,prior=64)
+        write = self.write(8,numerator=2)
+        result = c.record_registered_direct_hit_controls_device(tape,0,2,4,self.move,write,context,eligible=True)
+        self.assertEqual(result.count.tolist(),[0]*8)
+        self.assertEqual(result.refusal.tolist(),[64|256|public.OVERFLOW]*8)
+        self.same(result.execution,tape.execution)
+        tape, context = self.registered(8,prior=1)
+        fast = jax.jit(lambda t,w:c.record_registered_direct_hit_controls_device(t,0,2,4,self.move,w,context,eligible=True))
+        expected = fast(tape,write)
+        self.same(fast(tape,write),expected)
+        self.assertEqual(fast._cache_size(),1)
+        self.assertEqual(expected.refusal.tolist(),[1]*8)
+        self.assertEqual(c.validate_write_device(write,8).tolist(),[True]*8)
+        for changes in (dict(hit=False),dict(immune=True),dict(enduring=True),dict(substitute=True),
+                dict(protected=True),dict(new_hp=0),dict(new_hp=1000),dict(numerator=3),dict(hit=1)):
+            with self.subTest(changes=changes):
+                self.assertEqual(c.validate_write_device(write._replace(**changes),8).tolist(),[False]*8)
+        self.same(jax.jit(lambda w:c.validate_write_device(w,8))(write),j.ones(8,bool))
 
     def test_hot_jit_has_one_cache_no_callbacks_and_original_host_guards(self):
         tape = self.tape(8); write = self.write(8,numerator=2)
