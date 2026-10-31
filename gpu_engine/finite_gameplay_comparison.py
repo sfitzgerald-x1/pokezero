@@ -162,7 +162,9 @@ class OwnerReference:
             try:
                 if self.poisoned: raise ValueError('PRIOR_REFERENCE_PROJECTION_REFUSAL')
                 self.wire, packet = public_wire.project_line(self.wire, line, **v4_encoder.wire_kwargs(self.catalog))
-                words.extend(list(event.words()) for event in packet.events)
+                # Preserve the exact original integer words, while converting
+                # NumPy scalar storage to JSON's native scalar representation.
+                words.extend(event.words().tolist() for event in packet.events)
             except ValueError as error:
                 self.poisoned = True
                 refused.append(dict(kind=kind, offset=offset, reason=str(error),
