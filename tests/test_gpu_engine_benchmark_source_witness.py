@@ -1,5 +1,6 @@
 """Benchmark option/timing contracts; no checkpoint, model forward or game."""
 from contextlib import ExitStack
+from collections import namedtuple
 from dataclasses import dataclass
 import gc
 from types import SimpleNamespace as NS
@@ -143,11 +144,13 @@ class BenchmarkSourceWitnessTests(unittest.TestCase):
         self.assertIsNone(calls[0])
         self.assertIs(calls[1], session)
 
-    def measurement(self, *, mode, timing_names, closed_owner=False):
+    def measurement(self, *, mode, timing_names, closed_owner=False, evidence=None):
         reasons = np.array([[driver.PUBLIC_COVERAGE, 0], [0, 0], [0, 0]], np.int32)
         if closed_owner:
             reasons[:] = [0, driver.PUBLIC_COVERAGE]
         first, config = fixtures.result(reasons=reasons)
+        if evidence is not None:
+            first.state.core.frame_input_report, first.state.core.risks = evidence
         session = NS(state=first.state, result=first)
         runtime, prepared = NS(binding='synthetic-runtime'), PreparedStub()
         record = dict(prepared=prepared, config=config, metadata={'synthetic': True})
@@ -161,6 +164,8 @@ class BenchmarkSourceWitnessTests(unittest.TestCase):
             self.assertEqual(actions.shape, (3, 2))
             next_result, _ = fixtures.result(frames=[0, 1, 1], done=[False, True, False],
                 reasons=np.array([[driver.PUBLIC_COVERAGE, 0], [driver.ENCODER, driver.ENCODER], [0, 0]]))
+            if evidence is not None:
+                next_result.state.core.frame_input_report, next_result.state.core.risks = evidence
             session.state, session.result = next_result.state, next_result
             session.diagnostics = NS(active_rows=active_rows, executed_rows=active_rows,
                 invalid_actions=j.zeros(3, bool), placeholder_moves=j.zeros(3, j.int32))
@@ -199,6 +204,19 @@ class BenchmarkSourceWitnessTests(unittest.TestCase):
         self.assertEqual((measured['completed_games'], measured['refused_games'], measured['unknown_games']), (0, 3, 3))
         model.assert_not_called()
         advancing.assert_not_called()
+
+    def test_final_raw_evidence_is_literal_and_does_not_change_roster_accounting(self):
+        packet=namedtuple('Packet','refusal raw_words')(
+            j.array([3,0,0],j.int32),j.arange(12,dtype=j.int32).reshape(3,2,2))
+        risk=namedtuple('Risk','binding risk')(j.arange(8,dtype=j.uint32),j.array([7,0,0],j.int32))
+        phases=('engine','requests','public_pair','encode_p1','encode_p2','admission_p1','admission_p2')
+        measured,_,_=self.measurement(mode='source-witness',timing_names=phases,evidence=(packet,risk))
+        self.assertEqual(measured['final_frame_input_witness'],
+            {name:np.asarray(value).tolist() for name,value in packet._asdict().items()})
+        self.assertEqual(measured['final_kernel_risks'],
+            {name:np.asarray(value).tolist() for name,value in risk._asdict().items()})
+        self.assertEqual((measured['original_denominator'],measured['completed_games'],
+            measured['refused_games'],measured['censored_games'],measured['unknown_games']),(3,1,1,1,2))
 
     def test_timing_layout_must_match_original_prepared_mode(self):
         common = ('engine', 'requests', 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2')
