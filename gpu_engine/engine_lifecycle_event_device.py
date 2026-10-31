@@ -37,6 +37,7 @@ from . import engine_weather_speed_profile as weather_speed
 from . import engine_leftovers_callbacks as leftovers_callbacks
 from . import engine_status_residual_callbacks as status_residual_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
+from . import engine_direct_ko_callbacks as direct_ko_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -645,7 +646,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         event_ok=jnp.where(status_damage,generation_ok & clock_ok & status_damage_ok,event_ok)
         direct_move=jnp.clip(raw[:,5],0,tables.base.public_ids.shape[0]-1)
         direct_ok=(tables.status_events & ~tables.raw_begin & status_identity & actor_ok
-            & direct_hit_controls.validate_raw_device(raw) & (phase==0)
+            & (direct_hit_controls.validate_raw_device(raw)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)) & (phase==0)
             & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             & (incoming==cursor.physical_active[rows,safe_side])
             & (raw[:,5]<tables.base.public_ids.shape[0]) & (tables.base.public_ids[direct_move]>0))

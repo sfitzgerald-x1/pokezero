@@ -24,12 +24,12 @@ class CompositionTests(unittest.TestCase):
 
     def test_exact_ordinary_inventory_plus_existing_hypothesis_and_matching_schema(self):
         from gpu_engine import engine_source_frame_witness as witness
-        witness._source();self.assertEqual(len(witness.SOURCE_PINS),55)
-        old=subprocess.check_output(['git','show','e5d38e3c:gpu_engine/engine_source_frame_witness.py'],text=True)
+        witness._source();self.assertEqual(len(witness.SOURCE_PINS),56)
+        old=subprocess.check_output(['git','show','ce58e921:gpu_engine/engine_source_frame_witness.py'],text=True)
         inventory=next(ast.literal_eval(n.value) for n in ast.parse(old).body if isinstance(n,ast.Assign)
             and any(isinstance(t,ast.Name) and t.id=='SOURCE_PINS' for t in n.targets))
         self.assertEqual(set(witness.SOURCE_PINS)-set(inventory),{'v5_hypothetical_profile.py'})
-        for file,expected in [('engine_full_v4_event_device.py',32),('engine_lifecycle_event_device.py',37),('engine_kernel_frame_risk.py',23)]:
+        for file,expected in [('engine_full_v4_event_device.py',32),('engine_lifecycle_event_device.py',37),('engine_kernel_frame_risk.py',24)]:
             tree=ast.parse(Path('gpu_engine',file).read_text());table=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Tables')
             self.assertEqual(sum(isinstance(n,ast.AnnAssign) for n in table.body),expected)
             for call in ast.walk(tree):

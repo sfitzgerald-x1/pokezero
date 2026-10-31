@@ -352,6 +352,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if _direct_hit_context is not None:
         from . import engine_direct_hit_controls as direct_hit_controls
         _direct_hit_registered=type(_direct_hit_context) is direct_hit_controls.RegisteredContext
+        if _direct_hit_registered:from . import engine_direct_ko_callbacks as direct_ko_callbacks
         if (not _lifecycle_trace or type(_direct_hit_context) not in
                 (direct_hit_controls.Context,direct_hit_controls.RegisteredContext)
                 or type(_direct_hit_context.data) is not direct_hit_controls.Data):
@@ -834,18 +835,28 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move))
             _public_trace,_direct_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.DIRECT_HIT,foe,active=_direct_requested)
+            _direct_ko_actor_before=_active(work.hp,work,side)
+            _direct_ko_party_before=work.hp[rows,foe]
+
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
             substitute_hp=_set_active(work.substitute_hp,work,foe,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
         if _direct_hit_context is not None:
             _direct_write=direct_hit_controls.HitWrite(power,critical,hit,immune,num,den,hits_sub,
                 _risk_protected,enduring[rows,foe],hp,foe_hp,_active(work.max_hp,work,foe))
-            _direct_record=(direct_hit_controls.record_registered_direct_hit_controls_device
-                if _direct_hit_registered else direct_hit_controls.record_direct_hit_controls_device)
-            _public_trace=_direct_record(
-                _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
-                _direct_write,_direct_hit_context if _direct_hit_registered else _direct_hit_context.data,
-                eligible=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)))
+            if _direct_hit_registered:
+                _public_trace=direct_hit_controls.record_registered_direct_hit_controls_device(
+                    _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
+                    _direct_write,_direct_hit_context,eligible=_direct_requested & (_direct_write.new_hp!=0))
+                _public_trace,_direct_ko_pending=direct_ko_callbacks.prepare_controls_device(
+                    _public_trace,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,
+                    _direct_write,_direct_hit_context,_direct_ko_actor_before,_direct_ko_party_before,
+                    eligible=_direct_requested)
+            else:
+                _public_trace=direct_hit_controls.record_direct_hit_controls_device(
+                    _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
+                    _direct_write,_direct_hit_context.data,
+                    eligible=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)))
         if _public_trace is not None:
             _public_trace = public_callbacks.condition(_public_trace,foe,work.active[rows,foe],
                 foe_hp,_active(work.max_hp,work,foe),_active(work.status,work,foe),
@@ -853,7 +864,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _direct_hit_context is not None and _direct_hit_registered:
             _public_trace=execution_accounting.capture_direct_hit_write(_public_trace,_direct_ticket,
                 side,work.active[rows,side],work.active[rows,foe],move,_direct_write,
-                requested=_direct_requested,data=_direct_hit_context.data)
+                requested=_direct_requested & (_direct_write.new_hp!=0),data=_direct_hit_context.data)
         if table.focus_punch is not None:
             work=focusing.hit(work,side,move,table.focus_punch,eligible=acts & hit & ~immune & ~hits_sub)
         # Gen 3 floors recoil from actual damage, including capped sub damage.
@@ -873,7 +884,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 eligible=acts,active=live,captured_direct=(kernel_risks.CapturedDirectHit(
                     _direct_hit_context,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,_direct_write)
                     if _direct_hit_context is not None and _direct_hit_registered else None),
-                pending_recoil=_recoil_pending if _recoil_context is not None else None)
+                pending_recoil=_recoil_pending if _recoil_context is not None else None,
+                pending_ko=_direct_ko_pending if _direct_hit_context is not None and _direct_hit_registered else None)
         if table.effects is not None:
             effects = table.effects
             # Protect/Endure fail if there is no queued move left (including
@@ -1200,6 +1212,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _public_trace is not None:
             _public_trace = public_callbacks.faint(_public_trace,foe,work.active[rows,foe],
                 eligible=acts & hit & ~hits_sub & (dealt>0) & (foe_hp==0))
+        if _direct_hit_context is not None and _direct_hit_registered:
+            _public_trace=direct_ko_callbacks.finish_device(_public_trace,_direct_ko_pending,
+                _active(work.hp,work,side),work.hp[rows,foe],work.active[rows,side],work.active[rows,foe])
+
         if table.phazing is not None:
             work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],
                 table.phazing,table.entry,eligible=acts & hit & (hp>0))
