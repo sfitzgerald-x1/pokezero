@@ -311,6 +311,7 @@ def _captured_direct_matches(tape,outcome,tables,captured):
     context=accounting._context(tape)
     if context is None:return no
     ledger=context.ledger;slot,same=accounting._ticket(ledger,captured.ticket);rows=jnp.arange(b)
+    same &= accounting._validate(ledger,captured.context.accounting)
     data=captured.context.data
     if not direct._check(tape,data):return no
     move=_vector(captured.move,b)

@@ -78,6 +78,11 @@ class DirectHitRiskTests(unittest.TestCase):
         scalar=captured._replace(context=captured.context._replace(data=captured.context.data._replace(
             engine_binding=captured.context.data.engine_binding[None,:])))
         with self.assertRaises(ValueError):self.observe(tape,carry,scalar,outcome,active)
+        for name in e.Tables._fields:
+            original=getattr(captured.context.accounting,name)
+            bad=captured._replace(context=captured.context._replace(
+                accounting=captured.context.accounting._replace(**{name:original[None,:]})))
+            with self.assertRaises(ValueError):self.observe(tape,carry,bad,outcome,active)
         wrong_count=captured._replace(context=captured.context._replace(data=captured.context.data._replace(
             move_count=captured.context.data.move_count+1)))
         self.assertTrue(bool((self.observe(tape,carry,wrong_count,outcome,active).risk&r.TARGET_OUTCOME).all()))
