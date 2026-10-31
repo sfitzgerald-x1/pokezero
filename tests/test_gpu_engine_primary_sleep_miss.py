@@ -50,7 +50,7 @@ class PrimarySleepMissTests(unittest.TestCase):
         self.assertFalse(bool(f.old.helper.device.miss_mask.any()))
         self.assertTrue(bool(data.primary_sleep))
         for name in ('transition.py','mechanics.py','secondary.py','state.py','entry.py','engine_retained_encoder_driver.py'):
-            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','076cfcf:gpu_engine/'+name]))
+            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','6366403541f60c06fcaa625caf4ee636f3bf97fa:gpu_engine/'+name]))
         for name in ('hypnosis','spore','sleeppowder','sing'):
             row=ids.index(name);self.assertTrue(bool(data.miss_mask[row]));self.assertTrue(bool(f.runtime['public'].device.no_damage_miss[row]))
         legacy=data._replace(primary_sleep=j.array(False),miss_mask=j.zeros_like(data.miss_mask))
