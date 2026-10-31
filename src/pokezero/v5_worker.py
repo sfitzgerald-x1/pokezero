@@ -211,7 +211,7 @@ def prepare_runtime(inputs):
         engine_leftovers_callbacks as leftovers,engine_status_residual_callbacks as status,
         engine_direct_hit_controls as hit,engine_substitute_callbacks as substitute,engine_toxic_callbacks as toxic,
         engine_recoil_callbacks as recoil,engine_calm_mind_callbacks as calm,engine_swords_dance_callbacks as sword,
-        engine_spikes_callbacks as spikes,engine_thunder_wave_callbacks as thunder,engine_retained_encoder_driver as driver)
+        engine_spikes_callbacks as spikes,engine_thunder_wave_callbacks as thunder,engine_sleep_powder_callbacks as powder,engine_retained_encoder_driver as driver)
     import jax.numpy as j
     runtime=inputs.runtime;show=runtime['showdown'];contract=ActorContract.champion();v=inputs.vocabulary
     vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases'])
@@ -238,7 +238,7 @@ def prepare_runtime(inputs):
         toxic_compiled=toxic.compile_toxic(engine_catalog=lifecycle,metadata=metadata),toxic_mode='kernel-event')
     for name,move,module,function in (('recoil','doubleedge',recoil,'compile_recoil'),('calm_mind','calmmind',calm,'compile_calm_mind'),
             ('swords_dance','swordsdance',sword,'compile_swords_dance'),('spikes','spikes',spikes,'compile_spikes'),
-            ('thunder_wave','thunderwave',thunder,'compile_thunder_wave')):
+            ('thunder_wave','thunderwave',thunder,'compile_thunder_wave'),('sleep_powder','sleeppowder',powder,'compile_sleep_powder')):
         helper=getattr(module,function)(engine_catalog=lifecycle,metadata=metadata) if move in metadata['vocabulary']['moves'] else None
         helpers[name+'_compiled']=helper;helpers[name+'_mode']='kernel-event' if helper is not None else 'closed'
     def source_spy(_):return driver.FakeScores(j.zeros(9,j.float32),j.array(0,j.int32))

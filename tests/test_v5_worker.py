@@ -167,13 +167,13 @@ class WorkerTests(unittest.TestCase):
         from gpu_engine import engine_leftovers_callbacks as leftovers,engine_status_residual_callbacks as status
         from gpu_engine import engine_direct_hit_controls as hit,engine_substitute_callbacks as sub,engine_toxic_callbacks as toxic
         from gpu_engine import engine_recoil_callbacks as recoil,engine_calm_mind_callbacks as calm,engine_swords_dance_callbacks as sword
-        from gpu_engine import engine_spikes_callbacks as spikes,engine_thunder_wave_callbacks as thunder
+        from gpu_engine import engine_spikes_callbacks as spikes,engine_thunder_wave_callbacks as thunder,engine_sleep_powder_callbacks as powder
         with tempfile.TemporaryDirectory() as directory:
             _,contract,doc,rt,raw=self.fixture(Path(directory));inputs=self.load(doc,rt,contract)
-            metadata=dict(compiled_tree=dict(sha256=raw['showdown']['compiled_tree_sha256']),vocabulary=dict(moves=['doubleedge','calmmind','swordsdance','spikes','thunderwave']))
+            metadata=dict(compiled_tree=dict(sha256=raw['showdown']['compiled_tree_sha256']),vocabulary=dict(moves=['doubleedge','calmmind','swordsdance','spikes','thunderwave','sleeppowder']))
             pool=NS(metadata=lambda:metadata);v=inputs.vocabulary
             catalog=NS(moves=object(),vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases']),masks=NS(**dict(contract.feature_masks)))
-            modules=[(leftovers,'compile_leftovers'),(status,'compile_status_residual'),(hit,'compile_direct_hit_controls'),(sub,'compile_substitute'),(toxic,'compile_toxic'),(recoil,'compile_recoil'),(calm,'compile_calm_mind'),(sword,'compile_swords_dance'),(spikes,'compile_spikes'),(thunder,'compile_thunder_wave')]
+            modules=[(leftovers,'compile_leftovers'),(status,'compile_status_residual'),(hit,'compile_direct_hit_controls'),(sub,'compile_substitute'),(toxic,'compile_toxic'),(recoil,'compile_recoil'),(calm,'compile_calm_mind'),(sword,'compile_swords_dance'),(spikes,'compile_spikes'),(thunder,'compile_thunder_wave'),(powder,'compile_sleep_powder')]
             with ExitStack() as stack:
                 stack.enter_context(patch.object(ActorContract,'champion',return_value=contract))
                 for module,name,result in [(dex,'load_showdown_dex_cached',object()),(randbat,'load_gen3_randbat_source_cached',NS(metadata=NS(source_hash=contract.belief_set_source_hash))),(source_provenance,'load_constructor_pool',pool),(source_provenance,'_pool',{'pool_sha256':inputs.plan.pool_sha256}),(public_belief,'compile_source',object()),(v4_encoder,'compile_encoder',catalog),(transition,'tables_from_metadata',object()),(events,'compile_catalog',object()),(requests,'load_source_rules',object()),(requests,'compile_request_source',object()),(own,'compile_own_facts',object())]:
@@ -189,12 +189,12 @@ class WorkerTests(unittest.TestCase):
             self.assertIs(public.category_vocab,catalog.vocabulary);self.assertIs(public.set_belief_source,True)
             self.assertEqual((options['public_mode'],options['frame_input_mode']),('retained-full','source-witness'))
             self.assertIs(options['account_source_sites'],True);self.assertIs(options['track_kernel_risks'],True)
-            for name in ('status_residual','direct_hit','substitute','toxic','recoil','calm_mind','swords_dance','spikes','thunder_wave'):
+            for name in ('status_residual','direct_hit','substitute','toxic','recoil','calm_mind','swords_dance','spikes','thunder_wave','sleep_powder'):
                 self.assertEqual(options[name+'_mode'],'kernel-event');self.assertIsNotNone(options[name+'_compiled'])
             self.assertEqual(options['leftovers_mode'],'retained')
             for compiler in compilers[:5]:self.assertEqual(compiler.call_count,2)
             for compiler in compilers[5:]:compiler.assert_called_once()
-            for name in ('recoil','calm_mind','swords_dance','spikes','thunder_wave'):
+            for name in ('recoil','calm_mind','swords_dance','spikes','thunder_wave','sleep_powder'):
                 self.assertEqual(absent[name+'_mode'],'closed');self.assertIsNone(absent[name+'_compiled'])
 
 
