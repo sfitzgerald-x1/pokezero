@@ -23,7 +23,17 @@ def champion_feature_masks(masks):
         for name, value in masks.items()})
 
 
-def compare_saved(measured, pool, catalog, *, showdown_root, node, native_seed_start, env_config=None):
+def champion_env_config(*, showdown_root, node, vocabulary, masks):
+    from pokezero.showdown import V4_REPLAY_OBSERVATION_SPEC
+    return comparison.LocalShowdownConfig(showdown_root=showdown_root, node_binary=node,
+        observation_spec=V4_REPLAY_OBSERVATION_SPEC, category_vocab=vocabulary,
+        feature_masks=champion_feature_masks(masks))
+
+
+def compare_saved(measured, pool, catalog, *, showdown_root, node, native_seed_start, env_config=None,
+                  original_ivs=None):
+    if original_ivs is not None and original_ivs.pool_sha256 != measured.get('pool_receipt', {}).get('pool_sha256'):
+        raise ValueError('saved measurement original pool binding differs')
     cohort = measured['cohort']
     ids = [row['stream_id'] for row in cohort]
     if (len(cohort) != measured['original_denominator'] or len(set(ids)) != len(ids)
@@ -67,7 +77,7 @@ def compare_saved(measured, pool, catalog, *, showdown_root, node, native_seed_s
             BattleState(*(value[index:index+1] for value in state)),
             tuple(value[index:index+1] for value in capture), catalog, root_ids=[root_id],
             showdown_root=showdown_root, node=node, native_seed_start=native_seed_start+index,
-            env_config=env_config, engine_observations=actual)
+            env_config=env_config, engine_observations=actual, original_ivs=original_ivs)
         rows.extend(result['rows'])
     return dict(schema=comparison.SCHEMA, scope='SAVED_ACTUAL_CONSTRUCTOR_PACKETS_NO_ENGINE_REPLAY',
         source_measurement_binding=measured.get('runtime_binding'), rows=rows,
@@ -97,11 +107,13 @@ def main(argv=None):
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),
         load_showdown_dex_cached(args.showdown_root),vocab,
         checkpoint_sha256=vocabulary['checkpoint_sha256'],feature_masks=masks)
-    config=comparison.LocalShowdownConfig(showdown_root=args.showdown_root,node_binary=args.node,
-        category_vocab=vocab,feature_masks=champion_feature_masks(masks))
-    result=compare_saved(measured,source_provenance.load_constructor_pool(args.team_pool),catalog,
+    config=champion_env_config(showdown_root=args.showdown_root,node=args.node,vocabulary=vocab,masks=masks)
+    pool=source_provenance.load_constructor_pool(args.team_pool)
+    original_ivs=comparison.load_original_ivs(args.team_pool,pool,
+        expected_pool_sha256=measured['pool_receipt']['pool_sha256'])
+    result=compare_saved(measured,pool,catalog,
         showdown_root=args.showdown_root,node=args.node,native_seed_start=args.native_seed_start,
-        env_config=config)
+        env_config=config,original_ivs=original_ivs)
     result['measurement_file_sha256']=hashlib.sha256(raw).hexdigest()
     with args.out.open('x') as stream:json.dump(result,stream,sort_keys=True,allow_nan=False)
     print(json.dumps(result['summary'],sort_keys=True,allow_nan=False))

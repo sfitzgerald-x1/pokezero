@@ -7,8 +7,11 @@ wire projection of actual p1/p2 bridge messages, never writer templates as the
 reference. A refused projection/encoder cell remains UNKNOWN; later roots run.
 """
 from collections import Counter
+from dataclasses import dataclass
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -20,6 +23,41 @@ from pokezero.recorded_encoder_parity import SHAPES, _arrays
 from . import fidelity, public_wire, source_provenance, v4_encoder
 
 SCHEMA = 'pokezero.B4-finite-real-showdown-stream-comparison.v1'
+
+
+@dataclass(frozen=True)
+class OriginalPoolIVs:
+    """Comparator-only original archive snapshot, never constructor-pool fields."""
+    pool_sha256: str
+    archive_bytes: bytes
+
+    def values(self, pool):
+        receipt = source_provenance._pool(pool, rehash=True)
+        if (type(self.archive_bytes) is not bytes
+                or hashlib.sha256(self.archive_bytes).hexdigest() != self.pool_sha256
+                or receipt['pool_sha256'] != self.pool_sha256):
+            raise ValueError('ORIGINAL_IV_POOL_BINDING_CHANGED')
+        with np.load(io.BytesIO(self.archive_bytes), allow_pickle=False) as archive:
+            if 'ivs' not in archive.files:
+                raise ValueError('ORIGINAL_POOL_IVS_MISSING')
+            ivs = archive['ivs']
+        if (ivs.shape != (len(pool.arrays['species']), 6, 6) or ivs.dtype.kind not in 'iu'
+                or np.any(ivs < 0) or np.any(ivs > 31)):
+            raise ValueError('LITERAL_ORIGINAL_POOL_IVS_REQUIRED')
+        return np.frombuffer(ivs.tobytes(), dtype=ivs.dtype).reshape(ivs.shape)
+
+
+def load_original_ivs(path, pool, *, expected_pool_sha256):
+    """Read one original NPZ snapshot bound to the saved measurement's receipt."""
+    with Path(path).open('rb') as stream:
+        before = os.fstat(stream.fileno()); payload = stream.read(); after = os.fstat(stream.fileno())
+    identity = lambda s:(s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns)
+    if (identity(before) != identity(after) or len(payload) != after.st_size
+            or hashlib.sha256(payload).hexdigest() != expected_pool_sha256):
+        raise ValueError('ORIGINAL_IV_POOL_ARCHIVE_CHANGED')
+    result = OriginalPoolIVs(expected_pool_sha256, payload)
+    result.values(pool)
+    return result
 
 
 def _sha(value):
@@ -65,10 +103,18 @@ class OwningShowdownEnv(LocalShowdownEnv):
         self._reset(seed=seed, format_id='gen3randombattle', start_override=override)
 
 
-def pool_sets(pool, team_indices, genders, happiness=None):
+def pool_sets(pool, team_indices, genders, happiness=None, *, original_ivs=None):
     """Decode original Nature/EV/IV/moves/items; do NOT regenerate from seeds."""
     source_provenance._pool(pool, rehash=True)
     arrays, vocabulary = pool.arrays, pool.metadata()['vocabulary']
+    if original_ivs is not None:
+        if type(original_ivs) is not OriginalPoolIVs:
+            raise ValueError('ORIGINAL_POOL_IV_SNAPSHOT_REQUIRED')
+        ivs = original_ivs.values(pool)
+    else:
+        ivs = arrays.get('ivs')
+        if ivs is None:
+            raise ValueError('ORIGINAL_POOL_IV_SNAPSHOT_REQUIRED')
     indices, genders = np.asarray(team_indices), np.asarray(genders)
     if (indices.shape != (2,) or indices.dtype.kind not in 'iu'
             or len(set(indices.tolist())) != 2 or np.any(indices < 0)
@@ -90,7 +136,7 @@ def pool_sets(pool, team_indices, genders, happiness=None):
                 moves=[vocabulary['moves'][int(move)] for move in arrays['moves'][index, slot] if move],
                 item='' if not value('item') else name('items', 'item'),
                 ability=name('abilities', 'ability'), nature=name('natures', 'nature'),
-                ivs=dict(zip(stats, map(int, arrays['ivs'][index, slot]))),
+                ivs=dict(zip(stats, map(int, ivs[index, slot]))),
                 evs=dict(zip(stats, map(int, arrays['evs'][index, slot]))),
                 gender={0: 'N', 1: 'M', 2: 'F'}[int(genders[side, slot])],
                 happiness=int(happy[side, slot])))
@@ -209,7 +255,7 @@ def compare_owner(lines, captured, catalog, *, constructor=False, actual_observa
 
 def collect_constructors(pool, team_indices, engine_state, captured, catalog, *, root_ids,
                          showdown_root, node, native_seed_start, env_config=None,
-                         engine_observations=None):
+                         engine_observations=None, original_ivs=None):
     """Actual finite paired constructor exposure; per-root failure is nonfatal.
 
     Root supplies the same actual post-entry engine state and original captured
@@ -232,7 +278,8 @@ def collect_constructors(pool, team_indices, engine_state, captured, catalog, *,
             state = __import__('jax').tree.map(lambda x:x[index:index+1], engine_state)
             if int(np.asarray(state.turn)[0]) != 0:
                 raise ValueError('constructor-only comparison requires the actual turn0 engine boundary')
-            parties = pool_sets(pool, indices[index], np.asarray(state.gender)[0], np.asarray(state.happiness)[0])
+            parties = pool_sets(pool, indices[index], np.asarray(state.gender)[0], np.asarray(state.happiness)[0],
+                original_ivs=original_ivs)
             packed = pack_sets(parties, showdown_root=showdown_root, node=node)
             row['exact_pool_sets_sha256'] = _sha(parties)
             env = OwningShowdownEnv(config)
