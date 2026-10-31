@@ -148,6 +148,9 @@ class V5FoulPlayTests(unittest.TestCase):
             with self.assertRaises(ValueError):asyncio.run(v5.run_panel(config,self.factory))
             runner.assert_not_called()
 
+
+
+class V5PanelSupervisionTests(unittest.TestCase):
     def test_owned_group_watchdog_drains_descendants_after_leader_exit_and_on_parse_failure(self):
         class Child:
             pid=12345;returncode=0
@@ -169,7 +172,7 @@ class V5FoulPlayTests(unittest.TestCase):
                     self.assertTrue(result['cleanup_confirmed']);self.assertEqual(result['exit_code'],0)
                 self.assertEqual(kwargs,[{'start_new_session':True}]);self.assertFalse(groups);self.assertTrue(signals)
 
-    def test_watchdog_uses_completed_game_duration_and_original_distant_deadline(self):
+    def test_watchdog_uses_completed_game_duration_and_invocation_local_backstop(self):
         import time
         class Child:
             pid=12345;returncode=None
@@ -190,8 +193,8 @@ class V5FoulPlayTests(unittest.TestCase):
                         backstop_seconds=1000,popen=lambda *a,**kw:child,group_exists=lambda group:group in groups,
                         signal_group=send,sleep=sleep)
                 self.assertTrue(result['cleanup_confirmed']);self.assertEqual(result['exit_code'],-15)
-                self.assertEqual(result['stop_reason'],'DISTANT_BACKSTOP' if ancient else 'NO_COMPLETED_GAME_WITHIN_ADAPTIVE_WINDOW')
-                if not ancient:self.assertGreater(clock[0],25.)
+                self.assertEqual(result['stop_reason'],'NO_COMPLETED_GAME_WITHIN_ADAPTIVE_WINDOW')
+                self.assertGreater(clock[0],10. if ancient else 25.)
 
 
 if __name__=='__main__':unittest.main()

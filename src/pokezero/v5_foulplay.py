@@ -165,6 +165,27 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
     return report()
 
 
+def _stop_panel_owned_group(process,group,grace,*,group_exists,signal_group,sleep):
+    """Same bounded TERM/KILL/group-check/reap pattern as v5_run03d."""
+    def alive():return group_exists(group)
+    def send(value):
+        try:signal_group(group,value)
+        except ProcessLookupError:pass
+    if alive():send(signal.SIGTERM)
+    end=time.monotonic()+grace
+    while alive() and time.monotonic()<end:sleep(min(.1,max(0.,end-time.monotonic())))
+    if alive():
+        send(signal.SIGKILL);end=time.monotonic()+grace
+        while alive() and time.monotonic()<end:sleep(min(.1,max(0.,end-time.monotonic())))
+    if alive():raise RuntimeError('owned worker process group remains after bounded cleanup')
+    try:process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:process.wait(timeout=grace)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError('owned worker leader remains after bounded cleanup') from error
+
+
 def supervise_panel(command,*,progress_path,initial_window_seconds,longest_multiplier=5.,
         backstop_seconds=30*24*3600.,poll_seconds=1.,grace_seconds=10.,popen=subprocess.Popen,
         group_exists=None,signal_group=None,sleep=time.sleep):
@@ -173,6 +194,8 @@ def supervise_panel(command,*,progress_path,initial_window_seconds,longest_multi
     Direct async callers retain late-result rejection but cannot preempt JAX.
     Run that caller inside this supervisor for actual stall/backstop enforcement.
     Only the newly created session/process group may receive cleanup signals.
+    Historical started_unix remains provenance; the distant backstop bounds
+    THIS invocation, including an explicitly authorized resumed invocation.
     """
     values=(initial_window_seconds,longest_multiplier,backstop_seconds,poll_seconds,grace_seconds)
     if (os.name!='posix' or any(type(x) not in (int,float) or not 0<x<float('inf') for x in values)
@@ -198,7 +221,6 @@ def supervise_panel(command,*,progress_path,initial_window_seconds,longest_multi
                 if len(done)<completed:raise ValueError('completed panel progress regressed')
                 if len(done)>completed:
                     completed=len(done);last=time.monotonic();longest=max(longest,max(row['duration_seconds'] for row in done))
-                if time.time()-current['started_unix']>backstop_seconds:reason='DISTANT_BACKSTOP'
             now=time.monotonic()
             if now-started>backstop_seconds:reason='DISTANT_BACKSTOP'
             elif reason is None and now-last>max(initial_window_seconds,longest_multiplier*longest):reason='NO_COMPLETED_GAME_WITHIN_ADAPTIVE_WINDOW'
@@ -206,15 +228,8 @@ def supervise_panel(command,*,progress_path,initial_window_seconds,longest_multi
             sleep(poll_seconds)
     except BaseException as error:failure=error
     finally:
-        if process.poll() is None or group_exists(group):
-            if group_exists(group):signal_group(group,signal.SIGTERM)
-            try:process.wait(timeout=grace_seconds)
-            except subprocess.TimeoutExpired:
-                if group_exists(group):signal_group(group,signal.SIGKILL)
-                process.wait(timeout=grace_seconds)
-            if group_exists(group):signal_group(group,signal.SIGKILL)
-            until=time.monotonic()+grace_seconds
-            while group_exists(group) and time.monotonic()<until:sleep(min(poll_seconds,.2))
+        _stop_panel_owned_group(process,group,grace_seconds,
+            group_exists=group_exists,signal_group=signal_group,sleep=sleep)
     if failure is not None:raise failure
     return dict(exit_code=process.returncode,owned_pid=process.pid,owned_group=group,
         cleanup_confirmed=not group_exists(group),stop_reason=reason)
