@@ -75,6 +75,7 @@ class BirthRecord(NamedTuple):
     profile_binding: object
     birth_spe: object
     birth_ability: object
+    current_ability: object
 
 
 _PROFILES = weakref.WeakKeyDictionary()
@@ -133,7 +134,7 @@ def compile_profile(metadata, *, catalog, engine_catalog, rules, allow_none_at_b
         source=np.asarray(catalog.source.device.binding).tolist(), engine=engine_catalog.binding,
         rules=payload, items=sorted(items), abilities=sorted(abilities),
         allow_none_at_birth=allow_none_at_birth, physical='both_parties_all_six',
-        bounds='stored_spe1..2500_stage-6..6_Q12par_current_equals_birth_ability',
+        bounds='stored_spe1..2500_stage-6..6_Q12par_current_equals_owned_captured_ability',
         scope='conditional_speed_math_not_generator_or_complete_source_qualification')
     digest = hashlib.sha256(_json(contract).encode()).digest()
     device = ProfileData(jnp.asarray(np.frombuffer(digest, dtype='>u4').astype(np.uint32)),
@@ -178,14 +179,14 @@ def _state_shape(state, stream_ids):
     return b
 
 
-def _members(state, data, *, birth):
+def _members(state, data, *, birth, expected_ability=None):
     def allowed(value, table):
         return (value >= 0) & (value < table.shape[0]) & table[jnp.clip(value, 0, table.shape[0] - 1)]
     spe, stage = state.stats[..., 5], state.boosts[..., 4]
     members = (allowed(state.species, data.species)
         & allowed(state.item, data.birth_items if birth else data.current_items)
         & allowed(state.base_ability, data.abilities) & allowed(state.ability, data.abilities)
-        & (state.ability == state.base_ability)
+        & (state.ability == (state.base_ability if expected_ability is None else expected_ability))
         & (spe >= 1) & (spe <= 2500) & (stage >= -6) & (stage <= 6)
         & (state.status >= mechanics.NONE) & (state.status <= mechanics.FRZ))
     return jnp.all(members, axis=(1, 2))
@@ -206,10 +207,10 @@ def qualify_birth_device(state, stream_ids, data):
     duplicates = jnp.concatenate((equal, jnp.array([False]))) | jnp.concatenate((jnp.array([False]), equal))
     duplicate_rows = jnp.zeros(b, bool).at[order].set(duplicates)
     fresh = (state.turn == 0) & ~state.done & jnp.all((state.hp > 0) & (state.hp == state.max_hp), axis=(1, 2))
-    qualified = _members(state, data, birth=True) & fresh & (stream_ids > 0) & ~duplicate_rows
+    qualified = _members(state, data, birth=True) & jnp.all(state.ability==state.base_ability,axis=(1,2)) & fresh & (stream_ids > 0) & ~duplicate_rows
     broadcast = lambda v: jnp.broadcast_to(v, (b, 8))
     return BirthRecord(qualified, stream_ids, broadcast(data.engine_binding), broadcast(data.source_binding),
-        broadcast(data.binding), state.stats[..., 5], state.base_ability)
+        broadcast(data.binding), state.stats[..., 5], state.base_ability, state.ability)
 
 
 def retain_device(record, state, stream_ids, data):
@@ -218,7 +219,8 @@ def retain_device(record, state, stream_ids, data):
     Supported old-item preservation/swap/consumption-to0 is closed over the
     profile. This does not attest unseen mutations, transient outside items,
     or skipped carries. Session ownership/fixed kernel identity is required.
-    Transform/copied ability/stat changes conservatively latch False.
+    Unrecorded ability changes and stat changes conservatively latch False.
+    Only retain_frame_device advances current_ability from captured entry writes.
     """
     b = _state_shape(state, stream_ids)
     if type(record) is not BirthRecord:
@@ -226,15 +228,71 @@ def retain_device(record, state, stream_ids, data):
     for value, shape, dtype in ((record.qualified_birth, (b,), jnp.bool_),
             (record.stream_id, (b,), jnp.int32), (record.engine_binding, (b, 8), jnp.uint32),
             (record.source_binding, (b, 8), jnp.uint32), (record.profile_binding, (b, 8), jnp.uint32),
-            (record.birth_spe, (b, 2, 6), jnp.int32), (record.birth_ability, (b, 2, 6), jnp.int32)):
+            (record.birth_spe, (b, 2, 6), jnp.int32), (record.birth_ability, (b, 2, 6), jnp.int32),
+            (record.current_ability,(b,2,6),jnp.int32)):
         _typed(value, shape, dtype)
     bound = ((record.stream_id == stream_ids) & (stream_ids > 0)
         & jnp.all(record.engine_binding == data.engine_binding, axis=1)
         & jnp.all(record.source_binding == data.source_binding, axis=1)
         & jnp.all(record.profile_binding == data.binding, axis=1))
     unchanged = (jnp.all(state.stats[..., 5] == record.birth_spe, axis=(1, 2))
-        & jnp.all(state.base_ability == record.birth_ability, axis=(1, 2)))
-    return record._replace(qualified_birth=record.qualified_birth & bound & unchanged & _members(state, data, birth=False))
+        & jnp.all(state.base_ability == record.birth_ability, axis=(1, 2))
+        & jnp.all(state.ability == record.current_ability, axis=(1,2)))
+    return record._replace(qualified_birth=record.qualified_birth & bound & unchanged & _members(state, data, birth=False,expected_ability=record.current_ability))
+
+
+def retain_frame_device(record,state,stream_ids,data,tape):
+    """Owning entry frame only: exact captured copy, then ordinary retention.
+
+    A trusted actual constructor/kernel supplies the genuine tape once. This
+    is not copied-carry attestation. Later FULL folds must consume every claim.
+    Missing claims, changed snapshots/stamps or stale old ability latch false;
+    no previously false row can be revived. Switch departure restores only the
+    literal outgoing physical member to its immutable birth ability.
+    """
+    from . import engine_execution_completeness as execution, engine_lifecycle_callbacks as life
+    from . import engine_trace_callbacks as trace
+    b=_state_shape(state,stream_ids);rows=jnp.arange(b)
+    # Validate all non-ability state plus the ORIGINAL expected ability first.
+    retained=retain_device(record,state._replace(ability=record.current_ability),stream_ids,data)
+    context=execution._context(tape)
+    if context is None:
+        return retain_device(record,state,stream_ids,data)
+    ledger=context.ledger
+    bound=(execution._validate(ledger,context.tables)&execution._tape(ledger,tape,context.tables)
+        &ledger.opened&jnp.all(tape.engine_binding==data.engine_binding)
+        &jnp.all(tape.source_binding==data.source_binding))
+    def step(carry,index):
+        expected,good=carry;raw=tape.words[:,index];present=index<tape.count
+        side=jnp.clip(raw[:,3],0,1);physical=jnp.clip(raw[:,4],0,5)
+        switch=present&(raw[:,0]==life.SWITCH_INSTALLED)
+        outgoing=jnp.clip(raw[:,2],0,5)
+        reset=expected.at[rows,side,outgoing].set(record.birth_ability[rows,side,outgoing])
+        valid_switch=(raw[:,1]==raw[:,3])&(raw[:,2]>=0)&(raw[:,2]<6)&(raw[:,3]>=0)&(raw[:,3]<2)
+        good &= ~switch|(bound&valid_switch)
+        expected=jnp.where(switch[:,None,None],reset,expected)
+        copied=present&(raw[:,0]==trace.TRACE_COPY)
+        claim=ledger.claimed[:,index];slot=jnp.clip(claim-1,0,ledger.site.shape[1]-1)
+        foe=jnp.clip(raw[:,5],0,1);foe_physical=jnp.clip(raw[:,6],0,5)
+        exact=(bound&(claim>0)&(claim<=ledger.count)&(ledger.site[rows,slot]==int(execution.Site.TRACE_COPY))
+            &(ledger.stage[rows,slot]==2)&(ledger.start[rows,slot]==index)&(ledger.end[rows,slot]==index+1)
+            &jnp.all(ledger.words[:,index]==raw,axis=1)
+            &(ledger.event_turn[:,index]==tape.event_turn[:,index])
+            &(ledger.event_phase[:,index]==tape.event_phase[:,index])
+            &jnp.all(ledger.event_generation[:,index]==tape.event_generation[:,index],axis=1)
+            &(ledger.turn[rows,slot]==tape.event_turn[:,index])
+            &(ledger.phase[rows,slot]==tape.event_phase[:,index])
+            &jnp.all(ledger.generation[rows,slot]==tape.event_generation[:,index],axis=1)
+            &(raw[:,3]>=0)&(raw[:,3]<2)&(raw[:,4]>=0)&(raw[:,4]<6)
+            &(raw[:,5]==1-raw[:,3])&(raw[:,6]>=0)&(raw[:,6]<6)
+            &(raw[:,1]==expected[rows,side,physical])&(raw[:,2]==expected[rows,foe,foe_physical])
+            &(raw[:,2]==raw[:,7])&jnp.all(raw[:,8:]==0,axis=1))
+        good &= ~copied|exact
+        updated=expected.at[rows,side,physical].set(raw[:,2])
+        return (jnp.where((copied&exact)[:,None,None],updated,expected),good),None
+    (expected,good),_=jax.lax.scan(step,(record.current_ability,retained.qualified_birth),jnp.arange(tape.words.shape[1]))
+    retained=retained._replace(current_ability=expected,qualified_birth=retained.qualified_birth&good)
+    return retain_device(retained,state,stream_ids,data)
 
 
 def qualify_birth(state, stream_ids, *, profile):

@@ -46,6 +46,7 @@ class Site(IntEnum):
     DIRECT_HIT = 10
     SUBSTITUTE_SELF = 11
     TOXIC_ATTEMPT = 12
+    TRACE_COPY = 13
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -237,6 +238,25 @@ def capture_leftovers_write(tape, ticket, *, requested, positive_write):
     accepted=requested & positive_write & semantic
     ledger=unhandled(ledger,ticket,active=requested&~(positive_write&semantic),tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=accepted,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def capture_trace_copy(tape,ticket,*,requested):
+    """Snapshot only this actual entry copy's one raw27; no consume credit."""
+    context=_context(tape)
+    if context is None:return tape
+    from . import engine_trace_callbacks as trace
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);rows=jnp.arange(tape.count.shape[0])
+    _shape(requested,tape.count.shape,jnp.bool_)
+    start=ledger.start[rows,slot];raw=tape.words[rows,jnp.clip(start,0,tape.words.shape[1]-1)]
+    side=raw[:,3];safe=jnp.clip(side,0,1)
+    semantic=(same&(ledger.site[rows,slot]==int(Site.TRACE_COPY))&(tape.count==start+1)
+        &(raw[:,0]==trace.TRACE_COPY)&(side==ledger.side[rows,slot])&(side>=0)&(side<2)
+        &(raw[:,1]>0)&(raw[:,2]>0)&(raw[:,2]==raw[:,7])&(raw[:,5]==1-side)
+        &(raw[:,4]==tape.cursor.physical_active[rows,safe])
+        &(raw[:,6]==tape.cursor.physical_active[rows,1-safe])&jnp.all(raw[:,8:]==0,axis=1))
+    ledger=unhandled(ledger,ticket,active=requested&~semantic,tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
     return _put_context(tape,ledger,context)
 
 
