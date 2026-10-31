@@ -220,8 +220,15 @@ def v5_loss(output, tensors, model_config, config):
         variance = ((advantage - mean).square() * objective_weights).sum() / objective_weights.sum()
         advantage = (advantage - mean) / (variance.sqrt() + 1e-8)
     chosen = log_probs[ppo_mask].gather(1, actions[:, None]).squeeze(-1)
-    ratio = (chosen - behavior.log()).exp()
-    surrogate = torch.minimum(ratio * advantage, ratio.clamp(1 - config.clip_epsilon, 1 + config.clip_epsilon) * advantage)
+    # Select the exact signed PPO branch before exponentiation: an unused
+    # overflowing ratio otherwise backpropagates NaN through the clipped branch.
+    log_ratio = chosen - behavior.log()
+    surrogate = torch.zeros_like(chosen)
+    positive, negative = advantage > 0, advantage < 0
+    surrogate[positive] = (log_ratio[positive].clamp(max=math.log1p(config.clip_epsilon))
+        + advantage[positive].log()).exp()
+    surrogate[negative] = -(log_ratio[negative].clamp(min=math.log1p(-config.clip_epsilon))
+        + (-advantage[negative]).log()).exp()
     policy = average('policy_loss', -surrogate, objective_weights)
 
     search_policy_mask = column('search_policy_target_mask', (batch,), mask=True) if 'search_policy_target_mask' in tensors else torch.zeros_like(active)

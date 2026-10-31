@@ -216,6 +216,33 @@ class V5ModelLossTests(unittest.TestCase):
         torch.testing.assert_close(a, b)
         self.assertTrue(torch.isfinite(a).all())
 
+    def test_PPO_tiny_behavior_preserves_exact_signed_clipping_and_finite_gradients(self):
+        cfg = config('A'); columns = batch_columns('A')
+        columns.update(training_weights=(1.0, 0.0, 0.0),
+            action_probabilities=(1e-40, 0.4, math.nan), ppo_advantages=(1.0, 0.0, math.nan))
+        tensors = v5_batch_to_torch(columns, cfg, training=True)
+        out = outputs(cfg)
+        actual, _ = v5_loss(out, tensors, cfg, isolated_loss_config('A'))
+        self.assertAlmostEqual(actual.item(), -1.2, places=6)
+        grad = torch.autograd.grad(actual, out.policy_logits)[0]
+        self.assertTrue(torch.equal(grad, torch.zeros_like(grad)))
+        # A tiny negative advantage can still have a representable product even
+        # when its ratio alone exceeds float32. Preserve that unbounded branch.
+        tensors['ppo_advantages'][0] = -1e-10
+        out = outputs(cfg)
+        actual, _ = v5_loss(out, tensors, cfg, isolated_loss_config('A'))
+        reference_logits = out.policy_logits.detach().double().requires_grad_()
+        expected = (reference_logits[0, :2].softmax(-1)[0]
+            / tensors['action_probabilities'][0].double() * -tensors['ppo_advantages'][0].double())
+        torch.testing.assert_close(actual.double(), expected, rtol=2e-5, atol=0)
+        grad = torch.autograd.grad(actual, out.policy_logits)[0]
+        reference_grad = torch.autograd.grad(expected, reference_logits)[0]
+        torch.testing.assert_close(grad.double(), reference_grad, rtol=2e-5, atol=0)
+        self.assertTrue(torch.isfinite(grad).all())
+        tensors['ppo_advantages'][0] = -1.0
+        with self.assertRaisesRegex(ValueError, 'nonfinite active loss term: policy_loss'):
+            v5_loss(outputs(cfg), tensors, cfg, isolated_loss_config('A'))
+
     def test_reverse_uniform_KL_keeps_gradient_when_a_legal_action_probability_underflows(self):
         cfg = config(); out = outputs(cfg); tensors = v5_batch_to_torch(batch_columns(), cfg, training=True)
         tensors['ppo_advantages'].zero_()
