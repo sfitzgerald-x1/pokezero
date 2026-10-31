@@ -311,11 +311,11 @@ async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canar
     final=book.matching('CANARY_TRAINING_END')
     require(len(final)==1 and final[0]['declared_games']==DECLARED_GAMES and
         file_sha(final_checkpoint)==final[0]['checkpoint_sha256'],'final declared checkpoint only, no selection')
-    from .b4_canary_endpoint import evaluate_declared
+    from .b4_canary_endpoint import evaluate_with_sigterm
     import fcntl
     with (book.path/'fp-invocation.lock').open('a+b') as lock:
         fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
-        try:return await evaluate_declared(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint)
+        try:return await evaluate_with_sigterm(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint)
         finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN)
 
 
@@ -386,5 +386,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
             if reason:break
             sleep(1.)
     finally:
-        owned._stop_owned_group(process,10.,sleep=sleep)
+        # Cells can use5s TERM+5s KILL+5s leader reaping concurrently. Let
+        # the controller finish that unwind before escalating its own group.
+        owned._stop_owned_group(process,30.,sleep=sleep)
     return dict(exit_code=process.returncode,stop_reason=reason,owned_pid=getattr(process,'pid',None),observer_error=observer_error)

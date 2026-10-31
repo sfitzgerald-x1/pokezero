@@ -2,7 +2,9 @@
 import asyncio
 from dataclasses import replace
 import json
+import contextvars
 from pathlib import Path
+import signal
 import tempfile
 from types import SimpleNamespace as NS
 import unittest
@@ -171,6 +173,91 @@ class ConcurrentEndpointTests(unittest.TestCase):
                 fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
                 with self.assertRaises(BlockingIOError):self.run_panel(root,recipe,checkpoint,AsyncMock())
                 fcntl.flock(lock.fileno(),fcntl.LOCK_UN)
+
+    def test_scoped_term_is_idempotent_and_defers_prior_handler_until_cleanup(self):
+        for failure in (False,True):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as temp:
+                root=Path(temp)/'run';recipe,checkpoint=self.prepare(root);closed=[];prior_calls=[];handlers={}
+                real=c.file_sha
+                async def scenario():
+                    ready=asyncio.Event();release=asyncio.Event();never=asyncio.Event();started=[];loop=asyncio.get_running_loop()
+                    prior=lambda sig,frame:prior_calls.append((sig,frame,len(closed)))
+                    state=[prior];registry={}
+                    def install(sig,callback,*args):
+                        handlers[sig]=lambda:callback(*args);registry[sig]=asyncio.Handle(callback,args,loop);state[0]=lambda *_:None
+                    def remove(sig):handlers.pop(sig,None);registry.pop(sig,None);state[0]=signal.SIG_DFL;return True
+                    async def fake(path):
+                        ordinal=int(Path(path).stem);started.append(ordinal)
+                        if len(started)==4:ready.set()
+                        try:await never.wait()
+                        finally:
+                            await release.wait();closed.append(ordinal)
+                            if failure and ordinal==0:raise RuntimeError('owned cleanup failed')
+                    with patch.object(loop,'_signal_handlers',registry),patch.object(loop,'add_signal_handler',side_effect=install),\
+                         patch.object(loop,'remove_signal_handler',side_effect=remove),patch.object(e.signal,'getsignal',side_effect=lambda _:state[0]),\
+                         patch.object(e.signal,'signal',side_effect=lambda _,value:state.__setitem__(0,value)),\
+                         patch.object(c,'file_sha',side_effect=lambda p:c.CHAMPION_SHA if str(p)=='/untouched' else real(p)),\
+                         patch.object(e,'check_placement',return_value={}),patch.object(e,'launch',side_effect=fake):
+                        task=asyncio.create_task(c.evaluate(recipe,root,champion_checkpoint='/untouched',final_checkpoint=checkpoint,enable_canary=True))
+                        await ready.wait();handlers[signal.SIGTERM]();await asyncio.sleep(0);handlers[signal.SIGTERM]()
+                        task.cancel();await asyncio.sleep(0);task.cancel();await asyncio.sleep(0)
+                        self.assertFalse(task.done());self.assertEqual(prior_calls,[]);release.set()
+                        with self.assertRaisesRegex(RuntimeError,'cleanup failed') if failure else self.assertRaises(asyncio.CancelledError):await task
+                        self.assertEqual(sorted(closed),list(range(4)));self.assertIs(state[0],prior)
+                asyncio.run(scenario())
+                self.assertEqual(prior_calls,[] if failure else [(signal.SIGTERM,None,4)])
+
+    def test_prior_async_handle_and_context_are_restored_exactly(self):
+        async def scenario():
+            loop=asyncio.get_running_loop();variable=contextvars.ContextVar('unit-context');calls=[];handlers={}
+            variable.set('original');prior=asyncio.Handle(lambda arg:calls.append((arg,variable.get())),('saved',),loop)
+            variable.set('invocation');registry={signal.SIGTERM:prior};state=[lambda *_:None]
+            def install(sig,callback,*args):handlers[sig]=lambda:callback(*args);registry[sig]=asyncio.Handle(callback,args,loop)
+            def remove(sig):handlers.pop(sig,None);registry.pop(sig,None);return True
+            async def body(*args,**kwargs):handlers[signal.SIGTERM]();await asyncio.sleep(0)
+            with patch.object(loop,'_signal_handlers',registry),patch.object(loop,'add_signal_handler',side_effect=install),\
+                 patch.object(loop,'remove_signal_handler',side_effect=remove),patch.object(e.signal,'getsignal',side_effect=lambda _:state[0]),\
+                 patch.object(e.signal,'signal',side_effect=lambda _,value:state.__setitem__(0,value)),patch.object(e,'evaluate_declared',side_effect=body):
+                with self.assertRaises(asyncio.CancelledError):await e.evaluate_with_sigterm(object(),object(),champion_checkpoint='/unit',final_checkpoint='/unit')
+                self.assertIs(registry[signal.SIGTERM],prior);self.assertEqual(calls,[('saved','original')])
+                registry[signal.SIGTERM]._run();self.assertEqual(calls,[('saved','original')]*2)
+        asyncio.run(scenario())
+
+    def test_cancellation_during_normal_reap_waits_and_preserves_cleanup_failure(self):
+        from pokezero import owning_encoder_continuation as owned
+        for failure in (False,True):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as temp:
+                root=Path(temp);path=root/'fp-requests/0.json';e._write(path,{'unit':'not-science'})
+                async def scenario():
+                    entered=asyncio.Event();release=asyncio.Event();ended=[]
+                    async def cleanup(process):
+                        entered.set();await release.wait();ended.append('reaped')
+                        if failure:raise RuntimeError('owned group persists')
+                    process=NS(pid=987654321,returncode=0,wait=AsyncMock(return_value=0))
+                    with patch.object(e.asyncio,'create_subprocess_exec',new=AsyncMock(return_value=process)),\
+                         patch.object(owned,'_stop_owned_group',side_effect=cleanup) as reap:
+                        task=asyncio.create_task(e.launch(path));await entered.wait();task.cancel();await asyncio.sleep(0)
+                        task.cancel();await asyncio.sleep(0);self.assertFalse(task.done());release.set()
+                        with self.assertRaisesRegex(RuntimeError,'group persists') if failure else self.assertRaises(asyncio.CancelledError):await task
+                        self.assertEqual(ended,['reaped']);self.assertEqual(reap.call_count,1)
+                asyncio.run(scenario())
+
+    def test_scope_does_not_replace_new_unrelated_parent_handler(self):
+        async def scenario():
+            loop=asyncio.get_running_loop();registry={};calls=[]
+            parent=lambda:calls.append('parent')
+            def install(sig,callback,*args):registry[sig]=asyncio.Handle(callback,args,loop)
+            def remove(sig):registry.pop(sig,None);return True
+            async def body(*args,**kwargs):install(signal.SIGTERM,parent);return 'unit-result'
+            with patch.object(loop,'_signal_handlers',registry),patch.object(loop,'add_signal_handler',side_effect=install),\
+                 patch.object(loop,'remove_signal_handler',side_effect=remove) as removed,\
+                 patch.object(e.signal,'getsignal',return_value=signal.SIG_DFL),patch.object(e.signal,'signal') as setter,\
+                 patch.object(e,'evaluate_declared',side_effect=body):
+                result=await e.evaluate_with_sigterm(object(),object(),champion_checkpoint='/unit',final_checkpoint='/unit')
+                self.assertEqual(result,'unit-result');self.assertIs(registry[signal.SIGTERM]._callback,parent)
+                removed.assert_not_called();setter.assert_not_called();registry[signal.SIGTERM]._run()
+            self.assertEqual(calls,['parent'])
+        asyncio.run(scenario())
 
 
 if __name__=='__main__':unittest.main()

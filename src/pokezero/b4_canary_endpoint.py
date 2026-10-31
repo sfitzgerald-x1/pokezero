@@ -10,6 +10,7 @@ import json
 import math
 import os
 from pathlib import Path
+import signal
 import sys
 import tempfile
 import time
@@ -97,7 +98,6 @@ def checked_result(value,request,plan):
 async def launch(request_path):
     """Fixed original worker only, never an arbitrary executor callback."""
     from . import b4_fidelity_canary as c
-    from .owning_encoder_continuation import _stop_owned_group
     request_path=Path(request_path);digest=c.file_sha(request_path)
     log=request_path.parent.parent/'fp-errors'/request_path.with_suffix('.log').name;log.parent.mkdir(exist_ok=True)
     with log.open('xb') as stderr:
@@ -106,12 +106,75 @@ async def launch(request_path):
             stdout=asyncio.subprocess.DEVNULL,stderr=stderr,start_new_session=True)
         try:code=await process.wait()
         finally:
-            await _stop_owned_group(process)  # Confirm descendants gone before slot reuse.
+            await _finish_owned_cleanup(process)  # TERM cannot interrupt an already-running reap.
             stderr.flush();os.fsync(stderr.fileno());c._sync_directory(log.parent)
     c.require(code==0,'owned FP worker exited unsuccessfully; no retry')
     result=request_path.parent.parent/'fp-results'/request_path.name
     c.require(result.is_file(),'owned FP worker missing durable result; no retry')
     return _read_result(result)
+
+
+async def _finish_owned_cleanup(process):
+    from .owning_encoder_continuation import _stop_owned_group
+    cleanup=asyncio.create_task(_stop_owned_group(process))
+    try:await asyncio.shield(cleanup)
+    except asyncio.CancelledError:
+        while not cleanup.done():
+            try:await asyncio.shield(cleanup)
+            except asyncio.CancelledError:pass
+        cleanup.result()  # A failed reap remains visible rather than becoming cancellation.
+        raise
+
+
+async def evaluate_with_sigterm(plan,book,*,champion_checkpoint,final_checkpoint):
+    """Own TERM for this public invocation, then restore/defer caller handlers.
+
+    A separate endpoint task makes repeated termination idempotent while its
+    finally block gathers all independent process groups. Existing asyncio
+    handlers retain their original Handle/context; Python handlers receive the
+    deferred signal with frame=None, only after successful owned cleanup.
+    """
+    loop=asyncio.get_running_loop();registry=getattr(loop,'_signal_handlers',None)
+    if not isinstance(registry,dict):raise RuntimeError('Unix asyncio signal-handler preservation required')
+    prior_async=registry.get(signal.SIGTERM);prior_python=signal.getsignal(signal.SIGTERM)
+    if prior_async is not None and prior_async.cancelled():raise RuntimeError('prior SIGTERM handler is cancelled')
+    child=None;requested=False;received=False;cleanup_finished=False
+    def cancel_once():
+        nonlocal requested
+        if child is not None and not requested:requested=True;child.cancel()
+    def terminate():
+        nonlocal received
+        received=True;cancel_once()
+    loop.add_signal_handler(signal.SIGTERM,terminate)
+    installed=registry.get(signal.SIGTERM)
+    try:
+        child=asyncio.create_task(evaluate_declared(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint))
+        if received:cancel_once()
+        try:
+            value=await asyncio.shield(child);cleanup_finished=True;return value
+        except asyncio.CancelledError:
+            cancel_once()
+            while not child.done():
+                try:await asyncio.shield(child)
+                except asyncio.CancelledError:pass
+            if not child.cancelled():child.result()  # Propagate cleanup failure, never report a clean stop.
+            cleanup_finished=True
+            raise
+    finally:
+        # Do not replace a different handler installed by the parent meanwhile.
+        current_registry=getattr(loop,'_signal_handlers',None)
+        still_ours=current_registry is registry and (installed is None or registry.get(signal.SIGTERM) is installed)
+        if still_ours:
+            loop.remove_signal_handler(signal.SIGTERM)
+            if prior_async is not None:
+                loop.add_signal_handler(signal.SIGTERM,prior_async._run)
+                # Re-arm the OS/wakeup fd through the public API, then retain
+                # the exact original Handle, callback arguments and context.
+                registry[signal.SIGTERM]=prior_async
+            elif signal.getsignal(signal.SIGTERM)!=prior_python:signal.signal(signal.SIGTERM,prior_python)
+            if received and cleanup_finished:
+                if prior_async is not None:prior_async._run()
+                elif callable(prior_python):prior_python(signal.SIGTERM,None)
 
 
 def pin_owned_actor(pair):
