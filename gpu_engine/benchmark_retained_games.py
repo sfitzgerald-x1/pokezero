@@ -151,6 +151,19 @@ def _requested(state):
         for request, ledger in zip(state.core.requests, state.core.orders)], axis=1)
 
 
+def _refusal_snapshot(result):
+    """Retain original refusal values for diagnosis, without deriving causes."""
+    packet = lambda value: None if value is None else np.asarray(value).tolist()
+    core = result.state.core
+    ledger = getattr(core, 'execution', None)
+    return dict(core_admitted=packet(core.admitted), unsafe=packet(getattr(core, 'unsafe', None)),
+        accounting_refusal=packet(getattr(ledger, 'refusal', None)),
+        accounting_upstream_refusal=packet(getattr(ledger, 'upstream_refusal', None)),
+        owners=[{name:packet(getattr(owner, name, None)) for name in
+            ('reason', 'basic_error', 'retained_error', 'policy_admitted',
+             'full_line_consumers_complete', 'full_encoder_admitted')} for owner in result.owners])
+
+
 def _admission(result, active, config):
     """Check both public/source carries; policy admission is seat-requested."""
     batch = len(active)
@@ -437,6 +450,8 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         name: np.asarray(array).tolist() for name, array in value._asdict().items()}
     return dict(schema=SCHEMA, status=status, runtime_binding=runtime.binding,
         source=source,
+        initial_refusal_diagnostics=_refusal_snapshot(initial),
+        final_refusal_diagnostics=_refusal_snapshot(session.result),
         final_frame_input_witness=raw_packet(witness), final_kernel_risks=raw_packet(risks),
         initial_engine_state=raw_packet(initial.state.core.engine),
         initial_frame_input_witness=raw_packet(getattr(initial.state.core,'frame_input_report',None)),
