@@ -116,6 +116,19 @@ class WorkerTests(unittest.TestCase):
                 altered=record(root/(mutation+'.json'),value)
                 with self.subTest(mutation=mutation),self.assertRaises(ValueError):self.load(doc,altered,contract)
 
+    def test_main_emits_compact_dispositions_and_never_reports_stopped_as_success(self):
+        argv=['--enable-v5','--arm','B0','--declaration','/unit/plan','--expected-declaration-sha256','a'*64,
+            '--runtime','/unit/runtime','--expected-runtime-sha256','b'*64,'--run-root','/unit/out']
+        for status,expected_exit in [('STOPPED',1),('COMPLETE_DECLARATION',0)]:
+            result=dict(status=status,reason='literal-source-reason',statuses={1:'REFUSED',2:'NOT_ATTEMPTED'})
+            output=io.StringIO();hook=object()
+            with patch.object(w,'load_inputs',return_value=object()),patch.object(w,'execute',return_value=result) as execute,redirect_stdout(output):
+                self.assertEqual(w.main(argv,evaluation_hook=hook),expected_exit)
+            report=json.loads(output.getvalue());self.assertEqual(report['status'],status)
+            self.assertEqual(report['disposition_counts'],{'REFUSED':1,'NOT_ATTEMPTED':1})
+            self.assertFalse(report['scientific_qualification']);self.assertNotIn('statuses',report)
+            self.assertIs(execute.call_args.kwargs['evaluation_hook'],hook)
+
     def test_execution_requires_declared_panel_before_runtime_and_forwards_exact_api(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);recipe,contract,doc,rt,_=self.fixture(root);inputs=self.load(doc,rt,contract)

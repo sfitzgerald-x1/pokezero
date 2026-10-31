@@ -5,6 +5,7 @@ construct an engine/model. The CLI has no default panel executor: production
 execution requires the separately reviewed original evaluation hook.
 """
 import argparse
+from collections import Counter
 from dataclasses import dataclass,fields,replace
 import hashlib
 import json
@@ -270,8 +271,11 @@ def main(argv=None,*,evaluation_hook=None):
     if args.inspect_only:
         print(json.dumps(dict(status='BOUND_INPUTS_ONLY_NO_RUNTIME_OR_MODEL',arm=args.arm,declaration_sha256=inputs.declaration_sha256)))
         return 0
-    execute(inputs,_absolute(args.run_root),resume=args.resume,evaluation_hook=evaluation_hook)
-    return 0
+    result=execute(inputs,_absolute(args.run_root),resume=args.resume,evaluation_hook=evaluation_hook)
+    print(json.dumps(dict(status=result['status'],steps=result.get('steps'),rows=result.get('rows'),
+        reason=result.get('reason'),disposition_counts=dict(Counter(result.get('statuses',{}).values())),
+        scientific_qualification=False),allow_nan=False))
+    return 0 if result['status']=='COMPLETE_DECLARATION' else 1
 
 
 if __name__=='__main__':raise SystemExit(main())
