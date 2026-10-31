@@ -1,8 +1,10 @@
 """Test-only normalization of explicit, validated observer-disabled defaults.
 
-Only boolean conditions made entirely from the listed private parameters and
-literal constants can be evaluated. Numerical statements/calls/keywords,
-unknown guards, classes and all other parameters remain in the comparison.
+Only predicates made from the listed private parameters and literal constants
+can be evaluated. Boolean operators follow Python's ordered short circuit:
+a known observer predicate may make its later operands unreachable. Unknown
+operands that execute, numerical calls/keywords, classes and other parameters
+remain in the comparison.
 """
 import ast
 from copy import deepcopy
@@ -12,11 +14,24 @@ OBSERVER_DEFAULTS = {
     '_public_trace': None, '_lifecycle_trace': False, '_weather_trace': None,
     '_status_trace': None, '_weather_hp_context': None,
     '_leftovers_context': None, '_status_residual_context': None,
+    '_direct_hit_context': None,
 }
 
 
 class DefaultObserverProgram(ast.NodeTransformer):
     def truth(self, test):
+        if isinstance(test, ast.BoolOp) and isinstance(test.op, (ast.And, ast.Or)):
+            for operand in test.values:
+                result = self.truth(operand)
+                # An unknown prefix still executes, even if a later operand
+                # would force the final boolean. Never erase that prefix.
+                if result is None:
+                    return None
+                if isinstance(test.op, ast.And) and result is False:
+                    return False
+                if isinstance(test.op, ast.Or) and result is True:
+                    return True
+            return result
         allowed = (ast.Expression, ast.Name, ast.Load, ast.Constant, ast.Compare,
                    ast.Is, ast.IsNot, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not)
         nodes = list(ast.walk(test))
@@ -70,7 +85,7 @@ def dump_default_program(tree):
 
 
 def assert_hp_rng_mutations_detected(case, tree, baseline, dump=dump_default_program):
-    """Poison real numerical HP input and returned RNG separately, never a trace."""
+    """Poison real HP input, returned RNG and call keyword, never a trace."""
     # Choose writes in the retained default branch, rather than a disabled
     # observer branch that legitimately contains a separate keys assignment.
     hp = default_program(tree)
@@ -85,3 +100,9 @@ def assert_hp_rng_mutations_detected(case, tree, baseline, dump=dump_default_pro
     keyword = next(keyword for keyword in call.keywords if keyword.arg == 'keys')
     keyword.value = ast.BinOp(keyword.value, ast.Add(), ast.Constant(1))
     case.assertNotEqual(dump(rng), baseline, 'RNG mutation escaped the default proof')
+    keywords = default_program(tree)
+    call = next(node for node in ast.walk(keywords) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and node.func.attr == 'major_status_residual')
+    keyword = next(keyword for keyword in call.keywords if keyword.arg == 'active')
+    keyword.arg = 'changed_numerical_active_keyword'
+    case.assertNotEqual(dump(keywords), baseline, 'call keyword mutation escaped the default proof')
