@@ -159,10 +159,14 @@ def attach_batch(base, rows):
                 raise ValueError('original behavior observation and v5 prefix differ')
     observations=tuple(row.observation for row in rows);labels=tuple(row.labels for row in rows)
     packed=c.batch_columns(observations,labels)
-    for name in SEARCH:
-        old=getattr(base,name)
-        if old is not None and np.any(np.asarray(base.search_policy_target_mask)):
-            if not np.allclose(np.asarray(old),np.asarray(packed[name]),atol=1e-6,rtol=0):
+    for target,mask in (('search_policy_targets','search_policy_target_mask'),
+            ('search_value_targets','search_value_target_mask')):
+        old_mask=getattr(base,mask)
+        if old_mask is not None:
+            active=np.asarray(old_mask)
+            new_mask=np.asarray(packed[mask])
+            if (np.any(active & ~new_mask) or not np.allclose(np.asarray(getattr(base,target))[active],
+                    np.asarray(packed[target])[active],atol=1e-6,rtol=0)):
                 raise ValueError('existing search columns conflict with original D labels')
     sidecar={name:value for name,value in packed.items()
         if name not in (*INPUTS,'history_mask','legal_action_mask','batch_size',*SEARCH)}
@@ -201,7 +205,10 @@ def validate_batch(batch):
     for name in ('source_frame_sha256','terminal_source_sha256'):
         for value in cols[name]:
             if name=='source_frame_sha256' or value is not None:c._binding(value)
-    for address in cols['addresses']:c.DecisionAddress(**address)
+    for i,address in enumerate(cols['addresses']):
+        original=c.DecisionAddress(**address)
+        if batch.player_ids[i] != ('p1','p2')[original.owner]:
+            raise ValueError('v5 address owner differs from original behavior owner')
     for name,shape in ARRAY_SHAPES.items():
         a=np.asarray(cols[name])
         if a.shape!=(n,*shape):raise ValueError('v5 target shape differs: '+name)
@@ -233,6 +240,8 @@ def validate_batch(batch):
     survival=np.asarray(cols['survival_targets']);hp=np.asarray(cols['final_hp_targets']);pm=np.asarray(cols['pokemon_end_target_mask'])
     if not np.isin(outcome[om],[-1,0,1]).all():raise ValueError('literal masked game outcome required')
     for i,status in enumerate(cols['terminal_status']):
+        if bool(batch.terminal_capped[i]) != (status=='CAPPED'):
+            raise ValueError('v5 terminal status differs from original capped disposition')
         if status not in ('COMPLETE','IN_PROGRESS','CAPPED','REFUSED') or status!='COMPLETE' and (om[i] or pm[i].any()):
             raise ValueError('unknown terminal cannot supervise outcome or Pokemon end state')
         if status=='COMPLETE' and cols['terminal_source_sha256'][i] is None:

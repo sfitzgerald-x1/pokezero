@@ -198,6 +198,35 @@ class V5DataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'SHA256'):
             replace(batch,v5_columns=missing)
 
+    def test_existing_policy_and_value_targets_are_preserved_independently(self):
+        original=row();base=base_batch([original])
+        value_only=replace(base,search_policy_targets=((float('nan'),)*9,),search_policy_target_mask=(False,),
+            search_value_targets=(.4,),search_value_target_mask=(True,))
+        with self.assertRaisesRegex(ValueError,'existing search'):
+            data.attach_batch(value_only,[original])
+        # Matching existing value supervision need not have an existing policy
+        # label. New same-frame D data may supply the previously absent policy.
+        labeled=row(status='COMPLETE',search=True)
+        base=base_batch([labeled])
+        matching=replace(base,search_policy_targets=((float('nan'),)*9,),search_policy_target_mask=(False,),
+            search_value_targets=(.825,),search_value_target_mask=(True,))
+        attached=data.attach_batch(matching,[labeled])
+        self.assertEqual(attached.search_value_targets,(.825,))
+        self.assertEqual(attached.search_value_target_mask,(True,))
+        policy_only=replace(base,search_policy_targets=(labeled.labels.root_improvement.policy_target,),
+            search_policy_target_mask=(True,),search_value_targets=(float('nan'),),search_value_target_mask=(False,))
+        self.assertTrue(data.attach_batch(policy_only,[labeled]).search_policy_target_mask[0])
+
+    def test_cached_owner_and_cap_facts_cannot_be_rewritten_by_sidecar(self):
+        original=row(status='CAPPED');batch=data.attach_batch(base_batch([original]),[original])
+        wrong_address=dict(batch.v5_columns['addresses'][0],owner=1)
+        with self.assertRaisesRegex(ValueError,'original behavior owner'):
+            replace(batch,v5_columns=dict(batch.v5_columns,addresses=(wrong_address,)))
+        observed_tie=dict(batch.v5_columns,terminal_status=('COMPLETE',),
+            terminal_source_sha256=('e'*64,),outcome_targets=(0.,),outcome_target_mask=(True,))
+        with self.assertRaisesRegex(ValueError,'original capped disposition'):
+            replace(batch,v5_columns=observed_tie)
+
 
 if __name__=='__main__':
     unittest.main()
