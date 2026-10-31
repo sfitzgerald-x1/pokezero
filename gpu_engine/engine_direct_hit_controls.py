@@ -150,7 +150,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         kinds=[CRITICAL, SUPER_EFFECTIVE, RESISTED],
         positive_effectiveness_ratios=POSITIVE_EFFECTIVENESS_RATIOS,
         source_files={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py','secondary.py','engine_secondary_status_callbacks.py')},
+            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py','secondary.py','engine_secondary_status_callbacks.py','engine_flash_fire_end_callbacks.py')},
         scope='literal-positive-nonlethal-and-source-pending-nonterminal-ko-only-no-completeness')
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     words = lambda x:jnp.asarray(x, jnp.uint32)

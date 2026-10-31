@@ -543,7 +543,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         installed = installed.at[rows,side].set(do_switch)
         work = passing.copy_to_recipient(work,side,target[rows,side],
             eligible=do_switch & work.baton_pass[rows,side])
+        if _lifecycle_trace:
+            from . import engine_flash_fire_end_callbacks as _flash_end
+            _public_trace,_flash_pending=_flash_end.begin(_public_trace,work,side,
+                eligible=do_switch,baton=switch_baton,
+                context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None)
         work=arrival.depart(work,side,table.entry,eligible=do_switch)
+        if _lifecycle_trace:
+            _public_trace=_flash_end.finish(_public_trace,_flash_pending,work)
         work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
             baton_pass=work.baton_pass.at[rows,side].set(work.baton_pass[rows,side] & ~do_switch),
             forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])),
