@@ -199,6 +199,9 @@ class WorkerTests(unittest.TestCase):
                 prepare=stack.enter_context(patch.object(driver,'prepare',return_value=object()))
                 prepared,got_pool,public,got_contract=w.prepare_runtime(inputs)
                 options=prepare.call_args.kwargs
+                self.assertIs(compilers[2].call_args.kwargs['engine_catalog'],events.compile_catalog.return_value)
+                self.assertIs(compilers[2].call_args.kwargs['metadata'],metadata)
+                self.assertIs(compilers[2].call_args.kwargs['source_rules'],rules)
                 metadata['vocabulary']['moves']=[]
                 tables.effects.status=j.zeros(0,j.int32)
                 w.prepare_runtime(inputs)
@@ -207,6 +210,11 @@ class WorkerTests(unittest.TestCase):
                 tables.effects.status=j.array([5],j.int32)
                 w.prepare_runtime(inputs)
                 family_without_powder=prepare.call_args.kwargs
+                # A refused original compiler is never retried in legacy mode.
+                compilers[2].side_effect=ValueError('original secondary source refuses')
+                with self.assertRaisesRegex(ValueError,'original secondary source refuses'):
+                    w.prepare_runtime(inputs)
+                self.assertEqual(prepare.call_count,3)
             self.assertIs(prepared,prepare.return_value);self.assertIs(got_pool,pool);self.assertIs(got_contract,contract)
             self.assertIs(public.category_vocab,catalog.vocabulary);self.assertIs(public.set_belief_source,True)
             self.assertEqual((options['public_mode'],options['frame_input_mode']),('retained-full','source-witness'))
@@ -214,7 +222,8 @@ class WorkerTests(unittest.TestCase):
             for name in ('status_residual','direct_hit','substitute','toxic','recoil','calm_mind','swords_dance','spikes','thunder_wave','sleep_powder'):
                 self.assertEqual(options[name+'_mode'],'kernel-event');self.assertIsNotNone(options[name+'_compiled'])
             self.assertEqual(options['leftovers_mode'],'retained')
-            for compiler in compilers[:5]:self.assertEqual(compiler.call_count,3)
+            for compiler in compilers[:3]:self.assertEqual(compiler.call_count,4)
+            for compiler in compilers[3:5]:self.assertEqual(compiler.call_count,3)
             for compiler in compilers[5:-1]:compiler.assert_called_once()
             self.assertEqual(compilers[-1].call_count,2)
             self.assertEqual(family_without_powder['sleep_powder_mode'],'kernel-event')

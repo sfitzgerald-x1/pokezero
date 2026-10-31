@@ -242,7 +242,7 @@ def prepare_runtime(inputs):
     facts=own.compile_own_facts(request,catalog)
     helpers=dict(leftovers_compiled=leftovers.compile_leftovers(metadata,engine_catalog=lifecycle),leftovers_mode='retained',
         status_residual_compiled=status.compile_status_residual(metadata,engine_catalog=lifecycle),status_residual_mode='kernel-event',
-        direct_hit_compiled=hit.compile_direct_hit_controls(engine_catalog=lifecycle),direct_hit_mode='kernel-event',
+        direct_hit_compiled=hit.compile_direct_hit_controls(engine_catalog=lifecycle,metadata=metadata,source_rules=rules),direct_hit_mode='kernel-event',
         substitute_compiled=substitute.compile_substitute(engine_catalog=lifecycle,metadata=metadata),substitute_mode='kernel-event',
         toxic_compiled=toxic.compile_toxic(engine_catalog=lifecycle,metadata=metadata),toxic_mode='kernel-event')
     for name,move,module,function in (('recoil','doubleedge',recoil,'compile_recoil'),('calm_mind','calmmind',calm,'compile_calm_mind'),
