@@ -296,7 +296,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
                      _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
-                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None) -> StepResult:
+                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None, _swords_dance_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -305,6 +305,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _swords_dance_context is not None:
+        from . import engine_swords_dance_callbacks as swords_dance_callbacks
+        if not _lifecycle_trace or type(_swords_dance_context) is not swords_dance_callbacks.Context:
+            raise ValueError('typed actual registered Swords Dance context required')
     if _toxic_context is not None:
         from . import engine_toxic_callbacks as toxic_callbacks
         _toxic_registered=type(_toxic_context) is toxic_callbacks.RegisteredContext
@@ -942,10 +946,22 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             hp=hp-jnp.where(drum,max_hp//2,0)
             boosts=boosts.at[:,0].set(jnp.where(drum,6,boosts[:,0]))
             work=work._replace(hp=_set_active(work.hp,work,side,hp))
-            if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_BOOST,
-                    acts & jnp.any(effects.self_boosts[move]!=0,axis=1),active=live)
+            if _swords_dance_context is not None:
+                _swords_dance_old_atk=boosts[:,0]
+                _swords_dance_requested=caller_acts & (caller_move==_swords_dance_context.data.move_id)
+                _public_trace,_swords_dance_ticket=execution_accounting.open_attempt(_public_trace,
+                    execution_accounting.Site.SWORDS_DANCE,side,active=_swords_dance_requested)
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
+            if _swords_dance_context is not None:
+                _swords_dance_write=swords_dance_callbacks.Write(_swords_dance_old_atk,boosts[:,0],acts & hit & ~immune)
+                _public_trace=swords_dance_callbacks.record_device(_public_trace,_swords_dance_ticket,side,
+                    work.active[rows,side],move,_swords_dance_write,_swords_dance_context,eligible=_swords_dance_requested)
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.swords_dance_on_tape(_public_trace,
+                    acts & jnp.any(effects.self_boosts[move]!=0,axis=1),active=live,
+                    captured=(kernel_risks.CapturedSwordsDance(_swords_dance_context,_swords_dance_ticket,
+                        side,work.active[rows,side],move,_swords_dance_write)
+                        if _swords_dance_context is not None else None))
             # These damaging moves lower their own SpA on a successful hit,
             # including Substitute/KO, but not miss, Protect, immunity or
             # absorption. Unlike target secondaries this is not Shield Dust
