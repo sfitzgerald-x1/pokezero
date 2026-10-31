@@ -44,6 +44,7 @@ from . import engine_flash_fire_end_callbacks as flash_end
 from . import engine_substitute_damage_callbacks as substitute_damage
 from . import engine_protect_callbacks as protect_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
+from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -776,6 +777,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & ((toxic_callbacks.supported_raw(raw)&(tables.toxic_move>0)&(raw[:,5]==tables.toxic_move))
                 |(thunder_callbacks.supported_raw(raw)&(tables.thunder_wave_move>0)&(raw[:,5]==tables.thunder_wave_move))
                 |(powder_callbacks.supported_raw(raw,primary_sleep=True)&(raw[:,5]>0)&(raw[:,5]<len(tables.primary_sleep_moves))&tables.primary_sleep_moves[jnp.clip(raw[:,5],0,len(tables.primary_sleep_moves)-1)])))
+        toxic_ok |= (tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&(incoming==cursor.physical_active[rows,safe_side])
+            &plain_primary_callbacks.owned_pair(tape,index))
         event_ok=jnp.where(toxic,generation_ok & clock_ok & toxic_ok,event_ok)
         secondary_cont=kind==secondary_callbacks.SECONDARY_STATUS
         following=tape.words[:,jnp.minimum(index+1,capacity-1)]

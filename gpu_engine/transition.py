@@ -1171,6 +1171,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_sleep_powder_ticket=execution_accounting.open_attempt(_public_trace,
                     execution_accounting.Site.PRIMARY_SLEEP,foe,active=_sleep_powder_requested)
             if _lifecycle_trace:
+                from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
+                _primary_plain_pending=None;_primary_plain_capture=None
+                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.primary_plain_status is not None:
+                    _public_trace,_primary_plain_pending=plain_primary_callbacks.begin(_public_trace,work,side,move,
+                        _direct_hit_context,table,eligible=acts&~_protect_block_mask)
+            if _lifecycle_trace:
                 _public_trace=status_callbacks.changed(_public_trace,foe,work.active[rows,foe],
                     _active(work.status,work,foe),status,status_callbacks.PRIMARY,eligible=apply_status)
             work = work._replace(status=_set_active(work.status,work,foe,
@@ -1182,6 +1188,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(apply_status,0,_active(work.sleep_skipped,work,foe))),
                 rest_origin=_set_active(work.rest_origin,work,foe,
                     jnp.where(apply_status,False,_active(work.rest_origin,work,foe))))
+            if _lifecycle_trace and _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.primary_plain_status is not None:
+                _plain_type_immune=jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
+                _plain_ability_immune=table.secondary.ability_immunity[_active(work.ability,work,foe),status]
+                _plain_attempt=plain_primary_callbacks.Attempt(_direct_accuracy_hit,hit,_plain_type_immune,_plain_ability_immune,
+                    (_active(work.substitute_hp,work,foe)>0)&~effects.bypass_sub[move],_active(work.hp,work,foe)>0,
+                    apply_status,_risk_protected,_risk_absorbed,immune,acts&hit&~immune,
+                    _primary_plain_pending.old_status,_active(work.status,work,foe),_primary_plain_pending.old_counter,
+                    _active(work.status_counter,work,foe))
+                _public_trace,_primary_plain_capture=plain_primary_callbacks.finish(_public_trace,_primary_plain_pending,_plain_attempt)
             if _toxic_context is not None:
                 _toxic_attempt=toxic_callbacks.Attempt(_toxic_accuracy_hit,hit,_toxic_type_immune,
                     _toxic_ability_immune,_toxic_sub_block,_toxic_live,apply_status,_risk_protected,_risk_absorbed,
@@ -1218,7 +1233,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     captured_thunder_wave=(kernel_risks.CapturedThunderWave(_thunder_wave_context,_thunder_wave_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_thunder_wave_attempt)
                         if _thunder_wave_context is not None else None),
-                    captured_protect_block=_protect_block_capture,
+                    captured_protect_block=_protect_block_capture,captured_primary_plain=_primary_plain_capture,
                     captured_sleep_powder=(kernel_risks.CapturedSleepPowder(_sleep_powder_context,_sleep_powder_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_sleep_powder_attempt)
                         if _sleep_powder_context is not None else None))
