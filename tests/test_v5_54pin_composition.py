@@ -24,12 +24,12 @@ class CompositionTests(unittest.TestCase):
 
     def test_exact_ordinary_inventory_plus_existing_hypothesis_and_matching_schema(self):
         from gpu_engine import engine_source_frame_witness as witness
-        witness._source();self.assertEqual(len(witness.SOURCE_PINS),58)
-        old=subprocess.check_output(['git','show','7c6c6042:gpu_engine/engine_source_frame_witness.py'],text=True)
+        witness._source();self.assertEqual(len(witness.SOURCE_PINS),59)
+        old=subprocess.check_output(['git','show','2b0ec76a:gpu_engine/engine_source_frame_witness.py'],text=True)
         inventory=next(ast.literal_eval(n.value) for n in ast.parse(old).body if isinstance(n,ast.Assign)
             and any(isinstance(t,ast.Name) and t.id=='SOURCE_PINS' for t in n.targets))
         self.assertEqual(set(witness.SOURCE_PINS)-set(inventory),{'v5_hypothetical_profile.py'})
-        for file,expected in [('engine_full_v4_event_device.py',33),('engine_lifecycle_event_device.py',40),('engine_kernel_frame_risk.py',28)]:
+        for file,expected in [('engine_full_v4_event_device.py',34),('engine_lifecycle_event_device.py',41),('engine_kernel_frame_risk.py',28)]:
             tree=ast.parse(Path('gpu_engine',file).read_text());table=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Tables')
             self.assertEqual(sum(isinstance(n,ast.AnnAssign) for n in table.body),expected)
             for call in ast.walk(tree):
@@ -100,7 +100,7 @@ class CompositionTests(unittest.TestCase):
                 if ast.unparse(n)=='weather_profile_data is None and hypothetical_profile is None':return n.values[0]
                 return self.generic_visit(n)
         self_case=self
-        old=subprocess.check_output(['git','show','7c6c6042:gpu_engine/engine_retained_encoder_driver.py'],text=True)
+        old=subprocess.check_output(['git','show','2b0ec76a:gpu_engine/engine_retained_encoder_driver.py'],text=True)
         new=Path('gpu_engine/engine_retained_encoder_driver.py').read_text()
         normalize=lambda s:ast.dump(Driver().visit(ast.parse(s)),include_attributes=False)
         self.assertEqual(normalize(old),normalize(new))

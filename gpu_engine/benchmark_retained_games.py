@@ -474,12 +474,15 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     witness = getattr(session.state.core, 'frame_input_report', None)
     risks = getattr(session.state.core, 'risks', None)
     raw_packet = lambda value: None if value is None else {
-        name: np.asarray(array).tolist() for name, array in value._asdict().items()}
+        name: np.asarray(array).tolist() for name, array in value._asdict().items() if name!='outcome_diagnostics'}
+    from . import engine_outcome_diagnostics as outcome_diagnostics
+    refusal_outcomes=outcome_diagnostics.refused_rows(getattr(witness,'outcome_diagnostics',None),refused)
     return dict(schema=SCHEMA, status=status, runtime_binding=runtime.binding,
         source=source,
         initial_refusal_diagnostics=_refusal_snapshot(initial),
         final_refusal_diagnostics=_refusal_snapshot(session.result),
         final_frame_input_witness=raw_packet(witness), final_kernel_risks=raw_packet(risks),
+        refusal_outcomes=refusal_outcomes,
         initial_engine_state=raw_packet(initial.state.core.engine),
         initial_frame_input_witness=raw_packet(getattr(initial.state.core,'frame_input_report',None)),
         initial_owner_observations=[{name:np.asarray(getattr(owner.encoded.observation,name)).tolist()

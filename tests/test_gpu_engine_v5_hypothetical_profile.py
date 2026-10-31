@@ -115,6 +115,9 @@ def normalized_hypothetical_default(text,*,as_tree=False):
     class Default(ast.NodeTransformer):
         def visit_FunctionDef(self,node):
             if node.name=='step_with_chance':
+                extra=[d for a,d in zip(node.args.kwonlyargs,node.args.kw_defaults) if a.arg=='_hypothetical_profile']
+                if any(not isinstance(d,ast.Constant) or d.value is not None for d in extra):
+                    raise ValueError('changed explicit hypothetical observer default')
                 keep=[(a,d) for a,d in zip(node.args.kwonlyargs,node.args.kw_defaults) if a.arg!='_hypothetical_profile']
                 node.args.kwonlyargs=[a for a,d in keep];node.args.kw_defaults=[d for a,d in keep]
             return self.generic_visit(node)
@@ -157,12 +160,13 @@ def normalized_hypothetical_default(text,*,as_tree=False):
 
 class DefaultAST(unittest.TestCase):
     def test_whole_default_transition_ast_and_mutations(self):
-        original=subprocess.check_output(['git','show','7c6c6042:gpu_engine/transition.py'],text=True)
+        original=subprocess.check_output(['git','show','2b0ec76a:gpu_engine/transition.py'],text=True)
         current=Path('gpu_engine/transition.py').read_text()
         normalize=normalized_hypothetical_default
         self.assertEqual(normalize(original),normalize(current))
         self.assertNotEqual(normalize(original),normalize(current.replace('2 + chance[:,7]','3 + chance[:,7]')))
         self.assertNotEqual(normalize(original),normalize(current.replace('compound_eyes=compound_eyes','compound_eyes=sand_veil')))
+        with self.assertRaises(ValueError):normalize(current.replace('_hypothetical_profile=None','_hypothetical_profile=1'))
 
 
 class HypotheticalWeatherMath(unittest.TestCase):

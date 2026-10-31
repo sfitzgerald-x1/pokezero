@@ -36,6 +36,7 @@ from . import private_actions, v4_encoder, transition
 from . import engine_weather_speed_profile as weather_speed
 from . import engine_execution_completeness as execution
 from . import engine_kernel_frame_risk as kernel_risks
+from . import engine_outcome_diagnostics as outcome_diagnostics
 
 SCHEMA = 'pokezero.engine_retained173_driver.partial.v1'
 SOURCE, PUBLIC_COMPONENT, FULL_PUBLIC, REQUEST, OWN, ENCODER, PENDING, CELLS, PUBLIC_COVERAGE = (1 << n for n in range(9))
@@ -245,6 +246,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         source_ready &= active_rows
     if execution_tables is not None:
         tape=execution.begin_on_tape(tape,core.execution,execution_tables,active=source_ready)
+        tape=tape._replace(execution=tape.execution._replace(diagnostics=outcome_diagnostics.empty(b)))
     if kernel_risk_tables is not None:
         if execution_tables is None or type(core.risks) is not kernel_risks.Carry:
             raise ValueError('actual original accounting and retained risk carry required')
@@ -266,7 +268,8 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
     callbacks = callbacks._replace(cursor=cursor)
     if execution_tables is not None:
         ledger=execution.commit_rows(source_ready,tape.execution.ledger,result.callbacks.execution.ledger)
-        context=tape.execution._replace(ledger=ledger)
+        context=tape.execution._replace(ledger=ledger,diagnostics=_rows(source_ready,
+            tape.execution.diagnostics,result.callbacks.execution.diagnostics))
         if kernel_risk_tables is not None:
             after=result.callbacks.execution.risks
             if type(after) is not kernel_risks.Context:
@@ -546,6 +549,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         from . import engine_sleep_powder_callbacks as sleep_powder_callbacks
         sleep_powder_data=sleep_powder_callbacks.check_compiled(sleep_powder_compiled)
         if sleep_powder_callbacks._COMPILED[sleep_powder_compiled][2] is not request['lifecycle']:raise ValueError('same original Sleep Powder/request engine catalog required')
+        sleep_powder_callbacks.check_lexical_catalog(sleep_powder_compiled,catalog)
     if spikes_compiled is not None:
         from . import engine_spikes_callbacks as spikes_callbacks
         spikes_data=spikes_callbacks.check_compiled(spikes_compiled)
