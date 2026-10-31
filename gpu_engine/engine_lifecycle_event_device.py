@@ -50,6 +50,7 @@ from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
 from . import engine_recoil_callbacks as recoil_callbacks
+from . import engine_rough_skin_callbacks as rough_callbacks
 from . import engine_swords_dance_callbacks as swords_dance_callbacks
 from . import engine_intimidate_callbacks as intimidate_callbacks
 from . import engine_spikes_callbacks as spikes_callbacks
@@ -558,6 +559,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sub_damage = kind == substitute_damage.SUBSTITUTE_DAMAGE
         toxic = kind == toxic_callbacks.TOXIC_ATTEMPT
         recoil = kind == recoil_callbacks.RECOIL_HP
+        rough = kind == rough_callbacks.ROUGH_SKIN_HP
         intimidate = kind == intimidate_callbacks.INTIMIDATE
         calm_mind = kind == calm_mind_callbacks.CALM_MIND
         bulk_up = kind == bulk_up_callbacks.BULK_UP
@@ -717,6 +719,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(raw[:,6]>raw[:,7])&(raw[:,7]>0)&(raw[:,8]>=raw[:,6])&(raw[:,8]<=1_000_000)
             &(raw[:,9]>=0)&(raw[:,9]<=6))
         event_ok=jnp.where(recoil,generation_ok & clock_ok & recoil_ok,event_ok)
+        rough_ok=(tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
+            &rough_callbacks.owned(tape,index,cursor))
+        event_ok=jnp.where(rough,generation_ok&clock_ok&rough_ok,event_ok)
         intimidate_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity
             &~cursor.initialized&(turn==0)&(phase==0)&(actor_physical==0)&(incoming==0)
             &(actor_side>=0)&(actor_side<2)&(side==1-actor_side)
@@ -865,7 +870,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,9],0,6)],z,jnp.ones_like(z),jnp.ones_like(z),z),axis=1)
         recoil_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),semantic_sequence,
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),recoil_payload),axis=1)
-        semantic=jnp.where(recoil[:,None],recoil_semantic,semantic)
+        semantic=jnp.where((recoil|rough)[:,None],recoil_semantic,semantic)
         intimidate_payload=jnp.stack((status_enc,z,jnp.full_like(z,-1),jnp.full_like(z,public_mon_state.DELTA),jnp.ones_like(z),z,z,z),axis=1)
         intimidate_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
             turn,phase,absent,absent,side,status_slot),axis=1),intimidate_payload),axis=1)

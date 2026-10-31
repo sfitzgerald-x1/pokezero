@@ -1313,7 +1313,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.secondary is not None:
             if _lifecycle_trace:
                 work,_public_trace = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
-                    eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_status_trace=_public_trace)
+                    eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_status_trace=_public_trace,
+                    _rough_skin_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,
+                    _rough_skin_capture=(kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
+                        work.active[rows,side],work.active[rows,foe],move,_direct_write)
+                        if _direct_hit_context is not None and _direct_hit_registered else None))
             else:
                 work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
                     eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items)

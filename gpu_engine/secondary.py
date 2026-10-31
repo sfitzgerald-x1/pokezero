@@ -55,6 +55,7 @@ class SecondaryTable(NamedTuple):
     speed_drop: jax.Array        # [M], selected target Speed secondary
     self_omni: jax.Array         # [M], five user stages; not target Dust/Sub gated
     synchronize: jax.Array       # [A], deterministic reflection of fresh status
+    rough_skin: jax.Array        # [A], Gen3 deterministic contact HP damage
 
 
 def from_metadata(metadata):
@@ -79,7 +80,7 @@ def from_metadata(metadata):
         jnp.asarray(contact), flags({'static'}),
         jnp.asarray([name == 'mudshot' for name in vocab['moves']]),
         jnp.asarray([name in {'silverwind', 'ancientpower'} for name in vocab['moves']]),
-        flags({'synchronize'}))
+        flags({'synchronize'}), flags({'roughskin'}))
 
 
 def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None, _status_trace=None):
@@ -132,8 +133,9 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
     return state
 
 
-def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, _status_trace=None):
-    """Static's Gen3 onDamagingHit, after damage/secondaries, before Lum.
+def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, _status_trace=None,
+                  _rough_skin_context=None, _rough_skin_capture=None):
+    """Gen3 Static and Rough Skin onDamagingHit, before Lum/recoil.
 
     The existing uniform [0,60) auxiliary draw gives exactly 20/60 = 1/3.
     It is shared with phazing only across mutually exclusive dispatched moves:
@@ -161,10 +163,26 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
         status_counter=state.status_counter.at[rows, side, own].set(
             jnp.where(proc, 0, state.status_counter[rows, side, own])))
     if _status_trace is not None:
-        return after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
+        state,_status_trace=after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
             applied=proc,item_table=item_table,_status_trace=_status_trace)
-    return after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
-        applied=proc,item_table=item_table)
+    else:
+        state=after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
+            applied=proc,item_table=item_table)
+    # Original Gen3 roughskin.onDamagingHit: Battle.damage floors and clamps
+    # baseMaxhp/16 to at least one, capped by living source HP. No RNG draw.
+    rough=(jnp.asarray(eligible)&table.contact[move]
+        &table.rough_skin[state.ability[rows,foe,target]]&(state.hp[rows,side,own]>0))
+    old_hp=state.hp[rows,side,own]
+    if _status_trace is not None:
+        from . import engine_rough_skin_callbacks as rough_callbacks
+        _status_trace,pending=rough_callbacks.begin(_status_trace,_rough_skin_context,
+            _rough_skin_capture,state,side,move,table,requested=rough)
+    hp=jnp.maximum(0,old_hp-jnp.maximum(1,state.max_hp[rows,side,own]//16))
+    state=state._replace(hp=state.hp.at[rows,side,own].set(jnp.where(rough,hp,old_hp)))
+    if _status_trace is not None:
+        _status_trace=rough_callbacks.record(_status_trace,pending,state)
+        return state,_status_trace
+    return state
 
 
 def status_allowed(table, status, types, ability, *, effective_weather=0):

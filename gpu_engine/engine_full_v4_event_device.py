@@ -44,6 +44,7 @@ from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
 from . import engine_recoil_callbacks as recoil_callbacks
+from . import engine_rough_skin_callbacks as rough_callbacks
 from . import engine_swords_dance_callbacks as swords_dance_callbacks
 from . import engine_intimidate_callbacks as intimidate_callbacks
 from . import engine_calm_mind_callbacks as calm_mind_callbacks
@@ -99,6 +100,7 @@ class Tables(NamedTuple):
     protect_success: object
     protect_block: object
     protect_still_moves: object
+    rough_skin_damage: object
     namespaces: Bindings
     binding: object
 
@@ -284,6 +286,11 @@ def compile_adapter(metadata, projector, *, catalog):
     recoil_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
         f'|[from] Recoil|[of] {ident[1]}',inputs.Kind.CONDITION) for token in tokens],np.int32)
     if int(lower.device.recoil_move)>0 and not np.all(recoil_damage):raise ValueError('FULL writer lacks exact Gen3 Recoil/of schemas')
+    rough_skin_damage=np.zeros(7,np.int32)
+    if 'roughskin' in metadata['vocabulary']['abilities']:
+        rough_skin_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
+            f'|[from] ability: Rough Skin|[of] {ident[1]}',inputs.Kind.CONDITION) for token in tokens],np.int32)
+        if not np.all(rough_skin_damage):raise ValueError('FULL writer lacks exact Rough Skin/of schemas')
     pressure_start=0
     if int(lower.device.pressure_engine_ability)>0 and int(lower.device.pressure_public_ability)>0:
         pressure_start=add(f'|-ability|{ident[0]}|Pressure|[silent]',inputs.Kind.ABILITY)
@@ -382,7 +389,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
-    payload += sub_damage_keys.tobytes()
+    payload += sub_damage_keys.tobytes()+rough_skin_damage.tobytes()
     payload += no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()
     payload += ident_species.tobytes()
@@ -392,7 +399,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(rough_skin_damage),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -504,6 +511,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.substitute_created,(7,),jnp.int32)
     causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
     causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
+    causal.base._shape(tables.rough_skin_damage,(7,),jnp.int32)
     causal.base._shape(tables.intimidate,(),jnp.int32)
     causal.base._shape(tables.calm_mind,(2,),jnp.int32)
     causal.base._shape(tables.swords_dance,(),jnp.int32)
@@ -573,6 +581,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         leftovers_heal=condition & (raw_kind==leftovers_callbacks.LEFTOVERS_HEAL)
         status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
         recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
+        rough=condition & (raw_kind==rough_callbacks.ROUGH_SKIN_HP)
         intimidate=(kind==int(inputs.Kind.BOOST))&(raw_kind==intimidate_callbacks.INTIMIDATE)
         bulk_up=(kind==int(inputs.Kind.BOOST))&(raw_kind==bulk_up_callbacks.BULK_UP)
         calm_mind=(kind==int(inputs.Kind.BOOST))&(raw_kind==calm_mind_callbacks.CALM_MIND)
@@ -610,6 +619,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(leftovers_heal,tables.leftovers_heal[chip_status],key)
         key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,3),chip_status],key)
         key=jnp.where(recoil,tables.recoil_damage[jnp.clip(semantic[:,11],0,6)],key)
+        key=jnp.where(rough,tables.rough_skin_damage[jnp.clip(semantic[:,11],0,6)],key)
         key=jnp.where(direct_control,tables.direct_hit_control[jnp.clip(
             raw_kind-direct_hit_controls.CRITICAL,0,2)],key)
         # Kind9 already emits the sole STATUS line. Kind26 is its checked
@@ -765,7 +775,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         recoil_old_percent=jnp.where((raw[:,6]<raw[:,8])&(recoil_old_percent==100),99,recoil_old_percent)
         recoil_owner=state.causal.owner==subject
         recoil_old=jnp.where(recoil_owner,raw[:,6],recoil_old_percent);recoil_max=jnp.where(recoil_owner,raw[:,8],100)
-        identity &= ~recoil | ((called[:,0]==subject)&(called[:,1]==new_slot)
+        identity &= ~(recoil|rough) | ((called[:,0]==subject)&(called[:,1]==new_slot)
             &(called[:,2]==tables.causal.base.public_ids[recoil_move])&(called[:,3]==semantic[:,2])
             &live[rows,safe]&live[rows,1-safe]&(semantic[:,11]==previous_status)
             &(observed_hp[rows,safe,safe_slot]==recoil_old)&(observed_maximum[rows,safe,safe_slot]==recoil_max))
@@ -891,7 +901,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # and its raw species spelling, rather than schema-fixture encounter1.
         for col,value in ((11,new_slot+1),(13,tables.ident_species[jnp.clip(prior_species,0,tables.ident_species.shape[0]-1)])):
             result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
-        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block)[:,None]&(schema[:,:,10]>0)))
+        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block|rough)[:,None]&(schema[:,:,10]>0)))
         lexical_side=jnp.clip(result[:,:,4],0,1)
         lexical_slot=current_slots[rows[:,None],lexical_side]
         result=result.at[:,:,11].set(jnp.where(trace_prelude,lexical_slot+1,result[:,:,11]))
