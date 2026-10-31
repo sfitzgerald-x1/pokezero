@@ -159,6 +159,9 @@ def _refusal_snapshot(result):
     return dict(core_admitted=packet(core.admitted), unsafe=packet(getattr(core, 'unsafe', None)),
         accounting_refusal=packet(getattr(ledger, 'refusal', None)),
         accounting_upstream_refusal=packet(getattr(ledger, 'upstream_refusal', None)),
+        requests=[dict(reason=packet(getattr(request, 'reason', None)),
+            actions_admitted=packet(getattr(getattr(request, 'actions', None), 'admitted', None)))
+            for request in core.requests],
         owners=[{name:packet(getattr(owner, name, None)) for name in
             ('reason', 'basic_error', 'retained_error', 'policy_admitted',
              'full_line_consumers_complete', 'full_encoder_admitted')} for owner in result.owners])
