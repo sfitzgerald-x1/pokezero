@@ -42,6 +42,7 @@ from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
 from . import engine_recoil_callbacks as recoil_callbacks
+from . import engine_swords_dance_callbacks as swords_dance_callbacks
 from . import engine_intimidate_callbacks as intimidate_callbacks
 from . import public_mon_state
 from . import engine_calm_mind_callbacks as calm_mind_callbacks
@@ -85,6 +86,7 @@ class Tables(NamedTuple):
     intimidate_engine_ability: object
     intimidate_public_ability: object
     calm_mind_move: object
+    swords_dance_move: object
     binding: object
 
 
@@ -195,6 +197,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     intimidate_engine=next((i for i,n in enumerate(metadata['vocabulary'].get('abilities',[])) if normalize_id(n)=='intimidate'),0)
     intimidate_public=0 if weather_catalog is None else weather_catalog.abilities.ids.get('intimidate',0)
     calm_mind_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='calmmind' and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==0),0)
+    swords_dance_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='swordsdance' and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==0),0)
     ability_names=metadata['vocabulary'].get('abilities',[])
     trace_engine=next((i for i,n in enumerate(ability_names) if normalize_id(n)=='trace'),0)
     sturdy_engine=next((i for i,n in enumerate(ability_names) if normalize_id(n)=='sturdy'),0)
@@ -236,7 +239,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),
         leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,
         trace_engine_ability=trace_engine,sturdy_engine_ability=sturdy_engine,sturdy_public_ability=sturdy_public,
-        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,admission=False)
+        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,swords_dance_move=swords_dance_move,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
@@ -251,7 +254,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
-        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),
+        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -378,6 +381,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     base._shape(tables.intimidate_engine_ability,(),jnp.int32)
     base._shape(tables.intimidate_public_ability,(),jnp.int32)
     base._shape(tables.calm_mind_move,(),jnp.int32)
+    base._shape(tables.swords_dance_move,(),jnp.int32)
     base._shape(tables.substitute_move, (), jnp.int32)
     base._shape(tables.pressure_engine_ability, (), jnp.int32)
     base._shape(tables.pressure_public_ability, (), jnp.int32)
@@ -503,6 +507,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         recoil = kind == recoil_callbacks.RECOIL_HP
         intimidate = kind == intimidate_callbacks.INTIMIDATE
         calm_mind = kind == calm_mind_callbacks.CALM_MIND
+        swords_dance = kind == swords_dance_callbacks.SWORDS_DANCE
         lum = kind == item_callbacks.LUM_CONSUMED
         entry_weather = kind == weather_callbacks.ENTRY_WEATHER
         move_weather = kind == weather_progress.MOVE_WEATHER
@@ -649,6 +654,13 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &((raw[:,4]==2)|(raw[:,4]==3))&(raw[:,5]>=-6)&(raw[:,5]<6)
             &(raw[:,6]==raw[:,5]+1)&((raw[:,7]==0)|(raw[:,7]==1))&jnp.all(raw[:,8:]==0,axis=1))
         event_ok=jnp.where(calm_mind,generation_ok & clock_ok & calm_mind_ok,event_ok)
+        swords_dance_ok=(tables.status_events & ~tables.raw_begin & actor_ok & cursor.initialized
+            &(phase==0)&(actor_side>=0)&(actor_side<2)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            &(tables.swords_dance_move>0)&(raw[:,3]==tables.swords_dance_move)
+            &(raw[:,4]>=-6)&(raw[:,4]<=4)&(raw[:,5]==raw[:,4]+2)
+            &((raw[:,6]==0)|(raw[:,6]==1))&jnp.all(raw[:,7:]==0,axis=1))
+        event_ok=jnp.where(swords_dance,generation_ok & clock_ok & swords_dance_ok,event_ok)
 
         pressure_ok=(tables.status_events & ~tables.raw_begin & status_identity & (phase==0)
             & (incoming==cursor.physical_active[rows,safe_side])
@@ -743,6 +755,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         calm_mind_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),calm_mind_payload),axis=1)
         semantic=jnp.where(calm_mind[:,None],calm_mind_semantic,semantic)
+        swords_dance_payload=jnp.stack((actor_enc,z,jnp.full_like(z,2),jnp.full_like(z,public_mon_state.DELTA),z,z,z,z),axis=1)
+        swords_dance_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
+            turn,phase,absent,absent,actor_side,actor_slot),axis=1),swords_dance_payload),axis=1)
+        semantic=jnp.where(swords_dance[:,None],swords_dance_semantic,semantic)
 
         # Annotation-only lines still enter every original raw consumer. Their
         # main NONPROC word has no public target; the full adapter resolves the

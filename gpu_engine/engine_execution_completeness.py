@@ -49,7 +49,9 @@ class Site(IntEnum):
     TRACE_COPY = 13
     RECOIL_HP = 14
     INTIMIDATE_INITIAL = 15
-    CALM_MIND = 16
+    CALM_MIND = 16  # reserved separately reviewed source
+    SPIKES_WRITE = 17  # reserved independent source lane
+    SWORDS_DANCE = 18
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)

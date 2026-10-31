@@ -167,7 +167,7 @@ process.stdout.write(JSON.stringify({ability:p.ability,lines,calls,update:typeof
 
  def test_frozen_source_pins_and_legacy_copy_path_stay_closed(self):
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),52)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),53)
   s,t,_,_,_=self.fixture()
   legacy=events.initialize(2,64,catalog=self.producer)
   self.assertIs(trace.entry_trace(legacy,0,s.active[:,0],s.active[:,1],j.full(2,2,j.int32),

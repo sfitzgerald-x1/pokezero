@@ -57,7 +57,7 @@ def prepare(request_compiled, own_compiled, weights_path, *,
             status_residual_mode='diagnostic', direct_hit_compiled=None,
             direct_hit_mode='diagnostic', frame_input_mode='closed',
             substitute_compiled=None, substitute_mode='diagnostic',
-            toxic_compiled=None, toxic_mode='diagnostic',recoil_compiled=None,recoil_mode='closed',calm_mind_compiled=None,calm_mind_mode='closed'):
+            toxic_compiled=None, toxic_mode='diagnostic',recoil_compiled=None,recoil_mode='closed',calm_mind_compiled=None,calm_mind_mode='closed',swords_dance_compiled=None,swords_dance_mode='closed'):
     """Bind an exact existing champion; opt-in precedes checkpoint loading.
 
     Runtime preparation is host-only. Loading does not execute the model. The
@@ -74,11 +74,11 @@ def prepare(request_compiled, own_compiled, weights_path, *,
     if (record['request_compiled'] is not request_compiled
             or record['catalog'].checkpoint_sha256 != expected_checkpoint_sha256):
         raise ValueError('original request/OwnFacts and exact encoder checkpoint required')
-    modes = (leftovers_mode, status_residual_mode, direct_hit_mode, substitute_mode, toxic_mode, frame_input_mode,recoil_mode,calm_mind_mode)
+    modes = (leftovers_mode, status_residual_mode, direct_hit_mode, substitute_mode, toxic_mode, frame_input_mode,recoil_mode,calm_mind_mode,swords_dance_mode)
     default_options = (all(x is None for x in
-        (leftovers_compiled, status_residual_compiled, direct_hit_compiled, substitute_compiled, toxic_compiled,recoil_compiled,calm_mind_compiled))
+        (leftovers_compiled, status_residual_compiled, direct_hit_compiled, substitute_compiled, toxic_compiled,recoil_compiled,calm_mind_compiled,swords_dance_compiled))
         and all(type(x) is str for x in modes)
-        and modes == ('diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'closed','closed','closed'))
+        and modes == ('diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'closed','closed','closed','closed'))
     prepared = None
     if not default_options:
         # These are deliberate runtime modes, never caller-supplied coverage
@@ -86,7 +86,7 @@ def prepare(request_compiled, own_compiled, weights_path, *,
         # its own mode dependencies. Reuse this one Prepared after loading.
         witness = type(frame_input_mode) is str and frame_input_mode == 'source-witness'
         accounting = witness or any(type(x) is str and x == 'kernel-event'
-            for x in (status_residual_mode, direct_hit_mode, substitute_mode, toxic_mode,recoil_mode,calm_mind_mode))
+            for x in (status_residual_mode, direct_hit_mode, substitute_mode, toxic_mode,recoil_mode,calm_mind_mode,swords_dance_mode))
         prepared = driver.prepare(request_compiled, own_compiled,
             public_mode='retained-full', fake_forward=_noop_fake,
             leftovers_compiled=leftovers_compiled, leftovers_mode=leftovers_mode,
@@ -97,6 +97,7 @@ def prepare(request_compiled, own_compiled, weights_path, *,
             toxic_compiled=toxic_compiled, toxic_mode=toxic_mode,
             recoil_compiled=recoil_compiled,recoil_mode=recoil_mode,
             calm_mind_compiled=calm_mind_compiled,calm_mind_mode=calm_mind_mode,
+            swords_dance_compiled=swords_dance_compiled,swords_dance_mode=swords_dance_mode,
             account_source_sites=accounting,
             track_kernel_risks=witness,
             frame_input_mode=frame_input_mode)

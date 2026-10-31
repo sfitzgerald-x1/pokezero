@@ -80,6 +80,8 @@ class Tables(NamedTuple):
     recoil_candidates: object
     calm_mind_binding: object
     calm_mind_candidates: object
+    swords_dance_binding: object
+    swords_dance_candidates: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -139,7 +141,7 @@ def _host():
     if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked kernel risk boundary cannot be traced')
 
 
-def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None,toxic_compiled=None,recoil_compiled=None,calm_mind_compiled=None):
+def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None,toxic_compiled=None,recoil_compiled=None,calm_mind_compiled=None,swords_dance_compiled=None):
     _host();record=accounting._checked(accounting_compiled)
     if record[2].causal.projector.catalog is not engine_catalog:raise ValueError('same original accounting/kernel catalog required')
     public.check_catalog(engine_catalog,engine_catalog.engine_table,expected_binding=engine_catalog.binding,
@@ -202,7 +204,15 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         move=int(data.move_id)
         if not 0<move<m:raise ValueError('canonical Calm Mind row required')
         calm_binding=np.asarray(data.binding,np.uint32);calm_candidate[move]=True
-    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate]|=NON_WEATHER
+    swords_binding=np.zeros(8,np.uint32);swords_candidate=np.zeros(m,bool)
+    if swords_dance_compiled is not None:
+        from . import engine_swords_dance_callbacks as swords
+        data=swords.check_compiled(swords_dance_compiled)
+        if swords._COMPILED[swords_dance_compiled][2] is not engine_catalog:raise ValueError('same original Swords Dance/kernel catalog required')
+        move=int(data.move_id)
+        if not 0<move<m:raise ValueError('canonical Swords Dance row required')
+        swords_binding=np.asarray(data.binding,np.uint32);swords_candidate[move]=True
+    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -211,7 +221,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         risk[on]|=bit
     for name in ('heal_half','weather_heal','rest','pain_split','belly_drum'):flag(table.effects,name,SELF_EFFECT)
     if table.effects is not None:risk[np.asarray(table.effects.substitute)&~substitute_candidate]|=SELF_EFFECT
-    if table.effects is not None:risk[np.any(np.asarray(table.effects.self_boosts)!=0,axis=1)&~calm_candidate]|=BOOST
+    if table.effects is not None:risk[np.any(np.asarray(table.effects.self_boosts)!=0,axis=1)&~calm_candidate&~swords_candidate]|=BOOST
     for name in ('hit_spa_drop','haze'):flag(table.effects,name,BOOST)
     for name in ('protect','endure'):flag(table.effects,name,TARGET_OUTCOME)
     flag(table.effects,'heal_bell',FIELD_VOLATILE)
@@ -244,13 +254,13 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
         direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
-        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist())
+        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate))
-    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled)
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate))
+    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,swords_dance_compiled)
     return result
 
 
@@ -277,6 +287,9 @@ def check_compiled(compiled):
     if r[9] is not None:
         from . import engine_calm_mind_callbacks as calm
         calm.check_compiled(r[9])
+    if r[10] is not None:
+        from . import engine_swords_dance_callbacks as swords
+        swords.check_compiled(r[10])
     return compiled.device
 
 
@@ -312,6 +325,8 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.recoil_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.calm_mind_binding,(8,),jnp.uint32)
     accounting._shape(tables.calm_mind_candidates,(len(tables.selected_risk),),jnp.bool_)
+    accounting._shape(tables.swords_dance_binding,(8,),jnp.uint32)
+    accounting._shape(tables.swords_dance_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.toxic_binding,(8,),jnp.uint32)
     accounting._shape(tables.toxic_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.substitute_binding,(8,),jnp.uint32)
@@ -569,9 +584,9 @@ class CapturedCalmMind(NamedTuple):
     write:object
 
 
-def observe_self_boost_device(carry,tape,attempted,tables,*,active,captured=None):
+def _captured_calm_mind_matches(tape,tables,captured):
     from . import engine_calm_mind_callbacks as calm
-    b=len(carry.stream_id);supported=jnp.zeros(b,bool)
+    b=tape.count.shape[0];supported=jnp.zeros(b,bool)
     if captured is not None:
         if type(captured) is not CapturedCalmMind:raise ValueError('typed SAME-call Calm Mind capture required')
         context=accounting._context(tape)
@@ -589,12 +604,58 @@ def observe_self_boost_device(carry,tape,attempted,tables,*,active,captured=None
             supported &= jnp.all(~span|((context.ledger.claimed==slot[:,None]+1)&jnp.all(context.ledger.words==tape.words,axis=2)
                 &(context.ledger.event_turn==tape.event_turn)&(context.ledger.event_phase==tape.event_phase)
                 &jnp.all(context.ledger.event_generation==tape.event_generation,axis=2)),axis=1)
-    attempted=_vector(attempted,b,jnp.bool_)
+    return supported
+
+
+class CapturedSwordsDance(NamedTuple):
+    context:object
+    ticket:object
+    side:object
+    physical:object
+    move:object
+    write:object
+
+
+def _captured_swords_dance_matches(tape,tables,captured):
+    from . import engine_swords_dance_callbacks as swords
+    b=tape.count.shape[0];supported=jnp.zeros(b,bool)
+    if captured is None:return supported
+    if type(captured) is not CapturedSwordsDance:raise ValueError('typed SAME-call Swords Dance capture required')
+    context=accounting._context(tape)
+    if context is None:return supported
+    slot,same=accounting._ticket(context.ledger,captured.ticket);rows=jnp.arange(b);move=_vector(captured.move,b)
+    supported=(same&jnp.any(tables.swords_dance_binding!=0)
+        &jnp.all(captured.context.data.binding==tables.swords_dance_binding)
+        &(move>0)&(move<len(tables.swords_dance_candidates))
+        &tables.swords_dance_candidates[jnp.clip(move,0,len(tables.swords_dance_candidates)-1)]
+        &(context.ledger.stage[rows,slot]==2)&(context.ledger.refusal==0))
+    supported &= swords.span_matches(tape,captured.ticket,_vector(captured.side,b),_vector(captured.physical,b),move,captured.write,captured.context)
+    span=(jnp.arange(tape.words.shape[1])[None,:]>=context.ledger.start[rows,slot,None])&(jnp.arange(tape.words.shape[1])[None,:]<tape.count[:,None])
+    return supported&jnp.all(~span|((context.ledger.claimed==slot[:,None]+1)&jnp.all(context.ledger.words==tape.words,axis=2)
+        &(context.ledger.event_turn==tape.event_turn)&(context.ledger.event_phase==tape.event_phase)
+        &jnp.all(context.ledger.event_generation==tape.event_generation,axis=2)),axis=1)
+
+
+def observe_swords_dance_device(carry,tape,attempted,tables,*,active,captured=None):
+    attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
+    supported=_captured_swords_dance_matches(tape,tables,captured)
+    # Exactly ONE original SELF_BOOST observation per actual loop. Integration
+    # with another registered source unions read-only matches BEFORE _observe.
     return _observe(carry,tape,tables,Branch.SELF_BOOST,jnp.where(attempted&~supported,BOOST,0),active=active)
 
 
-def self_boost_on_tape(tape,attempted,*,active,captured=None):
-    return _on_tape(tape,observe_self_boost_device,attempted,active=active,captured=captured)
+def swords_dance_on_tape(tape,attempted,*,active,captured=None):
+    return _on_tape(tape,observe_swords_dance_device,attempted,active=active,captured=captured)
+
+
+def observe_self_boost_device(carry,tape,attempted,tables,*,active,captured=None,captured_swords=None):
+    attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
+    supported=_captured_calm_mind_matches(tape,tables,captured)|_captured_swords_dance_matches(tape,tables,captured_swords)
+    return _observe(carry,tape,tables,Branch.SELF_BOOST,jnp.where(attempted&~supported,BOOST,0),active=active)
+
+
+def self_boost_on_tape(tape,attempted,*,active,captured=None,captured_swords=None):
+    return _on_tape(tape,observe_self_boost_device,attempted,active=active,captured=captured,captured_swords=captured_swords)
 
 
 def observe_branch_device(carry,tape,branch,attempted,tables,*,active):

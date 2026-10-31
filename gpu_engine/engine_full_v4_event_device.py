@@ -38,6 +38,7 @@ from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
 from . import engine_recoil_callbacks as recoil_callbacks
+from . import engine_swords_dance_callbacks as swords_dance_callbacks
 from . import engine_intimidate_callbacks as intimidate_callbacks
 from . import engine_calm_mind_callbacks as calm_mind_callbacks
 
@@ -75,6 +76,7 @@ class Tables(NamedTuple):
     toxic_no_effect: object
     recoil_damage: object
     calm_mind: object
+    swords_dance: object
     ident_species: object
     intimidate: object
     namespaces: Bindings
@@ -247,6 +249,10 @@ def compile_adapter(metadata, projector, *, catalog):
     if int(lower.device.calm_mind_move)>0:
         calm_mind=np.array([add(f'|-boost|{ident[0]}|{stat}|1',inputs.Kind.BOOST) for stat in ('spa','spd')],np.int32)
         if not np.all(calm_mind):raise ValueError('FULL writer lacks exact Calm Mind SPA/SPD schemas')
+    swords_dance=0
+    if int(lower.device.swords_dance_move)>0:
+        swords_dance=add(f'|-boost|{ident[0]}|atk|2',inputs.Kind.BOOST)
+        if not swords_dance:raise ValueError('FULL writer lacks exact Swords Dance schema')
     trace_copy=0
     if int(lower.device.trace_engine_ability)>0 and int(lower.device.sturdy_engine_ability)>0 and int(lower.device.sturdy_public_ability)>0:
         trace_copy=add(f'|-ability|{ident[0]}|Sturdy|Trace|[from] ability: Trace|[of] {ident[1]}',inputs.Kind.TRACE)
@@ -284,6 +290,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
     payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
+    payload += np.array(swords_dance,np.int32).tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
@@ -291,7 +298,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -396,6 +403,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
     causal.base._shape(tables.intimidate,(),jnp.int32)
     causal.base._shape(tables.calm_mind,(2,),jnp.int32)
+    causal.base._shape(tables.swords_dance,(),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     causal.base._shape(tables.ident_species,(tables.ident_species.shape[0],),jnp.int32)
@@ -440,6 +448,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
         intimidate=(kind==int(inputs.Kind.BOOST))&(raw_kind==intimidate_callbacks.INTIMIDATE)
         calm_mind=(kind==int(inputs.Kind.BOOST))&(raw_kind==calm_mind_callbacks.CALM_MIND)
+        swords_dance=(kind==int(inputs.Kind.BOOST))&(raw_kind==swords_dance_callbacks.SWORDS_DANCE)
         direct_control=(kind==int(inputs.Kind.NONPROC)) & (
             (raw_kind==direct_hit_controls.CRITICAL)|(raw_kind==direct_hit_controls.SUPER_EFFECTIVE)
             |(raw_kind==direct_hit_controls.RESISTED))
@@ -478,6 +487,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(intimidate,tables.intimidate,key)
         key=jnp.where(trace_copy,tables.trace_copy,key)
         key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
+        key=jnp.where(swords_dance,tables.swords_dance,key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
@@ -545,6 +555,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~calm_mind | (pair&live[rows,safe]&(called[:,0]==subject)&(called[:,1]==new_slot)
             &(called[:,2]==tables.causal.base.public_ids[calm_move])&(called[:,3]==semantic[:,2])
             &(called[:,4]+1==first_at))
+        swords_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        identity &= ~swords_dance | (live[rows,safe]&(called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[swords_move])&(called[:,3]==semantic[:,2])
+            &(called[:,4]+1==index))
 
         raw=tape.words[:,index]
         recoil_move=jnp.clip(raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
