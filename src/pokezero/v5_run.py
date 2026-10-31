@@ -5,7 +5,7 @@ module never draws teams, allocates a job, loads a legacy warm start, evaluates
 a holdout, or promotes an arm. Real execution needs Torch and the separately
 prepared original engine/JAX backend. Source readiness is not qualification.
 """
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass, replace
 import hashlib
 import json
 import math
@@ -119,6 +119,40 @@ class EvaluationRequest:
     run_directory:Path
     checkpoint_path:Path
     archive_path:Path
+    progress_callback:object=None  # Host-only, excluded from immutable binding.
+
+
+@dataclass(frozen=True)
+class EvaluationCompletion:
+    cell_ordinal:int
+    offset:int
+    seed:int
+    seat:str
+    duration_seconds:float
+    source_game_json:str
+    source_result_sha256:str
+    learner_username:str
+    opponent_username:str
+
+
+def _checked_evaluation_completion(receipt):
+    from types import SimpleNamespace
+    from .v5_foulplay import _score
+    if (type(receipt) is not EvaluationCompletion or type(receipt.offset) is not int or not 0<=receipt.offset<500
+            or type(receipt.cell_ordinal) is not int or receipt.seat not in ('p1','p2')
+            or receipt.cell_ordinal!=2*receipt.offset+(receipt.seat=='p2')
+            or type(receipt.seed) is not int or not 0<=receipt.seed<2**32
+            or isinstance(receipt.duration_seconds,bool) or not isinstance(receipt.duration_seconds,Real)
+            or not math.isfinite(receipt.duration_seconds) or receipt.duration_seconds<0
+            or any(type(x) is not str or not x for x in (receipt.learner_username,receipt.opponent_username))):
+        raise ValueError('literal completed original paired FP cell receipt required')
+    game=json.loads(receipt.source_game_json)
+    if _sha(game)!=receipt.source_result_sha256 or game.get('seed')!=receipt.seed:
+        raise ValueError('actual completed FP source game differs')
+    config=SimpleNamespace(pokezero_player=receipt.seat,pokezero_username=receipt.learner_username,
+        foulplay_username=receipt.opponent_username)
+    if _score(config,game) is None:raise ValueError('unknown/capped FP game cannot advance completion watchdog')
+    return receipt
 
 
 @dataclass(frozen=True)
@@ -373,7 +407,7 @@ def _evaluation_history(store):
     if store.matching('RUN_STARTED')!=[dict(declaration_sha256=declaration_sha256)]:
         raise ValueError('original accepted run declaration binding required')
     milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
-    starts={};closed={};published={}
+    starts={};closed={};published={};completed={}
     for event in store.events:
         if event['kind']=='SNAPSHOT':
             snapshot=Snapshot(**event['payload'])
@@ -383,7 +417,7 @@ def _evaluation_history(store):
             iteration=event['payload']['iteration']
             if iteration not in published or _sha(_evaluation_binding(store,published[iteration])) not in closed:
                 raise ValueError('milestone iteration completed without an attempted evaluation disposition')
-        if event['kind'] not in ('EVALUATION_STARTED','EVALUATION_RESULT','EVALUATION_UNKNOWN'):continue
+        if event['kind'] not in ('EVALUATION_STARTED','EVALUATION_RESULT','EVALUATION_UNKNOWN','EVALUATION_GAME_END'):continue
         if store.plan.evaluation is None:raise ValueError('evaluation journal requires original opted-in declaration')
         payload=event['payload'];iteration=payload.get('iteration')
         if iteration not in published:raise ValueError('evaluation requires one original published snapshot')
@@ -395,6 +429,14 @@ def _evaluation_history(store):
         if event['kind']=='EVALUATION_STARTED':
             if key in starts or set(payload)!=set(expected):raise ValueError('evaluation attempt replay/extra fields')
             _evaluation_request(store,snapshot);starts[key]=expected
+        elif event['kind']=='EVALUATION_GAME_END':
+            if key not in starts or key in closed or set(payload)!=set(expected)|{'completion','status','duration_seconds'}:
+                raise ValueError('evaluation completion requires open original attempt')
+            receipt=_checked_evaluation_completion(EvaluationCompletion(**payload['completion']))
+            seen=completed.setdefault(key,set())
+            if receipt.cell_ordinal in seen or payload['status']!='COMPLETE' or payload['duration_seconds']!=receipt.duration_seconds:
+                raise ValueError('replayed/mismatched evaluation completion')
+            seen.add(receipt.cell_ordinal)
         else:
             if key not in starts or key in closed or set(payload)!=set(expected)|{'outcome'}:
                 raise ValueError('evaluation result requires one durable original attempt')
@@ -416,6 +458,14 @@ def _evaluate_snapshot(store,snapshot,hook):
     request=_evaluation_request(store,snapshot)
     bound=dict(**binding,evaluation_sha256=key)
     store.emit('EVALUATION_STARTED',**bound)
+    completed=set()
+    def actual_completion(receipt):
+        _checked_evaluation_completion(receipt)
+        if receipt.cell_ordinal in completed:raise ValueError('completed evaluation cell replayed')
+        store.emit('EVALUATION_GAME_END',**bound,status='COMPLETE',duration_seconds=receipt.duration_seconds,
+            completion=asdict(receipt))
+        completed.add(receipt.cell_ordinal)
+    request=replace(request,progress_callback=actual_completion)
     try:
         outcome=hook(request)
         if type(outcome) is not EvaluationOutcome:raise ValueError('typed evaluation outcome required')
@@ -587,7 +637,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
                     if event.get('sequence')!=seen or event.get('previous')!=previous or _sha(event)!=digest:
                         reason='PROGRESS_JOURNAL_CHANGED';break
                     previous=digest;seen+=1;payload=event['payload']
-                    if event['kind']=='GAME_END' and payload['status']=='COMPLETE':
+                    if event['kind'] in ('GAME_END','EVALUATION_GAME_END') and payload['status']=='COMPLETE':
                         longest=max(longest,payload['duration_seconds']);last=time.monotonic()
                     elif event['kind']=='TRAIN_PROGRESS' and payload['steps']>last_steps:
                         phase='TRAIN';last_steps=payload['steps'];last=time.monotonic()

@@ -269,9 +269,19 @@ def main(argv=None,*,evaluation_hook=None):
     parser.add_argument('--enable-v5',action='store_true');parser.add_argument('--inspect-only',action='store_true')
     parser.add_argument('--arm',required=True,choices=('A0','B0','D0','B1'))
     for name in ('declaration','expected-declaration-sha256','runtime','expected-runtime-sha256','run-root'):parser.add_argument('--'+name,required=True)
+    parser.add_argument('--evaluation-protocol');parser.add_argument('--expected-evaluation-protocol-sha256')
     parser.add_argument('--resume',action='store_true');args=parser.parse_args(argv)
     inputs=load_inputs(declaration=args.declaration,expected_declaration_sha256=args.expected_declaration_sha256,
         runtime=args.runtime,expected_runtime_sha256=args.expected_runtime_sha256,arm=args.arm,enable_v5=args.enable_v5)
+    if (args.evaluation_protocol is None)!=(args.expected_evaluation_protocol_sha256 is None):
+        raise ValueError('explicit evaluation protocol path and digest required together')
+    if args.evaluation_protocol is not None:
+        from .v5_evaluation import Artifact,EvaluationHook
+        if (evaluation_hook is not None or inputs.plan.evaluation is None
+                or inputs.plan.evaluation.protocol_sha256!=args.expected_evaluation_protocol_sha256):
+            raise ValueError('original declared evaluation hook required; no executor override')
+        from .v5_run import _sha
+        evaluation_hook=EvaluationHook(Artifact(args.evaluation_protocol,args.expected_evaluation_protocol_sha256),_sha(inputs.plan.manifest()))
     if args.inspect_only:
         print(json.dumps(dict(status='BOUND_INPUTS_ONLY_NO_RUNTIME_OR_MODEL',arm=args.arm,declaration_sha256=inputs.declaration_sha256)))
         return 0
