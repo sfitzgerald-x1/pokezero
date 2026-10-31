@@ -352,7 +352,7 @@ def compile_adapter(metadata, projector, *, catalog):
     no_damage_keys[no_damage.MISS,:]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
     no_damage_keys[no_damage.TYPE_IMMUNE,:]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
     no_damage_miss=np.zeros(len(projector.catalog.ids),bool)
-    for row in np.flatnonzero(np.asarray(lower.device.no_damage.candidates)):
+    for row in np.flatnonzero(np.asarray(lower.device.no_damage.candidates)|np.asarray(lower.device.primary_sleep_moves)):
         pid=projector.catalog.ids[row];name=catalog.moves.names[pid]
         annotated=add(f'|move|{ident[0]}|{name}|{ident[1]}|[miss]',inputs.Kind.MOVE)
         no_damage_miss[row]=bool(annotated and int(moves[pid]) and np.array_equal(templates[int(moves[pid])],templates[annotated]))
@@ -634,6 +634,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic_write=toxic_attempt&(toxic_code==toxic_callbacks.STATUS_WRITE)
         key=jnp.where(toxic_attempt,tables.toxic_no_effect[jnp.clip(toxic_code,0,2)],key)
         key=jnp.where(toxic_write,0,key)
+        sleep_miss=toxic_attempt&powder_callbacks.owned_miss_device(tape,index)
+        sleep_miss_safe=tables.no_damage_miss[jnp.clip(tape.words[:,index,5],0,len(tables.no_damage_miss)-1)]
+        key=jnp.where(sleep_miss,jnp.where(sleep_miss_safe,tables.no_damage[no_damage.MISS,0],0),key)
         key=jnp.where(substitute,tables.substitute_created[chip_status],key)
         key=jnp.where(pressure,tables.pressure_start,key)
         key=jnp.where(intimidate,tables.intimidate,key)
