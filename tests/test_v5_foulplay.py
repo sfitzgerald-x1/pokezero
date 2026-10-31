@@ -136,7 +136,7 @@ class V5FoulPlayTests(unittest.TestCase):
             self.assertEqual(trajectories[0].steps[0].metadata['archive_sha256'],'b'*64)
 
     def test_legacy_config_and_provenance_shapes_unchanged_and_default_cannot_admit_v5(self):
-        before=ast.parse(subprocess.check_output(['git','show','5f9845ae:src/pokezero/foulplay_bridge.py'],text=True))
+        before=ast.parse(subprocess.check_output(['git','show','d0467340:src/pokezero/foulplay_bridge.py'],text=True))
         after=ast.parse(Path(old.__file__).read_text())
         find=lambda tree:next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='ControlledFoulPlayConfig')
         self.assertEqual(ast.dump(find(before),include_attributes=False),ast.dump(find(after),include_attributes=False))
