@@ -33,7 +33,7 @@ class WorkerTests(unittest.TestCase):
         profile=phase.ChampionProfile.read(inventory['path'],expected_sha256=inventory['sha256'])
         pool=record(root/'pool.npz',b'synthetic-placeholder-not-loaded-as-NPZ')
         with patch.object(ActorContract,'champion',return_value=contract),patch.object(phase,'GAMES_PER_ARM',4):
-            recipe=phase.bind_plan(profile,vocabulary(),run_id='unit',arm='B',replicate=0,
+            recipe=phase.bind_plan(profile,vocabulary(),category_vocabulary=vocab,run_id='unit',arm='B',replicate=0,
                 iterations=tiny_plan().iterations,pool_sha256=pool['sha256'],selection_seed=9)
         if evaluation:recipe=replace(recipe,evaluation=run.EvaluationProtocol('c'*64))
         document=record(root/'plan.json',recipe.manifest())
@@ -135,7 +135,7 @@ class WorkerTests(unittest.TestCase):
             with patch.object(w,'_source') as source:
                 with self.assertRaisesRegex(run.MissingDependency,'evaluation'):w.execute(inputs,root/'run')
                 source.assert_not_called()
-            events=[];prepared=object();pool=object();public=object();backend=object();hook=object()
+            events=[];prepared=object();pool=object();public=object();backend=object();hook=lambda request:None
             with patch.object(w,'_source',side_effect=lambda _:events.append('source')),patch.object(w,'_memory',side_effect=lambda *a,**k:events.append('memory')),patch.object(w,'_probe',side_effect=lambda _:events.append('probe')),patch.object(w,'prepare_runtime',side_effect=lambda _:(events.append('prepare') or (prepared,pool,public,contract))),patch.object(phase,'build_backend',return_value=backend) as build,patch.object(run,'run',return_value={'unit':True}) as launch:
                 self.assertEqual(w.execute(inputs,root/'run',resume=True,evaluation_hook=hook),{'unit':True})
             self.assertEqual(events,['source','memory','probe','prepare'])

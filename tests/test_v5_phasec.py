@@ -10,8 +10,13 @@ from unittest.mock import patch
 
 from pokezero import v5_phasec as phase
 from pokezero.live_protocol_actor import ActorContract
+from pokezero.category_vocab import CategoryVocabulary
 from test_v5_contract import vocabulary
 from test_v5_run import plan
+
+
+def category():
+    return CategoryVocabulary(tuple('unit'+str(i) for i in range(899)),16,{})
 
 
 def original_metadata():
@@ -48,7 +53,7 @@ class PhaseCPreparationTests(unittest.TestCase):
             phase.ChampionProfile(hashlib.sha256(blob.encode()).hexdigest(),blob)
 
     def test_all_four_arms_have_exact_current_controls_and_intended_treatment_only(self):
-        data=profile();configs=[data.configurations(vocabulary(),arm=arm,replicate=rep) for arm,rep in phase.ARMS]
+        data=profile();configs=[data.configurations(vocabulary(),category_vocabulary=category(),arm=arm,replicate=rep) for arm,rep in phase.ARMS]
         self.assertEqual([x['role'] for x in configs],['A0','B0','D0','B1'])
         for config in configs:
             model=config['model'];loss=config['loss'];train=config['training']
@@ -65,10 +70,10 @@ class PhaseCPreparationTests(unittest.TestCase):
                 self.assertEqual((loss.value_lambda,loss.value_clip,loss.auxiliary_weight,loss.uniform_kl_coefficient,config['historical_fraction']),(.95,None,.1,.01,.5))
             self.assertEqual(loss.search_policy_weight,1. if model.arm=='D' else 0.)
         self.assertEqual([x['training']['seed'] for x in configs],[0,0,0,1])
-        with self.assertRaises(ValueError):data.configurations(vocabulary(),arm='C')
+        with self.assertRaises(ValueError):data.configurations(vocabulary(),category_vocabulary=category(),arm='C')
 
     def test_preparation_is_honest_about_unbound_panels_and_runtime(self):
-        doc=phase.preparation(profile(),vocabulary())
+        doc=phase.preparation(profile(),vocabulary(),category_vocabulary=category())
         self.assertEqual(doc['status'],'PREPARATION_ONLY_NO_LAUNCH')
         self.assertEqual(doc['panels']['at'],[500000,1000000,1500000,2000000])
         self.assertIn('NO_EVALUATION_HOOK',doc['panels']['execution'])
@@ -83,7 +88,7 @@ class PhaseCPreparationTests(unittest.TestCase):
 
     def test_bind_requires_full_declared_bank_and_real_scheduled_trainer(self):
         fixture=plan()
-        kwargs=dict(run_id='prep',arm='B',replicate=0,iterations=fixture.iterations,
+        kwargs=dict(category_vocabulary=category(),run_id='prep',arm='B',replicate=0,iterations=fixture.iterations,
             pool_sha256=fixture.pool_sha256,selection_seed=fixture.selection_seed)
         with self.assertRaisesRegex(ValueError,'complete predeclared2M'):
             phase.bind_plan(profile(),vocabulary(),**kwargs)
@@ -117,7 +122,7 @@ class PhaseCPreparationTests(unittest.TestCase):
         with self.assertRaises(phase.runs.MissingDependency):phase.build_backend(plan('D'),prepared,pool)
 
     def test_four_suspended_single_gpu_manifests_share_node_not_seeds_or_argv_defaults(self):
-        doc=phase.preparation(profile(),vocabulary())
+        doc=phase.preparation(profile(),vocabulary(),category_vocabulary=category())
         bindings=dict(name='unit-phasec',namespace='test',image='unit@sha256:'+'a'*64,
             worker_command=['python','unit_worker.py'],volumes=[],volume_mounts=[],cpu=4,memory='8Gi',private_manifest_root='/unit/private')
         jobs=phase.job_templates(doc,**bindings)

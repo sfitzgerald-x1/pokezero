@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -67,7 +68,7 @@ class Inputs:
     def gender_policy(self):return json.loads(self.gender_policy_json)
 
 
-def _plan(document,profile,arm):
+def _plan(document,profile,arm,category_vocabulary):
     from . import v5_run as run,v5_training as training,v5_phasec as phase
     from .v5_model import V5ModelConfig
     from .v5_loss import V5LossConfig
@@ -96,7 +97,7 @@ def _plan(document,profile,arm):
         document['max_requests'],run.Watchdog(**document['watchdog']),
         checkpoint_updates=document['checkpoint_updates'],discount=document['discount'],**extras)
     if run._json(result.manifest())!=run._json(document):raise ValueError('full original plan differs; no default or discarded fields')
-    expected=phase.bind_plan(profile,model.label_vocabulary,run_id=result.run_id,arm=model.arm,
+    expected=phase.bind_plan(profile,model.label_vocabulary,category_vocabulary=category_vocabulary,run_id=result.run_id,arm=model.arm,
         replicate=model.replicate,iterations=result.iterations,pool_sha256=result.pool_sha256,selection_seed=result.selection_seed)
     if extras:expected=replace(expected,**extras)
     if expected!=result:raise ValueError('declared controls differ from Phase C direct9375 recipe')
@@ -141,7 +142,7 @@ def load_inputs(*,declaration,expected_declaration_sha256,runtime,expected_runti
             or precision['jax_x64'] is not False or precision['jax_matmul']!='highest'
             or precision['torch_matmul'] not in ('highest','high','medium')):
         raise ValueError('explicit common bf16 precision/runtime arithmetic policy required')
-    plan=_plan(declaration_document,profile,arm)
+    plan=_plan(declaration_document,profile,arm,resolved)
     uses_gender=any(b.gender_seed is not None for iteration in plan.iterations for b in iteration)
     if uses_gender!=(gender is not None):raise ValueError('explicit gender policy must match declared gender recipe')
     return Inputs(plan,profile,json.dumps(runtime_document,sort_keys=True,allow_nan=False),
@@ -189,6 +190,9 @@ def _source(runtime):
         raise ValueError('original clean worker/engine source differs')
     show=runtime['showdown']
     _record(show['node'],json_value=False)
+    found=shutil.which('node')
+    if found is None or Path(found).resolve()!=Path(show['node']['path']).resolve():
+        raise ValueError('PATH Node must be the declared digest-bound executable')
     if subprocess.check_output(['git','-C',show['root'],'rev-parse','HEAD'],text=True).strip()!=show['commit']:
         raise ValueError('original Showdown source differs')
 
@@ -252,7 +256,7 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None):
     _absolute(str(run_root))
     if type(resume) is not bool:raise ValueError('explicit resume choice required')
     # No fake/default executor, zero-result success or panel bypass.
-    if getattr(inputs.plan,'evaluation',None) is None or evaluation_hook is None:
+    if getattr(inputs.plan,'evaluation',None) is None or not callable(evaluation_hook):
         raise run.MissingDependency('declared reviewed evaluation protocol and genuine panel executor required')
     _source(inputs.runtime);_memory(inputs.runtime['memory_policy'],apply=True);_probe(inputs.runtime)
     prepared,pool,public,contract=prepare_runtime(inputs)
