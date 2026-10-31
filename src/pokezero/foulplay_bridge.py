@@ -965,9 +965,15 @@ class ControlledFoulPlayConfig:
     # Explicit prospective owning-policy controls; legacy axes stay unchanged.
     owning_decision_timeout_seconds: float | None = None
     owning_public_single_line: bool = False
+    # Explicit continuation-only CPU placement; None preserves historical commands.
+    foulplay_cpu_affinity: int | None = None
 
     def __post_init__(self) -> None:
         validate_encoder_config(self)
+        if self.foulplay_cpu_affinity is not None and (
+            type(self.foulplay_cpu_affinity) is not int or self.foulplay_cpu_affinity < 0
+        ):
+            raise ValueError('foulplay_cpu_affinity must be a nonnegative integer when set.')
         if type(self.engine_policy_opponent) is not bool:
             raise ValueError("engine_policy_opponent must be boolean.")
         if self.engine_policy_opponent:
@@ -4961,6 +4967,7 @@ class _FoulPlayWebsocketServer:
         self.allow_missing_client = allow_missing_client
         self.port: int | None = None
         self.websocket: Any = None
+        self.last_disconnect: dict[str, Any] | None = None
         self.server: Any = None
         self.challenge_queue: asyncio.Queue[str] = asyncio.Queue()
         self.choice_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
@@ -4999,18 +5006,26 @@ class _FoulPlayWebsocketServer:
 
     async def _handle_connection(self, websocket: Any) -> None:
         self.websocket = websocket
+        self.last_disconnect = None
+        failure_type = None
         try:
             await websocket.send("|challstr|1|pokezero-controlled")
             async for message in websocket:
                 await self._handle_message(str(message))
-        except Exception:
-            # The caller monitors the foul-play process and will report its stderr/stdout. Avoid
-            # leaking a noisy websocket traceback as the primary error.
+        except Exception as error:
+            # Keep bounded transport evidence; never payloads, frame locals or
+            # a replacement client. The game remains failed closed.
+            failure_type = type(error).__name__[:128]
             return
         finally:
             # A game-scoped client can disconnect after its successor has already connected.
-            # Never let that stale handler clear the successor's active websocket.
+            # Never let that stale handler clear the successor's active websocket/evidence.
             if self.websocket is websocket:
+                code = getattr(websocket, 'close_code', None)
+                reason = getattr(websocket, 'close_reason', None)
+                self.last_disconnect = dict(error_type=failure_type,
+                    close_code=int(code) if isinstance(code, int) and not isinstance(code, bool) else None,
+                    close_reason=reason[:256] if type(reason) is str else None)
                 self.websocket = None
 
     async def _handle_message(self, message: str) -> None:
@@ -5031,9 +5046,15 @@ class _FoulPlayWebsocketServer:
             return
         # /utm, /timer, chat, and /savereplay are accepted no-ops for this controlled harness.
 
+    def _disconnected_error(self) -> FoulPlayProtocolError:
+        error = FoulPlayProtocolError("foul-play websocket is not connected.")
+        error.transport_diagnostics = dict(last_disconnect=(
+            None if self.last_disconnect is None else dict(self.last_disconnect)))
+        return error
+
     async def send_global(self, message: str) -> None:
         if self.websocket is None:
-            raise FoulPlayProtocolError("foul-play websocket is not connected.")
+            raise self._disconnected_error()
         await self.websocket.send(message)
 
     async def send_room_lines(self, battle_id: str, lines: Sequence[str]) -> None:
@@ -5050,7 +5071,7 @@ class _FoulPlayWebsocketServer:
         if self.websocket is None:
             if self.allow_missing_client:
                 return
-            raise FoulPlayProtocolError("foul-play websocket is not connected.")
+            raise self._disconnected_error()
         if not lines:
             return
         await self.websocket.send(f">{battle_id}\n" + "\n".join(lines))
@@ -7408,6 +7429,19 @@ def _foulplay_command(
         "sys.argv = sys.argv[1:]; "
         "runpy.run_path(script, run_name='__main__')"
     )
+    if config.encoder_kind != 'legacy-mixed':
+        # Match this harness's server-side ping policy. Synchronous owning
+        # setup/public folds can delay transport service without exceeding a
+        # decision deadline. Explicit challenge/choice/owning deadlines remain
+        # authoritative; no client disconnect may silently retry a game.
+        seed_wrapper = ("import functools, websockets; "
+            "websockets.connect = functools.partial(websockets.connect, ping_interval=None); "
+            + seed_wrapper)
+    if config.foulplay_cpu_affinity is not None:
+        # Set affinity in the child interpreter before importing FoulPlay; its
+        # descendants inherit it. No threaded-parent preexec_fn is involved.
+        seed_wrapper = (f"import os; os.sched_setaffinity(0, {{{config.foulplay_cpu_affinity}}}); "
+            f"assert os.sched_getaffinity(0) == {{{config.foulplay_cpu_affinity}}}; " + seed_wrapper)
     command: tuple[str, ...] = (
         str(config.resolved_foulplay_python),
         "-c",
@@ -7501,6 +7535,12 @@ async def _run_single_game(
         session.check_terminal_deadline()
     except BaseException as failure:
         error = failure
+        if getattr(failure, 'transport_diagnostics', None) is not None:
+            process, logs = kwargs.get('foulplay_process'), kwargs.get('foulplay_logs')
+            failure.transport_diagnostics.update(
+                foulplay_returncode=None if process is None else process.returncode,
+                stdout_tail=[] if logs is None else [line[-256:] for line in logs.stdout[-8:]],
+                stderr_tail=[] if logs is None else [line[-256:] for line in logs.stderr[-8:]])
         if getattr(failure,'bridge_event',None) is not None:
             session.capture_event_failure(failure,snapshot=failure.bridge_event)
         raise
@@ -7508,12 +7548,16 @@ async def _run_single_game(
         try:
             provenance = session.close(failed=error is not None)
             if error is not None:
+                if getattr(error, 'transport_diagnostics', None) is not None:
+                    provenance = dict(provenance, transport_diagnostics=error.transport_diagnostics)
                 error.owning_encoder_receipt = provenance
         except BaseException as cleanup_error:
             receipt = session.provenance(failed=True)
             if error is None:
                 cleanup_error.owning_encoder_receipt = receipt
                 raise
+            if getattr(error, 'transport_diagnostics', None) is not None:
+                receipt = dict(receipt, transport_diagnostics=error.transport_diagnostics)
             error.owning_encoder_receipt = receipt
             error.add_note(f"owning actor close error: {type(cleanup_error).__name__}")
     try:

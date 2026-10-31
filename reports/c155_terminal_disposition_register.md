@@ -1009,7 +1009,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 430 |
+| `base.expected_counter_artifacts` | 432 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 100 |
 | `base.section3_rows` | 82 |
@@ -1093,3 +1093,7 @@ For the owning ACK repair, the tracked JSON selector gives 429 members on main
 `1d1e3181` and 430 after adding the newly executed full
 `rollout_leaf_witness_mutation_battery_20261030_owning_choice_ack.json`.
 No selected path was removed; all 429 historical Git blobs remain unchanged.
+
+The fixed-order continuation adds one fresh full mutation receipt; the tracked
+reports/docs census is now 431. The exact selected-set difference against367c872b
+is that receipt alone, with no removals or altered historical JSON.
