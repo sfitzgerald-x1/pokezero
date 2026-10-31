@@ -9,8 +9,9 @@ these flags or ratios is reconstructed from the amount of HP lost.
 
 Positive nonlethal ordinary direct-target writes and the exact original compiled
 Seismic Toss fixed-level row are represented. Miss,
-immunity, substitute, protection, Endure, no-output and lethal writes stay
-UNKNOWN. Diagnostic calls retain UNKNOWN256. The separate PRIVATE registered
+immunity, substitute, protection, Endure and no-output writes stay UNKNOWN.
+These APIs remain nonlethal; the separate typed KO source requires its actual
+later faint callback and never relaxes this validator. Diagnostic calls retain UNKNOWN256. The separate PRIVATE registered
 source seam omits only this new latch for valid literal writes in the matching
 open accounting context; prior refusal bits remain unchanged. Neutral/noncritical
 writes emit no control and provide no no-output certificate. No damage formula,
@@ -50,6 +51,7 @@ class Data(NamedTuple):
     producer_binding: object
     move_count: object
     seismic_toss_move: object       # exact canonical fixed-LEVEL row, or0
+    ko_candidates: object          # ORIGINAL positive-power/nonrecoil rows only
 
 
 class Context(NamedTuple):
@@ -127,21 +129,25 @@ def compile_direct_hit_controls(*, engine_catalog):
                 and int(table.damage_moves.constant_damage[i])==0
                 and int(table.damage_moves.recoil_den[i])==0 and not bool(table.damage_moves.struggle[i])):
             seismic=i
+    ko=(np.asarray(table.power)>0)&(np.asarray(engine_catalog.ids)>0)&(np.asarray(engine_catalog.targets)==1)
+    ko &= np.arange(count)!=int(table.struggle)
+    if table.damage_moves is not None:ko &= np.asarray(table.damage_moves.recoil_den)==0
+    if table.self_destruct is not None:ko &= ~np.asarray(table.self_destruct.move)
     payload = dict(schema=SCHEMA, producer=engine_catalog.binding,
         engine=engine_catalog.engine_binding, source=engine_catalog.source_binding,
-        moves=engine_catalog.move_binding, move_count=count, seismic_toss_move=seismic,
+        moves=engine_catalog.move_binding, move_count=count, seismic_toss_move=seismic,ko_candidates=ko.tolist(),
         kinds=[CRITICAL, SUPER_EFFECTIVE, RESISTED],
         positive_effectiveness_ratios=POSITIVE_EFFECTIVENESS_RATIOS,
         source_files={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py')},
-        scope='literal-positive-nonlethal-write-only-no-consumer-registration')
+            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py')},
+        scope='literal-positive-nonlethal-and-source-pending-nonterminal-ko-only-no-completeness')
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     words = lambda x:jnp.asarray(x, jnp.uint32)
     data = Data(words(np.frombuffer(digest, dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding), words(engine_catalog.source_binding),
         words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding), dtype='>u4').astype(np.uint32)),
-        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32))
+        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko))
     result = Compiled(data)
     _COMPILED[result] = (data, tuple(data), engine_catalog)
     return result
@@ -184,6 +190,8 @@ def _check(tape, data):
         life._typed(value, (8,), jnp.uint32)
     life._typed(data.move_count, (), jnp.int32)
     life._typed(data.seismic_toss_move, (), jnp.int32)
+    if data.ko_candidates.ndim!=1 or len(data.ko_candidates)<2:raise ValueError('exact original KO move domain required')
+    life._typed(data.ko_candidates,(len(data.ko_candidates),),jnp.bool_)
     life._valid(tape.cursor)
     return True
 
