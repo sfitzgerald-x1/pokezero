@@ -6113,6 +6113,8 @@ async def _run_controlled_foulplay_games(
     phase_progress: FullgamePhaseProgress | None = None,
     owning_actor_factory: OwningActorFactory | None = None,
     actor_runtime: tuple[Any, Any, Any] | None = None,
+    actor_version: str = 'champion-v4',
+    game_offsets: tuple[int, ...] | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run a preconstructed legal policy through the shared FoulPlay bridge.
 
@@ -6122,10 +6124,19 @@ async def _run_controlled_foulplay_games(
     raw model directly instead of through a third opponent.
     """
 
-    actor_factory = require_actor_factory(config, owning_actor_factory)
-    if actor_factory is not None and (type(actor_runtime) is not tuple or len(actor_runtime) != 3):
+    actor_factory = (require_actor_factory(config, owning_actor_factory) if actor_version=='champion-v4'
+        else require_actor_factory(config, owning_actor_factory,actor_version=actor_version))
+    if actor_factory is not None and actor_version=='v5' and actor_runtime is not actor_factory:
+        raise ValueError('explicit original v5 factory runtime required')
+    if actor_factory is not None and actor_version=='champion-v4' and (type(actor_runtime) is not tuple or len(actor_runtime) != 3):
         raise ValueError("owning actor requires an explicit bound runtime")
-    foulplay_random_seed_schedule = _per_seed_foulplay_random_seed_schedule(config, count=config.games)
+    if game_offsets is not None and (actor_version!='v5' or type(game_offsets) is not tuple
+            or not game_offsets or any(type(i) is not int or not 0<=i<config.games for i in game_offsets)
+            or tuple(sorted(set(game_offsets)))!=game_offsets):
+        raise ValueError('ordered explicit v5 finite game offsets required')
+    offsets=range(config.games) if game_offsets is None else game_offsets
+    foulplay_random_seed_schedule = (_per_seed_foulplay_random_seed_schedule(config,count=config.games)
+        if game_offsets is None else _per_seed_foulplay_random_seed_schedule_for_offsets(config,offsets=offsets))
 
     # ONCE PER RUN, before any game, and only when there IS a foul-play process: whether its
     # search pool can emit the per-sample `Iterations` line at all is a property of the
@@ -6151,14 +6162,14 @@ async def _run_controlled_foulplay_games(
     try:
         await server.start()
         await bridge.start()
-        for offset in range(config.games):
+        for position,offset in enumerate(offsets):
             seed = config.seed_start + offset
             # Foul-play's websocket cleanup can terminate its process after a completed game.
             # Give every controlled battle an isolated client process so a completed result is
             # never reclassified as a failure while waiting for the next challenge.
             game_config = replace(
                 config,
-                foulplay_random_seed=foulplay_random_seed_schedule[offset],
+                foulplay_random_seed=foulplay_random_seed_schedule[position],
             )
             # With a NEURAL opponent there is no foul-play client, so none of its
             # lifecycle applies: nothing to spawn, no challenge to wait for, nothing to
@@ -6184,7 +6195,7 @@ async def _run_controlled_foulplay_games(
                     )
                 game_results.append(
                     await _run_single_game(
-                        config=config,
+                        config=game_config if actor_version=='v5' else config,
                         bridge=bridge,
                         server=server,
                         policy=policy,
@@ -6203,6 +6214,7 @@ async def _run_controlled_foulplay_games(
                         phase_progress=phase_progress,
                         **({"owning_actor_factory": actor_factory, "actor_runtime": actor_runtime}
                            if actor_factory is not None else {}),
+                        **({'actor_version':'v5'} if actor_version=='v5' else {}),
                     )
                 )
             finally:
@@ -7478,17 +7490,20 @@ async def _run_single_game(
     *, config: ControlledFoulPlayConfig,
     owning_actor_factory: OwningActorFactory | None = None,
     actor_runtime: tuple[Any, Any, Any] | None = None,
+    actor_version: str = 'champion-v4',
     **kwargs: Any,
 ) -> ControlledFoulPlayGameResult:
     """Preserve the legacy loop; own every opt-in actor through final cleanup."""
-    factory = require_actor_factory(config, owning_actor_factory)
+    factory = (require_actor_factory(config, owning_actor_factory) if actor_version=='champion-v4'
+        else require_actor_factory(config, owning_actor_factory,actor_version=actor_version))
     if factory is None:
         if actor_runtime is not None:
             raise ValueError("legacy-mixed cannot silently use an owning runtime")
         return await _run_single_game_body(config=config, **kwargs)
     seed = kwargs["seed"]
     session = OwningWireSession(config, factory, actor_runtime, seed=seed,
-        battle_id=f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}", start_seed=showdown_seed_from_int(seed))
+        battle_id=f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}", start_seed=showdown_seed_from_int(seed),
+        **({'actor_version':'v5'} if actor_version=='v5' else {}))
     callback = kwargs.get("trajectory_callback")
     captured: list[BattleTrajectory] = []
     error: BaseException | None = None
