@@ -1,6 +1,6 @@
 """Literal Gen3 Trace copy at the actual entry assignment, partial only.
 
-Initial capability is canonical Trace -> Sturdy. The receipt carries both
+The finite capability is canonical Trace -> Sturdy/Natural Cure/Oblivious. The receipt carries both
 actual physical identities and the old/new/foe ability reads from that SAME
 call. It never invokes the copied ability Start. Other copies remain UNKNOWN.
 Public names/encounters are resolved by the original owning FULL consumers.

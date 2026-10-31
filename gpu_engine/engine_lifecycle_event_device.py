@@ -92,6 +92,7 @@ class Tables(NamedTuple):
     swords_dance_move: object
     spikes_move: object
     thunder_wave_move: object
+    trace_public_ability: object
     binding: object
 
 
@@ -209,6 +210,11 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     trace_engine=next((i for i,n in enumerate(ability_names) if normalize_id(n)=='trace'),0)
     sturdy_engine=next((i for i,n in enumerate(ability_names) if normalize_id(n)=='sturdy'),0)
     sturdy_public=0 if weather_catalog is None else weather_catalog.abilities.ids.get('sturdy',0)
+    # Closed source-specific copy vocabulary, indexed in the ORIGINAL engine
+    # ability namespace. Never infer support from arbitrary copied IDs.
+    trace_public=np.array([weather_catalog.abilities.ids.get(normalize_id(n),0)
+        if weather_catalog is not None and normalize_id(n) in ('sturdy','naturalcure','oblivious') else 0
+        for n in ability_names],np.int32)
     substitute_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='substitute'),0)
     toxic_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='toxic'),0)
     recoil_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='doubleedge'),0)
@@ -246,6 +252,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),
         leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,
         trace_engine_ability=trace_engine,sturdy_engine_ability=sturdy_engine,sturdy_public_ability=sturdy_public,
+        trace_public_ability=trace_public.tolist(),
         pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,swords_dance_move=swords_dance_move,spikes_move=spikes_move,thunder_wave_move=thunder_wave_move,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
@@ -261,7 +268,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
-        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),
+        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),jnp.array(trace_public,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -394,6 +401,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     base._shape(tables.substitute_move, (), jnp.int32)
     base._shape(tables.pressure_engine_ability, (), jnp.int32)
     base._shape(tables.pressure_public_ability, (), jnp.int32)
+    if tables.trace_public_ability.ndim!=1 or tables.trace_public_ability.shape[0]<=0:
+        raise ValueError('original engine-indexed Trace copy vocabulary required')
+    base._shape(tables.trace_public_ability,tables.trace_public_ability.shape,jnp.int32)
     for v in (tables.trace_engine_ability,tables.sturdy_engine_ability,tables.sturdy_public_ability):
         base._shape(v,(),jnp.int32)
     base._shape(tape.words, (b, capacity, 10), jnp.int32)
@@ -701,8 +711,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         trace_ok=(tables.status_events & ~tables.raw_begin & status_identity & donor_ok & (phase==0)
             &(incoming==cursor.physical_active[rows,safe_side])&(raw[:,5]==1-side)
             &(raw[:,6]==cursor.physical_active[rows,1-safe_side])
-            &(tables.trace_engine_ability>0)&(tables.sturdy_engine_ability>0)&(tables.sturdy_public_ability>0)
-            &(raw[:,1]==tables.trace_engine_ability)&(raw[:,2]==tables.sturdy_engine_ability)
+            &(tables.trace_engine_ability>0)&(raw[:,1]==tables.trace_engine_ability)
+            &(raw[:,2]>0)&(raw[:,2]<tables.trace_public_ability.shape[0])
+            &(tables.trace_public_ability[jnp.clip(raw[:,2],0,tables.trace_public_ability.shape[0]-1)]>0)
             &(raw[:,7]==raw[:,2])&jnp.all(raw[:,8:]==0,axis=1))
         event_ok=jnp.where(trace_copy,generation_ok & clock_ok & trace_ok,event_ok)
         substitute_ok=(tables.status_events & ~tables.raw_begin & status_identity & (phase==0)
@@ -807,7 +818,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # Keep one internal semantic per receipt for exact raw-index alignment.
         # FULL projection alone enforces the source's owner-only visibility.
         semantic=jnp.where(pressure[:,None],pressure_semantic,semantic)
-        trace_payload=jnp.stack((status_enc,jnp.full_like(z,tables.sturdy_public_ability),donor_enc,jnp.ones_like(z),z,z,z,z),axis=1)
+        trace_payload=jnp.stack((status_enc,tables.trace_public_ability[jnp.clip(raw[:,2],0,tables.trace_public_ability.shape[0]-1)],donor_enc,jnp.ones_like(z),z,z,z,z),axis=1)
         trace_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.TRACE)),semantic_sequence,
             turn,phase,side,status_slot,raw[:,5],donor_slot),axis=1),trace_payload),axis=1)
         semantic=jnp.where(trace_copy[:,None],trace_semantic,semantic)

@@ -256,10 +256,14 @@ def compile_adapter(metadata, projector, *, catalog):
     if int(lower.device.swords_dance_move)>0:
         swords_dance=add(f'|-boost|{ident[0]}|atk|2',inputs.Kind.BOOST)
         if not swords_dance:raise ValueError('FULL writer lacks exact Swords Dance schema')
-    trace_copy=0
-    if int(lower.device.trace_engine_ability)>0 and int(lower.device.sturdy_engine_ability)>0 and int(lower.device.sturdy_public_ability)>0:
-        trace_copy=add(f'|-ability|{ident[0]}|Sturdy|Trace|[from] ability: Trace|[of] {ident[1]}',inputs.Kind.TRACE)
-        if not trace_copy:raise ValueError('FULL writer lacks exact Trace -> Sturdy schema')
+    trace_copy=np.zeros(len(metadata['vocabulary']['abilities']),np.int32)
+    trace_names={'sturdy':'Sturdy','naturalcure':'Natural Cure','oblivious':'Oblivious'}
+    if int(lower.device.trace_engine_ability)>0:
+        for ability_id,name in enumerate(metadata['vocabulary']['abilities']):
+            copied=trace_names.get(normalize_id(name))
+            if copied is not None and int(lower.device.trace_public_ability[ability_id])>0:
+                trace_copy[ability_id]=add(f'|-ability|{ident[0]}|{copied}|Trace|[from] ability: Trace|[of] {ident[1]}',inputs.Kind.TRACE)
+                if not trace_copy[ability_id]:raise ValueError('FULL writer lacks exact supported Trace copy schema')
     substitute_created=np.zeros(7,np.int32)
     if int(lower.device.substitute_move)>0:
         for status,token in enumerate(tokens):
@@ -402,7 +406,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.status_damage,(4,7),jnp.int32)
     causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
     causal.base._shape(tables.pressure_start,(),jnp.int32)
-    causal.base._shape(tables.trace_copy,(),jnp.int32)
+    causal.base._shape(tables.trace_copy,tables.causal.trace_public_ability.shape,jnp.int32)
     causal.base._shape(tables.substitute_created,(7,),jnp.int32)
     causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
     causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
@@ -493,7 +497,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(pressure,tables.pressure_start,key)
         key=jnp.where(intimidate,tables.intimidate,key)
         key=jnp.where(spikes,tables.spikes,key)
-        key=jnp.where(trace_copy,tables.trace_copy,key)
+        key=jnp.where(trace_copy,tables.trace_copy[jnp.clip(tape.words[:,index,2],0,tables.trace_copy.shape[0]-1)],key)
         key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
         key=jnp.where(swords_dance,tables.swords_dance,key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
