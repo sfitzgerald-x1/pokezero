@@ -349,7 +349,7 @@ def _substitute_span_matches(tape,ticket,side,physical,move,write):
         &life._valid(tape.cursor)&(physical==tape.cursor.physical_active[rows,safe])
         &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
         &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
-    for index in (prefix,at):
+    for index in (prefix,first,at):
         same &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])
             &(tape.event_phase[rows,index]==ledger.phase[rows,slot])
             &jnp.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
@@ -372,19 +372,27 @@ def _toxic_span_matches(tape,ticket,side,physical,target,move,attempt):
     if context is None:return jnp.zeros_like(tape.count,bool)
     ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=len(tape.count);rows=jnp.arange(b)
     expected=toxic.words_device(side,physical,target,move,attempt)
-    start=ledger.start[rows,slot];at=jnp.clip(start,0,tape.words.shape[1]-1);prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
+    applied=toxic.outcome_device(expected)==toxic.STATUS_WRITE
+    start=ledger.start[rows,slot];first=jnp.clip(start,0,tape.words.shape[1]-1)
+    at=jnp.clip(start+applied.astype(jnp.int32),0,tape.words.shape[1]-1)
+    prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
     raw=tape.words[rows,at];decl=tape.words[rows,prefix];safe=jnp.clip(side,0,1)
+    from . import engine_status_callbacks as status
+    absent=jnp.full_like(side,-1);zero=jnp.zeros_like(side)
+    status_words=jnp.stack((jnp.full_like(side,status.STATUS_APPLIED),absent,absent,1-side,target,
+        attempt.old_status,attempt.new_status,jnp.full_like(side,status.PRIMARY),zero,zero),axis=1)
+    same &= (~applied|jnp.all(tape.words[rows,first]==status_words,axis=1))
     same &= (_validate(ledger,context.tables)&_tape(ledger,tape,context.tables)&toxic.supported_raw(expected)
         &(attempt.old_counter>=0)&(attempt.old_counter<=15)&(attempt.new_counter>=0)&(attempt.new_counter<=15)
         &(ledger.site[rows,slot]==int(Site.TOXIC_ATTEMPT))&(ledger.side[rows,slot]==1-side)
-        &(tape.count==start+1)&jnp.all(raw==expected,axis=1)&(start>0)
+        &(tape.count==start+1+applied.astype(jnp.int32))&jnp.all(raw==expected,axis=1)&(start>0)
         &(decl[:,0]==toxic.public.MOVE)&(decl[:,1]==side)&(decl[:,2]==physical)
         &(decl[:,3]==1-side)&(decl[:,4]==target)&(decl[:,5]==move)&jnp.all(decl[:,6:]==0,axis=1)
         &life._valid(tape.cursor)&(physical==tape.cursor.physical_active[rows,safe])
         &(target==tape.cursor.physical_active[rows,1-safe])
         &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
         &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
-    for index in (prefix,at):
+    for index in (prefix,first,at):
         same &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])&(tape.event_phase[rows,index]==ledger.phase[rows,slot])
             &jnp.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
     return same

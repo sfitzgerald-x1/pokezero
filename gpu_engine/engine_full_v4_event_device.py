@@ -30,6 +30,7 @@ from . import engine_weather_progress_callbacks as weather_progress
 from . import engine_weather_effect_callbacks as weather_effects
 from . import engine_leftovers_callbacks as leftovers_callbacks
 from . import engine_status_residual_callbacks as status_residual_callbacks
+from . import engine_status_callbacks as status_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -417,13 +418,17 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,3),chip_status],key)
         key=jnp.where(direct_control,tables.direct_hit_control[jnp.clip(
             raw_kind-direct_hit_controls.CRITICAL,0,2)],key)
+        # Kind9 already emits the sole STATUS line. Kind26 is its checked
+        # same-call accounting continuation and contributes no public words.
+        toxic_write=toxic_attempt&(toxic_code==toxic_callbacks.STATUS_WRITE)
         key=jnp.where(toxic_attempt,tables.toxic_no_effect[jnp.clip(toxic_code,0,2)],key)
+        key=jnp.where(toxic_write,0,key)
         key=jnp.where(substitute,tables.substitute_created[chip_status],key)
         key=jnp.where(pressure,tables.pressure_start,key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
-        good = (key > 0) & enough
+        good = ((key > 0)|toxic_write) & enough
         error = jnp.where(present & (error == 0) & ~good, int(inputs.Error.PAYLOAD), error)
         schema = tables.templates[key]
         subject = jnp.where(direct_control,tape.words[:,index,3],jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6])))
@@ -446,10 +451,22 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic_raw=tape.words[:,index];toxic_actor=jnp.clip(toxic_raw[:,1],0,1);toxic_victim=jnp.clip(toxic_raw[:,3],0,1)
         toxic_move=jnp.clip(toxic_raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
         toxic_called=((called[:,0]==toxic_raw[:,1])&(called[:,1]==slots[rows,toxic_actor])
-            &(called[:,2]==tables.causal.base.public_ids[toxic_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
-        toxic_old=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(toxic_raw[:,7],0,6)]
+            &(called[:,2]==tables.causal.base.public_ids[toxic_move])&(called[:,3]==semantic[:,2])
+            &(called[:,4]+1+toxic_write.astype(jnp.int32)==index))
+        status_map=jnp.array([0,2,3,5,6,1,4],jnp.int32)
+        toxic_observed=status_map[jnp.clip(jnp.where(toxic_write,toxic_raw[:,8],toxic_raw[:,7]),0,6)]
+        previous_index=jnp.maximum(index-1,0);previous_raw=tape.words[:,previous_index]
+        toxic_status=(index>0)&(previous_raw[:,0]==status_callbacks.STATUS_APPLIED)
+        toxic_status &= jnp.all(previous_raw[:,1:3]==-1,axis=1)&jnp.all(previous_raw[:,8:]==0,axis=1)
+        toxic_status &= ((previous_raw[:,3]==toxic_raw[:,3])&(previous_raw[:,4]==toxic_raw[:,4])
+            &(previous_raw[:,5]==toxic_raw[:,7])&(previous_raw[:,6]==toxic_raw[:,8])
+            &(previous_raw[:,7]==status_callbacks.PRIMARY))
+        toxic_status &= ((tape.event_turn[:,previous_index]==tape.event_turn[:,index])
+            &(tape.event_phase[:,previous_index]==tape.event_phase[:,index])
+            &jnp.all(tape.event_generation[:,previous_index]==tape.event_generation[:,index],axis=1))
         identity &= ~toxic_attempt | (toxic_called & live[rows,toxic_actor]&live[rows,toxic_victim]
-            &(statuses[rows,toxic_victim,jnp.clip(slots[rows,toxic_victim],0,5)]==toxic_old))
+            &(~toxic_write|toxic_status)
+            &(statuses[rows,toxic_victim,jnp.clip(slots[rows,toxic_victim],0,5)]==toxic_observed))
         identity &= ~pressure | live[rows,safe]
         identity &= ~status_event | (old_public_status==previous_status)
         identity &= ~lum_event | ((lum_old_public==previous_status) & live[rows,safe])

@@ -38,14 +38,18 @@ class ToxicGuardTests(unittest.TestCase):
         tape,ticket,side,actor,target,move=self.tape();ctx=self.runtime['toxic_context']
         cases=[(self.attempt(),toxic.MISS,True),
             (self.attempt(accuracy_hit=True,hit=True,type_immune=True,secondary_active=True),toxic.PLAIN_TYPE_IMMUNITY,True),
-            (self.attempt(accuracy_hit=True,hit=True,applied=True,secondary_active=True,new_status=4),toxic.STATUS_WRITE,False),
+            (self.attempt(accuracy_hit=True,hit=True,applied=True,secondary_active=True,new_status=4),toxic.STATUS_WRITE,True),
             (self.attempt(accuracy_hit=True,hit=True,substitute_block=True,secondary_active=True),toxic.SUBSTITUTE_BLOCK,False),
             (self.attempt(accuracy_hit=True,hit=True,ability_immune=True,secondary_active=True),toxic.ABILITY_BLOCK,False),
             (self.attempt(accuracy_hit=True,hit=True,secondary_active=True,old_status=3,new_status=3),toxic.EXISTING_STATUS,False),
             (self.attempt(accuracy_hit=True,protected=True),toxic.OTHER,False)]
         for attempt,code,supported in cases:
-            out=toxic.record_device(tape,side,actor,target,move,attempt,ctx,eligible=j.ones(8,bool))
-            raw=out.words[:,1];self.assertEqual(toxic.outcome_device(raw).tolist(),[code]*8)
+            current=tape
+            if code==toxic.STATUS_WRITE:
+                from gpu_engine import engine_status_callbacks as status
+                current=status.changed(current,1-side,target,attempt.old_status,attempt.new_status,status.PRIMARY,eligible=j.ones(8,bool))
+            out=toxic.record_device(current,side,actor,target,move,attempt,ctx,eligible=j.ones(8,bool))
+            raw=out.words[j.arange(8),out.count-1];self.assertEqual(toxic.outcome_device(raw).tolist(),[code]*8)
             self.assertEqual(toxic.supported_raw(raw).tolist(),[supported]*8)
             out=execution.capture_toxic_attempt(out,ticket,side,actor,target,move,attempt,requested=j.ones(8,bool))
             self.assertEqual(out.execution.ledger.stage[:,0].tolist(),[2 if supported else 1]*8)
