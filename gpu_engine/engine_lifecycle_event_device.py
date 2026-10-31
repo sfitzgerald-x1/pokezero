@@ -43,6 +43,7 @@ from . import engine_no_damage_callbacks as no_damage
 from . import engine_flash_fire_end_callbacks as flash_end
 from . import engine_substitute_damage_callbacks as substitute_damage
 from . import engine_protect_callbacks as protect_callbacks
+from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -558,6 +559,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         recoil = kind == recoil_callbacks.RECOIL_HP
         intimidate = kind == intimidate_callbacks.INTIMIDATE
         calm_mind = kind == calm_mind_callbacks.CALM_MIND
+        bulk_up = kind == bulk_up_callbacks.BULK_UP
         swords_dance = kind == swords_dance_callbacks.SWORDS_DANCE
         spikes = kind == spikes_callbacks.SPIKES
         lum = kind == item_callbacks.LUM_CONSUMED
@@ -728,6 +730,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &((raw[:,4]==2)|(raw[:,4]==3))&(raw[:,5]>=-6)&(raw[:,5]<6)
             &(raw[:,6]==raw[:,5]+1)&((raw[:,7]==0)|(raw[:,7]==1))&jnp.all(raw[:,8:]==0,axis=1))
         event_ok=jnp.where(calm_mind,generation_ok & clock_ok & calm_mind_ok,event_ok)
+        bulk_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            &bulk_up_callbacks.owned_pair(tape,index))
+        event_ok=jnp.where(bulk_up,generation_ok&clock_ok&bulk_ok,event_ok)
         swords_dance_ok=(tables.status_events & ~tables.raw_begin & actor_ok & cursor.initialized
             &(phase==0)&(actor_side>=0)&(actor_side<2)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
@@ -864,6 +870,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         calm_mind_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),calm_mind_payload),axis=1)
         semantic=jnp.where(calm_mind[:,None],calm_mind_semantic,semantic)
+        bulk_payload=jnp.stack((actor_enc,raw[:,4],jnp.ones_like(z),jnp.full_like(z,public_mon_state.DELTA),z,z,z,z),axis=1)
+        bulk_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
+            turn,phase,absent,absent,actor_side,actor_slot),axis=1),bulk_payload),axis=1)
+        semantic=jnp.where(bulk_up[:,None],bulk_semantic,semantic)
         swords_dance_payload=jnp.stack((actor_enc,z,jnp.full_like(z,2),jnp.full_like(z,public_mon_state.DELTA),z,z,z,z),axis=1)
         swords_dance_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),swords_dance_payload),axis=1)

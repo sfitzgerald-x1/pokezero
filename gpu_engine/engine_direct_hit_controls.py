@@ -58,6 +58,7 @@ class Data(NamedTuple):
     secondary_status: object = None # explicit original-rule plain secondary capability
     substitute_damage: object = None # exact original ordinary Substitute source
     protect: object = None # explicit verified-rule Protect-condition family
+    bulk_up: object = None # original-bound ATK/DEF self-pair capability
 
 
 class Context(NamedTuple):
@@ -141,7 +142,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
     if table.self_destruct is not None:ko &= ~np.asarray(table.self_destruct.move)
     from . import engine_no_damage_callbacks as no_damage
     no_damage_data=no_damage.compile_data(engine_catalog)
-    secondary_data=None;substitute_damage_data=None;protect_data=None
+    secondary_data=None;substitute_damage_data=None;protect_data=None;bulk_up_data=None
     if metadata is not None or source_rules is not None:
         if metadata is None or source_rules is None:raise ValueError('original secondary metadata AND rules required')
         from . import engine_secondary_status_callbacks as secondary_status
@@ -150,13 +151,15 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         substitute_damage_data=substitute_damage.compile_data(engine_catalog,metadata,source_rules)
         from . import engine_protect_callbacks as protect_callbacks
         protect_data=protect_callbacks.compile_data(engine_catalog,metadata,source_rules)
-    payload = dict(schema=SCHEMA, protect_binding=None if protect_data is None else np.asarray(protect_data.binding).tolist(), substitute_damage_binding=None if substitute_damage_data is None else np.asarray(substitute_damage_data.binding).tolist(), secondary_binding=None if secondary_data is None else np.asarray(secondary_data.binding).tolist(), no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
+        from . import engine_bulk_up_callbacks as bulk_up
+        bulk_up_data=bulk_up.compile_data(engine_catalog,metadata,source_rules)
+    payload = dict(schema=SCHEMA, bulk_up_binding=None if bulk_up_data is None else np.asarray(bulk_up_data.binding).tolist(), protect_binding=None if protect_data is None else np.asarray(protect_data.binding).tolist(), substitute_damage_binding=None if substitute_damage_data is None else np.asarray(substitute_damage_data.binding).tolist(), secondary_binding=None if secondary_data is None else np.asarray(secondary_data.binding).tolist(), no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
         engine=engine_catalog.engine_binding, source=engine_catalog.source_binding,
         moves=engine_catalog.move_binding, move_count=count, seismic_toss_move=seismic,ko_candidates=ko.tolist(),
         kinds=[CRITICAL, SUPER_EFFECTIVE, RESISTED],
         positive_effectiveness_ratios=POSITIVE_EFFECTIVENESS_RATIOS,
         source_files={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py','secondary.py','engine_secondary_status_callbacks.py','engine_flash_fire_end_callbacks.py','engine_substitute_damage_callbacks.py','engine_protect_callbacks.py')},
+            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py','secondary.py','engine_secondary_status_callbacks.py','engine_flash_fire_end_callbacks.py','engine_substitute_damage_callbacks.py','engine_protect_callbacks.py','engine_bulk_up_callbacks.py')},
         scope='literal-positive-nonlethal-and-source-pending-nonterminal-ko-only-no-completeness')
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     words = lambda x:jnp.asarray(x, jnp.uint32)
@@ -164,7 +167,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         words(engine_catalog.engine_binding), words(engine_catalog.source_binding),
         words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding), dtype='>u4').astype(np.uint32)),
-        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data,secondary_data,substitute_damage_data,protect_data)
+        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data,secondary_data,substitute_damage_data,protect_data,bulk_up_data)
     result = Compiled(data)
     _COMPILED[result] = (data, tuple(data), engine_catalog,source_rules)
     return result
@@ -220,6 +223,9 @@ def _check(tape, data):
     if data.substitute_damage is not None:
         from . import engine_substitute_damage_callbacks as substitute_damage
         substitute_damage.shape(data.substitute_damage)
+    if data.bulk_up is not None:
+        from . import engine_bulk_up_callbacks as bulk_up
+        bulk_up.shape(data.bulk_up)
     if data.protect is not None:
         from . import engine_protect_callbacks as protect_callbacks
         protect_callbacks.shape(data.protect)

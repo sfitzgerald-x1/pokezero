@@ -90,6 +90,8 @@ class Tables(NamedTuple):
     sleep_powder_candidates: object     # [M] canonical original source only
     thunder_wave_candidates: object
     no_damage_binding: object          # GLOBAL8 original direct helper capability
+    bulk_up_binding: object
+    bulk_up_candidates: object
     protect_binding: object
     protect_candidates: object
     protect_block_candidates: object
@@ -160,6 +162,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     table=engine_catalog.engine_table;m=len(table.power);risk=np.zeros(m,np.int32)
     weather=np.asarray(table.weather.move_weather) if table.weather is not None else np.zeros(m,np.int32)
     no_damage_binding=np.zeros(8,np.uint32)
+    bulk_binding=np.zeros(8,np.uint32);bulk_candidates=np.zeros(m,bool)
     protect_binding=np.zeros(8,np.uint32);protect_candidates=np.zeros(m,bool);protect_blocks=np.zeros(m,bool)
     direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool);seismic=0;ko_candidates=np.zeros(m,bool)
     if direct_hit_compiled is not None:
@@ -171,6 +174,9 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         direct_binding=np.asarray(direct_data.binding,np.uint32)
         no_damage_binding=np.asarray(direct_data.no_damage.binding,np.uint32)
         ko_candidates=np.asarray(direct_data.ko_candidates,bool)
+        if direct_data.bulk_up is not None:
+            from . import engine_bulk_up_callbacks as bulk_up
+            bulk_up.shape(direct_data.bulk_up);bulk_binding=np.asarray(direct_data.bulk_up.binding,np.uint32);bulk_candidates=np.asarray(direct_data.bulk_up.candidates).copy()
         if direct_data.protect is not None:
             from . import engine_protect_callbacks as protect_callbacks
             protect_callbacks.shape(direct_data.protect)
@@ -257,7 +263,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         mask=np.asarray(data.move_mask)
         if mask.shape!=(m,) or mask.dtype!=np.dtype(bool) or not mask.any():raise ValueError('canonical primary sleep mask required')
         powder_binding=np.asarray(data.binding,np.uint32);powder_candidate=mask.copy()
-    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates]|=NON_WEATHER
+    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates&~bulk_candidates]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -266,7 +272,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         risk[on]|=bit
     for name in ('heal_half','weather_heal','rest','pain_split','belly_drum'):flag(table.effects,name,SELF_EFFECT)
     if table.effects is not None:risk[np.asarray(table.effects.substitute)&~substitute_candidate]|=SELF_EFFECT
-    if table.effects is not None:risk[np.any(np.asarray(table.effects.self_boosts)!=0,axis=1)&~calm_candidate&~swords_candidate]|=BOOST
+    if table.effects is not None:risk[np.any(np.asarray(table.effects.self_boosts)!=0,axis=1)&~calm_candidate&~swords_candidate&~bulk_candidates]|=BOOST
     for name in ('hit_spa_drop','haze'):flag(table.effects,name,BOOST)
     flag(table.effects,'endure',TARGET_OUTCOME)
     if table.effects is not None:risk[np.asarray(table.effects.protect)&~protect_candidates]|=TARGET_OUTCOME
@@ -300,12 +306,12 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
         direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
-        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist(),protect_binding=protect_binding.tolist(),protect_candidates=protect_candidates.tolist(),protect_block_candidates=protect_blocks.tolist())
+        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist(),bulk_up_binding=bulk_binding.tolist(),bulk_up_candidates=bulk_candidates.tolist(),protect_binding=protect_binding.tolist(),protect_candidates=protect_candidates.tolist(),protect_block_candidates=protect_blocks.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -377,6 +383,8 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.selected_risk,(len(tables.selected_risk),),jnp.int32)
     accounting._shape(tables.branch_risk,(len(Branch)+1,),jnp.int32)
     accounting._shape(tables.no_damage_binding,(8,),jnp.uint32)
+    accounting._shape(tables.bulk_up_binding,(8,),jnp.uint32)
+    accounting._shape(tables.bulk_up_candidates,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.protect_binding,(8,),jnp.uint32)
     accounting._shape(tables.protect_candidates,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.protect_block_candidates,tables.direct_candidates.shape,jnp.bool_)
@@ -790,14 +798,16 @@ def swords_dance_on_tape(tape,attempted,*,active,captured=None):
     return _on_tape(tape,observe_swords_dance_device,attempted,active=active,captured=captured)
 
 
-def observe_self_boost_device(carry,tape,attempted,tables,*,active,captured=None,captured_swords=None):
+def observe_self_boost_device(carry,tape,attempted,tables,*,active,captured=None,captured_swords=None,captured_bulk_up=None):
     attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
     supported=_captured_calm_mind_matches(tape,tables,captured)|_captured_swords_dance_matches(tape,tables,captured_swords)
+    from . import engine_bulk_up_callbacks as bulk_up
+    supported |= bulk_up.captured_matches(tape,captured_bulk_up)
     return _observe(carry,tape,tables,Branch.SELF_BOOST,jnp.where(attempted&~supported,BOOST,0),active=active)
 
 
-def self_boost_on_tape(tape,attempted,*,active,captured=None,captured_swords=None):
-    return _on_tape(tape,observe_self_boost_device,attempted,active=active,captured=captured,captured_swords=captured_swords)
+def self_boost_on_tape(tape,attempted,*,active,captured=None,captured_swords=None,captured_bulk_up=None):
+    return _on_tape(tape,observe_self_boost_device,attempted,active=active,captured=captured,captured_swords=captured_swords,captured_bulk_up=captured_bulk_up)
 
 
 class CapturedSpikes(NamedTuple):

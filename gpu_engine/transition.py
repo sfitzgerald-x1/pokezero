@@ -1064,7 +1064,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _swords_dance_requested=caller_acts & (caller_move==_swords_dance_context.data.move_id)
                 _public_trace,_swords_dance_ticket=execution_accounting.open_attempt(_public_trace,
                     execution_accounting.Site.SWORDS_DANCE,side,active=_swords_dance_requested)
+            if _lifecycle_trace:
+                from . import engine_bulk_up_callbacks as bulk_up_callbacks
+                _bulk_up_pending=None;_bulk_up_capture=None
+                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.bulk_up is not None:
+                    _public_trace,_bulk_up_pending=bulk_up_callbacks.begin(_public_trace,work,side,move,boosts,
+                        _direct_hit_context,effects,eligible=caller_acts)
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
+            if _lifecycle_trace:
+                _public_trace,_bulk_up_capture=bulk_up_callbacks.finish(_public_trace,_bulk_up_pending,boosts,acts&hit&~immune)
             if _calm_mind_context is not None:
                 _calm_mind_write=calm_mind_callbacks.Write(_calm_mind_old_spa,boosts[:,2],
                     _calm_mind_old_spd,boosts[:,3],acts & hit & ~immune)
@@ -1080,6 +1088,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     captured=(kernel_risks.CapturedCalmMind(_calm_mind_context,_calm_mind_ticket,
                         side,work.active[rows,side],move,_calm_mind_write)
                         if _calm_mind_context is not None else None),
+                    captured_bulk_up=_bulk_up_capture,
                     captured_swords=(kernel_risks.CapturedSwordsDance(_swords_dance_context,_swords_dance_ticket,
                         side,work.active[rows,side],move,_swords_dance_write)
                         if _swords_dance_context is not None else None))

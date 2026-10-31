@@ -47,7 +47,7 @@ class ProtectOwningTests(unittest.TestCase):
   cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
  def test_original_source_default_and_compiler_capability(self):
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),65)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),66)
   for name in self.names[:2]:
    at=self.metadata['vocabulary']['moves'].index(name);self.assertTrue(bool(self.helper.device.protect.candidates[at]));self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[at]),0)
   self.assertFalse(bool(self.helper.device.protect.candidates[self.metadata['vocabulary']['moves'].index('endure')]))
