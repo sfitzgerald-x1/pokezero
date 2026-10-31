@@ -173,8 +173,11 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     if table.own_tempo is not None:
         if _weather_trace is not None:
             from . import engine_kernel_frame_risk as kernel_risks
+            # Original Own Tempo Update prints/removes only an existing
+            # confusion volatile. Zero is absent in this state representation;
+            # every nonzero counter (including malformed negatives) stays unknown.
             _weather_trace=kernel_risks.branch_on_tape(_weather_trace,kernel_risks.Branch.ENTRY_CONFUSION_CURE,
-                starts & table.own_tempo[current],active=eligible)
+                starts & table.own_tempo[current] & (state.confusion_counter[rows,side,active]!=0),active=eligible)
         state=state._replace(confusion_counter=state.confusion_counter.at[rows,side,active].set(jnp.where(
             starts & table.own_tempo[current],0,state.confusion_counter[rows,side,active])))
     requested = table.weather_ability[ability]
