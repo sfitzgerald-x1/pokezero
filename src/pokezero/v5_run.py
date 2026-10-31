@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 import hashlib
 import json
 import math
+from numbers import Real
 import os
 import signal
 from pathlib import Path
@@ -127,10 +128,14 @@ class Plan:
     max_requests:int
     watchdog:Watchdog
     checkpoint_updates:int=32
+    discount:float=1.0
 
     def __post_init__(self):
         object.__setattr__(self,'iterations',tuple(tuple(x) for x in self.iterations))
         _seed(self.selection_seed);c._binding(self.pool_sha256)
+        if isinstance(self.discount,bool) or not isinstance(self.discount,Real) or not math.isfinite(self.discount) or not 0<=self.discount<=1:
+            raise ValueError('finite explicit discount in0..1 required')
+        object.__setattr__(self,'discount',float(self.discount))
         if (type(self.run_id) is not str or not self.run_id or type(self.model) is not V5ModelConfig
                 or type(self.loss) is not V5LossConfig or type(self.train) is not training.TrainConfig
                 or self.loss.arm!=self.model.arm or type(self.watchdog) is not Watchdog
@@ -160,7 +165,7 @@ class Plan:
         return dict(schema=SCHEMA,run_id=self.run_id,model=self.model.metadata(),loss=self.loss.metadata(),
             train=asdict(self.train),iterations=[[asdict(b) for b in x] for x in self.iterations],pool_sha256=self.pool_sha256,
             selection_seed=self.selection_seed,historical_fraction=self.historical_fraction,historical_window=self.historical_window,
-            max_requests=self.max_requests,watchdog=asdict(self.watchdog),checkpoint_updates=self.checkpoint_updates,
+            max_requests=self.max_requests,watchdog=asdict(self.watchdog),checkpoint_updates=self.checkpoint_updates,discount=self.discount,
             contract_sha256=_sha(c.contract_descriptor()),opponent_rule='UNIFORM_RECENT_PAST_SNAPSHOTS_NO_OUTCOME_ADAPTATION',
             initial_history='EMPTY_POOL_EXPLICIT_SELFPLAY',actor='RAW_POLICY',
             game_seed_scope='TRAJECTORY_IDENTITY_ONLY_BATCH_CONSTRUCTOR_AND_SAMPLING_SEEDS_DRIVE_RNG',scientific_qualification=False)
@@ -178,7 +183,12 @@ class Store:
         self.path=Path(path);self.plan=plan;self.path.mkdir(parents=True,exist_ok=True)
         declaration=self.path/'declaration.json';blob=_json(plan.manifest()).encode()
         if resume:
-            if not declaration.is_file() or declaration.read_bytes()!=blob:raise ValueError('original immutable run declaration required')
+            # Earlier declarations omitted discount and used exactly1.0. Accept
+            # only that identical historical recipe; never rewrite its bytes.
+            legacy=plan.manifest();legacy.pop('discount')
+            compatible=plan.discount==1.0 and declaration.is_file() and declaration.read_bytes()==_json(legacy).encode()
+            if not declaration.is_file() or declaration.read_bytes()!=blob and not compatible:
+                raise ValueError('original immutable run declaration required')
         else:
             if any(self.path.iterdir()):raise FileExistsError('fresh run directory required')
             _publish(declaration,blob)
