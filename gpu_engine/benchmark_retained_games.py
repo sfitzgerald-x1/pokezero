@@ -425,8 +425,15 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     _checked(runtime, session=session)
     if _source_snapshot() != source:
         raise RuntimeError('bound source changed during retained measurement')
+    # Refused rows freeze at their first unsupported frame. Preserve that raw
+    # evidence remotely so later source work does not replay consumed roots.
+    witness = getattr(session.state.core, 'frame_input_report', None)
+    risks = getattr(session.state.core, 'risks', None)
+    raw_packet = lambda value: None if value is None else {
+        name: np.asarray(array).tolist() for name, array in value._asdict().items()}
     return dict(schema=SCHEMA, status=status, runtime_binding=runtime.binding,
         source=source,
+        final_frame_input_witness=raw_packet(witness), final_kernel_risks=raw_packet(risks),
         full_B4_qualified=False, fidelity_qualified=False, strength_qualified=False,
         compute_dtype='bfloat16', model_outputs=['policy_logits', 'value', 'opponent_action_logits'],
         weights=record['metadata'], pool_receipt=receipt, batch=batch, original_denominator=batch,
