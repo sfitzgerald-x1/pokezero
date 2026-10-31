@@ -73,7 +73,7 @@ def _pair_inference(records,actors,inputs,legal,eligible,streams,frames,seed):
 
 
 def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_requests,sampling_seed,
-        on_end,check_progress,started_at=None,teacher=None):
+        on_end,check_progress,started_at=None,teacher=None,evaluation_recorder=None):
     """Collect one fixed original Session. No constructor/retry exists here."""
     if (type(max_requests) is not int or max_requests<=0 or type(sampling_seed) is not int
             or not 0<=sampling_seed<2**32 or not callable(on_end) or not callable(check_progress)):
@@ -94,6 +94,10 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
             if actor.config!=learner.config or other['catalog'] is not r['catalog']:
                 raise ValueError('same arm/replicate/source/category model namespace required')
             records[actor]=actual
+    if evaluation_recorder is not None:
+        from . import v5_evaluation_capture as evaluation_capture
+        evaluation_capture._start(evaluation_recorder,session,learner=learner,actors=actors,ledger=ledger,
+            team_indices=team_indices,sampling_seed=sampling_seed)
     book=base._ledger(ledger);status=book['status'];detail=book['detail']
     by_stream={cell.stream_id:i for i,cell in enumerate(ledger.cells)}
     if len(set(map(int,streams)))!=b or any(int(x) not in by_stream for x in streams):raise ValueError('declared actual streams required')
@@ -137,6 +141,8 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
             hp=np.asarray(core.engine.hp)[row].tolist(),max_hp=np.asarray(core.engine.max_hp)[row].tolist())
         terminal=data.TerminalCapture(int(streams[row]),frame,disposition,data.sha(body),body.get('winner'),
             base._as_tuple(body.get('hp',())),base._as_tuple(body.get('max_hp',())))
+        if evaluation_recorder is not None:
+            evaluation_capture._terminal(evaluation_recorder,session,terminal=terminal,body=body)
         terminals[int(streams[row])]=terminal;status[pos]=disposition
         detail[pos].update(reason=reason,duration_seconds=duration,source_sha256=terminal.source_sha256)
         on_end(int(streams[row]),disposition,duration_seconds=duration,source_sha256=terminal.source_sha256,
@@ -255,6 +261,8 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
             if not active.any():break
             transport=j.stack([j.where(route.admitted,route.engine_action,0) for route in routes],axis=1)
             before=np.asarray(core.frame_number).copy()
+            if evaluation_recorder is not None:
+                evaluation_capture._before(evaluation_recorder,session,pending=pending,histories=histories,own_statics=own_statics)
             base.driver.advance(session,transport,active_rows=j.asarray(active));jax.block_until_ready(session.result)
             diagnostics=base.driver.latest_diagnostics(session);jax.block_until_ready(diagnostics)
             executed=np.asarray(diagnostics.executed_rows);invalid=np.asarray(diagnostics.invalid_actions)
@@ -262,6 +270,8 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
                     or not np.array_equal(np.asarray(diagnostics.active_rows),active)
                     or not np.array_equal(np.asarray(session.state.core.frame_number)-before,executed.astype(np.int32))):
                 raise ValueError('actual driver executed a different frame/row set')
+            if evaluation_recorder is not None:
+                evaluation_capture._after(evaluation_recorder,session,diagnostics=diagnostics)
             # Nonexecuted requests have no new original frame. Executed refused
             # frames still retain the literal pre-rollback FULL report.
             retain_history(np.flatnonzero(executed))
@@ -285,7 +295,10 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
             if status[pos]=='RUNNING':close(row,'FAILED',type(error).__name__+': '+str(error))
         if isinstance(error,TimeoutError):raise
     closed=tuple(terminals[int(stream)] for stream in streams)
-    return PairedCollection(data.finish(decisions,closed),closed,ledger.report(),
+    finished=data.finish(decisions,closed)
+    if evaluation_recorder is not None:
+        evaluation_capture._finish(evaluation_recorder,session,decisions=decisions,terminals=closed,finished=finished)
+    return PairedCollection(finished,closed,ledger.report(),
         tuple((int(streams[row]),owner,value) for (row,owner),value in sorted(histories.items())),
         tuple((int(streams[row]),owner,reason) for (row,owner),reason in sorted(history_refusals.items())),
         tuple((int(streams[row]),owner,value) for (row,owner),value in sorted(own_statics.items())),

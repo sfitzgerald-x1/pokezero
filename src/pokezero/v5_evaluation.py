@@ -136,7 +136,9 @@ def _protocol(reference,*,parse_configs=False,checkpoint=None):
     category_sha=run._sha(dict(tokens=vocabulary['tokens'],oov_buckets=vocabulary['oov_buckets'],aliases=vocabulary['aliases']))
     for key,schema in (('positions',POSITIONS),('siblings',SIBLINGS)):
         with Path(value[key]['path']).open() as stream:header=json.loads(next(stream))
-        _keys(header,('schema','split','rows','category_vocabulary_sha256','label_vocabulary_sha256'))
+        base_header={'schema','split','rows','category_vocabulary_sha256','label_vocabulary_sha256'}
+        if set(header) not in (base_header,base_header|{'capture_bank','capture_source'}):
+            raise ValueError('complete fixed mechanism header required')
         if (header['schema']!=schema or header['split']!='PHASE_C_FIXED_HELDOUT'
                 or type(header['rows']) is not int or header['rows']<=0
                 or header['label_vocabulary_sha256']!=value['label_vocabulary_sha256']
@@ -269,8 +271,8 @@ def _mechanism_arithmetic(protocol,factory,data):
 def _capture_resolver():
     """Fixed original producer integration; never a caller readiness boolean.
 
-    That producer/resolver is not implemented in this revision. A complete
-    numeric fixture or hexadecimal receipt tag cannot replace it.
+    The fixed resolver requires the original nontraining collector/branch
+    records. A numeric fixture or hexadecimal tag alone cannot replace them.
     """
     name=__package__+'.v5_evaluation_capture'
     try:module=importlib.import_module(name)
@@ -458,6 +460,7 @@ class EvaluationHook:
         from . import v5_foulplay as fp
         protocol,panels=_protocol(self.protocol,parse_configs=True,checkpoint=request.checkpoint_path);_check_request(request,protocol,self.protocol,self.expected_run_declaration_sha256)
         _capture_resolver().require_original_capture(protocol)
+        _capture_resolver().resolve_original_capture(protocol,request)
         if request.declared_games not in panels:raise run.MissingDependency('exact declared milestone panel missing')
         if not callable(request.progress_callback):raise run.MissingDependency('original durable run completion sink required before panel')
         directory=request.run_directory/'artifacts'/('evaluation-'+str(request.declared_games)+'-'+uuid.uuid4().hex)
