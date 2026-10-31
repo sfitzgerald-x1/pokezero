@@ -129,6 +129,19 @@ class V5ModelLossTests(unittest.TestCase):
         with self.assertRaises(TypeError):model(**{name: tensors[name] for name in
             ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask', 'history_mask')}, privileged_view=True)
 
+    def test_tiny_cpu_bfloat16_autocast_forward_and_loss_have_finite_gradients(self):
+        for arm in ('B', 'D'):
+            with self.subTest(arm=arm):
+                cfg = config(arm); model = build_v5_model(cfg, enable_v5=True)
+                tensors = v5_batch_to_torch(batch_columns(arm), cfg, training=True)
+                with torch.autocast(device_type='cpu', dtype=torch.bfloat16):
+                    out = forward_v5(model, tensors, include_auxiliary=True)
+                    loss, _ = v5_loss(out, tensors, cfg, V5LossConfig(arm=arm))
+                self.assertTrue(torch.isfinite(loss))
+                loss.backward()
+                self.assertTrue(all(p.grad is not None and torch.isfinite(p.grad).all()
+                    for p in model.parameters()))
+
     def test_every_declared_belief_token_must_remain_attended(self):
         cfg = config(); model = build_v5_model(cfg, enable_v5=True)
         original = v5_batch_to_torch(batch_columns(), cfg)
