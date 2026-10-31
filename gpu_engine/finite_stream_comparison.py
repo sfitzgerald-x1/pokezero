@@ -20,6 +20,7 @@ import numpy as np
 from pokezero.env import BattleStartOverride
 from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from pokezero.recorded_encoder_parity import SHAPES, _arrays
+from .public_inputs import EVENT_WORDS
 from . import fidelity, public_wire, source_provenance, v4_encoder
 
 SCHEMA = 'pokezero.B4-finite-real-showdown-stream-comparison.v1'
@@ -183,7 +184,12 @@ def reference_words(lines, catalog, *, constructor=False):
         kinds[kind] += 1
         try:
             state, projected = public_wire.project_line(state, line, **tables)
-            words.extend(event.words() for event in projected.events)
+            for event in projected.events:
+                row = np.asarray(event.words())
+                if (row.shape != (EVENT_WORDS,) or row.dtype.kind not in 'iu'
+                        or np.any(row < np.iinfo(np.int32).min) or np.any(row > np.iinfo(np.int32).max)):
+                    raise ValueError('literal complete integer public event words required')
+                words.append(row.tolist())
         except ValueError as error:
             refusals.append(dict(kind=kind, offset=index, line_sha256=hashlib.sha256(line.encode()).hexdigest(),
                 reason=str(error)))
@@ -284,6 +290,10 @@ def collect_constructors(pool, team_indices, engine_state, captured, catalog, *,
             row['exact_pool_sets_sha256'] = _sha(parties)
             env = OwningShowdownEnv(config)
             env.reset_pool_sets(packed, seed=native_seed_start+index)
+            # Preserve the actual Native reference before any state comparison,
+            # observation or projection can fail. This remote row is evidence,
+            # never permission to replay its already-attempted constructor.
+            row['native_owner_lines'] = [list(lines) for lines in env.owner_transcripts]
             snapshot = env.snapshot()
             original = [[pool.metadata()['vocabulary']['species'][int(v)] for v in
                 pool.arrays['species'][team]] for team in indices[index]]
@@ -302,8 +312,12 @@ def collect_constructors(pool, team_indices, engine_state, captured, catalog, *,
                         observation_error = dict(type=type(error).__name__, message=str(error))
                 # Always collect stream/refusal diagnostics; conditional reducer
                 # alone decides which actually measured state-agreement rows enter.
-                compared = compare_owner(env.owner_transcripts[owner], owner_capture,
-                    catalog, constructor=True, actual_observation=actual, reference_observation=reference)
+                try:
+                    compared = compare_owner(row['native_owner_lines'][owner], owner_capture,
+                        catalog, constructor=True, actual_observation=actual, reference_observation=reference)
+                except Exception as error:
+                    compared = dict(status='UNKNOWN', error=dict(type=type(error).__name__, message=str(error)),
+                        columns=dict(status='UNKNOWN', reason='REFERENCE_COMPARISON_ERROR'))
                 if observation_error is not None:
                     compared['columns'] = dict(status='UNKNOWN', reason='REFERENCE_OR_ENGINE_ENCODER_REFUSED',
                         detail=observation_error)
