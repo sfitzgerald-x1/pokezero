@@ -287,7 +287,8 @@ def _source_snapshot():
 
 
 def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
-            sampling_seed=9771, max_requests=1000, enable_unqualified=False):
+            sampling_seed=9771, max_requests=1000, enable_unqualified=False,
+            gender_initialization=None):
     """Advance one immutable finite cohort; no refill, replay, or warmup games.
 
     Host compaction/validation, cold shape compilations, per-phase barriers and
@@ -317,8 +318,10 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         raise ValueError('distinct fixed team pairs and unique positive int32 stream IDs required')
     batch = len(indices)
     start = time.perf_counter_ns()
+    constructor_options={} if gender_initialization is None else {
+        'gender_initialization':gender_initialization}
     session = driver.construct(pool, indices, prepared=record['prepared'],
-        stream_ids=j.asarray(ids), seed=constructor_seed)
+        stream_ids=j.asarray(ids), seed=constructor_seed,**constructor_options)
     jax.block_until_ready(session.result)
     construction_ms = (time.perf_counter_ns() - start) / 1e6
     initial = session.result  # immutable actual constructor output; never replay it
