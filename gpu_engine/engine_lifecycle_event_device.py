@@ -26,7 +26,7 @@ import numpy as np
 
 from pokezero.dex import normalize_id
 from . import engine_lifecycle_callbacks as life, engine_public_event_device as base
-from . import engine_public_events as public, public_inputs as inputs
+from . import engine_public_events as public, public_inputs as inputs, public_toxic
 from . import public_belief, public_context, public_team
 from . import engine_status_callbacks as status_callbacks, engine_item_callbacks as item_callbacks
 from . import public_items, public_active
@@ -541,6 +541,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         initial = kind == life.INITIAL_REVEAL
         arrival = initial | (kind == life.SWITCH_INSTALLED)
         clock = (kind == life.TURN) | (kind == life.UPKEEP) | (kind == life.ACTION_END)
+        turnloop_prefix = kind == life.TURNLOOP_PREFIX
         component = (kind == public.MOVE) | (kind == public.MAIN_HP) | (kind == public.DIRECT_FAINT)
         applied = kind == status_callbacks.STATUS_APPLIED
         cured = kind == status_callbacks.STATUS_CURED
@@ -756,6 +757,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
                 |(thunder_callbacks.supported_raw(raw)&(tables.thunder_wave_move>0)&(raw[:,5]==tables.thunder_wave_move))
                 |(powder_callbacks.supported_raw(raw,primary_sleep=True)&(raw[:,5]>0)&(raw[:,5]<len(tables.primary_sleep_moves))&tables.primary_sleep_moves[jnp.clip(raw[:,5],0,len(tables.primary_sleep_moves)-1)])))
         event_ok=jnp.where(toxic,generation_ok & clock_ok & toxic_ok,event_ok)
+        prefix_ok=(tables.status_events&~tables.raw_begin&clock_payload&(index==0)
+            &jnp.all(cursor.established,axis=1)&jnp.all(details==0,axis=1))
+        event_ok=jnp.where(turnloop_prefix,generation_ok&clock_ok&prefix_ok,event_ok)
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -850,6 +854,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         trace_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.TRACE)),semantic_sequence,
             turn,phase,side,status_slot,raw[:,5],donor_slot),axis=1),trace_payload),axis=1)
         semantic=jnp.where(trace_copy[:,None],trace_semantic,semantic)
+        # The main fact of the exact two-line original FULL template is its
+        # timestamp control. The preceding blank retains its own six events.
+        prefix_payload=jnp.broadcast_to(jnp.array([public_toxic.TIMESTAMP,0,0,-1,0,1,0,0],jnp.int32),(b,8))
+        prefix_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.TOXIC)),
+            semantic_sequence,turn,phase,absent,absent,absent,absent),axis=1),prefix_payload),axis=1)
+        semantic=jnp.where(turnloop_prefix[:,None],prefix_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)

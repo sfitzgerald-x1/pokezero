@@ -21,6 +21,7 @@ from . import engine_request_order as request_order
 
 SCHEMA='pokezero.engine_lifecycle_callbacks.v1'
 TURN,UPKEEP,SWITCH_INSTALLED,ACTION_END,INITIAL_REVEAL=range(4,9)
+TURNLOOP_PREFIX=35  # INTERNAL composite: original turnLoop blank + timestamp
 UNKNOWN_DETAILS,UNKNOWN_BATON,MISSING_INSTALL,CLOCK=8,16,32,64
 
 
@@ -315,8 +316,18 @@ def begin(tape,state,live,invalid):
     ok &= (tape.cursor.turn==expected)&jnp.all(tape.cursor.physical_active==state.active,axis=1)
     ok &= jnp.all(~state.entry_pending,axis=1)
     ok &= jnp.where(replacing,jnp.where(state.pending_residual,tape.cursor.phase==0,tape.cursor.phase==1),tape.cursor.phase==0)
-    return tape._replace(cursor=tape.cursor._replace(admitted=ok&~invalid),turn=tape.cursor.turn,
+    tape=tape._replace(cursor=tape.cursor._replace(admitted=ok&~invalid),turn=tape.cursor.turn,
         refusal=tape.refusal|jnp.where(~ok,CLOCK,0))
+    # The owning driver opens THIS frame's ledger before entering the kernel.
+    # Diagnostic tapes and constructor initialization have no turnLoop entry.
+    if tape.execution is not None:
+        from . import engine_execution_completeness as execution
+        context=execution._context(tape)
+        entered=live&ok&~invalid&context.ledger.opened&(context.ledger.frame>0)
+        tape,ticket=execution.open_attempt(tape,execution.Site.TURNLOOP_PREFIX,0,active=entered)
+        tape=_clock(tape,TURNLOOP_PREFIX,entered)
+        tape=execution.capture_turnloop_prefix(tape,ticket,requested=entered)
+    return tape
 
 
 def installed(tape,state,side,outgoing,incoming,*,eligible,replacement,baton):

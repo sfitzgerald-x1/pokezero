@@ -132,7 +132,7 @@ def compile_adapter(metadata, projector, *, catalog):
         inputs.Kind.ACTIVE, inputs.Kind.TYPES, inputs.Kind.FIELD,
         inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY,inputs.Kind.ITEM,inputs.Kind.TRACE)}
 
-    def add(line, main_kind, before=prior):
+    def add(line, main_kind, before=prior, *, extra_kinds=()):
         try:
             if isinstance(line, tuple):
                 _, projections = public_wire.project_lines(before, line, **kwargs)
@@ -142,7 +142,7 @@ def compile_adapter(metadata, projector, *, catalog):
             words = np.array([e.words() for p in projections for e in p.events], np.int32)
             indices = np.flatnonzero(words[:, 0] == int(main_kind))
             if (len(indices) != 1 or not 1 <= len(words) <= 64
-                    or any(int(k) not in allowed | {int(main_kind)} for k in words[:, 0])):
+                    or any(int(k) not in allowed | {int(main_kind)} | {int(k) for k in extra_kinds} for k in words[:, 0])):
                 return 0
             templates.append(words)
             lengths.append(len(words)); mains.append(int(indices[0]))
@@ -156,6 +156,11 @@ def compile_adapter(metadata, projector, *, catalog):
     kinds[inputs.Kind.ACTION_CHUNK_END] = add('|', inputs.Kind.ACTION_CHUNK_END)
     kinds[inputs.Kind.UPKEEP] = add('|upkeep', inputs.Kind.UPKEEP)
     kinds[inputs.Kind.FAINT] = add('|faint|'+ident[0], inputs.Kind.FAINT)
+    # Original turnLoop emits this pair before every entered action queue.
+    # Timestamp magnitude is absent from its original canonical controls.
+    kinds[inputs.Kind.TOXIC] = add(('|','|t:|1'), inputs.Kind.TOXIC,
+        extra_kinds=(inputs.Kind.ACTION_CHUNK_END,))
+    # Partial legacy catalogs retain key0 (unsupported); no prefix is invented.
     conditions = np.array([add(f'|-damage|{ident[0]}|71/100'+suffix, inputs.Kind.CONDITION)
         for suffix in ('', ' slp', ' par', ' brn', ' frz', ' psn', ' tox')]
         + [add(f'|-damage|{ident[0]}|0 fnt', inputs.Kind.CONDITION)], np.int32)
@@ -814,7 +819,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
         toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header,new_slot+1,semantic[:,8])
-        result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes)[:,None], toxic_enc[:,None], result[:, :, 9]))
+        prefix = raw_kind == causal.life.TURNLOOP_PREFIX
+        result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes|prefix)[:,None], toxic_enc[:,None], result[:, :, 9]))
         result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)),
             jnp.where(semantic[:, 12, None] == 1, -1, hp[:, None]), result[:, :, 11]))
         result = result.at[:, :, 12].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)), maximum[:, None], result[:, :, 12]))

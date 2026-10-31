@@ -54,6 +54,7 @@ class Site(IntEnum):
     SWORDS_DANCE = 18
     PRIMARY_PARALYSIS = 19
     PRIMARY_SLEEP = 20
+    TURNLOOP_PREFIX = 21
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -226,6 +227,22 @@ def unhandled_attempt(tape, site, side, *, active):
     if context is None:return tape
     ledger=unhandled(context.ledger,ticket,active=active,tables=context.tables)
     return _put_context(tape,ledger,context)
+
+
+def capture_turnloop_prefix(tape,ticket,*,requested):
+    """Exactly the first entered scheduler receipt; never an empty-span waiver."""
+    context=_context(tape)
+    if context is None:return tape
+    ledger=context.ledger;rows=jnp.arange(tape.count.shape[0]);slot,same=_ticket(ledger,ticket)
+    start=ledger.start[rows,slot];raw=tape.words[:,0]
+    semantic=(same&(ledger.site[rows,slot]==int(Site.TURNLOOP_PREFIX))&(ledger.side[rows,slot]==0)
+        &(ledger.frame>0)&ledger.opened&(start==0)&(tape.count==1)
+        &tape.cursor.initialized&tape.cursor.admitted&jnp.all(tape.cursor.established,axis=1)
+        &(raw[:,0]==life.TURNLOOP_PREFIX)&jnp.all(raw[:,1:5]==-1,axis=1)&jnp.all(raw[:,5:]==0,axis=1)
+        &jnp.all(tape.switch_details[:,0]==0,axis=1))
+    result=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
+    result=_fail(result,requested,semantic,RECEIPT)
+    return _put_context(tape,result,context)
 
 
 def capture_leftovers_write(tape, ticket, *, requested, positive_write):
