@@ -47,6 +47,7 @@ from . import engine_intimidate_callbacks as intimidate_callbacks
 from . import engine_calm_mind_callbacks as calm_mind_callbacks
 from . import engine_spikes_callbacks as spikes_callbacks
 from . import engine_sleep_powder_callbacks as powder_callbacks
+from . import engine_substitute_damage_callbacks as substitute_damage
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -91,6 +92,7 @@ class Tables(NamedTuple):
     primary_sleep_status: object
     sleep_powder_status: object
     flash_fire_end: object
+    substitute_damage: object
     namespaces: Bindings
     binding: object
 
@@ -135,7 +137,7 @@ def compile_adapter(metadata, projector, *, catalog):
         inputs.Kind.ACTIVE, inputs.Kind.TYPES, inputs.Kind.FIELD,
         inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY,inputs.Kind.ITEM,inputs.Kind.TRACE)}
 
-    def add(line, main_kind, before=prior, *, extra_kinds=()):
+    def add(line, main_kind, before=prior, *, extra_kinds=(), last_main=False):
         try:
             if isinstance(line, tuple):
                 _, projections = public_wire.project_lines(before, line, **kwargs)
@@ -144,11 +146,11 @@ def compile_adapter(metadata, projector, *, catalog):
                 projections = (projection,)
             words = np.array([e.words() for p in projections for e in p.events], np.int32)
             indices = np.flatnonzero(words[:, 0] == int(main_kind))
-            if (len(indices) != 1 or not 1 <= len(words) <= 64
+            if ((len(indices) < 1 if last_main else len(indices) != 1) or not 1 <= len(words) <= 64
                     or any(int(k) not in allowed | {int(main_kind)} | {int(k) for k in extra_kinds} for k in words[:, 0])):
                 return 0
             templates.append(words)
-            lengths.append(len(words)); mains.append(int(indices[0]))
+            lengths.append(len(words)); mains.append(int(indices[-1] if last_main else indices[0]))
             return len(templates)-1
         except ValueError:
             return 0
@@ -335,6 +337,16 @@ def compile_adapter(metadata, projector, *, catalog):
         for i,name in enumerate(catalog.species.names)],np.int32)
     spikes=add('|-sidestart|p2: Player 2|Spikes',inputs.Kind.FIELD)
     if int(lower.device.spikes_move)>0 and not spikes:raise ValueError('FULL writer lacks original Spikes field schema')
+    sub_damage_keys=np.zeros((2,2,3),np.int32)
+    for broken in range(2):
+        for critical in range(2):
+            for effect in (-1,0,1):
+                lines=[]
+                if effect:lines.append(f'|-{"supereffective" if effect>0 else "resisted"}|{ident[0]}')
+                if critical:lines.append(f'|-crit|{ident[0]}')
+                lines.append(f'|-end|{ident[0]}|Substitute' if broken else f'|-activate|{ident[0]}|move: Substitute|[damage]')
+                sub_damage_keys[broken,critical,effect+1]=add(tuple(lines),inputs.Kind.ACTIVE if broken else inputs.Kind.NONPROC,last_main=not broken)
+    if not np.all(sub_damage_keys):raise ValueError('original FULL Substitute hit/end schemas required')
     width = max(lengths)
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
@@ -342,6 +354,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
+    payload += sub_damage_keys.tobytes()
     payload += no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()
     payload += ident_species.tobytes()
@@ -351,7 +364,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -508,6 +521,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_event = kind == int(inputs.Kind.STATUS)
         lum_event = kind == int(inputs.Kind.ITEM)
         raw_kind=tape.words[:,index,0]
+        sub_damage=raw_kind==substitute_damage.SUBSTITUTE_DAMAGE
         secondary_cont=raw_kind==secondary_callbacks.SECONDARY_STATUS
         flash_ended=raw_kind==flash_end.FLASH_FIRE_END
         substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
@@ -580,6 +594,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(no_damage_facts,0,key)
         key=jnp.where(secondary_cont,0,key)
         key=jnp.where(flash_ended,tables.flash_fire_end,key)
+        sub_raw=tape.words[:,index]
+        key=jnp.where(sub_damage,tables.substitute_damage[(sub_raw[:,7]==0).astype(jnp.int32),
+            jnp.clip(sub_raw[:,8],0,1),jnp.clip(sub_raw[:,9]+1,0,2)],key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
@@ -591,9 +608,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         subject=jnp.where(trace_copy,semantic[:,4],jnp.where(intimidate,tape.words[:,index,1],subject))
         subject=jnp.where(spikes,tape.words[:,index,1],subject)
         subject=jnp.where(flash_ended,tape.words[:,index,3],subject)
+        subject=jnp.where(sub_damage,tape.words[:,index,3],subject)
         subject=jnp.where(no_damage_header|no_damage_facts,jnp.where(nd_code==no_damage.MISS,nd_raw[:,1],nd_raw[:,3]),subject)
         safe = jnp.clip(subject, 0, 1)
-        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt|trace_copy|intimidate|spikes|no_damage_header|no_damage_facts|flash_ended,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
+        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt|trace_copy|intimidate|spikes|no_damage_header|no_damage_facts|flash_ended|sub_damage,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
         safe_slot = jnp.clip(new_slot, 0, 5)
         prior_species = species[rows, safe, safe_slot]
         collision = jnp.any((species[rows, safe] == semantic[:, 9, None])
@@ -832,7 +850,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         for col, value in ((12, hp), (13, maximum)):
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
-        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended,new_slot+1,semantic[:,8])
+        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage,new_slot+1,semantic[:,8])
         prefix = raw_kind == causal.life.TURNLOOP_PREFIX
         result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes|prefix)[:,None], toxic_enc[:,None], result[:, :, 9]))
         result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)),
@@ -845,6 +863,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         result=result.at[:,:,11].set(jnp.where(tendency & toxic_attempt[:,None]
             & (toxic_code==toxic_callbacks.PLAIN_TYPE_IMMUNITY)[:,None],subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&no_damage_header[:,None]&((nd_code==no_damage.TYPE_IMMUNE)|(nd_code==no_damage.WATER_FULL)|(nd_code==no_damage.VOLT_FULL)|(nd_code==no_damage.FLASH_REPEAT)|(nd_code==no_damage.FLASH_START)|nd_heal)[:,None],subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&sub_damage[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         raw_control = kinds == int(inputs.Kind.RAW_BEGIN)
         # Original HP_ABSORB lexical metadata packs the healed proc's public
         # encounter and side. Preserve its source ability ID and all flags.
@@ -855,6 +874,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         nd_main=schema[rows,main]
         nd_main=nd_main.at[:,2].set(semantic[:,2]).at[:,3].set(semantic[:,3]).at[:,6].set(nd_target).at[:,7].set(nd_slot).at[:,8].set(nd_slot+1)
         semantic=jnp.where(nd_ability[:,None],nd_main,semantic)
+        semantic=jnp.where(sub_damage[:,None],result[rows,main],semantic)
         semantic = semantic.at[:, 1].set(sequence+main+1)
         result = result.at[rows, main].set(semantic)
 

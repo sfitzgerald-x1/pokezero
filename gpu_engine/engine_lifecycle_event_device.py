@@ -41,6 +41,7 @@ from . import engine_direct_hit_controls as direct_hit_controls
 from . import engine_direct_ko_callbacks as direct_ko_callbacks
 from . import engine_no_damage_callbacks as no_damage
 from . import engine_flash_fire_end_callbacks as flash_end
+from . import engine_substitute_damage_callbacks as substitute_damage
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -551,6 +552,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         pressure = kind == pressure_callbacks.PRESSURE_START
         trace_copy = kind == trace_callbacks.TRACE_COPY
         substitute = kind == substitute_callbacks.SUBSTITUTE_CREATED
+        sub_damage = kind == substitute_damage.SUBSTITUTE_DAMAGE
         toxic = kind == toxic_callbacks.TOXIC_ATTEMPT
         recoil = kind == recoil_callbacks.RECOIL_HP
         intimidate = kind == intimidate_callbacks.INTIMIDATE
@@ -685,6 +687,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (incoming==cursor.physical_active[rows,safe_side])
             & (raw[:,5]<tables.base.public_ids.shape[0]) & (tables.base.public_ids[direct_move]>0))
         event_ok=jnp.where(direct_control,generation_ok & clock_ok & direct_ok,event_ok)
+        sub_damage_ok=(tables.status_events & ~tables.raw_begin & cursor.initialized & actor_ok & status_identity
+            &(phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            &(incoming==cursor.physical_active[rows,safe_side])
+            &(raw[:,5]<tables.base.public_ids.shape[0])&(tables.base.public_ids[direct_move]>0)
+            &substitute_damage.owned_raw(tape,index,raw,cursor))
+        event_ok=jnp.where(sub_damage,generation_ok&clock_ok&sub_damage_ok,event_ok)
         no_damage_start=jnp.where(no_damage_facts,index-1,index)
         header=tape.words[rows,jnp.clip(no_damage_start,0,capacity-1)]
         facts=tape.words[rows,jnp.clip(no_damage_start+1,0,capacity-1)]
@@ -880,6 +888,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             absent,absent,absent,absent,z,z,z,z,z,z,z,z),axis=1)
         semantic=jnp.where(secondary_cont[:,None],secondary_semantic,semantic)
         semantic=jnp.where(flash_ended[:,None],direct_semantic,semantic)
+        semantic=jnp.where(sub_damage[:,None],secondary_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)

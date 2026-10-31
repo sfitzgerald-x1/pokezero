@@ -652,7 +652,7 @@ def primary_status_on_tape(tape,attempted,*,active,captured=None,captured_thunde
     return _on_tape(tape,observe_primary_status_device,attempted,active=active,captured=captured,captured_thunder_wave=captured_thunder_wave,captured_sleep_powder=captured_sleep_powder)
 
 
-def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None):
+def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None,captured_substitute_damage=None):
     if type(outcome) is not Outcome:raise ValueError('literal typed kernel outcomes required')
     b=len(carry.stream_id);eligible=_vector(eligible,b,jnp.bool_)
     values={name:_vector(x,b,jnp.int32 if name in ('power','numerator','denominator','recoil') else jnp.bool_)
@@ -675,6 +675,15 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
     supported_no_damage=no_damage.captured_matches(tape,captured_no_damage,o)
     unsupported=jnp.where(direct_mode & ((o.power>0)|candidate),
         jnp.where(supported_no_damage,False,o.absorbed|~supported_direct),unsupported)
+    from . import engine_substitute_damage_callbacks as substitute_damage
+    if type(captured_substitute_damage) is substitute_damage.Captured:
+        capture=captured_substitute_damage;w=capture.write;p=capture.pending
+        supported_sub=substitute_damage.span_matches(tape,p,w)
+        supported_sub &= jnp.any(tables.direct_hit_binding!=0)&jnp.all(p.context.data.binding==tables.direct_hit_binding)
+        for key in ('power','hit','immune','critical','numerator','denominator','protected','enduring'):
+            supported_sub &= getattr(o,key)==getattr(w,key)
+        supported_sub &= o.substitute&~o.absorbed&~o.explodes&(o.recoil==0)
+        unsupported &= ~supported_sub
     recoil_ok=jnp.zeros(b,bool);recoil_needed=jnp.zeros(b,bool)
     if type(captured_direct) is CapturedDirectHit:
         move=_vector(captured_direct.move,b)
@@ -858,8 +867,8 @@ def selected_on_tape(tape,move,*,eligible,active):
     return _on_tape(tape,observe_selected_device,move,eligible=eligible,active=active)
 
 
-def outcome_on_tape(tape,outcome,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None):
-    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active,captured_direct=captured_direct,pending_recoil=pending_recoil,pending_ko=pending_ko,captured_no_damage=captured_no_damage)
+def outcome_on_tape(tape,outcome,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None,captured_substitute_damage=None):
+    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active,captured_direct=captured_direct,pending_recoil=pending_recoil,pending_ko=pending_ko,captured_no_damage=captured_no_damage,captured_substitute_damage=captured_substitute_damage)
 
 
 def observe_recoil_device(carry,tape,amount,tables,*,active,pending,before):

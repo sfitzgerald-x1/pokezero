@@ -833,7 +833,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             bypass_sub = table.effects.bypass_sub[move]
         if _direct_hit_context is not None and _direct_hit_registered:
             from . import engine_no_damage_callbacks as no_damage_callbacks
-            _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move))
+            from . import engine_substitute_damage_callbacks as substitute_damage_callbacks
+            _sub_damage_requested=substitute_damage_callbacks.route(_direct_hit_context,move,
+                acts=acts,power=power,hit=hit,immune=immune,protected=_risk_protected,
+                enduring=enduring[rows,foe],bypass=bypass_sub,absorbed=_risk_absorbed,
+                sub_hp=_active(work.substitute_hp,work,foe))
+            _public_trace,_sub_damage_ticket=execution_accounting.open_attempt(_public_trace,
+                execution_accounting.Site.SUBSTITUTE_DAMAGE,foe,active=_sub_damage_requested)
+            _sub_damage_pending=substitute_damage_callbacks.Pending(_direct_hit_context,_sub_damage_ticket,
+                side,work.active[rows,side],work.active[rows,foe],move,_sub_damage_requested)
+            _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)) & ~_sub_damage_requested
             _public_trace,_direct_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.DIRECT_HIT,foe,active=_direct_requested)
             _direct_ko_actor_before=_active(work.hp,work,side)
@@ -870,6 +879,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
             substitute_hp=_set_active(work.substitute_hp,work,foe,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
+        if _direct_hit_context is not None and _direct_hit_registered:
+            _sub_damage_write=substitute_damage_callbacks.Write(power,hit,immune,_risk_protected,
+                enduring[rows,foe],bypass_sub,_risk_absorbed,critical,num,den,sub_hp,
+                _active(work.substitute_hp,work,foe),dealt,damage,hp,foe_hp)
+            _public_trace=substitute_damage_callbacks.record(_public_trace,_sub_damage_pending,_sub_damage_write)
         if _direct_hit_context is not None:
             _direct_write=direct_hit_controls.HitWrite(power,critical,hit,immune,num,den,hits_sub,
                 _risk_protected,enduring[rows,foe],hp,foe_hp,_active(work.max_hp,work,foe))
@@ -919,6 +933,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=kernel_risks.outcome_on_tape(_public_trace,_literal_outcome,
                 eligible=acts,active=live,captured_direct=(kernel_risks.CapturedDirectHit(
                     _direct_hit_context,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,_direct_write)
+                    if _direct_hit_context is not None and _direct_hit_registered else None),
+                captured_substitute_damage=(substitute_damage_callbacks.Captured(_sub_damage_pending,_sub_damage_write)
                     if _direct_hit_context is not None and _direct_hit_registered else None),
                 pending_recoil=_recoil_pending if _recoil_context is not None else None,
                 pending_ko=_direct_ko_pending if _direct_hit_context is not None and _direct_hit_registered else None,
