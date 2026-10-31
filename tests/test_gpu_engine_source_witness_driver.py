@@ -103,5 +103,29 @@ class SourceWitnessDriverTests(unittest.TestCase):
                 chance_inputs=self.base.base().chance(),timing_callback=mutate)
         finally:object.__setattr__(compiled,'device',before)
 
+    def test_core_witness_transport_rejects_broadcasts_and_keeps_b8_identity(self):
+        binding=d._checked(self.prepared)['frame_witness_compiled'].device.binding
+        before=w.Carry(binding,j.arange(1,9,dtype=j.int32),j.zeros(8,j.int32),
+            j.zeros((8,2),j.int32),j.arange(8,dtype=j.int32))
+        active=j.array([True,False]*4)
+        returned=before._replace(frame=j.ones(8,j.int32),refusal=j.zeros(8,j.int32),
+            binding=binding.at[7].add(j.uint32(1)))
+        core=d.Core(j.zeros(8,j.int32),j.zeros(8,j.int32),(),(),(),(),(),
+            j.ones(8,bool),j.zeros(8,j.int32),frame_inputs=before)
+        selected=jax.jit(d._core_rows)(active,core,core._replace(frame_inputs=returned))
+        self.same(selected.frame_inputs.binding,binding)
+        self.same(selected.frame_inputs.stream_id,before.stream_id)
+        self.same(selected.frame_inputs.frame,before.frame)
+        self.same(selected.frame_inputs.refusal,before.refusal|j.where(active,w.SOURCE,0))
+        malformed=(dict(frame=j.array(1,j.int32)),dict(refusal=j.array(0,j.int32)),
+            dict(stream_id=j.array(1,j.int32)),dict(sequence=j.zeros(2,j.int32)),
+            dict(binding=binding[None,:]),dict(frame=j.zeros(8,j.float32)),
+            dict(sequence=j.zeros((8,2),j.float32)))
+        for bad in malformed:
+            for old,new in ((before._replace(**bad),before),(before,before._replace(**bad))):
+                with self.subTest(bad=tuple(bad)),self.assertRaises(ValueError):
+                    w.commit_rows(active,old,new)
+        with self.assertRaises(ValueError):w.commit_rows(j.array(True),before,before)
+
 
 if __name__=='__main__':unittest.main()

@@ -392,7 +392,13 @@ def consume_pair_device(carry, core, frame, streams, publics, tables, catalog, *
 def commit_rows(active,before,after):
     """Retain original GLOBAL8/stream identity and lifetime refusal in Core."""
     if type(before) is not Carry or type(after) is not Carry:raise ValueError('typed witness carry required')
-    b=len(before.stream_id);execution._shape(active,(b,),jnp.bool_)
+    if getattr(active,'ndim',None)!=1:raise ValueError('exact bool[B] active rows required')
+    b=active.shape[0];execution._shape(active,(b,),jnp.bool_)
+    for carry in (before,after):
+        execution._shape(carry.binding,(8,),jnp.uint32)
+        for name in ('stream_id','frame','refusal'):
+            execution._shape(getattr(carry,name),(b,),jnp.int32)
+        execution._shape(carry.sequence,(b,2),jnp.int32)
     same=jnp.all(before.binding==after.binding)&(before.stream_id==after.stream_id)
     use=active&same
     return before._replace(frame=jnp.where(use,after.frame,before.frame),
