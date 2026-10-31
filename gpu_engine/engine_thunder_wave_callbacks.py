@@ -73,6 +73,8 @@ def _bound(tape,context):
     if type(tape) is not life.LifecycleTape or type(context) is not Context or type(context.data) is not Data:raise ValueError('typed Thunder Wave source context required')
     for word in context.data[:5]:primary._shape(word,(8,),j.uint32)
     primary._shape(context.data.move_id,(),j.int32)
+    for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+        primary._shape(getattr(tape,name),(8,),j.uint32)
     actual=ex._context(tape)
     if actual is None:return j.zeros_like(tape.count,bool)
     good=ex._validate(actual.ledger,context.accounting)&ex._tape(actual.ledger,tape,context.accounting)&actual.ledger.opened&(actual.ledger.refusal==0)&life._valid(tape.cursor)
