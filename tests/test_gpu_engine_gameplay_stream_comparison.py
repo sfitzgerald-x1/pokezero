@@ -157,6 +157,48 @@ class GameplayCaptureTests(unittest.TestCase):
 
 
 class GameplayReferenceTests(unittest.TestCase):
+    def test_initial_owner_append_refusal_is_local_and_native_keeps_advancing(self):
+        calls=[]
+        class Native:
+            def __init__(self,config):self.index=0;self.owner_transcripts=[['|initial'],['|initial']]
+            def reset_pool_sets(self,*args,**kw):calls.append('reset')
+            def snapshot(self):return NS()
+            def step(self,actions):
+                calls.append('step');self.index+=1
+                for lines in self.owner_transcripts:lines.append('|frame|'+str(self.index))
+            def close(self):calls.append('close')
+        class Owner:
+            def __init__(self,*args,owner,**kw):self.owner=owner;self.frame=0
+            def append(self,lines,*,constructor=False):
+                if self.owner=='p2':
+                    calls.append('p2-initial-refusal');raise ValueError('UNIT initial p2 reference refusal')
+                if not constructor:self.frame+=1
+                word=[0]*16;word[0]=1;word[1]=self.frame+1
+                return dict(words=[word],raw_kinds={'move':len(lines)},refused_lines=[])
+            def observation(self):
+                value,_=result(frame=self.frame)
+                return {k:np.asarray(getattr(value.owners[0].encoded.observation,k)[0])for k in comparison.original.SHAPES}
+            def close(self):pass
+        with tempfile.TemporaryDirectory()as tmp:
+            path=Path(tmp)/'trace';measured=write_trace(path)
+            parties=[[dict(species=f'mon{s*6+i}')for i in range(1,7)]for s in(0,1)]
+            with patch.object(comparison.original.source_provenance,'_pool',return_value={'pool_sha256':'a'*64}),\
+                 patch.object(comparison.original,'pool_sets',return_value=parties),\
+                 patch.object(comparison.original,'pack_sets',return_value=['same-p1','same-p2']),\
+                 patch.object(comparison.original,'OwningShowdownEnv',Native),\
+                 patch.object(comparison,'OwnerReference',Owner),\
+                 patch.object(comparison,'state_differences',return_value=[]),\
+                 patch.object(comparison,'native_evidence',side_effect=lambda snap,env:{'test_frame':env.index}),\
+                 patch.object(comparison,'native_actions',return_value={'p1':0,'p2':0}):
+                actual=comparison.compare_trace(measured,path,NS(metadata=lambda:{'vocabulary':{}}),object(),
+                    expected_trace_sha256=measured['gameplay_trace']['sha256'],native_seed_start=700,
+                    showdown_root='/not-opened',node='not-run',env_config=comparison.original.LocalShowdownConfig(),
+                    original_ivs=NS(pool_sha256='a'*64),out_path=Path(tmp)/'out')
+            self.assertEqual(calls,['reset','p2-initial-refusal','step','step','close'])
+            summary=actual['summary'];conditional=summary['conditional_on_continuous_measured_state_agreement']
+            self.assertEqual((conditional['matched'],conditional['unknown'],summary['actual_engine_decisions']),(2,2,2))
+            self.assertEqual(actual['roots'][0]['initial_owner_reference_errors'],[None,'UNIT initial p2 reference refusal'])
+
     def test_existing_chance_control_uses_literal_saved_arrays_and_retains_unresolved(self):
         before=state()._replace(pending_residual=np.ones(1,bool),residual_draws=np.ones((1,2,12),np.int32),
             secondary_draws=np.full((1,2),2,np.int32),sleep_talk_draws=np.full((1,2),3,np.int32))

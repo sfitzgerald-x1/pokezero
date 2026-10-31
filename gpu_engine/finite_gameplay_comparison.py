@@ -219,6 +219,15 @@ def compare_owner(boundary, side, reference, owner_reference, *, eligible):
     return result
 
 
+def owner_refusal(lines, error):
+    """One failed owning reference cannot erase the other measured view."""
+    return dict(status='UNKNOWN',
+        reference=dict(raw_kinds=dict(Counter(original.line_kind(line) for line in lines
+            if original.line_kind(line) != 'request'))),
+        refusals=[dict(kind='OWNER_REFERENCE_REFUSAL', reason=str(error))],
+        columns=dict(status='UNKNOWN', reason='OWNER_REFERENCE_REFUSAL'))
+
+
 def state_differences(boundary, snapshot, env, original_parties, vocabulary, layout):
     state = decode_state(boundary['state'], layout)
     # The original represented-state comparison's full initial contract is
@@ -415,6 +424,7 @@ def compare_trace(measured, path, pool, catalog, *, expected_trace_sha256, nativ
         with out_path.open('x') as output:
             for ordinal, cell in enumerate(measured['cohort']):
                 stream = cell['stream_id']; env = None; references = []; stopped = None; continuous = True
+                owner_errors = [None, None]
                 processed = 0
                 root = dict(stream_id=stream, native_seed=native_seed_start+ordinal, native_started=False,
                     engine_status=cell['status'], trace_decisions=counts[stream])
@@ -442,9 +452,15 @@ def compare_trace(measured, path, pool, catalog, *, expected_trace_sha256, nativ
                         differences = state_differences(initial, snapshot, env, original_parties, pool.metadata()['vocabulary'], header['state_layout'])
                         continuous = not differences and not initial_unknown
                         root.update(initial_state_status='UNKNOWN' if initial_unknown else 'AGREE' if continuous else 'DIVERGE', initial_state_differences=differences)
-                        references = [OwnerReference(catalog, env_config, owner=f'p{s+1}', root_id=stream, seed=root['native_seed']) for s in (0,1)]
+                        references = [None, None]
                         offsets = [len(lines) for lines in env.owner_transcripts]
-                        for side in (0,1): references[side].append(list(env.owner_transcripts[side]), constructor=True)
+                        for side in (0,1):
+                            try:
+                                references[side] = OwnerReference(catalog, env_config, owner=f'p{side+1}', root_id=stream, seed=root['native_seed'])
+                                references[side].append(list(env.owner_transcripts[side]), constructor=True)
+                            except Exception as error:
+                                owner_errors[side] = str(error)
+                        root['initial_owner_reference_errors'] = list(owner_errors)
                         for raw in records:
                             captured = json.loads(raw)['payload']; row = dict(stream_id=stream, request=captured['request'],
                                 state_status='UNKNOWN', owners=[{},{}], engine_raw=captured['after']['raw'])
@@ -470,8 +486,14 @@ def compare_trace(measured, path, pool, catalog, *, expected_trace_sha256, nativ
                                     native_owner_lines=[list(lines[offset:]) for lines, offset in zip(env.owner_transcripts, offsets)])
                                 continuous = continuous and not pre and not post and not unresolved
                                 for side in (0,1):
-                                    projected = references[side].append(row['native_owner_lines'][side])
-                                    row['owners'][side] = compare_owner(captured['after'], side, projected, references[side], eligible=eligible)
+                                    try:
+                                        if owner_errors[side] is not None:
+                                            raise ValueError('PRIOR_OWNER_REFERENCE_REFUSAL:'+owner_errors[side])
+                                        projected = references[side].append(row['native_owner_lines'][side])
+                                        row['owners'][side] = compare_owner(captured['after'], side, projected, references[side], eligible=eligible)
+                                    except Exception as error:
+                                        if owner_errors[side] is None: owner_errors[side] = str(error)
+                                        row['owners'][side] = owner_refusal(row['native_owner_lines'][side], error)
                                     if unresolved:
                                         row['owners'][side]['refusals'].append(dict(kind='UNRESOLVED_CHANCE',reason='original coupling audit'))
                                         row['owners'][side]['columns']=dict(status='UNKNOWN',reason='UNRESOLVED_CHANCE')
@@ -504,6 +526,7 @@ def compare_trace(measured, path, pool, catalog, *, expected_trace_sha256, nativ
                                 reducer.add(row); output.write(json.dumps(row, sort_keys=True)+'\n')
                 finally:
                     for reference in references:
+                        if reference is None: continue
                         try: reference.close()
                         except Exception as error: root['python_close_error'] = str(error)
                     if env is not None:
