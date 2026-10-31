@@ -47,6 +47,7 @@ from . import engine_pinch_item_callbacks as pinch_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
+from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
 from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
 from . import engine_color_change_callbacks as color_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
@@ -578,6 +579,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         recoil = kind == recoil_callbacks.RECOIL_HP
         rough = kind == rough_callbacks.ROUGH_SKIN_HP
         belly = kind == belly_callbacks.BELLY_DRUM
+        sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
         intimidate = kind == intimidate_callbacks.INTIMIDATE
         calm_mind = kind == calm_mind_callbacks.CALM_MIND
         pinch = kind == pinch_callbacks.PINCH_ITEM
@@ -752,6 +754,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         belly_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)&belly_owned
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)]))
         event_ok=jnp.where(belly,generation_ok&clock_ok&belly_ok,event_ok)
+        sleep_blocked_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&sleep_blocked_callbacks.owned(tape,index))
+        event_ok=jnp.where(sleep_blocked,generation_ok&clock_ok&sleep_blocked_ok,event_ok)
         intimidate_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity
             &~cursor.initialized&(turn==0)&(phase==0)&(actor_physical==0)&(incoming==0)
             &(actor_side>=0)&(actor_side<2)&(side==1-actor_side)
@@ -927,6 +932,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),belly_boost_payload),axis=1)
         semantic=jnp.where((belly&(raw[:,4]==0))[:,None],belly_hp_semantic,semantic)
         semantic=jnp.where((belly&(raw[:,4]==1))[:,None],belly_boost_semantic,semantic)
+        from . import public_sleep
+        sleep_payload=jnp.stack((actor_enc,jnp.full_like(z,public_sleep.CANT_SLEEP),z,z,z,z,z,z),axis=1)
+        sleep_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.SLEEP)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),sleep_payload),axis=1)
+        semantic=jnp.where(sleep_blocked[:,None],sleep_semantic,semantic)
         intimidate_payload=jnp.stack((status_enc,z,jnp.full_like(z,-1),jnp.full_like(z,public_mon_state.DELTA),jnp.ones_like(z),z,z,z),axis=1)
         intimidate_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
             turn,phase,absent,absent,side,status_slot),axis=1),intimidate_payload),axis=1)
