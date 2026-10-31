@@ -56,7 +56,8 @@ def prepare(request_compiled, own_compiled, weights_path, *,
             leftovers_mode='diagnostic', status_residual_compiled=None,
             status_residual_mode='diagnostic', direct_hit_compiled=None,
             direct_hit_mode='diagnostic', frame_input_mode='closed',
-            substitute_compiled=None, substitute_mode='diagnostic'):
+            substitute_compiled=None, substitute_mode='diagnostic',
+            toxic_compiled=None, toxic_mode='diagnostic'):
     """Bind an exact existing champion; opt-in precedes checkpoint loading.
 
     Runtime preparation is host-only. Loading does not execute the model. The
@@ -73,11 +74,11 @@ def prepare(request_compiled, own_compiled, weights_path, *,
     if (record['request_compiled'] is not request_compiled
             or record['catalog'].checkpoint_sha256 != expected_checkpoint_sha256):
         raise ValueError('original request/OwnFacts and exact encoder checkpoint required')
-    modes = (leftovers_mode, status_residual_mode, direct_hit_mode, substitute_mode, frame_input_mode)
+    modes = (leftovers_mode, status_residual_mode, direct_hit_mode, substitute_mode, toxic_mode, frame_input_mode)
     default_options = (all(x is None for x in
-        (leftovers_compiled, status_residual_compiled, direct_hit_compiled, substitute_compiled))
+        (leftovers_compiled, status_residual_compiled, direct_hit_compiled, substitute_compiled, toxic_compiled))
         and all(type(x) is str for x in modes)
-        and modes == ('diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'closed'))
+        and modes == ('diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'diagnostic', 'closed'))
     prepared = None
     if not default_options:
         # These are deliberate runtime modes, never caller-supplied coverage
@@ -85,7 +86,7 @@ def prepare(request_compiled, own_compiled, weights_path, *,
         # its own mode dependencies. Reuse this one Prepared after loading.
         witness = type(frame_input_mode) is str and frame_input_mode == 'source-witness'
         accounting = witness or any(type(x) is str and x == 'kernel-event'
-            for x in (status_residual_mode, direct_hit_mode, substitute_mode))
+            for x in (status_residual_mode, direct_hit_mode, substitute_mode, toxic_mode))
         prepared = driver.prepare(request_compiled, own_compiled,
             public_mode='retained-full', fake_forward=_noop_fake,
             leftovers_compiled=leftovers_compiled, leftovers_mode=leftovers_mode,
@@ -93,6 +94,7 @@ def prepare(request_compiled, own_compiled, weights_path, *,
             status_residual_mode=status_residual_mode,
             direct_hit_compiled=direct_hit_compiled, direct_hit_mode=direct_hit_mode,
             substitute_compiled=substitute_compiled, substitute_mode=substitute_mode,
+            toxic_compiled=toxic_compiled, toxic_mode=toxic_mode,
             account_source_sites=accounting,
             track_kernel_risks=witness,
             frame_input_mode=frame_input_mode)
