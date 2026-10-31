@@ -383,7 +383,9 @@ def collect_session(session, *, actor, pool, team_indices, ledger, max_requests,
                 detail[positions[row]]['executed_frames']+=int(executed[row])
                 if not executed[row] or invalid[row] or not bool(np.asarray(session.state.core.admitted)[row]) or not public_ok[row]:
                     close(int(row),'REFUSED','actual-engine-or-public-frame-refused')
-                elif bool(np.asarray(session.state.core.engine.done)[row]):close(int(row),'COMPLETE','observed-admitted-terminal')
+                elif bool(np.asarray(session.state.core.engine.done)[row]):
+                    if bool(np.asarray(driver.terminal_complete(session.state.core))[row]):close(int(row),'COMPLETE','observed-source-finalized-terminal')
+                    else:close(int(row),'REFUSED','terminal-without-source-closeout')
         for row,pos in enumerate(positions):
             if status[pos]=='RUNNING':close(row,'CAPPED','finite-request-cap')
     except Exception as error:

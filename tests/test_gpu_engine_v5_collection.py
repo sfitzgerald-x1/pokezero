@@ -47,7 +47,7 @@ class V5CollectionTests(unittest.TestCase):
             hp=j.full((batch,2,6),100,j.int32),max_hp=j.full((batch,2,6),100,j.int32))
         core=NS(cursor=NS(stream_id=j.arange(1,batch+1,dtype=j.int32),physical_to_public=j.full((batch,2,6),-1,j.int32).at[:,:,0].set(0)),
             frame_number=j.zeros(batch,j.int32),engine=engine,requests=tuple(requests),orders=tuple(orders),
-            originals=tuple(originals),admitted=j.ones(batch,bool))
+            originals=tuple(originals),admitted=j.ones(batch,bool),terminal_closeout=j.zeros(batch,bool))
         prepared=c.driver.Prepared(j.zeros(8,j.uint32))
         state=c.driver.DriverState(core,tuple(observers));result=c.driver.Result(state,tuple(reports))
         session=c.driver.Session(prepared,state,result)
@@ -88,7 +88,8 @@ class V5CollectionTests(unittest.TestCase):
             old=session.state.core;active=j.asarray(active_rows)
             hp=old.engine.hp.at[:,1].set(j.where(active[:,None]&done,0,old.engine.hp[:,1]))
             new_engine=NS(**dict(vars(old.engine),done=active&done,winner=j.where(active&done,0,-1),hp=hp))
-            core=NS(**dict(vars(old),frame_number=old.frame_number+active.astype(j.int32),engine=new_engine))
+            core=NS(**dict(vars(old),frame_number=old.frame_number+active.astype(j.int32),engine=new_engine,
+                terminal_closeout=active&done))
             state=c.driver.DriverState(core,session.state.observers)
             result=c.driver.Result(state,session.result.owners)
             session.state=state;session.result=result;current.update(state=state,result=result)

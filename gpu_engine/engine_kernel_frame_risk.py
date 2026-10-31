@@ -819,7 +819,9 @@ def observe_branch_device(carry,tape,branch,attempted,tables,*,active):
 
 
 def observe_end_device(carry,tape,state,tables,*,active):
-    return _observe(carry,tape,tables,Branch.FRAME_END,jnp.where(state.done,TERMINAL,0),active=active)
+    from . import engine_terminal_callbacks as terminal
+    supported=terminal.matches_final_device(tape,state)
+    return _observe(carry,tape,tables,Branch.FRAME_END,jnp.where(state.done&~supported,TERMINAL,0),active=active)
 
 
 def commit_rows(active,before,after):

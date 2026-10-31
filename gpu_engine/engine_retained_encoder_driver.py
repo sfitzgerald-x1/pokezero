@@ -61,6 +61,7 @@ class Core(NamedTuple):
     risks: object = None  # PRIVATE sticky actual-kernel diagnostics
     frame_inputs: object = None  # PRIVATE original per-frame witness carry
     frame_input_report: object = None  # PRIVATE current frame input evidence
+    terminal_closeout: object = None  # Actual final direct-KO receipt AND both owner drains
 
 
 class BasicPublic(NamedTuple):
@@ -229,7 +230,7 @@ def _report_rows(ok, before, after):
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
            leftovers_context=None,execution_tables=None,status_residual_context=None,kernel_risk_tables=None,
-           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None,swords_dance_context=None,spikes_context=None,thunder_wave_context=None,sleep_powder_context=None,hypothetical_profile=None):
+           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None,swords_dance_context=None,spikes_context=None,thunder_wave_context=None,sleep_powder_context=None,hypothetical_profile=None,terminal_observer=False):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -253,6 +254,11 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         carry=kernel_risks.begin_frame_device(core.risks,tape,kernel_risk_tables,active=source_ready)
         tape=tape._replace(execution=tape.execution._replace(risks=kernel_risks.Context(carry,kernel_risk_tables)),
             refusal=tape.refusal|jnp.where(source_ready&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
+    if terminal_observer:
+        from . import engine_terminal_callbacks as terminal
+        if execution_tables is None or kernel_risk_tables is None or direct_hit_context is None:
+            raise ValueError('terminal observer requires original registered direct/accounting/risk contexts')
+        tape=terminal.begin_on_tape(tape,core.engine,direct_hit_context,active=source_ready)
     masked = core.engine._replace(done=core.engine.done | ~source_ready)
     result = transition.step_with_chance(masked, engine_actions, engine_table, chance,
         _public_trace=tape, _lifecycle_trace=True,
@@ -278,6 +284,9 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
             context=context._replace(risks=tape.execution.risks._replace(carry=carry))
             callbacks=callbacks._replace(refusal=callbacks.refusal|jnp.where(
                 source_ready&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
+        if terminal_observer:
+            context=context._replace(terminal=terminal.commit_rows(source_ready,
+                tape.execution.terminal,result.callbacks.execution.terminal))
         callbacks=callbacks._replace(execution=context)
     profile=None if weather_profile_data is None and hypothetical_profile is None else _rows(source_ready,
         core.weather_profile,result.weather_profile)
@@ -720,7 +729,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                 leftovers_context=leftovers_context,status_residual_context=status_residual_context,
                 execution_tables=None if execution_compiled is None else execution_compiled.device,
                 kernel_risk_tables=None if kernel_risk_compiled is None else kernel_risk_compiled.device,
-                direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context,calm_mind_context=calm_mind_context,swords_dance_context=swords_dance_context,spikes_context=spikes_context,thunder_wave_context=thunder_wave_context,sleep_powder_context=sleep_powder_context)),
+                direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context,calm_mind_context=calm_mind_context,swords_dance_context=swords_dance_context,spikes_context=spikes_context,thunder_wave_context=thunder_wave_context,sleep_powder_context=sleep_powder_context,
+                terminal_observer=frame_input_mode=='source-witness' and direct_hit_mode=='kernel-event')),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
@@ -843,7 +853,9 @@ def _consume_accounted(r,state,frame,active,timing_callback,previous_reports,hos
         evidence=paired.report if state.core.frame_input_report is None else _rows(
             active,state.core.frame_input_report,paired.report)
         core=state.core._replace(execution=joined,admitted=state.core.admitted & (~active|joint),
-            frame_inputs=paired.carry,frame_input_report=evidence)
+            frame_inputs=paired.carry,frame_input_report=evidence,
+            terminal_closeout=None if state.core.terminal_closeout is None else jnp.where(
+                active,paired.terminal_closeout,state.core.terminal_closeout))
         for before,consumed in zip(state.observers,paired.owners):
             projection=consumed.projection._replace(full_line_consumers_complete=joint)
             candidate=before._replace(projection=projection.state,retained=consumed.public,
@@ -941,7 +953,7 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
         from . import engine_source_frame_witness as frame_witness
         _checked_witness(r,constructed=snapshot)
         core=core._replace(frame_inputs=frame_witness.initialize_from_constructed(
-            r['frame_witness_compiled'],snapshot))
+            r['frame_witness_compiled'],snapshot),terminal_closeout=jnp.zeros(b,bool))
     observers = []
     for side in (0, 1):
         owners = jnp.full((b,), side, jnp.int32)
@@ -963,6 +975,18 @@ def _session(session):
             or session.result is not record['result']):
         raise ValueError('original current driver session required')
     return record
+
+
+def terminal_complete(core):
+    """Literal final source receipt + BOTH full drains; no next request needed.
+
+    A terminal OwnFacts/encoder refusal is expected because no decision follows.
+    It cannot stand in for this closeout or waive failed public/accounting/risk.
+    """
+    value=getattr(core,'terminal_closeout',None)
+    if value is None:return jnp.zeros_like(core.engine.done)
+    execution._shape(value,core.engine.done.shape,jnp.bool_)
+    return value & core.engine.done & core.admitted
 
 
 def latest_diagnostics(session):

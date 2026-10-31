@@ -61,7 +61,8 @@ def result(batch=3, *, reasons=None, waiting=(), forced=(), frames=None, done=No
     core = NS(cursor=NS(stream_id=streams), frame_number=j.asarray(frames if frames is not None else np.zeros(batch), j.int32),
         engine=namedtuple('SyntheticEngine','done turn')(
             j.asarray(done if done is not None else np.zeros(batch), bool),j.ones(batch,j.int32)),
-        requests=tuple(requests), orders=tuple(ledgers), admitted=j.ones(batch, bool))
+        requests=tuple(requests), orders=tuple(ledgers), admitted=j.ones(batch, bool),
+        terminal_closeout=j.asarray(done if done is not None else np.zeros(batch),bool))
     return driver.Result(NS(core=core, observers=tuple(observers)), tuple(reports)), config
 
 

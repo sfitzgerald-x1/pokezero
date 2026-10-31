@@ -1618,6 +1618,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         forced_switch=((jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0)
             | work.baton_pass) & alive,
         baton_pass=work.baton_pass & ~done[:,None])
+    if _lifecycle_trace:
+        from . import engine_terminal_callbacks as terminal_callbacks
+        _public_trace=terminal_callbacks.capture_final_on_tape(_public_trace,work,active=live)
     ordinary = turn_context & ~defer_residual
     if table.entry is not None and table.entry.truant is not None:
         # Pinned Gen3 ability residual order27. It flips even when no move

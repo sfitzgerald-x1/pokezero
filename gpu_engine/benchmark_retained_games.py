@@ -423,13 +423,14 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
             & np.asarray(observer.retained_healthy)
             for report, observer in zip(result.owners, result.state.observers)])
         invalid = active & (~executed | np.asarray(diagnostics.invalid_actions)
-            | ~np.asarray(result.state.core.admitted) | ~public_ok)
+            | ~np.asarray(result.state.core.admitted) | ~public_ok
+            | (np.asarray(result.state.core.engine.done) & ~np.asarray(driver.terminal_complete(result.state.core))))
         refused |= invalid
         for row in np.flatnonzero(invalid):
             details[row]['refusal'] = dict(kind='engine-or-source-refusal', request=index,
                 invalid_action=bool(np.asarray(diagnostics.invalid_actions)[row]),
                 executed=bool(executed[row]), public_frame_admitted=bool(public_ok[row]))
-        completed |= executed & ~invalid & np.asarray(result.state.core.engine.done)
+        completed |= executed & ~invalid & np.asarray(driver.terminal_complete(result.state.core))
         observation_phases = (*public_phases, 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2')
         required = {'engine', 'requests', *observation_phases}
         if set(step_phases) != required:

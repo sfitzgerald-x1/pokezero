@@ -168,6 +168,7 @@ class Context(NamedTuple):
     tables: Tables
     risks: object = None  # PRIVATE actual-kernel diagnostics; never a coverage certificate
     diagnostics: object = None  # Optional literal operands; never read by admission
+    terminal: object = None  # PRIVATE literal final direct-KO observer
 
 
 UNKNOWN_EXECUTION = 512

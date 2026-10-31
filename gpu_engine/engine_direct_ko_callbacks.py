@@ -1,10 +1,12 @@
-"""Prospective SAME-write nonterminal direct KO, not generic lethal admission.
+"""Prospective SAME-write direct KO, not generic lethal admission.
 
 Existing RAW controls->MAIN_HP0->DIRECT_FAINT and Site10 are reused. The typed
 pending source snapshots actual pre-write actor HP/target party HP and literal
 HitWrite; it earns NO stage2 until the actual later faint callback completes
 its exact contiguous span. Missing/interleaved/self/recoil/last-mon paths fail
-closed. Original owning host guards remain required; device copies do not
+closed by default. A private original-driver terminal observer additionally
+binds a last-mon KO to its literal final write and both later full drains.
+Original owning host guards remain required; device copies do not
 attest origin. No damage, HP, status, RNG or winner formula is implemented.
 """
 from typing import NamedTuple
@@ -26,7 +28,7 @@ class Pending(NamedTuple):
     requested:object
 
 
-def _literal(p,b):
+def _literal(p,b,terminal_last=None):
     if type(p) is not Pending or type(p.context) is not hit.RegisteredContext or type(p.write) is not hit.HitWrite:raise ValueError('typed literal direct KO pending required')
     for x in (p.actor,p.actor_physical,p.target_physical,p.move,p.actor_hp_before):life._typed(x,(b,),jnp.int32)
     life._typed(p.target_party_before,(b,6),jnp.int32);life._typed(p.requested,(b,),jnp.bool_)
@@ -36,7 +38,8 @@ def _literal(p,b):
     return ((w.power>0)&w.hit&~w.immune&~w.substitute&~w.protected&~w.enduring
         &hit._positive_ratio(w.numerator,w.denominator)&(w.old_hp>0)&(w.new_hp==0)&(w.maximum>=w.old_hp)
         &(p.actor_hp_before>0)&jnp.all(p.target_party_before>=0,axis=1)
-        &(p.target_party_before[rows,target]==w.old_hp)&jnp.any(other&(p.target_party_before>0),axis=1)
+        &(p.target_party_before[rows,target]==w.old_hp)&(jnp.any(other&(p.target_party_before>0),axis=1)
+            |(jnp.zeros(b,bool) if terminal_last is None else terminal_last))
         &(p.move>0)&(p.move<data.move_count)&data.ko_candidates[jnp.clip(p.move,0,len(data.ko_candidates)-1)])
 
 
@@ -44,7 +47,8 @@ def _prefix(tape,p):
     from . import engine_execution_completeness as ex
     b=tape.count.shape[0];rows=jnp.arange(b);context=ex._context(tape)
     if context is None:return jnp.zeros(b,bool),jnp.zeros(b,jnp.int32),jnp.zeros(b,jnp.int32)
-    good=hit._registered_bound(tape,p.context)&_literal(p,b);ledger=context.ledger;slot,same=ex._ticket(ledger,p.ticket);start=ledger.start[rows,slot]
+    from . import engine_terminal_callbacks as terminal
+    good=hit._registered_bound(tape,p.context)&_literal(p,b,terminal.allows_last_device(tape,p));ledger=context.ledger;slot,same=ex._ticket(ledger,p.ticket);start=ledger.start[rows,slot]
     good &= same&life._valid(tape.cursor)&tape.cursor.initialized&(p.actor>=0)&(p.actor<2)
     safe=jnp.clip(p.actor,0,1)
     good &= (p.actor_physical==tape.cursor.physical_active[rows,safe])&(p.target_physical==tape.cursor.physical_active[rows,1-safe])
@@ -122,7 +126,9 @@ def finish_device(tape,p,actor_hp,target_party,actor_physical,target_physical):
     actual=ex._context(tape)
     if actual is not None:
         ledger=ex.unhandled(actual.ledger,p.ticket,active=p.requested&~good,tables=actual.tables);ledger=ex.emitted(ledger,p.ticket,tape,active=p.requested&good,tables=actual.tables);tape=ex._put_context(tape,ledger,actual)
-    return tape._replace(refusal=tape.refusal|jnp.where(p.requested&~good,UNKNOWN_KO,0))
+    tape=tape._replace(refusal=tape.refusal|jnp.where(p.requested&~good,UNKNOWN_KO,0))
+    from . import engine_terminal_callbacks as terminal
+    return terminal.capture_ko_on_tape(tape,p,good)
 
 
 def validate_owned_control_device(tape,index,raw):
