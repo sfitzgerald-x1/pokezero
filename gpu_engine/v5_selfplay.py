@@ -6,7 +6,7 @@ opponent rows are not relabeled as learner-policy behavior or trained as PPO.
 No legacy/default runner is changed. D remains unavailable until an actual
 current public-world materializer and teacher provider are integrated.
 """
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 import time
 import uuid
@@ -20,22 +20,10 @@ from pokezero.v5_run import MissingDependency, _file_sha
 from . import v5_collection as base, v5_collection_data as data
 from . import v5_owning_history as history_capture
 from . import v5_public_world as public_world
+from . import v5_depth1_provider as depth1
 
 
-@dataclass(frozen=True)
-class TeacherContext:
-    address:object
-    source_frame_sha256:str
-    public_observation:object
-    own_packet:object
-    retained_public_state:object
-    raw_policy_logits:object
-    raw_public_value:float
-    actor_archive_sha256:str
-    opponent_archive_sha256:str
-    owning_packets:tuple
-    # Encoded/request packets are NOT complete literal public protocol history.
-    public_events_complete:bool=False
+TeacherContext=depth1.DecisionContext
 
 
 @dataclass(frozen=True)
@@ -47,6 +35,7 @@ class PairedCollection:
     history_refusals:tuple
     own_statics:tuple=()
     own_static_refusals:tuple=()
+    teacher_reports:tuple=()
 
 
 def _archive(actor):return json.loads(actor.metadata)['weights_archive_sha256']
@@ -84,12 +73,16 @@ def _pair_inference(records,actors,inputs,legal,eligible,streams,frames,seed):
 
 
 def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_requests,sampling_seed,
-        on_end,check_progress,started_at=None):
+        on_end,check_progress,started_at=None,teacher=None):
     """Collect one fixed original Session. No constructor/retry exists here."""
     if (type(max_requests) is not int or max_requests<=0 or type(sampling_seed) is not int
             or not 0<=sampling_seed<2**32 or not callable(on_end) or not callable(check_progress)):
         raise ValueError('finite declared paired collection recipe/callbacks required')
-    if learner.config.arm=='D':raise MissingDependency('D current-root public-world materializer/teacher is not integrated')
+    if learner.config.arm=='D':
+        if type(teacher) is not depth1.Provider or teacher.prepared is not session.prepared:
+            raise MissingDependency('D requires the connected original public-root depth1 provider')
+        teacher.require_ready()
+    elif teacher is not None:raise ValueError('teacher labels belong only to D; A/B actor path stays raw')
     record,r,current=base._checked(learner,session)
     actors=tuple(tuple(pair) for pair in actors);streams=np.asarray(session.state.core.cursor.stream_id);b=len(streams)
     if len(actors)!=b or any(len(pair)!=2 for pair in actors):raise ValueError('two declared original actors per game required')
@@ -115,6 +108,7 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
     started=time.monotonic() if started_at is None else started_at
     decisions=[];terminals={};receipt={'pool_sha256':None};histories={};history_refusals={}
     own_statics={};own_static_refusals={}
+    teacher_reports=[];teacher_by_frame={}
 
     def retain_history(rows):
         for row in rows:
@@ -212,10 +206,27 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
                             behavior_probability=float(probabilities[row,owner]),value_estimate=float(values[row,owner]),
                             actor_archive_sha256=_archive(actors[row][owner]),opponent_archive_sha256=_archive(actors[row][1-owner]),
                             training_only_peer_own_capture=peer_capture)
-                        row_pending.append((int(row),data.capture_decision(old,public,battle_id=cell.battle_id,seed=cell.seed,
+                        captured=data.capture_decision(old,public,battle_id=cell.battle_id,seed=cell.seed,
                             turn=body['turn'],choice=int(choices[row,owner]),probability=float(probabilities[row,owner]),
                             value=float(values[row,owner]),physical=physical,hidden_sets=hidden,source_frame_sha256=data.sha(body),
-                            capture_metadata={k:v for k,v in body.items() if k!='public_inputs'},opponent_action=semantic,privileged=privileged)))
+                            capture_metadata={k:v for k,v in body.items() if k!='public_inputs'},opponent_action=semantic,privileged=privileged)
+                        if teacher is not None:
+                            # Acting choices/probabilities above are already
+                            # fixed. Only our literal owner history/static are
+                            # passed: no Session/Core/peer training captures.
+                            context=TeacherContext(address,captured.row.source_frame_sha256,public,
+                                tuple(map(float,raw_logits[row,owner])),float(values[row,owner]),
+                                _archive(learner),_archive(actors[row][1-owner]),histories.get((int(row),owner)),
+                                own_statics.get((int(row),owner)),cell.battle_id,cell.seed)
+                            label=teacher.label(context,learner=learner,opponent=actors[row][1-owner])
+                            captured=replace(captured,row=replace(captured.row,labels=replace(captured.row.labels,
+                                root_improvement=label.improvement,search_status=label.status,search_refusal=label.refusal)))
+                            captured.row.labels.columns(public) # original D contract; mixing remains there only
+                            teacher_report=dict(label.report,status=label.status,refusal=label.refusal,
+                                retained_training_decision=False)
+                            teacher_reports.append(teacher_report)
+                            teacher_by_frame[captured.row.source_frame_sha256]=teacher_report
+                        row_pending.append((int(row),captured))
                 except ValueError as error:close(int(row),'REFUSED','source-row-capture: '+str(error))
                 else:pending.extend(row_pending)
             active=np.asarray([status[p]=='RUNNING' for p in positions])
@@ -233,7 +244,10 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
             # frames still retain the literal pre-rollback FULL report.
             retain_history(np.flatnonzero(executed))
             for row,captured in pending:
-                if executed[row] and not invalid[row]:decisions.append(captured);detail[positions[row]]['decisions']+=1
+                if executed[row] and not invalid[row]:
+                    decisions.append(captured);detail[positions[row]]['decisions']+=1
+                    report=teacher_by_frame.get(captured.row.source_frame_sha256)
+                    if report is not None:report['retained_training_decision']=True
             public_ok=np.logical_and.reduce([(np.asarray(report.basic_error)==0)&(np.asarray(report.retained_error)==0)
                 &np.asarray(observer.retained_healthy) for report,observer in zip(session.result.owners,session.state.observers)])
             for row in np.flatnonzero(active):
@@ -253,22 +267,30 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
         tuple((int(streams[row]),owner,value) for (row,owner),value in sorted(histories.items())),
         tuple((int(streams[row]),owner,reason) for (row,owner),reason in sorted(history_refusals.items())),
         tuple((int(streams[row]),owner,value) for (row,owner),value in sorted(own_statics.items())),
-        tuple((int(streams[row]),owner,reason) for (row,owner),reason in sorted(own_static_refusals.items())))
+        tuple((int(streams[row]),owner,reason) for (row,owner),reason in sorted(own_static_refusals.items())),
+        tuple(teacher_reports))
 
 
 class EngineBackend:
     """Real original constructor/collector/cache calls; creation executes none."""
-    def __init__(self,prepared,pool,*,gender_policy=None,compute_dtype='bfloat16'):
+    def __init__(self,prepared,pool,*,gender_policy=None,compute_dtype='bfloat16',teacher=None):
         self.prepared=prepared;self.pool=pool;self.gender_policy=gender_policy;self.compute_dtype=compute_dtype;self.actors={}
+        self.teacher=teacher
 
     def require_teacher(self):
-        raise MissingDependency('D current-root public-world materializer and ready provider are not integrated')
+        if type(self.teacher) is not depth1.Provider or self.teacher.prepared is not self.prepared:
+            raise MissingDependency('D requires the original public-root depth1 provider')
+        return self.teacher.require_batched()
 
     def check_plan(self,plan):
         r=base.driver._checked(self.prepared);base.driver._checked_witness(r)
         if base.source_provenance._pool(self.pool,rehash=True)['pool_sha256']!=plan.pool_sha256:
             raise ValueError('original declared constructor pool differs')
         base.v5_observation.compile_adapter(r['catalog'],model_config=plan.model)
+        if plan.model.arm=='D':
+            self.require_teacher()
+            if self.teacher.recipe.seed!=plan.selection_seed:
+                raise ValueError('teacher seed must equal declared selection_seed in its independent SHA domains')
 
     def _actor(self,snapshot,store):
         digest=snapshot['archive_sha256']
@@ -298,13 +320,18 @@ class EngineBackend:
         if batch.gender_seed is not None:
             if self.gender_policy is None:raise ValueError('original declared gender policy required')
             gender=dict(policy=self.gender_policy,seed=batch.gender_seed,domain=batch.gender_domain,root_ids=batch.gender_root_ids)
-        return dict(plan=plan,batch=batch,learner=learner,pairs=tuple(pairs),ledger=ledger,indices=indices,streams=streams,gender=gender)
+        if plan.model.arm=='D':store.emit('D_TEACHER_RECIPE',**self.require_teacher())
+        return dict(plan=plan,batch=batch,learner=learner,pairs=tuple(pairs),ledger=ledger,indices=indices,streams=streams,gender=gender,
+            teacher=self.teacher if plan.model.arm=='D' else None)
 
     def collect(self,prepared,store,on_end,check_progress):
         check_progress()
         plan=prepared['plan'];batch=prepared['batch'];learner=prepared['learner'];pairs=prepared['pairs']
         ledger=prepared['ledger'];indices=prepared['indices'];streams=prepared['streams'];gender=prepared['gender']
         started=time.monotonic()
+        if plan.model.arm=='D':
+            self.check_plan(plan) # fail before actual constructor on direct calls too
+            if prepared.get('teacher') is not self.teacher:raise MissingDependency('prepared D provider differs')
         try:session=base.driver.construct(self.pool,indices,prepared=self.prepared,stream_ids=streams,
             seed=batch.constructor_seed,gender_initialization=gender)
         except Exception as error:
@@ -312,7 +339,7 @@ class EngineBackend:
             raise
         collection=collect_paired(session,learner=learner,actors=pairs,pool=self.pool,team_indices=indices,
             ledger=ledger,max_requests=plan.max_requests,sampling_seed=batch.sampling_seed,
-            on_end=on_end,check_progress=check_progress,started_at=started)
+            on_end=on_end,check_progress=check_progress,started_at=started,teacher=prepared.get('teacher'))
         # Per-owner artifacts have no live Session/Core/catalog handle. Keep
         # complete canonical records and unknowns even when no training row
         # exists. A future teacher must use the original decoder, never relabel
@@ -334,6 +361,18 @@ class EngineBackend:
             store.emit('OWNING_HISTORY_REFUSED',stream_id=stream,owner=owner,reason=reason)
         for stream,owner,reason in collection.own_static_refusals:
             store.emit('OWN_STATIC_REFUSED',stream_id=stream,owner=owner,reason=reason)
+        if plan.model.arm=='D':
+            reports=collection.teacher_reports
+            coverage=dict(eligible=len(reports),selected=sum(bool(x['selected']) for x in reports),
+                labeled=sum(x['status']=='LABELED' for x in reports),refused=sum(x['status']=='REFUSED' for x in reports),
+                unselected=sum(x['status']=='UNSELECTED' for x in reports),
+                retained_labeled=sum(x['status']=='LABELED' and x['retained_training_decision'] for x in reports))
+            store.artifact(f'teachers/coverage-{uuid.uuid4().hex}.json',json.dumps(
+                dict(recipe=self.require_teacher(),coverage=coverage,decisions=reports,game_ledger=collection.ledger),
+                sort_keys=True,separators=(',',':'),allow_nan=False).encode(),kind='D_TEACHER_COVERAGE')
+            store.emit('D_TEACHER_COVERAGE',**coverage)
+            if not any(x.row.labels.search_status=='LABELED' for x in collection.decisions):
+                raise MissingDependency('D batch has zero usable teacher labels; coverage retained, no PPO-only cache/training')
         if not collection.decisions:return None
         relative=f'caches/cache-{uuid.uuid4().hex}'
         data.write_cache(store.path/relative,collection.decisions,loss_config=plan.loss,batch_size=plan.train.batch_size)
