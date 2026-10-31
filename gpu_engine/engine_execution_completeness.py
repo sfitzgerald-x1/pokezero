@@ -64,7 +64,7 @@ class Site(IntEnum):
     PRIMARY_PLAIN_STATUS = 28
     ROUGH_SKIN_HP = 29
     COLOR_CHANGE = 30
-    BELLY_DRUM = 31 # reserved separate source increment
+    BELLY_DRUM = 31
     SELF_HEAL = 32
 
 

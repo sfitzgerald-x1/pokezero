@@ -1072,8 +1072,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             drum=(acts & effects.belly_drum[move] & (max_hp>1)
                 & (hp*2>max_hp) & (boosts[:,0]<6))
             if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.BELLY_DRUM,
-                    acts & effects.belly_drum[move],active=live)
+                from . import engine_belly_drum_callbacks as belly_callbacks
+                _belly_pending=None
+                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.belly_drum is not None:
+                    _public_trace,_belly_pending=belly_callbacks.begin(_public_trace,work,side,move,hp,boosts,
+                        _direct_hit_context,effects,eligible=caller_acts & (caller_move==move))
             hp=hp-jnp.where(drum,max_hp//2,0)
             boosts=boosts.at[:,0].set(jnp.where(drum,6,boosts[:,0]))
             work=work._replace(hp=_set_active(work.hp,work,side,hp))
@@ -1125,6 +1128,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     drop,active=live)
             boosts = boosts.at[:,2].set(jnp.where(drop,jnp.maximum(-6,boosts[:,2]-2),boosts[:,2]))
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
+            if _lifecycle_trace:
+                _public_trace,_belly_capture=belly_callbacks.finish(_public_trace,_belly_pending,work,acts&hit&~immune)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.BELLY_DRUM,
+                    acts & effects.belly_drum[move],active=live,captured_belly_drum=_belly_capture)
             if _lifecycle_trace:
                 team_cured=(acts[:,None] & effects.heal_bell[move,None] & (work.hp[rows,side]>0)
                     & (work.status[rows,side]!=m.NONE) & ~effects.soundproof[work.ability[rows,side]])
