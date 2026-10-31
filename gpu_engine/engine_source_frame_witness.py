@@ -86,6 +86,9 @@ class Report(NamedTuple):
     switch_details: object
     claimed: object
     owner_words: object                   # [B,2] actually drained FULL words
+    owner_full_words: object              # [B,2,C,N,6] actual projected chunks
+    owner_full_valid: object              # [B,2,C,N], before refusal rollback
+    owner_full_more: object               # [B,2,C], before refusal rollback
 
 
 class Result(NamedTuple):
@@ -392,7 +395,9 @@ def consume_pair_device(carry, core, frame, streams, publics, tables, catalog, *
                 valid=p.chunk.valid&complete[:,None],more=p.chunk.more&complete))
         safe.append(full.Consumed(p,full._commit_public(complete,retained,result.public)))
     report=Report(complete,refusal,expected,risk.counts,tape.words,tape.count,tape.event_turn,
-        tape.event_phase,tape.event_generation,tape.switch_details,ledger.claimed,jnp.stack(amounts,axis=1))
+        tape.event_phase,tape.event_generation,tape.switch_details,ledger.claimed,jnp.stack(amounts,axis=1),
+        *[jnp.stack([jnp.moveaxis(getattr(result.projection.frames,name),1,0)
+            for result in results],axis=1) for name in ('words','valid','more')])
     return Result(updated,execution.commit_rows(active,core.execution,joined),tuple(safe),report)
 
 
