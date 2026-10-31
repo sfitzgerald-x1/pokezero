@@ -195,6 +195,28 @@ def _observer(public,owner):
     return driver.Observer(j.array([owner],j.int32),None,None,public,j.ones(1,bool),j.zeros(1,j.int32),None)
 
 
+def _requests_after_frame(runtime,frame,before,publics,orders,admitted):
+    """Original request/type proof from PRE-fold owning history and SAME tape.
+
+    This is the owning driver's existing Color Change join, not permission to
+    trust private current types. Unsupported root-history reconstruction in
+    core() remains refused. Only an existing public override or a genuine
+    current claimed receipt can differ from sealed constructor types.
+    """
+    current_types=(None,None)
+    context=runtime['direct_hit_context']
+    if context is not None and context.data.color_change is not None and runtime['direct_hit_mode']=='kernel-event':
+        from . import engine_color_change_callbacks as color
+        current_types=tuple(color.expected_owned_types(frame.state,before.engine,public,
+            owner=owner,tape=frame.callbacks,data=context.data.color_change,
+            categories=runtime['public'].device.causal.color_categories,
+            type_tables=runtime['catalog'].types.device,healthy=before.admitted)
+            for owner,public in enumerate(publics))
+    return tuple(runtime['request_fast'](frame.state,ledger,original,constructor,unsafe,
+        frame.after_registry,admitted,types) for ledger,original,constructor,unsafe,types in
+        zip(orders,before.originals,before.constructors,before.unsafe,current_types,strict=True))
+
+
 @dataclass(frozen=True)
 class Step:
     state: object | None
@@ -269,8 +291,7 @@ def step(branch, choices, *, chance_inputs,hypothetical_profiles=False):
         if not bool(np.asarray(good).all()):
             return Step(frame.state,tuple(value.public for value in consumed),(),('actual-hypothetical-kernel-or-FULL-refused',),frame,diagnostic)
         ledgers=tuple(runtime['installations'](ledger,frame) for ledger in current.orders)
-        requests=tuple(runtime['request_fast'](frame.state,ledger,original,constructor,unsafe,
-            frame.after_registry,good) for ledger,original,constructor,unsafe in zip(ledgers,current.originals,current.constructors,current.unsafe))
+        requests=_requests_after_frame(runtime,frame,current,publics,ledgers,good)
         after=current._replace(engine=frame.state,cursor=frame.cursor,orders=ledgers,requests=requests,admitted=good)
         encoded=[]
         for owner,value in enumerate(consumed):

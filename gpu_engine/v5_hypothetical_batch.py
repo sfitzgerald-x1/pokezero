@@ -201,8 +201,7 @@ class _Executor:
             good &= (frame.callbacks.refusal&~events.UNINSTRUMENTED)==0
             public_after=tuple(public_commit(good,before,value.public) for before,value in zip(publics,consumed,strict=True))
             orders=tuple(r['installations'](value,frame) for value in core.orders)
-            requests=tuple(r['request_fast'](frame.state,value,original,constructor,unsafe,frame.after_registry,good)
-                for value,original,constructor,unsafe in zip(orders,core.originals,core.constructors,core.unsafe,strict=True))
+            requests=branch._requests_after_frame(r,frame,core,publics,orders,good)
             after=core._replace(engine=frame.state,cursor=frame.cursor,orders=orders,requests=requests,admitted=good)
             appended=[];facts_ok=[];encoded_ok=[]
             for owner,public in enumerate(public_after):
