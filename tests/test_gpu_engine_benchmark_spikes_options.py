@@ -1,5 +1,5 @@
 """Named ordinary host option forwarding; no model or device work."""
-import ast,subprocess,unittest
+import ast,pathlib,subprocess,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,5 +18,13 @@ class BenchmarkSpikesOptionsTests(unittest.TestCase):
   for kwargs in ({'spikes_compiled':object()},{'spikes_mode':'kernel-event'},{'spikes_mode':'kernel-event','spikes_compiled':object(),'account_source_sites':True,'public_mode':'retained-full'}):
    with self.assertRaises(ValueError):driver.prepare(None,None,fake_forward=lambda x:x,**kwargs)
  def test_measurement_and_model_functions_unchanged(self):
-  def functions(s):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(s).body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name!='prepare'}
+  def functions(s):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(s).body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name not in ('prepare','measure')}
   self.assertEqual(functions(Path('gpu_engine/benchmark_retained_games.py').read_text()),functions(subprocess.check_output(['git','show','ea7c5059:gpu_engine/benchmark_retained_games.py'],text=True)))
+
+
+class ReviewedTimingCompositionTests(unittest.TestCase):
+ def test_measure_exact_independent_timing_source(self):
+  current=pathlib.Path(benchmark.__file__).read_text()
+  reviewed=subprocess.check_output(["git","show","4baa33e96d8d0c944374c81fd8cd44cc8b6bd26a:gpu_engine/benchmark_retained_games.py"],text=True)
+  def measure(text):return ast.dump(next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=="measure"),include_attributes=False)
+  self.assertEqual(measure(current),measure(reviewed))
