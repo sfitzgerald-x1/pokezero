@@ -44,6 +44,7 @@ from . import engine_flash_fire_end_callbacks as flash_end
 from . import engine_substitute_damage_callbacks as substitute_damage
 from . import engine_protect_callbacks as protect_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
+from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
 from . import engine_color_change_callbacks as color_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
@@ -587,6 +588,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         failed_weather = kind == weather_effects.SAME_WEATHER_FAILURE
         weather_chip = kind == weather_effects.WEATHER_CHIP
         leftovers_heal = kind == leftovers_callbacks.LEFTOVERS_HEAL
+        self_heal = kind == self_heal_callbacks.SELF_HEAL
         status_damage = kind == status_residual_callbacks.STATUS_RESIDUAL
         no_damage_header=kind==no_damage.TARGET_NO_DAMAGE
         no_damage_facts=kind==no_damage.ABSORB_FACTS
@@ -831,6 +833,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(incoming==cursor.physical_active[rows,safe_side]))
         event_ok=jnp.where(protect_attempt,generation_ok&clock_ok&protect_identity&protect_callbacks.owned_attempt(tape,index),event_ok)
         event_ok=jnp.where(protect_block,generation_ok&clock_ok&protect_identity&protect_callbacks.owned_block(tape,index),event_ok)
+        self_heal_ok=(tables.status_events&~tables.raw_begin&status_identity&(phase==0)
+            &(incoming==cursor.physical_active[rows,safe_side])&self_heal_callbacks.owned(tape,index))
+        event_ok=jnp.where(self_heal,generation_ok&clock_ok&self_heal_ok,event_ok)
         prefix_ok=(tables.status_events&~tables.raw_begin&clock_payload&(index==0)
             &jnp.all(cursor.established,axis=1)&jnp.all(details==0,axis=1))
         event_ok=jnp.where(turnloop_prefix,generation_ok&clock_ok&prefix_ok,event_ok)
@@ -886,10 +891,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_percent=jnp.where((raw[:,6]<raw[:,7])&(chip_percent==100),99,chip_percent)
         chip_payload=jnp.stack((status_enc,jnp.where(own,raw[:,6],chip_percent),
             jnp.where(own,raw[:,7],100),jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,8],0,6)],
-            z,jnp.where(leftovers_heal,0,1),jnp.where(leftovers_heal|substitute,0,1),z),axis=1)  # heal tags are not damage metadata
+            z,jnp.where(leftovers_heal|self_heal,0,1),jnp.where(leftovers_heal|substitute|self_heal,0,1),z),axis=1)  # heal tags are not damage metadata
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
-        semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute)[:,None],chip_semantic,semantic)
+        semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute|self_heal)[:,None],chip_semantic,semantic)
         recoil_own=state.owner==actor_side
         recoil_percent=(100*raw[:,7]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8])
         recoil_percent=jnp.where((raw[:,7]<raw[:,8])&(recoil_percent==100),99,recoil_percent)

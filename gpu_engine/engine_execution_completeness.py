@@ -64,6 +64,8 @@ class Site(IntEnum):
     PRIMARY_PLAIN_STATUS = 28
     ROUGH_SKIN_HP = 29
     COLOR_CHANGE = 30
+    BELLY_DRUM = 31 # reserved separate source increment
+    SELF_HEAL = 32
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
