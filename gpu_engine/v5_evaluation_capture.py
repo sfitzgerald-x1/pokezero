@@ -9,6 +9,7 @@ terminal continuations stay UNKNOWN. Source receipts are not external attestatio
 from dataclasses import asdict, dataclass, replace
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -217,7 +218,11 @@ def _terminal(recorder,session,*,terminal,body):
                 or terminal.hp!=data._tuple(np.asarray(core.engine.hp)[row].tolist())
                 or terminal.max_hp!=data._tuple(np.asarray(core.engine.max_hp)[row].tolist())):
             raise ValueError('literal actual returned terminal state differs')
-    record['terminals'][terminal.stream]=dict(body=body,capture=asdict(terminal))
+    saved=dict(body=body,capture=asdict(terminal))
+    # The original on_end callback runs AFTER this returns. Seal its literal
+    # source cell first, independently of whether the rest of this batch ends.
+    _save_cell(recorder,terminal.stream,saved)
+    record['terminals'][terminal.stream]=saved
 
 
 def _finish(recorder,session,*,decisions,terminals,finished):
@@ -269,6 +274,93 @@ def _claim(path,event):
     """Durable original attempt BEFORE constructor; interruption never replays."""
     with path.open('ab') as stream:
         stream.write((run._json(event)+'\n').encode());stream.flush();os.fsync(stream.fileno())
+    _sync_directory(path.parent)
+
+
+def _sync_directory(directory):
+    descriptor=os.open(directory,os.O_RDONLY)
+    try:os.fsync(descriptor)
+    finally:os.close(descriptor)
+
+
+def _save_cell(recorder,stream,terminal):
+    record=_record(recorder);storage=record.get('storage')
+    if storage is None:raise ValueError('original durable capture journal required before terminal callback')
+    bank=recorder.bank
+    index=next((i for i,b in enumerate(bank.batches) if any(g.stream_id==stream for g in b.games)),None)
+    if index is None:raise ValueError('terminal cell is outside declared original bank')
+    events=[json.loads(line) for line in storage['journal'].read_text().splitlines()]
+    expected=dict(kind='BATCH_STARTED',batch=index,binding=storage['binding'],recipe=asdict(bank.batches[index]))
+    last=next((event for event in reversed(events) if event.get('kind') in ('BATCH_STARTED','BATCH_END')),None)
+    if last!=json.loads(run._json(expected)):
+        raise ValueError('original live batch attempt required before cell completion')
+    positions=[dict(selector=asdict(a),value=record['positions'][a]) for a in bank.selectors
+        if a.stream==stream and a in record['positions']]
+    groups=[dict(selector=asdict(a),value=record['groups'][a]) for a in bank.selectors
+        if a.stream==stream and a in record['groups']]
+    value=dict(schema=schema.CAPTURE+'.cell',binding=storage['binding'],batch=index,stream=stream,
+        positions=positions,groups=groups,terminal=terminal)
+    path=storage['directory']/('cell-'+str(stream)+'.json')
+    blob=run._json(dict(sha256=run._sha(value),cell=value)).encode()
+    run._publish(path,blob)
+    _sync_directory(path.parent)
+    _claim(storage['journal'],dict(kind='CELL_END',batch=index,stream=stream,path=path.name,sha256=run._file_sha(path)))
+
+
+def _restore_cells(directory,recorder,started,completed,cell_events,binding):
+    """A durable cell is authoritative even if its enclosing batch lacks END."""
+    record=_record(recorder);bank=recorder.bank
+    expected={g.stream_id:index for index in started for g in bank.batches[index].games}
+    paths={directory/('cell-'+str(stream)+'.json'):stream for stream in expected}
+    if any(path not in paths for path in directory.glob('cell-*.json')):
+        raise ValueError('foreign/unattempted original cell file')
+    recovered=[]
+    for path,stream in paths.items():
+        if not path.exists():
+            if stream in cell_events:raise ValueError('durable completed source cell disappeared')
+            continue # Inflight/unobserved cell stays UNKNOWN; never replay it.
+        blob=path.read_bytes();document=json.loads(blob)
+        if stream in cell_events and hashlib.sha256(blob).hexdigest()!=cell_events[stream]['sha256']:
+            raise ValueError('durable completed source cell bytes mutated')
+        schema._keys(document,('sha256','cell'));cell=document['cell']
+        schema._keys(cell,('schema','binding','batch','stream','positions','groups','terminal'))
+        index=expected[stream]
+        if (run._sha(cell)!=document['sha256'] or cell['schema']!=schema.CAPTURE+'.cell'
+                or cell['binding']!=binding or cell['batch']!=index or cell['stream']!=stream):
+            raise ValueError('original durable cell binding/bytes differ')
+        game=bank.games[stream]
+        heldout=schema._artifact(bank.document['heldout_roster']).document()
+        terminal=schema._terminal(cell['terminal'],game,heldout['pool_sha256'])
+        def selected(rows):
+            values={}
+            for row in rows:
+                schema._keys(row,('selector','value'));address=c.DecisionAddress(**row['selector'])
+                if address.stream!=stream or address not in bank.selectors or address in values or address.frame>terminal.frame:
+                    raise ValueError('durable cell selector order/identity differs')
+                values[address]=row['value']
+            if list(values)!=[a for a in bank.selectors if a in values]:
+                raise ValueError('durable cell fixed selector order differs')
+            return values
+        positions=selected(cell['positions']);groups=selected(cell['groups'])
+        if set(positions)!=set(groups):raise ValueError('durable selected decision/sibling pair differs')
+        for name,values in (('positions',positions),('groups',groups)):
+            previous={a:v for a,v in record[name].items() if a.stream==stream}
+            if previous and (set(previous)!=set(values) or any(run._json(previous[a])!=run._json(values[a]) for a in values)):
+                raise ValueError('batch/cell completed source disappeared or mutated')
+            if index in completed and set(previous)!=set(values):
+                raise ValueError('completed batch omitted durable cell source')
+            record[name].update(values)
+        old=record['terminals'].get(stream)
+        if old is not None and run._json(old)!=run._json(cell['terminal']):
+            raise ValueError('batch/cell terminal source mutated')
+        if index in completed and old is None:raise ValueError('completed batch omitted durable terminal')
+        record['terminals'][stream]=cell['terminal']
+        if stream not in cell_events:
+            # A crash between the atomic cell publish and its journal append
+            # must preserve the actual source too, then make recovery durable.
+            recovered.append(dict(kind='CELL_RECOVERED',batch=index,stream=stream,path=path.name,
+                sha256=hashlib.sha256(blob).hexdigest()))
+    return recovered
 
 
 def _journal(directory,recorder,*,resume):
@@ -281,7 +373,7 @@ def _journal(directory,recorder,*,resume):
     elif not resume:raise ValueError('existing capture requires explicit resume; no automatic retry')
     if json.loads(path.read_bytes())!=declaration:raise ValueError('original capture bank/source changed on resume')
     events=[] if not journal.exists() else [json.loads(line) for line in journal.read_text().splitlines()]
-    started=[];completed=set()
+    started=[];completed=set();cell_events={}
     for event in events:
         index=event.get('batch')
         if type(index) is not int or not 0<=index<len(recorder.bank.batches):raise ValueError('capture journal batch differs')
@@ -290,6 +382,13 @@ def _journal(directory,recorder,*,resume):
             if event!=json.loads(run._json(dict(kind='BATCH_STARTED',batch=index,binding=run._sha(declaration),recipe=asdict(recorder.bank.batches[index])))):
                 raise ValueError('capture attempt recipe/binding changed')
             started.append(index)
+        elif event.get('kind') in ('CELL_END','CELL_RECOVERED'):
+            schema._keys(event,('kind','batch','stream','path','sha256'));stream=event['stream']
+            if (index not in started or event['kind']=='CELL_END' and (index!=started[-1] or index in completed) or type(stream) is not int
+                    or stream not in {g.stream_id for g in recorder.bank.batches[index].games}
+                    or stream in cell_events or event['path']!='cell-'+str(stream)+'.json'):
+                raise ValueError('original completed cell attempt/order/replay differs')
+            c._binding(event['sha256']);cell_events[stream]=event
         elif event.get('kind')=='BATCH_END':
             if not started or index!=started[-1] or index in completed:raise ValueError('capture completion lacks original attempt')
             expected=directory/('batch-'+str(index)+'.json')
@@ -313,8 +412,11 @@ def _journal(directory,recorder,*,resume):
                 record['terminals'][stream]=terminal
             completed.add(index)
         else:raise ValueError('unknown capture journal event')
-    # START without END remains an attempted UNKNOWN batch. No source state or
-    # completed row is reconstructed; only the next never-attempted batch runs.
+    for recovered in _restore_cells(directory,recorder,started,completed,cell_events,run._sha(declaration)):
+        _claim(journal,recovered)
+    record['storage']=dict(directory=directory,journal=journal,binding=run._sha(declaration))
+    # Restore literal durable completed cells, not an engine state. Other cells
+    # in START without END stay UNKNOWN; only the next unattempted batch runs.
     return journal,declaration,len(started)
 
 

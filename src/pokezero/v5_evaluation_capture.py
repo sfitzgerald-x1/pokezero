@@ -387,21 +387,32 @@ def evaluate_original_capture(protocol, factory, capture):
     known=[(o,y) for _,o,y in capture.positions if o is not None and y is not None]
     if not known:raise run.MissingDependency('no actual uncapped collector-policy terminal outcomes for calibration')
     metrics=calibration_metrics(predict([o for o,_ in known]),[y for _,y in known],bins=protocol['bins']);rmse=math.sqrt(metrics['mse'])
-    rows=[];unknown=0;terminals=0
+    rows=[];unknown=0;terminal_branches=0
     for group in capture.groups:
         if group['status']!='CAPTURED' or any(b['status']!='CAPTURED' for b in group['branches']):unknown+=1;continue
-        if any(b['terminal'] is not None for b in group['branches']):terminals+=1;continue
         if len(group['branches'])<2:unknown+=1;continue
-        values=predict([observation_from_dict(b['observation']) for b in group['branches']])
+        # Literal returned terminal outcomes are measured branches, not missing
+        # leaves. Only genuine nonterminal public children enter the head.
+        indices=[i for i,b in enumerate(group['branches']) if b['terminal'] is None]
+        predicted=predict([observation_from_dict(group['branches'][i]['observation']) for i in indices])
+        values=[None]*len(group['branches']);sources=[]
+        for i,value in zip(indices,predicted,strict=True):values[i]=value
+        owner=group['selector']['owner']
+        for i,branch in enumerate(group['branches']):
+            terminal=branch['terminal'];sources.append('CURRENT_PUBLIC_HEAD' if terminal is None else 'ACTUAL_TERMINAL_WINNER')
+            if terminal is not None:
+                winner=terminal['winner'];values[i]=0. if winner==2 else 1. if winner==owner else -1.
+                terminal_branches+=1
         order=sorted(range(len(values)),key=lambda i:(-values[i],group['branches'][i]['action']))[:2]
         gap=values[order[0]]-values[order[1]]
         rows.append(dict(selector=group['selector'],world=group['world'],reply=group['reply'],
-            actions=[b['action'] for b in group['branches']],values=values,
+            actions=[b['action'] for b in group['branches']],values=values,value_sources=sources,
             top_two_actions=[group['branches'][i]['action'] for i in order],gap=gap,gap_exceeds_outcome_rmse=gap>rmse))
     _checked_capture(capture,protocol)
     return dict(calibration=metrics,heldout_positions=len(capture.positions),known_outcomes=len(known),
         unknown_outcomes=len(capture.positions)-len(known),outcome_rmse=rmse,sibling_groups=len(capture.groups),
-        unknown_sibling_groups=unknown,terminal_groups_excluded=terminals,scored_sibling_groups=len(rows),top_two_rows=rows,
+        unknown_sibling_groups=unknown,terminal_groups_excluded=0,actual_terminal_branches=terminal_branches,
+        scored_sibling_groups=len(rows),top_two_rows=rows,
         share_gap_exceeds_outcome_rmse=sum(r['gap_exceeds_outcome_rmse'] for r in rows)/len(rows) if rows else None,
         interpretation='Descriptive public successor gap versus fixed collector-policy terminal-return RMSE; not each evaluated arm counterfactual value.',
         actual_ranking_accuracy='UNMEASURED_NO_MATCHED_TERMINAL_CONTINUATIONS',fitted_models=0,

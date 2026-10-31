@@ -95,7 +95,7 @@ def archives(root,bank_ref,bank_doc,*,terminal=True):
             seed=int.from_bytes(recipe._digest(address,'hypothetical-kernel',world)[:4],'big')
             lines=['unit-source-lines-not-a-game'];lines_sha=hashlib.sha256(''.join(line+'\n' for line in lines).encode()).hexdigest()
             origin=dict(scope='HYPOTHETICAL_PUBLIC_WORLD_NOT_ORDINARY_SESSION',root=lines_sha,engine=[3]*8,sampled_teams={'p1':'x','p2':'y'},seed=seed)
-            history=dict(stream=100,owner=0,own_constructor=[],frames=[dict(number=9)])
+            history=dict(stream=100,owner=address.owner,own_constructor=[],frames=[dict(number=9)])
             group=dict(schema=capture.SIBLING,selector=selector,world=world,reply=reply,status='CAPTURED',reason=None,
                 root_source_sha256=actual.row.source_frame_sha256,
                 origin=dict(body=origin,sha256=run._sha(origin),history_sha256=run._sha(history),history=history,
@@ -320,6 +320,8 @@ class OriginalEvaluationCaptureTests(unittest.TestCase):
             current=dict(session=session,pending=None)
             producer._RECORDERS[recorder]=dict(bank=checked,bank_sha256=run._sha(checked.document),source=capture.source_binding(),learner=learner,
                 current=current,positions={},groups={},terminals={})
+            journal,declaration,_=producer._journal(root/'out',recorder,resume=False)
+            producer._claim(journal,dict(kind='BATCH_STARTED',batch=0,binding=run._sha(declaration),recipe=asdict(checked.batches[0])))
             fake=NS(_checked=lambda *a:None,driver=NS(latest_diagnostics=lambda s:diagnostics))
             groups=[producer._unknown(actual.row.observation.address,w,w,'unit-no-child') for w in (0,1)]
             with patch.dict(sys.modules,{'gpu_engine.v5_collection':fake}),patch.object(producer,'_siblings',return_value=groups):
@@ -343,6 +345,80 @@ class OriginalEvaluationCaptureTests(unittest.TestCase):
             resolved=capture.resolve_original_capture(dict(references,label_vocabulary_sha256=fixture.vocabulary().sha256),None)
             self.assertEqual([row[2] for row in resolved.positions],[-1,None])
             with self.assertRaisesRegex(ValueError,'original source-bound'):producer._record(producer.Recorder(checked))
+
+    def test_completed_cell_atomic_publish_recovery_and_mutation_guards(self):
+        for interrupted in (False,True):
+            with self.subTest(interrupted=interrupted),tempfile.TemporaryDirectory() as temp:
+                root=Path(temp);ref,document=bank(root);checked=capture.load_bank(ref);directory=root/'capture'
+                def recorder():
+                    value=producer.Recorder(checked)
+                    producer._RECORDERS[value]=dict(bank=checked,bank_sha256=run._sha(checked.document),source=capture.source_binding(),
+                        current=None,positions={},groups={},terminals={})
+                    return value
+                value=recorder();journal,declaration,_=producer._journal(directory,value,resume=False)
+                producer._claim(journal,dict(kind='BATCH_STARTED',batch=0,binding=run._sha(declaration),recipe=asdict(checked.batches[0])))
+                address=checked.selectors[0];actual=decision(address)
+                saved=dict(decision=v5_data.row_to_dict(actual.row),execution={'unit':'literal-captured-frame'})
+                producer._record(value)['positions'][address]=saved
+                producer._record(value)['groups'][address]=[producer._unknown(address,w,w,'unit-no-child') for w in (0,1)]
+                body=dict(stream=100,frame=14,status='COMPLETE',reason='unit-actual-terminal',pool_sha256='e'*64,
+                    winner=1,hp=[[5]*6,[6]*6],max_hp=[[10]*6,[10]*6])
+                terminal=dict(body=body,capture=asdict(original.TerminalCapture(100,14,'COMPLETE',original.sha(body),1,
+                    original._tuple(body['hp']),original._tuple(body['max_hp']))))
+                if interrupted:
+                    with patch.object(producer,'_claim',side_effect=OSError('crash after atomic cell publish')),self.assertRaises(OSError):
+                        producer._save_cell(value,100,terminal)
+                else:producer._save_cell(value,100,terminal)
+                restored=recorder();_,_,attempted=producer._journal(directory,restored,resume=True)
+                self.assertEqual(attempted,1)
+                record=producer._record(restored)
+                self.assertEqual(run._json(record['positions'][address]),run._json(saved))
+                self.assertEqual(record['terminals'][100]['capture']['source_sha256'],terminal['capture']['source_sha256'])
+                events=[json.loads(line) for line in journal.read_text().splitlines()]
+                self.assertEqual(events[-1]['kind'],'CELL_RECOVERED' if interrupted else 'CELL_END')
+                producer._claim(journal,producer._save_batch(directory,restored,0,run._sha(declaration)))
+                finished=recorder();self.assertEqual(producer._journal(directory,finished,resume=True)[2],1)
+                self.assertEqual(producer._record(finished)['terminals'][100],record['terminals'][100])
+                path=directory/'cell-100.json';hidden=directory/'hidden-cell'
+                path.rename(hidden)
+                with self.assertRaisesRegex(ValueError,'disappeared'):producer._journal(directory,recorder(),resume=True)
+                hidden.rename(path)
+                blob=path.read_bytes();path.chmod(0o644);path.write_bytes(blob+b' ')
+                with self.assertRaisesRegex(ValueError,'bytes mutated'):producer._journal(directory,recorder(),resume=True)
+                path.write_bytes(blob);path.chmod(0o444)
+                producer._claim(journal,events[-1])
+                with self.assertRaisesRegex(ValueError,'order/replay'):producer._journal(directory,recorder(),resume=True)
+
+    def test_literal_terminal_children_and_only_genuine_nonterminal_rows_enter_head(self):
+        for owner,winner,expected in ((0,0,1.),(0,1,-1.),(0,2,0.),(1,0,-1.),(1,1,1.),(1,2,0.)):
+            with self.subTest(owner=owner,winner=winner),tempfile.TemporaryDirectory() as temp:
+                root=Path(temp);ref,document=bank(root)
+                if owner:
+                    document['collector_seats']=[1]
+                    for selector in document['selectors']:selector['owner']=1
+                    ref=artifact(root/'bank.json',document)
+                protocol=archives(root,ref,document)
+                def terminal(rows):
+                    group=rows[1];branch=group['branches'][0]
+                    branch.update(state=raw_state(done=True,winner=winner),observation=None,
+                        terminal=dict(state_sha256=run._sha(raw_state(done=True,winner=winner)),winner=winner))
+                    branch['receipt_sha256']=run._sha(dict(selector=group['selector'],world=group['world'],reply=group['reply'],
+                        origin=group['origin']['sha256'],chance=group['chance']['sha256'],
+                        returned={k:v for k,v in branch.items() if k!='receipt_sha256'}))
+                protocol=mutate(root,protocol,'siblings',terminal);resolved=capture.resolve_original_capture(protocol,None);counts=[]
+                def forward(value):
+                    count=len(value['history_mask']);counts.append(count)
+                    return NS(value=np.full(count,.25),valid=np.ones(count,bool))
+                factory=NS(config=NS(category_vocabulary_sha256='b'*64,label_vocabulary=fixture.vocabulary()),forward=forward)
+                with patch.dict(sys.modules,{'gpu_engine.v5_model':NS(prepare_inputs=lambda x,c:x),
+                        'gpu_engine.v5_live_protocol':NS(check_factory=lambda f:None)}):
+                    result=capture.evaluate_original_capture(protocol,factory,resolved)
+                self.assertEqual(counts,[1,1,2]) # One calibration, one mixed child, two ordinary children.
+                self.assertEqual((result['scored_sibling_groups'],result['actual_terminal_branches'],result['terminal_groups_excluded']),(2,1,0))
+                row=result['top_two_rows'][0]
+                self.assertEqual(row['values'],[expected,.25]);self.assertAlmostEqual(row['gap'],abs(expected-.25))
+                self.assertEqual(row['value_sources'],['ACTUAL_TERMINAL_WINNER','CURRENT_PUBLIC_HEAD'])
+                self.assertEqual(result['actual_ranking_accuracy'],'UNMEASURED_NO_MATCHED_TERMINAL_CONTINUATIONS')
 
     def test_mock_declared_bank_constructs_original_seeds_only_after_durable_claim_and_never_writes_cache(self):
         with tempfile.TemporaryDirectory() as temp:
