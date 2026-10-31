@@ -10,6 +10,8 @@ these flags or ratios is reconstructed from the amount of HP lost.
 Positive nonlethal ordinary direct-target writes and the exact original compiled
 Seismic Toss fixed-level row are represented. Miss,
 immunity, substitute, protection, Endure and no-output writes stay UNKNOWN.
+The registered caller separately dispatches literal no-damage callbacks via
+engine_no_damage_callbacks; these positive-write validators are unchanged.
 These APIs remain nonlethal; the separate typed KO source requires its actual
 later faint callback and never relaxes this validator. Diagnostic calls retain UNKNOWN256. The separate PRIVATE registered
 source seam omits only this new latch for valid literal writes in the matching
@@ -52,6 +54,7 @@ class Data(NamedTuple):
     move_count: object
     seismic_toss_move: object       # exact canonical fixed-LEVEL row, or0
     ko_candidates: object          # ORIGINAL positive-power/nonrecoil rows only
+    no_damage: object              # original literal miss/immunity/TryHit capability
 
 
 class Context(NamedTuple):
@@ -133,7 +136,9 @@ def compile_direct_hit_controls(*, engine_catalog):
     ko &= np.arange(count)!=int(table.struggle)
     if table.damage_moves is not None:ko &= np.asarray(table.damage_moves.recoil_den)==0
     if table.self_destruct is not None:ko &= ~np.asarray(table.self_destruct.move)
-    payload = dict(schema=SCHEMA, producer=engine_catalog.binding,
+    from . import engine_no_damage_callbacks as no_damage
+    no_damage_data=no_damage.compile_data(engine_catalog)
+    payload = dict(schema=SCHEMA, no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
         engine=engine_catalog.engine_binding, source=engine_catalog.source_binding,
         moves=engine_catalog.move_binding, move_count=count, seismic_toss_move=seismic,ko_candidates=ko.tolist(),
         kinds=[CRITICAL, SUPER_EFFECTIVE, RESISTED],
@@ -147,7 +152,7 @@ def compile_direct_hit_controls(*, engine_catalog):
         words(engine_catalog.engine_binding), words(engine_catalog.source_binding),
         words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding), dtype='>u4').astype(np.uint32)),
-        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko))
+        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data)
     result = Compiled(data)
     _COMPILED[result] = (data, tuple(data), engine_catalog)
     return result
@@ -158,7 +163,7 @@ def check_compiled(compiled):
     record = _COMPILED.get(compiled) if type(compiled) is Compiled else None
     if (record is None or compiled.device is not record[0]
             or any(a is not b for a, b in zip(compiled.device, record[1]))
-            or any(not isinstance(a, jax.Array) or isinstance(a, jax.core.Tracer) for a in compiled.device)):
+            or any(not isinstance(a, jax.Array) or isinstance(a, jax.core.Tracer) for a in jax.tree.leaves(compiled.device))):
         raise ValueError('original immutable direct-hit compiler required')
     catalog = record[2]
     public.check_catalog(catalog, catalog.engine_table, expected_binding=catalog.binding,
@@ -192,6 +197,8 @@ def _check(tape, data):
     life._typed(data.seismic_toss_move, (), jnp.int32)
     if data.ko_candidates.ndim!=1 or len(data.ko_candidates)<2:raise ValueError('exact original KO move domain required')
     life._typed(data.ko_candidates,(len(data.ko_candidates),),jnp.bool_)
+    from . import engine_no_damage_callbacks as no_damage
+    no_damage._shape(data.no_damage)
     life._valid(tape.cursor)
     return True
 

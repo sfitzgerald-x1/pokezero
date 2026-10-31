@@ -38,6 +38,7 @@ from . import engine_leftovers_callbacks as leftovers_callbacks
 from . import engine_status_residual_callbacks as status_residual_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
 from . import engine_direct_ko_callbacks as direct_ko_callbacks
+from . import engine_no_damage_callbacks as no_damage
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -94,6 +95,7 @@ class Tables(NamedTuple):
     spikes_move: object
     thunder_wave_move: object
     trace_public_ability: object
+    no_damage: object
     primary_sleep_moves: object
     sleep_powder_move: object
     binding: object
@@ -210,6 +212,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     spikes_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='spikes'),0)
     thunder_wave_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='thunderwave'),0)
     sleep_powder_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='sleeppowder'),0)
+    no_damage_data=no_damage.compile_data(projector.catalog)
     primary_sleep_moves=np.array([bool(i and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==1
         and metadata['moves'][i].get('category')=='Status' and int(projector.catalog.engine_table.power[i])==0
         and projector.catalog.engine_table.effects is not None and int(projector.catalog.engine_table.effects.status[i])==5)
@@ -260,7 +263,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),
         leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,
         trace_engine_ability=trace_engine,sturdy_engine_ability=sturdy_engine,sturdy_public_ability=sturdy_public,
-        trace_public_ability=trace_public.tolist(),sleep_powder_move=sleep_powder_move,primary_sleep_moves=primary_sleep_moves.tolist(),
+        trace_public_ability=trace_public.tolist(),sleep_powder_move=sleep_powder_move,primary_sleep_moves=primary_sleep_moves.tolist(),no_damage_binding=np.asarray(no_damage_data.binding).tolist(),
         pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,swords_dance_move=swords_dance_move,spikes_move=spikes_move,thunder_wave_move=thunder_wave_move,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
@@ -276,7 +279,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
-        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),jnp.array(trace_public,jnp.int32),jnp.array(primary_sleep_moves),jnp.array(sleep_powder_move,jnp.int32),
+        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),jnp.array(trace_public,jnp.int32),no_damage_data,jnp.array(primary_sleep_moves),jnp.array(sleep_powder_move,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -406,6 +409,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     base._shape(tables.swords_dance_move,(),jnp.int32)
     base._shape(tables.spikes_move,(),jnp.int32)
     base._shape(tables.thunder_wave_move,(),jnp.int32)
+    no_damage._shape(tables.no_damage)
     base._shape(tables.primary_sleep_moves,(len(tables.base.public_ids),),jnp.bool_)
     base._shape(tables.sleep_powder_move,(),jnp.int32)
     base._shape(tables.substitute_move, (), jnp.int32)
@@ -558,6 +562,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         weather_chip = kind == weather_effects.WEATHER_CHIP
         leftovers_heal = kind == leftovers_callbacks.LEFTOVERS_HEAL
         status_damage = kind == status_residual_callbacks.STATUS_RESIDUAL
+        no_damage_header=kind==no_damage.TARGET_NO_DAMAGE
+        no_damage_facts=kind==no_damage.ABSORB_FACTS
         direct_control = ((kind == direct_hit_controls.CRITICAL)
             | (kind == direct_hit_controls.SUPER_EFFECTIVE) | (kind == direct_hit_controls.RESISTED))
         any_weather=entry_weather|move_weather|clock_weather
@@ -675,6 +681,17 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (incoming==cursor.physical_active[rows,safe_side])
             & (raw[:,5]<tables.base.public_ids.shape[0]) & (tables.base.public_ids[direct_move]>0))
         event_ok=jnp.where(direct_control,generation_ok & clock_ok & direct_ok,event_ok)
+        no_damage_start=jnp.where(no_damage_facts,index-1,index)
+        header=tape.words[rows,jnp.clip(no_damage_start,0,capacity-1)]
+        facts=tape.words[rows,jnp.clip(no_damage_start+1,0,capacity-1)]
+        no_damage_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity & cursor.initialized
+            &(phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            &(incoming==cursor.physical_active[rows,safe_side])&(no_damage_start>0)&(no_damage_start+1<tape.count)
+            &no_damage.valid_raw_pair(header,facts,tables.no_damage))
+        for offset in (0,1):
+            at=jnp.clip(no_damage_start+offset,0,capacity-1)
+            no_damage_ok &= (tape.event_turn[rows,at]==turn)&(tape.event_phase[rows,at]==phase)&jnp.all(tape.event_generation[rows,at]==cursor.generation,axis=1)
+        event_ok=jnp.where(no_damage_header|no_damage_facts,generation_ok & clock_ok & no_damage_ok,event_ok)
         recoil_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity & (phase==0)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             &(side==1-actor_side)&(incoming==cursor.physical_active[rows,safe_side])
@@ -821,7 +838,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # lexical target independently from this literal raw receipt.
         direct_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,
             turn,phase,absent,absent,absent,absent,z,absent,absent,z,z,z,z,z),axis=1)
-        semantic=jnp.where((direct_control|toxic)[:,None],direct_semantic,semantic)
+        semantic=jnp.where((direct_control|toxic|no_damage_header|no_damage_facts)[:,None],direct_semantic,semantic)
         pressure_payload=jnp.stack((status_enc,jnp.full_like(z,tables.pressure_public_ability),
             jnp.ones_like(z),z,z,z,z,z),axis=1)
         pressure_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ABILITY)),
