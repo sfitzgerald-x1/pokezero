@@ -397,5 +397,5 @@ class EngineBackend:
                 raise MissingDependency('D batch has zero usable teacher labels; coverage retained, no PPO-only cache/training')
         if not collection.decisions:return None
         relative=f'caches/cache-{uuid.uuid4().hex}'
-        data.write_cache(store.path/relative,collection.decisions,loss_config=plan.loss,batch_size=plan.train.batch_size)
+        data.write_cache(store.path/relative,collection.decisions,loss_config=plan.loss,batch_size=plan.train.batch_size,discount=plan.discount)
         return relative,_file_sha(store.path/relative/'metadata.json')

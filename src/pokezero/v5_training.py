@@ -6,7 +6,7 @@ explicit seed/configuration. Each runtime owns its RNG stream and exact finite
 cache cursor; resume continues that stream rather than replaying prior batches.
 """
 from contextlib import contextmanager, nullcontext
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 import hashlib
 import json
 import math
@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 import random
 import tempfile
+from types import SimpleNamespace
+import weakref
 
 import numpy as np
 
@@ -26,6 +28,29 @@ from .v5_loss import (BASE_PPO_FIELDS, SEARCH_FIELDS, FLOAT_FIELDS, INTEGER_FIEL
 CHECKPOINT_SCHEMA = 'pokezero.checkpoint.v5'
 TRAINER_SCHEMA = 'pokezero.cache_trainer.v5'
 BOOTSTRAP_SCHEMA = 'pokezero.public_value_bootstrap.v5'
+_SCHEDULED = weakref.WeakKeyDictionary()
+
+
+@dataclass(frozen=True)
+class DeclaredGameWindow:
+    """Immutable ordinal interval in the original declared game budget."""
+    start_game: int
+    end_game: int
+    total_games: int
+
+    def __post_init__(self):
+        if (any(type(x) is not int for x in (self.start_game,self.end_game,self.total_games))
+                or not 0<=self.start_game<self.end_game<=self.total_games):
+            raise ValueError('ordered declared-game window within explicit total required')
+
+
+@dataclass(frozen=True)
+class _LearningRateState:
+    window: DeclaredGameWindow
+    manifest_sha256: str
+    base_steps: int
+    base_rows: int
+    progress_sha256: str
 
 
 def _sha(value):
@@ -45,12 +70,15 @@ class TrainConfig:
     max_grad_norm: float | None = None
     device: str = 'cpu'
     precision: str = 'float32'
+    learning_rate_schedule: str = 'constant'
 
     def __post_init__(self):
         if (type(self.seed) is not int or not 0<=self.seed<2**32
                 or any(type(v) is not int or v<=0 for v in (self.batch_size,self.epochs))
                 or type(self.device) is not str or not self.device
-                or self.precision not in ('float32','bfloat16')):
+                or self.precision not in ('float32','bfloat16')
+                or type(self.learning_rate_schedule) is not str
+                or self.learning_rate_schedule not in ('constant','mit-thesis')):
             raise ValueError('explicit uint32 seed, positive finite batch/epochs and precision/device required')
         for name in ('learning_rate','weight_decay','beta1','beta2','epsilon','max_grad_norm'):
             value=getattr(self,name)
@@ -76,6 +104,64 @@ class Runtime:
     steps: int = 0
     rows: int = 0
     progress: dict | None = None
+    learning_rate_state: _LearningRateState | None = None
+
+
+def train_config_metadata(config):
+    """The constant recipe keeps the original checkpoint/declaration bytes."""
+    value=asdict(config)
+    if config.learning_rate_schedule=='constant':value.pop('learning_rate_schedule')
+    return value
+
+
+def _epoch_learning_rate(config,window,epoch):
+    from .neural_policy import _learning_rate_for_epoch
+    # Reuse the existing epoch interpolation, including epochs==1 -> start.
+    recipe=SimpleNamespace(epochs=config.epochs,learning_rate=config.learning_rate,
+        learning_rate_schedule=config.learning_rate_schedule,
+        learning_rate_progress_start=window.start_game/window.total_games,
+        learning_rate_progress_end=window.end_game/window.total_games,
+        learning_rate_warmup_progress=0.,learning_rate_resume_warmup_start_progress=None,
+        learning_rate_resume_warmup_end_progress=None,learning_rate_resume_warmup_start_lr=None)
+    return _learning_rate_for_epoch(recipe,epoch)
+
+
+def _cursor_totals(progress,batch_size):
+    per_epoch=sum(x['batches'] for x in progress['manifest'])
+    examples=sum(x['examples'] for x in progress['manifest'])
+    steps=progress['epoch']*per_epoch+sum(x['batches'] for x in progress['manifest'][:progress['cache']])+progress['batch']
+    rows=progress['epoch']*examples+sum(x['examples'] for x in progress['manifest'][:progress['cache']])
+    if not progress['complete']:rows+=min(progress['batch']*batch_size,progress['manifest'][progress['cache']]['examples'])
+    return steps,rows,per_epoch
+
+
+def _expected_learning_rate(runtime):
+    config=runtime.train_config;record=_SCHEDULED.get(runtime)
+    if config.learning_rate_schedule=='constant' and record is None:
+        if runtime.learning_rate_state is not None:raise ValueError('constant runtime cannot carry scheduled state')
+        return config.learning_rate
+    if record is None or record[0] is not config or runtime.learning_rate_state is not record[1]:
+        raise ValueError('original scheduled configuration/state required')
+    state=runtime.learning_rate_state
+    if state is None:
+        if runtime.progress is not None or runtime.steps!=0 or runtime.rows!=0:
+            raise ValueError('fresh scheduled runtime has no cache cursor')
+        return config.learning_rate
+    _validate_progress(runtime.progress)
+    if (runtime.progress is None or runtime.progress['epochs']!=config.epochs
+            or _sha(runtime.progress)!=state.progress_sha256
+            or _sha(runtime.progress['manifest'])!=state.manifest_sha256):
+        raise ValueError('original scheduled finite cache cursor required')
+    steps,rows,per_epoch=_cursor_totals(runtime.progress,config.batch_size)
+    if runtime.steps!=state.base_steps+steps or runtime.rows!=state.base_rows+rows:
+        raise ValueError('scheduled training counters differ from original cache cursor')
+    last_epoch=1 if steps==0 else (steps-1)//per_epoch+1
+    return _epoch_learning_rate(config,state.window,last_epoch)
+
+
+def _bind_learning_rate_state(runtime,state):
+    runtime.learning_rate_state=state
+    _SCHEDULED[runtime]=(runtime.train_config,state)
 
 
 def _torch():
@@ -129,7 +215,9 @@ def create(model_config,loss_config,train_config,*,enable_v5=False):
             eps=train_config.epsilon,foreach=False,amsgrad=False,maximize=False,
             capturable=False,differentiable=False,fused=None)
         rng=_rng_state(torch,train_config.device.startswith('cuda'))
-    return Runtime(model_config,loss_config,train_config,model,optimizer,rng,contract.contract_descriptor())
+    runtime=Runtime(model_config,loss_config,train_config,model,optimizer,rng,contract.contract_descriptor())
+    if train_config.learning_rate_schedule!='constant':_bind_learning_rate_state(runtime,None)
+    return runtime
 
 
 def validate_bootstraps(batch):
@@ -154,13 +242,14 @@ def validate_bootstraps(batch):
 
 
 def _validate_optimizer(runtime):
-    _validate_optimizer_groups(runtime.optimizer.param_groups,runtime.train_config)
+    _validate_optimizer_groups(runtime.optimizer.param_groups,runtime.train_config,
+        learning_rate=_expected_learning_rate(runtime))
 
 
-def _validate_optimizer_groups(groups,config):
+def _validate_optimizer_groups(groups,config,*,learning_rate=None):
     if len(groups)!=1:raise ValueError('original single-group v5 AdamW required')
     actual=groups[0]
-    expected=dict(lr=config.learning_rate,weight_decay=config.weight_decay,
+    expected=dict(lr=config.learning_rate if learning_rate is None else learning_rate,weight_decay=config.weight_decay,
         betas=(config.beta1,config.beta2),eps=config.epsilon,foreach=False,
         amsgrad=False,maximize=False,capturable=False,differentiable=False,fused=None,
         decoupled_weight_decay=True)
@@ -186,12 +275,27 @@ def _training_tensors(batch,model_config,device):
 
 def update(runtime,batch):
     """One actual optimizer update from original public inputs and masked labels."""
+    if type(runtime) is Runtime and runtime.train_config.learning_rate_schedule!='constant':
+        raise ValueError('scheduled updates require the original finite train_caches cursor')
+    return _update(runtime,batch)
+
+
+def _update(runtime,batch):
     if type(runtime) is not Runtime:raise ValueError('v5 runtime required')
     if batch.v5_columns is None:raise ValueError('explicit v5 batch required')
     v5_data.validate_batch(batch);require_v5_bindings(batch.v5_columns,runtime.model_config)
     validate_bootstraps(batch)
     _validate_optimizer(runtime)
     torch=_torch();config=runtime.train_config
+    scheduled=config.learning_rate_schedule!='constant'
+    if scheduled:
+        progress=runtime.progress
+        if progress is None or progress['complete']:raise ValueError('active scheduled cache cursor required')
+        record=progress['manifest'][progress['cache']]
+        expected_rows=min(config.batch_size,record['examples']-progress['batch']*config.batch_size)
+        if batch.batch_size!=expected_rows:raise ValueError('scheduled batch differs from original cache cursor')
+        learning_rate=_epoch_learning_rate(config,runtime.learning_rate_state.window,progress['epoch']+1)
+        for group in runtime.optimizer.param_groups:group['lr']=learning_rate
     with _rng_scope(torch,config.device,state=runtime.rng):
         runtime.model.train()
         runtime.optimizer.zero_grad(set_to_none=True)
@@ -214,6 +318,13 @@ def update(runtime,batch):
             raise ValueError('finite v5 optimizer parameters required')
         runtime.rng=_rng_state(torch,config.device.startswith('cuda'))
     runtime.steps+=1;runtime.rows+=batch.batch_size
+    if scheduled:
+        epoch=runtime.progress['epoch']+1
+        _advance_progress(runtime.progress)
+        _bind_learning_rate_state(runtime,replace(runtime.learning_rate_state,
+            progress_sha256=_sha(runtime.progress)))
+        return dict(metrics,optimizer_step=runtime.steps,owner_rows=batch.batch_size,
+            gradient_norm=float(norm),learning_rate=learning_rate,learning_rate_epoch=epoch)
     return dict(metrics,optimizer_step=runtime.steps,owner_rows=batch.batch_size,gradient_norm=float(norm))
 
 
@@ -250,15 +361,47 @@ def _validate_progress(progress):
     if not valid:raise ValueError('v5 cache cursor outside original finite roster')
 
 
-def train_caches(runtime,paths,*,max_updates=None):
+def _advance_progress(progress):
+    shard=progress['cache'];progress['batch']+=1
+    if progress['batch']==progress['manifest'][shard]['batches']:
+        progress['batch']=0;progress['cache']+=1
+        if progress['cache']==len(progress['manifest']):
+            progress['cache']=0;progress['epoch']+=1
+            progress['complete']=progress['epoch']==progress['epochs']
+
+
+def train_caches(runtime,paths,*,max_updates=None,learning_rate_window=None):
     """Continue the exact ordered finite dataset; no refill, shuffle or replay."""
     if type(runtime) is not Runtime:raise ValueError('v5 runtime required')
     if max_updates is not None and (type(max_updates) is not int or max_updates<0):
         raise ValueError('nonnegative update budget required')
+    if runtime in _SCHEDULED:_validate_optimizer(runtime)
     paths=tuple(Path(path) for path in paths)
     manifest=_cache_manifest(paths,runtime.train_config.batch_size)
+    scheduled=runtime.train_config.learning_rate_schedule!='constant'
+    if scheduled:
+        if type(learning_rate_window) is not DeclaredGameWindow:
+            raise ValueError('explicit immutable declared-game learning-rate window required')
+        _validate_optimizer(runtime)  # Validate the LAST applied rate before changing it.
+        state=runtime.learning_rate_state
+        if state is None:
+            if learning_rate_window.start_game!=0:raise ValueError('fresh schedule must start at declared game zero')
+        elif state.window!=learning_rate_window:
+            if (not runtime.progress['complete'] or state.window.end_game!=learning_rate_window.start_game
+                    or state.window.total_games!=learning_rate_window.total_games):
+                raise ValueError('scheduled dataset transition requires completed cursor and contiguous declared windows')
+            if state.manifest_sha256==_sha(manifest):
+                raise ValueError('new declared window cannot replay the previous cache roster')
+            runtime.progress=None
+    elif learning_rate_window is not None:
+        raise ValueError('constant learning rate does not accept a scheduled window')
     if runtime.progress is None:
         runtime.progress=dict(manifest=manifest,epochs=runtime.train_config.epochs,epoch=0,cache=0,batch=0,complete=False)
+        if scheduled:
+            _bind_learning_rate_state(runtime,_LearningRateState(learning_rate_window,_sha(manifest),
+                runtime.steps,runtime.rows,_sha(runtime.progress)))
+            for group in runtime.optimizer.param_groups:
+                group['lr']=_epoch_learning_rate(runtime.train_config,learning_rate_window,1)
     elif runtime.progress['manifest']!=manifest or runtime.progress['epochs']!=runtime.train_config.epochs:
         raise ValueError('resume requires original ordered v5 caches and epoch budget')
     _validate_progress(runtime.progress)
@@ -268,13 +411,8 @@ def train_caches(runtime,paths,*,max_updates=None):
         batches=v5_data.iter_cache_batches(paths[shard],batch_size=runtime.train_config.batch_size)
         for index,batch in enumerate(batches):
             if index<start:continue
-            metrics.append(update(runtime,batch))
-            progress['batch']=index+1
-            if progress['batch']==manifest[shard]['batches']:
-                progress['batch']=0;progress['cache']+=1
-                if progress['cache']==len(paths):
-                    progress['cache']=0;progress['epoch']+=1
-                    progress['complete']=progress['epoch']==progress['epochs']
+            metrics.append(_update(runtime,batch) if scheduled else update(runtime,batch))
+            if not scheduled:_advance_progress(progress)
             if max_updates is not None and len(metrics)>=max_updates:break
     return dict(schema=TRAINER_SCHEMA,steps=runtime.steps,rows=runtime.rows,
         complete=progress['complete'],progress=json.loads(json.dumps(progress)),updates=metrics,
@@ -284,12 +422,14 @@ def train_caches(runtime,paths,*,max_updates=None):
 def _metadata(runtime):
     return dict(schema=CHECKPOINT_SCHEMA,training_schema=contract.TRAINING_CONTRACT_SCHEMA,
         observation_schema=contract.OBSERVATION_SCHEMA_VERSION_V5,model=runtime.model_config.metadata(),
-        loss=runtime.loss_config.metadata(),training=asdict(runtime.train_config),
+        loss=runtime.loss_config.metadata(),training=train_config_metadata(runtime.train_config),
         source_contract=runtime.source_contract,source_contract_sha256=_sha(runtime.source_contract),
         category_vocabulary_sha256=runtime.model_config.category_vocabulary_sha256,
         label_vocabulary_sha256=runtime.model_config.label_vocabulary.sha256,
         optimizer='AdamW',steps=runtime.steps,rows=runtime.rows,progress=runtime.progress,
-        model_training=runtime.model.training)
+        model_training=runtime.model.training,
+        **(dict(learning_rate_state=None if runtime.learning_rate_state is None else asdict(runtime.learning_rate_state))
+            if runtime.train_config.learning_rate_schedule!='constant' else {}))
 
 
 def save_checkpoint(path,runtime):
@@ -313,7 +453,7 @@ def save_checkpoint(path,runtime):
 
 
 def load_checkpoint(path,*,enable_v5=False,expected_model_config=None,expected_loss_config=None,
-                    expected_train_config=None):
+                    expected_train_config=None,expected_learning_rate_window=None):
     """Explicit same-v5 resume; no old loader, permissive warmstart or fresh head."""
     if enable_v5 is not True:raise ValueError('explicit v5 trainer enablement required')
     torch=_torch();payload=torch.load(Path(path),map_location='cpu',weights_only=True)
@@ -329,6 +469,7 @@ def load_checkpoint(path,*,enable_v5=False,expected_model_config=None,expected_l
     loss=V5LossConfig(**{field.name:metadata['loss'][field.name] for field in fields(V5LossConfig)})
     training=TrainConfig(**metadata['training'])
     if (_sha(loss.metadata())!=_sha(metadata['loss'])
+            or _sha(train_config_metadata(training))!=_sha(metadata['training'])
             or model.category_vocabulary_sha256!=metadata['category_vocabulary_sha256']
             or model.label_vocabulary.sha256!=metadata['label_vocabulary_sha256']):
         raise ValueError('checkpoint source/model/loss namespace differs')
@@ -339,15 +480,36 @@ def load_checkpoint(path,*,enable_v5=False,expected_model_config=None,expected_l
     if type(metadata['model_training']) is not bool:raise ValueError('explicit model mode required')
     _validate_progress(metadata['progress'])
     runtime=create(model,loss,training,enable_v5=True)
+    runtime.steps=metadata['steps'];runtime.rows=metadata['rows'];runtime.progress=metadata['progress']
+    if training.learning_rate_schedule!='constant':
+        if 'learning_rate_state' not in metadata:raise ValueError('explicit scheduled checkpoint state required')
+        saved=metadata.get('learning_rate_state')
+        if saved is None:
+            if expected_learning_rate_window is not None:raise ValueError('fresh scheduled checkpoint has no bound window')
+            state=None
+        else:
+            if (not isinstance(saved,dict) or set(saved)!={f.name for f in fields(_LearningRateState)}
+                    or type(saved['window']) is not dict
+                    or set(saved['window'])!={f.name for f in fields(DeclaredGameWindow)}
+                    or any(type(saved[k]) is not int or saved[k]<0 for k in ('base_steps','base_rows'))):
+                raise ValueError('original scheduled checkpoint state required')
+            contract._binding(saved['manifest_sha256']);contract._binding(saved['progress_sha256'])
+            window=DeclaredGameWindow(**saved['window'])
+            if type(expected_learning_rate_window) is not DeclaredGameWindow or expected_learning_rate_window!=window:
+                raise ValueError('explicit original declared-game resume window required')
+            state=_LearningRateState(**dict(saved,window=window))
+        _bind_learning_rate_state(runtime,state)
+    elif 'learning_rate_state' in metadata or expected_learning_rate_window is not None:
+        raise ValueError('constant checkpoint cannot accept scheduled state/window')
+    expected_rate=_expected_learning_rate(runtime)
     runtime.model.load_state_dict(payload['state_dict'],strict=True)
     # Validate the literal saved recipe before Torch can normalize defaults.
-    _validate_optimizer_groups(payload['optimizer_state']['param_groups'],training)
+    _validate_optimizer_groups(payload['optimizer_state']['param_groups'],training,learning_rate=expected_rate)
     runtime.optimizer.load_state_dict(payload['optimizer_state'])
     _validate_optimizer(runtime)
     if any(not torch.isfinite(parameter).all() for parameter in runtime.model.parameters()):
         raise ValueError('finite v5 checkpoint parameters required')
     runtime.rng=payload['rng']
     with _rng_scope(torch,training.device,state=runtime.rng):pass
-    runtime.model.train(metadata['model_training']);runtime.steps=metadata['steps'];runtime.rows=metadata['rows']
-    runtime.progress=metadata['progress']
+    runtime.model.train(metadata['model_training'])
     return runtime
