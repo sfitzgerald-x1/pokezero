@@ -21,6 +21,7 @@ import weakref
 import jax
 import jax.numpy as jnp
 import numpy as np
+from pokezero.dex import normalize_id
 
 from . import engine_lifecycle_event_device as causal
 from . import engine_public_events as engine, public_context, public_inputs as inputs
@@ -69,6 +70,7 @@ class Tables(NamedTuple):
     trace_copy: object
     substitute_created: object
     toxic_no_effect: object
+    ident_species: object
     namespaces: Bindings
     binding: object
 
@@ -249,6 +251,14 @@ def compile_adapter(metadata, projector, *, catalog):
             toxic_no_effect[toxic_callbacks.MISS]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
             toxic_no_effect[toxic_callbacks.PLAIN_TYPE_IMMUNITY]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
             if not np.all(toxic_no_effect[1:]):raise ValueError('original Toxic no-effect schemas missing')
+    # The original no-nickname Pokemon constructor uses baseSpecies for
+    # these exact Gen3 formes (sim/pokemon.ts329-334). This is lexical ident
+    # spelling only: details/current species and every encounter stay intact.
+    # Do not strip arbitrary hyphens (Ho-Oh/Nidoran forms remain distinct).
+    bases={'deoxysattack':'deoxys','deoxysdefense':'deoxys','deoxysspeed':'deoxys'}
+    ids={normalize_id(name):i for i,name in enumerate(catalog.species.names) if i}
+    ident_species=np.array([ids.get(bases[normalize_id(name)],0) if normalize_id(name) in bases else i
+        for i,name in enumerate(catalog.species.names)],np.int32)
     width = max(lengths)
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
@@ -257,12 +267,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
     payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()
+    payload += ident_species.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(ident_species),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -366,6 +377,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
+    causal.base._shape(tables.ident_species,(tables.ident_species.shape[0],),jnp.int32)
     width = tables.templates.shape[1]
     # At most64 causal receipts, each expanding to at mostwidth events. This
     # is a proven finite storage bound, not a smaller roster/cap/truncation.
@@ -598,13 +610,14 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         prelude = (kinds == int(inputs.Kind.SWITCH_PRELUDE)) & (entry_weather|pressure)[:,None]
         # Confirmed ability lexical facts use the already observed exact ident
         # and its raw species spelling, rather than schema-fixture encounter1.
-        for col,value in ((11,new_slot+1),(13,prior_species)):
+        for col,value in ((11,new_slot+1),(13,tables.ident_species[jnp.clip(prior_species,0,tables.ident_species.shape[0]-1)])):
             result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
         trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&trace_copy[:,None]
         lexical_side=jnp.clip(result[:,:,4],0,1)
         lexical_slot=current_slots[rows[:,None],lexical_side]
         result=result.at[:,:,11].set(jnp.where(trace_prelude,lexical_slot+1,result[:,:,11]))
         lexical_species=species[rows[:,None],lexical_side,jnp.clip(lexical_slot,0,5)]
+        lexical_species=tables.ident_species[jnp.clip(lexical_species,0,tables.ident_species.shape[0]-1)]
         result=result.at[:,:,13].set(jnp.where(trace_prelude,lexical_species,result[:,:,13]))
         mud = kinds == int(inputs.Kind.MUDSHOT)
         ms, sl = address(schema[:, :, 9]); enc = jnp.where(ms >= 0, sl+1, 0)
