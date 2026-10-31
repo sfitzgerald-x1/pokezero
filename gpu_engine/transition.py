@@ -1159,6 +1159,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if _lifecycle_trace:
         # Source runAction('residual') adds its blank separator before handlers.
         _public_trace=lifecycle_callbacks.action_end(_public_trace,residual_ready)
+    if _lifecycle_trace and _weather_hp_context is not None:
+        _weather_hp_record=weather_speed_profile.retain_frame_device(_weather_hp_record,work,
+            _public_trace.stream_id,_weather_hp_context[1],_public_trace)
     # Snapshot before Wish(order7), weather(order8), and order10 handlers.
     end_speed = _speeds(work,table)
     if _lifecycle_trace:_weather_pre_wish=work
@@ -1226,7 +1229,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _weather_observer_context is not None:
                 _weather_segment=weather_hp_segment.order_segment_device(_public_trace,
                     _weather_segment_before_count,_weather_pre_wish,work,end_speed,
-                    _weather_observer_context[0],_weather_observer_context[1],eligible=ordinary,
+                    _weather_hp_record,_weather_observer_context[1],eligible=ordinary,
                     pre_writes_state=_weather_pre_writes,hypothetical=_hypothetical)
                 _public_trace=_weather_segment.tape
                 _weather_hp_record=_weather_segment.record

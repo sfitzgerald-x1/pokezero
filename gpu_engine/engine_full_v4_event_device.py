@@ -33,6 +33,7 @@ from . import engine_status_residual_callbacks as status_residual_callbacks
 from . import engine_status_callbacks as status_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
 from . import engine_pressure_callbacks as pressure_callbacks
+from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
 
@@ -65,6 +66,7 @@ class Tables(NamedTuple):
     status_damage: object
     direct_hit_control: object
     pressure_start: object
+    trace_copy: object
     substitute_created: object
     toxic_no_effect: object
     namespaces: Bindings
@@ -109,7 +111,7 @@ def compile_adapter(metadata, projector, *, catalog):
     allowed = {int(k) for k in (inputs.Kind.RAW_BEGIN, inputs.Kind.SWITCH_PRELUDE,
         inputs.Kind.MUDSHOT, inputs.Kind.NONPROC, inputs.Kind.TENDENCY,
         inputs.Kind.ACTIVE, inputs.Kind.TYPES, inputs.Kind.FIELD,
-        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY,inputs.Kind.ITEM)}
+        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY,inputs.Kind.ITEM,inputs.Kind.TRACE)}
 
     def add(line, main_kind, before=prior):
         try:
@@ -226,6 +228,10 @@ def compile_adapter(metadata, projector, *, catalog):
     if int(lower.device.pressure_engine_ability)>0 and int(lower.device.pressure_public_ability)>0:
         pressure_start=add(f'|-ability|{ident[0]}|Pressure|[silent]',inputs.Kind.ABILITY)
         if not pressure_start:raise ValueError('FULL writer lacks exact owner-only Pressure schema')
+    trace_copy=0
+    if int(lower.device.trace_engine_ability)>0 and int(lower.device.sturdy_engine_ability)>0 and int(lower.device.sturdy_public_ability)>0:
+        trace_copy=add(f'|-ability|{ident[0]}|Sturdy|Trace|[from] ability: Trace|[of] {ident[1]}',inputs.Kind.TRACE)
+        if not trace_copy:raise ValueError('FULL writer lacks exact Trace -> Sturdy schema')
     substitute_created=np.zeros(7,np.int32)
     if int(lower.device.substitute_move)>0:
         for status,token in enumerate(tokens):
@@ -250,13 +256,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
-    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()
+    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -355,6 +361,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.status_damage,(4,7),jnp.int32)
     causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
     causal.base._shape(tables.pressure_start,(),jnp.int32)
+    causal.base._shape(tables.trace_copy,(),jnp.int32)
     causal.base._shape(tables.substitute_created,(7,),jnp.int32)
     causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
@@ -383,6 +390,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic_code=toxic_callbacks.outcome_device(tape.words[:,index])
         pressure=(kind==int(inputs.Kind.ABILITY)) & (raw_kind==pressure_callbacks.PRESSURE_START)
         pressure_visible=pressure & (state.causal.owner==semantic[:,6])
+        trace_copy=(kind==int(inputs.Kind.TRACE))&(raw_kind==trace_callbacks.TRACE_COPY)
         entry_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_callbacks.ENTRY_WEATHER)
         move_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_progress.MOVE_WEATHER)
         clock_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_progress.WEATHER_CLOCK)
@@ -425,6 +433,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(toxic_write,0,key)
         key=jnp.where(substitute,tables.substitute_created[chip_status],key)
         key=jnp.where(pressure,tables.pressure_start,key)
+        key=jnp.where(trace_copy,tables.trace_copy,key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
@@ -433,8 +442,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         schema = tables.templates[key]
         subject = jnp.where(direct_control,tape.words[:,index,3],jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6])))
         subject=jnp.where(toxic_attempt,jnp.where(toxic_code==toxic_callbacks.MISS,tape.words[:,index,1],tape.words[:,index,3]),subject)
+        subject=jnp.where(trace_copy,semantic[:,4],subject)
         safe = jnp.clip(subject, 0, 1)
-        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
+        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt|trace_copy,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
         safe_slot = jnp.clip(new_slot, 0, 5)
         prior_species = species[rows, safe, safe_slot]
         collision = jnp.any((species[rows, safe] == semantic[:, 9, None])
@@ -468,6 +478,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(~toxic_write|toxic_status)
             &(statuses[rows,toxic_victim,jnp.clip(slots[rows,toxic_victim],0,5)]==toxic_observed))
         identity &= ~pressure | live[rows,safe]
+        identity &= ~trace_copy | (live[rows,safe]&live[rows,1-safe])
         identity &= ~status_event | (old_public_status==previous_status)
         identity &= ~lum_event | ((lum_old_public==previous_status) & live[rows,safe])
         old_weather=tables.causal.weather_public[jnp.clip(tape.words[:,index,5],0,4)]
@@ -589,6 +600,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # and its raw species spelling, rather than schema-fixture encounter1.
         for col,value in ((11,new_slot+1),(13,prior_species)):
             result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
+        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&trace_copy[:,None]
+        lexical_side=jnp.clip(result[:,:,4],0,1)
+        lexical_slot=current_slots[rows[:,None],lexical_side]
+        result=result.at[:,:,11].set(jnp.where(trace_prelude,lexical_slot+1,result[:,:,11]))
+        lexical_species=species[rows[:,None],lexical_side,jnp.clip(lexical_slot,0,5)]
+        result=result.at[:,:,13].set(jnp.where(trace_prelude,lexical_species,result[:,:,13]))
         mud = kinds == int(inputs.Kind.MUDSHOT)
         ms, sl = address(schema[:, :, 9]); enc = jnp.where(ms >= 0, sl+1, 0)
         queue = schema[:, :, 12] == 1

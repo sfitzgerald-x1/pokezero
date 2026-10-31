@@ -790,7 +790,7 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
     if r['speed_profile'] is not None:
         if snapshot.birth_state is None:raise ValueError('actual pre-entry birth state required')
         profile=weather_speed.qualify_birth(snapshot.birth_state,stream_ids,profile=r['speed_profile'])
-        profile=r['retain_speed'](profile,snapshot.state,stream_ids)
+        profile=weather_speed.retain_frame_device(profile,snapshot.state,stream_ids,r['speed_profile'].device,snapshot.callbacks)
     core = Core(snapshot.state, snapshot.cursor, snapshot.orders,
         tuple(reg.original for reg in snapshot.registrations),
         tuple(actions._constructor(reg.constructor) for reg in snapshot.registrations),
