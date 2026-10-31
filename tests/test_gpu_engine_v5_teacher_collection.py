@@ -68,10 +68,13 @@ class TeacherCollectionTests(unittest.TestCase):
                 improvement=c.RootImprovement(tuple(float(active)/count for active in legal),.25,
                     tuple(.25 if active else None for active in legal),worlds=2)
                 return p.Label('LABELED',improvement,None,report)
-            stack.enter_context(patch.object(p.Provider,'label',side_effect=label))
+            def label_batch(contexts,*,learner,opponents):
+                return tuple(label(context,learner=learner,opponent=opponent) for context,opponent in zip(contexts,opponents,strict=True))
+            batch_call=stack.enter_context(patch.object(p.Provider,'label_batch',side_effect=label_batch))
             stack.enter_context(patch.object(p.Provider,'require_batched',return_value=dict(source='future-batch-contract-join-only')))
             out,ended=self.f.collect(session,learner,ledger,indices,((learner,learner),),teacher=teacher)
             self.assertEqual(len(out.decisions),2);self.assertEqual(len(seen),2)
+            self.assertEqual(batch_call.call_count,1);self.assertEqual(len(batch_call.call_args.args[0]),2)
             np.testing.assert_array_equal(calls.advance[0][0],[[2,2]]) # unchanged raw actor routes
             self.assertEqual(out.ledger['counts']['COMPLETE'],1)
             self.assertTrue(all(x['retained_training_decision'] for x in out.teacher_reports))
@@ -93,7 +96,9 @@ class TeacherCollectionTests(unittest.TestCase):
                 report=self.report(teacher,context)
                 return p.Label('REFUSED' if report['selected'] else 'UNSELECTED',None,
                     'unknown-required-world' if report['selected'] else None,report)
-            stack.enter_context(patch.object(p.Provider,'label',side_effect=label))
+            def label_batch(contexts,*,learner,opponents):
+                return tuple(label(context,learner=learner,opponent=opponent) for context,opponent in zip(contexts,opponents,strict=True))
+            batch_call=stack.enter_context(patch.object(p.Provider,'label_batch',side_effect=label_batch))
             # This cache-stop control models a future connected batch source;
             # it does NOT promote today's scalar component to plan readiness.
             stack.enter_context(patch.object(backend,'require_teacher',return_value=dict(source='unit-join-only')))
@@ -120,3 +125,18 @@ class TeacherCollectionTests(unittest.TestCase):
             self.assertEqual(coverage[0]['coverage']['eligible'],2)
             self.assertEqual(len(coverage[0]['decisions']),2)
             self.assertEqual(coverage[0]['game_ledger']['counts']['COMPLETE'],1)
+
+    def test_foreign_batch_label_address_is_unknown_without_changing_raw_actor(self):
+        with ExitStack() as stack:
+            session,learner,ledger,calls,indices,teacher=self.setup(stack)
+            def foreign(contexts,**kwargs):
+                return tuple(p.Label('UNSELECTED',None,None,
+                    dict(self.report(teacher,context),source_frame_sha256='f'*64)) for context in contexts)
+            stack.enter_context(patch.object(p.Provider,'label_batch',side_effect=foreign))
+            stack.enter_context(patch.object(p.Provider,'require_batched',return_value=dict(source='unit-contract-only')))
+            out,ended=self.f.collect(session,learner,ledger,indices,((learner,learner),),teacher=teacher)
+            self.assertEqual(out.ledger['counts']['COMPLETE'],1)
+            np.testing.assert_array_equal(calls.advance[0][0],[[2,2]])
+            self.assertTrue(all(x.row.labels.search_status!='LABELED' for x in out.decisions))
+            self.assertEqual(len(out.teacher_reports),2)
+            self.assertTrue(all('relabeled' in x['fatal'] for x in out.teacher_reports))
