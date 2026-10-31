@@ -7,8 +7,9 @@ inference is downstream, on compacted, admitted, currently requested rows only.
 
 No runtime is enabled by default. There is deliberately no checkpoint-loading
 CLI: the reviewed remote runner supplies original compiled catalogs, a bound
-constructor pool, and explicit enablement. Current full public admission remains
-closed, so the current actual driver produces no model calls or completions.
+constructor pool, and explicit enablement. Full public admission is closed by
+default. Explicit source-witness preparation can derive conditional per-frame
+coverage through the original runtime and both actual public consumers.
 Scientific use requires independent review of an immutable source freeze.
 """
 from dataclasses import dataclass
@@ -51,11 +52,17 @@ def _hex(value):
 
 def prepare(request_compiled, own_compiled, weights_path, *,
             expected_weights_sha256, expected_checkpoint_sha256,
-            enable_unqualified=False):
+            enable_unqualified=False, leftovers_compiled=None,
+            leftovers_mode='diagnostic', status_residual_compiled=None,
+            status_residual_mode='diagnostic', direct_hit_compiled=None,
+            direct_hit_mode='diagnostic', frame_input_mode='closed'):
     """Bind an exact existing champion; opt-in precedes checkpoint loading.
 
     Runtime preparation is host-only. Loading does not execute the model. The
     original request/OwnFacts/catalog/checkpoint identities remain mandatory.
+    Optional original helpers and modes are checked by the owning driver before
+    loading weights. Source-witness mode enables actual source accounting and
+    kernel-risk tracking; it confers no global or scientific qualification.
     """
     if enable_unqualified is not True:
         raise ValueError('explicit unqualified retained benchmark enablement required')
@@ -65,6 +72,28 @@ def prepare(request_compiled, own_compiled, weights_path, *,
     if (record['request_compiled'] is not request_compiled
             or record['catalog'].checkpoint_sha256 != expected_checkpoint_sha256):
         raise ValueError('original request/OwnFacts and exact encoder checkpoint required')
+    modes = (leftovers_mode, status_residual_mode, direct_hit_mode, frame_input_mode)
+    default_options = (all(x is None for x in
+        (leftovers_compiled, status_residual_compiled, direct_hit_compiled))
+        and all(type(x) is str for x in modes)
+        and modes == ('diagnostic', 'diagnostic', 'diagnostic', 'closed'))
+    prepared = None
+    if not default_options:
+        # These are deliberate runtime modes, never caller-supplied coverage
+        # booleans. The driver validates original helper/catalog identities and
+        # its own mode dependencies. Reuse this one Prepared after loading.
+        witness = type(frame_input_mode) is str and frame_input_mode == 'source-witness'
+        accounting = witness or any(type(x) is str and x == 'kernel-event'
+            for x in (status_residual_mode, direct_hit_mode))
+        prepared = driver.prepare(request_compiled, own_compiled,
+            public_mode='retained-full', fake_forward=_noop_fake,
+            leftovers_compiled=leftovers_compiled, leftovers_mode=leftovers_mode,
+            status_residual_compiled=status_residual_compiled,
+            status_residual_mode=status_residual_mode,
+            direct_hit_compiled=direct_hit_compiled, direct_hit_mode=direct_hit_mode,
+            account_source_sites=accounting,
+            track_kernel_risks=witness,
+            frame_input_mode=frame_input_mode)
     # Hash before loading, then check the loader's own immutable byte snapshot.
     if precision_benchmark.digest(weights_path) != expected_weights_sha256:
         raise ValueError('weights archive hash mismatch')
@@ -75,8 +104,9 @@ def prepare(request_compiled, own_compiled, weights_path, *,
             or metadata['weights_archive_sha256'] != expected_weights_sha256
             or metadata['checkpoint_sha256'] != expected_checkpoint_sha256):
         raise ValueError('exact default champion/config/archive/checkpoint required')
-    prepared = driver.prepare(request_compiled, own_compiled,
-        public_mode='retained-full', fake_forward=_noop_fake)
+    if prepared is None:
+        prepared = driver.prepare(request_compiled, own_compiled,
+            public_mode='retained-full', fake_forward=_noop_fake)
     return _bind(prepared, jax.device_put(params, device), config, metadata)
 
 
@@ -95,11 +125,15 @@ def _bind(prepared, params, config, metadata):
     return runtime
 
 
-def _checked(runtime):
+def _checked(runtime, *, session=None):
     record = _RUNTIMES.get(runtime) if type(runtime) is Runtime else None
     if record is None or runtime.binding is not record['binding']:
         raise ValueError('original retained benchmark runtime required')
-    driver._checked(record['prepared'])
+    prepared_record = driver._checked(record['prepared'])
+    if prepared_record.get('frame_input_mode') == 'source-witness':
+        # Keep the driver's base guard witness-free. Check the original witness
+        # (and actual current Session when available) before downstream inference.
+        driver._checked_witness(prepared_record, session=session)
     return record
 
 
@@ -267,6 +301,10 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
                 for x in (constructor_seed, sampling_seed))):
         raise ValueError('positive finite request cap and uint32 seeds required')
     record = _checked(runtime)
+    # The original Prepared determines whether the two full folds run through
+    # the source-witness pair seam. Never time or invoke a second pair here.
+    paired_public = driver._checked(record['prepared']).get('frame_input_mode') == 'source-witness'
+    public_phases = ('public_pair',) if paired_public else ('public_p1', 'public_p2')
     source = _source_snapshot()
     receipt = source_provenance._pool(pool, rehash=True)
     indices = np.asarray(team_indices)
@@ -293,7 +331,7 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     status = 'REQUEST_CAP'
     for index in range(max_requests):
         step_start = time.perf_counter_ns()
-        _checked(runtime)  # original static/catalog guards run before every step
+        _checked(runtime, session=session)  # guards precede downstream inference
         active = ~completed & ~refused
         # An initially terminal or externally replaced state is never a measured
         # completion. The checked driver separately guards current-carry identity.
@@ -356,14 +394,13 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
                 invalid_action=bool(np.asarray(diagnostics.invalid_actions)[row]),
                 executed=bool(executed[row]), public_frame_admitted=bool(public_ok[row]))
         completed |= executed & ~invalid & np.asarray(result.state.core.engine.done)
-        required = {'engine', 'requests', 'public_p1', 'public_p2', 'encode_p1', 'encode_p2',
-            'admission_p1', 'admission_p2'}
+        observation_phases = (*public_phases, 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2')
+        required = {'engine', 'requests', *observation_phases}
         if set(step_phases) != required:
             raise RuntimeError('complete synchronized driver timing phases required')
         for name, value in step_phases.items():
             phases.setdefault(name, []).append(value)
-        encoder_steps.append(sum(step_phases[x] for x in
-            ('public_p1', 'public_p2', 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2')))
+        encoder_steps.append(sum(step_phases[x] for x in observation_phases))
         full_steps.append((time.perf_counter_ns() - step_start) / 1e6)
         valid_steps += 1
         if completed.all():
@@ -385,7 +422,7 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
             final_owner_full_line_consumers_complete=[bool(np.asarray(owner.full_line_consumers_complete)[row])
                 for owner in session.result.owners])
     source_provenance._pool(pool, rehash=True)
-    _checked(runtime)
+    _checked(runtime, session=session)
     if _source_snapshot() != source:
         raise RuntimeError('bound source changed during retained measurement')
     return dict(schema=SCHEMA, status=status, runtime_binding=runtime.binding,
