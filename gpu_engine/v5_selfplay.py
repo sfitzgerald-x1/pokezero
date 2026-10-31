@@ -19,6 +19,7 @@ from pokezero import v5_contract as c, v5_data
 from pokezero.v5_run import MissingDependency, _file_sha
 from . import v5_collection as base, v5_collection_data as data
 from . import v5_owning_history as history_capture
+from . import v5_public_world as public_world
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,8 @@ class PairedCollection:
     ledger:dict
     owning_histories:tuple
     history_refusals:tuple
+    own_statics:tuple=()
+    own_static_refusals:tuple=()
 
 
 def _archive(actor):return json.loads(actor.metadata)['weights_archive_sha256']
@@ -111,11 +114,19 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
         status[pos]='RUNNING';detail[pos]={'decisions':0,'executed_frames':0}
     started=time.monotonic() if started_at is None else started_at
     decisions=[];terminals={};receipt={'pool_sha256':None};histories={};history_refusals={}
+    own_statics={};own_static_refusals={}
 
     def retain_history(rows):
         for row in rows:
             for owner in (0,1):
                 key=(int(row),owner)
+                if (int(np.asarray(session.state.core.frame_number)[row])==0
+                        and key not in own_statics and key not in own_static_refusals):
+                    try:own_statics[key]=public_world.capture_own_static(session,row=int(row),owner=owner)
+                    except (ValueError,KeyError,IndexError) as error:
+                        # Missing private own happiness is a teacher refusal,
+                        # independent of the retained public-history capture.
+                        own_static_refusals[key]=type(error).__name__+': '+str(error)
                 if key in history_refusals:continue
                 try:histories[key]=history_capture.capture(session,row=int(row),owner=owner,history=histories.get(key))
                 except (ValueError,KeyError,IndexError) as error:
@@ -240,7 +251,9 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
     closed=tuple(terminals[int(stream)] for stream in streams)
     return PairedCollection(data.finish(decisions,closed),closed,ledger.report(),
         tuple((int(streams[row]),owner,value) for (row,owner),value in sorted(histories.items())),
-        tuple((int(streams[row]),owner,reason) for (row,owner),reason in sorted(history_refusals.items())))
+        tuple((int(streams[row]),owner,reason) for (row,owner),reason in sorted(history_refusals.items())),
+        tuple((int(streams[row]),owner,value) for (row,owner),value in sorted(own_statics.items())),
+        tuple((int(streams[row]),owner,reason) for (row,owner),reason in sorted(own_static_refusals.items())))
 
 
 class EngineBackend:
@@ -305,10 +318,13 @@ class EngineBackend:
         # exists. A future teacher must use the original decoder, never relabel
         # this archive as literal simulator text or a ready device root.
         for stream,owner,history in collection.owning_histories:
+            own_static=next((value for actual,seat,value in collection.own_statics if (actual,seat)==(stream,owner)),None)
             payload=dict(schema='pokezero.owning_canonical_history.v5',stream_id=stream,owner=owner,
                 source_hash=history.catalog.source.source_hash,
                 category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
                 own_constructor=history.own_constructor,frames=[asdict(frame) for frame in history.frames],
+                own_static=None if own_static is None else asdict(own_static),
+                own_static_refusals=[reason for actual,seat,reason in collection.own_static_refusals if (actual,seat)==(stream,owner)],
                 capture_refusals=[reason for actual,seat,reason in collection.history_refusals if (actual,seat)==(stream,owner)],
                 device_branch_ready=False)
             store.artifact(f'histories/{stream}-p{owner+1}-{uuid.uuid4().hex}.json',
@@ -316,6 +332,8 @@ class EngineBackend:
                 kind='OWNING_HISTORY',stream_id=stream,owner=owner)
         for stream,owner,reason in collection.history_refusals:
             store.emit('OWNING_HISTORY_REFUSED',stream_id=stream,owner=owner,reason=reason)
+        for stream,owner,reason in collection.own_static_refusals:
+            store.emit('OWN_STATIC_REFUSED',stream_id=stream,owner=owner,reason=reason)
         if not collection.decisions:return None
         relative=f'caches/cache-{uuid.uuid4().hex}'
         data.write_cache(store.path/relative,collection.decisions,loss_config=plan.loss,batch_size=plan.train.batch_size)

@@ -31,6 +31,12 @@ class V5SelfplayTests(unittest.TestCase):
                 int(np.asarray(actual.state.core.cursor.stream_id)[row]),self.fixture.f.catalog,(),
                 (() if history is None else history.frames)+(frame,))
         stack.enter_context(patch.object(s.history_capture,'capture',side_effect=history))
+        def own_static(actual,*,row,owner):
+            self.assertIs(actual,session)
+            self.assertEqual(int(np.asarray(actual.state.core.frame_number)[row]),0)
+            return s.public_world.OwnStatic(int(np.asarray(actual.state.core.cursor.stream_id)[row]),
+                owner,(row,owner,0,0,0,0,0,0),tuple(range(7+owner,13+owner)))
+        stack.enter_context(patch.object(s.public_world,'capture_own_static',side_effect=own_static))
         return session,learner,ledger,calls,indices,capture
 
     def collect(self,session,learner,ledger,indices,pairs,**kwargs):
@@ -82,8 +88,19 @@ class V5SelfplayTests(unittest.TestCase):
                 metadata=decision.row.step.metadata['v5_capture']
                 self.assertEqual(metadata['actor_archive_sha256'],metadata['opponent_archive_sha256'])
             self.assertEqual(len(out.owning_histories),2);self.assertFalse(out.history_refusals)
+            self.assertEqual(len(out.own_statics),2);self.assertFalse(out.own_static_refusals)
             self.assertEqual(ended[0][0],(1,'CAPPED'))
             np.testing.assert_array_equal(calls.advance[0][0],[[2,2]])
+
+    def test_missing_own_static_is_auxiliary_unknown_and_does_not_erase_history_or_actor_rows(self):
+        with ExitStack() as stack:
+            session,learner,ledger,calls,indices,capture=self.setup(stack)
+            static=stack.enter_context(patch.object(s.public_world,'capture_own_static',side_effect=ValueError('missing-own-static')))
+            out,ended=self.collect(session,learner,ledger,indices,((learner,learner),))
+            self.assertEqual(static.call_count,2) # only the two original constructor0 seats
+            self.assertEqual(len(out.decisions),2);self.assertEqual(out.ledger['counts']['COMPLETE'],1)
+            self.assertEqual(len(out.owning_histories),2);self.assertFalse(out.history_refusals)
+            self.assertFalse(out.own_statics);self.assertEqual(len(out.own_static_refusals),2)
 
     def test_mixed_root_refusal_no_refill_and_history_failure_does_not_gate_public_actor(self):
         with ExitStack() as stack:
@@ -150,6 +167,9 @@ class V5SelfplayTests(unittest.TestCase):
                 self.assertEqual(payload['frames'][0]['refusal'],[['fixture-no-FULL-source',1]])
                 self.assertNotIn('session',payload);self.assertNotIn('catalog',payload)
                 self.assertEqual(payload['owner'],facts['owner'])
+                self.assertEqual(payload['own_static']['owner'],facts['owner'])
+                self.assertEqual(payload['own_static']['happiness'],list(range(7+facts['owner'],13+facts['owner'])))
+                self.assertFalse(payload['own_static_refusals'])
             self.assertEqual(digest,s._file_sha(sink.path/relative/'metadata.json'))
 
 
