@@ -1,5 +1,5 @@
 """Named source-mode wiring only; no weights/model/device invocation."""
-import ast,subprocess,unittest
+import ast,pathlib,subprocess,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,5 +18,13 @@ class BenchmarkCalmMindOptionsTests(unittest.TestCase):
   for kwargs in ({'calm_mind_mode':True},{'calm_mind_mode':'bad'},{'calm_mind_compiled':object()},{'calm_mind_mode':'kernel-event'},{'calm_mind_mode':'kernel-event','calm_mind_compiled':object(),'account_source_sites':True}):
    with self.assertRaises(ValueError):driver.prepare(None,None,fake_forward=lambda x:x,**kwargs)
  def test_model_measurement_admission_functions_unchanged(self):
-  def functions(text):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(text).body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name!='prepare'}
+  def functions(text):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(text).body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name not in ('prepare','measure')}
   old=subprocess.check_output(['git','show','7bc45a72:gpu_engine/benchmark_retained_games.py'],text=True);self.assertEqual(functions(old),functions(Path('gpu_engine/benchmark_retained_games.py').read_text()))
+
+
+class ReviewedTimingCompositionTests(unittest.TestCase):
+ def test_measure_exact_independent_timing_source(self):
+  current=pathlib.Path(benchmark.__file__).read_text()
+  reviewed=subprocess.check_output(["git","show","4baa33e96d8d0c944374c81fd8cd44cc8b6bd26a:gpu_engine/benchmark_retained_games.py"],text=True)
+  def measure(text):return ast.dump(next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=="measure"),include_attributes=False)
+  self.assertEqual(measure(current),measure(reviewed))

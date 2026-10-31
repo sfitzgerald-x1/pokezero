@@ -53,7 +53,7 @@ class CalmMindOwningTests(unittest.TestCase):
   closed=risk.compile_risks(self.producer,self.account);self.assertTrue(int(closed.device.selected_risk[move])&risk.BOOST)
   with self.assertRaises(ValueError):calm.check_compiled(replace(self.helper))
   with self.assertRaises(ValueError):jax.jit(lambda unused:calm.check_compiled(self.helper))(j.array(0))
-  before=ast.parse(subprocess.check_output(['git','show','7bc45a72:gpu_engine/transition.py'],text=True));after=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  before=ast.parse(subprocess.check_output(['git','show','e5d38e3c:gpu_engine/transition.py'],text=True));after=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
   node=shutil.which('node')
   if not node:self.skipTest('node unavailable')
   root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT','/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'));self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)

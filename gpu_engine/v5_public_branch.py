@@ -236,7 +236,10 @@ def step(branch, choices, *, chance_inputs,hypothetical_profiles=False):
             leftovers_context=None if left is None else left if hypothetical_profiles else life.LeftoversContext(left.data),
             status_residual_context=None if status is None else status if hypothetical_profiles else life.StatusResidualContext(status.data),
             execution_tables=runtime['execution_compiled'].device,kernel_risk_tables=runtime['kernel_risk_compiled'].device,
-            direct_hit_context=runtime['direct_hit_context'],hypothetical_profile=profile)
+            direct_hit_context=runtime['direct_hit_context'],substitute_context=runtime['substitute_context'],
+            toxic_context=runtime['toxic_context'],recoil_context=runtime['recoil_context'],
+            calm_mind_context=runtime['calm_mind_context'],swords_dance_context=runtime['swords_dance_context'],
+            spikes_context=runtime['spikes_context'],hypothetical_profile=profile)
         if profile is not None:profile=profile._replace(record=frame.weather_profile)
         consumed=[];ledgers=[]
         for stream,public in zip(streams,publics):
