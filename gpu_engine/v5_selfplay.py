@@ -169,7 +169,7 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
                 for row in np.flatnonzero(eligible[:,owner]&~np.asarray(route.admitted)):close(int(row),'REFUSED','actual-request-route-refused')
             active=np.asarray([status[p]=='RUNNING' for p in positions])
             if not active.any():break
-            pending=[]
+            pending=[];teacher_pending=[]
             for row in np.flatnonzero(active):
                 row_pending=[]
                 try:
@@ -218,17 +218,39 @@ def collect_paired(session,*,learner,actors,pool,team_indices,ledger,max_request
                                 tuple(map(float,raw_logits[row,owner])),float(values[row,owner]),
                                 _archive(learner),_archive(actors[row][1-owner]),histories.get((int(row),owner)),
                                 own_statics.get((int(row),owner)),cell.battle_id,cell.seed)
-                            label=teacher.label(context,learner=learner,opponent=actors[row][1-owner])
-                            captured=replace(captured,row=replace(captured.row,labels=replace(captured.row.labels,
-                                root_improvement=label.improvement,search_status=label.status,search_refusal=label.refusal)))
-                            captured.row.labels.columns(public) # original D contract; mixing remains there only
-                            teacher_report=dict(label.report,status=label.status,refusal=label.refusal,
-                                retained_training_decision=False)
-                            teacher_reports.append(teacher_report)
-                            teacher_by_frame[captured.row.source_frame_sha256]=teacher_report
+                            teacher_pending.append((int(row),captured,context,actors[row][1-owner]))
                         row_pending.append((int(row),captured))
                 except ValueError as error:close(int(row),'REFUSED','source-row-capture: '+str(error))
                 else:pending.extend(row_pending)
+            if teacher_pending:
+                contexts=tuple(value[2] for value in teacher_pending)
+                try:
+                    labels=teacher.label_batch(contexts,learner=learner,opponents=tuple(value[3] for value in teacher_pending))
+                    if len(labels)!=len(contexts):raise ValueError('teacher omitted actual frame contexts')
+                    for context,label in zip(contexts,labels,strict=True):
+                        if (type(label) is not depth1.Label or label.report.get('source_frame_sha256')!=context.source_frame_sha256
+                                or label.report.get('address')!=asdict(context.address)
+                                or label.report.get('selected')!=teacher.recipe.selected(context.address)):
+                            raise ValueError('teacher relabeled actual frame/owner/selection')
+                except Exception as error:
+                    # Auxiliary producer failure cannot alter the already fixed
+                    # acting policy or silently become valid D training data.
+                    # Every eligible current frame remains in the coverage.
+                    reason='teacher-frame-batch:'+type(error).__name__+': '+str(error)
+                    labels=tuple(depth1.Label('REFUSED' if teacher.recipe.selected(context.address) else 'UNSELECTED',None,
+                        reason if teacher.recipe.selected(context.address) else None,
+                        dict(address=asdict(context.address),source_frame_sha256=context.source_frame_sha256,
+                            selected=teacher.recipe.selected(context.address),fatal=reason,required_pairs=None,unknown_worlds=2))
+                        for context in contexts)
+                labeled={}
+                for (row,captured,context,opponent),label in zip(teacher_pending,labels,strict=True):
+                    captured=replace(captured,row=replace(captured.row,labels=replace(captured.row.labels,
+                        root_improvement=label.improvement,search_status=label.status,search_refusal=label.refusal)))
+                    captured.row.labels.columns(context.public_observation) # only original contract mixes outcomes
+                    labeled[captured.row.source_frame_sha256]=captured
+                    report=dict(label.report,status=label.status,refusal=label.refusal,retained_training_decision=False)
+                    teacher_reports.append(report);teacher_by_frame[captured.row.source_frame_sha256]=report
+                pending=[(row,labeled.get(captured.row.source_frame_sha256,captured)) for row,captured in pending]
             active=np.asarray([status[p]=='RUNNING' for p in positions])
             if not active.any():break
             transport=j.stack([j.where(route.admitted,route.engine_action,0) for route in routes],axis=1)

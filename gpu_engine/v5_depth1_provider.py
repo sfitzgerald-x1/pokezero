@@ -212,18 +212,35 @@ def _forward(record,inputs):
 def _leaf_values(record,chunk):
     """CURRENT learner value head on genuine chunk rows; scatter is explicit."""
     if type(chunk) is not GridChunk:raise ValueError('original typed grid chunk required')
-    if not chunk.model_indices:return {},{}
-    count=len(chunk.model_indices)
-    output=jax.block_until_ready(record['forward']({name:chunk.inputs[name] for name in collection.MODEL_INPUTS}))
-    logits=np.asarray(output.policy_logits);values=np.asarray(output.value);valid=np.asarray(output.valid)
-    if logits.shape!=(count,9) or values.shape!=(count,) or valid.shape!=(count,) or valid.dtype!=np.bool_:
-        raise ValueError('current public leaf head chunk shape differs')
+    if not chunk.model_indices:return {},{},()
+    logits,values,valid,batches=_predict(record,chunk.inputs)
     good=valid&np.isfinite(logits).all(-1)&np.isfinite(values)&(np.abs(values)<=1)
     result={};refused={}
     for model_index,cell_index in enumerate(chunk.model_indices):
         if good[model_index]:result[cell_index]=float(values[model_index])
         else:refused[cell_index]='current-public-leaf-head-refused-or-nonfinite'
-    return result,refused
+    return result,refused,batches
+
+
+def _predict(record,inputs,*,max_rows=128):
+    """Bounded current public-head breadth; padding is inactive transport only."""
+    if type(max_rows) is not int or max_rows<=0 or max_rows&(max_rows-1):raise ValueError('power-of-two bounded public inference rows required')
+    count=inputs['history_mask'].shape[0]
+    if not count or any(inputs[name].shape[0]!=count for name in collection.MODEL_INPUTS):
+        raise ValueError('genuine same-count five-tensor public input batch required')
+    logits=[];values=[];valid=[];batches=[]
+    for start in range(0,count,max_rows):
+        n=min(max_rows,count-start);size=1<<(n-1).bit_length();selected={}
+        for name in collection.MODEL_INPUTS:
+            value=inputs[name][start:start+n]
+            selected[name]=j.concatenate((value,j.zeros((size-n,*value.shape[1:]),value.dtype)),axis=0)
+        output=jax.block_until_ready(record['forward'](selected))
+        ls=np.asarray(output.policy_logits);vs=np.asarray(output.value);ok=np.asarray(output.valid)
+        if ls.shape!=(size,9) or vs.shape!=(size,) or ok.shape!=(size,) or ok.dtype!=np.bool_:
+            raise ValueError('current public head breadth output shape differs')
+        logits.append(ls[:n]);values.append(vs[:n]);valid.append(ok[:n])
+        batches.append(dict(active_rows=n,device_rows=size,padding=size-n))
+    return np.concatenate(logits),np.concatenate(values),np.concatenate(valid),tuple(batches)
 
 
 def _same_root(view,observation):
@@ -270,98 +287,179 @@ class Provider:
         return metadata
 
     def label(self,context,*,learner,opponent):
-        if type(context) is not DecisionContext:raise ValueError('typed owning PUBLIC decision context required')
-        self.require_ready();address=context.address;legal=tuple(context.public_observation.legal_action_mask)
-        report=dict(schema=SCHEMA,address=dict(stream=address.stream,frame=address.frame,owner=address.owner),
-            source_frame_sha256=context.source_frame_sha256,producer_sha256=self.producer_sha256,
-            actor_archive_sha256=context.actor_archive_sha256,opponent_archive_sha256=context.opponent_archive_sha256,
-            selected=self.recipe.selected(address),root_actions=sum(legal),world_slots=[],
-            required_pairs=None,known_required_pairs=0,unknown_pairs=0,unknown_worlds=0,
-            completed_pairs=0,branch_refusals={},required_pairs_known=False)
-        if not report['selected']:return Label('UNSELECTED',None,None,report)
-        reasons=Counter();prices=[];grid_roots=[];grid_chance=[];grid_cells=[];grids={};policies={}
-        report['required_worlds']=2
-        report['world_slots']=[dict(index=index,posterior_seed=self.recipe.world_seed(address,index),
-            status='REFUSED',required_pairs=None,completed_pairs=0,unknown_pairs=0,reason='not-materialized') for index in (0,1)]
-        try:
-            order=self.recipe.pricing_order(address,context.raw_policy_logits,legal)
-            report['pricing_order']=order
-            left,archive=_actor(learner,self.prepared);right,peer_archive=_actor(opponent,self.prepared)
-            if (archive,peer_archive)!=(context.actor_archive_sha256,context.opponent_archive_sha256):
-                raise ValueError('actual current learner/opponent archive binding differs')
-            if learner.config.arm!='D' or opponent.config!=learner.config:raise ValueError('same original D architecture required')
-            if context.history is None or context.own_static is None:raise ValueError('missing-owning-history-or-static')
-            if ((context.history.stream_id,context.history.frames[-1].number,context.history.owner)!=
-                    (address.stream,address.frame,address.owner)):
-                raise ValueError('same current owning history address required')
-            root=capture.public_root(context.history,config=self.public_config,contract=self.contract,
-                battle_id=context.battle_id,seed=context.battle_seed)
-            if root.root is None:raise ValueError('owning-history-decoder:'+str(root.decoded.refusal_counts))
-            public_root=root.root;source=public_root.context.public_materialization_state.belief_engine.set_source
-            plans=planner.plan_starts(public_root,self.recipe,set_source=source) # exactly2; no retry/refill
-            r=collection.driver._checked(self.prepared);shared=worlds.public_carry(context.history,r)
-            for index,(start,reason) in enumerate(zip(plans.starts,plans.refusals,strict=True)):
-                slot=report['world_slots'][index];slot['reason']=reason
-                if start is None:
-                    report['unknown_worlds']+=1;reasons[reason or 'public-sampler-unavailable']+=1;continue
-                seed=int.from_bytes(self.recipe._digest(address,'hypothetical-kernel',index)[:4],'big')
-                result=worlds.materialize(public_root,start,prepared=self.prepared,history=context.history,
-                    own_static=context.own_static,seed=seed,retained=shared)
-                if result.branch is None:
-                    slot['reason']='materialize:'+','.join(result.refusals);report['unknown_worlds']+=1;reasons[slot['reason']]+=1;continue
-                branch=result.branch
-                slot.update(hypothetical_origin_sha256=branch.origin_sha256,kernel_seed=seed)
-                try:
-                    _same_root(branches.policy_observation(branch,learner.adapter,owner=address.owner),context.public_observation)
-                    reply=branches.policy_observation(branch,opponent.adapter,owner=1-address.owner)
-                    reply_logits,_=_forward(right,reply.inputs)
-                    reply_legal=tuple(map(bool,np.asarray(reply.legal_action_mask)[0]))
-                    if not any(reply_legal):raise ValueError('unsupported-wait-or-replacement-reply-phase')
-                except (ValueError,KeyError,IndexError) as error:
-                    slot['reason']='root-policy:'+str(error);report['unknown_worlds']+=1;reasons[slot['reason']]+=1;continue
-                replies=tuple(i for i,active in enumerate(reply_legal) if active)
-                slot.update(required_pairs=len(order)*len(replies),reply_legal=reply_legal,reply_logits=reply_logits,reason=None)
-                report['known_required_pairs']+=slot['required_pairs']
-                chance=transition.sample_chance_inputs(branch.state) # same original chance block for this world's grid
-                root_index=len(grid_roots);grid_roots.append(branch);grid_chance.append(chance)
-                grids[index]=[[None]*9 for _ in range(9)];policies[index]=(reply_legal,reply_logits)
-                for action in order:
-                    for opponent_action in replies: # includes numerically underflowed positive probabilities
-                        grid_cells.append(GridCell(address,index,root_index,action,opponent_action))
-            executor,mode=_grid_executor();report['execution']=dict(mode=mode,chunks=[],declared_cells=len(grid_cells))
-            if grid_cells:
-                batch=GridBatch(tuple(grid_roots),tuple(grid_chance),tuple(grid_cells));seen=[]
-                for chunk in executor(batch,learner.adapter,max_rows=128):
+        """Single-root component convenience; production collects label_batch."""
+        return self.label_batch((context,),learner=learner,opponents=(opponent,))[0]
+
+    def label_batch(self,contexts,*,learner,opponents):
+        """ONE actual actor-frame breadth across roots/worlds/actions/replies.
+
+        Opponent policy forwards are grouped by their original immutable actor.
+        Current learner leaf forwards consume genuine bounded executor chunks.
+        No caller callback, private peer view, or survivor-only target is used.
+        """
+        contexts=tuple(contexts);opponents=tuple(opponents)
+        if (len(contexts)!=len(opponents) or any(type(x) is not DecisionContext for x in contexts)
+                or len({x.address for x in contexts})!=len(contexts)):
+            raise ValueError('one ordered original opponent per distinct PUBLIC decision required')
+        if not contexts:return ()
+        self.require_ready();executor,mode=_grid_executor();runtime=collection.driver._checked(self.prepared)
+        batch_id=c._sha(tuple(x.source_frame_sha256 for x in contexts))
+        works=[];reply_groups={};root_rows=[]
+        left=None;archive=None
+        for context,opponent in zip(contexts,opponents,strict=True):
+            address=context.address;legal=tuple(context.public_observation.legal_action_mask)
+            report=dict(schema=SCHEMA,address=dict(stream=address.stream,frame=address.frame,owner=address.owner),
+                source_frame_sha256=context.source_frame_sha256,producer_sha256=self.producer_sha256,
+                actor_archive_sha256=context.actor_archive_sha256,opponent_archive_sha256=context.opponent_archive_sha256,
+                selected=self.recipe.selected(address),root_actions=sum(legal),world_slots=[],required_pairs=None,
+                known_required_pairs=0,unknown_pairs=0,unknown_worlds=0,completed_pairs=0,branch_refusals={},
+                required_pairs_known=False,execution=dict(batch_id=batch_id,mode=mode,batch_root_count=len(contexts),
+                    chunks=[],reply_policy_batches=[],leaf_head_batches=[],declared_cells=0))
+            work=dict(context=context,legal=legal,report=report,reasons=Counter(),grids={},policies={},fatal=None)
+            works.append(work)
+            if not report['selected']:continue
+            report['required_worlds']=2
+            report['world_slots']=[dict(index=i,posterior_seed=self.recipe.world_seed(address,i),status='REFUSED',
+                required_pairs=None,completed_pairs=0,unknown_pairs=0,reason='not-materialized') for i in (0,1)]
+            try:
+                if left is None:left,archive=_actor(learner,self.prepared)
+                right,peer_archive=_actor(opponent,self.prepared)
+                if (archive,peer_archive)!=(context.actor_archive_sha256,context.opponent_archive_sha256):
+                    raise ValueError('actual current learner/opponent archive binding differs')
+                if learner.config.arm!='D' or opponent.config!=learner.config:
+                    raise ValueError('same original D architecture required')
+                if context.history is None or context.own_static is None:raise ValueError('missing-owning-history-or-static')
+                if ((context.history.stream_id,context.history.frames[-1].number,context.history.owner)!=
+                        (address.stream,address.frame,address.owner)):
+                    raise ValueError('same current owning history address required')
+                order=self.recipe.pricing_order(address,context.raw_policy_logits,legal)
+                report['pricing_order']=order
+                captured=capture.public_root(context.history,config=self.public_config,contract=self.contract,
+                    battle_id=context.battle_id,seed=context.battle_seed)
+                if captured.root is None:raise ValueError('owning-history-decoder:'+str(captured.decoded.refusal_counts))
+                root=captured.root;source=root.context.public_materialization_state.belief_engine.set_source
+                plans=planner.plan_starts(root,self.recipe,set_source=source) # exactly2, once per original context
+                shared=worlds.public_carry(context.history,runtime)
+                for index,(start,reason) in enumerate(zip(plans.starts,plans.refusals,strict=True)):
+                    slot=report['world_slots'][index];slot['reason']=reason
+                    if start is None:
+                        report['unknown_worlds']+=1;work['reasons'][reason or 'public-sampler-unavailable']+=1;continue
+                    seed=int.from_bytes(self.recipe._digest(address,'hypothetical-kernel',index)[:4],'big')
+                    result=worlds.materialize(root,start,prepared=self.prepared,history=context.history,
+                        own_static=context.own_static,seed=seed,retained=shared)
+                    if result.branch is None:
+                        reason='materialize:'+','.join(result.refusals);slot['reason']=reason
+                        report['unknown_worlds']+=1;work['reasons'][reason]+=1;continue
+                    branch=result.branch;slot.update(hypothetical_origin_sha256=branch.origin_sha256,kernel_seed=seed)
+                    try:
+                        _same_root(branches.policy_observation(branch,learner.adapter,owner=address.owner),context.public_observation)
+                        reply=branches.policy_observation(branch,opponent.adapter,owner=1-address.owner)
+                        reply_legal=tuple(map(bool,np.asarray(reply.legal_action_mask)[0]))
+                        if not any(reply_legal):raise ValueError('unsupported-wait-or-replacement-reply-phase')
+                    except Exception as error:
+                        reason='root-policy:'+type(error).__name__+': '+str(error);slot['reason']=reason
+                        report['unknown_worlds']+=1;work['reasons'][reason]+=1;continue
+                    row=dict(work=work,world=index,branch=branch,view=reply,legal=reply_legal,opponent=opponent)
+                    root_rows.append(row)
+                    group=reply_groups.setdefault(opponent,dict(record=right,archive=peer_archive,rows=[]))
+                    group['rows'].append(row)
+            except Exception as error:
+                work['fatal']=type(error).__name__+': '+str(error);work['reasons'][work['fatal']]+=1
+                report['unknown_worlds']=2
+        # These are original opponent-own views, grouped only by the actual
+        # immutable peer actor. Raw root values/GAE/peer live state never enter.
+        for group_index,group in enumerate(reply_groups.values()):
+            rows=[row for row in group['rows'] if row['work']['fatal'] is None]
+            if not rows:continue
+            inputs={name:j.concatenate([row['view'].inputs[name] for row in rows],axis=0) for name in collection.MODEL_INPUTS}
+            try:
+                logits,values,valid,batches=_predict(group['record'],inputs)
+                good=valid&np.isfinite(logits).all(-1)&np.isfinite(values)&(np.abs(values)<=1)
+                recorded=set()
+                for row,ls,ok in zip(rows,logits,good,strict=True):
+                    report=row['work']['report'];slot=report['world_slots'][row['world']]
+                    if row['work']['context'].address not in recorded:
+                        report['execution']['reply_policy_batches'].append(dict(archive_sha256=group['archive'],
+                            group_index=group_index,group_rows=len(rows),shared_across_roots=True,batches=batches))
+                        recorded.add(row['work']['context'].address)
+                    if not ok:
+                        reason='current-opponent-public-policy-refused-or-nonfinite';slot['reason']=reason
+                        report['unknown_worlds']+=1;row['work']['reasons'][reason]+=1
+                    else:row['logits']=tuple(map(float,ls))
+            except Exception as error:
+                reason='opponent-public-policy-batch:'+type(error).__name__+': '+str(error)
+                for row in rows:
+                    row['work']['report']['world_slots'][row['world']]['reason']=reason
+                    row['work']['report']['unknown_worlds']+=1;row['work']['reasons'][reason]+=1
+        grid_roots=[];grid_chance=[];grid_cells=[];by_address={x['context'].address:x for x in works}
+        for row in root_rows:
+            work=row['work']
+            if work['fatal'] is not None or 'logits' not in row:continue
+            address=work['context'].address;index=row['world'];legal=row['legal'];logits=row['logits']
+            replies=tuple(i for i,active in enumerate(legal) if active);order=work['report']['pricing_order']
+            slot=work['report']['world_slots'][index]
+            slot.update(required_pairs=len(order)*len(replies),reply_legal=legal,reply_logits=logits,reason=None)
+            work['report']['known_required_pairs']+=slot['required_pairs']
+            root_index=len(grid_roots);grid_roots.append(row['branch'])
+            grid_chance.append(transition.sample_chance_inputs(row['branch'].state)) # original block shared whole world grid
+            work['grids'][index]=[[None]*9 for _ in range(9)];work['policies'][index]=(legal,logits)
+            for action in order:
+                for reply in replies:grid_cells.append(GridCell(address,index,root_index,action,reply))
+        grid_failure=None
+        if grid_cells:
+            batch=GridBatch(tuple(grid_roots),tuple(grid_chance),tuple(grid_cells));seen=[]
+            try:
+                for chunk_index,chunk in enumerate(executor(batch,learner.adapter,max_rows=128)):
                     if type(chunk) is not GridChunk:raise ValueError('fixed executor must return original GridChunk')
+                    if chunk.cells!=batch.cells[len(seen):len(seen)+len(chunk.cells)]:
+                        raise ValueError('executor omitted/duplicated/reordered required grid cells')
                     seen.extend(chunk.cells)
-                    report['execution']['chunks'].append(dict(device_rows=chunk.device_rows,active_rows=chunk.active_rows,
-                        padding=chunk.padding,declared_cells=len(chunk.cells),model_rows=len(chunk.model_indices)))
-                    try:values,head_errors=_leaf_values(left,chunk)
-                    except Exception as error:values={};head_errors={i:type(error).__name__+': '+str(error) for i in chunk.model_indices}
+                    touched={cell.address for cell in chunk.cells}
+                    chunk_meta=dict(chunk_index=chunk_index,device_rows=chunk.device_rows,active_rows=chunk.active_rows,
+                        padding=chunk.padding,declared_cells=len(chunk.cells),model_rows=len(chunk.model_indices),shared_across_roots=True)
+                    try:priced,errors,head_batches=_leaf_values(left,chunk)
+                    except Exception as error:
+                        priced={};errors={i:type(error).__name__+': '+str(error) for i in chunk.model_indices};head_batches=()
+                    for address in touched:
+                        work=by_address[address];work['report']['execution']['chunks'].append(chunk_meta)
+                        if head_batches:work['report']['execution']['leaf_head_batches'].append(
+                            dict(chunk_index=chunk_index,shared_across_roots=True,batches=head_batches))
                     for index,cell in enumerate(chunk.cells):
-                        slot=report['world_slots'][cell.world]
-                        if index in values:
-                            grids[cell.world][cell.root_action][cell.reply_action]=values[index]
-                            slot['completed_pairs']+=1;report['completed_pairs']+=1
+                        work=by_address[cell.address];slot=work['report']['world_slots'][cell.world]
+                        if index in priced:
+                            work['grids'][cell.world][cell.root_action][cell.reply_action]=priced[index]
+                            slot['completed_pairs']+=1;work['report']['completed_pairs']+=1
                         else:
-                            reason=head_errors.get(index) or ','.join(chunk.refusals[index]) or 'unknown-required-public-leaf'
-                            slot['unknown_pairs']+=1;report['unknown_pairs']+=1;reasons[reason]+=1
+                            reason=errors.get(index) or ','.join(chunk.refusals[index]) or 'unknown-required-public-leaf'
+                            slot['unknown_pairs']+=1;work['report']['unknown_pairs']+=1;work['reasons'][reason]+=1
                 if tuple(seen)!=batch.cells:raise ValueError('executor omitted/duplicated/reordered required grid cells')
-            for index,(reply_legal,reply_logits) in sorted(policies.items()):
-                slot=report['world_slots'][index];slot['joint_values']=grids[index]
+            except Exception as error:grid_failure='grid-execution:'+type(error).__name__+': '+str(error)
+        labels=[]
+        for work in works:
+            context=work['context'];report=work['report'];prices=[]
+            if not report['selected']:
+                labels.append(Label('UNSELECTED',None,None,report));continue
+            report['execution'].update(declared_cells=report['known_required_pairs'],batch_declared_cells=len(grid_cells))
+            for index,(legal,logits) in sorted(work['policies'].items()):
+                slot=report['world_slots'][index];slot['joint_values']=work['grids'][index]
+                # Unexecuted required cells on a fatal iterator failure also
+                # remain explicit unknowns; they never become numeric zeros.
+                missing=slot['required_pairs']-slot['completed_pairs']-slot['unknown_pairs']
+                slot['unknown_pairs']+=missing;report['unknown_pairs']+=missing
+                if missing:work['reasons']['unexecuted-required-grid-cell']+=missing
                 slot['status']='COMPLETE' if not slot['unknown_pairs'] else 'REFUSED'
-                prices.append(g.WorldPrices(True,reply_legal,reply_logits,grids[index]))
-            report['branch_refusals']=dict(sorted(reasons.items()))
+                prices.append(g.WorldPrices(True,legal,logits,work['grids'][index]))
+            report['branch_refusals']=dict(sorted(work['reasons'].items()))
+            fatal=work['fatal'] or grid_failure
+            if fatal:
+                report['fatal']=fatal;labels.append(Label('REFUSED',None,fatal,report));continue
             if len(prices)!=2:
-                return Label('REFUSED',None,'unknown-required-world-or-reply-denominator',report)
-            reduced=g.reduce_completed_q(root_logits=context.raw_policy_logits,root_legal=legal,worlds=prices)
+                labels.append(Label('REFUSED',None,'unknown-required-world-or-reply-denominator',report));continue
+            reduced=g.reduce_completed_q(root_logits=context.raw_policy_logits,root_legal=work['legal'],worlds=prices)
             report.update(required_pairs=reduced.required_pairs,required_pairs_known=True,
                 unknown_pairs=reduced.unknown_pairs,unknown_reply_mass=reduced.unknown_reply_mass)
             if reduced.improvement is not None:
-                completed=tuple(logit+(q or 0.) for logit,q in zip(context.raw_policy_logits,reduced.improvement.completed_q))
-                report['gumbel_argmax_diagnostic']=self.recipe.pricing_order(address,completed,legal)[0]
-            return Label(reduced.status,reduced.improvement,reduced.reason,report)
-        except Exception as error:
-            reason=type(error).__name__+': '+str(error)
-            report['unknown_worlds']=2-len(prices);report['branch_refusals']={reason:1}
-            return Label('REFUSED',None,reason,report)
+                scores=tuple(logit+(q or 0.) for logit,q in zip(context.raw_policy_logits,reduced.improvement.completed_q))
+                report['gumbel_argmax_diagnostic']=self.recipe.pricing_order(context.address,scores,work['legal'])[0]
+            labels.append(Label(reduced.status,reduced.improvement,reduced.reason,report))
+        return tuple(labels)
