@@ -37,6 +37,7 @@ from . import engine_weather_speed_profile as weather_speed
 from . import engine_leftovers_callbacks as leftovers_callbacks
 from . import engine_status_residual_callbacks as status_residual_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
+from . import engine_pressure_callbacks as pressure_callbacks
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -66,6 +67,8 @@ class Tables(NamedTuple):
     weather_duration_safe: object
     leftovers_engine_item: object
     leftovers_public_item: object
+    pressure_engine_ability: object
+    pressure_public_ability: object
     binding: object
 
 
@@ -170,6 +173,9 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     lum = items is not None and lum_engine > 0 and lum_public > 0
     leftovers_engine = next((i for i, name in enumerate(item_names) if normalize_id(name) == 'leftovers'), 0)
     leftovers_public = 0 if items is None else items.ids.get('leftovers', 0)
+    pressure_engine = next((i for i,name in enumerate(metadata['vocabulary'].get('abilities',[]))
+        if normalize_id(name)=='pressure'),0)
+    pressure_public = 0 if weather_catalog is None else weather_catalog.abilities.ids.get('pressure',0)
     weather_ids = [0]*5; ability_ids = [0]*4; guard_species = [0]*4; guard_item = [False]*4
     weather_moves=np.array([{'raindance':weather.RAIN,'sunnyday':weather.SUN,
         'sandstorm':weather.SAND,'hail':weather.HAIL}.get(normalize_id(n),0)
@@ -202,7 +208,8 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         weather_guard_item_possible=guard_item,
         weather_moves=weather_moves.tolist(),weather_duration_safe=duration_safe,
         weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),
-        leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,admission=False)
+        leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,
+        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
@@ -217,6 +224,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
+        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -338,6 +346,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     b, capacity, _ = tape.words.shape
     if b <= 0 or not 1 <= capacity <= 64:
         raise ValueError('bounded lifecycle tape required')
+    base._shape(tables.pressure_engine_ability, (), jnp.int32)
+    base._shape(tables.pressure_public_ability, (), jnp.int32)
     base._shape(tape.words, (b, capacity, 10), jnp.int32)
     base._shape(tape.count, (b,), jnp.int32)
     base._shape(tape.refusal, (b,), jnp.int32)
@@ -451,6 +461,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         applied = kind == status_callbacks.STATUS_APPLIED
         cured = kind == status_callbacks.STATUS_CURED
         status_event = applied | cured
+        pressure = kind == pressure_callbacks.PRESSURE_START
         lum = kind == item_callbacks.LUM_CONSUMED
         entry_weather = kind == weather_callbacks.ENTRY_WEATHER
         move_weather = kind == weather_progress.MOVE_WEATHER
@@ -574,6 +585,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (incoming==cursor.physical_active[rows,safe_side])
             & (raw[:,5]<tables.base.public_ids.shape[0]) & (tables.base.public_ids[direct_move]>0))
         event_ok=jnp.where(direct_control,generation_ok & clock_ok & direct_ok,event_ok)
+        pressure_ok=(tables.status_events & ~tables.raw_begin & status_identity & (phase==0)
+            & (incoming==cursor.physical_active[rows,safe_side])
+            & jnp.all(raw[:,1:3]==-1,axis=1) & jnp.all(raw[:,6:]==0,axis=1)
+            & (tables.pressure_engine_ability>0) & (tables.pressure_public_ability>0)
+            & (raw[:,5]==tables.pressure_engine_ability))
+        event_ok=jnp.where(pressure,generation_ok & clock_ok & pressure_ok,event_ok)
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -632,6 +649,13 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         direct_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,
             turn,phase,absent,absent,absent,absent,z,absent,absent,z,z,z,z,z),axis=1)
         semantic=jnp.where(direct_control[:,None],direct_semantic,semantic)
+        pressure_payload=jnp.stack((status_enc,jnp.full_like(z,tables.pressure_public_ability),
+            jnp.ones_like(z),z,z,z,z,z),axis=1)
+        pressure_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ABILITY)),
+            semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),pressure_payload),axis=1)
+        # Keep one internal semantic per receipt for exact raw-index alignment.
+        # FULL projection alone enforces the source's owner-only visibility.
+        semantic=jnp.where(pressure[:,None],pressure_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)
