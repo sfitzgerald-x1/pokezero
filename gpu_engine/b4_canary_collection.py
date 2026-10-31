@@ -3,8 +3,11 @@
 No new observations, targets, physics or admission waiver. Per-root steps spool
 to remote run storage so the complete declared corpus is never retained in RAM.
 """
-from dataclasses import replace
+from dataclasses import asdict,replace
+import hashlib
 import json
+import math
+import os
 from pathlib import Path
 import time
 
@@ -16,8 +19,100 @@ from . import benchmark_retained_games as original,champion,source_provenance
 from pokezero.b4_fidelity_canary import require,file_sha,encoded,sha
 from pokezero.observation import PokeZeroObservationV0,ObservationPerspective
 from pokezero.trajectory import TrajectoryStep,BattleTrajectory,trajectory_to_dict,trajectory_from_dict
-from pokezero.collection import RolloutRecord,write_rollout_record
+from pokezero.collection import RolloutRecord,write_rollout_record,rollout_record_to_dict,rollout_record_from_dict
 from pokezero.env import TerminalState
+
+
+def sync_directory(path):
+    fd=os.open(path,os.O_RDONLY|getattr(os,'O_DIRECTORY',0))
+    try:os.fsync(fd)
+    finally:os.close(fd)
+
+
+def append_durable(path,blob):
+    path=Path(path)
+    with path.open('ab') as stream:stream.write(blob);stream.flush();os.fsync(stream.fileno())
+    sync_directory(path.parent)
+
+
+def sync_tree(path):
+    """Finish original cache publication before its durable batch receipt."""
+    path=Path(path)
+    for item in sorted(path.rglob('*')):
+        if item.is_file():
+            with item.open('rb') as stream:os.fsync(stream.fileno())
+    for item in sorted((p for p in path.rglob('*') if p.is_dir()),reverse=True):sync_directory(item)
+    sync_directory(path);sync_directory(path.parent)
+
+
+def publish_completed(path,*,game,pool_sha256,checkpoint_sha256,source_hash,prepared_binding,source_commit,ending,record):
+    """Exclusive full original trajectory+terminal, durable BEFORE callback."""
+    directory=Path(path)/'completed';directory.mkdir(exist_ok=True);sync_directory(directory.parent)
+    body=dict(schema='pokezero.b4.canary.completed-cell.v1',game=asdict(game),pool_sha256=pool_sha256,
+        checkpoint_sha256=checkpoint_sha256,source_hash=source_hash,prepared_binding=prepared_binding,source_commit=source_commit,
+        ending=ending,rollout=rollout_record_to_dict(record))
+    blob=encoded(body);target=directory/f'{game.stream_id}.json';temporary=directory/f'.{game.stream_id}.pending'
+    with temporary.open('xb') as stream:stream.write(blob);stream.flush();os.fsync(stream.fileno())
+    try:
+        os.link(temporary,target)  # Exclusive: never replace an observed completion.
+        sync_directory(directory)
+    finally:
+        temporary.unlink();sync_directory(directory)
+    return hashlib.sha256(blob).hexdigest()
+
+
+def stored_completed(path,*,batch,pool_sha256,checkpoint_sha256,source_hash,prepared_binding,source_commit):
+    """Restore only literal durable cells, never a simulator state or RNG."""
+    directory=Path(path)/'completed';games={g.stream_id:g for g in batch.games};found={}
+    if not directory.exists():return found
+    require(not directory.is_symlink(),'original owned completed directory required')
+    for name in sorted(directory.glob('*.json')):
+        require(name.is_file() and not name.is_symlink(),'original owned completed record required')
+        require(name.stem.isdigit() and int(name.stem) in games,'foreign completed source cell')
+        stream=int(name.stem);blob=name.read_bytes();body=json.loads(blob)
+        require(set(body)=={'schema','game','pool_sha256','checkpoint_sha256','source_hash','prepared_binding','source_commit','ending','rollout'} and
+            encoded(body)==blob and body['schema']=='pokezero.b4.canary.completed-cell.v1' and
+            sha(body['game'])==sha(asdict(games[stream])) and body['pool_sha256']==pool_sha256 and
+            body['checkpoint_sha256']==checkpoint_sha256 and body['source_hash']==source_hash and
+            body['prepared_binding']==prepared_binding and body['source_commit']==source_commit,'original completed cell binding differs')
+        ending=body['ending'];duration=ending['duration_seconds']
+        require(ending['stream_id']==stream and ending['status']=='COMPLETE' and type(duration) in (int,float) and
+            math.isfinite(duration) and duration>=0 and type(ending['frame']) is int and ending['frame']>0 and
+            type(ending['executed_steps']) is int and ending['executed_steps']==ending['frame'] and
+            type(ending['winner']) is int and ending['winner'] in (0,1,2),'literal completed terminal evidence differs')
+        record=rollout_record_from_dict(body['rollout']);game=games[stream]
+        require(record.battle_id==game.battle_id and record.seed==game.seed and record.format_id=='gen3randombattle' and
+            not record.terminal.capped and record.terminal.winner==(None if ending['winner']==2 else f"p{ending['winner']+1}") and
+            record.belief_set_source_hash==source_hash and record.elapsed_seconds==duration and
+            record.policy_ids=={'p1':checkpoint_sha256,'p2':checkpoint_sha256} and
+            record.trajectory.metadata['checkpoint_sha256']==checkpoint_sha256 and
+            record.trajectory.steps and all(step.observation.schema_version=='pokezero.observation.v4' for step in record.trajectory.steps),
+            'original terminal/trajectory receipt differs')
+        # Retain only small descriptors; never all completed trajectories in RAM.
+        found[stream]=(name,ending,hashlib.sha256(blob).hexdigest())
+    return found
+
+
+def cache_completed(path,*,batch,pool_sha256,checkpoint_sha256,source_hash,prepared_binding,source_commit,dataset_config,cache_name):
+    from pokezero import dataset
+    path=Path(path);found=stored_completed(path,batch=batch,pool_sha256=pool_sha256,
+        checkpoint_sha256=checkpoint_sha256,source_hash=source_hash,prepared_binding=prepared_binding,source_commit=source_commit)
+    report=dict(games=len(batch.games),complete=len(found),unknown=len(batch.games)-len(found),cache=None,
+                completed_sources={str(stream):value[2] for stream,value in found.items()})
+    if found:
+        records=path/(cache_name+'-complete.jsonl')
+        with records.open('x') as handle:
+            for game in batch.games:
+                if game.stream_id in found:
+                    blob=found[game.stream_id][0].read_bytes();body=json.loads(blob)
+                    require(hashlib.sha256(blob).hexdigest()==found[game.stream_id][2],'completed trajectory changed during cache packing')
+                    write_rollout_record(handle,rollout_record_from_dict(body['rollout']))
+            handle.flush();os.fsync(handle.fileno())
+        sync_directory(path)
+        cache=path/cache_name;dataset.write_training_cache_streaming(records,cache,config=dataset_config,collection_env='engine',belief_fidelity='full')
+        sync_tree(cache)
+        report.update(cache=str(cache),cache_metadata_sha256=file_sha(cache/'metadata.json'),complete_rollouts_sha256=file_sha(records))
+    return report,found
 
 
 def decide(record,result,eligible,seed):
@@ -92,9 +187,28 @@ class Backend:
         require(_source_snapshot()['commit']==plan.source_commit,'declared actual source freeze differs')
         require(prepared.binding==plan.prepared_binding,'declared original Prepared binding differs')
 
+    def recover(self,batch,checkpoint,path,*,dataset_config,on_end):
+        """Data-only recovery after an attempted batch; never call the engine."""
+        import uuid
+        path=Path(path)
+        if not path.exists():
+            return dict(status='INTERRUPTED_UNKNOWN',games=len(batch.games),complete=0,unknown=len(batch.games),cache=None,completed_sources={})
+        report,found=cache_completed(path,batch=batch,pool_sha256=self.plan.pool_sha256,
+            checkpoint_sha256=file_sha(checkpoint),source_hash=self.source_hash,prepared_binding=self.plan.prepared_binding,
+            source_commit=self.plan.source_commit,dataset_config=dataset_config,
+            cache_name='recovered-cache-'+uuid.uuid4().hex)
+        for game in batch.games:
+            if game.stream_id in found:
+                _,ending,digest=found[game.stream_id]
+                on_end(game.stream_id,'COMPLETE',ending['duration_seconds'],digest)
+        report.update(status='RECOVERED_STORED_ATTEMPT',preserved_completed_streams=[g.stream_id for g in batch.games if g.stream_id in found],
+            note='Only original durable complete trajectories recovered; every absent attempted cell remains UNKNOWN, no replay/refill')
+        if (path/'endings.jsonl').exists():report.update(endings=str(path/'endings.jsonl'),endings_sha256=file_sha(path/'endings.jsonl'))
+        return report
+
     def collect(self,batch,checkpoint,path,*,dataset_config,on_end,check_progress):
-        from pokezero import dataset
         path=Path(path);path.mkdir(parents=True,exist_ok=False)
+        sync_directory(path);sync_directory(path.parent)
         archive=path/'actor.npz';metadata=champion.export(checkpoint,archive)
         params,config,weights=champion.load(archive)
         require(config==champion.config_from_checkpoint(self.model_config.to_dict()),'original v4 shape changed')
@@ -110,20 +224,26 @@ class Backend:
             nonlocal complete
             if status[row]!='RUNNING':return
             status[row]=disposition;duration=time.monotonic()-start
+            ending=dict(stream_id=batch.games[row].stream_id,status=disposition,reason=reason,duration_seconds=duration,executed_steps=int(steps[row]),
+                        frame=int(np.asarray(session.state.core.frame_number)[row]))
+            digest=None
             if disposition=='COMPLETE':
                 spool=path/f'row-{row}.jsonl';saved=[]
                 if spool.exists():
+                    with spool.open('rb') as handle:os.fsync(handle.fileno())
+                    sync_directory(path)
                     for line in spool.read_text().splitlines():saved.extend(trajectory_from_dict(json.loads(line)).steps)
                 core=session.state.core
+                ending['winner']=int(np.asarray(core.engine.winner)[row])
                 item=complete_record(batch.games[row],saved,winner=int(np.asarray(core.engine.winner)[row]),
                     turn=int(np.asarray(core.cursor.turn)[row]),duration=duration,source_hash=self.source_hash,checkpoint_sha=file_sha(checkpoint))
-                with records.open('a') as handle:write_rollout_record(handle,item)
+                digest=publish_completed(path,game=batch.games[row],pool_sha256=self.plan.pool_sha256,
+                    checkpoint_sha256=file_sha(checkpoint),source_hash=self.source_hash,prepared_binding=self.plan.prepared_binding,
+                    source_commit=self.plan.source_commit,ending=ending,record=item)
+                append_durable(records,encoded(rollout_record_to_dict(item))+b'\n')
                 complete+=1
-            ending=dict(stream_id=batch.games[row].stream_id,status=disposition,reason=reason,duration_seconds=duration,executed_steps=int(steps[row]),
-                        frame=int(np.asarray(session.state.core.frame_number)[row]))
-            if disposition=='COMPLETE':ending['winner']=int(np.asarray(session.state.core.engine.winner)[row])
-            with (path/'endings.jsonl').open('ab') as handle:handle.write(encoded(ending)+b'\n')
-            on_end(batch.games[row].stream_id,disposition,duration,sha(ending))
+            append_durable(path/'endings.jsonl',encoded(dict(ending,completed_source_sha256=digest))+b'\n')
+            on_end(batch.games[row].stream_id,disposition,duration,digest if digest is not None else sha(ending))
         try:
             for _ in range(self.plan.max_requests):
                 check_progress();original._checked(runtime,session=session)
@@ -162,10 +282,8 @@ class Backend:
             for row in range(b):close(row,'FAILED','collection interrupted/failed; no automatic retry')
             raise
         for row in range(b):close(row,'CAPPED','declared finite request cap; no outcome')
-        report=dict(status='COLLECTED',games=b,complete=complete,unknown=b-complete,cache=None,
-                    endings=str(path/'endings.jsonl'),endings_sha256=file_sha(path/'endings.jsonl'))
-        if complete:
-            cache=path/'cache';dataset.write_training_cache_streaming(records,cache,config=dataset_config,
-                collection_env='engine',belief_fidelity='full')
-            report.update(cache=str(cache),cache_metadata_sha256=file_sha(cache/'metadata.json'),complete_rollouts_sha256=file_sha(records))
+        report,_=cache_completed(path,batch=batch,pool_sha256=self.plan.pool_sha256,checkpoint_sha256=file_sha(checkpoint),
+            source_hash=self.source_hash,prepared_binding=self.plan.prepared_binding,source_commit=self.plan.source_commit,
+            dataset_config=dataset_config,cache_name='cache')
+        report.update(status='COLLECTED',endings=str(path/'endings.jsonl'),endings_sha256=file_sha(path/'endings.jsonl'))
         return report

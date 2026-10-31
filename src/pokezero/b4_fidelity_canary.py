@@ -9,7 +9,9 @@ import hashlib
 import io
 import json
 import math
+import os
 from pathlib import Path
+import subprocess
 import time
 
 from . import neural_policy as neural
@@ -36,6 +38,12 @@ def file_sha(path):
 
 def require(condition, reason):
     if not condition:raise ValueError(reason)
+
+
+def _sync_directory(path):
+    fd=os.open(path,os.O_RDONLY|getattr(os,'O_DIRECTORY',0))
+    try:os.fsync(fd)
+    finally:os.close(fd)
 
 
 @dataclass(frozen=True)
@@ -135,7 +143,9 @@ class Journal:
         self.path=Path(path);self.events=[];blob=encoded(plan.manifest());declaration=self.path/'declaration.json'
         if resume:require(declaration.read_bytes()==blob,'original accepted declaration differs')
         else:
-            self.path.mkdir(parents=True,exist_ok=False);declaration.write_bytes(blob)
+            self.path.mkdir(parents=True,exist_ok=False)
+            with declaration.open('xb') as stream:stream.write(blob);stream.flush();os.fsync(stream.fileno())
+            _sync_directory(self.path);_sync_directory(self.path.parent)
         self.journal=self.path/'journal.jsonl'
         if self.journal.exists():
             for line in self.journal.read_bytes().splitlines():
@@ -145,10 +155,10 @@ class Journal:
                 self.events.append(dict(event,sha256=digest))
 
     def emit(self,kind,**payload):
-        import os
         event=dict(sequence=len(self.events),previous=self.events[-1]['sha256'] if self.events else None,kind=kind,payload=payload)
         event['sha256']=sha(event)
         with self.journal.open('ab') as stream:stream.write(encoded(event)+b'\n');stream.flush();os.fsync(stream.fileno())
+        _sync_directory(self.path)
         self.events.append(event)
 
     def matching(self,kind,**fields):
@@ -226,20 +236,29 @@ def run(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=
         if book.matching('TRAIN_START',iteration=iteration):raise RuntimeError('interrupted legacy optimizer attempt UNKNOWN; no automatic retrain')
         caches=[]
         def actual_end(stream,status,duration,source_sha256):
-            book.emit('GAME_END',stream_id=stream,status=status,duration_seconds=duration,source_sha256=source_sha256)
+            payload=dict(phase='COLLECT',stream_id=stream,status=status,duration_seconds=duration,source_sha256=source_sha256)
+            previous=book.matching('GAME_END',stream_id=stream)
+            if previous:
+                require(previous==[payload],'immutable completed/unknown cell ending differs')
+                return
+            book.emit('GAME_END',**payload)
             if status=='COMPLETE':progress.completed(duration)
         for index,batch in enumerate(batches):
             done=book.matching('COLLECT_END',iteration=iteration,batch=index)
             if done:
                 require(len(done)==1,'duplicate collected batch');result=done[0]
             elif book.matching('COLLECT_START',iteration=iteration,batch=index):
-                # Original attempted cells remain unknown; never reconstruct/replay.
-                endings=[e for e in book.matching('GAME_END') if e.get('stream_id') in {g.stream_id for g in batch.games}]
-                complete=[e['stream_id'] for e in endings if e['status']=='COMPLETE']
-                require(len(set(e['stream_id'] for e in endings))==len(endings),'duplicate actual cell ending')
-                result=dict(iteration=iteration,batch=index,cache=None,status='INTERRUPTED_UNKNOWN',games=len(batch.games),
-                    complete=len(complete),unknown=len(batch.games)-len(complete),preserved_completed_streams=complete,
-                    note='Original ending receipts and spooled records retained; interrupted batch cache not automatically reconstructed')
+                # Data-only restore of complete, durable terminal+trajectory files.
+                starts=book.matching('COLLECT_START',iteration=iteration,batch=index)
+                require(len(starts)==1 and starts[0]['checkpoint_sha256']==file_sha(current) and
+                    starts[0]['streams']==[g.stream_id for g in batch.games],'original attempted batch binding differs')
+                result=backend.recover(batch,current,book.path/f'collection-{iteration}-{index}',
+                    dataset_config=dataset_controls(train),on_end=actual_end)
+                result=dict(result,iteration=iteration,batch=index)
+                recovered=result.get('completed_sources',{})
+                require(all(str(e['stream_id']) in recovered and recovered[str(e['stream_id'])]==e['source_sha256']
+                    for e in book.matching('GAME_END') if e.get('stream_id') in {g.stream_id for g in batch.games} and e['status']=='COMPLETE'),
+                    'previous completed cell missing its original durable trajectory')
                 book.emit('COLLECT_END',**result)
             else:
                 book.emit('BATCH_STARTED',iteration=iteration,batch=index)
@@ -327,11 +346,72 @@ async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canar
     book.emit('FP_ENDPOINT',report=report);return report
 
 
-def supervise_owned(command,*,plan,path,**kwargs):
-    """Reuse the reviewed owned-process cleanup and durable-progress watchdog."""
-    from types import SimpleNamespace
-    from .v5_run import supervise_owned as supervise,Watchdog
-    operational=SimpleNamespace(evaluation=None,iterations=plan.iterations,
-        watchdog=Watchdog(initial_window_seconds=plan.stall_floor_seconds,longest_multiplier=plan.stall_multiplier,
-                          backstop_seconds=plan.backstop_seconds))
-    return supervise(command,plan=operational,path=path,**kwargs)
+def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep):
+    """Read THIS canary's actual JSONL; reuse original owned-group cleanup.
+
+    Prior lines are checked by a streaming prefix digest, so mutation/truncation
+    fails closed without reparsing the complete historical corpus each poll.
+    A partial final append is pending, never progress. A completion label here
+    is operational progress, not independent scientific attestation; the
+    producer durably publishes its original trajectory before emitting it.
+    """
+    from . import v5_run as owned
+    started=time.monotonic();last=started;longest=0.;seen=0;previous=None
+    prefix=hashlib.sha256(b'').hexdigest();phase='PREPARE';last_steps=-1;cells=set()
+    process=popen(command,start_new_session=True);reason=None;observer_error=None
+    journal=Path(path)/'journal.jsonl'
+    try:
+        while process.poll() is None:
+            try:
+                h=hashlib.sha256();count=0
+                if journal.exists():
+                    with journal.open('rb') as stream:
+                        for line in stream:
+                            if not line.endswith(b'\n'):break
+                            if count==seen:require(h.hexdigest()==prefix,'consumed canary journal prefix changed')
+                            h.update(line)
+                            if count>=seen:
+                                event=json.loads(line);digest=event.pop('sha256',None)
+                                require(event.get('sequence')==count and event.get('previous')==previous and sha(event)==digest,
+                                        'canary journal sequence/hash chain changed')
+                                previous=digest;payload=event['payload'];require(type(payload) is dict,'original canary payload')
+                                if event['kind']=='GAME_END':
+                                    status=payload.get('status');require(status in ('COMPLETE','REFUSED','FAILED','CAPPED','UNKNOWN'),'original cell disposition')
+                                    if payload.get('phase','COLLECT')=='COLLECT':
+                                        value=payload.get('stream_id');require(type(value) is int and 0<value<2**31,'original completion stream')
+                                        key=('COLLECT',value)
+                                    else:
+                                        require(payload.get('phase')=='FP' and payload.get('arm') in ('CONTROL','CANARY') and
+                                            type(payload.get('offset')) is int and 0<=payload['offset']<PANEL_SEEDS and
+                                            type(payload.get('seat')) is int and payload['seat'] in (0,1),'original paired FP completion')
+                                        key=('FP',payload['arm'],payload['offset'],payload['seat'])
+                                    require(key not in cells,'completed/unknown cell ending replayed');cells.add(key)
+                                    if status=='COMPLETE':
+                                        duration=payload.get('duration_seconds');source=payload.get('source_sha256')
+                                        require(type(duration) in (int,float) and math.isfinite(duration) and 0<=duration<=plan.backstop_seconds and
+                                            type(source) is str and len(source)==64 and all(x in '0123456789abcdef' for x in source),
+                                            'finite actual completed-game duration and source digest')
+                                        longest=max(longest,duration);last=time.monotonic()
+                                elif event['kind']=='TRAIN_PROGRESS':
+                                    steps=payload.get('steps');require(type(steps) is int and steps>=0,'actual monotonic training progress')
+                                    require(steps>=last_steps,'training progress moved backwards')
+                                    if steps>last_steps:phase='TRAIN';last_steps=steps;last=time.monotonic()
+                                elif event['kind']=='BATCH_STARTED' and phase!='COLLECT':
+                                    phase='COLLECT';last=time.monotonic()
+                            count+=1
+                    require(count>=seen,'canary journal truncated')
+                    # Even without a new line, verify every consumed byte.
+                    if count==seen:require(h.hexdigest()==prefix,'consumed canary journal prefix changed')
+                else:require(seen==0,'canary journal disappeared')
+                seen=count;prefix=h.hexdigest()
+            except (OSError,ValueError,KeyError,TypeError) as error:
+                observer_error=type(error).__name__+': '+str(error);reason='PROGRESS_JOURNAL_CHANGED'
+            now=time.monotonic()
+            if reason is None:
+                if now-started>plan.backstop_seconds:reason='DISTANT_BACKSTOP'
+                elif now-last>max(plan.stall_floor_seconds,plan.stall_multiplier*longest):reason='NO_DURABLE_WORK_PROGRESS'
+            if reason:break
+            sleep(1.)
+    finally:
+        owned._stop_owned_group(process,10.,sleep=sleep)
+    return dict(exit_code=process.returncode,stop_reason=reason,owned_pid=getattr(process,'pid',None),observer_error=observer_error)

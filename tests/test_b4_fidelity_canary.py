@@ -82,6 +82,33 @@ class CanaryTests(unittest.TestCase):
             progress.completed(600.);clock[0]=4800.;progress.check();clock[0]=4802.
             with self.assertRaises(TimeoutError):progress.check()
 
+    def test_actual_jsonl_supervisor_refusals_malformed_duplicate_and_training_progress(self):
+        from pokezero import v5_run as owned
+        for mode,expected in [('no-progress','NO_DURABLE_WORK_PROGRESS'),('refused','NO_DURABLE_WORK_PROGRESS'),
+                              ('negative','PROGRESS_JOURNAL_CHANGED'),('bool-duration','PROGRESS_JOURNAL_CHANGED'),
+                              ('duplicate','PROGRESS_JOURNAL_CHANGED'),('mutated-prefix','PROGRESS_JOURNAL_CHANGED'),
+                              ('partial-tail','NO_DURABLE_WORK_PROGRESS'),('training',None)]:
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as temp:
+                root=Path(temp)/'run';recipe=plan();book=c.Journal(root,recipe);clock=[0.]
+                class Child:
+                    pid=197001;returncode=0
+                    def poll(self):return 0 if clock[0]>=3500 else None
+                def sleep(_):
+                    clock[0]+=500
+                    if mode=='no-progress':return
+                    if mode=='partial-tail':
+                        with book.journal.open('ab') as stream:stream.write(b'{"incomplete":')
+                    elif mode=='training':book.emit('TRAIN_PROGRESS',steps=int(clock[0]))
+                    else:
+                        duration=-1. if mode=='negative' else True if mode=='bool-duration' else 500.
+                        book.emit('GAME_END',phase='COLLECT',stream_id=1 if mode=='duplicate' else int(clock[0]),
+                            status='REFUSED' if mode=='refused' else 'COMPLETE',duration_seconds=duration,source_sha256='a'*64)
+                        if mode=='mutated-prefix' and clock[0]>=1000:
+                            book.journal.write_bytes(book.journal.read_bytes().replace(b'"duration_seconds":500.0',b'"duration_seconds":499.0',1))
+                with patch.object(c.time,'monotonic',side_effect=lambda:clock[0]),patch.object(owned,'_stop_owned_group') as cleanup:
+                    result=c.supervise_owned(['unit-no-process'],plan=recipe,path=root,popen=lambda *a,**k:Child(),sleep=sleep)
+                self.assertEqual(result['stop_reason'],expected);cleanup.assert_called_once()
+
     def _run(self,root,recipe,*,resume=False,collect_calls=None,train_calls=None):
         import gpu_engine.b4_canary_collection as engine
         import gpu_engine.champion as champion
@@ -94,6 +121,8 @@ class CanaryTests(unittest.TestCase):
                 if strict is not True or state!={'literal':'original-state'}:raise AssertionError('strict original weights')
         class Backend:
             def __init__(self,*args,**kwargs):pass
+            def recover(self,batch,current,path,**kwargs):
+                return dict(status='INTERRUPTED_UNKNOWN',games=len(batch.games),complete=0,unknown=len(batch.games),cache=None,completed_sources={})
             def collect(self,batch,current,path,**kwargs):
                 calls.append(tuple(g.stream_id for g in batch.games));path.mkdir();cache=path/'cache';cache.mkdir();(cache/'metadata.json').write_text('{}')
                 for game in batch.games:kwargs['on_end'](game.stream_id,'COMPLETE',2.,'d'*64)
@@ -123,7 +152,7 @@ class CanaryTests(unittest.TestCase):
 
     def test_interrupted_collection_never_reconstructs_attempted_cells(self):
         with tempfile.TemporaryDirectory() as temp:
-            recipe=plan();root=Path(temp)/'run';book=c.Journal(root,recipe);book.emit('COLLECT_START',iteration=0,batch=0,streams=[1,2])
+            recipe=plan();root=Path(temp)/'run';book=c.Journal(root,recipe);book.emit('COLLECT_START',iteration=0,batch=0,streams=[1,2],checkpoint_sha256=c.CHAMPION_SHA)
             result,calls,trained=self._run(root,recipe,resume=True)
             self.assertEqual((result['status'],calls,trained),('UNKNOWN_NO_COMPLETE_CACHE',[],[]))
             self.assertEqual(c.Journal(root,recipe,resume=True).matching('COLLECT_END')[0]['status'],'INTERRUPTED_UNKNOWN')
@@ -184,24 +213,34 @@ class CanaryTests(unittest.TestCase):
         diag=NS(active_rows=np.ones(b,bool),executed_rows=np.ones(b,bool),invalid_actions=np.zeros(b,bool))
         config=NS();params={};runtime=object();endings=[]
         backend=engine.Backend.__new__(engine.Backend);backend.prepared=object();backend.pool=object();backend.gender_policy=object()
-        backend.plan=NS(max_requests=2);backend.model_config=model_config();backend.source_hash='unit-source'
+        backend.plan=NS(max_requests=2,pool_sha256='a'*64,prepared_binding='c'*64,source_commit='b'*40);backend.model_config=model_config();backend.source_hash='unit-source'
         def advance(actual,actions,**kwargs):
             self.assertIs(actual,session);self.assertEqual(kwargs['active_rows'].tolist(),[True,True])
             core.frame_number+=1;core.engine.done[:]=True;core.admitted[1]=False
             return session.result
         class Archive:
             def __call__(self,*args):return {'checkpoint_sha256':'e'*64}
+        real_file_sha=engine.file_sha
         with tempfile.TemporaryDirectory() as temp,patch.object(engine.champion,'export',side_effect=Archive()),\
              patch.object(engine.champion,'load',return_value=(params,config,{'weights_archive_sha256':'f'*64})),\
-             patch.object(engine.champion,'config_from_checkpoint',return_value=config),patch.object(engine,'file_sha',return_value='e'*64),\
+             patch.object(engine.champion,'config_from_checkpoint',return_value=config),\
+             patch.object(engine,'file_sha',side_effect=lambda p:'e'*64 if str(p)=='/unit-checkpoint' else real_file_sha(p)),\
              patch.object(engine.original,'_bind',return_value=runtime),patch.object(engine.original,'_checked',return_value={'config':config}),\
              patch.object(engine.original.driver,'construct',return_value=session) as construct,patch.object(engine.original.driver,'advance',side_effect=advance),\
              patch.object(engine.original.driver,'latest_diagnostics',return_value=diag),patch.object(engine.jax,'block_until_ready',side_effect=lambda x:x),\
              patch.object(engine.original,'_admission',return_value=(np.ones((b,2),bool),np.zeros(b,bool),None)),\
              patch.object(engine,'decide',return_value=(np.zeros((b,2),np.int32),np.zeros(b,bool),np.zeros((b,2),np.int32),
                  np.full((b,2),.75,np.float32),np.full((b,2),.25,np.float32))):
-            path=Path(temp)/'collection';result=backend.collect(plan().iterations[0][0],'/unit-checkpoint',path,
-                dataset_config=c.dataset_controls(training()),on_end=lambda *args:endings.append(args),check_progress=lambda:None)
+            path=Path(temp)/'collection'
+            def observed_end(*args):
+                if args[1]=='COMPLETE':
+                    found=engine.stored_completed(path,batch=plan().iterations[0][0],pool_sha256='a'*64,
+                        checkpoint_sha256='e'*64,source_hash='unit-source',prepared_binding='c'*64,source_commit='b'*40)
+                    self.assertIn(args[0],found)
+                    self.assertTrue((path/'complete.jsonl').is_file());self.assertTrue((path/'endings.jsonl').is_file())
+                endings.append(args)
+            result=backend.collect(plan().iterations[0][0],'/unit-checkpoint',path,
+                dataset_config=c.dataset_controls(training()),on_end=observed_end,check_progress=lambda:None)
             records=read_rollout_records(path/'complete.jsonl');self.assertEqual(len(records),1)
             self.assertEqual((records[0].battle_id,records[0].terminal.winner),('unit-0','p1'))
             self.assertEqual([s.action_probability for s in records[0].trajectory.steps],[.75,.75])
@@ -229,6 +268,47 @@ class CanaryTests(unittest.TestCase):
         self.assertEqual(choices.tolist(),[[1,0]]);self.assertEqual(probabilities.tolist(),[[.5,.5]])
         self.assertEqual(values.tolist(),[[.25,-.25]]);self.assertEqual(refused.tolist(),[False])
         network.assert_called_once();keys.assert_called_once();self.assertEqual(router.call_count,2)
+
+    def test_durable_terminal_and_full_trajectory_recover_without_batch_end_or_engine(self):
+        from gpu_engine import b4_canary_collection as engine
+        from pokezero.observation import PokeZeroObservationV0
+        from pokezero.trajectory import TrajectoryStep
+        legal=(True,)+(False,)*8
+        observation=PokeZeroObservationV0(tuple((0,)*41 for _ in range(23)),tuple((0.,)*132 for _ in range(23)),
+            (0,)*23,(True,)*23,legal,schema_version='pokezero.observation.v4')
+        recipe=plan();batch=recipe.iterations[0][0];game=batch.games[0]
+        step=TrajectoryStep('p1',1,observation,legal,0,action_probability=.75,value_estimate=.25)
+        record=engine.complete_record(game,[step],winner=0,turn=1,duration=2.,source_hash='unit-source',checkpoint_sha='b'*64)
+        ending=dict(stream_id=game.stream_id,status='COMPLETE',reason=None,duration_seconds=2.,executed_steps=1,frame=1,winner=0)
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);path=root/'attempt';path.mkdir()
+            with patch.object(engine.os,'fsync',wraps=engine.os.fsync) as fsync:
+                digest=engine.publish_completed(path,game=game,pool_sha256=recipe.pool_sha256,checkpoint_sha256='b'*64,
+                    source_hash='unit-source',prepared_binding=recipe.prepared_binding,source_commit=recipe.source_commit,ending=ending,record=record)
+            self.assertGreaterEqual(fsync.call_count,4)
+            self.assertFalse((path/'endings.jsonl').exists())  # Crash before callback/batch publication.
+            backend=engine.Backend.__new__(engine.Backend);backend.plan=recipe;backend.source_hash='unit-source';ends=[]
+            checkpoint=root/'checkpoint';checkpoint.write_bytes(b'unit-not-model')
+            real_sha=engine.file_sha
+            with patch.object(engine,'file_sha',side_effect=lambda p:'b'*64 if Path(p)==checkpoint else real_sha(p)),\
+                 patch.object(engine.original.driver,'construct') as construct,patch.object(engine.original.driver,'advance') as advance,\
+                 patch.object(engine.original,'_network') as network,patch.object(engine.champion,'export') as export:
+                result=backend.recover(batch,checkpoint,path,dataset_config=c.dataset_controls(training()),on_end=lambda *x:ends.append(x))
+            self.assertEqual((result['complete'],result['unknown']),(1,1));self.assertEqual(result['completed_sources'],{'1':digest})
+            self.assertEqual(ends,[(1,'COMPLETE',2.,digest)])
+            for source in (construct,advance,network,export):source.assert_not_called()
+            original=(path/'completed/1.json').read_bytes()
+            for mutation in ('checkpoint','winner','foreign'):
+                body=json.loads(original)
+                if mutation=='checkpoint':body['checkpoint_sha256']='d'*64
+                if mutation=='winner':body['ending']['winner']=1
+                (path/'completed/1.json').write_bytes(c.encoded(body))
+                if mutation=='foreign':(path/'completed/999.json').write_bytes(original)
+                with self.subTest(mutation=mutation),self.assertRaises(ValueError):engine.stored_completed(path,batch=batch,
+                    pool_sha256=recipe.pool_sha256,checkpoint_sha256='b'*64,source_hash='unit-source',
+                    prepared_binding=recipe.prepared_binding,source_commit=recipe.source_commit)
+                (path/'completed/1.json').write_bytes(original)
+                if mutation=='foreign':(path/'completed/999.json').unlink()
 
 
 if __name__=='__main__':unittest.main()
