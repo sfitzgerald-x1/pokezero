@@ -24,6 +24,7 @@ from .v5_loss import V5LossConfig
 
 
 SCHEMA = 'pokezero.finite_run.v5'
+EVALUATION_INTERVAL_GAMES = 500_000
 
 
 class MissingDependency(RuntimeError):pass
@@ -98,6 +99,64 @@ class Snapshot:
 
 
 @dataclass(frozen=True)
+class EvaluationProtocol:
+    """Explicit external panel recipe; never a qualification or launch decision."""
+    protocol_sha256:str
+
+    def __post_init__(self):c._binding(self.protocol_sha256)
+
+    def metadata(self):
+        return dict(protocol_sha256=self.protocol_sha256,interval_games=EVALUATION_INTERVAL_GAMES,
+            progress='DECLARED_GAME_ORDINAL',attempts='DURABLE_START_NO_AUTOMATIC_REPLAY')
+
+
+@dataclass(frozen=True)
+class EvaluationRequest:
+    declared_games:int
+    declaration_sha256:str
+    protocol_sha256:str
+    snapshot:Snapshot
+    run_directory:Path
+    checkpoint_path:Path
+    archive_path:Path
+
+
+@dataclass(frozen=True)
+class EvaluationOutcome:
+    """An owned immutable report receipt, or an explicit unknown disposition."""
+    status:str
+    report:str|None=None
+    report_sha256:str|None=None
+    reason:str|None=None
+
+    def __post_init__(self):
+        if self.status not in ('RESULT','UNKNOWN'):raise ValueError('evaluation RESULT or UNKNOWN required')
+        if (self.report is None)!=(self.report_sha256 is None):raise ValueError('complete evaluation report receipt required')
+        if self.report is not None:
+            if type(self.report) is not str or not self.report:raise ValueError('owned evaluation report path required')
+            c._binding(self.report_sha256)
+        if self.status=='RESULT' and (self.report is None or self.reason is not None):
+            raise ValueError('evaluation RESULT requires exact report receipt')
+        if self.status=='UNKNOWN' and (type(self.reason) is not str or not self.reason):
+            raise ValueError('evaluation UNKNOWN requires a reason')
+
+
+def evaluation_milestones(iteration_game_counts):
+    """Every fixed 500k boundary must be an exact declared iteration end."""
+    counts=tuple(iteration_game_counts)
+    if not counts or any(type(count) is not int or count<=0 for count in counts):
+        raise ValueError('positive declared iteration game counts required')
+    total=0;milestones={}
+    for iteration,count in enumerate(counts):
+        end=total+count
+        boundary=(total//EVALUATION_INTERVAL_GAMES+1)*EVALUATION_INTERVAL_GAMES
+        if boundary<end:raise ValueError('declared iteration crosses an exact500k evaluation checkpoint')
+        if boundary==end:milestones[iteration]=end
+        total=end
+    return milestones
+
+
+@dataclass(frozen=True)
 class Watchdog:
     initial_window_seconds:float
     longest_multiplier:float=5.
@@ -129,6 +188,7 @@ class Plan:
     watchdog:Watchdog
     checkpoint_updates:int=32
     discount:float=1.0
+    evaluation:EvaluationProtocol|None=None
 
     def __post_init__(self):
         object.__setattr__(self,'iterations',tuple(tuple(x) for x in self.iterations))
@@ -157,18 +217,23 @@ class Plan:
         if (len({g.stream_id for g in games})!=len(games) or len({g.battle_id for g in games})!=len(games)
                 or len({t for g in games for t in g.team_indices})!=2*len(games)):
             raise ValueError('one fixed ordered bank, no reused roots/teams required')
+        if self.evaluation is not None:
+            if type(self.evaluation) is not EvaluationProtocol:raise ValueError('typed evaluation protocol required')
+            evaluation_milestones(sum(len(b.games) for b in batches) for batches in self.iterations)
 
     @property
     def games(self):return tuple(g for iteration in self.iterations for batch in iteration for g in batch.games)
 
     def manifest(self):
-        return dict(schema=SCHEMA,run_id=self.run_id,model=self.model.metadata(),loss=self.loss.metadata(),
+        value=dict(schema=SCHEMA,run_id=self.run_id,model=self.model.metadata(),loss=self.loss.metadata(),
             train=training.train_config_metadata(self.train),iterations=[[asdict(b) for b in x] for x in self.iterations],pool_sha256=self.pool_sha256,
             selection_seed=self.selection_seed,historical_fraction=self.historical_fraction,historical_window=self.historical_window,
             max_requests=self.max_requests,watchdog=asdict(self.watchdog),checkpoint_updates=self.checkpoint_updates,discount=self.discount,
             contract_sha256=_sha(c.contract_descriptor()),opponent_rule='UNIFORM_RECENT_PAST_SNAPSHOTS_NO_OUTCOME_ADAPTATION',
             initial_history='EMPTY_POOL_EXPLICIT_SELFPLAY',actor='RAW_POLICY',
             game_seed_scope='TRAJECTORY_IDENTITY_ONLY_BATCH_CONSTRUCTOR_AND_SAMPLING_SEEDS_DRIVE_RNG',scientific_qualification=False)
+        if self.evaluation is not None:value['evaluation']=self.evaluation.metadata()
+        return value
 
 
 def _publish(path,blob):
@@ -285,17 +350,104 @@ def learning_rate_window(plan,iteration):
     return training.DeclaredGameWindow(start,start+counts[iteration],sum(counts))
 
 
-def run(plan,path,*,backend,resume=False,enable_v5=False):
+def _evaluation_binding(store,snapshot):
+    milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
+    if snapshot.iteration not in milestones:raise ValueError('evaluation requires exact declared milestone snapshot')
+    return dict(iteration=snapshot.iteration,declared_games=milestones[snapshot.iteration],
+        declaration_sha256=_sha(json.loads((store.path/'declaration.json').read_bytes())),
+        protocol_sha256=store.plan.evaluation.protocol_sha256,snapshot=asdict(snapshot))
+
+
+def _evaluation_request(store,snapshot):
+    binding=_evaluation_binding(store,snapshot)
+    checkpoint=store.resolve(snapshot.checkpoint,snapshot.checkpoint_sha256)
+    archive=store.resolve(snapshot.archive,snapshot.archive_sha256)
+    if snapshot.model_sha256!=_sha(store.plan.model.metadata()):raise ValueError('evaluation snapshot model namespace differs')
+    return EvaluationRequest(binding['declared_games'],binding['declaration_sha256'],binding['protocol_sha256'],
+        snapshot,store.path.resolve(),checkpoint,archive)
+
+
+def _evaluation_history(store):
+    """Verify attempted panels, then conservatively close interrupted starts."""
+    declaration_sha256=_sha(json.loads((store.path/'declaration.json').read_bytes()))
+    if store.matching('RUN_STARTED')!=[dict(declaration_sha256=declaration_sha256)]:
+        raise ValueError('original accepted run declaration binding required')
+    milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
+    starts={};closed={};published={}
+    for event in store.events:
+        if event['kind']=='SNAPSHOT':
+            snapshot=Snapshot(**event['payload'])
+            if snapshot.iteration in published:raise ValueError('one original snapshot per iteration required')
+            published[snapshot.iteration]=snapshot
+        if event['kind']=='ITERATION_COMPLETE' and event['payload'].get('iteration') in milestones:
+            iteration=event['payload']['iteration']
+            if iteration not in published or _sha(_evaluation_binding(store,published[iteration])) not in closed:
+                raise ValueError('milestone iteration completed without an attempted evaluation disposition')
+        if event['kind'] not in ('EVALUATION_STARTED','EVALUATION_RESULT','EVALUATION_UNKNOWN'):continue
+        if store.plan.evaluation is None:raise ValueError('evaluation journal requires original opted-in declaration')
+        payload=event['payload'];iteration=payload.get('iteration')
+        if iteration not in published:raise ValueError('evaluation requires one original published snapshot')
+        snapshot=published[iteration];binding=_evaluation_binding(store,snapshot)
+        expected=dict(**binding,evaluation_sha256=_sha(binding))
+        if {key:payload.get(key) for key in expected}!=expected:
+            raise ValueError('original evaluation snapshot/protocol/declaration binding changed')
+        key=expected['evaluation_sha256']
+        if event['kind']=='EVALUATION_STARTED':
+            if key in starts or set(payload)!=set(expected):raise ValueError('evaluation attempt replay/extra fields')
+            _evaluation_request(store,snapshot);starts[key]=expected
+        else:
+            if key not in starts or key in closed or set(payload)!=set(expected)|{'outcome'}:
+                raise ValueError('evaluation result requires one durable original attempt')
+            outcome=EvaluationOutcome(**payload['outcome'])
+            if event['kind']!='EVALUATION_'+outcome.status:raise ValueError('evaluation disposition differs')
+            if outcome.report is not None:store.resolve(outcome.report,outcome.report_sha256)
+            closed[key]=outcome
+    for key,binding in starts.items():
+        if key not in closed:
+            outcome=EvaluationOutcome('UNKNOWN',reason='interrupted-evaluation-attempt-not-replayed')
+            store.emit('EVALUATION_UNKNOWN',**binding,outcome=asdict(outcome));closed[key]=outcome
+    return closed
+
+
+def _evaluate_snapshot(store,snapshot,hook):
+    """Return False only for a newly attempted UNKNOWN; resume never replays it."""
+    binding=_evaluation_binding(store,snapshot);key=_sha(binding)
+    if store.matching('EVALUATION_STARTED',evaluation_sha256=key):return True
+    request=_evaluation_request(store,snapshot)
+    bound=dict(**binding,evaluation_sha256=key)
+    store.emit('EVALUATION_STARTED',**bound)
+    try:
+        outcome=hook(request)
+        if type(outcome) is not EvaluationOutcome:raise ValueError('typed evaluation outcome required')
+        # The callback cannot replace its published input or return a foreign
+        # output receipt. Snapshot metadata itself stays the original object.
+        if _evaluation_binding(store,snapshot)!=binding:raise ValueError('evaluation input metadata changed during callback')
+        _evaluation_request(store,snapshot)
+        if outcome.report is not None:store.resolve(outcome.report,outcome.report_sha256)
+    except Exception as error:
+        outcome=EvaluationOutcome('UNKNOWN',reason=type(error).__name__+': '+str(error))
+    store.emit('EVALUATION_'+outcome.status,**bound,outcome=asdict(outcome))
+    return outcome.status=='RESULT'
+
+
+def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None):
     """Bounded collect/cache/train iterations, with explicit original RNG resume.
 
     Backend collects only fixed supplied batches and writes a genuine v5 cache;
-    no outcome-dependent allocation exists. Completed-game panels/promotion are
-    separate; their source readiness/launch decisions are never inferred here.
+    no outcome-dependent allocation exists. An explicitly declared external
+    milestone hook records its result; it never promotes or retunes an arm.
     """
     if enable_v5 is not True or type(plan) is not Plan:raise ValueError('explicit v5 finite run enablement required')
+    milestones={}
+    if plan.evaluation is not None:
+        if type(plan.evaluation) is not EvaluationProtocol or not callable(evaluation_hook):
+            raise ValueError('explicit declared evaluation protocol and callable hook required')
+        milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in plan.iterations)
+    elif evaluation_hook is not None:raise ValueError('evaluation hook requires opted-in immutable declaration')
     require_treatment_ready(plan,backend)
     backend.check_plan(plan)
     store=Store(path,plan,resume=resume)
+    if plan.evaluation is not None:_evaluation_history(store)
     checkpoints=store.matching('CHECKPOINT')
     if checkpoints:
         checkpoint=checkpoints[-1];verified=store.resolve(checkpoint['path'],checkpoint['sha256'])
@@ -380,7 +532,12 @@ def run(plan,path,*,backend,resume=False,enable_v5=False):
                 checkpoint=store.checkpoint(runtime,iteration=iteration)
                 if report['complete']:break
             current=store.snapshot(checkpoint,iteration=iteration);snapshots.append(current)
-        store.emit('ITERATION_COMPLETE',iteration=iteration,snapshot=existing[0] if existing else current,
+        published=Snapshot(**existing[0]) if existing else current
+        if iteration in milestones and not _evaluate_snapshot(store,published,evaluation_hook):
+            store.emit('STOP',iteration=iteration,reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY')
+            return dict(status='STOPPED',reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY',statuses=statuses,
+                steps=runtime.steps,rows=runtime.rows,scientific_qualification=False)
+        store.emit('ITERATION_COMPLETE',iteration=iteration,snapshot=published,
             counts={name:list(statuses.values()).count(name) for name in ('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED')})
     return dict(status='COMPLETE_DECLARATION',statuses=statuses,steps=runtime.steps,rows=runtime.rows,
         scientific_qualification=False)
