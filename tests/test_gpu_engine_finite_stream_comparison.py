@@ -30,6 +30,56 @@ def writer(state, line, **_):
 
 
 class FiniteStreamComparisonTests(unittest.TestCase):
+    def test_real_PublicEvent_numpy_transport_compares_and_serializes_as_exact_integer_rows(self):
+        from gpu_engine.public_inputs import PublicEvent, Kind, Phase
+        event=PublicEvent(Kind.TURN,1,1,Phase.ACTION)
+        self.assertIsInstance(event.words(),np.ndarray)
+        expected=event.words().tolist()
+        with patch.object(comparison.v4_encoder,'wire_kwargs',return_value={}), \
+                patch.object(comparison.public_wire,'project_line',side_effect=lambda state,line,**_:
+                    (state,NS(events=(event,)))):
+            result=comparison.compare_owner(['|turn|1'],captured([expected]),None)
+            self.assertEqual(result['status'],'MATCH')
+            self.assertEqual(result['reference']['words'],[expected])
+            self.assertTrue(all(type(value) is int for value in result['reference']['words'][0]))
+            json.dumps(result,allow_nan=False)
+            changed=expected.copy();changed[-1]=1
+            result=comparison.compare_owner(['|turn|1'],captured([changed]),None)
+            self.assertEqual(result['status'],'MISMATCH')
+            self.assertEqual(result['first_difference']['showdown'],expected)
+            json.dumps(result,allow_nan=False)
+
+    def test_actual_native_lines_survive_state_or_owner_projection_failure_and_other_owner_continues(self):
+        State=namedtuple('State','turn gender happiness')
+        state=State(np.zeros(2,np.int32),np.ones((2,2,6),np.int32),np.full((2,2,6),143,np.int32))
+        pool=NS(arrays={'species':np.ones((4,6),np.int32)},metadata=lambda:dict(vocabulary={'species':['_none','mew']}))
+        allcaptures=tuple(np.stack([np.stack([part,part]) for _ in range(2)]) for part in captured([[7]+[0]*15]))
+        lines=[['|switch|p1a: Mew|Mew|100/100'],['|switch|p2a: Mew|Mew|100/100']]
+        class FakeEnv:
+            def __init__(self,_):self.owner_transcripts=[list(owner) for owner in lines]
+            def reset_pool_sets(self,*_,**__):pass
+            def snapshot(self):return object()
+            def close(self):pass
+        with patch.object(comparison,'OwningShowdownEnv',FakeEnv), \
+                patch.object(comparison,'pool_sets',return_value=[[],[]]), \
+                patch.object(comparison,'pack_sets',return_value=['packed1','packed2']), \
+                patch.object(comparison.fidelity,'compare',side_effect=[RuntimeError('authored state failure'),[]]), \
+                patch.object(comparison,'compare_owner',side_effect=[ValueError('authored owner projection failure'),
+                    dict(status='MATCH',columns=dict(status='UNKNOWN',reason='OBSERVATIONS_NOT_CAPTURED'))]) as compare:
+            result=comparison.collect_constructors(pool,[[0,1],[2,3]],state,allcaptures,None,
+                root_ids=[101,102],showdown_root='/not-opened',node='not-started',native_seed_start=700)
+        self.assertEqual([row['native_owner_lines'] for row in result['rows']],[lines,lines])
+        self.assertEqual(result['rows'][0]['error']['message'],'authored state failure')
+        self.assertEqual([owner['status'] for owner in result['rows'][1]['owners']],['UNKNOWN','MATCH'])
+        self.assertEqual(result['rows'][1]['owners'][0]['error']['message'],'authored owner projection failure')
+        self.assertEqual(compare.call_count,2)
+        summary=result['summary']
+        self.assertEqual(summary['original_owner_views'],4)
+        self.assertEqual(summary['conditional_on_measured_state_agreement']['unknown'],1)
+        self.assertEqual(summary['conditional_on_measured_state_agreement']['matched'],1)
+        self.assertEqual(summary['numeric_columns'][0]['unknown_cells'],92)
+        json.dumps(result,allow_nan=False)
+
     def test_only_literal_current_actual_owner_bridge_messages_are_captured(self):
         env = comparison.OwningShowdownEnv(comparison.LocalShowdownConfig())
         env._battle_token = 'b1'
