@@ -75,6 +75,8 @@ class Tables(NamedTuple):
     substitute_candidates: object   # [M], prospective only; actual Site11 REQUIRED
     toxic_binding: object
     toxic_candidates: object
+    recoil_binding: object  # GLOBAL8
+    recoil_candidates: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -134,7 +136,7 @@ def _host():
     if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked kernel risk boundary cannot be traced')
 
 
-def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None,toxic_compiled=None):
+def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None,toxic_compiled=None,recoil_compiled=None):
     _host();record=accounting._checked(accounting_compiled)
     if record[2].causal.projector.catalog is not engine_catalog:raise ValueError('same original accounting/kernel catalog required')
     public.check_catalog(engine_catalog,engine_catalog.engine_table,expected_binding=engine_catalog.binding,
@@ -178,6 +180,15 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         move=int(data.move_id)
         if not 0<move<m:raise ValueError('canonical Toxic move bounds required')
         toxic_binding=np.asarray(data.binding,np.uint32);toxic_candidate[move]=True
+    recoil_binding=np.zeros(8,np.uint32);recoil_candidate=np.zeros(m,bool)
+    if recoil_compiled is not None:
+        from . import engine_recoil_callbacks as recoil
+        data=recoil.check_compiled(recoil_compiled)
+        if recoil._COMPILED[recoil_compiled][2] is not engine_catalog or direct_hit_compiled is None:
+            raise ValueError('same original Double-Edge/direct-hit/kernel catalog required')
+        move=int(data.move_id)
+        if not 0<move<m or not candidate[move]:raise ValueError('original direct-capable Double-Edge row required')
+        recoil_binding=np.asarray(data.binding,np.uint32);recoil_candidate[move]=True
     risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
@@ -201,7 +212,8 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         # A possible proc is not an actual write: status/reflection callbacks
         # and stats/flinch branch guards retain their existing sticky refusals.
         risk[(chance!=0)&~candidate]|=FIELD_VOLATILE
-    flag(table.self_destruct,'move',SELF_HP);flag(table.damage_moves,'recoil_den',SELF_HP)
+    flag(table.self_destruct,'move',SELF_HP)
+    if table.damage_moves is not None:risk[(np.asarray(table.damage_moves.recoil_den)!=0)&~recoil_candidate]|=SELF_HP
     flag(table.solar_beam,'move',BLOCKED_ACTION);flag(table.focus_punch,'move',BLOCKED_ACTION)
     branch=np.zeros(len(Branch)+1,np.int32)
     for code in Branch:
@@ -218,13 +230,13 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
         direct_candidates=candidate.tolist(),substitute_binding=substitute_binding.tolist(),
-        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist())
+        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate))
-    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled)
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate))
+    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled)
     return result
 
 
@@ -245,6 +257,9 @@ def check_compiled(compiled):
     if r[7] is not None:
         from . import engine_toxic_callbacks as toxic
         toxic.check_compiled(r[7])
+    if r[8] is not None:
+        from . import engine_recoil_callbacks as recoil
+        recoil.check_compiled(r[8])
     return compiled.device
 
 
@@ -276,6 +291,8 @@ def _bound(carry,tape,tables):
     accounting._shape(carry.opened,(b,),jnp.bool_);accounting._shape(carry.counts,(b,len(Branch)),jnp.int32)
     accounting._shape(tables.selected_risk,(len(tables.selected_risk),),jnp.int32)
     accounting._shape(tables.branch_risk,(len(Branch)+1,),jnp.int32)
+    accounting._shape(tables.recoil_binding,(8,),jnp.uint32)
+    accounting._shape(tables.recoil_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.toxic_binding,(8,),jnp.uint32)
     accounting._shape(tables.toxic_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.substitute_binding,(8,),jnp.uint32)
@@ -491,7 +508,7 @@ def primary_status_on_tape(tape,attempted,*,active,captured=None):
     return _on_tape(tape,observe_primary_status_device,attempted,active=active,captured=captured)
 
 
-def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None):
+def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None,pending_recoil=None):
     if type(outcome) is not Outcome:raise ValueError('literal typed kernel outcomes required')
     b=len(carry.stream_id);eligible=_vector(eligible,b,jnp.bool_)
     values={name:_vector(x,b,jnp.int32 if name in ('power','numerator','denominator','recoil') else jnp.bool_)
@@ -507,7 +524,17 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
         candidate=(move>0)&(move<len(tables.direct_candidates))&tables.direct_candidates[
             jnp.clip(move,0,len(tables.direct_candidates)-1)]
     unsupported=jnp.where(direct_mode & ((o.power>0)|candidate),o.absorbed|~supported_direct,unsupported)
-    value=jnp.where(unsupported,TARGET_OUTCOME,0)|jnp.where(o.explodes|(o.recoil>0),SELF_HP,0)
+    recoil_ok=jnp.zeros(b,bool);recoil_needed=jnp.zeros(b,bool)
+    if type(captured_direct) is CapturedDirectHit:
+        move=_vector(captured_direct.move,b)
+        recoil_needed=(move>0)&(move<len(tables.recoil_candidates))&tables.recoil_candidates[jnp.clip(move,0,len(tables.recoil_candidates)-1)]
+    if pending_recoil is not None:
+        from . import engine_recoil_callbacks as recoil
+        recoil_needed |= pending_recoil.requested
+        recoil_ok=(recoil.matches_pending(tape,pending_recoil)&supported_direct
+            &jnp.any(tables.recoil_binding!=0)&jnp.all(tables.recoil_binding==pending_recoil.context.data.binding)
+            &(o.recoil==pending_recoil.recoil))
+    value=jnp.where(unsupported,TARGET_OUTCOME,0)|jnp.where(o.explodes|(((o.recoil>0)|recoil_needed)&~recoil_ok),SELF_HP,0)
     value |= jnp.where((o.power<0)|(o.numerator<0)|(o.denominator<=0)|(o.recoil<0),NAMESPACE,0)
     return _observe(carry,tape,tables,Branch.HIT_OUTCOME,jnp.where(eligible,value,0),active=active)
 
@@ -562,8 +589,21 @@ def selected_on_tape(tape,move,*,eligible,active):
     return _on_tape(tape,observe_selected_device,move,eligible=eligible,active=active)
 
 
-def outcome_on_tape(tape,outcome,*,eligible,active,captured_direct=None):
-    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active,captured_direct=captured_direct)
+def outcome_on_tape(tape,outcome,*,eligible,active,captured_direct=None,pending_recoil=None):
+    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active,captured_direct=captured_direct,pending_recoil=pending_recoil)
+
+
+def observe_recoil_device(carry,tape,amount,tables,*,active,pending,before):
+    from . import engine_recoil_callbacks as recoil
+    amount=_vector(amount,len(carry.stream_id));needed=pending.requested|(amount>0)
+    same=(recoil.matches_before(tape,pending,before)&(amount==pending.recoil)
+        &jnp.all(tables.direct_hit_binding==pending.context.direct.data.binding)
+        &jnp.any(tables.recoil_binding!=0)&jnp.all(tables.recoil_binding==pending.context.data.binding))
+    return _observe(carry,tape,tables,Branch.RECOIL,jnp.where(needed&~same,SELF_HP,0),active=active)
+
+
+def recoil_on_tape(tape,amount,*,active,pending,before):
+    return _on_tape(tape,observe_recoil_device,amount,active=active,pending=pending,before=before)
 
 
 def branch_on_tape(tape,branch,attempted,*,active):
