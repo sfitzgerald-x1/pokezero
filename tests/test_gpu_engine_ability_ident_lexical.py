@@ -89,4 +89,4 @@ class AbilityIdentLexicalTests(unittest.TestCase):
    self.assertEqual(mapped,base_id)
    if row['id'] in ('hooh','nidoranf','nidoranm'):self.assertEqual(public,mapped)
   for name in ('transition.py','entry.py','mechanics.py','engine_pressure_callbacks.py','engine_trace_callbacks.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','ad6f1d9e:gpu_engine/'+name]))
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','813ec81d:gpu_engine/'+name]))
