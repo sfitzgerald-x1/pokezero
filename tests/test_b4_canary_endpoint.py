@@ -259,5 +259,22 @@ class ConcurrentEndpointTests(unittest.TestCase):
             self.assertEqual(calls,['parent'])
         asyncio.run(scenario())
 
+    def test_cancellation_during_spawn_keeps_ownership_until_process_is_reaped(self):
+        from pokezero import owning_encoder_continuation as owned
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);path=root/'fp-requests/0.json';e._write(path,{'unit':'not-science'})
+            async def scenario():
+                entered=asyncio.Event();release=asyncio.Event();reaped=[]
+                process=NS(pid=987654321,returncode=None,wait=AsyncMock(return_value=0))
+                async def spawn(*args,**kwargs):entered.set();await release.wait();return process
+                async def reap(actual):self.assertIs(actual,process);reaped.append(actual.pid)
+                with patch.object(e.asyncio,'create_subprocess_exec',side_effect=spawn),patch.object(owned,'_stop_owned_group',side_effect=reap):
+                    task=asyncio.create_task(e.launch(path));await entered.wait();task.cancel();await asyncio.sleep(0)
+                    task.cancel();await asyncio.sleep(0);self.assertFalse(task.done());self.assertEqual(reaped,[])
+                    release.set()
+                    with self.assertRaises(asyncio.CancelledError):await task
+                    self.assertEqual(reaped,[process.pid]);process.wait.assert_not_awaited()
+            asyncio.run(scenario())
+
 
 if __name__=='__main__':unittest.main()

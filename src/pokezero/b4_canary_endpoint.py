@@ -101,17 +101,31 @@ async def launch(request_path):
     request_path=Path(request_path);digest=c.file_sha(request_path)
     log=request_path.parent.parent/'fp-errors'/request_path.with_suffix('.log').name;log.parent.mkdir(exist_ok=True)
     with log.open('xb') as stderr:
-        process=await asyncio.create_subprocess_exec(sys.executable,'-B','-m','pokezero.b4_canary_endpoint',
-            '--request',str(request_path),'--expected-request-sha256',digest,
-            stdout=asyncio.subprocess.DEVNULL,stderr=stderr,start_new_session=True)
-        try:code=await process.wait()
+        try:
+            process=await _spawn_owned(sys.executable,'-B','-m','pokezero.b4_canary_endpoint',
+                '--request',str(request_path),'--expected-request-sha256',digest,
+                stdout=asyncio.subprocess.DEVNULL,stderr=stderr,start_new_session=True)
+            try:code=await process.wait()
+            finally:await _finish_owned_cleanup(process)
         finally:
-            await _finish_owned_cleanup(process)  # TERM cannot interrupt an already-running reap.
             stderr.flush();os.fsync(stderr.fileno());c._sync_directory(log.parent)
     c.require(code==0,'owned FP worker exited unsuccessfully; no retry')
     result=request_path.parent.parent/'fp-results'/request_path.name
     c.require(result.is_file(),'owned FP worker missing durable result; no retry')
     return _read_result(result)
+
+
+async def _spawn_owned(*args,**kwargs):
+    """Cancellation cannot lose a process spawned before its transport returns."""
+    spawning=asyncio.create_task(asyncio.create_subprocess_exec(*args,**kwargs))
+    try:return await asyncio.shield(spawning)
+    except asyncio.CancelledError:
+        while not spawning.done():
+            try:await asyncio.shield(spawning)
+            except asyncio.CancelledError:pass
+        process=spawning.result()
+        await _finish_owned_cleanup(process)
+        raise
 
 
 async def _finish_owned_cleanup(process):
