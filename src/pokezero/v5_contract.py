@@ -12,6 +12,7 @@ import json
 import math
 from numbers import Real
 import re
+from types import MappingProxyType
 from typing import Mapping
 
 from .actions import ACTION_COUNT
@@ -26,9 +27,12 @@ OPPONENT_OFFSET, BELIEF_OFFSET, BELIEF_TYPE, MAX_VARIANTS = 7, 23, 7, 64
 V4_SPEC = ObservationSpec(categorical_feature_count=41, numeric_feature_count=132,
     transition_token_count=0, schema_version=OBSERVATION_SCHEMA_VERSION_V4)
 BELIEF_REASONS = ('RESOLVED', 'UNKNOWN_SPECIES', 'INCONSISTENT_REVEALS', 'NO_SOURCE')
+PINNED_SOURCE_CENSUS = MappingProxyType(dict(source_hash='f5a5265143d423af', species=220,
+    variant_rows=1682, maximum=44, maximum_species=('swalot',), species_over64=0))
 DECISIONS = (
     ('belief_type_7', 'Preserve retired recent-event type4 and transition type6; append a new role.'),
-    ('fixed_feature_widths', '64 posterior plus64 prior masses and4 public summary fields fit v4 numeric132.'),
+    ('fixed_feature_widths', 'Pinned public source f5a5265143d423af has220species/1682variant rows, maximum44(Swalot); capacity64 retains every original row and fits posterior64+prior64+4summary fields.'),
+    ('source_axis_admission', 'Bind every source-ordered variant identity before encoding; a future source above64 refuses without truncation and needs an explicit representation change.'),
     ('semantic_opponent_labels', 'MOVE identity and SWITCH target species never reuse the nine actor slot indices.'),
     ('unknown_terminal_mask', 'A capped/refused game has no survival-to-end or final-HP supervision.'),
     ('duplicate_set_rows', 'Uniform mass over all source rows matching the true set preserves duplicate identities.'),
@@ -79,6 +83,31 @@ class DecisionAddress:
             raise ValueError('nonnegative stream/frame and original owner0/1 required')
 
 
+def source_variant_census(source, *, capacity=MAX_VARIANTS):
+    """Read all static public source rows, without teams, worlds or models.
+
+    Counts are diagnostics, not a projection/pruning policy. The binding also
+    includes every original ordered variant identity and its source facts.
+    """
+    from .randbat import Gen3RandbatSource
+    if (type(source) is not Gen3RandbatSource or source.metadata.generation != 3
+            or source.metadata.format_id != 'gen3randombattle'
+            or type(capacity) is not int or capacity <= 0):
+        raise ValueError('original static Gen3 randbat source and positive capacity required')
+    rows = tuple((name, tuple(variant.to_summary() for variant in universe.variants))
+        for name, universe in source.universes.items())
+    if not rows or any(not variants for _, variants in rows):
+        raise ValueError('source requires nonempty original species variant axes')
+    counts = tuple((name, len(variants)) for name, variants in rows)
+    largest = max(count for _, count in counts)
+    return dict(source_hash=source.metadata.source_hash, species=len(counts),
+        variant_rows=sum(count for _, count in counts), maximum=largest,
+        maximum_species=tuple(name for name, count in counts if count == largest),
+        species_variants=counts, species_over_capacity=tuple((name, count) for name, count in counts if count > capacity),
+        source_rows_sha256=_sha(dict(source_hash=source.metadata.source_hash,
+            format_id=source.metadata.format_id, generation=3, source_ordered_variants=rows)))
+
+
 @dataclass(frozen=True)
 class LabelVocabulary:
     """Source-order label namespace, separate from checkpoint category rows."""
@@ -100,6 +129,16 @@ class LabelVocabulary:
         for _, count in self.species_variants:
             if type(count) is not int or not 1 <= count <= MAX_VARIANTS:
                 raise ValueError('source variant axis must contain1..64 original rows per species')
+
+    @classmethod
+    def from_public_source(cls, source, *, move_ids, expected_source_hash):
+        census = source_variant_census(source)
+        if (type(expected_source_hash) is not str or re.fullmatch('[0-9a-f]{16}', expected_source_hash) is None
+                or census['source_hash'] != expected_source_hash):
+            raise ValueError('original public set source hash differs')
+        if census['species_over_capacity']:
+            raise ValueError('full source axis exceeds64; no rows removed: ' + repr(census['species_over_capacity']))
+        return cls(census['source_rows_sha256'], tuple(move_ids), census['species_variants'])
 
     @property
     def species(self):
@@ -522,6 +561,7 @@ def contract_descriptor():
         base_schema=OBSERVATION_SCHEMA_VERSION_V4, base_tokens=V4_TOKENS, tokens=V5_TOKENS,
         numeric_features=NUMERIC_FEATURES, categorical_features=CATEGORICAL_FEATURES,
         belief_type=BELIEF_TYPE, belief_variant_capacity=MAX_VARIANTS,
+        pinned_source_census=dict(PINNED_SOURCE_CENSUS),
         auxiliary_targets=('opponent_semantic_action', 'hidden_set_species', 'hidden_set_variant_rows',
             'pokemon_survival', 'pokemon_final_hp'),
         initial_arms=phase_c_arms(), decisions=dict(DECISIONS),

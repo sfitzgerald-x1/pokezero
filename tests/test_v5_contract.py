@@ -11,6 +11,7 @@ from pokezero.observation import (
 )
 from pokezero import v5_contract as c
 from pokezero.search_label_data import SEARCH_COLUMNS, validate_batch_columns
+from pokezero.randbat import Gen3RandbatSource, Gen3RandbatVariant, Gen3RandbatSpeciesUniverse, RandbatSourceMetadata
 
 
 def vocabulary():
@@ -39,6 +40,49 @@ def improvement():
 
 
 class V5ContractTests(unittest.TestCase):
+    def static_source(self, count=44):
+        rows = tuple(Gen3RandbatVariant('variant-' + str(i), 'set', 'Swalot', 'role', 80,
+            ('Surf', 'Recover'), 'Sticky Hold', 'Leftovers') for i in range(count))
+        metadata = RandbatSourceMetadata('gen3randombattle', 3, None, None, None, 'f5a5265143d423af')
+        return Gen3RandbatSource(metadata, {'swalot': Gen3RandbatSpeciesUniverse('Swalot', 80, rows)})
+
+    def test_actual_source_builder_binds_every_original_variant_and_its_order(self):
+        source = self.static_source()
+        census = c.source_variant_census(source)
+        self.assertEqual(census['maximum'], 44)
+        self.assertEqual(census['variant_rows'], 44)
+        self.assertEqual(census['species_over_capacity'], ())
+        vocabulary = c.LabelVocabulary.from_public_source(source, move_ids=('surf', 'recover'),
+            expected_source_hash='f5a5265143d423af')
+        self.assertEqual(vocabulary.species_variants, (('swalot', 44),))
+        self.assertEqual(vocabulary.source_binding_sha256, census['source_rows_sha256'])
+        last = c.PublicPosterior(vocabulary, 'swalot', 1 << 43, (1 / 44,) * 44)
+        self.assertEqual(last.numeric_row()[43], 1)
+        self.assertEqual(last.numeric_row()[44:64], (0.0,) * 20)
+        target = c.HiddenSet('swalot', (43,)).probabilities(vocabulary)
+        self.assertEqual(target[43], 1)
+        self.assertEqual(sum(target), 1)
+        reordered = replace(source, universes={'swalot': replace(source.universes['swalot'],
+            variants=source.universes['swalot'].variants[::-1])})
+        self.assertNotEqual(c.source_variant_census(reordered)['source_rows_sha256'], census['source_rows_sha256'])
+        changed = list(source.universes['swalot'].variants)
+        changed[-1] = replace(changed[-1], item='Lum Berry')
+        modified = replace(source, universes={'swalot': replace(source.universes['swalot'], variants=tuple(changed))})
+        self.assertNotEqual(c.source_variant_census(modified)['source_rows_sha256'], census['source_rows_sha256'])
+        with self.assertRaises(ValueError):
+            c.LabelVocabulary.from_public_source(source, move_ids=('surf',), expected_source_hash='b' * 16)
+
+    def test_future_source_over_capacity_is_reported_in_full_never_pruned(self):
+        source = self.static_source(65)
+        census = c.source_variant_census(source)
+        self.assertEqual(census['maximum'], 65)
+        self.assertEqual(census['variant_rows'], 65)
+        self.assertEqual(census['species_over_capacity'], (('swalot', 65),))
+        with self.assertRaisesRegex(ValueError, 'full source axis exceeds64; no rows removed'):
+            c.LabelVocabulary.from_public_source(source, move_ids=('surf',),
+                expected_source_hash='f5a5265143d423af')
+        self.assertEqual(len(source.universes['swalot'].variants), 65)
+
     def test_append_preserves_every_v4_value_and_uses_a_new_role(self):
         old = v4(); new = observation()
         for name in ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask'):
