@@ -3,11 +3,13 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
+from unittest.mock import patch
 
 import jax.numpy as j
 import numpy as np
 
 from gpu_engine import v5_public_branch as branch
+from gpu_engine import v5_hypothetical_batch as batch
 from gpu_engine import engine_lifecycle_callbacks as life
 from gpu_engine import engine_color_change_callbacks as color
 import test_gpu_engine_color_change_owning as fixtures
@@ -111,6 +113,34 @@ class CurrentTypesTests(unittest.TestCase):
         tree=ast.parse((root/'v5_public_branch.py').read_text())
         get=lambda t:next(x for x in t.body if isinstance(x,ast.FunctionDef) and x.name=='core')
         self.assertEqual(ast.dump(get(old)),ast.dump(get(tree)))
+
+
+class ModeBindingTests(unittest.TestCase):
+    def test_cached_executor_checks_original_mode_edge_before_reuse(self):
+        # Reuse the literal production edge snapshot, without constructing an
+        # engine, public-world root, model, or executor compiler graph.
+        tree=ast.parse(Path(batch.__file__).read_text())
+        cls=next(x for x in tree.body if isinstance(x,ast.ClassDef) and x.name=='_Executor')
+        init=next(x for x in cls.body if isinstance(x,ast.FunctionDef) and x.name=='__init__')
+        names=next(ast.literal_eval(x.value) for x in init.body if isinstance(x,ast.Assign)
+            and any(isinstance(t,ast.Name) and t.id=='names' for t in x.targets))
+        self.assertIn('direct_hit_mode',names)
+        runtime={name:object() for name in names};runtime['catalog']=object()
+        runtime['direct_hit_mode']='kernel-event'
+        value=batch._Executor.__new__(batch._Executor)
+        value.prepared=object();value.adapter=object();value.runtime=runtime
+        value.route=object();value.run=object()
+        value.edges=tuple((name,runtime[name]) for name in names)
+        batch._REGISTERED[value]=(value.prepared,value.adapter,runtime,value.route,value.run,value.edges)
+        with patch.object(batch.driver,'_checked',return_value=runtime), \
+                patch.object(batch.driver,'_checked_witness'), \
+                patch.object(batch.v5_observation,'check_adapter',return_value=runtime['catalog']):
+            value.check()
+            original=runtime['direct_hit_mode'];runtime['direct_hit_mode']='closed'
+            with self.assertRaisesRegex(ValueError,'static hypothetical executor edges changed'):
+                value.check()
+            runtime['direct_hit_mode']=original
+            value.check()
 
 
 if __name__=='__main__':unittest.main()

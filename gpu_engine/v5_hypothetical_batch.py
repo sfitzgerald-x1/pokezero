@@ -157,7 +157,7 @@ class _Executor:
             raise ValueError('original hypothetical accounting/risk/profile/FULL statics required')
         self.runtime=r
         names=('request_fast','installations','encode_fast','public','execution_compiled','kernel_risk_compiled',
-            'speed_profile','frame_witness_compiled','leftovers_context','status_residual_context','direct_hit_context',
+            'speed_profile','frame_witness_compiled','leftovers_context','status_residual_context','direct_hit_context','direct_hit_mode',
             'substitute_context','toxic_context','recoil_context','calm_mind_context','swords_dance_context','spikes_context','thunder_wave_context','sleep_powder_context')
         self.edges=tuple((name,r[name]) for name in names)
         data=r['speed_profile'].device
