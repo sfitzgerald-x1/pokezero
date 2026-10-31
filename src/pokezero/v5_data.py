@@ -73,6 +73,9 @@ class DecisionRow:
             raise ValueError('explicit original trajectory/v5 public decision required')
         c._binding(self.source_frame_sha256)
         if self.terminal_source_sha256 is not None:c._binding(self.terminal_source_sha256)
+        if self.step.observation.schema_version != c.OBSERVATION_SCHEMA_VERSION_V4:
+            raise ValueError('original v4 step schema required; no legacy cache relabeling')
+        self.step.observation.validate(c.V4_SPEC)
         if self.step.player_id != ('p1','p2')[self.observation.address.owner]:
             raise ValueError('original trajectory owner differs from v5 address')
         for name in (*INPUTS,'legal_action_mask'):

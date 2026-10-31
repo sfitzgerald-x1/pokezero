@@ -61,6 +61,9 @@ class V5DataTests(unittest.TestCase):
         changed=replace(original.step,action_index=1)
         with self.assertRaisesRegex(ValueError,'original behavior'):
             data.attach_batch(base_batch([original]),[replace(original,step=changed)])
+        legacy=replace(original.step.observation,schema_version='pokezero.observation.v3')
+        with self.assertRaisesRegex(ValueError,'original v4 step schema'):
+            replace(original,step=replace(original.step,observation=legacy))
 
     def test_attach_uses_public29_inputs_and_keeps_behavior_ppo_and_privileged_sidecar_separate(self):
         rows=(row(status='COMPLETE',search=True,privileged=True),row(1,status='CAPPED',search=True))
