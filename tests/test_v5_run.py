@@ -195,9 +195,10 @@ class V5RunTests(unittest.TestCase):
             def wait(self,timeout=None):return self.returncode
             def kill(self):self.returncode=-9
         child=Child();clock=[0.]
-        with tempfile.TemporaryDirectory() as directory,patch.object(r.time,'monotonic',side_effect=lambda:clock[0]):
+        with tempfile.TemporaryDirectory() as directory,patch.object(r.time,'monotonic',side_effect=lambda:clock[0]),\
+                patch.object(r,'_stop_owned_group',side_effect=lambda child,grace,**kwargs:child.terminate()):
             def sleep(seconds):clock[0]+=seconds
-            out=r.supervise_owned(['owned-synthetic-worker'],plan=recipe,path=directory,popen=lambda cmd:child,sleep=sleep)
+            out=r.supervise_owned(['owned-synthetic-worker'],plan=recipe,path=directory,popen=lambda cmd,**kwargs:child,sleep=sleep)
             self.assertEqual(out['exit_code'],-15);self.assertEqual(out['owned_pid'],17)
             self.assertEqual(out['stop_reason'],'NO_DURABLE_WORK_PROGRESS')
 
@@ -207,11 +208,12 @@ class V5RunTests(unittest.TestCase):
             def poll(self):return self.returncode
             def terminate(self):self.returncode=-15
             def wait(self,timeout=None):return self.returncode
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory,\
+                patch.object(r,'_stop_owned_group',side_effect=lambda child,grace,**kwargs:child.terminate()):
             path=Path(directory);(path/'journal').mkdir()
             (path/'journal'/'000000000.json').write_text(json.dumps(dict(sequence=0,previous=None,
                 kind='GAME_END',payload={},time=1,sha256='wrong')))
-            out=r.supervise_owned(['owned-synthetic-worker'],plan=plan(),path=path,popen=lambda cmd:Child(),sleep=lambda seconds:None)
+            out=r.supervise_owned(['owned-synthetic-worker'],plan=plan(),path=path,popen=lambda cmd,**kwargs:Child(),sleep=lambda seconds:None)
             self.assertEqual(out['exit_code'],-15);self.assertEqual(out['stop_reason'],'PROGRESS_JOURNAL_CHANGED')
 
     def test_owned_artifact_is_create_only_namespace_bound_and_checked_on_read(self):
@@ -224,3 +226,59 @@ class V5RunTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class SupervisorRepairTests(unittest.TestCase):
+    """Fake owned process groups only; never signal a real PID in unit tests."""
+    def invoke(self,*,journal=None,finish=False,orphan=False,persistent=False):
+        clock=[0.];signals=[]
+        class Child:
+            pid=17003;returncode=None;polls=0;group=True;waits=[];killed=False
+            def poll(self):
+                self.polls+=1
+                if finish and self.polls>=3:
+                    self.returncode=0
+                    if not orphan:self.group=False
+                return self.returncode
+            def wait(self,timeout=None):self.waits.append(timeout);return self.returncode
+            def kill(self):self.killed=True;self.returncode=-9
+        child=Child();kwargs=[]
+        def popen(command,**options):kwargs.append(options);return child
+        def killpg(pid,sig):
+            self.assertEqual(pid,child.pid)
+            if not child.group:raise ProcessLookupError()
+            if sig==0:return
+            signals.append(sig)
+            if child.returncode is None:child.returncode=-15 if sig==r.signal.SIGTERM else -9
+            if sig==r.signal.SIGKILL and not persistent:child.group=False
+            elif sig==r.signal.SIGTERM and not orphan and not persistent:child.group=False
+        with tempfile.TemporaryDirectory() as directory,patch.object(r,'os',NS(killpg=killpg)),\
+                patch.object(r,'time',NS(monotonic=lambda:clock[0],time=lambda:2000.)):
+            path=Path(directory)
+            if journal is not None:
+                (path/'journal').mkdir();(path/'journal'/'000000000.json').write_text(journal)
+            out=r.supervise_owned(['fake-owned'],plan=plan(),path=path,popen=popen,
+                sleep=lambda seconds:clock.__setitem__(0,clock[0]+seconds))
+        self.assertEqual(kwargs,[dict(start_new_session=True)])
+        self.assertTrue(all(x is not None for x in child.waits))
+        return out,child,signals,clock[0]
+
+    def test_new_resume_uses_its_own_backstop_not_old_run_age(self):
+        event=dict(sequence=0,previous=None,time=1.,kind='RUN_STARTED',payload={});event['sha256']=r._sha(event)
+        out,child,_,_=self.invoke(journal=json.dumps(event),finish=True)
+        self.assertEqual(out['exit_code'],0);self.assertIsNone(out['stop_reason'])
+
+    def test_invalid_journal_reports_error_and_reaps_owned_worker(self):
+        out,child,signals,_=self.invoke(journal='{')
+        self.assertEqual(out['stop_reason'],'PROGRESS_JOURNAL_CHANGED')
+        self.assertIn('JSONDecodeError',out['observer_error']);self.assertFalse(child.group)
+        self.assertIn(r.signal.SIGTERM,signals)
+
+    def test_leader_exit_does_not_prove_its_ignoring_descendant_is_gone(self):
+        out,child,signals,_=self.invoke(finish=True,orphan=True)
+        self.assertEqual(out['exit_code'],0);self.assertFalse(child.group)
+        self.assertIn(r.signal.SIGTERM,signals);self.assertIn(r.signal.SIGKILL,signals)
+
+    def test_still_present_group_refuses_after_finite_cleanup(self):
+        with self.assertRaisesRegex(RuntimeError,'process group remains'):
+            self.invoke(finish=True,orphan=True,persistent=True)

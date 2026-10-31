@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import signal
 from pathlib import Path
 import subprocess
 import tempfile
@@ -43,6 +44,7 @@ def _seed(value):
 
 @dataclass(frozen=True)
 class Game:
+    """Cell/trajectory identity seed; Batch owns actual constructor/action RNG."""
     stream_id:int
     battle_id:str
     seed:int
@@ -160,7 +162,8 @@ class Plan:
             selection_seed=self.selection_seed,historical_fraction=self.historical_fraction,historical_window=self.historical_window,
             max_requests=self.max_requests,watchdog=asdict(self.watchdog),checkpoint_updates=self.checkpoint_updates,
             contract_sha256=_sha(c.contract_descriptor()),opponent_rule='UNIFORM_RECENT_PAST_SNAPSHOTS_NO_OUTCOME_ADAPTATION',
-            initial_history='EMPTY_POOL_EXPLICIT_SELFPLAY',actor='RAW_POLICY',scientific_qualification=False)
+            initial_history='EMPTY_POOL_EXPLICIT_SELFPLAY',actor='RAW_POLICY',
+            game_seed_scope='TRAJECTORY_IDENTITY_ONLY_BATCH_CONSTRUCTOR_AND_SAMPLING_SEEDS_DRIVE_RNG',scientific_qualification=False)
 
 
 def _publish(path,blob):
@@ -357,38 +360,66 @@ def run(plan,path,*,backend,resume=False,enable_v5=False):
         scientific_qualification=False)
 
 
-def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep):
-    """Optional outer backstop for a NEW owned worker command, never a service.
+def _stop_owned_group(process,grace,*,sleep):
+    """Only the private session created below; finite waits before returning."""
+    def alive():
+        try:os.killpg(process.pid,0);return True
+        except ProcessLookupError:return False
+    def signal_group(value):
+        try:os.killpg(process.pid,value)
+        except ProcessLookupError:pass
+    if alive():signal_group(signal.SIGTERM)
+    end=time.monotonic()+grace
+    while alive() and time.monotonic()<end:sleep(min(.1,max(0.,end-time.monotonic())))
+    if alive():
+        signal_group(signal.SIGKILL)
+        end=time.monotonic()+grace
+        while alive() and time.monotonic()<end:sleep(min(.1,max(0.,end-time.monotonic())))
+    if alive():raise RuntimeError('owned worker process group remains after bounded cleanup')
+    try:process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        try:process.wait(timeout=grace)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError('owned worker leader remains after bounded cleanup') from error
 
-    Only this function's child is terminated. It watches actual completion and
-    optimizer progress events, not CPU liveness. The caller must use it around
-    its bootstrap entrypoint to interrupt a blocked library call as well.
+
+def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep):
+    """Bound THIS owned invocation, including its privately owned descendants.
+
+    Original journal time remains provenance. A later authorized resume gets a
+    new invocation backstop while retaining completed/unknown root dispositions.
+    Observation errors and interruption clean only this new process session.
     """
-    started=time.monotonic();last=started;longest=0.;seen=0;previous=None;phase='PREPARE';last_steps=-1;run_started=None
-    process=popen(command)
-    reason=None
-    while process.poll() is None:
-        events=sorted((Path(path)/'journal').glob('*.json'))
-        if len(events)<seen:reason='PROGRESS_JOURNAL_CHANGED'
-        for item in events[seen:]:
-            event=json.loads(item.read_text());digest=event.pop('sha256',None)
-            if event.get('sequence')!=seen or event.get('previous')!=previous or _sha(event)!=digest:
-                reason='PROGRESS_JOURNAL_CHANGED';break
-            previous=digest;seen+=1;payload=event['payload']
-            if event['kind']=='RUN_STARTED':run_started=event['time']
-            if event['kind']=='GAME_END' and payload['status']=='COMPLETE':
-                longest=max(longest,payload['duration_seconds']);last=time.monotonic()
-            elif event['kind']=='TRAIN_PROGRESS' and payload['steps']>last_steps:
-                phase='TRAIN';last_steps=payload['steps'];last=time.monotonic()
-            elif event['kind']=='BATCH_STARTED' and phase!='COLLECT':phase='COLLECT';last=time.monotonic()
-        now=time.monotonic()
-        if reason is None:
-            if now-started>plan.watchdog.backstop_seconds or run_started is not None and time.time()-run_started>plan.watchdog.backstop_seconds:reason='DISTANT_BACKSTOP'
-            elif now-last>max(plan.watchdog.initial_window_seconds,plan.watchdog.longest_multiplier*longest):reason='NO_DURABLE_WORK_PROGRESS'
-        if reason:
-            process.terminate()
-            try:process.wait(timeout=plan.watchdog.terminate_grace_seconds)
-            except subprocess.TimeoutExpired:process.kill();process.wait()
-            break
-        sleep(plan.watchdog.poll_seconds)
-    return dict(exit_code=process.returncode,stop_reason=reason,owned_pid=getattr(process,'pid',None))
+    started=time.monotonic();last=started;longest=0.;seen=0;previous=None;phase='PREPARE';last_steps=-1
+    process=popen(command,start_new_session=True)
+    reason=None;observer_error=None
+    try:
+        while process.poll() is None:
+            try:
+                events=sorted((Path(path)/'journal').glob('*.json'))
+                if len(events)<seen:reason='PROGRESS_JOURNAL_CHANGED'
+                for item in events[seen:]:
+                    event=json.loads(item.read_text());digest=event.pop('sha256',None)
+                    if event.get('sequence')!=seen or event.get('previous')!=previous or _sha(event)!=digest:
+                        reason='PROGRESS_JOURNAL_CHANGED';break
+                    previous=digest;seen+=1;payload=event['payload']
+                    if event['kind']=='GAME_END' and payload['status']=='COMPLETE':
+                        longest=max(longest,payload['duration_seconds']);last=time.monotonic()
+                    elif event['kind']=='TRAIN_PROGRESS' and payload['steps']>last_steps:
+                        phase='TRAIN';last_steps=payload['steps'];last=time.monotonic()
+                    elif event['kind']=='BATCH_STARTED' and phase!='COLLECT':phase='COLLECT';last=time.monotonic()
+            except (OSError,ValueError,KeyError,TypeError) as error:
+                observer_error=type(error).__name__+': '+str(error)
+                reason='PROGRESS_JOURNAL_CHANGED'
+            now=time.monotonic()
+            if reason is None:
+                if now-started>plan.watchdog.backstop_seconds:reason='DISTANT_BACKSTOP'
+                elif now-last>max(plan.watchdog.initial_window_seconds,plan.watchdog.longest_multiplier*longest):reason='NO_DURABLE_WORK_PROGRESS'
+            if reason:break
+            sleep(plan.watchdog.poll_seconds)
+    finally:
+        # Also reap descendants after a leader exits or an observer raises;
+        # an exited leader alone does not establish resource/slot release.
+        _stop_owned_group(process,plan.watchdog.terminate_grace_seconds,sleep=sleep)
+    return dict(exit_code=process.returncode,stop_reason=reason,owned_pid=getattr(process,'pid',None),observer_error=observer_error)
