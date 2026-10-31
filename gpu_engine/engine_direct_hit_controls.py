@@ -7,7 +7,8 @@ Emit critical first, then at most one effectiveness control, immediately AFTER
 the numerical HP assignment and BEFORE its existing MAIN_HP callback. None of
 these flags or ratios is reconstructed from the amount of HP lost.
 
-Only positive nonlethal ordinary direct-target writes are represented. Miss,
+Positive nonlethal ordinary direct-target writes and the exact original compiled
+Seismic Toss fixed-level row are represented. Miss,
 immunity, substitute, protection, Endure, no-output and lethal writes stay
 UNKNOWN. Diagnostic calls retain UNKNOWN256. The separate PRIVATE registered
 source seam omits only this new latch for valid literal writes in the matching
@@ -48,6 +49,7 @@ class Data(NamedTuple):
     move_binding: object
     producer_binding: object
     move_count: object
+    seismic_toss_move: object       # exact canonical fixed-LEVEL row, or0
 
 
 class Context(NamedTuple):
@@ -111,13 +113,27 @@ def compile_direct_hit_controls(*, engine_catalog):
             or not np.all(((num == 0) & (den == 1)) | ((num == 1) & ((den == 1) | (den == 2)))
                 | ((num == 2) & (den == 1)))):
         raise ValueError('original finite kernel type-chart word domain required')
+    # The only zero-power source capability is canonical Seismic Toss. Its
+    # original LEVEL resolver returns before crit/effectiveness modifiers.
+    # Other fixed families (including Night Shade) remain unsupported.
+    table=engine_catalog.engine_table;seismic=0
+    public_id=engine_catalog.public_moves.ids.get('seismictoss',0)
+    for i,pid in enumerate(engine_catalog.ids):
+        if (i>0 and public_id>0 and pid==public_id and engine_catalog.targets[i]==1
+                and table.damage_moves is not None and int(table.power[i])==0
+                and int(table.type[i])==2 and bool(table.physical[i])
+                and int(table.accuracy[i])==100 and not bool(table.always_hit[i])
+                and int(table.priority[i])==0 and bool(table.damage_moves.level_damage[i])
+                and int(table.damage_moves.constant_damage[i])==0
+                and int(table.damage_moves.recoil_den[i])==0 and not bool(table.damage_moves.struggle[i])):
+            seismic=i
     payload = dict(schema=SCHEMA, producer=engine_catalog.binding,
         engine=engine_catalog.engine_binding, source=engine_catalog.source_binding,
-        moves=engine_catalog.move_binding, move_count=count,
+        moves=engine_catalog.move_binding, move_count=count, seismic_toss_move=seismic,
         kinds=[CRITICAL, SUPER_EFFECTIVE, RESISTED],
         positive_effectiveness_ratios=POSITIVE_EFFECTIVENESS_RATIOS,
         source_files={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('transition.py', 'critical.py', 'mechanics.py', 'engine_direct_hit_controls.py')},
+            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py')},
         scope='literal-positive-nonlethal-write-only-no-consumer-registration')
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     words = lambda x:jnp.asarray(x, jnp.uint32)
@@ -125,7 +141,7 @@ def compile_direct_hit_controls(*, engine_catalog):
         words(engine_catalog.engine_binding), words(engine_catalog.source_binding),
         words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding), dtype='>u4').astype(np.uint32)),
-        jnp.array(count, jnp.int32))
+        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32))
     result = Compiled(data)
     _COMPILED[result] = (data, tuple(data), engine_catalog)
     return result
@@ -167,6 +183,7 @@ def _check(tape, data):
             data.binding, data.engine_binding, data.source_binding, data.move_binding, data.producer_binding):
         life._typed(value, (8,), jnp.uint32)
     life._typed(data.move_count, (), jnp.int32)
+    life._typed(data.seismic_toss_move, (), jnp.int32)
     life._valid(tape.cursor)
     return True
 
@@ -198,13 +215,30 @@ def _typed_write(write, b):
         else _word(value, (b,))) for name, value in zip(write._fields, write)})
 
 
-def _valid_write(w):
-    return ((w.power > 0) & w.hit & ~w.immune & ~w.substitute & ~w.protected & ~w.enduring
+def fixed_level_move_device(data,move):
+    """Original compiled source row only; not actual write/attempt acceptance."""
+    if type(data) is not Data:raise ValueError('original direct-hit Data required')
+    life._typed(data.seismic_toss_move,(),jnp.int32)
+    return ((data.seismic_toss_move>0)&(data.seismic_toss_move<data.move_count)
+        &(move==data.seismic_toss_move))
+
+
+def annotation_flags_device(write,*,data=None,move=None):
+    # Keep the literal unused crit/type fields in HitWrite/Outcome. The original
+    # fixed-level source returns before the public modifier annotations.
+    fixed=False if data is None or move is None else fixed_level_move_device(data,move)
+    return write.critical&~jnp.asarray(fixed), (write.numerator!=write.denominator)&~jnp.asarray(fixed)
+
+
+def _valid_write(w,*,data=None,move=None):
+    fixed=False if data is None or move is None else fixed_level_move_device(data,move)
+    power=((w.power>0)&~jnp.asarray(fixed))|((w.power==0)&jnp.asarray(fixed))
+    return (power & w.hit & ~w.immune & ~w.substitute & ~w.protected & ~w.enduring
         & _positive_ratio(w.numerator, w.denominator)
         & (w.old_hp > w.new_hp) & (w.new_hp > 0) & (w.maximum >= w.old_hp))
 
 
-def validate_write_device(write, b):
+def validate_write_device(write, b, *, data=None, move=None):
     """Pure literal write validity only; no damage formula or caller proof."""
     if type(b) is not int or b <= 0 or type(write) is not HitWrite:
         raise ValueError('positive static batch and literal HitWrite required')
@@ -212,7 +246,7 @@ def validate_write_device(write, b):
         w = _typed_write(write, b)
     except (TypeError, ValueError):
         return jnp.zeros(b, bool)
-    return _valid_write(w)
+    return _valid_write(w,data=data,move=move)
 
 
 def _positive_ratio(numerator, denominator):
@@ -258,7 +292,8 @@ def _record(tape, actor_side, actor_physical, target_physical, move, write, data
         return tape, jnp.zeros_like(tape.count, bool)
     target_side = 1-actor_side
     rows = jnp.arange(tape.count.shape[0]); safe = jnp.clip(actor_side, 0, 1)
-    need = w.critical.astype(jnp.int32) + (w.numerator != w.denominator).astype(jnp.int32)
+    critical,effect=annotation_flags_device(w,data=data,move=move)
+    need = critical.astype(jnp.int32) + effect.astype(jnp.int32)
     room = (tape.count >= 0) & (tape.count <= tape.words.shape[1]-need)
     valid = (life._valid(tape.cursor) & tape.cursor.initialized
         & (tape.stream_id > 0) & (tape.stream_id == tape.cursor.stream_id)
@@ -272,7 +307,7 @@ def _record(tape, actor_side, actor_physical, target_physical, move, write, data
         & (target_physical == tape.cursor.physical_active[rows, 1-safe])
         & (data.move_count > 1) & (move > 0) & (move < data.move_count)
         & (tape.count >= 0) & (tape.count <= tape.words.shape[1])
-        & _valid_write(w))
+        & _valid_write(w,data=data,move=move))
     overflow = eligible & valid & ~room
     # Check only actual NEW slots. A clipped out-of-storage address would
     # inspect the previous prefix and must never hide capacity exhaustion.
@@ -283,8 +318,8 @@ def _record(tape, actor_side, actor_physical, target_physical, move, write, data
         valid &= (need <= offset) | ~inside | jnp.all(tape.switch_details[rows, index] == 0, axis=1)
     use = eligible & valid & room
     facts = (move, w.old_hp, w.new_hp, w.numerator, w.denominator)
-    for kind, flag in ((CRITICAL, w.critical), (SUPER_EFFECTIVE, w.numerator > w.denominator),
-                       (RESISTED, w.numerator < w.denominator)):
+    for kind, flag in ((CRITICAL, critical), (SUPER_EFFECTIVE, effect & (w.numerator > w.denominator)),
+                       (RESISTED, effect & (w.numerator < w.denominator))):
         tape = public._append(tape, kind, actor_side, actor_physical, target_side, target_physical,
             facts, use & flag)
     tape = tape._replace(refusal=tape.refusal | jnp.where(overflow, public.OVERFLOW, 0))
