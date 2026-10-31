@@ -296,7 +296,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
                      _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
-                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None) -> StepResult:
+                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None, _calm_mind_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -305,6 +305,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _calm_mind_context is not None:
+        from . import engine_calm_mind_callbacks as calm_mind_callbacks
+        if not _lifecycle_trace or type(_calm_mind_context) is not calm_mind_callbacks.Context:
+            raise ValueError('typed actual registered Calm Mind context required')
     if _toxic_context is not None:
         from . import engine_toxic_callbacks as toxic_callbacks
         _toxic_registered=type(_toxic_context) is toxic_callbacks.RegisteredContext
@@ -942,10 +946,23 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             hp=hp-jnp.where(drum,max_hp//2,0)
             boosts=boosts.at[:,0].set(jnp.where(drum,6,boosts[:,0]))
             work=work._replace(hp=_set_active(work.hp,work,side,hp))
-            if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_BOOST,
-                    acts & jnp.any(effects.self_boosts[move]!=0,axis=1),active=live)
+            if _calm_mind_context is not None:
+                _calm_mind_old_spa,_calm_mind_old_spd=boosts[:,2],boosts[:,3]
+                _calm_mind_requested=caller_acts & (caller_move==_calm_mind_context.data.move_id)
+                _public_trace,_calm_mind_ticket=execution_accounting.open_attempt(_public_trace,
+                    execution_accounting.Site.CALM_MIND,side,active=_calm_mind_requested)
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
+            if _calm_mind_context is not None:
+                _calm_mind_write=calm_mind_callbacks.Write(_calm_mind_old_spa,boosts[:,2],
+                    _calm_mind_old_spd,boosts[:,3],acts & hit & ~immune)
+                _public_trace=calm_mind_callbacks.record_device(_public_trace,_calm_mind_ticket,side,
+                    work.active[rows,side],move,_calm_mind_write,_calm_mind_context,eligible=_calm_mind_requested)
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.self_boost_on_tape(_public_trace,
+                    acts & jnp.any(effects.self_boosts[move]!=0,axis=1),active=live,
+                    captured=(kernel_risks.CapturedCalmMind(_calm_mind_context,_calm_mind_ticket,
+                        side,work.active[rows,side],move,_calm_mind_write)
+                        if _calm_mind_context is not None else None))
             # These damaging moves lower their own SpA on a successful hit,
             # including Substitute/KO, but not miss, Protect, immunity or
             # absorption. Unlike target secondaries this is not Shield Dust

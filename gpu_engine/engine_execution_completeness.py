@@ -48,6 +48,8 @@ class Site(IntEnum):
     TOXIC_ATTEMPT = 12
     TRACE_COPY = 13
     RECOIL_HP = 14
+    INTIMIDATE_INITIAL = 15  # reserved reviewed constructor-only producer
+    CALM_MIND = 16
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
