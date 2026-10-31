@@ -143,19 +143,26 @@ def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False):
         parameter_count=sum(a.size for a in params.values()),
         tensor_sha256={name: hashlib.sha256(a.tobytes()).hexdigest() for name, a in params.items()})
     encoded = np.frombuffer(json.dumps(result, sort_keys=True, allow_nan=False).encode(), np.uint8)
+    archive = io.BytesIO()
+    np.savez_compressed(archive, metadata_json=encoded, **params)
+    blob = archive.getvalue()
     with Path(out).open('xb') as stream:
-        np.savez_compressed(stream, metadata_json=encoded, **params)
-    return result
+        stream.write(blob)
+    # This digest belongs to the export receipt, not self-declared NPZ content.
+    return dict(result, weights_archive_sha256=hashlib.sha256(blob).hexdigest())
 
 
-def load(path, *, expected_checkpoint_sha256, expected_category_vocabulary_sha256,
+def load(path, *, expected_archive_sha256, expected_checkpoint_sha256, expected_category_vocabulary_sha256,
         expected_label_vocabulary_sha256, enable_v5=False):
     """Load an opt-in actor archive with explicit caller-selected namespaces."""
     if enable_v5 is not True:
         raise ValueError('explicit v5 actor enablement required')
-    for value in (expected_checkpoint_sha256, expected_category_vocabulary_sha256, expected_label_vocabulary_sha256):
+    for value in (expected_archive_sha256, expected_checkpoint_sha256,
+            expected_category_vocabulary_sha256, expected_label_vocabulary_sha256):
         contract._binding(value)
     _sources(); blob, digest = _snapshot(path)
+    if digest != expected_archive_sha256:
+        raise ValueError('caller-trusted v5 actor archive SHA256 differs')
     with np.load(io.BytesIO(blob), allow_pickle=False) as archive:
         metadata = json.loads(archive['metadata_json'].tobytes())
         params = {name: archive[name] for name in archive.files if name != 'metadata_json'}

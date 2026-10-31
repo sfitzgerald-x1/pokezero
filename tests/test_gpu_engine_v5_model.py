@@ -60,7 +60,8 @@ def emit_fixture(directory, arm, replicate):
     directory = Path(directory); checkpoint = directory / 'synthetic.pt'
     torch.save(payload, checkpoint); digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     archive = directory / 'actor.npz'
-    actor.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True)
+    receipt = actor.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True)
+    (directory / 'export-receipt.json').write_text(json.dumps(receipt))
     arrays['checkpoint_sha256'] = np.frombuffer(digest.encode(), np.uint8)
     np.savez_compressed(directory / 'fixture.npz', **arrays)
     # Check export failures in the runtime that owns safe Torch deserialization.
@@ -110,7 +111,9 @@ class V5JaxActorTests(unittest.TestCase):
             digest = data.pop('checkpoint_sha256').tobytes().decode()
             with np.load(directory / 'actor.npz', allow_pickle=False) as archive:
                 metadata = json.loads(archive['metadata_json'].tobytes())
+            receipt = json.loads((directory / 'export-receipt.json').read_text())
             params, config, loaded = actor.load(directory / 'actor.npz', enable_v5=True,
+                expected_archive_sha256=receipt['weights_archive_sha256'],
                 expected_checkpoint_sha256=digest, expected_category_vocabulary_sha256='b' * 64,
                 expected_label_vocabulary_sha256=metadata['model']['label_vocabulary_sha256'])
             columns = {name: data[name] for name in MODEL_INPUTS}
@@ -205,9 +208,11 @@ class V5JaxActorTests(unittest.TestCase):
             self.assertEqual(set(json.loads((directory / 'rejections.json').read_text())), expected)
             self.assertFalse(any('head' in key and key.startswith(('hidden_', 'opponent_', 'survival', 'final_hp')) for key in params))
             kwargs = dict(enable_v5=True, expected_checkpoint_sha256=metadata['checkpoint_sha256'],
+                expected_archive_sha256=metadata['weights_archive_sha256'],
                 expected_category_vocabulary_sha256=config.category_vocabulary_sha256,
                 expected_label_vocabulary_sha256=config.label_vocabulary.sha256)
-            for key in ('expected_checkpoint_sha256', 'expected_category_vocabulary_sha256', 'expected_label_vocabulary_sha256'):
+            for key in ('expected_archive_sha256', 'expected_checkpoint_sha256',
+                    'expected_category_vocabulary_sha256', 'expected_label_vocabulary_sha256'):
                 with self.assertRaises(ValueError):actor.load(directory / 'actor.npz', **dict(kwargs, **{key: 'f' * 64}))
             with self.assertRaises(ValueError):actor.load('/never-read', **dict(kwargs, enable_v5=False))
             with self.assertRaises(ValueError):actor.export('/never-read', '/never-written', expected_checkpoint_sha256='a' * 64)
@@ -216,10 +221,26 @@ class V5JaxActorTests(unittest.TestCase):
             changed = {name: source[name] for name in source.files}
         changed['policy_head.bias'] = changed['policy_head.bias'] + 1
         bad = directory / 'bad-archive.npz'; np.savez_compressed(bad, **changed)
-        with self.assertRaisesRegex(ValueError, 'digest'):
+        with self.assertRaisesRegex(ValueError, 'archive SHA256'):
             actor.load(bad, enable_v5=True, expected_checkpoint_sha256=metadata['checkpoint_sha256'],
+                expected_archive_sha256=metadata['weights_archive_sha256'],
                 expected_category_vocabulary_sha256='b' * 64,
                 expected_label_vocabulary_sha256=metadata['model']['label_vocabulary_sha256'])
+
+    def test_recomputed_internal_tensor_hash_cannot_rebind_trusted_archive(self):
+        directory, _, config, _, _, metadata = self.fixtures[2]
+        with np.load(directory / 'actor.npz', allow_pickle=False) as archive:
+            changed = {name: archive[name] for name in archive.files}
+        inner = json.loads(changed['metadata_json'].tobytes())
+        changed['policy_head.bias'] = changed['policy_head.bias'] + 1
+        inner['tensor_sha256']['policy_head.bias'] = hashlib.sha256(changed['policy_head.bias'].tobytes()).hexdigest()
+        changed['metadata_json'] = np.frombuffer(json.dumps(inner, sort_keys=True).encode(), np.uint8)
+        path = directory / 'rehashed.npz'; np.savez_compressed(path, **changed)
+        with self.assertRaisesRegex(ValueError, 'archive SHA256'):
+            actor.load(path, enable_v5=True, expected_archive_sha256=metadata['weights_archive_sha256'],
+                expected_checkpoint_sha256=metadata['checkpoint_sha256'],
+                expected_category_vocabulary_sha256=config.category_vocabulary_sha256,
+                expected_label_vocabulary_sha256=config.label_vocabulary.sha256)
 
 
 if __name__ == '__main__':
