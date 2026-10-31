@@ -157,7 +157,7 @@ def normalized_hypothetical_default(text,*,as_tree=False):
 
 class DefaultAST(unittest.TestCase):
     def test_whole_default_transition_ast_and_mutations(self):
-        original=subprocess.check_output(['git','show','ad445ae1:gpu_engine/transition.py'],text=True)
+        original=subprocess.check_output(['git','show','bce0c4db:gpu_engine/transition.py'],text=True)
         current=Path('gpu_engine/transition.py').read_text()
         normalize=normalized_hypothetical_default
         self.assertEqual(normalize(original),normalize(current))

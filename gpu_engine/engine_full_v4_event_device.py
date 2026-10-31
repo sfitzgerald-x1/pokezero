@@ -39,6 +39,7 @@ from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
 from . import engine_recoil_callbacks as recoil_callbacks
 from . import engine_intimidate_callbacks as intimidate_callbacks
+from . import engine_calm_mind_callbacks as calm_mind_callbacks
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -73,6 +74,7 @@ class Tables(NamedTuple):
     substitute_created: object
     toxic_no_effect: object
     recoil_damage: object
+    calm_mind: object
     ident_species: object
     intimidate: object
     namespaces: Bindings
@@ -241,6 +243,10 @@ def compile_adapter(metadata, projector, *, catalog):
     if int(lower.device.intimidate_engine_ability)>0 and int(lower.device.intimidate_public_ability)>0:
         intimidate=add((f'|-ability|{ident[0]}|Intimidate|boost',f'|-unboost|{ident[1]}|atk|1'),inputs.Kind.BOOST)
         if not intimidate:raise ValueError('FULL writer lacks exact positive Intimidate pair')
+    calm_mind=np.zeros(2,np.int32)
+    if int(lower.device.calm_mind_move)>0:
+        calm_mind=np.array([add(f'|-boost|{ident[0]}|{stat}|1',inputs.Kind.BOOST) for stat in ('spa','spd')],np.int32)
+        if not np.all(calm_mind):raise ValueError('FULL writer lacks exact Calm Mind SPA/SPD schemas')
     trace_copy=0
     if int(lower.device.trace_engine_ability)>0 and int(lower.device.sturdy_engine_ability)>0 and int(lower.device.sturdy_public_ability)>0:
         trace_copy=add(f'|-ability|{ident[0]}|Sturdy|Trace|[from] ability: Trace|[of] {ident[1]}',inputs.Kind.TRACE)
@@ -277,7 +283,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
-    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()
+    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
@@ -285,7 +291,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -389,6 +395,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
     causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
     causal.base._shape(tables.intimidate,(),jnp.int32)
+    causal.base._shape(tables.calm_mind,(2,),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     causal.base._shape(tables.ident_species,(tables.ident_species.shape[0],),jnp.int32)
@@ -432,6 +439,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
         recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
         intimidate=(kind==int(inputs.Kind.BOOST))&(raw_kind==intimidate_callbacks.INTIMIDATE)
+        calm_mind=(kind==int(inputs.Kind.BOOST))&(raw_kind==calm_mind_callbacks.CALM_MIND)
         direct_control=(kind==int(inputs.Kind.NONPROC)) & (
             (raw_kind==direct_hit_controls.CRITICAL)|(raw_kind==direct_hit_controls.SUPER_EFFECTIVE)
             |(raw_kind==direct_hit_controls.RESISTED))
@@ -469,6 +477,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(pressure,tables.pressure_start,key)
         key=jnp.where(intimidate,tables.intimidate,key)
         key=jnp.where(trace_copy,tables.trace_copy,key)
+        key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
@@ -516,6 +525,27 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~intimidate | (~state.causal.cursor.initialized&(state.sequence==0)
             &live[rows,safe]&live[rows,1-safe]&(semantic[:,2]==0)&(semantic[:,3]==0))
         identity &= ~trace_copy | (live[rows,safe]&live[rows,1-safe])
+        # One actual MOVE must be followed by the COMPLETE literal SPA->SPD
+        # pair; neither a single boost nor a migrated suffix can represent it.
+        calm_spa=tape.words[:,index,4]==2
+        first_at=index-jnp.where(calm_spa,0,1);second_at=first_at+1
+        first=tape.words[rows,jnp.clip(first_at,0,tape.words.shape[1]-1)]
+        second=tape.words[rows,jnp.clip(second_at,0,tape.words.shape[1]-1)]
+        pair=((first_at>0)&(second_at<tape.count)&(first[:,0]==calm_mind_callbacks.CALM_MIND)
+            &(second[:,0]==calm_mind_callbacks.CALM_MIND)&(first[:,4]==2)&(second[:,4]==3)
+            &jnp.all(first[:,1:4]==second[:,1:4],axis=1)&(first[:,7]==second[:,7])
+            &(first[:,5]>=-6)&(first[:,5]<6)&(first[:,6]==first[:,5]+1)
+            &(second[:,5]>=-6)&(second[:,5]<6)&(second[:,6]==second[:,5]+1)
+            &jnp.all(first[:,8:]==0,axis=1)&jnp.all(second[:,8:]==0,axis=1))
+        for at in (first_at,second_at):
+            clipped=jnp.clip(at,0,tape.words.shape[1]-1)
+            pair &= (tape.event_turn[rows,clipped]==semantic[:,2])&(tape.event_phase[rows,clipped]==semantic[:,3])
+            pair &= jnp.all(tape.event_generation[rows,clipped]==tape.event_generation[:,index],axis=1)
+        calm_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        identity &= ~calm_mind | (pair&live[rows,safe]&(called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[calm_move])&(called[:,3]==semantic[:,2])
+            &(called[:,4]+1==first_at))
+
         raw=tape.words[:,index]
         recoil_move=jnp.clip(raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
         recoil_old_percent=(100*raw[:,6]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8])
