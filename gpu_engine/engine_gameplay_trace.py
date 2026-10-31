@@ -1,6 +1,8 @@
 """Opt-in remote JSONL capture of actual retained decisions, never policy input.
 
-One row is copied at a time, after its original core call. No engine, model,
+One row is copied at a time, after its original core call. An exact immutable
+prior after-packet may supply the next before-packet; all checks stay outside
+this measurement-data reuse. No engine, model,
 writer/fold, RNG sampling or simulator runs here. Capacity/IO failures disable
 capture and retain dropped counts; they never alter the experiment's decisions.
 The caller chooses an explicit remote path. No default artifact is created.
@@ -9,13 +11,98 @@ import hashlib
 import json
 from pathlib import Path
 import time
+from collections import namedtuple
 
+import jax
 import numpy as np
 
 from .state import BattleState
 from pokezero.recorded_encoder_parity import SHAPES
 
 SCHEMA = 'pokezero.actual-gameplay-trace.v1'
+_TUPLE_GETTER = type(namedtuple('_TraceTupleDescriptor', 'field').field)
+
+
+def _boundary_proof(result):
+    """Host-only proof of the immutable inputs read by boundary(), not a gate.
+
+    Unserialized private constructor/static holders are deliberately excluded.
+    Every traversed container must be an ordinary immutable tuple record; every
+    captured leaf must be a live immutable JAX array or an immutable scalar.
+    NumPy fixtures, mutable wrappers and unfamiliar types always use fresh data.
+    """
+    from . import engine_retained_encoder_driver as driver
+    edges = []
+    def record(value):
+        cls = type(value)
+        fields = getattr(cls, '_fields', None)
+        if (cls.__bases__ != (tuple,) or type(fields) is not tuple
+                or len(fields) != len(value) or cls.__getattribute__ is not tuple.__getattribute__
+                or getattr(value, '__dict__', None) is not None
+                or any(type(name) is not str or type(getattr(cls, name, None)) is not _TUPLE_GETTER for name in fields)):
+            raise TypeError('unproven boundary container')
+        if any(getattr(value, name) is not tuple.__getitem__(value, index) for index, name in enumerate(fields)):
+            raise TypeError('changed boundary field descriptor')
+        edges.append(('record', value, fields))
+        return fields
+    def field(value, name):
+        return tuple.__getitem__(value, record(value).index(name))
+    def leaf(value):
+        if isinstance(value, jax.Array) and not isinstance(value, jax.core.Tracer):
+            if value.is_deleted():raise ValueError('deleted boundary array')
+            edges.append(('array', value, (tuple(value.shape), str(value.dtype))))
+        elif type(value) in (type(None), bool, int, str, bytes):
+            edges.append(('scalar', value, type(value)))
+        elif type(value) is float and np.isfinite(value):
+            edges.append(('scalar', value, type(value)))
+        else:raise TypeError('unproven boundary leaf')
+    def fields(value, names):
+        for name in names:leaf(field(value, name))
+    def sequence(value):
+        if type(value) is not tuple:raise TypeError('mutable boundary sequence')
+        edges.append(('tuple', value, len(value)))
+        return value
+    try:
+        if type(result) is not driver.Result: return None
+        state = field(result, 'state')
+        if type(state) is not driver.DriverState:return None
+        core = field(state, 'core')
+        if type(core) is not driver.Core:return None
+        engine = field(core, 'engine')
+        if type(engine) is not BattleState:return None
+        fields(engine, BattleState._fields)
+        unsafe = field(core, 'unsafe')
+        if unsafe is None:leaf(unsafe)
+        else:
+            for value in sequence(unsafe):leaf(value)
+        fields(core, ('frame_number', 'admitted', 'terminal_closeout'))
+        fields(field(core, 'cursor'), ('stream_id', 'turn', 'phase', 'generation'))
+        for request in sequence(field(core, 'requests')):
+            fields(field(field(field(request, 'actions'), 'facts'), 'request'), ('present', 'wait'))
+        for owner in sequence(field(result, 'owners')):
+            fields(owner, ('reason', 'basic_error', 'retained_error', 'full_line_consumers_complete'))
+            fields(field(field(owner, 'encoded'), 'observation'), ('admitted', *SHAPES))
+        report = field(core, 'frame_input_report')
+        if report is None:leaf(report)
+        else:fields(report, ('raw_count', 'raw_words', 'event_turn', 'event_phase', 'event_generation',
+            'switch_details', 'refusal', 'owner_full_words', 'owner_full_valid', 'owner_full_more'))
+        for name, selected in (('risks', 'risk'), ('execution', 'refusal')):
+            value = field(core, name)
+            if value is None:leaf(value)
+            else:fields(value, (selected,))
+        return tuple(edges)
+    except Exception:
+        return None
+
+
+def _same_boundary_proof(before, after):
+    if before is None or after is None or len(before) != len(after):return False
+    for old, new in zip(before, after, strict=True):
+        if old[0] != new[0] or old[2] != new[2]:return False
+        if old[0] == 'scalar':
+            if old[1] != new[1]:return False
+        elif old[1] is not new[1]:return False
+    return True
 
 
 def encoded(value):
@@ -180,10 +267,11 @@ def selected_actions(result, actions, row, action_names):
 
 class TraceWriter:
     """Exclusive bounded writer. Methods are nonfatal after explicit creation."""
-    def __init__(self, path, *, max_bytes=1024**3, max_record_bytes=4*1024**2):
+    def __init__(self, path, *, max_bytes=1024**3, max_record_bytes=4*1024**2, reuse_boundary_data=True):
         if (type(max_bytes) is not int or max_bytes < 4096
                 or type(max_record_bytes) is not int or not 1024 <= max_record_bytes <= 16*1024**2):
             raise ValueError('explicit finite trace byte bounds required')
+        if type(reuse_boundary_data) is not bool:raise ValueError('literal trace data reuse mode required')
         self.path = Path(path)
         self.stream = self.path.open('xb')
         self.max_bytes, self.max_record_bytes = max_bytes, max_record_bytes
@@ -192,6 +280,30 @@ class TraceWriter:
         self.header = None; self.attempts = {}; self.written = {}; self.terminals = {}
         self.initial_ms = 0.; self.advancing_ms = 0.
         self.unsafe_first = set()
+        self._reuse_boundary_data = reuse_boundary_data
+        self._boundary_result = None
+        self._boundary_packets = {}
+
+    def _before_boundary(self, result, row):
+        if type(row) is not int and not isinstance(row, np.integer):return boundary(result, row)
+        cached = self._boundary_packets.get(int(row))
+        runtime = None if self.header is None else self.header.get('runtime_binding')
+        if (self._reuse_boundary_data and result is self._boundary_result and cached is not None
+                and type(runtime) is str and runtime == cached[0]
+                and _same_boundary_proof(cached[1], _boundary_proof(result))):
+            # Canonical bytes cannot be mutated by a payload consumer. Return a
+            # fresh ordinary packet; never reuse an admission/consumer result.
+            return json.loads(cached[2])
+        return boundary(result, row)
+
+    def _remember_boundary(self, result, packet):
+        if not self._reuse_boundary_data:return None
+        runtime = None if self.header is None else self.header.get('runtime_binding')
+        if type(runtime) is not str:return None
+        proof = _boundary_proof(result)
+        if proof is None:return None
+        try:return runtime, proof, encoded(packet)
+        except Exception:return None  # Optimization cannot change capture errors.
 
     def _write(self, kind, payload, *, final=False):
         if self.disabled and not final:
@@ -230,14 +342,21 @@ class TraceWriter:
                 self.header['request_history_rules'] = request_history_rules(request_compiled)
             self.attempts = {int(s): 0 for s in stream_ids}; self.written = dict(self.attempts)
             self._write('HEADER', self.header)
+            packets = {}
             for row, stream in enumerate(stream_ids):
-                self._write('INITIAL', dict(stream_id=int(stream), boundary=boundary(initial, row)))
+                packet = boundary(initial, row)
+                if self._write('INITIAL', dict(stream_id=int(stream), boundary=packet)):
+                    remembered = self._remember_boundary(initial, packet)
+                    if remembered is not None:packets[row] = remembered
+            self._boundary_result = initial if packets and not self.disabled else None
+            self._boundary_packets = packets if not self.disabled else {}
         except Exception as error:
             self.disabled = True; self.failures.append(dict(type=type(error).__name__, message=str(error)))
         self.initial_ms = (time.perf_counter_ns()-start)/1e6
 
     def decision(self, *, request, before, after, actions, active, executed, invalid, chance):
         start = time.perf_counter_ns()
+        packets = {}
         for row in np.flatnonzero(active):
             try:
                 stream = int(np.asarray(before.state.core.cursor.stream_id[row]))
@@ -262,7 +381,7 @@ class TraceWriter:
                 if self.disabled:
                     continue
                 payload = dict(stream_id=stream, request=int(request),
-                    before=boundary(before, row), after=boundary(after, row),
+                    before=self._before_boundary(before, row), after=boundary(after, row),
                     chance={name:_row(value,row).tolist() for name,value in chance._asdict().items()},
                     selected=selected_actions(before, actions, row, self.header['action_names']),
                     executed=bool(executed[row]), invalid=bool(invalid[row]))
@@ -280,9 +399,14 @@ class TraceWriter:
                 if self._write('DECISION', payload):
                     self.written[stream] += 1
                     self.unsafe_first.update((stream, owner) for owner in first)
+                    remembered = self._remember_boundary(after, payload['after'])
+                    if remembered is not None:packets[int(row)] = remembered
             except Exception as error:
                 self.disabled = True
                 if not self.failures: self.failures.append(dict(type=type(error).__name__, message=str(error)))
+        # Only the current Result is retained, never inactive/history carries.
+        self._boundary_result = after if packets and not self.disabled else None
+        self._boundary_packets = packets if not self.disabled else {}
         milliseconds = (time.perf_counter_ns()-start)/1e6
         self.advancing_ms += milliseconds
         return milliseconds
@@ -300,6 +424,8 @@ class TraceWriter:
             self.disabled = True
             self.failures.append(dict(type=type(error).__name__, message=str(error)))
         self.closed = True
+        self._boundary_result = None
+        self._boundary_packets = {}
         return dict(schema=SCHEMA, path=str(self.path), sha256=digest,
             bytes=size, maximum_total_bytes=self.max_bytes+self.max_record_bytes,
             complete=not self.disabled, failures=self.failures, attempts=self.attempts, written=self.written,
