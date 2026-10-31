@@ -178,3 +178,58 @@ def job_templates(prepared,*,name,namespace,image,worker_command,volumes,volume_
             spec=dict(suspend=True,backoffLimit=0,activeDeadlineSeconds=30*24*3600,
                 template=dict(metadata=dict(labels=labels),spec=dict(restartPolicy='Never',affinity=affinity,containers=[container],volumes=volumes)))))
     return tuple(result)
+
+
+@dataclass(frozen=True)
+class WorkerBinding:
+    """Caller-supplied mounted files, with their raw byte digests.
+
+    These are launch arguments, not a scientific admission receipt. The worker
+    must still validate the files, accepted declaration and all launch gates.
+    Constructing this value reads no files and allocates no resources.
+    """
+    declaration:str
+    declaration_sha256:str
+    runtime:str
+    runtime_sha256:str
+    evaluation_protocol:str
+    evaluation_protocol_sha256:str
+    run_root:str
+
+    def __post_init__(self):
+        for name in ('declaration','runtime','evaluation_protocol','run_root'):
+            value=getattr(self,name)
+            if type(value) is not str or not value or not Path(value).is_absolute() or '..' in Path(value).parts:
+                raise ValueError('explicit absolute mounted path required:'+name)
+        for name in ('declaration_sha256','runtime_sha256','evaluation_protocol_sha256'):
+            c._binding(getattr(self,name))
+
+    def argv(self,role):
+        if role not in tuple(_role(*x) for x in ARMS):raise ValueError('exact declared role required')
+        return ['--enable-v5','--arm',role,'--declaration',self.declaration,
+            '--expected-declaration-sha256',self.declaration_sha256,
+            '--runtime',self.runtime,'--expected-runtime-sha256',self.runtime_sha256,
+            '--run-root',self.run_root,'--evaluation-protocol',self.evaluation_protocol,
+            '--expected-evaluation-protocol-sha256',self.evaluation_protocol_sha256]
+
+
+def worker_job_templates(prepared,*,bindings,**template_arguments):
+    """Bind four suspended worker jobs to distinct actual run declarations.
+
+    No preparation document is passed as a run declaration. Suspended state and
+    pending gate annotation remain intact; supplying paths does not pass B4 or
+    turn an unbound template into permission to execute it.
+    """
+    roles=tuple(_role(*x) for x in ARMS)
+    if type(bindings) is not dict or set(bindings)!=set(roles) or any(type(bindings[x]) is not WorkerBinding for x in roles):
+        raise ValueError('explicit binding for each of the four declared roles required')
+    if len({bindings[x].run_root for x in roles})!=len(roles):raise ValueError('distinct run roots required')
+    if len({bindings[x].declaration for x in roles})!=len(roles):raise ValueError('distinct run declaration paths required')
+    if len({bindings[x].declaration_sha256 for x in roles})!=len(roles):raise ValueError('distinct run declaration bytes required')
+    jobs=job_templates(prepared,**template_arguments)
+    for role,job in zip(roles,jobs):
+        binding=bindings[role]
+        job['spec']['template']['spec']['containers'][0]['args']=binding.argv(role)
+        job['metadata']['annotations']['pokezero.worker-binding-sha256']=_sha(dict(
+            (field.name,getattr(binding,field.name)) for field in fields(binding)))
+    return jobs

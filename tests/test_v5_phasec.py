@@ -1,6 +1,6 @@
 """Pure configuration/template checks; never allocate a model or game bank."""
 from copy import deepcopy
-from dataclasses import fields
+from dataclasses import fields,replace
 import hashlib
 import json
 from pathlib import Path
@@ -139,6 +139,38 @@ class PhaseCPreparationTests(unittest.TestCase):
             with self.assertRaises(ValueError):phase.job_templates(doc,**dict(bindings,**change))
         malformed=deepcopy(doc);malformed['arms'].pop()
         with self.assertRaisesRegex(ValueError,'four'):phase.job_templates(malformed,**bindings)
+
+    def test_actual_worker_arguments_bind_each_role_without_enabling_jobs(self):
+        doc=phase.preparation(profile(),vocabulary(),category_vocabulary=category())
+        arguments=dict(name='unit-phasec',namespace='test',image='unit@sha256:'+'a'*64,
+            worker_command=['python','-m','pokezero.v5_worker'],volumes=[],volume_mounts=[],cpu=4,memory='8Gi',private_manifest_root='/unit/private')
+        bindings={role:phase.WorkerBinding('/unit/'+role+'/declaration.json',str(i+1)*64,
+            '/unit/runtime.json','b'*64,'/unit/'+role+'/evaluation.json','c'*64,'/unit/'+role+'/run')
+            for i,role in enumerate(('A0','B0','D0','B1'))}
+        jobs=phase.worker_job_templates(doc,bindings=bindings,**arguments)
+        for role,job in zip(bindings,jobs):
+            bound=bindings[role];args=job['spec']['template']['spec']['containers'][0]['args']
+            self.assertEqual(args,['--enable-v5','--arm',role,'--declaration',bound.declaration,
+                '--expected-declaration-sha256',bound.declaration_sha256,'--runtime',bound.runtime,
+                '--expected-runtime-sha256',bound.runtime_sha256,'--run-root',bound.run_root,
+                '--evaluation-protocol',bound.evaluation_protocol,'--expected-evaluation-protocol-sha256',bound.evaluation_protocol_sha256])
+            self.assertNotIn('/unit/private/preparation.json',args)
+            self.assertTrue(job['spec']['suspend']);self.assertEqual(job['spec']['activeDeadlineSeconds'],30*24*3600)
+            self.assertEqual(job['metadata']['annotations']['pokezero.launch-state'],'PREPONLY_B4_GATE_PENDING')
+            self.assertEqual(job['metadata']['annotations']['pokezero.worker-binding-sha256'],phase._sha(
+                {field.name:getattr(bound,field.name) for field in fields(bound)}))
+        with self.assertRaisesRegex(ValueError,'four'):phase.worker_job_templates(doc,bindings={'A0':bindings['A0']},**arguments)
+        with self.assertRaisesRegex(ValueError,'four'):phase.worker_job_templates(doc,bindings=dict(bindings,B1={}),**arguments)
+        for field in ('run_root','declaration','declaration_sha256'):
+            changed=dict(bindings,B1=replace(bindings['B1'],**{field:getattr(bindings['A0'],field)}))
+            with self.assertRaisesRegex(ValueError,'distinct'):phase.worker_job_templates(doc,bindings=changed,**arguments)
+        for field in ('declaration','runtime','evaluation_protocol','run_root'):
+            for invalid in ('relative','/unit/../outside',''):
+                with self.assertRaises(ValueError):replace(bindings['A0'],**{field:invalid})
+        for field in ('declaration_sha256','runtime_sha256','evaluation_protocol_sha256'):
+            with self.assertRaises(ValueError):replace(bindings['A0'],**{field:'unbound'})
+        with self.assertRaises(TypeError):phase.WorkerBinding(**dict(vars(bindings['A0']),launch_ready=True))
+        with self.assertRaises(ValueError):bindings['A0'].argv('C0')
 
 
 if __name__=='__main__':unittest.main()
