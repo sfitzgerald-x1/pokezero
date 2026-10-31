@@ -295,7 +295,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
-                     _weather_hp_context=None) -> StepResult:
+                     _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -304,7 +304,51 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _status_residual_context is not None:
+        from . import engine_lifecycle_callbacks as lifecycle_callbacks
+        from . import engine_status_residual_callbacks as status_residual_callbacks
+        _status_registered=type(_status_residual_context) is status_residual_callbacks.RegisteredStatusResidualContext
+        if (not _lifecycle_trace or type(_status_residual_context) not in
+                (lifecycle_callbacks.StatusResidualContext,status_residual_callbacks.RegisteredStatusResidualContext)
+                or type(_status_residual_context.data) is not status_residual_callbacks.Data):
+            raise ValueError('typed owning lifecycle status residual context required')
+        if _status_registered:
+            from . import engine_weather_speed_profile as weather_speed_profile
+            if (type(_status_residual_context.weather_profile_data) is not weather_speed_profile.ProfileData
+                    or type(_weather_hp_context) is not tuple or len(_weather_hp_context)!=2
+                    or type(_weather_hp_context[0]) is not weather_speed_profile.BirthRecord
+                    or _weather_hp_context[1] is not _status_residual_context.weather_profile_data):
+                raise ValueError('registered status residual requires actual birth and same original profile')
+            if _status_residual_context.hook_context is not None:
+                raise ValueError('kernel-event observer does not accept original hook/history context')
+            # This private registration observes the ACTUAL kernel write.
+            # Original Showdown hook differences belong to physics fidelity,
+            # never to an invented source event or a caller proof boolean.
+    if _leftovers_context is not None:
+        from . import engine_lifecycle_callbacks as lifecycle_callbacks
+        from . import engine_leftovers_callbacks as leftovers_callbacks
+        _leftovers_registered=type(_leftovers_context) is leftovers_callbacks.RegisteredLeftoversContext
+        if (not _lifecycle_trace or type(_leftovers_context) not in
+                (lifecycle_callbacks.LeftoversContext,leftovers_callbacks.RegisteredLeftoversContext)
+                or type(_leftovers_context.data) is not leftovers_callbacks.Data):
+            raise ValueError('typed owning lifecycle Leftovers context required')
+        if _leftovers_registered:
+            if _leftovers_context.no_output_tables is not None:
+                from . import engine_leftovers_no_output as _leftovers_no_output
+                if (type(_leftovers_context.no_output_tables) is not _leftovers_no_output.Tables
+                        or _leftovers_context.no_output_tables.leftovers is not _leftovers_context.data
+                        or _leftovers_context.no_output_tables.profile is not _leftovers_context.weather_profile_data
+                        or getattr(_public_trace,'execution',None) is None):
+                    raise ValueError('original no-output metadata and actual owning accounting required')
+            from . import engine_weather_speed_profile as weather_speed_profile
+            if (type(_leftovers_context.weather_profile_data) is not weather_speed_profile.ProfileData
+                    or type(_weather_hp_context) is not tuple or len(_weather_hp_context)!=2
+                    or type(_weather_hp_context[0]) is not weather_speed_profile.BirthRecord
+                    or _weather_hp_context[1] is not _leftovers_context.weather_profile_data):
+                raise ValueError('registered Leftovers requires actual owning birth and same original profile')
     if _lifecycle_trace:
+        from . import engine_execution_completeness as execution_accounting
+        from .state import LEECH_SEED as _execution_leech_seed
         from . import engine_status_callbacks as status_callbacks
         from . import engine_weather_effect_callbacks as weather_effect_callbacks
         from . import engine_weather_order_callbacks as weather_order_callbacks
@@ -950,9 +994,32 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # Snapshot before Wish(order7), weather(order8), and order10 handlers.
     end_speed = _speeds(work,table)
     if _lifecycle_trace:_weather_pre_wish=work
+    if _status_residual_context is not None:
+        if _status_registered:
+            _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
+                work,_public_trace.stream_id,_status_residual_context.weather_profile_data,eligible=residual_ready)
+            _status_cached_speed_ok=(jnp.all((end_speed>0)&(end_speed<=10000),axis=1)
+                & (end_speed[:,0]!=end_speed[:,1])
+                & jnp.all(_status_residual_context.data.engine_binding==_status_residual_context.weather_profile_data.engine_binding)
+                & jnp.all(_status_residual_context.data.source_binding==_status_residual_context.weather_profile_data.source_binding))
+    if _leftovers_context is not None:
+        if _leftovers_registered:
+            _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                work,_public_trace.stream_id,_leftovers_context.weather_profile_data,eligible=residual_ready)
+            # Actual source cache, not a resample after Speed Boost/pinch.
+            # The cap guard keeps original getStat's 10000 clamp inactive even
+            # when an installed weather ability doubles a bounded live Speed.
+            _leftovers_cached_speed_ok=(jnp.all((end_speed>0)&(end_speed<=10000),axis=1)
+                & (end_speed[:,0]!=end_speed[:,1])
+                & jnp.all(_leftovers_context.data.engine_binding==_leftovers_context.weather_profile_data.engine_binding)
+                & jnp.all(_leftovers_context.data.source_binding==_leftovers_context.weather_profile_data.source_binding))
     if table.sustain is not None:
         ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         for side in range(2):
+            if _lifecycle_trace:
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.WISH,side,
+                    active=ordinary & (work.wish_counter[:,side]>0))
             wish = recovery.wish_residual(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 work.wish_counter[:,side],eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,wish.hp),
@@ -1015,15 +1082,52 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
         eligible = residual_ready & battle_continues
         hp = _active(work.hp,work,side)
+        if _status_residual_context is not None:
+            if _status_registered:
+                _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
+                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,eligible=eligible)
         if table.entry is not None:
             boosts = _active(work.boosts,work,side)
             speed_boost = (eligible & ability_event & (hp > 0)
                 & (work.active_turns[rows,side] > 0)
                 & table.entry.speed_boost[_active(work.ability,work,side)])
+            if _lifecycle_trace:
+                # The attempt exists at stage+6 too, even if min leaves no write.
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.SPEED_BOOST,side,active=speed_boost)
             boosts = boosts.at[:,4].set(jnp.where(speed_boost,jnp.minimum(6,boosts[:,4]+1),boosts[:,4]))
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
         healed = hp
+        if _leftovers_context is not None:
+            # Literal BEFORE values precede both the numerical heal and item
+            # consumption. No final item/state reconstruction or amount formula.
+            _leftovers_physical=work.active[rows,side]
+            _leftovers_item=_active(work.item,work,side)
+            _leftovers_old_hp=hp
+            _leftovers_maximum=_active(work.max_hp,work,side)
+            _leftovers_status=_active(work.status,work,side)
+            if _leftovers_registered:
+                _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,eligible=eligible)
         if table.items is not None:
+            if _lifecycle_trace:
+                _execution_item=_active(work.item,work,side)
+                _execution_leftovers_requested=(eligible & heal_event & (hp>0)
+                    & table.items.leftovers[_execution_item])
+                _execution_old_heal_hp=hp
+                _public_trace,_execution_leftovers_ticket=execution_accounting.open_attempt(
+                    _public_trace,execution_accounting.Site.LEFTOVERS,side,
+                    active=_execution_leftovers_requested)
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.PINCH_ITEM,side,
+                    active=eligible & heal_event & (hp>0)
+                    & (hp*4<=_active(work.max_hp,work,side)) & (table.items.pinch_stat[_execution_item]>=0))
+                if _leftovers_context is not None:
+                    if _leftovers_registered and _leftovers_context.no_output_tables is not None:
+                        _execution_full_hp_before=_leftovers_no_output.capture_before_device(
+                            _public_trace,_execution_leftovers_ticket,work,event,_weather_hp_record,
+                            _leftovers_context.no_output_tables,
+                            requested=_execution_leftovers_requested&(hp==_active(work.max_hp,work,side)))
             healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
                 _active(work.max_hp,work,side),eligible=eligible & heal_event)
             item,boosts=held.consume_pinch(table.items,_active(work.item,work,side),
@@ -1031,13 +1135,113 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 eligible=eligible & heal_event)
             work=work._replace(item=_set_active(work.item,work,side,item),
                 boosts=_set_active(work.boosts,work,side,boosts))
+            if _leftovers_context is not None:
+                if _leftovers_registered:
+                    _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                        work,_public_trace.stream_id,_leftovers_context.weather_profile_data,
+                        eligible=eligible & heal_event)
+        if _lifecycle_trace:
+            _execution_status=_active(work.status,work,side)
+            _execution_status_requested=(eligible & status_event & (hp>0)
+                & ((_execution_status==m.BRN)|(_execution_status==m.PSN)|(_execution_status==m.TOX)))
+            if _status_residual_context is not None and _status_registered:
+                _public_trace,_execution_status_ticket=execution_accounting.open_attempt(_public_trace,
+                    execution_accounting.Site.STATUS_RESIDUAL,side,active=_execution_status_requested)
+            else:
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.STATUS_RESIDUAL,side,active=_execution_status_requested)
+        if _status_residual_context is not None:
+            # Literal BEFORE values at this exact numerical assignment. The
+            # kernel-site ticket may capture its exact appended span later;
+            # no ticket is consumed or physically qualified by this write.
+            _status_physical=work.active[rows,side]
+            _status_old_hp=_active(work.hp,work,side)
+            _status_maximum=_active(work.max_hp,work,side)
+            _status_old_status=_active(work.status,work,side)
+            _status_old_counter=_active(work.status_counter,work,side)
+            if _status_registered:
+                _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
+                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,
+                    eligible=_execution_status_requested)
         residual = m.major_status_residual(hp,
             _active(work.max_hp, work, side), _active(work.status, work, side),
             _active(work.status_counter, work, side), active=eligible & status_event)
         work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
+        if _leftovers_context is not None:
+            if _leftovers_registered and _leftovers_context.no_output_tables is not None:
+                if table.items is not None:
+                    _execution_full_hp_after=_leftovers_no_output.finish_device(_execution_full_hp_before,
+                        _public_trace,work,_weather_hp_record,_leftovers_context.no_output_tables)
+                    _public_trace=execution_accounting.capture_leftovers_full_hp(_public_trace,
+                        _execution_full_hp_after,no_output_tables=_leftovers_context.no_output_tables)
+                    # Only this exact entered full-HP branch uses its typed
+                    # no-output receipt; failed proofs remain sticky/unhandled.
+                    _execution_leftovers_requested &= ~_execution_full_hp_before.requested
+        if _status_residual_context is not None:
+            # Read AFTER the SAME HP/counter write, before later handlers. No
+            # damage/stage formula, final-state reconstruction or faint event.
+            _status_new_hp=_active(work.hp,work,side)
+            _status_defer=False
+            if _status_registered:
+                _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
+                    work,_public_trace.stream_id,_status_residual_context.weather_profile_data,
+                    eligible=_execution_status_requested)
+                # Selected kernel-event coverage only. Original-hook/history
+                # equivalence is deliberately not inferred from speed membership.
+                _status_guard_valid=(_weather_hp_record.qualified_birth & _status_cached_speed_ok
+                    & ((_public_trace.refusal&~public_callbacks.UNINSTRUMENTED)==0))
+                _status_defer=_status_guard_valid
+            _public_trace=status_residual_callbacks.record_status_residual_device(_public_trace,
+                side,_status_physical,_status_old_hp,_active(work.hp,work,side),_status_maximum,
+                _status_old_status,_status_old_counter,_active(work.status_counter,work,side),
+                _status_residual_context.data,eligible=eligible & status_event & (_status_old_hp>0)
+                & ((_status_old_status==m.BRN)|(_status_old_status==m.PSN)|(_status_old_status==m.TOX)),
+                _defer_own_unknown=_status_defer)
+            if _status_registered:
+                _status_execution=getattr(_public_trace,'execution',None)
+                if _status_execution is not None:
+                    _status_ledger=execution_accounting.unhandled(_status_execution.ledger,
+                        _execution_status_ticket,active=_execution_status_requested & ~_status_guard_valid,
+                        tables=_status_execution.tables)
+                    _public_trace=execution_accounting._put_context(_public_trace,_status_ledger,_status_execution)
+                _public_trace=execution_accounting.capture_status_residual_write(_public_trace,
+                    _execution_status_ticket,requested=_execution_status_requested & _status_guard_valid,
+                    positive_write=(_status_new_hp<_status_old_hp)&(_status_new_hp>0))
+        if _leftovers_context is not None:
+            # Record immediately AFTER this exact HP assignment. The immutable
+            # Diagnostic mode retains UNKNOWN. The registered actual context
+            # defers ONLY this new emitter latch; all prior refusals survive.
+            _leftovers_new_hp=_active(work.hp,work,side)
+            _leftovers_defer=False
+            if _leftovers_registered:
+                _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,
+                    eligible=eligible & heal_event)
+                _leftovers_defer=_weather_hp_record.qualified_birth & _leftovers_cached_speed_ok
+            _public_trace=leftovers_callbacks.record_leftovers_heal_device(_public_trace,
+                side,_leftovers_physical,_leftovers_item,_leftovers_old_hp,_leftovers_new_hp,
+                _leftovers_maximum,_leftovers_status,_leftovers_context.data,
+                eligible=eligible & heal_event & (_leftovers_new_hp>_leftovers_old_hp),
+                _defer_own_unknown=_leftovers_defer)
+        if _lifecycle_trace:
+            if table.items is not None:
+                _public_trace=execution_accounting.capture_leftovers_write(_public_trace,
+                    _execution_leftovers_ticket,requested=_execution_leftovers_requested,
+                    positive_write=_active(work.hp,work,side)>_execution_old_heal_hp)
         if table.sustain is not None:
             foe = 1-side
+            if _lifecycle_trace:
+                _execution_seed_attempt=(eligible & seed_event & (_active(work.hp,work,side)>0)
+                    & ((_active(work.volatile,work,side)&_execution_leech_seed)!=0))
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.LEECH_DRAIN,side,active=_execution_seed_attempt)
+                # This is the numerical handler's recipient-live dispatch
+                # guard, not a reconstructed drain/healing delta. Source-slot
+                # provenance and cancellation hooks remain unproved/UNKNOWN.
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.LEECH_HEAL,foe,
+                    active=_execution_seed_attempt & (_active(work.hp,work,foe)>0))
             drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 _active(work.volatile,work,side),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
                 eligible=eligible & seed_event)

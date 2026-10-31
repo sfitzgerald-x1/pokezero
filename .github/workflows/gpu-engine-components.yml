@@ -27,16 +27,20 @@ jobs:
   cpu-component-shards:
     name: CPU component shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     env:
       JAX_PLATFORMS: cpu
       PYTHONPATH: src:.
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '2'
+      # JAXLIB 0.12.0 CPU correctness checks retain their complete JIT workload.
+      # Bound codegen concurrency while retaining normal optimized execution
+      # of the complete large frames in these correctness checks.
+      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3'
       POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
       POKEZERO_GPU_TEAM_POOL: ${{ github.workspace }}/.ci/gpu-component-teams.npz
     steps:
@@ -68,13 +72,31 @@ jobs:
           python -m gpu_engine.team_pool --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
             --source-commit-label f76228a1354b5d0f307ca2d16101294ad3a2308b \
             --teams 1024 --seed-start 650200000 --out "$POKEZERO_GPU_TEAM_POOL"
+      - name: Add swap headroom for complete CPU JIT compilation
+        run: |
+          awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
+          swapon --show --bytes
+          available_kib=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
+          test "$available_kib" -ge $((30 * 1024 * 1024))
+          swap_file=$(mktemp "$RUNNER_TEMP/pokezero-components-swap.XXXXXX")
+          sudo chown root:root "$swap_file"
+          sudo chmod 600 "$swap_file"
+          sudo fallocate --length 24G "$swap_file"
+          sudo mkswap "$swap_file"
+          sudo swapon "$swap_file"
+          awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
+          swapon --show --bytes
       - name: Run component shard without optional skips
         run: |
           set -o pipefail
           python -c 'import jax; print("Component test devices:", jax.devices())'
-          # Release each discovery block's compiled runtime resources before
-          # the next block; keep its original suite and every discovered case.
-          python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 8 --process-blocks 2>&1 \
+          # Keep original custom suites intact. These heavy plain classes have
+          # independent cases: release its process heap before the next case,
+          # including fresh original module/class fixtures for every case.
+          python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 16 --process-blocks \
+            --isolate-standard-class test_gpu_engine_execution_runtime_plumbing.ExecutionRuntimePlumbingTests \
+            --isolate-standard-class test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests \
+            --resource-interval-seconds 30 2>&1 \
             | tee /tmp/gpu-components.log
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
             echo '::error::component tests skipped required JAX, source oracle or real-team fixture'

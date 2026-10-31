@@ -28,6 +28,8 @@ from . import public_wire, public_refresh_stream, public_toxic, v4_encoder
 from . import engine_weather_callbacks as weather_callbacks, weather, public_field
 from . import engine_weather_progress_callbacks as weather_progress
 from . import engine_weather_effect_callbacks as weather_effects
+from . import engine_leftovers_callbacks as leftovers_callbacks
+from . import engine_status_residual_callbacks as status_residual_callbacks
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -54,6 +56,8 @@ class Tables(NamedTuple):
     weather_failure: object
     weather_failure_moves: object
     weather_chip: object
+    leftovers_heal: object
+    status_damage: object
     namespaces: Bindings
     binding: object
 
@@ -96,7 +100,7 @@ def compile_adapter(metadata, projector, *, catalog):
     allowed = {int(k) for k in (inputs.Kind.RAW_BEGIN, inputs.Kind.SWITCH_PRELUDE,
         inputs.Kind.MUDSHOT, inputs.Kind.NONPROC, inputs.Kind.TENDENCY,
         inputs.Kind.ACTIVE, inputs.Kind.TYPES, inputs.Kind.FIELD,
-        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY)}
+        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY,inputs.Kind.ITEM)}
 
     def add(line, main_kind, before=prior):
         try:
@@ -191,6 +195,18 @@ def compile_adapter(metadata, projector, *, catalog):
             suffix=(' '+token) if token else ''
             weather_chip[code,status]=add(f'|-damage|{ident[0]}|71/100{suffix}|[from] {label}',inputs.Kind.CONDITION)
             if not weather_chip[code,status]:raise ValueError('FULL writer lacks exact weather HP schema')
+    leftovers_heal=np.zeros(7,np.int32)
+    if int(lower.device.leftovers_engine_item)>0 and int(lower.device.leftovers_public_item)>0:
+        for status,token in enumerate(tokens):
+            suffix=(' '+token) if token else ''
+            leftovers_heal[status]=add(f'|-heal|{ident[0]}|81/100{suffix}|[from] item: Leftovers',inputs.Kind.CONDITION)
+            if not leftovers_heal[status]:raise ValueError('FULL writer lacks exact Leftovers heal schema')
+    status_damage=np.zeros((3,7),np.int32)
+    for reason,tag in ((status_residual_callbacks.BURN,'brn'),(status_residual_callbacks.POISON,'psn')):
+        for status,token in enumerate(tokens):
+            suffix=(' '+token) if token else ''
+            status_damage[reason,status]=add(f'|-damage|{ident[0]}|71/100{suffix}|[from] {tag}',inputs.Kind.CONDITION)
+            if not status_damage[reason,status]:raise ValueError('FULL writer lacks exact residual status HP schema')
     if not all(kinds[k] for k in (1, 2, 3, 6, 12)) or not np.all(conditions) or not np.all(statuses[1:]) or not np.all(cures[1:]):
         raise ValueError('FULL writer lacks required causal lifecycle schemas')
     width = max(lengths)
@@ -199,13 +215,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload = packed.tobytes()+np.array(lengths, np.int32).tobytes()+np.array(mains, np.int32).tobytes()
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
-    payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()
+    payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -280,7 +296,7 @@ def _commit_public(ok, before, after):
     return candidate._replace(context=candidate.context._replace(refresh=refresh))
 
 
-def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None):
+def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None,status_residual=None):
     """Trusted, pure device closure; genuine same-core frame delivered ONCE.
 
     The causal scan resolves BEFORE identities. This second device scan expands
@@ -290,7 +306,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     """
     if type(state) is not StreamState or type(tables) is not Tables:
         raise ValueError('typed FULL raw stream and static tables required')
-    lower = causal.project_device(state.causal, tape, before_registry, after_registry, tables.causal,weather_hp=weather_hp)
+    lower = causal.project_device(state.causal, tape, before_registry, after_registry, tables.causal,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
     b = tape.stream_id.shape[0]; rows = jnp.arange(b)
     causal.base._shape(state.sequence, (b,), jnp.int32)
     causal.base._shape(state.live, (b, 2), jnp.bool_)
@@ -301,6 +317,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(state.weather,(b,),jnp.int32)
     causal.base._shape(state.weather_permanent,(b,),jnp.bool_)
     causal.base._shape(state.weather_remaining,(b,),jnp.int32)
+    causal.base._shape(tables.status_damage,(3,7),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     width = tables.templates.shape[1]
@@ -309,7 +326,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     capacity = 64*width
 
     def step(carry, index):
-        words, count, sequence, turn, phase, slots, live, species, statuses, observed_hp,observed_maximum,current_weather,permanent,remaining,called,weather_window,weather_seen,hp_open,hp_seen,hp_speeds,hp_last_speed,error, overflow = carry
+        words, count, sequence, turn, phase, slots, live, species, statuses, observed_hp,observed_maximum,current_weather,permanent,remaining,called,weather_window,weather_seen,hp_open,hp_seen,hp_speeds,hp_last_speed,leftovers_open,leftovers_seen,status_seen,error, overflow = carry
         semantic = lower.chunk.words[:, index]; kind = semantic[:, 0]
         present = lower.chunk.valid[:, index]
         move = kind == int(inputs.Kind.MOVE); condition = kind == int(inputs.Kind.CONDITION)
@@ -328,6 +345,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         failed_weather=(kind==int(inputs.Kind.ACTIVE)) & (raw_kind==weather_effects.SAME_WEATHER_FAILURE)
         weather_event=entry_weather|move_weather|clock_weather
         weather_chip=condition & (raw_kind==weather_effects.WEATHER_CHIP)
+        leftovers_heal=condition & (raw_kind==leftovers_callbacks.LEFTOVERS_HEAL)
+        status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
         # This is a SAME-index causal receipt join, not a final-state join:
         # status-enabled lower mode forbids RAW_BEGIN and emits exactly one
         # semantic per accepted input. It never drops a receipt. The actual
@@ -348,6 +367,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(failed_weather,tables.weather_failure,key)
         chip_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,8],0,6)]
         key=jnp.where(weather_chip,tables.weather_chip[jnp.clip(tape.words[:,index,9],0,4),chip_status],key)
+        key=jnp.where(leftovers_heal,tables.leftovers_heal[chip_status],key)
+        key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,2),chip_status],key)
         size = tables.length[key]; main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
@@ -402,6 +423,14 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (observed_maximum[rows,safe,safe_slot]==max_visible)
             & (first_chip | jnp.all(hp_speeds==raw[:,1:3],axis=1))
             & (chip_speed<hp_last_speed))
+        identity &= ~leftovers_heal | (leftovers_open & ~leftovers_seen[rows,safe] & live[rows,safe]
+            & (chip_status==previous_status)
+            & (observed_hp[rows,safe,safe_slot]==old_visible)
+            & (observed_maximum[rows,safe,safe_slot]==max_visible))
+        identity &= ~status_damage | (leftovers_open & ~status_seen[rows,safe] & live[rows,safe]
+            & (chip_status==previous_status)
+            & (observed_hp[rows,safe,safe_slot]==old_visible)
+            & (observed_maximum[rows,safe,safe_slot]==max_visible))
         error = jnp.where(present & (error == 0) & ~identity, int(inputs.Error.IDENTITY), error)
         use = present & (error == 0)
         next_species = species.at[rows, safe, safe_slot].set(
@@ -512,6 +541,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
                 hp_seen.at[rows,safe].set(hp_seen[rows,safe]|(use&weather_chip))),
             jnp.where((use&weather_chip&first_chip)[:,None],raw[:,1:3],hp_speeds),
             jnp.where(use&clock_weather,jnp.iinfo(jnp.int32).max,jnp.where(use&weather_chip,chip_speed,hp_last_speed)),
+            jnp.where(use&(kind==int(inputs.Kind.ACTION_CHUNK_END)),True,
+                leftovers_open&~(use&(move|arrival|faint|(kind==int(inputs.Kind.TURN))|(kind==int(inputs.Kind.UPKEEP))))),
+            jnp.where((use&(kind==int(inputs.Kind.ACTION_CHUNK_END)))[:,None],False,
+                leftovers_seen.at[rows,safe].set(leftovers_seen[rows,safe]|(use&leftovers_heal))),
+            status_seen.at[rows,safe].set(status_seen[rows,safe]|(use&status_damage)),
             error, overflow), None
 
     init = (jnp.zeros((b, capacity, 16), jnp.int32), jnp.zeros(b, jnp.int32), state.sequence,
@@ -519,8 +553,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         state.live, state.species, state.status,state.hp,state.maximum,state.weather,state.weather_permanent,state.weather_remaining,
         jnp.full((b,5),-1,jnp.int32),jnp.zeros(b,bool),jnp.zeros(b,bool),
         jnp.zeros(b,bool),jnp.zeros((b,2),bool),jnp.zeros((b,2),jnp.int32),
-        jnp.full(b,jnp.iinfo(jnp.int32).max,jnp.int32),error,jnp.zeros(b,bool))
-    (words, count, sequence, _, _, _, live, species,statuses,observed_hp,observed_maximum,current_weather,permanent,remaining,_,_,_,_,_,_,_,error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
+        jnp.full(b,jnp.iinfo(jnp.int32).max,jnp.int32),jnp.zeros(b,bool),jnp.zeros((b,2),bool),jnp.zeros((b,2),bool),error,jnp.zeros(b,bool))
+    (words, count, sequence, _, _, _, live, species,statuses,observed_hp,observed_maximum,current_weather,permanent,remaining,_,_,_,_,_,_,_,_,_,_,error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
     ok = error == 0
     next_state = _commit(ok, state, StreamState(lower.state, sequence, live, species,statuses,current_weather,permanent,remaining,observed_hp,observed_maximum))
     next_state = next_state._replace(causal=next_state.causal._replace(admitted=state.causal.admitted & ok,
@@ -537,10 +571,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     return Projection(next_state, chunk, error, lower.refusal | jnp.where(overflow, engine.OVERFLOW, 0), ok, no, no, no, frames)
 
 
-def project_frame(state, frame, tables, *, weather_hp=None):
+def project_frame(state, frame, tables, *, weather_hp=None, leftovers=None,status_residual=None):
     if type(frame) is not causal.life.LifecycleResult:
         raise ValueError('genuine same-core lifecycle result required')
-    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,weather_hp=weather_hp)
+    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
 
 
 class Consumed(NamedTuple):
@@ -548,9 +582,9 @@ class Consumed(NamedTuple):
     public: v4_encoder.State
 
 
-def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None):
+def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, leftovers=None,status_residual=None):
     """Trusted device path into the ORIGINAL full retained public consumers."""
-    projection = project_frame(state, frame, tables,weather_hp=weather_hp)
+    projection = project_frame(state, frame, tables,weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
     def fold(carry, data):
         current,error=carry
         words,valid,more=data

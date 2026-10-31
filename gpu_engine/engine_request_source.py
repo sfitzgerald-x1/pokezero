@@ -73,6 +73,7 @@ class SourceRules:
 
 
 _RULES = weakref.WeakKeyDictionary()
+_RULE_ORIGINS = weakref.WeakKeyDictionary()
 _COMPILED = weakref.WeakKeyDictionary()
 _REGISTRATIONS = weakref.WeakKeyDictionary()
 _CONSTRUCTED = weakref.WeakKeyDictionary()
@@ -112,13 +113,23 @@ def _compile_rules(metadata, payload):
 
 def load_source_rules(showdown_root, metadata, *, node='node'):
     """Read only the pinned static Dex; never construct a team or a Battle."""
+    if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('verified source rule loader must remain outside outer JIT')
     script = Path(__file__).with_name('request_source_rules.cjs')
     result = subprocess.run([node,str(script),str(Path(showdown_root).resolve())],
         input=json.dumps(metadata,allow_nan=False),text=True,capture_output=True,check=True)
     payload = json.loads(result.stdout)
     if payload.get('generator_sha256') != hashlib.sha256(script.read_bytes()).hexdigest():
         raise ValueError('request rule generator changed')
-    return _compile_rules(metadata,payload)
+    rules=_compile_rules(metadata,payload)
+    # Only this successful pinned-source loader can mint an origin. Trusted
+    # shape fixtures built through _compile_rules intentionally have none.
+    origin=VerifiedRulesOrigin(str(Path(showdown_root).resolve()),str(node),
+        json.dumps(payload['source_tree'],sort_keys=True),
+        json.dumps(payload['compiled_tree'],sort_keys=True),payload['generator_sha256'])
+    _RULE_ORIGINS[rules]=(origin,rules.device,_RULES[rules][2],
+        (origin.root,origin.node,origin.source_tree_json,origin.compiled_tree_json,origin.generator_sha256))
+    return rules
 
 
 def _rules(rules):
@@ -128,6 +139,29 @@ def _rules(rules):
         raise ValueError('original static source rules required')
     actions._immutable_arrays(rules.device,'source rules')
     return record
+
+
+@dataclass(frozen=True,eq=False)
+class VerifiedRulesOrigin:
+    root: str
+    node: str
+    source_tree_json: str
+    compiled_tree_json: str
+    generator_sha256: str
+
+
+def _rules_origin(rules):
+    """Private original-loader edge, never a caller path or proof boolean."""
+    if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('verified source rule origin must remain outside outer JIT')
+    record=_rules(rules);origin=_RULE_ORIGINS.get(rules)
+    if (origin is None or type(origin[0]) is not VerifiedRulesOrigin
+            or origin[1] is not rules.device or origin[2]!=record[2]
+            or (origin[0].root,origin[0].node,origin[0].source_tree_json,
+                origin[0].compiled_tree_json,origin[0].generator_sha256)!=origin[3]
+            or origin[0].generator_sha256!=hashlib.sha256(Path(__file__).with_name('request_source_rules.cjs').read_bytes()).hexdigest()):
+        raise ValueError('original rules from verified pinned-source loader required')
+    return origin[0]
 
 
 @dataclass(frozen=True, eq=False)
@@ -447,15 +481,23 @@ def _gender(state, pool, indices, initialization):
 
 
 def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
-                        gender_initialization=None, capacity=64):
+                        gender_initialization=None, capacity=64, _execution_compiled=None):
     """Real opt-in constructor callsite; legacy state_from_pool stays unchanged.
 
     The same immutable pool and owned selection feed physical construction and
     both retained maxPP holders. Gender is assigned BEFORE actual initial public
     reveals/entry callbacks. Missing gender remains UNKNOWN, never absence.
     """
+    if _execution_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('checked accounting source constructor cannot be traced')
     from . import engine_lifecycle_callbacks as lifecycle
-    record = _checked(compiled); provenance._pool(pool,rehash=True)
+    record = _checked(compiled)
+    if _execution_compiled is not None:
+        from . import engine_execution_completeness as execution
+        _,_,execution_adapter=execution._checked(_execution_compiled)
+        if execution_adapter.causal.projector.catalog is not record['lifecycle']:
+            raise ValueError('same original source lifecycle catalog required for accounting')
+    provenance._pool(pool,rehash=True)
     if json.dumps(pool.metadata(),sort_keys=True) != record['metadata']:
         raise ValueError('actual constructor metadata differs from source producer')
     indices = np.asarray(team_indices)
@@ -480,7 +522,8 @@ def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
         expected_engine_binding=record['rules'].device.engine_binding)
     frame = lifecycle.initialize_with_lifecycle(state,record['engine_table'],cursor=cursor,
         catalog=catalog,expected_binding=catalog.binding,
-        expected_engine_binding=record['rules'].device.engine_binding,capacity=capacity)
+        expected_engine_binding=record['rules'].device.engine_binding,capacity=capacity,
+        execution_compiled=_execution_compiled)
     requests = tuple(produce_request(compiled,frame.state,o,r,frame.after_registry,
         lifecycle_admitted=frame.cursor.admitted) for o,r in zip(orders,registrations))
     return _bind_constructed(frame.state,frame.cursor,tuple(orders),tuple(registrations),requests,
@@ -492,6 +535,8 @@ def advance_source(constructed, engine_actions, *, compiled, chance_inputs=None,
     from . import engine_lifecycle_callbacks as lifecycle
     record = _checked(compiled)
     _constructed(constructed)
+    if constructed.callbacks.execution is not None:
+        raise ValueError('accounted source snapshots require the owning two-owner consuming driver')
     catalog = record['lifecycle']
     frame = lifecycle.trace_step(constructed.state,engine_actions,record['engine_table'],
         cursor=constructed.cursor,catalog=catalog,expected_binding=catalog.binding,

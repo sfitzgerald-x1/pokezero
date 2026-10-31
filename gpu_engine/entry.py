@@ -106,6 +106,13 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     grounded = (~jnp.any(state.types[rows,side,active] == table.flying_type,axis=-1)
         & ~table.levitate[ability])
     layers = jnp.clip(state.spikes[rows,side],0,3)
+    if _weather_trace is not None:
+        from . import engine_execution_completeness as execution_accounting
+        # Dispatch precedes grounded/Levitate blocking. An absent numerical HP
+        # change cannot silently prove no original source output/hook ran.
+        _weather_trace=execution_accounting.unhandled_attempt(_weather_trace,
+            execution_accounting.Site.ENTRY_HAZARD,side,
+            active=eligible & (hp>0) & (layers>0) & jnp.asarray(hazards))
     numerator = jnp.array([0,3,4,6],jnp.int32)[layers]
     amount = jnp.maximum(1,state.max_hp[rows,side,active]*numerator//24)
     hit = eligible & (hp > 0) & grounded & (layers > 0) & hazards
@@ -162,6 +169,12 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
         from . import engine_weather_callbacks as callbacks
         _weather_trace=callbacks.entry_weather(_weather_trace,side,active,old_weather,state.weather,
             old_counter,state.weather_counter,eligible=change)
+    if _weather_trace is not None:
+        # PRE-Trace Start ability, before foe-live/Substitute/immunity/cap
+        # branches. The source can print controls with zero numeric change.
+        _weather_trace=execution_accounting.unhandled_attempt(_weather_trace,
+            execution_accounting.Site.INTIMIDATE_ATTEMPT,side,
+            active=starts & table.intimidate[ability])
     blocked = ((state.substitute_hp[rows,foe,foe_active] > 0)
         | table.attack_drop_immune[state.ability[rows,foe,foe_active]])
     drops = starts & table.intimidate[ability] & (foe_hp > 0) & ~blocked
