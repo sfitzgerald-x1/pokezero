@@ -115,7 +115,7 @@ class PublicWorldTests(unittest.TestCase):
         cls.contract=replace(ActorContract.champion(),category_vocab_sha256=_vocab_sha(cls.config.category_vocab),
             categorical_vocab_size=cls.config.category_vocab.size,belief_set_source_hash=rows.source_hash)
 
-    def fixture(self,*,spent=False,foe_damage100=False,slow_own=False):
+    def fixture(self,*,spent=False,foe_damage100=False,slow_own=False,foe_lead=0,own_level=80):
         metadata=self.f.metadata;names=metadata['vocabulary']['species'][1:]
         pp=[self.catalog.dex.move_info(name).max_pp for name in self.f.names]
         teams=[];own=[]
@@ -130,10 +130,23 @@ class PublicWorldTests(unittest.TestCase):
             teams.append(mon)
             own.append(dict(ident='p1: '+name,details=name+', L80, M',condition=f'{maximum}/{maximum}',
                 active=len(own)==0,moves=list(self.f.names),baseAbility='Pressure',item='Leftovers',stats=stats))
+        own_team=list(teams)
+        if own_level!=80:
+            self.assertFalse(slow_own)
+            mon=teams[0];spread=_gen3_randbat_fixture_spread({},species=mon.species,moves=self.f.names,
+                item='Leftovers',level=own_level,set_source=self.source)
+            own_team[0]=replace(mon,level=own_level,ivs=spread['ivs'],evs=spread['evs'])
+            info=self.catalog.dex.species_info(mon.species)
+            own[0]['details']=f'{mon.species}, L{own_level}, M'
+            maximum=gen3_hp_stat(info.base_stats['hp'],spread['ivs']['hp'],spread['evs']['hp'],own_level)
+            own[0]['condition']=f'{maximum}/{maximum}'
+            own[0]['stats']={key:gen3_stat(info.base_stats[key],spread['ivs'][key],spread['evs'][key],own_level)
+                for key in ('atk','def','spa','spd','spe')}
         first=own[0];name=first['details'].split(',')[0]
+        foe_name=names[foe_lead]
         maximum=int(first['condition'].split('/')[1])
-        lines=[f'|switch|p1a: {name}|{name}, L80, M|{maximum}/{maximum}',
-            f'|switch|p2a: {name}|{name}, L80, M|100/100',f'|-ability|p1a: {name}|Pressure|[silent]','|turn|1']
+        lines=[f'|switch|p1a: {name}|{name}, L{own_level}, M|{maximum}/{maximum}',
+            f'|switch|p2a: {foe_name}|{foe_name}, L80, M|100/100',f'|-ability|p1a: {name}|Pressure|[silent]','|turn|1']
         request=dict(side=dict(id='p1',pokemon=own),active=[dict(moves=[dict(id=move,pp=maximum,maxpp=maximum,disabled=False)
             for move,maximum in zip(self.f.names,pp)])])
         initial_json=json.dumps(request,sort_keys=True,separators=(',',':'))
@@ -145,9 +158,9 @@ class PublicWorldTests(unittest.TestCase):
         if spent or foe_damage100:
             extra=[]
             if spent:
-                extra+=['|move|p2a: '+name+'|Tackle|p1a: '+name,f'|-damage|p1a: {name}|{maximum-1}/{maximum}']
+                extra+=['|move|p2a: '+foe_name+'|Tackle|p1a: '+name,f'|-damage|p1a: {name}|{maximum-1}/{maximum}']
                 request['side']['pokemon'][0]['condition']=f'{maximum-1}/{maximum}'
-            if foe_damage100:extra+=[f'|-damage|p2a: {name}|100/100']
+            if foe_damage100:extra+=[f'|-damage|p2a: {foe_name}|100/100']
             extra+=['|','|upkeep','|turn|2']
             _,packets=public_wire.project_lines(wire,extra,**v4_encoder.wire_kwargs(self.catalog))
             words=tuple(tuple(map(int,event.words())) for packet in packets for event in packet.events)
@@ -162,7 +175,8 @@ class PublicWorldTests(unittest.TestCase):
             stack.enter_context(patch('pokezero.local_showdown.load_showdown_dex_cached',return_value=self.catalog.dex))
             result=capture.public_root(history,config=self.config,contract=self.contract,battle_id='literal-component',seed=31)
         self.assertIsNotNone(result.root,result.decoded.refusal_counts)
-        start=BattleStartOverride(player_teams={'p1':pack_team(teams),'p2':pack_team(teams)},observation_format_id='gen3randombattle')
+        foe_team=teams[foe_lead:]+teams[:foe_lead]
+        start=BattleStartOverride(player_teams={'p1':pack_team(own_team),'p2':pack_team(foe_team)},observation_format_id='gen3randombattle')
         if slow_own:
             # A coherent literal own source set with a different raw Speed.
             # The opponent's full source-ordered sampled set stays unchanged.
@@ -180,7 +194,7 @@ class PublicWorldTests(unittest.TestCase):
                 stack.enter_context(patch('pokezero.local_showdown.load_showdown_dex_cached',return_value=self.catalog.dex))
                 result=capture.public_root(history,config=self.config,contract=self.contract,battle_id='literal-component',seed=31)
             self.assertIsNotNone(result.root,result.decoded.refusal_counts)
-            start=replace(start,player_teams={'p1':pack_team(own_team),'p2':pack_team(teams)})
+            start=replace(start,player_teams={'p1':pack_team(own_team),'p2':pack_team(foe_team)})
         static=world.OwnStatic(history.stream_id,0,(0,)*8,tuple(range(7,13)))
         return result.root,start,history,static
 
