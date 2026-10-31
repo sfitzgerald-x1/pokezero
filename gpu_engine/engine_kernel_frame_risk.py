@@ -51,6 +51,7 @@ class Branch(IntEnum):
     RECOIL=22
     CONFUSION_HP=23
     ENTRY_CONFUSION_CURE=24
+    PRIMARY_STATUS=25
 
 
 NON_WEATHER, SELF_EFFECT, BOOST, FIELD_VOLATILE, TARGET_OUTCOME, SELF_HP, BLOCKED_ACTION, TERMINAL, CONSTRUCTOR_STATE, NAMESPACE, ORDER, OVERFLOW, UPSTREAM = (1<<n for n in range(13))
@@ -72,6 +73,8 @@ class Tables(NamedTuple):
     direct_candidates: object        # [M] immutable original table capability
     substitute_binding: object      # GLOBAL8, original selected self-write helper
     substitute_candidates: object   # [M], prospective only; actual Site11 REQUIRED
+    toxic_binding: object
+    toxic_candidates: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -131,7 +134,7 @@ def _host():
     if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked kernel risk boundary cannot be traced')
 
 
-def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None):
+def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None,toxic_compiled=None):
     _host();record=accounting._checked(accounting_compiled)
     if record[2].causal.projector.catalog is not engine_catalog:raise ValueError('same original accounting/kernel catalog required')
     public.check_catalog(engine_catalog,engine_catalog.engine_table,expected_binding=engine_catalog.binding,
@@ -167,7 +170,15 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         move=int(data.move_id)
         if not 0<move<m:raise ValueError('canonical Substitute move bounds required')
         substitute_binding=np.asarray(data.binding,np.uint32);substitute_candidate[move]=True
-    risk[(weather==0)&~candidate&~substitute_candidate]|=NON_WEATHER
+    toxic_binding=np.zeros(8,np.uint32);toxic_candidate=np.zeros(m,bool)
+    if toxic_compiled is not None:
+        from . import engine_toxic_callbacks as toxic
+        data=toxic.check_compiled(toxic_compiled)
+        if toxic._COMPILED[toxic_compiled][2] is not engine_catalog:raise ValueError('same original Toxic/kernel catalog required')
+        move=int(data.move_id)
+        if not 0<move<m:raise ValueError('canonical Toxic move bounds required')
+        toxic_binding=np.asarray(data.binding,np.uint32);toxic_candidate[move]=True
+    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -178,7 +189,8 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     if table.effects is not None:risk[np.asarray(table.effects.substitute)&~substitute_candidate]|=SELF_EFFECT
     for name in ('self_boosts','hit_spa_drop','haze'):flag(table.effects,name,BOOST)
     for name in ('protect','endure'):flag(table.effects,name,TARGET_OUTCOME)
-    for name in ('heal_bell','status'):flag(table.effects,name,FIELD_VOLATILE)
+    flag(table.effects,'heal_bell',FIELD_VOLATILE)
+    if table.effects is not None:risk[(np.asarray(table.effects.status)!=0)&~toxic_candidate]|=FIELD_VOLATILE
     for name in ('seed','wish','spin'):flag(table.sustain,name,FIELD_VOLATILE)
     flag(table.entry,'spikes_move',FIELD_VOLATILE)
     flag(table.linked_traps,'move',FIELD_VOLATILE);flag(table.encore,'move',FIELD_VOLATILE)
@@ -197,6 +209,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         elif 10<=int(code)<=12 or code==Branch.HAZE:branch[int(code)]=BOOST
         elif 13<=int(code)<=19 or code==Branch.ENTRY_CONFUSION_CURE:branch[int(code)]=FIELD_VOLATILE
         elif 21<=int(code)<=23:branch[int(code)]=SELF_HP
+    branch[Branch.PRIMARY_STATUS]=FIELD_VOLATILE
     files=('transition.py','secondary.py','entry.py','effects.py','absorption.py','sustain.py',
         'linked_traps.py','encore.py','mechanics.py','engine_execution_completeness.py','engine_kernel_frame_risk.py')
     inventory=dict(schema=SCHEMA,declared={x.name:int(x) for x in Branch},
@@ -205,13 +218,13 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
         direct_candidates=candidate.tolist(),substitute_binding=substitute_binding.tolist(),
-        substitute_candidates=substitute_candidate.tolist())
+        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),words(substitute_binding),jnp.asarray(substitute_candidate))
-    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled)
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate))
+    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled)
     return result
 
 
@@ -229,6 +242,9 @@ def check_compiled(compiled):
     if r[6] is not None:
         from . import engine_substitute_callbacks as substitute
         substitute.check_compiled(r[6])
+    if r[7] is not None:
+        from . import engine_toxic_callbacks as toxic
+        toxic.check_compiled(r[7])
     return compiled.device
 
 
@@ -260,6 +276,8 @@ def _bound(carry,tape,tables):
     accounting._shape(carry.opened,(b,),jnp.bool_);accounting._shape(carry.counts,(b,len(Branch)),jnp.int32)
     accounting._shape(tables.selected_risk,(len(tables.selected_risk),),jnp.int32)
     accounting._shape(tables.branch_risk,(len(Branch)+1,),jnp.int32)
+    accounting._shape(tables.toxic_binding,(8,),jnp.uint32)
+    accounting._shape(tables.toxic_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.substitute_binding,(8,),jnp.uint32)
     accounting._shape(tables.substitute_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.direct_hit_binding,(8,),jnp.uint32)
@@ -421,6 +439,56 @@ def observe_substitute_device(carry,tape,attempted,tables,*,active,captured=None
 
 def substitute_on_tape(tape,attempted,*,active,captured=None):
     return _on_tape(tape,observe_substitute_device,attempted,active=active,captured=captured)
+
+
+class CapturedToxic(NamedTuple):
+    context:object
+    ticket:object
+    side:object
+    physical:object
+    target:object
+    move:object
+    attempt:object
+
+
+def _captured_toxic_matches(tape,tables,captured):
+    from . import engine_toxic_callbacks as toxic
+    b=len(tape.count);no=jnp.zeros(b,bool)
+    if captured is None:return no
+    if type(captured) is not CapturedToxic or type(captured.context) is not toxic.RegisteredContext:
+        raise ValueError('typed SAME-call captured Toxic attempt required')
+    context=accounting._context(tape)
+    if context is None:return no
+    ledger=context.ledger;slot,same=accounting._ticket(ledger,captured.ticket);rows=jnp.arange(b)
+    same &= accounting._validate(ledger,captured.context.accounting)
+    data=captured.context.data
+    same &= toxic._check(tape,data)&jnp.any(tables.toxic_binding!=0)&jnp.all(data.binding==tables.toxic_binding)
+    same &= jnp.all(captured.context.accounting.inventory_binding==tables.accounting_binding)
+    move=_vector(captured.move,b);same &= (move==data.move_id)&(move>0)&(move<len(tables.toxic_candidates))
+    same &= tables.toxic_candidates[jnp.clip(move,0,len(tables.toxic_candidates)-1)]
+    for name in ('engine_binding','source_binding','producer_binding'):
+        same &= jnp.all(getattr(data,name)==getattr(tables,name))
+        same &= jnp.all(getattr(captured.context.accounting,name)==getattr(context.tables,name))
+    same &= jnp.all(data.move_binding==tables.move_binding)&ledger.opened&(ledger.refusal==0)
+    same &= (ledger.stage[rows,slot]==2)&(ledger.end[rows,slot]==tape.count)
+    same &= accounting._toxic_span_matches(tape,captured.ticket,captured.side,captured.physical,
+        captured.target,captured.move,captured.attempt)
+    start=ledger.start[rows,slot];span=(jnp.arange(tape.words.shape[1])[None,:]>=start[:,None])&(
+        jnp.arange(tape.words.shape[1])[None,:]<tape.count[:,None])
+    same &= jnp.all(~span|((ledger.claimed==slot[:,None]+1)&jnp.all(ledger.words==tape.words,axis=2)
+        &(ledger.event_turn==tape.event_turn)&(ledger.event_phase==tape.event_phase)
+        &jnp.all(ledger.event_generation==tape.event_generation,axis=2)),axis=1)
+    return same
+
+
+def observe_primary_status_device(carry,tape,attempted,tables,*,active,captured=None):
+    attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
+    supported=_captured_toxic_matches(tape,tables,captured)
+    return _observe(carry,tape,tables,Branch.PRIMARY_STATUS,jnp.where(attempted&~supported,FIELD_VOLATILE,0),active=active)
+
+
+def primary_status_on_tape(tape,attempted,*,active,captured=None):
+    return _on_tape(tape,observe_primary_status_device,attempted,active=active,captured=captured)
 
 
 def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None):

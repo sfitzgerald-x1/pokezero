@@ -39,6 +39,7 @@ from . import engine_status_residual_callbacks as status_residual_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
+from . import engine_toxic_callbacks as toxic_callbacks
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -71,6 +72,7 @@ class Tables(NamedTuple):
     pressure_engine_ability: object
     pressure_public_ability: object
     substitute_move: object
+    toxic_move: object
     binding: object
 
 
@@ -179,6 +181,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         if normalize_id(name)=='pressure'),0)
     pressure_public = 0 if weather_catalog is None else weather_catalog.abilities.ids.get('pressure',0)
     substitute_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='substitute'),0)
+    toxic_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='toxic'),0)
     weather_ids = [0]*5; ability_ids = [0]*4; guard_species = [0]*4; guard_item = [False]*4
     weather_moves=np.array([{'raindance':weather.RAIN,'sunnyday':weather.SUN,
         'sandstorm':weather.SAND,'hail':weather.HAIL}.get(normalize_id(n),0)
@@ -212,7 +215,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         weather_moves=weather_moves.tolist(),weather_duration_safe=duration_safe,
         weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),
         leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,
-        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,admission=False)
+        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
@@ -227,7 +230,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
-        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(substitute_move,jnp.int32),
+        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -349,6 +352,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     b, capacity, _ = tape.words.shape
     if b <= 0 or not 1 <= capacity <= 64:
         raise ValueError('bounded lifecycle tape required')
+    base._shape(tables.toxic_move, (), jnp.int32)
     base._shape(tables.substitute_move, (), jnp.int32)
     base._shape(tables.pressure_engine_ability, (), jnp.int32)
     base._shape(tables.pressure_public_ability, (), jnp.int32)
@@ -467,6 +471,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_event = applied | cured
         pressure = kind == pressure_callbacks.PRESSURE_START
         substitute = kind == substitute_callbacks.SUBSTITUTE_CREATED
+        toxic = kind == toxic_callbacks.TOXIC_ATTEMPT
         lum = kind == item_callbacks.LUM_CONSUMED
         entry_weather = kind == weather_callbacks.ENTRY_WEATHER
         move_weather = kind == weather_progress.MOVE_WEATHER
@@ -602,6 +607,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (raw[:,2]==raw[:,5]-raw[:,6])&(raw[:,8]>=0)&(raw[:,8]<=6)
             & (tables.substitute_move>0)&(raw[:,9]==tables.substitute_move))
         event_ok=jnp.where(substitute,generation_ok & clock_ok & substitute_ok,event_ok)
+        toxic_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity & (phase==0)
+            & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            & (incoming==cursor.physical_active[rows,safe_side])&toxic_callbacks.supported_raw(raw)
+            & (tables.toxic_move>0)&(raw[:,5]==tables.toxic_move))
+        event_ok=jnp.where(toxic,generation_ok & clock_ok & toxic_ok,event_ok)
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -659,7 +669,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # lexical target independently from this literal raw receipt.
         direct_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,
             turn,phase,absent,absent,absent,absent,z,absent,absent,z,z,z,z,z),axis=1)
-        semantic=jnp.where(direct_control[:,None],direct_semantic,semantic)
+        semantic=jnp.where((direct_control|toxic)[:,None],direct_semantic,semantic)
         pressure_payload=jnp.stack((status_enc,jnp.full_like(z,tables.pressure_public_ability),
             jnp.ones_like(z),z,z,z,z,z),axis=1)
         pressure_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ABILITY)),

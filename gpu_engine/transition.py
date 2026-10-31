@@ -296,7 +296,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
                      _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
-                     _direct_hit_context=None, _substitute_context=None) -> StepResult:
+                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -305,6 +305,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _toxic_context is not None:
+        from . import engine_toxic_callbacks as toxic_callbacks
+        _toxic_registered=type(_toxic_context) is toxic_callbacks.RegisteredContext
+        if (not _lifecycle_trace or type(_toxic_context) not in (toxic_callbacks.Context,toxic_callbacks.RegisteredContext)
+                or type(_toxic_context.data) is not toxic_callbacks.Data):
+            raise ValueError('typed actual lifecycle Toxic context required')
     if _substitute_context is not None:
         from . import engine_substitute_callbacks as substitute_callbacks
         _substitute_registered=type(_substitute_context) is substitute_callbacks.RegisteredContext
@@ -749,6 +755,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
             chance[:,6],always_hit=always_hit,hustle=hustle_accuracy,
             compound_eyes=compound_eyes,sand_veil=sand_veil)
+        if _toxic_context is not None:
+            _toxic_accuracy_hit=hit  # Literal accuracy result BEFORE Protect/absorption.
         # TryMove (including Damp) succeeds before self-KO, which occurs even
         # if the subsequent target hit misses, is protected, immune or a sub.
         # Damage inputs were resolved while the user's ability was still active.
@@ -949,6 +957,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             status = effects.status[move]
             target_types = _active(work.types,work,foe)
             status_immune = jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
+            if _toxic_context is not None:
+                _toxic_type_immune=status_immune
+                _toxic_ability_immune=jnp.zeros_like(acts)
+                if table.secondary is not None:
+                    _toxic_ability_immune=table.secondary.ability_immunity[_active(work.ability,work,foe),status]
             if table.secondary is not None:
                 status_immune |= ~secondaries.status_allowed(table.secondary,status,target_types,
                     _active(work.ability,work,foe))
@@ -956,6 +969,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             apply_status = (acts & hit & (status != m.NONE) & ~status_immune
                 & (_active(work.hp,work,foe) > 0) & (_active(work.status,work,foe) == m.NONE)
                 & ((_active(work.substitute_hp,work,foe) == 0) | effects.bypass_sub[move]))
+            if _toxic_context is not None:
+                _toxic_requested=acts & (move==_toxic_context.data.move_id)
+                _toxic_old_status=_active(work.status,work,foe)
+                _toxic_old_counter=_active(work.status_counter,work,foe)
+                _toxic_live=_active(work.hp,work,foe)>0
+                _toxic_sub_block=(_active(work.substitute_hp,work,foe)>0)&~effects.bypass_sub[move]
+                if _toxic_registered:
+                    _public_trace,_toxic_ticket=execution_accounting.open_attempt(_public_trace,
+                        execution_accounting.Site.TOXIC_ATTEMPT,foe,active=_toxic_requested)
             if _lifecycle_trace:
                 _public_trace=status_callbacks.changed(_public_trace,foe,work.active[rows,foe],
                     _active(work.status,work,foe),status,status_callbacks.PRIMARY,eligible=apply_status)
@@ -968,6 +990,21 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(apply_status,0,_active(work.sleep_skipped,work,foe))),
                 rest_origin=_set_active(work.rest_origin,work,foe,
                     jnp.where(apply_status,False,_active(work.rest_origin,work,foe))))
+            if _toxic_context is not None:
+                _toxic_attempt=toxic_callbacks.Attempt(_toxic_accuracy_hit,hit,_toxic_type_immune,
+                    _toxic_ability_immune,_toxic_sub_block,_toxic_live,apply_status,_risk_protected,_risk_absorbed,
+                    immune,acts & hit & ~immune,_toxic_old_status,_active(work.status,work,foe),
+                    _toxic_old_counter,_active(work.status_counter,work,foe))
+                _public_trace=toxic_callbacks.record_device(_public_trace,side,work.active[rows,side],
+                    work.active[rows,foe],move,_toxic_attempt,_toxic_context,eligible=_toxic_requested)
+                if _toxic_registered:
+                    _public_trace=execution_accounting.capture_toxic_attempt(_public_trace,_toxic_ticket,
+                        side,work.active[rows,side],work.active[rows,foe],move,_toxic_attempt,requested=_toxic_requested)
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.primary_status_on_tape(_public_trace,acts & (status!=m.NONE),active=live,
+                    captured=(kernel_risks.CapturedToxic(_toxic_context,_toxic_ticket,side,
+                        work.active[rows,side],work.active[rows,foe],move,_toxic_attempt)
+                        if _toxic_context is not None and _toxic_registered else None))
             if table.secondary is not None:
                 if _lifecycle_trace:
                     work,_public_trace=secondaries.after_status_event(work,side,foe,status,table.secondary,
