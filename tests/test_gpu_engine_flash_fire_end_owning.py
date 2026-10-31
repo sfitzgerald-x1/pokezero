@@ -48,7 +48,7 @@ a.onEnd.call({},target);process.stdout.write(JSON.stringify(lines));"""
         zero=j.zeros(8,bool);slots=j.arange(8,dtype=j.int32)%6
         semantic=j.zeros((8,16),j.int32).at[:,8].set(5)
         values=dict(jnp=j,direct_control=zero,toxic_attempt=zero,no_damage_header=zero,
-            sub_damage=zero,new_slot=slots,semantic=semantic)
+            sub_damage=zero,protect_block=zero,new_slot=slots,semantic=semantic)
         np.testing.assert_array_equal(eval(expression,{},dict(values,flash_ended=j.ones(8,bool))),slots+1)
         np.testing.assert_array_equal(eval(expression,{},dict(values,flash_ended=zero)),semantic[:,8])
 

@@ -37,6 +37,7 @@ from . import engine_direct_ko_callbacks as direct_ko_callbacks
 from . import engine_no_damage_callbacks as no_damage
 from . import engine_secondary_status_callbacks as secondary_callbacks
 from . import engine_flash_fire_end_callbacks as flash_end
+from . import engine_protect_callbacks as protect_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -93,6 +94,9 @@ class Tables(NamedTuple):
     sleep_powder_status: object
     flash_fire_end: object
     substitute_damage: object
+    protect_success: object
+    protect_block: object
+    protect_still_moves: object
     namespaces: Bindings
     binding: object
 
@@ -226,6 +230,17 @@ def compile_adapter(metadata, projector, *, catalog):
                 raise ValueError('FULL retained weather MOVE [still] equivalence changed')
             weather_failure_moves[pid]=True
     if not weather_failure:raise ValueError('FULL writer lacks exact failed-weather schema')
+    protect_still_moves=np.zeros(len(moves),bool)
+    effects=projector.catalog.engine_table.effects
+    if effects is not None:
+        for row in np.flatnonzero(np.asarray(effects.protect)):
+            pid=projector.catalog.ids[row]
+            if pid<=0 or targets.get(pid)!=0:continue
+            still=add(f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[0]}|[still]',inputs.Kind.MOVE)
+            plain=int(moves[pid])
+            protect_still_moves[pid]=bool(plain and still and mains[plain]==mains[still] and np.array_equal(templates[plain],templates[still]))
+    protect_success=add(f'|-singleturn|{ident[0]}|Protect',inputs.Kind.ACTIVE)
+    protect_block=add(f'|-activate|{ident[0]}|Protect',inputs.Kind.NONPROC)
     # Exact source-tagged damage schemas; no generic direct-damage relabeling.
     # Nonlethal registration first; queued lethal/faint source ordering stays
     # unsupported until its own complete producer is installed.
@@ -358,13 +373,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()
     payload += ident_species.tobytes()
-    payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()
+    payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()+np.array([protect_success,protect_block],np.int32).tobytes()+protect_still_moves.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -464,6 +479,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
     causal.base._shape(tables.pressure_start,(),jnp.int32)
     causal.base._shape(tables.flash_fire_end,(),jnp.int32)
+    causal.base._shape(tables.protect_success,(),jnp.int32)
+    causal.base._shape(tables.protect_block,(),jnp.int32)
+    causal.base._shape(tables.protect_still_moves,tables.moves.shape,jnp.bool_)
     causal.base._shape(tables.no_damage_miss,tables.causal.no_damage.candidates.shape,jnp.bool_)
     causal.base._shape(tables.no_damage,(9,7),jnp.int32)
     causal.base._shape(tables.primary_sleep_status,(len(tables.causal.base.public_ids),),jnp.int32)
@@ -524,6 +542,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sub_damage=raw_kind==substitute_damage.SUBSTITUTE_DAMAGE
         secondary_cont=raw_kind==secondary_callbacks.SECONDARY_STATUS
         flash_ended=raw_kind==flash_end.FLASH_FIRE_END
+        protect_attempt=raw_kind==protect_callbacks.PROTECT_ATTEMPT
+        protect_block=raw_kind==protect_callbacks.PROTECT_BLOCK
         substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
         toxic_attempt=(kind==int(inputs.Kind.NONPROC)) & (raw_kind==toxic_callbacks.TOXIC_ATTEMPT)
         toxic_code=toxic_callbacks.outcome_device(tape.words[:,index])
@@ -597,6 +617,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sub_raw=tape.words[:,index]
         key=jnp.where(sub_damage,tables.substitute_damage[(sub_raw[:,7]==0).astype(jnp.int32),
             jnp.clip(sub_raw[:,8],0,1),jnp.clip(sub_raw[:,9]+1,0,2)],key)
+        key=jnp.where(protect_attempt,jnp.where((tape.words[:,index,6]&protect_callbacks.SUCCESS)!=0,tables.protect_success,tables.weather_failure),key)
+        key=jnp.where(protect_block,tables.protect_block,key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
@@ -607,11 +629,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         subject=jnp.where(toxic_attempt,jnp.where(toxic_code==toxic_callbacks.MISS,tape.words[:,index,1],tape.words[:,index,3]),subject)
         subject=jnp.where(trace_copy,semantic[:,4],jnp.where(intimidate,tape.words[:,index,1],subject))
         subject=jnp.where(spikes,tape.words[:,index,1],subject)
-        subject=jnp.where(flash_ended,tape.words[:,index,3],subject)
+        subject=jnp.where(flash_ended|protect_block,tape.words[:,index,3],subject)
         subject=jnp.where(sub_damage,tape.words[:,index,3],subject)
         subject=jnp.where(no_damage_header|no_damage_facts,jnp.where(nd_code==no_damage.MISS,nd_raw[:,1],nd_raw[:,3]),subject)
         safe = jnp.clip(subject, 0, 1)
-        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt|trace_copy|intimidate|spikes|no_damage_header|no_damage_facts|flash_ended|sub_damage,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
+        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt|trace_copy|intimidate|spikes|no_damage_header|no_damage_facts|flash_ended|sub_damage|protect_block,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
         safe_slot = jnp.clip(new_slot, 0, 5)
         prior_species = species[rows, safe, safe_slot]
         collision = jnp.any((species[rows, safe] == semantic[:, 9, None])
@@ -658,6 +680,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(observed_maximum[rows,nd_target,jnp.clip(nd_slot,0,5)]==nd_max)&(statuses[rows,nd_target,jnp.clip(nd_slot,0,5)]==nd_status))
         identity &= ~pressure | live[rows,safe]
         identity &= ~flash_ended | live[rows,safe]
+        protect_move=jnp.clip(tape.words[:,index,5],0,tables.causal.base.public_ids.shape[0]-1)
+        protect_pid=tables.causal.base.public_ids[protect_move]
+        protect_called=(called[:,0]==tape.words[:,index,1])&(called[:,1]==new_slot)&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
+        protect_failed=(tape.words[:,index,6]&protect_callbacks.SUCCESS)==0
+        identity &= ~protect_attempt | (live[rows,safe]&protect_called&(~protect_failed|tables.protect_still_moves[jnp.clip(protect_pid,0,len(tables.protect_still_moves)-1)]))
+        identity &= ~protect_block | (live[rows,safe]&live[rows,1-safe]&(called[:,0]==tape.words[:,index,1])&(called[:,1]==slots[rows,1-safe])&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
         spikes_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
         spikes_called=(called[:,0]==subject)&(called[:,1]==slots[rows,safe])&(called[:,2]==tables.causal.base.public_ids[spikes_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
         identity &= ~spikes | (live[rows,safe]&live[rows,1-safe]&(semantic[:,6]==1-subject)&spikes_called)
@@ -821,7 +849,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # and its raw species spelling, rather than schema-fixture encounter1.
         for col,value in ((11,new_slot+1),(13,tables.ident_species[jnp.clip(prior_species,0,tables.ident_species.shape[0]-1)])):
             result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
-        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended)[:,None]&(schema[:,:,10]>0)))
+        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block)[:,None]&(schema[:,:,10]>0)))
         lexical_side=jnp.clip(result[:,:,4],0,1)
         lexical_slot=current_slots[rows[:,None],lexical_side]
         result=result.at[:,:,11].set(jnp.where(trace_prelude,lexical_slot+1,result[:,:,11]))
@@ -850,7 +878,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         for col, value in ((12, hp), (13, maximum)):
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
-        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage,new_slot+1,semantic[:,8])
+        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage|protect_block,new_slot+1,semantic[:,8])
         prefix = raw_kind == causal.life.TURNLOOP_PREFIX
         result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes|prefix)[:,None], toxic_enc[:,None], result[:, :, 9]))
         result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)),
@@ -862,6 +890,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             result = result.at[:, :, col].set(jnp.where(tendency & active[:, None], value[:, None], result[:, :, col]))
         result=result.at[:,:,11].set(jnp.where(tendency & toxic_attempt[:,None]
             & (toxic_code==toxic_callbacks.PLAIN_TYPE_IMMUNITY)[:,None],subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&protect_block[:,None],subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&no_damage_header[:,None]&((nd_code==no_damage.TYPE_IMMUNE)|(nd_code==no_damage.WATER_FULL)|(nd_code==no_damage.VOLT_FULL)|(nd_code==no_damage.FLASH_REPEAT)|(nd_code==no_damage.FLASH_START)|nd_heal)[:,None],subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&sub_damage[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         raw_control = kinds == int(inputs.Kind.RAW_BEGIN)

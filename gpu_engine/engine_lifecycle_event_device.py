@@ -42,6 +42,7 @@ from . import engine_direct_ko_callbacks as direct_ko_callbacks
 from . import engine_no_damage_callbacks as no_damage
 from . import engine_flash_fire_end_callbacks as flash_end
 from . import engine_substitute_damage_callbacks as substitute_damage
+from . import engine_protect_callbacks as protect_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
@@ -570,6 +571,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         no_damage_header=kind==no_damage.TARGET_NO_DAMAGE
         no_damage_facts=kind==no_damage.ABSORB_FACTS
         flash_ended=kind==flash_end.FLASH_FIRE_END
+        protect_attempt=kind==protect_callbacks.PROTECT_ATTEMPT
+        protect_block=kind==protect_callbacks.PROTECT_BLOCK
         direct_control = ((kind == direct_hit_controls.CRITICAL)
             | (kind == direct_hit_controls.SUPER_EFFECTIVE) | (kind == direct_hit_controls.RESISTED))
         any_weather=entry_weather|move_weather|clock_weather
@@ -781,6 +784,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(incoming==cursor.physical_active[rows,safe_side])&cursor.initialized
             &flash_end.owned(tape,index,tables.no_damage))
         event_ok=jnp.where(flash_ended,generation_ok&clock_ok&flash_end_ok,event_ok)
+        protect_identity=(tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            &(incoming==cursor.physical_active[rows,safe_side]))
+        event_ok=jnp.where(protect_attempt,generation_ok&clock_ok&protect_identity&protect_callbacks.owned_attempt(tape,index),event_ok)
+        event_ok=jnp.where(protect_block,generation_ok&clock_ok&protect_identity&protect_callbacks.owned_block(tape,index),event_ok)
         prefix_ok=(tables.status_events&~tables.raw_begin&clock_payload&(index==0)
             &jnp.all(cursor.established,axis=1)&jnp.all(details==0,axis=1))
         event_ok=jnp.where(turnloop_prefix,generation_ok&clock_ok&prefix_ok,event_ok)
@@ -887,8 +895,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         secondary_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,turn,phase,
             absent,absent,absent,absent,z,z,z,z,z,z,z,z),axis=1)
         semantic=jnp.where(secondary_cont[:,None],secondary_semantic,semantic)
-        semantic=jnp.where(flash_ended[:,None],direct_semantic,semantic)
+        semantic=jnp.where((flash_ended|protect_block)[:,None],direct_semantic,semantic)
         semantic=jnp.where(sub_damage[:,None],secondary_semantic,semantic)
+        protect_payload=jnp.stack((actor_enc,jnp.where((raw[:,6]&protect_callbacks.SUCCESS)!=0,public_active.STALL_SUCCESS,public_active.STALL_FAIL),z,z,z,z,z,z),axis=1)
+        protect_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),protect_payload),axis=1)
+        semantic=jnp.where(protect_attempt[:,None],protect_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)

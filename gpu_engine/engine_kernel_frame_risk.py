@@ -90,6 +90,9 @@ class Tables(NamedTuple):
     sleep_powder_candidates: object     # [M] canonical original source only
     thunder_wave_candidates: object
     no_damage_binding: object          # GLOBAL8 original direct helper capability
+    protect_binding: object
+    protect_candidates: object
+    protect_block_candidates: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -157,6 +160,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     table=engine_catalog.engine_table;m=len(table.power);risk=np.zeros(m,np.int32)
     weather=np.asarray(table.weather.move_weather) if table.weather is not None else np.zeros(m,np.int32)
     no_damage_binding=np.zeros(8,np.uint32)
+    protect_binding=np.zeros(8,np.uint32);protect_candidates=np.zeros(m,bool);protect_blocks=np.zeros(m,bool)
     direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool);seismic=0;ko_candidates=np.zeros(m,bool)
     if direct_hit_compiled is not None:
         from . import engine_direct_hit_controls as direct
@@ -167,6 +171,12 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         direct_binding=np.asarray(direct_data.binding,np.uint32)
         no_damage_binding=np.asarray(direct_data.no_damage.binding,np.uint32)
         ko_candidates=np.asarray(direct_data.ko_candidates,bool)
+        if direct_data.protect is not None:
+            from . import engine_protect_callbacks as protect_callbacks
+            protect_callbacks.shape(direct_data.protect)
+            protect_binding=np.asarray(direct_data.protect.binding,np.uint32)
+            protect_candidates=np.asarray(direct_data.protect.candidates).copy()
+            protect_blocks=np.asarray(direct_data.protect.block_candidates).copy()
         # Candidate only: every actual positive outcome additionally requires
         # its SAME captured Site10 span. Other static/attempt risk bits remain.
         positive=np.asarray(table.power)>0
@@ -247,7 +257,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         mask=np.asarray(data.move_mask)
         if mask.shape!=(m,) or mask.dtype!=np.dtype(bool) or not mask.any():raise ValueError('canonical primary sleep mask required')
         powder_binding=np.asarray(data.binding,np.uint32);powder_candidate=mask.copy()
-    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate]|=NON_WEATHER
+    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -258,7 +268,8 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     if table.effects is not None:risk[np.asarray(table.effects.substitute)&~substitute_candidate]|=SELF_EFFECT
     if table.effects is not None:risk[np.any(np.asarray(table.effects.self_boosts)!=0,axis=1)&~calm_candidate&~swords_candidate]|=BOOST
     for name in ('hit_spa_drop','haze'):flag(table.effects,name,BOOST)
-    for name in ('protect','endure'):flag(table.effects,name,TARGET_OUTCOME)
+    flag(table.effects,'endure',TARGET_OUTCOME)
+    if table.effects is not None:risk[np.asarray(table.effects.protect)&~protect_candidates]|=TARGET_OUTCOME
     flag(table.effects,'heal_bell',FIELD_VOLATILE)
     if table.effects is not None:risk[(np.asarray(table.effects.status)!=0)&~toxic_candidate&~thunder_candidate&~powder_candidate]|=FIELD_VOLATILE
     for name in ('seed','wish','spin'):flag(table.sustain,name,FIELD_VOLATILE)
@@ -289,12 +300,12 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
         direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
-        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist())
+        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist(),protect_binding=protect_binding.tolist(),protect_candidates=protect_candidates.tolist(),protect_block_candidates=protect_blocks.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -366,6 +377,9 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.selected_risk,(len(tables.selected_risk),),jnp.int32)
     accounting._shape(tables.branch_risk,(len(Branch)+1,),jnp.int32)
     accounting._shape(tables.no_damage_binding,(8,),jnp.uint32)
+    accounting._shape(tables.protect_binding,(8,),jnp.uint32)
+    accounting._shape(tables.protect_candidates,tables.direct_candidates.shape,jnp.bool_)
+    accounting._shape(tables.protect_block_candidates,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.recoil_binding,(8,),jnp.uint32)
     accounting._shape(tables.recoil_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.calm_mind_binding,(8,),jnp.uint32)
@@ -642,17 +656,19 @@ def _captured_sleep_powder_matches(tape,tables,captured):
         &jnp.all(ledger.event_generation==tape.event_generation,axis=2)),axis=1)
 
 
-def observe_primary_status_device(carry,tape,attempted,tables,*,active,captured=None,captured_thunder_wave=None,captured_sleep_powder=None):
+def observe_primary_status_device(carry,tape,attempted,tables,*,active,captured=None,captured_thunder_wave=None,captured_sleep_powder=None,captured_protect_block=None):
     attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
     supported=_captured_toxic_matches(tape,tables,captured)|_captured_thunder_wave_matches(tape,tables,captured_thunder_wave)|_captured_sleep_powder_matches(tape,tables,captured_sleep_powder)
+    from . import engine_protect_callbacks as protect_callbacks
+    supported |= protect_callbacks.captured_block_matches(tape,captured_protect_block)
     return _observe(carry,tape,tables,Branch.PRIMARY_STATUS,jnp.where(attempted&~supported,FIELD_VOLATILE,0),active=active)
 
 
-def primary_status_on_tape(tape,attempted,*,active,captured=None,captured_thunder_wave=None,captured_sleep_powder=None):
-    return _on_tape(tape,observe_primary_status_device,attempted,active=active,captured=captured,captured_thunder_wave=captured_thunder_wave,captured_sleep_powder=captured_sleep_powder)
+def primary_status_on_tape(tape,attempted,*,active,captured=None,captured_thunder_wave=None,captured_sleep_powder=None,captured_protect_block=None):
+    return _on_tape(tape,observe_primary_status_device,attempted,active=active,captured=captured,captured_thunder_wave=captured_thunder_wave,captured_sleep_powder=captured_sleep_powder,captured_protect_block=captured_protect_block)
 
 
-def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None,captured_substitute_damage=None):
+def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None,captured_substitute_damage=None,captured_protect_block=None):
     if type(outcome) is not Outcome:raise ValueError('literal typed kernel outcomes required')
     b=len(carry.stream_id);eligible=_vector(eligible,b,jnp.bool_)
     values={name:_vector(x,b,jnp.int32 if name in ('power','numerator','denominator','recoil') else jnp.bool_)
@@ -684,6 +700,8 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
             supported_sub &= getattr(o,key)==getattr(w,key)
         supported_sub &= o.substitute&~o.absorbed&~o.explodes&(o.recoil==0)
         unsupported &= ~supported_sub
+    from . import engine_protect_callbacks as protect_callbacks
+    unsupported &= ~protect_callbacks.captured_block_matches(tape,captured_protect_block,o)
     recoil_ok=jnp.zeros(b,bool);recoil_needed=jnp.zeros(b,bool)
     if type(captured_direct) is CapturedDirectHit:
         move=_vector(captured_direct.move,b)
@@ -867,8 +885,8 @@ def selected_on_tape(tape,move,*,eligible,active):
     return _on_tape(tape,observe_selected_device,move,eligible=eligible,active=active)
 
 
-def outcome_on_tape(tape,outcome,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None,captured_substitute_damage=None):
-    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active,captured_direct=captured_direct,pending_recoil=pending_recoil,pending_ko=pending_ko,captured_no_damage=captured_no_damage,captured_substitute_damage=captured_substitute_damage)
+def outcome_on_tape(tape,outcome,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None,captured_substitute_damage=None,captured_protect_block=None):
+    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active,captured_direct=captured_direct,pending_recoil=pending_recoil,pending_ko=pending_ko,captured_no_damage=captured_no_damage,captured_substitute_damage=captured_substitute_damage,captured_protect_block=captured_protect_block)
 
 
 def observe_recoil_device(carry,tape,amount,tables,*,active,pending,before):

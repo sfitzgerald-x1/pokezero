@@ -726,6 +726,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work.active[rows,foe],caller_move,eligible=caller_acts,
                 unsupported=charge_locked | sleep_usable | ~acts)
         if _lifecycle_trace:
+            from . import engine_protect_callbacks as protect_callbacks
+            _protect_pending=None;_protect_block_capture=None;_protect_block_mask=jnp.zeros_like(acts)
+            if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.protect is not None:
+                _protect_count=jnp.where(state.pending_residual,saved_stall[rows,side],_active(old_stall,work,side))
+                _public_trace,_protect_pending=protect_callbacks.begin(_public_trace,work,side,move,_protect_count,chance[:,8],
+                    jnp.full_like(acts,order==0),~state.pending_residual,~switches[rows,foe],
+                    _direct_hit_context,table.effects,eligible=acts)
             _public_trace=kernel_risks.selected_on_tape(_public_trace,move,
                 eligible=caller_acts,active=live)
         attack_stats = _active(work.stats, work, side)
@@ -829,7 +836,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.effects is not None:
             if _lifecycle_trace:
                 _risk_protected=protected[rows,foe] & table.effects.protectable[move]
+                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.protect is not None:
+                    _public_trace,_protect_block_pending=protect_callbacks.begin_block(_public_trace,work,side,move,hit,
+                        protected[rows,foe],table.effects.protectable[move],_direct_hit_context,eligible=acts)
             hit &= ~(protected[rows,foe] & table.effects.protectable[move])
+            if _lifecycle_trace and _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.protect is not None:
+                _public_trace,_protect_block_capture=protect_callbacks.finish_block(_public_trace,_protect_block_pending,hit)
+                _protect_block_mask=protect_callbacks.captured_block_matches(_public_trace,_protect_block_capture)
             bypass_sub = table.effects.bypass_sub[move]
         if _direct_hit_context is not None and _direct_hit_registered:
             from . import engine_no_damage_callbacks as no_damage_callbacks
@@ -842,7 +855,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 execution_accounting.Site.SUBSTITUTE_DAMAGE,foe,active=_sub_damage_requested)
             _sub_damage_pending=substitute_damage_callbacks.Pending(_direct_hit_context,_sub_damage_ticket,
                 side,work.active[rows,side],work.active[rows,foe],move,_sub_damage_requested)
-            _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)) & ~_sub_damage_requested
+            _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)) & ~_sub_damage_requested & ~_protect_block_mask
             _public_trace,_direct_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.DIRECT_HIT,foe,active=_direct_requested)
             _direct_ko_actor_before=_active(work.hp,work,side)
@@ -938,6 +951,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     if _direct_hit_context is not None and _direct_hit_registered else None),
                 pending_recoil=_recoil_pending if _recoil_context is not None else None,
                 pending_ko=_direct_ko_pending if _direct_hit_context is not None and _direct_hit_registered else None,
+                captured_protect_block=_protect_block_capture,
                 captured_no_damage=(no_damage_callbacks.Captured(_no_damage_pending,_direct_write,_active(work.hp,work,side),
                     _active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),
                     _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side))
@@ -956,6 +970,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work = work._replace(protect_counter=_set_active(work.protect_counter,work,side,
                 jnp.where(stall,jnp.minimum(8,jnp.maximum(2,count*2)),
                           _active(work.protect_counter,work,side))))
+            if _lifecycle_trace:
+                _public_trace=protect_callbacks.finish(_public_trace,_protect_pending,work,stall,protected[rows,side],acts&hit&~immune)
             # Self effects use the active actor, never the opposing target.
             hp = _active(work.hp, work, side)
             max_hp = _active(work.max_hp, work, side)
@@ -1116,6 +1132,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 & ((_active(work.substitute_hp,work,foe) == 0) | effects.bypass_sub[move]))
             if _toxic_context is not None:
                 _toxic_requested=acts & (move==_toxic_context.data.move_id)
+                if _lifecycle_trace:
+                    _toxic_requested &= ~_protect_block_mask
                 _toxic_old_status=_active(work.status,work,foe)
                 _toxic_old_counter=_active(work.status_counter,work,foe)
                 _toxic_live=_active(work.hp,work,foe)>0
@@ -1125,6 +1143,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                         execution_accounting.Site.TOXIC_ATTEMPT,foe,active=_toxic_requested)
             if _thunder_wave_context is not None:
                 _thunder_wave_requested=acts & (move==_thunder_wave_context.data.move_id)
+                if _lifecycle_trace:
+                    _thunder_wave_requested &= ~_protect_block_mask
                 _thunder_wave_old_status=_active(work.status,work,foe)
                 _thunder_wave_old_counter=_active(work.status_counter,work,foe)
                 _thunder_wave_live=_active(work.hp,work,foe)>0
@@ -1133,6 +1153,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     execution_accounting.Site.PRIMARY_PARALYSIS,foe,active=_thunder_wave_requested)
             if _sleep_powder_context is not None:
                 _sleep_powder_requested=acts & powder_callbacks.selected_device(_sleep_powder_context.data,move)
+                if _lifecycle_trace:
+                    _sleep_powder_requested &= ~_protect_block_mask
                 _sleep_powder_old_status=_active(work.status,work,foe)
                 _sleep_powder_old_counter=_active(work.status_counter,work,foe)
                 _sleep_powder_live=_active(work.hp,work,foe)>0
@@ -1187,6 +1209,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     captured_thunder_wave=(kernel_risks.CapturedThunderWave(_thunder_wave_context,_thunder_wave_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_thunder_wave_attempt)
                         if _thunder_wave_context is not None else None),
+                    captured_protect_block=_protect_block_capture,
                     captured_sleep_powder=(kernel_risks.CapturedSleepPowder(_sleep_powder_context,_sleep_powder_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_sleep_powder_attempt)
                         if _sleep_powder_context is not None else None))
