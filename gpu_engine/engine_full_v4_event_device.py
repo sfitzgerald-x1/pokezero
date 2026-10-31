@@ -103,6 +103,7 @@ class Tables(NamedTuple):
     protect_block: object
     protect_still_moves: object
     rough_skin_damage: object
+    wonder_guard_immune: object
     namespaces: Bindings
     binding: object
 
@@ -351,6 +352,10 @@ def compile_adapter(metadata, projector, *, catalog):
     no_damage_keys=np.zeros((9,7),np.int32)
     no_damage_keys[no_damage.MISS,:]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
     no_damage_keys[no_damage.TYPE_IMMUNE,:]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
+    wonder_guard_immune=0
+    if int(lower.device.wonder_guard_engine_ability)>0 and int(lower.device.wonder_guard_public_ability)>0:
+        wonder_guard_immune=add(f'|-immune|{ident[0]}|[from] ability: Wonder Guard',inputs.Kind.NONPROC)
+        if not wonder_guard_immune:raise ValueError('FULL writer lacks original tagged Wonder Guard immunity schema')
     no_damage_miss=np.zeros(len(projector.catalog.ids),bool)
     for row in np.flatnonzero(np.asarray(lower.device.no_damage.candidates)|np.asarray(lower.device.primary_sleep_moves)):
         pid=projector.catalog.ids[row];name=catalog.moves.names[pid]
@@ -395,7 +400,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
     payload += sub_damage_keys.tobytes()+rough_skin_damage.tobytes()
-    payload += no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
+    payload += np.array(wonder_guard_immune,np.int32).tobytes()+no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()+np.array([protect_success,protect_block],np.int32).tobytes()+protect_still_moves.tobytes()
@@ -404,7 +409,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(rough_skin_damage),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(rough_skin_damage),jnp.array(wonder_guard_immune,jnp.int32),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -511,6 +516,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.protect_still_moves,tables.moves.shape,jnp.bool_)
     causal.base._shape(tables.no_damage_miss,tables.causal.no_damage.candidates.shape,jnp.bool_)
     causal.base._shape(tables.no_damage,(9,7),jnp.int32)
+    causal.base._shape(tables.wonder_guard_immune,(),jnp.int32)
     causal.base._shape(tables.primary_sleep_status,(len(tables.causal.base.public_ids),),jnp.int32)
     causal.base._shape(tables.sleep_powder_status,(),jnp.int32)
     causal.base._shape(tables.trace_copy,tables.causal.trace_public_ability.shape,jnp.int32)
@@ -648,6 +654,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(swords_dance,tables.swords_dance,key)
         nd_miss_safe=tables.no_damage_miss[jnp.clip(nd_raw[:,5],0,len(tables.no_damage_miss)-1)]
         key=jnp.where(no_damage_header,jnp.where((nd_code!=no_damage.MISS)|nd_miss_safe,tables.no_damage[jnp.clip(nd_code,0,8),jnp.clip(nd_status,0,6)],0),key)
+        wonder_immunity=no_damage_header&(nd_code==no_damage.TYPE_IMMUNE)&(tables.causal.wonder_guard_engine_ability>0)&(nd_facts[:,6]==tables.causal.wonder_guard_engine_ability)
+        key=jnp.where(wonder_immunity,tables.wonder_guard_immune,key)
         key=jnp.where(no_damage_facts,0,key)
         key=jnp.where(secondary_cont,0,key)
         key=jnp.where(flash_ended,tables.flash_fire_end,key)

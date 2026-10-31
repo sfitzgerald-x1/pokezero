@@ -107,6 +107,8 @@ class Tables(NamedTuple):
     color_categories: object
     primary_sleep_moves: object
     sleep_powder_move: object
+    wonder_guard_engine_ability: object
+    wonder_guard_public_ability: object
     binding: object
 
 
@@ -222,6 +224,10 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     thunder_wave_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='thunderwave'),0)
     sleep_powder_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='sleeppowder'),0)
     no_damage_data=no_damage.compile_data(projector.catalog)
+    wonder_rows=[i for i,n in enumerate(metadata["vocabulary"].get("abilities",[])) if normalize_id(n)=="wonderguard"]
+    if len(wonder_rows)>1:raise ValueError("one original Wonder Guard ability row required")
+    wonder_engine=wonder_rows[0] if wonder_rows else 0
+    wonder_public=0 if weather_catalog is None else weather_catalog.abilities.ids.get("wonderguard",0)
     from .public_moves import _static_category
     color_categories=np.asarray([0 if i==0 or weather_catalog is None else _static_category(weather_catalog.vocabulary,'type:'+name) for i,name in enumerate(metadata['vocabulary']['types'])],np.int32)
     primary_sleep_moves=np.array([bool(i and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==1
@@ -275,6 +281,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         leftovers_engine_item=leftovers_engine,leftovers_public_item=leftovers_public,
         trace_engine_ability=trace_engine,sturdy_engine_ability=sturdy_engine,sturdy_public_ability=sturdy_public,
         trace_public_ability=trace_public.tolist(),sleep_powder_move=sleep_powder_move,primary_sleep_moves=primary_sleep_moves.tolist(),no_damage_binding=np.asarray(no_damage_data.binding).tolist(),color_categories=color_categories.tolist(),
+        wonder_guard_engine_ability=wonder_engine,wonder_guard_public_ability=wonder_public,
         pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,swords_dance_move=swords_dance_move,spikes_move=spikes_move,thunder_wave_move=thunder_wave_move,admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
@@ -290,7 +297,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(weather_moves,jnp.int32),
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
-        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),jnp.array(trace_public,jnp.int32),no_damage_data,jnp.array(color_categories),jnp.array(primary_sleep_moves),jnp.array(sleep_powder_move,jnp.int32),
+        jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),jnp.array(trace_public,jnp.int32),no_damage_data,jnp.array(color_categories),jnp.array(primary_sleep_moves),jnp.array(sleep_powder_move,jnp.int32),jnp.array(wonder_engine,jnp.int32),jnp.array(wonder_public,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -424,6 +431,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     base._shape(tables.color_categories,(18,),jnp.int32)
     base._shape(tables.primary_sleep_moves,(len(tables.base.public_ids),),jnp.bool_)
     base._shape(tables.sleep_powder_move,(),jnp.int32)
+    base._shape(tables.wonder_guard_engine_ability,(),jnp.int32)
+    base._shape(tables.wonder_guard_public_ability,(),jnp.int32)
     base._shape(tables.substitute_move, (), jnp.int32)
     base._shape(tables.pressure_engine_ability, (), jnp.int32)
     base._shape(tables.pressure_public_ability, (), jnp.int32)
@@ -714,6 +723,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             &(incoming==cursor.physical_active[rows,safe_side])&(no_damage_start>0)&(no_damage_start+1<tape.count)
             &no_damage.valid_raw_pair(header,facts,tables.no_damage))
+        # Gen3 runs the actual ability TryHit before natural type immunity.
+        # A captured Wonder Guard holder therefore requires its tagged source
+        # schema, even though the unchanged kernel ratio is already zero.
+        wonder_immunity=(header[:,6]==no_damage.TYPE_IMMUNE)&(tables.wonder_guard_engine_ability>0)&(facts[:,6]==tables.wonder_guard_engine_ability)
+        no_damage_ok &= ~wonder_immunity|(tables.wonder_guard_public_ability>0)
         for offset in (0,1):
             at=jnp.clip(no_damage_start+offset,0,capacity-1)
             no_damage_ok &= (tape.event_turn[rows,at]==turn)&(tape.event_phase[rows,at]==phase)&jnp.all(tape.event_generation[rows,at]==cursor.generation,axis=1)
