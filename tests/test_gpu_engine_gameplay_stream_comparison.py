@@ -36,7 +36,7 @@ def state(batch=1, *, hp=100, done=False):
         fields[name]=np.zeros((batch,2,6),np.int32)
     fields.update(species=np.broadcast_to(np.arange(1,13).reshape(1,2,6),(batch,2,6)).copy(),
         level=np.full((batch,2,6),80,np.int32),hp=np.full((batch,2,6),hp,np.int32),max_hp=np.full((batch,2,6),100,np.int32),
-        stats=np.full((batch,2,6,6),100,np.int32),types=np.ones((batch,2,6,2),np.int32),
+        stats=np.full((batch,2,6,6),100,np.int32),types=np.ones((batch,2,6,2),np.int32),base_types=np.ones((batch,2,6,2),np.int32),
         moves=np.ones((batch,2,6,4),np.int32),pp=np.full((batch,2,6,4),10,np.int32),disabled=np.zeros((batch,2,6,4),bool),
         boosts=np.zeros((batch,2,6,7),np.int32),active=np.zeros((batch,2),np.int32),
         ability=np.ones((batch,2,6),np.int32),entry_pending=np.zeros((batch,2),bool),

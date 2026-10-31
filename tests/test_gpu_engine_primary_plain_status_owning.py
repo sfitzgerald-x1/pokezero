@@ -36,12 +36,12 @@ class PrimaryPlainStatusTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared);cls.kw=dict(catalog=cls.producer,expected_binding=cls.producer.binding,expected_engine_binding=np.asarray(cls.producer.engine_binding,np.uint32));cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
  def test_original_lexical_scope_default_and_legacy_disjoint(self):
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),68);d=self.helper.device.primary_plain_status
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),69);d=self.helper.device.primary_plain_status
   for name,code in (('willowisp',m.BRN),('stunspore',m.PAR)):
    at=self.metadata['vocabulary']['moves'].index(name);self.assertTrue(bool(d.candidates[at]));self.assertEqual(int(d.status[at]),code);self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[at]),0)
   for name in ('thunderwave','sleeppowder','bulkup'):self.assertFalse(bool(d.candidates[self.metadata['vocabulary']['moves'].index(name)]))
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.primary_plain_status)
-  old=ast.parse(subprocess.check_output(['git','show','00307d73:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  old=ast.parse(subprocess.check_output(['git','show','e1478066:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
   script="const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),out=[];for(const id of ['willowisp','stunspore']){let m=d.moves.get(id),p={toString:()=> 'p2a: Target'},lines=[];d.conditions.get(m.status).onStart.call({add:(...v)=>lines.push(v.map(String).join('|'))},p,{toString:()=> 'p1a: Actor'},m);out.push(lines);}process.stdout.write(JSON.stringify(out));"
   self.assertEqual(json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True)),[['-status|p2a: Target|brn'],['-status|p2a: Target|par']])
  def component(self,*,consume=True):

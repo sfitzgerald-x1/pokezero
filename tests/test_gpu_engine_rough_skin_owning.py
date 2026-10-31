@@ -105,10 +105,10 @@ class RoughSkinTests(unittest.TestCase):
             return driver.construct(pool,np.array([[0,1],[0,1]],np.int64),prepared=self.prepared,stream_ids=j.array([27101,27102],j.int32),seed=41)
 
     def test_original_transition_and_other_secondary_programs_unchanged(self):
-        before=ast.parse(subprocess.check_output(['git','show','c41d55db:gpu_engine/transition.py'],text=True))
+        before=ast.parse(subprocess.check_output(['git','show','e1478066:gpu_engine/transition.py'],text=True))
         after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
         self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
-        before=ast.parse(subprocess.check_output(['git','show','c41d55db:gpu_engine/secondary.py'],text=True))
+        before=ast.parse(subprocess.check_output(['git','show','e1478066:gpu_engine/secondary.py'],text=True))
         after=ast.parse(Path('gpu_engine/secondary.py').read_text())
         functions=lambda t:{n.name:ast.dump(n,include_attributes=False)for n in t.body if isinstance(n,ast.FunctionDef)and n.name not in ('from_metadata','apply_contact')}
         self.assertEqual(functions(before),functions(after))
