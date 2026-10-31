@@ -321,6 +321,7 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         stream_ids=j.asarray(ids), seed=constructor_seed)
     jax.block_until_ready(session.result)
     construction_ms = (time.perf_counter_ns() - start) / 1e6
+    initial = session.result  # immutable actual constructor output; never replay it
     completed, refused = np.zeros(batch, bool), np.zeros(batch, bool)
     details = [dict(stream_id=int(x), team_indices=pair.tolist(), refusal=None) for x, pair in zip(ids, indices)]
     full_steps, forward, compiles, phases, decisions = [], [], [], {}, []
@@ -434,6 +435,11 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     return dict(schema=SCHEMA, status=status, runtime_binding=runtime.binding,
         source=source,
         final_frame_input_witness=raw_packet(witness), final_kernel_risks=raw_packet(risks),
+        initial_engine_state=raw_packet(initial.state.core.engine),
+        initial_frame_input_witness=raw_packet(getattr(initial.state.core,'frame_input_report',None)),
+        initial_owner_observations=[{name:np.asarray(getattr(owner.encoded.observation,name)).tolist()
+            for name in ('numeric_features','categorical_ids','token_type_ids','attention_mask',
+                         'legal_action_mask','admitted')} for owner in initial.owners],
         full_B4_qualified=False, fidelity_qualified=False, strength_qualified=False,
         compute_dtype='bfloat16', model_outputs=['policy_logits', 'value', 'opponent_action_logits'],
         weights=record['metadata'], pool_receipt=receipt, batch=batch, original_denominator=batch,
