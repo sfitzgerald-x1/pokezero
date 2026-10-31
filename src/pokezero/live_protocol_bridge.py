@@ -109,7 +109,8 @@ def require_actor_factory(config, factory, *, actor_version='champion-v4'):
     if actor_version=='v5':
         from gpu_engine.v5_live_protocol import Factory, check_factory
         _require(config.encoder_kind=='jax-owning' and type(factory) is Factory
-            and config.owning_decision_timeout_seconds==60., 'explicit v5 JAX owning actor and60s learner bound required')
+            and config.owning_decision_timeout_seconds==60. and factory.learner_seconds==60.,
+            'explicit v5 JAX owning actor and60s learner bound required')
         check_factory(factory)
         _require(not os.environ.get('POKEZERO_TRAIT_CAPTURE'), 'omniscient trait capture forbidden in owning path')
         return factory

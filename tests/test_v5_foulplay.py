@@ -151,6 +151,56 @@ class V5FoulPlayTests(unittest.TestCase):
 
 
 class V5PanelSupervisionTests(unittest.TestCase):
+    def test_current_invocation_timeout_kills_promptly_but_historical_timeout_does_not(self):
+        class Child:
+            pid=12345;returncode=None
+            def poll(self):return self.returncode
+            def wait(self,timeout=None):return self.returncode
+        for historical in (False,True):
+            with self.subTest(historical=historical),tempfile.TemporaryDirectory() as directory:
+                child=Child();groups={child.pid};sent=[];sleeps=[];path=Path(directory)/'progress.json'
+                def document(current,row_id):return dict(schema=v5.SCHEMA,namespace='fixed',invocation_id=current,
+                    started_unix=0.,rows=[dict(status='FAILED',reason='TimeoutError: learner',invocation_id=row_id)])
+                if historical:path.write_text(json.dumps(document('old','old')))
+                def spawn(*a,**kw):
+                    path.write_text(json.dumps(document('new','old' if historical else 'new')));return child
+                def send(group,value):sent.append(value);groups.discard(group);child.returncode=-15
+                def sleep(seconds):sleeps.append(seconds);child.returncode=0;groups.discard(child.pid)
+                result=v5.supervise_panel(['fake-private-worker'],progress_path=path,initial_window_seconds=10,
+                    popen=spawn,group_exists=lambda group:group in groups,signal_group=send,sleep=sleep)
+                self.assertTrue(result['cleanup_confirmed'])
+                if historical:self.assertEqual(result['exit_code'],0);self.assertFalse(sent)
+                else:self.assertEqual(result['stop_reason'],'LEARNER_TIMEOUT');self.assertEqual(result['exit_code'],-15);self.assertFalse(sleeps)
+
+    def test_convenience_entry_owns_matched_precision_scope_and_restores_caller(self):
+        from gpu_engine import v5_live_protocol
+        observed=[]
+        def load(*a,**kw):observed.append((jax.config.jax_default_matmul_precision,jax.config.jax_enable_x64));return object()
+        with jax.default_matmul_precision('bfloat16'),jax.enable_x64(True), \
+                patch.object(v5_live_protocol,'load_factory',side_effect=load),patch.object(v5,'run_panel',new_callable=AsyncMock,return_value='fake-only'):
+            result=asyncio.run(v5.load_and_run(None,'/no-archive',catalog=None,contract=None,
+                expected_archive_sha256='a'*64,expected_checkpoint_sha256='b'*64,
+                expected_category_vocabulary_sha256='c'*64,expected_label_vocabulary_sha256='d'*64,enable_v5=True))
+            self.assertEqual(result,'fake-only');self.assertEqual(observed,[('highest',False)])
+            self.assertEqual(jax.config.jax_default_matmul_precision,'bfloat16');self.assertTrue(jax.config.jax_enable_x64)
+
+    def test_atomic_progress_retains_current_timeout_and_exact60_dispatch_guard(self):
+        from gpu_engine import v5_live_protocol
+        from pokezero.live_protocol_actor import ActorContract
+        config=old.ControlledFoulPlayConfig(checkpoint=Path('/fake'),showdown_root=Path('/fake'),policy_mode='raw',device='cpu',
+            belief_set_source=True,allow_search_fallback=False,opponent_crash_retries=0,encoder_kind='jax-owning',owning_decision_timeout_seconds=60.)
+        invalid=object.__new__(v5_live_protocol.Factory);object.__setattr__(invalid,'learner_seconds',1.)
+        with patch.object(v5_live_protocol,'check_factory',side_effect=AssertionError('budget rejected first')):
+            with self.assertRaisesRegex(ValueError,'60s'):bridge.require_actor_factory(config,invalid,actor_version='v5')
+        factory=NS(contract=ActorContract.champion(),catalog=NS(vocabulary=object(),dex=object()))
+        with tempfile.TemporaryDirectory() as directory,patch.object(v5,'_recipe',return_value=dict(archive_sha256='a'*64)), \
+                patch.object(old,'_run_controlled_foulplay_games',new_callable=AsyncMock,side_effect=TimeoutError('fake blocked')):
+            path=Path(directory)/'progress.json'
+            result=asyncio.run(v5.run_panel(config,factory,enable_v5=True,progress_path=path))
+            self.assertEqual(json.loads(path.read_text()),result)
+            self.assertEqual(result['rows'][0]['invocation_id'],result['invocation_id'])
+            self.assertTrue(result['rows'][0]['reason'].startswith('TimeoutError:'))
+
     def test_owned_group_watchdog_drains_descendants_after_leader_exit_and_on_parse_failure(self):
         class Child:
             pid=12345;returncode=0
@@ -160,9 +210,11 @@ class V5PanelSupervisionTests(unittest.TestCase):
             with self.subTest(bad=bad),tempfile.TemporaryDirectory() as directory:
                 child=Child();groups={12345};signals=[];kwargs=[]
                 def send(group,signal):signals.append((group,signal));groups.discard(group);child.returncode=-15 if bad else 0
-                if bad:
-                    child.returncode=None;(Path(directory)/'progress.json').write_text('broken-json')
-                def spawn(command,**options):kwargs.append(options);return child
+                if bad:child.returncode=None
+                def spawn(command,**options):
+                    kwargs.append(options)
+                    if bad:(Path(directory)/'progress.json').write_text('broken-json')
+                    return child
                 arguments=dict(progress_path=Path(directory)/'progress.json',initial_window_seconds=10,popen=spawn,
                     group_exists=lambda group:group in groups,signal_group=send,sleep=lambda _:None)
                 if bad:

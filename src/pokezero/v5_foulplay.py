@@ -14,6 +14,7 @@ from pathlib import Path
 import signal
 import subprocess
 import time
+import uuid
 
 
 SCHEMA='pokezero.v5.raw_foulplay_panel.v1'
@@ -71,7 +72,8 @@ def _recipe(config,factory):
         checkpoint_sha256=factory.contract.checkpoint_sha256,
         category_vocabulary_sha256=factory.config.category_vocabulary_sha256,
         label_vocabulary_sha256=factory.config.label_vocabulary.sha256,
-        deterministic=factory.deterministic,inference_precision=factory.compute_dtype)
+        deterministic=factory.deterministic,inference_precision=factory.compute_dtype,
+        learner_seconds=factory.learner_seconds)
 
 
 async def load_and_run(config,archive,*,catalog,contract,expected_archive_sha256,
@@ -79,17 +81,20 @@ async def load_and_run(config,archive,*,catalog,contract,expected_archive_sha256
         deterministic=True,compute_dtype='float32',enable_v5=False,**run_options):
     """Actual explicit archive load -> owning actor -> original FP game body."""
     if enable_v5 is not True:raise ValueError('explicit v5 FP enablement required')
+    import jax
     from gpu_engine.v5_live_protocol import load_factory
-    factory=load_factory(archive,catalog=catalog,contract=contract,
-        expected_archive_sha256=expected_archive_sha256,expected_checkpoint_sha256=expected_checkpoint_sha256,
-        expected_category_vocabulary_sha256=expected_category_vocabulary_sha256,
-        expected_label_vocabulary_sha256=expected_label_vocabulary_sha256,deterministic=deterministic,
-        compute_dtype=compute_dtype,enable_v5=True)
-    return await run_panel(config,factory,enable_v5=True,**run_options)
+    # Own matched main-thread setup, restoring it when this explicit call ends.
+    with jax.default_matmul_precision('highest'),jax.enable_x64(False):
+        factory=load_factory(archive,catalog=catalog,contract=contract,
+            expected_archive_sha256=expected_archive_sha256,expected_checkpoint_sha256=expected_checkpoint_sha256,
+            expected_category_vocabulary_sha256=expected_category_vocabulary_sha256,
+            expected_label_vocabulary_sha256=expected_label_vocabulary_sha256,deterministic=deterministic,
+            compute_dtype=compute_dtype,enable_v5=True)
+        return await run_panel(config,factory,enable_v5=True,**run_options)
 
 
 async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None,progress_callback=None,
-        trajectory_callback=None,enable_v5=False):
+        trajectory_callback=None,progress_path=None,enable_v5=False):
     """One original finite declared panel; exceptions remain unknown cells.
 
     The original low-level runner receives explicit offsets of the ORIGINAL
@@ -104,7 +109,8 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
     recipe=_recipe(config,factory);namespace=_sha(recipe)
     fp=old._per_seed_foulplay_random_seed_schedule(config,count=config.games)
     rows=[dict(offset=i,seed=config.seed_start+i,fp_seed=fp[i],status='NOT_ATTEMPTED',score=None,
-        duration_seconds=None,reason=None,source_result_sha256=None,source_game=None) for i in range(config.games)]
+        duration_seconds=None,reason=None,source_result_sha256=None,source_game=None,invocation_id=None) for i in range(config.games)]
+    invocation=uuid.uuid4().hex
     started=time.time()
     if previous is not None:
         if (type(previous) is not dict or _sha(previous)!=expected_previous_sha256
@@ -128,21 +134,31 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
         started=previous['started_unix']
     masks=dict(factory.contract.feature_masks);masks['opponent_tendency_stats_block']=masks.pop('stats_block')
     masks=ObservationFeatureMasks(**masks)
+    path=None if progress_path is None else Path(progress_path)
+    if path is not None and path.exists() and (previous is None or _sha(json.loads(path.read_bytes()))!=expected_previous_sha256):
+        raise ValueError('owned progress path must be fresh or match original resume artifact')
     def report():
         completed=[row['score'] for row in rows if row['status']=='COMPLETE']
         unknown=len(rows)-len(completed);total=sum(completed)
-        return dict(schema=SCHEMA,namespace=namespace,recipe=recipe,started_unix=started,
+        return dict(schema=SCHEMA,namespace=namespace,recipe=recipe,started_unix=started,invocation_id=invocation,
             rows=[dict(row) for row in rows],counts={s:sum(row['status']==s for row in rows)
                 for s in ('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED')},
             completed_only_score=total/len(completed) if completed else None,
             score_bounds=[total/len(rows),(total+unknown)/len(rows)],unknown_cells=unknown,
             full_B4_qualified=False,physics_qualified=False,strength_qualified=False)
     def publish():
-        if progress_callback is not None:progress_callback(report())
+        value=report()
+        if path is not None:
+            path.parent.mkdir(parents=True,exist_ok=True)
+            temporary=path.with_name('.'+path.name+'.'+invocation+'.pending')
+            with temporary.open('x') as stream:
+                json.dump(value,stream,sort_keys=True,allow_nan=False);stream.flush();os.fsync(stream.fileno())
+            temporary.replace(path)
+        if progress_callback is not None:progress_callback(value)
     publish()
     for row in rows:
         if row['status']!='NOT_ATTEMPTED':continue
-        row['status']='RUNNING';publish();clock=time.monotonic()
+        row.update(status='RUNNING',invocation_id=invocation);publish();clock=time.monotonic()
         try:
             result=await old._run_controlled_foulplay_games(config,policy=_TransportOnly(),
                 policy_id='v5-raw-'+recipe['archive_sha256'][:12],vocab=factory.catalog.vocabulary,
@@ -206,13 +222,14 @@ def supervise_panel(command,*,progress_path,initial_window_seconds,longest_multi
         def group_exists(group):
             try:os.killpg(group,0);return True
             except ProcessLookupError:return False
+    path=Path(progress_path)
+    baseline_invocation=json.loads(path.read_bytes()).get('invocation_id') if path.is_file() else None
     process=popen(command,start_new_session=True);group=process.pid
     if type(group) is not int or group<=0 or group==os.getpgrp():raise ValueError('new isolated owned worker group required')
     started=last=time.monotonic();completed=0;longest=0.;reason=None
     failure=None;namespace=None
     try:
         while process.poll() is None:
-            path=Path(progress_path)
             if path.is_file():
                 current=json.loads(path.read_bytes())
                 if current['schema']!=SCHEMA or namespace is not None and current['namespace']!=namespace:
@@ -221,6 +238,11 @@ def supervise_panel(command,*,progress_path,initial_window_seconds,longest_multi
                 if len(done)<completed:raise ValueError('completed panel progress regressed')
                 if len(done)>completed:
                     completed=len(done);last=time.monotonic();longest=max(longest,max(row['duration_seconds'] for row in done))
+                current_id=current.get('invocation_id')
+                if (current_id is not None and current_id!=baseline_invocation and any(
+                        row.get('invocation_id')==current_id and row['status']=='FAILED'
+                        and str(row.get('reason','')).startswith('TimeoutError:') for row in current['rows'])):
+                    reason='LEARNER_TIMEOUT'
             now=time.monotonic()
             if now-started>backstop_seconds:reason='DISTANT_BACKSTOP'
             elif reason is None and now-last>max(initial_window_seconds,longest_multiplier*longest):reason='NO_COMPLETED_GAME_WITHIN_ADAPTIVE_WINDOW'
