@@ -88,6 +88,19 @@ class PrimarySleepRuntimeTests(unittest.TestCase):
         before=ast.parse(subprocess.check_output(['git','show','7c6c6042:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text())
         baseline=dump_default_program(before);self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
         np.testing.assert_array_equal(self.runtime['kernel_risk_compiled'].device.sleep_powder_candidates,self.helper.device.move_mask)
+        sleep.check_lexical_catalog(self.helper,self.catalog)
+        bad=replace(self.catalog,dex=replace(self.catalog.dex,moves=dict(self.catalog.dex.moves)))
+        with self.assertRaises(ValueError):sleep.check_lexical_catalog(self.helper,bad)
+        # A newly compiled, genuine catalog with changed case still has the
+        # same normalized move ID. It must not replace the original spelling.
+        altered=dict(self.catalog.dex.moves);altered['hypnosis']=replace(altered['hypnosis'],name='HYPNOSIS')
+        bad_dex=ShowdownDex(altered,self.catalog.dex.species,self.catalog.dex.type_chart)
+        bad_catalog=v4_encoder.compile_encoder(self.catalog.source,bad_dex,self.catalog.vocabulary,
+            checkpoint_sha256='a'*64,feature_masks=self.catalog.masks.__dict__)
+        bad_engine=public.compile_catalog(self.metadata,self.table,public_moves=bad_catalog.moves,dex=bad_catalog.dex,
+            exposure=public.HealthExposure(public.SHOWDOWN,'gen3randombattle',True,False))
+        bad_helper=sleep.compile_primary_sleep(engine_catalog=bad_engine,metadata=self.metadata,source_rules=self.rules)
+        with self.assertRaisesRegex(ValueError,'display name'):sleep.check_lexical_catalog(bad_helper,bad_catalog)
         closed=risk.compile_risks(self.producer,self.runtime['execution_compiled'])
         for name in chosen:self.assertNotEqual(int(closed.device.selected_risk[ids.index(name)])&risk.NON_WEATHER,0)
 
@@ -98,6 +111,19 @@ class PrimarySleepRuntimeTests(unittest.TestCase):
             info=self.dex.move_info(self.metadata['vocabulary']['moves'][move]);_,p=public_wire.project_line(prior,f'|-status|{ident[0]}|slp|[from] move: {info.name}',**kwargs)
             key=int(self.runtime['public'].device.primary_sleep_status[move]);expected=np.array([e.words()for e in p.events],np.int32)
             self.assertGreater(key,0);np.testing.assert_array_equal(np.asarray(self.runtime['public'].device.templates[key])[:len(expected)],expected)
+        script=r"""
+const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');const d=Dex.mod('gen3');
+const names=JSON.parse(process.argv[2]);const out=[];
+for(const name of names){const lines=[],ranges=[],effectState={};
+d.conditions.get('slp').onStart.call({effectState,add:(...xs)=>lines.push(xs.map(String).join('|')),
+random:(lo,hi)=>{ranges.push([lo,hi]);return 3;}},
+{toString:()=> 'p2a: Target',removeVolatile:()=>false},{toString:()=> 'p1a: Actor'},d.moves.get(name));
+out.push({lines,ranges,effectState});}process.stdout.write(JSON.stringify(out));
+"""
+        names=[self.metadata['vocabulary']['moves'][i]for i in np.flatnonzero(self.helper.device.move_mask)]
+        callbacks=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root()),json.dumps(names)],text=True))
+        for name,value in zip(names,callbacks,strict=True):
+            self.assertEqual(value,dict(lines=['-status|p2a: Target|slp|[from] move: '+self.original.move_info(name).name],ranges=[[2,6]],effectState=dict(time=3,skippedTime=0)))
         b=8;z=j.zeros(b,j.int32);yes=j.ones(b,bool);no=j.zeros(b,bool);move=j.full(b,self.metadata['vocabulary']['moves'].index('hypnosis'),j.int32)
         attempt=sleep.Attempt(yes,yes,no,no,no,yes,yes,no,no,yes,no,z,j.full(b,m.SLP,j.int32),z,j.full(b,2,j.int32))
         raw=primary.words_device(z,z,z,move,attempt)

@@ -72,3 +72,29 @@ class OutcomeDiagnosticTests(unittest.TestCase):
             import ast,subprocess
             def fn(text):return ast.dump(next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef)and n.name==name),include_attributes=False)
             self.assertEqual(fn(Path('gpu_engine/benchmark_retained_games.py').read_text()),fn(subprocess.check_output(['git','show','7c6c6042:gpu_engine/benchmark_retained_games.py'],text=True)))
+
+    def test_benchmark_keeps_refused_only_original_frame_data(self):
+        from gpu_engine import benchmark_retained_games as bench,champion
+        import test_gpu_engine_benchmark_retained_games as fixture
+        Report=namedtuple('SyntheticReport','raw_count outcome_diagnostics')
+        first,config=fixture.result(reasons=np.array([[256,0],[0,0],[0,0]]))
+        tape,outcome=self.tape(3);capture=self.record(tape,outcome,j.ones(3,bool)).execution.diagnostics
+        first.state.core.frame_input_report=Report(j.array([11,12,13]),capture)
+        def network(_,args):
+            n=len(args[0]);return champion.Output(j.zeros((n,9)),j.zeros(n),j.zeros((n,9))),0.,1.
+        def advance(session,engine_actions,*,active_rows,timing_callback):
+            result,_=fixture.result(frames=[0,1,1],done=[False,True,False],reasons=np.array([[256,0],[256,256],[0,0]]))
+            result.state.core.frame_input_report=Report(j.array([11,21,22]),capture)
+            session.state,session.result=result.state,result
+            session.diagnostics=NS(active_rows=active_rows,executed_rows=active_rows,invalid_actions=j.zeros(3,bool),placeholder_moves=j.zeros(3,j.int32))
+            for name in ('engine','requests','public_p1','public_p2','encode_p1','encode_p2','admission_p1','admission_p2'):
+                timing_callback(name,.001)
+            return result
+        measured,model,advancing=fixture.RetainedBenchmarkTests().measure(first,config,network=network,advance=advance,cap=1)
+        self.assertEqual((measured['completed_games'],measured['refused_games'],measured['censored_games']),(1,1,1))
+        self.assertEqual([row['row']for row in measured['refusal_outcomes']['rows']],[0])
+        self.assertEqual(measured['refusal_outcomes']['rows'][0]['records'][0]['raw_count'],7)
+        for key in ('initial_frame_input_witness','final_frame_input_witness'):
+            self.assertNotIn('outcome_diagnostics',measured[key])
+        self.assertEqual(measured['final_frame_input_witness']['raw_count'],[11,21,22])
+        self.assertEqual(model.call_count,1);self.assertEqual(advancing.call_count,1)

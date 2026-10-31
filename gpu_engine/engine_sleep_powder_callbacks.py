@@ -1,4 +1,4 @@
-"""Actual canonical Sleep Powder NONE->SLP input; existing RAW9+26 only.
+"""Actual canonical primary SLP NONE->SLP input; existing RAW9+26 only.
 
 The status write is made by the original numerical kernel. This observer emits
 its literal private guard continuation, then requires the same current MOVE/status
@@ -107,6 +107,7 @@ process.stdout.write(JSON.stringify({rows,source_tree:verified.source_tree,compi
             and not info['callbacks'] and not info['mixed'] and info['priority']==0
             and type(info['accuracy']) in (int,float) and 0<info['accuracy']<=100
             and row.get('category')=='Status' and row.get('source_type')==info['type']
+            and int(table.type[i])==metadata['vocabulary']['types'].index(normalize_id(info['type']))
             and int(table.power[i])==0 and float(table.accuracy[i])==info['accuracy'] and not bool(table.always_hit[i])
             and int(table.priority[i])==0 and int(table.effects.status[i])==m.SLP
             and not bool(table.effects.thunderwave[i]) and not bool(table.effects.bypass_sub[i])
@@ -119,7 +120,7 @@ process.stdout.write(JSON.stringify({rows,source_tree:verified.source_tree,compi
     data=Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(0,j.int32),j.array(mask),j.array(True))
-    compiled=Compiled(data);_COMPILED[compiled]=(data,tuple(data),engine_catalog,source_rules);return compiled
+    compiled=Compiled(data);_COMPILED[compiled]=(data,tuple(data),engine_catalog,source_rules,tuple(row['name']for row in descriptor['rows']));return compiled
 
 
 def selected_device(data,move):
@@ -135,6 +136,19 @@ def check_compiled(compiled):
         request._rules_origin(r[3])
     catalog=r[2];public.check_catalog(catalog,catalog.engine_table,expected_binding=catalog.binding,
         expected_engine_binding=np.asarray(catalog.engine_binding,np.uint32));return compiled.device
+
+
+def check_lexical_catalog(compiled,catalog):
+    """Join bound original display names to the actual FULL writer catalog."""
+    data=check_compiled(compiled)
+    if not bool(data.primary_sleep):return
+    from . import v4_encoder
+    v4_encoder.check_catalog(catalog);record=_COMPILED[compiled]
+    if catalog.moves is not record[2].public_moves:raise ValueError('same original primary sleep FULL move catalog required')
+    for i in np.flatnonzero(np.asarray(data.move_mask)):
+        info=catalog.dex.move_info(catalog.moves.names[record[2].ids[i]])
+        if info is None or info.name!=record[4][i]:raise ValueError('original primary sleep source display name required')
+
 
 def supported_raw(raw,*,primary_sleep=False):
     # Successful primary application ONLY. Do not generalize the original

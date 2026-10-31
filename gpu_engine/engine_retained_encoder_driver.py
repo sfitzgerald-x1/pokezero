@@ -549,6 +549,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         from . import engine_sleep_powder_callbacks as sleep_powder_callbacks
         sleep_powder_data=sleep_powder_callbacks.check_compiled(sleep_powder_compiled)
         if sleep_powder_callbacks._COMPILED[sleep_powder_compiled][2] is not request['lifecycle']:raise ValueError('same original Sleep Powder/request engine catalog required')
+        sleep_powder_callbacks.check_lexical_catalog(sleep_powder_compiled,catalog)
     if spikes_compiled is not None:
         from . import engine_spikes_callbacks as spikes_callbacks
         spikes_data=spikes_callbacks.check_compiled(spikes_compiled)
