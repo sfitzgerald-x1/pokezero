@@ -165,6 +165,16 @@ def _lum_update(state,table,eligible,_status_trace=None):
     return state
 
 
+def _clear_fainted_boosts(state,before_hp,*,eligible):
+    """Gen3 faintMessages -> clearVolatile(false), seven boost stages only.
+
+    A faint queue is resolved at the caller's original action/handler boundary.
+    Previously dead slots and ineligible rows are not new faint transactions.
+    """
+    fainted=jnp.asarray(eligible)[:,None,None] & (before_hp>0) & (state.hp<=0)
+    return state._replace(boosts=jnp.where(fainted[...,None],0,state.boosts))
+
+
 def _speeds(state,table):
     rows,sides = jnp.arange(state.hp.shape[0])[:,None],jnp.arange(2)[None,:]
     stats = state.stats[rows,sides,state.active]
@@ -511,12 +521,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             eligible = (live & ~replacement & (actions[:,side]<4) & switches[:,1-side]
                 & ~struggle[:,side] & (initial_status!=m.SLP) & (initial_status!=m.FRZ)
                 & ~initial_loaf)
+            _faint_before_hp=work.hp
             work,used,fainted = intercepts.intercept(work,side,slot[:,side],moves[:,side],
                 draws[:,side],table,eligible=eligible,contact_roll=phazing_draws[:,side])
             if _lifecycle_trace:
                 _public_trace=status_callbacks.unknown(_public_trace,used)
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,used,_public_trace)
             else:work = _lum_update(work,table,used)
+            work=_clear_fainted_boosts(work,_faint_before_hp,eligible=used)
             pursuit_used = pursuit_used.at[:,side].set(used)
             pursuit_faint |= fainted
     bench = bench_indices(state.active)
@@ -563,11 +575,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
         callback_speed = callback_speed.at[rows,side].set(_speeds(work,table)[rows,side])
         if table.entry is not None:
+            _faint_before_hp=work.hp
             if _lifecycle_trace:
                 work,knocked_out,_public_trace = arrival.enter(work,side,table.entry,
                     eligible=do_switch & ~replacement,_weather_trace=_public_trace)
             else:
                 work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
+            work=_clear_fainted_boosts(work,_faint_before_hp,eligible=do_switch & ~replacement)
             switch_faint |= knocked_out
         else:
             work=arrival.restore_sleep(work,side,eligible=do_switch)
@@ -583,11 +597,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             side = jnp.where(order == 0,first_entry,1-first_entry)
             continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
             eligible = replacement & installed[rows,side] & continues & ~switch_faint
+            _faint_before_hp=work.hp
             if _lifecycle_trace:
                 work,knocked_out,_public_trace = arrival.enter(work,side,table.entry,
                     eligible=eligible,_weather_trace=_public_trace)
             else:
                 work,knocked_out = arrival.enter(work,side,table.entry,eligible=eligible)
+            work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
             # A hazard KO cancels subsequent queued runSwitch callbacks too.
             switch_faint |= knocked_out
     if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live,_public_trace)
@@ -611,6 +627,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     work = work._replace(protect_counter=jnp.where(
         (live & ~replacement)[:,None,None],0,work.protect_counter))
     for order in range(2):
+        _faint_before_hp=work.hp
         side = jnp.where(order == 0, first, 1 - first)
         foe = 1 - side
         move = moves[rows, side]
@@ -1400,6 +1417,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             save_foe = passed & (order == 0) & ~state.pending_residual & ~switches[rows,foe]
             queued_actor = jnp.where(save_foe,foe,queued_actor)
             paused |= passed
+        # All move effects, including self-KO/recoil and forced-entry hazards,
+        # finish before the original runAction faint queue is processed.
+        work=_clear_fainted_boosts(work,_faint_before_hp,eligible=live & move_context)
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
     # A KO cancels queued moves; direct Baton retains at most one selected foe
     # move. Both pause residuals, including hazard-KO recovery chains.
@@ -1464,6 +1484,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _weather_pre_writes=work  # actual AFTER Wish/clock, BEFORE either HP write
         # The field weather handler runs Weather on BOTH actives before
         # faintMessages/checkWin. A double last-mon weather KO is a Gen 3 tie.
+        _faint_before_hp=work.hp
         for side in range(2):
             if _lifecycle_trace:_weather_old_hp=_active(work.hp,work,side)
             hp = climate.chip(table.weather,effective_weather,_active(work.types,work,side),
@@ -1486,6 +1507,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     pre_writes_state=_weather_pre_writes,hypothetical=_hypothetical)
                 _public_trace=_weather_segment.tape
                 _weather_hp_record=_weather_segment.record
+        work=_clear_fainted_boosts(work,_faint_before_hp,eligible=ordinary)
     # Selected order10/priority0 handlers snapshot SPEED before suborder.
     # Equal-speed Speed Boost(3), Leftovers(4), seed(5), status(6) use independent ties.
     # Ability boosts do not re-sort the already queued residual handlers.
@@ -1497,6 +1519,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     event_keys = -end_speed[:,event_sides]*32 + event_suborder[None,:]*2 + tie
     event_order = jnp.argsort(event_keys,axis=1)
     for order in range(10):
+        _faint_before_hp=work.hp
         event = event_order[:,order]
         side = event % 2
         ability_event = event < 2
@@ -1677,6 +1700,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     eligible & (event>=8) & (_active(work.hp,work,side)>0)
                     & (_active(work.encore_counter,work,side)>0),active=live)
             work=repeating.residual(work,side,eligible=eligible & (event>=8))
+        work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
     work=linking.prune(work)
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,
         work.volatile & jnp.uint32(~(FOCUS_PUNCH|FOCUS_LOST)&0xffffffff)))
