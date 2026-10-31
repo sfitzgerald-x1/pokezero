@@ -142,6 +142,20 @@ class WorkerTests(unittest.TestCase):
             self.assertIs(build.call_args.args[0],inputs.plan);self.assertEqual(build.call_args.args[1:],(prepared,pool))
             self.assertEqual(launch.call_args.kwargs,dict(backend=backend,resume=True,enable_v5=True,evaluation_hook=hook))
 
+    def test_memory_policy_accepts_only_cold_package_torch_and_no_jax(self):
+        policy=dict(environment=dict(zip(w.ENV_KEYS,('false',None,None))),torch_fraction=None)
+        cold=NS(cuda=NS(is_initialized=lambda:False))
+        with patch.dict(sys.modules,{'torch':cold,'jax':None}),patch.dict(w.os.environ,{},clear=True):
+            w._memory(policy,apply=True)
+            self.assertEqual(w.os.environ[w.ENV_KEYS[0]],'false')
+        for value in (NS(cuda=NS(is_initialized=lambda:True)),NS(cuda=NS(is_initialized=lambda:None)),NS(cuda=NS())):
+            with patch.dict(sys.modules,{'torch':value,'jax':None}),patch.dict(w.os.environ,{},clear=True):
+                with self.assertRaisesRegex(ValueError,'CUDA initialization'):w._memory(policy,apply=True)
+                self.assertNotIn(w.ENV_KEYS[0],w.os.environ)
+        with patch.dict(sys.modules,{'torch':cold,'jax':object()}),patch.dict(w.os.environ,{},clear=True):
+            with self.assertRaisesRegex(ValueError,'JAX imports'):w._memory(policy,apply=True)
+            self.assertNotIn(w.ENV_KEYS[0],w.os.environ)
+
     def test_probe_rejects_absent_or_non_bf16_torch_before_any_compiler(self):
         with tempfile.TemporaryDirectory() as directory:
             *_,runtime=self.fixture(Path(directory))
