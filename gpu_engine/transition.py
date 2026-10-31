@@ -296,7 +296,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
                      _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
-                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None, _calm_mind_context=None, _swords_dance_context=None, _spikes_context=None) -> StepResult:
+                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None, _calm_mind_context=None, _swords_dance_context=None, _spikes_context=None, _thunder_wave_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -317,6 +317,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         from . import engine_spikes_callbacks as spikes_callbacks
         if not _lifecycle_trace or type(_spikes_context) is not spikes_callbacks.Context:
             raise ValueError('typed original registered Spikes context required')
+    if _thunder_wave_context is not None:
+        from . import engine_thunder_wave_callbacks as thunder_callbacks
+        if not _lifecycle_trace or type(_thunder_wave_context) is not thunder_callbacks.Context:
+            raise ValueError('typed actual registered Thunder Wave context required')
     if _toxic_context is not None:
         from . import engine_toxic_callbacks as toxic_callbacks
         _toxic_registered=type(_toxic_context) is toxic_callbacks.RegisteredContext
@@ -774,6 +778,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
             chance[:,6],always_hit=always_hit,hustle=hustle_accuracy,
             compound_eyes=compound_eyes,sand_veil=sand_veil)
+        if _thunder_wave_context is not None:
+            _thunder_wave_accuracy_hit=hit
         if _toxic_context is not None:
             _toxic_accuracy_hit=hit  # Literal accuracy result BEFORE Protect/absorption.
         # TryMove (including Damp) succeeds before self-KO, which occurs even
@@ -1008,6 +1014,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             status = effects.status[move]
             target_types = _active(work.types,work,foe)
             status_immune = jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
+            if _thunder_wave_context is not None:
+                _thunder_wave_type_immune=status_immune
+                _thunder_wave_ability_immune=jnp.zeros_like(acts)
+                if table.secondary is not None:
+                    _thunder_wave_ability_immune=table.secondary.ability_immunity[_active(work.ability,work,foe),status]
             if _toxic_context is not None:
                 _toxic_type_immune=status_immune
                 _toxic_ability_immune=jnp.zeros_like(acts)
@@ -1029,6 +1040,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if _toxic_registered:
                     _public_trace,_toxic_ticket=execution_accounting.open_attempt(_public_trace,
                         execution_accounting.Site.TOXIC_ATTEMPT,foe,active=_toxic_requested)
+            if _thunder_wave_context is not None:
+                _thunder_wave_requested=acts & (move==_thunder_wave_context.data.move_id)
+                _thunder_wave_old_status=_active(work.status,work,foe)
+                _thunder_wave_old_counter=_active(work.status_counter,work,foe)
+                _thunder_wave_live=_active(work.hp,work,foe)>0
+                _thunder_wave_sub_block=(_active(work.substitute_hp,work,foe)>0)&~effects.bypass_sub[move]
+                _public_trace,_thunder_wave_ticket=execution_accounting.open_attempt(_public_trace,
+                    execution_accounting.Site.PRIMARY_PARALYSIS,foe,active=_thunder_wave_requested)
             if _lifecycle_trace:
                 _public_trace=status_callbacks.changed(_public_trace,foe,work.active[rows,foe],
                     _active(work.status,work,foe),status,status_callbacks.PRIMARY,eligible=apply_status)
@@ -1051,11 +1070,23 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if _toxic_registered:
                     _public_trace=execution_accounting.capture_toxic_attempt(_public_trace,_toxic_ticket,
                         side,work.active[rows,side],work.active[rows,foe],move,_toxic_attempt,requested=_toxic_requested)
+            if _thunder_wave_context is not None:
+                _thunder_wave_attempt=thunder_callbacks.Attempt(_thunder_wave_accuracy_hit,hit,_thunder_wave_type_immune,
+                    _thunder_wave_ability_immune,_thunder_wave_sub_block,_thunder_wave_live,apply_status,_risk_protected,_risk_absorbed,
+                    immune,acts & hit & ~immune,_thunder_wave_old_status,_active(work.status,work,foe),
+                    _thunder_wave_old_counter,_active(work.status_counter,work,foe))
+                _public_trace=thunder_callbacks.record_device(_public_trace,_thunder_wave_ticket,side,work.active[rows,side],
+                    work.active[rows,foe],move,_thunder_wave_attempt,_thunder_wave_context,requested=_thunder_wave_requested)
+                _public_trace=thunder_callbacks.exclude_cure_device(_public_trace,_thunder_wave_requested,apply_status,
+                    _active(work.item,work,foe),table.items)
             if _lifecycle_trace:
                 _public_trace=kernel_risks.primary_status_on_tape(_public_trace,acts & (status!=m.NONE),active=live,
                     captured=(kernel_risks.CapturedToxic(_toxic_context,_toxic_ticket,side,
                         work.active[rows,side],work.active[rows,foe],move,_toxic_attempt)
-                        if _toxic_context is not None and _toxic_registered else None))
+                        if _toxic_context is not None and _toxic_registered else None),
+                    captured_thunder_wave=(kernel_risks.CapturedThunderWave(_thunder_wave_context,_thunder_wave_ticket,side,
+                        work.active[rows,side],work.active[rows,foe],move,_thunder_wave_attempt)
+                        if _thunder_wave_context is not None else None))
             if table.secondary is not None:
                 if _lifecycle_trace:
                     work,_public_trace=secondaries.after_status_event(work,side,foe,status,table.secondary,
