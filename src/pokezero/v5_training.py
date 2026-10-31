@@ -126,7 +126,8 @@ def create(model_config,loss_config,train_config,*,enable_v5=False):
         model=build_v5_model(model_config,enable_v5=True).to(train_config.device)
         optimizer=torch.optim.AdamW(model.parameters(),lr=train_config.learning_rate,
             weight_decay=train_config.weight_decay,betas=(train_config.beta1,train_config.beta2),
-            eps=train_config.epsilon,foreach=False)
+            eps=train_config.epsilon,foreach=False,amsgrad=False,maximize=False,
+            capturable=False,differentiable=False,fused=None)
         rng=_rng_state(torch,train_config.device.startswith('cuda'))
     return Runtime(model_config,loss_config,train_config,model,optimizer,rng,contract.contract_descriptor())
 
@@ -153,12 +154,20 @@ def validate_bootstraps(batch):
 
 
 def _validate_optimizer(runtime):
-    groups=runtime.optimizer.param_groups;config=runtime.train_config
+    _validate_optimizer_groups(runtime.optimizer.param_groups,runtime.train_config)
+
+
+def _validate_optimizer_groups(groups,config):
     if len(groups)!=1:raise ValueError('original single-group v5 AdamW required')
     actual=groups[0]
     expected=dict(lr=config.learning_rate,weight_decay=config.weight_decay,
-        betas=(config.beta1,config.beta2),eps=config.epsilon,foreach=False)
-    if any(actual.get(name)!=value for name,value in expected.items()):
+        betas=(config.beta1,config.beta2),eps=config.epsilon,foreach=False,
+        amsgrad=False,maximize=False,capturable=False,differentiable=False,fused=None,
+        decoupled_weight_decay=True)
+    if (set(actual)!={'params',*expected}
+            or any(actual.get(name)!=value for name,value in expected.items())
+            or any(type(actual[name]) is not type(expected[name]) for name in
+                ('foreach','amsgrad','maximize','capturable','differentiable','fused','decoupled_weight_decay'))):
         raise ValueError('v5 optimizer configuration differs from checkpoint training metadata')
 
 
@@ -331,6 +340,8 @@ def load_checkpoint(path,*,enable_v5=False,expected_model_config=None,expected_l
     _validate_progress(metadata['progress'])
     runtime=create(model,loss,training,enable_v5=True)
     runtime.model.load_state_dict(payload['state_dict'],strict=True)
+    # Validate the literal saved recipe before Torch can normalize defaults.
+    _validate_optimizer_groups(payload['optimizer_state']['param_groups'],training)
     runtime.optimizer.load_state_dict(payload['optimizer_state'])
     _validate_optimizer(runtime)
     if any(not torch.isfinite(parameter).all() for parameter in runtime.model.parameters()):

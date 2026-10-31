@@ -136,6 +136,22 @@ class V5TrainingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'optimizer configuration differs'):
                 training.load_checkpoint(wrong_optimizer,enable_v5=True)
 
+    def test_resume_rejects_every_optimizer_behavior_flag_drift(self):
+        runtime=training.create(*configurations(),enable_v5=True)
+        with tempfile.TemporaryDirectory() as directory:
+            original=Path(directory)/'original.pt';training.save_checkpoint(original,runtime)
+            for name,value in dict(amsgrad=True,maximize=True,foreach=True,capturable=True,
+                    differentiable=True,fused=True,decoupled_weight_decay=False).items():
+                with self.subTest(name=name):
+                    payload=torch.load(original,weights_only=True)
+                    payload['optimizer_state']['param_groups'][0][name]=value
+                    path=Path(directory)/(name+'.pt');torch.save(payload,path)
+                    with self.assertRaisesRegex(ValueError,'optimizer configuration differs'):
+                        training.load_checkpoint(path,enable_v5=True)
+            runtime.optimizer.param_groups[0]['maximize']=1
+            with self.assertRaisesRegex(ValueError,'optimizer configuration differs'):
+                training.save_checkpoint(Path(directory)/'integer-flag.pt',runtime)
+
     def test_capped_critic_needs_literal_later_public_bootstrap_not_return_or_gae(self):
         actual=batch(status='CAPPED');runtime=training.create(*configurations(),enable_v5=True)
         before={key:value.clone() for key,value in runtime.model.state_dict().items()}
