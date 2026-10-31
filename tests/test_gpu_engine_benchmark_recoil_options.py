@@ -28,4 +28,4 @@ class BenchmarkRecoilOptionsTests(unittest.TestCase):
  def test_fresh_benchmark_import_and_all_frozen_source_pins(self):
   import os,sys
   run=subprocess.run([sys.executable,'-c','from gpu_engine import benchmark_retained_games; from gpu_engine import engine_source_frame_witness as w; w._source(); print(len(w.SOURCE_PINS))'],text=True,capture_output=True,env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1'))
-  self.assertEqual(run.returncode,0,run.stderr);self.assertEqual(run.stdout.strip(),'51')
+  self.assertEqual(run.returncode,0,run.stderr);self.assertEqual(run.stdout.strip(),'52')

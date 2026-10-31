@@ -78,6 +78,8 @@ class Tables(NamedTuple):
     toxic_candidates: object
     recoil_binding: object  # GLOBAL8
     recoil_candidates: object
+    spikes_binding: object
+    spikes_candidates: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -137,7 +139,7 @@ def _host():
     if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked kernel risk boundary cannot be traced')
 
 
-def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None,toxic_compiled=None,recoil_compiled=None):
+def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None,toxic_compiled=None,recoil_compiled=None,spikes_compiled=None):
     _host();record=accounting._checked(accounting_compiled)
     if record[2].causal.projector.catalog is not engine_catalog:raise ValueError('same original accounting/kernel catalog required')
     public.check_catalog(engine_catalog,engine_catalog.engine_table,expected_binding=engine_catalog.binding,
@@ -192,7 +194,15 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         move=int(data.move_id)
         if not 0<move<m or not candidate[move]:raise ValueError('original direct-capable Double-Edge row required')
         recoil_binding=np.asarray(data.binding,np.uint32);recoil_candidate[move]=True
-    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate]|=NON_WEATHER
+    spikes_binding=np.zeros(8,np.uint32);spikes_candidate=np.zeros(m,bool)
+    if spikes_compiled is not None:
+        from . import engine_spikes_callbacks as spikes
+        data=spikes.check_compiled(spikes_compiled)
+        if spikes._COMPILED[spikes_compiled][2] is not engine_catalog:raise ValueError('same original Spikes/kernel catalog required')
+        move=int(data.move_id)
+        if not 0<move<m:raise ValueError('canonical Spikes bounds required')
+        spikes_binding=np.asarray(data.binding,np.uint32);spikes_candidate[move]=True
+    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~spikes_candidate]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -206,7 +216,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     flag(table.effects,'heal_bell',FIELD_VOLATILE)
     if table.effects is not None:risk[(np.asarray(table.effects.status)!=0)&~toxic_candidate]|=FIELD_VOLATILE
     for name in ('seed','wish','spin'):flag(table.sustain,name,FIELD_VOLATILE)
-    flag(table.entry,'spikes_move',FIELD_VOLATILE)
+    if table.entry is not None:risk[np.asarray(table.entry.spikes_move)&~spikes_candidate]|=FIELD_VOLATILE
     flag(table.linked_traps,'move',FIELD_VOLATILE);flag(table.encore,'move',FIELD_VOLATILE)
     if table.secondary is not None:
         chance=np.asarray(table.secondary.chance)
@@ -233,13 +243,13 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
         direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
-        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist())
+        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate))
-    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled)
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(spikes_binding),jnp.asarray(spikes_candidate))
+    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,spikes_compiled)
     return result
 
 
@@ -263,6 +273,9 @@ def check_compiled(compiled):
     if r[8] is not None:
         from . import engine_recoil_callbacks as recoil
         recoil.check_compiled(r[8])
+    if r[9] is not None:
+        from . import engine_spikes_callbacks as spikes
+        spikes.check_compiled(r[9])
     return compiled.device
 
 
@@ -296,6 +309,8 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.branch_risk,(len(Branch)+1,),jnp.int32)
     accounting._shape(tables.recoil_binding,(8,),jnp.uint32)
     accounting._shape(tables.recoil_candidates,(len(tables.selected_risk),),jnp.bool_)
+    accounting._shape(tables.spikes_binding,(8,),jnp.uint32)
+    accounting._shape(tables.spikes_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.toxic_binding,(8,),jnp.uint32)
     accounting._shape(tables.toxic_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.substitute_binding,(8,),jnp.uint32)
@@ -542,6 +557,39 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
     value=jnp.where(unsupported,TARGET_OUTCOME,0)|jnp.where(o.explodes|(((o.recoil>0)|recoil_needed)&~recoil_ok),SELF_HP,0)
     value |= jnp.where((o.power<0)|(o.numerator<0)|(o.denominator<=0)|(o.recoil<0),NAMESPACE,0)
     return _observe(carry,tape,tables,Branch.HIT_OUTCOME,jnp.where(eligible,value,0),active=active)
+
+
+class CapturedSpikes(NamedTuple):
+    context:object
+    ticket:object
+    side:object
+    physical:object
+    move:object
+    write:object
+
+
+def observe_spikes_device(carry,tape,attempted,tables,*,active,captured=None):
+    from . import engine_spikes_callbacks as spikes
+    b=len(carry.stream_id);supported=jnp.zeros(b,bool)
+    if captured is not None:
+        if type(captured) is not CapturedSpikes:raise ValueError('typed SAME-call Spikes capture required')
+        context=accounting._context(tape)
+        if context is not None:
+            slot,same=accounting._ticket(context.ledger,captured.ticket);rows=jnp.arange(b);move=_vector(captured.move,b)
+            supported=(same&jnp.any(tables.spikes_binding!=0)&jnp.all(captured.context.data.binding==tables.spikes_binding)
+                &(move>0)&(move<len(tables.spikes_candidates))&tables.spikes_candidates[jnp.clip(move,0,len(tables.spikes_candidates)-1)]
+                &(context.ledger.stage[rows,slot]==2)&(context.ledger.refusal==0))
+            supported &= spikes.span_matches(tape,captured.ticket,_vector(captured.side,b),_vector(captured.physical,b),move,captured.write,captured.context)
+            at=jnp.clip(context.ledger.start[rows,slot],0,tape.words.shape[1]-1)
+            supported &= ((context.ledger.claimed[rows,at]==slot+1)&jnp.all(context.ledger.words[rows,at]==tape.words[rows,at],axis=1)
+                &(context.ledger.event_turn[rows,at]==tape.event_turn[rows,at])&(context.ledger.event_phase[rows,at]==tape.event_phase[rows,at])
+                &jnp.all(context.ledger.event_generation[rows,at]==tape.event_generation[rows,at],axis=1))
+    attempted=_vector(attempted,b,jnp.bool_)
+    return _observe(carry,tape,tables,Branch.SPIKES,jnp.where(attempted&~supported,FIELD_VOLATILE,0),active=active)
+
+
+def spikes_on_tape(tape,attempted,*,active,captured=None):
+    return _on_tape(tape,observe_spikes_device,attempted,active=active,captured=captured)
 
 
 def observe_branch_device(carry,tape,branch,attempted,tables,*,active):

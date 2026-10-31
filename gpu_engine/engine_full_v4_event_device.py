@@ -39,6 +39,7 @@ from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
 from . import engine_recoil_callbacks as recoil_callbacks
 from . import engine_intimidate_callbacks as intimidate_callbacks
+from . import engine_spikes_callbacks as spikes_callbacks
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -75,6 +76,7 @@ class Tables(NamedTuple):
     recoil_damage: object
     ident_species: object
     intimidate: object
+    spikes: object
     namespaces: Bindings
     binding: object
 
@@ -270,6 +272,8 @@ def compile_adapter(metadata, projector, *, catalog):
     ids={normalize_id(name):i for i,name in enumerate(catalog.species.names) if i}
     ident_species=np.array([ids.get(bases[normalize_id(name)],0) if normalize_id(name) in bases else i
         for i,name in enumerate(catalog.species.names)],np.int32)
+    spikes=add('|-sidestart|p2: Player 2|Spikes',inputs.Kind.FIELD)
+    if int(lower.device.spikes_move)>0 and not spikes:raise ValueError('FULL writer lacks original Spikes field schema')
     width = max(lengths)
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
@@ -279,13 +283,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
     payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()
     payload += ident_species.tobytes()
-    payload += np.array(intimidate,np.int32).tobytes()
+    payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -389,6 +393,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
     causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
     causal.base._shape(tables.intimidate,(),jnp.int32)
+    causal.base._shape(tables.spikes,(),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     causal.base._shape(tables.ident_species,(tables.ident_species.shape[0],),jnp.int32)
@@ -432,6 +437,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
         recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
         intimidate=(kind==int(inputs.Kind.BOOST))&(raw_kind==intimidate_callbacks.INTIMIDATE)
+        spikes=(kind==int(inputs.Kind.FIELD))&(raw_kind==spikes_callbacks.SPIKES)
         direct_control=(kind==int(inputs.Kind.NONPROC)) & (
             (raw_kind==direct_hit_controls.CRITICAL)|(raw_kind==direct_hit_controls.SUPER_EFFECTIVE)
             |(raw_kind==direct_hit_controls.RESISTED))
@@ -468,6 +474,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(substitute,tables.substitute_created[chip_status],key)
         key=jnp.where(pressure,tables.pressure_start,key)
         key=jnp.where(intimidate,tables.intimidate,key)
+        key=jnp.where(spikes,tables.spikes,key)
         key=jnp.where(trace_copy,tables.trace_copy,key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
@@ -478,8 +485,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         subject = jnp.where(direct_control,tape.words[:,index,3],jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6])))
         subject=jnp.where(toxic_attempt,jnp.where(toxic_code==toxic_callbacks.MISS,tape.words[:,index,1],tape.words[:,index,3]),subject)
         subject=jnp.where(trace_copy,semantic[:,4],jnp.where(intimidate,tape.words[:,index,1],subject))
+        subject=jnp.where(spikes,tape.words[:,index,1],subject)
         safe = jnp.clip(subject, 0, 1)
-        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt|trace_copy|intimidate,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
+        new_slot = jnp.where(direct_control|entry_weather|move_weather|toxic_attempt|trace_copy|intimidate|spikes,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
         safe_slot = jnp.clip(new_slot, 0, 5)
         prior_species = species[rows, safe, safe_slot]
         collision = jnp.any((species[rows, safe] == semantic[:, 9, None])
@@ -513,6 +521,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(~toxic_write|toxic_status)
             &(statuses[rows,toxic_victim,jnp.clip(slots[rows,toxic_victim],0,5)]==toxic_observed))
         identity &= ~pressure | live[rows,safe]
+        spikes_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        spikes_called=(called[:,0]==subject)&(called[:,1]==slots[rows,safe])&(called[:,2]==tables.causal.base.public_ids[spikes_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
+        identity &= ~spikes | (live[rows,safe]&live[rows,1-safe]&(semantic[:,6]==1-subject)&spikes_called)
         identity &= ~intimidate | (~state.causal.cursor.initialized&(state.sequence==0)
             &live[rows,safe]&live[rows,1-safe]&(semantic[:,2]==0)&(semantic[:,3]==0))
         identity &= ~trace_copy | (live[rows,safe]&live[rows,1-safe])
@@ -677,7 +688,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
         toxic_enc=jnp.where(direct_control|toxic_attempt,new_slot+1,semantic[:,8])
-        result = result.at[:, :, 9].set(jnp.where(toxic & ~weather_event[:,None], toxic_enc[:,None], result[:, :, 9]))
+        result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes)[:,None], toxic_enc[:,None], result[:, :, 9]))
         result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)),
             jnp.where(semantic[:, 12, None] == 1, -1, hp[:, None]), result[:, :, 11]))
         result = result.at[:, :, 12].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)), maximum[:, None], result[:, :, 12]))

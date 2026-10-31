@@ -296,7 +296,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
                      _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
-                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None) -> StepResult:
+                     _direct_hit_context=None, _substitute_context=None, _toxic_context=None, _recoil_context=None, _spikes_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -305,6 +305,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _spikes_context is not None:
+        from . import engine_spikes_callbacks as spikes_callbacks
+        if not _lifecycle_trace or type(_spikes_context) is not spikes_callbacks.Context:
+            raise ValueError('typed original registered Spikes context required')
     if _toxic_context is not None:
         from . import engine_toxic_callbacks as toxic_callbacks
         _toxic_registered=type(_toxic_context) is toxic_callbacks.RegisteredContext
@@ -1127,11 +1131,22 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work = work._replace(weather=weather,weather_counter=counter)
         if table.entry is not None:
             old_layers = work.spikes[rows,foe]
-            if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SPIKES,
-                    acts & table.entry.spikes_move[move],active=live)
+            if _spikes_context is not None:
+                _spikes_requested=acts & table.entry.spikes_move[move]
+                _public_trace,_spikes_ticket=execution_accounting.open_attempt(_public_trace,
+                    execution_accounting.Site.SPIKES_WRITE,side,active=_spikes_requested)
             work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
+            if _spikes_context is not None:
+                _spikes_write=spikes_callbacks.Write(foe,old_layers,
+                    work.spikes[rows,foe],acts & hit & ~immune)
+                _public_trace=spikes_callbacks.record_device(_public_trace,_spikes_ticket,side,
+                    work.active[rows,side],move,_spikes_write,_spikes_context,requested=_spikes_requested)
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.spikes_on_tape(_public_trace,
+                    acts & table.entry.spikes_move[move],active=live,
+                    captured=(kernel_risks.CapturedSpikes(_spikes_context,_spikes_ticket,side,
+                        work.active[rows,side],move,_spikes_write) if _spikes_context is not None else None))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
         if _public_trace is not None:
             _public_trace = public_callbacks.faint(_public_trace,foe,work.active[rows,foe],
