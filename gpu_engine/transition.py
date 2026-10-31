@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import engine_pinch_item_callbacks as pinch_callbacks
 import numpy as np
 
 from . import mechanics as m
@@ -1565,10 +1566,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_execution_leftovers_ticket=execution_accounting.open_attempt(
                     _public_trace,execution_accounting.Site.LEFTOVERS,side,
                     active=_execution_leftovers_requested)
-                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                    execution_accounting.Site.PINCH_ITEM,side,
-                    active=eligible & heal_event & (hp>0)
-                    & (hp*4<=_active(work.max_hp,work,side)) & (table.items.pinch_stat[_execution_item]>=0))
+                _pinch_pending=None
+                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.pinch_item is not None:
+                    _public_trace,_pinch_pending=pinch_callbacks.begin(_public_trace,work,side,
+                        _execution_item,_active(work.boosts,work,side),hp,_active(work.max_hp,work,side),
+                        table.items,_direct_hit_context,eligible=eligible & heal_event)
+                else:
+                    _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                        execution_accounting.Site.PINCH_ITEM,side,
+                        active=eligible & heal_event & (hp>0)
+                        & (hp*4<=_active(work.max_hp,work,side)) & (table.items.pinch_stat[_execution_item]>=0))
                 if _leftovers_context is not None:
                     if _leftovers_registered and _leftovers_context.no_output_tables is not None:
                         _execution_full_hp_before=_leftovers_no_output.capture_before_device(
@@ -1582,6 +1589,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 eligible=eligible & heal_event)
             work=work._replace(item=_set_active(work.item,work,side,item),
                 boosts=_set_active(work.boosts,work,side,boosts))
+            if _lifecycle_trace:
+                _public_trace=pinch_callbacks.finish(_public_trace,_pinch_pending,item,boosts)
             if _leftovers_context is not None:
                 if _leftovers_registered:
                     _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,

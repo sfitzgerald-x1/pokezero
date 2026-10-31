@@ -38,6 +38,7 @@ from . import engine_no_damage_callbacks as no_damage
 from . import engine_secondary_status_callbacks as secondary_callbacks
 from . import engine_flash_fire_end_callbacks as flash_end
 from . import engine_protect_callbacks as protect_callbacks
+from . import engine_pinch_item_callbacks as pinch_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_color_change_callbacks as color_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
@@ -102,6 +103,7 @@ class Tables(NamedTuple):
     protect_success: object
     protect_block: object
     protect_still_moves: object
+    pinch_items: object
     rough_skin_damage: object
     wonder_guard_immune: object
     namespaces: Bindings
@@ -292,6 +294,12 @@ def compile_adapter(metadata, projector, *, catalog):
     recoil_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
         f'|[from] Recoil|[of] {ident[1]}',inputs.Kind.CONDITION) for token in tokens],np.int32)
     if int(lower.device.recoil_move)>0 and not np.all(recoil_damage):raise ValueError('FULL writer lacks exact Gen3 Recoil/of schemas')
+    pinch_items=np.zeros(len(metadata["vocabulary"]["items"]),np.int32)
+    for i,item in enumerate(metadata["vocabulary"]["items"]):
+        if item in {"liechiberry":"atk","petayaberry":"spa","salacberry":"spe"}:
+            stat={"liechiberry":"atk","petayaberry":"spa","salacberry":"spe"}[item]
+            name={"liechiberry":"Liechi Berry","petayaberry":"Petaya Berry","salacberry":"Salac Berry"}[item]
+            pinch_items[i]=add((f"|-enditem|{ident[0]}|{name}|[eat]",f"|-boost|{ident[0]}|{stat}|1|[from] item: {name}"),inputs.Kind.BOOST)
     rough_skin_damage=np.zeros(7,np.int32)
     if 'roughskin' in metadata['vocabulary']['abilities']:
         rough_skin_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
@@ -399,6 +407,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
+    payload += pinch_items.tobytes()
     payload += sub_damage_keys.tobytes()+rough_skin_damage.tobytes()
     payload += np.array(wonder_guard_immune,np.int32).tobytes()+no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
@@ -409,7 +418,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(rough_skin_damage),jnp.array(wonder_guard_immune,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(wonder_guard_immune,jnp.int32),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -523,6 +532,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.substitute_created,(7,),jnp.int32)
     causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
     causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
+    causal.base._shape(tables.pinch_items,tables.pinch_items.shape,jnp.int32)
+    if tables.pinch_items.ndim!=1 or not len(tables.pinch_items):raise ValueError("original pinch item namespace required")
     causal.base._shape(tables.rough_skin_damage,(7,),jnp.int32)
     causal.base._shape(tables.intimidate,(),jnp.int32)
     causal.base._shape(tables.calm_mind,(2,),jnp.int32)
@@ -596,6 +607,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
         rough=condition & (raw_kind==rough_callbacks.ROUGH_SKIN_HP)
         intimidate=(kind==int(inputs.Kind.BOOST))&(raw_kind==intimidate_callbacks.INTIMIDATE)
+        pinch=raw_kind==pinch_callbacks.PINCH_ITEM
         bulk_up=(kind==int(inputs.Kind.BOOST))&(raw_kind==bulk_up_callbacks.BULK_UP)
         calm_mind=(kind==int(inputs.Kind.BOOST))&(raw_kind==calm_mind_callbacks.CALM_MIND)
         swords_dance=(kind==int(inputs.Kind.BOOST))&(raw_kind==swords_dance_callbacks.SWORDS_DANCE)
@@ -649,6 +661,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(spikes,tables.spikes,key)
         key=jnp.where(trace_copy,tables.trace_copy[jnp.clip(tape.words[:,index,2],0,tables.trace_copy.shape[0]-1)],key)
         key=jnp.where(color_change,tables.color_change[jnp.clip(tape.words[:,index,8],0,17)],key)
+        key=jnp.where(pinch,tables.pinch_items[jnp.clip(tape.words[:,index,5],0,len(tables.pinch_items)-1)],key)
         key=jnp.where(bulk_up,tables.bulk_up[jnp.clip(tape.words[:,index,4],0,1)],key)
         key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
         key=jnp.where(swords_dance,tables.swords_dance,key)
@@ -727,6 +740,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~color_change | (color_callbacks.owned(tape,index)&live[rows,safe]
             &(called[:,0]==color_raw[:,1])&(called[:,1]==slots[rows,color_actor])
             &(called[:,2]==tables.causal.base.public_ids[color_move])&(called[:,3]==semantic[:,2]))
+        identity &= ~pinch | (pinch_callbacks.owned(tape,index)&live[rows,safe])
         identity &= ~pressure | live[rows,safe]
         identity &= ~flash_ended | live[rows,safe]
         protect_move=jnp.clip(tape.words[:,index,5],0,tables.causal.base.public_ids.shape[0]-1)
@@ -953,7 +967,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         for col, value in ((12, hp), (13, maximum)):
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
-        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage|protect_block|color_change,new_slot+1,semantic[:,8])
+        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage|protect_block|color_change|pinch,new_slot+1,semantic[:,8])
         prefix = raw_kind == causal.life.TURNLOOP_PREFIX
         result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes|prefix)[:,None], toxic_enc[:,None], result[:, :, 9]))
         result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)),

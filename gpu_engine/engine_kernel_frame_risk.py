@@ -93,6 +93,8 @@ class Tables(NamedTuple):
     primary_plain_binding: object
     primary_plain_candidates: object
     primary_plain_status: object
+    pinch_binding: object
+    pinch_stats: object
     bulk_up_binding: object
     bulk_up_candidates: object
     protect_binding: object
@@ -172,6 +174,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     weather=np.asarray(table.weather.move_weather) if table.weather is not None else np.zeros(m,np.int32)
     no_damage_binding=np.zeros(8,np.uint32)
     plain_binding=np.zeros(8,np.uint32);plain_candidates=np.zeros(m,bool);plain_status=np.zeros(m,np.int32)
+    pinch_binding=np.zeros(8,np.uint32);pinch_stats=np.full(len(table.items.pinch_stat) if table.items is not None else 1,-1,np.int32)
     bulk_binding=np.zeros(8,np.uint32);bulk_candidates=np.zeros(m,bool)
     protect_binding=np.zeros(8,np.uint32);protect_candidates=np.zeros(m,bool);protect_blocks=np.zeros(m,bool)
     direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool);seismic=0;ko_candidates=np.zeros(m,bool)
@@ -192,6 +195,9 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
             from . import engine_color_change_callbacks as color
             cd=direct_data.color_change;color.shape(cd)
             color_binding=np.asarray(cd.binding);color_abilities=np.asarray(cd.abilities);color_candidates=np.asarray(cd.candidates);color_types=np.asarray(cd.move_types);color_dynamic=np.asarray(cd.dynamic_type)
+        if direct_data.pinch_item is not None:
+            from . import engine_pinch_item_callbacks as pinch
+            pinch.shape(direct_data.pinch_item);pinch_binding=np.asarray(direct_data.pinch_item.binding,np.uint32);pinch_stats=np.asarray(direct_data.pinch_item.stats).copy()
         if direct_data.bulk_up is not None:
             from . import engine_bulk_up_callbacks as bulk_up
             bulk_up.shape(direct_data.bulk_up);bulk_binding=np.asarray(direct_data.bulk_up.binding,np.uint32);bulk_candidates=np.asarray(direct_data.bulk_up.candidates).copy()
@@ -322,6 +328,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         'linked_traps.py','encore.py','mechanics.py','engine_execution_completeness.py','engine_kernel_frame_risk.py')
     inventory=dict(schema=SCHEMA,declared={x.name:int(x) for x in Branch},
         source_files={f:hashlib.sha256(Path(__file__).with_name(f).read_bytes()).hexdigest() for f in files},
+        pinch_binding=pinch_binding.tolist(),pinch_stats=pinch_stats.tolist(),
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
@@ -331,7 +338,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -411,6 +418,9 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.color_change_candidates,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.color_change_types,tables.direct_candidates.shape,jnp.int32)
     accounting._shape(tables.color_change_dynamic,tables.direct_candidates.shape,jnp.bool_)
+    accounting._shape(tables.pinch_binding,(8,),jnp.uint32)
+    accounting._shape(tables.pinch_stats,tables.pinch_stats.shape,jnp.int32)
+    if tables.pinch_stats.ndim!=1 or not len(tables.pinch_stats):raise ValueError("original pinch namespace required")
     accounting._shape(tables.bulk_up_binding,(8,),jnp.uint32)
     accounting._shape(tables.bulk_up_candidates,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.protect_binding,(8,),jnp.uint32)
