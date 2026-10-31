@@ -507,7 +507,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                 profile=speed_profile,accounting_compiled=execution_compiled)
             leftovers_context=leftovers_context._replace(no_output_tables=no_output_compiled.device)
             if track_kernel_risks:
-                kernel_risk_compiled=kernel_risks.compile_risks(request['lifecycle'],execution_compiled)
+                kernel_risk_compiled=kernel_risks.compile_risks(request['lifecycle'],execution_compiled,
+                    direct_hit_compiled=direct_hit_compiled if direct_hit_mode=='kernel-event' else None)
             if direct_hit_mode=='kernel-event':
                 direct_hit_context=direct_hit_controls.RegisteredContext(direct_hit_data,execution_compiled.device)
         public_fast = lambda obs, frame, profile, active=None: _full_public(obs, frame, public_handle.device,

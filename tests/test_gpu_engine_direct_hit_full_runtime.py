@@ -108,7 +108,7 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
         prepared=driver.prepare(original['request_compiled'],original['own_compiled'],
             public_mode='retained-full',leftovers_compiled=original['leftovers_compiled'],
             leftovers_mode='retained',account_source_sites=True,direct_hit_compiled=compiled,
-            direct_hit_mode='kernel-event',
+            direct_hit_mode='kernel-event',track_kernel_risks=True,
             fake_forward=lambda _:driver.FakeScores(j.zeros(9),j.array(7,j.int32)))
         runtime=driver._checked(prepared);self.compiled=runtime['public']
         self.f=SimpleNamespace(catalog=runtime['catalog'])
@@ -137,6 +137,7 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
         legacy=transition.step_with_chance(before.core.engine,actions,runtime['request']['engine_table'],chance)
         self.same(result.state.core.engine,legacy.state)
         self.assertEqual(result.state.core.admitted.tolist(),[True,True])
+        self.assertEqual(result.state.core.risks.risk.tolist(),[0,0])
         ledger=result.state.core.execution
         self.assertTrue(bool(accounting.report(ledger,tables=runtime['execution_compiled'].device).scoped_drained.all()))
         direct=(ledger.site==int(accounting.Site.DIRECT_HIT))&(ledger.serial>0)

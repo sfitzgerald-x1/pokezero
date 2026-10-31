@@ -264,22 +264,29 @@ def capture_status_residual_write(tape, ticket, *, requested, positive_write):
     return _put_context(tape,ledger,context)
 
 
-def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,move,write,*,requested):
-    """Capture this literal positive write's complete controls + MAIN_HP span.
+def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write):
+    """Read-only literal Site10 span check shared by capture and risk observer.
 
-    The ticket begins before the SAME numerical HP assignment. There is no
-    empty-span exception: neutral/noncritical writes still require MAIN_HP.
-    This is source capture only; both genuine full owner folds must consume it.
+    This computes facts from the SAME source ticket/write/tape, not a caller
+    accepted flag. Stage/credit belongs to its owning capture/consumer caller.
     """
     from . import engine_direct_hit_controls as direct
     context=_context(tape)
-    if context is None:return tape
+    if context is None:return jnp.zeros_like(tape.count,dtype=jnp.bool_)
     ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=tape.count.shape[0];rows=jnp.arange(b)
-    _shape(requested,(b,),jnp.bool_)
     if type(write) is not direct.HitWrite:raise ValueError('literal direct-hit write required')
     for value in (actor,actor_physical,target_physical,move):_shape(value,(b,),jnp.int32)
     valid=direct.validate_write_device(write,b)
     start=ledger.start[rows,slot]
+    declaration=tape.words[rows,jnp.clip(start-1,0,tape.words.shape[1]-1)]
+    declared=((start>0)&(declaration[:,0]==direct.public.MOVE)
+        &(declaration[:,1]==actor)&(declaration[:,2]==actor_physical)
+        &(declaration[:,3]==1-actor)&(declaration[:,4]==target_physical)
+        &(declaration[:,5]==move)&jnp.all(declaration[:,6:]==0,axis=1))
+    prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
+    declared &= ((tape.event_turn[rows,prefix]==ledger.turn[rows,slot])
+        &(tape.event_phase[rows,prefix]==ledger.phase[rows,slot])
+        &jnp.all(tape.event_generation[rows,prefix]==ledger.generation[rows,slot],axis=1))
     critical=jnp.broadcast_to(write.critical,(b,));num=jnp.broadcast_to(write.numerator,(b,))
     den=jnp.broadcast_to(write.denominator,(b,));effect=num!=den
     length=critical.astype(jnp.int32)+effect.astype(jnp.int32)+1
@@ -294,8 +301,18 @@ def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,mo
     exact_hp=((hp[:,0]==direct.public.MAIN_HP)&jnp.all(hp[:,1:3]==-1,axis=1)&(hp[:,3]==1-actor)
         &(hp[:,4]==target_physical)&(hp[:,5]==write.new_hp)&(hp[:,6]==write.maximum)
         &(hp[:,7]>=0)&(hp[:,7]<=6)&jnp.all(hp[:,8:]==0,axis=1))
-    semantic=(same & valid & (ledger.site[rows,slot]==int(Site.DIRECT_HIT))
+    semantic=(_validate(ledger,context.tables) & _tape(ledger,tape,context.tables) & same & valid & declared & (ledger.site[rows,slot]==int(Site.DIRECT_HIT))
         &(ledger.side[rows,slot]==1-actor)&(tape.count==start+length)&controls&exact_hp)
+    return semantic
+
+
+def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,move,write,*,requested):
+    """Capture the complete literal positive span; BOTH owners must drain it."""
+    context=_context(tape)
+    if context is None:return tape
+    _shape(requested,tape.count.shape,jnp.bool_)
+    semantic=_direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write)
+    ledger=context.ledger
     ledger=unhandled(ledger,ticket,active=requested&~semantic,tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
     return _put_context(tape,ledger,context)

@@ -814,7 +814,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=kernel_risks.outcome_on_tape(_public_trace,
                 kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
                     hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes),
-                eligible=acts,active=live)
+                eligible=acts,active=live,captured_direct=(kernel_risks.CapturedDirectHit(
+                    _direct_hit_context,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,_direct_write)
+                    if _direct_hit_context is not None and _direct_hit_registered else None))
         if table.effects is not None:
             effects = table.effects
             # Protect/Endure fail if there is no queued move left (including

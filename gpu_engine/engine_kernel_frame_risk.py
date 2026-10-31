@@ -68,6 +68,8 @@ class Tables(NamedTuple):
     accounting_binding: object
     selected_risk: object
     branch_risk: object
+    direct_hit_binding: object       # GLOBAL8; zero means weather-only mode
+    direct_candidates: object        # [M] immutable original table capability
 
 
 @dataclass(frozen=True,eq=False)
@@ -107,18 +109,45 @@ class Outcome(NamedTuple):
     explodes: object
 
 
+class CapturedDirectHit(NamedTuple):
+    """PRIVATE SAME-call source values, not caller attestation or credit.
+
+    The actual kernel passes its original registered context, fresh Site10
+    ticket and literal write. The owning driver must establish frame origin;
+    hot device arrays/copies cannot attest that origin on their own.
+    """
+    context: object
+    ticket: object
+    actor: object
+    actor_physical: object
+    target_physical: object
+    move: object
+    write: object
+
+
 def _host():
     if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked kernel risk boundary cannot be traced')
 
 
-def compile_risks(engine_catalog,accounting_compiled):
+def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None):
     _host();record=accounting._checked(accounting_compiled)
     if record[2].causal.projector.catalog is not engine_catalog:raise ValueError('same original accounting/kernel catalog required')
     public.check_catalog(engine_catalog,engine_catalog.engine_table,expected_binding=engine_catalog.binding,
         expected_engine_binding=np.asarray(engine_catalog.engine_binding,np.uint32))
     table=engine_catalog.engine_table;m=len(table.power);risk=np.zeros(m,np.int32)
     weather=np.asarray(table.weather.move_weather) if table.weather is not None else np.zeros(m,np.int32)
-    risk[weather==0]|=NON_WEATHER
+    direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool)
+    if direct_hit_compiled is not None:
+        from . import engine_direct_hit_controls as direct
+        direct_data=direct.check_compiled(direct_hit_compiled)
+        if direct._COMPILED[direct_hit_compiled][2] is not engine_catalog:
+            raise ValueError('same original direct-hit/kernel catalog required')
+        if int(direct_data.move_count)!=m:raise ValueError('exact direct-hit move namespace required')
+        direct_binding=np.asarray(direct_data.binding,np.uint32)
+        # Candidate only: every actual positive outcome additionally requires
+        # its SAME captured Site10 span. Other static/attempt risk bits remain.
+        candidate=(np.asarray(table.power)>0)&(np.asarray(engine_catalog.ids)>0)&(np.asarray(engine_catalog.targets)==1)
+    risk[(weather==0)&~candidate]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -147,13 +176,14 @@ def compile_risks(engine_catalog,accounting_compiled):
         source_files={f:hashlib.sha256(Path(__file__).with_name(f).read_bytes()).hexdigest() for f in files},
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
-        selected_risk=risk.tolist(),branch_risk=branch.tolist())
+        selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
+        direct_candidates=candidate.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch))
-    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw)
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate))
+    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled)
     return result
 
 
@@ -164,7 +194,11 @@ def check_compiled(compiled):
         raise ValueError('original immutable kernel risk compiler required')
     catalog=r[2];public.check_catalog(catalog,catalog.engine_table,expected_binding=catalog.binding,
         expected_engine_binding=np.asarray(catalog.engine_binding,np.uint32))
-    accounting._checked(r[3]);return compiled.device
+    accounting._checked(r[3])
+    if r[5] is not None:
+        from . import engine_direct_hit_controls as direct
+        direct.check_compiled(r[5])
+    return compiled.device
 
 
 def inventory_json(compiled):
@@ -195,6 +229,8 @@ def _bound(carry,tape,tables):
     accounting._shape(carry.opened,(b,),jnp.bool_);accounting._shape(carry.counts,(b,len(Branch)),jnp.int32)
     accounting._shape(tables.selected_risk,(len(tables.selected_risk),),jnp.int32)
     accounting._shape(tables.branch_risk,(len(Branch)+1,),jnp.int32)
+    accounting._shape(tables.direct_hit_binding,(8,),jnp.uint32)
+    accounting._shape(tables.direct_candidates,(len(tables.selected_risk),),jnp.bool_)
     context=accounting._context(tape)
     if context is None:return jnp.zeros(b,bool),None
     if type(context.tables) is not accounting.Tables:raise ValueError('typed actual accounting context required')
@@ -264,7 +300,40 @@ def observe_selected_device(carry,tape,move,tables,*,eligible,active):
     return _observe(carry,tape,tables,Branch.SELECTED_MOVE,value,active=active)
 
 
-def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active):
+def _captured_direct_matches(tape,outcome,tables,captured):
+    """Read-only source receipt match; no risk is cleared retroactively."""
+    from . import engine_direct_hit_controls as direct
+    b=tape.count.shape[0];no=jnp.zeros(b,bool)
+    if captured is None:return no
+    if (type(captured) is not CapturedDirectHit or type(captured.context) is not direct.RegisteredContext
+            or type(captured.context.data) is not direct.Data or type(captured.write) is not direct.HitWrite):
+        raise ValueError('typed SAME-call captured direct hit required')
+    context=accounting._context(tape)
+    if context is None:return no
+    ledger=context.ledger;slot,same=accounting._ticket(ledger,captured.ticket);rows=jnp.arange(b)
+    data=captured.context.data
+    same &= jnp.any(tables.direct_hit_binding!=0)&jnp.all(data.binding==tables.direct_hit_binding)
+    same &= jnp.all(captured.context.accounting.inventory_binding==tables.accounting_binding)
+    for name in ('engine_binding','source_binding','producer_binding'):
+        same &= jnp.all(getattr(data,name)==getattr(tables,name))
+        same &= jnp.all(getattr(captured.context.accounting,name)==getattr(context.tables,name))
+    same &= jnp.all(data.move_binding==tables.move_binding)&ledger.opened&(ledger.refusal==0)
+    same &= (ledger.stage[rows,slot]==2)&(ledger.end[rows,slot]==tape.count)
+    same &= accounting._direct_hit_span_matches(tape,captured.ticket,captured.actor,captured.actor_physical,
+        captured.target_physical,captured.move,captured.write)
+    w=captured.write
+    for key in ('power','critical','hit','immune','numerator','denominator','substitute','protected','enduring'):
+        same &= getattr(outcome,key)==getattr(w,key)
+    start=ledger.start[rows,slot]
+    span=(jnp.arange(tape.words.shape[1])[None,:]>=start[:,None])&(
+        jnp.arange(tape.words.shape[1])[None,:]<tape.count[:,None])
+    same &= jnp.all(~span|((ledger.claimed==slot[:,None]+1)&jnp.all(ledger.words==tape.words,axis=2)
+        &(ledger.event_turn==tape.event_turn)&(ledger.event_phase==tape.event_phase)
+        &jnp.all(ledger.event_generation==tape.event_generation,axis=2)),axis=1)
+    return same
+
+
+def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None):
     if type(outcome) is not Outcome:raise ValueError('literal typed kernel outcomes required')
     b=len(carry.stream_id);eligible=_vector(eligible,b,jnp.bool_)
     values={name:_vector(x,b,jnp.int32 if name in ('power','numerator','denominator','recoil') else jnp.bool_)
@@ -272,6 +341,14 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active):
     o=Outcome(**values)
     unsupported=(o.absorbed|((o.power>0)&(o.critical|~o.hit|o.immune|(o.numerator!=o.denominator)
         |o.substitute|o.protected|o.enduring)))
+    direct_mode=jnp.any(tables.direct_hit_binding!=0)
+    supported_direct=_captured_direct_matches(tape,o,tables,captured_direct)
+    candidate=jnp.zeros(b,bool)
+    if type(captured_direct) is CapturedDirectHit:
+        move=_vector(captured_direct.move,b)
+        candidate=(move>0)&(move<len(tables.direct_candidates))&tables.direct_candidates[
+            jnp.clip(move,0,len(tables.direct_candidates)-1)]
+    unsupported=jnp.where(direct_mode & ((o.power>0)|candidate),o.absorbed|~supported_direct,unsupported)
     value=jnp.where(unsupported,TARGET_OUTCOME,0)|jnp.where(o.explodes|(o.recoil>0),SELF_HP,0)
     value |= jnp.where((o.power<0)|(o.numerator<0)|(o.denominator<=0)|(o.recoil<0),NAMESPACE,0)
     return _observe(carry,tape,tables,Branch.HIT_OUTCOME,jnp.where(eligible,value,0),active=active)
@@ -327,8 +404,8 @@ def selected_on_tape(tape,move,*,eligible,active):
     return _on_tape(tape,observe_selected_device,move,eligible=eligible,active=active)
 
 
-def outcome_on_tape(tape,outcome,*,eligible,active):
-    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active)
+def outcome_on_tape(tape,outcome,*,eligible,active,captured_direct=None):
+    return _on_tape(tape,observe_outcome_device,outcome,eligible=eligible,active=active,captured_direct=captured_direct)
 
 
 def branch_on_tape(tape,branch,attempted,*,active):

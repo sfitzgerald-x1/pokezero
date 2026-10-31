@@ -26,6 +26,7 @@ class DirectHitAccountingTests(unittest.TestCase):
         actor=j.zeros(b,j.int32);physical=j.full(b,2,j.int32);target=j.full(b,4,j.int32)
         move=j.full(b,self.f.move,j.int32)
         write=f.write(b,numerator=num,denominator=den)._replace(critical=critical)
+        tape=public.move(tape,actor,physical,target,move,eligible=active)
         tape,ticket=e.open_attempt(tape,e.Site.DIRECT_HIT,1-actor,active=active)
         tape=hit.record_registered_direct_hit_controls_device(tape,actor,physical,target,move,write,
             hit.RegisteredContext(self.f.data,self.account.device),eligible=active)
@@ -41,7 +42,7 @@ class DirectHitAccountingTests(unittest.TestCase):
             span=self.span(critical=critical,num=num,den=den)
             result=jax.jit(lambda t,k,a,p,v,m,w,x:e.capture_direct_hit_write(t,k,a,p,v,m,w,requested=x))(*span)
             self.assertEqual(result.execution.ledger.stage[:,0].tolist(),[2,2])
-            self.assertEqual(result.execution.ledger.end[:,0].tolist(),[length]*2)
+            self.assertEqual(result.execution.ledger.end[:,0].tolist(),[1+length]*2)
             self.assertEqual(result.refusal.tolist(),[0,0])
         active=j.array([True,False]*4);span=self.span(8,active);result=self.capture(span)
         self.assertEqual(result.execution.ledger.count.tolist(),active.astype(j.int32).tolist())
@@ -50,19 +51,19 @@ class DirectHitAccountingTests(unittest.TestCase):
 
     def test_source_span_mutations_reused_ticket_and_no_output_refuse(self):
         span=self.span();tape=span[0]
-        for index,column in ((0,5),(0,6),(1,7),(2,4),(2,5),(2,6)):
+        for index,column in ((0,5),(1,5),(1,6),(2,7),(3,4),(3,5),(3,6)):
             bad=tape._replace(words=tape.words.at[0,index,column].add(1))
             result=self.capture((bad,*span[1:]))
             self.assertNotEqual(int(result.execution.ledger.refusal[0]),0)
             self.assertEqual(int(result.execution.ledger.refusal[1]),0)
             self.assertEqual(result.execution.ledger.stage[:,0].tolist(),[1,2])
-        swapped=tape._replace(words=tape.words.at[0,0].set(tape.words[0,1]).at[0,1].set(tape.words[0,0]))
+        swapped=tape._replace(words=tape.words.at[0,1].set(tape.words[0,2]).at[0,2].set(tape.words[0,1]))
         self.assertNotEqual(int(self.capture((swapped,*span[1:])).execution.ledger.refusal[0]),0)
         captured=self.capture(span)
         self.assertNotEqual(int(self.capture((captured,*span[1:])).execution.ledger.refusal[0]),0)
         empty=tape._replace(count=j.zeros(2,j.int32))
         self.assertTrue(bool((self.capture((empty,*span[1:])).execution.ledger.refusal!=0).all()))
-        changed=tape._replace(event_turn=tape.event_turn.at[0,1].add(1))
+        changed=tape._replace(event_turn=tape.event_turn.at[0,2].add(1))
         self.assertNotEqual(int(self.capture((changed,*span[1:])).execution.ledger.refusal[0]),0)
 
 
