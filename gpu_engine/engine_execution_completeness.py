@@ -43,6 +43,7 @@ class Site(IntEnum):
     LEECH_HEAL = 7
     ENTRY_HAZARD = 8
     INTIMIDATE_ATTEMPT = 9
+    DIRECT_HIT = 10
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -260,6 +261,43 @@ def capture_status_residual_write(tape, ticket, *, requested, positive_write):
     accepted=requested & positive_write & semantic
     ledger=unhandled(ledger,ticket,active=requested&~(positive_write&semantic),tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=accepted,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,move,write,*,requested):
+    """Capture this literal positive write's complete controls + MAIN_HP span.
+
+    The ticket begins before the SAME numerical HP assignment. There is no
+    empty-span exception: neutral/noncritical writes still require MAIN_HP.
+    This is source capture only; both genuine full owner folds must consume it.
+    """
+    from . import engine_direct_hit_controls as direct
+    context=_context(tape)
+    if context is None:return tape
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=tape.count.shape[0];rows=jnp.arange(b)
+    _shape(requested,(b,),jnp.bool_)
+    if type(write) is not direct.HitWrite:raise ValueError('literal direct-hit write required')
+    for value in (actor,actor_physical,target_physical,move):_shape(value,(b,),jnp.int32)
+    valid=direct.validate_write_device(write,b)
+    start=ledger.start[rows,slot]
+    critical=jnp.broadcast_to(write.critical,(b,));num=jnp.broadcast_to(write.numerator,(b,))
+    den=jnp.broadcast_to(write.denominator,(b,));effect=num!=den
+    length=critical.astype(jnp.int32)+effect.astype(jnp.int32)+1
+    first=tape.words[rows,jnp.clip(start,0,tape.words.shape[1]-1)]
+    second=tape.words[rows,jnp.clip(start+critical.astype(jnp.int32),0,tape.words.shape[1]-1)]
+    hp=tape.words[rows,jnp.clip(start+length-1,0,tape.words.shape[1]-1)]
+    expected=jnp.stack((actor,actor_physical,1-actor,target_physical,move,
+        jnp.broadcast_to(write.old_hp,(b,)),jnp.broadcast_to(write.new_hp,(b,)),num,den),axis=1)
+    controls=(~critical|((first[:,0]==direct.CRITICAL)&jnp.all(first[:,1:]==expected,axis=1)))
+    controls &= ~effect|((second[:,0]==jnp.where(num>den,direct.SUPER_EFFECTIVE,direct.RESISTED))
+        & jnp.all(second[:,1:]==expected,axis=1))
+    exact_hp=((hp[:,0]==direct.public.MAIN_HP)&jnp.all(hp[:,1:3]==-1,axis=1)&(hp[:,3]==1-actor)
+        &(hp[:,4]==target_physical)&(hp[:,5]==write.new_hp)&(hp[:,6]==write.maximum)
+        &(hp[:,7]>=0)&(hp[:,7]<=6)&jnp.all(hp[:,8:]==0,axis=1))
+    semantic=(same & valid & (ledger.site[rows,slot]==int(Site.DIRECT_HIT))
+        &(ledger.side[rows,slot]==1-actor)&(tape.count==start+length)&controls&exact_hp)
+    ledger=unhandled(ledger,ticket,active=requested&~semantic,tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
     return _put_context(tape,ledger,context)
 
 

@@ -2,12 +2,14 @@
 from dataclasses import replace
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 import jax
 import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_direct_hit_controls as hit
 from gpu_engine import engine_full_v4_event_device as full, engine_lifecycle_callbacks as life
 from gpu_engine import public_wire, public_inputs as inputs, transition, v4_encoder as v4
+from gpu_engine import engine_retained_encoder_driver as driver, engine_execution_completeness as accounting
 import test_gpu_engine_engine_full_v4_event_device as fixture
 
 
@@ -55,7 +57,9 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
                     label={hit.CRITICAL:'-crit',hit.SUPER_EFFECTIVE:'-supereffective',hit.RESISTED:'-resisted'}[rawkind]
                     lines.append(f'|{label}|{active[int(raw[3])]}')
                 elif kind==inputs.Kind.CONDITION:
-                    lines.append(f'|-damage|{active[target]}|{p[1]}/{p[2]}'+statuses[p[3]])
+                    line=f'|-damage|{active[target]}|{p[1]}/{p[2]}'+statuses[p[3]]
+                    if rawkind==17:line=f'|-heal|{active[target]}|{p[1]}/{p[2]}'+statuses[p[3]]+'|[from] item: Leftovers'
+                    lines.append(line)
                 elif kind==inputs.Kind.TURN:lines.append(f'|turn|{turn}')
                 elif kind==inputs.Kind.UPKEEP:lines.append('|upkeep')
                 elif kind==inputs.Kind.ACTION_CHUNK_END:lines.append('|')
@@ -68,7 +72,7 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
         self.assertEqual(len(chunks),1)
         return chunks[0],next_wire
 
-    def test_actual_hit_full_words_both_owner_leaves_and_matching_hp_faults(self):
+    def test_actual_diagnostic_hit_keeps_unknown_and_full_frame_refused(self):
         initial,kw=self.initial();draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1).at[0,0,4].set(0)
         chance=transition.ChanceInputs(draws,*[j.zeros((2,2),j.int32) for _ in range(4)],j.zeros(2,j.int32))
         actions=j.array([[0,8],[0,8]],j.int32)
@@ -88,24 +92,78 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
             public=v4.initialize(self.f.catalog,stream_ids=ids,owner_sides=sides)
             expected,wire=self.reference(stream,initial,[public_wire.WireState()]*2)
             init=self.fast(stream,initial,public);self.same(init.projection.chunk,expected)
-            expected,wire=self.reference(init.projection.state,frame,wire)
-            expected_public,error=v4.fold_chunk(init.public,expected,self.f.catalog)
-            self.assertEqual(error.tolist(),[0,0])
             result=self.fast(init.projection.state,frame,init.public)
-            self.assertEqual(result.projection.error.tolist(),[0,0])
-            self.same(result.projection.chunk,expected);self.same(result.public,expected_public)
+            self.assertEqual(result.projection.error.tolist(),[int(inputs.Error.SOURCE)]*2)
+            self.same(result.public,init.public)
             self.assertFalse(bool(result.projection.full_line_consumers_complete.any()))
             self.assertFalse(bool(result.projection.B4_qualified.any()))
-            # Literal enum-valid faults cannot borrow a later HP write or old
-            # observed HP. A bad row rolls back the whole real FULL frame.
-            for column,index,value in ((6,at,int(raw[0,at,6])-1),
-                    (5,at+1,int(raw[0,at+1,5])+1),(5,at,2)):
-                tape=frame.callbacks._replace(words=frame.callbacks.words.at[0,index,column].set(value))
-                bad=self.fast(init.projection.state,frame._replace(callbacks=tape),init.public)
-                self.assertNotEqual(int(bad.projection.error[0]),0)
-                self.assertEqual(int(bad.projection.error[1]),0)
-                self.same(jax.tree.map(lambda x:x[0],bad.public),jax.tree.map(lambda x:x[0],init.public))
-                self.same(jax.tree.map(lambda x:x[1],bad.public),jax.tree.map(lambda x:x[1],result.public))
+
+    def test_registered_actual_span_both_owner_words_and_consumption(self):
+        import test_gpu_engine_execution_runtime_plumbing as owning_fixture
+        owning_fixture.ExecutionRuntimePlumbingTests.setUpClass()
+        base=owning_fixture.ExecutionRuntimePlumbingTests
+        original=driver._checked(base.prepared)
+        compiled=hit.compile_direct_hit_controls(engine_catalog=original['request']['lifecycle'])
+        prepared=driver.prepare(original['request_compiled'],original['own_compiled'],
+            public_mode='retained-full',leftovers_compiled=original['leftovers_compiled'],
+            leftovers_mode='retained',account_source_sites=True,direct_hit_compiled=compiled,
+            direct_hit_mode='kernel-event',
+            fake_forward=lambda _:driver.FakeScores(j.zeros(9),j.array(7,j.int32)))
+        runtime=driver._checked(prepared);self.compiled=runtime['public']
+        self.f=SimpleNamespace(catalog=runtime['catalog'])
+        fixture_instance=base();session=fixture_instance.construct(prepared=prepared);before=session.state
+        actual_constructor=driver._session(session)['constructed']
+        catalog=runtime['request']['lifecycle']
+        cursor=life.register(actual_constructor.cursor.stream_id,catalog=catalog,
+            expected_binding=catalog.binding,expected_engine_binding=np.asarray(catalog.engine_binding,np.uint32))
+        initial=life.LifecycleResult(actual_constructor.state,actual_constructor.cursor,actual_constructor.callbacks,
+            life.snapshot(cursor),actual_constructor.registry,j.zeros(2,bool),j.zeros(2,j.int32))
+        wires=[]
+        for owner in (0,1):
+            observer=full.register(cursor.stream_id,j.full(2,owner,j.int32),compiled=self.compiled)
+            _,wire=self.reference(observer,initial,[public_wire.WireState()]*2);wires.append(wire)
+        chance=fixture_instance.chance()._replace(draws=fixture_instance.chance().draws.at[0,0,4].set(0))
+        actions=j.array([[1,8],[1,8]],j.int32);frames=[];actual=runtime['frame']
+        def capture(*args):
+            frame=actual(*args);frames.append(frame);return frame
+        runtime['frame']=capture
+        try:result=driver.advance(session,actions,chance_inputs=chance)
+        finally:runtime['frame']=actual
+        self.assertEqual(len(frames),1);frame=frames[0]
+        legacy=transition.step_with_chance(before.core.engine,actions,runtime['request']['engine_table'],chance)
+        self.same(result.state.core.engine,legacy.state)
+        self.assertEqual(result.state.core.admitted.tolist(),[True,True])
+        ledger=result.state.core.execution
+        self.assertTrue(bool(accounting.report(ledger,tables=runtime['execution_compiled'].device).scoped_drained.all()))
+        direct=(ledger.site==int(accounting.Site.DIRECT_HIT))&(ledger.serial>0)
+        self.assertEqual(direct.sum(axis=1).tolist(),[1,1])
+        self.assertTrue(bool(j.all(j.where(direct,ledger.stage==3,True))))
+        self.assertEqual((frame.callbacks.refusal & hit.UNKNOWN_DIRECT_HIT).tolist(),[0,0])
+        for owner,(old,new) in enumerate(zip(before.observers,result.state.observers)):
+            expected,_=self.reference(old.projection,frame,wires[owner])
+            expected_public,error=v4.fold_chunk(old.retained,expected,self.f.catalog)
+            self.assertEqual(error.tolist(),[0,0]);self.same(new.retained,expected_public)
+            self.assertEqual(new.retained_healthy.tolist(),[True,True])
+            self.assertFalse(bool(result.owners[owner].scored.any()))
+            self.assertFalse(bool(result.owners[owner].B4_qualified.any()))
+        fault_session=fixture_instance.construct(prepared=prepared);prior=fault_session.state
+        original_public=runtime['public_fast']
+        def corrupt_second_owner(observer,frame,profile,active):
+            if int(observer.owner[0])==1:
+                words=np.asarray(frame.callbacks.words[0]);where=np.flatnonzero(words[:,0]==hit.CRITICAL)
+                self.assertEqual(len(where),1)
+                tape=frame.callbacks._replace(words=frame.callbacks.words.at[0,int(where[0]),6].add(1))
+                frame=frame._replace(callbacks=tape)
+            return original_public(observer,frame,profile,active)
+        runtime['public_fast']=corrupt_second_owner
+        try:failed=driver.advance(fault_session,actions,chance_inputs=chance)
+        finally:runtime['public_fast']=original_public
+        self.assertEqual(failed.state.core.admitted.tolist(),[False,True])
+        for old,new,good in zip(prior.observers,failed.state.observers,result.state.observers):
+            self.same(jax.tree.map(lambda x:x[0],new.retained),jax.tree.map(lambda x:x[0],old.retained))
+            self.same(jax.tree.map(lambda x:x[1],new.retained),jax.tree.map(lambda x:x[1],good.retained))
+        slots=failed.state.core.execution.site==int(accounting.Site.DIRECT_HIT)
+        self.assertEqual(failed.state.core.execution.stage[slots].tolist(),[2,3])
 
     def test_original_helper_and_fresh_outer_jit_guards(self):
         initial,kw=self.initial();actions=j.full((2,2),8,j.int32)
