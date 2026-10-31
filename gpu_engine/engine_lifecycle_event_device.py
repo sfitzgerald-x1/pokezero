@@ -44,6 +44,7 @@ from . import engine_flash_fire_end_callbacks as flash_end
 from . import engine_substitute_damage_callbacks as substitute_damage
 from . import engine_protect_callbacks as protect_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
+from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
 from . import engine_color_change_callbacks as color_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
@@ -574,6 +575,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic = kind == toxic_callbacks.TOXIC_ATTEMPT
         recoil = kind == recoil_callbacks.RECOIL_HP
         rough = kind == rough_callbacks.ROUGH_SKIN_HP
+        belly = kind == belly_callbacks.BELLY_DRUM
         intimidate = kind == intimidate_callbacks.INTIMIDATE
         calm_mind = kind == calm_mind_callbacks.CALM_MIND
         bulk_up = kind == bulk_up_callbacks.BULK_UP
@@ -742,6 +744,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         rough_ok=(tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
             &rough_callbacks.owned(tape,index,cursor))
         event_ok=jnp.where(rough,generation_ok&clock_ok&rough_ok,event_ok)
+        belly_a,belly_z,belly_owned=belly_callbacks.pair(tape,index)
+        belly_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)&belly_owned
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)]))
+        event_ok=jnp.where(belly,generation_ok&clock_ok&belly_ok,event_ok)
         intimidate_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity
             &~cursor.initialized&(turn==0)&(phase==0)&(actor_physical==0)&(incoming==0)
             &(actor_side>=0)&(actor_side<2)&(side==1-actor_side)
@@ -898,6 +904,18 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         recoil_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),semantic_sequence,
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),recoil_payload),axis=1)
         semantic=jnp.where((recoil|rough)[:,None],recoil_semantic,semantic)
+        belly_percent=(100*raw[:,6]+jnp.maximum(1,raw[:,7])-1)//jnp.maximum(1,raw[:,7])
+        belly_percent=jnp.where((raw[:,6]<raw[:,7])&(belly_percent==100),99,belly_percent)
+        belly_own=state.owner==actor_side
+        belly_hp_payload=jnp.stack((actor_enc,jnp.where(belly_own,raw[:,6],belly_percent),jnp.where(belly_own,raw[:,7],100),
+            jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,8],0,6)],z,jnp.ones_like(z),z,z),axis=1)
+        belly_hp_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),semantic_sequence,
+            turn,phase,absent,absent,actor_side,actor_slot),axis=1),belly_hp_payload),axis=1)
+        belly_boost_payload=jnp.stack((actor_enc,z,raw[:,6],jnp.full_like(z,public_mon_state.SET),z,z,z,z),axis=1)
+        belly_boost_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
+            turn,phase,absent,absent,actor_side,actor_slot),axis=1),belly_boost_payload),axis=1)
+        semantic=jnp.where((belly&(raw[:,4]==0))[:,None],belly_hp_semantic,semantic)
+        semantic=jnp.where((belly&(raw[:,4]==1))[:,None],belly_boost_semantic,semantic)
         intimidate_payload=jnp.stack((status_enc,z,jnp.full_like(z,-1),jnp.full_like(z,public_mon_state.DELTA),jnp.ones_like(z),z,z,z),axis=1)
         intimidate_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
             turn,phase,absent,absent,side,status_slot),axis=1),intimidate_payload),axis=1)
