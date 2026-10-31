@@ -225,7 +225,7 @@ def _report_rows(ok, before, after):
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
            leftovers_context=None,execution_tables=None,status_residual_context=None,kernel_risk_tables=None,
-           direct_hit_context=None):
+           direct_hit_context=None,substitute_context=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -253,7 +253,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         _public_trace=tape, _lifecycle_trace=True,
         _weather_hp_context=None if weather_profile_data is None else (core.weather_profile,weather_profile_data),
         _leftovers_context=leftovers_context,_status_residual_context=status_residual_context,
-        _direct_hit_context=direct_hit_context)
+        _direct_hit_context=direct_hit_context,_substitute_context=substitute_context)
     engine = _rows(source_ready, core.engine, result.step.state)
     cursor = _rows(source_ready, core.cursor, result.callbacks.cursor)
     # Bindings are GLOBAL [8], never row-select them by a coincidental B=8.
@@ -417,7 +417,8 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
 def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic', leftovers_compiled=None,
             leftovers_mode='diagnostic',account_source_sites=False,status_residual_compiled=None,
             status_residual_mode='diagnostic',track_kernel_risks=False,
-            direct_hit_compiled=None,direct_hit_mode='diagnostic',frame_input_mode='closed'):
+            direct_hit_compiled=None,direct_hit_mode='diagnostic',frame_input_mode='closed',
+            substitute_compiled=None,substitute_mode='diagnostic'):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
@@ -446,6 +447,14 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         raise ValueError('checked kernel risk driver must remain outside outer JIT')
     if track_kernel_risks and not account_source_sites:
         raise ValueError('kernel risk tracking requires actual source-site accounting')
+    if type(substitute_mode) is not str or substitute_mode not in ('diagnostic','kernel-event'):
+        raise ValueError('explicit diagnostic or kernel-event Substitute mode required')
+    if substitute_mode=='kernel-event' and (substitute_compiled is None or not account_source_sites):
+        raise ValueError('kernel-event Substitute requires original helper and actual accounting')
+    if substitute_compiled is not None:
+        if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+            raise ValueError('checked Substitute driver must remain outside outer JIT')
+        if public_mode!='retained-full':raise ValueError('Substitute requires retained-full mode')
     if type(direct_hit_mode) is not str or direct_hit_mode not in ('diagnostic','kernel-event'):
         raise ValueError('explicit diagnostic or kernel-event direct-hit mode required')
     if direct_hit_mode=='kernel-event' and (direct_hit_compiled is None or not account_source_sites):
@@ -478,7 +487,13 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         raise ValueError('same original request/OwnFacts producer and pure fake forward required')
     request = source._checked(request_compiled)
     catalog = record['catalog']
-    leftovers_context=None;status_residual_context=None;direct_hit_context=None
+    leftovers_context=None;status_residual_context=None;direct_hit_context=None;substitute_context=None
+    if substitute_compiled is not None:
+        from . import engine_substitute_callbacks as substitute_callbacks
+        substitute_data=substitute_callbacks.check_compiled(substitute_compiled)
+        if substitute_callbacks._COMPILED[substitute_compiled][2] is not request['lifecycle']:
+            raise ValueError('same original request engine catalog required for Substitute caller')
+        substitute_context=substitute_callbacks.Context(substitute_data)
     if direct_hit_compiled is not None:
         from . import engine_direct_hit_controls as direct_hit_controls
         direct_hit_data=direct_hit_controls.check_compiled(direct_hit_compiled)
@@ -525,7 +540,10 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
             leftovers_context=leftovers_context._replace(no_output_tables=no_output_compiled.device)
             if track_kernel_risks:
                 kernel_risk_compiled=kernel_risks.compile_risks(request['lifecycle'],execution_compiled,
-                    direct_hit_compiled=direct_hit_compiled if direct_hit_mode=='kernel-event' else None)
+                    direct_hit_compiled=direct_hit_compiled if direct_hit_mode=='kernel-event' else None,
+                    substitute_compiled=substitute_compiled if substitute_mode=='kernel-event' else None)
+            if substitute_mode=='kernel-event':
+                substitute_context=substitute_callbacks.RegisteredContext(substitute_data,execution_compiled.device)
             if direct_hit_mode=='kernel-event':
                 direct_hit_context=direct_hit_controls.RegisteredContext(direct_hit_data,execution_compiled.device)
         public_fast = lambda obs, frame, profile, active=None: _full_public(obs, frame, public_handle.device,
@@ -552,6 +570,9 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     if direct_hit_context is not None:
         payload['direct_hit_binding']=np.asarray(direct_hit_context.data.binding).tolist()
         payload['direct_hit_mode']=direct_hit_mode
+    if substitute_context is not None:
+        payload['substitute_binding']=np.asarray(substitute_context.data.binding).tolist()
+        payload['substitute_mode']=substitute_mode
     if frame_input_mode=='source-witness':
         from . import engine_source_frame_witness as frame_witness
         payload['frame_input_mode']=frame_input_mode
@@ -567,6 +588,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         kernel_risk_compiled=kernel_risk_compiled,
         frame_input_mode=frame_input_mode,frame_witness_compiled=None,frame_witness_fast=None,
         direct_hit_compiled=direct_hit_compiled,direct_hit_context=direct_hit_context,direct_hit_mode=direct_hit_mode,
+        substitute_compiled=substitute_compiled,substitute_context=substitute_context,substitute_mode=substitute_mode,
         status_residual_compiled=status_residual_compiled,status_residual_context=status_residual_context,
         status_residual_mode=status_residual_mode,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
@@ -577,7 +599,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                 leftovers_context=leftovers_context,status_residual_context=status_residual_context,
                 execution_tables=None if execution_compiled is None else execution_compiled.device,
                 kernel_risk_tables=None if kernel_risk_compiled is None else kernel_risk_compiled.device,
-                direct_hit_context=direct_hit_context)),
+                direct_hit_context=direct_hit_context,substitute_context=substitute_context)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
@@ -611,6 +633,9 @@ def _checked(prepared):
         from . import engine_leftovers_no_output as no_output
         no_output.check_compiled(r['no_output_compiled'])
     if r['kernel_risk_compiled'] is not None:kernel_risks.check_compiled(r['kernel_risk_compiled'])
+    if r['substitute_compiled'] is not None:
+        from . import engine_substitute_callbacks as substitute_callbacks
+        substitute_callbacks.check_compiled(r['substitute_compiled'])
     if r['direct_hit_compiled'] is not None:
         from . import engine_direct_hit_controls as direct_hit_controls
         direct_hit_controls.check_compiled(r['direct_hit_compiled'])

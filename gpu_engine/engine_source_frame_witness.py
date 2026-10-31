@@ -31,13 +31,14 @@ from . import engine_full_v4_event_device as full
 from . import engine_pressure_callbacks as pressure
 from . import engine_public_events as public, public_toxic, v4_encoder
 from .state import BattleState
+from . import engine_substitute_callbacks as substitute
 
 SCHEMA = 'pokezero.actual_source_frame_witness.v1'
 SOURCE, CUTPOINTS, RAW, ACCOUNTING, DRAIN, ORDER, PRIOR = (1<<i for i in range(7))
 _COMPILED = weakref.WeakKeyDictionary()
 # Exact frozen source audited for this geometry. Root integration/capability
 # changes require an explicit reviewed literal refresh, never auto-registration.
-SOURCE_PINS = {'absorption.py': '2d684602eb9aa69bc470b215c188533b0e1c4d8495dd5b71ca2508dc38f20623', 'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'baton.py': 'f08fb40dfc1e2d74e7a8fb2e42285c51a2ea4106484951580bf2aa9d23b29706', 'combat.py': '3e802d3fd2f488e9aa2a8ead663f935158c5fec1b7fb745034e54f21d38015af', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'damage_moves.py': '227c58ab6042cbb0178dcc821e1be7dd2af99aae0f149febef995bdb7662abd1', 'effects.py': '0138f0e90811c4829666960a106d80ed2d59f6cd06a8ff83324d189465f73104', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'engine_direct_hit_controls.py': '5ec305fdbfa84841ef93bddfa308095eddb302c7298d75afd46ae1aacc4e1de9', 'engine_execution_completeness.py': 'eb661edc9089b8e55dc4c8af3e9aee6349df4d1b0bf9d5a60be795f5c2f81632', 'engine_full_v4_event_device.py': 'b536cc7d8c111d278b2f345012332baf08d9e02700035f96fd23f5a9588992a1', 'engine_item_callbacks.py': 'b7984d566834887545526f2ffadd50ec1f7b98360f4d751a761d6bf9eb69eabd', 'engine_kernel_frame_risk.py': '69a7556dcb170574c6dfed7b3eca5e0c152c5b346088c3e91b2ba9b8fa6347a5', 'engine_leftovers_callbacks.py': '609858fbbc7ec669fe00da6a2fcd1832187616f3146ddef465f9ad6f9e73dce0', 'engine_leftovers_no_output.py': '29bd8cb04cd935485e877b757fa5056fe81cfaa9a51172e926eae779887540e9', 'engine_lifecycle_callbacks.py': 'bc8aba8d6af0824b60efa1bcccc9845fe3e0f993bd15aad7f7d16ba2864cfdc2', 'engine_lifecycle_event_device.py': '80eccdff8c7843347c39479730833122eef83052804f18a8e5e53de11c971654', 'engine_pressure_callbacks.py': '0de20779233ec90be004c0c604809ad5387edfc617cffaa7ce94d51f5ff875e9', 'engine_public_events.py': '091702fcb890ff2eefe0bb7ba7e42b3908e294c386bbb833841a4167a9a84549', 'engine_request_source.py': 'f58f4999103a4f747088167a7d55ac7168cdfc779d091d4e88aa85aa465a3e80', 'engine_retained_encoder_driver.py': '54adf8d6b7d354764a3f863e690202522d4a90b79d3879bcefdf46dc4c878153', 'engine_status_callbacks.py': '369bde361dbc8cffd357dc92ae576686ee6bbea8e5a96fbd9a8fb08fe86ec23e', 'engine_status_residual_callbacks.py': 'bb1ec77bb839b2403a6c8b1d593adedb94ca7df43717e3ca1a7e552a69ad5b5e', 'engine_weather_callbacks.py': 'b5fee00fa633de1ef03062bffeab107c37ea15124b38a6ffa70c0820e5521d87', 'engine_weather_effect_callbacks.py': '66deb3debe354d8e637524bfcc4b94218863ba501e8da430797d1ae7ac7048f9', 'engine_weather_hp_segment.py': 'ba79f08ef3db40ac557240e7c2589da2683d7441e8e6faa35787bb0ebad43284', 'engine_weather_order_callbacks.py': 'fe21ff43c8e5687b2c1cf6a80596fcad466a93cf06ea57b4415cc8c069c3c6fe', 'engine_weather_progress_callbacks.py': 'a643b28bce10d328ca7359e1685e7b692e316e975c10dc15786cec95b242729e', 'engine_weather_speed_profile.py': '158bc834c07bc0a539869758e1b7a5a1497047cb864c848e5b6080e762e966b5', 'entry.py': '9b77a376e10c3e795565c5b662cda753f30fcf45315eef9b72380b72b016d6d7', 'focus_punch.py': '881bd17a84dc22576aa618256ada2b0f67bee29224dbb50508925b55e119585f', 'items.py': 'db32fbb3d0062aa20c965505055b8506c3158d5a408c258095fa947aa0c06c43', 'linked_traps.py': '743c01ee69509162e7829ae555b85f069f1c20ec9bd19cec0779d066894bade4', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': '8f82d4894f03b39936de0e79b17f0b7715fdfe2f0edb6a7a42d44f1840671bee', 'pressure.py': '73eefb16678fedf1885a4e11cbc8954d15706592742caa6b0b673fb4d63d698c', 'pursuit.py': '2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309', 'secondary.py': '98fa5cdd3777c4843cb427f141bbd3aa2799cf6c9f84a3cd2630dad3ef52f071', 'self_destruct.py': 'b3c9df0ea093eca7c0960b4c4ffd4277e289a0ded6f32f914466c0752fa9b739', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'solar_beam.py': '5463e103392e24df7cc560003740b7e425aba766a0d1bba90ff4428606849155', 'state.py': 'e657242e2d7191c4c7c1acb265d8f5751a6f00acaa08c08998af208d90124fe6', 'sustain.py': '1ff481060f04384eae49da8bfeb663296c8efe582b0a7562fa3e3103ecbfd529', 'transition.py': '469069e253593cd939715f40cb59e8e4dff140fb269b1e71ba2582bbad78a1f8', 'variable_moves.py': '7b06b3f0a26abc023036edb4ac0d4050e550522dd231d2d2a74cebf8f569e9b9', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+SOURCE_PINS = {'absorption.py': '2d684602eb9aa69bc470b215c188533b0e1c4d8495dd5b71ca2508dc38f20623', 'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'baton.py': 'f08fb40dfc1e2d74e7a8fb2e42285c51a2ea4106484951580bf2aa9d23b29706', 'combat.py': '3e802d3fd2f488e9aa2a8ead663f935158c5fec1b7fb745034e54f21d38015af', 'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e', 'damage_moves.py': '227c58ab6042cbb0178dcc821e1be7dd2af99aae0f149febef995bdb7662abd1', 'effects.py': '0138f0e90811c4829666960a106d80ed2d59f6cd06a8ff83324d189465f73104', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'engine_direct_hit_controls.py': '5ec305fdbfa84841ef93bddfa308095eddb302c7298d75afd46ae1aacc4e1de9', 'engine_execution_completeness.py': '4ff1cbbbc901aedc0741654ed1aff9b74e4fd4748e71ff59ba8987d98b3d1843', 'engine_full_v4_event_device.py': '662799b3cb9de524b60b98dab9cc3d2bb8932fcb57ec11c8fde58276c5c5e757', 'engine_item_callbacks.py': 'b7984d566834887545526f2ffadd50ec1f7b98360f4d751a761d6bf9eb69eabd', 'engine_kernel_frame_risk.py': '02d68e393ce32812920c9926dff99762c10864f1022ea45d72dcb75b724f1726', 'engine_leftovers_callbacks.py': '609858fbbc7ec669fe00da6a2fcd1832187616f3146ddef465f9ad6f9e73dce0', 'engine_leftovers_no_output.py': '29bd8cb04cd935485e877b757fa5056fe81cfaa9a51172e926eae779887540e9', 'engine_lifecycle_callbacks.py': '8b6afae323086171e20857a30bbd6fef8654139a61b71933023f48b97c754d96', 'engine_lifecycle_event_device.py': '58c4216b417b279a4c90a4a02b627448c36dc53e90cdf8773a03a3e19b5228a6', 'engine_pressure_callbacks.py': '0de20779233ec90be004c0c604809ad5387edfc617cffaa7ce94d51f5ff875e9', 'engine_public_events.py': '091702fcb890ff2eefe0bb7ba7e42b3908e294c386bbb833841a4167a9a84549', 'engine_request_source.py': 'f58f4999103a4f747088167a7d55ac7168cdfc779d091d4e88aa85aa465a3e80', 'engine_retained_encoder_driver.py': '5e0c81d8fcbceb8daa936ec13785c7dfdc3aaa12b43453840ed25f698434bb4a', 'engine_status_callbacks.py': '369bde361dbc8cffd357dc92ae576686ee6bbea8e5a96fbd9a8fb08fe86ec23e', 'engine_status_residual_callbacks.py': 'bb1ec77bb839b2403a6c8b1d593adedb94ca7df43717e3ca1a7e552a69ad5b5e', 'engine_substitute_callbacks.py': '04e8d98dd1801a45a6da132d631f53eadb6da1d0f45622e0d1a23210a79be2a4', 'engine_weather_callbacks.py': 'b5fee00fa633de1ef03062bffeab107c37ea15124b38a6ffa70c0820e5521d87', 'engine_weather_effect_callbacks.py': '66deb3debe354d8e637524bfcc4b94218863ba501e8da430797d1ae7ac7048f9', 'engine_weather_hp_segment.py': 'ba79f08ef3db40ac557240e7c2589da2683d7441e8e6faa35787bb0ebad43284', 'engine_weather_order_callbacks.py': 'fe21ff43c8e5687b2c1cf6a80596fcad466a93cf06ea57b4415cc8c069c3c6fe', 'engine_weather_progress_callbacks.py': 'a643b28bce10d328ca7359e1685e7b692e316e975c10dc15786cec95b242729e', 'engine_weather_speed_profile.py': '158bc834c07bc0a539869758e1b7a5a1497047cb864c848e5b6080e762e966b5', 'entry.py': '9b77a376e10c3e795565c5b662cda753f30fcf45315eef9b72380b72b016d6d7', 'focus_punch.py': '881bd17a84dc22576aa618256ada2b0f67bee29224dbb50508925b55e119585f', 'items.py': 'db32fbb3d0062aa20c965505055b8506c3158d5a408c258095fa947aa0c06c43', 'linked_traps.py': '743c01ee69509162e7829ae555b85f069f1c20ec9bd19cec0779d066894bade4', 'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661', 'phazing.py': '8f82d4894f03b39936de0e79b17f0b7715fdfe2f0edb6a7a42d44f1840671bee', 'pressure.py': '73eefb16678fedf1885a4e11cbc8954d15706592742caa6b0b673fb4d63d698c', 'pursuit.py': '2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309', 'secondary.py': '98fa5cdd3777c4843cb427f141bbd3aa2799cf6c9f84a3cd2630dad3ef52f071', 'self_destruct.py': 'b3c9df0ea093eca7c0960b4c4ffd4277e289a0ded6f32f914466c0752fa9b739', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'solar_beam.py': '5463e103392e24df7cc560003740b7e425aba766a0d1bba90ff4428606849155', 'state.py': 'e657242e2d7191c4c7c1acb265d8f5751a6f00acaa08c08998af208d90124fe6', 'sustain.py': '1ff481060f04384eae49da8bfeb663296c8efe582b0a7562fa3e3103ecbfd529', 'transition.py': '9ee1ee4baf902d6a76917546c1cad40270839f8b7fd9c6f7da0bb6e58dafd6a9', 'variable_moves.py': '7b06b3f0a26abc023036edb4ac0d4050e550522dd231d2d2a74cebf8f569e9b9', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
 
 
 _REGISTERED_SOURCE_PINS = tuple(sorted(SOURCE_PINS.items()))
@@ -59,6 +60,7 @@ class Tables(NamedTuple):
     no_output: object
     secondary_weather: object             # ORIGINAL selected-column proof [M]
     direct_hit_binding: object
+    substitute_binding: object
 
 
 @dataclass(frozen=True, eq=False)
@@ -154,12 +156,19 @@ def compile_witness(prepared):
         if hit._COMPILED[direct][2] is not catalog:
             raise ValueError('same original direct-hit catalog required')
         direct_binding = data.binding
+    substitute_binding=jnp.zeros(8,jnp.uint32)
+    if runtime['substitute_compiled'] is not None and runtime['substitute_mode']=='kernel-event':
+        from . import engine_substitute_callbacks as substitute
+        data=substitute.check_compiled(runtime['substitute_compiled'])
+        if substitute._COMPILED[runtime['substitute_compiled']][2] is not catalog:
+            raise ValueError('same original Substitute catalog required')
+        substitute_binding=data.binding
     own_source = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     payload = dict(schema=SCHEMA,source=SOURCE_PINS,witness_source=own_source,prepared=prepared.binding,
         risk=np.asarray(risk.binding).tolist(),account=np.asarray(account.inventory_binding).tolist(),
         full=np.asarray(adapter.device.catalog_binding).tolist() if hasattr(adapter.device,'catalog_binding') else
             np.asarray(runtime['catalog'].binding).tolist(),
-        direct=np.asarray(direct_binding).tolist(),secondary_weather=weather_secondary.tolist(),
+        direct=np.asarray(direct_binding).tolist(),substitute=np.asarray(substitute_binding).tolist(),secondary_weather=weather_secondary.tolist(),
         scope='conditional-actual-frame-inputs-not-origin-or-physics')
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).digest()
     words = lambda x:jnp.asarray(x,jnp.uint32)
@@ -171,7 +180,7 @@ def compile_witness(prepared):
         None if runtime['status_residual_context'] is None or runtime['status_residual_mode']!='kernel-event'
             else runtime['status_residual_context'].data,
         None if runtime['no_output_compiled'] is None else runtime['no_output_compiled'].device,
-        jnp.asarray(weather_secondary),direct_binding)
+        jnp.asarray(weather_secondary),direct_binding,substitute_binding)
     result = Compiled(data)
     edges = tuple(runtime[k] for k in ('request_compiled','own_compiled','public','execution_compiled','kernel_risk_compiled'))
     _COMPILED[result] = (data,tuple(jax.tree.leaves(data)),weakref.ref(prepared),edges,own_source,
@@ -268,13 +277,13 @@ def _geometry(carry,tape):
 def _raw_complete(tape,tables):
     ledger = tape.execution.ledger; kind = tape.words[:,:,0]
     present = jnp.arange(kind.shape[1])[None,:] < tape.count[:,None]
-    known = ((kind>=1)&(kind<=17))|((kind>=20)&(kind<=23))|(kind==pressure.PRESSURE_START)
+    known = ((kind>=1)&(kind<=17))|((kind>=20)&(kind<=23))|(kind==pressure.PRESSURE_START)|(kind==substitute.SUBSTITUTE_CREATED)
     direct = (kind==public.MAIN_HP)|(kind==public.DIRECT_FAINT)|((kind>=21)&(kind<=23))
-    required = direct|(kind==17)|(kind==20)
+    required = direct|(kind==17)|(kind==20)|(kind==25)
     claim = ledger.claimed; slot = jnp.clip(claim-1,0,ledger.site.shape[1]-1)
     site = jnp.take_along_axis(ledger.site,slot,axis=1)
     expected = jnp.where(direct,int(execution.Site.DIRECT_HIT),jnp.where(kind==17,int(execution.Site.LEFTOVERS),
-        int(execution.Site.STATUS_RESIDUAL)))
+        jnp.where(kind==25,int(execution.Site.SUBSTITUTE_SELF),int(execution.Site.STATUS_RESIDUAL))))
     captured = (claim>0)&(claim<=ledger.count[:,None])&(site==expected)
     registered_direct = getattr(tables.risk,'direct_hit_binding',jnp.zeros(8,jnp.uint32))
     capability = jnp.any(tables.direct_hit_binding!=0)&jnp.all(registered_direct==tables.direct_hit_binding)
@@ -290,7 +299,16 @@ def _raw_complete(tape,tables):
     follows=jnp.any(ticket[:,None,:]&(ledger.start[:,None,:]==index+1),axis=2)
     candidate=getattr(tables.risk,'direct_candidates',jnp.zeros_like(tables.secondary_weather))
     ordinary=capability&candidate[jnp.clip(move,0,len(candidate)-1)]&follows
-    dispatch=(kind!=public.MOVE)|(valid_move&(weather|ordinary))
+    sub_binding=getattr(tables.risk,'substitute_binding',jnp.zeros(8,jnp.uint32))
+    sub_capability=jnp.any(tables.substitute_binding!=0)&jnp.all(sub_binding==tables.substitute_binding)
+    sub_ticket=(entries&(ledger.site==int(execution.Site.SUBSTITUTE_SELF))&(ledger.stage==2)
+        &(ledger.no_output_kind==0)&(ledger.end==ledger.start+1))
+    sub_follows=jnp.any(sub_ticket[:,None,:]&(ledger.start[:,None,:]==index+1),axis=2)
+    sub_candidate=getattr(tables.risk,'substitute_candidates',jnp.zeros_like(tables.secondary_weather))
+    captured_sub=sub_capability&sub_candidate[jnp.clip(move,0,len(sub_candidate)-1)]&sub_follows
+    # Actual geometry ALSO checks every secondary guard count. Unlike weather,
+    # this is no universal no-immunity assertion from a static move name.
+    dispatch=(kind!=public.MOVE)|(valid_move&(weather|ordinary|captured_sub))
     return jnp.all(~present|(known&(~required|captured)&(~direct|capability)&dispatch),axis=1)
 
 
@@ -315,7 +333,7 @@ def consume_pair_device(carry, core, frame, streams, publics, tables, catalog, *
             or type(tables.adapter) is not full.Tables):
         raise ValueError('exact original source frame/static types required')
     for x in (carry.binding,tables.binding,tables.engine_binding,tables.source_binding,tables.move_binding,
-            tables.producer_binding,tables.encoder_binding,tables.direct_hit_binding):execution._shape(x,(8,),jnp.uint32)
+            tables.producer_binding,tables.encoder_binding,tables.direct_hit_binding,tables.substitute_binding):execution._shape(x,(8,),jnp.uint32)
     for x in (carry.stream_id,carry.frame,carry.refusal,core.frame_number):execution._shape(x,(b,),jnp.int32)
     execution._shape(carry.sequence,(b,2),jnp.int32); execution._shape(active,(b,),jnp.bool_)
     if type(tape.execution) is not execution.Context or type(tape.execution.risks) is not risks.Context:

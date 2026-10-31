@@ -27,9 +27,9 @@ class SubstituteOwningTests(unittest.TestCase):
         # source catalog remain unchanged. No Battle/native/roster is created.
         original=f.inputdex.moves['protect']
         move=replace(original,id='substitute',name='Substitute',base_power=0,type='Normal',
-            category='Status',target='self',priority=0)
+            category='Status',target='self',priority=0,effect_label='substitute',effect_chance=100,self_hp_cost=.25,pp=10)
         dex=ShowdownDex(dict(f.inputdex.moves,substitute=move),dict(f.inputdex.species),f.inputdex.type_chart)
-        labels=set(f.vocab.tokens)|{'move:substitute','belief:possible_move:substitute','move_category:Status','move_priority:0'}
+        labels=set(f.vocab.tokens)|{'move:substitute','belief:possible_move:substitute','move_category:Status','move_priority:0','move_effect:substitute'}
         cls.catalog=v4.compile_encoder(f.source,dex,CategoryVocabulary(tuple(sorted(labels))),
             checkpoint_sha256='a'*64,feature_masks=f.masks)
         types=['_none','normal','fighting','flying','poison','ground','rock','bug','ghost','steel','fire','water','grass','electric','psychic','ice','dragon','dark']

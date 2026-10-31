@@ -70,6 +70,8 @@ class Tables(NamedTuple):
     branch_risk: object
     direct_hit_binding: object       # GLOBAL8; zero means weather-only mode
     direct_candidates: object        # [M] immutable original table capability
+    substitute_binding: object      # GLOBAL8, original selected self-write helper
+    substitute_candidates: object   # [M], prospective only; actual Site11 REQUIRED
 
 
 @dataclass(frozen=True,eq=False)
@@ -129,7 +131,7 @@ def _host():
     if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked kernel risk boundary cannot be traced')
 
 
-def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None):
+def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,substitute_compiled=None):
     _host();record=accounting._checked(accounting_compiled)
     if record[2].causal.projector.catalog is not engine_catalog:raise ValueError('same original accounting/kernel catalog required')
     public.check_catalog(engine_catalog,engine_catalog.engine_table,expected_binding=engine_catalog.binding,
@@ -156,14 +158,24 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None)
                 if variable.shape!=(m,):raise ValueError('exact selected variable move columns required')
                 positive |= variable
         candidate=positive&(np.asarray(engine_catalog.ids)>0)&(np.asarray(engine_catalog.targets)==1)
-    risk[(weather==0)&~candidate]|=NON_WEATHER
+    substitute_binding=np.zeros(8,np.uint32);substitute_candidate=np.zeros(m,bool)
+    if substitute_compiled is not None:
+        from . import engine_substitute_callbacks as substitute
+        data=substitute.check_compiled(substitute_compiled)
+        if substitute._COMPILED[substitute_compiled][2] is not engine_catalog:
+            raise ValueError('same original Substitute/kernel catalog required')
+        move=int(data.move_id)
+        if not 0<move<m:raise ValueError('canonical Substitute move bounds required')
+        substitute_binding=np.asarray(data.binding,np.uint32);substitute_candidate[move]=True
+    risk[(weather==0)&~candidate&~substitute_candidate]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
         if values.shape[:1]!=(m,):raise ValueError('exact selected kernel move columns required')
         on=np.any(values!=0,axis=tuple(range(1,values.ndim))) if values.ndim>1 else values!=0
         risk[on]|=bit
-    for name in ('substitute','heal_half','weather_heal','rest','pain_split','belly_drum'):flag(table.effects,name,SELF_EFFECT)
+    for name in ('heal_half','weather_heal','rest','pain_split','belly_drum'):flag(table.effects,name,SELF_EFFECT)
+    if table.effects is not None:risk[np.asarray(table.effects.substitute)&~substitute_candidate]|=SELF_EFFECT
     for name in ('self_boosts','hit_spa_drop','haze'):flag(table.effects,name,BOOST)
     for name in ('protect','endure'):flag(table.effects,name,TARGET_OUTCOME)
     for name in ('heal_bell','status'):flag(table.effects,name,FIELD_VOLATILE)
@@ -192,13 +204,14 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None)
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
-        direct_candidates=candidate.tolist())
+        direct_candidates=candidate.tolist(),substitute_binding=substitute_binding.tolist(),
+        substitute_candidates=substitute_candidate.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate))
-    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled)
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),words(substitute_binding),jnp.asarray(substitute_candidate))
+    result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled)
     return result
 
 
@@ -213,6 +226,9 @@ def check_compiled(compiled):
     if r[5] is not None:
         from . import engine_direct_hit_controls as direct
         direct.check_compiled(r[5])
+    if r[6] is not None:
+        from . import engine_substitute_callbacks as substitute
+        substitute.check_compiled(r[6])
     return compiled.device
 
 
@@ -244,6 +260,8 @@ def _bound(carry,tape,tables):
     accounting._shape(carry.opened,(b,),jnp.bool_);accounting._shape(carry.counts,(b,len(Branch)),jnp.int32)
     accounting._shape(tables.selected_risk,(len(tables.selected_risk),),jnp.int32)
     accounting._shape(tables.branch_risk,(len(Branch)+1,),jnp.int32)
+    accounting._shape(tables.substitute_binding,(8,),jnp.uint32)
+    accounting._shape(tables.substitute_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.direct_hit_binding,(8,),jnp.uint32)
     accounting._shape(tables.direct_candidates,(len(tables.selected_risk),),jnp.bool_)
     context=accounting._context(tape)
@@ -350,6 +368,59 @@ def _captured_direct_matches(tape,outcome,tables,captured):
         &(ledger.event_turn==tape.event_turn)&(ledger.event_phase==tape.event_phase)
         &jnp.all(ledger.event_generation==tape.event_generation,axis=2)),axis=1)
     return same
+
+
+class CapturedSubstitute(NamedTuple):
+    context: object
+    ticket: object
+    side: object
+    physical: object
+    move: object
+    write: object
+
+
+def _captured_substitute_matches(tape,tables,captured):
+    from . import engine_substitute_callbacks as substitute
+    b=len(tape.count);no=jnp.zeros(b,bool)
+    if captured is None:return no
+    if (type(captured) is not CapturedSubstitute or type(captured.context) is not substitute.RegisteredContext
+            or type(captured.context.data) is not substitute.Data):
+        raise ValueError('typed SAME-call captured Substitute required')
+    context=accounting._context(tape)
+    if context is None:return no
+    ledger=context.ledger;slot,same=accounting._ticket(ledger,captured.ticket);rows=jnp.arange(b)
+    same &= accounting._validate(ledger,captured.context.accounting)
+    data=captured.context.data
+    same &= substitute._check(tape,data)&jnp.any(tables.substitute_binding!=0)
+    same &= jnp.all(data.binding==tables.substitute_binding)
+    same &= jnp.all(captured.context.accounting.inventory_binding==tables.accounting_binding)
+    move=_vector(captured.move,b);same &= (move==data.move_id)&(move>0)&(move<len(tables.substitute_candidates))
+    same &= tables.substitute_candidates[jnp.clip(move,0,len(tables.substitute_candidates)-1)]
+    for name in ('engine_binding','source_binding','producer_binding'):
+        same &= jnp.all(getattr(data,name)==getattr(tables,name))
+        same &= jnp.all(getattr(captured.context.accounting,name)==getattr(context.tables,name))
+    same &= jnp.all(data.move_binding==tables.move_binding)&ledger.opened&(ledger.refusal==0)
+    same &= (ledger.stage[rows,slot]==2)&(ledger.end[rows,slot]==tape.count)
+    same &= accounting._substitute_span_matches(tape,captured.ticket,captured.side,captured.physical,
+        captured.move,captured.write)
+    start=ledger.start[rows,slot];span=(jnp.arange(tape.words.shape[1])[None,:]>=start[:,None])&(
+        jnp.arange(tape.words.shape[1])[None,:]<tape.count[:,None])
+    same &= jnp.all(~span|((ledger.claimed==slot[:,None]+1)&jnp.all(ledger.words==tape.words,axis=2)
+        &(ledger.event_turn==tape.event_turn)&(ledger.event_phase==tape.event_phase)
+        &jnp.all(ledger.event_generation==tape.event_generation,axis=2)),axis=1)
+    return same
+
+
+def observe_substitute_device(carry,tape,attempted,tables,*,active,captured=None):
+    attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
+    supported=_captured_substitute_matches(tape,tables,captured)
+    # Never erase a lifetime bit. This visit adds none only for its OWN fresh
+    # exact successful Site11 span; both owner drains remain a separate gate.
+    return _observe(carry,tape,tables,Branch.SUBSTITUTE,jnp.where(attempted&~supported,SELF_EFFECT,0),active=active)
+
+
+def substitute_on_tape(tape,attempted,*,active,captured=None):
+    return _on_tape(tape,observe_substitute_device,attempted,active=active,captured=captured)
 
 
 def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_direct=None):

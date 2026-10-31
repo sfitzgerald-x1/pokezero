@@ -845,8 +845,6 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             creates_sub = (acts & effects.substitute[move] & (sub_hp == 0)
                 & (max_hp > 1) & (hp * 4 > max_hp))
             if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SUBSTITUTE,
-                    acts & effects.substitute[move],active=live)
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_HEAL,
                     acts & (effects.heal_half[move] | effects.weather_heal[move] | effects.rest[move]),active=live)
             if _substitute_context is not None:
@@ -889,6 +887,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if _substitute_registered:
                     _public_trace=execution_accounting.capture_substitute_write(_public_trace,_substitute_ticket,
                         side,work.active[rows,side],move,_substitute_write,requested=_substitute_requested)
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.substitute_on_tape(_public_trace,acts & effects.substitute[move],active=live,
+                    captured=(kernel_risks.CapturedSubstitute(_substitute_context,_substitute_ticket,
+                        side,work.active[rows,side],move,_substitute_write)
+                        if _substitute_context is not None and _substitute_registered else None))
             # Pain Split assigns HP rather than dealing ordinary damage or
             # healing through callbacks. Read the CURRENT opposing active
             # after switches/earlier moves; floor the shared average once,
