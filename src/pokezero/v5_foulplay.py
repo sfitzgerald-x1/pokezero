@@ -94,7 +94,7 @@ async def load_and_run(config,archive,*,catalog,contract,expected_archive_sha256
 
 
 async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None,progress_callback=None,
-        trajectory_callback=None,progress_path=None,enable_v5=False):
+        trajectory_callback=None,progress_path=None,enable_v5=False,game_offsets=None):
     """One original finite declared panel; exceptions remain unknown cells.
 
     The original low-level runner receives explicit offsets of the ORIGINAL
@@ -106,10 +106,20 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
     from . import foulplay_bridge as old
     from .observation import ObservationFeatureMasks
     from .showdown import V4_REPLAY_OBSERVATION_SPEC
-    recipe=_recipe(config,factory);namespace=_sha(recipe)
-    fp=old._per_seed_foulplay_random_seed_schedule(config,count=config.games)
-    rows=[dict(offset=i,seed=config.seed_start+i,fp_seed=fp[i],status='NOT_ATTEMPTED',score=None,
-        duration_seconds=None,reason=None,source_result_sha256=None,source_game=None,invocation_id=None) for i in range(config.games)]
+    recipe=_recipe(config,factory)
+    if game_offsets is not None:
+        if (type(game_offsets) is not tuple or not game_offsets
+                or tuple(sorted(set(game_offsets)))!=game_offsets
+                or any(type(i) is not int or not 0<=i<config.games for i in game_offsets)):
+            raise ValueError('ordered original panel offsets required')
+        recipe['game_offsets']=list(game_offsets)
+    offsets=tuple(range(config.games)) if game_offsets is None else game_offsets
+    namespace=_sha(recipe)
+    fp=(old._per_seed_foulplay_random_seed_schedule(config,count=config.games) if game_offsets is None
+        else old._per_seed_foulplay_random_seed_schedule_for_offsets(config,offsets=offsets))
+    rows=[dict(offset=i,seed=config.seed_start+i,fp_seed=seed,status='NOT_ATTEMPTED',score=None,
+        duration_seconds=None,reason=None,source_result_sha256=None,source_game=None,invocation_id=None)
+        for i,seed in zip(offsets,fp)]
     invocation=uuid.uuid4().hex
     started=time.time()
     if previous is not None:
