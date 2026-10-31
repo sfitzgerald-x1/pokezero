@@ -212,7 +212,7 @@ def validate_batch(batch):
     for name,shape in ARRAY_SHAPES.items():
         a=np.asarray(cols[name])
         if a.shape!=(n,*shape):raise ValueError('v5 target shape differs: '+name)
-        if name.endswith('mask'):
+        if name.endswith('mask') and name!='privileged_attention_mask':
             if a.dtype!=np.bool_:raise ValueError('typed v5 target mask required')
     if np.any(np.asarray(batch.opponent_action_mask)) or np.any(np.asarray(batch.opponent_action_indices)!=-1):
         raise ValueError('legacy actor-slot opponent targets cannot enter v5')
@@ -225,6 +225,20 @@ def validate_batch(batch):
     expected_roles=(0,)+(1,)*6+(2,)*6+(3,)*9+(5,)+(7,)*6
     if not np.all(np.asarray(batch.token_type_ids)==np.asarray(expected_roles)[None,None]):
         raise ValueError('v4 prefix/appended belief roles differ')
+    private=np.asarray(cols['privileged_view_mask'])
+    if private.any():
+        # Validate only present training views, without coercing objects/bools
+        # into real numeric cells. Masked private payload never enters actor
+        # inputs and supplies no value/category/type/mask constraints.
+        pc=np.asarray(cols['privileged_categorical_ids'])[private]
+        pn=np.asarray(cols['privileged_numeric_features'])[private]
+        pt=np.asarray(cols['privileged_token_type_ids'])[private]
+        pa=np.asarray(cols['privileged_attention_mask'])[private]
+        if (pc.dtype.kind not in 'iu' or np.any(pc<0) or pn.dtype.kind not in 'iuf'
+                or not np.isfinite(pn).all() or pt.dtype.kind not in 'iu'
+                or not np.all(pt==np.asarray(expected_roles)[None,None])
+                or pa.dtype!=np.bool_ or not np.all(pa[:,:,23:])):
+            raise ValueError('active privileged category/numeric/type/mask values invalid')
     action=np.asarray(cols['opponent_semantic_action_targets']);mask=np.asarray(cols['opponent_semantic_action_target_mask'])
     if action.dtype.kind not in 'iu' or np.any((action[mask]<0)|(action[mask]>=len(vocabulary.opponent_classes))):
         raise ValueError('active semantic opponent target outside source namespace')

@@ -227,6 +227,42 @@ class V5DataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'original capped disposition'):
             replace(batch,v5_columns=observed_tie)
 
+    def test_active_private_payload_obeys_original_real_category_role_and_mask_constraints(self):
+        original=row(privileged=True);batch=data.attach_batch(base_batch([original]),[original])
+        variants=[]
+        for value,dtype in ((np.nan,float),(np.inf,float),(True,bool),(1+0j,complex),('1',object)):
+            numeric=np.array(batch.v5_columns['privileged_numeric_features'],dtype=dtype)
+            numeric[0,0,0,0]=value
+            variants.append(('privileged_numeric_features',numeric))
+        for value,dtype in ((-1,np.int32),(1.,float),(True,bool)):
+            categories=np.array(batch.v5_columns['privileged_categorical_ids'],dtype=dtype)
+            categories[0,0,0,0]=value
+            variants.append(('privileged_categorical_ids',categories))
+        for value,dtype in ((4,np.int32),(7.,float),(-1,np.int32)):
+            roles=np.array(batch.v5_columns['privileged_token_type_ids'],dtype=dtype)
+            roles[0,0,28]=value
+            variants.append(('privileged_token_type_ids',roles))
+        mask=np.array(batch.v5_columns['privileged_attention_mask']);mask[0,0,28]=False
+        variants.extend((('privileged_attention_mask',mask),
+            ('privileged_attention_mask',np.array(batch.v5_columns['privileged_attention_mask'],np.int32))))
+        for key,value in variants:
+            with self.subTest(key=key,dtype=value.dtype), self.assertRaisesRegex(ValueError,'active privileged'):
+                replace(batch,v5_columns=dict(batch.v5_columns,**{key:value}))
+        data.validate_batch(batch)
+
+    def test_masked_private_payload_is_ignored_and_does_not_change_public_or_targets(self):
+        original=row(status='COMPLETE',search=True);batch=data.attach_batch(base_batch([original]),[original])
+        changed=dict(batch.v5_columns,
+            privileged_numeric_features=np.full((1,1,29,132),np.nan),
+            privileged_categorical_ids=np.full((1,1,29,41),-3.5),
+            privileged_token_type_ids=np.full((1,1,29),-9.),
+            privileged_attention_mask=np.full((1,1,29),17.))
+        ignored=replace(batch,v5_columns=changed)
+        for name in (*data.INPUTS,*data.SEARCH,'returns','ppo_value_targets','action_indices'):
+            np.testing.assert_array_equal(getattr(ignored,name),getattr(batch,name))
+        self.assertEqual(ignored.v5_columns['outcome_targets'],batch.v5_columns['outcome_targets'])
+        self.assertFalse(ignored.v5_columns['privileged_view_mask'][0])
+
 
 if __name__=='__main__':
     unittest.main()
