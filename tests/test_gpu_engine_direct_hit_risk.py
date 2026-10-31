@@ -67,6 +67,20 @@ class DirectHitRiskTests(unittest.TestCase):
         altered=tape._replace(words=tape.words.at[0,0,5].add(1))
         result=self.observe(altered,carry,captured,outcome,active)
         self.assertTrue(int(result.risk[0])&r.TARGET_OUTCOME);self.assertEqual(int(result.risk[1]),0)
+        stale=tape._replace(cursor=tape.cursor._replace(physical_active=tape.cursor.physical_active.at[0,0].set(1)))
+        result=self.observe(stale,carry,captured,outcome,active)
+        self.assertTrue(int(result.risk[0])&r.TARGET_OUTCOME);self.assertEqual(int(result.risk[1]),0)
+        for key in ('turn','phase','generation'):
+            value=getattr(tape.cursor,key).at[0].add(1)
+            stale=tape._replace(cursor=tape.cursor._replace(**{key:value}))
+            result=self.observe(stale,carry,captured,outcome,active)
+            self.assertTrue(int(result.risk[0])&r.TARGET_OUTCOME);self.assertEqual(int(result.risk[1]),0)
+        scalar=captured._replace(context=captured.context._replace(data=captured.context.data._replace(
+            engine_binding=captured.context.data.engine_binding[None,:])))
+        with self.assertRaises(ValueError):self.observe(tape,carry,scalar,outcome,active)
+        wrong_count=captured._replace(context=captured.context._replace(data=captured.context.data._replace(
+            move_count=captured.context.data.move_count+1)))
+        self.assertTrue(bool((self.observe(tape,carry,wrong_count,outcome,active).risk&r.TARGET_OUTCOME).all()))
 
     def test_original_compiler_host_guard_and_default_zero_binding(self):
         np.testing.assert_array_equal(self.weather_only.device.direct_hit_binding,j.zeros(8,j.uint32))

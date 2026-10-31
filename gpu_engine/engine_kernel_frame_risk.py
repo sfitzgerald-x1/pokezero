@@ -312,6 +312,9 @@ def _captured_direct_matches(tape,outcome,tables,captured):
     if context is None:return no
     ledger=context.ledger;slot,same=accounting._ticket(ledger,captured.ticket);rows=jnp.arange(b)
     data=captured.context.data
+    if not direct._check(tape,data):return no
+    move=_vector(captured.move,b)
+    same &= (data.move_count==len(tables.selected_risk))&(move>0)&(move<data.move_count)
     same &= jnp.any(tables.direct_hit_binding!=0)&jnp.all(data.binding==tables.direct_hit_binding)
     same &= jnp.all(captured.context.accounting.inventory_binding==tables.accounting_binding)
     for name in ('engine_binding','source_binding','producer_binding'):

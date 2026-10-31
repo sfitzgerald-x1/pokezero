@@ -279,10 +279,16 @@ def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,mo
     valid=direct.validate_write_device(write,b)
     start=ledger.start[rows,slot]
     declaration=tape.words[rows,jnp.clip(start-1,0,tape.words.shape[1]-1)]
+    safe_actor=jnp.clip(actor,0,1)
     declared=((start>0)&(declaration[:,0]==direct.public.MOVE)
         &(declaration[:,1]==actor)&(declaration[:,2]==actor_physical)
         &(declaration[:,3]==1-actor)&(declaration[:,4]==target_physical)
         &(declaration[:,5]==move)&jnp.all(declaration[:,6:]==0,axis=1))
+    declared &= (life._valid(tape.cursor)&(actor>=0)&(actor<2)
+        &(actor_physical==tape.cursor.physical_active[rows,safe_actor])
+        &(target_physical==tape.cursor.physical_active[rows,1-safe_actor])
+        &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
+        &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
     prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
     declared &= ((tape.event_turn[rows,prefix]==ledger.turn[rows,slot])
         &(tape.event_phase[rows,prefix]==ledger.phase[rows,slot])
