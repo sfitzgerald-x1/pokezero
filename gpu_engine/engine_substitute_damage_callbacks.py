@@ -75,7 +75,7 @@ const verified=require(process.argv[2]).build(root,m),{Dex}=require(path.join(ro
 const sub=d.moves.get('substitute').condition;
 const rows=m.vocabulary.moves.map(id=>{const x=d.moves.get(id);return {id:x.id,exists:x.exists,gen:x.gen,target:x.target,power:x.basePower,
  category:x.category,bypass:!!x.flags.bypasssub,callbacks:Object.keys(x).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&x[k]!==undefined),
- exotic:!!(x.multihit||x.damage||x.recoil||x.drain||x.heal||x.self||x.boosts||x.status||x.volatileStatus||x.sideCondition||x.slotCondition||x.condition||x.weather||x.terrain||x.pseudoWeather||x.selfdestruct||x.forceSwitch||x.selfSwitch||x.ohko)}});
+ exotic:!!(x.multihit||x.damage||x.recoil||x.drain||x.heal||x.self||x.secondary?.self||(Array.isArray(x.secondaries)&&x.secondaries.some(v=>v.self))||x.boosts||x.status||x.volatileStatus||x.sideCondition||x.slotCondition||x.condition||x.weather||x.terrain||x.pseudoWeather||x.selfdestruct||x.forceSwitch||x.selfSwitch||x.ohko)}});
 process.stdout.write(JSON.stringify({rows,substitute:{hit:sub.onTryPrimaryHit.toString(),end:sub.onEnd.toString()},source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));
 """
     run=subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],
@@ -138,6 +138,22 @@ def validate_raw(raw):
         &((raw[:,8]==0)|(raw[:,8]==1))&(raw[:,9]>=-1)&(raw[:,9]<=1))
 
 
+def _declaration(tape,index,raw,cursor,turn,phase,generation):
+    """Same source MOVE/stamps at capture, outcome and eventual lower drain."""
+    b=len(tape.count);rows=j.arange(b);index=j.broadcast_to(j.asarray(index,j.int32),(b,))
+    at=j.clip(index,0,tape.words.shape[1]-1);prefix=j.clip(index-1,0,tape.words.shape[1]-1)
+    decl=tape.words[rows,prefix];actor=j.clip(raw[:,1],0,1)
+    good=(life._valid(cursor)&(index>0)&(decl[:,0]==public.MOVE)
+        &j.all(decl[:,1:6]==raw[:,1:6],axis=1)&j.all(decl[:,6:]==0,axis=1)
+        &(raw[:,2]==cursor.physical_active[rows,actor])&(raw[:,4]==cursor.physical_active[rows,1-actor])
+        &(cursor.turn==turn)&(cursor.phase==phase)&j.all(cursor.generation==generation,axis=1))
+    for position in (prefix,at):
+        good &= ((tape.event_turn[rows,position]==turn)&(tape.event_phase[rows,position]==phase)
+            &j.all(tape.event_generation[rows,position]==generation,axis=1)
+            &j.all(tape.switch_details[rows,position]==0,axis=1))
+    return good
+
+
 def span_matches(tape,p,write):
     from . import engine_execution_completeness as ex, engine_direct_hit_controls as direct
     actual=ex._context(tape)
@@ -148,21 +164,13 @@ def span_matches(tape,p,write):
     shape(data);b=len(tape.count);rows=j.arange(b);ledger=actual.ledger;slot,same=ex._ticket(ledger,p.ticket)
     for x in (p.actor,p.physical,p.target,p.move):life._typed(x,(b,),j.int32)
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):bound &= j.all(getattr(data,name)==getattr(tape,name))
-    start=ledger.start[rows,slot];prefix=j.clip(start-1,0,tape.words.shape[1]-1);at=j.clip(start,0,tape.words.shape[1]-1)
-    decl=tape.words[rows,prefix];raw=tape.words[rows,at];safe=j.clip(p.actor,0,1)
+    start=ledger.start[rows,slot];at=j.clip(start,0,tape.words.shape[1]-1)
+    raw=tape.words[rows,at]
     good=(bound&same&valid_write(write,b)&p.requested&(p.move>0)&(p.move<len(data.candidates))
         &data.candidates[j.clip(p.move,0,len(data.candidates)-1)]
         &(ledger.site[rows,slot]==int(ex.Site.SUBSTITUTE_DAMAGE))&(ledger.side[rows,slot]==1-p.actor)
         &(start>0)&(tape.count==start+1)&validate_raw(raw)&j.all(raw==raw_words(p,write),axis=1)
-        &(decl[:,0]==public.MOVE)&(decl[:,1]==p.actor)&(decl[:,2]==p.physical)
-        &(decl[:,3]==1-p.actor)&(decl[:,4]==p.target)&(decl[:,5]==p.move)&j.all(decl[:,6:]==0,axis=1)
-        &(p.physical==tape.cursor.physical_active[rows,safe])&(p.target==tape.cursor.physical_active[rows,1-safe])
-        &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
-        &j.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
-    for index in (prefix,at):
-        good &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])
-            &(tape.event_phase[rows,index]==ledger.phase[rows,slot])
-            &j.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
+        &_declaration(tape,start,raw,tape.cursor,ledger.turn[rows,slot],ledger.phase[rows,slot],ledger.generation[rows,slot]))
     return good
 
 
@@ -191,9 +199,4 @@ def owned_raw(tape,index,raw,cursor=None):
         &(ledger.side[rows,slot]==raw[:,3])&(ledger.stage[rows,slot]==2)
         &(ledger.start[rows,slot]==index)&(ledger.end[rows,slot]==index+1)
         &j.all(ledger.words[:,index]==raw,axis=1))
-    for name in ('turn','phase'):
-        same &= (getattr(current,name)==getattr(ledger,name)[rows,slot])
-        same &= (getattr(tape,'event_'+name)[:,index]==getattr(ledger,name)[rows,slot])
-    same &= j.all(current.generation==ledger.generation[rows,slot],axis=1)
-    same &= j.all(tape.event_generation[:,index]==ledger.generation[rows,slot],axis=1)
-    return same
+    return same&_declaration(tape,index,raw,current,ledger.turn[rows,slot],ledger.phase[rows,slot],ledger.generation[rows,slot])

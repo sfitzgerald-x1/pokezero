@@ -344,7 +344,7 @@ def compile_adapter(metadata, projector, *, catalog):
                 lines=[]
                 if effect:lines.append(f'|-{"supereffective" if effect>0 else "resisted"}|{ident[0]}')
                 if critical:lines.append(f'|-crit|{ident[0]}')
-                lines.append(f'|-end|{ident[0]}|Substitute' if broken else f'|-activate|{ident[0]}|move: Substitute|[damage]')
+                lines.append(f'|-end|{ident[0]}|Substitute' if broken else f'|-activate|{ident[0]}|Substitute|[damage]')
                 sub_damage_keys[broken,critical,effect+1]=add(tuple(lines),inputs.Kind.ACTIVE if broken else inputs.Kind.NONPROC,last_main=not broken)
     if not np.all(sub_damage_keys):raise ValueError('original FULL Substitute hit/end schemas required')
     width = max(lengths)

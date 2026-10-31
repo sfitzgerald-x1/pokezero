@@ -156,8 +156,13 @@ class SubstituteDamageTests(unittest.TestCase):
         causal=state.causal._replace(cursor=cursor)
         species=state.species.at[:,:,2].set(3)
         state=state._replace(causal=causal,live=j.ones((b,2),bool),species=species)
-        projected=jax.jit(lambda s,t:full.project_device(s,t,life.snapshot(cursor),life.snapshot(cursor),adapter.device))(state,tape)
+        project=jax.jit(lambda s,t:full.project_device(s,t,life.snapshot(cursor),life.snapshot(cursor),adapter.device))
+        projected=project(state,tape)
         self.assertEqual(projected.error.tolist(),[0]*b)
+        forged=tape._replace(words=tape.words.at[0,0,1:5].set(j.array([1,5,0,3],j.int32)))
+        self.assertEqual(sd.owned_raw(forged,1,forged.words[:,1],cursor).tolist(),[False]+[True]*7)
+        self.assertNotEqual(int(project(state,forged).error[0]),0)
+        self.assertEqual(sd.owned_raw(tape,1,tape.words[:,1],cursor).tolist(),[True]*b)
         names=self.catalog.species.names[1:4];self.assertEqual(len(names),3)
         wire=public_wire.WireState();kw=v4_encoder.wire_kwargs(self.catalog)
         lines=[f'|switch|p{side+1}a: {name}|{name}, L80, M|100/100'for name in names for side in (0,1)]
@@ -167,11 +172,27 @@ class SubstituteDamageTests(unittest.TestCase):
             lines=[]
             if int(effect[row]):lines.append(f'|-{"supereffective"if int(effect[row])>0 else"resisted"}|{ident}')
             if bool(critical[row]):lines.append(f'|-crit|{ident}')
-            lines.append(f'|-end|{ident}|Substitute'if bool(broken[row])else f'|-activate|{ident}|move: Substitute|[damage]')
+            lines.append(f'|-end|{ident}|Substitute'if bool(broken[row])else f'|-activate|{ident}|Substitute|[damage]')
             _,parts=public_wire.project_lines(wire,lines,**kw)
             expected=np.array([e.words()for p in parts for e in p.events]);expected[:,1]=0
             actual=np.asarray(projected.frames.words)[:,row][np.asarray(projected.frames.valid)[:,row]][-len(expected):].copy();actual[:,1]=0
             np.testing.assert_array_equal(actual,expected,err_msg=f'row{row}')
+
+    def test_effective_gen3_literal_alias_has_exact_original_full_words(self):
+        origin=request._rules_origin(self.rules)
+        code="const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');console.log(Dex.mod('gen3').moves.get('substitute').condition.onTryPrimaryHit.toString())"
+        source=subprocess.check_output([origin.node,'-e',code,origin.root],text=True)
+        self.assertIn('this.add("-activate", target, "Substitute", "[damage]")',source)
+        self.assertNotIn('this.add("-activate", target, "move: Substitute"',source)
+        kw=v4_encoder.wire_kwargs(self.catalog);name=self.catalog.species.names[1]
+        wire,_=public_wire.project_lines(public_wire.WireState(),[f'|switch|p1a: {name}|{name}, L80|100/100',
+            f'|switch|p2a: {name}|{name}, L80|100/100','|turn|1'],**kw)
+        for side in (1,2):
+            words=[]
+            for label in ('Substitute','move: Substitute'):
+                _,part=public_wire.project_line(wire,f'|-activate|p{side}a: {name}|{label}|[damage]',**kw)
+                words.append(np.array([event.words()for event in part.events]))
+            np.testing.assert_array_equal(*words)
 
     def test_actual_create_then_hit_survive_and_break_both_consumers(self):
         session=self.construct();self.assertEqual(session.state.core.admitted.tolist(),[True,True])
