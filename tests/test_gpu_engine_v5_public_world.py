@@ -115,7 +115,7 @@ class PublicWorldTests(unittest.TestCase):
         cls.contract=replace(ActorContract.champion(),category_vocab_sha256=_vocab_sha(cls.config.category_vocab),
             categorical_vocab_size=cls.config.category_vocab.size,belief_set_source_hash=rows.source_hash)
 
-    def fixture(self,*,spent=False,foe_damage100=False,slow_own=False,foe_lead=0,own_level=80):
+    def fixture(self,*,spent=False,foe_damage100=False,slow_own=False,foe_lead=0,own_level=80,all_own_levels=False):
         metadata=self.f.metadata;names=metadata['vocabulary']['species'][1:]
         pp=[self.catalog.dex.move_info(name).max_pp for name in self.f.names]
         teams=[];own=[]
@@ -133,15 +133,16 @@ class PublicWorldTests(unittest.TestCase):
         own_team=list(teams)
         if own_level!=80:
             self.assertFalse(slow_own)
-            mon=teams[0];spread=_gen3_randbat_fixture_spread({},species=mon.species,moves=self.f.names,
-                item='Leftovers',level=own_level,set_source=self.source)
-            own_team[0]=replace(mon,level=own_level,ivs=spread['ivs'],evs=spread['evs'])
-            info=self.catalog.dex.species_info(mon.species)
-            own[0]['details']=f'{mon.species}, L{own_level}, M'
-            maximum=gen3_hp_stat(info.base_stats['hp'],spread['ivs']['hp'],spread['evs']['hp'],own_level)
-            own[0]['condition']=f'{maximum}/{maximum}'
-            own[0]['stats']={key:gen3_stat(info.base_stats[key],spread['ivs'][key],spread['evs'][key],own_level)
-                for key in ('atk','def','spa','spd','spe')}
+            for index in range(len(teams)) if all_own_levels else (0,):
+                mon=teams[index];spread=_gen3_randbat_fixture_spread({},species=mon.species,moves=self.f.names,
+                    item='Leftovers',level=own_level,set_source=self.source)
+                own_team[index]=replace(mon,level=own_level,ivs=spread['ivs'],evs=spread['evs'])
+                info=self.catalog.dex.species_info(mon.species)
+                own[index]['details']=f'{mon.species}, L{own_level}, M'
+                maximum=gen3_hp_stat(info.base_stats['hp'],spread['ivs']['hp'],spread['evs']['hp'],own_level)
+                own[index]['condition']=f'{maximum}/{maximum}'
+                own[index]['stats']={key:gen3_stat(info.base_stats[key],spread['ivs'][key],spread['evs'][key],own_level)
+                    for key in ('atk','def','spa','spd','spe')}
         first=own[0];name=first['details'].split(',')[0]
         foe_name=names[foe_lead]
         maximum=int(first['condition'].split('/')[1])
