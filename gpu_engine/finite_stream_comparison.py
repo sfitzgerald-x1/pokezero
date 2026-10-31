@@ -22,6 +22,7 @@ from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from pokezero.recorded_encoder_parity import SHAPES, _arrays
 from .public_inputs import EVENT_WORDS
 from . import fidelity, public_wire, source_provenance, v4_encoder
+from . import owning_python_reference
 
 SCHEMA = 'pokezero.B4-finite-real-showdown-stream-comparison.v1'
 
@@ -302,12 +303,15 @@ def collect_constructors(pool, team_indices, engine_state, captured, catalog, *,
             for owner in range(2):
                 owner_capture = tuple(np.asarray(part)[index, owner] for part in captured)
                 actual = reference = None
+                reference_receipt = None
                 observation_error = None
                 if engine_observations is not None:
                     try:
                         actual = {name:np.asarray(engine_observations[owner][name])[index] for name in SHAPES}
-                        observed = env.observe(('p1', 'p2')[owner])
-                        reference = {name:getattr(observed, name) for name in SHAPES}
+                        reference, reference_receipt = owning_python_reference.observe_owner(config,
+                            row['native_owner_lines'][owner], owner=('p1', 'p2')[owner],
+                            battle_id=f'saved-constructor-{int(root_id)}', stream_id=int(root_id),
+                            seed=row['native_seed'])
                     except Exception as error:
                         observation_error = dict(type=type(error).__name__, message=str(error))
                 # Always collect stream/refusal diagnostics; conditional reducer
@@ -321,6 +325,8 @@ def collect_constructors(pool, team_indices, engine_state, captured, catalog, *,
                 if observation_error is not None:
                     compared['columns'] = dict(status='UNKNOWN', reason='REFERENCE_OR_ENGINE_ENCODER_REFUSED',
                         detail=observation_error)
+                if reference_receipt is not None:
+                    compared['python_reference'] = reference_receipt
                 row['owners'].append(compared)
         except Exception as error:
             row['error'] = dict(type=type(error).__name__, message=str(error))
