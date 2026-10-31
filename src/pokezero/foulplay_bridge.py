@@ -965,9 +965,15 @@ class ControlledFoulPlayConfig:
     # Explicit prospective owning-policy controls; legacy axes stay unchanged.
     owning_decision_timeout_seconds: float | None = None
     owning_public_single_line: bool = False
+    # Explicit continuation-only CPU placement; None preserves historical commands.
+    foulplay_cpu_affinity: int | None = None
 
     def __post_init__(self) -> None:
         validate_encoder_config(self)
+        if self.foulplay_cpu_affinity is not None and (
+            type(self.foulplay_cpu_affinity) is not int or self.foulplay_cpu_affinity < 0
+        ):
+            raise ValueError('foulplay_cpu_affinity must be a nonnegative integer when set.')
         if type(self.engine_policy_opponent) is not bool:
             raise ValueError("engine_policy_opponent must be boolean.")
         if self.engine_policy_opponent:
@@ -7408,6 +7414,11 @@ def _foulplay_command(
         "sys.argv = sys.argv[1:]; "
         "runpy.run_path(script, run_name='__main__')"
     )
+    if config.foulplay_cpu_affinity is not None:
+        # Set affinity in the child interpreter before importing FoulPlay; its
+        # descendants inherit it. No threaded-parent preexec_fn is involved.
+        seed_wrapper = (f"import os; os.sched_setaffinity(0, {{{config.foulplay_cpu_affinity}}}); "
+            f"assert os.sched_getaffinity(0) == {{{config.foulplay_cpu_affinity}}}; " + seed_wrapper)
     command: tuple[str, ...] = (
         str(config.resolved_foulplay_python),
         "-c",

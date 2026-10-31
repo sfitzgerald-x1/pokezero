@@ -258,7 +258,9 @@ _CORPUS_TREES = ("reports", "docs")
 # All 428 historical blobs remain identical and no selected path was removed.
 # 429 -> 430: sole addition against main1d1e3181 is the fresh full ACK
 # mutation receipt; all 429 historical selected Git blobs are unchanged.
-_EXPECTED_COUNTER_ARTIFACTS = 430
+# 430 -> 431: measured against parent 367c872b; only the fresh fixed-order
+# continuation full mutation receipt is added. No selected JSON was removed.
+_EXPECTED_COUNTER_ARTIFACTS = 431
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
