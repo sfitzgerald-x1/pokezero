@@ -44,7 +44,7 @@ def _differences(boundary, evidence, parties, vocabulary, layout):
 
 def reanalyse(*, measurement_path, expected_measurement_sha256, trace_path, expected_trace_sha256,
               native_result_path, expected_native_result_sha256, native_decisions_path,
-              expected_native_decisions_sha256, pool, catalog, env_config, out_path):
+              expected_native_decisions_sha256, pool, catalog, env_config, out_path, record_bad_cells=False):
     """Stream the same complete ordered captures to an exclusive NEW artifact.
 
     The pool is read only for its bound original engine vocabulary; no sets are
@@ -151,10 +151,12 @@ def reanalyse(*, measurement_path, expected_measurement_sha256, trace_path, expe
                                         if owner_errors[side] is not None:
                                             raise ValueError('PRIOR_OWNER_REFERENCE_REFUSAL:' + owner_errors[side])
                                         projected = refs[side].append(lines)
-                                        owner = comparison.compare_owner(captured['after'], side, projected, refs[side], eligible=eligible)
+                                        owner = comparison.compare_owner(captured['after'], side, projected, refs[side], eligible=eligible,record_bad_cells=record_bad_cells)
                                     except Exception as error:
                                         if owner_errors[side] is None: owner_errors[side] = str(error)
                                         owner = comparison.owner_refusal(lines, error)
+                                    if record_bad_cells and owner.get('columns',{}).get('status')=='COMPARED' and owner['columns'].get('bad_cells',{}).get('status')!='AVAILABLE':
+                                        raise ValueError('diagnostic operands unavailable; original metrics not retagged')
                                     if unresolved:
                                         owner['refusals'].append(dict(kind='UNRESOLVED_CHANCE', reason='original coupling audit'))
                                         owner['columns'] = dict(status='UNKNOWN', reason='UNRESOLVED_CHANCE')
@@ -176,6 +178,8 @@ def reanalyse(*, measurement_path, expected_measurement_sha256, trace_path, expe
                 raise ValueError('extra/foreign original Native decisions')
     if originals.summary() != native['summary']:
         raise ValueError('original full-roster reduction changed')
+    if record_bad_cells and reducer.summary()!=native['summary']:
+        raise ValueError('diagnostic reference drift: original full-roster metrics must reproduce')
     if trace.digest_file(native_decisions_path) != expected_native_decisions_sha256:
         raise ValueError('original Native decision artifact changed during read')
     return dict(schema=SCHEMA, measurement_sha256=expected_measurement_sha256,
@@ -205,6 +209,7 @@ def main(argv=None):
         parser.add_argument('--' + name, type=Path, required=True)
     for name in ('measurement', 'trace', 'native-result', 'native-decisions'):
         parser.add_argument('--' + name + '-sha256', required=True)
+    parser.add_argument('--record-bad-cells',action='store_true')
     parser.add_argument('--node', default='node')
     args = parser.parse_args(argv)
     if args.out.exists() or args.decisions_out.exists(): raise FileExistsError('exclusive NEW outputs required')
@@ -221,7 +226,7 @@ def main(argv=None):
         native_result_path=args.native_result, expected_native_result_sha256=args.native_result_sha256,
         native_decisions_path=args.native_decisions, expected_native_decisions_sha256=args.native_decisions_sha256,
         pool=source_provenance.load_constructor_pool(args.team_pool), catalog=catalog, env_config=config,
-        out_path=args.decisions_out)
+        out_path=args.decisions_out,record_bad_cells=args.record_bad_cells)
     with args.out.open('x') as output: json.dump(result, output, sort_keys=True, allow_nan=False)
     print(json.dumps(result['summary'], sort_keys=True))
     return 0

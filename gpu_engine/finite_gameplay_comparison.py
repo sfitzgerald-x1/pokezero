@@ -188,7 +188,30 @@ class OwnerReference:
         if self.backend is not None: self.backend.close()
 
 
-def compare_owner(boundary, side, reference, owner_reference, *, eligible):
+def _bad_cell_diagnostics(actual, expected, delta, *, limit=4096):
+    """Retain exact existing operands, without encoding or inferring cells.
+
+    The five fixed v4 tensors have at most4034 cells. The default bounds all
+    possible mismatches; a smaller explicit limit still retains full counts.
+    """
+    if type(limit) is not int or not 0 < limit <=4096:
+        raise ValueError('positive bounded bad-cell record limit required')
+    cells=[];total=0
+    for name in original.SHAPES:
+        mask=(delta>1e-6) if name=='numeric_features' else actual[name]!=expected[name]
+        indices=np.argwhere(mask);total+=len(indices)
+        for index in indices[:max(0,limit-len(cells))]:
+            coordinate=tuple(int(i)for i in index)
+            row=dict(tensor=name,index=list(coordinate),gpu=actual[name][coordinate].item(),
+                python=expected[name][coordinate].item())
+            if name=='numeric_features':row['absolute_error']=float(delta[coordinate])
+            cells.append(row)
+    return dict(status='AVAILABLE',schema='pokezero.gameplay.bad_cells.v1',limit=limit,total=total,
+        recorded=len(cells),truncated=total>len(cells),cells=cells,
+        scope='Original single reference observation and saved GPU operands; no second encoding or missing-cell inference.')
+
+
+def compare_owner(boundary, side, reference, owner_reference, *, eligible, record_bad_cells=False):
     refusal = list(reference['refused_lines']); actual = None
     try: actual = captured_words(boundary['full'][side])
     except (ValueError, KeyError, TypeError) as error:
@@ -218,6 +241,12 @@ def compare_owner(boundary, side, reference, owner_reference, *, eligible):
                     ('token_type_ids', 'attention_mask', 'legal_action_mask')})
         except Exception as error:
             result['columns'] = dict(status='UNKNOWN', reason='OWNING_PYTHON_REFERENCE_REFUSED', detail=str(error))
+        if record_bad_cells and result['columns']['status']=='COMPARED':
+            try:
+                result['columns']['bad_cells']=_bad_cell_diagnostics(a,b,delta)
+            except Exception as error:
+                # A diagnostic failure must not hide original compared/bad cells.
+                result['columns']['bad_cells']=dict(status='UNAVAILABLE',error_type=type(error).__name__,detail=str(error))
     return result
 
 
@@ -410,7 +439,7 @@ def _spool(path, measured, expected_sha256, folder):
 
 
 def compare_trace(measured, path, pool, catalog, *, expected_trace_sha256, native_seed_start,
-                  showdown_root, node, env_config, original_ivs, out_path):
+                  showdown_root, node, env_config, original_ivs, out_path, record_bad_cells=False):
     """EXPLICIT new prospective Native cohort; one root/process at a time."""
     reference_start=time.perf_counter_ns()
     ids = [row['stream_id'] for row in measured['cohort']]
@@ -492,7 +521,7 @@ def compare_trace(measured, path, pool, catalog, *, expected_trace_sha256, nativ
                                         if owner_errors[side] is not None:
                                             raise ValueError('PRIOR_OWNER_REFERENCE_REFUSAL:'+owner_errors[side])
                                         projected = references[side].append(row['native_owner_lines'][side])
-                                        row['owners'][side] = compare_owner(captured['after'], side, projected, references[side], eligible=eligible)
+                                        row['owners'][side] = compare_owner(captured['after'], side, projected, references[side], eligible=eligible,record_bad_cells=record_bad_cells)
                                     except Exception as error:
                                         if owner_errors[side] is None: owner_errors[side] = str(error)
                                         row['owners'][side] = owner_refusal(row['native_owner_lines'][side], error)
@@ -565,6 +594,7 @@ def main(argv=None):
     for name in ('measurement-sha256','trace-sha256'):
         parser.add_argument('--'+name, required=True)
     parser.add_argument('--native-seed-start', type=int, required=True)
+    parser.add_argument('--record-bad-cells',action='store_true')
     parser.add_argument('--node', default='node'); args=parser.parse_args(argv)
     if args.out.exists() or args.decisions_out.exists(): raise FileExistsError('exclusive comparison outputs required')
     raw = args.measurement.read_bytes()
@@ -581,7 +611,7 @@ def main(argv=None):
     ivs=original.load_original_ivs(args.team_pool,pool,expected_pool_sha256=measured['pool_receipt']['pool_sha256'])
     result=compare_trace(measured,args.trace,pool,catalog,expected_trace_sha256=args.trace_sha256,
         native_seed_start=args.native_seed_start,showdown_root=args.showdown_root,node=args.node,
-        env_config=config,original_ivs=ivs,out_path=args.decisions_out)
+        env_config=config,original_ivs=ivs,out_path=args.decisions_out,record_bad_cells=args.record_bad_cells)
     result['measurement_sha256']=args.measurement_sha256
     with args.out.open('x') as output: json.dump(result,output,sort_keys=True,allow_nan=False)
     print(json.dumps(result['summary'],sort_keys=True)); return 0
