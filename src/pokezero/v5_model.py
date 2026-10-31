@@ -220,6 +220,8 @@ def build_v5_model(config, *, enable_v5=False):
                     or (categorical_ids >= config.category_vocab_size).any()
                     or not history_mask.all() or not attention_mask.any(-1).all()):
                 raise ValueError('finite original public categories and active frame required')
+            if not attention_mask[:, :, 23:29].all():
+                raise ValueError('all six declared v5 belief tokens must be attended')
             expected_roles = torch.tensor(TOKEN_ROLES, dtype=torch.long, device=token_type_ids.device)
             if not (token_type_ids == expected_roles).all():
                 raise ValueError('original v4 roles plus six belief role7 tokens required')
@@ -234,7 +236,7 @@ def build_v5_model(config, *, enable_v5=False):
             mean = (encoded * weights[..., None]).sum(1)
             policy = self.policy_head(encoded[:, 13:22]).squeeze(-1)
             if config.treatment:
-                attention = (encoded.float() @ self.value_query.float()) / math.sqrt(config.width)
+                attention = (encoded.float() @ self.value_query.float()).float() / math.sqrt(config.width)
                 attention = attention.masked_fill(~mask, -torch.finfo(torch.float32).max).softmax(-1)
                 pooled = (encoded * attention[..., None].to(encoded.dtype)).sum(1)
                 logits = self.value_head(pooled)
