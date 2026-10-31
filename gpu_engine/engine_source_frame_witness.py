@@ -292,25 +292,16 @@ def _geometry(carry,tape):
 def _raw_complete(tape,tables):
     ledger = tape.execution.ledger; kind = tape.words[:,:,0]
     present = jnp.arange(kind.shape[1])[None,:] < tape.count[:,None]
-<<<<<<< HEAD
-    known = ((kind>=1)&(kind<=17))|((kind>=20)&(kind<=23))|(kind==pressure.PRESSURE_START)|(kind==substitute.SUBSTITUTE_CREATED)|(kind==toxic.TOXIC_ATTEMPT)|(kind==trace.TRACE_COPY)
+    known = ((kind>=1)&(kind<=17))|((kind>=20)&(kind<=23))|(kind==pressure.PRESSURE_START)|(kind==substitute.SUBSTITUTE_CREATED)|(kind==toxic.TOXIC_ATTEMPT)|(kind==trace.TRACE_COPY)|(kind==recoil.RECOIL_HP)
     direct = (kind==public.MAIN_HP)|(kind==public.DIRECT_FAINT)|((kind>=21)&(kind<=23))
-    required = direct|(kind==17)|(kind==20)|(kind==25)|(kind==26)|(kind==trace.TRACE_COPY)
-=======
-    known = ((kind>=1)&(kind<=17))|((kind>=20)&(kind<=23))|(kind==pressure.PRESSURE_START)|(kind==substitute.SUBSTITUTE_CREATED)|(kind==toxic.TOXIC_ATTEMPT)|(kind==recoil.RECOIL_HP)
-    direct = (kind==public.MAIN_HP)|(kind==public.DIRECT_FAINT)|((kind>=21)&(kind<=23))
-    required = direct|(kind==17)|(kind==20)|(kind==25)|(kind==26)|(kind==recoil.RECOIL_HP)
->>>>>>> 4ff3f0889738d08325663c8f2b0cdc3ebf50cf89
+    required = direct|(kind==17)|(kind==20)|(kind==25)|(kind==26)|(kind==trace.TRACE_COPY)|(kind==recoil.RECOIL_HP)
     claim = ledger.claimed; slot = jnp.clip(claim-1,0,ledger.site.shape[1]-1)
     site = jnp.take_along_axis(ledger.site,slot,axis=1)
     expected = jnp.where(direct,int(execution.Site.DIRECT_HIT),jnp.where(kind==17,int(execution.Site.LEFTOVERS),
         jnp.where(kind==25,int(execution.Site.SUBSTITUTE_SELF),
             jnp.where(kind==26,int(execution.Site.TOXIC_ATTEMPT),
-<<<<<<< HEAD
-                jnp.where(kind==trace.TRACE_COPY,int(execution.Site.TRACE_COPY),int(execution.Site.STATUS_RESIDUAL))))))
-=======
-                jnp.where(kind==recoil.RECOIL_HP,int(execution.Site.RECOIL_HP),int(execution.Site.STATUS_RESIDUAL))))))
->>>>>>> 4ff3f0889738d08325663c8f2b0cdc3ebf50cf89
+                jnp.where(kind==trace.TRACE_COPY,int(execution.Site.TRACE_COPY),
+                    jnp.where(kind==recoil.RECOIL_HP,int(execution.Site.RECOIL_HP),int(execution.Site.STATUS_RESIDUAL)))))))
     captured = (claim>0)&(claim<=ledger.count[:,None])&(site==expected)
     registered_direct = getattr(tables.risk,'direct_hit_binding',jnp.zeros(8,jnp.uint32))
     capability = jnp.any(tables.direct_hit_binding!=0)&jnp.all(registered_direct==tables.direct_hit_binding)
