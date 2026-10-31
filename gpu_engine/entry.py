@@ -31,6 +31,7 @@ class EntryTable(NamedTuple):
     status_cure: jax.Array | None = None
     own_tempo: jax.Array | None = None
     pressure: jax.Array | None = None
+    trace_copy: jax.Array | None = None
 
 
 def from_metadata(metadata):
@@ -45,7 +46,7 @@ def from_metadata(metadata):
         jnp.asarray(vocab["types"].index("flying")),jnp.asarray(vocab["types"].index("ground")),
         jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}),flag({"truant"}),
         flag({"trace"}),jnp.asarray([[status in cures.get(name,set()) for status in range(7)]
-            for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}))
+            for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}),flag({"sturdy"}))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
@@ -147,10 +148,17 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     foe_hp = state.hp[rows,foe,foe_active]
     if table.trace is not None:
         copied=starts & table.trace[ability] & (foe_hp>0)
+        if _weather_trace is not None:
+            from . import engine_trace_callbacks as trace_callbacks
+            _trace_foe_ability=state.ability[rows,foe,foe_active]
+            _weather_trace,_trace_ticket=execution_accounting.open_attempt(_weather_trace,
+                execution_accounting.Site.TRACE_COPY,side,active=copied)
         state=state._replace(ability=state.ability.at[rows,side,active].set(jnp.where(
             copied,state.ability[rows,foe,foe_active],ability)))
         if _weather_trace is not None:
-            _weather_trace=callbacks.unattributed_ability(_weather_trace,eligible=copied)
+            _weather_trace=trace_callbacks.entry_trace(_weather_trace,side,active,foe_active,
+                ability,state.ability[rows,side,active],_trace_foe_ability,table,eligible=copied)
+            _weather_trace=execution_accounting.capture_trace_copy(_weather_trace,_trace_ticket,requested=copied)
     current=state.ability[rows,side,active]
     status=state.status[rows,side,active]
     if table.status_cure is not None:
