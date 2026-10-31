@@ -5,11 +5,13 @@ import argparse
 from collections import Counter
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -76,6 +78,97 @@ def _digest(payload):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _numeric_fields(path, allowed, *, scale=1):
+    """Read only named numeric counters; never emit arbitrary file content."""
+    try:
+        lines = path.read_text(errors='replace').splitlines()
+    except OSError:
+        return {}
+    fields = {}
+    for line in lines:
+        parts = line.replace(':', ' ').split()
+        if len(parts) >= 2 and parts[0] in allowed and parts[1].isdigit():
+            fields[allowed[parts[0]]] = int(parts[1]) * scale
+    return fields
+
+
+def _resource_snapshot(pid, block_index, *, proc=Path('/proc'), cgroups=Path('/sys/fs/cgroup')):
+    """Best-effort Linux counters only: no environment, command lines or names."""
+    snapshot = dict(resource_snapshot=True, process_block=block_index,
+        monotonic_ns=time.monotonic_ns(), clock_ticks_per_second=os.sysconf('SC_CLK_TCK'), processes=[])
+    snapshot['vm'] = _numeric_fields(proc / 'meminfo', {
+        'MemTotal': 'total_bytes', 'MemAvailable': 'available_bytes',
+        'SwapTotal': 'swap_total_bytes', 'SwapFree': 'swap_free_bytes'}, scale=1024)
+    snapshot['vm'].update(_numeric_fields(proc / 'vmstat', {'oom_kill': 'oom_kill'}))
+    pending = [os.getpid(), pid]
+    seen = set()
+    # Include the actual block interpreter and its subprocesses, with bounded
+    # sampling overhead. /proc stat's command-name field is never retained.
+    while pending and len(seen) < 256:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        directory = proc / str(current)
+        try:
+            stat = (directory / 'stat').read_text(errors='replace')
+            fields = stat[stat.rindex(')') + 2:].split()
+            counters = dict(pid=current, parent_pid=int(fields[1]), user_ticks=int(fields[11]),
+                system_ticks=int(fields[12]), start_ticks=int(fields[19]))
+        except (OSError, ValueError, IndexError):
+            continue
+        counters.update(_numeric_fields(directory / 'status', {
+            'VmRSS': 'rss_bytes', 'VmHWM': 'peak_rss_bytes', 'VmSize': 'virtual_bytes'}, scale=1024))
+        counters.update(_numeric_fields(directory / 'status', {'Threads': 'threads'}))
+        snapshot['processes'].append(counters)
+        try:
+            children = (directory / 'task' / str(current) / 'children').read_text().split()
+            pending.extend(int(child) for child in children if child.isdigit())
+        except OSError:
+            pass
+    snapshot['processes'].sort(key=lambda row: row['pid'])
+    snapshot['cgroup'] = {}
+    # Collect cgroup v2 when available. An unavailable counter stays absent,
+    # rather than turning diagnostic collection into a test failure.
+    for member in (pid, os.getpid()):
+        try:
+            entries = (proc / str(member) / 'cgroup').read_text(errors='replace').splitlines()
+            relative = next(line[3:] for line in entries if line.startswith('0::'))
+            group = (cgroups / relative.lstrip('/')).resolve()
+            if not group.is_relative_to(cgroups.resolve()):
+                continue
+        except (OSError, StopIteration):
+            continue
+        for filename, key in (('memory.current', 'current_bytes'), ('memory.peak', 'peak_bytes'),
+                ('memory.max', 'limit_bytes'), ('memory.swap.current', 'swap_bytes')):
+            try:
+                value = (group / filename).read_text().strip()
+            except OSError:
+                continue
+            if value.isdigit():
+                snapshot['cgroup'][key] = int(value)
+        snapshot['cgroup'].update(_numeric_fields(group / 'memory.events',
+            {key: key for key in ('low', 'high', 'max', 'oom', 'oom_kill', 'oom_group_kill')}))
+        break
+    return snapshot
+
+
+def _run_block(command, environment, *, resource_interval_seconds, block_index, stream):
+    if not resource_interval_seconds:
+        return subprocess.run(command, env=environment, check=False).returncode
+    # Fresh exec and normal exit status remain unchanged. Timed waits only
+    # sample counters; they never terminate, retry, skip or time-limit a block.
+    with subprocess.Popen(command, env=environment) as process:
+        while True:
+            print(json.dumps(_resource_snapshot(process.pid, block_index)), file=stream, flush=True)
+            try:
+                returncode = process.wait(timeout=resource_interval_seconds)
+            except subprocess.TimeoutExpired:
+                continue
+            print(json.dumps(_resource_snapshot(process.pid, block_index)), file=stream, flush=True)
+            return returncode
+
+
 class _ObservedResult(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -134,7 +227,7 @@ def _child(plan_path, plan_sha256, block_index, receipt_path):
 
 
 def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engine*.py",
-                       top_level_dir=None, stream=None):
+                       top_level_dir=None, stream=None, resource_interval_seconds=0):
     """Optional sequential fresh-exec blocks; default whole-suite API unchanged.
 
     Discovery is repeated and verified in each fresh sys.executable process.
@@ -142,6 +235,8 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
     case multiplicities/counts must match discovery exactly. Noninspectable or
     nondeterministic discovery fails closed in this optional mode.
     """
+    if not math.isfinite(resource_interval_seconds) or resource_interval_seconds < 0:
+        raise ValueError("resource interval must be finite and nonnegative")
     stream = sys.stdout if stream is None else stream
     _, indices, _ = partition_suite(suite, index, count)
     spec = dict(start_dir=str(Path(start_dir).resolve()), pattern=pattern)
@@ -171,7 +266,9 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
             # No os.fork, multiprocessing fork context or preexec_fn after JAX.
             # The child starts a fresh interpreter and independently discovers.
             try:
-                returncode = subprocess.run(command, env=environment, check=False).returncode
+                returncode = _run_block(command, environment,
+                    resource_interval_seconds=resource_interval_seconds,
+                    block_index=block_index, stream=stream)
             except OSError:
                 returncode = None
             try:
@@ -201,6 +298,8 @@ def main() -> int:
     parser.add_argument("--count", type=int)
     parser.add_argument("--process-blocks", action="store_true",
         help="run each original discovery block in a verified fresh Python process")
+    parser.add_argument("--resource-interval-seconds", type=float, default=0,
+        help="sample numeric Linux memory/CPU counters during process blocks (0 disables)")
     parser.add_argument("--_child-plan", help=argparse.SUPPRESS)
     parser.add_argument("--_plan-sha256", help=argparse.SUPPRESS)
     parser.add_argument("--_block-index", type=int, help=argparse.SUPPRESS)
@@ -221,7 +320,8 @@ def main() -> int:
         "discovery_blocks": total, "selected_blocks": indices,
         "test_cases": selected.countTestCases()}), flush=True)
     if args.process_blocks:
-        return run_process_blocks(discovered, args.index, args.count, start_dir=ROOT / "tests")
+        return run_process_blocks(discovered, args.index, args.count, start_dir=ROOT / "tests",
+            resource_interval_seconds=args.resource_interval_seconds)
     return run_suite(selected)
 
 

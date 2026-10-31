@@ -11,7 +11,9 @@ import textwrap
 import unittest
 from unittest import mock
 
-from scripts.run_gpu_component_shard import partition_suite, run_suite, _valid_receipt, _digest
+from scripts.run_gpu_component_shard import (
+    partition_suite, run_suite, run_process_blocks, _valid_receipt, _digest, _resource_snapshot,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,23 +62,100 @@ class ComponentShardTests(unittest.TestCase):
                 self.assertEqual(result.errors, [])
                 self.assertEqual(result.skipped, [])
 
-    def isolated(self, root, index=0, count=1):
+    def isolated(self, root, index=0, count=1, resource_interval_seconds=0):
         # Actual fresh parent AND child interpreters, no mocked process runner
         # and no real component discovery/JAX imports in these tiny fixtures.
         code = """
 import sys, unittest
 from scripts.run_gpu_component_shard import run_process_blocks
 suite = unittest.TestLoader().discover(sys.argv[1], 'test_gpu_engine*.py')
-raise SystemExit(run_process_blocks(suite, int(sys.argv[2]), int(sys.argv[3]), start_dir=sys.argv[1]))
+raise SystemExit(run_process_blocks(suite, int(sys.argv[2]), int(sys.argv[3]), start_dir=sys.argv[1],
+    resource_interval_seconds=float(sys.argv[4])))
 """
         environment = dict(os.environ)
         environment['PYTHONPATH'] = os.pathsep.join([str(ROOT / 'src'), str(ROOT), environment.get('PYTHONPATH', '')])
-        result = subprocess.run([sys.executable, '-c', code, str(root), str(index), str(count)],
+        result = subprocess.run([sys.executable, '-c', code, str(root), str(index), str(count), str(resource_interval_seconds)],
             cwd=ROOT, env=environment, text=True, capture_output=True, timeout=30)
         summaries = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
         terminal = [row for row in summaries if row.get('process_blocks_terminal')]
         self.assertEqual(len(terminal), 1, (result.returncode, result.stdout, result.stderr))
         return result, terminal[0]
+
+    def test_resource_samples_preserve_real_success_skip_and_crash_dispositions(self):
+        for body, expected, child_exit in [('pass', 0, 0), ("self.skipTest('control')", 1, 1),
+                ('os._exit(7)', 1, 7), ('os.kill(os.getpid(), signal.SIGTERM)', 1, -15)]:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / 'test_gpu_engine_sample.py').write_text(
+                    'import os, signal, time, unittest\nclass Case(unittest.TestCase):\n'
+                    f' def test_sample(self):\n  time.sleep(0.12)\n  {body}\n')
+                result, terminal = self.isolated(root, resource_interval_seconds=0.02)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(terminal['passed'], expected == 0)
+                self.assertEqual(terminal['blocks'][0]['returncode'], child_exit)
+                samples = [json.loads(line) for line in result.stdout.splitlines()
+                    if line.startswith('{') and json.loads(line).get('resource_snapshot')]
+                self.assertGreaterEqual(len(samples), 3)
+                self.assertTrue(all(sample['process_block'] == 0 for sample in samples))
+                self.assertTrue(all(sample['monotonic_ns'] > 0 for sample in samples))
+                if child_exit in (7, -15):
+                    self.assertIsNone(terminal['tests_run'])
+                else:
+                    self.assertEqual(terminal['tests_run'], 1)
+
+    def test_linux_resource_samples_only_emit_allowed_numeric_counters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); proc = root / 'proc'; groups = root / 'cgroups'
+            proc.mkdir(); groups.mkdir()
+            (proc / 'meminfo').write_text('MemTotal: 1000 kB\nMemAvailable: 700 kB\nPrivate: 999 kB\n')
+            (proc / 'vmstat').write_text('oom_kill 4\nprivate 999\n')
+            for pid in (101, 102):
+                folder = proc / str(pid); (folder / 'task' / str(pid)).mkdir(parents=True)
+                stat = ['S'] + ['0'] * 21
+                stat[1] = '101' if pid == 102 else '1'
+                stat[11], stat[12], stat[19] = '123', '45', '999'
+                (folder / 'stat').write_text(f'{pid} (PRIVATE_PROCESS_NAME) ' + ' '.join(stat))
+                (folder / 'status').write_text('Name: PRIVATE_NAME\nVmRSS: 123 kB\nVmHWM: 234 kB\n'
+                    'VmSize: 345 kB\nThreads: 6\nPrivate: 999\n')
+                (folder / 'cmdline').write_text('PRIVATE_ARGUMENT')
+                (folder / 'environ').write_text('PRIVATE_ENVIRONMENT')
+                (folder / 'task' / str(pid) / 'children').write_text('102' if pid == 101 else '')
+            (proc / '101' / 'cgroup').write_text('0::/PRIVATE_CGROUP_PATH\n')
+            group = groups / 'PRIVATE_CGROUP_PATH'; group.mkdir()
+            for name, value in [('memory.current', '500'), ('memory.peak', '900'),
+                    ('memory.max', 'max'), ('memory.swap.current', '20'),
+                    ('memory.events', 'oom 1\noom_kill 2\nprivate 999\n')]:
+                (group / name).write_text(value)
+            read_text = Path.read_text
+            def checked_read(path, *args, **kwargs):
+                self.assertNotIn(path.name, ('cmdline', 'environ'))
+                return read_text(path, *args, **kwargs)
+            with mock.patch.object(Path, 'read_text', autospec=True, side_effect=checked_read):
+                sample = _resource_snapshot(101, 8, proc=proc, cgroups=groups)
+            self.assertNotIn('PRIVATE', json.dumps(sample))
+            self.assertEqual(sample['vm'], dict(total_bytes=1024000, available_bytes=716800, oom_kill=4))
+            self.assertEqual(sample['cgroup'], dict(current_bytes=500, peak_bytes=900, swap_bytes=20, oom=1, oom_kill=2))
+            self.assertEqual([row['pid'] for row in sample['processes']], [101, 102])
+            for row in sample['processes']:
+                self.assertEqual(row['user_ticks'], 123)
+                self.assertEqual(row['system_ticks'], 45)
+                self.assertEqual(row['start_ticks'], 999)
+                self.assertEqual(row['rss_bytes'], 123 * 1024)
+                self.assertEqual(row['peak_rss_bytes'], 234 * 1024)
+                self.assertEqual(row['virtual_bytes'], 345 * 1024)
+                self.assertEqual(row['threads'], 6)
+                self.assertTrue(all(type(value) is int for value in row.values()))
+            # Disappearing processes or unavailable Linux/cgroup counters do
+            # not affect the block's assertions or exit status.
+            missing = _resource_snapshot(404, 8, proc=root / 'missing', cgroups=groups)
+            self.assertEqual((missing['processes'], missing['vm'], missing['cgroup']), ([], {}, {}))
+            (proc / '101' / 'cgroup').write_text('0::/../../PRIVATE_ESCAPE\n')
+            self.assertEqual(_resource_snapshot(101, 8, proc=proc, cgroups=groups)['cgroup'], {})
+
+    def test_resource_sampling_interval_must_be_finite_and_nonnegative(self):
+        for interval in (-1, float('nan'), float('inf')):
+            with self.subTest(interval=interval), self.assertRaises(ValueError):
+                run_process_blocks(None, 0, 1, start_dir='.', resource_interval_seconds=interval)
 
     def fixture(self, root):
         log = root / 'events.jsonl'
@@ -127,7 +206,7 @@ class Case(unittest.TestCase):
     def test_real_process_blocks_keep_custom_run_load_tests_and_nested_cases(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); log = self.fixture(root)
-            result, terminal = self.isolated(root)
+            result, terminal = self.isolated(root, resource_interval_seconds=0.02)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(terminal['passed'])
             self.assertEqual(terminal['selected_blocks'], [0, 1, 2])
