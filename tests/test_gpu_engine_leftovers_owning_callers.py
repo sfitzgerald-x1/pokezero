@@ -1,5 +1,6 @@
 """Actual owning Leftovers write seam, always UNKNOWN; no models/games."""
 import ast
+from gpu_engine_default_observer_ast import dump_default_program, assert_hp_rng_mutations_detected
 from copy import deepcopy
 from dataclasses import replace
 import json
@@ -207,16 +208,17 @@ class LeftoversOwningCallerTests(unittest.TestCase):
     def test_default_transition_ast_unchanged_outside_explicit_private_observer(self):
         old=ast.parse(subprocess.check_output(['git','show','7e949065:gpu_engine/transition.py'],text=True))
         new=ast.parse(Path(transition.__file__).read_text())
-        class Normalize(ast.NodeTransformer):
-            def visit_If(self,node):
-                if ast.unparse(node.test)=='_leftovers_context is not None':return None
-                return self.generic_visit(node)
-            def visit_FunctionDef(self,node):
-                keep=[i for i,arg in enumerate(node.args.kwonlyargs) if arg.arg!='_leftovers_context']
-                node.args.kwonlyargs=[node.args.kwonlyargs[i] for i in keep]
-                node.args.kw_defaults=[node.args.kw_defaults[i] for i in keep]
-                return self.generic_visit(node)
-        self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(Normalize().visit(new),include_attributes=False))
+        baseline=dump_default_program(old)
+        self.assertEqual(dump_default_program(new),baseline)
+        assert_hp_rng_mutations_detected(self,new,baseline)
+        changed=deepcopy(new)
+        function=next(node for node in ast.walk(changed) if isinstance(node,ast.FunctionDef)
+            and node.name=='step_with_chance')
+        index=[arg.arg for arg in function.args.kwonlyargs].index('_status_residual_context')
+        function.args.kw_defaults[index]=ast.Constant(True)
+        with self.assertRaisesRegex(ValueError,'changed explicit observer default'):
+            dump_default_program(changed)
+
 
 
 if __name__=='__main__':unittest.main()

@@ -47,7 +47,7 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "6f799950d96cb450338cc839cf5c84d600286bc9e81d7c8deb62205fdecc2847",
+    "transition.py": "f7919d755e3658de68aeaf7f18bf05f13f603d7968f9bb70dc8c89cea82a8791",
     "mechanics.py": "e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661",
     "pursuit.py": "2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309",
     "effects.py": "0138f0e90811c4829666960a106d80ed2d59f6cd06a8ff83324d189465f73104",
@@ -62,7 +62,7 @@ SOURCE_PINS = {
     "action_history.py": "a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407",
 }
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "00510188351be865b2cb554a6925891e1a5a1a105822ddd28462b8f14116fdc4"
+DOMAIN_SHA256 = "03d1fe00f86a5dc2120001e9806a1ca7fa01fcfb0133146cace1c449f03417f7"
 
 
 def _host(value):

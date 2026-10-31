@@ -1,5 +1,6 @@
 """Actual initializer trace threading, literal engine states; no public claims."""
 import ast
+from gpu_engine_default_observer_ast import default_program, dump_default_program, assert_hp_rng_mutations_detected
 import subprocess
 from types import SimpleNamespace
 import unittest
@@ -46,17 +47,6 @@ class WeatherCallsiteTests(unittest.TestCase):
 
     def test_whole_default_transition_ast_stays_equal_to_actual_main_parent(self):
         class Strip(ast.NodeTransformer):
-            def visit_If(self,node):
-                if ast.unparse(node.test) in ('_weather_trace is not None','_status_trace is not None',
-                        '_public_trace is not None','_lifecycle_trace'):
-                    return [self.visit(n) for n in node.orelse]
-                return self.generic_visit(node)
-            def visit_FunctionDef(self,node):
-                for name in ('_weather_trace','_weather_hp_context'):
-                    if name in [a.arg for a in node.args.kwonlyargs]:
-                        i=[a.arg for a in node.args.kwonlyargs].index(name)
-                        node.args.kwonlyargs.pop(i);node.args.kw_defaults.pop(i)
-                return self.generic_visit(node)
             def visit_ClassDef(self,node):
                 if node.name=='WeatherProfileTracedStep':
                     # Remove ONLY this non-executable tracing return type, not
@@ -71,16 +61,50 @@ class WeatherCallsiteTests(unittest.TestCase):
                     return None
                 return self.generic_visit(node)
         def normalized(raw):
-            tree=Strip().visit(ast.parse(raw))
+            tree=Strip().visit(default_program(ast.parse(raw) if isinstance(raw,(str,bytes)) else raw))
             if any(isinstance(x,ast.Name) and x.id=='WeatherProfileTracedStep' for x in ast.walk(tree)):
                 raise ValueError('observer type is reachable from the default program')
             return ast.dump(tree,include_attributes=False)
         old=subprocess.check_output(['git','show','d38caf8808a87cb64319b8e3bf2f358c10729399:gpu_engine/transition.py'])
         from pathlib import Path
         current=Path(transition.__file__).read_text()
-        self.assertEqual(normalized(old),normalized(current))
+        baseline=normalized(old)
+        self.assertEqual(baseline,normalized(current))
+        assert_hp_rng_mutations_detected(self,ast.parse(current),baseline,dump=normalized)
         with self.assertRaises(ValueError):normalized(current.replace('weather_profile: object', 'weather_profile: object = 1',1))
         with self.assertRaises(ValueError):normalized(current+'\nBAD=WeatherProfileTracedStep\n')
+        changed=ast.parse(current)
+        function=next(node for node in ast.walk(changed) if isinstance(node,ast.FunctionDef)
+            and node.name=='step_with_chance')
+        index=[arg.arg for arg in function.args.kwonlyargs].index('_direct_hit_context')
+        function.args.kw_defaults[index]=ast.Constant(False)
+        with self.assertRaisesRegex(ValueError,'changed explicit observer default'):
+            normalized(changed)
+        # Kernel-risk imports need no special stripping rule: an unconditional
+        # import remains in the whole-program proof and must cause a mismatch.
+        self.assertNotEqual(normalized(current+'\nfrom . import engine_kernel_frame_risk as kernel_risks\n'),baseline)
+
+    def test_strict_observer_short_circuit_keeps_executed_unknown_guards_and_calls(self):
+        def program(guard, default='None'):
+            return ast.parse('def f(hp, *, _direct_hit_context='+default+'):\n'
+                '    if '+guard+':\n        hp = hp + 1\n    return hp\n')
+        plain=dump_default_program(ast.parse('def f(hp):\n    return hp\n'))
+        self.assertEqual(dump_default_program(program(
+            '_direct_hit_context is not None and _direct_hit_registered')),plain)
+        self.assertEqual(dump_default_program(program(
+            '_direct_hit_context is not None and numerical_call(active=True)')),plain)
+        for guard in ('runtime_guard and _direct_hit_context is not None',
+                'numerical_call(active=True) and _direct_hit_context is not None',
+                '_direct_hit_context is None and numerical_call(active=True)',
+                '_direct_hit_context is not None or numerical_call(active=True)',
+                '(_direct_hit_context is not None) & numerical_call(active=True)'):
+            with self.subTest(guard=guard):
+                normalized=default_program(program(guard))
+                self.assertTrue(any(isinstance(node,ast.If) for node in ast.walk(normalized)))
+                self.assertNotEqual(ast.dump(normalized,include_attributes=False),plain)
+        for default in ('True','False','0'):
+            with self.subTest(default=default),self.assertRaisesRegex(ValueError,'changed explicit observer default'):
+                dump_default_program(program('_direct_hit_context is not None',default))
 
 
 if __name__=='__main__':unittest.main()
