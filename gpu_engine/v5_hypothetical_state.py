@@ -118,6 +118,24 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
                 arrays['gender'][address]={None:-1,'N':0,'M':1,'F':2}[mon.gender]
                 if not 1<=len(mon.types)<=2:raise ValueError('type-count')
                 arrays['types'][address]=[identity('types',value,none=True) for value in mon.types]+[0]*(2-len(mon.types))
+                # A public Color Change can replace mon.types while the older
+                # materializer leaves base_types=None. Never seal that live
+                # replacement as constructor identity. The original static dex
+                # supplies an unmodified species row or this root is unknown.
+                base=mon.base_types
+                info=None if dex is None else dex.species_info(mon.id)
+                if base is None:
+                    if info is None:raise ValueError('base-types-unavailable')
+                    base=tuple(info.types)
+                elif dex is not None:
+                    if info is None:raise ValueError('base-types-unavailable')
+                    if tuple(normalize_id(v)for v in base)!=tuple(normalize_id(v)for v in info.types):
+                        raise ValueError('base-types-differ-original-species')
+                base=[identity('types',value,none=True) for value in base]
+                if not 1<=len(base)<=2:raise ValueError('base-type-count')
+                base=base+[0]*(2-len(base))
+                if base!=arrays['types'][address].tolist():raise ValueError('changed-types-base-unavailable')
+                arrays['base_types'][address]=base
                 mood=happiness[seat][slot]
                 if type(mood) is not int or not 0<=mood<=255:raise ValueError('packed-happiness')
                 arrays['happiness'][address]=mood

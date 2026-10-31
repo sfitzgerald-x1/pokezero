@@ -125,7 +125,7 @@ def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
     if "happiness" in pool:
         values["happiness"] = jnp.asarray(pool["happiness"][indices], jnp.int32)
     hp = values["stats"][..., 0]
-    state = state._replace(**values, base_ability=values["ability"], hp=hp, max_hp=hp, done=jnp.zeros_like(state.done),
+    state = state._replace(**values, base_types=values["types"], base_ability=values["ability"], hp=hp, max_hp=hp, done=jnp.zeros_like(state.done),
         entry_pending=jnp.ones_like(state.entry_pending))
     return initialize(state,table) if table is not None else state
 
@@ -1321,6 +1321,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             else:
                 work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
                     eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items)
+        if table.secondary is not None:
+            if _lifecycle_trace:
+                work,_public_trace=secondaries.apply_color_change(work,side,typ,table.secondary,
+                    eligible=acts & hit & (dealt>0) & ~hits_sub,_status_trace=_public_trace,
+                    _direct_hit_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,move=move)
+            else:
+                work=secondaries.apply_color_change(work,side,typ,table.secondary,
+                    eligible=acts & hit & (dealt>0) & ~hits_sub)
         if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live & move_context,_public_trace)
         else:work = _lum_update(work,table,live & move_context)
         # Gen3 applies contact DamagingHit (and immediate Lum cure) before

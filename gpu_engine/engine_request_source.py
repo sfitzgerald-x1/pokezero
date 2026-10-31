@@ -273,7 +273,7 @@ def _advance_registration(registration,state,rules):
     return value
 
 
-def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules, adapter_binding, engine_table):
+def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules, adapter_binding, engine_table, current_types=None):
     """Server-only primitive. Hidden foe cells never become feature fields."""
     b = ledger.owner_side.shape[0]
     rows = jnp.arange(b); own = jnp.clip(ledger.owner_side,0,1); foe = 1-own
@@ -282,6 +282,7 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     same = jnp.ones(b,jnp.bool_)
     for key in Original._fields:
         value = owned[key]; expected = getattr(original,key)
+        if key=="types" and current_types is not None:value=state.base_types[rows,own]
         same &= jnp.all(value==expected,axis=tuple(range(1,value.ndim)))
     present = owned['species']>0
     safe_own_species = jnp.clip(owned['species'],0,rules.species_supported.shape[0]-1)
@@ -289,6 +290,10 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
         & rules.species_supported[safe_own_species]),axis=-1)
     type_origin = jnp.all(~present[...,None] | (original.types==rules.species_types[safe_own_species]),axis=(-1,-2))
     same &= type_origin
+    if current_types is not None:
+        actions._shape(current_types,(b,6,2),jnp.int32,"source-current-types")
+        same &= jnp.all(owned["types"]==current_types,axis=(-1,-2))
+        same &= jnp.all((current_types>=0)&(current_types<rules.type_immune.shape[0]),axis=(-1,-2))
     gender_known = jnp.all(~present | ((owned['gender']>=0)&(owned['gender']<=2)),axis=-1)
     hp = state.hp[rows,own]
     active_hp = hp[rows,safe_active]
@@ -355,7 +360,8 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     # Gen3 Shadow Tag sets literal true; Arena/Magnet call tryTrap(true).
     visible_trap |= rules.shadow[fa]&(all_active_hp[rows,foe]>0)
     actual_hidden = ((rules.arena[fa]&grounded)|(rules.magnet[fa]&steel))&~immune
-    # knownType=true is proved by unchanged original types/identity. Source
+    # knownType=true uses unchanged constructor types/identity or the owning
+    # driver's exact previous-public/current-source live-type join. Source
     # Actual runEvent includes Any callbacks. Public alternatives dispatch only
     # singleEvent('FoeMaybeTrapPokemon'); the static eligibility preserves that
     # distinction (Gen3 Magnet Pull has no FoeMaybeTrapPokemon callback).
@@ -398,7 +404,7 @@ def produce_request(compiled, state, ledger, registration, arrival, *, lifecycle
             'hidden_power_type','hidden_power_power','charge_move','encore_move','encore_counter',
             'choice_move','last_move','trap_source'):
         actions._shape(getattr(state,name),(b,2,6),jnp.int32,'server '+name)
-    for name,tail,dtype in (('stats',(6,6),jnp.int32),('types',(6,2),jnp.int32),
+    for name,tail,dtype in (('stats',(6,6),jnp.int32),('types',(6,2),jnp.int32),('base_types',(6,2),jnp.int32),
             ('moves',(6,4),jnp.int32),('pp',(6,4),jnp.int32),('disabled',(6,4),jnp.bool_),
             ('volatile',(6,),jnp.uint32),('active',(),jnp.int32),('forced_switch',(),jnp.bool_),
             ('trapped',(),jnp.bool_),('entry_pending',(),jnp.bool_)):

@@ -56,6 +56,7 @@ class SecondaryTable(NamedTuple):
     self_omni: jax.Array         # [M], five user stages; not target Dust/Sub gated
     synchronize: jax.Array       # [A], deterministic reflection of fresh status
     rough_skin: jax.Array        # [A], Gen3 deterministic contact HP damage
+    color_change: jax.Array      # [A], original Gen3 inherited DamagingHit
 
 
 def from_metadata(metadata):
@@ -80,7 +81,30 @@ def from_metadata(metadata):
         jnp.asarray(contact), flags({'static'}),
         jnp.asarray([name == 'mudshot' for name in vocab['moves']]),
         jnp.asarray([name in {'silverwind', 'ancientpower'} for name in vocab['moves']]),
-        flags({'synchronize'}), flags({'roughskin'}))
+        flags({'synchronize'}),flags({'roughskin'}),flags({'colorchange'}))
+
+
+def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,_direct_hit_context=None,move=None):
+    """Original Gen3 DamagingHit, after secondaries and before recoil.
+
+    The caller supplies positive literal target damage and the SAME resolved
+    attack type (including Hidden Power). No additional chance is consumed.
+    """
+    rows=jnp.arange(state.hp.shape[0]);target=1-side;physical=state.active[rows,target]
+    old=state.types[rows,target,physical];ability=state.ability[rows,target,physical]
+    changes=(eligible & (state.hp[rows,target,physical]>0) & table.color_change[ability]
+        & (move_type>0) & ~jnp.any(old==move_type[:,None],axis=1))
+    pending=None
+    if _status_trace is not None:
+        from . import engine_color_change_callbacks as callbacks
+        _status_trace,pending=callbacks.begin(_status_trace,state,side,move,move_type,
+            _direct_hit_context,table,eligible=changes)
+    new=jnp.stack((move_type,jnp.zeros_like(move_type)),axis=1)
+    state=state._replace(types=state.types.at[rows,target,physical].set(jnp.where(changes[:,None],new,old)))
+    if _status_trace is not None:
+        _status_trace=callbacks.finish(_status_trace,pending,state)
+        return state,_status_trace
+    return state
 
 
 def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None, _status_trace=None):

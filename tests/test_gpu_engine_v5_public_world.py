@@ -31,7 +31,7 @@ from gpu_engine import v5_owning_history as capture,public_wire,v4_encoder,trans
 class TypedMappingTests(unittest.TestCase):
     def fixture(self):
         mon=PokemonSpec('snorlax',80,('normal',),100,200,100,101,102,103,104,
-            (MoveSpec('hiddenpowerice70',16),MoveSpec('tackle',56)),gender='M')
+            (MoveSpec('hiddenpowerice70',16),MoveSpec('tackle',56)),gender='M',base_types=('normal',))
         side=SideSpec((mon,),boosts={'attack':2},side_conditions={'spikes':2,'toxic_count':3,'protect':1},
             wish=(1,100),last_used_move='move:1')
         metadata={'vocabulary':{'species':['_none','snorlax'],'types':['_none','normal','ice'],

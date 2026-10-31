@@ -21,9 +21,9 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, CardinalityRefusal, Obse
 
 # Complete transition-domain proof, including the four copy/zero assignments
 # in transition.step_with_chance. A numeric representative alone is not proof.
-DOMAIN_SHA256 = '4c947bae4befef2ee0995c67223922857ac66687ab8c28bf4bcb6b173d91374e'
+DOMAIN_SHA256 = 'ebfc0d787cc3b24008e273a2526b43328808ecbf4f7057b8b73a8ec12ebbb9c1'
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': '20fa78d01224bd12cf57f23031e52959dc6c4b0a664f3dba94b67a08185734e4', 'conditioned_future.py': 'b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11', 'future_state.py': 'ec84f4c9678aad9d68fc3171de75e74f33a76348a68066bb0409c33cbb8c75cd', 'fidelity_panel.py': 'ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e', 'finite_law.py': '34317244b8430387ab46c148c578828f4d94da6ebb80d3556b197613f92703f0'}
+MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'a5e73d296e6d16e27e26541e4d7e1466a36be833891934c83a79eba28b19795a', 'conditioned_future.py': 'b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11', 'future_state.py': 'ec84f4c9678aad9d68fc3171de75e74f33a76348a68066bb0409c33cbb8c75cd', 'fidelity_panel.py': 'ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e', 'finite_law.py': '34317244b8430387ab46c148c578828f4d94da6ebb80d3556b197613f92703f0'}
 BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)

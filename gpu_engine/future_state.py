@@ -156,7 +156,7 @@ SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns"
     "spikes", "wish_counter", "wish_amount", "keys")})
 SHAPES.update({name: () for name in ("queued_actor", "pending_residual", "replacement_count", "weather",
     "weather_counter", "turn", "done", "winner")})
-SHAPES.update(types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
+SHAPES.update(types=(2, 6, 2), base_types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
     boosts=(2, 6, 7), residual_draws=(2, 12))
 
 

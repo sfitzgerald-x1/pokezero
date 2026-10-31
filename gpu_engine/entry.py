@@ -70,6 +70,10 @@ def depart(state,side,table,*,eligible):
     # Natural Cure). Restore the immutable constructor ability afterwards.
     state=state._replace(ability=state.ability.at[rows,side,active].set(jnp.where(
         eligible,state.base_ability[rows,side,active],state.ability[rows,side,active])))
+    # clearVolatile -> setSpecies(baseSpecies) restores the original types on
+    # every actual departure, including direct Baton and forced displacement.
+    state=state._replace(types=state.types.at[rows,side,active].set(jnp.where(
+        eligible[:,None],state.base_types[rows,side,active],state.types[rows,side,active])))
     counter=state.status_counter[rows,side,active]
     old_clock=state.truant_loaf[rows,side,active]
     state=state._replace(truant_loaf=state.truant_loaf.at[rows,side,active].set(

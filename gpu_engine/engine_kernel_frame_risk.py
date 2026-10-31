@@ -98,6 +98,11 @@ class Tables(NamedTuple):
     protect_binding: object
     protect_candidates: object
     protect_block_candidates: object
+    color_change_binding: object
+    color_change_abilities: object
+    color_change_candidates: object
+    color_change_types: object
+    color_change_dynamic: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -169,6 +174,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     bulk_binding=np.zeros(8,np.uint32);bulk_candidates=np.zeros(m,bool)
     protect_binding=np.zeros(8,np.uint32);protect_candidates=np.zeros(m,bool);protect_blocks=np.zeros(m,bool)
     direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool);seismic=0;ko_candidates=np.zeros(m,bool)
+    color_binding=np.zeros(8,np.uint32);color_abilities=np.zeros(len(table.secondary.color_change) if table.secondary is not None else 1,bool);color_candidates=np.zeros(m,bool);color_types=np.zeros(m,np.int32);color_dynamic=np.zeros(m,bool)
     if direct_hit_compiled is not None:
         from . import engine_direct_hit_controls as direct
         direct_data=direct.check_compiled(direct_hit_compiled)
@@ -181,6 +187,10 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         if direct_data.primary_plain_status is not None:
             from . import engine_primary_plain_status_callbacks as plain_primary
             plain_primary.shape(direct_data.primary_plain_status);plain_binding=np.asarray(direct_data.primary_plain_status.binding,np.uint32);plain_candidates=np.asarray(direct_data.primary_plain_status.candidates).copy();plain_status=np.asarray(direct_data.primary_plain_status.status).copy()
+        if direct_data.color_change is not None:
+            from . import engine_color_change_callbacks as color
+            cd=direct_data.color_change;color.shape(cd)
+            color_binding=np.asarray(cd.binding);color_abilities=np.asarray(cd.abilities);color_candidates=np.asarray(cd.candidates);color_types=np.asarray(cd.move_types);color_dynamic=np.asarray(cd.dynamic_type)
         if direct_data.bulk_up is not None:
             from . import engine_bulk_up_callbacks as bulk_up
             bulk_up.shape(direct_data.bulk_up);bulk_binding=np.asarray(direct_data.bulk_up.binding,np.uint32);bulk_candidates=np.asarray(direct_data.bulk_up.candidates).copy()
@@ -313,12 +323,12 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
         direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
-        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist(),primary_plain_binding=plain_binding.tolist(),primary_plain_candidates=plain_candidates.tolist(),primary_plain_status=plain_status.tolist(),bulk_up_binding=bulk_binding.tolist(),bulk_up_candidates=bulk_candidates.tolist(),protect_binding=protect_binding.tolist(),protect_candidates=protect_candidates.tolist(),protect_block_candidates=protect_blocks.tolist())
+        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist(),primary_plain_binding=plain_binding.tolist(),primary_plain_candidates=plain_candidates.tolist(),primary_plain_status=plain_status.tolist(),bulk_up_binding=bulk_binding.tolist(),bulk_up_candidates=bulk_candidates.tolist(),protect_binding=protect_binding.tolist(),protect_candidates=protect_candidates.tolist(),protect_block_candidates=protect_blocks.tolist(),color_change_binding=color_binding.tolist(),color_change_abilities=color_abilities.tolist(),color_change_candidates=color_candidates.tolist(),color_change_types=color_types.tolist(),color_change_dynamic=color_dynamic.tolist())
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -393,6 +403,11 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.primary_plain_binding,(8,),jnp.uint32)
     accounting._shape(tables.primary_plain_candidates,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.primary_plain_status,tables.direct_candidates.shape,jnp.int32)
+    accounting._shape(tables.color_change_binding,(8,),jnp.uint32)
+    accounting._shape(tables.color_change_abilities,(len(tables.color_change_abilities),),jnp.bool_)
+    accounting._shape(tables.color_change_candidates,tables.direct_candidates.shape,jnp.bool_)
+    accounting._shape(tables.color_change_types,tables.direct_candidates.shape,jnp.int32)
+    accounting._shape(tables.color_change_dynamic,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.bulk_up_binding,(8,),jnp.uint32)
     accounting._shape(tables.bulk_up_candidates,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.protect_binding,(8,),jnp.uint32)

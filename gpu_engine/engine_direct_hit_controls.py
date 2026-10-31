@@ -61,6 +61,7 @@ class Data(NamedTuple):
     primary_plain_status: object = None # original plain-primary PAR/BRN source
     bulk_up: object = None # original-bound ATK/DEF self-pair capability
     rough_skin: object = None # original-bound actual contact HP write
+    color_change: object = None # original Gen3 DamagingHit type mutation
 
 
 class Context(NamedTuple):
@@ -144,7 +145,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
     if table.self_destruct is not None:ko &= ~np.asarray(table.self_destruct.move)
     from . import engine_no_damage_callbacks as no_damage
     no_damage_data=no_damage.compile_data(engine_catalog)
-    secondary_data=None;substitute_damage_data=None;protect_data=None;bulk_up_data=None;plain_data=None;rough_skin_data=None
+    secondary_data=None;substitute_damage_data=None;protect_data=None;bulk_up_data=None;plain_data=None;rough_skin_data=None;color_data=None
     if metadata is not None or source_rules is not None:
         if metadata is None or source_rules is None:raise ValueError('original secondary metadata AND rules required')
         from . import engine_secondary_status_callbacks as secondary_status
@@ -159,13 +160,15 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         plain_data=plain_primary.compile_data(engine_catalog,metadata,source_rules)
         from . import engine_rough_skin_callbacks as rough_skin
         rough_skin_data=rough_skin.compile_data(engine_catalog,metadata,source_rules,substitute_damage_data)
-    payload = dict(schema=SCHEMA, rough_skin_binding=None if rough_skin_data is None else np.asarray(rough_skin_data.binding).tolist(), primary_plain_binding=None if plain_data is None else np.asarray(plain_data.binding).tolist(), bulk_up_binding=None if bulk_up_data is None else np.asarray(bulk_up_data.binding).tolist(), protect_binding=None if protect_data is None else np.asarray(protect_data.binding).tolist(), substitute_damage_binding=None if substitute_damage_data is None else np.asarray(substitute_damage_data.binding).tolist(), secondary_binding=None if secondary_data is None else np.asarray(secondary_data.binding).tolist(), no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
+        from . import engine_color_change_callbacks as color
+        color_data=color.compile_data(engine_catalog,metadata,source_rules)
+    payload = dict(schema=SCHEMA, color_change_binding=None if color_data is None else np.asarray(color_data.binding).tolist(), rough_skin_binding=None if rough_skin_data is None else np.asarray(rough_skin_data.binding).tolist(), primary_plain_binding=None if plain_data is None else np.asarray(plain_data.binding).tolist(), bulk_up_binding=None if bulk_up_data is None else np.asarray(bulk_up_data.binding).tolist(), protect_binding=None if protect_data is None else np.asarray(protect_data.binding).tolist(), substitute_damage_binding=None if substitute_damage_data is None else np.asarray(substitute_damage_data.binding).tolist(), secondary_binding=None if secondary_data is None else np.asarray(secondary_data.binding).tolist(), no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
         engine=engine_catalog.engine_binding, source=engine_catalog.source_binding,
         moves=engine_catalog.move_binding, move_count=count, seismic_toss_move=seismic,ko_candidates=ko.tolist(),
         kinds=[CRITICAL, SUPER_EFFECTIVE, RESISTED],
         positive_effectiveness_ratios=POSITIVE_EFFECTIVENESS_RATIOS,
         source_files={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py','secondary.py','engine_secondary_status_callbacks.py','engine_flash_fire_end_callbacks.py','engine_substitute_damage_callbacks.py','engine_protect_callbacks.py','engine_bulk_up_callbacks.py','engine_primary_plain_status_callbacks.py','engine_rough_skin_callbacks.py')},
+            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py','secondary.py','engine_secondary_status_callbacks.py','engine_flash_fire_end_callbacks.py','engine_substitute_damage_callbacks.py','engine_protect_callbacks.py','engine_bulk_up_callbacks.py','engine_primary_plain_status_callbacks.py','engine_rough_skin_callbacks.py','engine_color_change_callbacks.py','state.py','entry.py')},
         scope='literal-positive-nonlethal-and-source-pending-nonterminal-ko-only-no-completeness')
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     words = lambda x:jnp.asarray(x, jnp.uint32)
@@ -173,7 +176,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         words(engine_catalog.engine_binding), words(engine_catalog.source_binding),
         words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding), dtype='>u4').astype(np.uint32)),
-        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data,secondary_data,substitute_damage_data,protect_data,plain_data,bulk_up_data,rough_skin_data)
+        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data,secondary_data,substitute_damage_data,protect_data,plain_data,bulk_up_data,rough_skin_data,color_data)
     result = Compiled(data)
     _COMPILED[result] = (data, tuple(data), engine_catalog,source_rules)
     return result
@@ -232,6 +235,9 @@ def _check(tape, data):
     if data.primary_plain_status is not None:
         from . import engine_primary_plain_status_callbacks as plain_primary
         plain_primary.shape(data.primary_plain_status)
+    if data.color_change is not None:
+        from . import engine_color_change_callbacks as color
+        color.shape(data.color_change)
     if data.bulk_up is not None:
         from . import engine_bulk_up_callbacks as bulk_up
         bulk_up.shape(data.bulk_up)

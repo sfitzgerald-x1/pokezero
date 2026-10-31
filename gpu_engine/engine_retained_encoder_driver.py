@@ -300,11 +300,11 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         jnp.where(source_ready, result.step.placeholder_moves, 0),profile)
 
 
-def _request(engine, ledger, original, retained, unsafe, arrival, admitted, statics):
+def _request(engine, ledger, original, retained, unsafe, arrival, admitted, statics, current_types=None):
     """The existing source request + private adapter PURE lower primitives."""
     rules, adapter, private, action_tables, engine_table = statics
     packet, reason = source._produce(engine, ledger, arrival, original, retained, unsafe,
-        rules, adapter.binding, engine_table)
+        rules, adapter.binding, engine_table,current_types)
     reason |= jnp.where(admitted, 0, source.ARRIVAL)
     packet = packet._replace(complete=packet.complete & admitted,
         mode=jnp.where(admitted, packet.mode, actions.UNKNOWN))
@@ -736,8 +736,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                 kernel_risk_tables=None if kernel_risk_compiled is None else kernel_risk_compiled.device,
                 direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context,calm_mind_context=calm_mind_context,swords_dance_context=swords_dance_context,spikes_context=spikes_context,thunder_wave_context=thunder_wave_context,sleep_powder_context=sleep_powder_context,
                 terminal_observer=frame_input_mode=='source-witness' and direct_hit_mode=='kernel-event')),
-        request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
-            _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
+        request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted,current_types=None:
+            _request(engine, ledger, original, retained, unsafe, arrival, admitted, static,current_types)),
         installations=jax.jit(life.apply_installations),
         unsafe=jax.jit(lambda unsafe, state: unsafe | source._unsafe_history(state, request['rules'].device)),
         public_fast=jax.jit(public_fast),
@@ -1056,9 +1056,18 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
             orders = tuple(r['installations'](ledger, frame) for ledger in core.orders)
             unsafe = tuple(r['unsafe'](value, frame.state) for value in core.unsafe)
             admitted = core.admitted & frame.cursor.admitted & ((frame.callbacks.refusal & ~events.UNINSTRUMENTED) == 0)
+            current_types=(None,None)
+            direct_context=r['direct_hit_context']
+            if direct_context is not None and direct_context.data.color_change is not None and r['direct_hit_mode']=='kernel-event':
+                from . import engine_color_change_callbacks as color
+                type_categories=r['public'].device.causal.color_categories
+                current_types=tuple(color.expected_owned_types(frame.state,core.engine,observer.retained,
+                    owner=side,tape=frame.callbacks,data=direct_context.data.color_change,categories=type_categories,
+                    type_tables=r['catalog'].types.device,healthy=observer.retained_healthy)
+                    for side,observer in enumerate(old_state.observers))
             requests = tuple(r['request_fast'](frame.state, ledger, original, retained, history,
-                frame.after_registry, admitted) for ledger, original, retained, history in
-                zip(orders, core.originals, core.constructors, unsafe))
+                frame.after_registry, admitted,types) for ledger, original, retained, history,types in
+                zip(orders, core.originals, core.constructors, unsafe,current_types))
             profile=core.weather_profile if r['retain_speed'] is None else r['retain_speed'](
                 frame.weather_profile,frame.state,frame.cursor.stream_id)
             candidate = core._replace(engine=frame.state, cursor=frame.cursor, orders=orders, unsafe=unsafe,
