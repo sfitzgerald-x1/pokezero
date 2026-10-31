@@ -295,11 +295,22 @@ class EndpointTests(unittest.TestCase):
                 def interrupted_sleep(seconds):handlers[signal.SIGTERM](signal.SIGTERM,None)
                 return original(command,**dict(kwargs,sleep=interrupted_sleep),popen=lambda *a,**k:process,
                     group_exists=lambda group:alive[0],signal_group=send)
-            with patch.object(endpoint.signal,'getsignal',return_value=previous),patch.object(endpoint.signal,'signal',side_effect=install),\
+            with patch.object(endpoint.signal,'getsignal',side_effect=lambda sig:handlers.get(sig,previous)),patch.object(endpoint.signal,'signal',side_effect=install),\
                     patch.object(evaluation,'_pin_actor'),patch.object(fp,'supervise_panel',side_effect=supervise):
                 with self.assertRaises(KeyboardInterrupt):endpoint.run_endpoint(ref,root/'endpoint',enable_v5_endpoint=True)
             self.assertFalse(alive[0]);self.assertEqual(signals,[(process.pid,signal.SIGTERM)])
             self.assertIs(handlers[signal.SIGTERM],previous)
+
+    def test_sync_owner_does_not_replace_a_newer_parent_handler(self):
+        previous=object();newer=object();handlers={signal.SIGTERM:previous}
+        def install(sig,handler):handlers[sig]=handler
+        def body(*args,**kwargs):
+            handlers[signal.SIGTERM]=newer
+            return 'done'
+        with patch.object(endpoint.signal,'getsignal',side_effect=lambda sig:handlers[sig]), \
+                patch.object(endpoint.signal,'signal',side_effect=install),patch.object(endpoint,'_run_endpoint',side_effect=body):
+            self.assertEqual(endpoint.run_endpoint(None,None,enable_v5_endpoint=True),'done')
+        self.assertIs(handlers[signal.SIGTERM],newer)
 
     def test_cancelled_original_probe_kills_owned_group_even_after_leader_exit_and_reraises(self):
         process=NS(pid=987654322,returncode=0,communicate=AsyncMock(side_effect=asyncio.CancelledError),

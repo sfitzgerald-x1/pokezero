@@ -354,22 +354,42 @@ async def _execute_cells(store,factories,*,invocation):
 
 
 async def execute_cells(store,factories,*,invocation):
-    """Own SIGTERM cancellation until ALL original runner finalizers finish."""
+    """Own cancellation/reaping, restoring only the signal entry we installed."""
     loop=asyncio.get_running_loop();prior=signal.getsignal(signal.SIGTERM)
-    previous=getattr(loop,'_signal_handlers',{}).get(signal.SIGTERM)
+    registry=getattr(loop,'_signal_handlers',{})
+    previous=registry.get(signal.SIGTERM)
     callback=getattr(previous,'_callback',None);args=getattr(previous,'_args',())
-    task=asyncio.create_task(_execute_cells(store,factories,invocation=invocation));installed=False;cancelled=False
+    task=asyncio.create_task(_execute_cells(store,factories,invocation=invocation))
+    installed=False;installed_handle=None;installed_python=None;cancelled=False
     def terminate():
         nonlocal cancelled
         if not cancelled:cancelled=True;task.cancel()
     try:
         loop.add_signal_handler(signal.SIGTERM,terminate);installed=True
-        return await task
+        installed_handle=registry.get(signal.SIGTERM);installed_python=signal.getsignal(signal.SIGTERM)
+        try:return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            terminate()
+            while not task.done():
+                try:await asyncio.shield(task)
+                except asyncio.CancelledError:pass
+            if not task.cancelled():task.result() # A failed owned cleanup is never hidden by cancellation.
+            raise
     finally:
-        if not task.done():task.cancel();await asyncio.gather(task,return_exceptions=True)
-        if installed:
+        if not task.done():
+            terminate()
+            while not task.done():
+                try:await asyncio.shield(task)
+                except asyncio.CancelledError:pass
+            if not task.cancelled():task.result()
+        # A later parent handler owns its entry. Never overwrite it on return.
+        if (installed and getattr(loop,'_signal_handlers',None) is registry
+                and registry.get(signal.SIGTERM) is installed_handle
+                and signal.getsignal(signal.SIGTERM) is installed_python):
             loop.remove_signal_handler(signal.SIGTERM)
-            if callback is not None:loop.add_signal_handler(signal.SIGTERM,callback,*args)
+            if callback is not None:
+                loop.add_signal_handler(signal.SIGTERM,callback,*args)
+                registry[signal.SIGTERM]=previous # Preserve its original Handle and contextvars context.
             else:signal.signal(signal.SIGTERM,prior)
 
 
@@ -518,7 +538,8 @@ def run_endpoint(reference,directory,*,resume=False,enable_v5_endpoint=False):
             interrupted=True;raise KeyboardInterrupt('owned endpoint invocation interrupted')
     signal.signal(signal.SIGTERM,terminate)
     try:return _run_endpoint(reference,directory,resume=resume,enable_v5_endpoint=True)
-    finally:signal.signal(signal.SIGTERM,previous)
+    finally:
+        if signal.getsignal(signal.SIGTERM) is terminate:signal.signal(signal.SIGTERM,previous)
 
 
 def main(argv=None):
