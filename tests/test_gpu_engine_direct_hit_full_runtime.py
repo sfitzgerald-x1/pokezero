@@ -37,7 +37,8 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
         return frame,kw
 
     def reference(self,stream,frame,wire):
-        lower=full.causal.project_frame(stream.causal,frame,self.compiled.causal.device)
+        extra=self.lower_context(frame) if hasattr(self,'lower_context') else {}
+        lower=full.causal.project_frame(stream.causal,frame,self.compiled.causal.device,**extra)
         self.assertEqual(lower.error.tolist(),[0,0])
         rows=[];next_wire=[]
         statuses=('',' slp',' par',' brn',' frz',' psn',' tox')
@@ -112,6 +113,9 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
         runtime=driver._checked(prepared);self.compiled=runtime['public']
         self.f=SimpleNamespace(catalog=runtime['catalog'])
         fixture_instance=base();session=fixture_instance.construct(prepared=prepared);before=session.state
+        self.lower_context=lambda frame:dict(weather_hp=(
+            before.core.weather_profile if frame.weather_profile is None else frame.weather_profile,
+            runtime['speed_profile'].device),leftovers=runtime['leftovers_context'].data)
         actual_constructor=driver._session(session)['constructed']
         catalog=runtime['request']['lifecycle']
         cursor=life.register(actual_constructor.cursor.stream_id,catalog=catalog,
