@@ -349,7 +349,7 @@ def _substitute_span_matches(tape,ticket,side,physical,move,write):
         &life._valid(tape.cursor)&(physical==tape.cursor.physical_active[rows,safe])
         &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
         &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
-    for index in (prefix,first,at):
+    for index in (prefix,at):
         same &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])
             &(tape.event_phase[rows,index]==ledger.phase[rows,slot])
             &jnp.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
