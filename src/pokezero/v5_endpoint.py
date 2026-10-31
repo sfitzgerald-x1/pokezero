@@ -89,7 +89,7 @@ def _final_publication(arm,declaration,snapshot):
 def _protocol(reference,*,parse_configs=False):
     if type(reference) is not evaluation.Artifact:raise ValueError('original digest-bound endpoint Artifact required')
     value=reference.document()
-    _keys(value,('schema','seeds','arms','worker_python','foulplay_python','foulplay_commit',
+    _keys(value,('schema','seeds','arms','worker_python','foulplay_python','foulplay_commit','foulplay_source',
         'actor_cpus','foulplay_cpus','watchdog','bootstrap','deterministic','core_schedule'))
     if value['schema']!=SCHEMA or value['deterministic'] is not True:raise ValueError('explicit raw deterministic v5 endpoint required')
     if value['core_schedule']!=CORE_SCHEDULE:raise ValueError('fixed declared pre-outcome core rotation required')
@@ -98,7 +98,7 @@ def _protocol(reference,*,parse_configs=False):
             or seeds!=list(range(seeds[0],seeds[0]+1000))):
         raise ValueError('exact original 1,000 ordered seeds, both seats per arm required')
     if [a.get('name') for a in value['arms']]!=list(ARMS):raise ValueError('all four final arms in fixed original order required')
-    for key in ('worker_python','foulplay_python'):_ref(value[key]).verify()
+    for key in ('worker_python','foulplay_python','foulplay_source'):_ref(value[key]).verify()
     commit=value['foulplay_commit']
     if type(commit) is not str or len(commit)!=40 or any(x not in '0123456789abcdef' for x in commit):raise ValueError('original FP source revision required')
     actor=value['actor_cpus'];cores=value['foulplay_cpus']
@@ -460,14 +460,10 @@ def reduce_endpoint(protocol,rows,configs):
 def _factories(protocol,configs):
     from .v5_worker import _source,_probe
     factories={}
+    evaluation._require_foulplay_source(protocol,tuple(config['foulplay_root'] for arm in protocol['arms'] for config in arm['configs']))
     for arm in protocol['arms']:
         runtime=_ref(arm['runtime']).document();_source(runtime);_probe(runtime)
         directory=Path(arm['run_directory']);snapshot=run.Snapshot(**arm['snapshot'])
-        for config in arm['configs']:
-            if subprocess.check_output(['git','-C',config['foulplay_root'],'rev-parse','HEAD'],text=True).strip()!=protocol['foulplay_commit']:
-                raise ValueError('original endpoint FP revision changed')
-            if subprocess.check_output(['git','-C',config['foulplay_root'],'status','--porcelain','--untracked-files=no'],text=True).strip():
-                raise ValueError('original clean endpoint FP source required')
         view=dict(runtime=arm['runtime'],label_vocabulary_sha256=configs.models[arm['name']].label_vocabulary.sha256,
             model_sha256=snapshot.model_sha256,deterministic=True)
         request=SimpleNamespace(snapshot=snapshot,checkpoint_path=(directory/snapshot.checkpoint).resolve(),archive_path=(directory/snapshot.archive).resolve())

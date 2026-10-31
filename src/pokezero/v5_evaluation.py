@@ -61,6 +61,51 @@ def _config(document):
     return ControlledFoulPlayConfig(**values)
 
 
+def _require_foulplay_source(protocol, roots):
+    """Bind the dependency's original PATCHED tracked worktree, not a clean clone.
+
+    The dependency build commit is independent of the training/evaluator commit.
+    Its caller-bound component receipt supplies the actual diff and binary bytes;
+    only the current original FP/native build inputs must remain identical.
+    """
+    component=Artifact(**protocol['foulplay_source']).document()
+    commit=component.get('source_commit')
+    if (component.get('status')!='ORIGINAL_FOULPLAY_COMPONENT_BUILD_COMPLETE_NOT_SELECTED'
+            or type(commit) is not str or len(commit)!=40 or any(c not in '0123456789abcdef' for c in commit)
+            or component.get('foulplay_gitlink')!=protocol['foulplay_commit']
+            or component.get('native_patch_count')!=100):
+        raise ValueError('original digest-bound FoulPlay component source required')
+    runtime=component['runtime'];python=runtime['python_executable']
+    if python['path']!=protocol['foulplay_python']['path'] or python['sha256']!=protocol['foulplay_python']['sha256']:
+        raise ValueError('FoulPlay component interpreter differs from protocol')
+    for name in ('python_executable','pyvenv_config','native'):
+        record=runtime[name];Artifact(record['path'],record['sha256']).verify()
+    source=Path(__file__).resolve().parents[2]
+    manifest=source/'third_party/poke-engine-gen3-patches.txt'
+    patches=[line.strip() for line in manifest.read_text().splitlines() if line.strip() and not line.lstrip().startswith('#')]
+    if len(patches)!=100 or hashlib.sha256(manifest.read_bytes()).hexdigest()!=component['native_patch_manifest_sha256']:
+        raise ValueError('original FoulPlay native manifest differs')
+    names=('.gitmodules','scripts/setup_foulplay_eval.sh','scripts/setup_poke_engine.sh',
+        'scripts/verify_foulplay_poke_engine.py','scripts/verify_poke_engine_source.py',
+        'scripts/apply_poke_engine_patches.py','third_party/poke-engine-base-source.json',
+        'third_party/poke-engine-gen3-patches.txt',
+        *(f'third_party/{name}' for name in patches),
+        *(f'third_party/foulplay-{name}.patch' for name in ('local-nosec','rest-cant','capture')))
+    for name in names:
+        if hashlib.sha256((source/name).read_bytes()).hexdigest()!=component['input_sha256'].get(name):
+            raise ValueError('original FoulPlay build input differs: '+name)
+    expected=Path(python['path']).parents[2]/'source/third_party/foul-play'
+    actual={Path(root).resolve(strict=True) for root in roots}
+    if actual!={expected.resolve(strict=True)}:
+        raise ValueError('FoulPlay worktree differs from selected component runtime')
+    root=next(iter(actual))
+    if subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()!=protocol['foulplay_commit']:
+        raise ValueError('original declared FoulPlay source differs')
+    difference=subprocess.check_output(['git','-C',str(root),'diff','--binary','--no-ext-diff','--no-textconv','HEAD','--'])
+    if hashlib.sha256(difference).hexdigest()!=component['foulplay_applied_diff_sha256']:
+        raise ValueError('original patched FoulPlay tracked worktree differs')
+
+
 def _pairs(protocol,*,parse_configs,checkpoint=None):
     panels={}
     for entry in protocol['panels']:
@@ -102,13 +147,13 @@ def _pairs(protocol,*,parse_configs,checkpoint=None):
 def _protocol(reference,*,parse_configs=False,checkpoint=None):
     value=reference.document()
     _keys(value,('schema','model_sha256','label_vocabulary_sha256','runtime','worker_python','foulplay_python',
-        'foulplay_commit','positions','siblings','panels','actor_cpus','foulplay_cpus','watchdog','bins','batch_size','deterministic'))
+        'foulplay_commit','foulplay_source','positions','siblings','panels','actor_cpus','foulplay_cpus','watchdog','bins','batch_size','deterministic'))
     if value['schema']!=SCHEMA:raise ValueError('explicit v5 evaluation protocol required')
     if value['deterministic'] is not True:raise ValueError('explicit common raw greedy panel policy required')
     for key in ('model_sha256','label_vocabulary_sha256'):run.c._binding(value[key])
     if type(value['foulplay_commit']) is not str or len(value['foulplay_commit'])!=40 or any(x not in '0123456789abcdef' for x in value['foulplay_commit']):
         raise ValueError('original FoulPlay source revision required')
-    for key in ('runtime','worker_python','foulplay_python','positions','siblings'):Artifact(**value[key]).verify()
+    for key in ('runtime','worker_python','foulplay_python','foulplay_source','positions','siblings'):Artifact(**value[key]).verify()
     runtime=Artifact(**value['runtime']).document()
     from .v5_worker import SCHEMA as runtime_schema,_memory
     if runtime.get('schema')!=runtime_schema:raise ValueError('original explicit worker runtime required')
@@ -539,11 +584,7 @@ def child(reference):
         # No actual panel before source/data/runtime checks and genuine metric inputs.
         from .v5_worker import _source
         runtime=Artifact(**protocol['runtime']).document();_source(runtime)
-        for config in configs:
-            if subprocess.check_output(['git','-C',str(config.foulplay_root),'rev-parse','HEAD'],text=True).strip()!=protocol['foulplay_commit']:
-                raise ValueError('original declared FoulPlay source differs')
-            if subprocess.check_output(['git','-C',str(config.foulplay_root),'status','--porcelain','--untracked-files=no'],text=True).strip():
-                raise ValueError('original clean FoulPlay source required')
+        _require_foulplay_source(protocol,tuple(config.foulplay_root for config in configs))
         captured=_capture_resolver().resolve_original_capture(protocol,request);factory=_factory(protocol,request)
         mechanisms=mechanism(protocol,factory,captured)
         progress=asyncio.run(_concurrent_panel(configs,factory,protocol,directory/'progress.json',namespace))

@@ -83,6 +83,7 @@ class EvaluationTests(unittest.TestCase):
             configs.append(dict(json.loads(json.dumps(asdict(cfg),default=str)),checkpoint=None))
         protocol=dict(schema=e.SCHEMA,model_sha256=r._sha(config.metadata()),label_vocabulary_sha256=config.label_vocabulary.sha256,
             runtime=runtime_ref,worker_python=python,foulplay_python=python,foulplay_commit='f'*40,
+            foulplay_source=artifact(root/'foulplay-component.json',{'unit_metadata_only':True}),
             positions=asdict(e.Artifact(str(positions),r._file_sha(positions))),siblings=asdict(e.Artifact(str(siblings),r._file_sha(siblings))),
             panels=[dict(declared_games=500000,seeds=list(range(100,600)),configs=configs)],
             actor_cpus=[0],foulplay_cpus=[1,2,3,4],watchdog=asdict(r.Watchdog(10,backstop_seconds=1000)),bins=5,batch_size=4,deterministic=True)
@@ -374,14 +375,15 @@ class EvaluationTests(unittest.TestCase):
                 rows=e._fixed_rows(configs)
                 for value in rows:value.update(status='REFUSED',reason='fake-unknown')
                 return dict(rows=rows)
-            def source(args,**kwargs):return '' if 'status' in args else protocol['foulplay_commit']+'\n'
             with patch.object(e,'_pin_actor',side_effect=lambda _:order.append('affinity')),\
                     patch.object(worker,'_memory',side_effect=lambda *a,**kw:order.append('memory') if kw.get('apply') else None),\
                     patch.object(worker,'_source'),patch.object(e,'_protocol',side_effect=parse),\
                     patch.object(e,'_factory',return_value=object()) as factory,patch.object(e,'mechanism',return_value={'fake_only':True}),\
-                    patch.object(e,'_concurrent_panel',side_effect=fake),patch.object(e.subprocess,'check_output',side_effect=source):
+                    patch.object(e,'_concurrent_panel',side_effect=fake),\
+                    patch.object(e,'_require_foulplay_source',side_effect=lambda *a:order.append('fp-source')) as fp_source:
                 self.assertEqual(e.child(child_ref),0)
             self.assertEqual(order[:3],['affinity','memory','typed-config']);factory.assert_called_once()
+            fp_source.assert_called_once()
             report=json.loads((directory/'worker-report.json').read_bytes())
             self.assertEqual((report['known_completed'],report['unknown_cells'],report['score_bounds']),(0,1000,[0.,1.]))
             self.assertFalse(report['scientific_qualification'])

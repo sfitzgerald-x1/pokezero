@@ -56,7 +56,9 @@ def fixture(root):
         arms.append(dict(name=name,run_directory=str(directory),declaration=declaration_ref,final_events=final_events,
             snapshot=asdict(snapshot),runtime=runtime_ref,configs=configs))
     protocol=dict(schema=endpoint.SCHEMA,seeds=list(range(100,1100)),arms=arms,worker_python=interpreter,
-        foulplay_python=interpreter,foulplay_commit='f'*40,actor_cpus=[0],foulplay_cpus=[1,2,3,4],
+        foulplay_python=interpreter,foulplay_commit='f'*40,
+        foulplay_source=artifact(root/'foulplay-component.json',{'unit_metadata_only':True}),
+        actor_cpus=[0],foulplay_cpus=[1,2,3,4],
         watchdog=asdict(run.Watchdog(10,backstop_seconds=1000)),bootstrap=dict(method=endpoint.METHOD,replicates=10000,seed=31,confidence=.9),
         deterministic=True,core_schedule=endpoint.CORE_SCHEDULE)
     reference=evaluation.Artifact(**artifact(root/'recipe.json',protocol))
