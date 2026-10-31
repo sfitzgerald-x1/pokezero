@@ -54,6 +54,9 @@ class SourceWitnessDriverTests(unittest.TestCase):
             # Base-only check must not recurse through the witness.
             self.assertIs(d._checked(self.prepared),r)
             with self.assertRaisesRegex(ValueError,'witness static drift'):d._checked_witness(r)
+        with patch.dict(w.SOURCE_PINS,{'state.py':w.SOURCE_PINS['state.py']},clear=True):
+            with self.assertRaises(ValueError):w.check_compiled(r['frame_witness_compiled'])
+            with self.assertRaises(ValueError):w.compile_witness(self.prepared)
         ephemeral=d.prepare(*self.base.args,**self.options)
         reference=weakref.ref(ephemeral);compiled=d._checked(ephemeral)['frame_witness_compiled']
         del ephemeral;gc.collect();self.assertIsNone(reference())
