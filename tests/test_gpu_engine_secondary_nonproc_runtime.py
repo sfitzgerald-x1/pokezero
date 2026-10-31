@@ -27,11 +27,13 @@ class SecondaryNonprocRuntimeTests(unittest.TestCase):
     def setUpClass(cls):
         fixture.WeatherPublicTests.setUpClass();cls.base=fixture.WeatherPublicTests
         cls.metadata=deepcopy(cls.base.metadata)
-        cls.names=('icebeam','shadowball','rockslide','thunderbolt')
+        specs=getattr(cls,'literal_specs',(
+            ('icebeam','Ice',95,10,'Special'),('shadowball','Ghost',80,15,'Physical'),
+            ('rockslide','Rock',75,10,'Physical'),('thunderbolt','Electric',95,15,'Special')))
+        cls.names=tuple(spec[0] for spec in specs)
+        cls.max_pp=tuple(spec[3]*8//5 for spec in specs)
         moves=dict(cls.base.catalog.dex.moves);cls.move_ids=[]
-        for name,typ,power,pp,category in (
-                ('icebeam','Ice',95,10,'Special'),('shadowball','Ghost',80,15,'Physical'),
-                ('rockslide','Rock',75,10,'Physical'),('thunderbolt','Electric',95,15,'Special')):
+        for name,typ,power,pp,category in specs:
             cls.move_ids.append(len(cls.metadata['moves']))
             cls.metadata['vocabulary']['moves'].append(name)
             cls.metadata['moves'].append(dict(id=name,base_power=power,
@@ -75,7 +77,7 @@ class SecondaryNonprocRuntimeTests(unittest.TestCase):
     def construct(self,*,synchronize=False):
         arrays=self.base().arrays('pressure','pressure')
         arrays['moves'][:]=np.asarray(self.move_ids,np.int32)
-        arrays['pp'][:]=np.asarray([16,24,16,24],np.int32)
+        arrays['pp'][:]=np.asarray(self.max_pp,np.int32)
         if synchronize:arrays['ability'][1,:]=self.metadata['vocabulary']['abilities'].index('synchronize')
         with TemporaryDirectory() as directory:
             path=Path(directory)/'literal.npz'

@@ -146,7 +146,16 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None)
         direct_binding=np.asarray(direct_data.binding,np.uint32)
         # Candidate only: every actual positive outcome additionally requires
         # its SAME captured Site10 span. Other static/attempt risk bits remain.
-        candidate=(np.asarray(table.power)>0)&(np.asarray(engine_catalog.ids)>0)&(np.asarray(engine_catalog.targets)==1)
+        positive=np.asarray(table.power)>0
+        if table.variable_moves is not None:
+            # These original resolver families have positive power even when
+            # the source move's static base power is zero. Actual same-call
+            # direct-hit tickets and all other risk guards still apply.
+            for name in ('returns','frustration'):
+                variable=np.asarray(getattr(table.variable_moves,name))
+                if variable.shape!=(m,):raise ValueError('exact selected variable move columns required')
+                positive |= variable
+        candidate=positive&(np.asarray(engine_catalog.ids)>0)&(np.asarray(engine_catalog.targets)==1)
     risk[(weather==0)&~candidate]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
