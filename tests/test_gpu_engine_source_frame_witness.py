@@ -170,7 +170,7 @@ class SourceFrameWitnessTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError,'cannot be traced'):
                         jax.jit(lambda _:fn())(j.array(1)) if dummy else jax.jit(lambda:fn())()
         with patch.dict(w.SOURCE_PINS,{'transition.py':'0'*64}):
-            with self.assertRaisesRegex(ValueError,'ACTUAL_KERNEL_SOURCE_DRIFT'):w.check_compiled(self.compiled)
+            with self.assertRaisesRegex(ValueError,'actual source inventory changed'):w.check_compiled(self.compiled)
 
 
 if __name__=='__main__':unittest.main()

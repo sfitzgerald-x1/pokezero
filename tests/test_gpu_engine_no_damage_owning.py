@@ -55,7 +55,7 @@ class NoDamageOwningTests(unittest.TestCase):
  def same(self,a,b):
   for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b),strict=True):np.testing.assert_array_equal(x,y)
  def test_source_default_and_original_callback_grammar(self):
-  before=ast.parse(subprocess.check_output(['git','show','2b0ec76a:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
+  before=ast.parse(subprocess.check_output(['git','show','de1af5f0fd116308d21cd1bdaf9cfed5bcc27f37:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
   self.assertEqual(dump_default_program(after),baseline);assert_hp_rng_mutations_detected(self,after,baseline)
   with self.assertRaises(ValueError):hit.check_compiled(hit.Compiled(self.helper.device))
   with self.assertRaises(ValueError):jax.jit(lambda:hit.check_compiled(self.helper).binding)()
