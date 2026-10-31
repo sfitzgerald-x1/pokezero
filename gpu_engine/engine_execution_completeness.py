@@ -46,6 +46,8 @@ class Site(IntEnum):
     DIRECT_HIT = 10
     SUBSTITUTE_SELF = 11
     TOXIC_ATTEMPT = 12
+    TRACE_COPY = 13  # reserved for independently frozen Trace port
+    RECOIL_HP = 14
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)

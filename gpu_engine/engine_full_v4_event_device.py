@@ -35,6 +35,7 @@ from . import engine_direct_hit_controls as direct_hit_controls
 from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
+from . import engine_recoil_callbacks as recoil_callbacks
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -67,6 +68,7 @@ class Tables(NamedTuple):
     pressure_start: object
     substitute_created: object
     toxic_no_effect: object
+    recoil_damage: object
     namespaces: Bindings
     binding: object
 
@@ -222,6 +224,9 @@ def compile_adapter(metadata, projector, *, catalog):
         for label in ('-crit','-supereffective','-resisted')],np.int32)
     if not np.all(direct_hit_control):
         raise ValueError('FULL writer lacks exact direct-hit annotation schemas')
+    recoil_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
+        f'|[from] Recoil|[of] {ident[1]}',inputs.Kind.CONDITION) for token in tokens],np.int32)
+    if int(lower.device.recoil_move)>0 and not np.all(recoil_damage):raise ValueError('FULL writer lacks exact Gen3 Recoil/of schemas')
     pressure_start=0
     if int(lower.device.pressure_engine_ability)>0 and int(lower.device.pressure_public_ability)>0:
         pressure_start=add(f'|-ability|{ident[0]}|Pressure|[silent]',inputs.Kind.ABILITY)
@@ -250,13 +255,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
-    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()
+    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -357,6 +362,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.pressure_start,(),jnp.int32)
     causal.base._shape(tables.substitute_created,(7,),jnp.int32)
     causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
+    causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     width = tables.templates.shape[1]
@@ -391,6 +397,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         weather_chip=condition & (raw_kind==weather_effects.WEATHER_CHIP)
         leftovers_heal=condition & (raw_kind==leftovers_callbacks.LEFTOVERS_HEAL)
         status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
+        recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
         direct_control=(kind==int(inputs.Kind.NONPROC)) & (
             (raw_kind==direct_hit_controls.CRITICAL)|(raw_kind==direct_hit_controls.SUPER_EFFECTIVE)
             |(raw_kind==direct_hit_controls.RESISTED))
@@ -416,6 +423,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(weather_chip,tables.weather_chip[jnp.clip(tape.words[:,index,9],0,4),chip_status],key)
         key=jnp.where(leftovers_heal,tables.leftovers_heal[chip_status],key)
         key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,3),chip_status],key)
+        key=jnp.where(recoil,tables.recoil_damage[jnp.clip(semantic[:,11],0,6)],key)
         key=jnp.where(direct_control,tables.direct_hit_control[jnp.clip(
             raw_kind-direct_hit_controls.CRITICAL,0,2)],key)
         # Kind9 already emits the sole STATUS line. Kind26 is its checked
@@ -468,6 +476,16 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(~toxic_write|toxic_status)
             &(statuses[rows,toxic_victim,jnp.clip(slots[rows,toxic_victim],0,5)]==toxic_observed))
         identity &= ~pressure | live[rows,safe]
+        raw=tape.words[:,index]
+        recoil_move=jnp.clip(raw[:,5],0,tables.causal.base.public_ids.shape[0]-1)
+        recoil_old_percent=(100*raw[:,6]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8])
+        recoil_old_percent=jnp.where((raw[:,6]<raw[:,8])&(recoil_old_percent==100),99,recoil_old_percent)
+        recoil_owner=state.causal.owner==subject
+        recoil_old=jnp.where(recoil_owner,raw[:,6],recoil_old_percent);recoil_max=jnp.where(recoil_owner,raw[:,8],100)
+        identity &= ~recoil | ((called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[recoil_move])&(called[:,3]==semantic[:,2])
+            &live[rows,safe]&live[rows,1-safe]&(semantic[:,11]==previous_status)
+            &(observed_hp[rows,safe,safe_slot]==recoil_old)&(observed_maximum[rows,safe,safe_slot]==recoil_max))
         identity &= ~status_event | (old_public_status==previous_status)
         identity &= ~lum_event | ((lum_old_public==previous_status) & live[rows,safe])
         old_weather=tables.causal.weather_public[jnp.clip(tape.words[:,index,5],0,4)]
