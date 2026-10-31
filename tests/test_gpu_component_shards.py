@@ -8,11 +8,13 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import types
 import unittest
 from unittest import mock
 
 from scripts.run_gpu_component_shard import (
     partition_suite, run_suite, run_process_blocks, _valid_receipt, _digest, _resource_snapshot,
+    _manifest, _isolation_units, _one_case_suite,
 )
 
 
@@ -62,24 +64,261 @@ class ComponentShardTests(unittest.TestCase):
                 self.assertEqual(result.errors, [])
                 self.assertEqual(result.skipped, [])
 
-    def isolated(self, root, index=0, count=1, resource_interval_seconds=0):
+    def isolated(self, root, index=0, count=1, resource_interval_seconds=0, isolate_standard_classes=()):
         # Actual fresh parent AND child interpreters, no mocked process runner
         # and no real component discovery/JAX imports in these tiny fixtures.
         code = """
-import sys, unittest
+import json, sys, unittest
 from scripts.run_gpu_component_shard import run_process_blocks
 suite = unittest.TestLoader().discover(sys.argv[1], 'test_gpu_engine*.py')
 raise SystemExit(run_process_blocks(suite, int(sys.argv[2]), int(sys.argv[3]), start_dir=sys.argv[1],
-    resource_interval_seconds=float(sys.argv[4])))
+    resource_interval_seconds=float(sys.argv[4]), isolate_standard_classes=json.loads(sys.argv[5])))
 """
         environment = dict(os.environ)
         environment['PYTHONPATH'] = os.pathsep.join([str(ROOT / 'src'), str(ROOT), environment.get('PYTHONPATH', '')])
-        result = subprocess.run([sys.executable, '-c', code, str(root), str(index), str(count), str(resource_interval_seconds)],
+        result = subprocess.run([sys.executable, '-c', code, str(root), str(index), str(count),
+            str(resource_interval_seconds), json.dumps(isolate_standard_classes)],
             cwd=ROOT, env=environment, text=True, capture_output=True, timeout=30)
         summaries = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
         terminal = [row for row in summaries if row.get('process_blocks_terminal')]
         self.assertEqual(len(terminal), 1, (result.returncode, result.stdout, result.stderr))
         return result, terminal[0]
+
+    def test_real_standard_cases_have_fresh_heap_and_complete_original_fixture_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); log = root / 'events.jsonl'
+            (root / 'test_gpu_engine_heavy.py').write_text(textwrap.dedent(f'''
+                import json, os, unittest
+                from pathlib import Path
+                retained = []
+                def emit(label):
+                    with Path({str(log)!r}).open('a') as stream:
+                        stream.write(json.dumps(dict(label=label, pid=os.getpid()))+'\\n')
+                def setUpModule():
+                    emit('module_setup')
+                    unittest.addModuleCleanup(emit, 'module_cleanup')
+                def tearDownModule():emit('module_teardown')
+                class Case(unittest.TestCase):
+                    @classmethod
+                    def setUpClass(cls):
+                        cls.prepared = object()
+                        emit('class_setup')
+                        cls.addClassCleanup(emit, 'class_cleanup')
+                    @classmethod
+                    def tearDownClass(cls):emit('class_teardown')
+                    def setUp(self):
+                        self.assertIsNotNone(self.prepared)
+                        emit('case_setup')
+                        self.addCleanup(emit, 'case_cleanup')
+                    def tearDown(self):emit('case_teardown')
+                    def test_a(self):
+                        self.assertEqual(retained, [])
+                        retained.append(bytearray(1024 * 1024))
+                        emit('a')
+                    def test_b(self):
+                        self.assertEqual(retained, [])
+                        emit('b')
+            '''))
+            result, terminal = self.isolated(root, resource_interval_seconds=0.02,
+                isolate_standard_classes=['test_gpu_engine_heavy.Case'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(terminal['passed'])
+            self.assertEqual(terminal['selected_blocks'], [0])
+            self.assertEqual(terminal['expected_test_cases'], 2)
+            self.assertEqual(terminal['tests_run'], 2)
+            self.assertEqual([row['case_index'] for row in terminal['blocks']], [0, 1])
+            self.assertTrue(all(row['valid_terminal_receipt'] for row in terminal['blocks']))
+            events = [json.loads(line) for line in log.read_text().splitlines()]
+            pids = list(dict.fromkeys(row['pid'] for row in events))
+            self.assertEqual(len(pids), 2)
+            for pid, body in zip(pids, ('a', 'b')):
+                self.assertEqual([row['label'] for row in events if row['pid'] == pid],
+                    ['module_setup', 'class_setup', 'case_setup', body, 'case_teardown',
+                     'case_cleanup', 'class_teardown', 'class_cleanup', 'module_teardown', 'module_cleanup'])
+
+    def test_explicit_case_policy_keeps_custom_suites_and_package_load_tests_intact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); log = self.fixture(root)
+            result, terminal = self.isolated(root, isolate_standard_classes=[
+                'test_gpu_engine_alpha.Case', 'zz_shard_package.Case',
+                'zz_shard_package.test_gpu_engine_nested.Case'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(terminal['tests_run'], 5)
+            self.assertEqual([row['case_index'] for row in terminal['blocks']], [None] * 3)
+            events = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([row['label'] for row in events],
+                ['custom_reverse', 'alpha_b', 'alpha_a', 'beta', 'custom_package', 'package', 'nested'])
+            self.assertEqual(len({row['pid'] for row in events}), 3)
+            self.assertIn('custom_or_mixed_suite', result.stdout)
+
+    def test_plain_load_tests_and_custom_case_run_keep_shared_fixture_state(self):
+        for kind in ('module_load_tests', 'package_load_tests', 'custom_case_run'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                body = textwrap.dedent('''
+                    import unittest
+                    class Case(unittest.TestCase):
+                        @classmethod
+                        def setUpClass(cls):cls.counter = 0
+                        def test_a(self):
+                            type(self).counter += 1
+                            self.assertEqual(self.counter, 1)
+                        def test_b(self):
+                            type(self).counter += 1
+                            self.assertEqual(self.counter, 2)
+                ''')
+                if kind == 'custom_case_run':
+                    body += '    def run(self, result):return super().run(result)\n'
+                if kind == 'module_load_tests':
+                    body += 'def load_tests(loader, tests, pattern):return tests\n'
+                if kind == 'package_load_tests':
+                    package = root / 'hook_package'; package.mkdir()
+                    (package / '__init__.py').write_text(
+                        'def load_tests(loader, tests, pattern):\n'
+                        ' from .test_gpu_engine_hook import Case\n'
+                        ' return loader.loadTestsFromTestCase(Case)\n')
+                    (package / 'test_gpu_engine_hook.py').write_text(body)
+                    name = 'hook_package.test_gpu_engine_hook.Case'
+                else:
+                    (root / 'test_gpu_engine_hook.py').write_text(body)
+                    name = 'test_gpu_engine_hook.Case'
+                result, terminal = self.isolated(root, isolate_standard_classes=[name])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(terminal['tests_run'], 2)
+                self.assertEqual(len(terminal['blocks']), 1)
+                self.assertIsNone(terminal['blocks'][0]['case_index'])
+                self.assertIn('custom_case_run' if kind == 'custom_case_run' else 'load_tests', result.stdout)
+
+    def test_case_policy_does_not_add_custom_suite_iteration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); log = root / 'events'
+            (root / 'test_gpu_engine_iterator.py').write_text(textwrap.dedent(f'''
+                import unittest
+                from pathlib import Path
+                def emit(label):
+                    with Path({str(log)!r}).open('a') as stream:stream.write(label+'\\n')
+                class Case(unittest.TestCase):
+                    def test_a(self):emit('body_a')
+                    def test_b(self):emit('body_b')
+                class Custom(unittest.TestSuite):
+                    def __iter__(self):
+                        emit('custom_iterator')
+                        return super().__iter__()
+                def load_tests(loader, tests, pattern):return Custom([Case('test_a'), Case('test_b')])
+            '''))
+            original, _ = self.isolated(root)
+            self.assertEqual(original.returncode, 0, original.stderr)
+            expected = log.read_text().splitlines(); log.write_text('')
+            opted_in, terminal = self.isolated(root, isolate_standard_classes=['test_gpu_engine_iterator.Case'])
+            self.assertEqual(opted_in.returncode, 0, opted_in.stderr)
+            self.assertEqual(log.read_text().splitlines(), expected)
+            self.assertEqual(terminal['tests_run'], 2)
+            self.assertIsNone(terminal['blocks'][0]['case_index'])
+
+    def test_fresh_case_failure_skip_and_abrupt_exit_cannot_hide_other_cases(self):
+        for body, expected_run in [("self.fail('control')", 2), ("self.skipTest('control')", 2),
+                ('os._exit(0)', None), ('os._exit(7)', None), ('os.kill(os.getpid(), 15)', None)]:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); done = root / 'second_case_ran'
+                (root / 'test_gpu_engine_disposition.py').write_text(
+                    'import os, unittest\nfrom pathlib import Path\nclass Case(unittest.TestCase):\n'
+                    f' def test_a(self):{body}\n def test_b(self):Path({str(done)!r}).touch()\n')
+                result, terminal = self.isolated(root,
+                    isolate_standard_classes=['test_gpu_engine_disposition.Case'])
+                self.assertEqual(result.returncode, 1)
+                self.assertFalse(terminal['passed'])
+                self.assertEqual(terminal['expected_test_cases'], 2)
+                self.assertEqual(terminal['tests_run'], expected_run)
+                self.assertEqual(len(terminal['blocks']), 2)
+                self.assertFalse(terminal['blocks'][0]['valid_terminal_receipt'])
+                self.assertTrue(terminal['blocks'][1]['valid_terminal_receipt'])
+                self.assertTrue(done.exists())
+
+    def test_child_case_policy_drift_refuses_even_when_discovered_ids_stay_equal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ran = root / 'body_ran'
+            (root / 'test_gpu_engine_policy.py').write_text(textwrap.dedent(f'''
+                import sys, unittest
+                from pathlib import Path
+                class Case(unittest.TestCase):
+                    def test_a(self):Path({str(ran)!r}).touch()
+                    def test_b(self):pass
+                if '--_child-plan' in sys.argv:
+                    Case.run = lambda self, result:unittest.TestCase.run(self, result)
+            '''))
+            result, terminal = self.isolated(root, isolate_standard_classes=['test_gpu_engine_policy.Case'])
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse(terminal['passed'])
+            self.assertIsNone(terminal['tests_run'])
+            self.assertFalse(ran.exists())
+            self.assertIn('case isolation policy differs', result.stderr)
+
+    def test_fresh_case_fixture_errors_are_terminal_failures(self):
+        for hook in ('setUpClass', 'tearDownClass', 'setUpModule', 'tearDownModule', 'class_cleanup'):
+            with self.subTest(hook=hook), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                body = ('import unittest\ndef fail():raise RuntimeError("fixture control")\n'
+                    'class Case(unittest.TestCase):\n def test_a(self):pass\n def test_b(self):pass\n')
+                if hook in ('setUpModule', 'tearDownModule'):
+                    body += f'def {hook}():fail()\n'
+                elif hook == 'class_cleanup':
+                    body += ' @classmethod\n def setUpClass(cls):cls.addClassCleanup(fail)\n'
+                else:
+                    body += f' @classmethod\n def {hook}(cls):fail()\n'
+                (root / 'test_gpu_engine_fixture.py').write_text(body)
+                result, terminal = self.isolated(root,
+                    isolate_standard_classes=['test_gpu_engine_fixture.Case'])
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertFalse(terminal['passed'])
+                self.assertEqual(terminal['expected_test_cases'], 2)
+                self.assertEqual(terminal['tests_run'], 0 if hook in ('setUpClass', 'setUpModule') else 2)
+                self.assertEqual(terminal['errors'], 2)
+                self.assertEqual(len(terminal['blocks']), 2)
+                self.assertTrue(all(not row['valid_terminal_receipt'] for row in terminal['blocks']))
+
+    def test_fresh_case_receipt_requires_exact_authorized_case_and_original_block(self):
+        cases = [dict(kind='case', type='fixture.Case', count=1, id='fixture.Case.test_' + suffix)
+            for suffix in ('a', 'b')]
+        block = dict(kind='suite', type='unittest.suite.TestSuite', count=2, children=cases)
+        plan = dict(manifest=[block], execution_units=[dict(block_index=0, case_index=i) for i in range(2)])
+        receipt = dict(schema='component-block-terminal.v1', plan_sha256=_digest(plan), block_index=0,
+            case_index=0, block_manifest=block, declared_count=1, tests_run=1, observed_ids=[cases[0]['id']],
+            failures=0, errors=0, skipped=0, expected_failures=0, unexpected_successes=0, successful=True)
+        self.assertTrue(_valid_receipt(receipt, plan, 0, 0))
+        for key, value in [('case_index', None), ('case_index', False), ('case_index', 1),
+                ('observed_ids', [cases[1]['id']]), ('observed_ids', [cases[0]['id']] * 2),
+                ('block_manifest', cases[0]), ('declared_count', 2), ('tests_run', 2)]:
+            with self.subTest(key=key, value=value):
+                self.assertFalse(_valid_receipt(dict(receipt, **{key:value}), plan, 0, 0))
+        for index in (-1, True, 2):
+            with self.subTest(index=index):
+                self.assertFalse(_valid_receipt(receipt, plan, 0, index))
+        unauthorized = dict(plan, execution_units=[])
+        self.assertFalse(_valid_receipt(dict(receipt, plan_sha256=_digest(unauthorized)), unauthorized, 0, 0))
+
+    def test_real_heavy_class_source_keeps_all_six_case_objects_and_nested_manifests(self):
+        name = 'test_gpu_engine_execution_runtime_plumbing'
+        path = ROOT / 'tests' / (name + '.py')
+        tree = ast.parse(path.read_text())
+        case = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+            and node.name == 'ExecutionRuntimePlumbingTests')
+        module = types.ModuleType(name); module.unittest = unittest
+        # Method bodies remain unexecuted: no JAX/source fixture imports or setup.
+        with mock.patch.dict(sys.modules, {name: module}):
+            exec(compile(ast.Module(body=[case], type_ignores=[]), str(path), 'exec'), module.__dict__)
+            suite = unittest.TestSuite([unittest.TestLoader().loadTestsFromTestCase(module.ExecutionRuntimePlumbingTests)])
+            original = list(next(iter(suite)))
+            units, decisions = _isolation_units([suite], [0], [name + '.ExecutionRuntimePlumbingTests'])
+            self.assertEqual(len(units), 6)
+            self.assertTrue(decisions[0]['case_isolation'])
+            self.assertEqual([row['case_index'] for row in units], list(range(6)))
+            ids = []
+            for offset in range(6):
+                selected = _one_case_suite(suite, offset)
+                self.assertIs(next(iter(next(iter(selected)))), original[offset])
+                ids.append(_manifest(selected)['children'][0]['children'][0]['id'])
+            self.assertEqual(ids, [unittest.TestCase.id(case) for case in original])
+            self.assertEqual(_manifest(suite)['count'], 6)
 
     def test_resource_samples_preserve_real_success_skip_and_crash_dispositions(self):
         for body, expected, child_exit in [('pass', 0, 0), ("self.skipTest('control')", 1, 1),

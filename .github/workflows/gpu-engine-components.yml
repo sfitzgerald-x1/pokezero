@@ -75,9 +75,11 @@ jobs:
         run: |
           set -o pipefail
           python -c 'import jax; print("Component test devices:", jax.devices())'
-          # Release each discovery block's compiled runtime resources before
-          # the next block; keep its original suite and every discovered case.
+          # Keep original custom suites intact. This one heavy plain class has
+          # independent cases: release its process heap before the next case,
+          # including fresh original module/class fixtures for every case.
           python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 16 --process-blocks \
+            --isolate-standard-class test_gpu_engine_execution_runtime_plumbing.ExecutionRuntimePlumbingTests \
             --resource-interval-seconds 30 2>&1 \
             | tee /tmp/gpu-components.log
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
