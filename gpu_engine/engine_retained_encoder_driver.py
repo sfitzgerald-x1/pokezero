@@ -274,7 +274,12 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
     callbacks = callbacks._replace(cursor=cursor)
     if execution_tables is not None:
         ledger=execution.commit_rows(source_ready,tape.execution.ledger,result.callbacks.execution.ledger)
-        context=tape.execution._replace(ledger=ledger,diagnostics=_rows(source_ready,
+        # This immutable context is minted by the SAME secondary setter call.
+        # Retain it until both FULL owners validate its claimed RAW9+36 span;
+        # rebuilding solely from the pre-call context loses that source edge.
+        context=tape.execution._replace(ledger=ledger,
+            secondary_status=result.callbacks.execution.secondary_status,
+            diagnostics=_rows(source_ready,
             tape.execution.diagnostics,result.callbacks.execution.diagnostics))
         if kernel_risk_tables is not None:
             after=result.callbacks.execution.risks
