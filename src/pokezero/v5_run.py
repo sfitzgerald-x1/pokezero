@@ -133,6 +133,8 @@ class EvaluationCompletion:
     source_result_sha256:str
     learner_username:str
     opponent_username:str
+    protocol_path:str|None=None
+    foulplay_seed:int|None=None
 
 
 def _checked_evaluation_completion(receipt):
@@ -152,6 +154,45 @@ def _checked_evaluation_completion(receipt):
     config=SimpleNamespace(pokezero_player=receipt.seat,pokezero_username=receipt.learner_username,
         foulplay_username=receipt.opponent_username)
     if _score(config,game) is None:raise ValueError('unknown/capped FP game cannot advance completion watchdog')
+    return receipt
+
+
+def _checked_completion_protocol(receipt,binding):
+    """Join the literal terminal to its actual declared paired cell, not a tag."""
+    if type(receipt.protocol_path) is not str or not Path(receipt.protocol_path).is_absolute():
+        raise ValueError('original evaluation protocol artifact required for completion')
+    blob=Path(receipt.protocol_path).read_bytes()
+    if hashlib.sha256(blob).hexdigest()!=binding['protocol_sha256']:
+        raise ValueError('completed cell protocol digest differs')
+    protocol=json.loads(blob)
+    if (type(protocol) is not dict or protocol.get('schema')!='pokezero.v5.milestone_evaluation.v1'
+            or protocol.get('model_sha256')!=binding['snapshot']['model_sha256']):
+        raise ValueError('completed cell snapshot model differs')
+    matches=[p for p in protocol['panels'] if p['declared_games']==binding['declared_games']]
+    if len(matches)!=1:raise ValueError('original exact milestone cell declaration required')
+    panel=matches[0]
+    if len(panel['seeds'])!=500 or len(panel['configs'])!=2:raise ValueError('complete original paired cell roster required')
+    config=panel['configs'][receipt.seat=='p2']
+    from .foulplay_bridge import _per_seed_foulplay_random_seed_schedule_for_offsets
+    from types import SimpleNamespace
+    fp_seed=_per_seed_foulplay_random_seed_schedule_for_offsets(SimpleNamespace(
+        foulplay_random_seed=config['foulplay_random_seed'],seed_start=config['seed_start']),offsets=(receipt.offset,))[0]
+    if (panel['seeds'][receipt.offset]!=receipt.seed
+            or type(receipt.foulplay_seed) is not int or receipt.foulplay_seed!=fp_seed
+            or config['pokezero_player']!=receipt.seat or config['seed_start']+receipt.offset!=receipt.seed
+            or config['pokezero_username']!=receipt.learner_username or config['foulplay_username']!=receipt.opponent_username):
+        raise ValueError('completed source seed/seat/cell differs from declared protocol')
+
+
+def _checked_evaluation_progress(payload,expected,seen):
+    if (set(payload)!=set(expected)|{'completion','status','duration_seconds'}
+            or any(payload[k]!=v for k,v in expected.items())):
+        raise ValueError('original open evaluation progress binding required')
+    receipt=_checked_evaluation_completion(EvaluationCompletion(**payload['completion']))
+    _checked_completion_protocol(receipt,expected)
+    if receipt.cell_ordinal in seen or payload['status']!='COMPLETE' or payload['duration_seconds']!=receipt.duration_seconds:
+        raise ValueError('replayed/mismatched evaluation completion')
+    seen.add(receipt.cell_ordinal)
     return receipt
 
 
@@ -401,6 +442,28 @@ def _evaluation_request(store,snapshot):
         snapshot,store.path.resolve(),checkpoint,archive)
 
 
+def _checked_evaluation_start(store,event):
+    payload=event['payload'];iteration=payload.get('iteration');sequence=event['sequence']
+    if store.plan.evaluation is None:raise ValueError('evaluation progress requires opted-in original plan')
+    prior=[e for e in store.events if e['sequence']<sequence]
+    snapshots=[e['payload'] for e in prior if e['kind']=='SNAPSHOT' and e['payload'].get('iteration')==iteration]
+    if len(snapshots)!=1:raise ValueError('original prior milestone snapshot required')
+    snapshot=Snapshot(**snapshots[0]);binding=_evaluation_binding(store,snapshot)
+    expected=dict(**binding,evaluation_sha256=_sha(binding))
+    if payload!=expected:raise ValueError('original evaluation start binding differs')
+    checkpoints=[e for e in prior if e['kind']=='CHECKPOINT' and e['payload'].get('iteration')==iteration
+        and e['payload'].get('path')==snapshot.checkpoint and e['payload'].get('sha256')==snapshot.checkpoint_sha256]
+    if len(checkpoints)!=1:raise ValueError('evaluation snapshot requires original prior checkpoint')
+    if store.matching('RUN_STARTED')!=[dict(declaration_sha256=binding['declaration_sha256'])]:
+        raise ValueError('original accepted evaluation run declaration required')
+    milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
+    for earlier in (i for i in milestones if i<iteration):
+        if not any(e['kind'] in ('EVALUATION_RESULT','EVALUATION_UNKNOWN') and e['payload'].get('iteration')==earlier for e in prior):
+            raise ValueError('evaluation milestone order differs')
+    _evaluation_request(store,snapshot)
+    return expected
+
+
 def _evaluation_history(store):
     """Verify attempted panels, then conservatively close interrupted starts."""
     declaration_sha256=_sha(json.loads((store.path/'declaration.json').read_bytes()))
@@ -428,15 +491,11 @@ def _evaluation_history(store):
         key=expected['evaluation_sha256']
         if event['kind']=='EVALUATION_STARTED':
             if key in starts or set(payload)!=set(expected):raise ValueError('evaluation attempt replay/extra fields')
-            _evaluation_request(store,snapshot);starts[key]=expected
+            starts[key]=_checked_evaluation_start(store,event)
         elif event['kind']=='EVALUATION_GAME_END':
-            if key not in starts or key in closed or set(payload)!=set(expected)|{'completion','status','duration_seconds'}:
+            if key not in starts or key in closed:
                 raise ValueError('evaluation completion requires open original attempt')
-            receipt=_checked_evaluation_completion(EvaluationCompletion(**payload['completion']))
-            seen=completed.setdefault(key,set())
-            if receipt.cell_ordinal in seen or payload['status']!='COMPLETE' or payload['duration_seconds']!=receipt.duration_seconds:
-                raise ValueError('replayed/mismatched evaluation completion')
-            seen.add(receipt.cell_ordinal)
+            _checked_evaluation_progress(payload,starts[key],completed.setdefault(key,set()))
         else:
             if key not in starts or key in closed or set(payload)!=set(expected)|{'outcome'}:
                 raise ValueError('evaluation result requires one durable original attempt')
@@ -461,6 +520,7 @@ def _evaluate_snapshot(store,snapshot,hook):
     completed=set()
     def actual_completion(receipt):
         _checked_evaluation_completion(receipt)
+        _checked_completion_protocol(receipt,bound)
         if receipt.cell_ordinal in completed:raise ValueError('completed evaluation cell replayed')
         store.emit('EVALUATION_GAME_END',**bound,status='COMPLETE',duration_seconds=receipt.duration_seconds,
             completion=asdict(receipt))
@@ -625,6 +685,10 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
     Observation errors and interruption clean only this new process session.
     """
     started=time.monotonic();last=started;longest=0.;seen=0;previous=None;phase='PREPARE';last_steps=-1
+    evaluation_store=Store.__new__(Store);evaluation_store.path=Path(path);evaluation_store.plan=plan;evaluation_store.events=[]
+    evaluation_starts={};evaluation_closed=set();evaluation_cells={}
+    milestones=(evaluation_milestones(sum(len(b.games) for b in batches) for batches in plan.iterations)
+        if plan.evaluation is not None else {})
     process=popen(command,start_new_session=True)
     reason=None;observer_error=None
     try:
@@ -637,7 +701,35 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
                     if event.get('sequence')!=seen or event.get('previous')!=previous or _sha(event)!=digest:
                         reason='PROGRESS_JOURNAL_CHANGED';break
                     previous=digest;seen+=1;payload=event['payload']
-                    if event['kind'] in ('GAME_END','EVALUATION_GAME_END') and payload['status']=='COMPLETE':
+                    if type(payload) is not dict:raise ValueError('original journal payload required')
+                    kind=event['kind']
+                    if kind in ('RUN_STARTED','CHECKPOINT','SNAPSHOT','EVALUATION_STARTED','EVALUATION_GAME_END',
+                            'EVALUATION_RESULT','EVALUATION_UNKNOWN','ITERATION_COMPLETE'):
+                        evaluation_store.events.append(event)
+                    if kind=='EVALUATION_STARTED':
+                        key=payload.get('evaluation_sha256')
+                        if key in evaluation_starts:raise ValueError('evaluation start replayed')
+                        evaluation_starts[key]=_checked_evaluation_start(evaluation_store,event)
+                    elif kind=='EVALUATION_GAME_END':
+                        key=payload.get('evaluation_sha256')
+                        if key not in evaluation_starts or key in evaluation_closed:
+                            raise ValueError('evaluation progress requires an open original milestone')
+                        receipt=_checked_evaluation_progress(payload,evaluation_starts[key],evaluation_cells.setdefault(key,set()))
+                        longest=max(longest,receipt.duration_seconds);last=time.monotonic()
+                    elif kind in ('EVALUATION_RESULT','EVALUATION_UNKNOWN'):
+                        key=payload.get('evaluation_sha256');expected=evaluation_starts.get(key)
+                        if (expected is None or key in evaluation_closed or set(payload)!=set(expected)|{'outcome'}
+                                or any(payload[k]!=v for k,v in expected.items())):
+                            raise ValueError('evaluation disposition requires one original open milestone')
+                        outcome=EvaluationOutcome(**payload['outcome'])
+                        if kind!='EVALUATION_'+outcome.status:raise ValueError('evaluation disposition changed')
+                        if outcome.report is not None:evaluation_store.resolve(outcome.report,outcome.report_sha256)
+                        evaluation_closed.add(key)
+                    elif kind=='ITERATION_COMPLETE' and payload.get('iteration') in milestones:
+                        if not any(key in evaluation_closed and binding['iteration']==payload['iteration']
+                                for key,binding in evaluation_starts.items()):
+                            raise ValueError('milestone iteration completed without original evaluation disposition')
+                    if kind=='GAME_END' and payload['status']=='COMPLETE':
                         longest=max(longest,payload['duration_seconds']);last=time.monotonic()
                     elif event['kind']=='TRAIN_PROGRESS' and payload['steps']>last_steps:
                         phase='TRAIN';last_steps=payload['steps'];last=time.monotonic()

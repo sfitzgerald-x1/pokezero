@@ -42,6 +42,14 @@ def row(index,category,*,complete=True):
 
 
 class EvaluationTests(unittest.TestCase):
+    def setUp(self):
+        # Explicit UNIT harness only. No such resolver is present in production.
+        unit=NS(require_original_capture=lambda p:None,
+            resolve_original_capture=lambda p,r:e._mechanism_data(p),
+            evaluate_original_capture=lambda p,f,d:e._mechanism_arithmetic(p,f,d))
+        self.capture_patch=patch.object(e,'_capture_resolver',return_value=unit)
+        self.capture_patch.start();self.addCleanup(self.capture_patch.stop)
+
     def fixture(self,root):
         root=root.resolve()
         for name in ('show','fp'): (root/name).mkdir()
@@ -103,6 +111,14 @@ class EvaluationTests(unittest.TestCase):
                     if change=='seats':changed['panels'][0]['configs'][1]['pokezero_player']='p1'
                     bound=e.Artifact(**artifact(root/(change+'-bad.json'),changed))
                     with self.subTest(change=change),self.assertRaises(ValueError):e.EvaluationHook(bound,request.declaration_sha256)
+                launch.assert_not_called()
+
+    def test_missing_actual_capture_integration_refuses_even_complete_numeric_fixtures(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ref,protocol,_,request=self.fixture(Path(temp))
+            with patch.object(e,'_capture_resolver',side_effect=r.MissingDependency('genuine capture not integrated')),patch.object(fp,'supervise_panel') as launch:
+                with self.assertRaises(r.MissingDependency):e.EvaluationHook(ref,request.declaration_sha256)
+                with self.assertRaises(r.MissingDependency):e.mechanism(protocol,object(),e._mechanism_data(protocol))
                 launch.assert_not_called()
 
     def test_genuine_data_contract_rejects_adjacent_context_missing_siblings_and_private_rows(self):
@@ -264,9 +280,13 @@ class EvaluationTests(unittest.TestCase):
     def test_original_run_journals_only_valid_completed_receipts_once_and_resume_validates(self):
         import test_v5_milestone_evaluation as milestone
         harness=milestone.MilestoneEvaluationTests();config=NS(pokezero_username='Unit',foulplay_username='Peer',pokezero_player='p1')
-        source=game(config,101);receipt=r.EvaluationCompletion(0,0,101,'p1',3.,r._json(source),r._sha(source),'Unit','Peer')
         with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory() as temp:
-            path=Path(temp)/'run';recipe=harness.recipe()
+            path=Path(temp)/'run';base=run_fixture.plan()
+            protocol=dict(schema=e.SCHEMA,model_sha256=r._sha(base.model.metadata()),panels=[dict(declared_games=count,
+                seeds=list(range(101,601)),configs=[dict(seed_start=101,foulplay_random_seed=1000,pokezero_player=seat,pokezero_username='Unit',foulplay_username='Peer')
+                    for seat in ('p1','p2')]) for count in (2,4)])
+            ref=artifact(Path(temp)/'unit-progress-protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256']))
+            source=game(config,101);receipt=r.EvaluationCompletion(0,0,101,'p1',3.,r._json(source),r._sha(source),'Unit','Peer',ref['path'],1000)
             def hook(request):
                 request.progress_callback(receipt)
                 with self.assertRaisesRegex(ValueError,'replayed'):request.progress_callback(receipt)
@@ -279,6 +299,18 @@ class EvaluationTests(unittest.TestCase):
             store=r.Store(path,recipe,resume=True);events=store.matching('EVALUATION_GAME_END')
             self.assertEqual(len(events),2);self.assertTrue(all(x['status']=='COMPLETE' for x in events))
             self.assertTrue(all('progress_callback' not in x for x in events));r._evaluation_history(store)
+            expected={k:v for k,v in events[0].items() if k not in ('completion','status','duration_seconds')}
+            for change in ('seed','fp-seed','protocol','snapshot'):
+                payload=json.loads(r._json(events[0]));value=r.EvaluationCompletion(**payload['completion'])
+                if change=='seed':
+                    wrong=json.loads(value.source_game_json);wrong['seed']=102
+                    value=replace(value,seed=102,source_game_json=r._json(wrong),source_result_sha256=r._sha(wrong))
+                if change=='fp-seed':value=replace(value,foulplay_seed=999)
+                if change=='protocol':value=replace(value,protocol_path=str(Path(temp)/'missing-protocol.json'))
+                if change=='snapshot':payload['snapshot']['model_sha256']='f'*64
+                payload['completion']=asdict(value)
+                with self.subTest(change=change),self.assertRaises((ValueError,OSError)):
+                    r._checked_evaluation_progress(payload,expected,set())
             # A duplicate even on a valid rehashed journal cannot become new progress.
             original=next(event for event in store.events if event['kind']=='EVALUATION_GAME_END')
             store.emit('EVALUATION_GAME_END',**original['payload'])
@@ -287,7 +319,20 @@ class EvaluationTests(unittest.TestCase):
     def test_outer_supervisor_advances_only_on_actual_complete_evaluation_event(self):
         for status in ('COMPLETE','REFUSED'):
             with self.subTest(status=status),tempfile.TemporaryDirectory() as temp:
-                root=Path(temp);recipe=run_fixture.plan();store=r.Store(root,recipe);clock=[0.];published=False
+                root=Path(temp);base=run_fixture.plan()
+                protocol=dict(schema=e.SCHEMA,model_sha256=r._sha(base.model.metadata()),panels=[dict(declared_games=2,
+                    seeds=list(range(101,601)),configs=[dict(seed_start=101,foulplay_random_seed=1000,pokezero_player=seat,pokezero_username='Unit',foulplay_username='Peer')
+                        for seat in ('p1','p2')])])
+                ref=artifact(root/'unit-progress-protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256']))
+                store=r.Store(root/'run',recipe);clock=[0.];published=False
+                cp=store.artifact('checkpoint.pt',b'unit-only-checkpoint',kind='CHECKPOINT',iteration=0,steps=3,rows=12)
+                arc=store.artifact('archive.npz',b'unit-only-archive',kind='UNIT_ARCHIVE')
+                snapshot=r.Snapshot(0,cp['path'],cp['sha256'],arc['path'],arc['sha256'],r._sha(recipe.model.metadata()))
+                store.emit('SNAPSHOT',**asdict(snapshot))
+                with patch.object(r,'EVALUATION_INTERVAL_GAMES',2):binding=r._evaluation_binding(store,snapshot)
+                expected=dict(binding,evaluation_sha256=r._sha(binding));store.emit('EVALUATION_STARTED',**expected)
+                cfg=NS(pokezero_username='Unit',foulplay_username='Peer',pokezero_player='p1');source=game(cfg,101)
+                receipt=r.EvaluationCompletion(0,0,101,'p1',3.,r._json(source),r._sha(source),'Unit','Peer',ref['path'],1000)
                 class Child:
                     pid=17901;returncode=None
                     def poll(self):
@@ -298,13 +343,13 @@ class EvaluationTests(unittest.TestCase):
                     nonlocal published
                     clock[0]+=seconds
                     if not published and clock[0]>=2:
-                        store.emit('EVALUATION_GAME_END',status=status,duration_seconds=3.);published=True
+                        store.emit('EVALUATION_GAME_END',**expected,status=status,duration_seconds=3.,completion=asdict(receipt));published=True
                 def stop(process,*args,**kwargs):
                     if process.returncode is None:process.returncode=-15
-                with patch.object(r.time,'monotonic',side_effect=lambda:clock[0]),patch.object(r,'_stop_owned_group',side_effect=stop):
-                    report=r.supervise_owned(['fake-never-spawned'],plan=recipe,path=root,popen=lambda *a,**k:child,sleep=sleep)
+                with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),patch.object(r.time,'monotonic',side_effect=lambda:clock[0]),patch.object(r,'_stop_owned_group',side_effect=stop):
+                    report=r.supervise_owned(['fake-never-spawned'],plan=recipe,path=store.path,popen=lambda *a,**k:child,sleep=sleep)
                 if status=='COMPLETE':self.assertEqual((report['exit_code'],report['stop_reason']),(0,None))
-                else:self.assertEqual(report['stop_reason'],'NO_DURABLE_WORK_PROGRESS')
+                else:self.assertIn(report['stop_reason'],('PROGRESS_JOURNAL_CHANGED','NO_DURABLE_WORK_PROGRESS'))
 
     def test_affinity_covers_preexisting_native_threads_with_no_real_placement(self):
         masks={11:{0,1,2},12:{0,1,2}};changes=[]

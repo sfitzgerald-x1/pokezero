@@ -9,6 +9,7 @@ import argparse
 import asyncio
 from dataclasses import asdict,dataclass,fields,replace
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -173,7 +174,7 @@ def _identity(row):return (row.battle_id,row.seed,row.observation.address.stream
 
 
 def _mechanism_data(protocol):
-    """Validate actual captures without a model, simulator or adjacent-state guess."""
+    """Unit record-structure parser, not attestation of actual capture origin."""
     positions={};known=0
     for header,document in _records(Artifact(**protocol['positions']),POSITIONS):
         row=_position(document,header);key=_identity(row)
@@ -231,8 +232,8 @@ def _columns(rows,config):
     return value
 
 
-def mechanism(protocol,factory,data):
-    """Same frozen public head, actual outcomes only; no fitting or target reuse."""
+def _mechanism_arithmetic(protocol,factory,data):
+    """Unit arithmetic only. Production requires the original capture resolver."""
     import numpy as np
     from gpu_engine import v5_model
     from gpu_engine.v5_live_protocol import check_factory
@@ -265,6 +266,28 @@ def mechanism(protocol,factory,data):
         actual_ranking_accuracy='UNMEASURED_NO_MATCHED_TERMINAL_CONTINUATIONS',fitted_models=0)
 
 
+def _capture_resolver():
+    """Fixed original producer integration; never a caller readiness boolean.
+
+    That producer/resolver is not implemented in this revision. A complete
+    numeric fixture or hexadecimal receipt tag cannot replace it.
+    """
+    name=__package__+'.v5_evaluation_capture'
+    try:module=importlib.import_module(name)
+    except ModuleNotFoundError as error:
+        if error.name!=name:raise
+        raise run.MissingDependency('genuine original heldout/sibling capture resolver is not integrated') from error
+    if any(not callable(getattr(module,name,None)) for name in
+            ('require_original_capture','resolve_original_capture','evaluate_original_capture')):
+        raise run.MissingDependency('complete original capture producer/resolver API required')
+    return module
+
+
+def mechanism(protocol,factory,data):
+    """Production entry cannot turn hand-authored record metadata into claims."""
+    return _capture_resolver().evaluate_original_capture(protocol,factory,data)
+
+
 def _atomic(path,value):
     path=Path(path);temporary=path.with_name('.'+path.name+'.pending')
     with temporary.open('w') as stream:
@@ -280,7 +303,7 @@ def _fixed_rows(configs):
         source_game=None,reason=None,invocation_id=None) for i in range(500) for side in range(2)]
 
 
-def _completed_receipts(rows,expected,configs):
+def _completed_receipts(rows,expected,configs,*,protocol_path=None):
     from . import v5_foulplay as fp
     if type(rows) is not list or len(rows)!=1000:raise ValueError('full original1000cell denominator required')
     ended=False;completed=[]
@@ -296,7 +319,7 @@ def _completed_receipts(rows,expected,configs):
             continue
         config=configs[row['cell_ordinal']%2]
         receipt=run.EvaluationCompletion(row['cell_ordinal'],row['offset'],row['seed'],row['seat'],row['duration_seconds'],
-            run._json(row['source_game']),row['source_result_sha256'],config.pokezero_username,config.foulplay_username)
+            run._json(row['source_game']),row['source_result_sha256'],config.pokezero_username,config.foulplay_username,protocol_path,row['fp_seed'])
         run._checked_evaluation_completion(receipt)
         if row['score']!=fp._score(config,row['source_game']):raise ValueError('actual source terminal score differs')
         completed.append(receipt)
@@ -428,11 +451,13 @@ class EvaluationHook:
 
     def __post_init__(self):
         if type(self.protocol) is not Artifact:raise ValueError('original digest-bound protocol artifact required')
-        run.c._binding(self.expected_run_declaration_sha256);_protocol(self.protocol)
+        run.c._binding(self.expected_run_declaration_sha256);protocol,_=_protocol(self.protocol)
+        _capture_resolver().require_original_capture(protocol)
 
     def __call__(self,request):
         from . import v5_foulplay as fp
         protocol,panels=_protocol(self.protocol,parse_configs=True,checkpoint=request.checkpoint_path);_check_request(request,protocol,self.protocol,self.expected_run_declaration_sha256)
+        _capture_resolver().require_original_capture(protocol)
         if request.declared_games not in panels:raise run.MissingDependency('exact declared milestone panel missing')
         if not callable(request.progress_callback):raise run.MissingDependency('original durable run completion sink required before panel')
         directory=request.run_directory/'artifacts'/('evaluation-'+str(request.declared_games)+'-'+uuid.uuid4().hex)
@@ -445,7 +470,10 @@ class EvaluationHook:
             if not progress.is_file():return
             document=json.loads(progress.read_bytes())
             if document['namespace']!=namespace or len(document['rows'])!=1000:raise ValueError('original full panel progress binding differs')
-            for receipt in _completed_receipts(document['rows'],expected,configs):
+            current={receipt.cell_ordinal:receipt for receipt in _completed_receipts(document['rows'],expected,configs,protocol_path=self.protocol.path)}
+            if any(current.get(index)!=receipt for index,receipt in seen.items()):
+                raise ValueError('completed panel source disappeared or mutated')
+            for receipt in current.values():
                 if receipt.cell_ordinal in seen:
                     if seen[receipt.cell_ordinal]!=receipt:raise ValueError('completed panel source mutated')
                 else:
@@ -470,7 +498,9 @@ class EvaluationHook:
         if value['status']=='RESULT' and (not progress.is_file() or value['rows']!=json.loads(progress.read_bytes())['rows']):
             raise ValueError('final actual cell evidence differs from original progress')
         _check_request(request,protocol,self.protocol,self.expected_run_declaration_sha256)
-        _completed_receipts(value['rows'],expected,configs)
+        final={receipt.cell_ordinal:receipt for receipt in _completed_receipts(value['rows'],expected,configs,protocol_path=self.protocol.path)}
+        if any(final.get(index)!=receipt for index,receipt in seen.items()):
+            raise ValueError('completed source disappeared or mutated in final report')
         scores=[row['score'] for row in value['rows'] if row['status']=='COMPLETE'];unknown=1000-len(scores)
         value=dict(value,known_completed=len(scores),unknown_cells=unknown,
             completed_only_score=sum(scores)/len(scores) if scores else None,
@@ -511,7 +541,7 @@ def child(reference):
                 raise ValueError('original declared FoulPlay source differs')
             if subprocess.check_output(['git','-C',str(config.foulplay_root),'status','--porcelain','--untracked-files=no'],text=True).strip():
                 raise ValueError('original clean FoulPlay source required')
-        captured=_mechanism_data(protocol);factory=_factory(protocol,request)
+        captured=_capture_resolver().resolve_original_capture(protocol,request);factory=_factory(protocol,request)
         mechanisms=mechanism(protocol,factory,captured)
         progress=asyncio.run(_concurrent_panel(configs,factory,protocol,directory/'progress.json',namespace))
         rows=progress['rows'];known=[r['score'] for r in rows if r['status']=='COMPLETE'];unknown=1000-len(known)
