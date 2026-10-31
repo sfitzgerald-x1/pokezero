@@ -78,6 +78,7 @@ class SourceRequest(NamedTuple):
     disabled: object
     trapped: object
     engine_legal: object
+    encore_slot: object = None
 
 
 class Tables(NamedTuple):
@@ -364,8 +365,15 @@ def _device(selected, owned, facts, ledger, source, constructor, tables, action_
     ok &= jnp.all(constructor.moves[rows, active] == selected.moves, axis=-1)
     ok &= jnp.all(source.binding == tables.binding, axis=-1)
     ok &= (source.request_id >= -1) & (moving | forced | waiting)
-    ok &= ~moving | ((selected.charge_move == 0) & (selected.encore_move == 0)
-        & (selected.encore_counter == 0))
+    encore_ok=jnp.zeros(b,jnp.bool_)
+    if source.encore_slot is not None:
+        _shape(source.encore_slot,(b,),jnp.int32,'source Encore exact slot')
+        exact_slot=jnp.clip(source.encore_slot,0,3)
+        encore_ok=(source.encore_slot>=0)&(source.encore_slot<4)&(selected.encore_counter>0)&(selected.encore_move>0)
+        encore_ok &= (selected.moves[rows,exact_slot]==selected.encore_move)&(selected.pp[rows,exact_slot]>0)
+        encore_ok &= jnp.all(source.disabled | (jnp.arange(4)[None,:]==source.encore_slot[:,None]) | ~physical_present,axis=1)
+    ok &= ~moving | ((selected.charge_move == 0) & (((selected.encore_move == 0)
+        & (selected.encore_counter == 0)) | (ordinary&encore_ok)))
     ok &= ~ordinary | jnp.any(present & ~source.disabled,axis=-1)
     # STRUGGLE is an explicitly source-produced synthetic row. Its proof uses
     # the precompression source disabled mask, never the server legality mask.

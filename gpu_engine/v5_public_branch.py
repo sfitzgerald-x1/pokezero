@@ -212,9 +212,15 @@ def _requests_after_frame(runtime,frame,before,publics,orders,admitted):
             categories=runtime['public'].device.causal.color_categories,
             type_tables=runtime['catalog'].types.device,healthy=before.admitted)
             for owner,public in enumerate(publics))
+    current_encore=(None,None)
+    if context is not None and context.data.encore is not None and runtime['direct_hit_mode']=='kernel-event':
+        from . import engine_encore_callbacks as encore_callbacks
+        current_encore=tuple(encore_callbacks.expected_request(frame.state,before.engine,public,owner=owner,
+            tape=frame.callbacks,data=context.data.encore,active_tables=runtime['catalog'].active.device,
+            rules=runtime['request']['rules'].device,healthy=before.admitted)for owner,public in enumerate(publics))
     return tuple(runtime['request_fast'](frame.state,ledger,original,constructor,unsafe,
-        frame.after_registry,admitted,types) for ledger,original,constructor,unsafe,types in
-        zip(orders,before.originals,before.constructors,before.unsafe,current_types,strict=True))
+        frame.after_registry,admitted,types,encore) for ledger,original,constructor,unsafe,types,encore in
+        zip(orders,before.originals,before.constructors,before.unsafe,current_types,current_encore,strict=True))
 
 
 @dataclass(frozen=True)
