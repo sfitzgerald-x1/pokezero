@@ -55,10 +55,10 @@ class ProviderTests(unittest.TestCase):
         cls.config=V5ModelConfig(cls.f.catalog.vocabulary.size,category,labels,arm='D',width=8,layers=1,
             attention_heads=2,expert_width=8,value_hidden=(8,8))
 
-    def setup(self,stack):
+    def setup(self,stack,*,head_value=None,all_own_levels=False):
         # Known literal own L79 versus source-sampled L80 avoids a speed tie
         # without changing either side's original IV/EV recipe or source axis.
-        f=self.f;root,start,history,static=f.fixture(own_level=79)
+        f=self.f;root,start,history,static=f.fixture(own_level=79,all_own_levels=all_own_levels)
         stack.enter_context(patch('subprocess.Popen',side_effect=AssertionError('no Native/simulator')))
         stack.enter_context(patch('pokezero.local_showdown.load_gen3_randbat_source_cached',return_value=f.source))
         stack.enter_context(patch('pokezero.local_showdown.load_showdown_dex_cached',return_value=f.catalog.dex))
@@ -67,7 +67,8 @@ class ProviderTests(unittest.TestCase):
             b=inputs['history_mask'].shape[0];peer='peer' in params
             logits=j.zeros((b,9),j.float32).at[:,1].set(-10000 if peer else 0)
             if not peer:logits=logits.at[:,0].set(100)
-            value=j.tanh(10*inputs['numeric_features'][:,0,0,turn_column])
+            value=(j.tanh(10*inputs['numeric_features'][:,0,0,turn_column])
+                if head_value is None else head_value(inputs))
             return collection.v5_model.Output(logits,value,None,inputs['history_mask'][:,0])
         stack.enter_context(patch.object(collection.v5_model,'forward',side_effect=head))
         actors=[]
@@ -96,6 +97,11 @@ class ProviderTests(unittest.TestCase):
     def test_original_two_draws_full_reply_grid_one_real_cell_all_other_refusals_retained(self):
         with ExitStack() as stack:
             provider,context,(learner,opponent),start=self.setup(stack)
+            # This authored component deliberately executes ONE scalar cell
+            # and faults every other cell. Keep that scope explicit now that
+            # the separate production batched executor is installed.
+            stack.enter_context(patch.object(p,'_grid_executor',return_value=(p._scalar_execute,
+                'SCALAR_CORRECTNESS_COMPONENT_NOT_PRODUCTION_READY')))
             original_step=p.branches.step;calls=[]
             def bounded(branch,choices,**kwargs):
                 calls.append((branch,choices))
