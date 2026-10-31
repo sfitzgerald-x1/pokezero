@@ -4,6 +4,7 @@ The Session birth/warm-up is real. Explicit component status pre-state and
 original FULL status prefixes isolate this kernel-event integration; they do
 not attest original Showdown status-hook history or physics equivalence.
 """
+import gc
 import unittest
 import jax
 import jax.numpy as j
@@ -15,6 +16,12 @@ import test_gpu_engine_status_residual_runtime as fixtures
 
 
 class StatusKernelOwnerDrainTests(unittest.TestCase):
+    def setUp(self):
+        # Release setup/previous-case compilation caches before the real
+        # constructor, warm-up, projection and owner drains run together.
+        jax.clear_caches()
+        gc.collect()
+
     construct=fixtures.StatusResidualRuntimeTests.construct
     chance=fixtures.StatusResidualRuntimeTests.chance
     same=fixtures.StatusResidualRuntimeTests.same

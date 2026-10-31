@@ -1,4 +1,5 @@
 """Component shards retain discovery blocks and fail closed."""
+import ast
 import io
 import json
 import os
@@ -17,6 +18,48 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComponentShardTests(unittest.TestCase):
+    def test_heavy_runtime_cache_boundaries_keep_class_inputs_and_failed_cases(self):
+        # Exercise the real fixture hook through unittest without importing JAX,
+        # constructing a source session, or executing the scientific test body.
+        fixtures = (
+            ('test_gpu_engine_execution_runtime_plumbing.py', 'ExecutionRuntimePlumbingTests'),
+            ('test_gpu_engine_status_residual_runtime.py', 'StatusResidualRuntimeTests'),
+            ('test_gpu_engine_status_kernel_owner_drain.py', 'StatusKernelOwnerDrainTests'),
+        )
+        for filename, name in fixtures:
+            with self.subTest(fixture=name):
+                path = ROOT / 'tests' / filename
+                source = ast.parse(path.read_text())
+                case = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == name)
+                hook = next(node for node in case.body if isinstance(node, ast.FunctionDef) and node.name == 'setUp')
+                events = []
+                namespace = {
+                    'jax': mock.Mock(clear_caches=lambda: events.append('clear')),
+                    'gc': mock.Mock(collect=lambda: events.append('collect')),
+                }
+                exec(compile(ast.Module(body=[hook], type_ignores=[]), str(path), 'exec'), namespace)
+                shared_input = object()
+                class Synthetic(unittest.TestCase):
+                    setUp = namespace['setUp']
+                    @classmethod
+                    def setUpClass(cls):
+                        events.append('class_setup')
+                        cls.prepared = shared_input
+                    def test_first(self):
+                        self.assertIs(self.prepared, shared_input)
+                        events.append('first')
+                        self.fail('intentional control')
+                    def test_second(self):
+                        self.assertIs(self.prepared, shared_input)
+                        events.append('second')
+                result = unittest.TestResult()
+                unittest.TestSuite([Synthetic('test_first'), Synthetic('test_second')]).run(result)
+                self.assertEqual(events, ['class_setup', 'clear', 'collect', 'first', 'clear', 'collect', 'second'])
+                self.assertEqual(result.testsRun, 2)
+                self.assertEqual(len(result.failures), 1)
+                self.assertEqual(result.errors, [])
+                self.assertEqual(result.skipped, [])
+
     def isolated(self, root, index=0, count=1):
         # Actual fresh parent AND child interpreters, no mocked process runner
         # and no real component discovery/JAX imports in these tiny fixtures.

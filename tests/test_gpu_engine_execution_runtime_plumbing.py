@@ -19,6 +19,12 @@ import test_gpu_engine_leftovers_registered_runtime as fixtures
 
 
 class ExecutionRuntimePlumbingTests(unittest.TestCase):
+    def setUp(self):
+        # Keep setup/previous-case executables out of this heavy runtime case.
+        # Prepared inputs remain shared; all within-case warm-cache checks run.
+        jax.clear_caches()
+        gc.collect()
+
     @classmethod
     def setUpClass(cls):
         fixtures.RegisteredLeftoversRuntimeTests.setUpClass();cls.f=fixtures.RegisteredLeftoversRuntimeTests.f

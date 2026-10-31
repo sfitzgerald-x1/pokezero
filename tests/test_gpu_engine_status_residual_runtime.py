@@ -1,5 +1,6 @@
 """Explicit diagnostic caller mode; no public/status-origin qualification."""
 from dataclasses import replace
+import gc
 import json
 import unittest
 from unittest.mock import patch
@@ -13,6 +14,12 @@ import test_gpu_engine_execution_runtime_plumbing as fixtures
 
 
 class StatusResidualRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        # Setup builds several prepared variants; do not retain their compiled
+        # caches or a previous case's executables into this runtime case.
+        jax.clear_caches()
+        gc.collect()
+
     construct=fixtures.ExecutionRuntimePlumbingTests.construct
     chance=fixtures.ExecutionRuntimePlumbingTests.chance
     same=fixtures.ExecutionRuntimePlumbingTests.same
