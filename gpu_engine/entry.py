@@ -46,7 +46,7 @@ def from_metadata(metadata):
         jnp.asarray(vocab["types"].index("flying")),jnp.asarray(vocab["types"].index("ground")),
         jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}),flag({"truant"}),
         flag({"trace"}),jnp.asarray([[status in cures.get(name,set()) for status in range(7)]
-            for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}),flag({"sturdy"}))
+            for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}),flag({"sturdy","naturalcure","oblivious"}))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
