@@ -1,5 +1,6 @@
 """UNIT archives and mocked original callsites only; no data or runtime calls."""
 import ast
+from contextlib import contextmanager, ExitStack
 from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
@@ -18,6 +19,17 @@ from pokezero import v5_evaluation as evaluation, v5_evaluation_capture as captu
 from gpu_engine import v5_collection_data as original
 from gpu_engine import v5_evaluation_capture as producer
 import test_v5_contract as fixture
+
+
+@contextmanager
+def mocked_modules(values):
+    """Patch both import routes when preceding tests imported real packages."""
+    with ExitStack() as stack:
+        stack.enter_context(patch.dict(sys.modules, values))
+        for fullname, value in values.items():
+            package, name = fullname.rsplit('.', 1)
+            stack.enter_context(patch.object(sys.modules[package], name, value, create=True))
+        yield
 
 
 def artifact(path,value):
@@ -203,7 +215,7 @@ class OriginalEvaluationCaptureTests(unittest.TestCase):
                 return NS(value=np.linspace(.1,.3,len(value['history_mask'])),valid=np.ones(len(value['history_mask']),bool))
             factory=NS(config=NS(category_vocabulary_sha256='b'*64,label_vocabulary=fixture.vocabulary()),forward=forward)
             fake_model=NS(prepare_inputs=lambda x,config:x)
-            with patch.dict(sys.modules,{'gpu_engine.v5_model':fake_model,'gpu_engine.v5_live_protocol':NS(check_factory=lambda f:None)}):
+            with mocked_modules({'gpu_engine.v5_model':fake_model,'gpu_engine.v5_live_protocol':NS(check_factory=lambda f:None)}):
                 result=capture.evaluate_original_capture(protocol,factory,resolved)
             self.assertEqual((result['known_outcomes'],result['unknown_outcomes'],result['sibling_groups'],result['unknown_sibling_groups']),(1,1,4,2))
             self.assertEqual(result['actual_ranking_accuracy'],'UNMEASURED_NO_MATCHED_TERMINAL_CONTINUATIONS')
@@ -245,7 +257,7 @@ class OriginalEvaluationCaptureTests(unittest.TestCase):
                     inputs=view(selected.row.observation)),step=step),
                 'gpu_engine.transition':NS(sample_chance_inputs=chance),'gpu_engine.v5_observation':NS(),
                 'gpu_engine.v5_depth1_provider':NS(_same_root=lambda *a:None)}
-            with patch.dict(sys.modules,fake_modules),patch('pokezero.v5_teacher_public_root.plan_starts',return_value=plans) as sampler:
+            with mocked_modules(fake_modules),patch('pokezero.v5_teacher_public_root.plan_starts',return_value=plans) as sampler:
                 groups=producer._siblings(recorder,selected,history,object())
             self.assertEqual(sampler.call_count,1);self.assertEqual(len(chances),2);self.assertEqual(len(calls),4)
             self.assertIs(calls[0][2],calls[1][2]);self.assertIs(calls[2][2],calls[3][2]);self.assertIsNot(calls[0][2],calls[2][2])
@@ -324,7 +336,7 @@ class OriginalEvaluationCaptureTests(unittest.TestCase):
             producer._claim(journal,dict(kind='BATCH_STARTED',batch=0,binding=run._sha(declaration),recipe=asdict(checked.batches[0])))
             fake=NS(_checked=lambda *a:None,driver=NS(latest_diagnostics=lambda s:diagnostics))
             groups=[producer._unknown(actual.row.observation.address,w,w,'unit-no-child') for w in (0,1)]
-            with patch.dict(sys.modules,{'gpu_engine.v5_collection':fake}),patch.object(producer,'_siblings',return_value=groups):
+            with mocked_modules({'gpu_engine.v5_collection':fake}),patch.object(producer,'_siblings',return_value=groups):
                 producer._before(recorder,session,pending=((0,actual),),histories={},own_statics={})
                 with self.assertRaisesRegex(ValueError,'unconsumed'):producer._before(recorder,session,pending=(),histories={},own_statics={})
                 session.result=object();core.frame_number=np.array([10])
@@ -410,7 +422,7 @@ class OriginalEvaluationCaptureTests(unittest.TestCase):
                     count=len(value['history_mask']);counts.append(count)
                     return NS(value=np.full(count,.25),valid=np.ones(count,bool))
                 factory=NS(config=NS(category_vocabulary_sha256='b'*64,label_vocabulary=fixture.vocabulary()),forward=forward)
-                with patch.dict(sys.modules,{'gpu_engine.v5_model':NS(prepare_inputs=lambda x,c:x),
+                with mocked_modules({'gpu_engine.v5_model':NS(prepare_inputs=lambda x,c:x),
                         'gpu_engine.v5_live_protocol':NS(check_factory=lambda f:None)}):
                     result=capture.evaluate_original_capture(protocol,factory,resolved)
                 self.assertEqual(counts,[1,1,2]) # One calibration, one mixed child, two ordinary children.
@@ -453,7 +465,7 @@ class OriginalEvaluationCaptureTests(unittest.TestCase):
                 'gpu_engine.v5_depth1_provider':NS(_actor=actor),
                 'pokezero.live_protocol_actor':NS(ActorContract=Contract,_vocab_sha=lambda v:'d'*64,_mask_values=lambda x:()),
                 'pokezero.local_showdown':NS(LocalShowdownConfig=Public)}
-            with patch.dict(sys.modules,fakes):
+            with mocked_modules(fakes):
                 references=producer.collect_declared_bank(ref,prepared=prepared,pool=pool,learner=learner,opponent=opponent,
                     public_config=public,contract=contract,directory=directory,max_requests=30,on_end=lambda *a,**k:None,check_progress=lambda:None)
                 self.assertEqual(len(calls),1)
