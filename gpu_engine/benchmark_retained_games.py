@@ -313,7 +313,7 @@ def _source_snapshot():
 
 def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
             sampling_seed=9771, max_requests=1000, enable_unqualified=False,
-            gender_initialization=None):
+            gender_initialization=None, gameplay_trace=None):
     """Advance one immutable finite cohort; no refill, replay, or warmup games.
 
     Host compaction/validation, cold shape compilations, per-phase barriers and
@@ -322,6 +322,10 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     """
     if enable_unqualified is not True:
         raise ValueError('explicit unqualified retained benchmark enablement required')
+    if gameplay_trace is not None:
+        from .engine_gameplay_trace import TraceWriter
+        if type(gameplay_trace) is not TraceWriter or gameplay_trace.closed or gameplay_trace.header is not None:
+            raise ValueError('explicit bounded gameplay TraceWriter required')
     if (type(max_requests) is not int or max_requests < 1
             or any(type(x) is not int or not 0 <= x < 2**32
                 for x in (constructor_seed, sampling_seed))):
@@ -329,7 +333,8 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     record = _checked(runtime)
     # The original Prepared determines whether the two full folds run through
     # the source-witness pair seam. Never time or invoke a second pair here.
-    paired_public = driver._checked(record['prepared']).get('frame_input_mode') == 'source-witness'
+    prepared_record = driver._checked(record['prepared'])
+    paired_public = prepared_record.get('frame_input_mode') == 'source-witness'
     public_phases = ('public_pair',) if paired_public else ('public_p1', 'public_p2')
     source = _source_snapshot()
     receipt = source_provenance._pool(pool, rehash=True)
@@ -350,6 +355,11 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     jax.block_until_ready(session.result)
     construction_ms = (time.perf_counter_ns() - start) / 1e6
     initial = session.result  # immutable actual constructor output; never replay it
+    if gameplay_trace is not None:
+        gameplay_trace.begin(initial=initial, runtime_binding=runtime.binding, source=source,
+            pool_receipt=receipt, team_indices=indices, stream_ids=ids, max_requests=max_requests,
+            constructor_seed=constructor_seed, sampling_seed=sampling_seed,
+            action_names=prepared_record['request']['catalog'].names)
     completed, refused = np.zeros(batch, bool), np.zeros(batch, bool)
     details = [dict(stream_id=int(x), team_indices=pair.tolist(), refusal=None) for x, pair in zip(ids, indices)]
     full_steps, forward, compiles, phases, decisions = [], [], [], {}, []
@@ -399,7 +409,15 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
             step_phases[name] = step_phases.get(name, 0.) + float(milliseconds)
         with driver._host_span(step_host, 'before_frames_transfer_ms'):
             before_frames = np.asarray(session.state.core.frame_number).copy()
-        result = driver.advance(session, actions, active_rows=j.asarray(active), timing_callback=timing_callback)
+        trace_before = session.result if gameplay_trace is not None else None
+        chance_options = {}
+        if gameplay_trace is not None:
+            # The ORIGINAL pure sampler runs ONCE, with the same state keys.
+            # Forward those exact arrays through the existing explicit API.
+            with driver._host_span(step_host, 'gameplay_chance_capture_ms'):
+                captured_chance = driver.transition.sample_chance_inputs(session.state.core.engine)
+            chance_options['chance_inputs'] = captured_chance
+        result = driver.advance(session, actions, active_rows=j.asarray(active), timing_callback=timing_callback, **chance_options)
         with driver._host_span(step_host, 'advance_result_wait_ms'):
             jax.block_until_ready(result)
         with driver._host_span(step_host, 'latest_diagnostics_guard_ms'):
@@ -430,6 +448,10 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
             details[row]['refusal'] = dict(kind='engine-or-source-refusal', request=index,
                 invalid_action=bool(np.asarray(diagnostics.invalid_actions)[row]),
                 executed=bool(executed[row]), public_frame_admitted=bool(public_ok[row]))
+        if gameplay_trace is not None:
+            step_host['gameplay_capture_ms'] = gameplay_trace.decision(request=index,
+                before=trace_before, after=result, actions=actions, active=active,
+                executed=executed, invalid=invalid, chance=captured_chance)
         completed |= executed & ~invalid & np.asarray(driver.terminal_complete(result.state.core))
         observation_phases = (*public_phases, 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2')
         required = {'engine', 'requests', *observation_phases}
@@ -478,7 +500,9 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         name: np.asarray(array).tolist() for name, array in value._asdict().items() if name!='outcome_diagnostics'}
     from . import engine_outcome_diagnostics as outcome_diagnostics
     refusal_outcomes=outcome_diagnostics.refused_rows(getattr(witness,'outcome_diagnostics',None),refused)
+    trace_fields = {} if gameplay_trace is None else {'gameplay_trace': gameplay_trace.finish(details)}
     return dict(schema=SCHEMA, status=status, runtime_binding=runtime.binding,
+        **trace_fields,
         source=source,
         initial_refusal_diagnostics=_refusal_snapshot(initial),
         final_refusal_diagnostics=_refusal_snapshot(session.result),
