@@ -116,4 +116,4 @@ class ToxicRuntimeTests(unittest.TestCase):
         self.assertEqual(toxic.outcome_device(packet).tolist(),[toxic.STATUS_WRITE]*2)
         self.assertEqual(packet[:,7:10].tolist(),[[0,4,0],[0,4,0]])
         self.assertEqual(result.state.core.admitted.tolist(),[False,False])
-        self.assertTrue(bool(j.all((frame.callbacks.refusal&toxic.UNKNOWN_TOXIC)!=0)))
+        self.assertTrue(bool(j.all((frame.callbacks.refusal&512)!=0)))  # residual observer absent

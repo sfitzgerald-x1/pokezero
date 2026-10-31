@@ -2,9 +2,10 @@
 
 Kind26: actor side/physical, target side/physical, canonical move, literal guard
 bits, BEFORE/AFTER status, packed literal BEFORE/AFTER counter (four bits each).
-Only a simple actual accuracy miss or plain type immunity has a registered
-lexical output here. Applied/reflected/ability/Substitute/other outcomes remain
-UNKNOWN; kind9 still records the actual successful primary status write.
+A simple actual accuracy miss or plain type immunity emits its lexical line.
+A successful primary write closes the exact existing kind9+kind26 pair without
+duplicating the status line. Reflected/ability/Substitute/other outcomes remain
+UNKNOWN, as do unrepresented later effects.
 No damage/probability/status/counter is calculated from final outcomes.
 """
 from dataclasses import dataclass
@@ -126,7 +127,12 @@ def outcome_device(raw):
             jnp.where(raw[:,7]!=0,EXISTING_STATUS,OTHER))))))
 
 def supported_raw(raw):
-    code=outcome_device(raw);return literal_valid(raw)&((code==MISS)|(code==PLAIN_TYPE_IMMUNITY))
+    code=outcome_device(raw);f=raw[:,6]
+    success=(code==STATUS_WRITE)&((f&(ACCURACY_HIT|FINAL_HIT|LIVE|APPLIED|SECONDARY))
+        ==(ACCURACY_HIT|FINAL_HIT|LIVE|APPLIED|SECONDARY))
+    success &= (f&(TYPE_IMMUNE|ABILITY_IMMUNE|SUB_BLOCK|PROTECTED|ABSORBED|DAMAGE_IMMUNE))==0
+    success &= (raw[:,7]==m.NONE)&(raw[:,8]==m.TOX)&(raw[:,9]==0)
+    return literal_valid(raw)&((code==MISS)|(code==PLAIN_TYPE_IMMUNITY)|success)
 
 def record_device(tape,side,physical,target,move,attempt,context,*,eligible):
     registered=type(context) is RegisteredContext
