@@ -140,6 +140,16 @@ class ThunderWaveRuntimeTests(unittest.TestCase):
         self.assertEqual((excluded.refusal&status.UNKNOWN_STATUS).tolist(),[128,128,0,0,128,128,0,0])
         self.assertEqual(excluded.count.tolist(),good.count.tolist())
 
+    def test_all_tape_global_namespaces_require_exact_words_before_comparison(self):
+        cursor=life.register(j.arange(11901,11909,dtype=j.int32),catalog=self.producer,
+            expected_binding=self.producer.binding,expected_engine_binding=np.asarray(self.producer.engine_binding,np.uint32))
+        tape=life._tape(cursor,self.producer,64);context=self.runtime['thunder_wave_context']
+        for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+            original=getattr(tape,name)
+            for bad in (original[None,:],j.broadcast_to(original,(8,8)),original.astype(j.int32)):
+                with self.subTest(name=name,shape=bad.shape,dtype=str(bad.dtype)):
+                    with self.assertRaises(ValueError):thunder._bound(tape._replace(**{name:bad}),context)
+
     def test_actual_success_both_full_source_drains_and_single_primary_count(self):
         session=self.construct();before=session.state;frames=[];actual=self.runtime['frame']
         def capture(*args):value=actual(*args);frames.append(value);return value
