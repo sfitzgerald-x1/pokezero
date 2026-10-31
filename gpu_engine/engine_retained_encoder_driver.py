@@ -10,12 +10,14 @@ retained-full path consumes source-derived raw controls and the full retained
 fold. Neither path copies basic public state into the full context or reuses an
 old observation after refusal. Raw unwritten-mask totals include intentional
 role-specific zero defaults; they are descriptive, not a completeness verdict.
-All current full/B4 flags remain false. Only a pure FAKE forward interface is
-exposed for source integration tests.
+The explicit source-witness mode can establish logical input coverage for one
+actual frame, after both full folds. Global B4/physics qualification stays false.
+Only a pure FAKE forward interface is exposed for source integration tests.
 """
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import Path
 import time
 from typing import NamedTuple
 import weakref
@@ -55,6 +57,8 @@ class Core(NamedTuple):
     weather_profile: object = None
     execution: object = None  # PRIVATE joined closed ledger
     risks: object = None  # PRIVATE sticky actual-kernel diagnostics
+    frame_inputs: object = None  # PRIVATE original per-frame witness carry
+    frame_input_report: object = None  # PRIVATE current frame input evidence
 
 
 class BasicPublic(NamedTuple):
@@ -168,8 +172,13 @@ def _public_rows(ok, before, after):
 def _core_rows(ok, before, after):
     ledger=None if before.execution is None else execution.commit_rows(ok,before.execution,after.execution)
     risks=_risk_rows(ok,before.risks,after.risks)
-    return _rows(ok,before._replace(execution=None,risks=None),after._replace(execution=None,risks=None))._replace(
-        execution=ledger,risks=risks)
+    witness=None
+    if before.frame_inputs is not None or after.frame_inputs is not None:
+        from . import engine_source_frame_witness as frame_witness
+        witness=frame_witness.commit_rows(ok,before.frame_inputs,after.frame_inputs)
+    return _rows(ok,before._replace(execution=None,risks=None,frame_inputs=None),
+        after._replace(execution=None,risks=None,frame_inputs=None))._replace(
+        execution=ledger,risks=risks,frame_inputs=witness)
 
 
 def _risk_rows(active,before,after):
@@ -408,7 +417,7 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
 def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic', leftovers_compiled=None,
             leftovers_mode='diagnostic',account_source_sites=False,status_residual_compiled=None,
             status_residual_mode='diagnostic',track_kernel_risks=False,
-            direct_hit_compiled=None,direct_hit_mode='diagnostic'):
+            direct_hit_compiled=None,direct_hit_mode='diagnostic',frame_input_mode='closed'):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
@@ -422,7 +431,15 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     helper and actual accounting carry. Only genuine full consumption by both
     observers can close selected BRN/PSN spans. It establishes no original
     physics equivalence or exhaustive event coverage.
+    Explicit source-witness mode derives per-frame logical input coverage from
+    the actual pinned source and both consumers before encoding. Its default is
+    closed; it grants no global B4, physics or strength qualification.
     """
+    if type(frame_input_mode) is not str or frame_input_mode not in ('closed','source-witness'):
+        raise ValueError('explicit closed or source-witness frame input mode required')
+    if frame_input_mode=='source-witness' and (public_mode!='retained-full'
+            or not account_source_sites or not track_kernel_risks):
+        raise ValueError('source witness requires actual full/accounting/kernel-risk runtime')
     if type(track_kernel_risks) is not bool:
         raise ValueError('explicit kernel risk tracking mode required')
     if track_kernel_risks and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
@@ -535,6 +552,10 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     if direct_hit_context is not None:
         payload['direct_hit_binding']=np.asarray(direct_hit_context.data.binding).tolist()
         payload['direct_hit_mode']=direct_hit_mode
+    if frame_input_mode=='source-witness':
+        from . import engine_source_frame_witness as frame_witness
+        payload['frame_input_mode']=frame_input_mode
+        payload['frame_witness_source']=hashlib.sha256(Path(frame_witness.__file__).read_bytes()).hexdigest()
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = Prepared(binding)
     _PREPARED[result] = dict(binding=binding, prepared=weakref.ref(result),request_compiled=request_compiled, own_compiled=own_compiled,
@@ -544,6 +565,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         leftovers_mode=leftovers_mode,leftovers_context=leftovers_context,execution_compiled=execution_compiled,
         no_output_compiled=no_output_compiled,
         kernel_risk_compiled=kernel_risk_compiled,
+        frame_input_mode=frame_input_mode,frame_witness_compiled=None,frame_witness_fast=None,
         direct_hit_compiled=direct_hit_compiled,direct_hit_context=direct_hit_context,direct_hit_mode=direct_hit_mode,
         status_residual_compiled=status_residual_compiled,status_residual_context=status_residual_context,
         status_residual_mode=status_residual_mode,
@@ -566,6 +588,14 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
             execution.join_consumed_owners(first,second,tables=execution_compiled.device)),
         score_fast=jax.jit(lambda obs, facts, encoded, projection, error, admitted, active=None:
             _score(obs, facts, encoded, projection, error, admitted, fake_forward, active)))
+    if frame_input_mode=='source-witness':
+        # The base Prepared registry must exist before the witness compiler
+        # checks its original edges. Keep _checked base-only: no recursion.
+        compiled=frame_witness.compile_witness(result)
+        _PREPARED[result]['frame_witness_compiled']=compiled
+        _PREPARED[result]['frame_witness_fast']=jax.jit(lambda carry,core,frame,streams,publics,active:
+            frame_witness.consume_pair_device(carry,core,frame,streams,publics,
+                compiled.device,catalog,active=active))
     return result
 
 
@@ -605,20 +635,50 @@ def _timed(callback, name, function, *args):
     return result
 
 
+def _checked_witness(r, *, constructed=None, session=None):
+    """Separate outer guard; the witness's base driver check cannot recurse."""
+    compiled=r['frame_witness_compiled']
+    if compiled is not None:
+        from . import engine_source_frame_witness as frame_witness
+        if constructed is None and session is None:
+            frame_witness.check_compiled(compiled)
+        else:
+            frame_witness.check_host_origin(compiled,constructed=constructed,session=session)
+
+
 def _consume_accounted(r,state,frame,active,timing_callback,previous_reports):
     # BOTH original full folds finish before any own encoding or fake scoring.
     candidates=[];projections=[];errors=[]
-    for side,before in enumerate(state.observers,1):
+    if r['frame_witness_compiled'] is not None:
+        _checked_witness(r)
+        paired=_timed(timing_callback,'public_pair',r['frame_witness_fast'],state.core.frame_inputs,
+            state.core,frame,tuple(x.projection for x in state.observers),
+            tuple(x.retained for x in state.observers),active)
+        _checked_witness(r)
+        joint=paired.report.frame_inputs_complete
+        joined=paired.ledger
+        evidence=paired.report if state.core.frame_input_report is None else _rows(
+            active,state.core.frame_input_report,paired.report)
+        core=state.core._replace(execution=joined,admitted=state.core.admitted & (~active|joint),
+            frame_inputs=paired.carry,frame_input_report=evidence)
+        for before,consumed in zip(state.observers,paired.owners):
+            projection=consumed.projection._replace(full_line_consumers_complete=joint)
+            candidate=before._replace(projection=projection.state,retained=consumed.public,
+                retained_healthy=before.retained_healthy & (~active|joint),accounting=joined)
+            candidates.append(_observer_rows(active,before,candidate))
+            projections.append(projection);errors.append(projection.error)
+    else:
+        for side,before in enumerate(state.observers,1):
+            _checked(r['prepared']())
+            def public_phase(observer,frame,active):
+                after,projection,error=r['public_fast'](observer,frame,state.core.weather_profile,active)
+                return _observer_rows(active,observer,after),projection,error
+            candidate,projection,error=_timed(timing_callback,f'public_p{side}',public_phase,before,frame,active)
+            candidates.append(candidate);projections.append(projection);errors.append(error)
         _checked(r['prepared']())
-        def public_phase(observer,frame,active):
-            after,projection,error=r['public_fast'](observer,frame,state.core.weather_profile,active)
-            return _observer_rows(active,observer,after),projection,error
-        candidate,projection,error=_timed(timing_callback,f'public_p{side}',public_phase,before,frame,active)
-        candidates.append(candidate);projections.append(projection);errors.append(error)
-    _checked(r['prepared']())
-    joined,joint=r['join_execution'](candidates[0].accounting,candidates[1].accounting)
-    ledger=execution.commit_rows(active,state.core.execution,joined)
-    core=state.core._replace(execution=ledger,admitted=state.core.admitted & (~active|joint))
+        joined,joint=r['join_execution'](candidates[0].accounting,candidates[1].accounting)
+        ledger=execution.commit_rows(active,state.core.execution,joined)
+        core=state.core._replace(execution=ledger,admitted=state.core.admitted & (~active|joint))
     observers=[];reports=[]
     for index,(before,candidate,projection,error) in enumerate(zip(state.observers,candidates,projections,errors)):
         observer=_observer_rows(active & joint,before,candidate)
@@ -666,6 +726,7 @@ def _consume(r, state, frame, active_rows=None, timing_callback=None, previous_r
 def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initialization=None):
     """Actual constructor once, then consume its genuine initial frame once."""
     r = _checked(prepared)
+    _checked_witness(r)
     snapshot = source.construct_from_pool(pool, team_indices, compiled=r['request_compiled'],
         stream_ids=stream_ids, seed=seed, gender_initialization=gender_initialization,
         _execution_compiled=r['execution_compiled'],_kernel_risk_compiled=r['kernel_risk_compiled'])
@@ -689,6 +750,11 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
         None if snapshot.callbacks.execution is None else snapshot.callbacks.execution.ledger,
         None if snapshot.callbacks.execution is None or snapshot.callbacks.execution.risks is None
             else snapshot.callbacks.execution.risks.carry)
+    if r['frame_witness_compiled'] is not None:
+        from . import engine_source_frame_witness as frame_witness
+        _checked_witness(r,constructed=snapshot)
+        core=core._replace(frame_inputs=frame_witness.initialize_from_constructed(
+            r['frame_witness_compiled'],snapshot))
     observers = []
     for side in (0, 1):
         owners = jnp.full((b,), side, jnp.int32)
@@ -734,6 +800,7 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
         raise ValueError('host timing callback must be callable')
     r = _checked(session.prepared)
     source._constructed(record['constructed'])
+    _checked_witness(r,session=session)
     core = session.state.core
     b = core.frame_number.shape[0]
     if active_rows is None:
@@ -760,6 +827,7 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
             _session(session)
             _checked(session.prepared)
             source._constructed(record['constructed'])
+            _checked_witness(r,session=session)
         observe = None if timing_callback is None else checked_timing
         chance = transition.sample_chance_inputs(core.engine) if chance_inputs is None else chance_inputs
         frame = _timed(observe, 'engine', r['frame'], core, engine_actions, chance, executed)
