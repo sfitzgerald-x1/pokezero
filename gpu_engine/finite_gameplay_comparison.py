@@ -265,6 +265,25 @@ def state_differences(boundary, snapshot, env, original_parties, vocabulary, lay
     # reused at EVERY boundary: all12 HP/maxHP/status/faints/stats/boosts/
     # ability/item/move/PP + active identities + weather. Not PRNG equality.
     differences = fidelity.compare(state, snapshot, original_parties, vocabulary, initial=True)
+    # Dynamic types are additional literal physical state, not an encoder
+    # overlay or inferred species fact. Earlier captures omitted this field;
+    # they retain their original predicate and cannot be retagged by this one.
+    _, parties, _ = fidelity.native_view(snapshot, original_parties, vocabulary)
+    names = vocabulary['types']
+    for side in (0, 1):
+        for slot, mon in enumerate(parties[side]):
+            native = mon.get('types')
+            if (type(native) is not list or not 1 <= len(native) <= 2
+                    or any(type(value) is not str or not value for value in native)):
+                raise ValueError('literal Native dynamic types required; earlier captures retain their original scope')
+            expected = [fidelity.toid(value) for value in native]
+            pair = np.asarray(state.types)[0, side, slot]
+            if (pair.shape != (2,) or any(not 0 <= int(value) < len(names) for value in pair)
+                    or not int(pair[0]) or any(value not in names[1:] for value in expected)):
+                raise ValueError('literal dynamic type namespace differs')
+            actual = [names[int(value)] for value in pair if int(value)]
+            if actual != expected:
+                differences.append(dict(field=f'{side}:{slot}:types', gpu=actual, showdown=expected))
     requested = [f'p{i+1}' for i, value in enumerate(boundary['requested']) if value]
     native_requested = list(env.requested_players())
     if requested != native_requested:
@@ -282,7 +301,7 @@ def state_differences(boundary, snapshot, env, original_parties, vocabulary, lay
 def native_evidence(snapshot, env):
     """Literal original fields read by the comparison; no derived mechanics."""
     battle = snapshot.bridge_snapshot['battle']
-    fields = ('hp','maxhp','status','fainted','storedStats','boosts','ability','item','moveSlots')
+    fields = ('hp','maxhp','status','fainted','storedStats','boosts','ability','item','moveSlots','types')
     sides = [dict(pokemon=[dict(set={'species':mon['set']['species']},
         **{key:mon[key] for key in fields}) for mon in side['pokemon']]) for side in battle['sides']]
     terminal = env.terminal()

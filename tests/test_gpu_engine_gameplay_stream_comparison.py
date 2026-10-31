@@ -265,14 +265,24 @@ class GameplayReferenceTests(unittest.TestCase):
         actual,_=result();boundary=trace.boundary(actual,0);layout={k:dict(dtype=str(v.dtype),shape=list(v.shape[1:]))for k,v in actual.state.core.engine._asdict().items()}
         originals=[[f'mon{i}'for i in range(s*6+1,s*6+7)]for s in(0,1)];sides=[]
         for names in originals:
-            sides.append(dict(pokemon=[dict(set={'species':name},hp=100,maxhp=100,status='',fainted=False,ability='pressure',item='',
+            sides.append(dict(pokemon=[dict(set={'species':name},types=['Normal','Normal'],hp=100,maxhp=100,status='',fainted=False,ability='pressure',item='',
                 storedStats={k:100 for k in('atk','def','spa','spd','spe')},boosts={k:0 for k in('atk','def','spa','spd','spe','accuracy','evasion')},
                 moveSlots=[dict(id='tackle',pp=10)]*4)for name in names]))
         snapshot=NS(bridge_snapshot={'battle':{'sides':sides,'field':{'weather':''}}})
         env=NS(requested_players=lambda:('p1','p2'),terminal=lambda:None)
-        vocabulary=dict(abilities=['','pressure'],items=[''],moves=['','tackle'])
+        vocabulary=dict(abilities=['','pressure'],items=[''],moves=['','tackle'],types=['','normal','water'])
         check=lambda:comparison.state_differences(boundary,snapshot,env,originals,vocabulary,layout)
         self.assertEqual(check(),[])
+        sides[1]['pokemon'][0]['types']=['Water']
+        self.assertEqual(check(),[dict(field='1:0:types',gpu=['normal','normal'],showdown=['water'])])
+        evidence=comparison.native_evidence(snapshot,env)
+        self.assertEqual(evidence['battle']['sides'][1]['pokemon'][0]['types'],['Water'])
+        sides[1]['pokemon'][0]['types']=['Normal','Normal']
+        sides[0]['pokemon'][4]['types']=['Water']
+        self.assertEqual(check(),[dict(field='0:4:types',gpu=['normal','normal'],showdown=['water'])])
+        del sides[0]['pokemon'][4]['types']
+        with self.assertRaisesRegex(ValueError,'earlier captures retain their original scope'):check()
+        sides[0]['pokemon'][4]['types']=['Normal','Normal']
         sides[1]['pokemon'][0]['boosts']['atk']=1;self.assertTrue(any(d['field'].endswith('boosts')for d in check()))
         sides[1]['pokemon'][0]['boosts']['atk']=0;sides[1]['pokemon'][0]['moveSlots'][0]['pp']=9
         self.assertTrue(any(d['field'].endswith('pp')for d in check()))

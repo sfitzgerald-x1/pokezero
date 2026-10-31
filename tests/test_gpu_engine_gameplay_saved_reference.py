@@ -20,7 +20,7 @@ def evidence(boundary):
     state = boundary['state']; sides = []
     for side in (0, 1):
         sides.append(dict(pokemon=[dict(set={'species':f'mon{side*6+slot+1}'},
-            hp=state['hp'][0][side][slot], maxhp=100, status='', fainted=False,
+            hp=state['hp'][0][side][slot], types=['Normal','Normal'], maxhp=100, status='', fainted=False,
             storedStats={key:100 for key in ('atk','def','spa','spd','spe')},
             boosts={key:0 for key in ('atk','def','spa','spd','spe','accuracy','evasion')},
             ability='pressure', item='', moveSlots=[dict(id='tackle', pp=10)]*4) for slot in range(6)]))
@@ -83,7 +83,7 @@ def fixture(folder):
         trace_path=path,expected_trace_sha256=trace.digest_file(path),native_result_path=result_path,
         expected_native_result_sha256=trace.digest_file(result_path),native_decisions_path=native_path,
         expected_native_decisions_sha256=trace.digest_file(native_path),
-        pool=NS(metadata=lambda:{'vocabulary':dict(abilities=['','pressure'],items=[''],moves=['','tackle'])}),
+        pool=NS(metadata=lambda:{'vocabulary':dict(abilities=['','pressure'],items=[''],moves=['','tackle'],types=['','normal','water'])}),
         catalog=object(),env_config=object(),out_path=folder/'reanalysed')
 
 
