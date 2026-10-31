@@ -165,6 +165,8 @@ def owned_pair(tape,index,*,stage=2):
     # At stage1 the fresh ticket has not claimed storage yet.
     claim=j.where(stage==1,ledger.count,ledger.claimed[rows,last]);slot=j.clip(claim-1,0,ledger.site.shape[1]-1)
     valid=direct._registered_bound(tape,original)&valid_raw(raw,data)&(at>0)&(at<tape.count)&(claim>0)&(claim<=ledger.count)
+    for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+        valid &= j.all(getattr(data,name)==getattr(tape,name))
     valid &= (ledger.site[rows,slot]==int(ex.Site.SECONDARY_STATUS))&(ledger.side[rows,slot]==raw[:,3])&(ledger.stage[rows,slot]==stage)
     valid &= (ledger.start[rows,slot]==first)&j.where(stage==1,tape.count==at+1,ledger.end[rows,slot]==at+1)
     valid &= (status[:,0]==9)&j.all(status[:,1:3]==-1,axis=1)&j.all(status[:,3:5]==raw[:,3:5],axis=1)

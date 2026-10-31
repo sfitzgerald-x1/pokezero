@@ -124,4 +124,16 @@ class SecondaryStatusTests(unittest.TestCase):
         self.assertEqual(bad.count.tolist(),[1,1]);self.assertTrue(int(bad.refusal[0])&128)
 
 
+class SecondaryCallerGuardTests(unittest.TestCase):
+    def test_actual_optional_keyword_is_closed_without_registered_context(self):
+        tree=ast.parse(Path(secondary.__file__).with_name('transition.py').read_text())
+        keyword=next(k for n in ast.walk(tree) if isinstance(n,ast.Call) for k in n.keywords
+            if k.arg=='_secondary_status_context')
+        expr=compile(ast.Expression(keyword.value),'<actual secondary caller>','eval')
+        self.assertIsNone(eval(expr,{},dict(_direct_hit_context=None)))
+        holder=object()
+        self.assertIsNone(eval(expr,{},dict(_direct_hit_context=holder,_direct_hit_registered=False)))
+        self.assertIs(eval(expr,{},dict(_direct_hit_context=holder,_direct_hit_registered=True)),holder)
+
+
 if __name__=='__main__':unittest.main()

@@ -1223,7 +1223,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work,_public_trace=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
                     eligible=acts & hit & ~immune,effective_weather=effective_weather,
                     substitute_hit=hits_sub,item_table=table.items,_status_trace=_public_trace,
-                    _secondary_status_context=_direct_hit_context if _direct_hit_registered else None)
+                    _secondary_status_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None)
             else:
                 work=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
                     eligible=acts & hit & ~immune,effective_weather=effective_weather,
