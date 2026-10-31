@@ -152,6 +152,11 @@ class ExecutionRuntimePlumbingTests(unittest.TestCase):
 
     def test_b8_zero_and_mixed_rows_preserve_globals_and_private_history(self):
         session=self.construct(8);before=session.result;r=d._checked(self.prepared)
+        # Constructor outputs are real inputs to the unchanged B8 advances.
+        # Release constructor executables before compiling the larger frame.
+        jax.block_until_ready(before)
+        jax.clear_caches()
+        gc.collect()
         result=d.advance(session,j.full((8,2),8,j.int32),active_rows=j.zeros(8,bool),chance_inputs=self.chance(8))
         self.same(result,before)
         mask=j.array([False,True]*4)
