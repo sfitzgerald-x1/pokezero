@@ -33,7 +33,7 @@ class HostTimingTests(unittest.TestCase):
         import subprocess
         from pathlib import Path
         baseline=subprocess.check_output(['git','show',
-            'b69788d0:gpu_engine/engine_retained_encoder_driver.py'],text=True)
+            '7c6c6042:gpu_engine/engine_retained_encoder_driver.py'],text=True)
         current=Path(d.__file__).read_text()
         class EraseHost(ast.NodeTransformer):
             def visit_With(self,node):

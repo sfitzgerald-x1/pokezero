@@ -228,7 +228,7 @@ def _report_rows(ok, before, after):
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
            leftovers_context=None,execution_tables=None,status_residual_context=None,kernel_risk_tables=None,
-           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None,swords_dance_context=None,spikes_context=None,thunder_wave_context=None,hypothetical_profile=None):
+           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None,swords_dance_context=None,spikes_context=None,thunder_wave_context=None,sleep_powder_context=None,hypothetical_profile=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -256,7 +256,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         _public_trace=tape, _lifecycle_trace=True,
         _weather_hp_context=None if weather_profile_data is None else (core.weather_profile,weather_profile_data),
         _leftovers_context=leftovers_context,_status_residual_context=status_residual_context,
-        _direct_hit_context=direct_hit_context,_substitute_context=substitute_context,_toxic_context=toxic_context,_recoil_context=recoil_context,_calm_mind_context=calm_mind_context,_swords_dance_context=swords_dance_context,_spikes_context=spikes_context,_thunder_wave_context=thunder_wave_context,_hypothetical_profile=hypothetical_profile)
+        _direct_hit_context=direct_hit_context,_substitute_context=substitute_context,_toxic_context=toxic_context,_recoil_context=recoil_context,_calm_mind_context=calm_mind_context,_swords_dance_context=swords_dance_context,_spikes_context=spikes_context,_thunder_wave_context=thunder_wave_context,_sleep_powder_context=sleep_powder_context,_hypothetical_profile=hypothetical_profile)
     engine = _rows(source_ready, core.engine, result.step.state)
     cursor = _rows(source_ready, core.cursor, result.callbacks.cursor)
     # Bindings are GLOBAL [8], never row-select them by a coincidental B=8.
@@ -422,7 +422,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
             status_residual_mode='diagnostic',track_kernel_risks=False,
             direct_hit_compiled=None,direct_hit_mode='diagnostic',frame_input_mode='closed',
             substitute_compiled=None,substitute_mode='diagnostic',toxic_compiled=None,toxic_mode='diagnostic',
-            recoil_compiled=None,recoil_mode='closed',calm_mind_compiled=None,calm_mind_mode='closed',swords_dance_compiled=None,swords_dance_mode='closed',spikes_compiled=None,spikes_mode='closed',thunder_wave_compiled=None,thunder_wave_mode='closed'):
+            recoil_compiled=None,recoil_mode='closed',calm_mind_compiled=None,calm_mind_mode='closed',swords_dance_compiled=None,swords_dance_mode='closed',spikes_compiled=None,spikes_mode='closed',thunder_wave_compiled=None,thunder_wave_mode='closed',sleep_powder_compiled=None,sleep_powder_mode='closed'):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
@@ -458,6 +458,12 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         raise ValueError('kernel-event Thunder Wave requires original full/accounting/kernel-risk runtime')
     if thunder_wave_compiled is not None and thunder_wave_mode!='kernel-event':raise ValueError('Thunder Wave helper requires explicit kernel-event mode')
     if thunder_wave_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked Thunder Wave driver must remain outside outer JIT')
+    if type(sleep_powder_mode) is not str or sleep_powder_mode not in ('closed','kernel-event'):
+        raise ValueError('explicit closed or kernel-event Sleep Powder mode required')
+    if sleep_powder_mode=='kernel-event' and (sleep_powder_compiled is None or not account_source_sites or public_mode!='retained-full' or not track_kernel_risks):
+        raise ValueError('kernel-event Sleep Powder requires original full/accounting/kernel-risk runtime')
+    if sleep_powder_compiled is not None and sleep_powder_mode!='kernel-event':raise ValueError('Sleep Powder helper requires explicit kernel-event mode')
+    if sleep_powder_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):raise ValueError('checked Sleep Powder driver must remain outside outer JIT')
     if type(spikes_mode) is not str or spikes_mode not in ('closed','kernel-event'):
         raise ValueError('explicit closed or kernel-event Spikes mode required')
     if spikes_mode=='kernel-event' and (spikes_compiled is None or not account_source_sites or public_mode!='retained-full' or not track_kernel_risks):
@@ -531,11 +537,15 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         raise ValueError('same original request/OwnFacts producer and pure fake forward required')
     request = source._checked(request_compiled)
     catalog = record['catalog']
-    leftovers_context=None;status_residual_context=None;direct_hit_context=None;substitute_context=None;toxic_context=None;recoil_context=None;calm_mind_context=None;swords_dance_context=None;spikes_context=None;thunder_wave_context=None
+    leftovers_context=None;status_residual_context=None;direct_hit_context=None;substitute_context=None;toxic_context=None;recoil_context=None;calm_mind_context=None;swords_dance_context=None;spikes_context=None;thunder_wave_context=None;sleep_powder_context=None
     if thunder_wave_compiled is not None:
         from . import engine_thunder_wave_callbacks as thunder_wave_callbacks
         thunder_wave_data=thunder_wave_callbacks.check_compiled(thunder_wave_compiled)
         if thunder_wave_callbacks._COMPILED[thunder_wave_compiled][2] is not request['lifecycle']:raise ValueError('same original Thunder Wave/request engine catalog required')
+    if sleep_powder_compiled is not None:
+        from . import engine_sleep_powder_callbacks as sleep_powder_callbacks
+        sleep_powder_data=sleep_powder_callbacks.check_compiled(sleep_powder_compiled)
+        if sleep_powder_callbacks._COMPILED[sleep_powder_compiled][2] is not request['lifecycle']:raise ValueError('same original Sleep Powder/request engine catalog required')
     if spikes_compiled is not None:
         from . import engine_spikes_callbacks as spikes_callbacks
         spikes_data=spikes_callbacks.check_compiled(spikes_compiled)
@@ -618,11 +628,12 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                     calm_mind_compiled=calm_mind_compiled if calm_mind_mode=='kernel-event' else None,
                     swords_dance_compiled=swords_dance_compiled if swords_dance_mode=='kernel-event' else None,
                     spikes_compiled=spikes_compiled if spikes_mode=='kernel-event' else None,
-                    thunder_wave_compiled=thunder_wave_compiled if thunder_wave_mode=='kernel-event' else None)
+                    thunder_wave_compiled=thunder_wave_compiled if thunder_wave_mode=='kernel-event' else None,sleep_powder_compiled=sleep_powder_compiled if sleep_powder_mode=='kernel-event' else None)
             if calm_mind_mode=='kernel-event':calm_mind_context=calm_callbacks.Context(calm_data,execution_compiled.device)
             if swords_dance_mode=='kernel-event':swords_dance_context=swords_callbacks.Context(swords_data,execution_compiled.device)
             if spikes_mode=='kernel-event':spikes_context=spikes_callbacks.Context(spikes_data,execution_compiled.device)
             if thunder_wave_mode=='kernel-event':thunder_wave_context=thunder_wave_callbacks.Context(thunder_wave_data,execution_compiled.device)
+            if sleep_powder_mode=='kernel-event':sleep_powder_context=sleep_powder_callbacks.Context(sleep_powder_data,execution_compiled.device)
             if toxic_mode=='kernel-event':
                 toxic_context=toxic_callbacks.RegisteredContext(toxic_data,execution_compiled.device)
             if substitute_mode=='kernel-event':
@@ -670,6 +681,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         payload['spikes_binding']=np.asarray(spikes_context.data.binding).tolist();payload['spikes_mode']=spikes_mode
     if thunder_wave_context is not None:
         payload['thunder_wave_binding']=np.asarray(thunder_wave_context.data.binding).tolist();payload['thunder_wave_mode']=thunder_wave_mode
+    if sleep_powder_context is not None:
+        payload['sleep_powder_binding']=np.asarray(sleep_powder_context.data.binding).tolist();payload['sleep_powder_mode']=sleep_powder_mode
     if frame_input_mode=='source-witness':
         from . import engine_source_frame_witness as frame_witness
         payload['frame_input_mode']=frame_input_mode
@@ -692,6 +705,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         swords_dance_compiled=swords_dance_compiled,swords_dance_context=swords_dance_context,swords_dance_mode=swords_dance_mode,
         spikes_compiled=spikes_compiled,spikes_context=spikes_context,spikes_mode=spikes_mode,
         thunder_wave_compiled=thunder_wave_compiled,thunder_wave_context=thunder_wave_context,thunder_wave_mode=thunder_wave_mode,
+        sleep_powder_compiled=sleep_powder_compiled,sleep_powder_context=sleep_powder_context,sleep_powder_mode=sleep_powder_mode,
         status_residual_compiled=status_residual_compiled,status_residual_context=status_residual_context,
         status_residual_mode=status_residual_mode,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
@@ -702,7 +716,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                 leftovers_context=leftovers_context,status_residual_context=status_residual_context,
                 execution_tables=None if execution_compiled is None else execution_compiled.device,
                 kernel_risk_tables=None if kernel_risk_compiled is None else kernel_risk_compiled.device,
-                direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context,calm_mind_context=calm_mind_context,swords_dance_context=swords_dance_context,spikes_context=spikes_context,thunder_wave_context=thunder_wave_context)),
+                direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context,calm_mind_context=calm_mind_context,swords_dance_context=swords_dance_context,spikes_context=spikes_context,thunder_wave_context=thunder_wave_context,sleep_powder_context=sleep_powder_context)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
@@ -760,6 +774,9 @@ def _checked(prepared):
     if r['thunder_wave_compiled'] is not None:
         from . import engine_thunder_wave_callbacks as thunder_wave_callbacks
         thunder_wave_callbacks.check_compiled(r['thunder_wave_compiled'])
+    if r['sleep_powder_compiled'] is not None:
+        from . import engine_sleep_powder_callbacks as sleep_powder_callbacks
+        sleep_powder_callbacks.check_compiled(r['sleep_powder_compiled'])
     if r['speed_profile'] is not None:weather_speed.check_profile(r['speed_profile'])
     if r['leftovers_compiled'] is not None:
         from . import engine_leftovers_callbacks as leftovers_callbacks
