@@ -85,7 +85,7 @@ class PinchItemOwningTests(unittest.TestCase):
   observers=[n for n in after.body if isinstance(n,ast.ImportFrom) and n.level==1 and n.module is None and len(n.names)==1 and n.names[0].name=='engine_pinch_item_callbacks' and n.names[0].asname=='pinch_callbacks']
   self.assertEqual(len(observers),1);after.body.remove(observers[0]);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
   from gpu_engine import engine_source_frame_witness as witness
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),71)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),72)
   self.assertEqual(subprocess.check_output(['git','show','977d524d:gpu_engine/items.py']),Path('gpu_engine/items.py').read_bytes())
 
 if __name__=='__main__':unittest.main()

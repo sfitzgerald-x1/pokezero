@@ -42,7 +42,7 @@ class SelfHealOwningTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared);cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
 
  def test_original_source_callback_closed_scope_and_default_ast(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),71)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),72)
   ids=self.metadata['vocabulary']['moves'];mask=self.helper.device.self_heal.candidates
   self.assertEqual(set(ids[i]for i in np.flatnonzero(mask)),{'recover','synthesis','softboiled'})
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.self_heal)
