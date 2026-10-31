@@ -44,6 +44,7 @@ class Site(IntEnum):
     ENTRY_HAZARD = 8
     INTIMIDATE_ATTEMPT = 9
     DIRECT_HIT = 10
+    SUBSTITUTE_SELF = 11
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -321,6 +322,44 @@ def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,mo
     ledger=context.ledger
     ledger=unhandled(ledger,ticket,active=requested&~semantic,tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def _substitute_span_matches(tape,ticket,side,physical,move,write):
+    """Actual self-write after its own declaration, distinct from Site10."""
+    from . import engine_substitute_callbacks as substitute
+    context=_context(tape)
+    if context is None:return jnp.zeros_like(tape.count,bool)
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=len(tape.count);rows=jnp.arange(b)
+    for x in (side,physical,move):_shape(x,(b,),jnp.int32)
+    valid=substitute.validate_write_device(write,b)
+    start=ledger.start[rows,slot];at=jnp.clip(start,0,tape.words.shape[1]-1)
+    prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
+    raw=tape.words[rows,at];decl=tape.words[rows,prefix];safe=jnp.clip(side,0,1)
+    expected=jnp.stack((jnp.full_like(side,substitute.SUBSTITUTE_CREATED),write.old_sub_hp,
+        write.new_sub_hp,side,physical,write.old_hp,write.new_hp,write.maximum,write.status,move),axis=1)
+    same &= (_validate(ledger,context.tables)&_tape(ledger,tape,context.tables)&valid
+        &(ledger.site[rows,slot]==int(Site.SUBSTITUTE_SELF))&(ledger.side[rows,slot]==side)
+        &(tape.count==start+1)&jnp.all(raw==expected,axis=1)&(start>0)
+        &(decl[:,0]==substitute.public.MOVE)&(decl[:,1]==side)&(decl[:,2]==physical)
+        &(decl[:,3]==1-side)&(decl[:,4]==tape.cursor.physical_active[rows,1-safe])&(decl[:,5]==move)&jnp.all(decl[:,6:]==0,axis=1)
+        &life._valid(tape.cursor)&(physical==tape.cursor.physical_active[rows,safe])
+        &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
+        &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
+    for index in (prefix,at):
+        same &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])
+            &(tape.event_phase[rows,index]==ledger.phase[rows,slot])
+            &jnp.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
+    return same
+
+
+def capture_substitute_write(tape,ticket,side,physical,move,write,*,requested):
+    context=_context(tape)
+    if context is None:return tape
+    _shape(requested,tape.count.shape,jnp.bool_)
+    same=_substitute_span_matches(tape,ticket,side,physical,move,write)
+    ledger=unhandled(context.ledger,ticket,active=requested&~same,tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=requested&same,tables=context.tables)
     return _put_context(tape,ledger,context)
 
 

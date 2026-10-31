@@ -32,6 +32,7 @@ from . import engine_leftovers_callbacks as leftovers_callbacks
 from . import engine_status_residual_callbacks as status_residual_callbacks
 from . import engine_direct_hit_controls as direct_hit_controls
 from . import engine_pressure_callbacks as pressure_callbacks
+from . import engine_substitute_callbacks as substitute_callbacks
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -62,6 +63,7 @@ class Tables(NamedTuple):
     status_damage: object
     direct_hit_control: object
     pressure_start: object
+    substitute_created: object
     namespaces: Bindings
     binding: object
 
@@ -221,6 +223,13 @@ def compile_adapter(metadata, projector, *, catalog):
     if int(lower.device.pressure_engine_ability)>0 and int(lower.device.pressure_public_ability)>0:
         pressure_start=add(f'|-ability|{ident[0]}|Pressure|[silent]',inputs.Kind.ABILITY)
         if not pressure_start:raise ValueError('FULL writer lacks exact owner-only Pressure schema')
+    substitute_created=np.zeros(7,np.int32)
+    if int(lower.device.substitute_move)>0:
+        for status,token in enumerate(tokens):
+            suffix=(' '+token) if token else ''
+            substitute_created[status]=add((f'|-start|{ident[0]}|Substitute',
+                f'|-damage|{ident[0]}|71/100{suffix}'),inputs.Kind.CONDITION)
+            if not substitute_created[status]:raise ValueError('FULL writer lacks exact Substitute start/damage schemas')
     width = max(lengths)
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
@@ -228,13 +237,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     payload += weather_start.tobytes()+weather_upkeep.tobytes()+np.array(weather_end,np.int32).tobytes()
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
-    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()
+    payload += direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+substitute_created.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(substitute_created),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -333,6 +342,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.status_damage,(3,7),jnp.int32)
     causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
     causal.base._shape(tables.pressure_start,(),jnp.int32)
+    causal.base._shape(tables.substitute_created,(7,),jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     width = tables.templates.shape[1]
@@ -354,6 +364,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_event = kind == int(inputs.Kind.STATUS)
         lum_event = kind == int(inputs.Kind.ITEM)
         raw_kind=tape.words[:,index,0]
+        substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
         pressure=(kind==int(inputs.Kind.ABILITY)) & (raw_kind==pressure_callbacks.PRESSURE_START)
         pressure_visible=pressure & (state.causal.owner==semantic[:,6])
         entry_weather=(kind==int(inputs.Kind.FIELD)) & (raw_kind==weather_callbacks.ENTRY_WEATHER)
@@ -391,6 +402,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,2),chip_status],key)
         key=jnp.where(direct_control,tables.direct_hit_control[jnp.clip(
             raw_kind-direct_hit_controls.CRITICAL,0,2)],key)
+        key=jnp.where(substitute,tables.substitute_created[chip_status],key)
         key=jnp.where(pressure,tables.pressure_start,key)
         size = jnp.where(pressure & ~pressure_visible,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
@@ -477,6 +489,13 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (observed_maximum[rows,safe,safe_slot]==max_visible)
             & (first_chip | jnp.all(hp_speeds==raw[:,1:3],axis=1))
             & (chip_speed<hp_last_speed))
+        substitute_move=jnp.clip(raw[:,9],0,tables.causal.base.public_ids.shape[0]-1)
+        substitute_called=((called[:,0]==subject)&(called[:,1]==new_slot)
+            &(called[:,2]==tables.causal.base.public_ids[substitute_move])
+            &(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
+        identity &= ~substitute | (substitute_called & live[rows,safe] & (chip_status==previous_status)
+            &(observed_hp[rows,safe,safe_slot]==old_visible)
+            &(observed_maximum[rows,safe,safe_slot]==max_visible))
         identity &= ~leftovers_heal | (leftovers_open & ~leftovers_seen[rows,safe] & live[rows,safe]
             & (chip_status==previous_status)
             & (observed_hp[rows,safe,safe_slot]==old_visible)
@@ -553,16 +572,16 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic = kinds == int(inputs.Kind.TOXIC)
         toxic_enc=jnp.where(direct_control,new_slot+1,semantic[:,8])
         result = result.at[:, :, 9].set(jnp.where(toxic & ~weather_event[:,None], toxic_enc[:,None], result[:, :, 9]))
-        result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None],
+        result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)),
             jnp.where(semantic[:, 12, None] == 1, -1, hp[:, None]), result[:, :, 11]))
-        result = result.at[:, :, 12].set(jnp.where(toxic & condition[:, None], maximum[:, None], result[:, :, 12]))
+        result = result.at[:, :, 12].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)), maximum[:, None], result[:, :, 12]))
         tendency = kinds == int(inputs.Kind.TENDENCY)
         for col, value, active in ((9, semantic[:, 9], arrival), (10, semantic[:, 9], move),
                 (11, semantic[:, 6], move), (12, semantic[:, 2], kind == int(inputs.Kind.TURN))):
             result = result.at[:, :, col].set(jnp.where(tendency & active[:, None], value[:, None], result[:, :, col]))
         raw_control = kinds == int(inputs.Kind.RAW_BEGIN)
         for col, value in ((13, hp), (14, maximum), (15, semantic[:, 11])):
-            result = result.at[:, :, col].set(jnp.where(raw_control & condition[:, None], value[:, None], result[:, :, col]))
+            result = result.at[:, :, col].set(jnp.where(raw_control & condition[:, None] & (~substitute[:,None]|(schema[:,:,14]>0)), value[:, None], result[:, :, col]))
         semantic = semantic.at[:, 1].set(sequence+main+1)
         result = result.at[rows, main].set(semantic)
 

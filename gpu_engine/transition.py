@@ -296,7 +296,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
                      _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
-                     _direct_hit_context=None) -> StepResult:
+                     _direct_hit_context=None, _substitute_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -305,6 +305,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _substitute_context is not None:
+        from . import engine_substitute_callbacks as substitute_callbacks
+        _substitute_registered=type(_substitute_context) is substitute_callbacks.RegisteredContext
+        if (not _lifecycle_trace or type(_substitute_context) not in
+                (substitute_callbacks.Context,substitute_callbacks.RegisteredContext)
+                or type(_substitute_context.data) is not substitute_callbacks.Data):
+            raise ValueError('typed actual lifecycle Substitute context required')
     if _direct_hit_context is not None:
         from . import engine_direct_hit_controls as direct_hit_controls
         _direct_hit_registered=type(_direct_hit_context) is direct_hit_controls.RegisteredContext
@@ -842,6 +849,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     acts & effects.substitute[move],active=live)
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_HEAL,
                     acts & (effects.heal_half[move] | effects.weather_heal[move] | effects.rest[move]),active=live)
+            if _substitute_context is not None:
+                _substitute_old_hp=hp
+                _substitute_requested=acts & effects.substitute[move]
+                if _substitute_registered:
+                    _public_trace,_substitute_ticket=execution_accounting.open_attempt(_public_trace,
+                        execution_accounting.Site.SUBSTITUTE_SELF,side,active=_substitute_requested)
             cost = max_hp // 4
             hp -= jnp.where(creates_sub,cost,0)
             work = work._replace(substitute_hp=_set_active(work.substitute_hp,work,side,
@@ -868,6 +881,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(rest,0,_active(work.sleep_skipped,work,side))),
                 rest_origin=_set_active(work.rest_origin,work,side,
                     jnp.where(rest,True,_active(work.rest_origin,work,side))))
+            if _substitute_context is not None:
+                _substitute_write=substitute_callbacks.Write(_substitute_old_hp,_active(work.hp,work,side),
+                    max_hp,_active(work.status,work,side),sub_hp,_active(work.substitute_hp,work,side))
+                _public_trace=substitute_callbacks.record_device(_public_trace,side,work.active[rows,side],
+                    move,_substitute_write,_substitute_context,eligible=_substitute_requested)
+                if _substitute_registered:
+                    _public_trace=execution_accounting.capture_substitute_write(_public_trace,_substitute_ticket,
+                        side,work.active[rows,side],move,_substitute_write,requested=_substitute_requested)
             # Pain Split assigns HP rather than dealing ordinary damage or
             # healing through callbacks. Read the CURRENT opposing active
             # after switches/earlier moves; floor the shared average once,
