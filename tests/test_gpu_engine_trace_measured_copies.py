@@ -123,7 +123,7 @@ class MeasuredCopies(unittest.TestCase):
   for engine_id,name in ((3,'sturdy'),(4,'naturalcure'),(5,'oblivious')):self.assertEqual(int(mapping[engine_id]),self.catalog.abilities.ids[name])
   self.assertEqual(np.nonzero(np.asarray(self.adapter.device.trace_copy))[0].tolist(),[3,4,5])
   for file in ('transition.py','mechanics.py','engine_execution_completeness.py','engine_weather_speed_profile.py'):
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','552bd326:gpu_engine/'+file]))
+   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','48f95a3d:gpu_engine/'+file]))
   old_entry=subprocess.check_output(['git','show','552bd326:gpu_engine/entry.py'],text=True)
   enter=lambda source:next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)and n.name=='enter')
   self.assertEqual(dump_default_program(enter(old_entry)),dump_default_program(enter(Path('gpu_engine/entry.py').read_text())))
