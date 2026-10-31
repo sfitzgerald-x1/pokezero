@@ -101,8 +101,12 @@ def span_matches(tape,ticket,side,physical,move,write,context):
     good=(_bound(tape,context)&same&validate_write_device(write,b)&(side>=0)&(side<2)&(move==context.data.move_id)
         &(write.target_side==1-side)&(physical==tape.cursor.physical_active[rows,safe])
         &(ledger.site[rows,slot]==int(ex.Site.SPIKES_WRITE))&(ledger.side[rows,slot]==side)&(start>0)&(tape.count==start+1))
+    good &= ((ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)
+        &j.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1))
     prefix=j.clip(start-1,0,tape.words.shape[1]-1);decl=tape.words[rows,prefix]
     good &= (decl[:,0]==public.MOVE)&(decl[:,1]==side)&(decl[:,2]==physical)&(decl[:,3]==1-side)&(decl[:,4]==tape.cursor.physical_active[rows,1-safe])&(decl[:,5]==move)&j.all(decl[:,6:]==0,axis=1)
+    good &= ((tape.event_turn[rows,prefix]==ledger.turn[rows,slot])&(tape.event_phase[rows,prefix]==ledger.phase[rows,slot])
+        &j.all(tape.event_generation[rows,prefix]==ledger.generation[rows,slot],axis=1))
     expected=j.stack((j.full(b,SPIKES,j.int32),side,physical,move,write.target_side,write.old_layers,write.new_layers,write.secondary_dispatch.astype(j.int32),j.zeros(b,j.int32),j.zeros(b,j.int32)),axis=1)
     at=j.clip(start,0,tape.words.shape[1]-1)
     return good&j.all(tape.words[rows,at]==expected,axis=1)&(tape.event_turn[rows,at]==ledger.turn[rows,slot])&(tape.event_phase[rows,at]==ledger.phase[rows,slot])&j.all(tape.event_generation[rows,at]==ledger.generation[rows,slot],axis=1)&j.all(tape.switch_details[rows,at]==0,axis=1)

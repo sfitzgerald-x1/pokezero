@@ -107,6 +107,21 @@ class SpikesOwningTests(unittest.TestCase):
   poisoned=good._replace(execution=good.execution._replace(ledger=good.execution.ledger._replace(claimed=good.execution.ledger.claimed.at[0,1].set(0))))
   result=risk.spikes_on_tape(poisoned,j.ones(2,bool),active=j.ones(2,bool),captured=risk.CapturedSpikes(self.context,k,side,physical,move,w))
   self.assertTrue(int(result.execution.risks.carry.risk[0])&risk.FIELD_VOLATILE);self.assertEqual(int(result.execution.risks.carry.risk[1]),0)
+ def test_current_and_preceding_move_stamps_must_match_same_ticket(self):
+  t,k,side,physical,move,w,mask=self.pending(2);good=spike.record_device(t,k,side,physical,move,w,self.context,requested=mask)
+  self.assertEqual(spike.span_matches(good,k,side,physical,move,w,self.context).tolist(),[True,True])
+  slot,_=ex._ticket(good.execution.ledger,k)
+  for name,changed in (
+      ('current_generation',good._replace(cursor=good.cursor._replace(generation=good.cursor.generation.at[0,1].add(1)))),
+      ('prefix_turn',good._replace(event_turn=good.event_turn.at[0,0].add(1))),
+      ('prefix_phase',good._replace(event_phase=good.event_phase.at[0,0].set(1))),
+      ('prefix_generation',good._replace(event_generation=good.event_generation.at[0,0,1].add(1))),
+      ('ticket_turn',good._replace(execution=good.execution._replace(ledger=good.execution.ledger._replace(turn=good.execution.ledger.turn.at[0,slot[0]].add(1)))))):
+   with self.subTest(name=name):
+    self.assertEqual(spike.span_matches(changed,k,side,physical,move,w,self.context).tolist(),[False,True])
+    refused=risk.spikes_on_tape(changed,j.ones(2,bool),active=j.ones(2,bool),captured=risk.CapturedSpikes(self.context,k,side,physical,move,w))
+    self.assertTrue(int(refused.execution.risks.carry.risk[0])&risk.FIELD_VOLATILE)
+    self.assertEqual(int(refused.execution.risks.carry.risk[1]),0)
  def test_default_ast_and_original_pinned_source_callbacks(self):
   self.assertEqual(int(self.risks.device.selected_risk[self.move]),0)
   self.assertTrue(int(risk.compile_risks(self.producer,self.account).device.selected_risk[self.move])&risk.FIELD_VOLATILE)
