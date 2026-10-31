@@ -369,7 +369,9 @@ def compile_adapter(metadata, projector, *, catalog):
     no_damage_keys[no_damage.MISS,:]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
     no_damage_keys[no_damage.TYPE_IMMUNE,:]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
     self_heal=np.zeros(7,np.int32)
-    for status,suffix in enumerate(('',' par',' psn',' tox',' brn',' slp',' frz')):
+    # Runtime chip_status is PUBLIC, exactly the original tokens order above.
+    for status,token in enumerate(tokens):
+        suffix=(' '+token) if token else ''
         self_heal[status]=add(f'|-heal|{ident[0]}|71/100{suffix}',inputs.Kind.CONDITION)
         if not self_heal[status]:raise ValueError('FULL writer lacks original bare move heal schema')
     wonder_guard_immune=0
