@@ -98,6 +98,8 @@ class PhaseCPreparationTests(unittest.TestCase):
                 self.assertEqual(bound.discount,.9999)
                 self.assertEqual(bound.train.learning_rate_schedule,'mit-thesis')
                 self.assertEqual(bound.iterations,fixture.iterations)
+                self.assertEqual((bound.watchdog.initial_window_seconds,bound.watchdog.longest_multiplier,
+                    bound.watchdog.backstop_seconds),(1800,5.,30*24*3600.))
 
     def test_backend_wires_original_provider_only_for_D_without_running_it(self):
         from gpu_engine import v5_selfplay,v5_depth1_provider

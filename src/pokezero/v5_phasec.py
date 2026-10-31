@@ -98,7 +98,7 @@ def bind_plan(profile,vocabulary,*,run_id,arm,replicate,iterations,pool_sha256,s
         raise runs.MissingDependency('reviewed scheduled v5 trainer is not integrated')
     return runs.Plan(run_id,config['model'],config['loss'],training.TrainConfig(**config['training']),iterations,
         pool_sha256,selection_seed,config['historical_fraction'],config['historical_window'],1024,
-        runs.Watchdog(8*3600,longest_multiplier=4.,backstop_seconds=30*24*3600.),discount=config['discount'])
+        runs.Watchdog(1800,longest_multiplier=5.,backstop_seconds=30*24*3600.),discount=config['discount'])
 
 
 def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,gender_policy=None):
