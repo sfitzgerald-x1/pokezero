@@ -26,12 +26,13 @@ class CensusTests(unittest.TestCase):
   l.mark_capture(mask,step=0,packets=lambda r:dict(row=r));l.mark_capture(np.zeros(2048,bool),step=1,packets=lambda r:{})
   self.assertFalse(l.capture_good[[0,1,600]].any());self.assertTrue(l.capture_good[2])
   for step in(0,1):
-   l.observe(step=step,active=mask,executed=mask,engine_failed=np.zeros(2048,bool),done=np.zeros(2048,bool),turns=np.ones(2048,np.int32),packet=lambda r:dict(unhandled_sites=[5,5]if r==0 else[9],raw_unsupported_kinds=[],engine_failures=[]),terminal=lambda r:{})
+   l.observe(step=step,active=mask,executed=mask,engine_failed=np.zeros(2048,bool),done=np.zeros(2048,bool),turns=np.ones(2048,np.int32),packet=lambda r:dict(unhandled_sites=[5,5]if r==0 else[9],raw_unsupported_kinds=[],raw_unsupported_moves=[dict(move_id=17,name='literalboundmove')]if r==0 else[],engine_failures=[]),terminal=lambda r:{})
   summary=l.summary();by={(x['role'],x['kind']):x for x in summary['unsupported']}
   self.assertEqual(by[('census','site:5')]['occurrences'],4);self.assertEqual(by[('census','site:5')]['games_affected'],1)
   self.assertEqual(by[('timing-only','site:9')]['occurrences'],2);self.assertEqual(summary['census']['original_denominator'],512);self.assertEqual(summary['timing_only']['original_row_denominator'],1536)
   self.assertTrue(l.active(31)[600]);self.assertFalse(l.active(32)[600]);self.assertTrue(l.active(32)[0])
   self.assertLessEqual(len(by[('census','site:5')]['examples']),p.max_examples_per_kind)
+  self.assertEqual(by[('census','raw-move:17:literalboundmove')]['occurrences'],2);self.assertEqual(by[('census','raw-move:17:literalboundmove')]['games_affected'],1)
  def test_fake_run_keeps_sampling_once_no_postgap_policy_credit_and_all_denominators(self):
   p=census.Plan();ids=np.arange(20001,22049,dtype=np.int32);calls=[]
   class Fake:

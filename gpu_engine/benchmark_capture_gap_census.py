@@ -321,7 +321,9 @@ class _Runtime:
             unsupported=[int(words[i,0])for i in range(len(words))if not bool(good[i])]
             fresh_risk=int(np.asarray(t.execution.risks.carry.risk)[row])if t is not None else int(np.asarray(self.session.state.core.risks.risk)[row])
             self.last_packet.append(dict(unhandled_sites=sites[stages==1].tolist(),raw_unsupported_kinds=unsupported,raw_kinds=raw_kinds,raw_complete_words=good.tolist(),context_unknown=bool(context_unknown),
-                raw_words=words.tolist(),selected_move_ids=[int(w[5])for w in words if int(w[0])==1],fresh_call_risk=fresh_risk,diagnostic_local_ledger=use_diag,
+                raw_words=words.tolist(),selected_move_ids=[int(w[5])for w in words if int(w[0])==1],
+                raw_unsupported_moves=[dict(move_id=int(w[5]),name=self.move_names[int(w[5])]if 0<=int(w[5])<len(self.move_names)else'UNKNOWN_MOVE_ID')for i,w in enumerate(words)if int(w[0])==1 and not bool(good[i])],
+                fresh_call_risk=fresh_risk,diagnostic_local_ledger=use_diag,
                 ledger_refusal=int(np.asarray(l.refusal)[row]),raw_refusal=int(np.asarray(t.refusal)[row])if t is not None else None,
                 history_scope='DIAGNOSTIC_LOCAL_NO_PUBLIC_CONSUMPTION'if use_diag else'ORIGINAL_SCORED_SESSION',
                 diagnostic_counts_complete=not(missing_mask or bool(int(np.asarray(l.refusal)[row])&ex.OVERFLOW)or(t is not None and bool(int(np.asarray(t.refusal)[row])&events.OVERFLOW))),
