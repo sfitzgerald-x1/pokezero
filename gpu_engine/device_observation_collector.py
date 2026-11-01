@@ -307,7 +307,9 @@ def prepare(plan):
         showdown_source=json.loads(origin.source_tree_json), compiled_tree=metadata['compiled_tree'],
         node_sha256=plan['node_sha256'], jax_version=jax.__version__, numpy_version=np.__version__,
         device_platform=jax.default_backend(), policy=plan['policy'])
-    return Runtime(plan, pool, ivs, metadata['vocabulary'], Factory(catalog, adapter), config, engine, tables,
+    factory = Factory(catalog, adapter)
+    factory.functions.require_catalog(catalog)  # existing B2 dtype/precision/source contract before any cell
+    return Runtime(plan, pool, ivs, metadata['vocabulary'], factory, config, engine, tables,
         jax.jit(lambda s: transition.initialize_with_public(s, engine, belief_tables=tables.belief)),
         jax.jit(observe), jax.jit(lambda s, a, t, chance: transition.step_with_public(s, a, engine, t,
             belief_tables=tables.belief, chance_inputs=chance)), jax.jit(transition.sample_chance_inputs),
