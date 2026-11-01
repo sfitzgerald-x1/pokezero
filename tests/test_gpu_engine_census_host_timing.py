@@ -71,12 +71,15 @@ class HostTimingTests(unittest.TestCase):
   self.assertEqual(actual['samples'][0]['phases_ms']['census_host_overlap.chance_sampling_dispatch_wall_ms'],1.)
   stripped=copy.deepcopy(actual)
   for name in('host_timing_scope','unsupported_by_source_scope'):stripped.pop(name)
-  for sample in stripped['samples']:sample['phases_ms']={k:v for k,v in sample['phases_ms'].items()if not k.startswith('census_host_overlap.')}
+  for i,sample in enumerate(stripped['samples']):
+   self.assertIs(sample.pop('policy_work_skipped'),False);self.assertIsNone(sample.pop('policy_work_skip_reason'))
+   self.assertEqual(sample.pop('policy_input_capture_valid_rows'),2048 if i==0 else 2047)
+   sample['phases_ms']={k:v for k,v in sample['phases_ms'].items()if not k.startswith('census_host_overlap.')}
   self.assertEqual(stripped,original)
   json.dumps(actual,allow_nan=False)
   for path in('engine_retained_encoder_driver.py','transition.py'):
-   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','ac13fdbd:gpu_engine/'+path]))
-  # Serializer and owned diagnostic pin changes are checked against ac13 by
-  # the dedicated host-copy exact-AST/output controls, not an obsolete freeze.
+   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','ad123786c29ef068b53ca6f707db0313098856a6:gpu_engine/'+path]))
+  # Both physical sources remain exact at the reviewed current composition;
+  # historical ac13 preceded the separately reviewed built-in timing/inputs.
 
 if __name__=='__main__':unittest.main()

@@ -266,6 +266,11 @@ class _Runtime:
         forced=np.asarray(state.forced_switch)|(hp<=0)
         return ~forced.any(axis=1)[:,None]|forced
 
+    def check_physical_source(self):
+        # Policy normally performs this exact outer check. The diagnostic
+        # physical advance still requires it when discarded policy work stops.
+        self.retained._checked(self.runtime,session=self.session)
+
     def policy(self,active,ledger,step,sampling_seed):
         """Fixed4096owner BF16 shape; only admitted rows may choose actions."""
         j=self.j;record=self.retained._checked(self.runtime,session=self.session)
@@ -430,7 +435,21 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
             stop='WALL_BACKSTOP_UNKNOWN';break
         began=clock();cache_before=backend.cache_snapshot()
         host_start=time.perf_counter_ns()
-        policy_actions,model_cost=backend.policy(active,ledger,step,sampling_seed)
+        policy_input_capture_valid_rows=int((active&ledger.capture_good).sum())
+        policy_work_skipped=step>=plan.timing_warmup+plan.timing_steps and policy_input_capture_valid_rows==0
+        if policy_work_skipped:
+            backend.check_physical_source()
+            # No output can choose an action. Preserve engine/legal/chance
+            # work and permanent poisoning; do not fabricate policy tensors.
+            policy_actions=None
+            model_cost=dict(bf16_physical_owner_rows=0,admitted_policy_owner_rows=0,
+                shadow_discarded_owner_rows=0,shadow_actual_encoder_ms=[],shadow_actual_encoder_rows=0,
+                shadow_scope='NOT_EXECUTED: fixed timing window ended and no active capture-valid game; encoder/model timings unmeasured.')
+        else:
+            policy_actions,model_cost=backend.policy(active,ledger,step,sampling_seed)
+        model_cost.update(policy_input_capture_valid_rows=policy_input_capture_valid_rows,
+            policy_work_skipped=policy_work_skipped,
+            policy_work_skip_reason='POST_TIMING_WINDOW_NO_ACTIVE_CAPTURE_VALID_GAME'if policy_work_skipped else None)
         host_walls={'census_host_overlap.policy_wall_ms':(time.perf_counter_ns()-host_start)/1e6}
         host_start=time.perf_counter_ns()
         scored=active&ledger.capture_good
@@ -438,7 +457,7 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
         requested=backend.requested()
         fallback_actions,no_action=legal_fallback(legal,requested,active&~scored,
             seed=plan.fallback_seed,streams=streams,step=step)
-        actions=np.where(scored[:,None],policy_actions,fallback_actions).astype(np.int32)
+        actions=(fallback_actions if policy_work_skipped else np.where(scored[:,None],policy_actions,fallback_actions)).astype(np.int32)
         host_walls['census_host_overlap.legal_mask_fallback_wall_ms']=(time.perf_counter_ns()-host_start)/1e6
         # The original pure engine sampler runs ONCE from the current actual
         # physical carry. Both disjoint execution paths receive these arrays.
@@ -451,10 +470,11 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
         host_walls['census_host_overlap.advance_wall_ms']=(time.perf_counter_ns()-host_start)/1e6
         host_start=time.perf_counter_ns()
         engine_bad |= no_action
-        capture_failed,reasons=backend.capture_failure(active&scored&executed&~engine_bad)
-        ledger.mark_capture(capture_failed,step=step,packets=lambda row:dict(
-            kind='actual-capture-or-terminal-closeout-refusal',owner_reason=reasons[row].tolist(),
-            actual=backend.last_packet[row]))
+        if not policy_work_skipped:
+            capture_failed,reasons=backend.capture_failure(active&scored&executed&~engine_bad)
+            ledger.mark_capture(capture_failed,step=step,packets=lambda row:dict(
+                kind='actual-capture-or-terminal-closeout-refusal',owner_reason=reasons[row].tolist(),
+                actual=backend.last_packet[row]))
         for row in np.flatnonzero(no_action):
             backend.last_packet[row]=dict(unhandled_sites=[],raw_kinds=[],raw_unsupported_kinds=[],engine_failures=['NO_ORIGINAL_LEGAL_ACTION'])
         for row in np.flatnonzero(active):
@@ -477,7 +497,7 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
         observed=all(v is not None for v in deltas.values())
         new_signature=any(v is not None and v>0 for v in deltas.values())
         explicit_compile=model_cost.get('bf16_compile_ms',0)>0 or phases.get('diagnostic_fallback_lower_compile_ms',0)>0
-        warm=step>=plan.timing_warmup and not new_signature and not explicit_compile
+        warm=not policy_work_skipped and step>=plan.timing_warmup and not new_signature and not explicit_compile
         samples.append(dict(step=step,launch_shape=plan.batch,active_engine_rows=int(active.sum()),
             census_active_rows=int(active[:plan.census_games].sum()),timing_only_active_rows=int(active[plan.census_games:].sum()),
             elapsed_ms=(clock()-began)*1000,phases_ms=phases,**model_cost,cache_signature_delta=deltas,
