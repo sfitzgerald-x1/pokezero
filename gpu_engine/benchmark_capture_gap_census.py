@@ -184,10 +184,10 @@ def _driver_host_overlap_ms(diagnostics):
     return {}if measured is None else {'driver_host_overlap.'+name:value for name,value in measured.items()}
 
 
-def _attach_refused_diagnostics(packets,capture,refused):
+def _attach_refused_diagnostics(packets,capture,refused,*,_host_cache=None):
     """Original literal row slices only; data never returns to policy/guards."""
     from . import engine_outcome_diagnostics as literal_diagnostics
-    for item in literal_diagnostics.refused_rows(capture,refused)['rows']:
+    for item in literal_diagnostics.refused_rows(capture,refused,_host_cache=_host_cache)['rows']:
         packets[item['row']]['literal_diagnostics']=item
 
 
@@ -311,18 +311,25 @@ class _Runtime:
     def advance(self,actions,active,scored,chance):
         from . import engine_execution_completeness as ex,engine_public_events as events,engine_source_frame_witness as source_witness
         j=self.j;before=self.engine;executed=np.zeros(len(active),bool);invalid=np.zeros(len(active),bool);phases={};diag_callbacks=None;diag_good=None;diag_namespace=None
+        # One immutable host snapshot per actual array, local to this call.
+        # No JAX row slicing/gathers or extra synchronization/barrier call.
+        host_cache={}
+        def host(value):
+            key=id(value)
+            if key not in host_cache:host_cache[key]=(value,np.asarray(value))
+            return host_cache[key][1]
         kept=active&scored
         phases['original_request_rows']=int(kept.sum())
         if kept.any():
             def timing(name,milliseconds):phases['driver_'+name]=float(milliseconds)
-            old_frames=np.asarray(self.session.state.core.frame_number).copy()
+            old_frames=host(self.session.state.core.frame_number).copy()
             result=self.driver.advance(self.session,j.asarray(actions),active_rows=j.asarray(kept),chance_inputs=chance,timing_callback=timing)
             self.jax.block_until_ready(result);d=self.driver.latest_diagnostics(self.session)
             phases.update(_driver_host_overlap_ms(d))
-            ran=np.asarray(d.executed_rows)
-            if not np.array_equal(np.asarray(d.active_rows),kept)or np.any(ran&~kept)or not np.array_equal(np.asarray(result.state.core.frame_number)-old_frames,ran.astype(np.int32)):
+            ran=host(d.executed_rows)
+            if not np.array_equal(host(d.active_rows),kept)or np.any(ran&~kept)or not np.array_equal(host(result.state.core.frame_number)-old_frames,ran.astype(np.int32)):
                 raise RuntimeError('originaldriver must execute exactly one frame per selected physical row')
-            executed|=ran;invalid|=kept&(~ran|np.asarray(d.invalid_actions))
+            executed|=ran;invalid|=kept&(~ran|host(d.invalid_actions))
             self.engine=_row_select(kept,self.engine,result.state.core.engine)
             self.cursor=_row_select(kept,self.cursor,result.state.core.cursor)
             if self.profile is not None:self.profile=_row_select(kept,self.profile,result.state.core.weather_profile)
@@ -337,41 +344,52 @@ class _Runtime:
             state,cursor,profile,diag_callbacks,bad,_,diag_good,diag_namespace=self.jax.block_until_ready(self.diag_executable(*args))
             phases['diagnostic_fallback_engine_ms']=(time.perf_counter_ns()-start)/1e6
             self.engine,self.cursor,self.profile=state,cursor,profile
-            invalid|=fallback&np.asarray(bad);executed|=fallback&~np.asarray(bad)
+            invalid|=fallback&host(bad);executed|=fallback&~host(bad)
         witness=getattr(self.session.state.core,'frame_input_report',None)
         ledger=self.session.state.core.execution
+        # Only used original/fallback sources are transferred. Row processing
+        # below touches NumPy values exclusively; no repeated whole-GPU copy.
+        def packet_arrays(l,words,count,mask,risk,refusal=None,namespace=None,missing_history=False):
+            return dict(count=host(l.count),site=host(l.site),stage=host(l.stage),ledger_refusal=host(l.refusal),
+                words=host(words),raw_count=host(count),mask=None if mask is None else host(mask),risk=host(risk),
+                refusal=None if refusal is None else host(refusal),
+                namespace=None if mask is None or namespace is None else host(namespace),missing_history=missing_history)
+        original=(packet_arrays(ledger,witness.raw_words,witness.raw_count,getattr(witness,'raw_complete_words',None),
+            self.session.state.core.risks.risk,refusal=None if getattr(witness,'raw_complete_words',None)is None else witness.refusal)
+            if kept.any()else None)
+        diagnostic=(packet_arrays(diag_callbacks.execution.ledger,diag_callbacks.words,diag_callbacks.count,diag_good,
+            diag_callbacks.execution.risks.carry.risk,refusal=diag_callbacks.refusal,namespace=diag_namespace,
+            missing_history=diag_callbacks.execution.leech_history is None)if fallback.any()else None)
+        cursor_admitted=host(self.cursor.admitted)if active.any()else None
         self.last_packet=[]
         refused_original=np.zeros(len(active),bool);refused_diagnostic=np.zeros(len(active),bool)
         for row in range(len(active)):
-            use_diag=bool(fallback[row]);t=diag_callbacks if use_diag else None
-            l=t.execution.ledger if t is not None else ledger
-            count=int(np.asarray(l.count)[row]);sites=np.asarray(l.site)[row,:count];stages=np.asarray(l.stage)[row,:count]
             if not active[row]:
                 self.last_packet.append({})
                 continue
-            words=(np.asarray(t.words)[row,:int(np.asarray(t.count)[row])]if t is not None else
-                np.asarray(witness.raw_words)[row,:int(np.asarray(witness.raw_count)[row])])
+            use_diag=bool(fallback[row]);data=diagnostic if use_diag else original
+            count=int(data['count'][row]);sites=data['site'][row,:count];stages=data['stage'][row,:count]
+            words=data['words'][row,:int(data['raw_count'][row])]
             raw_kinds=words[:,0].tolist()if len(words)else[]
-            mask=diag_good if use_diag else getattr(witness,'raw_complete_words',None)
-            missing_mask=mask is None
-            good=np.ones(len(words),bool)if missing_mask else np.asarray(mask)[row,:len(words)]
-            missing_history=use_diag and any(int(site)in(6,7)for site in sites)and t.execution.leech_history is None
-            context_unknown=missing_mask or(use_diag and(not bool(np.asarray(diag_namespace)[row])or not bool(np.asarray(self.cursor.admitted)[row])or missing_history))or(not use_diag and bool(int(np.asarray(witness.refusal)[row])&(source_witness.SOURCE|source_witness.ORDER)))
+            missing_mask=data['mask']is None
+            good=np.ones(len(words),bool)if missing_mask else data['mask'][row,:len(words)]
+            missing_history=use_diag and any(int(site)in(6,7)for site in sites)and data['missing_history']
+            context_unknown=missing_mask or(use_diag and(not bool(data['namespace'][row])or not bool(cursor_admitted[row])or missing_history))or(not use_diag and bool(int(data['refusal'][row])&(source_witness.SOURCE|source_witness.ORDER)))
             unsupported=[int(words[i,0])for i in range(len(words))if not bool(good[i])]
-            fresh_risk=int(np.asarray(t.execution.risks.carry.risk)[row])if t is not None else int(np.asarray(self.session.state.core.risks.risk)[row])
+            fresh_risk=int(data['risk'][row])
             refused_row=bool(invalid[row]or context_unknown or np.any(stages==1)or np.any(~good)or fresh_risk!=0)
             (refused_diagnostic if use_diag else refused_original)[row]=refused_row
             self.last_packet.append(dict(unhandled_sites=sites[stages==1].tolist(),raw_unsupported_kinds=unsupported,raw_kinds=raw_kinds,raw_complete_words=good.tolist(),context_unknown=bool(context_unknown),
                 raw_words=words.tolist(),selected_move_ids=[int(w[5])for w in words if int(w[0])==1],
                 raw_unsupported_moves=[dict(move_id=int(w[5]),name=self.move_names[int(w[5])]if 0<=int(w[5])<len(self.move_names)else'UNKNOWN_MOVE_ID')for i,w in enumerate(words)if int(w[0])==1 and not bool(good[i])],
                 fresh_call_risk=fresh_risk,diagnostic_local_ledger=use_diag,
-                ledger_refusal=int(np.asarray(l.refusal)[row]),raw_refusal=int(np.asarray(t.refusal)[row])if t is not None else None,
+                ledger_refusal=int(data['ledger_refusal'][row]),raw_refusal=int(data['refusal'][row])if use_diag else None,
                 history_scope='DIAGNOSTIC_LOCAL_NO_PUBLIC_CONSUMPTION'if use_diag else'ORIGINAL_SCORED_SESSION',
-                diagnostic_counts_complete=not(missing_mask or bool(int(np.asarray(l.refusal)[row])&ex.OVERFLOW)or(t is not None and bool(int(np.asarray(t.refusal)[row])&events.OVERFLOW))),
-                diagnostic_context_admitted=bool(np.asarray(self.cursor.admitted)[row]),engine_failures=['INVALID_OR_UNEXECUTED_ACTION']if invalid[row]else[]))
+                diagnostic_counts_complete=not(missing_mask or bool(int(data['ledger_refusal'][row])&ex.OVERFLOW)or(use_diag and bool(int(data['refusal'][row])&events.OVERFLOW))),
+                diagnostic_context_admitted=bool(cursor_admitted[row]),engine_failures=['INVALID_OR_UNEXECUTED_ACTION']if invalid[row]else[]))
         for capture,mask in ((getattr(witness,'outcome_diagnostics',None),refused_original),
                 (None if diag_callbacks is None else diag_callbacks.execution.diagnostics,refused_diagnostic)):
-            _attach_refused_diagnostics(self.last_packet,capture,mask)
+            _attach_refused_diagnostics(self.last_packet,capture,mask,_host_cache=host_cache)
         return executed,invalid,phases
 
     def capture_failure(self,active):
