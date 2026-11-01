@@ -1058,6 +1058,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         encore_payload=jnp.stack((actor_enc,jnp.where(raw[:,3]==encore_callbacks.END,public_active.REMOVE,public_active.ADD),jnp.full_like(z,public_active.NAMES.index('encore')),z,z,z,z,z),axis=1)
         encore_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),encore_payload),axis=1)
         semantic=jnp.where(encore[:,None],encore_semantic,semantic)
+        encore_fail=encore&(raw[:,3]==encore_callbacks.FAIL_NO_LAST)
+        encore_caller=1-actor_side;encore_caller_slot=cursor.public_slot[rows,jnp.clip(encore_caller,0,1)];encore_caller_enc=cursor.encounter[rows,jnp.clip(encore_caller,0,1)]
+        encore_failure=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,encore_caller,encore_caller_slot),axis=1),jnp.stack((encore_caller_enc,jnp.full_like(z,public_active.STALL_FAIL),z,z,z,z,z,z),axis=1)),axis=1)
+        semantic=jnp.where(encore_fail[:,None],encore_failure,semantic)
         from . import public_sleep
         sleep_payload=jnp.stack((actor_enc,jnp.full_like(z,public_sleep.CANT_SLEEP),z,z,z,z,z,z),axis=1)
         sleep_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.SLEEP)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),sleep_payload),axis=1)

@@ -749,6 +749,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sm_rest_heal=self_move&(sm_code==self_move_callbacks.REST_HEAL)
         sm_sleep=self_move&((sm_code==self_move_callbacks.SLEEP_FAIL)|(sm_code==self_move_callbacks.REST_ASLEEP_FAIL))
         encore=raw_kind==encore_callbacks.ENCORE
+        encore_fail=encore&(tape.words[:,index,3]==encore_callbacks.FAIL_NO_LAST)
         encore_tick=encore&(tape.words[:,index,3]==encore_callbacks.TICK)
         flash_ended=raw_kind==flash_end.FLASH_FIRE_END
         color_change=raw_kind==color_callbacks.COLOR_CHANGE
@@ -858,7 +859,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(before_move_blocked,tables.before_move_blocked[(tape.words[:,index,4]==6).astype(jnp.int32)],key)
         key=jnp.where(leech,tables.leech[jnp.clip(leech_op,0,2),jnp.where(leech_op==leech_callbacks.START,0,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,9],0,6)])],key)
         key=jnp.where(self_move,tables.self_move[jnp.where(sm_rest_status,2,jnp.where(sm_rest_heal,3,jnp.clip(sm_code,0,1)))],key)
-        key=jnp.where(encore,tables.encore[jnp.clip(tape.words[:,index,3],0,1)],key)
+        key=jnp.where(encore,jnp.where(encore_fail,tables.weather_failure,tables.encore[jnp.clip(tape.words[:,index,3],0,1)]),key)
         key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
         key=jnp.where(swords_dance,tables.swords_dance,key)
         nd_miss_safe=tables.no_damage_miss[jnp.clip(nd_raw[:,5],0,len(tables.no_damage_miss)-1)]
@@ -960,13 +961,17 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # target erasure as original Battle.attrLastMove; no comparison change.
         toxic_pid=tables.causal.base.public_ids[jnp.clip(tape.words[:,index,5],0,len(tables.causal.base.public_ids)-1)]
         erase_pid=jnp.where(toxic_erases,toxic_pid,jnp.where(sm_sleep,sm_pid,jnp.where(heal_half_full,tables.causal.base.public_ids[jnp.clip(tape.words[:,index,1],0,len(tables.causal.base.public_ids)-1)],protect_pid)))
+        encore_decl=tape.words[:,jnp.maximum(index-1,0)];encore_pid=tables.causal.base.public_ids[jnp.clip(encore_decl[:,5],0,len(tables.causal.base.public_ids)-1)]
+        erase_pid=jnp.where(encore_fail,encore_pid,erase_pid)
         protect_move_key=tables.moves[jnp.clip(erase_pid,0,len(tables.moves)-1)]
         protect_declaration=count-tables.length[protect_move_key]+tables.main[protect_move_key]
         protect_declaration_at=jnp.clip(protect_declaration,0,capacity-1)
         protect_previous=words[rows,protect_declaration_at]
-        protect_erases_target=(protect_attempt&protect_failed)|sm_sleep|toxic_erases|heal_half_full
+        protect_erases_target=(protect_attempt&protect_failed)|sm_sleep|toxic_erases|heal_half_full|encore_fail
         erase_target_side=jnp.where(toxic_erases,toxic_victim,called[:,0])
         erase_target_slot=jnp.where(toxic_erases,slots[rows,toxic_victim],called[:,1])
+        erase_target_side=jnp.where(encore_fail,tape.words[:,index,1],erase_target_side)
+        erase_target_slot=jnp.where(encore_fail,slots[rows,jnp.clip(tape.words[:,index,1],0,1)],erase_target_slot)
         protect_previous_ok=(protect_declaration>=0)&(protect_declaration<count)
         protect_previous_ok &= (protect_previous[:,0]==int(inputs.Kind.MOVE))
         protect_previous_ok &= (protect_previous[:,4]==called[:,0])&(protect_previous[:,5]==called[:,1])
@@ -1037,6 +1042,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~self_destruct|self_destruct_callbacks.owned(tape,index)
         identity &= ~self_move|(self_move_callbacks.owned(tape,index)&live[rows,safe]&((sm_code==self_move_callbacks.WISH_TICK)|sm_called)&(statuses[rows,safe,safe_slot]==sm_prior_status)&(sm_rest_status|sm_health)&(~sm_sleep|tables.self_move_still[jnp.clip(sm_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~encore | (encore_callbacks.owned(tape,index)&live[rows,safe])
+        identity &= ~encore_fail | ((called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==encore_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
         identity &= ~before_move_blocked|(before_move_blocked_callbacks.owned(tape,index)&live[rows,safe]&(previous_status==jnp.where(tape.words[:,index,4]==6,4,2)))
         identity &= ~sleep_talk | (sleep_talk_callbacks.owned(tape,index)&live[rows,safe]&(previous_status==1))
         identity &= ~sleep_talk_child | (semantic[:,10]==1)&(semantic[:,11]==1)
