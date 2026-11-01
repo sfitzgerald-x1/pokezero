@@ -22,6 +22,7 @@ owning invocation.
 from dataclasses import dataclass
 import hashlib
 import json
+import subprocess
 from typing import NamedTuple
 import weakref
 
@@ -50,6 +51,7 @@ class Data(NamedTuple):
     producer_binding: object
     reason_by_status: object
     damage_tag_by_reason: object
+    singleton_order: object
 
 
 class RegisteredStatusResidualContext(NamedTuple):
@@ -99,7 +101,7 @@ def _host():
         raise ValueError('checked status residual host boundary cannot be traced')
 
 
-def compile_status_residual(metadata, *, engine_catalog):
+def compile_status_residual(metadata, *, engine_catalog, source_rules=None):
     """Original metadata/catalog namespaces plus fixed canonical engine enum."""
     _host()
     public.check_catalog(engine_catalog,engine_catalog.engine_table,
@@ -107,7 +109,16 @@ def compile_status_residual(metadata, *, engine_catalog):
         expected_engine_binding=private_team.engine_metadata_binding(metadata))
     if (mechanics.NONE,mechanics.PAR,mechanics.BRN,mechanics.PSN,mechanics.TOX,mechanics.SLP,mechanics.FRZ)!=tuple(range(7)):
         raise ValueError('original engine status enum required')
-    payload=_json(dict(schema=SCHEMA,metadata=metadata,producer=engine_catalog.binding,
+    source_descriptor=None
+    if source_rules is not None:
+        from . import engine_request_source as source
+        origin=source._rules_origin(source_rules)
+        if not np.array_equal(source_rules.device.engine_binding,engine_catalog.engine_binding):
+            raise ValueError('same original status residual source rules required')
+        script=r"""const path=require('path'),c=require('crypto'),r=process.argv[1],{Battle}=require(path.join(r,'dist/sim/battle.js')),{Pokemon}=require(path.join(r,'dist/sim/pokemon.js')),d=require(path.join(r,'dist/sim/dex.js')).Dex.mod('gen3'),h=f=>c.createHash('sha256').update(f.toString()).digest('hex'),g=xs=>xs.filter(x=>typeof x.onResidual==='function'&&x.onResidualOrder===10&&!(x.onResidualPriority||0)&&x.onResidualSubOrder===6).map(x=>x.id).sort();console.log(JSON.stringify({functions:Object.fromEntries(Object.entries({comparePriority:Battle.prototype.comparePriority,speedSort:Battle.prototype.speedSort,fieldEvent:Battle.prototype.fieldEvent,resolvePriority:Battle.prototype.resolvePriority,runAction:Battle.prototype.runAction,updateSpeed:Battle.prototype.updateSpeed,pokemonUpdateSpeed:Pokemon.prototype.updateSpeed}).map(([n,f])=>[n,h(f)])),conditions:Object.fromEntries(['brn','psn','tox'].map(n=>{const x=d.conditions.get(n);return [n,[x.onResidualOrder,x.onResidualPriority||0,x.onResidualSubOrder,h(x.onResidual)]]})),tie_group:{abilities:g(d.abilities.all().filter(x=>x.gen<=3)),items:g(d.items.all().filter(x=>x.gen<=3)),conditions:g([...new Set([...Object.keys(d.data.Conditions),...Object.keys(d.data.Moves)])].map(n=>d.conditions.get(n)))}}));"""
+        source_descriptor=json.loads(subprocess.run([origin.node,'-e',script,origin.root],capture_output=True,text=True,check=True,timeout=30).stdout)
+        if source_descriptor!=SINGLETON_SOURCE:raise ValueError('original residual queue/source changed')
+    payload=_json(dict(schema=SCHEMA,singleton_source=source_descriptor,metadata=metadata,producer=engine_catalog.binding,
         engine=engine_catalog.engine_binding,source=engine_catalog.source_binding,
         moves=engine_catalog.move_binding,status_names=('none','par','brn','psn','tox','slp','frz'),
         reasons=_REASON_BY_STATUS,damage_tags=_TAG_BY_REASON,source_revision=public.SHOWDOWN,
@@ -118,9 +129,9 @@ def compile_status_residual(metadata, *, engine_catalog):
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),
         words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),
-        jnp.array(_REASON_BY_STATUS,jnp.int32),jnp.array(_TAG_BY_REASON,jnp.int32))
+        jnp.array(_REASON_BY_STATUS,jnp.int32),jnp.array(_TAG_BY_REASON,jnp.int32),jnp.array(source_descriptor is not None,jnp.bool_))
     result=Compiled(data)
-    _COMPILED[result]=(data,tuple(data),metadata,_json(metadata),engine_catalog)
+    _COMPILED[result]=(data,tuple(data),metadata,_json(metadata),engine_catalog,source_rules)
     return result
 
 
@@ -133,6 +144,9 @@ def check_compiled(compiled):
             or _json(record[2])!=record[3]
             or any(not isinstance(a,jax.Array) or isinstance(a,jax.core.Tracer) for a in compiled.device)):
         raise ValueError('original immutable status residual compiler/metadata required')
+    if record[5] is not None:
+        from . import engine_request_source as source
+        source._rules_origin(record[5])
     catalog=record[4]
     public.check_catalog(catalog,catalog.engine_table,expected_binding=catalog.binding,
         expected_engine_binding=compiled.device.engine_binding)
@@ -160,6 +174,7 @@ def _check(tape,data):
         life._typed(value,(8,),jnp.uint32)
     life._typed(data.reason_by_status,(7,),jnp.int32)
     life._typed(data.damage_tag_by_reason,(4,),jnp.int32)
+    life._typed(data.singleton_order,(),jnp.bool_)
     life._valid(tape.cursor)
     return True
 
@@ -229,3 +244,65 @@ def record_status_residual(tape,side,physical,old_hp,new_hp,maximum,old_status,
     _host()
     return record_status_residual_device(tape,side,physical,old_hp,new_hp,maximum,old_status,
         old_counter,new_counter,check_compiled(compiled),eligible=eligible)
+
+
+# Positive source capability only for the absence of a status-handler tie.
+# The original physical scheduler and all of its chance coordinates are unchanged.
+SINGLETON_SOURCE=dict(functions=dict(comparePriority='6037e6f1ce0144cd4075a939b5e14f1a9829fc760056a4eda58e0afda57f4015',speedSort='bb743bd89b65e5fa2270d62c2011946312a66bfbabab1f0b1ba923e6943c26bb',fieldEvent='5ada727300458c9350861313d56328944a13360b80efba54eca9bcdee979a879',resolvePriority='0c1208b08dc0bcf44d85ce8508b199508a11b52d996935fe472fc7f5d2049f4f',runAction='6c36c083886cd9f924699a934ba43e3aee101c4c435fdb00a811b476bc9f23df',updateSpeed='3dc9a9eb6c457cd99bb2ffd92ac112eb44fc43772e75aba5ba9f4046a3a9f3b4',pokemonUpdateSpeed='4c8fa2dab90a627d300b7d9a5d377e70b097cf942912c1b1f0ce9c2533372074'),tie_group=dict(abilities=[],items=[],conditions=['brn','psn','tox']),conditions=dict(brn=[10,0,6,'e2d98cce06adcb06823fc4b11301d78d413186ccd89e7477705672670ff283a8'],psn=[10,0,6,'e2d98cce06adcb06823fc4b11301d78d413186ccd89e7477705672670ff283a8'],tox=[10,0,6,'5bbd74e4fc26c19c8d842a4188dc3ca503b36ccf8da69cf9fa66f84e3e461919']))
+
+class QueueSnapshot(NamedTuple):
+    binding: object
+    stream_id: object
+    frame: object
+    turn: object
+    phase: object
+    generation: object
+    physical: object
+    hp: object
+    status: object
+    speeds: object
+    eligible: object
+
+
+def capture_queue_device(tape,data,hp,status,speeds,*,eligible):
+    """SAME pre-Wish/pre-weather queue snapshot, never a later-state estimate."""
+    from . import engine_execution_completeness as execution
+    if not _check(tape,data):raise ValueError('owning residual queue tape required')
+    b=len(tape.count)
+    for x in (hp,status,speeds):life._typed(x,(b,2),jnp.int32)
+    life._typed(eligible,(b,),jnp.bool_)
+    context=execution._context(tape)
+    frame=jnp.full(b,-1,jnp.int32)if context is None else context.ledger.frame
+    return QueueSnapshot(data.binding,tape.stream_id,frame,tape.cursor.turn,tape.cursor.phase,
+        tape.cursor.generation,tape.cursor.physical_active,hp,status,speeds,eligible)
+
+
+def singleton_queue_matches(tape,data,queue,side,physical,current_hp,current_status):
+    """One queued order10/sub6 status handler cannot have a status-speed tie.
+
+    This joins actual immutable call-local operands and current source lifetime;
+    it does not consume a tie coin or explain two tied status handlers.
+    """
+    from . import engine_execution_completeness as execution
+    if not _check(tape,data):raise ValueError('owning residual queue tape required')
+    if type(queue)is not QueueSnapshot:raise ValueError('same-call typed residual queue required')
+    b=len(tape.count);rows=jnp.arange(b)
+    life._typed(queue.binding,(8,),jnp.uint32)
+    for x in (queue.stream_id,queue.frame,queue.turn,queue.phase,side,physical,current_hp,current_status):life._typed(x,(b,),jnp.int32)
+    for x in (queue.generation,queue.physical,queue.hp,queue.status,queue.speeds):life._typed(x,(b,2),jnp.int32)
+    life._typed(queue.eligible,(b,),jnp.bool_)
+    context=execution._context(tape)
+    if context is None:return jnp.zeros(b,bool)
+    ledger=context.ledger;safe=jnp.clip(side,0,1)
+    handlers=(queue.hp>0)&((queue.status==mechanics.BRN)|(queue.status==mechanics.PSN)|(queue.status==mechanics.TOX))
+    good=execution._validate(ledger,context.tables)&execution._tape(ledger,tape,context.tables)&life._valid(tape.cursor)&tape.cursor.initialized
+    good &= (data.singleton_order&jnp.all(queue.binding==data.binding)&queue.eligible&ledger.opened
+        &(ledger.frame>0)&(ledger.frame==queue.frame)&(ledger.refusal==0)&((tape.refusal&~public.UNINSTRUMENTED)==0)
+        &(queue.stream_id==tape.stream_id)&(queue.turn==tape.cursor.turn)&(queue.phase==0)&(queue.phase==tape.cursor.phase)
+        &jnp.all(queue.generation==tape.cursor.generation,axis=1)&jnp.all(queue.physical==tape.cursor.physical_active,axis=1)
+        &jnp.all((queue.hp>0)&(queue.status>=0)&(queue.status<=6),axis=1)
+        &jnp.all((queue.speeds>0)&(queue.speeds<=10000),axis=1)&(queue.speeds[:,0]==queue.speeds[:,1])
+        &(jnp.sum(handlers,axis=1)==1)&(side>=0)&(side<2)&handlers[rows,safe]
+        &(physical==queue.physical[rows,safe])&(current_status==queue.status[rows,safe])&(current_hp>0))
+    for name in ('engine_binding','source_binding','move_binding','producer_binding'):good &= jnp.all(getattr(tape,name)==getattr(data,name))
+    return good

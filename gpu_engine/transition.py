@@ -1495,6 +1495,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 & (end_speed[:,0]!=end_speed[:,1])
                 & jnp.all(_status_residual_context.data.engine_binding==_status_residual_context.weather_profile_data.engine_binding)
                 & jnp.all(_status_residual_context.data.source_binding==_status_residual_context.weather_profile_data.source_binding))
+            _status_queue=status_residual_callbacks.capture_queue_device(_public_trace,
+                _status_residual_context.data,work.hp[rows[:,None],sides,work.active],
+                work.status[rows[:,None],sides,work.active],end_speed,eligible=residual_ready)
     if _leftovers_context is not None:
         if _leftovers_registered:
             _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
@@ -1699,7 +1702,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     eligible=_execution_status_requested)
                 # Selected kernel-event coverage only. Original-hook/history
                 # equivalence is deliberately not inferred from speed membership.
-                _status_guard_valid=(_profile_qualified(_weather_hp_record) & _status_cached_speed_ok
+                _status_singleton_ok=status_residual_callbacks.singleton_queue_matches(_public_trace,
+                    _status_residual_context.data,_status_queue,side,_status_physical,_status_old_hp,_active(work.status,work,side))
+                _status_guard_valid=(_profile_qualified(_weather_hp_record) & (_status_cached_speed_ok|_status_singleton_ok)
                     & ((_public_trace.refusal&~public_callbacks.UNINSTRUMENTED)==0))
                 from . import engine_outcome_diagnostics as _residual_diagnostics
                 _public_trace=_residual_diagnostics.record_residual_on_tape(_public_trace,
