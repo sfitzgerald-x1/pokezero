@@ -881,11 +881,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _sub_damage_requested=substitute_damage_callbacks.route(_direct_hit_context,move,
                 acts=acts,power=power,hit=hit,immune=immune,protected=_risk_protected,
                 enduring=enduring[rows,foe],bypass=bypass_sub,absorbed=_risk_absorbed,
-                sub_hp=_active(work.substitute_hp,work,foe))
+                sub_hp=_active(work.substitute_hp,work,foe),actor_happiness=_active(work.happiness,work,side),caller_move=caller_move)
             _public_trace,_sub_damage_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.SUBSTITUTE_DAMAGE,foe,active=_sub_damage_requested)
             _sub_damage_pending=substitute_damage_callbacks.Pending(_direct_hit_context,_sub_damage_ticket,
-                side,work.active[rows,side],work.active[rows,foe],move,_sub_damage_requested)
+                side,work.active[rows,side],work.active[rows,foe],move,_sub_damage_requested,_active(work.happiness,work,side),caller_move)
             _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)) & ~_sub_damage_requested & ~_protect_block_mask
             _public_trace,_direct_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.DIRECT_HIT,foe,active=_direct_requested)
