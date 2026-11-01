@@ -140,6 +140,7 @@ class Tables(NamedTuple):
     namespaces: Bindings
     binding: object
     natural_cure: object = None
+    thunder_wave_limber: object = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -429,6 +430,7 @@ def compile_adapter(metadata, projector, *, catalog, direct_hit_compiled=None):
         substitute_created[7]=add(f'|-fail|{ident[0]}|move: Substitute',inputs.Kind.ACTIVE)
         substitute_created[8]=add(f'|-fail|{ident[0]}|move: Substitute|[weak]',inputs.Kind.ACTIVE)
         if np.any(substitute_created[7:]<=0):raise ValueError('original Substitute failure schemas required')
+    thunder_wave_limber=0
     toxic_no_effect=np.zeros(7,np.int32)
     if int(lower.device.toxic_move)>0:
         pid=int(lower.device.base.public_ids[int(lower.device.toxic_move)])
@@ -451,6 +453,7 @@ def compile_adapter(metadata, projector, *, catalog, direct_hit_compiled=None):
         pid=int(lower.device.base.public_ids[int(lower.device.thunder_wave_move)])
         if pid>0:
             toxic_no_effect[toxic_callbacks.PLAIN_TYPE_IMMUNITY]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
+            thunder_wave_limber=add(f'|-immune|{ident[0]}|[from] ability: Limber',inputs.Kind.NONPROC)
             plain=int(moves[pid]);blank=add(f'|move|{ident[0]}|Thunder Wave||[still]',inputs.Kind.MOVE)
             patched=templates[plain].copy();patched[mains[plain],6:8]=-1
             if not blank or mains[plain]!=mains[blank] or not np.array_equal(patched,templates[blank]):raise ValueError('original Thunder Wave failed MOVE target-erasure schema changed')
@@ -542,9 +545,10 @@ def compile_adapter(metadata, projector, *, catalog, direct_hit_compiled=None):
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()+np.array([protect_success,protect_block],np.int32).tobytes()+protect_still_moves.tobytes()+entry_spikes_damage.tobytes()
-    payload += status_damage_lethal.tobytes()+self_boost.tobytes()+natural_cure.tobytes()
+    payload += status_damage_lethal.tobytes() + self_boost.tobytes() + natural_cure.tobytes()
+    payload += np.array(thunder_wave_limber,np.int32).tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
-    tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32), jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions), jnp.array(statuses), jnp.array(cures), jnp.array(lum), jnp.array(weather_keys), jnp.array(weather_start), jnp.array(weather_upkeep), jnp.array(weather_end, jnp.int32), jnp.array(weather_failure, jnp.int32), jnp.array(weather_failure_moves), jnp.array(weather_chip), jnp.array(leftovers_heal), jnp.array(status_damage), jnp.array(direct_hit_control), jnp.array(pressure_start, jnp.int32), jnp.array(trace_copy, jnp.int32), jnp.array(substitute_created), jnp.array(toxic_no_effect), jnp.array(recoil_damage), jnp.array(calm_mind), jnp.array(swords_dance, jnp.int32), jnp.array(ident_species), jnp.array(intimidate, jnp.int32), jnp.array(spikes, jnp.int32), jnp.array(no_damage_miss), jnp.array(no_damage_keys), jnp.array(primary_sleep_status), jnp.array(sleep_powder_status, jnp.int32), jnp.array(flash_fire_end, jnp.int32), jnp.array(sub_damage_keys), jnp.array(bulk_up), jnp.array(color_change), jnp.array(protect_success, jnp.int32), jnp.array(protect_block, jnp.int32), jnp.array(protect_still_moves), jnp.array(pinch_items), jnp.array(rough_skin_damage), jnp.array(self_heal), jnp.array(wonder_guard_immune, jnp.int32), jnp.array(belly_drum_setboost, jnp.int32), jnp.array(before_move_blocked), jnp.array(sleep_blocked, jnp.int32), jnp.array(encore), jnp.array(leech), jnp.array(entry_spikes_damage), jnp.array(self_move), jnp.array(self_move_still), jnp.array(status_damage_lethal), jnp.array(self_boost), jnp.array(heal_bell_keys), jnp.array(sleep_talk_moves), jnp.array(focus_preparation, jnp.int32), ns, binding, jnp.array(natural_cure))
+    tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32), jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions), jnp.array(statuses), jnp.array(cures), jnp.array(lum), jnp.array(weather_keys), jnp.array(weather_start), jnp.array(weather_upkeep), jnp.array(weather_end, jnp.int32), jnp.array(weather_failure, jnp.int32), jnp.array(weather_failure_moves), jnp.array(weather_chip), jnp.array(leftovers_heal), jnp.array(status_damage), jnp.array(direct_hit_control), jnp.array(pressure_start, jnp.int32), jnp.array(trace_copy, jnp.int32), jnp.array(substitute_created), jnp.array(toxic_no_effect), jnp.array(recoil_damage), jnp.array(calm_mind), jnp.array(swords_dance, jnp.int32), jnp.array(ident_species), jnp.array(intimidate, jnp.int32), jnp.array(spikes, jnp.int32), jnp.array(no_damage_miss), jnp.array(no_damage_keys), jnp.array(primary_sleep_status), jnp.array(sleep_powder_status, jnp.int32), jnp.array(flash_fire_end, jnp.int32), jnp.array(sub_damage_keys), jnp.array(bulk_up), jnp.array(color_change), jnp.array(protect_success, jnp.int32), jnp.array(protect_block, jnp.int32), jnp.array(protect_still_moves), jnp.array(pinch_items), jnp.array(rough_skin_damage), jnp.array(self_heal), jnp.array(wonder_guard_immune, jnp.int32), jnp.array(belly_drum_setboost, jnp.int32), jnp.array(before_move_blocked), jnp.array(sleep_blocked, jnp.int32), jnp.array(encore), jnp.array(leech), jnp.array(entry_spikes_damage), jnp.array(self_move), jnp.array(self_move_still), jnp.array(status_damage_lethal), jnp.array(self_boost), jnp.array(heal_bell_keys), jnp.array(sleep_talk_moves), jnp.array(focus_preparation, jnp.int32), ns, binding, jnp.array(natural_cure), jnp.array(thunder_wave_limber, jnp.int32))
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -767,6 +771,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_block=raw_kind==protect_callbacks.PROTECT_BLOCK
         substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
         sub_failure=(kind==int(inputs.Kind.ACTIVE))&(raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
+        thunder_limber=thunder_callbacks.limber_raw(tape.words[:,index])&(tape.words[:,index,5]==tables.causal.thunder_wave_move)
         thunder_ground=thunder_callbacks.ground_raw(tape.words[:,index])&(tape.words[:,index,5]==tables.causal.thunder_wave_move)
         toxic_code=jnp.where(thunder_ground,toxic_callbacks.PLAIN_TYPE_IMMUNITY,toxic_callbacks.outcome_device(tape.words[:,index]))
         toxic_sub_failure=(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)&(kind==int(inputs.Kind.ACTIVE))&toxic_callbacks.substitute_failure_raw(tape.words[:,index])
@@ -852,6 +857,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic_write=toxic_attempt&(toxic_code==toxic_callbacks.STATUS_WRITE)
         key=jnp.where(toxic_attempt,tables.toxic_no_effect[jnp.where(toxic_existing,jnp.where(toxic_existing_other,6,5),jnp.clip(toxic_code,0,4))],key)
         key=jnp.where(toxic_write,0,key)
+        key=jnp.where(thunder_limber,0 if tables.thunder_wave_limber is None else tables.thunder_wave_limber,key)
         sleep_miss=toxic_attempt&(powder_callbacks.owned_miss_device(tape,index)|causal.plain_primary_callbacks.owned_miss(tape,index))
         sleep_miss_safe=tables.no_damage_miss[jnp.clip(tape.words[:,index,5],0,len(tables.no_damage_miss)-1)]
         key=jnp.where(sleep_miss,jnp.where(sleep_miss_safe,tables.no_damage[no_damage.MISS,0],0),key)
@@ -1005,6 +1011,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_previous_ok &= (protect_previous_tendency[:,2]==semantic[:,2])&(protect_previous_tendency[:,3]==semantic[:,3])
         identity &= ~toxic_sub_failure|(toxic_callbacks.owned_substitute_failure(tape,index)|thunder_callbacks.owned_substitute_failure(tape,index))
         identity &= ~thunder_ground|thunder_callbacks.owned_ground_immunity(tape,index)
+        identity &= ~thunder_limber|thunder_callbacks.owned_limber_immunity(tape,index)
         identity &= ~toxic_existing|toxic_callbacks.owned_existing_status(tape,index)
         identity &= ~protect_erases_target | (protect_previous_ok&(~heal_half_full|tables.self_move_still[jnp.clip(erase_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~protect_block | (live[rows,safe]&live[rows,1-safe]&(called[:,0]==tape.words[:,index,1])&(called[:,1]==slots[rows,1-safe])&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
@@ -1240,7 +1247,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # and its raw species spelling, rather than schema-fixture encounter1.
         for col,value in ((11,new_slot+1),(13,tables.ident_species[jnp.clip(prior_species,0,tables.ident_species.shape[0]-1)])):
             result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
-        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block|rough|color_change|encore|leech|heal_bell|focus|natural_cure)[:,None]&(schema[:,:,10]>0)))
+        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block|rough|color_change|encore|leech|heal_bell|focus|natural_cure|thunder_limber)[:,None]&(schema[:,:,10]>0)))
         lexical_side=jnp.clip(result[:,:,4],0,1)
         lexical_slot=current_slots[rows[:,None],lexical_side]
         lexical_slot=jnp.where(heal_bell[:,None]&(lexical_side==subject[:,None]),new_slot[:,None],lexical_slot)
@@ -1286,7 +1293,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             result = result.at[:, :, col].set(jnp.where(tendency & active[:, None], value[:, None], result[:, :, col]))
         result=result.at[:,:,11].set(jnp.where(tendency&(toxic_sub_failure|toxic_existing)[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency & toxic_attempt[:,None]
-            & (toxic_code==toxic_callbacks.PLAIN_TYPE_IMMUNITY)[:,None],subject[:,None],result[:,:,11]))
+            & ((toxic_code==toxic_callbacks.PLAIN_TYPE_IMMUNITY)|thunder_limber)[:,None],subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&leech[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&heal_bell[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&(self_move|self_heal)[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
