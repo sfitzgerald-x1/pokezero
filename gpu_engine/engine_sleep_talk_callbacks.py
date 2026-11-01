@@ -1,6 +1,6 @@
 """SAME-call sleeping Sleep Talk opener/selection, RAW57/Site42.
 
-Only a positive-PP canonical normal-target damaging child or SAME-rules Toxic
+Only a positive-PP canonical normal-target damaging child, SAME-rules Rest failure or Toxic
 child is declared here. Existing child write/outcome guards remain mandatory. No
 status, sleep clock, PP, choice, draw or damage is assigned by this observer.
 """
@@ -55,6 +55,7 @@ def _child_supported(tape,move):
     t=c.risks.tables;life._typed(move,(b,),j.int32)
     life._typed(t.direct_candidates,(len(t.selected_risk),),j.bool_)
     life._typed(t.toxic_candidates,t.direct_candidates.shape,j.bool_)
+    life._typed(t.sleep_talk_rest_failure,(),j.bool_);life._typed(t.self_move_binding,(8,),j.uint32);life._typed(t.self_move_ids,(3,),j.int32)
     life._typed(t.sleep_talk_toxic_child,(),j.bool_);life._typed(t.toxic_binding,(8,),j.uint32)
     same=j.ones(b,bool)
     for name in('engine_binding','source_binding','move_binding','producer_binding'):
@@ -62,7 +63,8 @@ def _child_supported(tape,move):
         same &= j.all(getattr(tape,name)==getattr(t,name))
     at=j.clip(move,0,len(t.direct_candidates)-1)
     return same&(move>0)&(move<len(t.direct_candidates))&(t.direct_candidates[at]
-        |(t.sleep_talk_toxic_child&j.any(t.toxic_binding!=0)&t.toxic_candidates[at]))
+        |(t.sleep_talk_toxic_child&j.any(t.toxic_binding!=0)&t.toxic_candidates[at])
+        |(t.sleep_talk_rest_failure&j.any(t.self_move_binding!=0)&(move==t.self_move_ids[0])))
 
 
 def begin(tape,state,side,caller,slot,context,table,*,choice_roll,eligible,sleep_usable,early_bird,loafing):
@@ -107,13 +109,14 @@ def owned(tape,index,*,stage=2):
     good &= (a[:,0]==SLEEP_TALK)&(z[:,0]==SLEEP_TALK)&(a[:,3]==CLOCK)&(z[:,3]==CALL)&j.all(a[:,1:3]==z[:,1:3],axis=1)&(a[:,4]==t.self_move_ids[1])&(z[:,4]==a[:,4])
     good &= (a[:,1]>=0)&(a[:,1]<2)&(a[:,2]>=0)&(a[:,2]<6)&(a[:,5]>=2)&(a[:,5]<=5)&(a[:,6]>0)&(a[:,6]==a[:,5]-1-(a[:,9]&1))&(a[:,7]>=0)&(a[:,8]==a[:,7]+1)&(a[:,8]<=6)&(a[:,9]>=0)&(a[:,9]<=3)
     good &= _child_supported(tape,z[:,5])&(z[:,6]>=0)&(z[:,6]<4)&(z[:,7]>0)&(z[:,8]>=0)&(z[:,8]<240)&(z[:,6]!=(z[:,8]%4))&(z[:,9]>=0)
-    good &= (child[:,0]==public.MOVE)&j.all(child[:,1:3]==a[:,1:3],axis=1)&(child[:,3]==1-a[:,1])&(child[:,4]>=0)&(child[:,4]<6)&(child[:,5]==z[:,5])&j.all(child[:,6:]==0,axis=1)
+    rest_child=t.sleep_talk_rest_failure&(z[:,5]==t.self_move_ids[0])
+    good &= (child[:,0]==public.MOVE)&j.all(child[:,1:3]==a[:,1:3],axis=1)&(child[:,3]==j.where(rest_child,a[:,1],1-a[:,1]))&(child[:,4]>=0)&(child[:,4]<6)&(~rest_child|(child[:,4]==a[:,2]))&(child[:,5]==z[:,5])&j.all(child[:,6:]==0,axis=1)
     good &= (ledger.site[rows,entry]==int(ex.Site.SLEEP_TALK))&(ledger.side[rows,entry]==a[:,1])&(ledger.stage[rows,entry]==stage)&(ledger.no_output_kind[rows,entry]==0)
     for offset in range(3):
         pos=addresses[:,offset];good &= j.all(tape.switch_details[rows,pos]==0,axis=1)&(tape.event_turn[rows,pos]==ledger.turn[rows,entry])&(tape.event_phase[rows,pos]==ledger.phase[rows,entry])&j.all(tape.event_generation[rows,pos]==ledger.generation[rows,entry],axis=1)
         if stage==2:good &= (ledger.claimed[rows,pos]==claim)&j.all(ledger.words[rows,pos]==parts[:,offset],axis=1)&(ledger.event_turn[rows,pos]==tape.event_turn[rows,pos])&(ledger.event_phase[rows,pos]==tape.event_phase[rows,pos])&j.all(ledger.event_generation[rows,pos]==tape.event_generation[rows,pos],axis=1)
     if stage==1:
-        good &= (tape.count==start+3)&(a[:,2]==tape.cursor.physical_active[rows,j.clip(a[:,1],0,1)])&(child[:,4]==tape.cursor.physical_active[rows,1-j.clip(a[:,1],0,1)])&(ledger.turn[rows,entry]==tape.cursor.turn)&(ledger.phase[rows,entry]==tape.cursor.phase)&j.all(ledger.generation[rows,entry]==tape.cursor.generation,axis=1)
+        good &= (tape.count==start+3)&(a[:,2]==tape.cursor.physical_active[rows,j.clip(a[:,1],0,1)])&(child[:,4]==tape.cursor.physical_active[rows,j.where(rest_child,j.clip(a[:,1],0,1),1-j.clip(a[:,1],0,1))])&(ledger.turn[rows,entry]==tape.cursor.turn)&(ledger.phase[rows,entry]==tape.cursor.phase)&j.all(ledger.generation[rows,entry]==tape.cursor.generation,axis=1)
     else:good &= ledger.end[rows,entry]==start+3
     return good
 
@@ -136,7 +139,8 @@ def finish(tape,p,state,before,called,usable,roll,*,acts,caller_acts):
     c=ex._context(tape);entry,same=ex._ticket(c.ledger,p.ticket);good &= same&(c.ledger.refusal==0)&(c.ledger.start[rows,entry]==tape.count)&((tape.refusal&~public.UNINSTRUMENTED)==0)
     clock=j.stack((j.full(b,SLEEP_TALK,j.int32),p.side,p.physical,j.full(b,CLOCK,j.int32),p.caller,p.counter,before.counter,p.skipped,state.sleep_skipped[at],p.early.astype(j.int32)+2*p.rest.astype(j.int32)),axis=1)
     call=j.stack((j.full(b,SLEEP_TALK,j.int32),p.side,p.physical,j.full(b,CALL,j.int32),p.caller,called,slot,pp[rows,slot],4*roll+p.slot,pp[rows,p.slot]),axis=1)
-    child=j.stack((j.full(b,public.MOVE,j.int32),p.side,p.physical,1-p.side,p.target,called,j.zeros(b,j.int32),j.zeros(b,j.int32),j.zeros(b,j.int32),j.zeros(b,j.int32)),axis=1)
+    rest_child=tape.execution.risks.tables.sleep_talk_rest_failure&(called==d.move_ids[0])
+    child=j.stack((j.full(b,public.MOVE,j.int32),p.side,p.physical,j.where(rest_child,p.side,1-p.side),j.where(rest_child,p.physical,p.target),called,j.zeros(b,j.int32),j.zeros(b,j.int32),j.zeros(b,j.int32),j.zeros(b,j.int32)),axis=1)
     room=(tape.count>=0)&(tape.count<=tape.words.shape[1]-3)
     for offset in range(3):
         pos=j.clip(tape.count+offset,0,tape.words.shape[1]-1);good &= ~room|j.all(tape.switch_details[rows,pos]==0,axis=1)
@@ -161,7 +165,8 @@ def captured_matches(tape,captured):
     z=j.zeros(b,j.int32);before=captured.before;selected=j.clip(captured.selected_slot,0,3)
     clock=j.stack((j.full(b,SLEEP_TALK,j.int32),p.side,p.physical,z,p.caller,p.counter,before.counter,p.skipped,p.skipped+1,p.early.astype(j.int32)+2*p.rest.astype(j.int32)),axis=1)
     call=j.stack((j.full(b,SLEEP_TALK,j.int32),p.side,p.physical,z+CALL,p.caller,captured.called,captured.selected_slot,p.pp[rows,selected],4*captured.roll+p.slot,j.maximum(0,p.pp[rows,p.slot]-1)),axis=1)
-    child=j.stack((z+public.MOVE,p.side,p.physical,1-p.side,p.target,captured.called,z,z,z,z),axis=1)
+    rest_child=tape.execution.risks.tables.sleep_talk_rest_failure&(captured.called==p.context.data.self_move.move_ids[0])
+    child=j.stack((z+public.MOVE,p.side,p.physical,j.where(rest_child,p.side,1-p.side),j.where(rest_child,p.physical,p.target),captured.called,z,z,z,z),axis=1)
     good &= j.all(captured.raw==j.stack((clock,call,child),axis=1),axis=(1,2))&before.can_act&(before.status==5)&(before.counter==p.counter-1-p.early.astype(j.int32))&(before.counter>0)&~before.confusion_self_hit&(before.confusion_counter==0)
     for k in range(3):good &= j.all(tape.words[rows,j.clip(start+k,0,tape.words.shape[1]-1)]==captured.raw[:,k],axis=1)
     good &= (c.ledger.turn[rows,entry]==tape.cursor.turn)&(c.ledger.phase[rows,entry]==tape.cursor.phase)&j.all(c.ledger.generation[rows,entry]==tape.cursor.generation,axis=1)&(p.physical==tape.cursor.physical_active[rows,j.clip(p.side,0,1)])

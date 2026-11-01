@@ -260,8 +260,9 @@ def compile_adapter(metadata, projector, *, catalog):
     sleep_talk_moves=np.zeros(len(moves),np.int32)
     if projector.catalog.engine_table.sleep_talk is not None:
         for pid,target in targets.items():
-            if target==1:
-                line=f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[1]}|[from] sleeptalk'
+            rest_self=(target==0 and catalog.moves.names[pid].lower().replace(' ','')=='rest' and projector.catalog.engine_table.effects is not None and any(int(projector.catalog.ids[i])==pid and bool(x)for i,x in enumerate(projector.catalog.engine_table.effects.rest)))
+            if target==1 or rest_self:
+                line=f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[target]}|[from] sleeptalk'
                 called=add(line,inputs.Kind.MOVE);miss=add(line+'|[miss]',inputs.Kind.MOVE)
                 if called and miss and mains[called]==mains[miss] and np.array_equal(templates[called],templates[miss]):sleep_talk_moves[pid]=called
     weather_failure=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
@@ -301,7 +302,7 @@ def compile_adapter(metadata, projector, *, catalog):
         from . import public_tendency
         still_rows=np.zeros(len(projector.catalog.ids),bool)
         if projector.catalog.engine_table.sleep_talk is not None:still_rows|=np.asarray(projector.catalog.engine_table.sleep_talk.move)
-        if effects is not None:still_rows|=np.asarray(effects.heal_half)
+        if effects is not None:still_rows|=np.asarray(effects.heal_half)|np.asarray(effects.rest)
         for row in np.flatnonzero(still_rows):
             pid=projector.catalog.ids[row]
             if pid<=0 or targets.get(pid)!=0:continue
@@ -746,7 +747,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sm_silent=self_move&((sm_code==self_move_callbacks.WISH_START)|(sm_code==self_move_callbacks.WISH_TICK))
         sm_rest_status=self_move&(sm_code==self_move_callbacks.REST_STATUS)
         sm_rest_heal=self_move&(sm_code==self_move_callbacks.REST_HEAL)
-        sm_sleep=self_move&(sm_code==self_move_callbacks.SLEEP_FAIL)
+        sm_sleep=self_move&((sm_code==self_move_callbacks.SLEEP_FAIL)|(sm_code==self_move_callbacks.REST_ASLEEP_FAIL))
         encore=raw_kind==encore_callbacks.ENCORE
         encore_tick=encore&(tape.words[:,index,3]==encore_callbacks.TICK)
         flash_ended=raw_kind==flash_end.FLASH_FIRE_END

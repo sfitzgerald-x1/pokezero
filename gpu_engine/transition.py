@@ -1063,7 +1063,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             creates_sub = (acts & effects.substitute[move] & (sub_hp == 0)
                 & (max_hp > 1) & (hp * 4 > max_hp))
             if _lifecycle_trace:
-                _public_trace,_rest_pending=self_move_callbacks.begin(_public_trace,work,side,caller_move,_self_move_context,code=self_move_callbacks.REST_FAIL,eligible=acts&caller_acts&(caller_move==move),secondary=acts&hit&~immune)
+                _public_trace,_rest_pending=self_move_callbacks.begin(_public_trace,work,side,move,_self_move_context,code=self_move_callbacks.REST_FAIL,eligible=acts&caller_acts,secondary=acts&hit&~immune,caller_move=caller_move)
                 from . import engine_self_heal_callbacks as self_heal_callbacks
                 _public_trace,_self_heal_pending=self_heal_callbacks.begin(_public_trace,work,side,move,
                     _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table,eligible=acts&caller_acts&(caller_move==move))
