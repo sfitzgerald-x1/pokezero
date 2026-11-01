@@ -153,6 +153,42 @@ def _immutable(value):
         isinstance(value, tuple) and hasattr(value, '_fields') and all(_immutable(v) for v in value))
 
 
+def _namespace_values_equal(actual, expected):
+    # Both sides are CURRENT arguments. Only this numerical code is retained;
+    # no namespace arrays or successful guard result are captured/cached.
+    return jnp.stack(tuple(jnp.all(a == b) for a, b in zip(actual, expected, strict=True)))
+
+
+_NAMESPACE_EQUAL_DEVICE = jax.jit(_namespace_values_equal)
+_NAMESPACE_EQUAL_ORIGIN = (_namespace_values_equal, _NAMESPACE_EQUAL_DEVICE)
+
+
+def _check_namespace_pairs(pairs):
+    # Specialize only the normal original flat uint32[8] namespace signature.
+    # Other signatures retain the old ordered current NumPy semantics/errors.
+    normal = (len(pairs) == 6 and all(isinstance(a, jax.Array)
+        and not isinstance(a, jax.core.Tracer) and a.shape == (8,)
+        and a.dtype == jnp.dtype(jnp.uint32) for pair in pairs for a in pair))
+    if (normal and _namespace_values_equal is _NAMESPACE_EQUAL_ORIGIN[0]
+            and _NAMESPACE_EQUAL_DEVICE is _NAMESPACE_EQUAL_ORIGIN[1]):
+        try:
+            same = np.asarray(_NAMESPACE_EQUAL_DEVICE(
+                tuple(a for a, _ in pairs), tuple(b for _, b in pairs)))
+        except Exception:
+            # A deleted/mixed-device array or unavailable compilation must not
+            # introduce a new admission restriction. Re-evaluate CURRENT inputs
+            # with the original comparisons; their own errors still propagate.
+            same = None
+        if same is not None and same.shape == (6,) and same.dtype == np.dtype(bool):
+            for equal in same:
+                if not equal:
+                    raise ValueError('lifecycle source/public namespace drift')
+            return
+    for a, expected in pairs:
+        if not np.array_equal(np.asarray(a), np.asarray(expected)):
+            raise ValueError('lifecycle source/public namespace drift')
+
+
 def _host_inputs(projector, species_catalog, source, context_tables):
     b = base.check_projector(projector)
     if (type(species_catalog) is not public_team.PublicSpeciesCatalog
@@ -171,14 +207,12 @@ def _host_inputs(projector, species_catalog, source, context_tables):
             or context_tables.toxic is not None or context_tables.tendency is not None
             or context_tables.sleep is not None or context_tables.types is not None or context_tables.active is not None):
         raise ValueError('enhanced raw semantic/closure producers remain unknown in this component')
-    for a, expected in ((source.device.binding, b.source_binding),
+    _check_namespace_pairs(((source.device.binding, b.source_binding),
             (species_catalog.device.source_binding, b.source_binding),
             (context_tables.abilities.source_binding, b.source_binding),
             (context_tables.moves.source_binding, b.source_binding),
             (context_tables.moves.binding, b.move_binding),
-            (species_catalog.device.ability_binding, context_tables.abilities.binding)):
-        if not np.array_equal(np.asarray(a), np.asarray(expected)):
-            raise ValueError('lifecycle source/public namespace drift')
+            (species_catalog.device.ability_binding, context_tables.abilities.binding)))
 
 
 def _item_inputs(items, source):
