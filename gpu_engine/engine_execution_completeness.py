@@ -344,7 +344,7 @@ def capture_status_residual_write(tape, ticket, *, requested, positive_write):
     return _put_context(tape,ledger,context)
 
 
-def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write,*,data=None):
+def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write,*,data=None,_diagnostic_sink=None):
     """Read-only literal Site10 span check shared by capture and risk observer.
 
     This computes facts from the SAME source ticket/write/tape, not a caller
@@ -360,19 +360,19 @@ def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,mo
     start=ledger.start[rows,slot]
     declaration=tape.words[rows,jnp.clip(start-1,0,tape.words.shape[1]-1)]
     safe_actor=jnp.clip(actor,0,1)
-    declared=((start>0)&(declaration[:,0]==direct.public.MOVE)
+    declared=(_diagnostic_header := ((start>0)&(declaration[:,0]==direct.public.MOVE)
         &(declaration[:,1]==actor)&(declaration[:,2]==actor_physical)
         &(declaration[:,3]==1-actor)&(declaration[:,4]==target_physical)
-        &(declaration[:,5]==move)&jnp.all(declaration[:,6:]==0,axis=1))
-    declared &= (life._valid(tape.cursor)&(actor>=0)&(actor<2)
+        &(declaration[:,5]==move)&jnp.all(declaration[:,6:]==0,axis=1)))
+    declared &= (_diagnostic_current := (life._valid(tape.cursor)&(actor>=0)&(actor<2)
         &(actor_physical==tape.cursor.physical_active[rows,safe_actor])
         &(target_physical==tape.cursor.physical_active[rows,1-safe_actor])
         &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
-        &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
+        &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1)))
     prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
-    declared &= ((tape.event_turn[rows,prefix]==ledger.turn[rows,slot])
+    declared &= (_diagnostic_stamp := ((tape.event_turn[rows,prefix]==ledger.turn[rows,slot])
         &(tape.event_phase[rows,prefix]==ledger.phase[rows,slot])
-        &jnp.all(tape.event_generation[rows,prefix]==ledger.generation[rows,slot],axis=1))
+        &jnp.all(tape.event_generation[rows,prefix]==ledger.generation[rows,slot],axis=1)))
     critical,effect=direct.annotation_flags_device(write,data=data,move=move)
     critical=jnp.broadcast_to(critical,(b,));effect=jnp.broadcast_to(effect,(b,))
     num=jnp.broadcast_to(write.numerator,(b,));den=jnp.broadcast_to(write.denominator,(b,))
@@ -388,8 +388,26 @@ def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,mo
     exact_hp=((hp[:,0]==direct.public.MAIN_HP)&jnp.all(hp[:,1:3]==-1,axis=1)&(hp[:,3]==1-actor)
         &(hp[:,4]==target_physical)&(hp[:,5]==write.new_hp)&(hp[:,6]==write.maximum)
         &(hp[:,7]>=0)&(hp[:,7]<=6)&jnp.all(hp[:,8:]==0,axis=1))
-    semantic=(_validate(ledger,context.tables) & _tape(ledger,tape,context.tables) & same & valid & declared & (ledger.site[rows,slot]==int(Site.DIRECT_HIT))
-        &(ledger.side[rows,slot]==1-actor)&(tape.count==start+length)&controls&exact_hp)
+    semantic=((_diagnostic_namespace_valid := _validate(ledger,context.tables)) & (_diagnostic_namespace_tape := _tape(ledger,tape,context.tables)) & same & valid & declared & (_diagnostic_site_match := (ledger.site[rows,slot]==int(Site.DIRECT_HIT)))
+        &(_diagnostic_side_match := (ledger.side[rows,slot]==1-actor))&(_diagnostic_span_count := (tape.count==start+length))&controls&exact_hp)
+    if type(_diagnostic_sink)is dict:
+        _diagnostic_sink.update(actor_side=actor,actor_physical=actor_physical,target_physical=target_physical,move=move,
+            ticket_same=same,ticket_slot=ticket.slot,ticket_serial=ticket.serial,ticket_frame=ticket.frame,ledger_slot=slot,ledger_count=ledger.count,
+            ledger_site=ledger.site[rows,slot],ledger_side=ledger.side[rows,slot],ledger_stage=ledger.stage[rows,slot],ledger_start=start,ledger_end=ledger.end[rows,slot],ledger_opened=ledger.opened,
+            ledger_turn=ledger.turn[rows,slot],ledger_phase=ledger.phase[rows,slot],ledger_generation0=ledger.generation[rows,slot,0],ledger_generation1=ledger.generation[rows,slot,1],
+            write_valid=valid,declared_header=_diagnostic_header,declared_current=_diagnostic_current,declared_stamp=_diagnostic_stamp,declared=declared,
+            critical_annotation=critical,effect_annotation=effect,length=length,controls=controls,exact_hp=exact_hp,semantic=semantic,
+            capacity=jnp.full_like(move,tape.words.shape[1]),stream_id=tape.stream_id,frame=ledger.frame,raw_count=tape.count,turn=tape.cursor.turn,phase=tape.cursor.phase,
+            generation0=tape.cursor.generation[:,0],generation1=tape.cursor.generation[:,1],prior_tape_refusal=tape.refusal,prior_execution_refusal=ledger.refusal,
+            prior_kernel_risk=None if context.risks is None else context.risks.carry.risk)
+        _diagnostic_sink.update({'write_'+name:value for name,value in zip(write._fields,write)})
+        for _diagnostic_name,_diagnostic_word in (('declaration_word',declaration),('first_word',first),('second_word',second),('hp_word',hp)):
+            for _diagnostic_column in range(10):_diagnostic_sink[_diagnostic_name+str(_diagnostic_column)]=_diagnostic_word[:,_diagnostic_column]
+        _diagnostic_sink['namespace_valid']=_diagnostic_namespace_valid
+        _diagnostic_sink['namespace_tape']=_diagnostic_namespace_tape
+        _diagnostic_sink['site_match']=_diagnostic_site_match
+        _diagnostic_sink['side_match']=_diagnostic_side_match
+        _diagnostic_sink['span_count']=_diagnostic_span_count
     return semantic
 
 
@@ -398,7 +416,13 @@ def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,mo
     context=_context(tape)
     if context is None:return tape
     _shape(requested,tape.count.shape,jnp.bool_)
-    semantic=_direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write,data=data)
+    from . import engine_outcome_diagnostics as diagnostics
+    _diagnostic_sink={}if diagnostics.direct_enabled(tape)else None
+    semantic=_direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write,data=data,_diagnostic_sink=_diagnostic_sink)
+    if _diagnostic_sink is not None:
+        _diagnostic_sink['requested']=requested
+        tape=diagnostics.record_direct_on_tape(tape,_diagnostic_sink,phase=1,active=requested|_diagnostic_sink['ticket_same'])
+        context=context._replace(diagnostics=tape.execution.diagnostics)
     ledger=context.ledger
     ledger=unhandled(ledger,ticket,active=requested&~semantic,tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
