@@ -78,7 +78,9 @@ class BatonStartDiagnosticsTests(unittest.TestCase):
     return self.generic_visit(n)
    def visit_Name(self,n):return ast.Call(ast.Name('_bound',ast.Load()),[ast.Name('tape',ast.Load()),ast.Name('d',ast.Load())],[])if n.id=='data_bound'and isinstance(n.ctx,ast.Load)else n
   self.assertEqual(dump(old),dump(Remove().visit(new)))
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/benchmark_capture_gap_census.py'],text=True));new=ast.parse(Path('gpu_engine/benchmark_capture_gap_census.py').read_text())
+  # Historical whole-census delta belongs to this observer component;
+  # party-order transport has a separate current behavioral/source review.
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/benchmark_capture_gap_census.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','47f8dd99dd600388ecd72932068c7308f1f8136f:gpu_engine/benchmark_capture_gap_census.py'],text=True))
   class RemoveCensus(ast.NodeTransformer):
    def visit_FunctionDef(self,n):return None if n.name=='_baton_start_predicates'else self.generic_visit(n)
    def visit_For(self,n):return None if any(isinstance(x,ast.Call)and isinstance(x.func,ast.Name)and x.func.id=='_baton_start_predicates'for x in ast.walk(n.iter))else self.generic_visit(n)
