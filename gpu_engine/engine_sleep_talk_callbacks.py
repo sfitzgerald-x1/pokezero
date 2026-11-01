@@ -1,7 +1,7 @@
 """SAME-call sleeping Sleep Talk opener/selection, RAW57/Site42.
 
-Only a positive-PP canonical normal-target damaging child is declared here.
-The existing child write/outcome guards remain mandatory and unchanged. No
+Only a positive-PP canonical normal-target damaging child or SAME-rules Toxic
+child is declared here. Existing child write/outcome guards remain mandatory. No
 status, sleep clock, PP, choice, draw or damage is assigned by this observer.
 """
 from typing import NamedTuple
@@ -47,6 +47,24 @@ def _bound(tape,context):
     return sm._bound(tape,context)
 
 
+def _child_supported(tape,move):
+    """A declaration capability only; never closes the child's actual site."""
+    from . import engine_execution_completeness as ex
+    c=ex._context(tape);b=len(tape.count)
+    if c is None or c.risks is None:return j.zeros(b,bool)
+    t=c.risks.tables;life._typed(move,(b,),j.int32)
+    life._typed(t.direct_candidates,(len(t.selected_risk),),j.bool_)
+    life._typed(t.toxic_candidates,t.direct_candidates.shape,j.bool_)
+    life._typed(t.sleep_talk_toxic_child,(),j.bool_);life._typed(t.toxic_binding,(8,),j.uint32)
+    same=j.ones(b,bool)
+    for name in('engine_binding','source_binding','move_binding','producer_binding'):
+        life._typed(getattr(tape,name),(8,),j.uint32);life._typed(getattr(t,name),(8,),j.uint32)
+        same &= j.all(getattr(tape,name)==getattr(t,name))
+    at=j.clip(move,0,len(t.direct_candidates)-1)
+    return same&(move>0)&(move<len(t.direct_candidates))&(t.direct_candidates[at]
+        |(t.sleep_talk_toxic_child&j.any(t.toxic_binding!=0)&t.toxic_candidates[at]))
+
+
 def begin(tape,state,side,caller,slot,context,table,*,choice_roll,eligible,sleep_usable,early_bird,loafing):
     from . import engine_execution_completeness as ex
     if context is None or context.data.self_move is None or context.data.self_move.talking is None:return tape,None
@@ -88,7 +106,7 @@ def owned(tape,index,*,stage=2):
     good &= j.any(t.self_move_binding!=0)&(t.self_move_ids[1]>0)&(claim>0)&(claim<=ledger.count)&(idx>=start)&(idx<start+3)&(idx>=0)&(idx<tape.count)&(start>=0)&(start+3<=tape.count)
     good &= (a[:,0]==SLEEP_TALK)&(z[:,0]==SLEEP_TALK)&(a[:,3]==CLOCK)&(z[:,3]==CALL)&j.all(a[:,1:3]==z[:,1:3],axis=1)&(a[:,4]==t.self_move_ids[1])&(z[:,4]==a[:,4])
     good &= (a[:,1]>=0)&(a[:,1]<2)&(a[:,2]>=0)&(a[:,2]<6)&(a[:,5]>=2)&(a[:,5]<=5)&(a[:,6]>0)&(a[:,6]==a[:,5]-1-(a[:,9]&1))&(a[:,7]>=0)&(a[:,8]==a[:,7]+1)&(a[:,8]<=6)&(a[:,9]>=0)&(a[:,9]<=3)
-    good &= (z[:,5]>0)&(z[:,5]<len(t.direct_candidates))&t.direct_candidates[j.clip(z[:,5],0,len(t.direct_candidates)-1)]&(z[:,6]>=0)&(z[:,6]<4)&(z[:,7]>0)&(z[:,8]>=0)&(z[:,8]<240)&(z[:,6]!=(z[:,8]%4))&(z[:,9]>=0)
+    good &= _child_supported(tape,z[:,5])&(z[:,6]>=0)&(z[:,6]<4)&(z[:,7]>0)&(z[:,8]>=0)&(z[:,8]<240)&(z[:,6]!=(z[:,8]%4))&(z[:,9]>=0)
     good &= (child[:,0]==public.MOVE)&j.all(child[:,1:3]==a[:,1:3],axis=1)&(child[:,3]==1-a[:,1])&(child[:,4]>=0)&(child[:,4]<6)&(child[:,5]==z[:,5])&j.all(child[:,6:]==0,axis=1)
     good &= (ledger.site[rows,entry]==int(ex.Site.SLEEP_TALK))&(ledger.side[rows,entry]==a[:,1])&(ledger.stage[rows,entry]==stage)&(ledger.no_output_kind[rows,entry]==0)
     for offset in range(3):
@@ -112,7 +130,7 @@ def finish(tape,p,state,before,called,usable,roll,*,acts,caller_acts):
     selected=eligible&(ranks==(roll%j.maximum(1,count))[:,None]);slot=j.argmax(selected,axis=1).astype(j.int32);pp=state.pp[at];moves=state.moves[at]
     good=p.valid&_bound(tape,p.context)&usable&acts&caller_acts&before.can_act&~before.confusion_self_hit&(before.confusion_counter==0)&(before.status==5)&(before.counter==p.counter-1-p.early.astype(j.int32))&(before.counter>0)
     good &= (roll==p.roll)&(roll>=0)&(roll<60)&(count>0)&j.all(moves==p.moves,axis=1)&(called==p.moves[rows,slot])&(pp[rows,slot]>0)&(slot!=p.slot)
-    good &= (called>0)&(called<len(tape.execution.risks.tables.direct_candidates))&tape.execution.risks.tables.direct_candidates[j.clip(called,0,len(tape.execution.risks.tables.direct_candidates)-1)]
+    good &= _child_supported(tape,called)
     wanted=p.pp.at[rows,p.slot].set(j.maximum(0,p.pp[rows,p.slot]-1));good &= j.all(pp==wanted,axis=1)
     good &= (state.active[rows,seat]==p.physical)&(state.active[rows,1-seat]==p.target)&(state.status[at]==5)&(state.status_counter[at]==before.counter)&(state.sleep_skipped[at]==p.skipped+1)&(state.rest_origin[at]==p.rest)&(state.hp[at]==p.hp)&(state.max_hp[at]==p.maximum)&(state.ability[at]==p.ability)&(state.volatile[at]==0)&(state.confusion_counter[at]==0)
     c=ex._context(tape);entry,same=ex._ticket(c.ledger,p.ticket);good &= same&(c.ledger.refusal==0)&(c.ledger.start[rows,entry]==tape.count)&((tape.refusal&~public.UNINSTRUMENTED)==0)
