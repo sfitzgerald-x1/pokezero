@@ -660,6 +660,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace,_sleep_blocked_pending=sleep_blocked_callbacks.begin(_public_trace,work,side,move,
                 _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table.sleep_talk,
                 eligible=eligible,sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
+        if _lifecycle_trace:
+            from . import engine_before_move_blocked_callbacks as before_move_blocked_callbacks
+            _public_trace,_before_move_blocked_pending=before_move_blocked_callbacks.begin(_public_trace,work,side,move,caller_move,chance[:,1:4],
+                _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,
+                eligible=eligible,sleep_usable=sleep_usable,loafing=loafing)
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
@@ -687,8 +692,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 jnp.where(eligible, value, _active(current, work, side)))})
         if _lifecycle_trace:
             _public_trace,_sleep_blocked_capture=sleep_blocked_callbacks.finish(_public_trace,_sleep_blocked_pending,work,before)
+            _public_trace,_before_move_blocked_capture=before_move_blocked_callbacks.finish(_public_trace,_before_move_blocked_pending,work,before)
             _public_trace=kernel_risks.pre_move_on_tape(_public_trace,_sleep_blocked_old_work,side,before,
-                eligible=eligible,active=live,captured_sleep=_sleep_blocked_capture)
+                eligible=eligible,active=live,captured_sleep=_sleep_blocked_capture,captured_before_move=_before_move_blocked_capture)
         own_stats = _active(work.stats, work, side)
         own_boosts = _active(work.boosts, work, side)
         confusion_num,confusion_den = (1,1)

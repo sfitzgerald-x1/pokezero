@@ -143,6 +143,10 @@ class Tables(NamedTuple):
     self_destruct_damp: object
     self_destruct_abilities: object
     self_destruct_items: object
+    before_move_blocked_binding: object
+    before_move_blocked_moves: object
+    before_move_blocked_abilities: object
+    before_move_blocked_items: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -226,6 +230,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     heal_binding=np.zeros(8,np.uint32);heal_candidates=np.zeros(m,bool);heal_family=np.zeros(m,np.int32)
     heal_bell_binding=np.zeros(8,np.uint32);heal_bell_move=0;heal_bell_candidates=np.zeros(m,bool);heal_bell_soundproof=np.zeros(len(table.effects.soundproof)if table.effects is not None else 1,bool)
     self_destruct_binding=np.zeros(8,np.uint32);self_destruct_candidates=np.zeros(m,bool);self_destruct_powers=np.zeros(m,np.int32);self_destruct_damp=np.zeros(1,bool);self_destruct_abilities=np.zeros(1,bool);self_destruct_items=np.zeros(1,bool)
+    before_move_blocked_binding=np.zeros(8,np.uint32);before_move_blocked_moves=np.zeros((2,m),bool);before_move_blocked_abilities=np.zeros(1,bool);before_move_blocked_items=np.zeros(1,bool)
     if direct_hit_compiled is not None:
         from . import engine_direct_hit_controls as direct
         direct_data=direct.check_compiled(direct_hit_compiled)
@@ -267,6 +272,9 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         if direct_data.belly_drum is not None:
             from . import engine_belly_drum_callbacks as belly
             belly.shape(direct_data.belly_drum);belly_binding=np.asarray(direct_data.belly_drum.binding,np.uint32);belly_candidates=np.asarray(direct_data.belly_drum.candidates).copy()
+        if direct_data.before_move_blocked is not None:
+            from . import engine_before_move_blocked_callbacks as bm
+            data=direct_data.before_move_blocked;bm.shape(data);before_move_blocked_binding=np.asarray(data.binding);before_move_blocked_moves=np.asarray(data.moves);before_move_blocked_abilities=np.asarray(data.abilities);before_move_blocked_items=np.asarray(data.items)
         if direct_data.baton_pass is not None:
             from . import engine_baton_pass_callbacks as baton_callbacks
             bd=direct_data.baton_pass;baton_callbacks.shape(bd);baton_binding=np.asarray(bd.binding);baton_move=int(bd.move_id);baton_abilities=np.asarray(bd.quiet_abilities);baton_items=np.asarray(bd.quiet_items)
@@ -413,7 +421,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     branch[Branch.HEAL_BELL]=FIELD_VOLATILE
     files=('transition.py','secondary.py','entry.py','effects.py','absorption.py','sustain.py',
         'linked_traps.py','encore.py','mechanics.py','engine_execution_completeness.py','engine_kernel_frame_risk.py')
-    inventory=dict(self_destruct_binding=self_destruct_binding.tolist(),self_destruct_candidates=self_destruct_candidates.tolist(),self_destruct_powers=self_destruct_powers.tolist(),self_destruct_damp=self_destruct_damp.tolist(),self_destruct_abilities=self_destruct_abilities.tolist(),self_destruct_items=self_destruct_items.tolist(),heal_bell_binding=heal_bell_binding.tolist(),heal_bell_move=heal_bell_move,heal_bell_soundproof=heal_bell_soundproof.tolist(),schema=SCHEMA,baton_binding=baton_binding.tolist(),baton_move=baton_move,baton_abilities=baton_abilities.tolist(),baton_items=baton_items.tolist(),declared={x.name:int(x) for x in Branch},
+    inventory=dict(before_move_blocked_binding=before_move_blocked_binding.tolist(),before_move_blocked_moves=before_move_blocked_moves.tolist(),before_move_blocked_abilities=before_move_blocked_abilities.tolist(),before_move_blocked_items=before_move_blocked_items.tolist(),self_destruct_binding=self_destruct_binding.tolist(),self_destruct_candidates=self_destruct_candidates.tolist(),self_destruct_powers=self_destruct_powers.tolist(),self_destruct_damp=self_destruct_damp.tolist(),self_destruct_abilities=self_destruct_abilities.tolist(),self_destruct_items=self_destruct_items.tolist(),heal_bell_binding=heal_bell_binding.tolist(),heal_bell_move=heal_bell_move,heal_bell_soundproof=heal_bell_soundproof.tolist(),schema=SCHEMA,baton_binding=baton_binding.tolist(),baton_move=baton_move,baton_abilities=baton_abilities.tolist(),baton_items=baton_items.tolist(),declared={x.name:int(x) for x in Branch},
         source_files={f:hashlib.sha256(Path(__file__).with_name(f).read_bytes()).hexdigest() for f in files},
         pinch_binding=pinch_binding.tolist(),pinch_stats=pinch_stats.tolist(),
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
@@ -425,7 +433,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths),words(heal_bell_binding),jnp.asarray(heal_bell_move,jnp.int32),jnp.asarray(heal_bell_soundproof),words(baton_binding),jnp.asarray(baton_move,jnp.int32),jnp.asarray(baton_abilities),jnp.asarray(baton_items),words(self_destruct_binding),jnp.asarray(self_destruct_candidates),jnp.asarray(self_destruct_powers),jnp.asarray(self_destruct_damp),jnp.asarray(self_destruct_abilities),jnp.asarray(self_destruct_items))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths),words(heal_bell_binding),jnp.asarray(heal_bell_move,jnp.int32),jnp.asarray(heal_bell_soundproof),words(baton_binding),jnp.asarray(baton_move,jnp.int32),jnp.asarray(baton_abilities),jnp.asarray(baton_items),words(self_destruct_binding),jnp.asarray(self_destruct_candidates),jnp.asarray(self_destruct_powers),jnp.asarray(self_destruct_damp),jnp.asarray(self_destruct_abilities),jnp.asarray(self_destruct_items),words(before_move_blocked_binding),jnp.asarray(before_move_blocked_moves),jnp.asarray(before_move_blocked_abilities),jnp.asarray(before_move_blocked_items))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -534,6 +542,9 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.self_move_ids,(3,),jnp.int32)
     accounting._shape(tables.encore_binding,(8,),jnp.uint32)
     accounting._shape(tables.encore_move,(),jnp.int32)
+    accounting._shape(tables.before_move_blocked_binding,(8,),jnp.uint32)
+    accounting._shape(tables.before_move_blocked_moves,(2,len(tables.selected_risk)),jnp.bool_)
+    for value in (tables.before_move_blocked_abilities,tables.before_move_blocked_items):accounting._shape(value,(len(value),),jnp.bool_)
     accounting._shape(tables.sleep_blocked_binding,(8,),jnp.uint32)
     accounting._shape(tables.sleep_blocked_moves,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.belly_drum_binding,(8,),jnp.uint32)
@@ -606,7 +617,7 @@ def observe_constructor_device(carry,tape,state,tables,*,active):
     return _observe(carry,tape,tables,Branch.CONSTRUCTOR,jnp.where(bad,CONSTRUCTOR_STATE,0),active=active)
 
 
-def observe_pre_move_device(carry,tape,state,side,before,tables,*,eligible,active,captured_sleep=None):
+def observe_pre_move_device(carry,tape,state,side,before,tables,*,eligible,active,captured_sleep=None,captured_before_move=None):
     if type(before) is not mechanics.BeforeMove:raise ValueError('literal actual BeforeMove result required')
     b=len(carry.stream_id);side=_vector(side,b);eligible=_vector(eligible,b,jnp.bool_)
     accounting._shape(state.active,(b,2),jnp.int32)
@@ -616,6 +627,8 @@ def observe_pre_move_device(carry,tape,state,side,before,tables,*,eligible,activ
     confusion=state.confusion_counter[rows,safe_side,jnp.clip(physical,0,5)]
     from . import engine_sleep_blocked_callbacks as sleep_blocked
     supported=sleep_blocked.captured_matches(tape,captured_sleep,state,side,before)
+    from . import engine_before_move_blocked_callbacks as bm
+    supported |= bm.captured_matches(tape,captured_before_move,state,side,before)
     bad=eligible&address&((~before.can_act&~supported)|before.confusion_self_hit|(confusion>0))
     return _observe(carry,tape,tables,Branch.PRE_MOVE,jnp.where(bad,BLOCKED_ACTION,0)
         |jnp.where(eligible&~address,NAMESPACE,0),active=active)
@@ -1070,8 +1083,8 @@ def _on_tape(tape,observe,*args,**kwargs):
         refusal=tape.refusal|jnp.where(active&(carry.risk!=0),UNKNOWN_KERNEL_RISK,0))
 
 
-def pre_move_on_tape(tape,state,side,before,*,eligible,active,captured_sleep=None):
-    return _on_tape(tape,observe_pre_move_device,state,side,before,eligible=eligible,active=active,captured_sleep=captured_sleep)
+def pre_move_on_tape(tape,state,side,before,*,eligible,active,captured_sleep=None,captured_before_move=None):
+    return _on_tape(tape,observe_pre_move_device,state,side,before,eligible=eligible,active=active,captured_sleep=captured_sleep,captured_before_move=captured_before_move)
 
 
 def selected_on_tape(tape,move,*,eligible,active):

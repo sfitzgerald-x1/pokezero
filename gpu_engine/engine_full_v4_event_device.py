@@ -24,6 +24,7 @@ import numpy as np
 from pokezero.dex import normalize_id
 
 from . import engine_self_destruct_callbacks as self_destruct_callbacks
+from . import engine_before_move_blocked_callbacks as before_move_blocked_callbacks
 from . import engine_lifecycle_event_device as causal
 from . import engine_public_events as engine, public_context, public_inputs as inputs
 from . import public_wire, public_refresh_stream, public_toxic, v4_encoder
@@ -119,6 +120,7 @@ class Tables(NamedTuple):
     self_heal: object
     wonder_guard_immune: object
     belly_drum_setboost: object
+    before_move_blocked: object
     sleep_blocked: object
     encore: object
     leech: object
@@ -307,6 +309,8 @@ def compile_adapter(metadata, projector, *, catalog):
         self_boost[stat,delta]=add(f'|-boost|{ident[0]}|{("atk","def","spa","spd","spe","accuracy","evasion")[stat]}|{delta}',inputs.Kind.BOOST)
     belly_drum_setboost=add(f'|-setboost|{ident[0]}|atk|6|[from] move: Belly Drum',inputs.Kind.BOOST)
     sleep_blocked=add(f'|cant|{ident[0]}|slp',inputs.Kind.SLEEP)
+    before_move_blocked=np.asarray([add(f'|cant|{ident[0]}|'+reason,inputs.Kind.ACTIVE,last_main=True)for reason in ('par','frz')],np.int32)
+    if np.any(before_move_blocked<=0):raise ValueError('original PAR/FRZ cant writer required')
     encore=np.array([add(f'|-start|{ident[0]}|Encore',inputs.Kind.ACTIVE),add(f'|-end|{ident[0]}|Encore',inputs.Kind.ACTIVE)],np.int32)
     leech_start=add(f'|-start|{ident[0]}|move: Leech Seed',inputs.Kind.ACTIVE)
     leech=np.array([[leech_start]*7,[add(f'|-damage|{ident[0]}|71/100'+suffix+f'|[from] Leech Seed|[of] {ident[1]}',inputs.Kind.CONDITION)for suffix in ('',' slp',' par',' brn',' frz',' psn',' tox')],[add(f'|-heal|{ident[0]}|71/100'+suffix+'|[silent]',inputs.Kind.CONDITION)for suffix in ('',' slp',' par',' brn',' frz',' psn',' tox')]],np.int32)
@@ -500,6 +504,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += pinch_items.tobytes()+heal_bell_keys.tobytes()
     payload += sub_damage_keys.tobytes()+rough_skin_damage.tobytes()
     payload += leech.tobytes()+encore.tobytes()+self_move.tobytes()+self_move_still.tobytes()
+    payload += before_move_blocked.tobytes()
     payload += np.array(sleep_blocked,np.int32).tobytes()+np.array(belly_drum_setboost,np.int32).tobytes()+self_heal.tobytes()+np.array(wonder_guard_immune,np.int32).tobytes()+no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
     payload += ident_species.tobytes()
@@ -510,7 +515,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),jnp.array(status_damage_lethal),jnp.array(self_boost),jnp.array(heal_bell_keys),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(before_move_blocked),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),jnp.array(status_damage_lethal),jnp.array(self_boost),jnp.array(heal_bell_keys),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -633,6 +638,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.self_heal,(7,),jnp.int32)
     causal.base._shape(tables.wonder_guard_immune,(),jnp.int32)
     causal.base._shape(tables.belly_drum_setboost,(),jnp.int32)
+    causal.base._shape(tables.before_move_blocked,(2,),jnp.int32)
     causal.base._shape(tables.sleep_blocked,(),jnp.int32)
     causal.base._shape(tables.self_move,(4,),jnp.int32)
     causal.base._shape(tables.self_move_still,tables.moves.shape,jnp.bool_)
@@ -757,6 +763,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         self_boost=(kind==int(inputs.Kind.BOOST))&(raw_kind==self_boost_callbacks.SELF_BOOST_INPUT)
         belly=raw_kind==belly_callbacks.BELLY_DRUM
         sleep_blocked=raw_kind==sleep_blocked_callbacks.SLEEP_BLOCKED
+        before_move_blocked=raw_kind==before_move_blocked_callbacks.BEFORE_MOVE_BLOCKED
         belly_boost=belly&(tape.words[:,index,4]==1)
         calm_mind=(kind==int(inputs.Kind.BOOST))&(raw_kind==calm_mind_callbacks.CALM_MIND)
         swords_dance=(kind==int(inputs.Kind.BOOST))&(raw_kind==swords_dance_callbacks.SWORDS_DANCE)
@@ -820,6 +827,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(self_boost,tables.self_boost[jnp.clip(sb_raw[:,4],0,6),jnp.clip(sb_raw[:,6]-sb_raw[:,5],0,2)],key)
         key=jnp.where(belly_boost,tables.belly_drum_setboost,key)
         key=jnp.where(sleep_blocked,tables.sleep_blocked,key)
+        key=jnp.where(before_move_blocked,tables.before_move_blocked[(tape.words[:,index,4]==6).astype(jnp.int32)],key)
         key=jnp.where(leech,tables.leech[jnp.clip(leech_op,0,2),jnp.where(leech_op==leech_callbacks.START,0,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,9],0,6)])],key)
         key=jnp.where(self_move,tables.self_move[jnp.where(sm_rest_status,2,jnp.where(sm_rest_heal,3,jnp.clip(sm_code,0,1)))],key)
         key=jnp.where(encore,tables.encore[jnp.clip(tape.words[:,index,3],0,1)],key)
@@ -1001,6 +1009,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~self_destruct|self_destruct_callbacks.owned(tape,index)
         identity &= ~self_move|(self_move_callbacks.owned(tape,index)&live[rows,safe]&((sm_code==self_move_callbacks.WISH_TICK)|sm_called)&(statuses[rows,safe,safe_slot]==sm_prior_status)&(sm_rest_status|sm_health)&(~sm_sleep|tables.self_move_still[jnp.clip(sm_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~encore | (encore_callbacks.owned(tape,index)&live[rows,safe])
+        identity &= ~before_move_blocked|(before_move_blocked_callbacks.owned(tape,index)&live[rows,safe]&(previous_status==jnp.where(tape.words[:,index,4]==6,4,2)))
         identity &= ~sleep_blocked | (sleep_blocked_callbacks.owned(tape,index)&live[rows,safe]
             &(previous_status==1))
         belly_a,belly_z,belly_owned=belly_callbacks.pair(tape,index)
