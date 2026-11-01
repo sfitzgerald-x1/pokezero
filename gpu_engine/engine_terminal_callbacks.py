@@ -1,7 +1,8 @@
-"""Private SAME-call final direct-KO receipt; no terminal/physics inference.
+"""Private SAME-call direct/status KO receipts; no terminal/physics inference.
 
 The owning source-witness driver opens this observer before its one transition.
-Only the existing registered direct KO's exact HP0/faint Site10 span can fill it.
+The original direct HP0/faint Site10 receiver is unchanged. A separate optional
+companion accepts only the source-owned Site5 status HP0/faint transaction.
 The final numerical assignment supplies literal done/winner and all twelve HP
 and maxima. This is not an event synthesized from a terminal state, a general
 terminal capability, or birth/origin attestation. Both original owner consumers
@@ -42,6 +43,7 @@ class Context(NamedTuple):
     final_done: object
     final_winner: object
     finalized: object
+    status: object = None
 
 
 def _context(tape):
@@ -60,6 +62,7 @@ def _typed(c,b):
     life._typed(c.generation,(b,2),jnp.int32)
     for name in ('before_hp','before_max_hp','final_hp','final_max_hp'):
         life._typed(getattr(c,name),(b,2,6),jnp.int32)
+    if c.status is not None:_typed_status(c.status,b)
 
 
 def _bound(tape,c):
@@ -82,7 +85,7 @@ def _bound(tape,c):
     return good
 
 
-def begin_on_tape(tape,state,context,*,active):
+def begin_on_tape(tape,state,context,*,active,status_data=None):
     """Owning pre-transition cutpoint only; no accepted/completed argument."""
     from . import engine_execution_completeness as ex, engine_direct_hit_controls as hit
     from .state import BattleState
@@ -99,6 +102,8 @@ def begin_on_tape(tape,state,context,*,active):
         active&hit._registered_bound(tape,context),state.hp,state.max_hp,state.done,state.winner,
         z,jnp.full(b,-1,jnp.int32),z,jnp.full(b,-1,jnp.int32),jnp.full(b,-1,jnp.int32),z,
         jnp.zeros_like(state.hp),jnp.zeros_like(state.max_hp),no,jnp.full(b,-1,jnp.int32),z)
+    if status_data is not None:
+        c=c._replace(status=_initialize_status(status_data,c.enabled,state))
     return tape._replace(execution=actual._replace(terminal=c))
 
 
@@ -162,7 +167,7 @@ def capture_final_on_tape(tape,state,*,active):
     return tape._replace(execution=tape.execution._replace(terminal=updated))
 
 
-def matches_final_device(tape,state):
+def _matches_direct_final_device(tape,state):
     c=_context(tape);b=len(tape.count)
     if c is None:return jnp.zeros(b,bool)
     rows=jnp.arange(b);side=jnp.clip(c.actor,0,1);target=jnp.clip(c.target_physical,0,5)
@@ -186,4 +191,84 @@ def commit_rows(active,before,after):
         same &= jnp.all((old==new).reshape((b,-1)),axis=1)
     use=active&same
     return before._replace(**{name:jnp.where(use.reshape((b,)+(1,)*(old.ndim-1)),new,old)
-        for name,old,new in zip(before._fields,before,after) if name not in _GLOBAL})
+        for name,old,new in zip(before._fields,before,after) if name not in _GLOBAL and name!='status'},status=_commit_status_rows(use,before.status,after.status))
+
+
+class StatusReceipt(NamedTuple):
+    data: object
+    enabled: object
+    candidates: object
+    slot: object
+    serial: object
+    side: object
+    physical: object
+    old_hp: object
+    before_hp: object
+    before_max_hp: object
+
+
+def _typed_status(s,b):
+    from . import engine_status_residual_callbacks as status
+    if type(s)is not StatusReceipt or type(s.data)is not status.Data:raise ValueError('original residual terminal companion required')
+    for x in s.data[:5]:life._typed(x,(8,),jnp.uint32)
+    life._typed(s.data.reason_by_status,(7,),jnp.int32);life._typed(s.data.damage_tag_by_reason,(4,),jnp.int32)
+    life._typed(s.data.singleton_order,(),jnp.bool_);life._typed(s.data.lethal_source,(),jnp.bool_)
+    life._typed(s.enabled,(b,),jnp.bool_)
+    for n in ('candidates','slot','serial','side','physical','old_hp'):life._typed(getattr(s,n),(b,),jnp.int32)
+    for n in ('before_hp','before_max_hp'):life._typed(getattr(s,n),(b,2,6),jnp.int32)
+
+
+def _initialize_status(data,enabled,state):
+    b=len(enabled);z=jnp.zeros(b,jnp.int32);absent=jnp.full(b,-1,jnp.int32)
+    s=StatusReceipt(data,enabled&data.lethal_source,z,absent,z,absent,absent,z,jnp.zeros_like(state.hp),jnp.zeros_like(state.max_hp));_typed_status(s,b);return s
+
+
+def _commit_status_rows(active,before,after):
+    if before is None and after is None:return None
+    b=len(active);_typed_status(before,b);_typed_status(after,b)
+    same=jnp.array(True)
+    for a,z in zip(before.data,after.data):same &= jnp.all(a==z)
+    use=active&same&(before.enabled==after.enabled)
+    return before._replace(**{n:jnp.where(use.reshape((b,)+(1,)*(a.ndim-1)),z,a)for n,a,z in zip(before._fields,before,after)if n!='data'})
+
+
+def capture_status_on_tape(tape,capture,good):
+    """Only a just-claimed original Site5 HP0→faint can be a terminal candidate."""
+    from . import engine_status_residual_callbacks as status,engine_execution_completeness as ex
+    c=_context(tape)
+    if c is None or c.status is None:return tape
+    b=len(tape.count);rows=jnp.arange(b);s=c.status;_typed_status(s,b);p=capture.pending;ledger=tape.execution.ledger;slot,same=ex._ticket(ledger,p.ticket)
+    victim=jnp.clip(p.side,0,1);physical=jnp.clip(p.physical,0,5)
+    source=jnp.array(True)
+    for a,z in zip(s.data,p.data):source &= jnp.all(a==z)
+    last=(jnp.sum(p.hp[rows,victim]>0,axis=1)==1)&(p.hp[rows,victim,physical]>0)
+    use=(good&source&_bound(tape,c)&s.enabled&same&(c.candidates==0)&(s.candidates==0)&last
+        &status.owned_lethal(tape,ledger.start[rows,slot],s.data)&(ledger.end[rows,slot]==tape.count))
+    updated=s._replace(candidates=s.candidates+use.astype(jnp.int32),slot=jnp.where(use,slot,s.slot),serial=jnp.where(use,p.ticket.serial,s.serial),side=jnp.where(use,p.side,s.side),physical=jnp.where(use,p.physical,s.physical),old_hp=jnp.where(use,p.hp[rows,victim,physical],s.old_hp),before_hp=jnp.where(use[:,None,None],p.hp,s.before_hp),before_max_hp=jnp.where(use[:,None,None],p.maximum,s.before_max_hp))
+    return tape._replace(execution=tape.execution._replace(terminal=c._replace(status=updated)))
+
+
+def _matches_status_final_device(tape,state):
+    from . import engine_status_residual_callbacks as status,engine_execution_completeness as ex
+    c=_context(tape);b=len(tape.count)
+    if c is None or c.status is None:return jnp.zeros(b,bool)
+    s=c.status;_typed_status(s,b);rows=jnp.arange(b);ledger=tape.execution.ledger;slot=jnp.clip(s.slot,0,ledger.site.shape[1]-1);victim=jnp.clip(s.side,0,1);physical=jnp.clip(s.physical,0,5)
+    good=(_bound(tape,c)&s.enabled&(c.candidates==0)&(s.candidates==1)&(s.slot>=0)&(s.slot<ledger.count)&(ledger.serial[rows,slot]==s.serial)&(ledger.side[rows,slot]==s.side)&status.owned_lethal(tape,ledger.start[rows,slot],s.data))
+    raw=tape.words[rows,jnp.clip(ledger.start[rows,slot],0,tape.words.shape[1]-1)]
+    good &= ((raw[:,3]==s.side)&(raw[:,4]==s.physical)&(raw[:,5]==s.old_hp)
+        &(raw[:,5]==s.before_hp[rows,victim,physical])
+        &(raw[:,7]==s.before_max_hp[rows,victim,physical]))
+    expected=s.before_hp.at[rows,victim,physical].set(0)
+    good &= ((c.finalized==1)&~c.before_done&(c.before_winner==-1)&c.final_done
+        &(s.side>=0)&(s.side<2)&(s.physical>=0)&(s.physical<6)&(s.old_hp>0)&(s.old_hp==s.before_hp[rows,victim,physical])
+        &jnp.all((s.before_hp>=0)&(s.before_max_hp>0)&(s.before_hp<=s.before_max_hp),axis=(1,2))&jnp.all(jnp.any(s.before_hp>0,axis=2),axis=1)
+        &jnp.all(c.final_hp==expected,axis=(1,2))&jnp.all(c.final_max_hp==s.before_max_hp,axis=(1,2)))
+    alive=jnp.any(c.final_hp>0,axis=2)
+    good &= ~alive[rows,victim]&alive[rows,1-victim]&(c.final_winner==1-s.side)
+    good &= state.done&(state.winner==c.final_winner)&jnp.all(state.hp==c.final_hp,axis=(1,2))&jnp.all(state.max_hp==c.final_max_hp,axis=(1,2))
+    return good
+
+
+def matches_final_device(tape,state):
+    """Disjoint original direct-KO or exact residual source transactions only."""
+    return _matches_direct_final_device(tape,state)|_matches_status_final_device(tape,state)

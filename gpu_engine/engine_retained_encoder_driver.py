@@ -264,7 +264,8 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         from . import engine_terminal_callbacks as terminal
         if execution_tables is None or kernel_risk_tables is None or direct_hit_context is None:
             raise ValueError('terminal observer requires original registered direct/accounting/risk contexts')
-        tape=terminal.begin_on_tape(tape,core.engine,direct_hit_context,active=source_ready)
+        tape=terminal.begin_on_tape(tape,core.engine,direct_hit_context,active=source_ready,
+            status_data=None if status_residual_context is None else status_residual_context.data)
     masked = core.engine._replace(done=core.engine.done | ~source_ready)
     result = transition.step_with_chance(masked, engine_actions, engine_table, chance,
         _public_trace=tape, _lifecycle_trace=True,

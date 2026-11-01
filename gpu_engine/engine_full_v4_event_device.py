@@ -121,6 +121,7 @@ class Tables(NamedTuple):
     entry_spikes_damage: object
     self_move: object
     self_move_still: object
+    status_damage_lethal: object
     namespaces: Bindings
     binding: object
 
@@ -319,6 +320,10 @@ def compile_adapter(metadata, projector, *, catalog):
             suffix=(' '+token) if token else ''
             status_damage[reason,status]=add(f'|-damage|{ident[0]}|71/100{suffix}|[from] {tag}',inputs.Kind.CONDITION)
             if not status_damage[reason,status]:raise ValueError('FULL writer lacks exact residual status HP schema')
+    status_damage_lethal=np.zeros(4,np.int32)
+    for reason,tag in ((status_residual_callbacks.BURN,'brn'),(status_residual_callbacks.POISON,'psn'),(status_residual_callbacks.TOXIC,'psn')):
+        status_damage_lethal[reason]=add(f'|-damage|{ident[0]}|0 fnt|[from] {tag}',inputs.Kind.CONDITION)
+        if not status_damage_lethal[reason]:raise ValueError('FULL writer lacks exact lethal status HP schema')
     entry_spikes_damage=np.array([add(f'|-damage|{ident[0]}|71/100'+(' '+token if token else '')+
         '|[from] Spikes',inputs.Kind.CONDITION) for token in tokens],np.int32)
     if not np.all(entry_spikes_damage):raise ValueError('FULL writer lacks exact entry Spikes schemas')
@@ -468,12 +473,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()+np.array([protect_success,protect_block],np.int32).tobytes()+protect_still_moves.tobytes()+entry_spikes_damage.tobytes()
+    payload += status_damage_lethal.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),jnp.array(status_damage_lethal),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -581,6 +587,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(state.weather_permanent,(b,),jnp.bool_)
     causal.base._shape(state.weather_remaining,(b,),jnp.int32)
     causal.base._shape(tables.status_damage,(4,7),jnp.int32)
+    causal.base._shape(tables.status_damage_lethal,(4,),jnp.int32)
     causal.base._shape(tables.direct_hit_control,(3,),jnp.int32)
     causal.base._shape(tables.pressure_start,(),jnp.int32)
     causal.base._shape(tables.flash_fire_end,(),jnp.int32)
@@ -744,6 +751,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(leftovers_heal,tables.leftovers_heal[chip_status],key)
         key=jnp.where(self_heal,jnp.where(heal_code!=0,tables.self_move[0],tables.self_heal[chip_status]),key)
         key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,3),chip_status],key)
+        key=jnp.where(status_damage&(tape.words[:,index,6]==0),tables.status_damage_lethal[jnp.clip(tape.words[:,index,9],0,3)],key)
         key=jnp.where(recoil,tables.recoil_damage[jnp.clip(semantic[:,11],0,6)],key)
         key=jnp.where(rough,tables.rough_skin_damage[jnp.clip(semantic[:,11],0,6)],key)
         key=jnp.where(direct_control,tables.direct_hit_control[jnp.clip(
