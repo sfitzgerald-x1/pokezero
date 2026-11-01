@@ -72,14 +72,14 @@ class HostCopyTests(unittest.TestCase):
   original_capture=capture(b,wrap);diag_capture=capture(b,wrap)
   if missing:original_capture=None
   witness=NS(raw_words=raw,raw_count=count,raw_complete_words=None if missing else good,refusal=zero,outcome_diagnostics=original_capture)
-  current=NS(engine=NS(fake='before'),cursor=NS(admitted=yes),weather_profile=None,frame_number=wrap(np.zeros(b,np.int32)),execution=ledger(10),risks=risk,frame_input_report=witness)
+  current=NS(engine=NS(fake='before'),cursor=NS(admitted=yes),weather_profile=None,orders=None,frame_number=wrap(np.zeros(b,np.int32)),execution=ledger(10),risks=risk,frame_input_report=witness)
   after=NS(**vars(current));active=np.arange(b)%4!=0;scored=np.arange(b)%2==0;kept=active&scored
   after.frame_number=wrap(kept.astype(np.int32));after.engine=NS(fake='after')
   callbacks=NS(words=raw,count=count,refusal=zero,execution=NS(ledger=ledger(5),risks=NS(carry=risk),leech_history=None,diagnostics=diag_capture))
   if not missing:witness.outcome_diagnostics=original_capture._replace(count=current.execution.count)
   callbacks.execution.diagnostics=diag_capture._replace(count=callbacks.execution.ledger.count)
   backend=c._Runtime.__new__(c._Runtime);backend.j=NS(asarray=lambda x:x);backend.jax=NS(block_until_ready=lambda x:x)
-  backend.engine=current.engine;backend.cursor=current.cursor;backend.profile=None;backend.move_names=('none','one','two');backend.session=NS(state=NS(core=current),result=None);calls=[]
+  backend.engine=current.engine;backend.cursor=current.cursor;backend.profile=None;backend.party_orders=current.orders;backend.move_names=('none','one','two');backend.session=NS(state=NS(core=current),result=None);calls=[]
   def advance(session,actions,**kw):
    calls.append(('original',actions.tolist(),kw['active_rows'].tolist(),kw['chance_inputs']));session.state=NS(core=after);session.result=NS(state=session.state)
    if kw.get('return_diagnostics',False):
@@ -89,7 +89,7 @@ class HostCopyTests(unittest.TestCase):
   diag=NS(executed_rows=wrap(kept),active_rows=wrap(kept.copy()),invalid_actions=wrap(np.zeros(b,bool)),host_timings={'advance_wall_ms':1.25})
   backend.driver=NS(advance=advance,latest_diagnostics=lambda session:diag)
   bad=wrap(np.arange(b)%5==0)
-  def executable(*args):calls.append(('fallback',args[3].tolist(),args[5].tolist(),args[4]));return NS(fake='combined'),NS(admitted=yes),None,callbacks,bad,None,None if missing else good,yes
+  def executable(*args):calls.append(('fallback',args[3].tolist(),args[5].tolist(),args[4]));return (NS(fake='combined'),NS(admitted=yes),None,callbacks,bad,None,None if missing else good,yes)+((None,)if len(args)==7 else())
   backend.diag_executable=executable
   return backend,tracked,calls,active,scored
  def test_mixed_advance_exact_packets_and_no_per_row_device_conversions(self):
