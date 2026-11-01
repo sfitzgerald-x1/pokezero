@@ -1,8 +1,10 @@
-"""Literal positive Recover/Soft-Boiled/Synthesis SAME-write input.
+"""Literal source-derived recovery SAME-write input.
 
 RAW45=[45,move,effectiveWeather,side,physical,oldHP,newHP,maxHP,status,
-       literalSecondaryDispatch]. Site32 owns exactly one word. This observes
-existing assignments; full/no-effect/called/unsupported branches stay UNKNOWN.
+       flags]. flags: secondary1, half-fullHP2, weather-fullHP4.
+Site32 owns exactly one word. This observes
+existing assignments. Named full-HP half/weather outcomes require unchanged
+actual HP/status; called, ambiguous and unsupported branches stay UNKNOWN.
 """
 import hashlib,json,subprocess
 from pathlib import Path
@@ -12,6 +14,10 @@ import numpy as np
 from . import engine_public_events as public,engine_lifecycle_callbacks as life
 
 SELF_HEAL=45
+SECONDARY,HALF_FULL,WEATHER_FULL=1,2,4
+HALF,WEATHER=1,2
+RUN_EFFECTS_SHA='bb75053d0bc1c666f41ea43143e8440ec1d415194e979d79eb007ae7ed3ea2b5'
+ATTR_LAST_MOVE_SHA='6cf95c40dee8596819ba868acd720c3d41646b32a5266b5d966cec770e5d1241'
 SYNTHESIS_SHA='f055a11ff7d7d6a15761908c36fef2c6d9d1ce23e696feb1b8be8309466ee75b'
 HEAL_SHA='75d2b2e30f95f52a9adc9847fae763fe92145535416f69ebb0ec0782d9d65ddb'
 class Data(NamedTuple):
@@ -23,6 +29,7 @@ class Data(NamedTuple):
     candidates:object
     installed:object
     weather:object
+    family:object
 class Pending(NamedTuple):
     context:object
     ticket:object
@@ -46,36 +53,38 @@ def compile_data(catalog,metadata,rules):
     script=r"""
 const fs=require('fs'),path=require('path'),crypto=require('crypto'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
 const verified=require(process.argv[2]).build(root,meta),d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),{Battle}=require(path.join(root,'dist/sim/battle.js'));
+const {BattleActions}=require(path.join(root,'dist/sim/battle-actions.js'));
 const h=x=>crypto.createHash('sha256').update(x).digest('hex');
 const rows=meta.vocabulary.moves.map(id=>{const m=d.moves.get(id);return {id:m.id,exists:m.exists,gen:m.gen,name:m.name,
 category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,heal:m.heal||null,
 callbacks:Object.keys(m).filter(k=>/^on/.test(k)&&m[k]!==undefined),onHitSHA:m.onHit?h(m.onHit.toString()):null,
 mixed:!!(m.self||m.boosts||m.status||m.secondary||m.secondaries||m.volatileStatus||m.condition||m.sideCondition||m.slotCondition||m.weather||m.terrain||m.pseudoWeather||m.recoil||m.drain||m.selfdestruct||m.forceSwitch||m.selfSwitch)}});
-process.stdout.write(JSON.stringify({rows,healSHA:h(Battle.prototype.heal.toString()),source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
+process.stdout.write(JSON.stringify({rows,healSHA:h(Battle.prototype.heal.toString()),effectsSHA:h(BattleActions.prototype.runMoveEffects.toString()),attrSHA:h(Battle.prototype.attrLastMove.toString()),source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
     result=subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30)
     descriptor=json.loads(result.stdout)
-    if json.dumps(descriptor['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(descriptor['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json or descriptor['healSHA']!=HEAL_SHA:raise ValueError('original self-heal source changed')
+    if json.dumps(descriptor['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(descriptor['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json or descriptor['healSHA']!=HEAL_SHA or descriptor['effectsSHA']!=RUN_EFFECTS_SHA or descriptor['attrSHA']!=ATTR_LAST_MOVE_SHA:raise ValueError('original self-heal source changed')
     t=catalog.engine_table;e=t.effects
     if e is None:raise ValueError('actual original self-heal effects required')
-    mask=np.zeros(len(t.power),bool)
+    mask=np.zeros(len(t.power),bool);family=np.zeros(len(t.power),np.int32)
     for i,row in enumerate(descriptor['rows']):
-        half=row['id']in ('recover','softboiled')and row['heal']==[1,2]and not row['callbacks']
-        weather=row['id']=='synthesis'and row['heal']is None and row['callbacks']==['onHit']and row['onHitSHA']==SYNTHESIS_SHA
+        half= row['heal']==[1,2]and not row['callbacks']
+        weather= row['heal']is None and row['callbacks']==['onHit']and row['onHitSHA']==SYNTHESIS_SHA
         mask[i]=bool(i and(half or weather)and row['exists']and row['gen']<=3 and row['id']==metadata['vocabulary']['moves'][i]
             and row['category']=='Status'and row['target']=='self'and row['power']==0 and row['accuracy']is True and not row['mixed']
             and catalog.ids[i]>0 and catalog.targets[i]==0 and int(t.power[i])==0 and bool(t.always_hit[i])and int(t.priority[i])==row['priority']
-            and bool(e.heal_half[i])==half and bool(e.weather_heal[i])==weather)
+            and bool(e.heal_half[i])==half and bool(e.weather_heal[i])==weather and(not weather or t.weather is not None))
         for name in ('status','self_boosts','rest','haze','substitute','protect','endure','heal_bell','pain_split','belly_drum','hit_spa_drop','thunderwave','bypass_sub'):
             mask[i]&=not bool(np.any(np.asarray(getattr(e,name)[i])!=0))
-    payload=dict(schema='pokezero.positive-original-self-heal.v1',descriptor=descriptor,candidates=mask.tolist(),engine=catalog.engine_binding,source=catalog.source_binding,moves=catalog.move_binding,producer=catalog.binding,
+        family[i]=(HALF if half else WEATHER)if mask[i]else 0
+    payload=dict(schema='pokezero.original-recovery-input.v2',family=family.tolist(),descriptor=descriptor,candidates=mask.tolist(),engine=catalog.engine_binding,source=catalog.source_binding,moves=catalog.move_binding,producer=catalog.binding,
         installed={k:np.asarray(v).tolist()for k,v in zip(e._fields,e)},weather=None if t.weather is None else {k:np.asarray(v).tolist()for k,v in zip(t.weather._fields,t.weather)})
     words=lambda v:j.asarray(v,j.uint32)
-    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(mask),e,t.weather)
+    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(mask),e,t.weather,j.asarray(family,j.int32))
 
 def shape(d):
     if type(d)is not Data:raise ValueError('typed original self-heal data required')
     for x in d[:5]:life._typed(x,(8,),j.uint32)
-    life._typed(d.candidates,(len(d.installed.heal_half),),j.bool_)
+    life._typed(d.candidates,(len(d.installed.heal_half),),j.bool_);life._typed(d.family,d.candidates.shape,j.int32)
 
 def selected(context,move):
     if context is None or context.data.self_heal is None:return j.zeros_like(move,bool)
@@ -89,8 +98,8 @@ def _bound(tape,context):
     if r is None:return j.zeros(len(tape.count),bool)
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):
         life._typed(getattr(tape,name),(8,),j.uint32);good&=j.all(getattr(d,name)==getattr(tape,name))
-    life._typed(r.tables.self_heal_binding,(8,),j.uint32);life._typed(r.tables.self_heal_candidates,d.candidates.shape,j.bool_)
-    return good&life._valid(tape.cursor)&tape.cursor.initialized&(tape.turn==tape.cursor.turn)&(tape.cursor.phase==0)&j.any(d.binding!=0)&j.all(r.tables.self_heal_binding==d.binding)&j.all(r.tables.self_heal_candidates==d.candidates)
+    life._typed(r.tables.self_heal_binding,(8,),j.uint32);life._typed(r.tables.self_heal_candidates,d.candidates.shape,j.bool_);life._typed(r.tables.self_heal_family,d.family.shape,j.int32)
+    return good&life._valid(tape.cursor)&tape.cursor.initialized&(tape.turn==tape.cursor.turn)&(tape.cursor.phase==0)&j.any(d.binding!=0)&j.all(r.tables.self_heal_binding==d.binding)&j.all(r.tables.self_heal_candidates==d.candidates)&j.all(r.tables.self_heal_family==d.family)
 
 def begin(tape,state,side,move,context,table,*,eligible):
     from . import engine_execution_completeness as ex
@@ -105,24 +114,27 @@ def begin(tape,state,side,move,context,table,*,eligible):
                 if x.shape!=y.shape or x.dtype!=y.dtype:raise ValueError('self-heal installed table geometry')
                 good&=j.all(x==y)
     safe=j.clip(side,0,1);physical=state.active[rows,safe];hp=state.hp[rows,safe,physical];maximum=state.max_hp[rows,safe,physical];status=state.status[rows,safe,physical]
-    good&=(side>=0)&(side<2)&(physical==tape.cursor.physical_active[rows,safe])&(hp>0)&(hp<maximum)&(maximum<=1000000)&(tape.cursor.phase==0)
+    good&=(side>=0)&(side<2)&(physical==tape.cursor.physical_active[rows,safe])&(hp>0)&(hp<=maximum)&(maximum<=1000000)&(tape.cursor.phase==0)
     requested=eligible&selected(context,move);tape,ticket=ex.open_attempt(tape,ex.Site.SELF_HEAL,side,active=requested)
     return tape,Pending(context,ticket,side,physical,move,hp,maximum,status,requested,good)
 
 def valid_raw(raw):
-    return(raw[:,0]==SELF_HEAL)&(raw[:,1]>0)&(raw[:,2]>=0)&(raw[:,2]<=4)&(raw[:,3]>=0)&(raw[:,3]<2)&(raw[:,4]>=0)&(raw[:,4]<6)&(raw[:,5]>0)&(raw[:,6]>raw[:,5])&(raw[:,6]<=raw[:,7])&(raw[:,7]<=1000000)&(raw[:,8]>=0)&(raw[:,8]<=6)&((raw[:,9]==0)|(raw[:,9]==1))
+    code=raw[:,9]&~SECONDARY
+    return(raw[:,0]==SELF_HEAL)&(raw[:,1]>0)&(raw[:,2]>=0)&(raw[:,2]<=4)&(raw[:,3]>=0)&(raw[:,3]<2)&(raw[:,4]>=0)&(raw[:,4]<6)&(raw[:,5]>0)&(raw[:,6]<=raw[:,7])&(raw[:,7]<=1000000)&(raw[:,8]>=0)&(raw[:,8]<=6)&(raw[:,9]>=0)&j.where(code==0,raw[:,6]>raw[:,5],((code==HALF_FULL)|(code==WEATHER_FULL))&(raw[:,5]==raw[:,6])&(raw[:,6]==raw[:,7]))
 
 def _owned(tape,index,stage=2):
     from . import engine_execution_completeness as ex
     c=ex._context(tape);b=len(tape.count);rows=j.arange(b);at=j.broadcast_to(j.asarray(index,j.int32),(b,));safe=j.clip(at,0,tape.words.shape[1]-1);raw=tape.words[rows,safe]
     if c is None or c.risks is None:return raw,j.zeros(b,bool)
     ledger=c.ledger;t=c.risks.tables
-    life._typed(t.self_heal_binding,(8,),j.uint32);life._typed(t.self_heal_candidates,(len(t.selected_risk),),j.bool_)
+    life._typed(t.self_heal_binding,(8,),j.uint32);life._typed(t.self_heal_candidates,(len(t.selected_risk),),j.bool_);life._typed(t.self_heal_family,t.self_heal_candidates.shape,j.int32)
     claim=ledger.count if stage==1 else ledger.claimed[rows,safe];slot=j.clip(claim-1,0,ledger.site.shape[1]-1)
     good=ex._validate(ledger,c.tables)&ex._tape(ledger,tape,c.tables)&ledger.opened&(ledger.frame>0)&j.any(t.self_heal_binding!=0)
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):
         life._typed(getattr(tape,name),(8,),j.uint32);life._typed(getattr(t,name),(8,),j.uint32);good&=j.all(getattr(tape,name)==getattr(t,name))
     move=raw[:,1];good&=valid_raw(raw)&(at>0)&(at<tape.count)&(move<len(t.self_heal_candidates))&t.self_heal_candidates[j.clip(move,0,len(t.self_heal_candidates)-1)]&(claim>0)&(claim<=ledger.count)
+    family=t.self_heal_family[j.clip(move,0,len(t.self_heal_family)-1)];code=raw[:,9]&~SECONDARY
+    good&=j.where(code==HALF_FULL,family==HALF,j.where(code==WEATHER_FULL,family==WEATHER,(family==HALF)|(family==WEATHER)))
     good&=(ledger.site[rows,slot]==int(ex.Site.SELF_HEAL))&(ledger.side[rows,slot]==raw[:,3])&(ledger.stage[rows,slot]==stage)&(ledger.start[rows,slot]==at)&(ledger.no_output_kind[rows,slot]==0)
     good&=j.where(stage==1,tape.count==at+1,ledger.end[rows,slot]==at+1)
     prefix=j.clip(at-1,0,tape.words.shape[1]-1);decl=tape.words[rows,prefix]
@@ -142,7 +154,7 @@ def finish(tape,p,state,weather,secondary):
     b=len(tape.count);rows=j.arange(b)
     life._typed(weather,(b,),j.int32);life._typed(secondary,(b,),j.bool_)
     safe=j.clip(p.side,0,1);new=state.hp[rows,safe,p.physical];maximum=state.max_hp[rows,safe,p.physical];status=state.status[rows,safe,p.physical]
-    raw=j.stack((j.full_like(p.move,SELF_HEAL),p.move,weather,p.side,p.physical,p.old_hp,new,maximum,status,secondary.astype(j.int32)),axis=1)
+    raw=j.stack((j.full_like(p.move,SELF_HEAL),p.move,weather,p.side,p.physical,p.old_hp,new,maximum,status,secondary.astype(j.int32)+j.where(p.old_hp==p.maximum,j.where(p.context.data.self_heal.family[j.clip(p.move,0,len(p.context.data.self_heal.family)-1)]==HALF,HALF_FULL,WEATHER_FULL),0)),axis=1)
     valid=p.valid&_bound(tape,p.context)&valid_raw(raw)&(maximum==p.maximum)&(status==p.status)&(state.active[rows,safe]==p.physical)
     room=(tape.count>=0)&(tape.count<tape.words.shape[1]);at=j.clip(tape.count,0,tape.words.shape[1]-1);valid&=j.all(tape.switch_details[rows,at]==0,axis=1)
     use=p.requested&valid&room;tape=public._append(tape,SELF_HEAL,p.move,weather,p.side,p.physical,tuple(raw[:,i]for i in range(5,10)),use)
