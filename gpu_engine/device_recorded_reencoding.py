@@ -365,6 +365,56 @@ def _owner_running(job,pod):
         raise ValueError('source owner running container evidence required')
 
 
+def _prefix_accounting(snapshot,chosen,ends,bindings):
+    """Join retained rows to original END counters before deriving a report."""
+    import ast
+    from collections import Counter
+    name='gpu_engine/engine_device_observation.py'
+    payload=subprocess.check_output(['git','show',bindings['source_commit']+':'+name],cwd=collector.ROOT)
+    if hashlib.sha256(payload).hexdigest()!=bindings.get('source_files',{}).get(name):
+        raise ValueError('original encoder error namespace source differs')
+    names=[ast.literal_eval(node.value)for node in ast.parse(payload).body
+        if isinstance(node,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='ERROR_KINDS'for t in node.targets)]
+    if (len(names)!=1 or type(names[0])is not tuple or not names[0]
+            or any(type(x)is not str for x in names[0])or len(set(names[0]))!=len(names[0])):
+        raise ValueError('original encoder error namespace missing')
+    kinds=names[0]
+    rows={cell['stream_id']:dict(steps=0,successful=0,views=0,errors=0,kinds=Counter(),last=None,addresses={})for cell in chosen}
+    for record,record_sha in _records(snapshot['files']['physical']['path']):
+        row=rows[record['stream_id']]
+        if record.get('kind')=='CONSTRUCTOR':row['last']=record['initialized']['state']
+        elif record.get('kind')=='STEP':
+            if type(record.get('request'))is not int or record['request']!=row['steps']:
+                raise ValueError('prefix retained STEP sequence differs')
+            requested=record['before']['requested']
+            if type(requested)is not list or len(requested)!=2 or any(type(x)is not bool for x in requested):
+                raise ValueError('prefix original requested seats differ')
+            for side,use in enumerate(requested):
+                if use:row['addresses'][(record['request'],side)]=record_sha
+            row['steps']+=1;row['successful']+=int('after'in record)
+            row['last']=record.get('after',record['before'])['state']
+    for record,_ in _records(snapshot['files']['decisions']['path']):
+        row=rows[record['stream_id']];address=(record.get('request'),record.get('owner_side'))
+        if row['addresses'].pop(address,None)!=record.get('physical_binding_sha256'):
+            raise ValueError('prefix retained decision/STEP address differs')
+        error=record.get('candidate_error')
+        if type(error)is not int or not 0<=error<(1<<len(kinds)):
+            raise ValueError('prefix original candidate error bits differ')
+        row['views']+=1;row['errors']+=int(error!=0)
+        row['kinds'].update(kind for bit,kind in enumerate(kinds)if error&(1<<bit))
+    for cell,end in zip(chosen,ends):
+        row=rows[cell['stream_id']]
+        for key,value in [('executed_steps',row['successful']),('requested_views',row['views']),('candidate_error_views',row['errors'])]:
+            if type(end.get(key))is not int or end[key]!=value:
+                raise ValueError('prefix END '+key+' differs from retained rows')
+        if row['addresses']or end.get('candidate_error_kind_views')!=dict(row['kinds']):
+            raise ValueError('prefix END views/error-kind counts differ from retained rows')
+        if row['last']is not None:
+            for key,field in [('final_turn','turn'),('final_done','done'),('final_winner','winner')]:
+                if key in end and (type(end[key])is not type(row['last'][field][0])or end[key]!=row['last'][field][0]):
+                    raise ValueError('prefix END '+key+' differs from retained final boundary')
+
+
 def validate_prefix_inputs(manifest):
     """Immutable completed first8 snapshot; never impersonates final512 data."""
     required={'schema','original_plan','original_source_bindings','original_reducer','runtime_plan',
@@ -415,6 +465,7 @@ def validate_prefix_inputs(manifest):
     for key in ('physical','decisions'):
         for row,_ in _records(snapshot['files'][key]['path']):
             if row.get('stream_id')not in selected:raise ValueError('out-of-prefix record retained')
+    _prefix_accounting(snapshot,chosen,ends,bindings)
     return root,plan,bindings,runtime_plan,[{k:v for k,v in row.items()if k!='kind'}for row in ends]
 
 

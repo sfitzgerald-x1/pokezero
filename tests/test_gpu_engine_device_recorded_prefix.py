@@ -21,6 +21,9 @@ def setup(folder):
     plan=copy.deepcopy(plan)
     plan['cells']=[dict(stream_id=10+n,root_id=1000+n,native_seed=2000+n,team_indices=[2*n,2*n+1])for n in range(512)]
     bindings=copy.deepcopy(bindings)
+    name='gpu_engine/engine_device_observation.py'
+    payload=subprocess.check_output(['git','show',plan['source_commit']+':'+name],cwd=c.ROOT)
+    bindings['source_files'][name]=hashlib.sha256(payload).hexdigest()
     for key in ('pool','vocabulary','labels','gender_policy'):bindings[key]=plan[key]
     snapshot=folder/'snapshot';writer=c.Evidence(snapshot)
     for n,cell in enumerate(plan['cells'][:8]):
@@ -39,7 +42,10 @@ def setup(folder):
                         root_id=cell['root_id'],request=step,owner_side=side,turn=step,agreement=agreement,
                         line_kinds=['move'],refusal=None,physical_binding_sha256=sha,candidate_error=0,reference_metadata={})
                     writer.decision(row,fixture.view(),fixture.view())
-        writer.event(dict(kind='END',status='COLLECTION_CELL_FAILED'if n==2 else'TERMINAL',**cell))
+        final=dict(executed_steps=0 if n==2 else 2,requested_views=0 if n==2 else 4,
+            candidate_error_views=0,candidate_error_kind_views={})
+        if n!=2:final.update(final_turn=2,final_done=True,final_winner=int(fixture.state(n,2).winner[0]))
+        writer.event(dict(kind='END',status='COLLECTION_CELL_FAILED'if n==2 else'TERMINAL',**cell,**final))
     writer.close()
     (folder/'original-plan.json').write_text(c._json(plan)+'\n')
     runtime=copy.deepcopy(plan);runtime['source_commit']='b'*40
@@ -62,6 +68,18 @@ def setup(folder):
 
 
 class DeviceRecordedPrefixTests(unittest.TestCase):
+    def test_original_end_error_and_final_boundary_facts_are_joined(self):
+        for change in ('error','final'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory()as folder:
+                manifest=setup(folder);root=Path(manifest['snapshot']['root'])
+                key='decisions'if change=='error'else'journal';path=root/(key+'.jsonl')
+                rows=[row for row,_ in r._records(path)]
+                if change=='error':rows[0]['candidate_error']=1
+                else:next(row for row in rows if row['kind']=='END')['final_done']=False
+                path.write_text(''.join(c._json(row)+'\n'for row in rows))
+                manifest['snapshot']['files'][key]['sha256']=c.digest(path)
+                with self.assertRaisesRegex(ValueError,'prefix END'):r.validate_prefix_inputs(manifest)
+
     def test_running_immutable_first8_retains_failed_roots_and_final_is_not_accepted(self):
         with tempfile.TemporaryDirectory()as folder:
             manifest=setup(folder);root,plan,bindings,runtime,ends=r.validate_prefix_inputs(manifest)
