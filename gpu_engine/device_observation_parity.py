@@ -16,9 +16,12 @@ SHAPES = dict(numeric_features=((29, 132), 'f'), categorical_ids=((29, 41), 'iu'
 
 
 class AgreementParity:
-    def __init__(self, *, source_bindings):
+    def __init__(self, *, source_bindings, comparison_mode='legacy_strict'):
         if not isinstance(source_bindings, dict) or not source_bindings:
             raise ValueError('source identities required before any collection')
+        if comparison_mode not in ('legacy_strict', 'source_routing_coordinates'):
+            raise ValueError('explicit supported observation comparison mode required')
+        self.comparison_mode = comparison_mode
         self.bindings = dict(source_bindings)
         self.ids = set(); self.total = Counter(); self.turns = defaultdict(Counter)
         self.refusals = Counter(); self.kinds = defaultdict(Counter)
@@ -28,6 +31,7 @@ class AgreementParity:
         self.numeric_nonfinite = np.zeros((29, 132), np.int64)
         self.structure_bad = Counter()
         self.column_kind = Counter()
+        self.switch_coordinate_bad = np.zeros(5, np.int64)
 
     def _refuse(self, source, reason, kinds, column='ALL'):
         for kind in kinds:self.refusals[(source, kind, column, reason)] += 1
@@ -106,10 +110,13 @@ class AgreementParity:
         structure = {key: not np.array_equal(ref[key], got[key])
             for key in SHAPES if key not in ('numeric_features', 'categorical_ids')}
         self.structure_bad.update({key: int(value) for key, value in structure.items()})
+        self.switch_coordinate_bad += ref['switch_targets'] != got['switch_targets']
         for kind, bad in (('numeric', nb), ('categorical', cb)):
             for column in np.flatnonzero(np.any(bad, axis=0)):
                 for line in kinds:self.column_kind[(kind, int(column), line)] += 1
-        joint = not (nb.any() or cb.any() or any(structure.values()))
+        joint_structure = structure if self.comparison_mode == 'legacy_strict' else {
+            key:value for key,value in structure.items() if key != 'switch_targets'}
+        joint = not (nb.any() or cb.any() or any(joint_structure.values()))
         self.total['compared'] += 1; ledger['compared'] += 1
         self.total['joint_match'] += int(joint); ledger['joint_match'] += int(joint)
         for kind in kinds:
@@ -132,7 +139,7 @@ class AgreementParity:
         late = sum(row['compared'] for turn, row in self.turns.items() if turn >= 10)
         enough = self.total['compared'] >= 10000
         late_enough = late >= 1000
-        return dict(schema='pokezero.engine-device-public29-agreement-parity.v1',
+        result = dict(schema='pokezero.engine-device-public29-agreement-parity.v1',
             source_bindings=self.bindings, counts=dict(self.total), columns=columns,
             joint_match_fraction_on_ALL_agreement_views=ratio,
             joint_denominator_scope='All independently state-agreeing attempted views; comparison refusals stay in denominator. Zero/deferred columns are included.',
@@ -150,3 +157,14 @@ class AgreementParity:
                 for (k, c, l), n in sorted(self.column_kind.items())],
             kind_count_scope='Line kinds and column mismatch kinds are nonexclusive; do not sum as disjoint views.',
             qualification='NUMERICAL_ONLY; live engine/Showdown physical agreement, actual owning protocol references, fixed cohort provenance and independent result review required separately.')
+        if self.comparison_mode == 'source_routing_coordinates':
+            result.update(schema='pokezero.engine-device-public29-agreement-parity.source-routing.v2',
+                comparison_mode=self.comparison_mode,
+                joint_comparison_scope='All numeric/categorical columns, token types, attention and canonical legal-action masks. Raw switch-target routing coordinates are source-specific and excluded ONLY from joint matching; their shape/type/admission checks and every refusal denominator remain required.',
+                switch_target_routing_coordinates=dict(compared_views=self.total['compared'],
+                    raw_differing_views=int(self.structure_bad['switch_targets']),
+                    raw_differing_slots=self.switch_coordinate_bad.tolist(),
+                    excluded_from_joint=True,
+                    semantic_routing_equivalence_verified=False,
+                    scope='Raw coordinates only: reference own-request positions versus candidate stable physical positions. This comparison does not establish action-routing equivalence, change map_actions, or retroactively alter legacy reports.'))
+        return result
