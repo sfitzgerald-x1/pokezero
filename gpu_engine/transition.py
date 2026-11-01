@@ -1294,7 +1294,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _primary_plain_pending=None;_primary_plain_capture=None
                 if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.primary_plain_status is not None:
                     _public_trace,_primary_plain_pending=plain_primary_callbacks.begin(_public_trace,work,side,move,
-                        _direct_hit_context,table,eligible=acts&~_protect_block_mask)
+                        _direct_hit_context,table,eligible=acts&~_protect_block_mask,caller_move=caller_move)
             if _lifecycle_trace:
                 _public_trace=status_callbacks.changed(_public_trace,foe,work.active[rows,foe],
                     _active(work.status,work,foe),status,status_callbacks.PRIMARY,eligible=apply_status)
@@ -1315,7 +1315,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     apply_status,_risk_protected,_risk_absorbed,immune,acts&hit&~immune,
                     _primary_plain_pending.old_status,_active(work.status,work,foe),_primary_plain_pending.old_counter,
                     _active(work.status_counter,work,foe))
-                _public_trace,_primary_plain_capture=plain_primary_callbacks.finish(_public_trace,_primary_plain_pending,_plain_attempt)
+                _public_trace,_primary_plain_capture=plain_primary_callbacks.finish(_public_trace,_primary_plain_pending,_plain_attempt,state=work)
             if _toxic_context is not None:
                 _toxic_attempt=toxic_callbacks.Attempt(_toxic_accuracy_hit,hit,_toxic_type_immune,
                     _toxic_ability_immune,_toxic_sub_block,_toxic_live,apply_status,_risk_protected,_risk_absorbed,
