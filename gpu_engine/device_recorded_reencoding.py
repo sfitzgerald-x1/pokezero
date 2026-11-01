@@ -252,10 +252,12 @@ def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisi
                     original_candidate,reference,path=_load_row(root,row)
                     old.add(decision_id=row['decision_id'],turn=row['turn'],line_kinds=row['line_kinds'],
                         agreement=row['agreement'],reference=reference,candidate=original_candidate,refusal=row['refusal'])
-                    replay_error=pre_error if pre_error is not None else post_error
-                    effective=row['refusal']if row['refusal']is not None else replay_error
+                    # Current PRE was already checked/encoded. A subsequent
+                    # POST failure stops future carry; it cannot erase this
+                    # independently recorded current PRE decision.
+                    effective=row['refusal']if row['refusal']is not None else pre_error
                     metadata=dict(row,original_metadata=row,original_tensor_path=str(path),
-                        original_tensor_sha256=row['tensor_sha256'],reencoding_refusal=replay_error,
+                        original_tensor_sha256=row['tensor_sha256'],reencoding_refusal=pre_error,
                         reencoded_candidate_error=bits[side],mode='STORED_REENCODING')
                     writer.decision(metadata,candidates[side],reference)
                     new.add(decision_id=row['decision_id'],turn=row['turn'],line_kinds=row['line_kinds'],
@@ -281,6 +283,10 @@ def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisi
         new_team_generation_calls=0,new_chance_sampling_calls=0,full_game_throughput=None,
         original_cells=summary['cells'],reencoding_cells=roots,original_counts=summary['counts'],
         original_report_recomputed_exact=True,stored_rows_retained=rows,
+        replay_integrity_requirement_met=not any(row['reencoding_stopped']is not None for row in roots),
+        replay_integrity_failed_roots=sum(row['reencoding_stopped']is not None for row in roots),
+        provenance_qualification_status=('INELIGIBLE_REPLAY_INTEGRITY_FAILURE'
+            if any(row['reencoding_stopped']is not None for row in roots) else 'PENDING_INDEPENDENT_REVIEW'),
         scope='Fixed original legal-policy collection; current device encoder/hooks applied to literal saved inputs only. All numeric fields must exactly match recorded states. Original physical flags/refusals unchanged; no fresh roots/outcomes, strength, Native collection or automatic B4 qualification.')
     return result
 

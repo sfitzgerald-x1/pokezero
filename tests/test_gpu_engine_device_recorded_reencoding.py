@@ -125,11 +125,15 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
     def test_numeric_mismatch_stops_root_refuses_but_keeps_original_agreement(self):
         with tempfile.TemporaryDirectory()as folder:
             result,runtime,old,new=self.run_stored(folder,runtime=Runtime(bad_after=True))
-            self.assertEqual(result['counts']['agreement'],4);self.assertEqual(result['counts']['comparison_refused'],2)
-            self.assertEqual(result['counts']['compared'],2)
+            self.assertEqual(result['counts']['agreement'],4);self.assertEqual(result['counts'].get('comparison_refused',0),0)
+            self.assertEqual(result['counts']['compared'],4)
             self.assertEqual(result['reencoding_cells'][0]['reencoding_stopped']['differing_state_fields'],['status_counter'])
             self.assertIsNone(result['reencoding_cells'][1]['reencoding_stopped'])
             self.assertEqual(len([x for x in runtime.calls if x[0]=='advance']),3)
+            self.assertFalse(result['replay_integrity_requirement_met'])
+            self.assertEqual(result['replay_integrity_failed_roots'],1)
+            self.assertEqual(result['provenance_qualification_status'],'INELIGIBLE_REPLAY_INTEGRITY_FAILURE')
+            self.assertFalse(result['collection_provenance_independently_verified']);self.assertFalse(result['full_B4_pass'])
         with tempfile.TemporaryDirectory()as folder:
             result,runtime,old,new=self.run_stored(folder,runtime=Runtime(bad_initial=True))
             self.assertFalse(any(x[0]=='advance'for x in runtime.calls))
