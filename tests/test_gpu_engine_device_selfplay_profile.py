@@ -82,6 +82,7 @@ class DeviceSelfplayProfileTests(unittest.TestCase):
         Obs=namedtuple('Obs','error');Actor=namedtuple('Actor','finite')
         Step=namedtuple('Step','state invalid_actions');Public=namedtuple('Public','step trackers')
         def components(*args,**kwargs):
+            self.assertIs(kwargs['dense_public_updates'],True)
             def encoder(s,t):return (Obs(error=np.zeros(len(s.done),np.int32)),)*2
             def forward(params,obs):return Actor(finite=np.ones((len(obs[0].error),2),bool))
             def public(s,a,t,chance):
@@ -95,7 +96,7 @@ class DeviceSelfplayProfileTests(unittest.TestCase):
                 patch.object(p.time,'perf_counter_ns',Clock()):
             report=p.profile_fixed(snapshot,params={'inert':np.ones(1)},config=config,engine_tables=object(),
                 observation_tables=object(),bindings={'fixture':'not-actual-measurement'},enable_profile=True,
-                repeats=2,warmup=1,tail_capacity=3)
+                repeats=2,warmup=1,tail_capacity=3,dense_public_updates=True)
         self.assertEqual(len(jit.compiled),10);self.assertEqual(len(jit.lowered),10)
         self.assertEqual(len(jit.called),40)
         full,tail=report['profiles'];self.assertEqual(full['geometry']['physical_bf16_owner_rows'],8)
@@ -106,6 +107,7 @@ class DeviceSelfplayProfileTests(unittest.TestCase):
         self.assertEqual(full['returned_payloads']['fixed_actions_joint']['nonfinite_elements'],0)
         self.assertEqual(report['played_games'],0);self.assertIsNone(report['full_game_throughput'])
         self.assertFalse(report['qualification']);self.assertEqual(report['sampled_chance_calls'],0)
+        self.assertIs(report['dense_public_updates'],True)
         self.assertTrue(all(x is snapshot.chance for x in chance_seen[:12]))
         self.assertEqual(full['phases']['public29_bf16_forward']['warm_execute_blocked_ms'],[1.,1.])
 
@@ -129,6 +131,20 @@ class DeviceSelfplayProfileTests(unittest.TestCase):
         forbidden={'sample_chance_inputs','state_from_pool','initialize_with_public','sample','map_actions','build_v5_model'}
         self.assertFalse(any(isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and n.func.attr in forbidden for n in ast.walk(tree)))
         self.assertEqual(ast.unparse(nested['joint'].body[-1].value),'(observations, actor, result)')
+
+    def test_dense_flag_is_explicit_static_and_only_forwarded_to_public_step(self):
+        tables=NS(belief='same-source-tables')
+        for kwargs,expected in (({},False),({'dense_public_updates':True},True)):
+            components=p.make_components('engine','observations-unused','model',**kwargs)
+            # Replace only the closure's observation-table object, never an
+            # original engine call: this is an inert forwarding control.
+            components=p.make_components('engine',tables,'model',**kwargs)
+            with patch('gpu_engine.transition.step_with_public',return_value='same-output')as public:
+                self.assertEqual(components['step_with_public']('state','actions','trackers','chance'),'same-output')
+            self.assertEqual(public.call_args.args,('state','actions','engine','trackers'))
+            self.assertEqual(public.call_args.kwargs,dict(belief_tables=tables.belief,chance_inputs='chance',dense_public_updates=expected))
+        for flag in (1,None,'true'):
+            with self.assertRaises(ValueError):p.make_components(None,None,None,dense_public_updates=flag)
 
 
 if __name__=='__main__':unittest.main()

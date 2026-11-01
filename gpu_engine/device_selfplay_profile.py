@@ -83,9 +83,10 @@ def gather_tail(snapshot, *, capacity=16):
         scope='Diagnostic gathered copy only; each active source row once, padding copies one original already-done row. No invented state, trajectory or policy change.')
 
 
-def make_components(engine_tables, observation_tables, config, *, include_bare=True):
+def make_components(engine_tables, observation_tables, config, *, include_bare=True,dense_public_updates=False):
     """Pure original hot paths. No construction, chance sampling, or actor init."""
     if type(include_bare) is not bool: raise ValueError('strict optional bare-step flag required')
+    if type(dense_public_updates) is not bool: raise ValueError('strict dense public-update flag required')
     import jax.numpy as j
     from . import transition, engine_device_observation as encoder, engine_device_trackers as public
     from .benchmark_device_selfplay import run_actor
@@ -102,7 +103,7 @@ def make_components(engine_tables, observation_tables, config, *, include_bare=T
 
     def public_step(state, actions, trackers, chance):
         return transition.step_with_public(state, actions, engine_tables, trackers,
-            belief_tables=observation_tables.belief, chance_inputs=chance)
+            belief_tables=observation_tables.belief, chance_inputs=chance,dense_public_updates=dense_public_updates)
 
     def bare_step(state, actions, chance):
         return transition.step_with_chance(state, actions, engine_tables, chance)
@@ -185,7 +186,7 @@ def _payload_summary(value):
 
 
 def profile_fixed(snapshot, *, params, config, engine_tables, observation_tables,
-                  bindings, enable_profile=False, repeats=20, warmup=3, tail_capacity=16, include_bare=True):
+                  bindings, enable_profile=False, repeats=20, warmup=3, tail_capacity=16, include_bare=True,dense_public_updates=False):
     """Profile a caller-supplied declared fixed boundary, opt-in before work.
 
     ``bindings`` names actual source/pool/actor/declaration/snapshot artifacts;
@@ -195,7 +196,7 @@ def profile_fixed(snapshot, *, params, config, engine_tables, observation_tables
     if enable_profile is not True: raise ValueError('explicit fixed-input profiling enablement required')
     if (type(repeats) is not int or not 2 <= repeats <= 1000
             or type(warmup) is not int or not 1 <= warmup <= 100
-            or type(include_bare) is not bool or type(bindings) is not dict or not bindings):
+            or type(include_bare) is not bool or type(dense_public_updates) is not bool or type(bindings) is not dict or not bindings):
         raise ValueError('bounded repeats/warmup and actual input provenance required')
     if type(tail_capacity) is not int or not 1 <= tail_capacity <= 16:
         raise ValueError('tail capacity must be1..16')
@@ -206,7 +207,7 @@ def profile_fixed(snapshot, *, params, config, engine_tables, observation_tables
     if type(config) is not V5ModelConfig:
         raise ValueError('actual original public29 model configuration required')
     v5_model.validate_weights(params, config)
-    components = make_components(engine_tables, observation_tables, config, include_bare=include_bare)
+    components = make_components(engine_tables, observation_tables, config, include_bare=include_bare,dense_public_updates=dense_public_updates)
     tail, tail_meta = gather_tail(snapshot, capacity=tail_capacity)
     variants = [('full', snapshot, dict(status='READY', source_batch=len(snapshot.state.done),
         physical_batch=len(snapshot.state.done), padding_rows=0))]
@@ -236,7 +237,7 @@ def profile_fixed(snapshot, *, params, config, engine_tables, observation_tables
             returned_payloads={name: _payload_summary(value) for name, value in outputs.items()},
             public_trackers_returned=True))
     return dict(schema=SCHEMA, source_bindings=dict(bindings), profiles=rows,
-        gathered_tail_status=tail_meta, repeats=repeats, warmup=warmup,
+        gathered_tail_status=tail_meta, repeats=repeats, warmup=warmup,dense_public_updates=dense_public_updates,
         actor_kind='v5-public29', actor_compute_dtype='bfloat16', model_initialization_calls=0,
         model_config=config.metadata(), runtime=dict(jax=jax.__version__, numpy=np.__version__,
             backend=jax.default_backend()),
