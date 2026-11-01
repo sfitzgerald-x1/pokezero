@@ -18,7 +18,8 @@ console.log(JSON.stringify({allowed:Object.fromEntries(names.map(n=>[n,PREDICATE
   value=json.loads(subprocess.check_output(['node','-e',node,str(showdown_root())],text=True))
   self.assertEqual(value['callback'],'26759547257248edbbf4ba3a036f3aecff3dacc794bf5193286fcf29870d1b07');self.assertEqual(value['contact'],[False,False]);self.assertEqual(value['logs'][0],['chance',1,3]);self.assertEqual(value['logs'][1][0:2],['status','par']);self.assertEqual(len(value['logs']),2)
   self.assertTrue(value['allowed']['static']);self.assertTrue(value['allowed']['runaway'])
-  for n in ('rockhead','roughskin','poisonpoint'):self.assertFalse(value['allowed'][n])
+  self.assertTrue(value['allowed']['poisonpoint'])
+  for n in ('rockhead','roughskin'):self.assertFalse(value['allowed'][n])
   self.assertFalse(value['focusband']);self.assertFalse(value['unexpectedHook'])
 
 
@@ -84,14 +85,16 @@ class SelfDestructStaticNoncontactTests(unittest.TestCase):
                 cls.metadata['moves'].append(None)
             i = cls.metadata['vocabulary']['moves'].index(name)
             cls.metadata['moves'][i] = dict(id=name, base_power=info.base_power, type=cls.metadata['vocabulary']['types'].index(info.type.lower()), source_type=info.type, category=info.category, pp=info.pp, accuracy=True if name == 'agility' else int(info.accuracy), priority=info.priority, flags=flag)
-        for name in ('runaway', 'damp', 'static', 'stickyhold'):
+        for name in ('runaway', 'damp', 'static', 'stickyhold', *getattr(cls, 'extra_abilities', ())):
             if name not in cls.metadata['vocabulary']['abilities']:
                 cls.metadata['vocabulary']['abilities'].append(name)
-        cls.ability = cls.metadata['vocabulary']['abilities'].index('static')
+        cls.ability = cls.metadata['vocabulary']['abilities'].index(getattr(cls, 'fixture_ability', 'static'))
         cls.dex = ShowdownDex(moves, f.dex.species, f.dex.type_chart)
-        variants = {name: Gen3RandbatSpeciesUniverse(name, 80, (Gen3RandbatVariant('explode-' + name, 'unit', name, 'unit', 80, cls.names, 'Static', 'Leftovers'),)) for name in cls.metadata['vocabulary']['species'][1:]}
+        variants = {name: Gen3RandbatSpeciesUniverse(name, 80, (Gen3RandbatVariant('explode-' + name, 'unit', name, 'unit', 80, cls.names, getattr(cls, 'fixture_ability', 'Static'), 'Leftovers'),)) for name in cls.metadata['vocabulary']['species'][1:]}
         source = Gen3RandbatSource(RandbatSourceMetadata('gen3randombattle', 3, None, None, None, 'literal-selfdestruct-component'), variants)
         labels = set(f.catalog.vocabulary.tokens) | {'ability:static', 'belief:possible_ability:static', 'ability:stickyhold', 'belief:possible_ability:stickyhold'}
+        for n in getattr(cls, 'extra_abilities', ()):
+            labels |= {'ability:'+n, 'belief:possible_ability:'+n}
         for n in cls.names:
             labels |= {'move:' + n, 'belief:possible_move:' + n}
         cls.catalog = v4.compile_encoder(public_belief.compile_source(source), cls.dex, CategoryVocabulary(tuple(sorted(labels))), checkpoint_sha256='a' * 64, feature_masks=f.catalog.masks.__dict__)
@@ -117,7 +120,7 @@ class SelfDestructStaticNoncontactTests(unittest.TestCase):
         actor = active[r, side]
         target = active[r, 1 - side]
         s = state.empty_state(b)._replace(active=active, gender=j.ones((b, 2, 6), j.int32), hp=j.full((b, 2, 6), 100, j.int32), max_hp=j.full((b, 2, 6), 100, j.int32), ability=j.full((b, 2, 6), self.ability, j.int32), base_ability=j.full((b, 2, 6), self.ability, j.int32), species=j.broadcast_to(j.array([1, 2])[None, :, None], (b, 2, 6)), level=j.full((b, 2, 6), 80, j.int32), done=~yes)
-        sticky=self.metadata['vocabulary']['abilities'].index('stickyhold')
+        sticky=self.metadata['vocabulary']['abilities'].index(getattr(self, 'fixture_target', 'stickyhold'))
         s=s._replace(ability=s.ability.at[r,1-side,target].set(sticky),base_ability=s.base_ability.at[r,1-side,target].set(sticky))
         cursor = life.register(r + 211001, **self.kw)
         initial = life._tape(cursor, self.producer, 64)
