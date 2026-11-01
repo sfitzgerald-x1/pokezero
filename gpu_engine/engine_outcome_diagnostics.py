@@ -16,15 +16,24 @@ META_FIELDS=('move','actor_side','actor_physical','target_side','target_physical
     'prior_execution_refusal','prior_kernel_risk')
 FIELDS=OUTCOME_FIELDS+META_FIELDS
 CAPACITY=2
+RESIDUAL_FIELDS=('side','physical','profile_qualified','cached_speed_valid','end_speed0','end_speed1',
+    'guard_valid','stream_id','frame','raw_count','turn','phase','generation0','generation1',
+    'prior_tape_refusal','prior_execution_refusal','prior_kernel_risk')
 
 class Capture(NamedTuple):
     words:object
     valid:object
     count:object
     overflow:object
+    residual_words:object=None
+    residual_valid:object=None
+    residual_count:object=None
+    residual_overflow:object=None
 
 def empty(batch):
     return Capture(j.zeros((batch,CAPACITY,len(FIELDS)),j.int32),j.zeros((batch,CAPACITY),bool),
+        j.zeros(batch,j.int32),j.zeros(batch,bool),
+        j.zeros((batch,CAPACITY,len(RESIDUAL_FIELDS)),j.int32),j.zeros((batch,CAPACITY),bool),
         j.zeros(batch,j.int32),j.zeros(batch,bool))
 
 def _valid(value,b):
@@ -49,9 +58,39 @@ def record_on_tape(tape,outcome,move,side,physical,target,*,eligible,active):
     words=j.stack([v.astype(j.int32) for v in values],axis=1)
     rows=j.arange(b);slot=j.clip(capture.count,0,CAPACITY-1);room=(capture.count>=0)&(capture.count<CAPACITY)
     write=active&room
-    updated=Capture(capture.words.at[rows,slot].set(j.where(write[:,None],words,capture.words[rows,slot])),
-        capture.valid.at[rows,slot].set(capture.valid[rows,slot]|write),
-        j.where(write,capture.count+1,capture.count),capture.overflow|(active&~room))
+    updated=capture._replace(words=capture.words.at[rows,slot].set(j.where(write[:,None],words,capture.words[rows,slot])),
+        valid=capture.valid.at[rows,slot].set(capture.valid[rows,slot]|write),
+        count=j.where(write,capture.count+1,capture.count),overflow=capture.overflow|(active&~room))
+    return tape._replace(execution=context._replace(diagnostics=updated))
+
+
+def _valid_residual(value,b):
+    return _valid(value,b) and all(getattr(a,'shape',None)==shape and getattr(a,'dtype',None)==j.dtype(dtype)
+        for a,shape,dtype in zip(value[4:],((b,CAPACITY,len(RESIDUAL_FIELDS)),(b,CAPACITY),(b,),(b,)),(j.int32,j.bool_,j.int32,j.bool_)))
+
+def record_residual_on_tape(tape,side,physical,qualified,cached_speed_valid,end_speed,guard_valid,*,active):
+    """SAME original residual guard operands, before emitter/ledger changes.
+
+    No recomputation, source ticket, refusal, risk or policy input. A missing or
+    malformed optional store is inert; overflow is diagnostic-only. Exactly
+    the actually requested residual sites consume the two bounded slots.
+    """
+    context=getattr(tape,'execution',None);capture=getattr(context,'diagnostics',None);b=len(tape.count)
+    if not _valid_residual(capture,b) or getattr(context,'risks',None)is None:return tape
+    if getattr(end_speed,'shape',None)!=(b,2) or getattr(end_speed,'dtype',None)!=j.dtype(j.int32):return tape
+    if any(getattr(v,'shape',None)!=(b,)or getattr(v,'dtype',None)!=j.dtype(bool)for v in(qualified,cached_speed_valid,guard_valid,active)):return tape
+    if any(getattr(v,'shape',None)!=(b,)or getattr(v,'dtype',None)!=j.dtype(j.int32)for v in(side,physical)):return tape
+    values=(side,physical,qualified,cached_speed_valid,end_speed[:,0],end_speed[:,1],guard_valid,
+        tape.stream_id,context.ledger.frame,tape.count,tape.cursor.turn,tape.cursor.phase,
+        tape.cursor.generation[:,0],tape.cursor.generation[:,1],tape.refusal,context.ledger.refusal,context.risks.carry.risk)
+    if any(getattr(v,'shape',None)!=(b,)for v in values):return tape
+    words=j.stack([v.astype(j.int32)for v in values],axis=1)
+    rows=j.arange(b);slot=j.clip(capture.residual_count,0,CAPACITY-1)
+    room=(capture.residual_count>=0)&(capture.residual_count<CAPACITY);write=active&room
+    updated=capture._replace(residual_words=capture.residual_words.at[rows,slot].set(j.where(write[:,None],words,capture.residual_words[rows,slot])),
+        residual_valid=capture.residual_valid.at[rows,slot].set(capture.residual_valid[rows,slot]|write),
+        residual_count=j.where(write,capture.residual_count+1,capture.residual_count),
+        residual_overflow=capture.residual_overflow|(active&~room))
     return tape._replace(execution=context._replace(diagnostics=updated))
 
 def refused_rows(capture,refused):
@@ -65,5 +104,11 @@ def refused_rows(capture,refused):
             valid=np.asarray(capture.valid[row],bool)
             item.update(count=int(np.asarray(capture.count[row])),overflow=bool(np.asarray(capture.overflow[row])),
                 records=[dict(zip(FIELDS,map(int,record))) for record in np.asarray(capture.words[row])[valid]])
+            residual={'available':_valid_residual(capture,len(refused)),'capacity':CAPACITY}
+            if residual['available']:
+                selected=np.asarray(capture.residual_valid[row],bool)
+                residual.update(count=int(np.asarray(capture.residual_count[row])),overflow=bool(np.asarray(capture.residual_overflow[row])),
+                    records=[dict(zip(RESIDUAL_FIELDS,map(int,record)))for record in np.asarray(capture.residual_words[row])[selected]])
+            item['residual']=residual
         result.append(item)
     return dict(schema='pokezero.literal-refused-outcomes.v1',capacity=CAPACITY,rows=result)

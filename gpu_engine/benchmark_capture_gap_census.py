@@ -166,6 +166,13 @@ def _row_select(mask, before, after):
     return jax.tree.map(choose,before,after)
 
 
+def _attach_refused_diagnostics(packets,capture,refused):
+    """Original literal row slices only; data never returns to policy/guards."""
+    from . import engine_outcome_diagnostics as literal_diagnostics
+    for item in literal_diagnostics.refused_rows(capture,refused)['rows']:
+        packets[item['row']]['literal_diagnostics']=item
+
+
 def _bound_engine_move_names(request):
     """Decode the ORIGINAL checked request record's canonical metadata JSON."""
     import json
@@ -315,6 +322,7 @@ class _Runtime:
         witness=getattr(self.session.state.core,'frame_input_report',None)
         ledger=self.session.state.core.execution
         self.last_packet=[]
+        refused_original=np.zeros(len(active),bool);refused_diagnostic=np.zeros(len(active),bool)
         for row in range(len(active)):
             use_diag=bool(fallback[row]);t=diag_callbacks if use_diag else None
             l=t.execution.ledger if t is not None else ledger
@@ -332,6 +340,8 @@ class _Runtime:
             context_unknown=missing_mask or(use_diag and(not bool(np.asarray(diag_namespace)[row])or not bool(np.asarray(self.cursor.admitted)[row])or missing_history))or(not use_diag and bool(int(np.asarray(witness.refusal)[row])&(source_witness.SOURCE|source_witness.ORDER)))
             unsupported=[int(words[i,0])for i in range(len(words))if not bool(good[i])]
             fresh_risk=int(np.asarray(t.execution.risks.carry.risk)[row])if t is not None else int(np.asarray(self.session.state.core.risks.risk)[row])
+            refused_row=bool(invalid[row]or context_unknown or np.any(stages==1)or np.any(~good)or fresh_risk!=0)
+            (refused_diagnostic if use_diag else refused_original)[row]=refused_row
             self.last_packet.append(dict(unhandled_sites=sites[stages==1].tolist(),raw_unsupported_kinds=unsupported,raw_kinds=raw_kinds,raw_complete_words=good.tolist(),context_unknown=bool(context_unknown),
                 raw_words=words.tolist(),selected_move_ids=[int(w[5])for w in words if int(w[0])==1],
                 raw_unsupported_moves=[dict(move_id=int(w[5]),name=self.move_names[int(w[5])]if 0<=int(w[5])<len(self.move_names)else'UNKNOWN_MOVE_ID')for i,w in enumerate(words)if int(w[0])==1 and not bool(good[i])],
@@ -340,6 +350,9 @@ class _Runtime:
                 history_scope='DIAGNOSTIC_LOCAL_NO_PUBLIC_CONSUMPTION'if use_diag else'ORIGINAL_SCORED_SESSION',
                 diagnostic_counts_complete=not(missing_mask or bool(int(np.asarray(l.refusal)[row])&ex.OVERFLOW)or(t is not None and bool(int(np.asarray(t.refusal)[row])&events.OVERFLOW))),
                 diagnostic_context_admitted=bool(np.asarray(self.cursor.admitted)[row]),engine_failures=['INVALID_OR_UNEXECUTED_ACTION']if invalid[row]else[]))
+        for capture,mask in ((getattr(witness,'outcome_diagnostics',None),refused_original),
+                (None if diag_callbacks is None else diag_callbacks.execution.diagnostics,refused_diagnostic)):
+            _attach_refused_diagnostics(self.last_packet,capture,mask)
         return executed,invalid,phases
 
     def capture_failure(self,active):
