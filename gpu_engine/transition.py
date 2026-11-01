@@ -1680,6 +1680,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 # equivalence is deliberately not inferred from speed membership.
                 _status_guard_valid=(_profile_qualified(_weather_hp_record) & _status_cached_speed_ok
                     & ((_public_trace.refusal&~public_callbacks.UNINSTRUMENTED)==0))
+                from . import engine_outcome_diagnostics as _residual_diagnostics
+                _public_trace=_residual_diagnostics.record_residual_on_tape(_public_trace,
+                    side,_status_physical,_profile_qualified(_weather_hp_record),_status_cached_speed_ok,
+                    end_speed,_status_guard_valid,active=_execution_status_requested)
                 _status_defer=_status_guard_valid
             _public_trace=status_residual_callbacks.record_status_residual_device(_public_trace,
                 side,_status_physical,_status_old_hp,_active(work.hp,work,side),_status_maximum,
