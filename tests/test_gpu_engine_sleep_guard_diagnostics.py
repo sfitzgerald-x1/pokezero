@@ -7,13 +7,13 @@ import jax
 import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_outcome_diagnostics as d
-from test_gpu_engine_before_move_diagnostics import BeforeMoveDiagnosticsTests
+import test_gpu_engine_before_move_diagnostics as fixture
 
 BASE='8c879093c6384610d24338e90f7cf6588fa589b0'
 
 class SleepGuardDiagnosticsTests(unittest.TestCase):
     def setUp(self):
-        f=BeforeMoveDiagnosticsTests();f.setUp();self.t=f.t;self.args,self.kw=f.inputs()
+        f=fixture.BeforeMoveDiagnosticsTests();f.setUp();self.t=f.t;self.args,self.kw=f.inputs()
 
     def observe(self,t,**changes):
         b=8;z=j.arange(b,dtype=j.int32)
