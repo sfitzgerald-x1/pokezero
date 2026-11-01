@@ -20,6 +20,7 @@ from pokezero.dex import normalize_id
 from . import engine_public_events as public,engine_lifecycle_callbacks as life,mechanics as m
 from . import engine_toxic_callbacks as primary,engine_status_callbacks as status
 
+WATER_ABSORB_TRY_HIT_SHA256='cdb3e97abb787964258c22da86ab53884bf112e7356ce1d54fb8261eb7c87dd6'
 _COMPILED=weakref.WeakKeyDictionary()
 Attempt=primary.Attempt  # Existing RAW26 literal guard schema, not Toxic admission.
 class Data(NamedTuple):
@@ -114,7 +115,9 @@ const verified=require(process.argv[2]).build(root,meta),d=require(path.join(roo
 const h=f=>crypto.createHash('sha256').update(f.toString()).digest('hex');
 const hooks=['onTryHit','onTryPrimaryHit','onTryMove','onPrepareHit','onModifyMove','onAnyModifyMove','onAllyModifyMove','onNegateImmunity','onAnyTryHit','onAllyTryHit','onFoeTryHit','onSourceTryHit','onDeductPP'];
 const quiet=e=>e.exists&&e.gen<=3&&!hooks.some(k=>e[k]!==undefined);
-process.stdout.write(JSON.stringify({sub:h(s.onTryPrimaryHit),getDamage:h(require(path.join(root,'dist/sim/battle-actions.js')).BattleActions.prototype.getDamage),runImmunity:h(require(path.join(root,'dist/sim/pokemon.js')).Pokemon.prototype.runImmunity),ground:{type:m.type,ignoreImmunity:m.ignoreImmunity,abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))},priority:s.onTryPrimaryHitPriority,tryMoveHit:h(require(path.join(root,'dist/data/mods/gen3/scripts.js')).Scripts.actions.tryMoveHit),move:{id:m.id,category:m.category,target:m.target,status:m.status,accuracy:m.accuracy,bypass:!!m.flags.bypasssub},source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
+const wa=d.abilities.get('waterabsorb'),other=hooks.filter(k=>k!=='onTryHit');
+const dormantWaterAbsorb=e=>e.id==='waterabsorb'&&e.exists&&e.gen<=3&&typeof e.onTryHit==='function'&&!other.some(k=>e[k]!==undefined);
+process.stdout.write(JSON.stringify({sub:h(s.onTryPrimaryHit),getDamage:h(require(path.join(root,'dist/sim/battle-actions.js')).BattleActions.prototype.getDamage),runImmunity:h(require(path.join(root,'dist/sim/pokemon.js')).Pokemon.prototype.runImmunity),ground:{type:m.type,ignoreImmunity:m.ignoreImmunity,abilities:meta.vocabulary.abilities.map(n=>{const e=d.abilities.get(n);return quiet(e)||dormantWaterAbsorb(e)}),dormantWaterAbsorb:{id:wa.id,exists:wa.exists,gen:wa.gen,onTryHit:h(wa.onTryHit),otherHooks:other.map(k=>typeof wa[k])},items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))},priority:s.onTryPrimaryHitPriority,tryMoveHit:h(require(path.join(root,'dist/data/mods/gen3/scripts.js')).Scripts.actions.tryMoveHit),move:{id:m.id,category:m.category,target:m.target,status:m.status,accuracy:m.accuracy,bypass:!!m.flags.bypasssub},source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
         descriptor=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
         if (descriptor['sub']!='050e1c1fbdb80ea3ab7bc63909eb72433cb45e9c49ff7889e16ec2c207528a24'
                 or descriptor['getDamage']!='dfd031900da8c77e5e1a2721858d8d4a7804bc7def1b7a1d486220521a6a7f12'
@@ -122,7 +125,11 @@ process.stdout.write(JSON.stringify({sub:h(s.onTryPrimaryHit),getDamage:h(requir
                 or descriptor['move']!=dict(id='thunderwave',category='Status',target='normal',status='par',accuracy=100,bypass=False)):
             raise ValueError('original Gen3 Thunder Wave/Substitute source changed')
         if json.dumps(descriptor['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(descriptor['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original Thunder Wave source tree changed')
-        g=descriptor['ground'];electric=metadata['vocabulary']['types'].index('electric');ground_type=metadata['vocabulary']['types'].index('ground')
+        g=descriptor['ground'];wa=g['dormantWaterAbsorb']
+        if (wa['id']!='waterabsorb' or wa['exists']is not True or wa['gen']!=3
+                or wa['onTryHit']!=WATER_ABSORB_TRY_HIT_SHA256 or wa['otherHooks']!=['undefined']*12):
+            raise ValueError('canonical dormant Water Absorb on Electric source required')
+        electric=metadata['vocabulary']['types'].index('electric');ground_type=metadata['vocabulary']['types'].index('ground')
         if (descriptor['runImmunity']!='4c7cbdb0b36ed635276037455e9ee78593e79268c4c97c70a1a892d6651c198d'
                 or g['type']!='Electric' or g['ignoreImmunity']is not False or int(table.type[move])!=electric
                 or int(table.effects.ground_type)!=ground_type or int(table.type_num[electric,ground_type])!=0):raise ValueError('canonical Thunder Wave natural Ground immunity required')
