@@ -6,6 +6,8 @@ parity and model qualification are measured on recorded decisions separately.
 """
 from dataclasses import dataclass, replace, fields, is_dataclass
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import weakref
@@ -173,28 +175,69 @@ def _current_mapping(parent,entries):
         yield parent[key],index
 
 
+class _GuardPass:
+    """Call-local immutable-subtree visits, never catalog acceptance."""
+    __slots__=('plans','completed')
+    def __init__(self):
+        self.plans={}
+        self.completed=set()
+
+    def immutable_nodes(self,plan):
+        key=id(plan);cached=self.plans.get(key)
+        if cached is not None and cached[0] is plan:return cached[1]
+        # A seen snapshot may be an alias to a MUTABLE object. Only actual
+        # immutable leaves and exact builtin tuples can close a subtree.
+        eligible=[False]*len(plan.nodes)
+        for index in range(len(plan.nodes)-1,-1,-1):
+            original,kind,entries=plan.nodes[index]
+            if kind is None:
+                eligible[index]=type(original) in (str,int,float,bool,type(None)) or issubclass(type(original),jax.Array)
+            elif kind=='sequence' and type(original) is tuple:
+                eligible[index]=all(eligible[child]for child in entries)
+        result=tuple(eligible);self.plans[key]=(plan,result)
+        return result
+
+
+_GUARD_PASS=ContextVar('pokezero_encoder_guard_pass',default=None)
+
+
+@contextmanager
+def _driver_guard_pass():
+    """A fresh scope for one host guard only; no capability is returned."""
+    token=_GUARD_PASS.set(_GuardPass())
+    try:yield
+    finally:_GUARD_PASS.reset(token)
+
+
 def _check_catalog_plan(catalog,plan):
-    # Every read uses the CURRENT parent on this invocation. In particular the
-    # plan contains no captured actual-parent traversal or acceptance cache.
-    # Sequence zip/iteration order is the original recursive validator's order.
-    stack=[iter(_current_attributes(catalog,plan.roots))]
+    # Mutable attributes/mappings/lists and every current parent edge are read
+    # on EVERY visit. Only fully immutable exact tuple descendants can reuse a
+    # completed visit in this one driver guard pass. No source/content result
+    # or acceptance survives the lexical guard scope.
+    scope=_GUARD_PASS.get();eligible=None if scope is None else scope.immutable_nodes(plan)
+    stack=[(iter(_current_attributes(catalog,plan.roots)),None)]
     while stack:
-        try:value,index=next(stack[-1])
+        iterator,completed=stack[-1]
+        try:value,index=next(iterator)
         except StopIteration:
-            stack.pop();continue
+            stack.pop()
+            if completed is not None:scope.completed.add(completed)
+            continue
         original,kind,entries=plan.nodes[index]
         if value is not original:
             raise ValueError('original encoder catalog edges required')
         if kind=='attrs':
-            stack.append(iter(_current_attributes(value,entries)))
+            stack.append((iter(_current_attributes(value,entries)),None))
         elif kind=='mapping':
             if tuple(value)!=tuple(key for key,_ in entries):
                 raise ValueError('original encoder catalog namespace required')
-            stack.append(iter(_current_mapping(value,entries)))
+            stack.append((iter(_current_mapping(value,entries)),None))
         elif kind is not None:
             if len(value)!=len(entries):
                 raise ValueError('original encoder static sequence required')
-            stack.append(iter(zip(value,entries)))
+            key=(id(plan),index)if eligible is not None and eligible[index]else None
+            if key is not None and key in scope.completed:continue
+            stack.append((iter(zip(value,entries)),key))
 
 
 def check_catalog(catalog):

@@ -775,52 +775,53 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
 
 
 def _checked(prepared):
-    r = _PREPARED.get(prepared) if type(prepared) is Prepared else None
-    if r is None or prepared.binding is not r['binding']:
-        raise ValueError('original prepared driver required')
-    own._checked(r['own_compiled'])
-    source._checked(r['request_compiled'])
-    r['check_public'](r['public'])
-    if r['execution_compiled'] is not None:execution._checked(r['execution_compiled'])
-    if r['no_output_compiled'] is not None:
-        from . import engine_leftovers_no_output as no_output
-        no_output.check_compiled(r['no_output_compiled'])
-    if r['kernel_risk_compiled'] is not None:kernel_risks.check_compiled(r['kernel_risk_compiled'])
-    if r['calm_mind_compiled'] is not None:
-        from . import engine_calm_mind_callbacks as calm_callbacks
-        calm_callbacks.check_compiled(r['calm_mind_compiled'])
-    if r['swords_dance_compiled'] is not None:
-        from . import engine_swords_dance_callbacks as swords_callbacks
-        swords_callbacks.check_compiled(r['swords_dance_compiled'])
-    if r['recoil_compiled'] is not None:
-        from . import engine_recoil_callbacks as recoil_callbacks
-        recoil_callbacks.check_compiled(r['recoil_compiled'])
-    if r['toxic_compiled'] is not None:
-        from . import engine_toxic_callbacks as toxic_callbacks
-        toxic_callbacks.check_compiled(r['toxic_compiled'])
-    if r['substitute_compiled'] is not None:
-        from . import engine_substitute_callbacks as substitute_callbacks
-        substitute_callbacks.check_compiled(r['substitute_compiled'])
-    if r['direct_hit_compiled'] is not None:
-        from . import engine_direct_hit_controls as direct_hit_controls
-        direct_hit_controls.check_compiled(r['direct_hit_compiled'])
-    if r['spikes_compiled'] is not None:
-        from . import engine_spikes_callbacks as spikes_callbacks
-        spikes_callbacks.check_compiled(r['spikes_compiled'])
-    if r['thunder_wave_compiled'] is not None:
-        from . import engine_thunder_wave_callbacks as thunder_wave_callbacks
-        thunder_wave_callbacks.check_compiled(r['thunder_wave_compiled'])
-    if r['sleep_powder_compiled'] is not None:
-        from . import engine_sleep_powder_callbacks as sleep_powder_callbacks
-        sleep_powder_callbacks.check_compiled(r['sleep_powder_compiled'])
-    if r['speed_profile'] is not None:weather_speed.check_profile(r['speed_profile'])
-    if r['leftovers_compiled'] is not None:
-        from . import engine_leftovers_callbacks as leftovers_callbacks
-        leftovers_callbacks.check_compiled(r['leftovers_compiled'])
-    if r['status_residual_compiled'] is not None:
-        from . import engine_status_residual_callbacks as status_residual_callbacks
-        status_residual_callbacks.check_compiled(r['status_residual_compiled'])
-    return r
+    with v4_encoder._driver_guard_pass():
+        r = _PREPARED.get(prepared) if type(prepared) is Prepared else None
+        if r is None or prepared.binding is not r['binding']:
+            raise ValueError('original prepared driver required')
+        own._checked(r['own_compiled'])
+        source._checked(r['request_compiled'])
+        r['check_public'](r['public'])
+        if r['execution_compiled'] is not None:execution._checked(r['execution_compiled'])
+        if r['no_output_compiled'] is not None:
+            from . import engine_leftovers_no_output as no_output
+            no_output.check_compiled(r['no_output_compiled'])
+        if r['kernel_risk_compiled'] is not None:kernel_risks.check_compiled(r['kernel_risk_compiled'])
+        if r['calm_mind_compiled'] is not None:
+            from . import engine_calm_mind_callbacks as calm_callbacks
+            calm_callbacks.check_compiled(r['calm_mind_compiled'])
+        if r['swords_dance_compiled'] is not None:
+            from . import engine_swords_dance_callbacks as swords_callbacks
+            swords_callbacks.check_compiled(r['swords_dance_compiled'])
+        if r['recoil_compiled'] is not None:
+            from . import engine_recoil_callbacks as recoil_callbacks
+            recoil_callbacks.check_compiled(r['recoil_compiled'])
+        if r['toxic_compiled'] is not None:
+            from . import engine_toxic_callbacks as toxic_callbacks
+            toxic_callbacks.check_compiled(r['toxic_compiled'])
+        if r['substitute_compiled'] is not None:
+            from . import engine_substitute_callbacks as substitute_callbacks
+            substitute_callbacks.check_compiled(r['substitute_compiled'])
+        if r['direct_hit_compiled'] is not None:
+            from . import engine_direct_hit_controls as direct_hit_controls
+            direct_hit_controls.check_compiled(r['direct_hit_compiled'])
+        if r['spikes_compiled'] is not None:
+            from . import engine_spikes_callbacks as spikes_callbacks
+            spikes_callbacks.check_compiled(r['spikes_compiled'])
+        if r['thunder_wave_compiled'] is not None:
+            from . import engine_thunder_wave_callbacks as thunder_wave_callbacks
+            thunder_wave_callbacks.check_compiled(r['thunder_wave_compiled'])
+        if r['sleep_powder_compiled'] is not None:
+            from . import engine_sleep_powder_callbacks as sleep_powder_callbacks
+            sleep_powder_callbacks.check_compiled(r['sleep_powder_compiled'])
+        if r['speed_profile'] is not None:weather_speed.check_profile(r['speed_profile'])
+        if r['leftovers_compiled'] is not None:
+            from . import engine_leftovers_callbacks as leftovers_callbacks
+            leftovers_callbacks.check_compiled(r['leftovers_compiled'])
+        if r['status_residual_compiled'] is not None:
+            from . import engine_status_residual_callbacks as status_residual_callbacks
+            status_residual_callbacks.check_compiled(r['status_residual_compiled'])
+        return r
 
 
 @contextmanager
