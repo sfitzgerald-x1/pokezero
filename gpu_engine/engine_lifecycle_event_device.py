@@ -860,7 +860,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity & (phase==0)
             & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             & (incoming==cursor.physical_active[rows,safe_side])
-            & ((toxic_callbacks.supported_raw(raw)&(tables.toxic_move>0)&(raw[:,5]==tables.toxic_move))
+            & (((toxic_callbacks.supported_raw(raw)|toxic_callbacks.owned_substitute_failure(tape,index))&(tables.toxic_move>0)&(raw[:,5]==tables.toxic_move))
                 |(thunder_callbacks.supported_raw(raw)&(tables.thunder_wave_move>0)&(raw[:,5]==tables.thunder_wave_move))
                 |(powder_callbacks.supported_raw(raw,primary_sleep=True)&(raw[:,5]>0)&(raw[:,5]<len(tables.primary_sleep_moves))&tables.primary_sleep_moves[jnp.clip(raw[:,5],0,len(tables.primary_sleep_moves)-1)])))
         toxic_ok |= (tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
@@ -1021,6 +1021,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         direct_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,
             turn,phase,absent,absent,absent,absent,z,absent,absent,z,z,z,z,z),axis=1)
         semantic=jnp.where((direct_control|toxic|no_damage_header|no_damage_facts)[:,None],direct_semantic,semantic)
+        semantic=jnp.where((toxic&toxic_callbacks.substitute_failure_raw(raw))[:,None],failed_semantic,semantic)
         pressure_payload=jnp.stack((status_enc,jnp.full_like(z,tables.pressure_public_ability),
             jnp.ones_like(z),z,z,z,z,z),axis=1)
         pressure_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ABILITY)),
