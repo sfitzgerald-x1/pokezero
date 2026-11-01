@@ -137,8 +137,9 @@ class DeviceObservationTests(unittest.TestCase):
                 'actions': slice(13, 22), 'stats': slice(22, 23), 'belief': slice(23, 29)}[row['section']]
             a = out.numeric_features if row['kind'] == 'numeric' else out.categorical_ids
             np.testing.assert_array_equal(a[:, sl, row['column']], 0)
-        # A zero deferred posterior is not silently relabeled as source prior.
-        np.testing.assert_array_equal(out.numeric_features[:, 23:, :64], 0)
+        # With no observations beyond species, posterior equals the source
+        # prior. Missing public hooks do not substitute sampled hidden sets.
+        np.testing.assert_allclose(out.numeric_features[:, 23:, :64], out.numeric_features[:, 23:, 64:128], atol=1e-7, rtol=0)
         self.assertGreater(float(out.numeric_features[:, 23:, 64:128].sum()), 0)
 
     def test_original_action_writer_force_switch_and_struggle(self):
