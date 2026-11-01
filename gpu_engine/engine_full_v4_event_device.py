@@ -47,6 +47,7 @@ from . import engine_baton_pass_callbacks as baton_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
+from . import engine_sleep_talk_callbacks as sleep_talk_callbacks
 from . import engine_encore_callbacks as encore_callbacks
 from . import engine_self_move_callbacks as self_move_callbacks
 from . import engine_heal_bell_callbacks as heal_bell_callbacks
@@ -130,6 +131,7 @@ class Tables(NamedTuple):
     status_damage_lethal: object
     self_boost: object
     heal_bell: object
+    sleep_talk_moves: object
     namespaces: Bindings
     binding: object
 
@@ -254,6 +256,13 @@ def compile_adapter(metadata, projector, *, catalog):
     for pid, target in targets.items():
         if target in (0, 1):
             moves[pid] = add(f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[target]}', inputs.Kind.MOVE)
+    sleep_talk_moves=np.zeros(len(moves),np.int32)
+    if projector.catalog.engine_table.sleep_talk is not None:
+        for pid,target in targets.items():
+            if target==1:
+                line=f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[1]}|[from] sleeptalk'
+                called=add(line,inputs.Kind.MOVE);miss=add(line+'|[miss]',inputs.Kind.MOVE)
+                if called and miss and mains[called]==mains[miss] and np.array_equal(templates[called],templates[miss]):sleep_talk_moves[pid]=called
     weather_failure=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
     weather_failure_moves=np.zeros(len(catalog.moves.names),bool)
     for pid,target in targets.items():
@@ -503,6 +512,7 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += np.array(weather_failure,np.int32).tobytes()+weather_failure_moves.tobytes()+weather_chip.tobytes()+leftovers_heal.tobytes()+status_damage.tobytes()
     payload += pinch_items.tobytes()+heal_bell_keys.tobytes()
     payload += sub_damage_keys.tobytes()+rough_skin_damage.tobytes()
+    payload += sleep_talk_moves.tobytes()
     payload += leech.tobytes()+encore.tobytes()+self_move.tobytes()+self_move_still.tobytes()
     payload += before_move_blocked.tobytes()
     payload += np.array(sleep_blocked,np.int32).tobytes()+np.array(belly_drum_setboost,np.int32).tobytes()+self_heal.tobytes()+np.array(wonder_guard_immune,np.int32).tobytes()+no_damage_miss.tobytes()+no_damage_keys.tobytes()+primary_sleep_status.tobytes()+np.array(sleep_powder_status,np.int32).tobytes()+direct_hit_control.tobytes()+np.array(pressure_start,np.int32).tobytes()+np.array(trace_copy,np.int32).tobytes()+substitute_created.tobytes()+toxic_no_effect.tobytes()+recoil_damage.tobytes()+calm_mind.tobytes()
@@ -515,7 +525,7 @@ def compile_adapter(metadata, projector, *, catalog):
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(before_move_blocked),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),jnp.array(status_damage_lethal),jnp.array(self_boost),jnp.array(heal_bell_keys),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(before_move_blocked),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),jnp.array(status_damage_lethal),jnp.array(self_boost),jnp.array(heal_bell_keys),jnp.array(sleep_talk_moves),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -641,6 +651,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.before_move_blocked,(2,),jnp.int32)
     causal.base._shape(tables.sleep_blocked,(),jnp.int32)
     causal.base._shape(tables.self_move,(4,),jnp.int32)
+    causal.base._shape(tables.sleep_talk_moves,tables.moves.shape,jnp.int32)
     causal.base._shape(tables.self_move_still,tables.moves.shape,jnp.bool_)
     causal.base._shape(tables.encore,(2,),jnp.int32)
     causal.base._shape(tables.leech,(3,7),jnp.int32)
@@ -763,6 +774,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         self_boost=(kind==int(inputs.Kind.BOOST))&(raw_kind==self_boost_callbacks.SELF_BOOST_INPUT)
         belly=raw_kind==belly_callbacks.BELLY_DRUM
         sleep_blocked=raw_kind==sleep_blocked_callbacks.SLEEP_BLOCKED
+        sleep_talk=raw_kind==sleep_talk_callbacks.SLEEP_TALK
+        sleep_talk_clock=sleep_talk&(tape.words[:,index,3]==sleep_talk_callbacks.CLOCK)
+        sleep_talk_child=(raw_kind==engine.MOVE)&sleep_talk_callbacks.owned(tape,index)
         before_move_blocked=raw_kind==before_move_blocked_callbacks.BEFORE_MOVE_BLOCKED
         belly_boost=belly&(tape.words[:,index,4]==1)
         calm_mind=(kind==int(inputs.Kind.BOOST))&(raw_kind==calm_mind_callbacks.CALM_MIND)
@@ -826,7 +840,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sb_raw=tape.words[:,index]
         key=jnp.where(self_boost,tables.self_boost[jnp.clip(sb_raw[:,4],0,6),jnp.clip(sb_raw[:,6]-sb_raw[:,5],0,2)],key)
         key=jnp.where(belly_boost,tables.belly_drum_setboost,key)
-        key=jnp.where(sleep_blocked,tables.sleep_blocked,key)
+        key=jnp.where(sleep_blocked|sleep_talk_clock,tables.sleep_blocked,key)
+        key=jnp.where(sleep_talk_child,tables.sleep_talk_moves[jnp.clip(mid,0,len(tables.sleep_talk_moves)-1)],key)
         key=jnp.where(before_move_blocked,tables.before_move_blocked[(tape.words[:,index,4]==6).astype(jnp.int32)],key)
         key=jnp.where(leech,tables.leech[jnp.clip(leech_op,0,2),jnp.where(leech_op==leech_callbacks.START,0,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,9],0,6)])],key)
         key=jnp.where(self_move,tables.self_move[jnp.where(sm_rest_status,2,jnp.where(sm_rest_heal,3,jnp.clip(sm_code,0,1)))],key)
@@ -1010,6 +1025,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~self_move|(self_move_callbacks.owned(tape,index)&live[rows,safe]&((sm_code==self_move_callbacks.WISH_TICK)|sm_called)&(statuses[rows,safe,safe_slot]==sm_prior_status)&(sm_rest_status|sm_health)&(~sm_sleep|tables.self_move_still[jnp.clip(sm_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~encore | (encore_callbacks.owned(tape,index)&live[rows,safe])
         identity &= ~before_move_blocked|(before_move_blocked_callbacks.owned(tape,index)&live[rows,safe]&(previous_status==jnp.where(tape.words[:,index,4]==6,4,2)))
+        identity &= ~sleep_talk | (sleep_talk_callbacks.owned(tape,index)&live[rows,safe]&(previous_status==1))
+        identity &= ~sleep_talk_child | (semantic[:,10]==1)&(semantic[:,11]==1)
         identity &= ~sleep_blocked | (sleep_blocked_callbacks.owned(tape,index)&live[rows,safe]
             &(previous_status==1))
         belly_a,belly_z,belly_owned=belly_callbacks.pair(tape,index)

@@ -52,6 +52,7 @@ from . import engine_baton_pass_callbacks as baton_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
+from . import engine_sleep_talk_callbacks as sleep_talk_callbacks
 from . import engine_encore_callbacks as encore_callbacks
 from . import engine_self_move_callbacks as self_move_callbacks
 from . import engine_heal_bell_callbacks as heal_bell_callbacks
@@ -612,6 +613,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         rough = kind == rough_callbacks.ROUGH_SKIN_HP
         belly = kind == belly_callbacks.BELLY_DRUM
         sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
+        sleep_talk = kind == sleep_talk_callbacks.SLEEP_TALK
+        sleep_talk_owned = sleep_talk_callbacks.owned(tape,index)
+        sleep_talk_child = (kind==public.MOVE)&sleep_talk_owned
         before_move_blocked = kind == before_move_blocked_callbacks.BEFORE_MOVE_BLOCKED
         heal_bell = kind == heal_bell_callbacks.HEAL_BELL
         self_move = kind == self_move_callbacks.SELF_MOVE_INPUT
@@ -828,6 +832,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sleep_blocked_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&sleep_blocked_callbacks.owned(tape,index))
         event_ok=jnp.where(sleep_blocked,generation_ok&clock_ok&sleep_blocked_ok,event_ok)
+        talk_ok=tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&sleep_talk_owned
+        event_ok=jnp.where(sleep_talk,generation_ok&clock_ok&talk_ok,event_ok)
         bm_ok=tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&before_move_blocked_callbacks.owned(tape,index)
         event_ok=jnp.where(before_move_blocked,generation_ok&clock_ok&bm_ok,event_ok)
         intimidate_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity
@@ -1052,7 +1058,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         from . import public_sleep
         sleep_payload=jnp.stack((actor_enc,jnp.full_like(z,public_sleep.CANT_SLEEP),z,z,z,z,z,z),axis=1)
         sleep_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.SLEEP)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),sleep_payload),axis=1)
-        semantic=jnp.where(sleep_blocked[:,None],sleep_semantic,semantic)
+        semantic=jnp.where((sleep_blocked|(sleep_talk&(raw[:,3]==sleep_talk_callbacks.CLOCK)))[:,None],sleep_semantic,semantic)
+        talk_payload=jnp.stack((actor_enc,tables.base.public_ids[jnp.clip(raw[:,4],0,len(tables.base.public_ids)-1)],z,z,z,z,z,z),axis=1)
+        talk_move=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.MOVE)),semantic_sequence,turn,phase,actor_side,actor_slot,actor_side,actor_slot),axis=1),talk_payload),axis=1)
+        semantic=jnp.where((sleep_talk&(raw[:,3]==sleep_talk_callbacks.CALL))[:,None],talk_move,semantic)
+        semantic=semantic.at[:,10].set(jnp.where(sleep_talk_child,1,semantic[:,10])).at[:,11].set(jnp.where(sleep_talk_child,1,semantic[:,11]))
         bm_payload=jnp.stack((actor_enc,jnp.full_like(z,public_active.STALL_BREAK),z,z,z,z,z,z),axis=1)
         bm_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),bm_payload),axis=1)
         semantic=jnp.where(before_move_blocked[:,None],bm_semantic,semantic)
