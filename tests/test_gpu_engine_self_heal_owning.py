@@ -35,6 +35,10 @@ class SelfHealOwningTests(unittest.TestCase):
   labels=set(f.catalog.vocabulary.tokens)
   for n in cls.names:labels|={'move:'+n,'belief:possible_move:'+n}
   cls.catalog=v4.compile_encoder(public_belief.compile_source(source),cls.dex,CategoryVocabulary(tuple(sorted(labels))),checkpoint_sha256='a'*64,feature_masks=f.catalog.masks.__dict__)
+  # Keep the authored installed flags equal to the pinned original source.
+  original_flags=json.loads(subprocess.check_output(['node','-e',"const d=require(process.argv[1]).Dex.mod('gen3');console.log(JSON.stringify(JSON.parse(process.argv[2]).map(n=>!!d.moves.get(n).flags.failencore)))",str(showdown_root()/'dist/sim/dex.js'),json.dumps(cls.metadata['vocabulary']['moves'])],text=True))
+  for row,flag in zip(cls.metadata['moves'],original_flags):
+   if row is not None:row.setdefault('flags',{})['failencore']=flag
   cls.table=tr.tables_from_metadata(cls.metadata);cls.producer=public.compile_catalog(cls.metadata,cls.table,public_moves=cls.catalog.moves,dex=cls.dex,exposure=public.HealthExposure(public.SHOWDOWN,'gen3randombattle',True,False))
   rules=request.load_source_rules(showdown_root(),cls.metadata);req=request.compile_request_source(cls.metadata,vocabulary=cls.catalog.vocabulary,dex=cls.dex,checkpoint_sha256='a'*64,rules=rules,lifecycle_catalog=cls.producer);facts=own.compile_own_facts(req,cls.catalog)
   cls.helper=direct.compile_direct_hit_controls(engine_catalog=cls.producer,metadata=cls.metadata,source_rules=rules)
@@ -42,7 +46,7 @@ class SelfHealOwningTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared);cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
 
  def test_original_source_callback_closed_scope_and_default_ast(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),72)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),74)
   ids=self.metadata['vocabulary']['moves'];mask=self.helper.device.self_heal.candidates
   self.assertEqual(set(ids[i]for i in np.flatnonzero(mask)),{'recover','synthesis','softboiled'})
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.self_heal)
