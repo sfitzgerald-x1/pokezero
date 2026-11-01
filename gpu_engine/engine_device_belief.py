@@ -44,6 +44,8 @@ class Tables(NamedTuple):
     species_types: object
     public_move: object
     source_move_evidence: object
+    public_foe_targeted: object
+    public_pressure: object
 
 
 def compile_tables(metadata, catalog):
@@ -83,7 +85,9 @@ def compile_tables(metadata, catalog):
         np.asarray(e.exact_hp)[pub], np.asarray(catalog.hazard.device.exact_flying)[pub],
         np.asarray(catalog.exact.device.trapper), np.asarray(catalog.exact.device.early_bird), np.asarray(catalog.hazard.device.levitate),
         np.asarray(species_types, np.int32), np.asarray(public_move, np.int32),
-        np.asarray([bool(i) and normalize_id(n) != 'struggle' for i, n in enumerate(v['moves'])], bool))
+        np.asarray([bool(i) and normalize_id(n) != 'struggle' for i, n in enumerate(v['moves'])], bool),
+        np.asarray(feature.move_tables.foe_targeted)[engine_moves],
+        np.asarray([bool(i) and normalize_id(n) == 'pressure' for i, n in enumerate(v['abilities'])], bool))
     # Preserve primitive dtype (especially uint32 bitmasks and compact spreads).
     return Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)))
 

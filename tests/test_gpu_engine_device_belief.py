@@ -73,7 +73,7 @@ class DeviceBeliefTests(unittest.TestCase):
 
     def test_source_hidden_power_public_alias_and_struggle_no_evidence(self):
         metadata = dict(vocabulary=dict(self.fixture.metadata['vocabulary']))
-        metadata['vocabulary']['moves'] = list(metadata['vocabulary']['moves']) + ['hiddenpowerfighting', 'hiddenpowerice']
+        metadata['vocabulary']['moves'] = list(metadata['vocabulary']['moves']) + ['curse', 'hiddenpowerfighting', 'hiddenpowerice']
         tables = b.compile_tables(metadata, self.catalog)
         self.assertEqual(int(tables.public_move[-1]), int(tables.public_move[-2]))
         np.testing.assert_array_equal(tables.move_mask[:, -1], tables.move_mask[:, -2])
@@ -81,6 +81,13 @@ class DeviceBeliefTests(unittest.TestCase):
         self.assertEqual(int(tables.engine_move[-1]), self.catalog.moves.ids['hiddenpower'])
         source_mask = self.catalog.source.device.predicates[self.catalog.source.predicate_id('move', 'hiddenpower')]
         np.testing.assert_array_equal(tables.move_mask[:, -1], source_mask[tables.source_species])
+        # Public PP accounting uses the ORIGINAL observer target rule, not a
+        # second physical-target predicate (notably for Curse).
+        np.testing.assert_array_equal(tables.public_foe_targeted,
+            self.catalog.features.move_tables.foe_targeted[tables.engine_move])
+        self.assertEqual(tables.public_foe_targeted.dtype, j.bool_)
+        np.testing.assert_array_equal(tables.public_pressure, [False, False, True])
+        self.assertEqual(tables.public_pressure.dtype, j.bool_)
 
     def test_raw_public_clocks_categories_and_request_charge_mapping(self):
         state, view, owners, legal = self.fixture.facts(b=1)
