@@ -744,12 +744,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
             acts &= ~blocked
             explodes=acts & table.self_destruct.move[move]
+        if _lifecycle_trace:
+            from . import engine_self_move_callbacks as self_move_callbacks
+            _self_move_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None
+            _sleep_failure=self_move_callbacks.awake_failure(_public_trace,work,side,caller_move,_self_move_context,eligible=caller_acts,acts=acts)
         if _public_trace is not None:
             # A genuine ordinary declaration is known here, after the actual
             # suppression/preparation gates and before any main-hit callback.
             _public_trace = public_callbacks.move(_public_trace,side,work.active[rows,side],
                 work.active[rows,foe],caller_move,eligible=caller_acts,
-                unsupported=charge_locked | sleep_usable | ~acts)
+                unsupported=charge_locked | ((sleep_usable | ~acts) & ~(_sleep_failure if _lifecycle_trace else jnp.zeros_like(acts))))
         if _lifecycle_trace:
             from . import engine_protect_callbacks as protect_callbacks
             _protect_pending=None;_protect_block_capture=None;_protect_block_mask=jnp.zeros_like(acts)
@@ -758,7 +762,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_protect_pending=protect_callbacks.begin(_public_trace,work,side,move,_protect_count,chance[:,8],
                     jnp.full_like(acts,order==0),~state.pending_residual,~switches[rows,foe],
                     _direct_hit_context,table.effects,eligible=acts)
-            _public_trace=kernel_risks.selected_on_tape(_public_trace,move,
+            _public_trace,_sleep_pending=self_move_callbacks.begin(_public_trace,work,side,caller_move,_self_move_context,code=self_move_callbacks.SLEEP_FAIL,eligible=_sleep_failure)
+            _public_trace,_sleep_capture=self_move_callbacks.finish(_public_trace,_sleep_pending,work)
+            _public_trace=kernel_risks.selected_on_tape(_public_trace,jnp.where(_sleep_failure,caller_move,move),
                 eligible=caller_acts,active=live)
         attack_stats = _active(work.stats, work, side)
         defense_stats = _active(work.stats, work, foe)
@@ -1004,6 +1010,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             creates_sub = (acts & effects.substitute[move] & (sub_hp == 0)
                 & (max_hp > 1) & (hp * 4 > max_hp))
             if _lifecycle_trace:
+                _public_trace,_rest_pending=self_move_callbacks.begin(_public_trace,work,side,caller_move,_self_move_context,code=self_move_callbacks.REST_FAIL,eligible=acts&caller_acts&(caller_move==move),secondary=acts&hit&~immune)
                 from . import engine_self_heal_callbacks as self_heal_callbacks
                 _public_trace,_self_heal_pending=self_heal_callbacks.begin(_public_trace,work,side,move,
                     _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table,eligible=acts&caller_acts&(caller_move==move))
@@ -1040,9 +1047,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 rest_origin=_set_active(work.rest_origin,work,side,
                     jnp.where(rest,True,_active(work.rest_origin,work,side))))
             if _lifecycle_trace:
+                _public_trace,_rest_capture=self_move_callbacks.finish(_public_trace,_rest_pending,work)
                 _public_trace,_self_heal_capture=self_heal_callbacks.finish(_public_trace,_self_heal_pending,work,heal_weather,acts&hit&~immune)
                 _public_trace=kernel_risks.self_heal_on_tape(_public_trace,
-                    acts & (effects.heal_half[move] | effects.weather_heal[move] | effects.rest[move]),active=live,captured=_self_heal_capture)
+                    acts & (effects.heal_half[move] | effects.weather_heal[move] | effects.rest[move]),active=live,captured=_self_heal_capture,captured_self_move=_rest_capture)
             if _substitute_context is not None:
                 _substitute_write=substitute_callbacks.Write(_substitute_old_hp,_active(work.hp,work,side),
                     max_hp,_active(work.status,work,side),sub_hp,_active(work.substitute_hp,work,side))
@@ -1288,8 +1296,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.leech_seed is not None:
                     _public_trace,_seed_pending=leech_callbacks.begin_seed(_public_trace,work,side,move,
                         _direct_hit_context,table.sustain,eligible=acts & hit & (caller_move==move),secondary=acts & hit & ~immune)
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.WISH_START,
-                    acts & table.sustain.wish[move],active=live)
+                _public_trace,_wish_pending=self_move_callbacks.begin(_public_trace,work,side,caller_move,_self_move_context,code=self_move_callbacks.WISH_START,eligible=acts&caller_acts&(caller_move==move),secondary=acts&hit&~immune)
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SPIN_CLEAR,
                     acts & hit & ~immune & table.sustain.spin[move],active=live)
             seeded = recovery.seed_target(table.sustain,move,_active(work.types,work,foe),
@@ -1303,6 +1310,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 wish_amount=work.wish_amount.at[rows,side].set(jnp.where(
                     starts_wish,_active(work.max_hp,work,side)//2,work.wish_amount[rows,side])))
             if _lifecycle_trace:
+                _public_trace,_wish_capture=self_move_callbacks.finish(_public_trace,_wish_pending,work)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.WISH_START,acts & table.sustain.wish[move],active=live,captured_self_move=_wish_capture)
                 _public_trace,_seed_capture=leech_callbacks.finish_seed(_public_trace,_seed_pending,work)
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SEED_START,
                     acts & hit & table.sustain.seed[move],active=live,captured_leech=_seed_capture)
@@ -1495,13 +1504,19 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         for side in range(2):
             if _lifecycle_trace:
-                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                    execution_accounting.Site.WISH,side,
-                    active=ordinary & (work.wish_counter[:,side]>0))
+                from . import engine_self_move_callbacks as self_move_callbacks
+                _wish_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None
+                if _wish_context is not None and _wish_context.data.self_move is not None:
+                    _public_trace,_wish_tick_pending=self_move_callbacks.begin(_public_trace,work,side,_wish_context.data.self_move.move_ids[2],_wish_context,code=self_move_callbacks.WISH_TICK,eligible=ordinary)
+                else:
+                    _wish_tick_pending=None
+                    _public_trace=execution_accounting.unhandled_attempt(_public_trace,execution_accounting.Site.WISH,side,active=ordinary & (work.wish_counter[:,side]>0))
             wish = recovery.wish_residual(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 work.wish_counter[:,side],eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,wish.hp),
                 wish_counter=work.wish_counter.at[:,side].set(wish.counter))
+            if _lifecycle_trace:
+                _public_trace,_wish_tick_capture=self_move_callbacks.finish(_public_trace,_wish_tick_pending,work)
     if table.weather is not None:
         ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         if _lifecycle_trace:
