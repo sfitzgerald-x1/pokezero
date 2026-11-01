@@ -507,9 +507,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     charge_moves=state.charge_move[rows[:,None],sides,state.active]
     moves=jnp.where(charge_moves>0,charge_moves,moves)
     moves = jnp.where(struggle, table.struggle, moves)
+    if _lifecycle_trace:_focus_capture=None
     if table.focus_punch is not None:
+        if _lifecycle_trace:
+            from . import engine_focus_punch_callbacks as focus_callbacks
+            _public_trace,_focus_pending=focus_callbacks.begin(_public_trace,work,moves,slot,
+                _direct_hit_context if _direct_hit_registered else None,table.focus_punch,
+                ordinary=live & ~replacement,move_requests=(actions<4) & ~struggle)
         work=focusing.prepare(work,moves,table.focus_punch,ordinary=live & ~replacement,
             move_requests=(actions<4) & ~struggle)
+        if _lifecycle_trace:
+            _public_trace,_focus_capture=focus_callbacks.finish(_public_trace,_focus_pending,work)
     pursuit_used = jnp.zeros_like(switches)
     pursuit_faint = jnp.zeros_like(state.done)
     if table.pursuit is not None:
@@ -796,7 +804,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace,_sleep_pending=self_move_callbacks.begin(_public_trace,work,side,caller_move,_self_move_context,code=self_move_callbacks.SLEEP_FAIL,eligible=_sleep_failure)
             _public_trace,_sleep_capture=self_move_callbacks.finish(_public_trace,_sleep_pending,work)
             _public_trace=kernel_risks.selected_on_tape(_public_trace,jnp.where(_sleep_failure,caller_move,move),
-                eligible=caller_acts,active=live)
+                eligible=caller_acts,active=live,captured_focus=_focus_capture,state=work,side=side,caller_move=caller_move)
         attack_stats = _active(work.stats, work, side)
         defense_stats = _active(work.stats, work, foe)
         attack_boosts = _active(work.boosts, work, side)
