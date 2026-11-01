@@ -12,6 +12,26 @@ from . import mechanics as m,engine_public_events as public,engine_lifecycle_cal
 
 SLEEP_BLOCKED=47
 SOURCE_SHA='69a6ba02bb56466f43b8fd6422165dff5caca176790b2495be2a7a0e5793e672'
+# Exact original generate_teams.cjs non-Normal TYPES aliases, not a prefix rule.
+HIDDEN_POWER_TYPES=('Fighting','Flying','Poison','Ground','Rock','Bug','Ghost','Steel','Fire','Water','Grass','Electric','Psychic','Ice','Dragon','Dark')
+HIDDEN_POWER_ALIASES={('hiddenpower'+name.lower()):name for name in HIDDEN_POWER_TYPES}
+
+def canonical_move_rows(catalog,names,rows):
+    """Source-canonical ordinary rows, including only original HP aliases."""
+    matches=np.asarray([row.get('requested')==name and row['id']==name for name,row in zip(names,rows,strict=True)],bool)
+    aliases=[i for i,name in enumerate(names)if name in HIDDEN_POWER_ALIASES]
+    if aliases:
+        public.check_catalog(catalog,catalog.engine_table,expected_binding=catalog.binding,
+            expected_engine_binding=np.asarray(catalog.engine_binding,np.uint32))
+        actual=catalog.public_moves;canonical=actual.ids.get('hiddenpower',0)
+        canonical_ok=type(canonical)is int and 0<canonical<len(actual.names)and actual.names[canonical]=='hiddenpower'
+        for i in aliases:
+            row=rows[i]
+            matches[i]=bool(canonical_ok and catalog.ids[i]==canonical and row.get('requested')==names[i]and row['id']=='hiddenpower'
+                and row.get('realMove')=='Hidden Power'and row.get('type')==HIDDEN_POWER_ALIASES[names[i]]
+                and row['exists']and row['gen']==2 and not row['sleepUsable'])
+    return matches
+
 class Data(NamedTuple):
     binding:object
     engine_binding:object
@@ -43,7 +63,7 @@ def compile_data(catalog,metadata,rules):
     script=r"""
 const fs=require('fs'),path=require('path'),crypto=require('crypto'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
 const verified=require(process.argv[2]).build(root,meta),d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),c=d.conditions.get('slp');
-const rows=meta.vocabulary.moves.map(id=>{const m=d.moves.get(id);return {id:m.id,exists:m.exists,gen:m.gen,sleepUsable:!!m.sleepUsable}});
+const rows=meta.vocabulary.moves.map(id=>{const m=d.moves.get(id);return {requested:id,id:m.id,realMove:m.realMove||null,type:m.type,exists:m.exists,gen:m.gen,sleepUsable:!!m.sleepUsable}});
 process.stdout.write(JSON.stringify({rows,sha:crypto.createHash('sha256').update(c.onBeforeMove.toString()).digest('hex'),priority:c.onBeforeMovePriority,source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
     descriptor=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
     if descriptor['sha']!=SOURCE_SHA or descriptor['priority']!=10 or json.dumps(descriptor['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(descriptor['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original Gen3 sleep callback changed')
@@ -51,8 +71,9 @@ process.stdout.write(JSON.stringify({rows,sha:crypto.createHash('sha256').update
     if installed is None:return None
     count=len(catalog.engine_table.power);names=metadata['vocabulary']['moves'];abilities=metadata['vocabulary']['abilities']
     if len(installed.move)!=count or not np.array_equal(installed.move,np.array([name=='sleeptalk'for name in names]))or not np.array_equal(installed.early_bird,np.array([name=='earlybird'for name in abilities])):raise ValueError('original installed sleep flags required')
-    moves=np.array([bool(i and row['exists']and row['gen']<=3 and row['id']==names[i]and not row['sleepUsable']and catalog.ids[i]>0)for i,row in enumerate(descriptor['rows'])])
-    payload=dict(schema='pokezero.literal-ordinary-sleep-block.v1',descriptor=descriptor,engine=catalog.engine_binding,source=catalog.source_binding,moves=catalog.move_binding,producer=catalog.binding,candidates=moves.tolist(),installed={k:np.asarray(v).tolist()for k,v in zip(installed._fields,installed)})
+    canonical=canonical_move_rows(catalog,names,descriptor['rows'])
+    moves=np.array([bool(i and row['exists']and row['gen']<=3 and canonical[i]and not row['sleepUsable']and catalog.ids[i]>0)for i,row in enumerate(descriptor['rows'])])
+    payload=dict(schema='pokezero.literal-ordinary-sleep-block.v1',descriptor=descriptor,canonical_rows=canonical.tolist(),hidden_power_aliases=HIDDEN_POWER_ALIASES,engine=catalog.engine_binding,source=catalog.source_binding,moves=catalog.move_binding,producer=catalog.binding,candidates=moves.tolist(),installed={k:np.asarray(v).tolist()for k,v in zip(installed._fields,installed)})
     words=lambda x:j.asarray(x,j.uint32)
     return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(moves),installed)
 
