@@ -392,7 +392,7 @@ def compile_adapter(metadata, projector, *, catalog):
         swords_dance=add(f'|-boost|{ident[0]}|atk|2',inputs.Kind.BOOST)
         if not swords_dance:raise ValueError('FULL writer lacks exact Swords Dance schema')
     primary_sleep_status=np.zeros(len(metadata['moves']),np.int32)
-    for i,enabled in enumerate(np.asarray(lower.device.primary_sleep_moves)):
+    for i,enabled in enumerate(np.asarray(lower.device.primary_sleep_moves)|np.asarray([name=='willowisp' for name in metadata['vocabulary']['moves']])):
         if enabled:
             info=catalog.dex.move_info(metadata['vocabulary']['moves'][i])
             if info is not None and info.status=='slp' and info.target=='normal' and info.category=='Status' and info.base_power==0:
@@ -464,7 +464,7 @@ def compile_adapter(metadata, projector, *, catalog):
         wonder_guard_immune=add(f'|-immune|{ident[0]}|[from] ability: Wonder Guard',inputs.Kind.NONPROC)
         if not wonder_guard_immune:raise ValueError('FULL writer lacks original tagged Wonder Guard immunity schema')
     no_damage_miss=np.zeros(len(projector.catalog.ids),bool)
-    for row in np.flatnonzero(np.asarray(lower.device.no_damage.candidates)|np.asarray(lower.device.primary_sleep_moves)):
+    for row in np.flatnonzero(np.asarray(lower.device.no_damage.candidates)|np.asarray(lower.device.primary_sleep_moves)|np.asarray([name=='willowisp' for name in metadata['vocabulary']['moves']])):
         pid=projector.catalog.ids[row];name=catalog.moves.names[pid]
         annotated=add(f'|move|{ident[0]}|{name}|{ident[1]}|[miss]',inputs.Kind.MOVE)
         no_damage_miss[row]=bool(annotated and int(moves[pid]) and np.array_equal(templates[int(moves[pid])],templates[annotated]))
@@ -840,7 +840,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         toxic_write=toxic_attempt&(toxic_code==toxic_callbacks.STATUS_WRITE)
         key=jnp.where(toxic_attempt,tables.toxic_no_effect[jnp.where(toxic_existing,jnp.where(toxic_existing_other,6,5),jnp.clip(toxic_code,0,4))],key)
         key=jnp.where(toxic_write,0,key)
-        sleep_miss=toxic_attempt&powder_callbacks.owned_miss_device(tape,index)
+        sleep_miss=toxic_attempt&(powder_callbacks.owned_miss_device(tape,index)|causal.plain_primary_callbacks.owned_miss(tape,index))
         sleep_miss_safe=tables.no_damage_miss[jnp.clip(tape.words[:,index,5],0,len(tables.no_damage_miss)-1)]
         key=jnp.where(sleep_miss,jnp.where(sleep_miss_safe,tables.no_damage[no_damage.MISS,0],0),key)
         key=jnp.where(substitute,tables.substitute_created[chip_status],key)

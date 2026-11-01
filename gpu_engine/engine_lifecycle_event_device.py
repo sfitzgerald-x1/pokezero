@@ -914,7 +914,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
                 |(powder_callbacks.supported_raw(raw,primary_sleep=True)&(raw[:,5]>0)&(raw[:,5]<len(tables.primary_sleep_moves))&tables.primary_sleep_moves[jnp.clip(raw[:,5],0,len(tables.primary_sleep_moves)-1)])))
         toxic_ok |= (tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&(incoming==cursor.physical_active[rows,safe_side])
-            &plain_primary_callbacks.owned_pair(tape,index))
+            &(plain_primary_callbacks.owned_pair(tape,index)|plain_primary_callbacks.owned_miss(tape,index)))
         toxic_ok |= (tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&(incoming==cursor.physical_active[rows,safe_side])
             &powder_callbacks.owned_miss_device(tape,index))
