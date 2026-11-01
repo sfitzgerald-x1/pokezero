@@ -17,6 +17,7 @@ class Pending(NamedTuple):
     physical:object
     target:object
     caller:object
+    roll:object # literal same-call sleep_talk_draws before original choose
     slot:object
     moves:object
     pp:object
@@ -46,11 +47,11 @@ def _bound(tape,context):
     return sm._bound(tape,context)
 
 
-def begin(tape,state,side,caller,slot,context,table,*,eligible,sleep_usable,early_bird,loafing):
+def begin(tape,state,side,caller,slot,context,table,*,choice_roll,eligible,sleep_usable,early_bird,loafing):
     from . import engine_execution_completeness as ex
     if context is None or context.data.self_move is None or context.data.self_move.talking is None:return tape,None
     b=len(tape.count);rows=j.arange(b)
-    for x in(side,caller,slot):life._typed(x,(b,),j.int32)
+    for x in(side,caller,slot,choice_roll):life._typed(x,(b,),j.int32)
     for x in(eligible,sleep_usable,early_bird,loafing):life._typed(x,(b,),j.bool_)
     d=context.data.self_move;good=_bound(tape,context);installed=d.talking
     if type(table)is not type(installed):raise ValueError('original installed Sleep Talk table required')
@@ -60,7 +61,7 @@ def begin(tape,state,side,caller,slot,context,table,*,eligible,sleep_usable,earl
     seat=j.clip(side,0,1);physical=state.active[rows,seat];at=(rows,seat,physical)
     hp=state.hp[at];maximum=state.max_hp[at];counter=state.status_counter[at];ability=state.ability[at]
     requested=eligible&sleep_usable&(state.status[at]==5)&(counter>1+early_bird.astype(j.int32))
-    good &= (side>=0)&(side<2)&(caller==d.move_ids[1])&(caller>0)&(slot>=0)&(slot<4)
+    good &= (choice_roll>=0)&(choice_roll<60)&(side>=0)&(side<2)&(caller==d.move_ids[1])&(caller>0)&(slot>=0)&(slot<4)
     good &= (state.moves[at][rows,j.clip(slot,0,3)]==caller)&(state.pp[at][rows,j.clip(slot,0,3)]>0)
     good &= (physical==tape.cursor.physical_active[rows,seat])&(hp>0)&(hp<=maximum)&(maximum<=1_000_000)
     good &= (counter>=2)&(counter<=5)&(state.sleep_skipped[at]>=0)&(state.sleep_skipped[at]<=5)
@@ -69,7 +70,7 @@ def begin(tape,state,side,caller,slot,context,table,*,eligible,sleep_usable,earl
     good &= ~loafing&(state.volatile[at]==0)&(state.confusion_counter[at]==0)&(state.encore_counter[at]==0)&(state.choice_move[at]==0)
     good &= (tape.refusal&~public.UNINSTRUMENTED)==0
     tape,ticket=ex.open_attempt(tape,ex.Site.SLEEP_TALK,side,active=requested)
-    return tape,Pending(context,ticket,side,physical,state.active[rows,1-seat],caller,slot,state.moves[at],state.pp[at],counter,state.sleep_skipped[at],state.rest_origin[at],early_bird,hp,maximum,ability,requested,good)
+    return tape,Pending(context,ticket,side,physical,state.active[rows,1-seat],caller,choice_roll,slot,state.moves[at],state.pp[at],counter,state.sleep_skipped[at],state.rest_origin[at],early_bird,hp,maximum,ability,requested,good)
 
 
 def owned(tape,index,*,stage=2):
@@ -110,7 +111,7 @@ def finish(tape,p,state,before,called,usable,roll,*,acts,caller_acts):
     eligible=table.callable[p.moves];count=j.sum(eligible,axis=1,dtype=j.int32);ranks=j.cumsum(eligible,axis=1)-1
     selected=eligible&(ranks==(roll%j.maximum(1,count))[:,None]);slot=j.argmax(selected,axis=1).astype(j.int32);pp=state.pp[at];moves=state.moves[at]
     good=p.valid&_bound(tape,p.context)&usable&acts&caller_acts&before.can_act&~before.confusion_self_hit&(before.confusion_counter==0)&(before.status==5)&(before.counter==p.counter-1-p.early.astype(j.int32))&(before.counter>0)
-    good &= (roll>=0)&(roll<60)&(count>0)&j.all(moves==p.moves,axis=1)&(called==p.moves[rows,slot])&(pp[rows,slot]>0)&(slot!=p.slot)
+    good &= (roll==p.roll)&(roll>=0)&(roll<60)&(count>0)&j.all(moves==p.moves,axis=1)&(called==p.moves[rows,slot])&(pp[rows,slot]>0)&(slot!=p.slot)
     good &= (called>0)&(called<len(tape.execution.risks.tables.direct_candidates))&tape.execution.risks.tables.direct_candidates[j.clip(called,0,len(tape.execution.risks.tables.direct_candidates)-1)]
     wanted=p.pp.at[rows,p.slot].set(j.maximum(0,p.pp[rows,p.slot]-1));good &= j.all(pp==wanted,axis=1)
     good &= (state.active[rows,seat]==p.physical)&(state.active[rows,1-seat]==p.target)&(state.status[at]==5)&(state.status_counter[at]==before.counter)&(state.sleep_skipped[at]==p.skipped+1)&(state.rest_origin[at]==p.rest)&(state.hp[at]==p.hp)&(state.max_hp[at]==p.maximum)&(state.ability[at]==p.ability)&(state.volatile[at]==0)&(state.confusion_counter[at]==0)
@@ -135,6 +136,10 @@ def captured_matches(tape,captured):
     if type(captured)is not Captured or type(captured.pending)is not Pending:raise ValueError('SAME Sleep Talk capture required')
     p=captured.pending;c=ex._context(tape);b=len(tape.count);rows=j.arange(b);entry,same=ex._ticket(c.ledger,p.ticket);start=c.ledger.start[rows,entry]
     good=same&p.requested&p.valid&_bound(tape,p.context)&owned(tape,start)&(c.ledger.end[rows,entry]==tape.count)
+    life._typed(p.roll,(b,),j.int32)
+    eligible=p.context.data.self_move.talking.callable[p.moves];count=j.sum(eligible,axis=1,dtype=j.int32);ranks=j.cumsum(eligible,axis=1)-1
+    selected_mask=eligible&(ranks==(p.roll%j.maximum(1,count))[:,None]);actual_slot=j.argmax(selected_mask,axis=1).astype(j.int32)
+    good &= (p.roll>=0)&(p.roll<60)&(count>0)&(captured.roll==p.roll)&(captured.selected_slot==actual_slot)&(captured.called==p.moves[rows,actual_slot])
     z=j.zeros(b,j.int32);before=captured.before;selected=j.clip(captured.selected_slot,0,3)
     clock=j.stack((j.full(b,SLEEP_TALK,j.int32),p.side,p.physical,z,p.caller,p.counter,before.counter,p.skipped,p.skipped+1,p.early.astype(j.int32)+2*p.rest.astype(j.int32)),axis=1)
     call=j.stack((j.full(b,SLEEP_TALK,j.int32),p.side,p.physical,z+CALL,p.caller,captured.called,captured.selected_slot,p.pp[rows,selected],4*captured.roll+p.slot,j.maximum(0,p.pp[rows,p.slot]-1)),axis=1)

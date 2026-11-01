@@ -669,7 +669,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             from . import engine_sleep_talk_callbacks as sleep_talk_callbacks
             _public_trace,_sleep_talk_pending=sleep_talk_callbacks.begin(_public_trace,work,side,caller_move,chosen_slot,
                 _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table.sleep_talk,
-                eligible=eligible,sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
+                choice_roll=sleep_talk_draws[rows,side],eligible=eligible,sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],

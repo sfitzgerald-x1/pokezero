@@ -61,13 +61,14 @@ class SleepTalkOwningTests(unittest.TestCase):
     stream=full.register(start.stream_id,z+owner,compiled=self.runtime['public']);pub=v4.initialize(self.catalog,stream_ids=start.stream_id,owner_sides=z+owner);got=self.fold(stream,frame0,pub);self.assertEqual(got.projection.error.tolist(),[0]*b);consumers.append((got.projection.state,got.public))
   t=life._tape(initial.cursor,self.producer,64);account=self.runtime['execution_compiled'];rt=self.runtime['kernel_risk_compiled'].device;t=ex.begin_on_tape(t,ex.initialize(start.stream_id,compiled=account),account.device,active=yes);carry=risk.begin_frame_device(risk.initialize_device(t.stream_id,rt),t,rt,active=yes);t=t._replace(execution=t.execution._replace(risks=risk.Context(carry,rt)))
   if poison:t=t._replace(refusal=t.refusal|64)
-  table=self.producer.engine_table.sleep_talk;t,p=cb.begin(t,s,side,caller,z,self.runtime['direct_hit_context'],table,eligible=eligible,sleep_usable=yes,early_bird=~yes,loafing=~yes)
+  roll=z+(1 if chosen=='rest'else 0)
+  table=self.producer.engine_table.sleep_talk;t,p=cb.begin(t,s,side,caller,z,self.runtime['direct_hit_context'],table,choice_roll=roll,eligible=eligible,sleep_usable=yes,early_bird=~yes,loafing=~yes)
   before=m.before_move(s.status[rows,side,phys],counter,s.confusion_counter[rows,side,phys],sleep_usable=yes)
   after=talking.before_move(s,side,before.status,eligible=eligible,sleep_usable=yes)
   for name,value in(('status',before.status),('status_counter',before.counter),('confusion_counter',before.confusion_counter)):
    old=getattr(after,name);after=after._replace(**{name:old.at[rows,side,phys].set(j.where(eligible,value,old[rows,side,phys]))})
   caller_acts=eligible&before.can_act&(pp[:,0]>0);after=after._replace(pp=after.pp.at[rows,side,phys,0].set(j.where(caller_acts,j.maximum(0,pp[:,0]-1),pp[:,0])))
-  roll=z+(1 if chosen=='rest'else 0);called,usable=talking.choose(table,after.moves[rows,side,phys],after.pp[rows,side,phys],roll);acts=caller_acts&usable&(before.status==m.SLP)
+  called,usable=talking.choose(table,after.moves[rows,side,phys],after.pp[rows,side,phys],roll);acts=caller_acts&usable&(before.status==m.SLP)
   t,c=cb.finish(t,p,after,before,called,usable,roll,acts=acts,caller_acts=caller_acts)
   if outcomes:
    from gpu_engine import engine_no_damage_callbacks as nd,engine_direct_hit_controls as hit,engine_public_events as public
@@ -84,6 +85,7 @@ class SleepTalkOwningTests(unittest.TestCase):
    t=nd.finish(t,pending,write,outcome,z+100,j.zeros(b,j.uint32),z,z,z+70)
    capture=nd.Captured(pending,write,z+100,j.zeros(b,j.uint32),z,z,z+70)
    t=risk.outcome_on_tape(t,outcome,eligible=yes,active=yes,captured_direct=risk.CapturedDirectHit(self.runtime['direct_hit_context'],ticket,side,phys,target,called,write),captured_no_damage=capture)
+   Path('/tmp/pokezero-sleep-talk-typed-current.json').write_text(json.dumps(dict(words=t.words.tolist(),counts=t.count.tolist(),ledger_refusal=t.execution.ledger.refusal.tolist(),risk=t.execution.risks.carry.risk.tolist()))+'\n')
    self.assertEqual(t.execution.risks.carry.risk.tolist(),[0]*b)
    after=after._replace(hp=after.hp.at[rows,1-side,target].set(new_hp))
   return s,after,before,side,t,c,consumers,initial.cursor
@@ -135,9 +137,11 @@ class SleepTalkOwningTests(unittest.TestCase):
   Path('/tmp/pokezero-sleep-talk-typed-current.json').write_text(json.dumps(dict(words=t.words.tolist(),counts=t.count.tolist(),ledger_refusal=t.execution.ledger.refusal.tolist(),risk=t.execution.risks.carry.risk.tolist()))+'\n')
   self.assertTrue(bool(witness._raw_complete(t,self.runtime['frame_witness_compiled'].device).all()))
   fr=life.LifecycleResult(after,t.cursor,t,life.snapshot(cursor),life.snapshot(t.cursor),j.zeros(8,bool),j.zeros(8,j.int32))
+  self.assertEqual(full.Consumed._fields,('projection','public'));self.assertIn('component_admitted',full.Projection._fields);self.assertIn('frames',full.Projection._fields)
+  self.assertIn('needs_more',type(consumers[0][1].cursor)._fields)
   all_words=[];folded=[]
   for st,pub in consumers:folded.append(self.fold(st,fr,pub))
-  Path('/tmp/pokezero-sleep-talk-full-literal-current.json').write_text(json.dumps([dict(projection_error=g.projection.error.tolist(),words=g.projection.frames.words.tolist(),valid=g.projection.frames.valid.tolist(),component_admitted=g.projection.component_admitted.tolist(),public_needs_more=g.public.cursor.needs_more.tolist())for g in folded])+'\n')
+  Path('/tmp/pokezero-sleep-talk-full-literal-current.json').write_text(json.dumps([dict(projection_error=g.projection.error.tolist(),words=[np.asarray(g.projection.frames.words)[:,row].reshape(-1,16)[np.asarray(g.projection.frames.valid)[:,row].reshape(-1)].tolist()for row in range(8)],fold_diagnostics=g.projection.fold_diagnostics.tolist(),component_admitted=g.projection.component_admitted.tolist(),public_needs_more=g.public.cursor.needs_more.tolist())for g in folded])+'\n')
   for owner,(st,pub) in enumerate(consumers):
    got=folded[owner];self.assertEqual(got.projection.error.tolist(),[0]*8);self.assertTrue(bool(got.projection.component_admitted.all()))
    for row in range(8):
