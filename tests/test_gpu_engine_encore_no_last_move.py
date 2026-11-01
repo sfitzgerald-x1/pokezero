@@ -59,4 +59,15 @@ class EncoreNoLastMoveTests(unittest.TestCase):
    for row in range(b):
     ids={a:f'p{a+1}a: '+self.catalog.species.names[a+1]for a in(0,1)};lines=[f'|switch|{ids[a]}|{self.catalog.species.names[a+1]}, L80, M|100/100'for a in(0,1)];wire,_=public_wire.project_lines(public_wire.WireState(),lines+['|turn|1'],**v4.wire_kwargs(self.catalog));who=1-int(c.pending.side[row]);_,packets=public_wire.project_lines(wire,[f'|move|{ids[who]}|Encore||[still]',f'|-fail|{ids[who]}','|','|upkeep','|turn|2'],**v4.wire_kwargs(self.catalog));want=np.asarray([e.words()for p in packets for e in p.events],np.int32);np.testing.assert_array_equal(actual[row],want)
   _,good=ex.join_consumed_owners(*closed,tables=self.runtime['execution_compiled'].device);self.assertTrue(bool(good.all()))
+class EncoreNoLastLegacyTests(unittest.TestCase):
+ def test_missing_source_and_legacy_pending_stay_closed(self):
+  from types import SimpleNamespace
+  sentinel=object()
+  for context in (None,SimpleNamespace(data=SimpleNamespace(encore=None))):
+   returned,p=cb.begin(sentinel,None,None,None,context,None,eligible=None)
+   self.assertIs(returned,sentinel);self.assertIsNone(p)
+  self.assertEqual(cb.Pending._field_defaults,dict(failure=None,before=None))
+  self.assertFalse(bool(cb._failure(SimpleNamespace(requested=j.ones(8,bool),failure=None)).any()))
+  for names in (('benchmark_retained_games','engine_lifecycle_event_device','engine_full_v4_event_device'),('engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_retained_games')):
+   subprocess.run([__import__('sys').executable,'-c',';'.join('import gpu_engine.'+x for x in names)],capture_output=True,check=True)
 if __name__=='__main__':unittest.main()
