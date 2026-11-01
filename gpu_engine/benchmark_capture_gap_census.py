@@ -140,10 +140,18 @@ class Ledger:
                 capture_gap_games=int((mask&~self.capture_good).sum()),engine_refused_games=int((mask&self.engine_failed).sum()),
                 capped_games=int((mask&self.capped).sum()),unknown_terminal_games=int((mask&~self.done).sum()),
                 terminal_without_capture_gap=int((mask&self.done&self.capture_good).sum()))
+        # Sum occurrences, but UNION row identities across original context
+        # strata. Timing-only rows never enter the census-games denominator.
+        by_source=Counter();source_rows=defaultdict(set)
+        for key,occurrences in self.kind_occurrences.items():
+            role,domain,kind=key;source='engine'if domain=='engine'else'capture-gap'
+            grouped=(role,source,kind);by_source[grouped]+=occurrences
+            source_rows[grouped].update(self.kind_games[key])
         timing=reduce(~roles);timing={key.replace('_games','_rows'):value for key,value in timing.items()}
         timing['original_row_denominator']=timing.pop('original_denominator')
         return dict(schema=SCHEMA,census=reduce(roles),timing_only=timing,
             unsupported=[dict(role=k[0],domain=k[1],kind=k[2],occurrences=v,**({'games_affected':len(self.kind_games[k])}if k[0]=='census'else{'timing_rows_affected':len(self.kind_games[k])}),examples=self.kind_examples[k])for k,v in sorted(self.kind_occurrences.items())],
+            unsupported_by_source=[dict(role=k[0],source=k[1],kind=k[2],occurrences=v,**({'games_affected':len(source_rows[k])}if k[0]=='census'else{'timing_rows_affected':len(source_rows[k])}))for k,v in sorted(by_source.items())],
             per_step=self.step_rows,cohort=[dict(stream_id=int(self.streams[i]),role='census'if roles[i]else'timing-only',
                 first_capture_gap=self.first_gap[i],engine_failed=bool(self.engine_failed[i]),engine_terminal=bool(self.done[i]),
                 capped=bool(self.capped[i]),executed_steps=int(self.engine_steps[i]),terminal=self.terminal[i],
@@ -164,6 +172,16 @@ def _row_select(mask, before, after):
             raise ValueError('declared row carry geometry differs')
         return j.where(j.asarray(mask).reshape((len(mask),)+(1,)*(a.ndim-1)),b,a)
     return jax.tree.map(choose,before,after)
+
+
+def _driver_host_overlap_ms(diagnostics):
+    """Already measured host spans; overlapping with synchronized driver phases.
+
+    No measurement, guard recheck, barrier or device call occurs here. Missing
+    data means unmeasured, never zero. Names retain the original driver's units.
+    """
+    measured=getattr(diagnostics,'host_timings',None)
+    return {}if measured is None else {'driver_host_overlap.'+name:value for name,value in measured.items()}
 
 
 def _attach_refused_diagnostics(packets,capture,refused):
@@ -300,6 +318,7 @@ class _Runtime:
             old_frames=np.asarray(self.session.state.core.frame_number).copy()
             result=self.driver.advance(self.session,j.asarray(actions),active_rows=j.asarray(kept),chance_inputs=chance,timing_callback=timing)
             self.jax.block_until_ready(result);d=self.driver.latest_diagnostics(self.session)
+            phases.update(_driver_host_overlap_ms(d))
             ran=np.asarray(d.executed_rows)
             if not np.array_equal(np.asarray(d.active_rows),kept)or np.any(ran&~kept)or not np.array_equal(np.asarray(result.state.core.frame_number)-old_frames,ran.astype(np.int32)):
                 raise RuntimeError('originaldriver must execute exactly one frame per selected physical row')
@@ -390,18 +409,27 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
         if clock()-started>=plan.max_elapsed_seconds:
             stop='WALL_BACKSTOP_UNKNOWN';break
         began=clock();cache_before=backend.cache_snapshot()
+        host_start=time.perf_counter_ns()
         policy_actions,model_cost=backend.policy(active,ledger,step,sampling_seed)
+        host_walls={'census_host_overlap.policy_wall_ms':(time.perf_counter_ns()-host_start)/1e6}
+        host_start=time.perf_counter_ns()
         scored=active&ledger.capture_good
         legal=np.asarray(backend.jax.block_until_ready(backend.mask(backend.engine)))
         requested=backend.requested()
         fallback_actions,no_action=legal_fallback(legal,requested,active&~scored,
             seed=plan.fallback_seed,streams=streams,step=step)
         actions=np.where(scored[:,None],policy_actions,fallback_actions).astype(np.int32)
+        host_walls['census_host_overlap.legal_mask_fallback_wall_ms']=(time.perf_counter_ns()-host_start)/1e6
         # The original pure engine sampler runs ONCE from the current actual
         # physical carry. Both disjoint execution paths receive these arrays.
         from . import transition
+        host_start=time.perf_counter_ns()
         chance=transition.sample_chance_inputs(backend.engine)
+        host_walls['census_host_overlap.chance_sampling_dispatch_wall_ms']=(time.perf_counter_ns()-host_start)/1e6
+        host_start=time.perf_counter_ns()
         executed,engine_bad,phases=backend.advance(actions,active&~no_action,scored,chance)
+        host_walls['census_host_overlap.advance_wall_ms']=(time.perf_counter_ns()-host_start)/1e6
+        host_start=time.perf_counter_ns()
         engine_bad |= no_action
         capture_failed,reasons=backend.capture_failure(active&scored&executed&~engine_bad)
         ledger.mark_capture(capture_failed,step=step,packets=lambda row:dict(
@@ -421,6 +449,8 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
         ledger.observe(step=step,active=active,executed=executed,engine_failed=engine_bad,
             done=np.asarray(backend.engine.done),turns=np.asarray(backend.engine.turn),
             packet=lambda row:backend.last_packet[row],terminal=backend.terminal)
+        host_walls['census_host_overlap.accounting_wall_ms']=(time.perf_counter_ns()-host_start)/1e6
+        phases.update(host_walls)
         cache_after=backend.cache_snapshot()
         deltas={name:None if value is None or cache_before.get(name)is None else value-cache_before[name]
             for name,value in cache_after.items()}
@@ -441,6 +471,8 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
     report=ledger.summary()
     report.update(stop=stop,plan=plan.__dict__,elapsed_seconds=clock()-started,samples=samples,
         compile_scope='BF16 and diagnosticfallback lowering+compile explicit; original driver phase coldcall-inclusive and cache deltas recorded.',
+        host_timing_scope='driver_host_overlap.* copies existing driver host spans/advance wall. census_host_overlap.* are thin caller host walls; policy/legal/advance contain ONLY their existing synchronization, chance_sampling_dispatch is unsynchronized dispatch, accounting may include existing host copies. All overlap existing synchronized phases and are NOT summable as disjoint costs. Missing driver spans mean unmeasured. No added barriers, JIT, engine/model or RNG calls.',
+        unsupported_by_source_scope='Occurrences summed per role/source/kind; games/rows affected are UNION identities across original capture/capture-context strata. Original stratified table retained; no exclusive-cause attribution.',
         full_policy_game_rate=None,production_fullgame_throughput=None,
         diagnostic_engine_terminal_rate=report['census']['engine_terminal_games']/max(1e-12,clock()-started),
         accounting='512 fixedcensusgames plus1536timing-onlywindows; no refills; postgap rows forever unscored. Caps/failed advancement/missingterminals remain explicitunknown.',
