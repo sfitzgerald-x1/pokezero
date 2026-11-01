@@ -124,6 +124,9 @@ class Ledger:
             for raw in p.get('raw_unsupported_kinds',[]):self._count(role,domain,'raw:'+str(raw),row,step,p)
             for move in p.get('raw_unsupported_moves',[]):self._count(role,domain,'raw-move:'+str(move['move_id'])+':'+str(move['name']),row,step,p)
             for risk in p.get('capture_risk_kinds',[]):self._count(role,domain,'risk:'+str(risk),row,step,p)
+            # Original private consumer observations, separate/nonexclusive.
+            # These label failed predicates, never causes or admission credit.
+            for failure in p.get('consumer_failures',[]):self._count(role,domain,'consumer:'+str(failure),row,step,p)
             for kind in p.get('engine_failures',[]):self._count(role,'engine',str(kind),row,step,p)
         self.step_rows.append(dict(step=int(step),launch_rows=b,active_engine_rows=int(active.sum()),executed_engine_rows=int(executed.sum()),
             capture_valid_rows=int((active&self.capture_good).sum()),fallback_rows=int((active&~self.capture_good).sum()),observed_epoch=time.time()))
@@ -158,7 +161,7 @@ class Ledger:
                 observation_scoring_valid=bool(self.capture_good[i]))for i in range(self.plan.batch)],
             full_B4_qualified=False,fidelity_qualified=False,strength_qualified=False,
             callback_counts_complete=self.counts_complete,
-            counts_scope='Per-call source sites, raw guard failures, per-move breakdown and risk bits are separate nonexclusive cooccurrences. Never sum them as distinct failures or intrinsic causes.',
+            counts_scope='Per-call source sites, raw guard failures, per-move breakdown, risk bits and private consumer predicates are separate nonexclusive cooccurrences. Never sum them as distinct failures or intrinsic causes.',
             timing_scope='Actual launchshape and active/admitted counts required; timings never imply2048completed games.')
 
 
@@ -189,6 +192,61 @@ def _attach_refused_diagnostics(packets,capture,refused,*,_host_cache=None):
     from . import engine_outcome_diagnostics as literal_diagnostics
     for item in literal_diagnostics.refused_rows(capture,refused,_host_cache=_host_cache)['rows']:
         packets[item['row']]['literal_diagnostics']=item
+
+
+def _attach_consumer_diagnostics(packets,value,selected,*,host):
+    """Bounded literal pre-rollback FULL/accounting data; no policy input.
+
+    Old/missing fields stay UNRECORDED. Fallback has no original FULL fold.
+    Failure labels overlap and cannot identify an exclusive cause.
+    """
+    from . import engine_full_v4_event_device as full
+    from . import engine_execution_completeness as execution
+    from . import engine_source_frame_witness as witness
+    b=len(packets);selected=np.asarray(selected)
+    if selected.shape!=(b,)or selected.dtype!=np.bool_:
+        raise ValueError('exact selected original-consumer rows required')
+    for row in np.flatnonzero(selected):
+        packets[row]['consumer_diagnostics']=dict(available=False,reason='UNRECORDED')
+        packets[row]['consumer_failures']=['UNRECORDED']
+    if value is None or not selected.any():return
+    try:
+        arrays={name:host(getattr(value,name))for name in witness.ConsumerDiagnostics._fields}
+        for name,width in (('fold',len(full.FOLD_DIAGNOSTIC_FIELDS)),
+                           ('consumption',len(execution.CONSUMPTION_DIAGNOSTIC_FIELDS)),
+                           ('owner_checks',len(witness.OWNER_DRAIN_DIAGNOSTIC_FIELDS))):
+            if arrays[name].shape!=(b,2,width)or arrays[name].dtype!=np.int32:raise ValueError('private diagnostic shape')
+        if arrays['owner_ledger_drained'].shape!=(b,2)or arrays['owner_ledger_drained'].dtype!=np.bool_:raise ValueError('owner report shape')
+        if arrays['joined'].shape!=(b,)or arrays['joined'].dtype!=np.bool_:raise ValueError('join shape')
+        for flags in (arrays['fold'][:,:,2:16],arrays['consumption'][:,:,:11],
+                      arrays['consumption'][:,:,12:13],arrays['owner_checks']):
+            if not np.isin(flags,(0,1)).all():raise ValueError('private predicate must be literal bool')
+    except (ValueError,TypeError,AttributeError):
+        for row in np.flatnonzero(selected):packets[row]['consumer_diagnostics']['reason']='INVALID_DIAGNOSTIC_SHAPE'
+        return
+    for row in np.flatnonzero(selected):
+        owners=[];failures=[]
+        for owner in range(2):
+            fold=dict(zip(full.FOLD_DIAGNOSTIC_FIELDS,map(int,arrays['fold'][row,owner])))
+            accounting=dict(zip(execution.CONSUMPTION_DIAGNOSTIC_FIELDS,map(int,arrays['consumption'][row,owner])))
+            checks=dict(zip(witness.OWNER_DRAIN_DIAGNOSTIC_FIELDS,map(int,arrays['owner_checks'][row,owner])))
+            owners.append(dict(owner=owner,fold=fold,accounting=accounting,owner_checks=checks,
+                ledger_drained=bool(arrays['owner_ledger_drained'][row,owner])))
+            prefix='owner'+str(owner)+'/'
+            for name in ('projection_error','fold_error'):
+                if fold[name]!=0:failures.append(prefix+'FULL_'+name+':'+str(fold[name]))
+            for name in full.FOLD_DIAGNOSTIC_FIELDS[2:16]:
+                if fold[name]==0:failures.append(prefix+'FULL_'+name)
+            for name in execution.CONSUMPTION_DIAGNOSTIC_FIELDS[:11]:
+                if accounting[name]==0:failures.append(prefix+'ACCOUNTING_'+name)
+            for name in witness.OWNER_DRAIN_DIAGNOSTIC_FIELDS:
+                if checks[name]==0:failures.append(prefix+'OWNER_'+name)
+            if not arrays['owner_ledger_drained'][row,owner]:failures.append(prefix+'LEDGER_NOT_DRAINED')
+        joined=bool(arrays['joined'][row])
+        if not joined:failures.append('BOTH_OWNER_JOIN')
+        packets[row]['consumer_diagnostics']=dict(available=True,owners=owners,joined=joined,
+            scope='FULL before fold rollback; accounting before accounting rollback; owner/join before witness rollback. Literal overlapping predicates, not causes or qualification.')
+        packets[row]['consumer_failures']=failures
 
 
 def _bound_engine_move_names(request):
@@ -394,6 +452,11 @@ class _Runtime:
                 history_scope='DIAGNOSTIC_LOCAL_NO_PUBLIC_CONSUMPTION'if use_diag else'ORIGINAL_SCORED_SESSION',
                 diagnostic_counts_complete=not(missing_mask or bool(int(data['ledger_refusal'][row])&ex.OVERFLOW)or(use_diag and bool(int(data['refusal'][row])&events.OVERFLOW))),
                 diagnostic_context_admitted=bool(cursor_admitted[row]),engine_failures=['INVALID_OR_UNEXECUTED_ACTION']if invalid[row]else[]))
+        # Only the SAME original frame report can provide consumer errors.
+        # Diagnostic fallback does not project/fold public owner histories.
+        for row in np.flatnonzero(fallback):
+            self.last_packet[row]['consumer_diagnostics']=dict(available=False,reason='DIAGNOSTIC_LOCAL_NO_PUBLIC_CONSUMPTION')
+        _attach_consumer_diagnostics(self.last_packet,getattr(witness,'consumer_diagnostics',None),kept,host=host)
         for capture,mask in ((getattr(witness,'outcome_diagnostics',None),refused_original),
                 (None if diag_callbacks is None else diag_callbacks.execution.diagnostics,refused_diagnostic)):
             _attach_refused_diagnostics(self.last_packet,capture,mask,_host_cache=host_cache)
