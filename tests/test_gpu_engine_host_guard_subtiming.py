@@ -1,6 +1,7 @@
 """Literal host call/clock controls only; no engine, device kernel or model."""
 import ast
 from contextlib import ExitStack
+from contextvars import copy_context
 import copy
 import importlib
 from itertools import count
@@ -121,7 +122,9 @@ class HostGuardSubtimingTests(unittest.TestCase):
   before=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));after=ast.parse(Path(d.__file__).read_text())
   class Erase(ast.NodeTransformer):
    def visit_ImportFrom(self,n):return None if n.module=='contextvars'else n
-   def visit_Assign(self,n):return None if any(isinstance(t,ast.Name)and t.id in('_HOST_GUARD_TIMING','token')for t in n.targets)else self.generic_visit(n)
+   def visit_Assign(self,n):return None if any(isinstance(t,ast.Name)and t.id in('_HOST_GUARD_TIMING','token','scope')for t in n.targets)else self.generic_visit(n)
+   def visit_ClassDef(self,n):return None if n.name=='_HostGuardTimingScope'else self.generic_visit(n)
+   def visit_If(self,n):return None if ast.unparse(n.test)=='scope is not None'else self.generic_visit(n)
    def visit_FunctionDef(self,n):return None if n.name=='_guard_span'else self.generic_visit(n)
    def visit_With(self,n):
     n=self.generic_visit(n)
@@ -135,6 +138,26 @@ class HostGuardSubtimingTests(unittest.TestCase):
   node=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.FunctionDef)and n.name=='_driver_host_overlap_ms');space={};exec(compile(ast.Module([copy.deepcopy(node)],[]),'<existing literal timing ferry>','exec'),space)
   measured={'guard_call.extra_guards_ms.own_ms':2.5,'guard_call.extra_guards_ms.own_calls':3}
   result=space['_driver_host_overlap_ms'](NS(host_timings=measured));self.assertEqual(result,{'driver_host_overlap.'+k:v for k,v in measured.items()});self.assertNotIn('driver_host_overlap.guard_call.extra_guards_ms.risk_ms',result)
+
+ def test_copied_or_pending_context_cannot_measure_after_lexical_scope_expires(self):
+  measured={};nested={}
+  with patch.object(d.time,'perf_counter_ns',side_effect=count(0,1000000))as clock:
+   with d._host_span(measured,'initial_guards_ms'):
+    outer=copy_context()
+    # Even a guard entered before scope close must not finalize later into
+    # the completed report. Its function/exception behavior remains original.
+    pending=d._guard_span('pending');pending.__enter__()
+    with d._host_span(nested,'extra_guards_ms'):
+     inner=copy_context()
+    with d._guard_span('live_outer'):pass
+   before=dict(measured);inner_before=dict(nested);clock.reset_mock()
+   def late():
+    with d._guard_span('late'):pass
+   outer.run(late);inner.run(late);pending.__exit__(None,None,None)
+   self.assertEqual(measured,before);self.assertEqual(nested,inner_before);clock.assert_not_called()
+   self.assertNotIn('guard_call.initial_guards_ms.pending_calls',measured)
+   self.assertEqual(measured['guard_call.initial_guards_ms.live_outer_calls'],1)
+   self.assertIsNone(d._HOST_GUARD_TIMING.get())
 
 
 if __name__=='__main__':unittest.main()

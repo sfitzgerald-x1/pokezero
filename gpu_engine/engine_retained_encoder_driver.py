@@ -160,6 +160,13 @@ _LEECH_HISTORY_ORIGINS = weakref.WeakKeyDictionary()
 _HOST_GUARD_TIMING = ContextVar('pokezero_driver_host_guard_timing', default=None)
 
 
+class _HostGuardTimingScope:
+    """Shared lexical lifetime, including copies of the current Context."""
+    __slots__ = ('timings','group','active')
+    def __init__(self,timings,group):
+        self.timings,self.group,self.active = timings,group,True
+
+
 def _basic_initialize(catalog, context, streams):
     b = streams.shape[0]
     beliefs = public_belief.initialize(jnp.zeros((b, 2, 6), jnp.int32), catalog.source.device)
@@ -947,10 +954,12 @@ def _host_span(timings, name):
         yield
         return
     start = time.perf_counter_ns()
-    token = _HOST_GUARD_TIMING.set((timings,name) if name in ('initial_guards_ms','extra_guards_ms') else None)
+    scope = _HostGuardTimingScope(timings,name) if name in ('initial_guards_ms','extra_guards_ms') else None
+    token = _HOST_GUARD_TIMING.set(scope)
     try:
         yield
     finally:
+        if scope is not None:scope.active = False
         try:
             timings[name] = timings.get(name, 0.) + (time.perf_counter_ns()-start)/1e6
         finally:
@@ -965,17 +974,20 @@ def _guard_span(name):
     raise; timings never cache validity or influence the original result.
     """
     scope = _HOST_GUARD_TIMING.get()
-    if scope is None:
+    if scope is None or not scope.active:
         yield
         return
-    timings,group = scope
+    timings,group = scope.timings,scope.group
     prefix = 'guard_call.'+group+'.'+name
     start = time.perf_counter_ns()
     try:
         yield
     finally:
-        timings[prefix+'_calls'] = timings.get(prefix+'_calls',0) + 1
-        timings[prefix+'_ms'] = timings.get(prefix+'_ms',0.) + (time.perf_counter_ns()-start)/1e6
+        if scope.active:
+            elapsed = (time.perf_counter_ns()-start)/1e6
+            if scope.active:
+                timings[prefix+'_calls'] = timings.get(prefix+'_calls',0) + 1
+                timings[prefix+'_ms'] = timings.get(prefix+'_ms',0.) + elapsed
 
 
 def _timed(callback, name, function, *args, _host_timings=None):
