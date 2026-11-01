@@ -1022,7 +1022,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_recoil_pending=recoil_callbacks.prepare_device(_public_trace,_recoil_captured,recoil,
                     _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),
                     _active(work.status,work,side),_recoil_context,eligible=acts,target_ko=_direct_ko_pending,caller_move=caller_move,
-                    no_damage=_recoil_no_damage,no_damage_outcome=_literal_outcome)
+                    no_damage=_recoil_no_damage,no_damage_outcome=_literal_outcome,
+                    substitute_damage=substitute_damage_callbacks.Captured(_sub_damage_pending,_sub_damage_write))
             from . import engine_outcome_diagnostics as outcome_diagnostics
             _public_trace=outcome_diagnostics.record_on_tape(_public_trace,_literal_outcome,move,side,
                 work.active[rows,side],work.active[rows,foe],eligible=acts,active=live)

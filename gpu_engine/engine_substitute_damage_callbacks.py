@@ -29,6 +29,7 @@ class Data(NamedTuple):
     return_move: object = None # canonical source-bound dynamic Return only
     seismic_move: object = None # original fixed-LEVEL source, literal power0
     hidden_power_moves: object = None # installed original aliases, actual member operands required
+    double_edge_move: object = None # canonical source-bound Sub damage + separate recoil only
 
 
 class Write(NamedTuple):
@@ -83,7 +84,7 @@ const fs=require('fs'),path=require('path'),root=process.argv[1],m=JSON.parse(fs
 const verified=require(process.argv[2]).build(root,m),{Dex}=require(path.join(root,'dist/sim/dex.js')),d=Dex.mod('gen3');
 const sub=d.moves.get('substitute').condition;
 const rows=m.vocabulary.moves.map(id=>{const x=d.moves.get(id);return {id:x.id,exists:x.exists,gen:x.gen,target:x.target,power:x.basePower,type:x.type,
- damage:x.damage||null,fixedExotic:!!(x.multihit||x.recoil||x.drain||x.heal||x.self||x.secondary||x.secondaries||x.boosts||x.status||x.volatileStatus||x.sideCondition||x.slotCondition||x.condition||x.weather||x.terrain||x.pseudoWeather||x.selfdestruct||x.forceSwitch||x.selfSwitch||x.ohko),returnCallback:x.id==='return'&&x.basePowerCallback?require('crypto').createHash('sha256').update(x.basePowerCallback.toString()).digest('hex'):null,category:x.category,bypass:!!x.flags.bypasssub,callbacks:Object.keys(x).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&x[k]!==undefined),
+ damage:x.damage||null,recoil:x.recoil||null,accuracy:x.accuracy,priority:x.priority,recoilExotic:!!(x.multihit||x.damage||x.drain||x.heal||x.self||x.secondary||x.secondaries||x.boosts||x.status||x.volatileStatus||x.sideCondition||x.slotCondition||x.condition||x.weather||x.terrain||x.pseudoWeather||x.selfdestruct||x.forceSwitch||x.selfSwitch||x.ohko),fixedExotic:!!(x.multihit||x.recoil||x.drain||x.heal||x.self||x.secondary||x.secondaries||x.boosts||x.status||x.volatileStatus||x.sideCondition||x.slotCondition||x.condition||x.weather||x.terrain||x.pseudoWeather||x.selfdestruct||x.forceSwitch||x.selfSwitch||x.ohko),returnCallback:x.id==='return'&&x.basePowerCallback?require('crypto').createHash('sha256').update(x.basePowerCallback.toString()).digest('hex'):null,category:x.category,bypass:!!x.flags.bypasssub,callbacks:Object.keys(x).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&x[k]!==undefined),
  exotic:!!(x.multihit||x.damage||x.recoil||x.drain||x.heal||x.self||x.secondary?.self||(Array.isArray(x.secondaries)&&x.secondaries.some(v=>v.self))||x.boosts||x.status||x.volatileStatus||x.sideCondition||x.slotCondition||x.condition||x.weather||x.terrain||x.pseudoWeather||x.selfdestruct||x.forceSwitch||x.selfSwitch||x.ohko)}});
 process.stdout.write(JSON.stringify({rows,hiddenPower:Object.fromEntries(['onModifyType','basePowerCallback','onModifyMove'].map(k=>[k,require('crypto').createHash('sha256').update(d.moves.get('hiddenpower')[k].toString()).digest('hex')])),getDamage:require('crypto').createHash('sha256').update(require(path.join(root,'dist/sim/battle-actions.js')).BattleActions.prototype.getDamage.toString()).digest('hex'),substitute:{hit:sub.onTryPrimaryHit.toString(),end:sub.onEnd.toString()},source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));
 """
@@ -94,12 +95,24 @@ process.stdout.write(JSON.stringify({rows,hiddenPower:Object.fromEntries(['onMod
             or json.dumps(source['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json):
         raise ValueError('original Substitute source changed')
     table=catalog.engine_table
-    mask=np.zeros(len(table.power),bool);return_move=0;seismic_move=0;hidden=np.zeros(len(table.power),bool)
+    mask=np.zeros(len(table.power),bool);return_move=0;seismic_move=0;double_edge_move=0;hidden=np.zeros(len(table.power),bool)
     for i,(name,row) in enumerate(zip(metadata['vocabulary']['moves'],source['rows'],strict=True)):
         mask[i]=bool(i>0 and name==row['id'] and row['exists'] and row['gen']<=3
             and row['target'] in ('normal','allAdjacent','allAdjacentFoes') and row['category'] in ('Physical','Special')
             and row['power']>0 and not row['callbacks'] and not row['exotic'] and not row['bypass']
             and int(table.power[i])==row['power'] and catalog.ids[i]>0 and catalog.targets[i]==1)
+        if name=='doubleedge' and i>0 and catalog.ids[i]>0:
+            if (double_edge_move or row['id']!='doubleedge' or not row['exists'] or row['gen']!=1
+                or row['target']!='normal' or row['category']!='Physical' or row['type']!='Normal'
+                or row['power']!=120 or row['recoil']!=[1,3] or row['callbacks'] or row['bypass'] or row['recoilExotic']
+                or row['accuracy']!=100 or row['priority']!=0 or not bool(table.physical[i]) or int(table.type[i])!=metadata['vocabulary']['types'].index('normal')
+                or int(table.power[i])!=120 or int(table.accuracy[i])!=100 or bool(table.always_hit[i])
+                or int(table.priority[i])!=0 or catalog.targets[i]!=1 or table.damage_moves is None
+                or int(table.damage_moves.recoil_den[i])!=3 or bool(table.damage_moves.struggle[i])):
+                raise ValueError('canonical original Double-Edge Substitute source required')
+            if hashlib.sha256(source['substitute']['hit'].encode()).hexdigest()!='050e1c1fbdb80ea3ab7bc63909eb72433cb45e9c49ff7889e16ec2c207528a24':
+                raise ValueError('original Substitute damage-before-recoil callback required')
+            double_edge_move=i;mask[i]=True
     if table.variable_moves is not None:
         installed=np.asarray(table.variable_moves.returns);wanted=np.asarray([n=='return'for n in metadata['vocabulary']['moves']],bool)
         if not np.array_equal(installed,wanted):raise ValueError('original installed Return resolver required')
@@ -130,12 +143,12 @@ process.stdout.write(JSON.stringify({rows,hiddenPower:Object.fromEntries(['onMod
                 or int(table.power[i])!=row['power'] or int(table.type[i])!=types.index(row['type'].lower()) or bool(table.physical[i])!=(row['category']=='Physical')
                 or int(table.accuracy[i])!=100 or bool(table.always_hit[i]) or int(table.priority[i])!=0 or catalog.targets[i]!=1 or public_hidden<=0 or catalog.ids[i]!=public_hidden):raise ValueError('canonical original installed Hidden Power/alias Substitute source required')
             hidden[i]=True;mask[i]=True
-    payload=dict(source=source,candidates=mask.tolist(),return_move=return_move,seismic_move=seismic_move,hidden_power_moves=hidden.tolist(),engine=catalog.engine_binding,
+    payload=dict(source=source,candidates=mask.tolist(),return_move=return_move,seismic_move=seismic_move,double_edge_move=double_edge_move,hidden_power_moves=hidden.tolist(),engine=catalog.engine_binding,
         producer=catalog.binding,helper=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     words=lambda x:j.asarray(x,j.uint32)
     return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True,default=lambda x:np.asarray(x).tolist()).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),
-        words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(mask),j.asarray(return_move,j.int32),j.asarray(seismic_move,j.int32),j.asarray(hidden))
+        words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(mask),j.asarray(return_move,j.int32),j.asarray(seismic_move,j.int32),j.asarray(hidden),j.asarray(double_edge_move,j.int32))
 
 
 def shape(data):
@@ -143,6 +156,17 @@ def shape(data):
     for x in data[:5]:life._typed(x,(8,),j.uint32)
     life._typed(data.candidates,(len(data.candidates),),j.bool_)
     life._typed(data.return_move,(),j.int32);life._typed(data.seismic_move,(),j.int32);life._typed(data.hidden_power_moves,data.candidates.shape,j.bool_)
+    if data.double_edge_move is not None:life._typed(data.double_edge_move,(),j.int32)
+
+
+def _double_edge(context,move,power,caller):
+    data=context.data.substitute_damage
+    required=j.zeros_like(move,bool)if data.double_edge_move is None else(data.double_edge_move>0)&(move==data.double_edge_move)
+    valid=j.zeros_like(move,bool)
+    if caller is not None:
+        life._typed(caller,move.shape,j.int32)
+        valid=(caller==move)&(power==120)
+    return ~required|valid
 
 
 def _return_power(context,move,power,happiness,caller_move):
@@ -190,7 +214,7 @@ def route(context,move,*,acts,power,hit,immune,protected,enduring,bypass,absorbe
     if context is None or context.data.substitute_damage is None:return j.zeros_like(acts)
     data=context.data.substitute_damage;shape(data)
     valid=(move>0)&(move<len(data.candidates))
-    return (_return_power(context,move,power,actor_happiness,caller_move)&_hidden_power(context,move,power,actor_hp_type,actor_hp_power,resolved_type,caller_move)&acts&valid&data.candidates[j.clip(move,0,len(data.candidates)-1)]&_source_power(context,move,power,actor_level,caller_move)
+    return (_double_edge(context,move,power,caller_move)&_return_power(context,move,power,actor_happiness,caller_move)&_hidden_power(context,move,power,actor_hp_type,actor_hp_power,resolved_type,caller_move)&acts&valid&data.candidates[j.clip(move,0,len(data.candidates)-1)]&_source_power(context,move,power,actor_level,caller_move)
         &hit&~immune&~protected&~enduring&~bypass&~absorbed&(sub_hp>0))
 
 
@@ -255,7 +279,7 @@ def span_matches(tape,p,write):
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):bound &= j.all(getattr(data,name)==getattr(tape,name))
     start=ledger.start[rows,slot];at=j.clip(start,0,tape.words.shape[1]-1)
     raw=tape.words[rows,at]
-    good=(bound&same&valid_write(write,b,pending=p)&_return_power(p.context,p.move,write.power,p.actor_happiness,p.caller_move)&p.requested&(p.move>0)&(p.move<len(data.candidates))
+    good=(bound&same&valid_write(write,b,pending=p)&_double_edge(p.context,p.move,write.power,p.caller_move)&_return_power(p.context,p.move,write.power,p.actor_happiness,p.caller_move)&p.requested&(p.move>0)&(p.move<len(data.candidates))
         &data.candidates[j.clip(p.move,0,len(data.candidates)-1)]
         &(ledger.site[rows,slot]==int(ex.Site.SUBSTITUTE_DAMAGE))&(ledger.side[rows,slot]==1-p.actor)
         &(start>0)&(tape.count==start+1)&validate_raw(raw)&j.all(raw==raw_words(p,write),axis=1)
