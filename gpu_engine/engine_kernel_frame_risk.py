@@ -801,11 +801,16 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
         move=_vector(captured_direct.move,b)
         candidate=(move>0)&(move<len(tables.direct_candidates))&tables.direct_candidates[
             jnp.clip(move,0,len(tables.direct_candidates)-1)]
+    # The optional captured-Sub API must request the same canonical zero-power
+    # outcome check even when no separate direct-hit Capture was supplied.
+    from . import engine_substitute_damage_callbacks as substitute_damage
+    if type(captured_substitute_damage) is substitute_damage.Captured:
+        move=_vector(captured_substitute_damage.pending.move,b)
+        candidate |= (tables.seismic_toss_move>0)&(move==tables.seismic_toss_move)
     from . import engine_no_damage_callbacks as no_damage
     supported_no_damage=no_damage.captured_matches(tape,captured_no_damage,o)
     unsupported=jnp.where(direct_mode & ((o.power>0)|candidate),
         jnp.where(supported_no_damage,False,o.absorbed|~supported_direct),unsupported)
-    from . import engine_substitute_damage_callbacks as substitute_damage
     if type(captured_substitute_damage) is substitute_damage.Captured:
         capture=captured_substitute_damage;w=capture.write;p=capture.pending
         supported_sub=substitute_damage.span_matches(tape,p,w)
