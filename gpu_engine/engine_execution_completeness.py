@@ -75,7 +75,6 @@ class Site(IntEnum):
     BEFORE_MOVE_BLOCKED = 41
     SELF_DESTRUCT = 40 # reserved separately reviewed composite
     BATON_PASS = 39
-    SELF_DESTRUCT = 40
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)

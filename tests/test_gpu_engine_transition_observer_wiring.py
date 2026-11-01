@@ -149,7 +149,7 @@ class TransitionObserverWiringTests(unittest.TestCase):
                     isinstance(t, ast.Name) and t.id == name for t in n.targets)))
 
         for file, name, count in (
-                ("engine_source_frame_witness.py", "SOURCE_PINS", 79),
+                ("engine_source_frame_witness.py", "SOURCE_PINS", 84),
                 ("chance_consumers.py", "SOURCE_PINS", 13),
                 ("ordinary_law.py", "MAPPING_PINS", 6),
                 ("conditional_law.py", "MAPPING_PINS", 4)):

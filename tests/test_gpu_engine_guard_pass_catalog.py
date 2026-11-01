@@ -1,5 +1,6 @@
 """Call-local immutable tuple visits; no model/kernel/game/benchmark runs."""
 import ast
+import copy
 import builtins
 from contextvars import copy_context
 import jax.numpy as j
@@ -130,8 +131,15 @@ class GuardPassTests(unittest.TestCase):
     with self.assertRaisesRegex(ValueError,'cannot be traced'):jax.jit(lambda:e.check_catalog(self.catalog))()
     old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));new=ast.parse(Path(d.__file__).read_text())
     fn=lambda tree,name:next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name==name)
+    class EraseObservationScopes(ast.NodeTransformer):
+        def visit_With(self,node):
+            if len(node.items)==1 and isinstance(node.items[0].context_expr,ast.Call) and ast.unparse(node.items[0].context_expr.func)=='compile_observations.phase':
+                return [self.visit(child)for child in node.body]
+            return self.generic_visit(node)
     for name in ('advance','_checked_witness','_consume_accounted','_session','_timed','latest_diagnostics'):
-        self.assertEqual(ast.dump(fn(old,name),include_attributes=False),ast.dump(fn(new,name),include_attributes=False))
+        current=copy.deepcopy(fn(new,name))
+        if name=='_timed':current=EraseObservationScopes().visit(current)
+        self.assertEqual(ast.dump(fn(old,name),include_attributes=False),ast.dump(current,include_attributes=False))
     checked=fn(new,'_checked');self.assertEqual(len(checked.body),1);self.assertIsInstance(checked.body[0],ast.With);self.assertEqual(ast.unparse(checked.body[0].items[0].context_expr),'v4_encoder._driver_guard_pass()');checked.body=checked.body[0].body
     self.assertEqual(ast.dump(fn(old,'_checked'),include_attributes=False),ast.dump(checked,include_attributes=False))
 
