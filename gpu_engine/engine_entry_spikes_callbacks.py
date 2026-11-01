@@ -8,7 +8,6 @@ No-output, lethal, unknown history and missing source context remain UNKNOWN.
 from typing import NamedTuple
 import jax.numpy as j
 from . import engine_public_events as public,engine_lifecycle_callbacks as life
-from . import engine_execution_completeness as ex
 
 ENTRY_SPIKES_HP=50
 UNKNOWN_ENTRY_SPIKES=256
@@ -30,6 +29,7 @@ class Pending(NamedTuple):
 
 
 def namespaces(tape):
+    from . import engine_execution_completeness as ex
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):
         ex._shape(getattr(tape,name),(8,),j.uint32)
 
@@ -78,6 +78,7 @@ def owned(tape,index,cursor):
 
 def claimed(tape,index,cursor):
     """Only this exact owned positive Site8 payload may bridge an entry prefix."""
+    from . import engine_execution_completeness as ex
     from . import engine_kernel_frame_risk as risks
     context=ex._context(tape);b=len(tape.count)
     if context is None:return j.zeros(b,bool)
@@ -100,6 +101,7 @@ def claimed(tape,index,cursor):
 
 
 def begin(tape,state,side,layers,table,*,requested):
+    from . import engine_execution_completeness as ex
     b=len(tape.count);rows=j.arange(b);side=j.broadcast_to(j.asarray(side,j.int32),(b,))
     ex._shape(requested,(b,),j.bool_);namespaces(tape)
     physical=state.active[rows,side]
@@ -110,6 +112,7 @@ def begin(tape,state,side,layers,table,*,requested):
 
 
 def finish(tape,p,new_hp):
+    from . import engine_execution_completeness as ex
     from . import engine_kernel_frame_risk as risks
     context=ex._context(tape)
     if context is None:return tape
