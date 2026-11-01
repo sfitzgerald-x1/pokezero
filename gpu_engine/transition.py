@@ -1525,8 +1525,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=self_destruct_callbacks.finish(_public_trace,work)
 
         if table.phazing is not None:
-            work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],
-                table.phazing,table.entry,eligible=acts & hit & (hp>0))
+            _whirlwind_pending=None
+            if _lifecycle_trace and _direct_hit_registered and _direct_hit_context.data.whirlwind is not None:
+                from . import engine_whirlwind_callbacks as whirlwind_callbacks
+                _public_trace,_whirlwind_pending=whirlwind_callbacks.begin(_public_trace,work,side,move,caller_move,chosen_slot,phazing_draws[rows,side],_direct_hit_context,table,
+                    eligible=acts,hit=hit,immune=immune,protected=_risk_protected,absorbed=_risk_absorbed)
+            if _whirlwind_pending is not None:
+                work,changed,hazard_ko,_public_trace=dragging.drag(work,foe,move,phazing_draws[rows,side],
+                    table.phazing,table.entry,eligible=acts & hit & (hp>0),_public_trace=_public_trace,_whirlwind_pending=_whirlwind_pending)
+            else:
+                work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],
+                    table.phazing,table.entry,eligible=acts & hit & (hp>0))
             displaced=displaced.at[rows,foe].set(displaced[rows,foe] | changed)
             moves_cancelled |= hazard_ko
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,changed,_public_trace)

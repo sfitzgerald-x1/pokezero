@@ -49,6 +49,7 @@ from . import engine_pinch_item_callbacks as pinch_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_self_boost_callbacks as self_boost_callbacks
 from . import engine_baton_pass_callbacks as baton_callbacks
+from . import engine_whirlwind_callbacks as whirlwind_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
@@ -662,6 +663,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         bulk_up = kind == bulk_up_callbacks.BULK_UP
         self_boost = kind == self_boost_callbacks.SELF_BOOST_INPUT
         baton = kind == baton_callbacks.BATON_PASS
+        whirlwind = kind == whirlwind_callbacks.WHIRLWIND
         color_change=kind==color_callbacks.COLOR_CHANGE
         swords_dance = kind == swords_dance_callbacks.SWORDS_DANCE
         spikes = kind == spikes_callbacks.SPIKES
@@ -697,11 +699,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         species_index = jnp.clip(species, 0, tables.species.shape[0]-1)
         public_species = tables.species[species_index]
         baton_arrival=arrival&(raw[:,6]==1)&baton_callbacks.owned(tape,index,baton_callbacks.INSTALL)
+        drag_arrival=arrival&(raw[:,7]==1)&whirlwind_callbacks.owned(tape,index)
         arrival_ok = ((side >= 0) & (side <= 1) & (incoming >= 0) & (incoming < 6)
             & (slot >= 0) & (slot < 6) & (species > 0) & (species < tables.species.shape[0]) & (public_species > 0)
             & (level > 0) & (level <= 100) & (gender >= 0) & (gender <= 2)
             & (hp > 0) & (hp <= maximum) & (maximum <= 1_000_000) & (status >= 0) & (status <= 6)
-            & jnp.where(baton_arrival,jnp.all(raw[:,7:]==0,axis=1),jnp.all(raw[:,6:]==0,axis=1)) & ((raw[:, 5] == 0) | (raw[:, 5] == 1))
+            & jnp.where(drag_arrival,(raw[:,5]==0)&(raw[:,6]==0)&jnp.all(raw[:,8:]==0,axis=1),jnp.where(baton_arrival,jnp.all(raw[:,7:]==0,axis=1),jnp.all(raw[:,6:]==0,axis=1))) & ((raw[:, 5] == 0) | (raw[:, 5] == 1))
             & jnp.where(initial, (raw[:, 1] == -1) & (raw[:, 2] == -1) & ~cursor.initialized
                 & ~cursor.established[rows, safe_side] & (raw[:, 5] == 0) & (turn == 0) & (phase == 0),
                 (raw[:, 1] == side) & (raw[:, 2] == cursor.physical_active[rows, safe_side])
@@ -903,6 +906,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&self_boost_callbacks.owned(tape,index))
         event_ok=jnp.where(self_boost,generation_ok&clock_ok&self_boost_ok,event_ok)
         event_ok=jnp.where(baton,generation_ok&clock_ok&baton_callbacks.owned(tape,index),event_ok)
+        event_ok=jnp.where(whirlwind,generation_ok&clock_ok&whirlwind_callbacks.owned(tape,index),event_ok)
         swords_dance_ok=(tables.status_events & ~tables.raw_begin & actor_ok & cursor.initialized
             &(phase==0)&(actor_side>=0)&(actor_side<2)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
@@ -998,7 +1002,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         s = jnp.array([0, 2, 3, 5, 6, 1, 4], jnp.int32)[jnp.clip(status, 0, 6)]
         absent = jnp.full((b,), -1, jnp.int32)
         z = jnp.zeros((b,), jnp.int32)
-        public_kind = jnp.where(arrival,jnp.where(baton_arrival,int(inputs.Kind.BATON_PASS),int(inputs.Kind.SWITCH)), jnp.where(kind == life.TURN,
+        public_kind = jnp.where(arrival,jnp.where(drag_arrival,int(inputs.Kind.DRAG),jnp.where(baton_arrival,int(inputs.Kind.BATON_PASS),int(inputs.Kind.SWITCH))), jnp.where(kind == life.TURN,
             int(inputs.Kind.TURN), jnp.where(kind == life.UPKEEP, int(inputs.Kind.UPKEEP), int(inputs.Kind.ACTION_CHUNK_END))))
         arrival_payload = jnp.stack((slot+1, public_species, tables.source_species[species_index], level, gender, h, m, s), axis=1)
         semantic = jnp.concatenate((jnp.stack((public_kind, semantic_sequence, turn, phase, absent, absent,
@@ -1123,7 +1127,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         self_boost_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),self_boost_payload),axis=1)
         semantic=jnp.where(self_boost[:,None],self_boost_semantic,semantic)
         baton_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,turn,phase,absent,absent,absent,absent,z,z,z,z,z,z,z,z),axis=1)
-        semantic=jnp.where(baton[:,None],baton_semantic,semantic)
+        semantic=jnp.where((baton|whirlwind)[:,None],baton_semantic,semantic)
         pinch_payload=jnp.stack((actor_enc,raw[:,6],jnp.ones_like(z),jnp.full_like(z,public_mon_state.DELTA),z,z,z,z),axis=1)
         pinch_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),pinch_payload),axis=1)
         semantic=jnp.where(pinch[:,None],pinch_semantic,semantic)

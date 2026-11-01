@@ -89,4 +89,4 @@ class TwistedSpoonLevitateTests(unittest.TestCase):
    actual=np.asarray(got.projection.frames.words).transpose(1,0,2,3)[row][np.asarray(got.projection.frames.valid).transpose(1,0,2)[row]];np.testing.assert_array_equal(actual,expected[row]);captures.append(dict(owner=0,row=row,actual=actual.tolist(),expected=expected[row].tolist(),private_item=int(p.before.item[row])))
   for name in('types','items'):
    for before,after in zip(jax.tree.leaves(getattr(pub.context,name)),jax.tree.leaves(getattr(got.public.context,name)),strict=True):np.testing.assert_array_equal(before,after)
-  Path('/Users/scott/workspace/agents/pokezero-b4-driver-independent-review-evidence-20261030/levitate-twisted-spoon-original-full-compact.json').write_text(json.dumps(captures,sort_keys=True)+'\n')
+  Path('/tmp/pokezero-levitate-twisted-spoon-original-full-compact.json').write_text(json.dumps(captures,sort_keys=True)+'\n')

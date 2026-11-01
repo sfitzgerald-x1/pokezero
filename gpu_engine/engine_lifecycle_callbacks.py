@@ -197,7 +197,7 @@ def _turn(tape,eligible):
     return _clock(tape,TURN,ok)
 
 
-def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initial):
+def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initial,drag=False):
     rows=jnp.arange(tape.count.shape[0]);cursor=tape.cursor
     eligible=eligible&cursor.admitted
     requested=eligible
@@ -219,7 +219,7 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
     flags=jnp.asarray(baton,jnp.int32);replacing=jnp.asarray(replacement,jnp.int32)
     absent=jnp.full_like(before,-1);z=jnp.zeros_like(before)
     tape=public._append(tape,INITIAL_REVEAL if initial else SWITCH_INSTALLED,
-        absent if initial else side,absent if initial else outgoing,side,incoming,(replacing,flags,z,z,z),eligible)
+        absent if initial else side,absent if initial else outgoing,side,incoming,(replacing,flags,jnp.asarray(drag,jnp.int32)+z,z,z),eligible)
     old_details=tape.switch_details[rows,index]
     tape=tape._replace(switch_details=tape.switch_details.at[rows,index].set(
         jnp.where((eligible&room)[:,None],details,old_details)))
@@ -332,8 +332,8 @@ def begin(tape,state,live,invalid):
     return tape
 
 
-def installed(tape,state,side,outgoing,incoming,*,eligible,replacement,baton):
-    return _reveal(tape,state,side,outgoing,incoming,eligible=eligible,replacement=replacement,baton=baton,initial=False)
+def installed(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,drag=False):
+    return _reveal(tape,state,side,outgoing,incoming,eligible=eligible,replacement=replacement,baton=baton,initial=False,drag=drag)
 
 
 def action_end(tape,eligible):

@@ -44,6 +44,7 @@ from . import engine_pinch_item_callbacks as pinch_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_self_boost_callbacks as self_boost_callbacks
 from . import engine_baton_pass_callbacks as baton_callbacks
+from . import engine_whirlwind_callbacks as whirlwind_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
@@ -197,6 +198,7 @@ def compile_adapter(metadata, projector, *, catalog, direct_hit_compiled=None):
 
     kinds = np.zeros(33, np.int32)
     kinds[inputs.Kind.SWITCH] = add(arrivals[0], inputs.Kind.SWITCH, public_wire.WireState())
+    kinds[inputs.Kind.DRAG] = add(arrivals[0].replace('|switch|','|drag|',1), inputs.Kind.DRAG, public_wire.WireState())
     if catalog.moves.ids.get('batonpass',0):
         baton_prior,_=public_wire.project_lines(prior,[f'|move|{ident[0]}|Baton Pass|{ident[0]}'],**kwargs)
         kinds[inputs.Kind.BATON_PASS]=add(arrivals[0],inputs.Kind.BATON_PASS,baton_prior)
@@ -719,8 +721,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         semantic=jnp.where(nd_heal[:,None],nd_semantic,semantic)
         kind=semantic[:,0]
         move=kind==int(inputs.Kind.MOVE);condition=kind==int(inputs.Kind.CONDITION)
-        arrival = (kind == int(inputs.Kind.SWITCH))|(kind==int(inputs.Kind.BATON_PASS)); faint = kind == int(inputs.Kind.FAINT)
+        arrival = (kind == int(inputs.Kind.SWITCH))|(kind==int(inputs.Kind.BATON_PASS))|(kind==int(inputs.Kind.DRAG)); faint = kind == int(inputs.Kind.FAINT)
         baton_raw=tape.words[:,index,0]==baton_callbacks.BATON_PASS
+        whirlwind_raw=tape.words[:,index,0]==whirlwind_callbacks.WHIRLWIND
+        drag_raw=kind==int(inputs.Kind.DRAG)
         key = tables.kinds[jnp.clip(kind, 0, 32)]
         mid = semantic[:, 9]
         key = jnp.where(move, tables.moves[jnp.clip(mid, 0, tables.moves.shape[0]-1)], key)
@@ -880,11 +884,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         bell_bench=bell_raw[:,4]!=bell_raw[:,2]
         bell_key=jnp.where(bell_header,tables.heal_bell[0,0],jnp.where(bell_immune,tables.heal_bell[1,0],jnp.where(bell_cure,tables.heal_bell[jnp.where(bell_bench,3,2),bell_public_old],0)))
         key=jnp.where(heal_bell,bell_key,key)
-        key=jnp.where(self_destruct,0,key)
-        size = jnp.where(baton_raw|(pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent|heal_weather_full|recoil_silent|bell_silent|self_destruct,0,tables.length[key]); main = tables.main[key]
+        key=jnp.where(self_destruct|whirlwind_raw,0,key)
+        size = jnp.where(whirlwind_raw|baton_raw|(pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent|heal_weather_full|recoil_silent|bell_silent|self_destruct,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
-        good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont|bell_silent|baton_raw|self_destruct) & enough
+        good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont|bell_silent|baton_raw|self_destruct|whirlwind_raw) & enough
         error = jnp.where(present & (error == 0) & ~good, int(inputs.Error.PAYLOAD), error)
         schema = tables.templates[key]
         subject = jnp.where(direct_control,tape.words[:,index,3],jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6])))
@@ -909,6 +913,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # the pinned writer reuses rather than assigning a new public slot.
         # Refuse that ambiguity and an unobserved forme change atomically.
         identity = ~baton_raw|baton_callbacks.owned(tape,index)
+        identity &= ~(whirlwind_raw|drag_raw)|whirlwind_callbacks.owned(tape,index)
         identity &= ~(kind==int(inputs.Kind.BATON_PASS))|baton_callbacks.owned(tape,index,baton_callbacks.INSTALL)
         identity &= ~arrival | (~collision & ((prior_species == 0) | (prior_species == semantic[:, 9])))
         # Old status is a causal receipt fact, and must agree with the BEFORE
