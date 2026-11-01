@@ -60,6 +60,7 @@ from . import engine_recoil_callbacks as recoil_callbacks
 from . import engine_rough_skin_callbacks as rough_callbacks
 from . import engine_swords_dance_callbacks as swords_dance_callbacks
 from . import engine_intimidate_callbacks as intimidate_callbacks
+from . import engine_entry_spikes_callbacks as entry_spikes_callbacks
 from . import engine_spikes_callbacks as spikes_callbacks
 from . import engine_thunder_wave_callbacks as thunder_callbacks
 from . import engine_sleep_powder_callbacks as powder_callbacks
@@ -115,6 +116,11 @@ class Tables(NamedTuple):
     sleep_powder_move: object
     wonder_guard_engine_ability: object
     wonder_guard_public_ability: object
+    entry_spikes_flying_type: object
+    entry_spikes_type_count: object
+    entry_spikes_levitate: object
+    entry_spikes_item_count: object
+    entry_spikes_boots_item: object
     binding: object
 
 
@@ -224,6 +230,11 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     pressure_public = 0 if weather_catalog is None else weather_catalog.abilities.ids.get('pressure',0)
     intimidate_engine=next((i for i,n in enumerate(metadata['vocabulary'].get('abilities',[])) if normalize_id(n)=='intimidate'),0)
     intimidate_public=0 if weather_catalog is None else weather_catalog.abilities.ids.get('intimidate',0)
+    entry_spikes_flying=next((i for i,n in enumerate(metadata['vocabulary'].get('types',[])) if n=='flying'),0)
+    entry_spikes_types=len(metadata['vocabulary'].get('types',[]))
+    entry_spikes_levitate=[n=='levitate' for n in metadata['vocabulary'].get('abilities',[])] or [False]
+    entry_spikes_items=len(item_names)
+    entry_spikes_boots=next((i for i,n in enumerate(item_names) if n=='heavydutyboots'),0)
     calm_mind_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='calmmind' and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==0),0)
     swords_dance_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='swordsdance' and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==0),0)
     spikes_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='spikes'),0)
@@ -288,7 +299,8 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         trace_engine_ability=trace_engine,sturdy_engine_ability=sturdy_engine,sturdy_public_ability=sturdy_public,
         trace_public_ability=trace_public.tolist(),sleep_powder_move=sleep_powder_move,primary_sleep_moves=primary_sleep_moves.tolist(),no_damage_binding=np.asarray(no_damage_data.binding).tolist(),color_categories=color_categories.tolist(),
         wonder_guard_engine_ability=wonder_engine,wonder_guard_public_ability=wonder_public,
-        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,swords_dance_move=swords_dance_move,spikes_move=spikes_move,thunder_wave_move=thunder_wave_move,admission=False)
+        pressure_engine_ability=pressure_engine,pressure_public_ability=pressure_public,substitute_move=substitute_move,toxic_move=toxic_move,recoil_move=recoil_move,intimidate_engine_ability=intimidate_engine,intimidate_public_ability=intimidate_public,calm_mind_move=calm_mind_move,swords_dance_move=swords_dance_move,spikes_move=spikes_move,thunder_wave_move=thunder_wave_move,
+        entry_spikes=(entry_spikes_flying,entry_spikes_types,entry_spikes_levitate,entry_spikes_items,entry_spikes_boots),admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
@@ -304,6 +316,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(duration_safe),
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
         jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),jnp.array(trace_public,jnp.int32),no_damage_data,jnp.array(color_categories),jnp.array(primary_sleep_moves),jnp.array(sleep_powder_move,jnp.int32),jnp.array(wonder_engine,jnp.int32),jnp.array(wonder_public,jnp.int32),
+        jnp.array(entry_spikes_flying,jnp.int32),jnp.array(entry_spikes_types,jnp.int32),jnp.array(entry_spikes_levitate,bool),jnp.array(entry_spikes_items,jnp.int32),jnp.array(entry_spikes_boots,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -544,6 +557,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & jnp.all(status_residual.producer_binding==tape.producer_binding)
             & jnp.all(status_residual.reason_by_status==jnp.array([0,0,1,2,3,0,0],jnp.int32))
             & jnp.all(status_residual.damage_tag_by_reason==jnp.array([0,1,2,2],jnp.int32)))
+    for value in (tables.entry_spikes_flying_type,tables.entry_spikes_type_count,
+            tables.entry_spikes_item_count,tables.entry_spikes_boots_item):base._shape(value,(),jnp.int32)
+    if tables.entry_spikes_levitate.ndim!=1 or not len(tables.entry_spikes_levitate):raise ValueError('original entry ability namespace required')
+    base._shape(tables.entry_spikes_levitate,tables.entry_spikes_levitate.shape,jnp.bool_)
     rows = jnp.arange(b)
     known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK | status_callbacks.UNKNOWN_STATUS | weather_callbacks.UNKNOWN_WEATHER
     fatal = (tape.refusal & ~public.UNINSTRUMENTED) != 0
@@ -600,6 +617,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         leftovers_heal = kind == leftovers_callbacks.LEFTOVERS_HEAL
         self_heal = kind == self_heal_callbacks.SELF_HEAL
         status_damage = kind == status_residual_callbacks.STATUS_RESIDUAL
+        entry_spikes = kind == entry_spikes_callbacks.ENTRY_SPIKES_HP
         no_damage_header=kind==no_damage.TARGET_NO_DAMAGE
         no_damage_facts=kind==no_damage.ABSORB_FACTS
         flash_ended=kind==flash_end.FLASH_FIRE_END
@@ -715,6 +733,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
                 &(raw[:,2]==raw[:,1])
                 |((raw[:,8]==4)&(raw[:,9]==3)&(raw[:,2]==jnp.minimum(raw[:,1]+1,15)))))
         event_ok=jnp.where(status_damage,generation_ok & clock_ok & status_damage_ok,event_ok)
+        entry_spikes_ok=(tables.status_events&~tables.raw_begin&status_identity
+            &entry_spikes_callbacks.claimed(tape,index,cursor)
+            &entry_spikes_callbacks.ground(raw,tables.entry_spikes_levitate,tables.entry_spikes_flying_type,
+                tables.entry_spikes_type_count,tables.entry_spikes_item_count,tables.entry_spikes_boots_item))
+        event_ok=jnp.where(entry_spikes,generation_ok&clock_ok&entry_spikes_ok,event_ok)
         direct_move=jnp.clip(raw[:,5],0,tables.base.public_ids.shape[0]-1)
         direct_ok=(tables.status_events & ~tables.raw_begin & status_identity & actor_ok
             & (direct_hit_controls.validate_raw_device(raw)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)) & (phase==0)
@@ -923,10 +946,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_percent=jnp.where((raw[:,6]<raw[:,7])&(chip_percent==100),99,chip_percent)
         chip_payload=jnp.stack((status_enc,jnp.where(own,raw[:,6],chip_percent),
             jnp.where(own,raw[:,7],100),jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,8],0,6)],
-            z,jnp.where(leftovers_heal|self_heal,0,1),jnp.where(leftovers_heal|substitute|self_heal,0,1),z),axis=1)  # heal tags are not damage metadata
+            z,jnp.where(leftovers_heal|self_heal,0,1),jnp.where(leftovers_heal|substitute|self_heal,0,1),entry_spikes.astype(jnp.int32)),axis=1)  # heal tags are not damage metadata
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
-        semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute|self_heal)[:,None],chip_semantic,semantic)
+        semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute|self_heal|entry_spikes)[:,None],chip_semantic,semantic)
         recoil_own=state.owner==actor_side
         recoil_percent=(100*raw[:,7]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8])
         recoil_percent=jnp.where((raw[:,7]<raw[:,8])&(recoil_percent==100),99,recoil_percent)

@@ -16,6 +16,24 @@ from gpu_engine_default_observer_ast import dump_default_program
 import test_gpu_engine_intimidate_owning_event as initial_fixture
 
 
+def default_entry_program(text):
+ tree=ast.parse(text)
+ fields=('spikes_type_count','spikes_item_count','spikes_boots_item')
+ table=next(n for n in tree.body if isinstance(n,ast.ClassDef)and n.name=='EntryTable')
+ added=[n for n in table.body if isinstance(n,ast.AnnAssign)and n.target.id in fields]
+ if added:
+  assert tuple(n.target.id for n in added)==fields
+  expected=ast.parse("x: jax.Array | None = None").body[0]
+  assert all(ast.dump(n.annotation)==ast.dump(expected.annotation)and ast.dump(n.value)==ast.dump(expected.value)for n in added)
+  table.body=[n for n in table.body if n not in added]
+  factory=next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata')
+  arguments=factory.body[-1].value.args
+  approved=ast.parse("x(jnp.asarray(len(vocab['types']),jnp.int32),jnp.asarray(len(vocab.get('items',[])),jnp.int32),jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32))").body[0].value.args
+  assert [ast.dump(n)for n in arguments[-3:]]==[ast.dump(n)for n in approved]
+  del arguments[-3:]
+ return dump_default_program(tree)
+
+
 class OrdinaryIntimidateTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
@@ -102,12 +120,12 @@ class OrdinaryIntimidateTests(unittest.TestCase):
   self.same(tape.cursor.generation,out.cursor.generation)
  def test_original_default_ast_constructor_api_and_source_callback(self):
   path=Path('gpu_engine/entry.py');old=subprocess.check_output(['git','show','f3c9dbea:'+str(path)],text=True)
-  self.assertEqual(dump_default_program(ast.parse(old)),dump_default_program(ast.parse(path.read_text())))
+  self.assertEqual(default_entry_program(old),default_entry_program(path.read_text()))
   for old_numeric,new_numeric in [('jnp.maximum(-6,old-1)','jnp.maximum(-5,old-1)'),
       ('jnp.maximum(-6,old-1)','jnp.maximum(-6,old-2)')]:
    self.assertIn(old_numeric,path.read_text())
-   self.assertNotEqual(dump_default_program(ast.parse(old)),
-    dump_default_program(ast.parse(path.read_text().replace(old_numeric,new_numeric))))
+   self.assertNotEqual(default_entry_program(old),
+    default_entry_program(path.read_text().replace(old_numeric,new_numeric)))
   original=ast.parse(subprocess.check_output(['git','show','f3c9dbea:gpu_engine/engine_intimidate_callbacks.py'],text=True))
   current=ast.parse(Path('gpu_engine/engine_intimidate_callbacks.py').read_text())
   for name in('_constructor','record_device'):
