@@ -133,6 +133,12 @@ class FrameDiagnostics(NamedTuple):
     host_timings: object = None
 
 
+class AdvanceWithDiagnostics(NamedTuple):
+    """Exact successful result and diagnostics from one checked transaction."""
+    result: Result
+    diagnostics: FrameDiagnostics
+
+
 @dataclass(frozen=True, eq=False)
 class Prepared:
     binding: object
@@ -1078,7 +1084,7 @@ def latest_diagnostics(session):
     return record['diagnostics']
 
 
-def advance(session, engine_actions, *, active_rows=None, timing_callback=None, chance_inputs=None, collect_timings=False):
+def advance(session, engine_actions, *, active_rows=None, timing_callback=None, chance_inputs=None, collect_timings=False, return_diagnostics=False):
     """Source component advance; never a model rollout or implicit CLI enable.
 
     The API takes no external frame: its sole core result is consumed here once.
@@ -1087,6 +1093,8 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
     collect_timings records the original synchronized phase intervals internally;
     it cannot be combined with an arbitrary external timing observer.
     """
+    if type(return_diagnostics) is not bool:
+        raise ValueError('return_diagnostics must be an explicit bool')
     if type(collect_timings) is not bool:
         raise ValueError('collect_timings must be an explicit bool')
     if collect_timings and timing_callback is not None:
@@ -1194,8 +1202,8 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
         session.state, session.result = result.state, result
         if host_timings is not None:
             host_timings['advance_wall_ms'] = (time.perf_counter_ns()-advance_start)/1e6
-        record.update(state=result.state, result=result,
-            diagnostics=FrameDiagnostics(frame.invalid_actions, frame.placeholder_moves, active, executed,host_timings))
-        return result
+        diagnostics=FrameDiagnostics(frame.invalid_actions, frame.placeholder_moves, active, executed,host_timings)
+        record.update(state=result.state, result=result, diagnostics=diagnostics)
+        return AdvanceWithDiagnostics(result, diagnostics) if return_diagnostics else result
     finally:
         record['advancing'] = False

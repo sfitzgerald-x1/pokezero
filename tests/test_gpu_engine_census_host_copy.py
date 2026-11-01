@@ -80,7 +80,12 @@ class HostCopyTests(unittest.TestCase):
   callbacks.execution.diagnostics=diag_capture._replace(count=callbacks.execution.ledger.count)
   backend=c._Runtime.__new__(c._Runtime);backend.j=NS(asarray=lambda x:x);backend.jax=NS(block_until_ready=lambda x:x)
   backend.engine=current.engine;backend.cursor=current.cursor;backend.profile=None;backend.move_names=('none','one','two');backend.session=NS(state=NS(core=current),result=None);calls=[]
-  def advance(session,actions,**kw):calls.append(('original',actions.tolist(),kw['active_rows'].tolist(),kw['chance_inputs']));session.state=NS(core=after);session.result=NS(state=session.state);return session.result
+  def advance(session,actions,**kw):
+   calls.append(('original',actions.tolist(),kw['active_rows'].tolist(),kw['chance_inputs']));session.state=NS(core=after);session.result=NS(state=session.state)
+   if kw.get('return_diagnostics',False):
+    from gpu_engine.engine_retained_encoder_driver import AdvanceWithDiagnostics
+    return AdvanceWithDiagnostics(session.result,diag)
+   return session.result
   diag=NS(executed_rows=wrap(kept),active_rows=wrap(kept.copy()),invalid_actions=wrap(np.zeros(b,bool)),host_timings={'advance_wall_ms':1.25})
   backend.driver=NS(advance=advance,latest_diagnostics=lambda session:diag)
   bad=wrap(np.arange(b)%5==0)

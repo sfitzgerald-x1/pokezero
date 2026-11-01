@@ -415,8 +415,9 @@ class _Runtime:
         phases['original_request_rows']=int(kept.sum())
         if kept.any():
             old_frames=host(self.session.state.core.frame_number).copy()
-            result=self.driver.advance(self.session,j.asarray(actions),active_rows=j.asarray(kept),chance_inputs=chance,collect_timings=True)
-            self.jax.block_until_ready(result);d=self.driver.latest_diagnostics(self.session)
+            advanced=self.driver.advance(self.session,j.asarray(actions),active_rows=j.asarray(kept),chance_inputs=chance,collect_timings=True,return_diagnostics=True)
+            result,d=advanced.result,advanced.diagnostics
+            self.jax.block_until_ready(result)
             phases.update(_driver_host_overlap_ms(d))
             phases.update({'driver_'+name[len('phase.'):-len('_ms')]:milliseconds
                 for name,milliseconds in (getattr(d,'host_timings',None)or{}).items()
