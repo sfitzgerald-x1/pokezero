@@ -1,8 +1,8 @@
 """Finite full-game timing of the direct public device observation path.
 
 The actual public29 encoder drives the champion's explicit23-token adapter and
-bf16 policy, both seats. Missing hooks stay zero in its column manifest. This
-first-cut speed estimate does not establish parity, strength or B4 passage.
+bf16 policy, both seats. Missing hooks stay zero in its column manifest. Timing
+alone does not establish parity, strength or B4 passage.
 No protocol capture, event proof, host fold or placeholder observation is used.
 """
 from typing import NamedTuple
@@ -60,8 +60,8 @@ def sample_keys(root_ids, requests, *, sampling_seed):
     return jax.vmap(one)(root_ids, requests)
 
 
-def retire(carry, after, updated_trackers, initial, *, failure, requested, errors,
-           max_requests, tracker_initialize, observation_checksum=0):
+def retire(carry, after, updated_trackers, initial, initial_public, *, failure, requested, errors,
+           max_requests, observation_checksum=0):
     """Retain every declared cell once, including failures/caps; no redraw."""
     assigned = carry.ids >= 0
     count = carry.requests + assigned.astype(j.int32)
@@ -83,8 +83,11 @@ def retire(carry, after, updated_trackers, initial, *, failure, requested, error
     fill = available & (next_ids < n)
     safe = j.clip(next_ids, 0, n - 1)
     fresh = jax.tree.map(lambda x: x[safe], initial)
+    fresh_public = jax.tree.map(lambda x: x[safe], initial_public)
     state = select_rows(fill, fresh, after)
-    trackers = select_rows(fill, tracker_initialize(fresh), updated_trackers)
+    # Reuse the SAME constructor's actual Ability Start/Trace/entry knowledge,
+    # never reconstruct public state by polling an already initialized battle.
+    trackers = select_rows(fill, fresh_public, updated_trackers)
     ids = j.where(fill, next_ids, j.where(ended, -1, carry.ids))
     state = state._replace(done=state.done | (ids < 0))
     return Carry(state, trackers, ids, j.where(fill, 0, count),
@@ -100,7 +103,7 @@ def make_driver(config, engine_tables, observation_tables, *,
     """One compiled worker; engine and tracker writes share the same device step."""
     from . import engine_device_observation as encoder
     from . import engine_device_trackers as public
-    def advance(c, initial, root_ids, params):
+    def advance(c, initial, initial_public, root_ids, params):
         state = c.state
         masks = transition.action_mask(state, engine_tables)
         observations = [encoder.encode(state, public.readout(c.trackers,
@@ -120,16 +123,18 @@ def make_driver(config, engine_tables, observation_tables, *,
         keys = sample_keys(root_ids[j.clip(c.ids, 0, len(root_ids)-1)], c.requests,
                            sampling_seed=sampling_seed)
         chosen = champion.sample(safe_output, legal, keys)
-        targets = j.stack([o.switch_targets for o in observations], axis=1)
-        actions = physical_actions(j.maximum(chosen, 0), targets, state.active)
+        actions = j.stack([encoder.map_actions(observations[side], state,
+            j.full((len(c.ids),), side, j.int32), j.maximum(chosen[:, side], 0))
+            for side in range(2)], axis=1)
         requested = request_seats(state) & (c.ids >= 0)[:, None]
         flags = j.stack([o.error for o in observations], axis=1)
         errors = j.sum(((flags[..., None] & (1 << j.arange(len(encoder.ERROR_KINDS)))) != 0)
             & requested[..., None], axis=(0, 1), dtype=j.int32)
-        out = transition.step(state, actions, engine_tables)
+        public_out = transition.step_with_public(state, actions, engine_tables, c.trackers,
+            belief_tables=observation_tables.belief)
+        out = public_out.step
         failure = out.invalid_actions | j.any(requested & ~finite, axis=1)
-        trackers = public.update(c.trackers, state, out.state, actions,
-                                 active_rows=(c.ids >= 0) & ~state.done & ~out.invalid_actions)
+        trackers = public_out.trackers
         # Retain ALL29 outputs, including public belief tails not consumed by
         # the champion23 adapter. Otherwise XLA could prune encoder work. This
         # diagnostic checksum wraps uint32 intentionally; it is not parity.
@@ -138,29 +143,30 @@ def make_driver(config, engine_tables, observation_tables, *,
             checksum += j.sum(jax.lax.bitcast_convert_type(o.numeric_features, j.uint32), dtype=j.uint32)
             for value in (o.categorical_ids, o.token_type_ids, o.attention_mask):
                 checksum += j.sum(value.astype(j.uint32), dtype=j.uint32)
-        return retire(c, out.state, trackers, initial, failure=failure,
+        return retire(c, out.state, trackers, initial, initial_public, failure=failure,
             requested=requested, errors=errors, max_requests=max_requests,
-            tracker_initialize=public.initialize, observation_checksum=checksum)
-    def chunk(c, initial, root_ids, params):
+            observation_checksum=checksum)
+    def chunk(c, initial, initial_public, root_ids, params):
         def body(c, _):
             # No policy/engine work after the fixed finite cohort is exhausted.
-            c = jax.lax.cond(j.any(c.ids >= 0), lambda x: advance(x, initial, root_ids, params), lambda x: x, c)
+            c = jax.lax.cond(j.any(c.ids >= 0), lambda x: advance(x, initial, initial_public, root_ids, params), lambda x: x, c)
             return c, None
         return jax.lax.scan(body, c, None, length=chunk_steps)[0]
     return jax.jit(chunk)
 
 
-def initialize(initial, batch):
-    from . import engine_device_trackers as public
+def initialize(initial, initial_public, batch):
+    from . import engine_device_observation as encoder
     n = initial.done.shape[0]
     if not 1 <= batch <= n:
         raise ValueError('positive batch within the fixed declared cohort')
     state = jax.tree.map(lambda x: x[:batch], initial)
+    public = jax.tree.map(lambda x: x[:batch], initial_public)
     zero = j.zeros(n, j.int32)
-    return Carry(state, public.initialize(state), j.arange(batch, dtype=j.int32),
+    return Carry(state, public, j.arange(batch, dtype=j.int32),
         j.zeros(batch, j.int32), j.asarray(batch, j.int32),
         j.zeros(n, bool), j.zeros(n, bool), j.zeros(n, bool), zero, zero,
-        j.zeros(7, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32),
+        j.zeros(len(encoder.ERROR_KINDS), j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32),
         j.asarray(0, j.uint32))
 
 
@@ -186,10 +192,10 @@ def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
         decisions_by_game=decisions.tolist(), completed=complete.tolist(),
         capped=capped.tolist(), failed=failed.tolist(), ticks=int(np.asarray(carry.ticks)),
         all29_observation_checksum_uint32=int(np.asarray(carry.observation_checksum)),
-        scope='First-cut real direct encoder; zero manifest retained. No parity/coverage/strength/canary/B4 qualification.')
+        scope='Real direct encoder; zero manifest retained. Timing alone is not parity/coverage/strength/canary/B4 qualification.')
 
 
-def run_finite(compiled, start, initial, root_ids, params, *, progress=None, stall_floor_seconds=600):
+def run_finite(compiled, start, initial, initial_public, root_ids, params, *, progress=None, stall_floor_seconds=600):
     """Whole finite cohort including tail/dispatch/scalar accounting wall time.
 
     Stall guard grows with the longest observed completed game so far; it is
@@ -203,7 +209,7 @@ def run_finite(compiled, start, initial, root_ids, params, *, progress=None, sta
     seen = np.zeros(c.completed.shape, bool)
     previous_boundary = begin
     while True:
-        c = compiled(c, initial, root_ids, params)
+        c = compiled(c, initial, initial_public, root_ids, params)
         completed_mask, retired, active, cursor = jax.device_get((c.completed,
             j.sum(c.completed | c.capped | c.failed), j.sum(c.ids >= 0), c.cursor))
         completed_mask = np.asarray(completed_mask)
@@ -227,7 +233,7 @@ def run_finite(compiled, start, initial, root_ids, params, *, progress=None, sta
 
 
 def measure_pair(params, config, engine_tables, observation_tables, warm_initial,
-                 initial, warm_roots, roots, *, batch, sampling_seed,
+                 initial, warm_public, initial_public, warm_roots, roots, *, batch, sampling_seed,
                  max_requests=4096, chunk_steps=16, progress=None):
     """Disjoint full warmup cohort followed by the whole declared measured one."""
     warm_roots, roots = np.asarray(warm_roots), np.asarray(roots)
@@ -235,14 +241,15 @@ def measure_pair(params, config, engine_tables, observation_tables, warm_initial
     if (warm_initial.done.shape != initial.done.shape or warm_roots.shape != (n,)
             or roots.shape != (n,) or len(np.unique(np.concatenate((warm_roots, roots)))) != 2*n):
         raise ValueError('same shapes and disjoint per-game warm/measured root IDs required')
-    initial, warm_initial, params = jax.block_until_ready((initial, warm_initial, params))
-    start = jax.block_until_ready(initialize(initial, batch))
-    warm_start = jax.block_until_ready(initialize(warm_initial, batch))
+    initial, warm_initial, warm_public, initial_public, params = jax.block_until_ready(
+        (initial, warm_initial, warm_public, initial_public, params))
+    start = jax.block_until_ready(initialize(initial, initial_public, batch))
+    warm_start = jax.block_until_ready(initialize(warm_initial, warm_public, batch))
     roots = j.asarray(roots, j.uint32); warm_roots = j.asarray(warm_roots, j.uint32)
     driver = make_driver(config, engine_tables, observation_tables,
         sampling_seed=sampling_seed, max_requests=max_requests, chunk_steps=chunk_steps)
     before = time.perf_counter()
-    lowered = driver.lower(start, initial, roots, params)
+    lowered = driver.lower(start, initial, initial_public, roots, params)
     lowering = time.perf_counter()-before
     if progress:progress(dict(phase='LOWERED', batch=batch, lowering_seconds=lowering))
     before = time.perf_counter()
@@ -251,9 +258,9 @@ def measure_pair(params, config, engine_tables, observation_tables, warm_initial
     if progress:progress(dict(phase='COMPILED', batch=batch, compile_seconds=compilation))
     def report(phase):
         return (lambda value: progress(dict(value, phase=phase, batch=batch))) if progress else None
-    warm, warm_seconds = run_finite(compiled, warm_start, warm_initial, warm_roots, params,
+    warm, warm_seconds = run_finite(compiled, warm_start, warm_initial, warm_public, warm_roots, params,
         progress=report('DISJOINT_FULL_WARMUP'))
-    finished, seconds = run_finite(compiled, start, initial, roots, params,
+    finished, seconds = run_finite(compiled, start, initial, initial_public, roots, params,
         progress=report('WARM_FULL_MEASURED'))
     result = summary(finished, seconds=seconds, batch=batch,
         compile_seconds=compilation, warmup_seconds=warm_seconds)

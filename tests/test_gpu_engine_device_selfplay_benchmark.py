@@ -1,6 +1,8 @@
 """Accounting/action contracts; no model loading or scientific games."""
 from typing import NamedTuple
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import jax
 import jax.numpy as j
 import numpy as np
@@ -13,6 +15,51 @@ class State(NamedTuple):
 
 
 class DeviceSelfplayBenchmarkTests(unittest.TestCase):
+    def test_full_public_step_uses_constructor_carry_and_compressed_move_mapping(self):
+        from gpu_engine import champion, transition, engine_device_observation as e
+        from gpu_engine import engine_device_trackers as public
+        from gpu_engine.engine_device_public_hooks import PublicStepResult
+        class FullState(NamedTuple):
+            done: object
+            turn: object
+            hp: object
+            active: object
+            forced_switch: object
+        initial=FullState(j.zeros(3,bool),j.zeros(3,j.int32),j.ones((3,2,6),j.int32),
+            j.broadcast_to(j.asarray([3,1],j.int32),(3,2)),j.zeros((3,2),bool))
+        initial_public=j.arange(3,dtype=j.int32)[:,None]+100
+        tables=SimpleNamespace(belief=j.asarray(42,j.int32))
+        def encode(state,pub,tables,*,observer_sides,legal_action_mask):
+            n=len(observer_sides);side=observer_sides
+            numeric=j.zeros((n,29,132),j.float32).at[:,0,0].set(pub[:,0])
+            numeric=numeric.at[:,28,131].set(pub[:,0])
+            legal=j.zeros((n,9),bool).at[j.arange(n),j.where(side==0,0,4)].set(True)
+            return e.Observation(numeric,j.zeros((n,29,41),j.int32),j.zeros((n,29),j.int32),
+                j.ones((n,29),bool),legal,j.broadcast_to(j.asarray([5,0,2,3,4],j.int32),(n,5)),
+                j.zeros(n,j.int32),j.zeros(len(e.ERROR_KINDS),j.int32),
+                j.broadcast_to(j.asarray([3,1,2,0],j.int32),(n,4)))
+        def forward(params,*,numeric,categorical,token_types,attention,c,compute_dtype):
+            self.assertEqual(compute_dtype,'bfloat16')
+            shape=numeric.shape[:2]
+            return champion.Output(j.zeros(shape+(9,)),j.zeros(shape),j.zeros(shape+(9,)))
+        def step(state,actions,table,trackers,*,belief_tables):
+            self.assertIs(belief_tables,tables.belief)
+            bad=j.any(actions!=j.asarray([3,8]),axis=1)&~state.done
+            after=state._replace(done=j.ones_like(state.done),turn=state.turn+(~state.done).astype(j.int32))
+            return PublicStepResult(transition.StepResult(after,bad,j.zeros_like(bad)),trackers+10)
+        with patch.object(public,'readout',lambda carry,side:carry),patch.object(e,'encode',encode),\
+             patch.object(champion,'forward',forward),patch.object(transition,'step_with_public',step),\
+             patch.object(transition,'action_mask',lambda state,table:j.ones((2,2,9),bool)):
+            start=b.initialize(initial,initial_public,2)
+            fn=b.make_driver(None,None,tables,sampling_seed=21,chunk_steps=2)
+            out=jax.block_until_ready(fn(start,initial,initial_public,j.arange(3,dtype=j.uint32),{}))
+        result=b.summary(out,seconds=1.,batch=2,compile_seconds=0.,warmup_seconds=0.)
+        self.assertEqual(result['completed_games'],3);self.assertEqual(result['failed_games'],0)
+        self.assertEqual(result['actual_requested_views'],6)
+        self.assertEqual(result['physical_encoder_forward_rows'],8)
+        self.assertEqual(len(result['error_counts']),9)
+        self.assertGreater(result['all29_observation_checksum_uint32'],0)
+
     def test_request_order_switches_map_to_the_engine_physical_bench(self):
         active = j.asarray([[3, 1], [0, 5]], j.int32)
         targets = j.asarray([[[0, 2, 1, 4, 5], [5, 0, 2, 3, 4]],
@@ -30,9 +77,9 @@ class DeviceSelfplayBenchmarkTests(unittest.TestCase):
             j.zeros(5, j.int32), j.zeros(5, j.int32), j.zeros(7, j.int32),
             j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.uint32))
         advance = jax.jit(lambda c, after, fail: b.retire(c, after, c.trackers+1,
-            initial, failure=fail, requested=j.asarray([[True, True], [True, False]]),
-            errors=j.asarray([0, 0, 1, 0, 0, 0, 0]), max_requests=2,
-            tracker_initialize=lambda state: state.turn[:, None]+100))
+            initial, initial.turn[:, None]+100, failure=fail,
+            requested=j.asarray([[True, True], [True, False]]),
+            errors=j.asarray([0, 0, 1, 0, 0, 0, 0]), max_requests=2))
         c = advance(c, State(j.asarray([True, False]), j.asarray([9, 8], j.int32)), j.asarray([False, False]))
         np.testing.assert_array_equal(c.ids, [2, 3]); np.testing.assert_array_equal(c.trackers, [[102], [103]])
         np.testing.assert_array_equal(c.completed, [True, False, False, False, False])
