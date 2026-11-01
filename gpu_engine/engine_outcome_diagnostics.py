@@ -6,6 +6,7 @@ serialization includes refused rows only; these private operands are not model
 features, public facts or training labels.
 """
 from typing import NamedTuple
+import jax
 import jax.numpy as j
 import numpy as np
 
@@ -30,6 +31,10 @@ SLEEP_GUARD_FIELDS=('sleep_rest_origin','sleep_skipped','sleep_volatile_uint32',
 BATON_START_FIELDS=('actor_side', 'actor_physical', 'move', 'caller_move', 'eligible', 'acts', 'begin_valid', 'registered_bound', 'data_bound', 'transaction_present', 'history_side', 'public_known', 'public_pending', 'public_substitute', 'hp', 'maximum', 'status', 'counter', 'ability', 'base_ability', 'item', 'type0', 'type1', 'base_type0', 'base_type1', 'substitute_hp', 'confusion_counter', 'volatile_uint32', 'protect_counter', 'choice_move', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'spikes', 'any_trap_source', 'pending_residual', 'any_forced_switch', 'any_baton_pass', 'ability_namespace_size', 'item_namespace_size', 'quiet_ability_lookup', 'quiet_item_lookup', 'boost0', 'boost1', 'boost2', 'boost3', 'boost4', 'boost5', 'boost6', 'public_boost0', 'public_boost1', 'public_boost2', 'public_boost3', 'public_boost4', 'public_boost5', 'public_boost6', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk', 'quiet_status_lookup')
 
 NO_DAMAGE_FIELDS=('actor_side', 'actor_physical', 'target_physical', 'move', 'caller_move', 'requested', 'accuracy_hit', 'move_type', 'ability', 'status', 'hp', 'maximum', 'volatile_uint32', 'substitute_hp', 'actor_hp', 'explodes', 'actor_hp_type', 'actor_hp_power', 'target_type0', 'target_type1', 'item', 'absorption_blocked', 'absorption_hp', 'absorption_volatile_uint32', 'write_power', 'write_critical', 'write_hit', 'write_immune', 'write_numerator', 'write_denominator', 'write_substitute', 'write_protected', 'write_enduring', 'write_old_hp', 'write_new_hp', 'write_maximum', 'current_actor_hp', 'current_volatile_uint32', 'current_substitute_hp', 'current_actor_hp_type', 'current_actor_hp_power', 'current_type0', 'current_type1', 'current_item', 'current_ability', 'move_namespace_size', 'ability_namespace_size', 'item_namespace_size', 'candidate', 'selected_type', 'dynamic_type', 'levitate_source', 'levitate_move', 'ground_type', 'flying_type', 'levitate_lookup', 'allowed_item_lookup', 'finish_scheduled', 'header_code', 'finish_matches', 'room', 'use', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk')
+
+# Two independent original call phases, each bounded to the two seats/frame.
+DIRECT_PHASES=('emitter','span_capture')
+DIRECT_FIELDS=('actor_side', 'actor_physical', 'target_physical', 'move', 'requested', 'registered_bound', 'effective_eligible', 'write_power', 'write_critical', 'write_hit', 'write_immune', 'write_numerator', 'write_denominator', 'write_substitute', 'write_protected', 'write_enduring', 'write_old_hp', 'write_new_hp', 'write_maximum', 'critical_annotation', 'effect_annotation', 'need', 'room', 'valid_before_details', 'valid', 'use', 'overflow', 'capacity', 'move_namespace_size', 'seismic_toss_move', 'cursor_valid', 'cursor_initialized', 'stream_match', 'engine_namespace', 'source_namespace', 'move_namespace', 'producer_namespace', 'cursor_namespace', 'clock_match', 'phase_zero', 'actor_nonnegative', 'actor_current', 'target_current', 'write_valid', 'detail0_inside', 'detail0_zero', 'detail1_inside', 'detail1_zero', 'ticket_same', 'ticket_slot', 'ticket_serial', 'ticket_frame', 'ledger_slot', 'ledger_count', 'ledger_site', 'ledger_side', 'ledger_stage', 'ledger_start', 'ledger_end', 'ledger_opened', 'ledger_turn', 'ledger_phase', 'ledger_generation0', 'ledger_generation1', 'namespace_valid', 'namespace_tape', 'declared_header', 'declared_current', 'declared_stamp', 'declared', 'length', 'controls', 'exact_hp', 'site_match', 'side_match', 'span_count', 'semantic', 'declaration_word0', 'declaration_word1', 'declaration_word2', 'declaration_word3', 'declaration_word4', 'declaration_word5', 'declaration_word6', 'declaration_word7', 'declaration_word8', 'declaration_word9', 'first_word0', 'first_word1', 'first_word2', 'first_word3', 'first_word4', 'first_word5', 'first_word6', 'first_word7', 'first_word8', 'first_word9', 'second_word0', 'second_word1', 'second_word2', 'second_word3', 'second_word4', 'second_word5', 'second_word6', 'second_word7', 'second_word8', 'second_word9', 'hp_word0', 'hp_word1', 'hp_word2', 'hp_word3', 'hp_word4', 'hp_word5', 'hp_word6', 'hp_word7', 'hp_word8', 'hp_word9', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk')
 
 class Capture(NamedTuple):
     words:object
@@ -57,6 +62,13 @@ class Capture(NamedTuple):
     no_damage_overflow:object=None
     sleep_guard_words:object=None
     sleep_guard_known:object=None
+    direct_words:object=None
+    direct_known:object=None
+    direct_malformed:object=None
+    direct_valid:object=None
+    direct_count:object=None
+    direct_overflow:object=None
+    direct_unsigned:object=None
 
 def empty(batch):
     return Capture(j.zeros((batch,CAPACITY,len(FIELDS)),j.int32),j.zeros((batch,CAPACITY),bool),
@@ -69,7 +81,11 @@ def empty(batch):
         j.zeros((batch,CAPACITY),bool),j.zeros(batch,j.int32),j.zeros(batch,bool),
         j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),bool),
         j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),bool),j.zeros((batch,CAPACITY),bool),j.zeros(batch,j.int32),j.zeros(batch,bool),
-        j.zeros((batch,CAPACITY,len(SLEEP_GUARD_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(SLEEP_GUARD_FIELDS)),bool))
+        j.zeros((batch,CAPACITY,len(SLEEP_GUARD_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(SLEEP_GUARD_FIELDS)),bool),
+        j.zeros((batch,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS)),j.int32),j.zeros((batch,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS)),bool),
+        j.zeros((batch,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS)),bool),j.zeros((batch,len(DIRECT_PHASES),CAPACITY),bool),
+        j.zeros((batch,len(DIRECT_PHASES)),j.int32),j.zeros((batch,len(DIRECT_PHASES)),bool),
+        j.zeros((batch,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS)),bool))
 
 def _valid(value,b):
     return type(value) is Capture and all(getattr(a,'shape',None)==shape and getattr(a,'dtype',None)==j.dtype(dtype)
@@ -114,6 +130,46 @@ def _valid_baton_start(value,b):
 def _valid_no_damage(value,b):
     return _valid(value,b) and all(getattr(a,'shape',None)==shape and getattr(a,'dtype',None)==j.dtype(dtype)
         for a,shape,dtype in zip(value[17:23],((b,CAPACITY,len(NO_DAMAGE_FIELDS)),)*3+((b,CAPACITY),(b,),(b,)),(j.int32,j.bool_,j.bool_,j.bool_,j.int32,j.bool_)))
+
+def direct_enabled(tape):
+    """Storage-shape capability only, never an eligibility/admission predicate."""
+    capture=getattr(getattr(tape,'execution',None),'diagnostics',None);b=len(tape.count)
+    return _valid_direct(capture,b) and all(isinstance(v,(jax.Array,jax.core.Tracer))for v in capture[25:32])
+
+def _valid_direct(value,b):
+    shape=(b,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS))
+    return _valid(value,b) and getattr(value.direct_unsigned,'shape',None)==shape and getattr(value.direct_unsigned,'dtype',None)==j.dtype(bool) and all(getattr(a,'shape',None)==sh and getattr(a,'dtype',None)==j.dtype(dt)
+        for a,sh,dt in zip(value[25:31],(shape,shape,shape,(b,len(DIRECT_PHASES),CAPACITY),(b,len(DIRECT_PHASES)),(b,len(DIRECT_PHASES))),(j.int32,j.bool_,j.bool_,j.bool_,j.int32,j.bool_)))
+
+def direct_meta(tape):
+    """Literal current cutpoint metadata; absent values stay unavailable."""
+    c=getattr(tape,'execution',None);cursor=getattr(tape,'cursor',None);ledger=getattr(c,'ledger',None);risks=getattr(c,'risks',None)
+    generation=getattr(cursor,'generation',None);b=len(tape.count)
+    col=lambda n:generation[:,n]if getattr(generation,'shape',None)==(b,2)else None
+    return dict(stream_id=getattr(tape,'stream_id',None),frame=getattr(ledger,'frame',None),raw_count=tape.count,
+        turn=getattr(cursor,'turn',None),phase=getattr(cursor,'phase',None),generation0=col(0),generation1=col(1),
+        prior_tape_refusal=getattr(tape,'refusal',None),prior_execution_refusal=getattr(ledger,'refusal',None),prior_kernel_risk=getattr(getattr(risks,'carry',None),'risk',None))
+
+def record_direct_on_tape(tape,values,*,phase,active):
+    """Observe already-evaluated original operands/results, no guard evaluation.
+
+    Each phase has two slots. Known/malformed masks distinguish unavailable
+    legacy operands from literal false/zero; no field is read by admission.
+    """
+    c=getattr(tape,'execution',None);capture=getattr(c,'diagnostics',None);b=len(tape.count)
+    if not direct_enabled(tape)or type(values)is not dict or type(phase)is not int or not 0<=phase<len(DIRECT_PHASES):return tape
+    if getattr(active,'shape',None)!=(b,)or getattr(active,'dtype',None)!=j.dtype(bool):return tape
+    words=[];known=[];malformed=[];unsigned=[]
+    for name in DIRECT_FIELDS:
+        v=values.get(name);missing=v is None;good=getattr(v,'shape',None)==(b,)and getattr(v,'dtype',None)in(j.dtype(j.int32),j.dtype(j.uint32),j.dtype(bool))
+        words.append(v.astype(j.int32)if good else j.zeros(b,j.int32));known.append(j.full(b,good,bool));malformed.append(j.full(b,not missing and not good,bool));unsigned.append(j.full(b,good and getattr(v,'dtype',None)==j.dtype(j.uint32),bool))
+    words=j.stack(words,axis=1);known=j.stack(known,axis=1);malformed=j.stack(malformed,axis=1);unsigned=j.stack(unsigned,axis=1);rows=j.arange(b)
+    count=capture.direct_count[:,phase];slot=j.clip(count,0,CAPACITY-1);room=(count>=0)&(count<CAPACITY);write=active&room
+    def put(a,v):return a.at[rows,phase,slot].set(j.where(write[:,None],v,a[rows,phase,slot]))
+    updated=capture._replace(direct_words=put(capture.direct_words,words),direct_known=put(capture.direct_known,known),direct_malformed=put(capture.direct_malformed,malformed),direct_unsigned=put(capture.direct_unsigned,unsigned),
+        direct_valid=capture.direct_valid.at[rows,phase,slot].set(capture.direct_valid[rows,phase,slot]|write),
+        direct_count=capture.direct_count.at[:,phase].set(j.where(write,count+1,count)),direct_overflow=capture.direct_overflow.at[:,phase].set(capture.direct_overflow[:,phase]|(active&~room)))
+    return tape._replace(execution=c._replace(diagnostics=updated))
 
 def record_no_damage_on_tape(tape,p,w,*,scheduled,code,matched,room,use,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,target_types,item,ability):
     """Original finish operands and already-evaluated results, never admission.
@@ -320,6 +376,8 @@ def refused_rows(capture,refused,*,_host_cache=None):
     baton_present=type(capture)is Capture and any(x is not None for x in capture[12:17])
     no_damage_available=_valid_no_damage(capture,len(refused))if available else False
     no_damage_present=type(capture)is Capture and any(x is not None for x in capture[17:23])
+    direct_available=_valid_direct(capture,len(refused))if available else False
+    direct_present=type(capture)is Capture and any(x is not None for x in capture[25:32])
     cache={}if _host_cache is None else _host_cache
     def host(value):
         key=id(value)
@@ -331,6 +389,7 @@ def refused_rows(capture,refused,*,_host_cache=None):
     baton_copied=tuple(host(value)for value in capture[12:17])if baton_available and len(indices)else None
     no_damage_copied=tuple(host(value)for value in capture[17:23])if no_damage_available and len(indices)else None
     sleep_guard_copied=tuple(host(value)for value in capture[23:25])if before_available and _valid_sleep_guards(capture,len(refused))and len(indices)else None
+    direct_copied=tuple(host(value)for value in capture[25:32])if direct_available and len(indices)else None
     for row in indices:
         item={'row':int(row),'available':available}
         if available:
@@ -378,5 +437,18 @@ def refused_rows(capture,refused,*,_host_cache=None):
                 result_data.update(count=int(count[row]),overflow=bool(overflow[row]),records=records)
             else:result_data['reason']='MISSING_OR_MALFORMED_STORAGE'
             item['no_damage_finish']=result_data
+        if direct_present:
+            direct_result=dict(available=direct_available,capacity_per_phase=CAPACITY,scope='Literal SAME-call emitter and capture checks. Independent bounded phases; false/missing/overflow are observations, not causes or admission.')
+            if direct_available:
+                words,known,malformed,valid,count,overflow,unsigned=direct_copied
+                for phase,name in enumerate(DIRECT_PHASES):
+                    records=[]
+                    for record,mask,bad,types in zip(words[row,phase][valid[row,phase]],known[row,phase][valid[row,phase]],malformed[row,phase][valid[row,phase]],unsigned[row,phase][valid[row,phase]],strict=True):
+                        values={field:((int(v)&0xffffffff)if uns else int(v))if yes else None for field,v,yes,uns in zip(DIRECT_FIELDS,record,mask,types,strict=True)}
+                        values['malformed_fields']=[field for field,v in zip(DIRECT_FIELDS,bad,strict=True)if v]
+                        values['unavailable_fields']=[field for field,v in values.items()if v is None];records.append(values)
+                    direct_result[name]=dict(count=int(count[row,phase]),overflow=bool(overflow[row,phase]),records=records)
+            else:direct_result['reason']='MISSING_OR_MALFORMED_STORAGE'
+            item['direct_hit']=direct_result
         result.append(item)
     return dict(schema='pokezero.literal-refused-outcomes.v1',capacity=CAPACITY,rows=result)

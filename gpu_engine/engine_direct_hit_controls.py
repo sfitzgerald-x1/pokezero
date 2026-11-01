@@ -421,7 +421,7 @@ def validate_raw_device(raw):
         & (move > 0) & (old > new) & (new > 0) & _positive_ratio(num, den))
 
 
-def _record(tape, actor_side, actor_physical, target_physical, move, write, data, *, eligible):
+def _record(tape, actor_side, actor_physical, target_physical, move, write, data, *, eligible, _diagnostic_requested=None, _diagnostic_bound=None):
     """Shared actual-write body; returns valid-and-room, never latches UNKNOWN.
 
     Rows for one write are appended atomically: a two-control write with one
@@ -444,28 +444,54 @@ def _record(tape, actor_side, actor_physical, target_physical, move, write, data
     critical,effect=annotation_flags_device(w,data=data,move=move)
     need = critical.astype(jnp.int32) + effect.astype(jnp.int32)
     room = (tape.count >= 0) & (tape.count <= tape.words.shape[1]-need)
-    valid = (life._valid(tape.cursor) & tape.cursor.initialized
-        & (tape.stream_id > 0) & (tape.stream_id == tape.cursor.stream_id)
-        & jnp.all(tape.engine_binding == data.engine_binding) & jnp.all(tape.source_binding == data.source_binding)
-        & jnp.all(tape.move_binding == data.move_binding) & jnp.all(tape.producer_binding == data.producer_binding)
-        & jnp.all(tape.cursor.engine_binding == data.engine_binding, axis=1)
-        & (tape.turn == tape.cursor.turn) & (tape.cursor.phase == 0)
-        & (actor_side >= 0) & (actor_side < 2) & (actor_physical >= 0) & (actor_physical < 6)
+    valid = ((_diagnostic_cursor_valid := life._valid(tape.cursor)) & tape.cursor.initialized
+        & (tape.stream_id > 0) & (_diagnostic_stream_match := (tape.stream_id == tape.cursor.stream_id))
+        & (_diagnostic_engine_namespace := jnp.all(tape.engine_binding == data.engine_binding)) & (_diagnostic_source_namespace := jnp.all(tape.source_binding == data.source_binding))
+        & (_diagnostic_move_namespace := jnp.all(tape.move_binding == data.move_binding)) & (_diagnostic_producer_namespace := jnp.all(tape.producer_binding == data.producer_binding))
+        & (_diagnostic_cursor_namespace := jnp.all(tape.cursor.engine_binding == data.engine_binding, axis=1))
+        & (_diagnostic_clock_match := (tape.turn == tape.cursor.turn)) & (_diagnostic_phase_zero := (tape.cursor.phase == 0))
+        & (_diagnostic_actor_nonnegative := (actor_side >= 0)) & (actor_side < 2) & (actor_physical >= 0) & (actor_physical < 6)
         & (target_physical >= 0) & (target_physical < 6)
-        & (actor_physical == tape.cursor.physical_active[rows, safe])
-        & (target_physical == tape.cursor.physical_active[rows, 1-safe])
+        & (_diagnostic_actor_current := (actor_physical == tape.cursor.physical_active[rows, safe]))
+        & (_diagnostic_target_current := (target_physical == tape.cursor.physical_active[rows, 1-safe]))
         & (data.move_count > 1) & (move > 0) & (move < data.move_count)
         & (tape.count >= 0) & (tape.count <= tape.words.shape[1])
-        & _valid_write(w,data=data,move=move))
+        & (_diagnostic_write_valid := _valid_write(w,data=data,move=move)))
     overflow = eligible & valid & ~room
     # Check only actual NEW slots. A clipped out-of-storage address would
     # inspect the previous prefix and must never hide capacity exhaustion.
+    _diagnostic_before_details=valid
+    _diagnostic_details=[]
     for offset in range(2):
         address = tape.count+offset
         inside = (address >= 0) & (address < tape.words.shape[1])
         index = jnp.clip(address, 0, tape.words.shape[1]-1)
-        valid &= (need <= offset) | ~inside | jnp.all(tape.switch_details[rows, index] == 0, axis=1)
+        valid &= (need <= offset) | ~inside | (_diagnostic_detail_zero := jnp.all(tape.switch_details[rows, index] == 0, axis=1))
+        _diagnostic_details.append((inside,_diagnostic_detail_zero))
     use = eligible & valid & room
+    from . import engine_outcome_diagnostics as diagnostics
+    if diagnostics.direct_enabled(tape):
+        _diagnostic_values=diagnostics.direct_meta(tape)
+        _diagnostic_values.update(actor_side=actor_side,actor_physical=actor_physical,target_physical=target_physical,move=move,
+            requested=eligible if _diagnostic_requested is None else _diagnostic_requested,registered_bound=_diagnostic_bound,effective_eligible=eligible,
+            critical_annotation=critical,effect_annotation=effect,need=need,room=room,valid_before_details=_diagnostic_before_details,valid=valid,use=use,overflow=overflow,
+            capacity=jnp.full_like(move,tape.words.shape[1]),move_namespace_size=jnp.broadcast_to(data.move_count,move.shape),seismic_toss_move=jnp.broadcast_to(data.seismic_toss_move,move.shape),cursor_initialized=tape.cursor.initialized,
+            detail0_inside=_diagnostic_details[0][0],detail0_zero=_diagnostic_details[0][1],detail1_inside=_diagnostic_details[1][0],detail1_zero=_diagnostic_details[1][1])
+        _diagnostic_values.update({'write_'+name:value for name,value in zip(w._fields,w)})
+        _diagnostic_values['cursor_valid']=jnp.broadcast_to(_diagnostic_cursor_valid,move.shape)
+        _diagnostic_values['stream_match']=jnp.broadcast_to(_diagnostic_stream_match,move.shape)
+        _diagnostic_values['engine_namespace']=jnp.broadcast_to(_diagnostic_engine_namespace,move.shape)
+        _diagnostic_values['source_namespace']=jnp.broadcast_to(_diagnostic_source_namespace,move.shape)
+        _diagnostic_values['move_namespace']=jnp.broadcast_to(_diagnostic_move_namespace,move.shape)
+        _diagnostic_values['producer_namespace']=jnp.broadcast_to(_diagnostic_producer_namespace,move.shape)
+        _diagnostic_values['cursor_namespace']=jnp.broadcast_to(_diagnostic_cursor_namespace,move.shape)
+        _diagnostic_values['clock_match']=jnp.broadcast_to(_diagnostic_clock_match,move.shape)
+        _diagnostic_values['phase_zero']=jnp.broadcast_to(_diagnostic_phase_zero,move.shape)
+        _diagnostic_values['actor_nonnegative']=jnp.broadcast_to(_diagnostic_actor_nonnegative,move.shape)
+        _diagnostic_values['actor_current']=jnp.broadcast_to(_diagnostic_actor_current,move.shape)
+        _diagnostic_values['target_current']=jnp.broadcast_to(_diagnostic_target_current,move.shape)
+        _diagnostic_values['write_valid']=jnp.broadcast_to(_diagnostic_write_valid,move.shape)
+        tape=diagnostics.record_direct_on_tape(tape,_diagnostic_values,phase=0,active=eligible if _diagnostic_requested is None else _diagnostic_requested)
     facts = (move, w.old_hp, w.new_hp, w.numerator, w.denominator)
     for kind, flag in ((CRITICAL, critical), (SUPER_EFFECTIVE, effect & (w.numerator > w.denominator)),
                        (RESISTED, effect & (w.numerator < w.denominator))):
@@ -531,7 +557,8 @@ def record_registered_direct_hit_controls_device(tape, actor_side, actor_physica
     bound = _registered_bound(tape, context)
     requested = _boolean(eligible, tape.count.shape)
     result, valid = _record(tape, actor_side, actor_physical, target_physical,
-        move, write, context.data, eligible=requested & bound)
+        move, write, context.data, eligible=requested & bound,
+        _diagnostic_requested=requested,_diagnostic_bound=bound)
     return _unknown(result, requested & ~(bound & valid))
 
 
