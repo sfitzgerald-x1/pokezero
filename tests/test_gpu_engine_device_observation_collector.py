@@ -212,5 +212,24 @@ class DeviceObservationCollectorTests(unittest.TestCase):
             path.write_text('{}')
             with self.assertRaises(ValueError):c.checked_document(dict(path=str(path),sha256='f'*64))
 
+    def test_actual_config_call_uses_semantic_category_not_champion_document_hash(self):
+        # Execute the actual config call AST only: no catalogs, model, source
+        # loader, device compiler or prospective game is constructed.
+        from pokezero.category_vocab import CategoryVocabulary
+        from pokezero.v5_contract import LabelVocabulary
+        from pokezero.v5_model import V5ModelConfig
+        from pokezero.v5_phasec import category_binding
+        vocabulary=CategoryVocabulary(('move:surf','pokemon:self'),16,{})
+        labels=dict(source_binding_sha256='a'*64,moves=['surf'],species_variants=[['gardevoir',1]])
+        tree=ast.parse(Path(c.__file__).read_text())
+        prepare=next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='prepare')
+        assignment=next(n for n in prepare.body if isinstance(n,ast.Assign)
+            and any(isinstance(x,ast.Name)and x.id=='model_config'for x in n.targets))
+        context=dict(V5ModelConfig=V5ModelConfig,LabelVocabulary=LabelVocabulary,vocabulary=vocabulary,
+            category_binding=category_binding,labels=labels,vocab_doc=dict(category_vocab_sha256='b'*64))
+        exec(compile(ast.Module(body=[assignment],type_ignores=[]),'actual-config-call','exec'),context)
+        self.assertEqual(context['model_config'].category_vocabulary_sha256,category_binding(vocabulary))
+        self.assertNotEqual(context['model_config'].category_vocabulary_sha256,'b'*64)
+
 
 if __name__=='__main__':unittest.main()

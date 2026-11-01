@@ -283,7 +283,7 @@ def prepare(plan):
         load_showdown_dex_cached(plan['showdown_root']), vocabulary,
         checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'], feature_masks=CHAMPION_CONTRACT['feature_masks'])
     model_config = V5ModelConfig(category_vocab_size=vocabulary.size,
-        category_vocabulary_sha256=vocab_doc['category_vocab_sha256'], label_vocabulary=LabelVocabulary(**labels))
+        category_vocabulary_sha256=category_binding(vocabulary), label_vocabulary=LabelVocabulary(**labels))
     if (category_binding(vocabulary) != model_config.category_vocabulary_sha256
             or model_config.label_vocabulary.moves != tuple(catalog.moves.names[1:])):
         raise ValueError('actual original ordered category/label namespace differs')
