@@ -14,8 +14,11 @@ import numpy as np
 from . import engine_lifecycle_callbacks as life,engine_public_events as public
 
 BATON_PASS=54
+TOXIC_SWITCH_IN_SHA256='36fcc82af87dfb5bbcdc39bdfcf2e763d57721d27df52e5fcce3afc462aff645'
+COPY_VOLATILE_SHA256='c3499e9e26b9f935bc8eacc3c6620d03f00263e483d5dd24abf99b56bed1a6db'
+TOXIC_STATUS=4
 START,INSTALL=0,1
-PRIVATE_FIELDS=('hp','max_hp','status','species','level','gender','stats','moves','pp','item','ability','base_ability','types','base_types','hidden_power_type','hidden_power_power','happiness')
+PRIVATE_FIELDS=('hp','max_hp','status','species','level','gender','stats','moves','pp','item','ability','base_ability','types','base_types','hidden_power_type','hidden_power_power','happiness','status_counter')
 Private=NamedTuple('Private',[(n,object)for n in PRIVATE_FIELDS])
 SUSPENSION_FIELDS=('turn','pending_residual','baton_pass','forced_switch','queued_actor','queued_actions','queued_stall','residual_draws','phazing_draws','secondary_draws','sleep_talk_draws','replacement_count','keys')
 Suspension=NamedTuple('Suspension',[(n,object)for n in SUSPENSION_FIELDS])
@@ -86,16 +89,18 @@ def compile_data(catalog,metadata,rules):
     if not np.array_equal(engine_metadata_binding(metadata),catalog.engine_binding)or not np.array_equal(rules.device.engine_binding,catalog.engine_binding):raise ValueError('same original Baton metadata/rules required')
     script=r"""
 const fs=require('fs'),path=require('path'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
-const checked=require(process.argv[2]).build(root,meta),d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),m=d.moves.get('batonpass');
+const checked=require(process.argv[2]).build(root,meta),d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),m=d.moves.get('batonpass'),P=require(path.join(root,'dist/sim/pokemon.js')).Pokemon;
 const quiet=(e)=>e.exists&&e.gen<=3&&!['onStart','onEnd','onBeforeSwitchOut','onSwitchOut','onSwitchIn','onAnySwitchIn','onAllySwitchIn','onUpdate'].some(n=>typeof e[n]!=='undefined');
-process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,move:{id:m.id,gen:m.gen,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,selfSwitch:m.selfSwitch,onHit:(''+m.onHit),selfHit:(''+m.self.onHit)},abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
+process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,move:{id:m.id,gen:m.gen,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,selfSwitch:m.selfSwitch,onHit:(''+m.onHit),selfHit:(''+m.self.onHit)},toxicSwitchIn:''+d.conditions.get('tox').onSwitchIn,copyVolatile:''+P.prototype.copyVolatileFrom,abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
     value=json.loads(subprocess.check_output([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata).encode(),timeout=30))
     if json.dumps(value['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(value['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original Baton source drift')
+    if hashlib.sha256(value['toxicSwitchIn'].encode()).hexdigest()!=TOXIC_SWITCH_IN_SHA256:raise ValueError('canonical original toxic switch reset required')
+    if hashlib.sha256(value['copyVolatile'].encode()).hexdigest()!=COPY_VOLATILE_SHA256:raise ValueError('canonical original Baton copy required')
     row=value['move'];names=metadata['vocabulary']['moves'];ids=[i for i,n in enumerate(names)if n=='batonpass']
     move=ids[0]if len(ids)==1 else 0;t=catalog.engine_table
     if move:
         if not(row['id']=='batonpass'and row['gen']==2 and row['category']=='Status'and row['target']=='self'and row['power']==0 and row['accuracy']is True and row['priority']==0 and row['selfSwitch']=='copyvolatile'and t.baton is not None and bool(t.baton.move[move])and int(t.power[move])==0 and bool(t.always_hit[move])and int(catalog.ids[move])>0 and catalog.targets[move]==0):raise ValueError('canonical original Baton columns required')
-    payload=dict(schema='pokezero.baton.boost-only.source.v1',source=value,engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding,move=move)
+    payload=dict(schema='pokezero.baton.boost-only.toxic-source.v2',source=value,engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding,move=move)
     words=lambda v:j.asarray(v,j.uint32)
     return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),j.asarray(value['abilities']),j.asarray(value['items']))
 
@@ -171,9 +176,12 @@ def prepare(tape,state,h,proof,requests,orders,actions,data):
     tr=Transaction(h,proof,good,j.clip(target,0,5),order,empty_record(h))
     return tape._replace(execution=tape.execution._replace(baton_transaction=tr))
 
-def _quiet(s,side,physical,data):
+def _quiet(s,side,physical,data,*,outgoing_toxic=False):
     r=j.arange(len(side));seat=j.clip(side,0,1);mon=j.clip(physical,0,5);ability=s.ability[r,seat,mon];item=s.item[r,seat,mon]
-    good=(physical>=0)&(physical<6)&(s.hp[r,seat,mon]>0)&(s.status[r,seat,mon]==0)&(ability>0)&(ability<len(data.quiet_abilities))&data.quiet_abilities[j.clip(ability,0,len(data.quiet_abilities)-1)]&(item>=0)&(item<len(data.quiet_items))&data.quiet_items[j.clip(item,0,len(data.quiet_items)-1)]
+    status=s.status[r,seat,mon];counter=s.status_counter[r,seat,mon]
+    status_ok=(status==0)&(counter==0)
+    if outgoing_toxic:status_ok |= (status==TOXIC_STATUS)&(counter>=0)&(counter<=15)
+    good=(physical>=0)&(physical<6)&(s.hp[r,seat,mon]>0)&status_ok&(ability>0)&(ability<len(data.quiet_abilities))&data.quiet_abilities[j.clip(ability,0,len(data.quiet_abilities)-1)]&(item>=0)&(item<len(data.quiet_items))&data.quiet_items[j.clip(item,0,len(data.quiet_items)-1)]
     good &= (ability==s.base_ability[r,seat,mon])&j.all(s.types[r,seat,mon]==s.base_types[r,seat,mon],axis=1)&(s.spikes[r,seat]==0)&j.all(s.trap_source<0,axis=(1,2))
     for n in ('substitute_hp','confusion_counter','volatile','protect_counter','choice_move','encore_move','encore_counter','charge_move','charge_counter'):good &= getattr(s,n)[r,seat,mon]==0
     return good
@@ -194,7 +202,7 @@ def begin_start(tape,state,side,move,caller,context,*,acts,eligible):
     d=context.data.baton_pass;registered=direct._registered_bound(tape,context);tr=tape.execution.baton_transaction;r=j.arange(len(side));seat=j.clip(side,0,1);physical=state.active[r,seat]
     requested=eligible&(move==d.move_id)&(d.move_id>0)
     good=registered&_bound(tape,d)&(caller==move)&acts&~state.pending_residual&~j.any(state.forced_switch,axis=1)&(tr.history.side<0)&tr.public.known[r,seat]&~tr.public.pending[r,seat]
-    good &= _quiet(state,side,physical,d)&j.all(tr.public.boosts[r,seat]==state.boosts[r,seat,physical],axis=1)&~j.any(state.baton_pass,axis=1)
+    good &= _quiet(state,side,physical,d,outgoing_toxic=True)&j.all(tr.public.boosts[r,seat]==state.boosts[r,seat,physical],axis=1)&~j.any(state.baton_pass,axis=1)
     tape,ticket=ex.open_attempt(tape,ex.Site.BATON_PASS,side,active=requested)
     h=History(tape.stream_id,ticket.frame,tape.cursor.turn,tape.cursor.generation,state.active,side,tape.cursor.public_slot[r,seat],j.zeros(len(side),bool),state.boosts,snapshot(state),tr.order,suspend(state))
     return tape,Pending(ticket,requested,good,side,physical,j.full_like(side,-1),h,snapshot(state),state.boosts)
@@ -224,7 +232,7 @@ def before_copy(tape,state,side,target,context,*,eligible):
     registered=direct._registered_bound(tape,context)
     tr=tape.execution.baton_transaction;h=tr.history;d=context.data.baton_pass;r=j.arange(len(side));seat=j.clip(side,0,1);old=state.active[r,seat]
     requested=eligible&state.baton_pass[r,seat]
-    good=registered&_bound(tape,d)&tr.request_ok&(side==h.side)&(target==tr.recipient)&(old==h.active[r,seat])&_quiet(state,side,old,d)&_quiet(state,side,target,d)&equal(h.private,snapshot(state))&j.all(h.boosts==state.boosts,axis=(1,2,3))
+    good=registered&_bound(tape,d)&tr.request_ok&(side==h.side)&(target==tr.recipient)&(old==h.active[r,seat])&_quiet(state,side,old,d,outgoing_toxic=True)&_quiet(state,side,target,d)&equal(h.private,snapshot(state))&j.all(h.boosts==state.boosts,axis=(1,2,3))
     tape,ticket=ex.open_attempt(tape,ex.Site.BATON_PASS,side,active=requested)
     return tape,Pending(ticket,requested,good,side,old,target,h,snapshot(state),state.boosts)
 def after_copy(tape,p,state):
@@ -234,11 +242,23 @@ def after_copy(tape,p,state):
     tape=public._append(tape,BATON_PASS,p.side,p.physical,p.incoming,z+INSTALL,(h.turn,h.frame,h.generation[r,side],h.public_slot,z),p.requested&good)
     rec=Record(good&p.requested,j.zeros_like(good),z+INSTALL,start,p.ticket.slot,p.ticket.serial,p.ticket.frame,p.side,p.physical,p.incoming,j.zeros_like(good),h,p.before,p.boosts,state.boosts)
     return tape._replace(execution=tape.execution._replace(baton_transaction=tr._replace(record=rows(p.requested,tr.record,rec))))
+def departed_private(before,side,outgoing):
+    """Same original entry.depart TOX-counter reset; no physical write here.
+
+    Major status remains on the outgoing mon and never transfers. Original
+    tox.onSwitchIn resets its own stage; the existing kernel clears that private
+    clock on departure. This predicts only that actual already-existing write.
+    """
+    r=j.arange(len(side));seat=j.clip(side,0,1);old=j.clip(outgoing,0,5)
+    counter=before.status_counter[r,seat,old]
+    expected=j.where(before.status[r,seat,old]==TOXIC_STATUS,0,counter)
+    return before._replace(status_counter=before.status_counter.at[r,seat,old].set(expected))
+
 def reveal_matches(tape,state,side,outgoing,incoming):
     if tape.execution is None or tape.execution.baton_transaction is None:return j.zeros_like(side,bool)
     tr=tape.execution.baton_transaction;rec=tr.record;h=rec.history;r=j.arange(len(side));seat=j.clip(side,0,1);old=j.clip(outgoing,0,5);new=j.clip(incoming,0,5)
     expected=rec.boost_after.at[r,seat,old].set(0)
-    return rec.known&(rec.code==INSTALL)&(rec.side==side)&(rec.outgoing==outgoing)&(rec.incoming==incoming)&tr.request_ok&(tape.count==rec.start+1)&j.all(state.active.at[r,seat].set(old)==h.active,axis=1)&equal(rec.before,snapshot(state))&j.all(state.boosts==expected,axis=(1,2,3))
+    return rec.known&(rec.code==INSTALL)&(rec.side==side)&(rec.outgoing==outgoing)&(rec.incoming==incoming)&tr.request_ok&(tape.count==rec.start+1)&j.all(state.active.at[r,seat].set(old)==h.active,axis=1)&equal(departed_private(rec.before,side,outgoing),snapshot(state))&j.all(state.boosts==expected,axis=(1,2,3))
 def finish_install(tape,state,current_side,*,eligible):
     if tape.execution is None or tape.execution.baton_transaction is None:return tape
     from . import engine_execution_completeness as ex
@@ -246,7 +266,7 @@ def finish_install(tape,state,current_side,*,eligible):
     good=rec.known&(rec.code==INSTALL)&(tape.count==rec.start+2)&(raw[:,0]==life.SWITCH_INSTALLED)&(raw[:,1]==rec.side)&(raw[:,2]==rec.outgoing)&(raw[:,3]==rec.side)&(raw[:,4]==rec.incoming)&(raw[:,6]==1)&j.all(raw[:,7:]==0,axis=1)
     good &= (tape.cursor.physical_active[r,side]==rec.incoming)&(tape.cursor.generation[r,side]==rec.history.generation[r,side]+1)&tape.cursor.established[r,side]
     expected=rec.boost_after.at[r,side,j.clip(rec.outgoing,0,5)].set(0)
-    good &= equal(rec.before,snapshot(state))&j.all(expected==state.boosts,axis=(1,2,3))
+    good &= equal(departed_private(rec.before,rec.side,rec.outgoing),snapshot(state))&j.all(expected==state.boosts,axis=(1,2,3))
     ticket=ex.Ticket(tape.stream_id,tape.execution.tables.inventory_binding,rec.frame,rec.slot,rec.serial);c=ex._context(tape)
     requested=(rec.code==INSTALL)&eligible&(rec.side==current_side);ledger=ex.unhandled(c.ledger,ticket,active=requested&~good,tables=c.tables);ledger=ex.emitted(ledger,ticket,tape,active=requested&good,tables=c.tables)
     rec=rec._replace(finalized=j.where(requested,good,rec.finalized),boost_after=rows(requested,rec.boost_after,state.boosts));h=tr.history._replace(side=j.where(requested&good,-1,tr.history.side),ready=tr.history.ready&~(requested&good))
