@@ -137,5 +137,24 @@ class DeviceBeliefTests(unittest.TestCase):
         self.assertTrue(np.asarray(e.actor_inputs(bad)['history_mask']).all())
         self.assertTrue(np.isfinite(bad.numeric_features).all())
 
+    def test_sleep_columns_use_current_status_for_both_owners_and_public_cure(self):
+        state, view, owners, legal = self.fixture.facts()
+        counters = dict(sleep_turns=j.full((2, 6), 3, j.int32), rest_sleep=j.ones((2, 6), j.int32))
+        view = view._replace(mon_features=counters, own_mon_features=counters,
+            status=j.where(view.present, 5, 0))
+        r=j.arange(2); state=state._replace(status=state.status.at[r, owners].set(5))
+        fn=jax.jit(lambda s,v:e.encode(s,v,self.tables,observer_sides=owners,legal_action_mask=legal))
+        sleeping=fn(state,view)
+        for name, value in (('SLEEP_TURNS',.6),('REST_SLEEP',1.),('WAKE_KNOWN',1.)):
+            col=e._index(name)
+            np.testing.assert_allclose(sleeping.numeric_features[:,1:3,col],value,atol=1e-6)
+            np.testing.assert_allclose(sleeping.numeric_features[:,7,col],value,atol=1e-6)
+        cured=fn(state._replace(status=state.status.at[r,owners].set(0)),view._replace(status=j.zeros_like(view.status)))
+        for name in ('SLEEP_TURNS','REST_SLEEP','WAKE_KNOWN'):
+            np.testing.assert_array_equal(cured.numeric_features[:,1:13,e._index(name)],0)
+        # The correction conserves every unrelated input/output field.
+        columns=[i for i in range(132) if i not in [e._index(n) for n in ('SLEEP_TURNS','REST_SLEEP','WAKE_KNOWN')]]
+        np.testing.assert_array_equal(cured.numeric_features[:,:,columns],sleeping.numeric_features[:,:,columns])
+
 
 if __name__ == '__main__':unittest.main()
