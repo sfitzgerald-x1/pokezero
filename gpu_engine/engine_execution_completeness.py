@@ -72,6 +72,8 @@ class Site(IntEnum):
     SELF_MOVE_INPUT = 36
     HEAL_BELL = 37
     SELF_BOOST_INPUT = 38
+    BATON_PASS = 39 # reserved independent two-boundary port
+    SELF_DESTRUCT = 40
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -190,6 +192,7 @@ class Context(NamedTuple):
     secondary_status: object = None # ephemeral SAME-call registered context
     leech_history: object = None # actual owning public/current seed source-slot facts
     party_orders: object = None # actual BEFORE-frame owner permutations, never guessed
+    self_destruct: object = None # row-only actual self-KO/target/faint composite
 
 
 UNKNOWN_EXECUTION = 512

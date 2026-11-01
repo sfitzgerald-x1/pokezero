@@ -25,6 +25,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from pokezero.dex import normalize_id
+from . import engine_self_destruct_callbacks as self_destruct_callbacks
 from . import engine_lifecycle_callbacks as life, engine_public_event_device as base
 from . import engine_public_events as public, public_inputs as inputs, public_toxic
 from . import engine_secondary_status_callbacks as secondary_callbacks
@@ -611,6 +612,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
         heal_bell = kind == heal_bell_callbacks.HEAL_BELL
         self_move = kind == self_move_callbacks.SELF_MOVE_INPUT
+        self_destruct = kind == self_destruct_callbacks.SELF_DESTRUCT
         encore = kind == encore_callbacks.ENCORE
         leech = kind == leech_callbacks.LEECH
         intimidate = kind == intimidate_callbacks.INTIMIDATE
@@ -754,7 +756,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         event_ok=jnp.where(entry_spikes,generation_ok&clock_ok&entry_spikes_ok,event_ok)
         direct_move=jnp.clip(raw[:,5],0,tables.base.public_ids.shape[0]-1)
         direct_ok=(tables.status_events & ~tables.raw_begin & status_identity & actor_ok
-            & (direct_hit_controls.validate_raw_device(raw)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)|recoil_callbacks.validate_owned_ko_control(tape,index,raw)) & (phase==0)
+            & (direct_hit_controls.validate_raw_device(raw)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)|recoil_callbacks.validate_owned_ko_control(tape,index,raw)|self_destruct_callbacks.owned(tape,index)) & (phase==0)
             & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             & (incoming==cursor.physical_active[rows,safe_side])
             & (raw[:,5]<tables.base.public_ids.shape[0]) & (tables.base.public_ids[direct_move]>0))
@@ -802,6 +804,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         event_ok=jnp.where(leech,generation_ok&clock_ok&leech_ok,event_ok)
         self_move_ok=tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&self_move_callbacks.owned(tape,index)
         event_ok=jnp.where(self_move,generation_ok&clock_ok&self_move_ok,event_ok)
+        event_ok=jnp.where(self_destruct,generation_ok&clock_ok&self_destruct_callbacks.owned(tape,index),event_ok)
         bell_status=heal_bell&(raw[:,5]==heal_bell_callbacks.STATUS)
         bell_cure=bell_status&(raw[:,6]>0)&(raw[:,7]==0)
         bell_sp=tables.heal_bell_soundproof[jnp.clip(raw[:,9],0,len(tables.heal_bell_soundproof)-1)]
@@ -1073,7 +1076,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # lexical target independently from this literal raw receipt.
         direct_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,
             turn,phase,absent,absent,absent,absent,z,absent,absent,z,z,z,z,z),axis=1)
-        semantic=jnp.where((direct_control|toxic|no_damage_header|no_damage_facts)[:,None],direct_semantic,semantic)
+        semantic=jnp.where((direct_control|toxic|no_damage_header|no_damage_facts|self_destruct)[:,None],direct_semantic,semantic)
         semantic=jnp.where(heal_bell[:,None],jnp.where(bell_cure[:,None],bell_semantic,direct_semantic),semantic)
         semantic=jnp.where((toxic&toxic_callbacks.substitute_failure_raw(raw))[:,None],failed_semantic,semantic)
         toxic_existing=toxic&toxic_callbacks.existing_status_raw(raw);toxic_same=toxic_existing&(raw[:,7]==4)

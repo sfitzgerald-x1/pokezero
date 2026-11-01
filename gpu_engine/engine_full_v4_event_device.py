@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 from pokezero.dex import normalize_id
 
+from . import engine_self_destruct_callbacks as self_destruct_callbacks
 from . import engine_lifecycle_event_device as causal
 from . import engine_public_events as engine, public_context, public_inputs as inputs
 from . import public_wire, public_refresh_stream, public_toxic, v4_encoder
@@ -704,6 +705,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         bell_immune=bell_status&(bell_raw[:,4]==bell_raw[:,2])&bell_sp
         bell_silent=heal_bell&~(bell_header|bell_cure|bell_immune)
         self_move=raw_kind==self_move_callbacks.SELF_MOVE_INPUT
+        self_destruct=raw_kind==self_destruct_callbacks.SELF_DESTRUCT
         sm_raw=tape.words[:,index];sm_code=sm_raw[:,3]&~self_move_callbacks.SECONDARY
         sm_pid=tables.causal.base.public_ids[jnp.clip(sm_raw[:,4],0,len(tables.causal.base.public_ids)-1)]
         sm_silent=self_move&((sm_code==self_move_callbacks.WISH_START)|(sm_code==self_move_callbacks.WISH_TICK))
@@ -833,10 +835,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         bell_bench=bell_raw[:,4]!=bell_raw[:,2]
         bell_key=jnp.where(bell_header,tables.heal_bell[0,0],jnp.where(bell_immune,tables.heal_bell[1,0],jnp.where(bell_cure,tables.heal_bell[jnp.where(bell_bench,3,2),bell_public_old],0)))
         key=jnp.where(heal_bell,bell_key,key)
-        size = jnp.where((pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent|heal_weather_full|recoil_silent|bell_silent,0,tables.length[key]); main = tables.main[key]
+        key=jnp.where(self_destruct,0,key)
+        size = jnp.where((pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent|heal_weather_full|recoil_silent|bell_silent|self_destruct,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
-        good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont|bell_silent) & enough
+        good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont|bell_silent|self_destruct) & enough
         error = jnp.where(present & (error == 0) & ~good, int(inputs.Error.PAYLOAD), error)
         schema = tables.templates[key]
         subject = jnp.where(direct_control,tape.words[:,index,3],jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6])))
@@ -987,6 +990,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sm_old_percent=(100*sm_hp+jnp.maximum(1,sm_maximum)-1)//jnp.maximum(1,sm_maximum)
         sm_old_percent=jnp.where((sm_hp<sm_maximum)&(sm_old_percent==100),99,sm_old_percent)
         sm_health=(observed_hp[rows,safe,safe_slot]==jnp.where(state.causal.owner==subject,sm_hp,sm_old_percent))&(observed_maximum[rows,safe,safe_slot]==jnp.where(state.causal.owner==subject,sm_maximum,100))
+        identity &= ~self_destruct|self_destruct_callbacks.owned(tape,index)
         identity &= ~self_move|(self_move_callbacks.owned(tape,index)&live[rows,safe]&((sm_code==self_move_callbacks.WISH_TICK)|sm_called)&(statuses[rows,safe,safe_slot]==sm_prior_status)&(sm_rest_status|sm_health)&(~sm_sleep|tables.self_move_still[jnp.clip(sm_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~encore | (encore_callbacks.owned(tape,index)&live[rows,safe])
         identity &= ~sleep_blocked | (sleep_blocked_callbacks.owned(tape,index)&live[rows,safe]
@@ -1061,8 +1065,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         preceding=tape.words[:,jnp.maximum(index-1,0)]
         previous_crit=(preceding[:,0]==direct_hit_controls.CRITICAL)&jnp.all(preceding[:,1:]==raw[:,1:],axis=1)
         first_control=(index==called[:,4]+1)
+        sd_control=self_destruct_callbacks.owned(tape,index)
+        first_control |= sd_control&(index==called[:,4]+2)
         control_order=jnp.where(raw_kind==direct_hit_controls.CRITICAL,first_control,
-            first_control|((index==called[:,4]+2)&previous_crit))
+            first_control|(((index==called[:,4]+2)|(sd_control&(index==called[:,4]+3)))&previous_crit))
         hit_max=hp_raw[:,6]
         hit_old_percent=(100*raw[:,6]+jnp.maximum(1,hit_max)-1)//jnp.maximum(1,hit_max)
         hit_old_percent=jnp.where((raw[:,6]<hit_max)&(hit_old_percent==100),99,hit_old_percent)
@@ -1072,7 +1078,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             hp_raw[:,3]==raw[:,3])&(hp_raw[:,4]==raw[:,4])&(hp_raw[:,5]==raw[:,7])&(
             hit_max>=raw[:,6])&(hit_max<=1_000_000)&(~needs_effect|pair_same)
         identity &= ~direct_control | (called_hit & control_order & hit_suffix
-            & ((raw[:,7]>0)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)|recoil_callbacks.validate_owned_ko_control(tape,index,raw)) & live[rows,safe]
+            & ((raw[:,7]>0)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)|recoil_callbacks.validate_owned_ko_control(tape,index,raw)|sd_control) & live[rows,safe]
             & (observed_hp[rows,safe,safe_slot]==hit_old_visible)
             & (observed_maximum[rows,safe,safe_slot]==hit_max_visible))
         old_percent=(100*raw[:,5]+jnp.maximum(1,raw[:,7])-1)//jnp.maximum(1,raw[:,7])
