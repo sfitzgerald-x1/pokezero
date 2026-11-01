@@ -157,13 +157,32 @@ class DeviceBoundaryParityTests(unittest.TestCase):
         self.assertEqual(original.catalog.names[int(moves.last_id[0,0])],
             self.metadata['vocabulary']['moves'][int(c.trackers.last_moves[0,0,0])])
         self.assertEqual(c.trackers.tendency.opportunities.tolist(),[[1,0],[1,0]])
-        # Actual preparation header records last move, while child-only [from]
-        # declarations do not; a later ordinary header cannot count twice.
+        # Preparation-only -singleturn remains a reveal, not a MOVE header;
+        # only the subsequent ordinary header supplies lastmove/tendency.
         fresh=h.initialize(state,self.tables.belief)
         h.move(fresh,state,0,j.ones(2,j.int32),yes,pp_use=False,count_turn=False,preparation=True)
-        self.assertEqual(int(fresh.trackers.last_moves[0,0,0]),1)
+        self.assertEqual(int(fresh.trackers.last_moves[0,0,0]),-1)
+        self.assertEqual(int(fresh.trackers.mon_features['stayed_and_attacked'][0,0,0]),0)
+        self.assertEqual(int(fresh.trackers.tendency.opportunities[0,0]),0)
+        self.assertEqual(int(fresh.trackers.observed_moves[0,0,0,0]),1)
         h.move(fresh,state,0,j.ones(2,j.int32),yes,pp_use=True)
         self.assertEqual(int(fresh.trackers.mon_features['stayed_and_attacked'][0,0,0]),1)
+
+    def test_effective_gen3_failed_focus_retains_move_before_cant_order(self):
+        import json,os
+        root=os.environ['POKEZERO_SHOWDOWN_ROOT']
+        code="""const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');const d=Dex.mod('gen3'),m=d.moves.get('focuspunch'),a=d.data.Scripts.actions;const events=[];const result=m.onTry.call({attrLastMove:x=>events.push(['attr',x]),add:(...x)=>events.push(['add',...x.map(String)])},{toString:()=> 'p1a: Snorlax',volatiles:{focuspunch:{lostFocus:true}}});const use=a.useMoveInner.toString(),hit=a.tryMoveHit.toString();console.log(JSON.stringify({beforeMove:typeof m.beforeMoveCallback,resultIsNull:result===null,events,move:use.indexOf('this.battle.addMove('),hit:use.indexOf('this.tryMoveHit('),onTry:hit.indexOf('singleEvent("Try",')}));"""
+        actual=json.loads(subprocess.check_output(['node','-e',code,root],text=True))
+        self.assertEqual(actual['beforeMove'],'undefined');self.assertTrue(actual['resultIsNull'])
+        self.assertEqual(actual['events'],[['attr','[still]'],['add','cant','p1a: Snorlax','Focus Punch','Focus Punch']])
+        self.assertGreaterEqual(actual['move'],0);self.assertGreater(actual['hit'],actual['move']);self.assertGreaterEqual(actual['onTry'],0)
+        # The ordinary MOVE has already opened this original-source window;
+        # the following CANT does not erase its header/first-stay effects.
+        refstate=self.reference()
+        for line in ('|switch|p1a: Snorlax|Snorlax, L80|100/100','|switch|p2a: Absol|Absol, L80|100/100','|turn|1',
+                     '|move|p1a: Snorlax|Surf|p2a: Absol|[still]','|cant|p1a: Snorlax|Focus Punch|Focus Punch'):
+            refstate=self.line(refstate,line)
+        self.assertEqual(int(refstate.mon[0,0,0,1]),1);self.assertEqual(int(refstate.opportunities[0,0]),1)
 
 
 if __name__=='__main__':unittest.main()
