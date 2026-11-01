@@ -49,6 +49,7 @@ from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
 from . import engine_encore_callbacks as encore_callbacks
+from . import engine_self_move_callbacks as self_move_callbacks
 from . import engine_leech_seed_callbacks as leech_callbacks
 from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
 from . import engine_color_change_callbacks as color_callbacks
@@ -599,6 +600,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         rough = kind == rough_callbacks.ROUGH_SKIN_HP
         belly = kind == belly_callbacks.BELLY_DRUM
         sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
+        self_move = kind == self_move_callbacks.SELF_MOVE_INPUT
         encore = kind == encore_callbacks.ENCORE
         leech = kind == leech_callbacks.LEECH
         intimidate = kind == intimidate_callbacks.INTIMIDATE
@@ -785,6 +787,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             &(incoming==cursor.physical_active[rows,safe_side])&leech_callbacks.owned(tape,index))
         event_ok=jnp.where(leech,generation_ok&clock_ok&leech_ok,event_ok)
+        self_move_ok=tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&self_move_callbacks.owned(tape,index)
+        event_ok=jnp.where(self_move,generation_ok&clock_ok&self_move_ok,event_ok)
         encore_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&encore_callbacks.owned(tape,index))
         event_ok=jnp.where(encore,generation_ok&clock_ok&encore_ok,event_ok)
@@ -941,7 +945,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         failed_payload=jnp.stack((actor_enc,jnp.full_like(z,public_active.STALL_FAIL),z,z,z,z,z,z),axis=1)
         failed_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),
             semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),failed_payload),axis=1)
-        semantic=jnp.where(failed_weather[:,None],failed_semantic,semantic)
+        semantic=jnp.where((failed_weather|self_move)[:,None],failed_semantic,semantic)
         chip_percent=(100*raw[:,6]+jnp.maximum(1,raw[:,7])-1)//jnp.maximum(1,raw[:,7])
         chip_percent=jnp.where((raw[:,6]<raw[:,7])&(chip_percent==100),99,chip_percent)
         chip_payload=jnp.stack((status_enc,jnp.where(own,raw[:,6],chip_percent),
