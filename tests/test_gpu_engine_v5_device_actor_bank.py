@@ -92,7 +92,9 @@ class DeviceActorBankTests(unittest.TestCase):
    d.training_batch((forged,),bank.bindings,actor_bank=bank,battle_ids=('a','b'),seeds=(11,22),loss_config=V5LossConfig())
 
  def test_original_planner_adapter_preserves_order_and_history_without_rng(self):
-  *_,bindings=fixture()
+  _,carry,labels,config,bindings=fixture()
+  default=d.make_collector(None,None,config,labels,bindings,sampling_seed=7)
+  with self.assertRaisesRegex(ValueError,'two explicit original seat parameter trees required'):default(carry,())
   assignments=({'stream_id':202,'learner_side':1,'opponent':{'archive_sha256':'6'*64}},
    {'stream_id':101,'learner_side':0,'opponent':{'archive_sha256':'3'*64}})
   bank=d.actor_bank_from_assignments(bindings,('2'*64,'3'*64,'6'*64),current_archive='2'*64,assignments=assignments)

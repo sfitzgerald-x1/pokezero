@@ -292,7 +292,9 @@ def make_collector(engine_tables,observation_tables,model_config,labels,bindings
             opponent_targets,opponent_mask,hidden,hs,hm,actor_indices,learner_mask)
         return carry,record
     def collect(c,params):
-        if len(params)!=(2 if actor_bank is None else len(actor_bank.actor_archives)):
+        if actor_bank is None and len(params)!=2:
+            raise ValueError('two explicit original seat parameter trees required')
+        if actor_bank is not None and len(params)!=len(actor_bank.actor_archives):
             raise ValueError('one explicit original parameter tree per declared actor required')
         carry,frames=jax.lax.scan(lambda c,_:advance(c,params),c,None,length=chunk_steps)
         return Rollout(carry,frames)
