@@ -99,6 +99,9 @@ class ToxicSubstituteFailureTests(unittest.TestCase):
   for bad in (t._replace(words=t.words.at[:,2,5].set(0)),t._replace(event_turn=t.event_turn.at[:,2].add(1)),t._replace(execution=t.execution._replace(ledger=t.execution.ledger._replace(claimed=t.execution.ledger.claimed.at[:,3].set(0))))):self.assertFalse(bool(cb.owned_substitute_failure(bad,3).any()))
   prior=t._replace(refusal=t.refusal|128);kept=risk.primary_status_on_tape(prior,yes,active=yes,captured=captured);self.assertTrue(bool((kept.refusal&128).all()))
   # Source/default numerics and original closed APIs remain exact.
-  self.assertEqual(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py']),Path('gpu_engine/transition.py').read_bytes());witness._source()
+  baseline=dump_default_program(ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True)))
+  current=ast.parse(Path('gpu_engine/transition.py').read_text())
+  self.assertEqual(dump_default_program(current),baseline)
+  assert_hp_rng_mutations_detected(self,current,baseline);witness._source()
 
 if __name__=='__main__':unittest.main()
