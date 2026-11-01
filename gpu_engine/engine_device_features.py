@@ -42,6 +42,8 @@ STATS_FIELDS = {
     'pursuit_intercept_predict': ('STAT_PURSUIT_INTERCEPT_PREDICT', 64.),
     'my_switch_turns': ('STAT_MY_SWITCH_TURNS', 64.),
 }
+TENDENCY_FIELDS = frozenset(('switched_before_attack','stayed_and_attacked','turns_active_total',
+    'switched_vs_active','stayed_vs_active'))
 
 
 class Tables(NamedTuple):
@@ -50,6 +52,7 @@ class Tables(NamedTuple):
     switch_categories: object
     traced_abilities: object
     stats_role: object
+    stats_enabled: object = False
 
 
 def compile_tables(metadata, catalog):
@@ -59,23 +62,26 @@ def compile_tables(metadata, catalog):
             for i, n in enumerate(metadata['vocabulary']['moves'])], j.int32),
         j.asarray([category(s.LAST_USED_MOVE_SWITCH_SENTINEL), category(s.LAST_USED_MOVE_BATON_PASS_SENTINEL)], j.int32),
         j.asarray([category('ability:' + n) if i else 0 for i, n in enumerate(metadata['vocabulary']['abilities'])], j.int32),
-        j.asarray(category('stats'), j.int32))
+        j.asarray(category('stats'), j.int32), j.asarray(catalog.masks.stats_block, bool))
 
 
 def _column(name):return s.v4_numeric_index(getattr(s, 'NUMERIC_' + name))
 
 
 def project_mon(numeric, categorical, facts, *, active, present, tables, last_moves=None,
-                borrowed_ability=None, volatiles=None, substitute_fraction=None, status=None):
+                borrowed_ability=None, volatiles=None, substitute_fraction=None, status=None,
+                opponent_tendency=True):
     facts = {} if facts is None else facts
     bad = j.zeros((numeric.shape[0],), bool)
     for key, (name, divisor, active_only) in MON_FIELDS.items():
         if key not in facts:continue
+        if not opponent_tendency and key in TENDENCY_FIELDS:continue
         value = facts[key].astype(j.float32)
         if value.shape != present.shape:raise ValueError('public mon fact shape: ' + key)
         bad |= j.any(~j.isfinite(value) | (value < 0), axis=-1)
         use = present & active if active_only else present
         value = j.where(use, j.clip(j.nan_to_num(value) / divisor, 0., 1.), 0)
+        if key in TENDENCY_FIELDS:value=j.where(tables.stats_enabled,value,0)
         # Original _encode_mon_exact_state always gates on actual current
         # condition status, independently of retained counters/Rest evidence.
         if key in ('sleep_turns', 'rest_sleep'):
@@ -118,7 +124,7 @@ def project_field(numeric, facts):
 def project_stats(facts, tables, batch):
     numeric = j.zeros((batch, 132), j.float32); categorical = j.zeros((batch, 41), j.int32)
     bad = j.zeros(batch, bool)
-    if facts is None:return numeric, categorical, j.zeros(batch, bool), bad
+    facts = {} if facts is None else facts
     for value in facts.values():bad |= ~j.isfinite(value) | (value < 0)
     for key, (name, divisor) in STATS_FIELDS.items():
         if key in facts:numeric = numeric.at[:, _column(name)].set(j.clip(j.nan_to_num(facts[key]) / divisor, 0., 1.))
@@ -127,4 +133,5 @@ def project_stats(facts, tables, batch):
         if key in facts:numeric = numeric.at[:, s.v4_numeric_index(s.NUMERIC_STAT_WEATHER_REVEAL_OFFSET + i)].set(j.clip(j.nan_to_num(facts[key]), 0., 1.))
     numeric = numeric.at[:, _column('PRESENT')].set(1)
     categorical = categorical.at[:, s.CATEGORY_ROLE].set(tables.stats_role)
-    return numeric, categorical, j.ones(batch, bool), bad
+    on=j.broadcast_to(j.asarray(tables.stats_enabled,bool),(batch,))
+    return j.where(on[:,None],numeric,0), j.where(on[:,None],categorical,0), on, bad

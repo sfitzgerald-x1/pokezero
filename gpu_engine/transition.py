@@ -601,7 +601,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _device_public is not None:
             _device_depart_before=work
             _device_baton=work.baton_pass[rows,side]
-            device_public.feature(_device_public,side,old_active,'switched_before_attack',jnp.ones_like(old_active),do_switch & ~replacement,add=True)
+            device_public.switch_decision(_device_public,work,side,do_switch & ~replacement,baton=_device_baton)
         work=arrival.depart(work,side,table.entry,eligible=do_switch)
         if _device_public is not None:device_public.depart(_device_public,_device_depart_before,work,side,table.entry,do_switch)
         if _lifecycle_trace:
