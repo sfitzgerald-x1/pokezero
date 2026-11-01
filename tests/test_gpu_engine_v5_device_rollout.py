@@ -34,8 +34,16 @@ def fixture():
  return s,carry,labels,config,bindings
 
 class DeviceRolloutTests(unittest.TestCase):
- def run_fake(self,*,bad_actor=False):
+ def run_fake(self,*,bad_actor=False,charged_child=False):
   s,carry,labels,config,bindings=fixture();seen=[]
+  if charged_child:
+   vocab=replace(config.label_vocabulary,moves=('tackle','struggle','solarbeam'))
+   config=replace(config,label_vocabulary=vocab);bindings=replace(bindings,label_vocabulary=vocab)
+   labels=d.compile_labels({'vocabulary':{'moves':['_none','tackle','struggle','solarbeam'],
+       'species':['_none','gardevoir','snorlax']}},vocab)
+   s=s._replace(pp=j.zeros_like(s.pp),charge_move=s.charge_move.at[0,1,0].set(3),
+       forced_switch=j.zeros_like(s.forced_switch))
+   carry=carry._replace(state=s)
   def encode(state,view,tables,*,observer_sides,legal_action_mask):
    b=len(observer_sides);numeric=j.zeros((b,29,132),j.float32).at[:,0,0].set(state.turn.astype(j.float32))
    return e.Observation(numeric,j.zeros((b,29,41),j.int32),j.broadcast_to(j.array(TOKEN_ROLES,j.int32),(b,29)),
@@ -52,7 +60,8 @@ class DeviceRolloutTests(unittest.TestCase):
    after=state._replace(turn=turn,done=state.done|ended,winner=j.where(ended,0,state.winner),forced_switch=j.zeros_like(state.forced_switch))
    return h.PublicStepResult(transition.StepResult(after,j.zeros(2,bool),j.zeros(2,j.int32)),public)
   with patch.object(e,'encode',encode),patch.object(v5_model,'forward',forward),\
-       patch.object(transition,'step_with_public',step),patch.object(transition,'action_mask',lambda s,t:j.ones((2,2,9),bool)):
+       patch.object(transition,'step_with_public',step),patch.object(transition,'action_mask',lambda s,t:
+           j.zeros((2,2,9),bool).at[:,:,0].set(True) if charged_child else j.ones((2,2,9),bool)):
    collector=d.make_collector(NS(struggle=j.array(2,j.int32)),NS(belief=None),config,labels,bindings,sampling_seed=7,chunk_steps=4,max_requests=3)
    out=collector(carry,({'seat':j.array(0)},{'seat':j.array(1)}))
    out=d.boundary(out)
@@ -93,6 +102,15 @@ class DeviceRolloutTests(unittest.TestCase):
    restored=tuple(v5_data.iter_cache_batches(Path(temp)/'actual',batch_size=4))[0]
    np.testing.assert_array_equal(restored.numeric_features,batch.numeric_features)
    np.testing.assert_array_equal(restored.v5_columns['hidden_set_targets'],batch.v5_columns['hidden_set_targets'])
+ def test_semantic_label_uses_actual_hard_charged_child_before_zero_pp_struggle(self):
+  out,_=self.run_fake(charged_child=True)
+  # Actual hard request is SolarBeam3, absent from all four Tackle1 slots,
+  # with zero PP. The parallel uncharged row really requests Struggle2.
+  self.assertTrue((out.carry.state.moves==1).all());self.assertFalse(out.carry.state.pp.any())
+  self.assertEqual(out.carry.state.charge_move[0,1,0],3)
+  self.assertEqual(out.frames.actions[0,:,1].tolist(),[0,0])
+  self.assertEqual(out.frames.semantic_targets[0,:,0].tolist(),[2,1])
+  self.assertTrue(out.frames.semantic_mask[0,:,0].all())
  def test_bad_raw_actor_closes_fixed_cell_without_fallback_training_labels(self):
   out,_=self.run_fake(bad_actor=True)
   self.assertEqual(out.carry.status.tolist(),[d.REFUSED,d.REFUSED])

@@ -193,7 +193,10 @@ def make_collector(engine_tables,observation_tables,model_config,labels,bindings
         # of ConstructorTruth, peer choices, or terminal data enter encode.
         slot=j.clip(engine_actions,0,3);move=state.moves[r,sides,state.active,slot]
         from .state import usable_moves,bench_indices
-        move=j.where(j.any(usable_moves(state),axis=-1),move,engine_tables.struggle)
+        charge=state.charge_move[r,sides,state.active]
+        # Hard charging requests name the actual current child, which may be
+        # absent from installed slots (Sleep Talk) and have no remaining PP.
+        move=j.where(charge>0,charge,j.where(j.any(usable_moves(state),axis=-1),move,engine_tables.struggle))
         move_label=labels.move[j.clip(move,0,len(labels.move)-1)]
         targets=j.take_along_axis(bench_indices(state.active),j.clip(engine_actions-4,0,4)[...,None],axis=-1)[...,0]
         species_label=labels.species[j.clip(state.species[r,sides,targets],0,len(labels.species)-1)]
