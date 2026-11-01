@@ -896,7 +896,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),_active(work.hp,work,side),explodes,
                 _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side))
             _no_damage_pending=no_damage_callbacks.prepare(_public_trace,_direct_ticket,side,work.active[rows,side],
-                work.active[rows,foe],move,_no_damage_before,_direct_hit_context,requested=_direct_requested)
+                work.active[rows,foe],move,_no_damage_before,_direct_hit_context,requested=_direct_requested,caller_move=caller_move)
         if table.absorption is not None:
             # TryHit follows accuracy/Protect but precedes Substitute. Field
             # weather and self effects do not run a Pokemon-targeted TryHit.

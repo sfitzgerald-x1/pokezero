@@ -6,7 +6,7 @@ against the SAME literal Outcome after the original direct assignment. No HP,
 status, ability, hit or effectiveness fact is reconstructed from an afterstate.
 """
 from typing import NamedTuple
-import hashlib,json
+import hashlib,json,subprocess
 from pathlib import Path
 import jax
 import jax.numpy as j
@@ -33,6 +33,7 @@ class Data(NamedTuple):
     water_type:object
     electric_type:object
     fire_type:object
+    protect_miss:object=None # explicit original accuracy-before-TryHit source
 
 class Before(NamedTuple):
     accuracy_hit:object
@@ -58,6 +59,7 @@ class Pending(NamedTuple):
     before:Before
     absorbed:object
     requested:object
+    caller_move:object=None
 
 class Captured(NamedTuple):
     pending:Pending
@@ -68,7 +70,7 @@ class Captured(NamedTuple):
     actor_hp_type:object
     actor_hp_power:object
 
-def compile_data(engine_catalog):
+def compile_data(engine_catalog,metadata=None,source_rules=None):
     """Private host compiler from ORIGINAL immutable numerical columns."""
     if isinstance(j.zeros((),j.int32),jax.core.Tracer):raise ValueError('no-damage compiler cannot be traced')
     public.check_catalog(engine_catalog,engine_catalog.engine_table,expected_binding=engine_catalog.binding,
@@ -95,14 +97,28 @@ def compile_data(engine_catalog):
         columns=(a.water_absorb,a.volt_absorb,a.flash_fire,t.entry.levitate)
         type_ids=(a.water_type,a.electric_type,a.fire_type)
     if any(v.shape!=columns[0].shape or v.dtype!=j.dtype(bool)for v in columns):raise ValueError('original ability namespace required')
-    payload=dict(schema='pokezero.literal-no-damage-target.v1',producer=engine_catalog.binding,
+    descriptor=None
+    if metadata is not None or source_rules is not None:
+        if metadata is None or source_rules is None:raise ValueError('original no-damage metadata AND rules required')
+        from . import engine_request_source as request
+        from .engine_private_team import engine_metadata_binding
+        origin=request._rules_origin(source_rules)
+        if not np.array_equal(engine_metadata_binding(metadata),engine_catalog.engine_binding) or not np.array_equal(source_rules.device.engine_binding,engine_catalog.engine_binding):raise ValueError('same original no-damage rules/catalog required')
+        script=r"""
+const fs=require('fs'),path=require('path'),crypto=require('crypto'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
+const checked=require(process.argv[2]).build(root,meta),f=require(path.join(root,'dist/data/mods/gen3/scripts.js')).Scripts.actions.tryMoveHit;
+process.stdout.write(JSON.stringify({tryMoveHit:crypto.createHash('sha256').update(f.toString()).digest('hex'),source_tree:checked.source_tree,compiled_tree:checked.compiled_tree}));"""
+        descriptor=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
+        if descriptor['tryMoveHit']!='af529997d52b6d856301bc8f958ead5963f68abc58d9568c82df24f212b0a97f':raise ValueError('original Gen3 accuracy-before-TryHit source required')
+        if json.dumps(descriptor['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(descriptor['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original no-damage source changed')
+    payload=dict(schema='pokezero.literal-no-damage-target.v2',protect_miss_source=descriptor,producer=engine_catalog.binding,
         candidates=candidates.tolist(),move_types=np.asarray(t.type).tolist(),dynamic_type=dynamic.tolist(),dark_type=int(dark),abilities=[np.asarray(v).tolist()for v in columns],
         source=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     words=lambda v:j.asarray(v,j.uint32)
     return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(candidates),t.type,j.array(dynamic),dark,
-        *columns,*type_ids)
+        *columns,*type_ids,j.array(descriptor is not None,j.bool_))
 
 def _shape(data):
     if type(data)is not Data:raise ValueError('original no-damage Data required')
@@ -110,14 +126,14 @@ def _shape(data):
     life._typed(data.candidates,(len(data.candidates),),j.bool_)
     life._typed(data.move_types,data.candidates.shape,j.int32)
     life._typed(data.dynamic_type,data.candidates.shape,j.bool_)
-    life._typed(data.dark_type,(),j.int32)
+    life._typed(data.dark_type,(),j.int32);life._typed(data.protect_miss,(),j.bool_)
     for v in (data.water,data.volt,data.flash,data.levitate):life._typed(v,(len(data.water),),j.bool_)
     for v in (data.water_type,data.electric_type,data.fire_type):life._typed(v,(),j.int32)
 
-def prepare(tape,ticket,actor,physical,target,move,before,context,*,requested):
+def prepare(tape,ticket,actor,physical,target,move,before,context,*,requested,caller_move=None):
     if type(before)is not Before:raise ValueError('literal pre-TryHit operands required')
     return Pending(context,ticket,actor,physical,target,move,before,
-        absorption.AbsorptionResult(j.zeros_like(requested),before.hp,before.volatile),requested)
+        absorption.AbsorptionResult(j.zeros_like(requested),before.hp,before.volatile),requested,caller_move)
 
 def observed_absorption(pending,result):
     if type(result)is not absorption.AbsorptionResult:raise ValueError('original literal TryHit result required')
@@ -143,7 +159,7 @@ def _code(p,w):
         &type_join&(before.actor_hp_type>=0)&(before.actor_hp_type<18)&(before.actor_hp_power>=0)&(before.actor_hp_power<=70)
         &(before.ability>=0)&(before.ability<len(data.water))&(before.move_type>0)&(before.move_type<18)
         &(before.hp>0)&(before.hp<=before.maximum)&(before.actor_hp>0)&(before.status>=0)&(before.status<=6)
-        &(before.sub_hp==0)&~before.explodes&((w.power>0)|((w.power==0)&fixed))&~w.substitute&~w.protected&~w.enduring
+        &(before.sub_hp==0)&~before.explodes&((w.power>0)|((w.power==0)&fixed))&~w.substitute&~w.enduring
         &(w.old_hp==a.hp)&(w.new_hp==a.hp)&(w.maximum==before.maximum))
     abi=j.clip(before.ability,0,len(data.water)-1)
     same=(a.hp==before.hp)&(a.volatile==before.volatile)
@@ -159,7 +175,13 @@ def _code(p,w):
     code=j.where(miss,MISS,j.where(pure,TYPE_IMMUNE,j.where(water&healed,WATER_HEAL,j.where(water&full,WATER_FULL,
         j.where(volt&healed,VOLT_HEAL,j.where(volt&full,VOLT_FULL,j.where(flash&((before.volatile&absorption.FLASH_FIRE)==0),FLASH_START,
         j.where(flash,FLASH_REPEAT,0))))))))
-    return j.where(valid,code,0)
+    protected_miss=j.zeros(b,bool)
+    if p.caller_move is not None and p.context.data.protect is not None:
+        from . import engine_protect_callbacks as protect
+        life._typed(p.caller_move,(b,),j.int32);protect.shape(p.context.data.protect)
+        source_move=p.context.data.protect.block_candidates[j.clip(p.move,0,len(data.candidates)-1)]
+        protected_miss=data.protect_miss&miss&w.protected&(p.caller_move==p.move)&source_move
+    return j.where(valid&(~w.protected|protected_miss),code,0)
 
 def scheduled(pending,write):
     """Typed prospective branch; final literal Outcome still MUST validate."""
