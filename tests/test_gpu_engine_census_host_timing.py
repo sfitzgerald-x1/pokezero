@@ -78,7 +78,7 @@ class HostTimingTests(unittest.TestCase):
   self.assertEqual(stripped,original)
   json.dumps(actual,allow_nan=False)
   for path in('engine_retained_encoder_driver.py','transition.py'):
-   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','ad123786c29ef068b53ca6f707db0313098856a6:gpu_engine/'+path]))
+   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','a8034bc27e083b156f525d69defa673c6908a25b:gpu_engine/'+path]))
   # Both physical sources remain exact at the reviewed current composition;
   # historical ac13 preceded the separately reviewed built-in timing/inputs.
 
