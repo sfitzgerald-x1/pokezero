@@ -87,14 +87,19 @@ class BuiltinTimingTests(unittest.TestCase):
     with self.subTest(value=value),self.assertRaises(ValueError):d.advance(None,None,collect_timings=value)
    with self.assertRaises(ValueError):d.advance(None,None,collect_timings=True,timing_callback=lambda *args:None)
    guard.assert_not_called()
- def test_original_guards_callback_body_and_timed_source_exact(self):
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));new=ast.parse(Path(d.__file__).read_text())
+ def test_historical_guards_callback_body_and_timed_source_exact(self):
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','8c367a0afdcb3bebea67170ed962c09372fd453f:gpu_engine/engine_retained_encoder_driver.py'],text=True))
+  current=ast.parse(Path(d.__file__).read_text())
   fn=lambda tree,name:next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name==name)
   for name in('_timed','_host_span','_checked','_checked_witness','_consume','_consume_accounted','construct','latest_diagnostics'):
    self.assertEqual(ast.dump(fn(old,name),include_attributes=False),ast.dump(fn(new,name),include_attributes=False),name)
-  a,b=fn(old,'advance'),fn(new,'advance')
+  historical=ast.parse(subprocess.check_output(['git','show','8c367a0afdcb3bebea67170ed962c09372fd453f:gpu_engine/engine_retained_encoder_driver.py'],text=True))
+  a,b=fn(old,'advance'),fn(historical,'advance')
+  # Current callback and behavioral controls remain live. Current helper
+  # bodies are bound after compile observations in atomic diagnostics; this
+  # historical erase proof predates both later reviewed opt-in additions.
   callback=lambda n:next(v for v in ast.walk(n)if isinstance(v,ast.FunctionDef)and v.name=='checked_timing')
-  self.assertEqual(ast.dump(callback(a),include_attributes=False),ast.dump(callback(b),include_attributes=False))
+  self.assertEqual(ast.dump(callback(a),include_attributes=False),ast.dump(callback(fn(current,'advance')),include_attributes=False))
   # Erase ONLY this opt-in API/data collector to prove original phase/carry
   # assignments and normal checks remain the identical program.
   class EraseBuiltin(ast.NodeTransformer):

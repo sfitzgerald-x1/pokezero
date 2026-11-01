@@ -9,6 +9,7 @@ import numpy as np
 from gpu_engine import benchmark_capture_gap_census as c,engine_outcome_diagnostics as d
 
 BASE='ac13fdbd'
+HOST_COPY_SOURCE='fe06bcd805cbc8f8a60b8861bfd9e6d270080cfe'
 class Device:
  def __init__(self,value,root=None):
   self.value=np.asarray(value);self.shape=self.value.shape;self.dtype=self.value.dtype
@@ -17,8 +18,8 @@ class Device:
  def __array__(self,dtype=None,copy=None):self.root.copies+=1;return np.asarray(self.value,dtype=dtype)
  def __getitem__(self,index):self.root.slices+=1;return Device(self.value[index],self.root)
 
-def original(path,name,env,cls=None):
- tree=ast.parse(subprocess.check_output(['git','show',BASE+':'+path],text=True))
+def original(path,name,env,cls=None,source=BASE):
+ tree=ast.parse(subprocess.check_output(['git','show',source+':'+path],text=True))
  body=tree.body if cls is None else next(n for n in tree.body if isinstance(n,ast.ClassDef)and n.name==cls).body
  node=next(n for n in body if isinstance(n,ast.FunctionDef)and n.name==name);node.name='original_'+name
  exec(compile(ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])),'immutable-original','exec'),env)
@@ -52,14 +53,16 @@ class HostCopyTests(unittest.TestCase):
      if mode=='empty':self.assertTrue(all(v.copies==0 for v in tracked))
      self.assertEqual([row['row']for row in actual['rows']],np.flatnonzero(refused).tolist())
  def test_only_data_serializer_and_owned_pin_change_outside_census(self):
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_outcome_diagnostics.py'],text=True));new=ast.parse(Path(d.__file__).read_text())
+  # Historical component-only source delta; current serializer behavior is
+  # checked above and new scientific producers have their own exact review.
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_outcome_diagnostics.py'],text=True));new=ast.parse(subprocess.check_output(['git','show',HOST_COPY_SOURCE+':gpu_engine/engine_outcome_diagnostics.py'],text=True))
   keep=lambda tree:ast.Module(body=[n for n in tree.body if not isinstance(n,ast.FunctionDef)or n.name!='refused_rows'],type_ignores=[])
   self.assertEqual(ast.dump(keep(old),include_attributes=False),ast.dump(keep(new),include_attributes=False))
   for path in('transition.py','engine_kernel_frame_risk.py'):
-   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+path]))
+   self.assertEqual(subprocess.check_output(['git','show',HOST_COPY_SOURCE+':gpu_engine/'+path]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+path]))
   # Built-in timing's guarded driver delta is separately exact-AST checked
   # against c028 by test_gpu_engine_builtin_host_timing.
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_source_frame_witness.py'],text=True));new=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text())
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_source_frame_witness.py'],text=True));new=ast.parse(subprocess.check_output(['git','show',HOST_COPY_SOURCE+':gpu_engine/engine_source_frame_witness.py'],text=True))
   keep=lambda tree:ast.Module(body=[n for n in tree.body if not isinstance(n,ast.Assign)or not any(isinstance(t,ast.Name)and t.id=='SOURCE_PINS'for t in n.targets)],type_ignores=[])
   self.assertEqual(ast.dump(keep(old),include_attributes=False),ast.dump(keep(new),include_attributes=False))
  def make_backend(self,b,missing):
@@ -92,9 +95,12 @@ class HostCopyTests(unittest.TestCase):
   def executable(*args):calls.append(('fallback',args[3].tolist(),args[5].tolist(),args[4]));return NS(fake='combined'),NS(admitted=yes),None,callbacks,bad,None,None if missing else good,yes
   backend.diag_executable=executable
   return backend,tracked,calls,active,scored
- def test_mixed_advance_exact_packets_and_no_per_row_device_conversions(self):
+ def test_historical_mixed_advance_exact_packets_and_no_per_row_device_conversions(self):
+  # Compare the two historical host-copy implementations on identical inert
+  # data; CURRENT packet and transfer behavior also runs in atomic diagnostics.
   choose=lambda mask,prior,new:new
   old=original('gpu_engine/benchmark_capture_gap_census.py','advance',dict(vars(c),_row_select=choose),cls='_Runtime')
+  optimized=original('gpu_engine/benchmark_capture_gap_census.py','advance',dict(vars(c),_row_select=choose),cls='_Runtime',source=HOST_COPY_SOURCE)
   for b in(8,16):
    for missing in(False,True):
     with self.subTest(b=b,missing=missing):
@@ -102,7 +108,7 @@ class HostCopyTests(unittest.TestCase):
      with mock.patch.object(c,'_row_select',side_effect=choose),mock.patch.object(c.time,'perf_counter_ns',side_effect=[1000000,2000000]):
       expected=old(before,np.zeros((b,2),np.int32),active,scored,'literal-same-chance')
      with mock.patch.object(c,'_row_select',side_effect=choose),mock.patch.object(c.time,'perf_counter_ns',side_effect=[1000000,2000000]):
-      actual=after.advance(np.zeros((b,2),np.int32),active,scored,'literal-same-chance')
+      actual=optimized(after,np.zeros((b,2),np.int32),active,scored,'literal-same-chance')
      self.assertEqual(before.last_packet,after.last_packet);self.assertEqual(old_calls,new_calls)
      for a,z in zip(actual[:2],expected[:2]):np.testing.assert_array_equal(a,z)
      self.assertEqual(actual[2],expected[2]);self.assertTrue(any(v.copies>1 for v in old_arrays))

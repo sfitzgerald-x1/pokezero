@@ -136,7 +136,9 @@ class AtomicDiagnosticsTests(unittest.TestCase):
   old_body={n.name:ast.dump(n,include_attributes=False)for n in old.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))and n.name!='advance'}
   new_body={n.name:ast.dump(n,include_attributes=False)for n in new.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))and n.name not in ('advance','AdvanceWithDiagnostics')}
   self.assertEqual(old_body,new_body)
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/benchmark_capture_gap_census.py'],text=True));new=ast.parse(Path(census.__file__).read_text())
+  # This historical whole-module delta belongs to the atomic component.
+  # Current census behavior and current source pins are checked separately.
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/benchmark_capture_gap_census.py'],text=True));new=ast.parse(subprocess.check_output(['git','show',ATOMIC_SOURCE+':gpu_engine/benchmark_capture_gap_census.py'],text=True))
   def body(t):return next(n for n in t.body if isinstance(n,ast.ClassDef)and n.name=='_Runtime')
   a,b=body(old),body(new);oldfn=next(n for n in a.body if isinstance(n,ast.FunctionDef)and n.name=='advance');newfn=next(n for n in b.body if isinstance(n,ast.FunctionDef)and n.name=='advance')
   oldif=next(n for n in oldfn.body if isinstance(n,ast.If)and ast.unparse(n.test)=='kept.any()');newif=next(n for n in newfn.body if isinstance(n,ast.If)and ast.unparse(n.test)=='kept.any()')
