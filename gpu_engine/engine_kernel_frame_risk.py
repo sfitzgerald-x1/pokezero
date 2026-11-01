@@ -129,6 +129,10 @@ class Tables(NamedTuple):
     self_boost_stats: object
     self_boost_deltas: object
     self_boost_lengths: object
+    baton_binding: object
+    baton_move: object
+    baton_abilities: object
+    baton_items: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -203,6 +207,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     belly_binding=np.zeros(8,np.uint32);belly_candidates=np.zeros(m,bool)
     sleep_block_binding=np.zeros(8,np.uint32);sleep_block_moves=np.zeros(m,bool)
     encore_binding=np.zeros(8,np.uint32);encore_move=0
+    baton_binding=np.zeros(8,np.uint32);baton_move=0;baton_abilities=np.zeros(len(engine_catalog.engine_binding),bool);baton_items=np.zeros(1,bool)
     self_move_binding=np.zeros(8,np.uint32);self_move_ids=np.zeros(3,np.int32);self_move_candidates=np.zeros(m,bool)
     leech_binding=np.zeros(8,np.uint32);leech_move=0
     protect_binding=np.zeros(8,np.uint32);protect_candidates=np.zeros(m,bool);protect_blocks=np.zeros(m,bool)
@@ -243,6 +248,9 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         if direct_data.belly_drum is not None:
             from . import engine_belly_drum_callbacks as belly
             belly.shape(direct_data.belly_drum);belly_binding=np.asarray(direct_data.belly_drum.binding,np.uint32);belly_candidates=np.asarray(direct_data.belly_drum.candidates).copy()
+        if direct_data.baton_pass is not None:
+            from . import engine_baton_pass_callbacks as baton_callbacks
+            bd=direct_data.baton_pass;baton_callbacks.shape(bd);baton_binding=np.asarray(bd.binding);baton_move=int(bd.move_id);baton_abilities=np.asarray(bd.quiet_abilities);baton_items=np.asarray(bd.quiet_items)
         if direct_data.self_boost is not None:
             from . import engine_self_boost_callbacks as self_boost
             sd=direct_data.self_boost;self_boost.shape(sd)
@@ -342,7 +350,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         powder_miss=np.asarray(data.miss_mask)
         if powder_miss.shape!=(m,) or powder_miss.dtype!=np.dtype(bool) or np.any(powder_miss&~mask) or (not bool(data.primary_sleep) and powder_miss.any()):raise ValueError("original explicit primary sleep miss mask required")
         powder_binding=np.asarray(data.binding,np.uint32);powder_candidate=mask.copy()
-    risk[(weather==0)&~self_move_candidates&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates&~bulk_candidates&~(self_boost_lengths>0)&~plain_candidates&~heal_candidates&~belly_candidates&~((encore_move>0)&(np.arange(m)==encore_move))&~((leech_move>0)&(np.arange(m)==leech_move))]|=NON_WEATHER
+    risk[(weather==0)&~((baton_move>0)&(np.arange(m)==baton_move))&~self_move_candidates&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates&~bulk_candidates&~(self_boost_lengths>0)&~plain_candidates&~heal_candidates&~belly_candidates&~((encore_move>0)&(np.arange(m)==encore_move))&~((leech_move>0)&(np.arange(m)==leech_move))]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -385,7 +393,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     branch[Branch.PRIMARY_STATUS]=FIELD_VOLATILE
     files=('transition.py','secondary.py','entry.py','effects.py','absorption.py','sustain.py',
         'linked_traps.py','encore.py','mechanics.py','engine_execution_completeness.py','engine_kernel_frame_risk.py')
-    inventory=dict(schema=SCHEMA,declared={x.name:int(x) for x in Branch},
+    inventory=dict(schema=SCHEMA,baton_binding=baton_binding.tolist(),baton_move=baton_move,baton_abilities=baton_abilities.tolist(),baton_items=baton_items.tolist(),declared={x.name:int(x) for x in Branch},
         source_files={f:hashlib.sha256(Path(__file__).with_name(f).read_bytes()).hexdigest() for f in files},
         pinch_binding=pinch_binding.tolist(),pinch_stats=pinch_stats.tolist(),
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
@@ -397,7 +405,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths),words(baton_binding),jnp.asarray(baton_move,jnp.int32),jnp.asarray(baton_abilities),jnp.asarray(baton_items))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 

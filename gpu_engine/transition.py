@@ -554,8 +554,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             incoming=status_callbacks.entry_cure_possible(table,work.status[rows,side,target[rows,side]])
             _public_trace=status_callbacks.unknown(_public_trace,do_switch & (departure | incoming))
         installed = installed.at[rows,side].set(do_switch)
+        if _lifecycle_trace:
+            from . import engine_baton_pass_callbacks as baton_callbacks
+            _public_trace,_baton_copy=baton_callbacks.before_copy(_public_trace,work,side,target[rows,side],
+                _direct_hit_context if _direct_hit_registered else None,eligible=do_switch)
         work = passing.copy_to_recipient(work,side,target[rows,side],
             eligible=do_switch & work.baton_pass[rows,side])
+        if _lifecycle_trace:
+            _public_trace=baton_callbacks.after_copy(_public_trace,_baton_copy,work)
         if _lifecycle_trace:
             from . import engine_flash_fire_end_callbacks as _flash_end
             _public_trace,_flash_pending=_flash_end.begin(_public_trace,work,side,
@@ -571,6 +577,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _lifecycle_trace:
             _public_trace=lifecycle_callbacks.installed(_public_trace,work,side,old_active,target[rows,side],
                 eligible=do_switch,replacement=replacement,baton=switch_baton)
+            _public_trace=baton_callbacks.finish_install(_public_trace,work,side,eligible=do_switch)
         work=history.record_switch(work,side,target[rows,side],eligible=do_switch)
         # insertChoice snapshots each incoming callback's Speed now; a later
         # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
@@ -1465,8 +1472,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             bench_alive = jnp.any(
                 (work.hp[rows,side] > 0) & (jnp.arange(6)[None,:] != work.active[rows,side,None]),axis=1)
             passed = acts & table.baton.move[move] & (hp > 0) & bench_alive
+            if _lifecycle_trace:
+                from . import engine_baton_pass_callbacks as baton_callbacks
+                _public_trace,_baton_start=baton_callbacks.begin_start(_public_trace,work,side,move,caller_move,
+                    _direct_hit_context if _direct_hit_registered else None,acts=acts,eligible=caller_acts)
             work = work._replace(baton_pass=work.baton_pass.at[rows,side].set(
                 work.baton_pass[rows,side] | passed))
+            if _lifecycle_trace:
+                _public_trace=baton_callbacks.finish_start(_public_trace,_baton_start,work,passed,acts&hit&~immune)
             # Only a first ordinary action can leave an opposing action queued.
             # A resumed Baton is already the final original action.
             save_foe = passed & (order == 0) & ~state.pending_residual & ~switches[rows,foe]
@@ -1826,6 +1839,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             | work.baton_pass) & alive,
         baton_pass=work.baton_pass & ~done[:,None])
     if _lifecycle_trace:
+        from . import engine_baton_pass_callbacks as baton_callbacks
+        _public_trace=baton_callbacks.finalize_request(_public_trace,work)
         from . import engine_terminal_callbacks as terminal_callbacks
         _public_trace=terminal_callbacks.capture_final_on_tape(_public_trace,work,active=live)
     ordinary = turn_context & ~defer_residual
