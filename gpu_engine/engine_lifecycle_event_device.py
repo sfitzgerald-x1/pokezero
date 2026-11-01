@@ -50,6 +50,7 @@ from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_self_boost_callbacks as self_boost_callbacks
 from . import engine_baton_pass_callbacks as baton_callbacks
 from . import engine_whirlwind_callbacks as whirlwind_callbacks
+from . import engine_natural_cure_callbacks as natural_cure_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
@@ -639,6 +640,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         component = (kind == public.MOVE) | (kind == public.MAIN_HP) | (kind == public.DIRECT_FAINT)
         applied = kind == status_callbacks.STATUS_APPLIED
         cured = kind == status_callbacks.STATUS_CURED
+        natural_cure = kind == natural_cure_callbacks.NATURAL_CURE
         status_event = applied | cured
         pressure = kind == pressure_callbacks.PRESSURE_START
         trace_copy = kind == trace_callbacks.TRACE_COPY
@@ -909,6 +911,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         event_ok=jnp.where(self_boost,generation_ok&clock_ok&self_boost_ok,event_ok)
         event_ok=jnp.where(baton,generation_ok&clock_ok&baton_callbacks.owned(tape,index),event_ok)
         event_ok=jnp.where(whirlwind,generation_ok&clock_ok&whirlwind_callbacks.owned(tape,index),event_ok)
+        natural_owned=natural_cure_callbacks.owned(tape,index)
+        natural_owned &= ~natural_cure_callbacks.composite_at(tape,index)|baton_callbacks.owned(tape,index,baton_callbacks.INSTALL)
+        event_ok=jnp.where(natural_cure,generation_ok&clock_ok&actor_ok&(phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&natural_owned,event_ok)
         swords_dance_ok=(tables.status_events & ~tables.raw_begin & actor_ok & cursor.initialized
             &(phase==0)&(actor_side>=0)&(actor_side<2)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
@@ -1018,6 +1023,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_semantic = jnp.concatenate((jnp.stack((jnp.full((b,),int(inputs.Kind.STATUS),jnp.int32),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),status_payload),axis=1)
         semantic=jnp.where(status_event[:,None],status_semantic,semantic)
+        natural_payload=jnp.stack((actor_enc,z,z,z,z,z,z,z),axis=1)
+        natural_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.STATUS)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),natural_payload),axis=1)
+        semantic=jnp.where(natural_cure[:,None],natural_semantic,semantic)
         bell_payload=jnp.stack((bell_member_slot+1,z,z,z,z,z,z,z),axis=1)
         bell_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.STATUS)),semantic_sequence,turn,phase,absent,absent,actor_side,bell_member_slot),axis=1),bell_payload),axis=1)
         item_payload = jnp.stack((status_enc, jnp.full_like(z, tables.lum_public_item),

@@ -78,6 +78,7 @@ class Site(IntEnum):
     SLEEP_TALK = 42
     WHIRLWIND = 43
     FOCUS_PREPARATION = 44
+    NATURAL_CURE = 45
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -200,6 +201,7 @@ class Context(NamedTuple):
     self_destruct: object = None # row-only actual self-KO/target/faint composite
     thunder_wave_immunity: object = None # max2 SAME-call natural-immunity receipts
     whirlwind: object = None # max2 actual positive ordinary drag transactions
+    natural_cure: object = None # SAME actual departure snapshots; ordinary or Baton composite
 
 
 UNKNOWN_EXECUTION = 512

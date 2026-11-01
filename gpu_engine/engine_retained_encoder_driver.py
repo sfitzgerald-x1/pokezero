@@ -309,11 +309,13 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         # rebuilding solely from the pre-call context loses that source edge.
         from . import engine_leech_seed_callbacks as leech_callbacks
         from . import engine_thunder_wave_callbacks as thunder_callbacks,engine_whirlwind_callbacks as whirlwind_callbacks
+        from . import engine_natural_cure_callbacks as natural_cure_callbacks
         context=tape.execution._replace(ledger=ledger,
             leech_history=leech_callbacks.commit_history(source_ready,tape.execution.leech_history,result.callbacks.execution.leech_history),
             secondary_status=result.callbacks.execution.secondary_status,
             baton_transaction=None if tape.execution.baton_transaction is None else baton_callbacks.rows(source_ready,tape.execution.baton_transaction,result.callbacks.execution.baton_transaction),
             self_destruct=result.callbacks.execution.self_destruct,
+            natural_cure=natural_cure_callbacks.commit(source_ready,result.callbacks.execution.natural_cure),
             thunder_wave_immunity=thunder_callbacks.commit_ground(source_ready,result.callbacks.execution.thunder_wave_immunity),
             whirlwind=whirlwind_callbacks.commit(source_ready,result.callbacks.execution.whirlwind),
             diagnostics=_rows(source_ready,

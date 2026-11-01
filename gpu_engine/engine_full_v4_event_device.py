@@ -45,6 +45,7 @@ from . import engine_bulk_up_callbacks as bulk_up_callbacks
 from . import engine_self_boost_callbacks as self_boost_callbacks
 from . import engine_baton_pass_callbacks as baton_callbacks
 from . import engine_whirlwind_callbacks as whirlwind_callbacks
+from . import engine_natural_cure_callbacks as natural_cure_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
@@ -138,6 +139,7 @@ class Tables(NamedTuple):
     focus_preparation: object
     namespaces: Bindings
     binding: object
+    natural_cure: object = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -220,6 +222,7 @@ def compile_adapter(metadata, projector, *, catalog, direct_hit_compiled=None):
     tokens=('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')
     statuses=np.array([0]+[add(f'|-status|{ident[0]}|{token}',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
     cures=np.array([0]+[add(f'|-curestatus|{ident[0]}|{token}|[msg]',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
+    natural_cure=np.array([0]+[add(f'|-curestatus|{ident[0]}|{token}|[from] ability: Natural Cure',inputs.Kind.STATUS)for token in tokens[1:]],np.int32)
     lum = np.zeros((7, 2), np.int32)
     if bool(lower.device.lum_events):
         # Effective Gen3 inherited eatItem/onEat emits these genuine source
@@ -539,13 +542,9 @@ def compile_adapter(metadata, projector, *, catalog, direct_hit_compiled=None):
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()+np.array([protect_success,protect_block],np.int32).tobytes()+protect_still_moves.tobytes()+entry_spikes_damage.tobytes()
-    payload += status_damage_lethal.tobytes()+self_boost.tobytes()
+    payload += status_damage_lethal.tobytes()+self_boost.tobytes()+natural_cure.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
-    tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
-        jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
-        jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
-        jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(before_move_blocked),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),jnp.array(status_damage_lethal),jnp.array(self_boost),jnp.array(heal_bell_keys),jnp.array(sleep_talk_moves),jnp.array(focus_preparation,jnp.int32),ns, binding)
+    tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32), jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions), jnp.array(statuses), jnp.array(cures), jnp.array(lum), jnp.array(weather_keys), jnp.array(weather_start), jnp.array(weather_upkeep), jnp.array(weather_end, jnp.int32), jnp.array(weather_failure, jnp.int32), jnp.array(weather_failure_moves), jnp.array(weather_chip), jnp.array(leftovers_heal), jnp.array(status_damage), jnp.array(direct_hit_control), jnp.array(pressure_start, jnp.int32), jnp.array(trace_copy, jnp.int32), jnp.array(substitute_created), jnp.array(toxic_no_effect), jnp.array(recoil_damage), jnp.array(calm_mind), jnp.array(swords_dance, jnp.int32), jnp.array(ident_species), jnp.array(intimidate, jnp.int32), jnp.array(spikes, jnp.int32), jnp.array(no_damage_miss), jnp.array(no_damage_keys), jnp.array(primary_sleep_status), jnp.array(sleep_powder_status, jnp.int32), jnp.array(flash_fire_end, jnp.int32), jnp.array(sub_damage_keys), jnp.array(bulk_up), jnp.array(color_change), jnp.array(protect_success, jnp.int32), jnp.array(protect_block, jnp.int32), jnp.array(protect_still_moves), jnp.array(pinch_items), jnp.array(rough_skin_damage), jnp.array(self_heal), jnp.array(wonder_guard_immune, jnp.int32), jnp.array(belly_drum_setboost, jnp.int32), jnp.array(before_move_blocked), jnp.array(sleep_blocked, jnp.int32), jnp.array(encore), jnp.array(leech), jnp.array(entry_spikes_damage), jnp.array(self_move), jnp.array(self_move_still), jnp.array(status_damage_lethal), jnp.array(self_boost), jnp.array(heal_bell_keys), jnp.array(sleep_talk_moves), jnp.array(focus_preparation, jnp.int32), ns, binding, jnp.array(natural_cure))
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -815,10 +814,13 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # status-enabled lower mode forbids RAW_BEGIN and emits exactly one
         # semantic per accepted input. It never drops a receipt. The actual
         # preceding-MOVE/HP -> wake-CURE regression locks this alignment.
-        old_engine_status = jnp.where(bell_cure,bell_raw[:,6],tape.words[:,index,5])
+        natural_cure=raw_kind==natural_cure_callbacks.NATURAL_CURE
+        old_engine_status = jnp.where(natural_cure,tape.words[:,index,3],jnp.where(bell_cure,bell_raw[:,6],tape.words[:,index,5]))
         old_public_status = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(old_engine_status,0,6)]
         status_key=jnp.where(semantic[:,9]>0,tables.statuses[jnp.clip(semantic[:,9],0,6)],tables.cures[old_public_status])
         key=jnp.where(status_event,status_key,key)
+        if tables.natural_cure is not None:key=jnp.where(natural_cure,tables.natural_cure[old_public_status],key)
+        else:key=jnp.where(natural_cure,0,key)
         next_raw=tape.words[:,jnp.minimum(index+1,tape.words.shape[1]-1)]
         sleep_status=status_event&(raw_kind==status_callbacks.STATUS_APPLIED)&(tape.words[:,index,6]==5)
         sleep_move=next_raw[:,5];sleep_safe=jnp.clip(sleep_move,0,len(tables.primary_sleep_status)-1)
@@ -922,6 +924,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # Refuse that ambiguity and an unobserved forme change atomically.
         identity = ~baton_raw|baton_callbacks.owned(tape,index)
         identity &= ~(whirlwind_raw|drag_raw)|whirlwind_callbacks.owned(tape,index)
+        identity &= ~natural_cure|natural_cure_callbacks.owned(tape,index)
         identity &= ~(kind==int(inputs.Kind.BATON_PASS))|baton_callbacks.owned(tape,index,baton_callbacks.INSTALL)
         identity &= ~arrival | (~collision & ((prior_species == 0) | (prior_species == semantic[:, 9])))
         # Old status is a causal receipt fact, and must agree with the BEFORE
@@ -1092,6 +1095,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &live[rows,safe]&live[rows,1-safe]&(semantic[:,11]==previous_status)
             &(observed_hp[rows,safe,safe_slot]==recoil_old)&(observed_maximum[rows,safe,safe_slot]==recoil_max))
         identity &= ~status_event | (old_public_status==previous_status)
+        natural_raw=tape.words[:,index];natural_side=jnp.clip(natural_raw[:,1],0,1);natural_slot=slots[rows,natural_side]
+        natural_own=state.causal.owner==natural_side;natural_percent=(100*natural_raw[:,8]+jnp.maximum(1,natural_raw[:,9])-1)//jnp.maximum(1,natural_raw[:,9])
+        natural_percent=jnp.where((natural_raw[:,8]<natural_raw[:,9])&(natural_percent==100),99,natural_percent)
+        natural_hp=jnp.where(natural_own,natural_raw[:,8],natural_percent);natural_max=jnp.where(natural_own,natural_raw[:,9],100)
+        identity &= ~natural_cure|((observed_hp[rows,natural_side,jnp.clip(natural_slot,0,5)]==natural_hp)&(observed_maximum[rows,natural_side,jnp.clip(natural_slot,0,5)]==natural_max))
         identity &= ~heal_bell | (heal_bell_callbacks.owned(tape,index)&(new_slot>=0)&(new_slot<6)&(prior_species>0))
         if tape.execution is not None:
             bell_start=jnp.take_along_axis(tape.execution.ledger.start,jnp.clip(tape.execution.ledger.claimed[:,index]-1,0,tape.execution.ledger.start.shape[1]-1)[:,None],axis=1)[:,0]
@@ -1232,7 +1240,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # and its raw species spelling, rather than schema-fixture encounter1.
         for col,value in ((11,new_slot+1),(13,tables.ident_species[jnp.clip(prior_species,0,tables.ident_species.shape[0]-1)])):
             result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
-        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block|rough|color_change|encore|leech|heal_bell|focus)[:,None]&(schema[:,:,10]>0)))
+        trace_prelude=(kinds==int(inputs.Kind.SWITCH_PRELUDE))&(trace_copy[:,None]|((no_damage_header|flash_ended|protect_attempt|protect_block|rough|color_change|encore|leech|heal_bell|focus|natural_cure)[:,None]&(schema[:,:,10]>0)))
         lexical_side=jnp.clip(result[:,:,4],0,1)
         lexical_slot=current_slots[rows[:,None],lexical_side]
         lexical_slot=jnp.where(heal_bell[:,None]&(lexical_side==subject[:,None]),new_slot[:,None],lexical_slot)
