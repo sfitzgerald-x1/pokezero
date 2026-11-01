@@ -238,7 +238,7 @@ def readout(trackers,observer_sides):
     return PublicView(trackers.own_order[r,owner],take('species'),take('level'),take('gender'),
         take('hp_percent').astype(j.float32)/100.0,take('status'),active,present,take('fainted'),
         j.zeros((b,6,2),j.int32) if trackers.shown_types is None else take('shown_types'),take('boosts'),
-        z if trackers.shown_ability is None else take('shown_ability'),
+        z if trackers.original_ability is None else take('original_ability'),
         z if trackers.shown_item is None else take('shown_item'),
         trackers.error|j.where((observer_sides<0)|(observer_sides>1),BAD_OBSERVER,0),None,
         trackers.turn,trackers.weather,trackers.spikes,optional('belief_mask'),optional('observed_moves'),

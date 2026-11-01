@@ -82,7 +82,7 @@ def initialize(state,belief_tables=None):
     t=tr.initialize(state);b=len(t.error);z=j.zeros((b,2,6),j.int32)
     t=t._replace(observed_moves=j.zeros((b,2,6,4),j.int32),pp_used=j.zeros((b,2,6,4),j.int32),
         last_moves=z,tendencies=j.zeros((b,2,6,2),j.int32),belief_mask=j.zeros((b,2,6,2),j.uint32),
-        shown_ability=z,original_ability=z,shown_item=z,item_removed=j.zeros_like(z,bool),shown_types=j.zeros((b,2,6,2),j.int32),borrowed_ability=j.zeros_like(z,bool),
+        shown_ability=z,original_ability=z,shown_item=z,item_removed=j.zeros_like(z,bool),shown_types=j.zeros((b,2,6,2),j.int32),borrowed_ability=z,
         mon_features={key:(z.astype(j.float32) if key.startswith('last_damage') else z) for key in MON_KEYS},
         damage_exact_dealt=z.astype(j.float32),damage_exact_taken=z.astype(j.float32),
         public_volatiles=j.zeros((b,2,6,len(VOLATILE_NAMES)),bool),field_features={'weather_upkeeps':j.zeros(b,j.int32),
@@ -141,8 +141,8 @@ def reveal_ability(c,state,side,use,*,ability=None,original=True):
     borrowed=c.trackers.borrowed_ability[r,side,slot]
     c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,ability,use))
     if original:
-        c=c._replace(trackers=_write(c.trackers,'original_ability',side,p,ability,use&~borrowed))
-        c=_narrow(c,side,p,ability,use&~borrowed,'ability')
+        c=c._replace(trackers=_write(c.trackers,'original_ability',side,p,ability,use&(borrowed==0)))
+        c=_narrow(c,side,p,ability,use&(borrowed==0),'ability')
     return c
 
 
@@ -167,7 +167,7 @@ def entry(c,before,after,side,table,use):
         c=reveal_ability(c,before,side,copied,ability=ability)
         c=reveal_ability(c,before,1-side,copied)
         p=after.active[_r(after),side]
-        c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.ones_like(copied),copied))
+        c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,_get(after,'ability',side),copied))
         c=reveal_ability(c,after,side,copied,original=False)
     current=_get(after,'ability',side)
     cure=starts&(_get(before,'status',side)!=0)&(_get(after,'status',side)==0)
@@ -183,15 +183,20 @@ def depart(c,before,after,side,table,use):
     if table is not None:
         cure=use&(_get(before,'hp',side)>0)&(_get(before,'status',side)!=0)&table.natural_cure[_get(before,'ability',side)]
         c=reveal_ability(c,before,side,cure)
-        c=c._replace(trackers=tr._observe(c.trackers,after,side,p,cure,identity=False))
+        c=observe(c,after,cure)
     # A borrowed ability ends silently; known original identity is not guessed.
-    c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,c.trackers.original_ability[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)],use&c.trackers.borrowed_ability[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)]))
-    c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.zeros_like(use),use))
+    c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,c.trackers.original_ability[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)],use&(c.trackers.borrowed_ability[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)]!=0)))
+    c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.zeros_like(use,j.int32),use))
     return c
 
 
 def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,preparation=False):
-    """Called only at actual declaration. PP count is public uses, not hidden Pressure cost."""
+    """Actual declarations charge public PP, never hidden physical PP cost.
+
+    Original source target semantics and only publicly running Pressure can
+    double a caller charge. Called Sleep Talk children remain uncharged.
+    """
+    actual_move=move
     if c.belief_tables is not None and hasattr(c.belief_tables,'public_move'):
         valid=(move>=0)&(move<len(c.belief_tables.public_move))
         at=j.clip(move,0,len(c.belief_tables.public_move)-1)
@@ -206,7 +211,19 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     previous=t.observed_moves[r,side,slot,at]
     observed=t.observed_moves.at[r,side,slot,at].set(j.where(use,move,previous))
     count=t.pp_used[r,side,slot,at]
-    pp=t.pp_used.at[r,side,slot,at].set(count+(use&j.asarray(pp_use)).astype(j.int32))
+    extra=j.zeros_like(use)
+    if (c.belief_tables is not None and hasattr(c.belief_tables,'public_foe_targeted')
+            and hasattr(c.belief_tables,'public_pressure')):
+        targets=c.belief_tables.public_foe_targeted;pressure=c.belief_tables.public_pressure
+        foe=1-side;foe_slot=j.clip(t.active_slot[r,foe],0,5)
+        copied=t.borrowed_ability[r,foe,foe_slot]
+        running=j.where(copied!=0,copied,t.original_ability[r,foe,foe_slot])
+        valid_ability=(running>0)&(running<len(pressure))
+        known_pressure=valid_ability&pressure[j.clip(running,0,len(pressure)-1)]
+        target_known=(actual_move>0)&(actual_move<len(targets))
+        extra=known_pressure&target_known&targets[j.clip(actual_move,0,len(targets)-1)]
+    charge=(use&j.asarray(pp_use)).astype(j.int32)*(1+extra.astype(j.int32))
+    pp=t.pp_used.at[r,side,slot,at].set(count+charge)
     c=c._replace(trackers=t._replace(observed_moves=observed,pp_used=pp))
     if not preparation:
         c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,move,declared))
@@ -233,6 +250,9 @@ def party_cure(c,before,after,side,use,table=None):
         old=c.trackers.status;slot=c.trackers.physical_to_public[r,side,p];at=j.clip(slot,0,5)
         yes=changed&(slot>=0)
         c=c._replace(trackers=c.trackers._replace(status=old.at[r,side,at].set(j.where(yes,after.status[r,side,p],old[r,side,at]))))
+        cured=yes&(after.status[r,side,p]==0)
+        for name in ('sleep_turns','rest_sleep','toxic_stage'):
+            c=feature(c,side,p,name,j.zeros(len(r),j.int32),cured)
     return c
 
 
