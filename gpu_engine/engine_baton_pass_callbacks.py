@@ -218,18 +218,55 @@ def missing_transaction(tape,side,requested):
         tape=ex._put_context(tape,ex.unhandled(c.ledger,ticket,active=requested,tables=c.tables),c)
     return tape._replace(refusal=tape.refusal|j.where(requested,256,0)),None
 
+def _start_diagnostics(tape,state,side,move,caller,data,*,acts,eligible,transaction=None,private=None,registered=None,data_bound=None,valid=None,prior=None):
+    """Observe actual current start operands; never read back by admission."""
+    from . import engine_outcome_diagnostics as diag
+    c=getattr(tape,'execution',None);b=len(tape.count)
+    if not diag._valid_baton_start(getattr(c,'diagnostics',None),b):return tape
+    if getattr(side,'shape',None)!=(b,)or getattr(side,'dtype',None)!=j.dtype(j.int32):return tape
+    r=j.arange(b);seat=j.clip(side,0,1);physical=state.active[r,seat];safe=j.clip(physical,0,5);known=(side>=0)&(side<2)&(physical>=0)&(physical<6);base=state if private is None else private
+    def mon(source,name,tail=()):
+        value=getattr(source,name,None)
+        return None if getattr(value,'shape',None)!=(b,2,6)+tail else(value[r,seat,safe],known)
+    values=dict(actor_side=side,actor_physical=physical,move=move,caller_move=caller,eligible=eligible,acts=acts,begin_valid=valid,registered_bound=registered,data_bound=data_bound,transaction_present=j.full(b,transaction is not None,bool),history_side=None if transaction is None else transaction.history.side)
+    for name,field in [('hp','hp'),('maximum','max_hp'),('status','status'),('counter','status_counter'),('ability','ability'),('base_ability','base_ability'),('item','item'),('substitute_hp','substitute_hp')]:values[name]=mon(base,field)
+    for name in('confusion_counter','volatile','protect_counter','choice_move','encore_move','encore_counter','charge_move','charge_counter'):values['volatile_uint32'if name=='volatile'else name]=mon(state,name)
+    for field,prefix in [('types','type'),('base_types','base_type')]:
+        value=mon(base,field,(2,))
+        for i in range(2):values[prefix+str(i)]=None if value is None else(value[0][:,i],value[1])
+    values.update(spikes=(state.spikes[r,seat],(side>=0)&(side<2)),any_trap_source=j.any(state.trap_source>=0,axis=(1,2)),pending_residual=state.pending_residual,any_forced_switch=j.any(state.forced_switch,axis=1),any_baton_pass=j.any(state.baton_pass,axis=1))
+    for i in range(7):values['boost'+str(i)]=(state.boosts[r,seat,safe,i],known)
+    pub=None if transaction is None else transaction.public
+    for name,field in [('public_known','known'),('public_pending','pending'),('public_substitute','substitute')]:
+        value=getattr(pub,field,None);values[name]=None if getattr(value,'shape',None)!=(b,2)else(value[r,seat],(side>=0)&(side<2))
+    boost=getattr(pub,'boosts',None)
+    for i in range(7):values['public_boost'+str(i)]=None if getattr(boost,'shape',None)!=(b,2,7)else(boost[r,seat,i],(side>=0)&(side<2))
+    for field,ns in [('ability','abilities'),('item','items')]:
+        table=getattr(data,'quiet_'+ns,None);value=mon(base,field)
+        if value is not None and getattr(table,'ndim',None)==1 and len(table)>0:
+            ids=value[0];values[field+'_namespace_size']=j.full(b,len(table),j.int32);values['quiet_'+field+'_lookup']=(table[j.clip(ids,0,len(table)-1)],value[1])
+    before=tape if prior is None else prior;context=getattr(before,'execution',None)
+    values.update(stream_id=before.stream_id,frame=None if context is None else context.ledger.frame,raw_count=before.count,turn=before.cursor.turn,phase=before.cursor.phase,generation0=before.cursor.generation[:,0],generation1=before.cursor.generation[:,1],prior_tape_refusal=before.refusal,prior_execution_refusal=None if context is None else context.ledger.refusal,prior_kernel_risk=None if context is None or context.risks is None else context.risks.carry.risk)
+    requested=eligible&(move==data.move_id)&(data.move_id>0)
+    return diag.record_baton_start_on_tape(tape,values,active=requested)
+
 def begin_start(tape,state,side,move,caller,context,*,acts,eligible):
     from . import engine_execution_completeness as ex
     if context is None or context.data.baton_pass is None:return tape,None
-    if tape.execution is None or tape.execution.baton_transaction is None:return missing_transaction(tape,side,eligible&(move==context.data.baton_pass.move_id)&(context.data.baton_pass.move_id>0))
+    if tape.execution is None or tape.execution.baton_transaction is None:
+        tape=_start_diagnostics(tape,state,side,move,caller,context.data.baton_pass,acts=acts,eligible=eligible)
+        return missing_transaction(tape,side,eligible&(move==context.data.baton_pass.move_id)&(context.data.baton_pass.move_id>0))
     from . import engine_direct_hit_controls as direct
     d=context.data.baton_pass;registered=direct._registered_bound(tape,context);tr=tape.execution.baton_transaction;r=j.arange(len(side));seat=j.clip(side,0,1);physical=state.active[r,seat]
     requested=eligible&(move==d.move_id)&(d.move_id>0)
-    good=registered&_bound(tape,d)&(caller==move)&acts&~state.pending_residual&~j.any(state.forced_switch,axis=1)&(tr.history.side<0)&tr.public.known[r,seat]&~tr.public.pending[r,seat]
+    data_bound=_bound(tape,d)
+    good=registered&data_bound&(caller==move)&acts&~state.pending_residual&~j.any(state.forced_switch,axis=1)&(tr.history.side<0)&tr.public.known[r,seat]&~tr.public.pending[r,seat]
     good &= _quiet(state,side,physical,d,outgoing_toxic=True,outgoing_paralysis=True,outgoing_substitute=True)&j.all(tr.public.boosts[r,seat]==state.boosts[r,seat,physical],axis=1)&~j.any(state.baton_pass,axis=1)
     good &= tr.public.substitute[r,seat]==(state.substitute_hp[r,seat,physical]>0)
+    prior=tape
     tape,ticket=ex.open_attempt(tape,ex.Site.BATON_PASS,side,active=requested)
     h=History(tape.stream_id,ticket.frame,tape.cursor.turn,tape.cursor.generation,state.active,side,tape.cursor.public_slot[r,seat],j.zeros(len(side),bool),state.boosts,snapshot(state),tr.order,suspend(state))
+    tape=_start_diagnostics(tape,state,side,move,caller,d,acts=acts,eligible=eligible,transaction=tr,private=h.private,registered=registered,data_bound=data_bound,valid=good,prior=prior)
     return tape,Pending(ticket,requested,good,side,physical,j.full_like(side,-1),h,snapshot(state),state.boosts)
 def finish_start(tape,p,state,passed,secondary):
     if p is None:return tape
