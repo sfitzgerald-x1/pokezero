@@ -29,6 +29,11 @@ class SelfHealOwningTests(unittest.TestCase):
    info=dex.move_info(name);moves[name]=info
    if name not in cls.metadata['vocabulary']['moves']:cls.metadata['vocabulary']['moves'].append(name);cls.metadata['moves'].append(None)
    i=cls.metadata['vocabulary']['moves'].index(name);cls.metadata['moves'][i]=dict(id=name,base_power=info.base_power,type=cls.metadata['vocabulary']['types'].index(info.type.lower()),source_type=info.type,category=info.category,pp=info.pp,accuracy=True if name!='surf'else 100,priority=info.priority,flags={}if name!='surf'else{'protect':1})
+  # This shared catalog also contains Encore; keep that unused fixture row
+  # equal to the original installed move rather than the generic always-hit row.
+  if 'encore' in cls.metadata['vocabulary']['moves']:
+   encore=dex.move_info('encore');moves['encore']=encore
+   cls.metadata['moves'][cls.metadata['vocabulary']['moves'].index('encore')]=dict(id='encore',base_power=encore.base_power,type=cls.metadata['vocabulary']['types'].index(encore.type.lower()),source_type=encore.type,category=encore.category,pp=encore.pp,accuracy=100,priority=encore.priority,flags={'protect':1,'mirror':1,'bypasssub':1,'metronome':1,'failencore':1})
   cls.dex=ShowdownDex(moves,f.dex.species,f.dex.type_chart)
   variants={name:Gen3RandbatSpeciesUniverse(name,80,(Gen3RandbatVariant('heal-'+name,'authored',name,'authored',80,cls.names,'Pressure','Leftovers'),))for name in cls.metadata['vocabulary']['species'][1:]}
   source=Gen3RandbatSource(RandbatSourceMetadata('gen3randombattle',3,None,None,None,'literal-original-self-heal'),variants)
