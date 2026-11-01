@@ -141,14 +141,17 @@ def _observe(t,state,side,physical,rows_active,*,identity):
 
 
 def _install(t,state,side,active_rows):
-    b=len(active_rows);r=j.arange(b);physical=state.active[:,side];p=j.clip(physical,0,5)
-    old=t.physical_to_public[r,side,p];fresh=old<0;slot=j.where(fresh,t.next_slot[:,side],old)
+    # side is either a scalar seat or one actual seat per row (speed order).
+    # Pair EVERY seat gather/scatter with its row; [:, side] cross-products a
+    # vector side into [B,B] and mixes independent games.
+    b=len(active_rows);r=j.arange(b);physical=state.active[r,side];p=j.clip(physical,0,5)
+    old=t.physical_to_public[r,side,p];fresh=old<0;slot=j.where(fresh,t.next_slot[r,side],old)
     good=(physical>=0)&(physical<6)&(slot>=0)&(slot<6)
     use=active_rows&good;at=j.clip(slot,0,5)
     mapping=t.physical_to_public.at[r,side,p].set(j.where(use,at,old))
-    next_slot=t.next_slot.at[:,side].set(t.next_slot[:,side]+(use&fresh).astype(j.int32))
-    current=t.active_physical.at[:,side].set(j.where(use,physical,t.active_physical[:,side]))
-    current_slot=t.active_slot.at[:,side].set(j.where(use,at,t.active_slot[:,side]))
+    next_slot=t.next_slot.at[r,side].set(t.next_slot[r,side]+(use&fresh).astype(j.int32))
+    current=t.active_physical.at[r,side].set(j.where(use,physical,t.active_physical[r,side]))
+    current_slot=t.active_slot.at[r,side].set(j.where(use,at,t.active_slot[r,side]))
     t=t._replace(physical_to_public=mapping,next_slot=next_slot,active_physical=current,active_slot=current_slot,
         error=t.error|j.where(active_rows&~good,BAD_ACTIVE,0))
     return _observe(t,state,side,physical,use,identity=True)
