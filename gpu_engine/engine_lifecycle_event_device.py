@@ -45,6 +45,7 @@ from . import engine_substitute_damage_callbacks as substitute_damage
 from . import engine_protect_callbacks as protect_callbacks
 from . import engine_pinch_item_callbacks as pinch_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
+from . import engine_self_boost_callbacks as self_boost_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
@@ -607,6 +608,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         calm_mind = kind == calm_mind_callbacks.CALM_MIND
         pinch = kind == pinch_callbacks.PINCH_ITEM
         bulk_up = kind == bulk_up_callbacks.BULK_UP
+        self_boost = kind == self_boost_callbacks.SELF_BOOST_INPUT
         color_change=kind==color_callbacks.COLOR_CHANGE
         swords_dance = kind == swords_dance_callbacks.SWORDS_DANCE
         spikes = kind == spikes_callbacks.SPIKES
@@ -823,6 +825,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             &bulk_up_callbacks.owned_pair(tape,index))
         event_ok=jnp.where(bulk_up,generation_ok&clock_ok&bulk_ok,event_ok)
+        self_boost_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&self_boost_callbacks.owned(tape,index))
+        event_ok=jnp.where(self_boost,generation_ok&clock_ok&self_boost_ok,event_ok)
         swords_dance_ok=(tables.status_events & ~tables.raw_begin & actor_ok & cursor.initialized
             &(phase==0)&(actor_side>=0)&(actor_side<2)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
@@ -1026,6 +1031,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         bulk_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),bulk_payload),axis=1)
         semantic=jnp.where(bulk_up[:,None],bulk_semantic,semantic)
+        self_boost_payload=jnp.stack((actor_enc,raw[:,4],raw[:,6]-raw[:,5],jnp.full_like(z,public_mon_state.DELTA),z,z,z,z),axis=1)
+        self_boost_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),self_boost_payload),axis=1)
+        semantic=jnp.where(self_boost[:,None],self_boost_semantic,semantic)
         pinch_payload=jnp.stack((actor_enc,raw[:,6],jnp.ones_like(z),jnp.full_like(z,public_mon_state.DELTA),z,z,z,z),axis=1)
         pinch_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),pinch_payload),axis=1)
         semantic=jnp.where(pinch[:,None],pinch_semantic,semantic)

@@ -71,6 +71,7 @@ class Data(NamedTuple):
     leech_seed: object = None # original seed assignment + paired residual source slot
     self_move: object = None # partial original self-move failures/Wish start
     return_ko_move: object = None # canonical source-bound Return; actual happiness required
+    self_boost: object = None # source-bound ordinary positive self-boosts
 
 
 class Context(NamedTuple):
@@ -176,6 +177,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
     if table.damage_moves is not None:ko &= np.asarray(table.damage_moves.recoil_den)==0
     if table.self_destruct is not None:ko &= ~np.asarray(table.self_destruct.move)
     from . import engine_no_damage_callbacks as no_damage
+    self_boost_data=None
     secondary_data=None;substitute_damage_data=None;protect_data=None;bulk_up_data=None;plain_data=None;rough_skin_data=None;color_data=None;pinch_data=None;heal_data=None;belly_data=None;sleep_block_data=None;encore_data=None;leech_data=None;self_move_data=None
     if metadata is not None or source_rules is not None:
         if metadata is None or source_rules is None:raise ValueError('original secondary metadata AND rules required')
@@ -187,6 +189,8 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         protect_data=protect_callbacks.compile_data(engine_catalog,metadata,source_rules)
         from . import engine_bulk_up_callbacks as bulk_up
         bulk_up_data=bulk_up.compile_data(engine_catalog,metadata,source_rules)
+        from . import engine_self_boost_callbacks as self_boost
+        self_boost_data=self_boost.compile_data(engine_catalog,metadata,source_rules)
         from . import engine_primary_plain_status_callbacks as plain_primary
         plain_data=plain_primary.compile_data(engine_catalog,metadata,source_rules)
         from . import engine_rough_skin_callbacks as rough_skin
@@ -209,13 +213,13 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         from . import engine_self_move_callbacks as self_move_callbacks
         self_move_data=self_move_callbacks.compile_data(engine_catalog,metadata,source_rules)
     no_damage_data=no_damage.compile_data(engine_catalog,metadata,source_rules)
-    payload = dict(schema=SCHEMA, return_ko_move=return_ko,return_source=return_source, self_move_binding=None if self_move_data is None else np.asarray(self_move_data.binding).tolist(), leech_binding=None if leech_data is None else np.asarray(leech_data.binding).tolist(), encore_binding=None if encore_data is None else np.asarray(encore_data.binding).tolist(), sleep_blocked_binding=None if sleep_block_data is None else np.asarray(sleep_block_data.binding).tolist(), belly_drum_binding=None if belly_data is None else np.asarray(belly_data.binding).tolist(), self_heal_binding=None if heal_data is None else np.asarray(heal_data.binding).tolist(), pinch_binding=None if pinch_data is None else np.asarray(pinch_data.binding).tolist(), color_change_binding=None if color_data is None else np.asarray(color_data.binding).tolist(), rough_skin_binding=None if rough_skin_data is None else np.asarray(rough_skin_data.binding).tolist(), primary_plain_binding=None if plain_data is None else np.asarray(plain_data.binding).tolist(), bulk_up_binding=None if bulk_up_data is None else np.asarray(bulk_up_data.binding).tolist(), protect_binding=None if protect_data is None else np.asarray(protect_data.binding).tolist(), substitute_damage_binding=None if substitute_damage_data is None else np.asarray(substitute_damage_data.binding).tolist(), secondary_binding=None if secondary_data is None else np.asarray(secondary_data.binding).tolist(), no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
+    payload = dict(schema=SCHEMA, self_boost_binding=None if self_boost_data is None else np.asarray(self_boost_data.binding).tolist(), return_ko_move=return_ko,return_source=return_source, self_move_binding=None if self_move_data is None else np.asarray(self_move_data.binding).tolist(), leech_binding=None if leech_data is None else np.asarray(leech_data.binding).tolist(), encore_binding=None if encore_data is None else np.asarray(encore_data.binding).tolist(), sleep_blocked_binding=None if sleep_block_data is None else np.asarray(sleep_block_data.binding).tolist(), belly_drum_binding=None if belly_data is None else np.asarray(belly_data.binding).tolist(), self_heal_binding=None if heal_data is None else np.asarray(heal_data.binding).tolist(), pinch_binding=None if pinch_data is None else np.asarray(pinch_data.binding).tolist(), color_change_binding=None if color_data is None else np.asarray(color_data.binding).tolist(), rough_skin_binding=None if rough_skin_data is None else np.asarray(rough_skin_data.binding).tolist(), primary_plain_binding=None if plain_data is None else np.asarray(plain_data.binding).tolist(), bulk_up_binding=None if bulk_up_data is None else np.asarray(bulk_up_data.binding).tolist(), protect_binding=None if protect_data is None else np.asarray(protect_data.binding).tolist(), substitute_damage_binding=None if substitute_damage_data is None else np.asarray(substitute_damage_data.binding).tolist(), secondary_binding=None if secondary_data is None else np.asarray(secondary_data.binding).tolist(), no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
         engine=engine_catalog.engine_binding, source=engine_catalog.source_binding,
         moves=engine_catalog.move_binding, move_count=count, seismic_toss_move=seismic,ko_candidates=ko.tolist(),
         kinds=[CRITICAL, SUPER_EFFECTIVE, RESISTED],
         positive_effectiveness_ratios=POSITIVE_EFFECTIVENESS_RATIOS,
         source_files={name:hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py','engine_recoil_callbacks.py','secondary.py','engine_secondary_status_callbacks.py','engine_flash_fire_end_callbacks.py','engine_substitute_damage_callbacks.py','engine_protect_callbacks.py','engine_bulk_up_callbacks.py','engine_primary_plain_status_callbacks.py','engine_rough_skin_callbacks.py','engine_color_change_callbacks.py','engine_pinch_item_callbacks.py','engine_self_heal_callbacks.py','engine_belly_drum_callbacks.py','engine_sleep_blocked_callbacks.py','engine_encore_callbacks.py','engine_leech_seed_callbacks.py','engine_self_move_callbacks.py','sustain.py','encore.py','engine_request_source.py','engine_private_actions.py','items.py','state.py','entry.py')},
+            for name in ('transition.py', 'critical.py', 'mechanics.py', 'damage_moves.py', 'engine_direct_hit_controls.py','engine_direct_ko_callbacks.py','engine_recoil_callbacks.py','secondary.py','engine_secondary_status_callbacks.py','engine_flash_fire_end_callbacks.py','engine_substitute_damage_callbacks.py','engine_protect_callbacks.py','engine_bulk_up_callbacks.py','engine_self_boost_callbacks.py','engine_primary_plain_status_callbacks.py','engine_rough_skin_callbacks.py','engine_color_change_callbacks.py','engine_pinch_item_callbacks.py','engine_self_heal_callbacks.py','engine_belly_drum_callbacks.py','engine_sleep_blocked_callbacks.py','engine_encore_callbacks.py','engine_leech_seed_callbacks.py','engine_self_move_callbacks.py','sustain.py','encore.py','engine_request_source.py','engine_private_actions.py','items.py','state.py','entry.py')},
         scope='literal-positive-nonlethal-and-source-pending-nonterminal-ko-only-no-completeness')
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     words = lambda x:jnp.asarray(x, jnp.uint32)
@@ -223,7 +227,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         words(engine_catalog.engine_binding), words(engine_catalog.source_binding),
         words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding), dtype='>u4').astype(np.uint32)),
-        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data,secondary_data,substitute_damage_data,protect_data,plain_data,bulk_up_data,rough_skin_data,color_data,pinch_data,heal_data,belly_data,sleep_block_data,encore_data,leech_data,self_move_data,jnp.array(return_ko,jnp.int32))
+        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data,secondary_data,substitute_damage_data,protect_data,plain_data,bulk_up_data,rough_skin_data,color_data,pinch_data,heal_data,belly_data,sleep_block_data,encore_data,leech_data,self_move_data,jnp.array(return_ko,jnp.int32),self_boost_data)
     result = Compiled(data)
     _COMPILED[result] = (data, tuple(data), engine_catalog,source_rules)
     return result
@@ -289,6 +293,9 @@ def _check(tape, data):
     if data.pinch_item is not None:
         from . import engine_pinch_item_callbacks as pinch
         pinch.shape(data.pinch_item)
+    if data.self_boost is not None:
+        from . import engine_self_boost_callbacks as self_boost
+        self_boost.shape(data.self_boost)
     if data.bulk_up is not None:
         from . import engine_bulk_up_callbacks as bulk_up
         bulk_up.shape(data.bulk_up)

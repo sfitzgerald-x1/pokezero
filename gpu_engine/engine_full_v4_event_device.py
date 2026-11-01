@@ -40,6 +40,7 @@ from . import engine_flash_fire_end_callbacks as flash_end
 from . import engine_protect_callbacks as protect_callbacks
 from . import engine_pinch_item_callbacks as pinch_callbacks
 from . import engine_bulk_up_callbacks as bulk_up_callbacks
+from . import engine_self_boost_callbacks as self_boost_callbacks
 from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
@@ -122,6 +123,7 @@ class Tables(NamedTuple):
     self_move: object
     self_move_still: object
     status_damage_lethal: object
+    self_boost: object
     namespaces: Bindings
     binding: object
 
@@ -292,6 +294,9 @@ def compile_adapter(metadata, projector, *, catalog):
     # A narrow legacy public catalog can omit Color Change. Its zero schema
     # stays unsupported; it must not prevent unrelated default preparation.
     bulk_up=np.array([add(f'|-boost|{ident[0]}|{stat}|1',inputs.Kind.BOOST)for stat in ('atk','def')],np.int32)
+    self_boost=np.zeros((7,3),np.int32)
+    for stat,delta in ((0,1),(4,1),(2,2),(4,2)):
+        self_boost[stat,delta]=add(f'|-boost|{ident[0]}|{("atk","def","spa","spd","spe","accuracy","evasion")[stat]}|{delta}',inputs.Kind.BOOST)
     belly_drum_setboost=add(f'|-setboost|{ident[0]}|atk|6|[from] move: Belly Drum',inputs.Kind.BOOST)
     sleep_blocked=add(f'|cant|{ident[0]}|slp',inputs.Kind.SLEEP)
     encore=np.array([add(f'|-start|{ident[0]}|Encore',inputs.Kind.ACTIVE),add(f'|-end|{ident[0]}|Encore',inputs.Kind.ACTIVE)],np.int32)
@@ -473,13 +478,13 @@ def compile_adapter(metadata, projector, *, catalog):
     payload += np.array(swords_dance,np.int32).tobytes()+bulk_up.tobytes()+color_change.tobytes()
     payload += ident_species.tobytes()
     payload += np.array(intimidate,np.int32).tobytes()+np.array(spikes,np.int32).tobytes()+np.array(flash_fire_end,np.int32).tobytes()+np.array([protect_success,protect_block],np.int32).tobytes()+protect_still_moves.tobytes()+entry_spikes_damage.tobytes()
-    payload += status_damage_lethal.tobytes()
+    payload += status_damage_lethal.tobytes()+self_boost.tobytes()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
         jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys),
         jnp.array(weather_start),jnp.array(weather_upkeep),jnp.array(weather_end,jnp.int32),
-        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),jnp.array(status_damage_lethal),ns, binding)
+        jnp.array(weather_failure,jnp.int32),jnp.array(weather_failure_moves),jnp.array(weather_chip),jnp.array(leftovers_heal),jnp.array(status_damage),jnp.array(direct_hit_control),jnp.array(pressure_start,jnp.int32),jnp.array(trace_copy,jnp.int32),jnp.array(substitute_created),jnp.array(toxic_no_effect),jnp.array(recoil_damage),jnp.array(calm_mind),jnp.array(swords_dance,jnp.int32),jnp.array(ident_species),jnp.array(intimidate,jnp.int32),jnp.array(spikes,jnp.int32),jnp.array(no_damage_miss),jnp.array(no_damage_keys),jnp.array(primary_sleep_status),jnp.array(sleep_powder_status,jnp.int32),jnp.array(flash_fire_end,jnp.int32),jnp.array(sub_damage_keys),jnp.array(bulk_up),jnp.array(color_change),jnp.array(protect_success,jnp.int32),jnp.array(protect_block,jnp.int32),jnp.array(protect_still_moves),jnp.array(pinch_items),jnp.array(rough_skin_damage),jnp.array(self_heal),jnp.array(wonder_guard_immune,jnp.int32),jnp.array(belly_drum_setboost,jnp.int32),jnp.array(sleep_blocked,jnp.int32),jnp.array(encore),jnp.array(leech),jnp.array(entry_spikes_damage),jnp.array(self_move),jnp.array(self_move_still),jnp.array(status_damage_lethal),jnp.array(self_boost),ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -593,6 +598,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.flash_fire_end,(),jnp.int32)
     causal.base._shape(tables.color_change,(18,),jnp.int32)
     causal.base._shape(tables.bulk_up,(2,),jnp.int32)
+    causal.base._shape(tables.self_boost,(7,3),jnp.int32)
     causal.base._shape(tables.protect_success,(),jnp.int32)
     causal.base._shape(tables.protect_block,(),jnp.int32)
     causal.base._shape(tables.protect_still_moves,tables.moves.shape,jnp.bool_)
@@ -713,6 +719,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         intimidate=(kind==int(inputs.Kind.BOOST))&(raw_kind==intimidate_callbacks.INTIMIDATE)
         pinch=raw_kind==pinch_callbacks.PINCH_ITEM
         bulk_up=(kind==int(inputs.Kind.BOOST))&(raw_kind==bulk_up_callbacks.BULK_UP)
+        self_boost=(kind==int(inputs.Kind.BOOST))&(raw_kind==self_boost_callbacks.SELF_BOOST_INPUT)
         belly=raw_kind==belly_callbacks.BELLY_DRUM
         sleep_blocked=raw_kind==sleep_blocked_callbacks.SLEEP_BLOCKED
         belly_boost=belly&(tape.words[:,index,4]==1)
@@ -774,6 +781,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(color_change,tables.color_change[jnp.clip(tape.words[:,index,8],0,17)],key)
         key=jnp.where(pinch,tables.pinch_items[jnp.clip(tape.words[:,index,5],0,len(tables.pinch_items)-1)],key)
         key=jnp.where(bulk_up,tables.bulk_up[jnp.clip(tape.words[:,index,4],0,1)],key)
+        sb_raw=tape.words[:,index]
+        key=jnp.where(self_boost,tables.self_boost[jnp.clip(sb_raw[:,4],0,6),jnp.clip(sb_raw[:,6]-sb_raw[:,5],0,2)],key)
         key=jnp.where(belly_boost,tables.belly_drum_setboost,key)
         key=jnp.where(sleep_blocked,tables.sleep_blocked,key)
         key=jnp.where(leech,tables.leech[jnp.clip(leech_op,0,2),jnp.where(leech_op==leech_callbacks.START,0,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,9],0,6)])],key)
@@ -925,6 +934,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~bulk_up | (bulk_up_callbacks.owned_pair(tape,index)&live[rows,safe]
             &(called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==tables.causal.base.public_ids[bulk_move])
             &(called[:,3]==semantic[:,2])&(called[:,4]+1+tape.words[:,index,4]==index))
+        sb_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
+        identity &= ~self_boost | (self_boost_callbacks.owned(tape,index)&live[rows,safe]
+            &(called[:,0]==subject)&(called[:,1]==new_slot)&(called[:,2]==tables.causal.base.public_ids[sb_move])
+            &(called[:,3]==semantic[:,2])&(called[:,4]+1+tape.words[:,index,8]==index))
         leech_raw=tape.words[:,index]
         leech_old=leech_raw[:,6];leech_max=leech_raw[:,8];leech_percent=(100*leech_old+jnp.maximum(1,leech_max)-1)//jnp.maximum(1,leech_max)
         leech_percent=jnp.where((leech_old<leech_max)&(leech_percent==100),99,leech_percent)
