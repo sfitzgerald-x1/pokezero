@@ -774,7 +774,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&(incoming==cursor.physical_active[rows,safe_side])
             &jnp.all(cursor.generation==0,axis=1)&(tables.intimidate_engine_ability>0)&(tables.intimidate_public_ability>0)
             &(raw[:,5]==tables.intimidate_engine_ability)&(raw[:,6]==0)&(raw[:,7]==-1)&jnp.all(raw[:,8:]==0,axis=1))
-        event_ok=jnp.where(intimidate,generation_ok & clock_ok & intimidate_ok,event_ok)
+        ordinary_intimidate=(tables.status_events&~tables.raw_begin&actor_ok&status_identity
+            &(tables.intimidate_engine_ability>0)&(tables.intimidate_public_ability>0)
+            &(raw[:,5]==tables.intimidate_engine_ability)
+            &intimidate_callbacks.ordinary_owned(tape,index,cursor))
+        event_ok=jnp.where(intimidate,generation_ok & clock_ok & (intimidate_ok|ordinary_intimidate),event_ok)
         calm_mind_ok=(tables.status_events & ~tables.raw_begin & actor_ok & cursor.initialized
             &(phase==0)&(actor_side>=0)&(actor_side<2)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
