@@ -30,6 +30,7 @@ class Carry(NamedTuple):
     requested_views: object
     physical_views: object
     ticks: object
+    observation_checksum: object
 
 
 def select_rows(mask, new, old):
@@ -60,7 +61,7 @@ def sample_keys(root_ids, requests, *, sampling_seed):
 
 
 def retire(carry, after, updated_trackers, initial, *, failure, requested, errors,
-           max_requests, tracker_initialize):
+           max_requests, tracker_initialize, observation_checksum=0):
     """Retain every declared cell once, including failures/caps; no redraw."""
     assigned = carry.ids >= 0
     count = carry.requests + assigned.astype(j.int32)
@@ -90,7 +91,8 @@ def retire(carry, after, updated_trackers, initial, *, failure, requested, error
         carry.cursor + j.sum(fill, dtype=j.int32), completion, caps, failures,
         turns, decisions, carry.error_counts + errors,
         carry.requested_views + j.sum(requested, dtype=j.int32),
-        carry.physical_views + 2 * len(ids), carry.ticks + 1)
+        carry.physical_views + 2 * len(ids), carry.ticks + 1,
+        carry.observation_checksum + j.asarray(observation_checksum, j.uint32))
 
 
 def make_driver(config, engine_tables, observation_tables, *,
@@ -128,9 +130,17 @@ def make_driver(config, engine_tables, observation_tables, *,
         failure = out.invalid_actions | j.any(requested & ~finite, axis=1)
         trackers = public.update(c.trackers, state, out.state, actions,
                                  active_rows=(c.ids >= 0) & ~state.done & ~out.invalid_actions)
+        # Retain ALL29 outputs, including public belief tails not consumed by
+        # the champion23 adapter. Otherwise XLA could prune encoder work. This
+        # diagnostic checksum wraps uint32 intentionally; it is not parity.
+        checksum = j.asarray(0, j.uint32)
+        for o in observations:
+            checksum += j.sum(jax.lax.bitcast_convert_type(o.numeric_features, j.uint32), dtype=j.uint32)
+            for value in (o.categorical_ids, o.token_type_ids, o.attention_mask):
+                checksum += j.sum(value.astype(j.uint32), dtype=j.uint32)
         return retire(c, out.state, trackers, initial, failure=failure,
             requested=requested, errors=errors, max_requests=max_requests,
-            tracker_initialize=public.initialize)
+            tracker_initialize=public.initialize, observation_checksum=checksum)
     def chunk(c, initial, root_ids, params):
         def body(c, _):
             # No policy/engine work after the fixed finite cohort is exhausted.
@@ -150,7 +160,8 @@ def initialize(initial, batch):
     return Carry(state, public.initialize(state), j.arange(batch, dtype=j.int32),
         j.zeros(batch, j.int32), j.asarray(batch, j.int32),
         j.zeros(n, bool), j.zeros(n, bool), j.zeros(n, bool), zero, zero,
-        j.zeros(7, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32))
+        j.zeros(7, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32),
+        j.asarray(0, j.uint32))
 
 
 def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
@@ -174,6 +185,7 @@ def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
         completed_turns=turns[complete].tolist(), all_final_turns=turns.tolist(),
         decisions_by_game=decisions.tolist(), completed=complete.tolist(),
         capped=capped.tolist(), failed=failed.tolist(), ticks=int(np.asarray(carry.ticks)),
+        all29_observation_checksum_uint32=int(np.asarray(carry.observation_checksum)),
         scope='First-cut real direct encoder; zero manifest retained. No parity/coverage/strength/canary/B4 qualification.')
 
 

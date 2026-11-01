@@ -28,7 +28,7 @@ class DeviceSelfplayBenchmarkTests(unittest.TestCase):
             j.asarray([0, 1], j.int32), j.asarray(2, j.int32),
             j.zeros(5, bool), j.zeros(5, bool), j.zeros(5, bool),
             j.zeros(5, j.int32), j.zeros(5, j.int32), j.zeros(7, j.int32),
-            j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32))
+            j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.uint32))
         advance = jax.jit(lambda c, after, fail: b.retire(c, after, c.trackers+1,
             initial, failure=fail, requested=j.asarray([[True, True], [True, False]]),
             errors=j.asarray([0, 0, 1, 0, 0, 0, 0]), max_requests=2,
