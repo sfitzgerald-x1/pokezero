@@ -110,7 +110,7 @@ class Observer:
    return # same JAX context also emits the authoritative time-span record
   if not event.startswith('/jax/compilation_cache/'):return
   try:
-   valid=type(duration)in(int,float)and math.isfinite(duration)
+   valid=type(duration)in(int,float)and math.isfinite(duration)and duration>=0
    where=self._where()
    if not valid:where.update(matched=False,phase=None,reason='INVALID_LITERAL_DURATION')
    self._append(dict(kind='cache_duration',event=event,reported_duration_secs=duration if valid else None,**where))

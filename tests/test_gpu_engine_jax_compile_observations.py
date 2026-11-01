@@ -28,6 +28,17 @@ class FakeMonitor:
 class CompileObservationTests(unittest.TestCase):
  def setUp(self):self.m=FakeMonitor();self.p=patch.object(c,'_runtime',return_value=(self.m,dict(jax_version='literal-test',supported=True)));self.p.start()
  def tearDown(self):self.p.stop();self.assertIsNone(c._CURRENT.get());self.assertIsNone(c._PHASE.get())
+ def test_cache_duration_nonnegative_finite_literals_only(self):
+  o=c.Observer().start()
+  try:
+   with c.phase('driver.engine'):
+    for value in(-.25,float('nan'),float('inf'),-float('inf'),0.,.25):
+     self.m.duration('/jax/compilation_cache/cache_retrieval_time_sec',value)
+   for record in o.records[:4]:
+    self.assertFalse(record['matched']);self.assertIsNone(record['phase']);self.assertIsNone(record['reported_duration_secs']);self.assertEqual(record['reason'],'INVALID_LITERAL_DURATION')
+   for record,value in zip(o.records[4:],(0.,.25)):
+    self.assertTrue(record['matched']);self.assertEqual(record['reported_duration_secs'],value)
+  finally:o.close()
  def test_exact_spans_cache_notifications_unknown_thread_and_fixed_window(self):
   o=c.Observer().start();c.sample_step(8)
   with patch.object(c.time,'time',return_value=10.):
