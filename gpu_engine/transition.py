@@ -1035,7 +1035,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             rest = (acts & effects.rest[move] & (hp < max_hp)
                     & (_active(work.status,work,side) != m.SLP))
             if _lifecycle_trace:
-                _public_trace=status_callbacks.unknown(_public_trace,rest)
+                _rest_write_ready=self_move_callbacks.rest_write_supported(_public_trace,_rest_pending,rest)
+                _public_trace=status_callbacks.unknown(_public_trace,rest&~_rest_write_ready)
             hp = jnp.where(rest,max_hp,hp)
             work = work._replace(hp=_set_active(work.hp,work,side,hp),
                 status=_set_active(work.status,work,side,

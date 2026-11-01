@@ -1027,7 +1027,7 @@ def observe_self_heal_device(carry,tape,attempted,tables,*,active,captured=None,
     from . import engine_self_heal_callbacks as self_heal
     from . import engine_self_move_callbacks as self_move_callbacks
     self_move_supported=self_move_callbacks.captured_matches(tape,captured_self_move)
-    if captured_self_move is not None:self_move_supported &= captured_self_move.pending.code==self_move_callbacks.REST_FAIL
+    if captured_self_move is not None:self_move_supported &= (captured_self_move.pending.code==self_move_callbacks.REST_FAIL)|(captured_self_move.pending.code==self_move_callbacks.REST_STATUS)
     supported=self_heal.captured_matches(tape,captured)|self_move_supported
     return _observe(carry,tape,tables,Branch.SELF_HEAL,jnp.where(_vector(attempted,len(carry.stream_id),jnp.bool_)&~supported,SELF_EFFECT,0),active=active)
 

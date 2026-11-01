@@ -282,7 +282,7 @@ def compile_adapter(metadata, projector, *, catalog):
             plain=int(moves[pid]);still=add(f'|move|{ident[0]}|{catalog.moves.names[pid]}||[still]',inputs.Kind.MOVE)
             patched=templates[plain].copy();patched[mains[plain],6:8]=-1;patched[-1,11]=1
             self_move_still[pid]=bool(plain and still and patched[-1,0]==int(inputs.Kind.TENDENCY) and patched[-1,8]==public_tendency.MOVE and mains[plain]==mains[still] and np.array_equal(patched,templates[still]))
-    self_move=np.asarray([add(f'|-fail|{ident[0]}|heal',inputs.Kind.ACTIVE),add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)],np.int32)
+    self_move=np.asarray([add(f'|-fail|{ident[0]}|heal',inputs.Kind.ACTIVE),add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE),add(f'|-status|{ident[0]}|slp|[from] move: Rest',inputs.Kind.STATUS),add(f'|-heal|{ident[0]}|100/100 slp|[silent]',inputs.Kind.CONDITION)],np.int32)
     if np.any(self_move<=0):raise ValueError('FULL writer lacks original self-move failure schemas')
     color_change=np.asarray([0 if i==0 else add(f'|-start|{ident[0]}|typechange|{name.title()}|[from] ability: Color Change',inputs.Kind.TYPES) for i,name in enumerate(metadata['vocabulary']['types'])],np.int32)
     # A narrow legacy public catalog can omit Color Change. Its zero schema
@@ -570,7 +570,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.wonder_guard_immune,(),jnp.int32)
     causal.base._shape(tables.belly_drum_setboost,(),jnp.int32)
     causal.base._shape(tables.sleep_blocked,(),jnp.int32)
-    causal.base._shape(tables.self_move,(2,),jnp.int32)
+    causal.base._shape(tables.self_move,(4,),jnp.int32)
     causal.base._shape(tables.self_move_still,tables.moves.shape,jnp.bool_)
     causal.base._shape(tables.encore,(2,),jnp.int32)
     causal.base._shape(tables.leech,(3,7),jnp.int32)
@@ -639,9 +639,11 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         leech_op=tape.words[:,index,5]
         leech_silent=leech&(leech_op==leech_callbacks.HEAL)&(tape.words[:,index,6]==tape.words[:,index,8])&(tape.words[:,index,7]==tape.words[:,index,8])
         self_move=raw_kind==self_move_callbacks.SELF_MOVE_INPUT
-        sm_raw=tape.words[:,index];sm_code=sm_raw[:,3]&3
+        sm_raw=tape.words[:,index];sm_code=sm_raw[:,3]&~self_move_callbacks.SECONDARY
         sm_pid=tables.causal.base.public_ids[jnp.clip(sm_raw[:,4],0,len(tables.causal.base.public_ids)-1)]
-        sm_silent=self_move&(sm_code>=self_move_callbacks.WISH_START)
+        sm_silent=self_move&((sm_code==self_move_callbacks.WISH_START)|(sm_code==self_move_callbacks.WISH_TICK))
+        sm_rest_status=self_move&(sm_code==self_move_callbacks.REST_STATUS)
+        sm_rest_heal=self_move&(sm_code==self_move_callbacks.REST_HEAL)
         sm_sleep=self_move&(sm_code==self_move_callbacks.SLEEP_FAIL)
         encore=raw_kind==encore_callbacks.ENCORE
         encore_tick=encore&(tape.words[:,index,3]==encore_callbacks.TICK)
@@ -732,7 +734,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(belly_boost,tables.belly_drum_setboost,key)
         key=jnp.where(sleep_blocked,tables.sleep_blocked,key)
         key=jnp.where(leech,tables.leech[jnp.clip(leech_op,0,2),jnp.where(leech_op==leech_callbacks.START,0,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,9],0,6)])],key)
-        key=jnp.where(self_move,tables.self_move[jnp.clip(sm_code,0,1)],key)
+        key=jnp.where(self_move,tables.self_move[jnp.where(sm_rest_status,2,jnp.where(sm_rest_heal,3,jnp.clip(sm_code,0,1)))],key)
         key=jnp.where(encore,tables.encore[jnp.clip(tape.words[:,index,3],0,1)],key)
         key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
         key=jnp.where(swords_dance,tables.swords_dance,key)
@@ -882,10 +884,15 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         identity &= ~leech | (leech_callbacks.owned(tape,index)&live[rows,safe]&jnp.where(leech_op==leech_callbacks.START,True,
             (previous_status==leech_status)&(observed_hp[rows,safe,safe_slot]==jnp.where(leech_own,leech_old,leech_percent))
             &(observed_maximum[rows,safe,safe_slot]==jnp.where(leech_own,leech_max,100))))
-        sm_called=(called[:,0]==sm_raw[:,1])&(called[:,1]==new_slot)&(called[:,2]==sm_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
+        sm_called=(called[:,0]==sm_raw[:,1])&(called[:,1]==new_slot)&(called[:,2]==sm_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1+sm_rest_heal.astype(jnp.int32)==index)
         sm_percent=(100*sm_raw[:,5]+jnp.maximum(1,sm_raw[:,6])-1)//jnp.maximum(1,sm_raw[:,6]);sm_percent=jnp.where((sm_raw[:,5]<sm_raw[:,6])&(sm_percent==100),99,sm_percent)
         sm_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(sm_raw[:,7],0,6)]
-        identity &= ~self_move|(self_move_callbacks.owned(tape,index)&live[rows,safe]&((sm_code==self_move_callbacks.WISH_TICK)|sm_called)&(statuses[rows,safe,safe_slot]==sm_status)&(observed_hp[rows,safe,safe_slot]==jnp.where(state.causal.owner==subject,sm_raw[:,5],sm_percent))&(observed_maximum[rows,safe,safe_slot]==jnp.where(state.causal.owner==subject,sm_raw[:,6],100))&(~sm_sleep|tables.self_move_still[jnp.clip(sm_pid,0,len(tables.self_move_still)-1)]))
+        sm_prior_status=jnp.where(sm_rest_status,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(sm_raw[:,5],0,6)],jnp.where(sm_rest_heal,1,sm_status))
+        sm_maximum=jnp.where(sm_rest_heal,sm_raw[:,7],sm_raw[:,6]);sm_hp=sm_raw[:,5]
+        sm_old_percent=(100*sm_hp+jnp.maximum(1,sm_maximum)-1)//jnp.maximum(1,sm_maximum)
+        sm_old_percent=jnp.where((sm_hp<sm_maximum)&(sm_old_percent==100),99,sm_old_percent)
+        sm_health=(observed_hp[rows,safe,safe_slot]==jnp.where(state.causal.owner==subject,sm_hp,sm_old_percent))&(observed_maximum[rows,safe,safe_slot]==jnp.where(state.causal.owner==subject,sm_maximum,100))
+        identity &= ~self_move|(self_move_callbacks.owned(tape,index)&live[rows,safe]&((sm_code==self_move_callbacks.WISH_TICK)|sm_called)&(statuses[rows,safe,safe_slot]==sm_prior_status)&(sm_rest_status|sm_health)&(~sm_sleep|tables.self_move_still[jnp.clip(sm_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~encore | (encore_callbacks.owned(tape,index)&live[rows,safe])
         identity &= ~sleep_blocked | (sleep_blocked_callbacks.owned(tape,index)&live[rows,safe]
             &(previous_status==1))
