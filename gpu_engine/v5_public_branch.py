@@ -267,7 +267,8 @@ def step(branch, choices, *, chance_inputs,hypothetical_profiles=False):
             direct_hit_context=runtime['direct_hit_context'],substitute_context=runtime['substitute_context'],
             toxic_context=runtime['toxic_context'],recoil_context=runtime['recoil_context'],
             calm_mind_context=runtime['calm_mind_context'],swords_dance_context=runtime['swords_dance_context'],
-            spikes_context=runtime['spikes_context'],thunder_wave_context=runtime['thunder_wave_context'],sleep_powder_context=runtime['sleep_powder_context'],hypothetical_profile=profile)
+            spikes_context=runtime['spikes_context'],thunder_wave_context=runtime['thunder_wave_context'],sleep_powder_context=runtime['sleep_powder_context'],hypothetical_profile=profile,
+            leech_history=driver._leech_history(runtime,current,tuple(publics),current.admitted))
         if profile is not None:profile=profile._replace(record=frame.weather_profile)
         consumed=[];ledgers=[]
         for stream,public in zip(streams,publics):

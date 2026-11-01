@@ -114,6 +114,8 @@ class Tables(NamedTuple):
     sleep_blocked_moves: object
     encore_binding: object
     encore_move: object
+    leech_binding: object
+    leech_move: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -187,6 +189,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     belly_binding=np.zeros(8,np.uint32);belly_candidates=np.zeros(m,bool)
     sleep_block_binding=np.zeros(8,np.uint32);sleep_block_moves=np.zeros(m,bool)
     encore_binding=np.zeros(8,np.uint32);encore_move=0
+    leech_binding=np.zeros(8,np.uint32);leech_move=0
     protect_binding=np.zeros(8,np.uint32);protect_candidates=np.zeros(m,bool);protect_blocks=np.zeros(m,bool)
     direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool);seismic=0;ko_candidates=np.zeros(m,bool)
     color_binding=np.zeros(8,np.uint32);color_abilities=np.zeros(len(table.secondary.color_change) if table.secondary is not None else 1,bool);color_candidates=np.zeros(m,bool);color_types=np.zeros(m,np.int32);color_dynamic=np.zeros(m,bool)
@@ -210,6 +213,9 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         if direct_data.pinch_item is not None:
             from . import engine_pinch_item_callbacks as pinch
             pinch.shape(direct_data.pinch_item);pinch_binding=np.asarray(direct_data.pinch_item.binding,np.uint32);pinch_stats=np.asarray(direct_data.pinch_item.stats).copy()
+        if direct_data.leech_seed is not None:
+            from . import engine_leech_seed_callbacks as leech_callbacks
+            ld=direct_data.leech_seed;leech_callbacks.shape(ld);leech_binding=np.asarray(ld.binding);leech_move=int(ld.move_id)
         if direct_data.encore is not None:
             from . import engine_encore_callbacks as encore_callbacks
             ed=direct_data.encore;encore_callbacks.shape(ed);encore_binding=np.asarray(ed.binding);encore_move=int(ed.move_id)
@@ -313,7 +319,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         powder_miss=np.asarray(data.miss_mask)
         if powder_miss.shape!=(m,) or powder_miss.dtype!=np.dtype(bool) or np.any(powder_miss&~mask) or (not bool(data.primary_sleep) and powder_miss.any()):raise ValueError("original explicit primary sleep miss mask required")
         powder_binding=np.asarray(data.binding,np.uint32);powder_candidate=mask.copy()
-    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates&~bulk_candidates&~plain_candidates&~heal_candidates&~belly_candidates&~((encore_move>0)&(np.arange(m)==encore_move))]|=NON_WEATHER
+    risk[(weather==0)&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates&~bulk_candidates&~plain_candidates&~heal_candidates&~belly_candidates&~((encore_move>0)&(np.arange(m)==encore_move))&~((leech_move>0)&(np.arange(m)==leech_move))]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -330,7 +336,8 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     if table.effects is not None:risk[np.asarray(table.effects.protect)&~protect_candidates]|=TARGET_OUTCOME
     flag(table.effects,'heal_bell',FIELD_VOLATILE)
     if table.effects is not None:risk[(np.asarray(table.effects.status)!=0)&~toxic_candidate&~thunder_candidate&~powder_candidate&~plain_candidates]|=FIELD_VOLATILE
-    for name in ('seed','wish','spin'):flag(table.sustain,name,FIELD_VOLATILE)
+    for name in ('wish','spin'):flag(table.sustain,name,FIELD_VOLATILE)
+    if table.sustain is not None:risk[np.asarray(table.sustain.seed)&(np.arange(m)!=leech_move)]|=FIELD_VOLATILE
     if table.entry is not None:risk[np.asarray(table.entry.spikes_move)&~spikes_candidate]|=FIELD_VOLATILE
     flag(table.linked_traps,'move',FIELD_VOLATILE)
     if table.encore is not None:risk[np.asarray(table.encore.move)&(np.arange(m)!=encore_move)]|=FIELD_VOLATILE
@@ -360,12 +367,12 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
         direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
-        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist(),primary_plain_binding=plain_binding.tolist(),primary_plain_candidates=plain_candidates.tolist(),primary_plain_status=plain_status.tolist(),bulk_up_binding=bulk_binding.tolist(),bulk_up_candidates=bulk_candidates.tolist(),protect_binding=protect_binding.tolist(),protect_candidates=protect_candidates.tolist(),protect_block_candidates=protect_blocks.tolist(),color_change_binding=color_binding.tolist(),color_change_abilities=color_abilities.tolist(),color_change_candidates=color_candidates.tolist(),color_change_types=color_types.tolist(),color_change_dynamic=color_dynamic.tolist(),primary_sleep_miss_candidates=powder_miss.tolist(),self_heal_binding=heal_binding.tolist(),self_heal_candidates=heal_candidates.tolist(),belly_drum_binding=belly_binding.tolist(),belly_drum_candidates=belly_candidates.tolist(),sleep_blocked_binding=sleep_block_binding.tolist(),sleep_blocked_moves=sleep_block_moves.tolist(),encore_binding=encore_binding.tolist(),encore_move=encore_move)
+        substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist(),primary_plain_binding=plain_binding.tolist(),primary_plain_candidates=plain_candidates.tolist(),primary_plain_status=plain_status.tolist(),bulk_up_binding=bulk_binding.tolist(),bulk_up_candidates=bulk_candidates.tolist(),protect_binding=protect_binding.tolist(),protect_candidates=protect_candidates.tolist(),protect_block_candidates=protect_blocks.tolist(),color_change_binding=color_binding.tolist(),color_change_abilities=color_abilities.tolist(),color_change_candidates=color_candidates.tolist(),color_change_types=color_types.tolist(),color_change_dynamic=color_dynamic.tolist(),primary_sleep_miss_candidates=powder_miss.tolist(),self_heal_binding=heal_binding.tolist(),self_heal_candidates=heal_candidates.tolist(),belly_drum_binding=belly_binding.tolist(),belly_drum_candidates=belly_candidates.tolist(),sleep_blocked_binding=sleep_block_binding.tolist(),sleep_blocked_moves=sleep_block_moves.tolist(),encore_binding=encore_binding.tolist(),encore_move=encore_move,leech_binding=leech_binding.tolist(),leech_move=leech_move)
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -459,6 +466,8 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.calm_mind_candidates,(len(tables.selected_risk),),jnp.bool_)
     accounting._shape(tables.swords_dance_binding,(8,),jnp.uint32)
     accounting._shape(tables.swords_dance_candidates,(len(tables.selected_risk),),jnp.bool_)
+    accounting._shape(tables.leech_binding,(8,),jnp.uint32)
+    accounting._shape(tables.leech_move,(),jnp.int32)
     accounting._shape(tables.encore_binding,(8,),jnp.uint32)
     accounting._shape(tables.encore_move,(),jnp.int32)
     accounting._shape(tables.sleep_blocked_binding,(8,),jnp.uint32)
@@ -921,7 +930,7 @@ def spikes_on_tape(tape,attempted,*,active,captured=None):
     return _on_tape(tape,observe_spikes_device,attempted,active=active,captured=captured)
 
 
-def observe_branch_device(carry,tape,branch,attempted,tables,*,active,captured_belly_drum=None,captured_encore=None):
+def observe_branch_device(carry,tape,branch,attempted,tables,*,active,captured_belly_drum=None,captured_encore=None,captured_leech=None):
     """Literal named actual branch guard, NOT accepted/coverage/exhaustive.
 
     Root must place this at that branch's real cutpoint, including unsupported
@@ -931,6 +940,9 @@ def observe_branch_device(carry,tape,branch,attempted,tables,*,active,captured_b
     if type(branch) is not Branch or int(branch)<6:raise ValueError('named actual unsupported write branch required')
     attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
     supported=jnp.zeros_like(attempted)
+    if branch is Branch.SEED_START:
+        from . import engine_leech_seed_callbacks as leech_callbacks
+        supported=leech_callbacks.captured_matches(tape,captured_leech)
     if branch is Branch.ENCORE:
         from . import engine_encore_callbacks as encore_callbacks
         supported=encore_callbacks.captured_matches(tape,captured_encore)
@@ -1007,8 +1019,8 @@ def self_heal_on_tape(tape,attempted,*,active,captured=None):
     return _on_tape(tape,observe_self_heal_device,attempted,active=active,captured=captured)
 
 
-def branch_on_tape(tape,branch,attempted,*,active,captured_belly_drum=None,captured_encore=None):
-    return _on_tape(tape,observe_branch_device,branch,attempted,active=active,captured_belly_drum=captured_belly_drum,captured_encore=captured_encore)
+def branch_on_tape(tape,branch,attempted,*,active,captured_belly_drum=None,captured_encore=None,captured_leech=None):
+    return _on_tape(tape,observe_branch_device,branch,attempted,active=active,captured_belly_drum=captured_belly_drum,captured_encore=captured_encore,captured_leech=captured_leech)
 
 
 def end_on_tape(tape,state,*,active):

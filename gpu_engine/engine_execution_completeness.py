@@ -68,6 +68,7 @@ class Site(IntEnum):
     SELF_HEAL = 32
     SLEEP_BLOCKED = 33
     ENCORE = 34
+    LEECH_SEED = 35
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -184,6 +185,7 @@ class Context(NamedTuple):
     diagnostics: object = None  # Optional literal operands; never read by admission
     terminal: object = None  # PRIVATE literal final direct-KO observer
     secondary_status: object = None # ephemeral SAME-call registered context
+    leech_history: object = None # actual owning public/current seed source-slot facts
 
 
 UNKNOWN_EXECUTION = 512

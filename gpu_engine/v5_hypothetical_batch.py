@@ -171,13 +171,13 @@ class _Executor:
 
         # Separate PURE batched stages avoid cloning the large kernel/FULL
         # compiler graph per owner. Both owners reuse the SAME consume JIT.
-        frame_fast=jax.jit(lambda core,record,choices,chance,active:driver._frame(core,
+        frame_fast=jax.jit(lambda core,record,choices,chance,active,leech_history:driver._frame(core,
             (None,r['public'].causal.projector.device,r['request']['engine_table']),choices,chance,active,
             leftovers_context=left,status_residual_context=status,execution_tables=r['execution_compiled'].device,
             kernel_risk_tables=r['kernel_risk_compiled'].device,direct_hit_context=r['direct_hit_context'],
             substitute_context=r['substitute_context'],toxic_context=r['toxic_context'],recoil_context=r['recoil_context'],
             calm_mind_context=r['calm_mind_context'],swords_dance_context=r['swords_dance_context'],spikes_context=r['spikes_context'],thunder_wave_context=r['thunder_wave_context'],sleep_powder_context=r['sleep_powder_context'],
-            hypothetical_profile=hypothesis.Context(record,data)))
+            hypothetical_profile=hypothesis.Context(record,data),leech_history=leech_history))
         consume_fast=jax.jit(lambda ledger,frame,stream,public,record,active:execution.consume_frame_device(
             ledger,frame,stream,public,active=active,tables=r['execution_compiled'].device,
             adapter_tables=r['public'].device,catalog=r['catalog'],leftovers=None if left is None else left.data,
@@ -187,7 +187,7 @@ class _Executor:
         append_fast=jax.jit(lambda encoded,public,owner:v5_observation.append_device(encoded,public,adapter,observer_sides=owner))
         def run(core,publics,streams,record,engine_actions,chance,active):
             b=len(active)
-            frame=frame_fast(core,record,engine_actions,chance,active)
+            frame=frame_fast(core,record,engine_actions,chance,active,driver._leech_history(r,core,tuple(publics),core.admitted))
             consumed=[];ledgers=[]
             for stream,public in zip(streams,publics,strict=True):
                 ledger,result=consume_fast(frame.callbacks.execution.ledger,frame,stream,public,frame.weather_profile,active)
