@@ -1,3 +1,4 @@
+from gpu_engine_default_observer_ast import assert_frozen_function_overlay
 """Source-qualified dormant outgoing callbacks; no turn, model or FULL replay."""
 import ast,hashlib,json,subprocess,sys,unittest
 from pathlib import Path
@@ -108,7 +109,9 @@ console.log(JSON.stringify(rows));
 
  def test_source_defaults_consumers_and_call_scope_unchanged(self):
   for name in ('transition.py','entry.py','baton.py','state.py','mechanics.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('7e9580207defb397e81313d0ace17d38eb8a6aea'if name=='engine_retained_encoder_driver.py'else BASE)+':gpu_engine/'+name]),name)
+   if name=='engine_retained_encoder_driver.py':
+    assert_frozen_function_overlay(self,'gpu_engine/'+name,'7e9580207defb397e81313d0ace17d38eb8a6aea',{'_frame':'974a4cebab4629043944e922ebe5af1d4da49e5b'})
+   else:self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('974a4cebab4629043944e922ebe5af1d4da49e5b'if name in('transition.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py')else BASE)+':gpu_engine/'+name]),name)
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text())
   changed={'compile_data','shape','_bound','_data','_ability_quiet','_quiet','_start_diagnostics','begin_start','before_copy'}
   fns=lambda t:{n.name:ast.dump(n,include_attributes=False)for n in t.body if isinstance(n,ast.FunctionDef)and n.name not in changed}

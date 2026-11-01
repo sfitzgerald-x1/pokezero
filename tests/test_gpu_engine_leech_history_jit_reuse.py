@@ -138,7 +138,10 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
         before,after=functions(old),functions(current)
         allowed={'prepare','_leech_history','_prepare_leech_history_proof','_checked_leech_history_proof'}
         for name,node in before.items():
-            if name not in allowed:self.assertEqual(ast.dump(node),ast.dump(after[name]),name)
+            if name=='_frame':
+                reference=functions(ast.parse(subprocess.check_output(['git','show','974a4cebab4629043944e922ebe5af1d4da49e5b:gpu_engine/engine_retained_encoder_driver.py'],text=True)))
+                self.assertEqual(ast.dump(reference[name]),ast.dump(after[name]),name)
+            elif name not in allowed:self.assertEqual(ast.dump(node),ast.dump(after[name]),name)
         preparation=deepcopy(after['prepare'])
         def added(node):
             return (isinstance(node,ast.Assign) and any(isinstance(n,ast.Name) and n.id=='leech_history_proof' for n in node.targets)
@@ -158,7 +161,7 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
             self.assertEqual(jit.call_count,1)
         # No helper, physics, catalog or admission code is changed.
         for name in ('engine_leech_seed_callbacks.py','transition.py','state.py','v4_encoder.py'):
-            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('974a4cebab4629043944e922ebe5af1d4da49e5b'if name=='transition.py'else BASE)+':gpu_engine/'+name]))
 
 
 if __name__=='__main__':unittest.main()

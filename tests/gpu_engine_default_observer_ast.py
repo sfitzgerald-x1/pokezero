@@ -107,3 +107,28 @@ def assert_hp_rng_mutations_detected(case, tree, baseline, dump=dump_default_pro
     keyword = next(keyword for keyword in call.keywords if keyword.arg == 'active')
     keyword.arg = 'changed_numerical_active_keyword'
     case.assertNotEqual(dump(keywords), baseline, 'call keyword mutation escaped the default proof')
+
+
+def assert_frozen_function_overlay(case, path, base, overlays):
+    """Bind every current statement to frozen components, including each overlay.
+
+    Compare the complete module after reversing only explicitly bound functions.
+    Unknown functions, globals, classes and edits elsewhere still fail.
+    """
+    import copy
+    import subprocess
+    from pathlib import Path
+    def frozen(ref):
+        return ast.parse(subprocess.check_output(['git', 'show', ref + ':' + path], text=True))
+    old = frozen(base)
+    current = ast.parse(Path(path).read_text())
+    def function(tree, name):
+        return next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
+    for name, ref in overlays.items():
+        actual = function(current, name)
+        expected = function(frozen(ref), name)
+        case.assertEqual(ast.dump(actual, include_attributes=False),
+                         ast.dump(expected, include_attributes=False), (path, name, ref))
+        current.body[current.body.index(actual)] = copy.deepcopy(function(old, name))
+    case.assertEqual(ast.dump(current, include_attributes=False),
+                     ast.dump(old, include_attributes=False), path)
