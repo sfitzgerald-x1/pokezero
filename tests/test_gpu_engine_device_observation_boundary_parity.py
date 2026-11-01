@@ -157,11 +157,14 @@ class DeviceBoundaryParityTests(unittest.TestCase):
         self.assertEqual(original.catalog.names[int(moves.last_id[0,0])],
             self.metadata['vocabulary']['moves'][int(c.trackers.last_moves[0,0,0])])
         self.assertEqual(c.trackers.tendency.opportunities.tolist(),[[1,0],[1,0]])
-        # Actual preparation header records last move, while child-only [from]
-        # declarations do not; a later ordinary header cannot count twice.
+        # Preparation-only -singleturn remains a reveal, not a MOVE header;
+        # only the subsequent ordinary header supplies lastmove/tendency.
         fresh=h.initialize(state,self.tables.belief)
         h.move(fresh,state,0,j.ones(2,j.int32),yes,pp_use=False,count_turn=False,preparation=True)
-        self.assertEqual(int(fresh.trackers.last_moves[0,0,0]),1)
+        self.assertEqual(int(fresh.trackers.last_moves[0,0,0]),-1)
+        self.assertEqual(int(fresh.trackers.mon_features['stayed_and_attacked'][0,0,0]),0)
+        self.assertEqual(int(fresh.trackers.tendency.opportunities[0,0]),0)
+        self.assertEqual(int(fresh.trackers.observed_moves[0,0,0,0]),1)
         h.move(fresh,state,0,j.ones(2,j.int32),yes,pp_use=True)
         self.assertEqual(int(fresh.trackers.mon_features['stayed_and_attacked'][0,0,0]),1)
 

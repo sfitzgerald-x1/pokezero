@@ -271,10 +271,9 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     charge=(use&j.asarray(pp_use)).astype(j.int32)*(1+extra.astype(j.int32))
     pp=t.pp_used.at[r,side,slot,at].set(count+charge)
     c=c._replace(trackers=t._replace(observed_moves=observed,pp_used=pp))
-    # The existing child hook has count_turn=False; its original [from] line
-    # reveals the child but cannot replace last-used move. A preparation hook
-    # is an actual ordinary MOVE header, despite deferring its physical PP.
-    header=count_turn or preparation
+    # The child [from] line and preparation-only -singleturn annotation can
+    # reveal a move, but neither is an ordinary MOVE header/decision datum.
+    header=count_turn
     if header:c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,move,declared))
     if not preparation:
         c=feature(c,side,p,'moves_shown',j.ones_like(move),declared,add=True)
