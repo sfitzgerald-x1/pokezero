@@ -321,11 +321,13 @@ class _Runtime:
         kept=active&scored
         phases['original_request_rows']=int(kept.sum())
         if kept.any():
-            def timing(name,milliseconds):phases['driver_'+name]=float(milliseconds)
             old_frames=host(self.session.state.core.frame_number).copy()
-            result=self.driver.advance(self.session,j.asarray(actions),active_rows=j.asarray(kept),chance_inputs=chance,timing_callback=timing)
+            result=self.driver.advance(self.session,j.asarray(actions),active_rows=j.asarray(kept),chance_inputs=chance,collect_timings=True)
             self.jax.block_until_ready(result);d=self.driver.latest_diagnostics(self.session)
             phases.update(_driver_host_overlap_ms(d))
+            phases.update({'driver_'+name[len('phase.'):-len('_ms')]:milliseconds
+                for name,milliseconds in (getattr(d,'host_timings',None)or{}).items()
+                if name.startswith('phase.')and name.endswith('_ms')})
             ran=host(d.executed_rows)
             if not np.array_equal(host(d.active_rows),kept)or np.any(ran&~kept)or not np.array_equal(host(result.state.core.frame_number)-old_frames,ran.astype(np.int32)):
                 raise RuntimeError('originaldriver must execute exactly one frame per selected physical row')

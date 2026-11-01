@@ -33,7 +33,7 @@ class HostTimingTests(unittest.TestCase):
         import subprocess
         from pathlib import Path
         baseline=subprocess.check_output(['git','show',
-            '7c6c6042:gpu_engine/engine_retained_encoder_driver.py'],text=True)
+            'c028e11b20b01f67a6110ac1b3f3e4c3cc2c3efb:gpu_engine/engine_retained_encoder_driver.py'],text=True)
         current=Path(d.__file__).read_text()
         class EraseHost(ast.NodeTransformer):
             def visit_With(self,node):
@@ -42,9 +42,11 @@ class HostTimingTests(unittest.TestCase):
                     return node.body
                 return node
             def visit_Assign(self,node):
+                if any(isinstance(t,ast.Name)and t.id=='observe'for t in node.targets)and isinstance(node.value,ast.IfExp)and ast.unparse(node.value.test)=='collect_timings':node.value=node.value.orelse
                 if any(isinstance(t,ast.Name) and t.id in ('host_timings','advance_start') for t in node.targets):return None
                 return self.generic_visit(node)
             def visit_If(self,node):
+                if ast.unparse(node.test)in('type(collect_timings) is not bool','collect_timings and timing_callback is not None'):return None
                 if ast.unparse(node.test)=='host_timings is not None':return None
                 return self.generic_visit(node)
             def visit_Call(self,node):
@@ -58,7 +60,11 @@ class HostTimingTests(unittest.TestCase):
                     return node.values[0]
                 return self.generic_visit(node)
             def visit_FunctionDef(self,node):
+                if node.name=='built_in_timing':return None
                 node=self.generic_visit(node)
+                if node.name=='advance':
+                    keep=[(a,v)for a,v in zip(node.args.kwonlyargs,node.args.kw_defaults)if a.arg!='collect_timings'];node.args.kwonlyargs=[a for a,v in keep];node.args.kw_defaults=[v for a,v in keep]
+                    node.body[0]=next(n for n in ast.parse(baseline).body if isinstance(n,ast.FunctionDef)and n.name=='advance').body[0]
                 if node.name=='_frame':
                     keep=[(a,d) for a,d in zip(node.args.kwonlyargs,node.args.kw_defaults) if a.arg!='hypothetical_profile']
                     node.args.kwonlyargs=[a for a,d in keep];node.args.kw_defaults=[d for a,d in keep]
@@ -78,10 +84,11 @@ class HostTimingTests(unittest.TestCase):
         Core=namedtuple('Core','engine frame_number admitted requests orders unsafe originals constructors weather_profile execution risks cursor')
         State=namedtuple('State','core observers')
         engine=NS(done=np.zeros(1,bool));core=Core(engine,np.zeros(1,np.int32),np.ones(1,bool),(),(),(),(),(),None,None,None,None)
-        state=State(core,());result=d.Result(state,());session=d.Session(NS(),state,result)
+        observers=tuple(NS(retained='public-original',retained_healthy=np.ones(1,bool),projection=NS(causal=NS(admitted=np.ones(1,bool))))for _ in range(2))
+        state=State(core,observers);result=d.Result(state,());session=d.Session(NS(),state,result)
         record=dict(advancing=False,constructed=object(),state=state,result=result)
         trace=[];poisoned=False
-        r=dict(execution_compiled=object(),retain_speed=None,public_mode='retained-full')
+        r=dict(execution_compiled=object(),retain_speed=None,public_mode='retained-full',direct_hit_context=None)
         def checked(_):
             trace.append('checked')
             if poisoned:raise ValueError('static mutation')
