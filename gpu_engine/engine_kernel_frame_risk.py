@@ -158,6 +158,9 @@ class Tables(NamedTuple):
     baton_outgoing_dormant_abilities: object = None
     thunder_wave_ground_immunity: object = None
     baton_outgoing_insomnia_status: object = None
+    focus_binding: object = None
+    focus_move: object = None
+    focus_abilities: object = None
 
 
 @dataclass(frozen=True,eq=False)
@@ -224,6 +227,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         expected_engine_binding=np.asarray(engine_catalog.engine_binding,np.uint32))
     table=engine_catalog.engine_table;m=len(table.power);risk=np.zeros(m,np.int32)
     weather=np.asarray(table.weather.move_weather) if table.weather is not None else np.zeros(m,np.int32)
+    focus_binding=np.zeros(8,np.uint32);focus_move=0;focus_abilities=np.zeros(0,bool)
     no_damage_binding=np.zeros(8,np.uint32);levitate_immunity=False
     plain_binding=np.zeros(8,np.uint32);plain_candidates=np.zeros(m,bool);plain_status=np.zeros(m,np.int32)
     pinch_binding=np.zeros(8,np.uint32);pinch_stats=np.full(len(table.items.pinch_stat) if table.items is not None else 1,-1,np.int32)
@@ -249,6 +253,9 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
             raise ValueError('same original direct-hit/kernel catalog required')
         if int(direct_data.move_count)!=m:raise ValueError('exact direct-hit move namespace required')
         direct_binding=np.asarray(direct_data.binding,np.uint32)
+        if direct_data.focus_punch is not None:
+            from . import engine_focus_punch_callbacks as focus_callbacks
+            fd=direct_data.focus_punch;focus_callbacks.shape(fd);focus_binding=np.asarray(fd.binding);focus_move=int(fd.move);focus_abilities=np.asarray(fd.abilities)
         no_damage_binding=np.asarray(direct_data.no_damage.binding,np.uint32)
         from . import engine_no_damage_callbacks as no_damage
         no_damage._shape(direct_data.no_damage);levitate_immunity=bool(direct_data.no_damage.levitate_source)
@@ -456,13 +463,13 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
         kernel=engine_catalog.binding,accounting=np.asarray(record[0].inventory_binding).tolist(),
         selected_risk=risk.tolist(),branch_risk=branch.tolist(),direct_hit_binding=direct_binding.tolist(),
-        direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
+        focus_binding=focus_binding.tolist(),focus_move=focus_move,focus_abilities=focus_abilities.tolist(),direct_candidates=candidate.tolist(),seismic_toss_move=seismic,substitute_binding=substitute_binding.tolist(),
         substitute_candidates=substitute_candidate.tolist(),toxic_binding=toxic_binding.tolist(),toxic_candidates=toxic_candidate.tolist(),recoil_binding=recoil_binding.tolist(),recoil_candidates=recoil_candidate.tolist(),recoil_ko=recoil_ko,recoil_rock_head_source=recoil_rock_head_source,recoil_rock_head=recoil_rock_head.tolist(),calm_mind_binding=calm_binding.tolist(),calm_mind_candidates=calm_candidate.tolist(),swords_dance_binding=swords_binding.tolist(),swords_dance_candidates=swords_candidate.tolist(),spikes_binding=spikes_binding.tolist(),spikes_candidates=spikes_candidate.tolist(),direct_ko_candidates=ko_candidates.tolist(),thunder_wave_ground_immunity=thunder_ground.tolist(),thunder_wave_binding=thunder_binding.tolist(),thunder_wave_candidates=thunder_candidate.tolist(),sleep_powder_binding=powder_binding.tolist(),sleep_powder_candidates=powder_candidate.tolist(),no_damage_binding=no_damage_binding.tolist(),primary_plain_binding=plain_binding.tolist(),primary_plain_candidates=plain_candidates.tolist(),primary_plain_status=plain_status.tolist(),self_boost_binding=self_boost_binding.tolist(),self_boost_stats=self_boost_stats.tolist(),self_boost_deltas=self_boost_deltas.tolist(),self_boost_lengths=self_boost_lengths.tolist(),bulk_up_binding=bulk_binding.tolist(),bulk_up_candidates=bulk_candidates.tolist(),protect_binding=protect_binding.tolist(),protect_candidates=protect_candidates.tolist(),protect_block_candidates=protect_blocks.tolist(),color_change_binding=color_binding.tolist(),color_change_abilities=color_abilities.tolist(),color_change_candidates=color_candidates.tolist(),color_change_types=color_types.tolist(),color_change_dynamic=color_dynamic.tolist(),primary_sleep_miss_candidates=powder_miss.tolist(),self_heal_binding=heal_binding.tolist(),self_heal_candidates=heal_candidates.tolist(),self_heal_family=heal_family.tolist(),belly_drum_binding=belly_binding.tolist(),belly_drum_candidates=belly_candidates.tolist(),sleep_blocked_binding=sleep_block_binding.tolist(),sleep_blocked_moves=sleep_block_moves.tolist(),encore_binding=encore_binding.tolist(),encore_move=encore_move,leech_binding=leech_binding.tolist(),leech_move=leech_move,self_move_binding=self_move_binding.tolist(),self_move_ids=self_move_ids.tolist(),toxic_substitute_failure=toxic_substitute_failure,substitute_failure=substitute_failure,toxic_existing_status=toxic_existing_status,thunder_wave_substitute_failure=thunder_substitute_failure,sleep_talk_toxic_child=sleep_talk_toxic_child,levitate_immunity=levitate_immunity,recoil_immune_source=recoil_immune_source,recoil_immune_ghost_type=recoil_immune_ghost_type,recoil_immune_wonder_guard=recoil_immune_wonder_guard,sleep_talk_rest_failure=sleep_talk_rest_failure)
     raw=json.dumps(inventory,sort_keys=True,separators=(',',':'))
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths),words(heal_bell_binding),jnp.asarray(heal_bell_move,jnp.int32),jnp.asarray(heal_bell_soundproof),words(baton_binding),jnp.asarray(baton_move,jnp.int32),jnp.asarray(baton_abilities),jnp.asarray(baton_items),words(self_destruct_binding),jnp.asarray(self_destruct_candidates),jnp.asarray(self_destruct_powers),jnp.asarray(self_destruct_damp),jnp.asarray(self_destruct_abilities),jnp.asarray(self_destruct_items),words(before_move_blocked_binding),jnp.asarray(before_move_blocked_moves),jnp.asarray(before_move_blocked_abilities),jnp.asarray(before_move_blocked_items),jnp.asarray(thunder_substitute_failure,jnp.bool_),jnp.asarray(sleep_talk_toxic_child,jnp.bool_),jnp.asarray(levitate_immunity,jnp.bool_),jnp.asarray(recoil_immune_source,jnp.bool_),jnp.asarray(recoil_immune_ghost_type,jnp.int32),jnp.asarray(recoil_immune_wonder_guard,jnp.int32),jnp.asarray(sleep_talk_rest_failure,jnp.bool_),jnp.asarray(self_destruct_own_tempo),jnp.asarray(baton_outgoing_dormant_abilities),jnp.asarray(thunder_ground,jnp.int32),jnp.asarray(baton_outgoing_insomnia_status,jnp.int32))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths),words(heal_bell_binding),jnp.asarray(heal_bell_move,jnp.int32),jnp.asarray(heal_bell_soundproof),words(baton_binding),jnp.asarray(baton_move,jnp.int32),jnp.asarray(baton_abilities),jnp.asarray(baton_items),words(self_destruct_binding),jnp.asarray(self_destruct_candidates),jnp.asarray(self_destruct_powers),jnp.asarray(self_destruct_damp),jnp.asarray(self_destruct_abilities),jnp.asarray(self_destruct_items),words(before_move_blocked_binding),jnp.asarray(before_move_blocked_moves),jnp.asarray(before_move_blocked_abilities),jnp.asarray(before_move_blocked_items),jnp.asarray(thunder_substitute_failure,jnp.bool_),jnp.asarray(sleep_talk_toxic_child,jnp.bool_),jnp.asarray(levitate_immunity,jnp.bool_),jnp.asarray(recoil_immune_source,jnp.bool_),jnp.asarray(recoil_immune_ghost_type,jnp.int32),jnp.asarray(recoil_immune_wonder_guard,jnp.int32),jnp.asarray(sleep_talk_rest_failure,jnp.bool_),jnp.asarray(self_destruct_own_tempo),jnp.asarray(baton_outgoing_dormant_abilities),jnp.asarray(thunder_ground,jnp.int32),jnp.asarray(baton_outgoing_insomnia_status,jnp.int32),words(focus_binding),jnp.asarray(focus_move,jnp.int32),jnp.asarray(focus_abilities))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -673,10 +680,14 @@ def observe_pre_move_device(carry,tape,state,side,before,tables,*,eligible,activ
         |jnp.where(eligible&~address,NAMESPACE,0),active=active)
 
 
-def observe_selected_device(carry,tape,move,tables,*,eligible,active):
+def observe_selected_device(carry,tape,move,tables,*,eligible,active,captured_focus=None,state=None,side=None,caller_move=None):
     b=len(carry.stream_id);move=_vector(move,b);eligible=_vector(eligible,b,jnp.bool_)
     valid=(move>0)&(move<len(tables.selected_risk));safe=jnp.clip(move,0,len(tables.selected_risk)-1)
     value=jnp.where(eligible,jnp.where(valid,tables.selected_risk[safe],NAMESPACE),0)
+    if captured_focus is not None:
+        from . import engine_focus_punch_callbacks as focus_callbacks
+        supported=focus_callbacks.matches_selected(tape,captured_focus,state,side,move,caller_move)
+        value &= ~jnp.where(supported,BLOCKED_ACTION,0)
     return _observe(carry,tape,tables,Branch.SELECTED_MOVE,value,active=active)
 
 
@@ -1135,8 +1146,8 @@ def pre_move_on_tape(tape,state,side,before,*,eligible,active,captured_sleep=Non
     return _on_tape(tape,observe_pre_move_device,state,side,before,eligible=eligible,active=active,captured_sleep=captured_sleep,captured_before_move=captured_before_move)
 
 
-def selected_on_tape(tape,move,*,eligible,active):
-    return _on_tape(tape,observe_selected_device,move,eligible=eligible,active=active)
+def selected_on_tape(tape,move,*,eligible,active,captured_focus=None,state=None,side=None,caller_move=None):
+    return _on_tape(tape,observe_selected_device,move,eligible=eligible,active=active,captured_focus=captured_focus,state=state,side=side,caller_move=caller_move)
 
 
 def outcome_on_tape(tape,outcome,*,eligible,active,captured_direct=None,pending_recoil=None,pending_ko=None,captured_no_damage=None,captured_substitute_damage=None,captured_protect_block=None):

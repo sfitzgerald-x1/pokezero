@@ -53,6 +53,7 @@ from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
 from . import engine_sleep_talk_callbacks as sleep_talk_callbacks
+from . import engine_focus_punch_callbacks as focus_callbacks
 from . import engine_encore_callbacks as encore_callbacks
 from . import engine_self_move_callbacks as self_move_callbacks
 from . import engine_heal_bell_callbacks as heal_bell_callbacks
@@ -613,6 +614,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         rough = kind == rough_callbacks.ROUGH_SKIN_HP
         belly = kind == belly_callbacks.BELLY_DRUM
         sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
+        focus = kind == focus_callbacks.FOCUS_PREPARATION
         sleep_talk = kind == sleep_talk_callbacks.SLEEP_TALK
         sleep_talk_owned = sleep_talk_callbacks.owned(tape,index)
         sleep_talk_child = (kind==public.MOVE)&sleep_talk_owned
@@ -947,6 +949,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         prefix_ok=(tables.status_events&~tables.raw_begin&clock_payload&(index==0)
             &jnp.all(cursor.established,axis=1)&jnp.all(details==0,axis=1))
         event_ok=jnp.where(turnloop_prefix,generation_ok&clock_ok&prefix_ok,event_ok)
+        focus_ok=(tables.status_events&~tables.raw_begin&actor_ok&(phase==0)
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&focus_callbacks.owned(tape,index))
+        event_ok=jnp.where(focus,generation_ok&clock_ok&focus_ok,event_ok)
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -1106,7 +1111,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # lexical target independently from this literal raw receipt.
         direct_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,
             turn,phase,absent,absent,absent,absent,z,absent,absent,z,z,z,z,z),axis=1)
-        semantic=jnp.where((direct_control|toxic|no_damage_header|no_damage_facts|self_destruct)[:,None],direct_semantic,semantic)
+        semantic=jnp.where((direct_control|toxic|no_damage_header|no_damage_facts|self_destruct|focus)[:,None],direct_semantic,semantic)
         semantic=jnp.where(heal_bell[:,None],jnp.where(bell_cure[:,None],bell_semantic,direct_semantic),semantic)
         semantic=jnp.where((toxic&toxic_callbacks.substitute_failure_raw(raw))[:,None],failed_semantic,semantic)
         toxic_existing=toxic&toxic_callbacks.existing_status_raw(raw);toxic_same=toxic_existing&(raw[:,7]==4)
