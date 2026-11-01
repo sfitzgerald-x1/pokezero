@@ -91,6 +91,8 @@ class Catalog:
 
 _CATALOGS = weakref.WeakKeyDictionary()
 _STATIC_PLANS = weakref.WeakKeyDictionary()
+_STATIC_INSTRUCTION_CODES = weakref.WeakKeyDictionary()
+_STATIC_INSTRUCTION_ORIGINS = weakref.WeakKeyDictionary()
 
 
 def _static_snapshot(value, seen):
@@ -175,6 +177,37 @@ def _current_mapping(parent,entries):
         yield parent[key],index
 
 
+@dataclass(frozen=True, eq=False)
+class _StaticInstructionCode:
+    plan: object
+    nodes: tuple
+    flags: tuple
+    classifier: object
+    array_type: object
+
+
+def _compile_immutable_instructions(plan):
+    """Classify expected traversal instructions, never current catalog values."""
+    eligible=[False]*len(plan.nodes)
+    for index in range(len(plan.nodes)-1,-1,-1):
+        original,kind,entries=plan.nodes[index]
+        if kind is None:
+            eligible[index]=type(original) in (str,int,float,bool,type(None)) or issubclass(type(original),jax.Array)
+        elif kind=='sequence' and type(original) is tuple:
+            eligible[index]=all(eligible[child]for child in entries)
+    return tuple(eligible)
+
+
+def _register_static_instructions(catalog,plan):
+    # The plan is compiler metadata. No current mutable edge, source read,
+    # guard success or validation result is retained by this registry.
+    if type(plan) is not _StaticPlan:return
+    flags=_compile_immutable_instructions(plan)
+    code=_StaticInstructionCode(plan,plan.nodes,flags,_compile_immutable_instructions,jax.Array)
+    _STATIC_INSTRUCTION_CODES[catalog]=code
+    _STATIC_INSTRUCTION_ORIGINS[code]=(plan,plan.nodes,flags,code.classifier,code.array_type)
+
+
 class _GuardPass:
     """Call-local immutable-subtree visits, never catalog acceptance."""
     __slots__=('plans','completed','active')
@@ -183,7 +216,17 @@ class _GuardPass:
         self.completed=set()
         self.active=True
 
-    def immutable_nodes(self,plan):
+    def immutable_nodes(self,plan,catalog=None):
+        code=_STATIC_INSTRUCTION_CODES.get(catalog) if type(catalog) is Catalog else None
+        origin=_STATIC_INSTRUCTION_ORIGINS.get(code) if type(code) is _StaticInstructionCode else None
+        if (origin is not None and code.plan is plan and origin[0] is plan
+                and code.nodes is plan.nodes and origin[1] is plan.nodes
+                and code.flags is origin[2] and code.classifier is origin[3]
+                and code.array_type is origin[4]
+                and _compile_immutable_instructions is origin[3] and jax.Array is origin[4]):
+            return code.flags
+        # Missing/replaced/forged instruction lineage retains the original
+        # current-call classification and traversal; it is never a new gate.
         key=id(plan);cached=self.plans.get(key)
         if cached is not None and cached[0] is plan:return cached[1]
         # A seen snapshot may be an alias to a MUTABLE object. Only actual
@@ -222,7 +265,7 @@ def _check_catalog_plan(catalog,plan):
     # or acceptance survives the lexical guard scope.
     scope=_GUARD_PASS.get()
     if scope is not None and not scope.active:scope=None
-    eligible=None if scope is None else scope.immutable_nodes(plan)
+    eligible=None if scope is None else scope.immutable_nodes(plan,catalog)
     stack=[(iter(_current_attributes(catalog,plan.roots)),None)]
     while stack:
         iterator,completed=stack[-1]
@@ -317,6 +360,7 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     seen = set()
     _CATALOGS[catalog] = tuple((f.name, _static_snapshot(getattr(catalog, f.name), seen)) for f in fields(catalog))
     _STATIC_PLANS[catalog] = _compile_static_plan(_CATALOGS[catalog])
+    _register_static_instructions(catalog,_STATIC_PLANS[catalog])
     return catalog
 
 
