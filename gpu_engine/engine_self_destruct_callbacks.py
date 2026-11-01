@@ -47,6 +47,8 @@ class Record(NamedTuple):
  write:object
  secondary:object
 
+STATIC_CALLBACK_SHA256='26759547257248edbbf4ba3a036f3aecff3dacc794bf5193286fcf29870d1b07'
+
 def compile_data(catalog,metadata,rules):
  from . import engine_request_source as request
  from .engine_private_team import engine_metadata_binding
@@ -58,21 +60,24 @@ const checked=require(process.argv[2]).build(root,meta),d=require(path.join(root
 const B=require(path.join(root,'dist/sim/battle.js')).Battle,P=require(path.join(root,'dist/sim/pokemon.js')).Pokemon,A=require(path.join(root,'dist/sim/battle-actions.js')).BattleActions;const hash=f=>crypto.createHash('sha256').update(f.toString()).digest('hex');
 const callbacks={useMoveInner:hash(d.data.Scripts.actions.useMoveInner),faintMessages:hash(B.prototype.faintMessages),faint:hash(P.prototype.faint),getDamage:hash(d.data.Scripts.actions.getDamage||A.prototype.getDamage),tryMoveHit:hash(d.data.Scripts.actions.tryMoveHit||A.prototype.tryMoveHit)};
 const quiet=e=>e.exists&&e.gen<=3&&!['onDamage','onDamagingHit','onAfterDamage','onAfterMoveSecondary','onAfterMoveSecondarySelf','onUpdate','onAfterSubDamage','onEnd','onFaint','onBeforeFaint','onAfterFaint'].some(k=>e[k]!==undefined);
-process.stdout.write(JSON.stringify({callbacks,source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,moves:['explosion','selfdestruct'].map(n=>{const m=d.moves.get(n);return {id:m.id,gen:m.gen,power:m.basePower,type:m.type,category:m.category,target:m.target,accuracy:m.accuracy,priority:m.priority,selfdestruct:m.selfdestruct,callbacks:Object.keys(m).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&m[k]!==undefined),exotic:!!(m.multihit||m.recoil||m.drain||m.secondary||m.secondaries||m.self||m.boosts||m.status||m.volatileStatus||m.forceSwitch||m.selfSwitch)}}),abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
+const compatibleAbility=e=>quiet(e)||(e.exists&&e.gen<=3&&e.id==='static'&&typeof e.onDamagingHit==='function'&&!['onDamage','onAfterDamage','onAfterMoveSecondary','onAfterMoveSecondarySelf','onUpdate','onAfterSubDamage','onEnd','onFaint','onBeforeFaint','onAfterFaint'].some(k=>e[k]!==undefined));
+process.stdout.write(JSON.stringify({callbacks,static_callback:hash(d.abilities.get('static').onDamagingHit),source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,moves:['explosion','selfdestruct'].map(n=>{const m=d.moves.get(n);return {id:m.id,gen:m.gen,power:m.basePower,type:m.type,category:m.category,target:m.target,accuracy:m.accuracy,priority:m.priority,selfdestruct:m.selfdestruct,contact:!!m.flags.contact,callbacks:Object.keys(m).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&m[k]!==undefined),exotic:!!(m.multihit||m.recoil||m.drain||m.secondary||m.secondaries||m.self||m.boosts||m.status||m.volatileStatus||m.forceSwitch||m.selfSwitch)}}),abilities:meta.vocabulary.abilities.map(n=>compatibleAbility(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
  v=json.loads(subprocess.check_output([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata).encode(),timeout=30))
  if v['callbacks']!={'useMoveInner': '8c35e507bccb4bc25d13e24d582895097cd14ea6b24630b163e6ffafc7b4a160', 'faintMessages': '62f5ba2782de2f0716c5071a3555ac238a430105b1e2e04e8b96b9cb6c9e5c4b', 'faint': '2ba9a893c499af2d32dd02dcfc255a63ba03f9308cf6fa2f51f98940dc315a28', 'getDamage': 'dfd031900da8c77e5e1a2721858d8d4a7804bc7def1b7a1d486220521a6a7f12', 'tryMoveHit': 'af529997d52b6d856301bc8f958ead5963f68abc58d9568c82df24f212b0a97f'}:raise ValueError('exact original Gen3 self-KO/damage/faint callbacks required')
+ if v['static_callback']!=STATIC_CALLBACK_SHA256:raise ValueError('original conditional Static callback required')
  if json.dumps(v['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(v['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original self-destruct source drift')
  names=metadata['vocabulary']['moves'];t=catalog.engine_table;c=np.zeros(len(names),bool);powers=np.zeros(len(names),np.int32)
  for row in v['moves']:
   expected=250 if row['id']=='explosion'else 200
-  if (row['gen'],row['power'],row['type'],row['category'],row['target'],row['accuracy'],row['priority'],row['selfdestruct'],row['callbacks'],row['exotic'])!=(1,expected,'Normal','Physical','allAdjacent',100,0,'always',[],False):raise ValueError('original canonical Gen3 self-destruct source required')
+  if (row['gen'],row['power'],row['type'],row['category'],row['target'],row['accuracy'],row['priority'],row['selfdestruct'],row['contact'],row['callbacks'],row['exotic'])!=(1,expected,'Normal','Physical','allAdjacent',100,0,'always',False,[],False):raise ValueError('original canonical Gen3 self-destruct source required')
   for move,name in enumerate(names):
    if name!=row['id']:continue
    if not(move>0 and int(catalog.ids[move])>0 and int(catalog.targets[move])==1 and t.self_destruct is not None and bool(t.self_destruct.move[move])and int(t.power[move])==expected and bool(t.physical[move])and int(t.type[move])==1 and int(t.accuracy[move])==100 and not bool(t.always_hit[move])):raise ValueError('canonical installed self-destruct row required')
+   if t.secondary is not None and bool(t.secondary.contact[move]):raise ValueError('noncontact installed self-destruct row required')
    c[move]=True;powers[move]=expected
  damp=np.asarray([n=='damp'for n in metadata['vocabulary']['abilities']],bool)
  if t.self_destruct is None or not np.array_equal(t.self_destruct.damp,damp):raise ValueError('original Damp guard required')
- payload=dict(schema='pokezero.self-destruct.composite.v1',source=v,candidates=c.tolist(),powers=powers.tolist(),engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding)
+ payload=dict(schema='pokezero.self-destruct.static-noncontact.composite.v2',source=v,candidates=c.tolist(),powers=powers.tolist(),engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding)
  words=lambda x:j.asarray(x,j.uint32)
  return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(c),j.asarray(powers),j.asarray(damp),j.asarray(v['abilities']),j.asarray(v['items']))
 def shape(d):
