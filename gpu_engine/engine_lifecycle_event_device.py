@@ -776,6 +776,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             &(tables.recoil_move>0)&(raw[:,5]==tables.recoil_move)
             &(raw[:,6]>raw[:,7])&(raw[:,7]>0)&(raw[:,8]>=raw[:,6])&(raw[:,8]<=1_000_000)
             &(raw[:,9]>=0)&(raw[:,9]<=6))
+        recoil_ok |= tables.status_events & ~tables.raw_begin & actor_ok & status_identity & (phase==0) & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)]) & (side==1-actor_side)&(incoming==cursor.physical_active[rows,safe_side]) & recoil_callbacks.owned_silent(tape,index,cursor)
         event_ok=jnp.where(recoil,generation_ok & clock_ok & recoil_ok,event_ok)
         rough_ok=(tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
             &rough_callbacks.owned(tape,index,cursor))

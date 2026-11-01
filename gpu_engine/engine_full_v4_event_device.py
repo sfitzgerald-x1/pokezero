@@ -690,6 +690,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
         entry_spikes=condition & (raw_kind==entry_spikes_callbacks.ENTRY_SPIKES_HP)
         recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
+        recoil_silent=recoil&recoil_callbacks.owned_silent(tape,index)
         rough=condition & (raw_kind==rough_callbacks.ROUGH_SKIN_HP)
         intimidate=(kind==int(inputs.Kind.BOOST))&(raw_kind==intimidate_callbacks.INTIMIDATE)
         pinch=raw_kind==pinch_callbacks.PINCH_ITEM
@@ -773,7 +774,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             jnp.clip(sub_raw[:,8],0,1),jnp.clip(sub_raw[:,9]+1,0,2)],key)
         key=jnp.where(protect_attempt,jnp.where((tape.words[:,index,6]&protect_callbacks.SUCCESS)!=0,tables.protect_success,tables.weather_failure),key)
         key=jnp.where(protect_block,tables.protect_block,key)
-        size = jnp.where((pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent|heal_weather_full,0,tables.length[key]); main = tables.main[key]
+        size = jnp.where((pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent|heal_weather_full|recoil_silent,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
         good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont) & enough

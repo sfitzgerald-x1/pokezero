@@ -966,7 +966,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work.active[rows,side],work.active[rows,foe],move,_direct_write)
             _public_trace,_recoil_pending=recoil_callbacks.prepare_device(_public_trace,_recoil_captured,recoil,
                 _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),
-                _active(work.status,work,side),_recoil_context,eligible=acts,target_ko=_direct_ko_pending)
+                _active(work.status,work,side),_recoil_context,eligible=acts,target_ko=_direct_ko_pending,caller_move=caller_move)
         if _lifecycle_trace:
             _literal_outcome=kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
                 hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes)
