@@ -1249,7 +1249,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     immune,acts & hit & ~immune,_toxic_old_status,_active(work.status,work,foe),
                     _toxic_old_counter,_active(work.status_counter,work,foe))
                 _public_trace=toxic_callbacks.record_device(_public_trace,side,work.active[rows,side],
-                    work.active[rows,foe],move,_toxic_attempt,_toxic_context,eligible=_toxic_requested)
+                    work.active[rows,foe],move,_toxic_attempt,_toxic_context,eligible=_toxic_requested,caller_move=caller_move)
                 if _toxic_registered:
                     _public_trace=execution_accounting.capture_toxic_attempt(_public_trace,_toxic_ticket,
                         side,work.active[rows,side],work.active[rows,foe],move,_toxic_attempt,requested=_toxic_requested)
