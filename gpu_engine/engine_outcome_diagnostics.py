@@ -25,7 +25,7 @@ BEFORE_MOVE_FIELDS=('actor_side','actor_physical','move','caller_move','eligible
     'result_confusion_counter','can_act','confusion_self_hit','stream_id','frame','raw_count',
     'turn','phase','generation0','generation1','prior_tape_refusal','prior_execution_refusal','prior_kernel_risk')
 
-BATON_START_FIELDS=('actor_side', 'actor_physical', 'move', 'caller_move', 'eligible', 'acts', 'begin_valid', 'registered_bound', 'data_bound', 'transaction_present', 'history_side', 'public_known', 'public_pending', 'public_substitute', 'hp', 'maximum', 'status', 'counter', 'ability', 'base_ability', 'item', 'type0', 'type1', 'base_type0', 'base_type1', 'substitute_hp', 'confusion_counter', 'volatile_uint32', 'protect_counter', 'choice_move', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'spikes', 'any_trap_source', 'pending_residual', 'any_forced_switch', 'any_baton_pass', 'ability_namespace_size', 'item_namespace_size', 'quiet_ability_lookup', 'quiet_item_lookup', 'boost0', 'boost1', 'boost2', 'boost3', 'boost4', 'boost5', 'boost6', 'public_boost0', 'public_boost1', 'public_boost2', 'public_boost3', 'public_boost4', 'public_boost5', 'public_boost6', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk')
+BATON_START_FIELDS=('actor_side', 'actor_physical', 'move', 'caller_move', 'eligible', 'acts', 'begin_valid', 'registered_bound', 'data_bound', 'transaction_present', 'history_side', 'public_known', 'public_pending', 'public_substitute', 'hp', 'maximum', 'status', 'counter', 'ability', 'base_ability', 'item', 'type0', 'type1', 'base_type0', 'base_type1', 'substitute_hp', 'confusion_counter', 'volatile_uint32', 'protect_counter', 'choice_move', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'spikes', 'any_trap_source', 'pending_residual', 'any_forced_switch', 'any_baton_pass', 'ability_namespace_size', 'item_namespace_size', 'quiet_ability_lookup', 'quiet_item_lookup', 'boost0', 'boost1', 'boost2', 'boost3', 'boost4', 'boost5', 'boost6', 'public_boost0', 'public_boost1', 'public_boost2', 'public_boost3', 'public_boost4', 'public_boost5', 'public_boost6', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk', 'quiet_status_lookup')
 
 class Capture(NamedTuple):
     words:object
@@ -185,7 +185,7 @@ def baton_start_guard_values(record):
         result[key]=calc((field,),lambda x,want=want:x==want)
     result['history_empty']=calc(('history_side',),lambda x:x<0)
     result['ordinary_caller']=calc(('caller_move','move'),lambda x,y:x==y)
-    result['quiet_status']=calc(('status','counter'),lambda s,c:(s==0 and c==0)or(s==4 and 0<=c<=15)or(s==1 and c==0))
+    result['quiet_status']=(calc(('quiet_status_lookup',),lambda x:x==1)if 'quiet_status_lookup'in record else calc(('status','counter'),lambda s,c:(s==0 and c==0)or(s==4 and 0<=c<=15)or(s==1 and c==0)))
     result['living_actor']=calc(('hp',),lambda x:x>0)
     result['quiet_ability']=calc(('ability','ability_namespace_size','quiet_ability_lookup'),lambda i,n,v:0<i<n and v==1)
     result['quiet_item']=calc(('item','item_namespace_size','quiet_item_lookup'),lambda i,n,v:0<=i<n and v==1)
