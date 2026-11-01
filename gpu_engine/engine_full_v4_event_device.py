@@ -274,9 +274,12 @@ def compile_adapter(metadata, projector, *, catalog):
             patched[-1,11]=1
             protect_still_moves[pid]=bool(plain and still and has_tendency and mains[plain]==mains[still] and np.array_equal(patched,templates[still]))
     self_move_still=np.zeros(len(moves),bool)
-    if projector.catalog.engine_table.sleep_talk is not None:
+    if projector.catalog.engine_table.sleep_talk is not None or effects is not None:
         from . import public_tendency
-        for row in np.flatnonzero(np.asarray(projector.catalog.engine_table.sleep_talk.move)):
+        still_rows=np.zeros(len(projector.catalog.ids),bool)
+        if projector.catalog.engine_table.sleep_talk is not None:still_rows|=np.asarray(projector.catalog.engine_table.sleep_talk.move)
+        if effects is not None:still_rows|=np.asarray(effects.heal_half)
+        for row in np.flatnonzero(still_rows):
             pid=projector.catalog.ids[row]
             if pid<=0 or targets.get(pid)!=0:continue
             plain=int(moves[pid]);still=add(f'|move|{ident[0]}|{catalog.moves.names[pid]}||[still]',inputs.Kind.MOVE)
@@ -680,7 +683,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         weather_event=entry_weather|move_weather|clock_weather
         weather_chip=condition & (raw_kind==weather_effects.WEATHER_CHIP)
         leftovers_heal=condition & (raw_kind==leftovers_callbacks.LEFTOVERS_HEAL)
-        self_heal=condition & (raw_kind==self_heal_callbacks.SELF_HEAL)
+        self_heal=raw_kind==self_heal_callbacks.SELF_HEAL
+        heal_code=tape.words[:,index,9]&~self_heal_callbacks.SECONDARY
+        heal_half_full=self_heal&(heal_code==self_heal_callbacks.HALF_FULL)
+        heal_weather_full=self_heal&(heal_code==self_heal_callbacks.WEATHER_FULL)
         status_damage=condition & (raw_kind==status_residual_callbacks.STATUS_RESIDUAL)
         entry_spikes=condition & (raw_kind==entry_spikes_callbacks.ENTRY_SPIKES_HP)
         recoil=condition & (raw_kind==recoil_callbacks.RECOIL_HP)
@@ -724,7 +730,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_status=jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(tape.words[:,index,8],0,6)]
         key=jnp.where(weather_chip,tables.weather_chip[jnp.clip(tape.words[:,index,9],0,4),chip_status],key)
         key=jnp.where(leftovers_heal,tables.leftovers_heal[chip_status],key)
-        key=jnp.where(self_heal,tables.self_heal[chip_status],key)
+        key=jnp.where(self_heal,jnp.where(heal_code!=0,tables.self_move[0],tables.self_heal[chip_status]),key)
         key=jnp.where(status_damage,tables.status_damage[jnp.clip(tape.words[:,index,9],0,3),chip_status],key)
         key=jnp.where(recoil,tables.recoil_damage[jnp.clip(semantic[:,11],0,6)],key)
         key=jnp.where(rough,tables.rough_skin_damage[jnp.clip(semantic[:,11],0,6)],key)
@@ -767,7 +773,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             jnp.clip(sub_raw[:,8],0,1),jnp.clip(sub_raw[:,9]+1,0,2)],key)
         key=jnp.where(protect_attempt,jnp.where((tape.words[:,index,6]&protect_callbacks.SUCCESS)!=0,tables.protect_success,tables.weather_failure),key)
         key=jnp.where(protect_block,tables.protect_block,key)
-        size = jnp.where((pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent,0,tables.length[key]); main = tables.main[key]
+        size = jnp.where((pressure & ~pressure_visible)|encore_tick|leech_silent|sm_silent|heal_weather_full,0,tables.length[key]); main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
         good = ((key > 0)|toxic_write|no_damage_facts|secondary_cont) & enough
@@ -843,12 +849,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # that exact emitted declaration before applying the same retroactive
         # target erasure as original Battle.attrLastMove; no comparison change.
         toxic_pid=tables.causal.base.public_ids[jnp.clip(tape.words[:,index,5],0,len(tables.causal.base.public_ids)-1)]
-        erase_pid=jnp.where(toxic_erases,toxic_pid,jnp.where(sm_sleep,sm_pid,protect_pid))
+        erase_pid=jnp.where(toxic_erases,toxic_pid,jnp.where(sm_sleep,sm_pid,jnp.where(heal_half_full,tables.causal.base.public_ids[jnp.clip(tape.words[:,index,1],0,len(tables.causal.base.public_ids)-1)],protect_pid)))
         protect_move_key=tables.moves[jnp.clip(erase_pid,0,len(tables.moves)-1)]
         protect_declaration=count-tables.length[protect_move_key]+tables.main[protect_move_key]
         protect_declaration_at=jnp.clip(protect_declaration,0,capacity-1)
         protect_previous=words[rows,protect_declaration_at]
-        protect_erases_target=(protect_attempt&protect_failed)|sm_sleep|toxic_erases
+        protect_erases_target=(protect_attempt&protect_failed)|sm_sleep|toxic_erases|heal_half_full
         erase_target_side=jnp.where(toxic_erases,toxic_victim,called[:,0])
         erase_target_slot=jnp.where(toxic_erases,slots[rows,toxic_victim],called[:,1])
         protect_previous_ok=(protect_declaration>=0)&(protect_declaration<count)
@@ -866,7 +872,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_previous_ok &= (protect_previous_tendency[:,2]==semantic[:,2])&(protect_previous_tendency[:,3]==semantic[:,3])
         identity &= ~toxic_sub_failure|toxic_callbacks.owned_substitute_failure(tape,index)
         identity &= ~toxic_existing|toxic_callbacks.owned_existing_status(tape,index)
-        identity &= ~protect_erases_target | protect_previous_ok
+        identity &= ~protect_erases_target | (protect_previous_ok&(~heal_half_full|tables.self_move_still[jnp.clip(erase_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~protect_block | (live[rows,safe]&live[rows,1-safe]&(called[:,0]==tape.words[:,index,1])&(called[:,1]==slots[rows,1-safe])&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
         spikes_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
         spikes_called=(called[:,0]==subject)&(called[:,1]==slots[rows,safe])&(called[:,2]==tables.causal.base.public_ids[spikes_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
@@ -1103,7 +1109,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         for col, value in ((12, hp), (13, maximum)):
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
-        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage|protect_block|color_change|pinch|self_move,new_slot+1,semantic[:,8])
+        toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage|protect_block|color_change|pinch|self_move|self_heal,new_slot+1,semantic[:,8])
         # Intimidate is TWO source lines: the ability actor and boost target
         # can have different public encounters after an ordinary installation.
         toxic_encounters=jnp.where(intimidate[:,None],
@@ -1121,7 +1127,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         result=result.at[:,:,11].set(jnp.where(tendency & toxic_attempt[:,None]
             & (toxic_code==toxic_callbacks.PLAIN_TYPE_IMMUNITY)[:,None],subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&leech[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
-        result=result.at[:,:,11].set(jnp.where(tendency&self_move[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&(self_move|self_heal)[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&encore[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&color_change[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&protect_block[:,None],subject[:,None],result[:,:,11]))

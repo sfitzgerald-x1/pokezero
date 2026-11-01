@@ -18,13 +18,13 @@ from gpu_engine import engine_source_frame_witness as witness
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixtures
-BASE='977d524d2b947a421e94b40105970e8a52d4a298'
+BASE='8cdd966d843e2d9603f4372f593065a7bae8d99d'
 
 class SelfHealOwningTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
   fixtures.NoDamageOwningTests.setUpClass();f=fixtures.NoDamageOwningTests;cls.f=f;cls.metadata=deepcopy(f.metadata)
-  dex=load_showdown_dex_cached(showdown_root());moves=dict(f.dex.moves);cls.names=('recover','synthesis','softboiled','surf')
+  dex=load_showdown_dex_cached(showdown_root());moves=dict(f.dex.moves);cls.names=('recover','synthesis','softboiled','surf','rest','sleeptalk','wish')
   for name in cls.names:
    info=dex.move_info(name);moves[name]=info
    if name not in cls.metadata['vocabulary']['moves']:cls.metadata['vocabulary']['moves'].append(name);cls.metadata['moves'].append(None)
@@ -35,7 +35,7 @@ class SelfHealOwningTests(unittest.TestCase):
    encore=dex.move_info('encore');moves['encore']=encore
    cls.metadata['moves'][cls.metadata['vocabulary']['moves'].index('encore')]=dict(id='encore',base_power=encore.base_power,type=cls.metadata['vocabulary']['types'].index(encore.type.lower()),source_type=encore.type,category=encore.category,pp=encore.pp,accuracy=100,priority=encore.priority,flags={'protect':1,'mirror':1,'bypasssub':1,'metronome':1,'failencore':1})
   cls.dex=ShowdownDex(moves,f.dex.species,f.dex.type_chart)
-  variants={name:Gen3RandbatSpeciesUniverse(name,80,(Gen3RandbatVariant('heal-'+name,'authored',name,'authored',80,cls.names,'Pressure','Leftovers'),))for name in cls.metadata['vocabulary']['species'][1:]}
+  variants={name:Gen3RandbatSpeciesUniverse(name,80,tuple(Gen3RandbatVariant('heal-'+name+str(i),'authored',name,'authored',80,cls.names[i:i+4],'Pressure','Leftovers')for i in(0,4)))for name in cls.metadata['vocabulary']['species'][1:]}
   source=Gen3RandbatSource(RandbatSourceMetadata('gen3randombattle',3,None,None,None,'literal-original-self-heal'),variants)
   labels=set(f.catalog.vocabulary.tokens)
   for n in cls.names:labels|={'move:'+n,'belief:possible_move:'+n}
@@ -51,16 +51,13 @@ class SelfHealOwningTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared);cls.fold=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.runtime['public'].device,p,cls.catalog)))
 
  def test_original_source_callback_closed_scope_and_default_ast(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),74)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),77)
   ids=self.metadata['vocabulary']['moves'];mask=self.helper.device.self_heal.candidates
   self.assertEqual(set(ids[i]for i in np.flatnonzero(mask)),{'recover','synthesis','softboiled'})
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.self_heal)
   for n in self.names[:3]:self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[ids.index(n)]),0)
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old)
-  # The composed source adds exactly this independently reviewed observer
-  # import; its numerical statements and RNG expressions remain in the oracle.
-  observers=[n for n in new.body if isinstance(n,ast.ImportFrom) and n.level==1 and n.module is None and len(n.names)==1 and n.names[0].name=='engine_pinch_item_callbacks' and n.names[0].asname=='pinch_callbacks']
-  self.assertEqual(len(observers),1);new.body.remove(observers[0]);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
   self.assertIn('eligible=acts&caller_acts&(caller_move==move)',Path('gpu_engine/transition.py').read_text())
   script=r'''const root=process.argv[1],{Dex}=require(root+'/dist/sim/dex.js'),{Battle}=require(root+'/dist/sim/battle.js'),d=Dex.mod('gen3'),out=[];
 for(const id of ['recover','softboiled','synthesis'])for(const weather of ['','sunnyday','raindance','sandstorm','hail']){
@@ -90,9 +87,9 @@ for(const id of ['recover','softboiled','synthesis'])for(const weather of ['','s
   return s,after,initial.cursor,consumers,tape,capture,actor,eligible
 
  def test_mixed_source_span_namespace_lifetime_and_unsupported(self):
-  s,after,cursor,consumers,t,c,actor,eligible=self.component();good=[True,True,True,False,False,False,False,True]
+  s,after,cursor,consumers,t,c,actor,eligible=self.component();good=[True,True,True,True,False,False,False,True]
   self.assertEqual(cb.owned(t,1).tolist(),good);self.assertEqual(cb.captured_matches(t,c).tolist(),good)
-  observed=risk.self_heal_on_tape(t,j.ones(8,bool),active=eligible,captured=c);self.assertEqual((observed.execution.risks.carry.risk&risk.SELF_EFFECT!=0).tolist(),[False,False,False,True,True,True,False,False])
+  observed=risk.self_heal_on_tape(t,j.ones(8,bool),active=eligible,captured=c);self.assertEqual((observed.execution.risks.carry.risk&risk.SELF_EFFECT!=0).tolist(),[False,False,False,False,True,True,False,False])
   for name in ('engine_binding','source_binding','move_binding','producer_binding'):
    bad=t._replace(**{name:getattr(t,name).at[0].add(j.uint32(1))});self.assertFalse(bool(cb.owned(bad,1).any()))
    with self.assertRaises(ValueError):cb.owned(t._replace(**{name:j.broadcast_to(getattr(t,name),(8,8))}),1)

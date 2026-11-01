@@ -618,6 +618,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         weather_chip = kind == weather_effects.WEATHER_CHIP
         leftovers_heal = kind == leftovers_callbacks.LEFTOVERS_HEAL
         self_heal = kind == self_heal_callbacks.SELF_HEAL
+        heal_failure=self_heal&((raw[:,9]&~self_heal_callbacks.SECONDARY)!=0)
         status_damage = kind == status_residual_callbacks.STATUS_RESIDUAL
         entry_spikes = kind == entry_spikes_callbacks.ENTRY_SPIKES_HP
         no_damage_header=kind==no_damage.TARGET_NO_DAMAGE
@@ -965,10 +966,13 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             z,jnp.where(leftovers_heal|self_heal,0,1),jnp.where(leftovers_heal|substitute|self_heal,0,1),entry_spikes.astype(jnp.int32)),axis=1)  # heal tags are not damage metadata
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
-        semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute|self_heal|entry_spikes)[:,None],chip_semantic,semantic)
+        semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute|(self_heal&~heal_failure)|entry_spikes)[:,None],chip_semantic,semantic)
         sub_fail_payload=jnp.stack((status_enc,jnp.full_like(z,public_active.STALL_FAIL),z,z,z,z,z,z),axis=1)
         sub_fail_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),sub_fail_payload),axis=1)
         semantic=jnp.where((substitute&substitute_failure)[:,None],sub_fail_semantic,semantic)
+        heal_fail_payload=jnp.stack((status_enc,jnp.full_like(z,public_active.STALL_FAIL),z,z,z,z,z,z),axis=1)
+        heal_fail_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),heal_fail_payload),axis=1)
+        semantic=jnp.where(heal_failure[:,None],heal_fail_semantic,semantic)
         recoil_own=state.owner==actor_side
         recoil_percent=(100*raw[:,7]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8])
         recoil_percent=jnp.where((raw[:,7]<raw[:,8])&(recoil_percent==100),99,recoil_percent)
