@@ -182,6 +182,7 @@ def pack_ground(g):
     if g is None:return j.zeros((0,),j.int32)
     ground_shape(g)
     return j.concatenate((g.electric.reshape(1),g.ground.reshape(1),
+        j.array([len(g.abilities),len(g.items)],j.int32),
         g.abilities.astype(j.int32),g.items.astype(j.int32)))
 
 

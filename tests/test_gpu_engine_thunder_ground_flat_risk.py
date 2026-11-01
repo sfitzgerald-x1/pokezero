@@ -32,12 +32,12 @@ class FlatGroundRiskTests(unittest.TestCase):
   return t._replace(execution=t.execution._replace(risks=risk.Context(carry,rt)))
  def test_real_compiler_exact_flat_values_and_strict_current_ground_join(self):
   g=self.thunder.device.ground_immunity;rt=self.runtime['kernel_risk_compiled'].device;packed=rt.thunder_wave_ground_immunity
-  expected=np.concatenate(([int(g.electric),int(g.ground)],np.asarray(g.abilities,np.int32),np.asarray(g.items,np.int32))).astype(np.int32)
+  expected=np.concatenate(([int(g.electric),int(g.ground),len(g.abilities),len(g.items)],np.asarray(g.abilities,np.int32),np.asarray(g.items,np.int32))).astype(np.int32)
   np.testing.assert_array_equal(packed,expected);self.assertEqual(packed.shape,expected.shape);self.assertEqual(packed.dtype,j.int32)
   self.assertTrue(all(isinstance(v,jax.Array)for v in rt));risk.check_compiled(self.runtime['kernel_risk_compiled'])
   raw=json.loads(risk._COMPILED[self.runtime['kernel_risk_compiled']][4]);self.assertEqual(raw['thunder_wave_ground_immunity'],expected.tolist())
   t=self.tape();context=self.runtime['thunder_wave_context'];self.assertEqual(cb._ground_source(t,context).tolist(),[True]*8)
-  for i in (0,1,2,len(packed)-1):
+  for i in (0,1,2,3,4,len(packed)-1):
    bad=packed.at[i].add(1);current=t._replace(execution=t.execution._replace(risks=t.execution.risks._replace(tables=rt._replace(thunder_wave_ground_immunity=bad))))
    self.assertEqual(cb._ground_source(current,context).tolist(),[False]*8)
   for bad in (packed[None,:],packed.astype(j.uint32),packed[:-1],None):
