@@ -85,7 +85,7 @@ class Captured(NamedTuple):
     item:object=None
     ability:object=None
 
-def compile_data(engine_catalog,metadata=None,source_rules=None):
+def compile_data(engine_catalog,metadata=None,source_rules=None,*,levitate_item_compiled=None):
     """Private host compiler from ORIGINAL immutable numerical columns."""
     if isinstance(j.zeros((),j.int32),jax.core.Tracer):raise ValueError('no-damage compiler cannot be traced')
     public.check_catalog(engine_catalog,engine_catalog.engine_table,expected_binding=engine_catalog.binding,
@@ -123,7 +123,7 @@ def compile_data(engine_catalog,metadata=None,source_rules=None):
 const fs=require('fs'),path=require('path'),crypto=require('crypto'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
 const checked=require(process.argv[2]).build(root,meta),f=require(path.join(root,'dist/data/mods/gen3/scripts.js')).Scripts.actions.tryMoveHit;
 const d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),P=require(path.join(root,'dist/sim/pokemon.js')).Pokemon,h=f=>crypto.createHash('sha256').update(f.toString()).digest('hex'),q=d.moves.get('earthquake'),a=d.abilities.get('levitate');
-process.stdout.write(JSON.stringify({tryMoveHit:h(f),runImmunity:h(P.prototype.runImmunity),isGrounded:h(P.prototype.isGrounded),earthquake:{id:q.id,gen:q.gen,power:q.basePower,type:q.type,category:q.category,target:q.target,accuracy:q.accuracy,priority:q.priority,ignoreImmunity:q.ignoreImmunity,callbacks:Object.keys(q).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&q[k]!==undefined)},levitate:{id:a.id,gen:a.gen,callbacks:Object.keys(a).filter(k=>/^on/.test(k)&&a[k]!==undefined)},doubleedge:(()=>{const x=d.moves.get('doubleedge');return {id:x.id,gen:x.gen,power:x.basePower,type:x.type,category:x.category,target:x.target,accuracy:x.accuracy,priority:x.priority,recoil:x.recoil,callbacks:Object.keys(x).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&x[k]!==undefined)}})(),source_tree:checked.source_tree,compiled_tree:checked.compiled_tree}));"""
+process.stdout.write(JSON.stringify({tryMoveHit:h(f),runImmunity:h(P.prototype.runImmunity),isGrounded:h(P.prototype.isGrounded),earthquake:{id:q.id,gen:q.gen,power:q.basePower,type:q.type,category:q.category,target:q.target,accuracy:q.accuracy,priority:q.priority,ignoreImmunity:q.ignoreImmunity,callbacks:Object.keys(q).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&q[k]!==undefined)},levitate:{id:a.id,gen:a.gen,callbacks:Object.keys(a).filter(k=>/^on/.test(k)&&a[k]!==undefined)},twistedspoon:(()=>{const x=d.items.get('twistedspoon');return {id:x.id,name:x.name,gen:x.gen,hooks:Object.keys(x).filter(k=>/^on/.test(k)&&x[k]!==undefined).sort().map(k=>[k,typeof x[k],typeof x[k]==='function'?h(x[k]):x[k]])}})(),doubleedge:(()=>{const x=d.moves.get('doubleedge');return {id:x.id,gen:x.gen,power:x.basePower,type:x.type,category:x.category,target:x.target,accuracy:x.accuracy,priority:x.priority,recoil:x.recoil,callbacks:Object.keys(x).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&x[k]!==undefined)}})(),source_tree:checked.source_tree,compiled_tree:checked.compiled_tree}));"""
         descriptor=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
         if descriptor['tryMoveHit']!='af529997d52b6d856301bc8f958ead5963f68abc58d9568c82df24f212b0a97f':raise ValueError('original Gen3 accuracy-before-TryHit source required')
         if (descriptor['runImmunity']!='4c7cbdb0b36ed635276037455e9ee78593e79268c4c97c70a1a892d6651c198d'
@@ -132,6 +132,7 @@ process.stdout.write(JSON.stringify({tryMoveHit:h(f),runImmunity:h(P.prototype.r
                 or descriptor['levitate']!=dict(id='levitate',gen=3,callbacks=[])):
             raise ValueError('original Gen3 Earthquake/Levitate grounding source required')
         if descriptor['doubleedge']!=dict(id='doubleedge',gen=1,power=120,type='Normal',category='Physical',target='normal',accuracy=100,priority=0,recoil=[1,3],callbacks=[]):raise ValueError('canonical original Double-Edge immunity source required')
+        if descriptor['twistedspoon']!=dict(id='twistedspoon',name='Twisted Spoon',gen=2,hooks=[['onBasePowerPriority','number',15],['onModifySpA','function','e0f9012a4f7ea5866c59f11ce3a7c7b7969c082e241a338d1f4e62949fdb13a1'],['onModifySpAPriority','number',1]]):raise ValueError('original defending Twisted Spoon dormant source required')
         if json.dumps(descriptor['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(descriptor['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original no-damage source changed')
     quake=0;ground=j.array(0,j.int32);flying=j.array(0,j.int32)
     allowed_items=j.zeros(1,j.bool_)
@@ -144,6 +145,30 @@ process.stdout.write(JSON.stringify({tryMoveHit:h(f),runImmunity:h(P.prototype.r
                     and not bool(t.always_hit[i]) and int(t.priority[i])==0):quake=i
         if t.items is not None:
             allowed_items=t.items.leftovers.at[0].set(True)
+            if descriptor is not None:
+                names=metadata['vocabulary']['items']
+                if allowed_items.shape!=(len(names),):raise ValueError('same original Levitate item namespace required')
+                ids=[i for i,name in enumerate(names)if name==descriptor['twistedspoon']['id']]
+                if len(ids)>1 or (ids and ids[0]==0):raise ValueError('unique canonical Twisted Spoon item row required')
+                if ids:
+                    item=ids[0]
+                    for field in ('leftovers','lum','choice_band','thick_club','light_ball','soul_dew'):
+                        values=getattr(t.items,field)
+                        if values.shape!=(len(names),) or values.dtype!=j.dtype(j.bool_) or bool(values[item]):raise ValueError('actual dormant defending Twisted Spoon columns required')
+                    if t.items.pinch_stat.shape!=(len(names),) or int(t.items.pinch_stat[item])!=-1:raise ValueError('actual dormant defending Twisted Spoon pinch column required')
+                    allowed_items=allowed_items.at[item].set(True)
+    # The legacy lower parser may receive ONLY this item mask from the SAME
+    # verified original Direct compiler. No other optional capability/flag is
+    # enabled, and a raw caller-supplied array cannot mint this permission.
+    item_origin=None
+    if levitate_item_compiled is not None:
+        from . import engine_direct_hit_controls as direct
+        verified=direct.check_compiled(levitate_item_compiled)
+        if direct._COMPILED[levitate_item_compiled][2] is not engine_catalog:raise ValueError('same original Direct/Levitate item catalog required')
+        _shape(verified.no_damage)
+        if verified.no_damage.levitate_items.shape!=allowed_items.shape:raise ValueError('same original Direct/Levitate item namespace required')
+        allowed_items=verified.no_damage.levitate_items
+        item_origin=np.asarray(verified.no_damage.binding).tolist()
     recoil_move=0
     if t.damage_moves is not None and a is not None and t.entry is not None:
         public_id=engine_catalog.public_moves.ids.get('doubleedge',0)
@@ -160,6 +185,7 @@ process.stdout.write(JSON.stringify({tryMoveHit:h(f),runImmunity:h(P.prototype.r
         levitate_move=quake,ground_type=int(ground),flying_type=int(flying),levitate_items=np.asarray(allowed_items).tolist(),
         candidates=candidates.tolist(),move_types=np.asarray(t.type).tolist(),dynamic_type=dynamic.tolist(),dark_type=int(dark),abilities=[np.asarray(v).tolist()for v in columns],
         source=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+    if item_origin is not None:payload['levitate_items_origin']=item_origin
     words=lambda v:j.asarray(v,j.uint32)
     return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),

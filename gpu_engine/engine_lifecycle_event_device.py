@@ -192,7 +192,7 @@ def _item_inputs(items, source):
 
 
 def compile_projector(metadata, projector, *, species_catalog, source, context_tables, status_events=False,
-        items=None, weather_catalog=None):
+        items=None, weather_catalog=None, direct_hit_compiled=None):
     """Host-only compilation, retaining original guarded upstream handles.
 
     Upstream constructor/compiler provenance is trusted, not attested by tags.
@@ -250,7 +250,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     spikes_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if n=='spikes'),0)
     thunder_wave_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='thunderwave'),0)
     sleep_powder_move=next((i for i,n in enumerate(metadata['vocabulary']['moves']) if normalize_id(n)=='sleeppowder'),0)
-    no_damage_data=no_damage.compile_data(projector.catalog)
+    no_damage_data=no_damage.compile_data(projector.catalog,levitate_item_compiled=direct_hit_compiled)
     wonder_rows=[i for i,n in enumerate(metadata["vocabulary"].get("abilities",[])) if normalize_id(n)=="wonderguard"]
     if len(wonder_rows)>1:raise ValueError("one original Wonder Guard ability row required")
     wonder_engine=wonder_rows[0] if wonder_rows else 0

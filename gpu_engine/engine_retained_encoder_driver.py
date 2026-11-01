@@ -723,7 +723,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     speed_profile=None;execution_compiled=None;no_output_compiled=None;kernel_risk_compiled=None
     if public_mode == 'retained-full':
         from . import engine_full_v4_event_device as full
-        public_handle = full.compile_adapter(json.loads(request['metadata']), base_handle, catalog=catalog)
+        public_handle = full.compile_adapter(json.loads(request['metadata']), base_handle, catalog=catalog,
+            direct_hit_compiled=direct_hit_compiled if direct_hit_mode=='kernel-event' else None)
         check_public, register_public = full.check_adapter, full.register
         speed_profile=weather_speed.compile_profile(json.loads(request['metadata']),catalog=catalog,
             engine_catalog=request['lifecycle'],rules=request['rules'])

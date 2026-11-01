@@ -147,7 +147,7 @@ class Compiled:
 _COMPILED = weakref.WeakKeyDictionary()
 
 
-def compile_adapter(metadata, projector, *, catalog):
+def compile_adapter(metadata, projector, *, catalog, direct_hit_compiled=None):
     """Host-only original full catalog + reviewed causal projector boundary.
 
     Strings exist only here, at static schema compilation. Each engine move row
@@ -160,7 +160,7 @@ def compile_adapter(metadata, projector, *, catalog):
         raise ValueError('original engine/public FULL catalog move edge required')
     simple = public_context.compile_context(catalog.source, catalog.abilities, catalog.moves)
     lower = causal.compile_projector(metadata, projector, species_catalog=catalog.species,
-        source=catalog.source, context_tables=simple, status_events=True, items=catalog.items,weather_catalog=catalog)
+        source=catalog.source, context_tables=simple, status_events=True, items=catalog.items,weather_catalog=catalog,direct_hit_compiled=direct_hit_compiled)
     kwargs = v4_encoder.wire_kwargs(catalog)
     name = catalog.species.names[1]
     ident = ('p1a: '+name, 'p2a: '+name)
