@@ -950,7 +950,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             & (incoming==cursor.physical_active[rows,safe_side])
             & (((toxic_callbacks.supported_raw(raw)|toxic_callbacks.owned_substitute_failure(tape,index)|toxic_callbacks.owned_existing_status(tape,index))&(tables.toxic_move>0)&(raw[:,5]==tables.toxic_move))
-                |((thunder_callbacks.supported_raw(raw)|thunder_callbacks.owned_substitute_failure(tape,index)|thunder_callbacks.owned_ground_immunity(tape,index))&(tables.thunder_wave_move>0)&(raw[:,5]==tables.thunder_wave_move))
+                |((thunder_callbacks.supported_raw(raw)|thunder_callbacks.owned_substitute_failure(tape,index)|thunder_callbacks.owned_ground_immunity(tape,index)|thunder_callbacks.owned_limber_immunity(tape,index))&(tables.thunder_wave_move>0)&(raw[:,5]==tables.thunder_wave_move))
                 |(powder_callbacks.supported_raw(raw,primary_sleep=True)&(raw[:,5]>0)&(raw[:,5]<len(tables.primary_sleep_moves))&tables.primary_sleep_moves[jnp.clip(raw[:,5],0,len(tables.primary_sleep_moves)-1)])))
         toxic_ok |= (tables.status_events&~tables.raw_begin&actor_ok&status_identity&(phase==0)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&(incoming==cursor.physical_active[rows,safe_side])

@@ -4,7 +4,8 @@ The status write is made by the original numerical kernel. This observer emits
 its literal guard continuation, then requires the same current MOVE/status
 span and both original consumers. Explicit SAME source rules additionally bind
 the actual no-write Substitute failure and prospective same-call natural Ground
-immunity. Other non-successes stay UNKNOWN.
+immunity and the exact current Limber no-write status interruption. Other
+non-successes stay UNKNOWN.
 """
 from dataclasses import dataclass
 import hashlib
@@ -32,6 +33,7 @@ class Data(NamedTuple):
     move_id:object
     substitute_failure:object=None # SAME original source rules; legacy closed
     ground_immunity:object=None # SAME source-only private current-fact capability
+    limber_ability:object=None # Explicit SAME rules only; scalar original ABI id
 class GroundData(NamedTuple):
     electric:object
     ground:object
@@ -103,7 +105,7 @@ def compile_thunder_wave(*,engine_catalog,metadata,source_rules=None):
             or int(table.effects.status[move])!=m.PAR or not bool(table.effects.thunderwave[move])
             or engine_catalog.ids[move]<=0 or engine_catalog.targets[move]!=1):
         raise ValueError('canonical Gen3 Thunder Wave100/primary PAR/target required')
-    descriptor=None;ground=None
+    descriptor=None;ground=None;limber=0
     if source_rules is not None:
         from . import engine_request_source as request
         origin=request._rules_origin(source_rules)
@@ -116,8 +118,9 @@ const h=f=>crypto.createHash('sha256').update(f.toString()).digest('hex');
 const hooks=['onTryHit','onTryPrimaryHit','onTryMove','onPrepareHit','onModifyMove','onAnyModifyMove','onAllyModifyMove','onNegateImmunity','onAnyTryHit','onAllyTryHit','onFoeTryHit','onSourceTryHit','onDeductPP'];
 const quiet=e=>e.exists&&e.gen<=3&&!hooks.some(k=>e[k]!==undefined);
 const wa=d.abilities.get('waterabsorb'),other=hooks.filter(k=>k!=='onTryHit');
+const li=d.abilities.get('limber'),P=require(path.join(root,'dist/sim/pokemon.js')).Pokemon,A=require(path.join(root,'dist/sim/battle-actions.js')).BattleActions;
 const dormantWaterAbsorb=e=>e.id==='waterabsorb'&&e.exists&&e.gen<=3&&typeof e.onTryHit==='function'&&!other.some(k=>e[k]!==undefined);
-process.stdout.write(JSON.stringify({sub:h(s.onTryPrimaryHit),getDamage:h(require(path.join(root,'dist/sim/battle-actions.js')).BattleActions.prototype.getDamage),runImmunity:h(require(path.join(root,'dist/sim/pokemon.js')).Pokemon.prototype.runImmunity),ground:{type:m.type,ignoreImmunity:m.ignoreImmunity,abilities:meta.vocabulary.abilities.map(n=>{const e=d.abilities.get(n);return quiet(e)||dormantWaterAbsorb(e)}),dormantWaterAbsorb:{id:wa.id,exists:wa.exists,gen:wa.gen,onTryHit:h(wa.onTryHit),otherHooks:other.map(k=>typeof wa[k])},items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))},priority:s.onTryPrimaryHitPriority,tryMoveHit:h(require(path.join(root,'dist/data/mods/gen3/scripts.js')).Scripts.actions.tryMoveHit),move:{id:m.id,category:m.category,target:m.target,status:m.status,accuracy:m.accuracy,bypass:!!m.flags.bypasssub},source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
+process.stdout.write(JSON.stringify({limber:{id:li.id,gen:li.gen,exists:li.exists,onSetStatus:h(li.onSetStatus),onUpdate:h(li.onUpdate),hooks:Object.keys(li).filter(k=>k.startsWith('on')).sort(),index:meta.vocabulary.abilities.indexOf('limber')},setStatus:h(P.prototype.setStatus),trySetStatus:h(P.prototype.trySetStatus),runMoveEffects:h(A.prototype.runMoveEffects),sub:h(s.onTryPrimaryHit),getDamage:h(require(path.join(root,'dist/sim/battle-actions.js')).BattleActions.prototype.getDamage),runImmunity:h(require(path.join(root,'dist/sim/pokemon.js')).Pokemon.prototype.runImmunity),ground:{type:m.type,ignoreImmunity:m.ignoreImmunity,abilities:meta.vocabulary.abilities.map(n=>{const e=d.abilities.get(n);return quiet(e)||dormantWaterAbsorb(e)}),dormantWaterAbsorb:{id:wa.id,exists:wa.exists,gen:wa.gen,onTryHit:h(wa.onTryHit),otherHooks:other.map(k=>typeof wa[k])},items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))},priority:s.onTryPrimaryHitPriority,tryMoveHit:h(require(path.join(root,'dist/data/mods/gen3/scripts.js')).Scripts.actions.tryMoveHit),move:{id:m.id,category:m.category,target:m.target,status:m.status,accuracy:m.accuracy,bypass:!!m.flags.bypasssub},source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
         descriptor=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
         if (descriptor['sub']!='050e1c1fbdb80ea3ab7bc63909eb72433cb45e9c49ff7889e16ec2c207528a24'
                 or descriptor['getDamage']!='dfd031900da8c77e5e1a2721858d8d4a7804bc7def1b7a1d486220521a6a7f12'
@@ -134,12 +137,25 @@ process.stdout.write(JSON.stringify({sub:h(s.onTryPrimaryHit),getDamage:h(requir
                 or g['type']!='Electric' or g['ignoreImmunity']is not False or int(table.type[move])!=electric
                 or int(table.effects.ground_type)!=ground_type or int(table.type_num[electric,ground_type])!=0):raise ValueError('canonical Thunder Wave natural Ground immunity required')
         ground=GroundData(j.array(electric,j.int32),j.array(ground_type,j.int32),j.array(g['abilities'],j.bool_),j.array(g['items'],j.bool_))
+        li=descriptor['limber']
+        if (li['id']!='limber' or li['gen']!=3 or li['exists']is not True
+                or li['onSetStatus']!='60da459401ee4a61664e9e02b30d4e3f6694151655c5e63f2aad5c64a33f5bc4'
+                or li['onUpdate']!='087c0d1cbf7a25ef68b740a4f53bfdb778edd7319dd717c9a78136fb0e4bc6e9'
+                or li['hooks']!=['onSetStatus','onUpdate']
+                or descriptor['setStatus']!='1078d45febffb2ca663eca5c04d18d154304aaa467b57bf22535d90715172ef0'
+                or descriptor['trySetStatus']!='11c0204459e16765256cfcb741932358f443878d4cd11aac4847e34ec527e850'
+                or descriptor['runMoveEffects']!='bb75053d0bc1c666f41ea43143e8440ec1d415194e979d79eb007ae7ed3ea2b5'):
+            raise ValueError('canonical original Limber no-write status source required')
+        limber=max(0,li['index'])
+        if limber and (table.secondary is None or not bool(table.secondary.ability_immunity[limber,m.PAR])):
+            raise ValueError('same installed Limber paralysis-immunity namespace required')
+
     payload=dict(schema='pokezero.thunder-wave-actual-par.v1',substitute_failure=descriptor,move=move,engine=engine_catalog.engine_binding,
         source=engine_catalog.source_binding,moves=engine_catalog.move_binding,producer=engine_catalog.binding)
     words=lambda x:j.asarray(x,j.uint32)
     data=Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(move,j.int32),j.array(descriptor is not None,j.bool_),ground)
+        words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(move,j.int32),j.array(descriptor is not None,j.bool_),ground,j.array(limber,j.int32))
     result=Compiled(data);_COMPILED[result]=(data,tuple(data),engine_catalog,source_rules);return result
 
 def check_compiled(compiled):
@@ -163,6 +179,85 @@ def supported_raw(raw):
 def ground_raw(raw):
     flags=primary.ACCURACY_HIT|primary.FINAL_HIT|primary.LIVE|primary.DAMAGE_IMMUNE
     return primary.literal_valid(raw)&(raw[:,6]==flags)&j.all(raw[:,7:]==0,axis=1)
+
+
+def limber_raw(raw):
+    flags=primary.ACCURACY_HIT|primary.FINAL_HIT|primary.ABILITY_IMMUNE|primary.LIVE|primary.SECONDARY
+    return primary.literal_valid(raw)&(raw[:,6]==flags)&j.all(raw[:,7:]==0,axis=1)
+
+
+def _limber_valid(tape,p):
+    """Replay actual retained source operands, never an accepted-valid flag."""
+    data=p.context.data;abi=getattr(data,'limber_ability',None);g=data.ground_immunity;b=len(tape.count)
+    if abi is None or g is None:return j.zeros(b,bool)
+    life._typed(abi,(),j.int32)
+    actual=tape.execution
+    if actual is None or actual.risks is None:return j.zeros(b,bool)
+    installed=getattr(actual.risks.tables,'thunder_wave_limber_ability',None)
+    if installed is None:return j.zeros(b,bool)
+    life._typed(installed,(),j.int32);ground_shape(g)
+    for name in ('side','physical','target','move','caller','slot','resolved_type','power','numerator','denominator'):life._typed(getattr(p,name),(b,),j.int32)
+    for name in ('requested','accuracy','hit','immune','protected','absorbed'):life._typed(getattr(p,name),(b,),j.bool_)
+    before=p.before
+    for name,x in zip(Private._fields,before,strict=True):
+        tail=(2,)if name in ('types','base_types')else(4,)if name in ('moves','pp')else()
+        life._typed(x,(b,2)+tail,j.uint32 if name=='volatile'else j.int32)
+    r=j.arange(b);side=j.clip(p.side,0,1);foe=1-side
+    good=_ground_source(tape,p.context)&(abi>0)&(abi<len(g.abilities))&(abi==installed)&p.requested
+    good &= (p.side>=0)&(p.side<2)&(p.physical>=0)&(p.physical<6)&(p.target>=0)&(p.target<6)
+    good &= (p.move==data.move_id)&(p.caller==p.move)&(p.slot>=0)&(p.slot<4)&(before.moves[r,side,j.clip(p.slot,0,3)]==p.move)
+    good &= (p.resolved_type==g.electric)&(p.power==0)&p.accuracy&p.hit&~p.immune&(p.numerator==1)&(p.denominator==1)&~p.protected&~p.absorbed
+    good &= (before.ability[r,foe]==abi)&j.all(before.types[r,foe]!=g.ground,axis=1)
+    good &= j.all((before.hp>0)&(before.hp<=before.max_hp)&(before.max_hp<=1_000_000),axis=1)
+    good &= j.all((before.status==0)&(before.status_counter==0)&(before.substitute_hp==0),axis=1)&j.all(before.pp>=0,axis=(1,2))
+    good &= j.all(before.ability==before.base_ability,axis=1)&j.all(before.types==before.base_types,axis=(1,2))
+    for n,mask in [('ability',g.abilities),('item',g.items)]:
+        value=getattr(before,n);good &= j.all((value>=0)&(value<len(mask))&mask[j.clip(value,0,len(mask)-1)],axis=1)
+    for n in ('volatile','confusion_counter','protect_counter','choice_move','encore_move','encore_counter','charge_move','charge_counter'):good &= j.all(getattr(before,n)==0,axis=1)
+    return good
+
+
+def _limber_attempt(p,after,a):
+    b=len(p.side);r=j.arange(b);foe=1-j.clip(p.side,0,1)
+    for x in a[:11]:life._typed(x,(b,),j.bool_)
+    for x in a[11:]:life._typed(x,(b,),j.int32)
+    # All actual status-stage fields join the SAME before/after and actual
+    # accuracy/Outcome. Explicit counter equality precedes packed RAW26.
+    good=(a.accuracy_hit==p.accuracy)&(a.hit==p.hit)&~a.type_immune&a.ability_immune&~a.substitute_block&a.live&~a.applied
+    good &= (a.protected==p.protected)&(a.absorbed==p.absorbed)&(a.damage_immune==p.immune)&a.secondary_active
+    good &= (a.old_status==p.before.status[r,foe])&(a.new_status==after.status[r,foe])&(a.old_status==0)&(a.new_status==0)
+    good &= (a.old_counter==p.before.status_counter[r,foe])&(a.new_counter==after.status_counter[r,foe])&(a.old_counter==0)&(a.new_counter==0)
+    for old,new in zip(p.before,after,strict=True):good &= j.all((old==new).reshape(b,-1),axis=1)
+    return good
+
+
+def _limber_matches(tape,c,index,*,claimed):
+    from . import engine_execution_completeness as ex
+    p=c.pending;b=len(p.side);r=j.arange(b);actual=ex._context(tape)
+    if actual is None:return j.zeros(b,bool)
+    ledger=actual.ledger;slot,same=ex._ticket(ledger,p.ticket);start=ledger.start[r,slot]
+    index=j.broadcast_to(j.asarray(index,j.int32),(b,));at=j.clip(index,0,tape.words.shape[1]-1);prior=j.clip(at-1,0,tape.words.shape[1]-1)
+    raw=primary.words_device(p.side,p.physical,p.target,p.move,c.attempt);decl=tape.words[r,prior]
+    good=_limber_valid(tape,p)&_limber_attempt(p,c.after,c.attempt)&same&limber_raw(raw)&j.all(tape.words[r,at]==raw,axis=1)&(start==index)&(start>0)
+    good &= (ledger.site[r,slot]==int(ex.Site.PRIMARY_PARALYSIS))&(ledger.side[r,slot]==1-p.side)&(ledger.phase[r,slot]==0)
+    good &= (p.physical==tape.cursor.physical_active[r,j.clip(p.side,0,1)])&(p.target==tape.cursor.physical_active[r,1-j.clip(p.side,0,1)])
+    good &= j.all(ledger.generation[r,slot]==tape.cursor.generation,axis=1)&tape.cursor.initialized
+    good &= (decl[:,0]==public.MOVE)&j.all(decl[:,1:6]==raw[:,1:6],axis=1)&j.all(decl[:,6:]==0,axis=1)
+    for pos in (prior,at):good &= (tape.event_turn[r,pos]==ledger.turn[r,slot])&(tape.event_phase[r,pos]==ledger.phase[r,slot])&j.all(tape.event_generation[r,pos]==ledger.generation[r,slot],axis=1)
+    good &= j.all(tape.switch_details[r,at]==0,axis=1)
+    if claimed:
+        good &= (ledger.stage[r,slot]==2)&(ledger.end[r,slot]==start+1)&(index<tape.count)&(ledger.claimed[r,at]==slot+1)&(ledger.no_output_kind[r,slot]==0)
+        good &= j.all(ledger.words[r,at]==raw,axis=1)&(ledger.event_turn[r,at]==tape.event_turn[r,at])&(ledger.event_phase[r,at]==tape.event_phase[r,at])&j.all(ledger.event_generation[r,at]==tape.event_generation[r,at],axis=1)
+    else:good &= (ledger.stage[r,slot]==1)&(tape.count==start+1)
+    return good
+
+
+def owned_limber_immunity(tape,index):
+    from . import engine_execution_completeness as ex
+    actual=ex._context(tape);good=j.zeros(len(tape.count),bool)
+    if actual is None or actual.thunder_wave_immunity is None:return good
+    for capture in actual.thunder_wave_immunity:good |= _limber_matches(tape,capture,index,claimed=True)
+    return good
 
 
 def _private(state):
@@ -340,7 +435,7 @@ def span_matches(tape,ticket,side,physical,target,move,attempt,context):
     status_word=j.stack((j.full_like(side,status.STATUS_APPLIED),absent,absent,1-side,target,
         attempt.old_status,attempt.new_status,j.full_like(side,status.PRIMARY),zero,zero),axis=1)
     decl=tape.words[rows,prefix]
-    failed=(context.data.substitute_failure&substitute_failure_source(tape,raw))|owned_ground_immunity(tape,start)
+    failed=(context.data.substitute_failure&substitute_failure_source(tape,raw))|owned_ground_immunity(tape,start)|owned_limber_immunity(tape,start)
     expected_end=start+j.where(failed,1,2)
     good=(_bound(tape,context)&same&(supported_raw(raw)|failed)&(move==context.data.move_id)
         &(attempt.old_counter==0)&(attempt.new_counter==0)&(start>0)&(tape.count==expected_end)
@@ -362,22 +457,27 @@ def record_device(tape,ticket,side,physical,target,move,attempt,context,*,reques
     if actual is None:return tape
     primary._shape(requested,tape.count.shape,j.bool_)
     raw=primary.words_device(side,physical,target,move,attempt)
-    ground=j.zeros(len(tape.count),bool);capture=None
+    ground=j.zeros(len(tape.count),bool);limber=j.zeros_like(ground);capture=None
     if ground_pending is not None:
         if type(ground_pending)is not GroundPending or state is None:raise ValueError('actual Ground immunity before/after required')
         capture=GroundCaptured(ground_pending,_private(state),attempt)
         ground=_ground_valid(tape,ground_pending)&ground_raw(raw)
-        for left,right in zip(ground_pending.ticket,ticket,strict=True):ground &= j.all(left==right)
-        for left,right in zip((ground_pending.side,ground_pending.physical,ground_pending.target,ground_pending.move),(side,physical,target,move),strict=True):ground &= left==right
-        if ground_pending.context is not context:ground &= False
+        limber=_limber_valid(tape,ground_pending)&_limber_attempt(ground_pending,capture.after,attempt)&limber_raw(raw)
+        for left,right in zip(ground_pending.ticket,ticket,strict=True):
+            ground &= j.all(left==right);limber &= j.all(left==right)
+        for left,right in zip((ground_pending.side,ground_pending.physical,ground_pending.target,ground_pending.move),(side,physical,target,move),strict=True):
+            ground &= left==right;limber &= left==right
+        if ground_pending.context is not context:ground &= False;limber &= False
         for a,z in zip(ground_pending.before,capture.after,strict=True):ground &= j.all((a==z).reshape(len(tape.count),-1),axis=1)
         previous=actual.thunder_wave_immunity or ()
         if len(previous)>=2:raise ValueError('only original two actor immunity records per frame')
         tape=tape._replace(execution=actual._replace(thunder_wave_immunity=previous+(capture,)))
-    valid=_bound(tape,context)&(supported_raw(raw)|(context.data.substitute_failure&substitute_failure_source(tape,raw))|ground)&(move==context.data.move_id)&(attempt.old_counter==0)&(attempt.new_counter==0)
+    valid=_bound(tape,context)&(supported_raw(raw)|(context.data.substitute_failure&substitute_failure_source(tape,raw))|ground|limber)&(move==context.data.move_id)&(attempt.old_counter==0)&(attempt.new_counter==0)
     tape=public._append(tape,primary.TOXIC_ATTEMPT,side,physical,1-side,target,tuple(raw[:,i] for i in range(5,10)),requested&valid)
     same=span_matches(tape,ticket,side,physical,target,move,attempt,context)
-    if capture is not None:same |= _ground_matches(tape,capture,tape.execution.ledger.start[j.arange(len(tape.count)),j.clip(ticket.slot,0,tape.execution.ledger.site.shape[1]-1)],claimed=False)
+    if capture is not None:
+        start=tape.execution.ledger.start[j.arange(len(tape.count)),j.clip(ticket.slot,0,tape.execution.ledger.site.shape[1]-1)]
+        same |= _ground_matches(tape,capture,start,claimed=False)|_limber_matches(tape,capture,start,claimed=False)
     actual=ex._context(tape);ledger=ex.unhandled(actual.ledger,ticket,active=requested&~same,tables=actual.tables)
     ledger=ex.emitted(ledger,ticket,tape,active=requested&same,tables=actual.tables)
     return ex._put_context(tape,ledger,actual)
