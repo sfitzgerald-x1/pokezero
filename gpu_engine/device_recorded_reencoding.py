@@ -5,11 +5,12 @@ state field must equal the saved output before public carry is trusted again.
 Original Native agreement, unknowns, refusals, turns and reference tensors are
 immutable inputs. This cannot improve their physical-agreement classification.
 """
-from collections import Counter
+from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
 import os
+from types import MappingProxyType
 
 import numpy as np
 
@@ -48,7 +49,8 @@ def _owner_complete(job,pod):
             or pod.get('status',{}).get('phase')!='Succeeded'):
         raise ValueError('original source owner must be FINAL COMPLETE/Succeeded')
     states=pod.get('status',{}).get('containerStatuses',[])
-    if not states or any(x.get('state',{}).get('terminated',{}).get('exitCode')!=0 for x in states):
+    if not states or any(type(x.get('state',{}).get('terminated',{}).get('exitCode'))is not int
+            or x['state']['terminated']['exitCode']!=0 for x in states):
         raise ValueError('original owner exit0 terminal evidence required')
     uid=job.get('metadata',{}).get('uid')
     if not uid or not any(x.get('kind')=='Job'and x.get('uid')==uid for x in pod.get('metadata',{}).get('ownerReferences',[])):
@@ -99,12 +101,17 @@ def validate_inputs(manifest,*,expected_cells=512):
     return root,plan,summary,bindings,runtime_plan
 
 
-def decode_state(packet):
+@lru_cache(maxsize=1)
+def _state_layout():
     from .state import empty_state
-    from .finite_gameplay_comparison import decode_state as original_decode
     template=empty_state(1)  # dtype/shape storage template, never a battle constructor
-    layout={k:dict(shape=list(getattr(template,k).shape[1:]),dtype=str(getattr(template,k).dtype))for k in template._fields}
-    return original_decode(packet,layout)
+    return MappingProxyType({k:MappingProxyType(dict(shape=tuple(getattr(template,k).shape[1:]),
+        dtype=str(getattr(template,k).dtype)))for k in template._fields})
+
+
+def decode_state(packet):
+    from .finite_gameplay_comparison import decode_state as original_decode
+    return original_decode(packet,_state_layout())
 
 
 def decode_chance(packet):
@@ -142,6 +149,7 @@ def _boundary(packet):
 
 
 def _load_row(root,row):
+    root=Path(root).resolve()
     path=Path(row['tensor_path'])
     if path.is_absolute()or '..'in path.parts:raise ValueError('original relative tensor path required')
     path=(root/path).resolve()
@@ -166,9 +174,10 @@ class Replay:
     def __init__(self,runtime):self.runtime=runtime;self.state=None;self.public=None;self.stop=None
     def constructor(self,record):
         try:
-            raw,_=_boundary(record['raw']);expected,_=_boundary(record['initialized'])
+            raw,_=_boundary(record['raw']);expected,requested=_boundary(record['initialized'])
             current=self.runtime.initialize(raw)
             bad=differences(current.state,expected)
+            if not np.array_equal(self.runtime.boundary(current.state)['requested'],requested):bad=['REQUESTED_SEATS']+bad
             if bad:self.stop=_refusal('INITIALIZED_STATE_CHANGED',bad)
             else:self.state,self.public=current.state,current.trackers
         except Exception as error:self.stop=_refusal('CONSTRUCTOR_REFUSED:'+type(error).__name__+': '+str(error)[:1000])
@@ -193,9 +202,10 @@ class Replay:
             self.stop=post_error=_refusal('RECORDED_STEP_HAS_NO_AFTER; NO_NEW_OUTCOME_EVALUATED')
             return candidate,error_bits,pre_error,post_error
         try:
-            after,_=_boundary(record['after']);chance=decode_chance(record['chance']);actions=decode_actions(record['actions'])
+            after,requested_after=_boundary(record['after']);chance=decode_chance(record['chance']);actions=decode_actions(record['actions'])
             result=self.runtime.advance(before,actions,self.public,chance)
             bad=differences(result.step.state,after)
+            if not np.array_equal(self.runtime.boundary(result.step.state)['requested'],requested_after):bad=['REQUESTED_SEATS']+bad
             if bool(np.asarray(result.step.invalid_actions)[0]):bad=['INVALID_ACTION']+bad
             if bad:self.stop=post_error=_refusal('AFTER_STATE_CHANGED',bad)
             else:self.state,self.public=result.step.state,result.trackers
@@ -242,9 +252,10 @@ def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisi
                     original_candidate,reference,path=_load_row(root,row)
                     old.add(decision_id=row['decision_id'],turn=row['turn'],line_kinds=row['line_kinds'],
                         agreement=row['agreement'],reference=reference,candidate=original_candidate,refusal=row['refusal'])
-                    effective=row['refusal']if row['refusal']is not None else pre_error
+                    replay_error=pre_error if pre_error is not None else post_error
+                    effective=row['refusal']if row['refusal']is not None else replay_error
                     metadata=dict(row,original_metadata=row,original_tensor_path=str(path),
-                        original_tensor_sha256=row['tensor_sha256'],reencoding_refusal=pre_error,
+                        original_tensor_sha256=row['tensor_sha256'],reencoding_refusal=replay_error,
                         reencoded_candidate_error=bits[side],mode='STORED_REENCODING')
                     writer.decision(metadata,candidates[side],reference)
                     new.add(decision_id=row['decision_id'],turn=row['turn'],line_kinds=row['line_kinds'],
