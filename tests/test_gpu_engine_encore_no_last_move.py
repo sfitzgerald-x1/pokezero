@@ -48,6 +48,13 @@ class EncoreNoLastMoveTests(unittest.TestCase):
   observed=risk.branch_on_tape(out,risk.Branch.ENCORE,j.ones(8,bool),active=j.ones(8,bool),captured_encore=c);self.assertEqual(observed.execution.risks.carry.risk.tolist(),[0]*8)
   for file in ('transition.py','encore.py','state.py','action_history.py','engine_retained_encoder_driver.py'):
    self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+file]))
+ def test_fail_refuses_changed_actual_after_encore_fields(self):
+  s,t,after,out,c,_=self.component();side=int(c.pending.side[0]);phys=int(c.pending.physical[0])
+  for field in ('encore_move','encore_counter'):
+   changed=after._replace(**{field:getattr(after,field).at[0,side,phys].set(1)})
+   candidate,_=cb.finish(t,c.pending,changed)
+   self.assertFalse(bool(cb.owned(candidate,j.maximum(candidate.count-1,0))[0]),field)
+   self.assertNotEqual(int(candidate.execution.ledger.refusal[0]),0,field)
  def test_both_original_full_callers_empty_target_still_and_no_lock(self):
   s,t,after,out,c,owners=self.component(True);b=8;yes=j.ones(b,bool);z=j.zeros(b,j.int32);out=life.action_end(out,yes);out=life.finish(out,after,live=yes,replacement=~yes,pending_before=~yes,residual_ready=yes,defer_residual=~yes,turn_context=yes)
   frame=life.LifecycleResult(after,out.cursor,out,life.snapshot(t.cursor),life.snapshot(out.cursor),~yes,z);closed=[];saved=[]

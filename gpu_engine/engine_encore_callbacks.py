@@ -201,6 +201,7 @@ def finish(tape,p,state):
     if p.before is not None:raw=j.where(failure[:,None],_failure_raw(p),raw)
     valid=p.valid&_bound(tape,p.context)&valid_raw(raw,len(p.context.data.encore.installed.move))&(state.active[rows,j.clip(p.side,0,1)]==p.physical)
     valid &= (counter==p.expected_counter)&(state.hp[at]==p.hp)
+    valid &= ~failure|((new==p.old_move)&(new==0)&(counter==p.old_counter)&(counter==0))
     positive=(state.moves[rows,j.clip(p.side,0,1),p.physical,p.recorded_slot]==p.recorded_move)&(state.pp[rows,j.clip(p.side,0,1),p.physical,p.recorded_slot]==p.pp)&(state.last_action_kind[rows,j.clip(p.side,0,1)]==2)&(state.last_action_index[rows,j.clip(p.side,0,1)]==p.recorded_slot)
     same=j.zeros(b,bool)
     if p.before is not None:
