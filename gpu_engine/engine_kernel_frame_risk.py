@@ -902,6 +902,7 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
     # The optional captured-Sub API must request the same canonical zero-power
     # outcome check even when no separate direct-hit Capture was supplied.
     from . import engine_substitute_damage_callbacks as substitute_damage
+    supported_sub=jnp.zeros(b,bool)
     if type(captured_substitute_damage) is substitute_damage.Captured:
         move=_vector(captured_substitute_damage.pending.move,b)
         candidate |= (tables.seismic_toss_move>0)&(move==tables.seismic_toss_move)
@@ -915,7 +916,15 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
         supported_sub &= jnp.any(tables.direct_hit_binding!=0)&jnp.all(p.context.data.binding==tables.direct_hit_binding)
         for key in ('power','hit','immune','critical','numerator','denominator','protected','enduring'):
             supported_sub &= getattr(o,key)==getattr(w,key)
-        supported_sub &= o.substitute&~o.absorbed&~o.explodes&(o.recoil==0)
+        supported_sub &= o.substitute&~o.absorbed&~o.explodes
+        sub_recoil=jnp.zeros(b,bool)
+        if pending_recoil is not None:
+            from . import engine_recoil_callbacks as recoil
+            sub_recoil=(recoil.matches_pending(tape,pending_recoil)
+                &recoil.matches_substitute_pending(tape,pending_recoil,capture)
+                &jnp.any(tables.recoil_binding!=0)&jnp.all(tables.recoil_binding==pending_recoil.context.data.binding)
+                &(o.recoil==pending_recoil.recoil))
+        supported_sub &= (o.recoil==0)|sub_recoil
         unsupported &= ~supported_sub
     from . import engine_protect_callbacks as protect_callbacks
     unsupported &= ~protect_callbacks.captured_block_matches(tape,captured_protect_block,o)
@@ -926,7 +935,7 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
     if pending_recoil is not None:
         from . import engine_recoil_callbacks as recoil
         recoil_needed |= pending_recoil.requested
-        recoil_ok=(recoil.matches_pending(tape,pending_recoil)&supported_direct
+        recoil_ok=(recoil.matches_pending(tape,pending_recoil)&(supported_direct|supported_sub)
             &jnp.any(tables.recoil_binding!=0)&jnp.all(tables.recoil_binding==pending_recoil.context.data.binding)
             &(o.recoil==pending_recoil.recoil))
     from . import engine_self_destruct_callbacks as sd

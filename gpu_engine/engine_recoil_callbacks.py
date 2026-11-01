@@ -58,6 +58,7 @@ class Pending(NamedTuple):
     caller_move:object=None
     no_damage:object=None
     no_damage_outcome:object=None
+    substitute_damage:object=None # same actual RAW38 target write, never inferred HP
 
 class Before(NamedTuple):
     actor_physical:object
@@ -149,6 +150,46 @@ def _bound(tape,context):
     good &= jnp.all(original.tables.inventory_binding==context.direct.accounting.inventory_binding)
     return good
 
+def matches_substitute_pending(tape,pending,captured=None):
+    """Only the source-bound Double-Edge Sub write may precede positive recoil.
+
+    No damage/recoil amount is reconstructed. The actual Outcome and later
+    actor HP write must separately match the original pending recoil amount.
+    """
+    from . import engine_substitute_damage_callbacks as sub
+    from . import engine_execution_completeness as ex
+    b=len(tape.count);no=jnp.zeros(b,bool)
+    s=pending.substitute_damage
+    if s is None:return no
+    if type(s)is not sub.Captured:raise ValueError('same-call captured Substitute write required')
+    p=s.pending;d=p.context.data.substitute_damage;w=s.write;c=pending.captured
+    if d is None or d.double_edge_move is None:return no
+    if pending.caller_move is None or p.caller_move is None:return no
+    good=_bound(tape,pending.context)&sub.span_matches(tape,p,w)
+    good &= pending.context.data.ko_source&(d.double_edge_move>0)&(p.move==d.double_edge_move)
+    good &= (p.move==pending.context.data.move_id)&(p.caller_move==p.move)&(pending.caller_move==p.move)
+    good &= (c.actor==p.actor)&(c.actor_physical==p.physical)&(c.target_physical==p.target)&(c.move==p.move)
+    for name in ('binding','engine_binding','source_binding','move_binding','producer_binding'):
+        good &= jnp.all(getattr(p.context.data,name)==getattr(c.context.data,name))
+    for name in ('power','critical','hit','immune','numerator','denominator','protected','enduring','old_hp','new_hp'):
+        good &= getattr(c.write,name)==getattr(w,name)
+    good &= c.write.substitute&(w.power==120)&(pending.recoil>0)&(pending.old_hp>pending.recoil)
+    good &= ~pending.context.data.rock_head[jnp.clip(pending.ability,0,len(pending.context.data.rock_head)-1)]
+    if captured is not None:
+        if type(captured)is not sub.Captured:raise ValueError('literal observed Substitute capture required')
+        for name in w._fields:good &= getattr(w,name)==getattr(captured.write,name)
+        for name in ('actor','physical','target','move','requested','caller_move'):
+            value=getattr(captured.pending,name)
+            if value is None:return no
+            good &= getattr(p,name)==value
+        ledger=ex._context(tape).ledger
+        slot,same=ex._ticket(ledger,p.ticket);other,matched=ex._ticket(ledger,captured.pending.ticket)
+        good &= same&matched&(slot==other)
+        for name in ('binding','engine_binding','source_binding','move_binding','producer_binding'):
+            good &= jnp.all(getattr(p.context.data,name)==getattr(captured.pending.context.data,name))
+    return good
+
+
 def matches_pending(tape,pending):
     """Read-only prospective obligation. No flag/risk is ever cleared."""
     from . import engine_execution_completeness as execution
@@ -161,6 +202,12 @@ def matches_pending(tape,pending):
     if original is None:return jnp.zeros(b,bool)
     ledger=original.ledger;slot,same=execution._ticket(ledger,pending.ticket)
     dslot,dsame=execution._ticket(ledger,capture.ticket)
+    sub_mode=jnp.zeros(b,bool)
+    if pending.substitute_damage is not None:
+        sp=pending.substitute_damage.pending
+        sub_mode=sp.requested
+        subslot,subsame=execution._ticket(ledger,sp.ticket)
+        dslot=jnp.where(sub_mode,subslot,dslot);dsame=jnp.where(sub_mode,subsame,dsame)
     if type(capture.context) is not direct.RegisteredContext or type(capture.write) is not direct.HitWrite:raise ValueError('original captured direct write required')
     direct._check(tape,capture.context.data)
     for a,z in zip(capture.context.accounting,context.direct.accounting):
@@ -174,30 +221,31 @@ def matches_pending(tape,pending):
         &((tape.refusal&~public.UNINSTRUMENTED)==0)&(move==data.move_id)&(data.move_id>0)
         &(ledger.site[rows,slot]==int(execution.Site.RECOIL_HP))&(ledger.stage[rows,slot]==1)
         &(ledger.start[rows,slot]==tape.count)&(ledger.side[rows,slot]==actor)
-        &(ledger.site[rows,dslot]==int(execution.Site.DIRECT_HIT))
+        &(ledger.site[rows,dslot]==jnp.where(sub_mode,int(execution.Site.SUBSTITUTE_DAMAGE),int(execution.Site.DIRECT_HIT)))
         &(actor>=0)&(actor<2)&(ap==tape.cursor.physical_active[rows,safe])
         &(target==tape.cursor.physical_active[rows,1-safe])
         &(ability>=0)&(ability<n)&(pending.old_hp>0)&(pending.maximum>=pending.old_hp)&(pending.maximum<=1_000_000)
         &(pending.status>=0)&(pending.status<=6))
-    ordinary=(ledger.stage[rows,dslot]==2)&(ledger.end[rows,dslot]==tape.count)&execution._direct_hit_span_matches(tape,capture.ticket,actor,ap,target,move,capture.write)
+    ordinary=~sub_mode&(ledger.stage[rows,dslot]==2)&(ledger.end[rows,dslot]==tape.count)&execution._direct_hit_span_matches(tape,capture.ticket,actor,ap,target,move,capture.write)
     composite=matches_ko_pending(tape,pending)
+    substitute=matches_substitute_pending(tape,pending)
     positive=~data.rock_head[jnp.clip(ability,0,n-1)]&(pending.recoil>0)&(pending.old_hp>pending.recoil)
     silent=silent_pending(pending)
-    good &= (positive&(ordinary|composite))|(_rock_head_pending(pending)&ordinary)|matches_immune_pending(tape,pending)
+    good &= (positive&(ordinary|composite|substitute))|(_rock_head_pending(pending)&ordinary)|matches_immune_pending(tape,pending)
     start=ledger.start[rows,dslot];span=(jnp.arange(tape.words.shape[1])[None,:]>=start[:,None])&(jnp.arange(tape.words.shape[1])[None,:]<tape.count[:,None])
     good &= composite|jnp.all(~span|((ledger.claimed==dslot[:,None]+1)&jnp.all(ledger.words==tape.words,axis=2)
         &(ledger.event_turn==tape.event_turn)&(ledger.event_phase==tape.event_phase)
         &jnp.all(ledger.event_generation==tape.event_generation,axis=2)),axis=1)
     return good
 
-def prepare_device(tape,captured,recoil,ability,hp,maximum,status,context,*,eligible,target_ko=None,caller_move=None,no_damage=None,no_damage_outcome=None):
+def prepare_device(tape,captured,recoil,ability,hp,maximum,status,context,*,eligible,target_ko=None,caller_move=None,no_damage=None,no_damage_outcome=None,substitute_damage=None):
     from . import engine_execution_completeness as execution
     b=tape.count.shape[0]
     for x in (recoil,ability,hp,maximum,status):_vector(x,b)
     _vector(eligible,b,jnp.bool_)
     requested=eligible&(captured.move==context.data.move_id)
     tape,ticket=execution.open_attempt(tape,execution.Site.RECOIL_HP,captured.actor,active=requested)
-    pending=Pending(context,ticket,captured,recoil,ability,hp,maximum,status,requested,target_ko,caller_move,no_damage,no_damage_outcome)
+    pending=Pending(context,ticket,captured,recoil,ability,hp,maximum,status,requested,target_ko,caller_move,no_damage,no_damage_outcome,substitute_damage)
     good=matches_pending(tape,pending)
     original=execution._context(tape)
     if original is not None:
