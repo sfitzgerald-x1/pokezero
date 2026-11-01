@@ -37,6 +37,7 @@ from . import engine_weather_speed_profile as weather_speed
 from . import engine_execution_completeness as execution
 from . import engine_kernel_frame_risk as kernel_risks
 from . import engine_outcome_diagnostics as outcome_diagnostics
+from . import engine_direct_hit_controls as direct_hit_controls
 
 SCHEMA = 'pokezero.engine_retained173_driver.partial.v1'
 SOURCE, PUBLIC_COMPONENT, FULL_PUBLIC, REQUEST, OWN, ENCODER, PENDING, CELLS, PUBLIC_COVERAGE = (1 << n for n in range(9))
@@ -230,7 +231,7 @@ def _report_rows(ok, before, after):
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
            leftovers_context=None,execution_tables=None,status_residual_context=None,kernel_risk_tables=None,
-           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None,swords_dance_context=None,spikes_context=None,thunder_wave_context=None,sleep_powder_context=None,hypothetical_profile=None,terminal_observer=False):
+           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None,swords_dance_context=None,spikes_context=None,thunder_wave_context=None,sleep_powder_context=None,hypothetical_profile=None,terminal_observer=False,leech_history=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -254,6 +255,11 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         carry=kernel_risks.begin_frame_device(core.risks,tape,kernel_risk_tables,active=source_ready)
         tape=tape._replace(execution=tape.execution._replace(risks=kernel_risks.Context(carry,kernel_risk_tables)),
             refusal=tape.refusal|jnp.where(source_ready&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
+    if direct_hit_context is not None and type(direct_hit_context) is direct_hit_controls.RegisteredContext and direct_hit_context.data.leech_seed is not None and execution_tables is not None:
+        from . import engine_leech_seed_callbacks as leech_callbacks
+        if leech_history is None:leech_history=leech_callbacks.empty_history(tape.cursor,direct_hit_context.data.leech_seed)
+        leech_callbacks.history_shape(leech_history,b)
+        tape=tape._replace(execution=tape.execution._replace(leech_history=leech_history))
     if terminal_observer:
         from . import engine_terminal_callbacks as terminal
         if execution_tables is None or kernel_risk_tables is None or direct_hit_context is None:
@@ -277,7 +283,9 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         # This immutable context is minted by the SAME secondary setter call.
         # Retain it until both FULL owners validate its claimed RAW9+36 span;
         # rebuilding solely from the pre-call context loses that source edge.
+        from . import engine_leech_seed_callbacks as leech_callbacks
         context=tape.execution._replace(ledger=ledger,
+            leech_history=leech_callbacks.commit_history(source_ready,tape.execution.leech_history,result.callbacks.execution.leech_history),
             secondary_status=result.callbacks.execution.secondary_status,
             diagnostics=_rows(source_ready,
             tape.execution.diagnostics,result.callbacks.execution.diagnostics))
@@ -298,6 +306,14 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
     return life.LifecycleResult(engine, cursor, callbacks, before,
         life.snapshot(cursor), jnp.where(source_ready, result.step.invalid_actions, False),
         jnp.where(source_ready, result.step.placeholder_moves, 0),profile)
+
+
+def _leech_history(runtime,core,publics,healthy):
+    context=runtime['direct_hit_context']
+    if context is None or context.data.leech_seed is None or runtime['direct_hit_mode']!='kernel-event':return None
+    from . import engine_leech_seed_callbacks as leech_callbacks
+    return leech_callbacks.history_from_public(core.engine,core.cursor,publics,data=context.data.leech_seed,
+        active_tables=runtime['catalog'].active.device,healthy=healthy)
 
 
 def _request(engine, ledger, original, retained, unsafe, arrival, admitted, statics, current_types=None,current_encore=None):
@@ -728,14 +744,14 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         status_residual_mode=status_residual_mode,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
             weather_speed.retain_device(profile,state,streams,speed_profile.device)),
-        frame=jax.jit(lambda core, act, chance, active=None:
+        frame=jax.jit(lambda core, act, chance, active=None,leech_history=None:
             _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active,
                 weather_profile_data=None if speed_profile is None else speed_profile.device,
                 leftovers_context=leftovers_context,status_residual_context=status_residual_context,
                 execution_tables=None if execution_compiled is None else execution_compiled.device,
                 kernel_risk_tables=None if kernel_risk_compiled is None else kernel_risk_compiled.device,
                 direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context,calm_mind_context=calm_mind_context,swords_dance_context=swords_dance_context,spikes_context=spikes_context,thunder_wave_context=thunder_wave_context,sleep_powder_context=sleep_powder_context,
-                terminal_observer=frame_input_mode=='source-witness' and direct_hit_mode=='kernel-event')),
+                terminal_observer=frame_input_mode=='source-witness' and direct_hit_mode=='kernel-event',leech_history=leech_history)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted,current_types=None,current_encore=None:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static,current_types,current_encore)),
         installations=jax.jit(life.apply_installations),
@@ -1051,7 +1067,9 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
                 _checked_witness(r,session=session)
         observe = None if timing_callback is None else checked_timing
         chance = transition.sample_chance_inputs(core.engine) if chance_inputs is None else chance_inputs
-        frame = _timed(observe, 'engine', r['frame'], core, engine_actions, chance, executed, _host_timings=host_timings)
+        leech_history=_leech_history(r,core,tuple(o.retained for o in old_state.observers),
+            core.admitted & old_state.observers[0].retained_healthy & old_state.observers[1].retained_healthy)
+        frame = _timed(observe, 'engine', r['frame'], core, engine_actions, chance, executed,leech_history, _host_timings=host_timings)
         def requests_phase(core, frame):
             orders = tuple(r['installations'](ledger, frame) for ledger in core.orders)
             unsafe = tuple(r['unsafe'](value, frame.state) for value in core.unsafe)

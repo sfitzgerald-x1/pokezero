@@ -49,6 +49,7 @@ from . import engine_self_heal_callbacks as self_heal_callbacks
 from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
 from . import engine_encore_callbacks as encore_callbacks
+from . import engine_leech_seed_callbacks as leech_callbacks
 from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
 from . import engine_color_change_callbacks as color_callbacks
 from . import engine_pressure_callbacks as pressure_callbacks
@@ -582,6 +583,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         belly = kind == belly_callbacks.BELLY_DRUM
         sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
         encore = kind == encore_callbacks.ENCORE
+        leech = kind == leech_callbacks.LEECH
         intimidate = kind == intimidate_callbacks.INTIMIDATE
         calm_mind = kind == calm_mind_callbacks.CALM_MIND
         pinch = kind == pinch_callbacks.PINCH_ITEM
@@ -756,6 +758,10 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         belly_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)&belly_owned
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)]))
         event_ok=jnp.where(belly,generation_ok&clock_ok&belly_ok,event_ok)
+        leech_ok=(tables.status_events&~tables.raw_begin&actor_ok&status_identity&cursor.initialized
+            &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            &(incoming==cursor.physical_active[rows,safe_side])&leech_callbacks.owned(tape,index))
+        event_ok=jnp.where(leech,generation_ok&clock_ok&leech_ok,event_ok)
         encore_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&encore_callbacks.owned(tape,index))
         event_ok=jnp.where(encore,generation_ok&clock_ok&encore_ok,event_ok)
@@ -937,6 +943,17 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             turn,phase,absent,absent,actor_side,actor_slot),axis=1),belly_boost_payload),axis=1)
         semantic=jnp.where((belly&(raw[:,4]==0))[:,None],belly_hp_semantic,semantic)
         semantic=jnp.where((belly&(raw[:,4]==1))[:,None],belly_boost_semantic,semantic)
+        leech_start=leech&(raw[:,5]==leech_callbacks.START)
+        leech_heal=leech&(raw[:,5]==leech_callbacks.HEAL)
+        leech_slot=jnp.where(leech_heal,actor_slot,status_slot);leech_enc=jnp.where(leech_heal,actor_enc,status_enc);leech_side=jnp.where(leech_heal,actor_side,side)
+        leech_percent=(100*raw[:,7]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8]);leech_percent=jnp.where((raw[:,7]<raw[:,8])&(leech_percent==100),99,leech_percent)
+        leech_own=state.owner==leech_side
+        leech_hp=jnp.stack((leech_enc,jnp.where(leech_own,raw[:,7],leech_percent),jnp.where(leech_own,raw[:,8],100),jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,9],0,6)],z,(~leech_heal).astype(jnp.int32),(~leech_heal).astype(jnp.int32),z),axis=1)
+        leech_hp_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),semantic_sequence,turn,phase,absent,absent,leech_side,leech_slot),axis=1),leech_hp),axis=1)
+        leech_start_payload=jnp.stack((status_enc,jnp.full_like(z,public_active.ADD),jnp.full_like(z,public_active.NAMES.index('leechseed')),z,z,z,z,z),axis=1)
+        leech_start_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),leech_start_payload),axis=1)
+        semantic=jnp.where((leech&~leech_start)[:,None],leech_hp_semantic,semantic)
+        semantic=jnp.where(leech_start[:,None],leech_start_semantic,semantic)
         encore_payload=jnp.stack((actor_enc,jnp.where(raw[:,3]==encore_callbacks.END,public_active.REMOVE,public_active.ADD),jnp.full_like(z,public_active.NAMES.index('encore')),z,z,z,z,z),axis=1)
         encore_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),encore_payload),axis=1)
         semantic=jnp.where(encore[:,None],encore_semantic,semantic)

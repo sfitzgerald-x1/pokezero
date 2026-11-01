@@ -1283,8 +1283,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                         applied=apply_status,item_table=table.items)
         if table.sustain is not None:
             if _lifecycle_trace:
-                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SEED_START,
-                    acts & hit & table.sustain.seed[move],active=live)
+                from . import engine_leech_seed_callbacks as leech_callbacks
+                _seed_pending=None;_seed_capture=None
+                if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.leech_seed is not None:
+                    _public_trace,_seed_pending=leech_callbacks.begin_seed(_public_trace,work,side,move,
+                        _direct_hit_context,table.sustain,eligible=acts & hit & (caller_move==move),secondary=acts & hit & ~immune)
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.WISH_START,
                     acts & table.sustain.wish[move],active=live)
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SPIN_CLEAR,
@@ -1299,6 +1302,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     starts_wish,2,pending)),
                 wish_amount=work.wish_amount.at[rows,side].set(jnp.where(
                     starts_wish,_active(work.max_hp,work,side)//2,work.wish_amount[rows,side])))
+            if _lifecycle_trace:
+                _public_trace,_seed_capture=leech_callbacks.finish_seed(_public_trace,_seed_pending,work)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SEED_START,
+                    acts & hit & table.sustain.seed[move],active=live,captured_leech=_seed_capture)
             # Gen3 clears even through an unbroken Substitute or zero actual
             # Endure damage, but not on a miss, Protect or type immunity.
             work=recovery.spin_cleanup(work,side,
@@ -1714,21 +1721,30 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.sustain is not None:
             foe = 1-side
             if _lifecycle_trace:
-                _execution_seed_attempt=(eligible & seed_event & (_active(work.hp,work,side)>0)
-                    & ((_active(work.volatile,work,side)&_execution_leech_seed)!=0))
-                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                    execution_accounting.Site.LEECH_DRAIN,side,active=_execution_seed_attempt)
-                # This is the numerical handler's recipient-live dispatch
-                # guard, not a reconstructed drain/healing delta. Source-slot
-                # provenance and cancellation hooks remain unproved/UNKNOWN.
-                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
-                    execution_accounting.Site.LEECH_HEAL,foe,
-                    active=_execution_seed_attempt & (_active(work.hp,work,foe)>0))
+                from . import engine_leech_seed_callbacks as leech_callbacks
+                _leech_pending=None;_leech_capture=None;_leech_heal_pending=None
+                _leech_registered=(_direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.leech_seed is not None)
+                if _leech_registered:
+                    _public_trace,_leech_pending=leech_callbacks.begin_drain(_public_trace,work,side,
+                        _direct_hit_context,eligible=eligible & seed_event)
+                else:
+                    _execution_seed_attempt=(eligible & seed_event & (_active(work.hp,work,side)>0)
+                        & ((_active(work.volatile,work,side)&_execution_leech_seed)!=0))
+                    _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                        execution_accounting.Site.LEECH_DRAIN,side,active=_execution_seed_attempt)
+                    _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                        execution_accounting.Site.LEECH_HEAL,foe,
+                        active=_execution_seed_attempt & (_active(work.hp,work,foe)>0))
             drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 _active(work.volatile,work,side),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
                 eligible=eligible & seed_event)
             work = work._replace(hp=_set_active(work.hp,work,side,drained.hp))
+            if _lifecycle_trace:
+                _public_trace,_leech_capture=leech_callbacks.finish_drain(_public_trace,_leech_pending,work,drained)
+                _public_trace,_leech_heal_pending=leech_callbacks.begin_heal(_public_trace,work,_leech_capture)
             work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
+            if _lifecycle_trace:
+                _public_trace,_leech_heal_capture=leech_callbacks.finish_heal(_public_trace,_leech_heal_pending,work)
         if table.encore is not None:
             if _lifecycle_trace:
                 from . import engine_encore_callbacks as encore_callbacks
