@@ -34,6 +34,7 @@ class Data(NamedTuple):
     rock_head:object
     ko_source:object
     rock_head_source:object
+    immune_source:object=None
 
 @dataclass(frozen=True,eq=False)
 class Compiled:
@@ -55,6 +56,8 @@ class Pending(NamedTuple):
     requested:object
     target_ko:object=None
     caller_move:object=None
+    no_damage:object=None
+    no_damage_outcome:object=None
 
 class Before(NamedTuple):
     actor_physical:object
@@ -101,12 +104,12 @@ def compile_recoil(*,engine_catalog,metadata,source_rules=None):
         rock_head_descriptor=json.loads(subprocess.run([origin.node,'-e',rock_script,origin.root],capture_output=True,text=True,check=True,timeout=30).stdout)
         if rock_head_descriptor!={'id':'rockhead','exists':True,'gen':3,'callbacks':['onDamage'],'onDamage':'93f86584c39c6ffe0a2a36792751f9e88f304762eb8e48befecd1ee630b9ef1d'}:raise ValueError('canonical original silent Rock Head recoil source required')
         rock_head_source=bool(np.count_nonzero(rock)==1)
-    raw=dict(schema='pokezero.literal_doubleedge_pair.v2',ko_source=source,rock_head=rock_head_descriptor,move=move,engine=engine_catalog.engine_binding,
+    raw=dict(schema='pokezero.literal_doubleedge_pair.v3',immune_source=source is not None,ko_source=source,rock_head=rock_head_descriptor,move=move,engine=engine_catalog.engine_binding,
         source=engine_catalog.source_binding,moves=engine_catalog.move_binding,producer=engine_catalog.binding,rock_head_abilities=rock.tolist())
     words=lambda x:jnp.asarray(x,jnp.uint32)
     data=Data(words(np.frombuffer(hashlib.sha256(json.dumps(raw,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),jnp.array(move,jnp.int32),jnp.array(rock),jnp.array(ko_source,jnp.bool_),jnp.array(rock_head_source,jnp.bool_))
+        words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),jnp.array(move,jnp.int32),jnp.array(rock),jnp.array(ko_source,jnp.bool_),jnp.array(rock_head_source,jnp.bool_),jnp.array(source is not None,jnp.bool_))
     out=Compiled(data);_COMPILED[out]=(data,tuple(data),engine_catalog,source_rules);return out
 
 def check_compiled(compiled):
@@ -129,6 +132,7 @@ def _bound(tape,context):
     direct._check(tape,context.direct.data)
     for a in data[:5]:execution._shape(a,(8,),jnp.uint32)
     execution._shape(data.move_id,(),jnp.int32)
+    execution._shape(data.immune_source,(),jnp.bool_)
     execution._shape(data.ko_source,(),jnp.bool_)
     execution._shape(data.rock_head_source,(),jnp.bool_)
     execution._shape(data.rock_head,(len(data.rock_head),),jnp.bool_)
@@ -179,21 +183,21 @@ def matches_pending(tape,pending):
     composite=matches_ko_pending(tape,pending)
     positive=~data.rock_head[jnp.clip(ability,0,n-1)]&(pending.recoil>0)&(pending.old_hp>pending.recoil)
     silent=silent_pending(pending)
-    good &= (positive&(ordinary|composite))|(silent&ordinary)
+    good &= (positive&(ordinary|composite))|(_rock_head_pending(pending)&ordinary)|matches_immune_pending(tape,pending)
     start=ledger.start[rows,dslot];span=(jnp.arange(tape.words.shape[1])[None,:]>=start[:,None])&(jnp.arange(tape.words.shape[1])[None,:]<tape.count[:,None])
     good &= composite|jnp.all(~span|((ledger.claimed==dslot[:,None]+1)&jnp.all(ledger.words==tape.words,axis=2)
         &(ledger.event_turn==tape.event_turn)&(ledger.event_phase==tape.event_phase)
         &jnp.all(ledger.event_generation==tape.event_generation,axis=2)),axis=1)
     return good
 
-def prepare_device(tape,captured,recoil,ability,hp,maximum,status,context,*,eligible,target_ko=None,caller_move=None):
+def prepare_device(tape,captured,recoil,ability,hp,maximum,status,context,*,eligible,target_ko=None,caller_move=None,no_damage=None,no_damage_outcome=None):
     from . import engine_execution_completeness as execution
     b=tape.count.shape[0]
     for x in (recoil,ability,hp,maximum,status):_vector(x,b)
     _vector(eligible,b,jnp.bool_)
     requested=eligible&(captured.move==context.data.move_id)
     tape,ticket=execution.open_attempt(tape,execution.Site.RECOIL_HP,captured.actor,active=requested)
-    pending=Pending(context,ticket,captured,recoil,ability,hp,maximum,status,requested,target_ko,caller_move)
+    pending=Pending(context,ticket,captured,recoil,ability,hp,maximum,status,requested,target_ko,caller_move,no_damage,no_damage_outcome)
     good=matches_pending(tape,pending)
     original=execution._context(tape)
     if original is not None:
@@ -225,7 +229,9 @@ def record_device(tape,pending,write):
     # A nonempty PRIVATE RAW28 is consumed, with no public output. The typed
     # ability/source receipt is separate from the generic empty-span protocol.
     slot,_=execution._ticket(ledger,pending.ticket);use=pending.requested&good&silent
-    facts=jnp.stack((write.ability,write.old_hp,write.maximum,write.status,c.write.old_hp,c.write.new_hp),axis=1)
+    caller=pending.caller_move if pending.caller_move is not None else jnp.full_like(write.ability,-1)
+    source_fact=jnp.where(_immune_literal(pending),caller,write.ability)
+    facts=jnp.stack((source_fact,write.old_hp,write.maximum,write.status,c.write.old_hp,c.write.new_hp),axis=1)
     ledger=ledger._replace(no_output_facts=ledger.no_output_facts.at[rows,slot].set(jnp.where(use[:,None],facts,ledger.no_output_facts[rows,slot])),
         no_output_binding=ledger.no_output_binding.at[rows,slot].set(jnp.where(use[:,None],pending.context.data.binding[None,:],ledger.no_output_binding[rows,slot])))
     tape=execution._put_context(tape,ledger,original)
@@ -353,7 +359,7 @@ def validate_owned_ko_control(tape,index,raw):
     return good
 
 
-def silent_pending(pending):
+def _rock_head_pending(pending):
     """Only current canonical RockHead +positive nonlethal SAME target write."""
     b=len(pending.requested);no=jnp.zeros(b,bool);data=pending.context.data
     from . import engine_execution_completeness as ex
@@ -368,7 +374,7 @@ def silent_pending(pending):
         &(w.old_hp>w.new_hp)&(w.new_hp>0)&(w.maximum>=w.old_hp))
 
 
-def owned_silent(tape,index,cursor=None):
+def _owned_rock_head(tape,index,cursor=None):
     """Independent typed source receipt for RAW28 with exactly zero public words."""
     from . import engine_execution_completeness as ex
     c=ex._context(tape);b=len(tape.count);rows=jnp.arange(b);at=jnp.broadcast_to(jnp.asarray(index,jnp.int32),(b,));safe=jnp.clip(at,0,tape.words.shape[1]-1);raw=tape.words[rows,safe]
@@ -399,3 +405,69 @@ def owned_silent(tape,index,cursor=None):
     good &= jnp.all(ledger.words[rows,safe]==raw,axis=1)&(ledger.turn[rows,slot]==tape.event_turn[rows,safe])&(ledger.phase[rows,slot]==tape.event_phase[rows,safe])&jnp.all(ledger.generation[rows,slot]==tape.event_generation[rows,safe],axis=1)
     good &= (ledger.event_turn[rows,safe]==tape.event_turn[rows,safe])&(ledger.event_phase[rows,safe]==tape.event_phase[rows,safe])&jnp.all(ledger.event_generation[rows,safe]==tape.event_generation[rows,safe],axis=1)
     return good
+
+
+def _immune_literal(p):
+    """Literal ordinary type-immunity/zero-recoil envelope; no HP formula."""
+    from . import engine_no_damage_callbacks as nd,engine_kernel_frame_risk as risks
+    b=len(p.requested);no=jnp.zeros(b,bool)
+    if type(p.no_damage)is not nd.Captured or type(p.no_damage_outcome)is not risks.Outcome or p.caller_move is None:return no
+    _vector(p.caller_move,b);d=p.context.data;w=p.captured.write;c=p.no_damage;o=p.no_damage_outcome
+    same=jnp.ones(b,bool)
+    for x,y in zip(c.write,w,strict=True):same &= x==y
+    for x,y in ((c.pending.actor,p.captured.actor),(c.pending.physical,p.captured.actor_physical),(c.pending.target,p.captured.target_physical),(c.pending.move,p.captured.move),(c.actor_hp,p.old_hp),(c.pending.before.actor_hp,p.old_hp)):
+        same &= x==y
+    return (same&d.immune_source&(p.caller_move==p.captured.move)&(p.captured.move==d.move_id)&(d.move_id>0)
+        &(p.recoil==0)&(o.recoil==0)&(w.power==120)&w.hit&w.immune&(w.numerator==0)&((w.denominator==1)|(w.denominator==2))
+        &~w.substitute&~w.protected&~w.enduring&~o.absorbed&~o.explodes&(w.old_hp==w.new_hp)&(w.new_hp>0))
+
+
+def matches_immune_pending(tape,p):
+    from . import engine_no_damage_callbacks as nd,engine_execution_completeness as ex
+    good=_immune_literal(p);c=ex._context(tape)
+    if c is None or c.risks is None or p.no_damage is None or p.no_damage_outcome is None:return good&False
+    t=c.risks.tables;ex._shape(t.recoil_immune_source,(),jnp.bool_)
+    good &= t.recoil_immune_source&jnp.all(p.context.data.binding==t.recoil_binding)
+    good &= nd.captured_matches(tape,p.no_damage,p.no_damage_outcome)
+    for name in ('stream_id','frame','slot','serial'):good &= getattr(p.no_damage.pending.ticket,name)==getattr(p.captured.ticket,name)
+    good &= jnp.all(p.no_damage.pending.ticket.inventory_binding==p.captured.ticket.inventory_binding)
+    for name in ('binding','engine_binding','source_binding','move_binding','producer_binding'):
+        good &= jnp.all(getattr(p.no_damage.pending.context.data,name)==getattr(p.context.direct.data,name))
+    return good
+
+
+def silent_pending(pending):
+    return _rock_head_pending(pending)|_immune_literal(pending)
+
+
+def _owned_immune(tape,index,cursor=None):
+    """Two separately claimed nonempty sites; original immune line only."""
+    from . import engine_execution_completeness as ex,engine_no_damage_callbacks as nd
+    c=ex._context(tape);b=len(tape.count);rows=jnp.arange(b);at=jnp.broadcast_to(jnp.asarray(index,jnp.int32),(b,));safe=jnp.clip(at,0,tape.words.shape[1]-1);raw=tape.words[rows,safe]
+    if c is None or c.risks is None or type(c.secondary_status)is not direct.RegisteredContext:return jnp.zeros(b,bool)
+    t=c.risks.tables;d=c.secondary_status.data.no_damage;nd._shape(d)
+    ex._shape(t.recoil_immune_source,(),jnp.bool_);ex._shape(t.recoil_binding,(8,),jnp.uint32)
+    good=direct._registered_bound(tape,c.secondary_status)&t.recoil_immune_source&d.recoil_immune_source&jnp.any(t.recoil_binding!=0)
+    good &= jnp.all(c.secondary_status.data.binding==t.direct_hit_binding)&jnp.all(d.binding==t.no_damage_binding)
+    for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+        ex._shape(getattr(tape,name),(8,),jnp.uint32);ex._shape(getattr(t,name),(8,),jnp.uint32);good &= jnp.all(getattr(tape,name)==getattr(t,name))
+    pair,header,_=nd.owned_pair(tape,at-2,d);good &= pair&(header[:,6]==nd.TYPE_IMMUNE)&(header[:,5]==d.recoil_immune_move)&(d.recoil_immune_move>0)
+    ledger=c.ledger;claim=ledger.claimed[rows,safe];slot=jnp.clip(claim-1,0,ledger.site.shape[1]-1);facts=ledger.no_output_facts[rows,slot]
+    direct_at=jnp.clip(at-2,0,tape.words.shape[1]-1);dc=ledger.claimed[rows,direct_at];ds=jnp.clip(dc-1,0,ledger.site.shape[1]-1)
+    good &= ledger.opened&(ledger.refusal==0)&((tape.refusal&~public.UNINSTRUMENTED)==0)&(at>=3)&(at<tape.count)
+    good &= (raw[:,0]==RECOIL_HP)&jnp.all(raw[:,1:6]==header[:,1:6],axis=1)&(raw[:,6]==raw[:,7])&(raw[:,6]>0)&(raw[:,8]>=raw[:,6])&(raw[:,8]<=1_000_000)&(raw[:,9]>=0)&(raw[:,9]<=6)
+    # Fact0 is the actual ordinary caller for this subtype, never an ability.
+    expected=jnp.stack((raw[:,5],raw[:,6],raw[:,8],raw[:,9],header[:,7],header[:,8]),axis=1)
+    good &= jnp.all(facts==expected,axis=1)&(claim>0)&(claim<=ledger.count)&(ledger.site[rows,slot]==int(ex.Site.RECOIL_HP))&(ledger.side[rows,slot]==raw[:,1])&(ledger.stage[rows,slot]==2)&(ledger.start[rows,slot]==at)&(ledger.end[rows,slot]==at+1)&(ledger.no_output_kind[rows,slot]==0)
+    good &= jnp.all(ledger.no_output_binding[rows,slot]==t.recoil_binding[None,:],axis=1)&jnp.all(ledger.words[rows,safe]==raw,axis=1)&jnp.all(tape.switch_details[rows,safe]==0,axis=1)
+    good &= (dc>0)&(dc<=ledger.count)&(dc!=claim)&(ledger.side[rows,ds]==raw[:,3])&(ledger.end[rows,ds]==at)
+    good &= (ledger.turn[rows,ds]==ledger.turn[rows,slot])&(ledger.phase[rows,ds]==ledger.phase[rows,slot])&jnp.all(ledger.generation[rows,ds]==ledger.generation[rows,slot],axis=1)
+    good &= (ledger.event_turn[rows,safe]==tape.event_turn[rows,safe])&(ledger.event_phase[rows,safe]==tape.event_phase[rows,safe])&jnp.all(ledger.event_generation[rows,safe]==tape.event_generation[rows,safe],axis=1)
+    good &= (ledger.turn[rows,slot]==tape.event_turn[rows,safe])&(ledger.phase[rows,slot]==tape.event_phase[rows,safe])&jnp.all(ledger.generation[rows,slot]==tape.event_generation[rows,safe],axis=1)
+    if cursor is not None:
+        good &= (raw[:,2]==cursor.physical_active[rows,jnp.clip(raw[:,1],0,1)])&(raw[:,4]==cursor.physical_active[rows,jnp.clip(raw[:,3],0,1)])&(cursor.turn==ledger.turn[rows,slot])&(cursor.phase==ledger.phase[rows,slot])&jnp.all(cursor.generation==ledger.generation[rows,slot],axis=1)
+    return good
+
+
+def owned_silent(tape,index,cursor=None):
+    return _owned_rock_head(tape,index,cursor)|_owned_immune(tape,index,cursor)
