@@ -79,6 +79,14 @@ def legal_fallback(legal, requested, active, *, seed, streams, step):
     return choices,no_action
 
 
+def _baton_start_predicates(packet):
+    """Literal false guard facts, overlapping and never sole-cause labels."""
+    value=packet.get('literal_diagnostics',{}).get('baton_start',{})
+    if value.get('available')is not True:return []
+    return sorted({name for record in value.get('records',[])if record.get('eligible')==1
+        for name,flag in record.get('guard_values',{}).items()if flag is False})
+
+
 def _before_move_predicates(packet):
     """Literal eligible input/output cooccurrences on refused frames only.
 
@@ -153,6 +161,7 @@ class Ledger:
             # These label failed predicates, never causes or admission credit.
             for failure in p.get('consumer_failures',[]):self._count(role,domain,'consumer:'+str(failure),row,step,p)
             for predicate in _before_move_predicates(p):self._count(role,domain,'before-move-predicate:'+predicate,row,step,p)
+            for predicate in _baton_start_predicates(p):self._count(role,domain,'baton-start-failed-guard:'+predicate,row,step,p)
             for kind in p.get('engine_failures',[]):self._count(role,'engine',str(kind),row,step,p)
         self.step_rows.append(dict(step=int(step),launch_rows=b,active_engine_rows=int(active.sum()),executed_engine_rows=int(executed.sum()),
             capture_valid_rows=int((active&self.capture_good).sum()),fallback_rows=int((active&~self.capture_good).sum()),observed_epoch=time.time()))
@@ -188,6 +197,7 @@ class Ledger:
             full_B4_qualified=False,fidelity_qualified=False,strength_qualified=False,
             callback_counts_complete=self.counts_complete,
             counts_scope='Per-call source sites, raw guard failures, per-move breakdown, risk bits and private consumer predicates are separate nonexclusive cooccurrences. Never sum them as distinct failures or intrinsic causes.',
+            baton_start_predicate_scope='Only literal same-call failed begin_start guard facts in refused packets; nonexclusive, unknown fields are None and omitted from labels; no causal or admission claim.',
             before_move_predicate_scope='Only literal eligible inputs/outputs serialized from refused frames. Nonexclusive; no sole-cause attribution, no subtraction of supported sleep and no reconstruction when absent. Original source-split counts/unique game denominators retained.',
             timing_scope='Actual launchshape and active/admitted counts required; timings never imply2048completed games.')
 
