@@ -10,6 +10,18 @@ def view():
 
 
 class DeviceAgreementParityTests(unittest.TestCase):
+    def test_scalar_admission_types_and_unknowns_remain_nonfatal_refusals(self):
+        for status in (False, np.bool_(False), np.asarray(False), None, 0, [False]):
+            for side in ('reference', 'candidate'):
+                with self.subTest(status=repr(status), side=side):
+                    r=AgreementParity(source_bindings={'test':'synthetic'});a=view();b=view()
+                    (a if side=='reference' else b)['admitted']=status
+                    r.add(decision_id='bad',turn=10,line_kinds=['move'],agreement=True,reference=a,candidate=b)
+                    r.add(decision_id='good',turn=11,line_kinds=['move'],agreement=True,reference=view(),candidate=view())
+                    p=r.report();self.assertEqual(p['counts']['compared'],1)
+                    self.assertEqual(p['counts']['comparison_refused'],1)
+                    self.assertEqual(p['joint_match_fraction_on_ALL_agreement_views'],.5)
+
     def test_joint_all_columns_includes_zero_columns_and_29th_token(self):
         r=AgreementParity(source_bindings={'test':'synthetic'})
         a=view();b=view();b['numeric_features'][28,131]=2e-6

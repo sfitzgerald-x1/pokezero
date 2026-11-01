@@ -76,8 +76,15 @@ class AgreementParity:
                         arrays[name] = value
                     except (KeyError, ValueError, TypeError, OverflowError):
                         problems.append((name, 'MALFORMED_VIEW_FIELD'))
-                if record.get('admitted') is False:
-                    problems.append(('ALL', str(record.get('reason', 'REFERENCE_REFUSED'))))
+                if 'admitted' in record:
+                    try:
+                        admitted = np.asarray(record['admitted'])
+                        if admitted.shape != () or admitted.dtype.kind != 'b':
+                            problems.append(('ALL', 'MALFORMED_OR_UNKNOWN_ADMISSION'))
+                        elif not bool(admitted):
+                            problems.append(('ALL', str(record.get('reason', 'PRODUCER_REFUSED'))))
+                    except (TypeError, ValueError, OverflowError):
+                        problems.append(('ALL', 'MALFORMED_OR_UNKNOWN_ADMISSION'))
             if problems:
                 self.total['comparison_refused'] += 1; ledger['comparison_refused'] += 1
                 for column, reason in problems:self._refuse(source, reason, kinds, column)
