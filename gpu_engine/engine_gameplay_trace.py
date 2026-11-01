@@ -27,6 +27,8 @@ from pokezero.recorded_encoder_parity import SHAPES
 
 SCHEMA = 'pokezero.actual-gameplay-trace.v1'
 _TUPLE_GETTER = type(namedtuple('_TraceTupleDescriptor', 'field').field)
+_EXECUTION_SCALARS = ('count', 'refusal', 'upstream_refusal')
+_EXECUTION_ENTRIES = ('site', 'side', 'serial', 'stage', 'start', 'end', 'turn', 'phase', 'generation')
 
 
 def _boundary_proof(result):
@@ -92,10 +94,17 @@ def _boundary_proof(result):
         if report is None:leaf(report)
         else:fields(report, ('raw_count', 'raw_words', 'event_turn', 'event_phase', 'event_generation',
             'switch_details', 'refusal', 'owner_full_words', 'owner_full_valid', 'owner_full_more'))
-        for name, selected in (('risks', 'risk'), ('execution', 'refusal')):
-            value = field(core, name)
-            if value is None:leaf(value)
-            else:fields(value, (selected,))
+        risks = field(core, 'risks')
+        if risks is None:leaf(risks)
+        else:fields(risks, ('risk',))
+        execution = field(core, 'execution')
+        if execution is None:leaf(execution)
+        else:
+            # Record fields also prove absence for older/malformed immutable
+            # fixtures; every present leaf read by _execution is covered.
+            present = record(execution)
+            fields(execution, tuple(name for name in (*_EXECUTION_SCALARS, *_EXECUTION_ENTRIES)
+                if name in present))
         return tuple(edges)
     except Exception:
         return None
@@ -205,6 +214,31 @@ def _full(report, row, owner):
             for packet, mask, remaining in zip(words, valid, more, strict=True)])
 
 
+def _execution(ledger, row):
+    """Literal entered prefix only; diagnostic data, never a source verdict."""
+    if ledger is None:
+        return dict(available=False, reason='MISSING_ACTUAL_EXECUTION_LEDGER')
+    try:
+        scalars = {name: getattr(ledger, name) for name in _EXECUTION_SCALARS}
+        entries = {name: getattr(ledger, name) for name in _EXECUTION_ENTRIES}
+        batch, = scalars['count'].shape
+        capacity = entries['site'].shape[1]
+        if (not 0 <= row < batch or not 1 <= capacity <= 32
+                or any(value.shape != (batch,) or value.dtype != np.int32 for value in scalars.values())
+                or any(value.shape != ((batch, capacity, 2) if name == 'generation' else (batch, capacity))
+                    or value.dtype != np.int32 for name, value in entries.items())):
+            raise ValueError('execution ledger shape/dtype')
+        # Select the actual row and entered count BEFORE any host transfer.
+        values = {name: int(np.asarray(value[row])) for name, value in scalars.items()}
+        if not 0 <= values['count'] <= capacity:
+            return dict(available=False, reason='MALFORMED_ACTUAL_EXECUTION_COUNT', **values)
+        return dict(available=True, **values,
+            entries={name: np.asarray(value[row, :values['count']]).tolist()
+                for name, value in entries.items()})
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return dict(available=False, reason='MALFORMED_ACTUAL_EXECUTION_LEDGER')
+
+
 def boundary(result, row):
     core = result.state.core
     report = getattr(core, 'frame_input_report', None)
@@ -238,6 +272,7 @@ def boundary(result, row):
             and not np.asarray(request.actions.facts.request.wait[row])) for request in core.requests],
         owners=owners, observations=observations, full=[_full(report, row, side) for side in (0, 1)], raw=raw,
         kernel_risk=None if core.risks is None else int(np.asarray(core.risks.risk[row])),
+        execution=_execution(core.execution, row),
         execution_refusal=None if core.execution is None else int(np.asarray(core.execution.refusal[row])))
 
 
