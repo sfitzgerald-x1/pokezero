@@ -318,7 +318,7 @@ def boundary(rollout):
     return jax.device_get(rollout)
 
 
-def constructor_truth(raw_state,pool,team_indices,*,source,vocabulary):
+def constructor_truth(raw_state,pool,team_indices,*,source,vocabulary,compiled_source=None):
     """Match ORIGINAL pre-entry pool rows once, never later private-state guesses."""
     from . import v5_collection_data as original
     indices=np.asarray(team_indices);b=raw_state.hp.shape[0];meta=pool.metadata();v=meta['vocabulary']
@@ -326,6 +326,13 @@ def constructor_truth(raw_state,pool,team_indices,*,source,vocabulary):
         raise ValueError('same actual constructor team indices required')
     if contract.source_variant_census(source)['source_rows_sha256']!=vocabulary.source_binding_sha256:
         raise ValueError('same complete original source label axis required')
+    # The full label census belongs to the original Gen3RandbatSource; the
+    # constructor matcher uses its compiled source-order species/variant API.
+    # These are distinct original types, never interchangeable placeholders.
+    from . import public_belief
+    if compiled_source is None:compiled_source=public_belief.compile_source(source)
+    if type(compiled_source)is not public_belief.SourceTables or compiled_source.source_hash!=source.metadata.source_hash:
+        raise ValueError('same original compiled constructor-label source required')
     for actual,key in (('species','species'),('level','level'),('moves','moves'),('base_ability','ability'),('item','item'),('hidden_power_type','hidden_power_type')):
         if not np.array_equal(np.asarray(getattr(raw_state,actual)),pool.arrays[key][indices]):
             raise ValueError('pre-entry original constructor differs: '+actual)
@@ -338,7 +345,7 @@ def constructor_truth(raw_state,pool,team_indices,*,source,vocabulary):
                 label=original.matching_hidden_set(v['species'][get('species')],level=get('level'),
                     moves=tuple(v['moves'][int(m)] for m in pool.arrays['moves'][idx,p] if m),
                     ability=v['abilities'][get('ability')],item=v['items'][get('item')],
-                    hidden_power_type=v['types'][get('hidden_power_type')],source=source)
+                    hidden_power_type=v['types'][get('hidden_power_type')],source=compiled_source)
                 if label is not None:
                     targets[row,side,p]=label.probabilities(vocabulary)
                     species[row,side,p]=vocabulary.species.index(label.species);known[row,side,p]=True

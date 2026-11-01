@@ -109,11 +109,16 @@ def bind_plan(profile,vocabulary,*,category_vocabulary,run_id,arm,replicate,iter
         runs.Watchdog(1800,longest_multiplier=5.,backstop_seconds=30*24*3600.),discount=config['discount'])
 
 
-def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,gender_policy=None):
-    """Original EngineBackend and, forD, actual public-leaf provider only."""
+def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,gender_policy=None,device_rollout=False):
+    """Explicit device rollout or the unchanged original protocol backend."""
     from gpu_engine import v5_selfplay,v5_depth1_provider
     from .v5_gumbel import Recipe
     if type(plan) is not runs.Plan:raise ValueError('original finite plan required')
+    if type(device_rollout)is not bool:raise ValueError('explicit device rollout factory flag required')
+    if device_rollout:
+        from gpu_engine.v5_device_backend import RuntimeBackend
+        if plan.model.arm=='D':raise runs.MissingDependency('device D public-world teacher consumer is not integrated; no FULL fallback')
+        return RuntimeBackend(prepared,pool,gender_policy=gender_policy)
     teacher=None
     if plan.model.arm=='D':
         if public_config is None or actor_contract is None:raise runs.MissingDependency('D needs bound original public parser/contract')
