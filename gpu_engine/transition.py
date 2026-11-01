@@ -659,6 +659,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
             sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
         if _lifecycle_trace:
+            from . import engine_outcome_diagnostics as _before_move_diagnostics
+            _public_trace=_before_move_diagnostics.record_before_move_on_tape(_public_trace,before,side,
+                work.active[rows,side],move,caller_move,_active(work.status,work,side),
+                _active(work.status_counter,work,side),_active(work.confusion_counter,work,side),
+                hp=_active(work.hp,work,side),maximum=_active(work.max_hp,work,side),ability=_active(work.ability,work,side),
+                thaw_roll=chance[:,1],paralysis_roll=chance[:,2],confusion_roll=chance[:,3],
+                flinched=(_active(work.volatile,work,side)&FLINCH)!=0,
+                sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,eligible=eligible,active=live)
+        if _lifecycle_trace:
             old_status=_active(work.status,work,side)
             _public_trace=status_callbacks.changed(_public_trace,side,work.active[rows,side],old_status,
                 before.status,jnp.where(old_status==m.SLP,status_callbacks.WAKE,status_callbacks.THAW),

@@ -78,6 +78,30 @@ def legal_fallback(legal, requested, active, *, seed, streams, step):
     return choices,no_action
 
 
+def _before_move_predicates(packet):
+    """Literal eligible input/output cooccurrences on refused frames only.
+
+    No exclusive blocker/cause is inferred and ordinary supported sleep is not
+    subtracted. These observations cannot change scoring or admission decisions.
+    """
+    value=packet.get('literal_diagnostics',{}).get('before_move',{})
+    if not value.get('available',False):return []
+    result=[]
+    for record in value.get('records',[]):
+        if record.get('eligible')!=1:continue
+        blocked=record.get('can_act')==0
+        predicates={'eligible_and_cannot_act':blocked,
+            'eligible_PAR_and_cannot_act':blocked and record.get('status')==1,
+            'eligible_FRZ_and_cannot_act':blocked and record.get('status')==6,
+            'eligible_SLP_and_cannot_act':blocked and record.get('status')==5,
+            'eligible_flinched_and_cannot_act':blocked and record.get('flinched')==1,
+            'eligible_loafing_and_cannot_act':blocked and record.get('loafing')==1,
+            'eligible_prior_confusion_positive':record.get('confusion_counter',0)>0,
+            'eligible_confusion_self_hit':record.get('confusion_self_hit')==1}
+        result.extend(name for name,present in predicates.items()if present)
+    return result
+
+
 class Ledger:
     """Counts current callback occurrences and unique games, never sticky totals."""
     def __init__(self, plan, streams):
@@ -127,6 +151,7 @@ class Ledger:
             # Original private consumer observations, separate/nonexclusive.
             # These label failed predicates, never causes or admission credit.
             for failure in p.get('consumer_failures',[]):self._count(role,domain,'consumer:'+str(failure),row,step,p)
+            for predicate in _before_move_predicates(p):self._count(role,domain,'before-move-predicate:'+predicate,row,step,p)
             for kind in p.get('engine_failures',[]):self._count(role,'engine',str(kind),row,step,p)
         self.step_rows.append(dict(step=int(step),launch_rows=b,active_engine_rows=int(active.sum()),executed_engine_rows=int(executed.sum()),
             capture_valid_rows=int((active&self.capture_good).sum()),fallback_rows=int((active&~self.capture_good).sum()),observed_epoch=time.time()))
@@ -162,6 +187,7 @@ class Ledger:
             full_B4_qualified=False,fidelity_qualified=False,strength_qualified=False,
             callback_counts_complete=self.counts_complete,
             counts_scope='Per-call source sites, raw guard failures, per-move breakdown, risk bits and private consumer predicates are separate nonexclusive cooccurrences. Never sum them as distinct failures or intrinsic causes.',
+            before_move_predicate_scope='Only literal eligible inputs/outputs serialized from refused frames. Nonexclusive; no sole-cause attribution, no subtraction of supported sleep and no reconstruction when absent. Original source-split counts/unique game denominators retained.',
             timing_scope='Actual launchshape and active/admitted counts required; timings never imply2048completed games.')
 
 
