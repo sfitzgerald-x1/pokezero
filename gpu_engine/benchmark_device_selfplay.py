@@ -180,19 +180,31 @@ def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
 def run_finite(compiled, start, initial, root_ids, params, *, progress=None, stall_floor_seconds=600):
     """Whole finite cohort including tail/dispatch/scalar accounting wall time.
 
-    Stall guard grows with the longest time to a completed game so far; it is
+    Stall guard grows with the longest observed completed game so far; it is
     not a duration cap. Caller supplies a separate disjoint warmup cohort.
     """
     c = start
     begin = last_completion = time.perf_counter()
-    longest = 0.; seen = 0
+    longest = 0.
+    birth = np.full(c.completed.shape, np.nan)
+    previous_cursor = int(np.asarray(c.cursor)); birth[:previous_cursor] = begin
+    seen = np.zeros(c.completed.shape, bool)
+    previous_boundary = begin
     while True:
         c = compiled(c, initial, root_ids, params)
-        completed, retired, active = map(int, jax.device_get((j.sum(c.completed),
-            j.sum(c.completed | c.capped | c.failed), j.sum(c.ids >= 0))))
+        completed_mask, retired, active, cursor = jax.device_get((c.completed,
+            j.sum(c.completed | c.capped | c.failed), j.sum(c.ids >= 0), c.cursor))
+        completed_mask = np.asarray(completed_mask)
+        completed = int(completed_mask.sum()); retired, active, cursor = map(int, (retired, active, cursor))
         now = time.perf_counter()
-        if completed > seen:
-            longest = max(longest, now-last_completion); last_completion=now; seen=completed
+        # New assignments/completions can occur inside a chunk. The preceding
+        # boundary is a conservative start and this boundary a conservative end.
+        birth[previous_cursor:cursor] = previous_boundary
+        new = completed_mask & ~seen
+        if np.any(new):
+            longest = max(longest, float(np.max(now-birth[new])))
+            last_completion = now
+        seen = completed_mask; previous_cursor = cursor; previous_boundary = now
         if progress:
             progress(dict(completed=completed, retired=retired, active=active,
                 elapsed_seconds=now-begin, ticks=int(c.ticks)))
