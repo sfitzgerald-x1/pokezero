@@ -25,7 +25,7 @@ BEFORE_MOVE_FIELDS=('actor_side','actor_physical','move','caller_move','eligible
     'result_confusion_counter','can_act','confusion_self_hit','stream_id','frame','raw_count',
     'turn','phase','generation0','generation1','prior_tape_refusal','prior_execution_refusal','prior_kernel_risk')
 SLEEP_GUARD_FIELDS=('sleep_rest_origin','sleep_skipped','sleep_volatile_uint32',
-    'sleep_block_requested','sleep_block_valid')
+    'sleep_block_requested','sleep_block_valid','sleep_block_move_ok')
 
 BATON_START_FIELDS=('actor_side', 'actor_physical', 'move', 'caller_move', 'eligible', 'acts', 'begin_valid', 'registered_bound', 'data_bound', 'transaction_present', 'history_side', 'public_known', 'public_pending', 'public_substitute', 'hp', 'maximum', 'status', 'counter', 'ability', 'base_ability', 'item', 'type0', 'type1', 'base_type0', 'base_type1', 'substitute_hp', 'confusion_counter', 'volatile_uint32', 'protect_counter', 'choice_move', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'spikes', 'any_trap_source', 'pending_residual', 'any_forced_switch', 'any_baton_pass', 'ability_namespace_size', 'item_namespace_size', 'quiet_ability_lookup', 'quiet_item_lookup', 'boost0', 'boost1', 'boost2', 'boost3', 'boost4', 'boost5', 'boost6', 'public_boost0', 'public_boost1', 'public_boost2', 'public_boost3', 'public_boost4', 'public_boost5', 'public_boost6', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk')
 
@@ -208,7 +208,7 @@ def record_before_move_on_tape(tape,before,side,physical,move,caller_move,status
         before_move_overflow=capture.before_move_overflow|(active&~room))
     return tape._replace(execution=context._replace(diagnostics=updated))
 
-def record_sleep_guard_on_tape(tape,rest_origin,skipped,volatile,requested,valid,*,eligible):
+def record_sleep_guard_on_tape(tape,rest_origin,skipped,volatile,requested,valid,move_ok,*,eligible):
     """Literal begin operands/results aligned to the next BeforeMove slot.
 
     No count, ticket, word, risk or admission value changes. Missing storage or
@@ -217,7 +217,7 @@ def record_sleep_guard_on_tape(tape,rest_origin,skipped,volatile,requested,valid
     context=getattr(tape,'execution',None);capture=getattr(context,'diagnostics',None);b=len(tape.count)
     if not _valid_before_move(capture,b)or not _valid_sleep_guards(capture,b):return tape
     if getattr(eligible,'shape',None)!=(b,)or getattr(eligible,'dtype',None)!=j.dtype(bool):return tape
-    supplied=(rest_origin,skipped,volatile,requested,valid);expected=(j.bool_,j.int32,j.uint32,j.bool_,j.bool_)
+    supplied=(rest_origin,skipped,volatile,requested,valid,move_ok);expected=(j.bool_,j.int32,j.uint32,j.bool_,j.bool_,j.bool_)
     values=[];known=[]
     for value,dtype in zip(supplied,expected,strict=True):
         good=getattr(value,'shape',None)==(b,)and getattr(value,'dtype',None)==j.dtype(dtype)

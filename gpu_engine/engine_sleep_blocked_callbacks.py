@@ -90,7 +90,7 @@ def begin(tape,state,side,move,context,table,*,eligible,sleep_usable,early_bird,
     requested=eligible&move_ok&ordinary;tape,ticket=ex.open_attempt(tape,ex.Site.SLEEP_BLOCKED,side,active=requested)
     from . import engine_outcome_diagnostics as diagnostics
     tape=diagnostics.record_sleep_guard_on_tape(tape,state.rest_origin[at],state.sleep_skipped[at],
-        state.volatile[at],requested,good,eligible=eligible)
+        state.volatile[at],requested,good,move_ok,eligible=eligible)
     return tape,Pending(context,ticket,side,physical,move,counter,hp,early_bird,requested,good)
 
 def valid_raw(raw):

@@ -18,7 +18,7 @@ class SleepGuardDiagnosticsTests(unittest.TestCase):
     def observe(self,t,**changes):
         b=8;z=j.arange(b,dtype=j.int32)
         values=dict(rest_origin=z%2==0,skipped=z,volatile=j.full(b,0x80000001,j.uint32),
-            requested=z%3==0,valid=z%3!=0,eligible=j.ones(b,bool))
+            requested=z%3==0,valid=z%3!=0,move_ok=z%4==0,eligible=j.ones(b,bool))
         values.update(changes)
         return d.record_sleep_guard_on_tape(t,**values)
 
@@ -35,6 +35,7 @@ class SleepGuardDiagnosticsTests(unittest.TestCase):
             self.assertEqual(r['sleep_volatile_uint32'],0x80000001 if i%2==0 else None)
             self.assertEqual(r['sleep_skipped'],i if i%2==0 else None)
             self.assertEqual(r['sleep_block_requested'],int(i%3==0)if i%2==0 else None)
+            self.assertEqual(r['sleep_block_move_ok'],int(i%4==0)if i%2==0 else None)
             self.assertEqual(r['sleep_rest_origin'],int(i%2==0)if i%2==0 else None)
         c=d.record_before_move_on_tape(self.observe(b),*self.args,**self.kw)
         e=self.observe(c)
@@ -46,7 +47,7 @@ class SleepGuardDiagnosticsTests(unittest.TestCase):
         b=d.record_before_move_on_tape(a,*self.args,**self.kw)
         r=d.refused_rows(b.execution.diagnostics,np.array([True]+[False]*7))['rows'][0]['before_move']['records'][0]
         self.assertIsNone(r['sleep_skipped']);self.assertIsNone(r['sleep_block_valid']);self.assertEqual(r['sleep_volatile_uint32'],0x80000001)
-        for cap in (None,d.Capture(*self.t.execution.diagnostics[:23]),self.t.execution.diagnostics._replace(sleep_guard_words=j.zeros((8,2,5),j.float32))):
+        for cap in (None,d.Capture(*self.t.execution.diagnostics[:23]),self.t.execution.diagnostics._replace(sleep_guard_words=j.zeros((8,2,6),j.float32))):
             t=self.t._replace(execution=self.t.execution._replace(diagnostics=cap));self.assertIs(self.observe(t),t)
         legacy=d.Capture(*b.execution.diagnostics[:23]);old={}
         exec(compile(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_outcome_diagnostics.py'],text=True),'legacy','exec'),old)
@@ -73,7 +74,7 @@ class SleepGuardDiagnosticsTests(unittest.TestCase):
             return d.record_before_move_on_tape(self.observe(t),*self.args,**self.kw).execution.diagnostics
         shaped=jax.eval_shape(fn,self.t.execution.diagnostics)
         self.assertEqual(len(shaped),25)
-        self.assertEqual(shaped.sleep_guard_words.shape,(8,2,5))
+        self.assertEqual(shaped.sleep_guard_words.shape,(8,2,6))
         jax.make_jaxpr(fn)(self.t.execution.diagnostics)
 
 if __name__=='__main__':unittest.main()
