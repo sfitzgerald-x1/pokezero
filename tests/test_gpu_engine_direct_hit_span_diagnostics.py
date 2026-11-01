@@ -37,6 +37,16 @@ class DirectSpanDiagnosticTests(unittest.TestCase):
   C=namedtuple('CurrentDiagnosticCursor','turn phase generation');L=namedtuple('CurrentDiagnosticLedger','refusal frame');RK=namedtuple('CurrentDiagnosticRisk','carry');RC=namedtuple('CurrentDiagnosticCarry','risk')
   t=t._replace(cursor=C(t.cursor.turn,t.cursor.phase,t.cursor.generation),execution=t.execution._replace(ledger=L(t.execution.ledger.refusal,t.execution.ledger.frame),risks=RK(RC(t.execution.risks.carry.risk))))
   capture=a.execution.diagnostics;fast=jax.jit(lambda t:d.record_direct_on_tape(t,values,phase=0,active=active));got=fast(t);np.testing.assert_array_equal(got.execution.diagnostics.direct_words[:,0,0],capture.direct_words[:,0,0])
+ def test_unsigned_literal_signed_negative_and_nondevice_legacy_storage(self):
+  t,_=fixture.OutcomeDiagnosticTests().tape();active=j.ones(8,bool);expected=2**31+1
+  a=d.record_direct_on_tape(t,dict(stream_id=j.full(8,expected,j.uint32),ledger_start=j.full(8,-1,j.int32)),phase=0,active=active)
+  record=d.refused_rows(a.execution.diagnostics,np.array([True]+[False]*7))['rows'][0]['direct_hit']['emitter']['records'][0]
+  self.assertEqual((record['stream_id'],record['ledger_start']),(expected,-1))
+  for capture in (d.Capture(*t.execution.diagnostics[:31]),t.execution.diagnostics._replace(**{name:np.asarray(getattr(t.execution.diagnostics,name))for name in d.Capture._fields[25:32]})):
+   before=t._replace(execution=t.execution._replace(diagnostics=capture));self.assertFalse(d.direct_enabled(before));self.assertIs(d.record_direct_on_tape(before,dict(move=j.ones(8,j.int32)),phase=0,active=active),before)
+  # Read-only host snapshots remain serializable, retaining original dtype bits.
+  host=a.execution.diagnostics._replace(**{name:np.asarray(getattr(a.execution.diagnostics,name))for name in d.Capture._fields[25:32]})
+  record=d.refused_rows(host,np.array([True]+[False]*7))['rows'][0]['direct_hit']['emitter']['records'][0];self.assertEqual((record['stream_id'],record['ledger_start']),(expected,-1))
  def actual_fixture(self):
   b=8;rows=j.arange(b);z=j.zeros(b,j.int32);yes=j.ones(b,bool);ns=j.arange(8,dtype=j.uint32)+11;streams=z+204001;actor=rows%2;physical=j.stack((z+2,z+4),axis=1);mapping=j.full((b,2,6),-1,j.int32).at[rows[:,None],j.arange(2)[None,:],physical].set(0)
   cursor=life.Cursor(streams,j.broadcast_to(ns,(b,8)),j.zeros((b,2),j.int32),z+3,z,yes,yes,physical,j.zeros((b,2),j.int32),j.ones((b,2),j.int32),j.ones((b,2),bool),j.ones((b,2),j.int32),mapping,j.ones((b,2),j.int32))

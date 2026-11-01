@@ -6,6 +6,7 @@ serialization includes refused rows only; these private operands are not model
 features, public facts or training labels.
 """
 from typing import NamedTuple
+import jax
 import jax.numpy as j
 import numpy as np
 
@@ -67,6 +68,7 @@ class Capture(NamedTuple):
     direct_valid:object=None
     direct_count:object=None
     direct_overflow:object=None
+    direct_unsigned:object=None
 
 def empty(batch):
     return Capture(j.zeros((batch,CAPACITY,len(FIELDS)),j.int32),j.zeros((batch,CAPACITY),bool),
@@ -82,7 +84,8 @@ def empty(batch):
         j.zeros((batch,CAPACITY,len(SLEEP_GUARD_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(SLEEP_GUARD_FIELDS)),bool),
         j.zeros((batch,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS)),j.int32),j.zeros((batch,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS)),bool),
         j.zeros((batch,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS)),bool),j.zeros((batch,len(DIRECT_PHASES),CAPACITY),bool),
-        j.zeros((batch,len(DIRECT_PHASES)),j.int32),j.zeros((batch,len(DIRECT_PHASES)),bool))
+        j.zeros((batch,len(DIRECT_PHASES)),j.int32),j.zeros((batch,len(DIRECT_PHASES)),bool),
+        j.zeros((batch,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS)),bool))
 
 def _valid(value,b):
     return type(value) is Capture and all(getattr(a,'shape',None)==shape and getattr(a,'dtype',None)==j.dtype(dtype)
@@ -131,11 +134,11 @@ def _valid_no_damage(value,b):
 def direct_enabled(tape):
     """Storage-shape capability only, never an eligibility/admission predicate."""
     capture=getattr(getattr(tape,'execution',None),'diagnostics',None);b=len(tape.count)
-    return _valid_direct(capture,b)
+    return _valid_direct(capture,b) and all(isinstance(v,(jax.Array,jax.core.Tracer))for v in capture[25:32])
 
 def _valid_direct(value,b):
     shape=(b,len(DIRECT_PHASES),CAPACITY,len(DIRECT_FIELDS))
-    return _valid(value,b) and all(getattr(a,'shape',None)==sh and getattr(a,'dtype',None)==j.dtype(dt)
+    return _valid(value,b) and getattr(value.direct_unsigned,'shape',None)==shape and getattr(value.direct_unsigned,'dtype',None)==j.dtype(bool) and all(getattr(a,'shape',None)==sh and getattr(a,'dtype',None)==j.dtype(dt)
         for a,sh,dt in zip(value[25:31],(shape,shape,shape,(b,len(DIRECT_PHASES),CAPACITY),(b,len(DIRECT_PHASES)),(b,len(DIRECT_PHASES))),(j.int32,j.bool_,j.bool_,j.bool_,j.int32,j.bool_)))
 
 def direct_meta(tape):
@@ -154,16 +157,16 @@ def record_direct_on_tape(tape,values,*,phase,active):
     legacy operands from literal false/zero; no field is read by admission.
     """
     c=getattr(tape,'execution',None);capture=getattr(c,'diagnostics',None);b=len(tape.count)
-    if not _valid_direct(capture,b)or type(values)is not dict or type(phase)is not int or not 0<=phase<len(DIRECT_PHASES):return tape
+    if not direct_enabled(tape)or type(values)is not dict or type(phase)is not int or not 0<=phase<len(DIRECT_PHASES):return tape
     if getattr(active,'shape',None)!=(b,)or getattr(active,'dtype',None)!=j.dtype(bool):return tape
-    words=[];known=[];malformed=[]
+    words=[];known=[];malformed=[];unsigned=[]
     for name in DIRECT_FIELDS:
         v=values.get(name);missing=v is None;good=getattr(v,'shape',None)==(b,)and getattr(v,'dtype',None)in(j.dtype(j.int32),j.dtype(j.uint32),j.dtype(bool))
-        words.append(v.astype(j.int32)if good else j.zeros(b,j.int32));known.append(j.full(b,good,bool));malformed.append(j.full(b,not missing and not good,bool))
-    words=j.stack(words,axis=1);known=j.stack(known,axis=1);malformed=j.stack(malformed,axis=1);rows=j.arange(b)
+        words.append(v.astype(j.int32)if good else j.zeros(b,j.int32));known.append(j.full(b,good,bool));malformed.append(j.full(b,not missing and not good,bool));unsigned.append(j.full(b,good and getattr(v,'dtype',None)==j.dtype(j.uint32),bool))
+    words=j.stack(words,axis=1);known=j.stack(known,axis=1);malformed=j.stack(malformed,axis=1);unsigned=j.stack(unsigned,axis=1);rows=j.arange(b)
     count=capture.direct_count[:,phase];slot=j.clip(count,0,CAPACITY-1);room=(count>=0)&(count<CAPACITY);write=active&room
     def put(a,v):return a.at[rows,phase,slot].set(j.where(write[:,None],v,a[rows,phase,slot]))
-    updated=capture._replace(direct_words=put(capture.direct_words,words),direct_known=put(capture.direct_known,known),direct_malformed=put(capture.direct_malformed,malformed),
+    updated=capture._replace(direct_words=put(capture.direct_words,words),direct_known=put(capture.direct_known,known),direct_malformed=put(capture.direct_malformed,malformed),direct_unsigned=put(capture.direct_unsigned,unsigned),
         direct_valid=capture.direct_valid.at[rows,phase,slot].set(capture.direct_valid[rows,phase,slot]|write),
         direct_count=capture.direct_count.at[:,phase].set(j.where(write,count+1,count)),direct_overflow=capture.direct_overflow.at[:,phase].set(capture.direct_overflow[:,phase]|(active&~room)))
     return tape._replace(execution=c._replace(diagnostics=updated))
@@ -374,7 +377,7 @@ def refused_rows(capture,refused,*,_host_cache=None):
     no_damage_available=_valid_no_damage(capture,len(refused))if available else False
     no_damage_present=type(capture)is Capture and any(x is not None for x in capture[17:23])
     direct_available=_valid_direct(capture,len(refused))if available else False
-    direct_present=type(capture)is Capture and any(x is not None for x in capture[25:31])
+    direct_present=type(capture)is Capture and any(x is not None for x in capture[25:32])
     cache={}if _host_cache is None else _host_cache
     def host(value):
         key=id(value)
@@ -386,7 +389,7 @@ def refused_rows(capture,refused,*,_host_cache=None):
     baton_copied=tuple(host(value)for value in capture[12:17])if baton_available and len(indices)else None
     no_damage_copied=tuple(host(value)for value in capture[17:23])if no_damage_available and len(indices)else None
     sleep_guard_copied=tuple(host(value)for value in capture[23:25])if before_available and _valid_sleep_guards(capture,len(refused))and len(indices)else None
-    direct_copied=tuple(host(value)for value in capture[25:31])if direct_available and len(indices)else None
+    direct_copied=tuple(host(value)for value in capture[25:32])if direct_available and len(indices)else None
     for row in indices:
         item={'row':int(row),'available':available}
         if available:
@@ -437,11 +440,11 @@ def refused_rows(capture,refused,*,_host_cache=None):
         if direct_present:
             direct_result=dict(available=direct_available,capacity_per_phase=CAPACITY,scope='Literal SAME-call emitter and capture checks. Independent bounded phases; false/missing/overflow are observations, not causes or admission.')
             if direct_available:
-                words,known,malformed,valid,count,overflow=direct_copied
+                words,known,malformed,valid,count,overflow,unsigned=direct_copied
                 for phase,name in enumerate(DIRECT_PHASES):
                     records=[]
-                    for record,mask,bad in zip(words[row,phase][valid[row,phase]],known[row,phase][valid[row,phase]],malformed[row,phase][valid[row,phase]],strict=True):
-                        values={field:int(v)if yes else None for field,v,yes in zip(DIRECT_FIELDS,record,mask,strict=True)}
+                    for record,mask,bad,types in zip(words[row,phase][valid[row,phase]],known[row,phase][valid[row,phase]],malformed[row,phase][valid[row,phase]],unsigned[row,phase][valid[row,phase]],strict=True):
+                        values={field:((int(v)&0xffffffff)if uns else int(v))if yes else None for field,v,yes,uns in zip(DIRECT_FIELDS,record,mask,types,strict=True)}
                         values['malformed_fields']=[field for field,v in zip(DIRECT_FIELDS,bad,strict=True)if v]
                         values['unavailable_fields']=[field for field,v in values.items()if v is None];records.append(values)
                     direct_result[name]=dict(count=int(count[row,phase]),overflow=bool(overflow[row,phase]),records=records)
