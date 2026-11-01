@@ -34,6 +34,10 @@ class Pending(NamedTuple):
  requested:object
  valid:object
  secondary:object
+ start:object
+ turn:object
+ phase:object
+ generation:object
 class Captured(NamedTuple):
  pending:object
  after:object
@@ -125,7 +129,7 @@ def begin(tape,state,side,move,context,table,*,eligible,primary,secondary):
  good &= j.all((state.species[rows,side]>0)==j.any(perm[:,:,None]==j.arange(6)[None,None,:],axis=1),axis=1)
  good &= j.all((state.status_counter[rows,side]>=0)&(state.sleep_skipped[rows,side]>=0)&(state.rest_origin[rows,side]>=0)&(state.rest_origin[rows,side]<=1),axis=1)
  tape,ticket=ex.open_attempt(tape,ex.Site.HEAL_BELL,side,active=requested)
- return tape,Pending(context,ticket,side,physical,move,state,perm,requested,good,secondary)
+ return tape,Pending(context,ticket,side,physical,move,state,perm,requested,good,secondary,tape.count,tape.cursor.turn,tape.cursor.phase,tape.cursor.generation)
 
 def prospective(p):return j.asarray(False)if p is None else p.requested&p.valid
 
@@ -200,6 +204,41 @@ def owned(tape,index,*,stage=2):
  return good
 
 def captured_matches(tape,captured):
+ """Join structural ownership to the SAME captured cure, not cached raw alone."""
+ from . import engine_execution_completeness as ex
  if captured is None:return j.zeros(len(tape.count),bool)
- p=captured.pending;c=tape.execution;rows=j.arange(len(tape.count));slot=j.clip(p.ticket.slot,0,c.ledger.site.shape[1]-1)
- return p.requested&p.valid&_bound(tape,p.context)&(captured.end==tape.count)&(c.ledger.serial[rows,slot]==p.ticket.serial)&owned(tape,c.ledger.start[rows,slot])
+ p=captured.pending;c=ex._context(tape)
+ if c is None:return j.zeros(len(tape.count),bool)
+ b=len(tape.count);rows=j.arange(b);slot,ticket_same=ex._ticket(c.ledger,p.ticket)
+ before,after=p.before,captured.after;side=p.side;d=p.context.data.heal_bell
+ life._typed(captured.write_mask,(b,6),j.bool_)
+ good=p.requested&p.valid&_bound(tape,p.context)&ticket_same
+ size=j.sum(p.permutation>=0,axis=1,dtype=j.int32)
+ good &= (c.ledger.start[rows,slot]==p.start)&(c.ledger.end[rows,slot]==captured.end)&(captured.end==tape.count)&(captured.end==p.start+1+3*size)
+ good &= (c.ledger.turn[rows,slot]==p.turn)&(c.ledger.phase[rows,slot]==p.phase)&j.all(c.ledger.generation[rows,slot]==p.generation,axis=1)
+ good &= (tape.cursor.turn==p.turn)&(tape.cursor.phase==p.phase)&j.all(tape.cursor.generation==p.generation,axis=1)
+ actual_order=_prefix_order(tape,side)
+ if actual_order is None:good &= False
+ else:good &= order._valid(actual_order)&j.all(actual_order.request_to_physical==p.permutation,axis=1)&(actual_order.generation==p.generation[rows,side])
+ abi=before.ability[rows,side];hp=before.hp[rows,side];status=before.status[rows,side]
+ expected_mask=p.requested[:,None]&(hp>0)&(status!=0)&~d.installed.soundproof[j.clip(abi,0,len(d.installed.soundproof)-1)]
+ good &= j.all(captured.write_mask==expected_mask,axis=1)&(before.active[rows,side]==p.physical)&(tape.cursor.physical_active[rows,side]==p.physical)&(p.move==d.move)
+ for name in before._fields:
+  old,new=getattr(before,name),getattr(after,name)
+  if old is None or new is None:good &= False;continue
+  wanted=old.at[rows,side].set(j.where(captured.write_mask,0,old[rows,side]))if name in ('status','status_counter','sleep_skipped','rest_origin')else old
+  good &= j.all((new==wanted).reshape((b,-1)),axis=1)
+ zero=j.zeros(b,j.int32)
+ header=j.stack((zero+HEAL_BELL,side,p.physical,side,p.physical,zero,p.move,size,p.secondary.astype(j.int32),zero),axis=1)
+ good &= j.all(tape.words[rows,j.clip(p.start,0,tape.words.shape[1]-1)]==header,axis=1)
+ for position in range(6):
+  physical=p.permutation[:,position];on=physical>=0;safe=j.clip(physical,0,5)
+  def get(state,name):return getattr(state,name)[rows,side,safe]
+  prefix=(zero+HEAL_BELL,side,p.physical,side,physical)
+  expected=(j.stack((*prefix,zero+STATUS,get(before,'status'),get(after,'status'),get(before,'hp'),get(before,'ability')),axis=1),
+   j.stack((*prefix,zero+COUNTERS,get(before,'status_counter'),get(after,'status_counter'),get(before,'sleep_skipped'),get(after,'sleep_skipped')),axis=1),
+   j.stack((*prefix,zero+ORIGIN,get(before,'rest_origin'),get(after,'rest_origin'),get(before,'max_hp'),get(after,'max_hp')),axis=1))
+  for offset,words in enumerate(expected):
+   index=j.clip(p.start+1+position*3+offset,0,tape.words.shape[1]-1)
+   good &= ~on|j.all(tape.words[rows,index]==words,axis=1)
+ return good&owned(tape,p.start)
