@@ -311,6 +311,7 @@ class _Runtime:
         self.engine=self.session.state.core.engine
         self.cursor=self.session.state.core.cursor
         self.profile=self.session.state.core.weather_profile
+        self.party_orders=self.session.state.core.orders
         # Fresh per-call local accounting is DIAGNOSTIC ONLY: it measures actual
         # newly requested sites, does not close/repair the Session's ledger,
         # carries no both-owner proof, and never grants observation admission.
@@ -322,7 +323,7 @@ class _Runtime:
         self.mask=jax.jit(lambda state:transition.action_mask(state,self.table))
         self.last_packet=[{}for _ in streams]
 
-    def _diagnostic_step(self,engine,cursor,profile,actions,chance,active):
+    def _diagnostic_step(self,engine,cursor,profile,actions,chance,active,party_orders=None):
         import jax.numpy as j
         from . import engine_lifecycle_callbacks as life,engine_execution_completeness as ex
         from . import engine_kernel_frame_risk as risk,engine_public_events as events
@@ -333,7 +334,7 @@ class _Runtime:
             j.zeros((b,64),j.int32),j.zeros((b,64),j.int32),j.zeros((b,64,2),j.int32),j.zeros((b,64,6),j.int32),cursor)
         tape=ex.begin_on_tape(tape,self.empty_ledger,s['execution_compiled'].device,active=active)
         local=risk.begin_frame_device(self.empty_risk,tape,s['kernel_risk_compiled'].device,active=active)
-        tape=tape._replace(execution=tape.execution._replace(risks=risk.Context(local,s['kernel_risk_compiled'].device),diagnostics=diagnostics.empty(b)))
+        tape=tape._replace(execution=tape.execution._replace(risks=risk.Context(local,s['kernel_risk_compiled'].device),diagnostics=diagnostics.empty(b),party_orders=party_orders))
         weather=None if s['speed_profile']is None else(profile,s['speed_profile'].device)
         result=transition.step_with_chance(engine._replace(done=engine.done|~active),actions,self.table,chance,
             _public_trace=tape,_lifecycle_trace=True,_weather_hp_context=weather,
@@ -344,7 +345,13 @@ class _Runtime:
         from . import engine_source_frame_witness as witness
         raw_good=witness._raw_complete_words(result.callbacks,s['frame_witness_compiled'].device)
         namespace=ex._validate(result.callbacks.execution.ledger,s['execution_compiled'].device)&ex._tape(result.callbacks.execution.ledger,result.callbacks,s['execution_compiled'].device)
-        return physical,next_cursor,next_profile,result.callbacks,result.step.invalid_actions,result.step.placeholder_moves,raw_good,namespace
+        next_orders=None
+        if party_orders is not None:
+            # SAME private before-order plus actual installed-switch receipts.
+            # Missing/invalid transport is never rebuilt from final state.
+            frame=life.LifecycleResult(physical,next_cursor,result.callbacks,life.snapshot(cursor),life.snapshot(next_cursor),result.step.invalid_actions,result.step.placeholder_moves,next_profile)
+            next_orders=_row_select(active,party_orders,tuple(life.apply_installations(o,frame)for o in party_orders))
+        return physical,next_cursor,next_profile,result.callbacks,result.step.invalid_actions,result.step.placeholder_moves,raw_good,namespace,next_orders
 
     def requested(self):
         state=self.engine;rows=np.arange(len(state.done))[:,None];sides=np.arange(2)[None,:]
@@ -428,10 +435,11 @@ class _Runtime:
             executed|=ran;invalid|=kept&(~ran|host(d.invalid_actions))
             self.engine=_row_select(kept,self.engine,result.state.core.engine)
             self.cursor=_row_select(kept,self.cursor,result.state.core.cursor)
+            self.party_orders=_row_select(kept,self.party_orders,result.state.core.orders)
             if self.profile is not None:self.profile=_row_select(kept,self.profile,result.state.core.weather_profile)
         fallback=active&~scored
         if fallback.any():
-            args=(self.engine,self.cursor,self.profile,j.asarray(actions),chance,j.asarray(fallback))
+            args=(self.engine,self.cursor,self.profile,j.asarray(actions),chance,j.asarray(fallback),self.party_orders)
             if self.diag_executable is None:
                 build=time.perf_counter_ns()
                 with compile_observations.phase('fallback.original_lower_compile'):
@@ -439,9 +447,9 @@ class _Runtime:
                 phases['diagnostic_fallback_lower_compile_ms']=(time.perf_counter_ns()-build)/1e6
             start=time.perf_counter_ns()
             with compile_observations.phase('fallback.original_execute'):
-                state,cursor,profile,diag_callbacks,bad,_,diag_good,diag_namespace=self.jax.block_until_ready(self.diag_executable(*args))
+                state,cursor,profile,diag_callbacks,bad,_,diag_good,diag_namespace,party_orders=self.jax.block_until_ready(self.diag_executable(*args))
             phases['diagnostic_fallback_engine_ms']=(time.perf_counter_ns()-start)/1e6
-            self.engine,self.cursor,self.profile=state,cursor,profile
+            self.engine,self.cursor,self.profile,self.party_orders=state,cursor,profile,party_orders
             invalid|=fallback&host(bad);executed|=fallback&~host(bad)
         witness=getattr(self.session.state.core,'frame_input_report',None)
         ledger=self.session.state.core.execution
