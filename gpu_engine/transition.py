@@ -1274,6 +1274,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _thunder_wave_sub_block=(_active(work.substitute_hp,work,foe)>0)&~effects.bypass_sub[move]
                 _public_trace,_thunder_wave_ticket=execution_accounting.open_attempt(_public_trace,
                     execution_accounting.Site.PRIMARY_PARALYSIS,foe,active=_thunder_wave_requested)
+                _thunder_wave_ground_pending=thunder_callbacks.begin_ground(_public_trace,work,_thunder_wave_ticket,
+                    side,move,caller_move,chosen_slot,_thunder_wave_context,requested=_thunder_wave_requested,
+                    resolved_type=typ,power=power,accuracy=_thunder_wave_accuracy_hit,hit=hit,immune=immune,
+                    numerator=num,denominator=den,protected=_risk_protected,absorbed=_risk_absorbed)
             if _sleep_powder_context is not None:
                 _sleep_powder_requested=acts & powder_callbacks.selected_device(_sleep_powder_context.data,move)
                 if _lifecycle_trace:
@@ -1327,7 +1331,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     immune,acts & hit & ~immune,_thunder_wave_old_status,_active(work.status,work,foe),
                     _thunder_wave_old_counter,_active(work.status_counter,work,foe))
                 _public_trace=thunder_callbacks.record_device(_public_trace,_thunder_wave_ticket,side,work.active[rows,side],
-                    work.active[rows,foe],move,_thunder_wave_attempt,_thunder_wave_context,requested=_thunder_wave_requested)
+                    work.active[rows,foe],move,_thunder_wave_attempt,_thunder_wave_context,requested=_thunder_wave_requested,
+                    ground_pending=_thunder_wave_ground_pending,state=work)
                 _public_trace=thunder_callbacks.exclude_cure_device(_public_trace,_thunder_wave_requested,apply_status,
                     _active(work.item,work,foe),table.items)
             if _sleep_powder_context is not None:

@@ -196,6 +196,7 @@ class Context(NamedTuple):
     party_orders: object = None # actual BEFORE-frame owner permutations, never guessed
     baton_transaction: object = None # exact source/public/request two-boundary transaction
     self_destruct: object = None # row-only actual self-KO/target/faint composite
+    thunder_wave_immunity: object = None # max2 SAME-call natural-immunity receipts
 
 
 UNKNOWN_EXECUTION = 512

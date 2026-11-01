@@ -441,6 +441,7 @@ def compile_adapter(metadata, projector, *, catalog):
     if int(lower.device.thunder_wave_move)>0:
         pid=int(lower.device.base.public_ids[int(lower.device.thunder_wave_move)])
         if pid>0:
+            toxic_no_effect[toxic_callbacks.PLAIN_TYPE_IMMUNITY]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
             plain=int(moves[pid]);blank=add(f'|move|{ident[0]}|Thunder Wave||[still]',inputs.Kind.MOVE)
             patched=templates[plain].copy();patched[mains[plain],6:8]=-1
             if not blank or mains[plain]!=mains[blank] or not np.array_equal(patched,templates[blank]):raise ValueError('original Thunder Wave failed MOVE target-erasure schema changed')
@@ -757,7 +758,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_block=raw_kind==protect_callbacks.PROTECT_BLOCK
         substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
         sub_failure=(kind==int(inputs.Kind.ACTIVE))&(raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
-        toxic_code=toxic_callbacks.outcome_device(tape.words[:,index])
+        thunder_ground=thunder_callbacks.ground_raw(tape.words[:,index])&(tape.words[:,index,5]==tables.causal.thunder_wave_move)
+        toxic_code=jnp.where(thunder_ground,toxic_callbacks.PLAIN_TYPE_IMMUNITY,toxic_callbacks.outcome_device(tape.words[:,index]))
         toxic_sub_failure=(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)&(kind==int(inputs.Kind.ACTIVE))&toxic_callbacks.substitute_failure_raw(tape.words[:,index])
         toxic_existing=(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)&(kind==int(inputs.Kind.ACTIVE))&toxic_callbacks.existing_status_raw(tape.words[:,index])
         toxic_existing_other=toxic_existing&(tape.words[:,index,7]!=4)
@@ -986,6 +988,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_previous_ok &= (protect_previous_tendency[:,6]==called[:,0])&(protect_previous_tendency[:,10]==erase_pid)&(protect_previous_tendency[:,11]==erase_target_side)
         protect_previous_ok &= (protect_previous_tendency[:,2]==semantic[:,2])&(protect_previous_tendency[:,3]==semantic[:,3])
         identity &= ~toxic_sub_failure|(toxic_callbacks.owned_substitute_failure(tape,index)|thunder_callbacks.owned_substitute_failure(tape,index))
+        identity &= ~thunder_ground|thunder_callbacks.owned_ground_immunity(tape,index)
         identity &= ~toxic_existing|toxic_callbacks.owned_existing_status(tape,index)
         identity &= ~protect_erases_target | (protect_previous_ok&(~heal_half_full|tables.self_move_still[jnp.clip(erase_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~protect_block | (live[rows,safe]&live[rows,1-safe]&(called[:,0]==tape.words[:,index,1])&(called[:,1]==slots[rows,1-safe])&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
