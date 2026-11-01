@@ -711,6 +711,12 @@ def emitted(ledger, ticket, tape, *, active, tables):
     return _fail(result,active,good,RECEIPT)
 
 
+CONSUMPTION_DIAGNOSTIC_FIELDS = ('namespace_equal','claimed_receipt_exact','all_obligations_emitted',
+    'ledger_opened','sequence_advanced_exactly','public_sequence_equal','public_stream_equal',
+    'causal_stream_equal','claimed_span_has_output','drained','good',
+    'projection_error','component_admitted','emitted_word_count')
+
+
 def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapter_tables, catalog,
                          weather_hp=None, leftovers=None, status_residual=None,leftovers_no_output=None,hypothetical_hp=None):
     """Trusted owning closure: actually project/fold before resolving ANY span.
@@ -763,6 +769,14 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
     captured=(ledger.stage==2)&(ledger.start>=0)&(ledger.end<=tape.count[:,None])&(positive|silent)
     all_emitted=jnp.all(~present|captured,axis=1)
     good=ns & ledger.opened & exact & all_emitted & drained
+    # Literal pre-accounting-rollback predicates; no diagnostic can grant credit.
+    consumption_diagnostics=jnp.stack((ns,exact,all_emitted,ledger.opened,
+        projection.state.sequence==stream.sequence+emitted_count,
+        consumed.public.cursor.sequence==projection.state.sequence,
+        consumed.public.cursor.stream_id==ledger.stream_id,
+        projection.state.causal.cursor.stream_id==ledger.stream_id,
+        jnp.where(jnp.any(claimed,axis=1),emitted_count>0,True),drained,good,
+        projection.error,projection.component_admitted,emitted_count),axis=1).astype(jnp.int32)
     candidate=ledger._replace(stage=jnp.where(present,3,ledger.stage),opened=jnp.zeros(b,bool),
         upstream_refusal=ledger.upstream_refusal|tape.refusal)
     result=_commit(active & good,ledger,candidate)
@@ -780,6 +794,7 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
     use=active & good & (result.refusal==0)
     error=jnp.where(active & ~use,jnp.where(projection.error!=0,projection.error,int(full.inputs.Error.PAYLOAD)),0)
     safe_projection=projection._replace(state=full._commit(use,stream,projection.state),error=error,
+        consumption_diagnostics=consumption_diagnostics,
         component_admitted=use,chunk=projection.chunk._replace(
             words=jnp.where(use[:,None,None],projection.chunk.words,0),
             valid=projection.chunk.valid & use[:,None],more=projection.chunk.more & use),

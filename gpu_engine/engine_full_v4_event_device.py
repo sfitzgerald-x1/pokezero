@@ -523,6 +523,15 @@ class FrameChunks(NamedTuple):
     more: object                # [bounded chunks,B]
 
 
+# Private observations only. These fields never enter acceptance or rollback.
+FOLD_DIAGNOSTIC_FIELDS = ('projection_error','fold_error','prior_context_equal',
+    'prior_sequence_equal','prior_stream_equal','prior_turn_equal','prior_phase_equal',
+    'prior_toxic_visibility_equal','prior_species_equal','prior_status_equal',
+    'prior_hp_equal','prior_maximum_equal','prior_weather_equal',
+    'prior_weather_ability_equal','prior_weather_set_equal','prior_weather_remaining_equal',
+    'input_sequence','projected_sequence','folded_public_sequence','projected_word_count')
+
+
 class Projection(NamedTuple):
     state: StreamState
     chunk: inputs.EventChunk
@@ -533,6 +542,8 @@ class Projection(NamedTuple):
     full_encoder_admitted: object
     B4_qualified: object
     frames: FrameChunks
+    fold_diagnostics: object = None       # int32[B,len(FOLD_DIAGNOSTIC_FIELDS)]
+    consumption_diagnostics: object = None # private accounting observations
 
 
 def _commit(ok, old, new):
@@ -1250,6 +1261,25 @@ def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, 
         & (public.context.field.weather_set==(state.weather>0))
         & (state.weather_remaining==jnp.where((state.weather>0)&~state.weather_permanent,
             jnp.maximum(0,5-public.context.field.weather_upkeeps),0)))
+    # Copy the original inputs/errors BEFORE the atomic public rollback below.
+    # Redundant equality observations are data, never substitutes for `same`.
+    fold_diagnostics=jnp.stack((projection.error,fold_error,same,
+        public.cursor.sequence==state.sequence,
+        public.cursor.stream_id==state.causal.cursor.stream_id,
+        public.cursor.turn==state.causal.cursor.turn,
+        public.cursor.phase==state.causal.cursor.phase,
+        jnp.all(public.context.toxic.visibility==visibility,axis=1),
+        jnp.all(public.mons.species==state.species,axis=(1,2)),
+        jnp.all(public.mons.status==state.status,axis=(1,2)),
+        jnp.all(public.mons.hp_numerator==state.hp,axis=(1,2)),
+        jnp.all(public.mons.hp_denominator==state.maximum,axis=(1,2)),
+        public.context.field.weather==state.weather,
+        public.context.field.weather_ability==state.weather_permanent,
+        public.context.field.weather_set==(state.weather>0),
+        state.weather_remaining==jnp.where((state.weather>0)&~state.weather_permanent,
+            jnp.maximum(0,5-public.context.field.weather_upkeeps),0),
+        state.sequence,projection.state.sequence,candidate.cursor.sequence,
+        jnp.sum(projection.frames.valid,axis=(0,2),dtype=jnp.int32)),axis=1).astype(jnp.int32)
     error = jnp.where(projection.error != 0, projection.error,
         jnp.where(same, fold_error, int(inputs.Error.STREAM)))
     ok = error == 0
@@ -1257,6 +1287,7 @@ def project_and_fold(state, frame, tables, public, catalog, *, weather_hp=None, 
     next_state = next_state._replace(causal=next_state.causal._replace(admitted=state.causal.admitted & ok,
         cursor=next_state.causal.cursor._replace(admitted=state.causal.cursor.admitted & ok)))
     projection = projection._replace(state=next_state, error=error, component_admitted=ok,
+        fold_diagnostics=fold_diagnostics,
         chunk=projection.chunk._replace(words=jnp.where(ok[:, None, None], projection.chunk.words, 0),
             valid=projection.chunk.valid & ok[:, None],more=projection.chunk.more & ok),
         frames=FrameChunks(jnp.where(ok[None,:,None,None],projection.frames.words,0),
