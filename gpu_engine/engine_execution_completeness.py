@@ -189,6 +189,7 @@ class Context(NamedTuple):
     terminal: object = None  # PRIVATE literal final direct-KO observer
     secondary_status: object = None # ephemeral SAME-call registered context
     leech_history: object = None # actual owning public/current seed source-slot facts
+    party_orders: object = None # actual BEFORE-frame owner permutations, never guessed
 
 
 UNKNOWN_EXECUTION = 512

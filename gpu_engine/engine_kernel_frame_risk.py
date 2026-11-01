@@ -52,6 +52,7 @@ class Branch(IntEnum):
     CONFUSION_HP=23
     ENTRY_CONFUSION_CURE=24
     PRIMARY_STATUS=25
+    HEAL_BELL=26
 
 
 NON_WEATHER, SELF_EFFECT, BOOST, FIELD_VOLATILE, TARGET_OUTCOME, SELF_HP, BLOCKED_ACTION, TERMINAL, CONSTRUCTOR_STATE, NAMESPACE, ORDER, OVERFLOW, UPSTREAM = (1<<n for n in range(13))
@@ -129,6 +130,9 @@ class Tables(NamedTuple):
     self_boost_stats: object
     self_boost_deltas: object
     self_boost_lengths: object
+    heal_bell_binding: object
+    heal_bell_move: object
+    heal_bell_soundproof: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -209,6 +213,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     direct_binding=np.zeros(8,np.uint32);candidate=np.zeros(m,bool);seismic=0;ko_candidates=np.zeros(m,bool)
     color_binding=np.zeros(8,np.uint32);color_abilities=np.zeros(len(table.secondary.color_change) if table.secondary is not None else 1,bool);color_candidates=np.zeros(m,bool);color_types=np.zeros(m,np.int32);color_dynamic=np.zeros(m,bool)
     heal_binding=np.zeros(8,np.uint32);heal_candidates=np.zeros(m,bool);heal_family=np.zeros(m,np.int32)
+    heal_bell_binding=np.zeros(8,np.uint32);heal_bell_move=0;heal_bell_candidates=np.zeros(m,bool);heal_bell_soundproof=np.zeros(len(table.effects.soundproof)if table.effects is not None else 1,bool)
     if direct_hit_compiled is not None:
         from . import engine_direct_hit_controls as direct
         direct_data=direct.check_compiled(direct_hit_compiled)
@@ -218,6 +223,10 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         direct_binding=np.asarray(direct_data.binding,np.uint32)
         no_damage_binding=np.asarray(direct_data.no_damage.binding,np.uint32)
         ko_candidates=np.asarray(direct_data.ko_candidates,bool)
+        if direct_data.heal_bell is not None:
+            from . import engine_heal_bell_callbacks as heal_bell_callbacks
+            data=direct_data.heal_bell;heal_bell_callbacks.shape(data);heal_bell_move=int(data.move)
+            heal_bell_binding=np.asarray(data.binding,np.uint32);heal_bell_candidates[heal_bell_move]=True;heal_bell_soundproof=np.asarray(data.installed.soundproof,bool)
         if direct_data.primary_plain_status is not None:
             from . import engine_primary_plain_status_callbacks as plain_primary
             plain_primary.shape(direct_data.primary_plain_status);plain_binding=np.asarray(direct_data.primary_plain_status.binding,np.uint32);plain_candidates=np.asarray(direct_data.primary_plain_status.candidates).copy();plain_status=np.asarray(direct_data.primary_plain_status.status).copy()
@@ -342,7 +351,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         powder_miss=np.asarray(data.miss_mask)
         if powder_miss.shape!=(m,) or powder_miss.dtype!=np.dtype(bool) or np.any(powder_miss&~mask) or (not bool(data.primary_sleep) and powder_miss.any()):raise ValueError("original explicit primary sleep miss mask required")
         powder_binding=np.asarray(data.binding,np.uint32);powder_candidate=mask.copy()
-    risk[(weather==0)&~self_move_candidates&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates&~bulk_candidates&~(self_boost_lengths>0)&~plain_candidates&~heal_candidates&~belly_candidates&~((encore_move>0)&(np.arange(m)==encore_move))&~((leech_move>0)&(np.arange(m)==leech_move))]|=NON_WEATHER
+    risk[(weather==0)&~heal_bell_candidates&~self_move_candidates&~candidate&~substitute_candidate&~toxic_candidate&~calm_candidate&~swords_candidate&~spikes_candidate&~thunder_candidate&~powder_candidate&~protect_candidates&~bulk_candidates&~(self_boost_lengths>0)&~plain_candidates&~heal_candidates&~belly_candidates&~((encore_move>0)&(np.arange(m)==encore_move))&~((leech_move>0)&(np.arange(m)==leech_move))]|=NON_WEATHER
     def flag(module,name,bit):
         if module is None:return
         values=np.asarray(getattr(module,name))
@@ -358,7 +367,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     for name in ('hit_spa_drop','haze'):flag(table.effects,name,BOOST)
     flag(table.effects,'endure',TARGET_OUTCOME)
     if table.effects is not None:risk[np.asarray(table.effects.protect)&~protect_candidates]|=TARGET_OUTCOME
-    flag(table.effects,'heal_bell',FIELD_VOLATILE)
+    if table.effects is not None:risk[np.asarray(table.effects.heal_bell)&~heal_bell_candidates]|=FIELD_VOLATILE
     if table.effects is not None:risk[(np.asarray(table.effects.status)!=0)&~toxic_candidate&~thunder_candidate&~powder_candidate&~plain_candidates]|=FIELD_VOLATILE
     flag(table.sustain,'spin',FIELD_VOLATILE)
     if table.sustain is not None:risk[np.asarray(table.sustain.wish)&~self_move_candidates]|=FIELD_VOLATILE
@@ -383,9 +392,10 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         elif 13<=int(code)<=19 or code==Branch.ENTRY_CONFUSION_CURE:branch[int(code)]=FIELD_VOLATILE
         elif 21<=int(code)<=23:branch[int(code)]=SELF_HP
     branch[Branch.PRIMARY_STATUS]=FIELD_VOLATILE
+    branch[Branch.HEAL_BELL]=FIELD_VOLATILE
     files=('transition.py','secondary.py','entry.py','effects.py','absorption.py','sustain.py',
         'linked_traps.py','encore.py','mechanics.py','engine_execution_completeness.py','engine_kernel_frame_risk.py')
-    inventory=dict(schema=SCHEMA,declared={x.name:int(x) for x in Branch},
+    inventory=dict(heal_bell_binding=heal_bell_binding.tolist(),heal_bell_move=heal_bell_move,heal_bell_soundproof=heal_bell_soundproof.tolist(),schema=SCHEMA,declared={x.name:int(x) for x in Branch},
         source_files={f:hashlib.sha256(Path(__file__).with_name(f).read_bytes()).hexdigest() for f in files},
         pinch_binding=pinch_binding.tolist(),pinch_stats=pinch_stats.tolist(),
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
@@ -397,7 +407,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths),words(heal_bell_binding),jnp.asarray(heal_bell_move,jnp.int32),jnp.asarray(heal_bell_soundproof))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -971,7 +981,7 @@ def spikes_on_tape(tape,attempted,*,active,captured=None):
     return _on_tape(tape,observe_spikes_device,attempted,active=active,captured=captured)
 
 
-def observe_branch_device(carry,tape,branch,attempted,tables,*,active,captured_belly_drum=None,captured_encore=None,captured_leech=None,captured_self_move=None):
+def observe_branch_device(carry,tape,branch,attempted,tables,*,active,captured_belly_drum=None,captured_encore=None,captured_leech=None,captured_self_move=None,captured_heal_bell=None):
     """Literal named actual branch guard, NOT accepted/coverage/exhaustive.
 
     Root must place this at that branch's real cutpoint, including unsupported
@@ -981,6 +991,9 @@ def observe_branch_device(carry,tape,branch,attempted,tables,*,active,captured_b
     if type(branch) is not Branch or int(branch)<6:raise ValueError('named actual unsupported write branch required')
     attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
     supported=jnp.zeros_like(attempted)
+    if branch is Branch.HEAL_BELL:
+        from . import engine_heal_bell_callbacks as heal_bell_callbacks
+        supported=heal_bell_callbacks.captured_matches(tape,captured_heal_bell)
     if branch is Branch.WISH_START:
         from . import engine_self_move_callbacks as self_move_callbacks
         supported=self_move_callbacks.captured_matches(tape,captured_self_move)
@@ -1067,8 +1080,8 @@ def self_heal_on_tape(tape,attempted,*,active,captured=None,captured_self_move=N
     return _on_tape(tape,observe_self_heal_device,attempted,active=active,captured=captured,captured_self_move=captured_self_move)
 
 
-def branch_on_tape(tape,branch,attempted,*,active,captured_belly_drum=None,captured_encore=None,captured_leech=None,captured_self_move=None):
-    return _on_tape(tape,observe_branch_device,branch,attempted,active=active,captured_belly_drum=captured_belly_drum,captured_encore=captured_encore,captured_leech=captured_leech,captured_self_move=captured_self_move)
+def branch_on_tape(tape,branch,attempted,*,active,captured_belly_drum=None,captured_encore=None,captured_leech=None,captured_self_move=None,captured_heal_bell=None):
+    return _on_tape(tape,observe_branch_device,branch,attempted,active=active,captured_belly_drum=captured_belly_drum,captured_encore=captured_encore,captured_leech=captured_leech,captured_self_move=captured_self_move,captured_heal_bell=captured_heal_bell)
 
 
 def end_on_tape(tape,state,*,active):

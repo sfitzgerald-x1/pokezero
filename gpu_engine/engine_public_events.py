@@ -228,6 +228,9 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
         # moves remain unsupported rather than inferred from target category.
         if wire_info and wire_info.target=='foeSide' and wire_key=='spikes':
             target=1
+        # Pinned getRandomTarget(allyTeam) returns the user; Heal Bell only.
+        if wire_info and wire_info.target=='allyTeam' and wire_key=='healbell':
+            target=0
         # The source resolver documents the one Gen3 type-dependent case.
         # Never infer its target rewrite from a static row or physical types.
         dynamic = bool(wire_info and resolve_move_effect(wire_info,()) != resolve_move_effect(wire_info,('Ghost',)))
