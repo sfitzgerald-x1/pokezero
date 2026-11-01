@@ -119,7 +119,7 @@ def _percent(hp,maximum):
     return j.where((hp<positive)&(shown==100),99,shown)
 
 
-def _observe(t,state,side,physical,rows_active,*,identity):
+def _observe(t,state,side,physical,rows_active,*,identity,dense_updates=False):
     """Observe only a known active endpoint; never poll an opponent bench."""
     b=len(rows_active);r=j.arange(b);p=j.clip(physical,0,5)
     slot=t.physical_to_public[r,side,p];at=j.clip(slot,0,5)
@@ -130,13 +130,18 @@ def _observe(t,state,side,physical,rows_active,*,identity):
         valid &= (state.species[r,side,p]>0)&(state.level[r,side,p]>0)&(state.level[r,side,p]<=100)&(state.gender[r,side,p]>=-1)&(state.gender[r,side,p]<=2)
     error=t.error|j.where(use&~valid,BAD_PUBLIC_VALUE,0)
     values={}
+    def put(old,value):
+        if dense_updates:
+            from .engine_device_member_updates import set_member
+            return set_member(old,side,at,value)
+        return old.at[r,side,at].set(value)
     for name,value in [('hp_percent',_percent(hp,maximum)),('status',state.status[r,side,p]),('fainted',hp==0)]:
-        old=getattr(t,name);values[name]=old.at[r,side,at].set(j.where(use,value,old[r,side,at]))
-    old=t.boosts;values['boosts']=old.at[r,side,at].set(j.where(use[:,None],state.boosts[r,side,p],old[r,side,at]))
+        old=getattr(t,name);values[name]=put(old,j.where(use,value,old[r,side,at]))
+    old=t.boosts;values['boosts']=put(old,j.where(use[:,None],state.boosts[r,side,p],old[r,side,at]))
     if identity:
         for name in ('species','level','gender'):
-            old=getattr(t,name);values[name]=old.at[r,side,at].set(j.where(use,getattr(state,name)[r,side,p],old[r,side,at]))
-        old=t.present;values['present']=old.at[r,side,at].set(j.where(use,state.species[r,side,p]>0,old[r,side,at]))
+            old=getattr(t,name);values[name]=put(old,j.where(use,getattr(state,name)[r,side,p],old[r,side,at]))
+        old=t.present;values['present']=put(old,j.where(use,state.species[r,side,p]>0,old[r,side,at]))
     return t._replace(error=error,**values)
 
 

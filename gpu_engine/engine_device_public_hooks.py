@@ -30,9 +30,10 @@ DEFERRED={
 class Context:
     # Trace-local builder only. No shared/global object and no validity cache;
     # wrappers return the immutable arrays, never this Python object.
-    __slots__=('trackers','belief_tables')
-    def __init__(self,trackers,belief_tables=None):
-        self.trackers=trackers;self.belief_tables=belief_tables
+    __slots__=('trackers','belief_tables','dense_updates')
+    def __init__(self,trackers,belief_tables=None,*,dense_updates=False):
+        if type(dense_updates)is not bool:raise ValueError('explicit static dense public-update flag required')
+        self.trackers=trackers;self.belief_tables=belief_tables;self.dense_updates=dense_updates
     def _replace(self,**values):
         for key,value in values.items():setattr(self,key,value)
         return self
@@ -62,7 +63,11 @@ def feature(c,side,physical,name,value,use,*,add=False):
     use=use&(slot>=0)&(slot<6)&(physical>=0)&(physical<6)
     values=t.mon_features;old=values[name];v=old[r,side,at]
     new=j.where(use,v+value if add else value,v)
-    return c._replace(trackers=t._replace(mon_features={**values,name:old.at[r,side,at].set(new)}))
+    if c.dense_updates:
+        from .engine_device_member_updates import set_member
+        updated=set_member(old,side,at,new)
+    else:updated=old.at[r,side,at].set(new)
+    return c._replace(trackers=t._replace(mon_features={**values,name:updated}))
 
 def _narrow(c,side,physical,fact,use,kind):
     if c.belief_tables is None:return c
@@ -129,7 +134,7 @@ def observe(c,state,use):
         status=_get(state,'status',side);changed=use&(t.status[r,side,slot]!=status)
         for key in ('sleep_turns','rest_sleep','toxic_stage'):
             c=feature(c,side,p,key,j.zeros_like(p),changed)
-        c=c._replace(trackers=tr._observe(c.trackers,state,side,p,use,identity=False))
+        c=c._replace(trackers=tr._observe(c.trackers,state,side,p,use,identity=False,dense_updates=c.dense_updates))
     t=c.trackers
     return c._replace(trackers=t._replace(turn=j.where(use,state.turn,t.turn),weather=j.where(use,state.weather,t.weather),
         spikes=j.where(use[:,None],state.spikes,t.spikes)))

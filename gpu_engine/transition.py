@@ -2054,10 +2054,10 @@ def initialize_with_public(state,table,*,belief_tables=None,eligible=True,tie_co
     return device_public.Initialized(result,context.trackers)
 
 
-def step_with_public(state,actions,table,trackers,*,belief_tables=None,chance_inputs=None):
+def step_with_public(state,actions,table,trackers,*,belief_tables=None,chance_inputs=None,dense_public_updates=False):
     """Actual numerical step plus public carry; explicit chance is never redrawn."""
     if trackers.mon_features is None or trackers.observed_moves is None:
         raise ValueError('initialize_with_public tracker carry required')
-    context=device_public.Context(trackers,belief_tables)
+    context=device_public.Context(trackers,belief_tables,dense_updates=dense_public_updates)
     chance=sample_chance_inputs(state) if chance_inputs is None else chance_inputs
     return step_with_chance(state,actions,table,chance,_device_public=context)
