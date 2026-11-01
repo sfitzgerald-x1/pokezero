@@ -50,16 +50,17 @@ class OutcomeDiagnosticTests(unittest.TestCase):
             before=t._replace(execution=t.execution._replace(diagnostics=bad));self.assertIs(self.record(before,o,active),before)
         bad=t._replace(execution=t.execution._replace(risks=None));self.assertIs(self.record(bad,o,active),bad)
         self.assertEqual(d.refused_rows(None,np.array([False,True]))['rows'],[dict(row=1,available=False)])
-    def test_refused_only_serializer_slices_before_host_copy(self):
-        class SliceOnly:
-            def __init__(self,values):self.values=values;self.shape=values.shape;self.dtype=values.dtype
-            def __array__(self,*a,**k):raise AssertionError('whole batch was copied')
-            def __getitem__(self,index):return self.values[index]
+    def test_refused_only_serializer_hoists_host_copies_without_device_row_slices(self):
+        class CountCopies:
+            def __init__(self,values):self.values=values;self.shape=values.shape;self.dtype=values.dtype;self.copies=0
+            def __array__(self,dtype=None,copy=None):self.copies+=1;return np.asarray(self.values,dtype=dtype)
+            def __getitem__(self,index):raise AssertionError('device row slice/gather')
         t,o=self.tape();a=self.record(t,o,j.ones(8,bool)).execution.diagnostics
-        wrapped=d.Capture(*(SliceOnly(np.asarray(v))for v in a))
+        wrapped=d.Capture(*(CountCopies(np.asarray(v))for v in a))
         out=d.refused_rows(wrapped,np.array([False,True,False,False,False,False,False,True]))
         self.assertEqual([v['row']for v in out['rows']],[1,7]);self.assertTrue(all(v['available']for v in out['rows']))
         self.assertEqual(d.refused_rows(wrapped,np.zeros(8,bool))['rows'],[])
+        self.assertTrue(all(value.copies==1 for value in wrapped))
         for mask in (np.array([1,0]),np.array([[True]])):
             with self.assertRaises(ValueError):d.refused_rows(a,mask)
     def test_observation_is_not_used_by_admission_or_policy(self):

@@ -40,14 +40,15 @@ class LiteralCensusDiagnosticsTests(unittest.TestCase):
   before=t._replace(execution=t.execution._replace(diagnostics=legacy))
   self.assertIs(self.record(before,active),before)
   a=self.record(self.f.record(t,self.outcome,active),active).execution.diagnostics
-  class SliceOnly:
-   def __init__(self,value):self.value=np.asarray(value);self.shape=self.value.shape;self.dtype=self.value.dtype
-   def __array__(self,*args,**kwargs):raise AssertionError('whole-batch diagnostic copied')
-   def __getitem__(self,index):return self.value[index]
-  wrapped=d.Capture(*(SliceOnly(value)for value in a));packets=[{}for _ in range(8)]
+  class CountCopies:
+   def __init__(self,value):self.value=np.asarray(value);self.shape=self.value.shape;self.dtype=self.value.dtype;self.copies=0
+   def __array__(self,dtype=None,copy=None):self.copies+=1;return np.asarray(self.value,dtype=dtype)
+   def __getitem__(self,index):raise AssertionError('device row slice/gather')
+  wrapped=d.Capture(*(CountCopies(value)for value in a));packets=[{}for _ in range(8)]
   mask=np.array([False,True,False,False,False,False,False,True])
   census._attach_refused_diagnostics(packets,wrapped,mask)
   self.assertEqual([i for i,p in enumerate(packets)if p],[1,7])
+  self.assertTrue(all(value.copies==1 for value in wrapped))
   self.assertEqual(packets[7]['literal_diagnostics']['residual']['records'][0]['stream_id'],int(t.stream_id[7]))
   self.assertEqual(packets[7]['literal_diagnostics']['residual']['records'][0]['prior_tape_refusal'],int(t.refusal[7]))
   self.assertEqual(packets[7]['literal_diagnostics']['residual']['records'][0]['prior_execution_refusal'],17)

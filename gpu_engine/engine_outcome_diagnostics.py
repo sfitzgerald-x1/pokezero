@@ -93,22 +93,35 @@ def record_residual_on_tape(tape,side,physical,qualified,cached_speed_valid,end_
         residual_overflow=capture.residual_overflow|(active&~room))
     return tape._replace(execution=context._replace(diagnostics=updated))
 
-def refused_rows(capture,refused):
-    """Copy only refused row slices, including explicit missing/overflow state."""
+def refused_rows(capture,refused,*,_host_cache=None):
+    """Copy each used array once, then serialize ONLY refused host rows.
+
+    The ephemeral identity cache is local to this serialization call. No JAX
+    row indexing/gather, extra barrier, or policy/public consumer is introduced.
+    Empty/missing/malformed diagnostic storage retains its original semantics.
+    """
     refused=np.asarray(refused)
     if refused.ndim!=1 or refused.dtype!=np.dtype(bool):raise ValueError('bool[B] refused rows required')
-    result=[]
-    for row in np.flatnonzero(refused):
-        item={'row':int(row),'available':_valid(capture,len(refused))}
-        if item['available']:
-            valid=np.asarray(capture.valid[row],bool)
-            item.update(count=int(np.asarray(capture.count[row])),overflow=bool(np.asarray(capture.overflow[row])),
-                records=[dict(zip(FIELDS,map(int,record))) for record in np.asarray(capture.words[row])[valid]])
-            residual={'available':_valid_residual(capture,len(refused)),'capacity':CAPACITY}
-            if residual['available']:
-                selected=np.asarray(capture.residual_valid[row],bool)
-                residual.update(count=int(np.asarray(capture.residual_count[row])),overflow=bool(np.asarray(capture.residual_overflow[row])),
-                    records=[dict(zip(RESIDUAL_FIELDS,map(int,record)))for record in np.asarray(capture.residual_words[row])[selected]])
+    indices=np.flatnonzero(refused);result=[]
+    available=_valid(capture,len(refused));residual_available=_valid_residual(capture,len(refused))if available else False
+    cache={}if _host_cache is None else _host_cache
+    def host(value):
+        key=id(value)
+        if key not in cache:cache[key]=(value,np.asarray(value))
+        return cache[key][1]
+    copied=tuple(host(value)for value in capture[:4])if available and len(indices)else None
+    residual_copied=tuple(host(value)for value in capture[4:])if residual_available and len(indices)else None
+    for row in indices:
+        item={'row':int(row),'available':available}
+        if available:
+            words,valid,count,overflow=copied
+            item.update(count=int(count[row]),overflow=bool(overflow[row]),
+                records=[dict(zip(FIELDS,map(int,record)))for record in words[row][valid[row]]])
+            residual={'available':residual_available,'capacity':CAPACITY}
+            if residual_available:
+                words,valid,count,overflow=residual_copied
+                residual.update(count=int(count[row]),overflow=bool(overflow[row]),
+                    records=[dict(zip(RESIDUAL_FIELDS,map(int,record)))for record in words[row][valid[row]]])
             item['residual']=residual
         result.append(item)
     return dict(schema='pokezero.literal-refused-outcomes.v1',capacity=CAPACITY,rows=result)
