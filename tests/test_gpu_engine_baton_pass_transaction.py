@@ -158,6 +158,8 @@ class BatonCallerBindingsTests(unittest.TestCase):
   s=state.empty_state(2);z=j.zeros(2,j.int32);cursor=SimpleNamespace(stream_id=z+9100,turn=z,generation=j.zeros((2,2),j.int32));h=cb.empty_history(s,cursor,j.broadcast_to(j.arange(6),(2,2,6)))._replace(side=z,frame=z,public_slot=z)
   rec=cb.empty_record(h)._replace(code=z,slot=z,serial=z+1);trn=cb.Transaction(h,None,None,None,None,rec);frame=SimpleNamespace(callbacks=SimpleNamespace(execution=SimpleNamespace(baton_transaction=trn)))
   ledger=SimpleNamespace(site=j.full((2,1),39,j.int32),stream_id=h.stream_id,refusal=z,stage=j.full((2,1),3,j.int32),serial=j.ones((2,1),j.int32));pub=SimpleNamespace(cursor=SimpleNamespace(stream_id=h.stream_id),context=SimpleNamespace(tendency=SimpleNamespace(baton=j.ones((2,2),bool))),mons=SimpleNamespace(boosts=j.zeros((2,2,7),j.int32)))
+  from gpu_engine import public_active
+  pub.context.active=SimpleNamespace(volatiles=j.zeros((2,2,len(public_active.NAMES)),bool))
   def request(kind):return SimpleNamespace(actions=SimpleNamespace(admitted=j.ones(2,bool),facts=SimpleNamespace(request=SimpleNamespace(kind=j.full(2,int(kind),j.int32)))))
   requests=(request(private_requests.RequestKind.FORCE_SWITCH),request(private_requests.RequestKind.WAIT))
   with patch.object(cb,'owned',return_value=j.ones(2,bool)):
