@@ -5,6 +5,7 @@ flag. Self effects survive Substitute damage and a target KO; target effects
 do not. No chance is drawn conditionally here.
 """
 from typing import NamedTuple
+from . import engine_device_public_hooks as device_public
 
 import jax
 import jax.numpy as jnp
@@ -84,7 +85,7 @@ def from_metadata(metadata):
         flags({'synchronize'}),flags({'roughskin'}),flags({'colorchange'}))
 
 
-def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,_direct_hit_context=None,move=None):
+def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,_direct_hit_context=None,move=None,_device_public=None):
     """Original Gen3 DamagingHit, after secondaries and before recoil.
 
     The caller supplies positive literal target damage and the SAME resolved
@@ -100,14 +101,16 @@ def apply_color_change(state,side,move_type,table,*,eligible,_status_trace=None,
         _status_trace,pending=callbacks.begin(_status_trace,state,side,move,move_type,
             _direct_hit_context,table,eligible=changes)
     new=jnp.stack((move_type,jnp.zeros_like(move_type)),axis=1)
+    if _device_public is not None:_device_color_before=state
     state=state._replace(types=state.types.at[rows,target,physical].set(jnp.where(changes[:,None],new,old)))
+    if _device_public is not None:device_public.color_change(_device_public,_device_color_before,state,target,changes)
     if _status_trace is not None:
         _status_trace=callbacks.finish(_status_trace,pending,state)
         return state,_status_trace
     return state
 
 
-def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None, _status_trace=None):
+def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None, _status_trace=None, _device_public=None):
     """Gen3 AfterSetStatus: reflect first, then consume each event's Lum.
 
     The caller has just installed a fresh status and supplies that exact mask.
@@ -131,12 +134,16 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
         old=getattr(state,name)
         updates[name]=old.at[rows,source,own].set(jnp.where(reflects,value,old[rows,source,own]))
     state=state._replace(**updates)
+    if _device_public is not None:
+        device_public.reveal_ability(_device_public,state,afflicted,reflects)
+        device_public.observe(_device_public,state,jnp.asarray(applied)|reflects)
     if item_table is not None:
         # A nested reflection finishes before the original holder's Lum event.
         # Cure now, before a later contact event can inflict/reflect again.
         for side,changed in ((source,reflects),(afflicted,jnp.asarray(applied))):
             active=state.active[rows,side]
             get=lambda a:a[rows,side,active]
+            if _device_public is not None:_device_item_before=state
             old_item=get(state.item)
             result=consume_lum(item_table,old_item,get(state.status),get(state.status_counter),
                 get(state.confusion_counter),get(state.hp),eligible=changed)
@@ -153,12 +160,13 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
                 old=getattr(state,name)
                 updates[name]=old.at[rows,side,active].set(jnp.where(consumed,jnp.zeros_like(get(old)),get(old)))
             state=state._replace(**updates)
+            if _device_public is not None:device_public.item_changes(_device_public,_device_item_before,state,changed)
     if _status_trace is not None:return state,_status_trace
     return state
 
 
 def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, _status_trace=None,
-                  _rough_skin_context=None, _rough_skin_capture=None):
+                  _rough_skin_context=None, _rough_skin_capture=None, _device_public=None):
     """Gen3 Static and Rough Skin onDamagingHit, before Lum/recoil.
 
     The existing uniform [0,60) auxiliary draw gives exactly 20/60 = 1/3.
@@ -186,16 +194,20 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, 
         status=state.status.at[rows, side, own].set(jnp.where(proc, m.PAR, state.status[rows, side, own])),
         status_counter=state.status_counter.at[rows, side, own].set(
             jnp.where(proc, 0, state.status_counter[rows, side, own])))
+    if _device_public is not None:
+        device_public.reveal_ability(_device_public,state,foe,proc)
+        device_public.observe(_device_public,state,proc)
     if _status_trace is not None:
         state,_status_trace=after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
-            applied=proc,item_table=item_table,_status_trace=_status_trace)
+            applied=proc,item_table=item_table,_status_trace=_status_trace,_device_public=_device_public)
     else:
         state=after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
-            applied=proc,item_table=item_table)
+            applied=proc,item_table=item_table,_device_public=_device_public)
     # Original Gen3 roughskin.onDamagingHit: Battle.damage floors and clamps
     # baseMaxhp/16 to at least one, capped by living source HP. No RNG draw.
     rough=(jnp.asarray(eligible)&table.contact[move]
         &table.rough_skin[state.ability[rows,foe,target]]&(state.hp[rows,side,own]>0))
+    if _device_public is not None:device_public.reveal_ability(_device_public,state,foe,rough)
     old_hp=state.hp[rows,side,own]
     if _status_trace is not None:
         from . import engine_rough_skin_callbacks as rough_callbacks
@@ -217,7 +229,7 @@ def status_allowed(table, status, types, ability, *, effective_weather=0):
 
 
 def apply(state, side, move, roll, table, *, eligible, effective_weather=0, substitute_hit=False,
-          item_table=None, _status_trace=None, _secondary_status_context=None):
+          item_table=None, _status_trace=None, _secondary_status_context=None, _device_public=None):
     rows = jnp.arange(state.hp.shape[0]); foe = 1 - side
     own, target = state.active[rows, side], state.active[rows, foe]
     get = lambda value: value[rows, foe, target]
@@ -272,11 +284,12 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0, subs
         boosts=state.boosts.at[rows, foe, target].set(boosts).at[rows, side, own].set(own_boosts),
         volatile=state.volatile.at[rows, foe, target].set(
             get(state.volatile) | jnp.where(flinch, jnp.uint32(FLINCH), jnp.uint32(0))))
+    if _device_public is not None:device_public.observe(_device_public,state,jnp.asarray(eligible))
     if _status_trace is not None:
         if _secondary_status_context is not None:
             _secondary_write=_secondary_write._replace(new_status=state.status[rows,foe,target],
                 new_counter=state.status_counter[rows,foe,target])
             _status_trace=secondary_status.finish(_status_trace,_secondary_ticket,side,own,target,move,
                 _secondary_write,_secondary_status_context,table)
-        return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table,_status_trace=_status_trace)
-    return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table)
+        return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table,_status_trace=_status_trace,_device_public=_device_public)
+    return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table,_device_public=_device_public)

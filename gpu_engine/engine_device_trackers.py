@@ -1,15 +1,15 @@
 """Small public-knowledge device carry for direct engine observations.
 
 No event tape, source callback proof, host transfer or observation admission is
-involved. This first cut observes only active endpoints of an actual engine
-step. Transient within-step installations and hook-only facts are explicitly
-deferred; this module does not establish parity or throughput qualification.
+involved. The legacy initialize/update API observes active endpoints. The opt-in
+transition.initialize_with_public/step_with_public path fills actual write
+hooks and appended knowledge fields; this module does not establish parity or throughput qualification.
 """
 from typing import NamedTuple
 import jax
 import jax.numpy as j
 
-SCHEMA='pokezero.engine_device_public_trackers.v1'
+SCHEMA='pokezero.engine_device_public_trackers.v2'
 BAD_ACTIVE=1
 BAD_PUBLIC_VALUE=2
 BEFORE_ACTIVE_MISMATCH=4
@@ -19,9 +19,9 @@ CAPACITY=6
 DEFERRED={
     'opponent_ability_item':'Zero until an actual public ability/item reveal hook.',
     'opponent_live_types':'Zero; encoder may use public species static base types with its own manifest scope.',
-    'observed_moves_pp_lastmoves_tendencies':'Zero/deferred until actual called-move and public outcome hooks.',
-    'belief_posterior':'None; no sampled hidden state or fabricated narrowing.',
-    'transient_installations':'Before/after endpoints do not expose multiple intermediate installations in one step.',
+    'observed_moves_pp_lastmoves_tendencies':'Legacy endpoint API only; full hook path supplies actual declarations and marginal tendencies.',
+    'belief_posterior':'Tracker retains hard source masks; encoder owns the effective fallback/posterior projector.',
+    'transient_installations':'Legacy endpoint API only; public-step hooks observe each actual installation.',
     'own_order':'Active-first observed net-switch swaps only; per-install hook needed for exact transient request order.',
     'bench_public_changes':'Hidden/previously seen bench fields are not polled; party-wide public cure hooks are deferred.',
     'public_weather_remaining':'Not exposed; true engine duration is not a public timer receipt.',
@@ -46,6 +46,20 @@ class PublicView(NamedTuple):
     turn:object=None
     weather:object=None
     spikes:object=None
+    belief_mask:object=None
+    revealed_moves:object=None
+    move_pp_used:object=None
+    last_moves:object=None
+    borrowed_ability:object=None
+    own_last_moves:object=None
+    mon_features:object=None
+    own_mon_features:object=None
+    field_features:object=None
+    own_borrowed_ability:object=None
+    volatiles:object=None
+    own_volatiles:object=None
+    item_removed:object=None
+    own_item_removed:object=None
 
 class Trackers(NamedTuple):
     physical_to_public:object # [B,2,6], private identity cursor only; never an encoder feature
@@ -70,6 +84,17 @@ class Trackers(NamedTuple):
     last_moves:object=None
     tendencies:object=None
     belief_mask:object=None
+    shown_ability:object=None
+    shown_item:object=None
+    shown_types:object=None
+    borrowed_ability:object=None
+    mon_features:object=None
+    field_features:object=None
+    original_ability:object=None
+    damage_exact_dealt:object=None
+    damage_exact_taken:object=None
+    public_volatiles:object=None
+    item_removed:object=None
 
 
 def _shape(x,shape,dtype,name):
@@ -179,11 +204,45 @@ def readout(trackers,observer_sides):
     take=lambda name:getattr(trackers,name)[r,foe]
     present=take('present');active=(j.arange(6)[None,:]==trackers.active_slot[r,foe,None])&present
     z=j.zeros((b,6),j.int32)
+    optional=lambda name:None if getattr(trackers,name) is None else take(name)
+    mon=None if trackers.mon_features is None else {key:value[r,foe] for key,value in trackers.mon_features.items()}
+    own_mon=None
+    own_last=None
+    own_borrowed=None
+    own_vol=None
+    own_removed=None
+    if trackers.mon_features is not None:
+        physical=trackers.own_order[r,owner]
+        slots=trackers.physical_to_public[r[:,None],owner[:,None],physical]
+        def own(value):
+            got=value[r[:,None],owner[:,None],j.clip(slots,0,5)]
+            return j.where(slots>=0,got,0)
+        own_mon={key:own(value) for key,value in trackers.mon_features.items()}
+        own_last=own(trackers.last_moves)
+        own_borrowed=own(trackers.borrowed_ability)
+        own_removed=own(trackers.item_removed)
+        if trackers.public_volatiles is not None:
+            got=trackers.public_volatiles[r[:,None],owner[:,None],j.clip(slots,0,5)]
+            own_vol=j.where((slots>=0)[:,:,None],got,False)
+        # Original observer-relative damage semantics: own victim HP is exact,
+        # opposing victim HP comes from the shown-percent stream.
+        mon['last_damage_dealt']=trackers.damage_exact_dealt[r,foe]
+        own_mon['last_damage_taken']=own(trackers.damage_exact_taken)
+    fields=None
+    if trackers.field_features is not None:
+        raw=trackers.field_features
+        fields={key:(value[r,owner] if value.ndim==2 else value) for key,value in raw.items()}
+        fields.update(self_wish_turns=raw['wish_turns'][r,owner],opp_wish_turns=raw['wish_turns'][r,foe],
+            self_wish_pending=raw['wish_pending'][r,owner],opp_wish_pending=raw['wish_pending'][r,foe],
+            weather_turns=j.where(trackers.weather>0,j.where(raw['weather_permanent'],5,j.maximum(0,5-raw['weather_upkeeps'])),0))
     return PublicView(trackers.own_order[r,owner],take('species'),take('level'),take('gender'),
         take('hp_percent').astype(j.float32)/100.0,take('status'),active,present,take('fainted'),
-        j.zeros((b,6,2),j.int32),take('boosts'),z,z,
+        j.zeros((b,6,2),j.int32) if trackers.shown_types is None else take('shown_types'),take('boosts'),
+        z if trackers.shown_ability is None else take('shown_ability'),
+        z if trackers.shown_item is None else take('shown_item'),
         trackers.error|j.where((observer_sides<0)|(observer_sides>1),BAD_OBSERVER,0),None,
-        trackers.turn,trackers.weather,trackers.spikes)
+        trackers.turn,trackers.weather,trackers.spikes,optional('belief_mask'),optional('observed_moves'),
+        optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed)
 
 
 def clone_for_worlds(trackers,root_rows):
