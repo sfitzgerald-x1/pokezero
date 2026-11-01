@@ -24,6 +24,8 @@ BEFORE_MOVE_FIELDS=('actor_side','actor_physical','move','caller_move','eligible
     'thaw_roll','paralysis_roll','confusion_roll','result_status','result_counter',
     'result_confusion_counter','can_act','confusion_self_hit','stream_id','frame','raw_count',
     'turn','phase','generation0','generation1','prior_tape_refusal','prior_execution_refusal','prior_kernel_risk')
+SLEEP_GUARD_FIELDS=('sleep_rest_origin','sleep_skipped','sleep_volatile_uint32',
+    'sleep_block_requested','sleep_block_valid')
 
 BATON_START_FIELDS=('actor_side', 'actor_physical', 'move', 'caller_move', 'eligible', 'acts', 'begin_valid', 'registered_bound', 'data_bound', 'transaction_present', 'history_side', 'public_known', 'public_pending', 'public_substitute', 'hp', 'maximum', 'status', 'counter', 'ability', 'base_ability', 'item', 'type0', 'type1', 'base_type0', 'base_type1', 'substitute_hp', 'confusion_counter', 'volatile_uint32', 'protect_counter', 'choice_move', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'spikes', 'any_trap_source', 'pending_residual', 'any_forced_switch', 'any_baton_pass', 'ability_namespace_size', 'item_namespace_size', 'quiet_ability_lookup', 'quiet_item_lookup', 'boost0', 'boost1', 'boost2', 'boost3', 'boost4', 'boost5', 'boost6', 'public_boost0', 'public_boost1', 'public_boost2', 'public_boost3', 'public_boost4', 'public_boost5', 'public_boost6', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk')
 
@@ -53,6 +55,8 @@ class Capture(NamedTuple):
     no_damage_valid:object=None
     no_damage_count:object=None
     no_damage_overflow:object=None
+    sleep_guard_words:object=None
+    sleep_guard_known:object=None
 
 def empty(batch):
     return Capture(j.zeros((batch,CAPACITY,len(FIELDS)),j.int32),j.zeros((batch,CAPACITY),bool),
@@ -64,7 +68,8 @@ def empty(batch):
         j.zeros((batch,CAPACITY,len(BATON_START_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(BATON_START_FIELDS)),bool),
         j.zeros((batch,CAPACITY),bool),j.zeros(batch,j.int32),j.zeros(batch,bool),
         j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),bool),
-        j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),bool),j.zeros((batch,CAPACITY),bool),j.zeros(batch,j.int32),j.zeros(batch,bool))
+        j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),bool),j.zeros((batch,CAPACITY),bool),j.zeros(batch,j.int32),j.zeros(batch,bool),
+        j.zeros((batch,CAPACITY,len(SLEEP_GUARD_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(SLEEP_GUARD_FIELDS)),bool))
 
 def _valid(value,b):
     return type(value) is Capture and all(getattr(a,'shape',None)==shape and getattr(a,'dtype',None)==j.dtype(dtype)
@@ -203,6 +208,35 @@ def record_before_move_on_tape(tape,before,side,physical,move,caller_move,status
         before_move_overflow=capture.before_move_overflow|(active&~room))
     return tape._replace(execution=context._replace(diagnostics=updated))
 
+def record_sleep_guard_on_tape(tape,rest_origin,skipped,volatile,requested,valid,*,eligible):
+    """Literal begin operands/results aligned to the next BeforeMove slot.
+
+    No count, ticket, word, risk or admission value changes. Missing storage or
+    malformed operands stay unknown; no original private fact is inferred.
+    """
+    context=getattr(tape,'execution',None);capture=getattr(context,'diagnostics',None);b=len(tape.count)
+    if not _valid_before_move(capture,b)or not _valid_sleep_guards(capture,b):return tape
+    if getattr(eligible,'shape',None)!=(b,)or getattr(eligible,'dtype',None)!=j.dtype(bool):return tape
+    supplied=(rest_origin,skipped,volatile,requested,valid);expected=(j.bool_,j.int32,j.uint32,j.bool_,j.bool_)
+    values=[];known=[]
+    for value,dtype in zip(supplied,expected,strict=True):
+        good=getattr(value,'shape',None)==(b,)and getattr(value,'dtype',None)==j.dtype(dtype)
+        values.append(value.astype(j.int32)if good else j.zeros(b,j.int32))
+        known.append(j.full((b,),good,bool))
+    extra=j.stack(values,axis=1);mask=j.stack(known,axis=1);rows=j.arange(b)
+    slot=j.clip(capture.before_move_count,0,CAPACITY-1)
+    write=eligible&(capture.before_move_count>=0)&(capture.before_move_count<CAPACITY)
+    updated=capture._replace(
+        sleep_guard_words=capture.sleep_guard_words.at[rows,slot].set(j.where(write[:,None],extra,capture.sleep_guard_words[rows,slot])),
+        sleep_guard_known=capture.sleep_guard_known.at[rows,slot].set(j.where(write[:,None],mask,capture.sleep_guard_known[rows,slot])))
+    return tape._replace(execution=context._replace(diagnostics=updated))
+
+
+def _valid_sleep_guards(value,b):
+    return type(value)is Capture and all(getattr(v,'shape',None)==(b,CAPACITY,len(SLEEP_GUARD_FIELDS))
+        and getattr(v,'dtype',None)==j.dtype(dtype)
+        for v,dtype in ((value.sleep_guard_words,j.int32),(value.sleep_guard_known,j.bool_)))
+
 def record_residual_on_tape(tape,side,physical,qualified,cached_speed_valid,end_speed,guard_valid,*,active):
     """SAME original residual guard operands, before emitter/ledger changes.
 
@@ -296,6 +330,7 @@ def refused_rows(capture,refused,*,_host_cache=None):
     before_copied=tuple(host(value)for value in capture[8:12])if before_available and len(indices)else None
     baton_copied=tuple(host(value)for value in capture[12:17])if baton_available and len(indices)else None
     no_damage_copied=tuple(host(value)for value in capture[17:23])if no_damage_available and len(indices)else None
+    sleep_guard_copied=tuple(host(value)for value in capture[23:25])if before_available and _valid_sleep_guards(capture,len(refused))and len(indices)else None
     for row in indices:
         item={'row':int(row),'available':available}
         if available:
@@ -312,6 +347,12 @@ def refused_rows(capture,refused,*,_host_cache=None):
                 words,valid,count,overflow=before_copied
                 item['before_move']=dict(available=True,capacity=CAPACITY,count=int(count[row]),overflow=bool(overflow[row]),
                     records=[dict(zip(BEFORE_MOVE_FIELDS,map(int,record)))for record in words[row][valid[row]]])
+                if sleep_guard_copied is not None:
+                    item['before_move']['sleep_guard_operands_available']=True
+                    extra,known=sleep_guard_copied
+                    for record,values,mask in zip(item['before_move']['records'],extra[row][valid[row]],known[row][valid[row]],strict=True):
+                        record.update({name:(int(value)if yes else None)for name,value,yes in zip(SLEEP_GUARD_FIELDS,values,mask,strict=True)})
+                        if record['sleep_volatile_uint32']is not None:record['sleep_volatile_uint32']&=0xffffffff
         if baton_present:
             item['baton_start']=dict(available=baton_available,capacity=CAPACITY,scope='Literal same-call operands; nonexclusive guard facts, never causal admission.')
             if baton_available:

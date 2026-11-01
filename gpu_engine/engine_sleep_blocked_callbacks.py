@@ -88,6 +88,9 @@ def begin(tape,state,side,move,context,table,*,eligible,sleep_usable,early_bird,
     ordinary &= ~loafing&(state.confusion_counter[at]==0)&(state.volatile[at]==0)
     good &= (side>=0)&(side<2)&(physical==tape.cursor.physical_active[rows,seat])&(hp>0)&(ability>=0)&(ability<len(d.installed.early_bird))&(early_bird==d.installed.early_bird[j.clip(ability,0,len(d.installed.early_bird)-1)])
     requested=eligible&move_ok&ordinary;tape,ticket=ex.open_attempt(tape,ex.Site.SLEEP_BLOCKED,side,active=requested)
+    from . import engine_outcome_diagnostics as diagnostics
+    tape=diagnostics.record_sleep_guard_on_tape(tape,state.rest_origin[at],state.sleep_skipped[at],
+        state.volatile[at],requested,good,eligible=eligible)
     return tape,Pending(context,ticket,side,physical,move,counter,hp,early_bird,requested,good)
 
 def valid_raw(raw):
