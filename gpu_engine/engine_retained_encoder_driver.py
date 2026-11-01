@@ -37,6 +37,7 @@ from . import engine_weather_speed_profile as weather_speed
 from . import engine_execution_completeness as execution
 from . import engine_kernel_frame_risk as kernel_risks
 from . import engine_outcome_diagnostics as outcome_diagnostics
+from . import jax_compile_observations as compile_observations
 from . import engine_direct_hit_controls as direct_hit_controls
 
 SCHEMA = 'pokezero.engine_retained173_driver.partial.v1'
@@ -846,12 +847,14 @@ def _host_span(timings, name):
 
 def _timed(callback, name, function, *args, _host_timings=None):
     if callback is None:
-        return function(*args)
+        with compile_observations.phase('driver.'+name):
+            return function(*args)
     with _host_span(_host_timings, f'input_block_wait.{name}_ms'):
         jax.block_until_ready(args)
     start = time.perf_counter_ns()
-    result = function(*args)
-    jax.block_until_ready(result)
+    with compile_observations.phase('driver.'+name):
+        result = function(*args)
+        jax.block_until_ready(result)
     callback(name, (time.perf_counter_ns()-start)/1e6)
     return result
 
