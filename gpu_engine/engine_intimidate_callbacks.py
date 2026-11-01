@@ -46,12 +46,21 @@ def ordinary_prefix(tape,index,cursor):
         &jnp.all(generation==cursor.generation,axis=1))
 
 
+def _ordinary_installation(tape,index,cursor):
+    """Old immediate prefix OR exactly one owned/claimed entry-Spikes span."""
+    from . import engine_entry_spikes_callbacks as spikes
+    b=len(tape.count);index=jnp.broadcast_to(jnp.asarray(index,jnp.int32),(b,))
+    hazard=spikes.claimed(tape,index-1,cursor)
+    return ordinary_prefix(tape,index,cursor)|hazard,index-jnp.where(hazard,2,1)
+
+
 def ordinary_owned(tape,index,cursor):
     """Exact positive ordinary raw29 schema/clock/installation identity."""
     b=tape.count.shape[0];rows=jnp.arange(b);index=jnp.broadcast_to(jnp.asarray(index,jnp.int32),(b,))
     at=jnp.clip(index,0,tape.words.shape[1]-1);raw=tape.words[rows,at]
-    side=raw[:,1];safe=jnp.clip(side,0,1);previous=tape.words[rows,jnp.clip(index-1,0,tape.words.shape[1]-1)]
-    return (ordinary_prefix(tape,index,cursor)&(index<tape.count)
+    side=raw[:,1];safe=jnp.clip(side,0,1);prefix,installation=_ordinary_installation(tape,index,cursor)
+    previous=tape.words[rows,jnp.clip(installation,0,tape.words.shape[1]-1)]
+    return (prefix&(index<tape.count)
         &(raw[:,0]==INTIMIDATE)&(side>=0)&(side<2)&(raw[:,3]==1-side)
         &(previous[:,3]==side)&(previous[:,4]==raw[:,2])
         &(raw[:,2]==cursor.physical_active[rows,safe])&(raw[:,4]==cursor.physical_active[rows,1-safe])
@@ -79,16 +88,17 @@ def record_ordinary_device(tape,ticket,side,physical,target_physical,write,table
         bound,_=risks._bound(context.risks.carry,tape,context.risks.tables)
         bound &= context.risks.carry.opened&(context.risks.carry.frame==ledger.frame)
     safe=jnp.clip(side,0,1);n=table.intimidate.shape[0]
+    prefix,installation=_ordinary_installation(tape,tape.count,tape.cursor)
     valid=(bound&same&execution._validate(ledger,context.tables)&(ledger.refusal==0)
         &((tape.refusal&~public.UNINSTRUMENTED)==0)
         &(ledger.site[rows,slot]==int(execution.Site.INTIMIDATE_ATTEMPT))
         &(ledger.side[rows,slot]==side)&(ledger.start[rows,slot]==tape.count)
         &(ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)
         &jnp.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1)
-        &ordinary_prefix(tape,tape.count,tape.cursor)&(side>=0)&(side<2)
+        &prefix&(side>=0)&(side<2)
         &(physical==tape.cursor.physical_active[rows,safe])
         &(target_physical==tape.cursor.physical_active[rows,1-safe])
-        &(tape.words[rows,jnp.clip(tape.count-1,0,tape.words.shape[1]-1),3]==side)
+        &(tape.words[rows,jnp.clip(installation,0,tape.words.shape[1]-1),3]==side)
         &(write.actor_ability>0)&(write.actor_ability<n)&table.intimidate[jnp.clip(write.actor_ability,0,n-1)]
         &(write.target_ability>=0)&(write.target_ability<n)&~table.attack_drop_immune[jnp.clip(write.target_ability,0,n-1)]
         &(write.target_hp>0)&(write.target_substitute==0)&(write.old_stage>-6)&(write.old_stage<=6)

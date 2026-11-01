@@ -32,6 +32,9 @@ class EntryTable(NamedTuple):
     own_tempo: jax.Array | None = None
     pressure: jax.Array | None = None
     trace_copy: jax.Array | None = None
+    spikes_type_count: jax.Array | None = None
+    spikes_item_count: jax.Array | None = None
+    spikes_boots_item: jax.Array | None = None
 
 
 def from_metadata(metadata):
@@ -46,7 +49,9 @@ def from_metadata(metadata):
         jnp.asarray(vocab["types"].index("flying")),jnp.asarray(vocab["types"].index("ground")),
         jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}),flag({"truant"}),
         flag({"trace"}),jnp.asarray([[status in cures.get(name,set()) for status in range(7)]
-            for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}),flag({"sturdy","naturalcure","oblivious"}))
+            for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}),flag({"sturdy","naturalcure","oblivious"}),
+        jnp.asarray(len(vocab['types']),jnp.int32),jnp.asarray(len(vocab.get('items',[])),jnp.int32),
+        jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
@@ -114,17 +119,19 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     layers = jnp.clip(state.spikes[rows,side],0,3)
     if _weather_trace is not None:
         from . import engine_execution_completeness as execution_accounting
+        from . import engine_entry_spikes_callbacks as entry_spikes_callbacks
         # Dispatch precedes grounded/Levitate blocking. An absent numerical HP
         # change cannot silently prove no original source output/hook ran.
-        _weather_trace=execution_accounting.unhandled_attempt(_weather_trace,
-            execution_accounting.Site.ENTRY_HAZARD,side,
-            active=eligible & (hp>0) & (layers>0) & jnp.asarray(hazards))
+        _weather_trace,_entry_spikes_pending=entry_spikes_callbacks.begin(_weather_trace,state,side,layers,table,
+            requested=eligible & (hp>0) & (layers>0) & jnp.asarray(hazards))
     numerator = jnp.array([0,3,4,6],jnp.int32)[layers]
     amount = jnp.maximum(1,state.max_hp[rows,side,active]*numerator//24)
     hit = eligible & (hp > 0) & grounded & (layers > 0) & hazards
     next_hp = jnp.where(hit,jnp.maximum(0,hp-amount),hp)
     knocked_out = hit & (next_hp == 0)
     state = state._replace(hp=state.hp.at[rows,side,active].set(next_hp))
+    if _weather_trace is not None:
+        _weather_trace=entry_spikes_callbacks.finish(_weather_trace,_entry_spikes_pending,state.hp[rows,side,active])
     # Gen3 runs status SwitchIn even after a hazard KO, before faintMessages.
     state=restore_sleep(state,side,eligible=eligible)
     starts = eligible & (next_hp > 0)
