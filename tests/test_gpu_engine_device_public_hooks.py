@@ -47,8 +47,8 @@ class PublicHooksTests(unittest.TestCase):
   s=state();c=h.initialize(s,tables());yes=j.ones(2,bool)
   h.reveal_ability(c,s,1,yes,ability=j.full(2,3,j.int32))
   old=c.trackers.belief_mask.copy()
-  h._write(c.trackers,'borrowed_ability',1,s.active[:,1],yes,yes) # immutable return deliberately ignored
-  c.trackers=h._write(c.trackers,'borrowed_ability',1,s.active[:,1],yes,yes)
+  h._write(c.trackers,'borrowed_ability',1,s.active[:,1],j.full(2,7,j.int32),yes) # immutable return deliberately ignored
+  c.trackers=h._write(c.trackers,'borrowed_ability',1,s.active[:,1],j.full(2,7,j.int32),yes)
   h.reveal_ability(c,s,1,yes,ability=j.full(2,7,j.int32),original=False)
   np.testing.assert_array_equal(c.trackers.belief_mask,old)
   for p in (3,4,0):
@@ -86,7 +86,10 @@ class PublicHooksTests(unittest.TestCase):
   after=s._replace(ability=s.ability.at[:,0,0].set(7))
   h.entry(c,s,after,0,entry,yes)
   self.assertEqual(c.trackers.original_ability[:,0,0].tolist(),[3,3]);self.assertEqual(c.trackers.shown_ability[:,0,0].tolist(),[7,7])
-  self.assertEqual(c.trackers.borrowed_ability[:,0,0].tolist(),[True,True]);self.assertEqual(c.trackers.belief_mask[:,0,0,0].tolist(),[5,5])
+  view=tr.readout(c.trackers,j.ones(2,j.int32))
+  self.assertEqual(view.ability[:,0].tolist(),[3,3]);self.assertEqual(view.borrowed_ability[:,0].tolist(),[7,7])
+  self.assertEqual(view.borrowed_ability.dtype,j.int32)
+  self.assertEqual(c.trackers.borrowed_ability[:,0,0].tolist(),[7,7]);self.assertEqual(c.trackers.belief_mask[:,0,0,0].tolist(),[5,5])
   h.volatile(c,after,0,'substitute',yes,yes);h.feature(c,0,after.active[:,0],'sub_present',j.ones(2,j.int32),yes)
   nextstate=after._replace(active=after.active.at[:,0].set(3))
   h.install(c,nextstate,0,yes);h.baton_copy(c,nextstate,0,j.zeros(2,j.int32),yes);h.withdraw(c,nextstate,0,j.zeros(2,j.int32),yes)
@@ -102,6 +105,34 @@ class PublicHooksTests(unittest.TestCase):
   # Root-world clones carry exactly existing public leaves, never a sampled world.
   out=tr.clone_for_worlds(c.trackers,j.array([1,0,1],j.int32))
   for x,y in zip(jax.tree.leaves(c.trackers),jax.tree.leaves(out)):np.testing.assert_array_equal(y,np.asarray(x)[[1,0,1]])
+ def test_public_pressure_charge_and_actual_known_bench_cure(self):
+  s=state(6);yes=j.ones(6,bool);r=j.arange(6)
+  base=tables();b=NS(**base._asdict(),public_foe_targeted=j.ones(10,bool).at[4].set(False),
+       public_pressure=j.zeros(10,bool).at[2].set(True))
+  # Actual private Pressure is deliberately present on EVERY foe. Only public
+  # native or copied Pressure can double a caller's source-targeted charge.
+  s=s._replace(ability=s.ability.at[:,1,0].set(2))
+  c=h.initialize(s,b)
+  h.reveal_ability(c,s,1,j.array([False,True,False,False,True,True]),ability=j.full(6,2,j.int32))
+  h.reveal_ability(c,s,1,j.array([False,False,True,True,False,False]),ability=j.full(6,3,j.int32))
+  c.trackers=h._write(c.trackers,'borrowed_ability',1,s.active[:,1],j.full(6,2,j.int32),j.array([False,False,True,False,False,False]))
+  move=j.array([2,2,2,2,4,2],j.int32)
+  h.move(c,s,0,move,yes,pp_use=j.array([True,True,True,True,True,False]))
+  self.assertEqual(c.trackers.pp_used[:,0,0,0].tolist(),[1,2,2,1,1,0])
+  # An observed bench member's genuine party cure clears only its public
+  # major-status clocks. Unseen members do not become public encounters.
+  asleep=s._replace(active=s.active.at[:,1].set(3),status=s.status.at[:,1,3].set(5))
+  h.install(c,asleep,1,yes)
+  h.feature(c,1,j.full(6,3,j.int32),'sleep_turns',j.full(6,3,j.int32),yes)
+  h.feature(c,1,j.full(6,3,j.int32),'rest_sleep',j.ones(6,j.int32),yes)
+  back=asleep._replace(active=asleep.active.at[:,1].set(0),status=asleep.status.at[:,1,5].set(5))
+  h.install(c,back,1,yes)
+  cured=back._replace(status=back.status.at[:,1,3].set(0).at[:,1,5].set(0))
+  h.party_cure(c,back,cured,1,yes)
+  view=tr.readout(c.trackers,j.zeros(6,j.int32))
+  self.assertFalse(bool(view.mon_features['sleep_turns'][:,1].any()))
+  self.assertFalse(bool(view.mon_features['rest_sleep'][:,1].any()))
+  self.assertFalse(bool(view.present[:,2:].any()))
  def test_explicit_chance_same_original_call_and_sample_once(self):
   s=state();c=h.initialize(s);a=j.zeros((2,2),j.int32);chance=object();sentinel=object()
   with self.assertRaisesRegex(ValueError,'initialize_with_public'):
