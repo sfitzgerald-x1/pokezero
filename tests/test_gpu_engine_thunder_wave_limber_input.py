@@ -76,6 +76,15 @@ class ThunderLimberTests(unittest.TestCase):
   # interruption emits immunity only, without fail/still or private writes.
   script=r'''const r=process.argv[1],d=require(r+'/dist/sim/dex.js').Dex.mod('gen3'),P=require(r+'/dist/sim/pokemon.js').Pokemon,A=require(r+'/dist/sim/battle-actions.js').BattleActions,move=d.moves.get('thunderwave'),lines=[],source={hp:100,hasAbility:()=>false,toString:()=> 'p1a: Actor'},battle={dex:d,effect:move,event:null,debug(){},add:(...xs)=>lines.push('|'+xs.map(String).join('|')),attrLastMove:x=>lines.push(x)},target={hp:100,status:'',pp:[5],item:'leftovers',battle,trySetStatus:P.prototype.trySetStatus,setStatus:P.prototype.setStatus,runStatusImmunity:()=>true,toString:()=> 'p2a: Target'};battle.runEvent=(name,t,src,effect,status)=>{if(name!=='SetStatus')throw Error(name);return d.abilities.get('limber').onSetStatus.call(battle,status,t,src,effect)};const actions={battle,combineResults:A.prototype.combineResults};const result=A.prototype.runMoveEffects.call(actions,[undefined],[target],source,move,move,false,false);console.log(JSON.stringify({result,lines,hp:target.hp,status:target.status,pp:target.pp,item:target.item}));'''
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got,dict(result=[False],lines=['|-immune|p2a: Target|[from] ability: Limber'],hp=100,status='',pp=[5],item='leftovers'))
+ def test_04_each_private_after_field_keeps_actual_geometry(self):
+  _,t,_,actor,phys,target,move,a,ticket,p,_=self.literal()
+  c=t.execution.thunder_wave_immunity[0];self.assertEqual(cb.owned_limber_immunity(t,2).tolist(),[True]*8)
+  for name in cb.Private._fields:
+   value=getattr(c.after,name)
+   for malformed in (value[:,:1],value.astype(j.float32)):
+    after=c.after._replace(**{name:malformed});bad=t._replace(execution=t.execution._replace(thunder_wave_immunity=(c._replace(after=after),)))
+    with self.assertRaises(ValueError,msg=name):cb.owned_limber_immunity(bad,2)
+  with self.assertRaises(ValueError):cb._limber_attempt(p,tuple(c.after),a)
  def test_03_old_routes_and_legacy_remain_current(self):
   ground=ground_fixture.ThunderGroundTests.literal(self,False)
   self.assertEqual(cb.owned_ground_immunity(ground[1],ground[1].count-1).tolist(),[True]*8)

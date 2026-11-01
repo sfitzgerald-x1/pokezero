@@ -219,6 +219,13 @@ def _limber_valid(tape,p):
 
 def _limber_attempt(p,after,a):
     b=len(p.side);r=j.arange(b);foe=1-j.clip(p.side,0,1)
+    if type(p.before)is not Private or type(after)is not Private:
+        raise ValueError('typed actual Limber before/after Private required')
+    for name,old,new in zip(Private._fields,p.before,after,strict=True):
+        tail=(2,)if name in ('types','base_types')else(4,)if name in ('moves','pp')else()
+        dtype=j.uint32 if name=='volatile'else j.int32
+        life._typed(old,(b,2)+tail,dtype)
+        life._typed(new,(b,2)+tail,dtype)
     for x in a[:11]:life._typed(x,(b,),j.bool_)
     for x in a[11:]:life._typed(x,(b,),j.int32)
     # All actual status-stage fields join the SAME before/after and actual
