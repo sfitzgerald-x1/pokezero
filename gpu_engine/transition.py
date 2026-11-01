@@ -938,7 +938,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_direct_ko_pending=direct_ko_callbacks.prepare_controls_device(
                     _public_trace,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,
                     _direct_write,_direct_hit_context,_direct_ko_actor_before,_direct_ko_party_before,
-                    eligible=_direct_requested,actor_happiness=_active(work.happiness,work,side))
+                    eligible=_direct_requested,actor_happiness=_active(work.happiness,work,side),
+                    recoil_before=(recoil_callbacks.KOBefore(_recoil_context,caller_move,_active(work.ability,work,side),
+                        _active(work.max_hp,work,side),_active(work.status,work,side),jnp.full_like(move,-1))if _recoil_context is not None else None))
             else:
                 _public_trace=direct_hit_controls.record_direct_hit_controls_device(
                     _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
@@ -959,11 +961,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.damage_moves is not None:
             recoil=special_hits.recoil_damage(table.damage_moves,move,_active(work.ability,work,side),dealt)
         if _recoil_context is not None:
+            _direct_ko_pending=recoil_callbacks.with_ko_amount(_direct_ko_pending,recoil)
             _recoil_captured=kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
                 work.active[rows,side],work.active[rows,foe],move,_direct_write)
             _public_trace,_recoil_pending=recoil_callbacks.prepare_device(_public_trace,_recoil_captured,recoil,
                 _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),
-                _active(work.status,work,side),_recoil_context,eligible=acts)
+                _active(work.status,work,side),_recoil_context,eligible=acts,target_ko=_direct_ko_pending)
         if _lifecycle_trace:
             _literal_outcome=kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
                 hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes)
@@ -1441,7 +1444,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 eligible=acts & hit & ~hits_sub & (dealt>0) & (foe_hp==0))
         if _direct_hit_context is not None and _direct_hit_registered:
             _public_trace=direct_ko_callbacks.finish_device(_public_trace,_direct_ko_pending,
-                _active(work.hp,work,side),work.hp[rows,foe],work.active[rows,side],work.active[rows,foe])
+                _active(work.hp,work,side),work.hp[rows,foe],work.active[rows,side],work.active[rows,foe],
+                recoil_after=(recoil_callbacks.Write(work.active[rows,side],work.active[rows,foe],_active(work.ability,work,side),
+                    _recoil_before.old_hp,_active(work.hp,work,side),_active(work.max_hp,work,side),_active(work.status,work,side))if _recoil_context is not None else None))
 
         if table.phazing is not None:
             work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],

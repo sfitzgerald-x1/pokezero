@@ -743,7 +743,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         event_ok=jnp.where(entry_spikes,generation_ok&clock_ok&entry_spikes_ok,event_ok)
         direct_move=jnp.clip(raw[:,5],0,tables.base.public_ids.shape[0]-1)
         direct_ok=(tables.status_events & ~tables.raw_begin & status_identity & actor_ok
-            & (direct_hit_controls.validate_raw_device(raw)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)) & (phase==0)
+            & (direct_hit_controls.validate_raw_device(raw)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)|recoil_callbacks.validate_owned_ko_control(tape,index,raw)) & (phase==0)
             & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             & (incoming==cursor.physical_active[rows,safe_side])
             & (raw[:,5]<tables.base.public_ids.shape[0]) & (tables.base.public_ids[direct_move]>0))

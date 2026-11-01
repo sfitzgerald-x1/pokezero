@@ -248,7 +248,7 @@ def prepare_runtime(inputs):
     for name,move,module,function in (('recoil','doubleedge',recoil,'compile_recoil'),('calm_mind','calmmind',calm,'compile_calm_mind'),
             ('swords_dance','swordsdance',sword,'compile_swords_dance'),('spikes','spikes',spikes,'compile_spikes'),
             ('thunder_wave','thunderwave',thunder,'compile_thunder_wave')):
-        helper=getattr(module,function)(engine_catalog=lifecycle,metadata=metadata) if move in metadata['vocabulary']['moves'] else None
+        helper=getattr(module,function)(engine_catalog=lifecycle,metadata=metadata,**({'source_rules':rules} if name=='recoil' else {})) if move in metadata['vocabulary']['moves'] else None
         helpers[name+'_compiled']=helper;helpers[name+'_mode']='kernel-event' if helper is not None else 'closed'
     # Explicit family compiler: actual numerical SLP setters determine whether
     # there is a capability to compile; verified source descriptors determine
