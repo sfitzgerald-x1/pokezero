@@ -104,6 +104,8 @@ class PublicHooksTests(unittest.TestCase):
   for x,y in zip(jax.tree.leaves(c.trackers),jax.tree.leaves(out)):np.testing.assert_array_equal(y,np.asarray(x)[[1,0,1]])
  def test_explicit_chance_same_original_call_and_sample_once(self):
   s=state();c=h.initialize(s);a=j.zeros((2,2),j.int32);chance=object();sentinel=object()
+  with self.assertRaisesRegex(ValueError,'initialize_with_public'):
+   transition.step_with_public(s,a,None,tr.initialize(s),chance_inputs=chance)
   with patch.object(transition,'sample_chance_inputs',return_value=chance) as sample,patch.object(transition,'step_with_chance',return_value=sentinel) as step:
    self.assertIs(transition.step_with_public(s,a,None,c.trackers),sentinel);sample.assert_called_once_with(s)
    self.assertIs(step.call_args.args[3],chance)
