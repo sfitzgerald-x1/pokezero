@@ -120,6 +120,7 @@ class Report(NamedTuple):
     owner_full_valid: object              # [B,2,C,N], before refusal rollback
     owner_full_more: object               # [B,2,C], before refusal rollback
     outcome_diagnostics: object = None    # literal private operands, data ONLY
+    raw_complete_words: object = None    # SAME prejoin per-word predicate, diagnostics ONLY
 
 
 class Result(NamedTuple):
@@ -356,7 +357,7 @@ def _geometry(carry,tape):
     return expected,mask,geometry
 
 
-def _raw_complete(tape,tables):
+def _raw_complete_words(tape,tables):
     ledger = tape.execution.ledger; kind = tape.words[:,:,0]
     present = jnp.arange(kind.shape[1])[None,:] < tape.count[:,None]
     known = (kind==no_damage.TARGET_NO_DAMAGE)|(kind==no_damage.ABSORB_FACTS)|((kind>=1)&(kind<=17))|((kind>=20)&(kind<=23))|(kind==pressure.PRESSURE_START)|(kind==substitute.SUBSTITUTE_CREATED)|(kind==toxic.TOXIC_ATTEMPT)|(kind==trace.TRACE_COPY)|(kind==recoil.RECOIL_HP)|(kind==intimidate.INTIMIDATE)|(kind==calm_mind.CALM_MIND)|(kind==swords_dance.SWORDS_DANCE)|(kind==spikes.SPIKES)
@@ -498,7 +499,11 @@ def _raw_complete(tape,tables):
     powder_follows=jnp.any(powder_ticket[:,None,:]&(ledger.start[:,None,:]==index+1),axis=2)
     captured_powder=powder_cap&tables.risk.sleep_powder_candidates[jnp.clip(move,0,len(tables.risk.sleep_powder_candidates)-1)]&powder_follows
     dispatch=(kind!=public.MOVE)|(valid_move&(weather|ordinary|captured_seed|captured_encore|captured_plain|captured_bulk|captured_heal|captured_belly|captured_protect|captured_sub|captured_tox|captured_calm|captured_swords|captured_spike|captured_thunder|captured_powder))
-    return jnp.all(~present|(known&(~required|captured)&(~direct|capability)&dispatch),axis=1)
+    return ~present|(known&(~required|captured)&(~direct|capability)&dispatch)
+
+
+def _raw_complete(tape,tables):
+    return jnp.all(_raw_complete_words(tape,tables),axis=1)
 
 
 def consume_pair_device(carry, core, frame, streams, publics, tables, catalog, *, active):
@@ -558,7 +563,8 @@ def consume_pair_device(carry, core, frame, streams, publics, tables, catalog, *
     from . import engine_terminal_callbacks as terminal
     terminal_source=terminal.matches_final_device(tape,frame.state)
     valid &= ~frame.state.done|terminal_source
-    raw = _raw_complete(tape,tables)
+    raw_good_words = _raw_complete_words(tape,tables)
+    raw = jnp.all(raw_good_words,axis=1)
     before = (tape.refusal&~public.UNINSTRUMENTED)==0
     before &= (ledger.refusal==0)&((ledger.upstream_refusal&~public.UNINSTRUMENTED)==0)&(carry.refusal==0)
     results=[]; ledgers=[]; drained=jnp.ones(b,bool); amounts=[]
@@ -609,7 +615,7 @@ def consume_pair_device(carry, core, frame, streams, publics, tables, catalog, *
         tape.event_phase,tape.event_generation,tape.switch_details,ledger.claimed,jnp.stack(amounts,axis=1),
         *[jnp.stack([jnp.moveaxis(getattr(result.projection.frames,name),1,0)
             for result in results],axis=1) for name in ('words','valid','more')],
-        tape.execution.diagnostics if tape.execution.diagnostics is not None else outcome_diagnostics.empty(b))
+        tape.execution.diagnostics if tape.execution.diagnostics is not None else outcome_diagnostics.empty(b),raw_good_words)
     return Result(updated,execution.commit_rows(active,core.execution,joined),tuple(safe),report,
         complete & frame.state.done & terminal_source)
 
