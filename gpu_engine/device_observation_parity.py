@@ -10,7 +10,7 @@ from collections import Counter, defaultdict
 import numpy as np
 
 
-SHAPES = dict(numeric_features=((29, 132), 'fiu'), categorical_ids=((29, 41), 'iu'),
+SHAPES = dict(numeric_features=((29, 132), 'f'), categorical_ids=((29, 41), 'iu'),
     token_type_ids=((29,), 'iu'), attention_mask=((29,), 'b'),
     legal_action_mask=((9,), 'b'), switch_targets=((5,), 'iu'))
 
@@ -73,6 +73,8 @@ class AgreementParity:
                         value = np.asarray(record[name])
                         if value.shape != shape or value.dtype.kind not in dtype:
                             raise ValueError('shape or dtype')
+                        if name == 'numeric_features' and value.dtype not in (np.dtype('float32'), np.dtype('float64')):
+                            raise ValueError('actual float32 tensors or lossless JSON float64 reconstruction required')
                         arrays[name] = value
                     except (KeyError, ValueError, TypeError, OverflowError):
                         problems.append((name, 'MALFORMED_VIEW_FIELD'))

@@ -10,6 +10,15 @@ def view():
 
 
 class DeviceAgreementParityTests(unittest.TestCase):
+    def test_integer_numeric_inputs_cannot_collapse_into_false_matches(self):
+        r=AgreementParity(source_bindings={'test':'synthetic'});a=view();b=view()
+        a['numeric_features']=np.zeros((29,132),np.uint64)
+        b['numeric_features']=a['numeric_features'].copy()
+        a['numeric_features'][0,0]=2**53;b['numeric_features'][0,0]=2**53+1
+        r.add(decision_id='bad',turn=10,line_kinds=['move'],agreement=True,reference=a,candidate=b)
+        p=r.report();self.assertEqual(p['counts']['comparison_refused'],1)
+        self.assertEqual(p['joint_match_fraction_on_ALL_agreement_views'],0)
+
     def test_scalar_admission_types_and_unknowns_remain_nonfatal_refusals(self):
         for status in (False, np.bool_(False), np.asarray(False), None, 0, [False]):
             for side in ('reference', 'candidate'):
