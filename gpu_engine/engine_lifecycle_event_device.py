@@ -50,6 +50,7 @@ from . import engine_belly_drum_callbacks as belly_callbacks
 from . import engine_sleep_blocked_callbacks as sleep_blocked_callbacks
 from . import engine_encore_callbacks as encore_callbacks
 from . import engine_self_move_callbacks as self_move_callbacks
+from . import engine_heal_bell_callbacks as heal_bell_callbacks
 from . import engine_leech_seed_callbacks as leech_callbacks
 from . import engine_primary_plain_status_callbacks as plain_primary_callbacks
 from . import engine_color_change_callbacks as color_callbacks
@@ -122,6 +123,9 @@ class Tables(NamedTuple):
     entry_spikes_levitate: object
     entry_spikes_item_count: object
     entry_spikes_boots_item: object
+    heal_bell_move: object
+    heal_bell_soundproof: object
+    heal_bell_public_soundproof: object
     binding: object
 
 
@@ -246,6 +250,9 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     if len(wonder_rows)>1:raise ValueError("one original Wonder Guard ability row required")
     wonder_engine=wonder_rows[0] if wonder_rows else 0
     wonder_public=0 if weather_catalog is None else weather_catalog.abilities.ids.get("wonderguard",0)
+    heal_bell_move=next((i for i,n in enumerate(metadata['vocabulary']['moves'])if n=='healbell'and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==0),0)
+    heal_bell_soundproof=np.asarray(projector.catalog.engine_table.effects.soundproof,bool)if projector.catalog.engine_table.effects is not None else np.zeros(1,bool)
+    heal_bell_public_soundproof=0 if weather_catalog is None else weather_catalog.abilities.ids.get('soundproof',0)
     from .public_moves import _static_category
     color_categories=np.asarray([0 if i==0 or weather_catalog is None else _static_category(weather_catalog.vocabulary,'type:'+name) for i,name in enumerate(metadata['vocabulary']['types'])],np.int32)
     primary_sleep_moves=np.array([bool(i and projector.catalog.ids[i]>0 and projector.catalog.targets[i]==1
@@ -282,7 +289,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         for proc, species_name, item_name in ((1,'kyogre','blueorb'),(2,'groudon','redorb')):
             guard_species[proc] = next((i for i,n in enumerate(names) if normalize_id(n)==species_name),0)
             guard_item[proc] = any(normalize_id(n)==item_name for n in item_names)
-    payload = dict(schema=SCHEMA, base=np.asarray(projector.device.binding).tolist(), names=names,
+    payload = dict(heal_bell_move=heal_bell_move,heal_bell_soundproof=heal_bell_soundproof.tolist(),heal_bell_public_soundproof=heal_bell_public_soundproof,schema=SCHEMA, base=np.asarray(projector.device.binding).tolist(), names=names,
         species=species, source_species=source_ids, species_binding=np.asarray(species_catalog.device.binding).tolist(),
         context=[None if a is None else np.asarray(a).tolist() for a in (
             context_tables.binding, context_tables.abilities.binding,
@@ -318,6 +325,7 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         jnp.array(leftovers_engine,jnp.int32),jnp.array(leftovers_public,jnp.int32),
         jnp.array(pressure_engine,jnp.int32),jnp.array(pressure_public,jnp.int32),jnp.array(trace_engine,jnp.int32),jnp.array(sturdy_engine,jnp.int32),jnp.array(sturdy_public,jnp.int32),jnp.array(substitute_move,jnp.int32),jnp.array(toxic_move,jnp.int32),jnp.array(recoil_move,jnp.int32),jnp.array(intimidate_engine,jnp.int32),jnp.array(intimidate_public,jnp.int32),jnp.array(calm_mind_move,jnp.int32),jnp.array(swords_dance_move,jnp.int32),jnp.array(spikes_move,jnp.int32),jnp.array(thunder_wave_move,jnp.int32),jnp.array(trace_public,jnp.int32),no_damage_data,jnp.array(color_categories),jnp.array(primary_sleep_moves),jnp.array(sleep_powder_move,jnp.int32),jnp.array(wonder_engine,jnp.int32),jnp.array(wonder_public,jnp.int32),
         jnp.array(entry_spikes_flying,jnp.int32),jnp.array(entry_spikes_types,jnp.int32),jnp.array(entry_spikes_levitate,bool),jnp.array(entry_spikes_items,jnp.int32),jnp.array(entry_spikes_boots,jnp.int32),
+        jnp.array(heal_bell_move,jnp.int32),jnp.array(heal_bell_soundproof),jnp.array(heal_bell_public_soundproof,jnp.int32),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
@@ -600,6 +608,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         rough = kind == rough_callbacks.ROUGH_SKIN_HP
         belly = kind == belly_callbacks.BELLY_DRUM
         sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
+        heal_bell = kind == heal_bell_callbacks.HEAL_BELL
         self_move = kind == self_move_callbacks.SELF_MOVE_INPUT
         encore = kind == encore_callbacks.ENCORE
         leech = kind == leech_callbacks.LEECH
@@ -791,6 +800,18 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         event_ok=jnp.where(leech,generation_ok&clock_ok&leech_ok,event_ok)
         self_move_ok=tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&self_move_callbacks.owned(tape,index)
         event_ok=jnp.where(self_move,generation_ok&clock_ok&self_move_ok,event_ok)
+        bell_status=heal_bell&(raw[:,5]==heal_bell_callbacks.STATUS)
+        bell_cure=bell_status&(raw[:,6]>0)&(raw[:,7]==0)
+        bell_sp=tables.heal_bell_soundproof[jnp.clip(raw[:,9],0,len(tables.heal_bell_soundproof)-1)]
+        bell_immune=bell_status&(raw[:,4]==raw[:,2])&bell_sp
+        bell_member_slot=cursor.physical_to_public[rows,jnp.clip(raw[:,3],0,1),jnp.clip(raw[:,4],0,5)]
+        bell_visible=bell_cure|bell_immune
+        bell_ok=tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&heal_bell_callbacks.owned(tape,index)
+        bell_ok &= (~bell_visible|((bell_member_slot>=0)&(bell_member_slot<6)))&(~bell_immune|(tables.heal_bell_public_soundproof>0))
+        if tape.execution is not None and tape.execution.risks is not None:
+            bell_ok &= (tables.heal_bell_move==tape.execution.risks.tables.heal_bell_move)&jnp.all(tables.heal_bell_soundproof==tape.execution.risks.tables.heal_bell_soundproof)
+        else:bell_ok &= False
+        event_ok=jnp.where(heal_bell,generation_ok&clock_ok&bell_ok,event_ok)
         encore_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&encore_callbacks.owned(tape,index))
         event_ok=jnp.where(encore,generation_ok&clock_ok&encore_ok,event_ok)
@@ -929,6 +950,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_semantic = jnp.concatenate((jnp.stack((jnp.full((b,),int(inputs.Kind.STATUS),jnp.int32),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),status_payload),axis=1)
         semantic=jnp.where(status_event[:,None],status_semantic,semantic)
+        bell_payload=jnp.stack((bell_member_slot+1,z,z,z,z,z,z,z),axis=1)
+        bell_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.STATUS)),semantic_sequence,turn,phase,absent,absent,actor_side,bell_member_slot),axis=1),bell_payload),axis=1)
         item_payload = jnp.stack((status_enc, jnp.full_like(z, tables.lum_public_item),
             jnp.full_like(z, public_items.CONSUME), z,z,z,z,z), axis=1)
         item_semantic = jnp.concatenate((jnp.stack((jnp.full_like(z, int(inputs.Kind.ITEM)),
@@ -1043,6 +1066,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         direct_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,
             turn,phase,absent,absent,absent,absent,z,absent,absent,z,z,z,z,z),axis=1)
         semantic=jnp.where((direct_control|toxic|no_damage_header|no_damage_facts)[:,None],direct_semantic,semantic)
+        semantic=jnp.where(heal_bell[:,None],jnp.where(bell_cure[:,None],bell_semantic,direct_semantic),semantic)
         semantic=jnp.where((toxic&toxic_callbacks.substitute_failure_raw(raw))[:,None],failed_semantic,semantic)
         toxic_existing=toxic&toxic_callbacks.existing_status_raw(raw);toxic_same=toxic_existing&(raw[:,7]==4)
         toxic_failure_payload=jnp.stack((status_enc,jnp.full_like(z,public_active.STALL_FAIL),z,z,z,z,z,z),axis=1)

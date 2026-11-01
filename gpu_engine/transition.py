@@ -1152,10 +1152,19 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.BELLY_DRUM,
                     acts & effects.belly_drum[move],active=live,captured_belly_drum=_belly_capture)
             if _lifecycle_trace:
+                from . import engine_heal_bell_callbacks as heal_bell_callbacks
+                _public_trace,_heal_bell_pending=heal_bell_callbacks.begin(_public_trace,work,side,move,
+                    _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table,
+                    eligible=acts,primary=caller_acts&(caller_move==move),secondary=acts&hit&~immune)
                 team_cured=(acts[:,None] & effects.heal_bell[move,None] & (work.hp[rows,side]>0)
                     & (work.status[rows,side]!=m.NONE) & ~effects.soundproof[work.ability[rows,side]])
-                _public_trace=status_callbacks.unknown(_public_trace,jnp.any(team_cured,axis=1))
-            work=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move])
+                _public_trace=status_callbacks.unknown(_public_trace,jnp.any(team_cured,axis=1)&~heal_bell_callbacks.prospective(_heal_bell_pending))
+                work,_heal_bell_mask=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move],_return_write_mask=True)
+                _public_trace,_heal_bell_capture=heal_bell_callbacks.finish(_public_trace,_heal_bell_pending,work,_heal_bell_mask)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.HEAL_BELL,
+                    acts & effects.heal_bell[move],active=live,captured_heal_bell=_heal_bell_capture)
+            else:
+                work=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move])
             if _lifecycle_trace:
                 _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.HAZE,
                     acts & effects.haze[move],active=live)

@@ -70,6 +70,7 @@ class Site(IntEnum):
     ENCORE = 34
     LEECH_SEED = 35
     SELF_MOVE_INPUT = 36
+    HEAL_BELL = 37
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -187,6 +188,7 @@ class Context(NamedTuple):
     terminal: object = None  # PRIVATE literal final direct-KO observer
     secondary_status: object = None # ephemeral SAME-call registered context
     leech_history: object = None # actual owning public/current seed source-slot facts
+    party_orders: object = None # actual BEFORE-frame owner permutations, never guessed
 
 
 UNKNOWN_EXECUTION = 512

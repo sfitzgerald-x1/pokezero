@@ -248,7 +248,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         source_ready &= active_rows
     if execution_tables is not None:
         tape=execution.begin_on_tape(tape,core.execution,execution_tables,active=source_ready)
-        tape=tape._replace(execution=tape.execution._replace(diagnostics=outcome_diagnostics.empty(b)))
+        tape=tape._replace(execution=tape.execution._replace(diagnostics=outcome_diagnostics.empty(b),party_orders=core.orders))
     if kernel_risk_tables is not None:
         if execution_tables is None or type(core.risks) is not kernel_risks.Carry:
             raise ValueError('actual original accounting and retained risk carry required')
