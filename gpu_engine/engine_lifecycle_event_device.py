@@ -731,7 +731,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         status_damage_ok=(status_profile & tables.status_events & ~tables.raw_begin & status_identity
             & (phase==0)&(incoming==cursor.physical_active[rows,safe_side])
             & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]>=0)&(raw[:,2]<=15)
-            & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5])&(raw[:,7]<=1_000_000)
+            & (raw[:,5]>raw[:,6])&((raw[:,6]>0)|(status_residual_callbacks.owned_lethal(tape,index,status_residual) if status_residual is not None else jnp.zeros(b,bool)))&(raw[:,7]>=raw[:,5])&(raw[:,7]<=1_000_000)
             & ((((raw[:,8]==2)&(raw[:,9]==1))|((raw[:,8]==3)&(raw[:,9]==2)))
                 &(raw[:,2]==raw[:,1])
                 |((raw[:,8]==4)&(raw[:,9]==3)&(raw[:,2]==jnp.minimum(raw[:,1]+1,15)))))
@@ -965,6 +965,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_payload=jnp.stack((status_enc,jnp.where(own,raw[:,6],chip_percent),
             jnp.where(own,raw[:,7],100),jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,8],0,6)],
             z,jnp.where(leftovers_heal|self_heal,0,1),jnp.where(leftovers_heal|substitute|self_heal,0,1),entry_spikes.astype(jnp.int32)),axis=1)  # heal tags are not damage metadata
+        lethal_status=status_damage&(raw[:,6]==0)
+        chip_payload=chip_payload.at[:,2].set(jnp.where(lethal_status,0,chip_payload[:,2])).at[:,3].set(jnp.where(lethal_status,0,chip_payload[:,3])).at[:,4].set(lethal_status.astype(jnp.int32))
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
         semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute|(self_heal&~heal_failure)|entry_spikes)[:,None],chip_semantic,semantic)

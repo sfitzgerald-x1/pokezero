@@ -1673,6 +1673,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _status_old_status=_active(work.status,work,side)
             _status_old_counter=_active(work.status_counter,work,side)
             if _status_registered:
+                _status_lethal_pending=status_residual_callbacks.begin_lethal_device(_public_trace,work,
+                    _execution_status_ticket,side,_status_residual_context.data,requested=_execution_status_requested)
+            if _status_registered:
                 _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
                     work,_public_trace.stream_id,_status_residual_context.weather_profile_data,hypothetical=_hypothetical,
                     eligible=_execution_status_requested)
@@ -1711,13 +1714,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     side,_status_physical,_profile_qualified(_weather_hp_record),_status_cached_speed_ok,
                     end_speed,_status_guard_valid,active=_execution_status_requested)
                 _status_defer=_status_guard_valid
+                _status_lethal_write=status_residual_callbacks.LethalWrite(_status_lethal_pending,work,_status_guard_valid)
             _public_trace=status_residual_callbacks.record_status_residual_device(_public_trace,
                 side,_status_physical,_status_old_hp,_active(work.hp,work,side),_status_maximum,
                 _status_old_status,_status_old_counter,_active(work.status_counter,work,side),
                 _status_residual_context.data,eligible=eligible & status_event & (_status_old_hp>0)
                 & ((_status_old_status==m.BRN)|(_status_old_status==m.PSN)|(_status_old_status==m.TOX)),
-                _defer_own_unknown=_status_defer)
+                _defer_own_unknown=_status_defer,_lethal_write=_status_lethal_write if _status_registered else None)
             if _status_registered:
+                _status_lethal_requested=_status_lethal_pending.requested&(_status_new_hp==0)
+                _public_trace=status_residual_callbacks.finish_lethal_device(_public_trace,_status_lethal_write)
                 _status_execution=getattr(_public_trace,'execution',None)
                 if _status_execution is not None:
                     _status_ledger=execution_accounting.unhandled(_status_execution.ledger,
@@ -1725,7 +1731,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                         tables=_status_execution.tables)
                     _public_trace=execution_accounting._put_context(_public_trace,_status_ledger,_status_execution)
                 _public_trace=execution_accounting.capture_status_residual_write(_public_trace,
-                    _execution_status_ticket,requested=_execution_status_requested & _status_guard_valid,
+                    _execution_status_ticket,requested=_execution_status_requested & _status_guard_valid & ~_status_lethal_requested,
                     positive_write=(_status_new_hp<_status_old_hp)&(_status_new_hp>0))
         if _leftovers_context is not None:
             # Record immediately AFTER this exact HP assignment. The immutable
