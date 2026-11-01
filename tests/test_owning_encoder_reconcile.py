@@ -8,6 +8,14 @@ from pokezero import owning_encoder_study as s
 from tests.test_owning_encoder_continuation import ContinuationTests
 
 
+def stat_literal(process):
+    fields=['0']*50
+    for index,value in ((0,process['state']),(1,process['ppid']),(2,process['pgid']),
+            (3,process['sid']),(19,process['start_ticks']),(49,process['exit_code'])):
+        fields[index]=str(value)
+    return str(process['pid'])+' (unit python) '+' '.join(fields)+'\n'
+
+
 class ReconciliationTests(unittest.TestCase):
     def setUp(self):
         self.f = ContinuationTests()
@@ -39,7 +47,9 @@ class ReconciliationTests(unittest.TestCase):
             plan_sha256=self.plan_ref['sha256'],observed_epoch=1010,workers=[])
         for before in workers:
             i=int(before['args'][-4]);pair=ledger['cells'][i]['attempt']['cpu_pair']
-            self.end['workers'].append(dict(index=i,process={**before,'state':'Z','exit_code':0},
+            process={**before,'state':'Z','exit_code':0,'args':[]}
+            process['stat_literal']=stat_literal(process)
+            self.end['workers'].append(dict(index=i,process=process,
                 remaining_group_processes=[],receipt=self.f.fixture.put(f'cell-{i}.json',self.f.receipt(i,pair)),
                 attempted_marker=self.f.fixture.put(f'cell-{i}.attempted',dict(index=i,plan_sha256=self.plan_ref['sha256']))))
         self.refs = dict(plan=self.plan_ref,ledger=self.ledger_ref,quiesce=pause_ref)
@@ -59,6 +69,7 @@ class ReconciliationTests(unittest.TestCase):
 
     def test_unavailable_or_nonzero_child_status_cannot_become_completed_game(self):
         end=deepcopy(self.end);end['workers'][0]['process']['exit_code']=256
+        end['workers'][0]['process']['stat_literal']=stat_literal(end['workers'][0]['process'])
         result=self.invoke(end)
         self.assertEqual(result['cells'][326]['status'],'UNKNOWN_ATTEMPTED')
         self.assertEqual(result['reconciliation']['retained_completed_indices'],[327])
@@ -68,6 +79,9 @@ class ReconciliationTests(unittest.TestCase):
         for field,value in (('remaining_group_processes',[{'pid':555}]),('index',328)):
             end=deepcopy(self.end);end['workers'][0][field]=value
             with self.subTest(field=field),self.assertRaises((ValueError,KeyError)):self.invoke(end)
+        for field,value in (('stat_literal',None),('exit_code',256),('args',self.pause['workers_before'][0]['args'])):
+            end=deepcopy(self.end);end['workers'][0]['process'][field]=value
+            with self.subTest(field=field),self.assertRaises(ValueError):self.invoke(end)
 
     def test_foreign_hash_marker_terminal_and_duplicate_never_recover(self):
         for field,value in (('quiesce_sha256','0'*64),('controller_closed',False),('controller_pid',42),('observed_epoch',999)):

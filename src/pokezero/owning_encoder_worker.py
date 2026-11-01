@@ -25,8 +25,14 @@ async def serve(plan, output, pair):
     os.sched_setaffinity(0, {pair[0]})
     study.require(os.sched_getaffinity(0) == {pair[0]}, 'actor CPU placement failed')
     initialized = time.monotonic()
-    precision = study._configure_precision()
+    # Match the original environment BEFORE the cache setup imports JAX. The
+    # unchanged precision routine then configures Torch/JAX and checks devices.
+    for name in ('OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS','NUMEXPR_NUM_THREADS',
+                 'VECLIB_MAXIMUM_THREADS','POKEZERO_TORCH_NUM_THREADS','POKEZERO_TORCH_NUM_INTEROP_THREADS'):
+        os.environ[name] = '1'
+    os.environ['JAX_PLATFORMS'] = 'cpu'
     cache = configure_compilation_cache(plan['compilation_cache_directory'])
+    precision = study._configure_precision()
     startup_seconds = time.monotonic() - initialized
     spec = study.read_bound(plan['references']['prespec'])
     runtime = ChampionWorkerRuntime()

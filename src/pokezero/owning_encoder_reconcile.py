@@ -14,6 +14,25 @@ from . import owning_encoder_study as s
 
 SCHEMA = 'pokezero.B3-drained-worker-reconciliation.v1'
 PROCESS_ID = ('pid', 'ppid', 'pgid', 'sid', 'start_ticks', 'args')
+TERMINAL_ID = ('pid', 'ppid', 'pgid', 'sid', 'start_ticks')
+
+
+def _terminal_process(before, after):
+    """Linux zombies lose cmdline; retain pre-exit argv, verify actual stat."""
+    literal = after.get('stat_literal')
+    s.require(type(literal) is str and '(' in literal and ')' in literal,
+        'literal original terminal proc stat required')
+    prefix, _, suffix = literal.rpartition(')')
+    pid = int(prefix.split('(',1)[0].strip())
+    fields = suffix.split()
+    s.require(len(fields) >= 50, 'complete Linux proc stat including wait status required')
+    values = dict(pid=pid,state=fields[0],ppid=int(fields[1]),pgid=int(fields[2]),
+        sid=int(fields[3]),start_ticks=int(fields[19]),exit_code=int(fields[49]))
+    s.require(all(after.get(k) == v for k,v in values.items())
+        and all(after[k] == before[k] for k in TERMINAL_ID)
+        and after['state'] == 'Z' and type(after['exit_code']) is int
+        and after.get('args') == [],
+        'same unreaped terminal child, empty zombie cmdline and exact literal wait status required')
 
 
 def reconcile(*, plan, ledger, quiesce, terminal):
@@ -40,7 +59,8 @@ def reconcile(*, plan, ledger, quiesce, terminal):
         and c._finite(end['observed_epoch']) and end['observed_epoch'] >= pause['observed_epoch'],
         'closed exact stopped controller and bound terminal evidence required')
     position = controller['args'].index('run')
-    s.require(controller['args'][position+2] == refs['plan']['sha256'], 'controller plan SHA differs')
+    s.require(controller['args'][position-2:position] == ['-m','pokezero.owning_encoder_continuation']
+        and controller['args'][position+2] == refs['plan']['sha256'], 'controller plan SHA differs')
     original_output = Path(controller['args'][position+3])
     current = [i for i in old['continuation']['dispatch_order'] if old['cells'][i]['status'] == 'ATTEMPTED']
     s.require([dict(index=i,attempt=old['cells'][i]['attempt']) for i in current] == pause['current_attempted']
@@ -51,6 +71,7 @@ def reconcile(*, plan, ledger, quiesce, terminal):
         argv = worker['args'];at = argv.index('worker')
         index = int(argv[at+2])
         s.require(index in current and index not in workers
+            and argv[at-2:at] == ['-m','pokezero.owning_encoder_continuation']
             and argv[at+1] == str(original_output/'plan.json')
             and argv[at+5] == str(original_output/f'cell-{index}.json')
             and [int(argv[at+3]),int(argv[at+4])] == old['cells'][index]['attempt']['cpu_pair']
@@ -64,10 +85,8 @@ def reconcile(*, plan, ledger, quiesce, terminal):
     result = deepcopy(old);retained = []
     for index in current:
         item = endings[index];before = workers[index];after = item['process']
-        s.require(all(after[k] == before[k] for k in PROCESS_ID)
-            and after['state'] == 'Z' and type(after['exit_code']) is int
-            and item['remaining_group_processes'] == [],
-            'same unreaped terminal child and fully drained owned process group required')
+        _terminal_process(before, after)
+        s.require(item['remaining_group_processes'] == [], 'fully drained owned process group required')
         receipt_ref,marker_ref = s._reference(item['receipt']),s._reference(item['attempted_marker'])
         receipt,marker = s.read_bound(receipt_ref),s.read_bound(marker_ref)
         s.require(Path(receipt_ref['path']).name == f'cell-{index}.json'

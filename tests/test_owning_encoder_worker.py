@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import replace
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -89,6 +90,26 @@ class WorkerRuntimeTests(unittest.TestCase):
 class PersistentDispatchTests(unittest.TestCase):
     def setUp(self):
         self.f=ContinuationTests();self.f.setUp();self.addCleanup(self.f.doCleanups)
+
+    def test_cache_precedes_original_precision_backend_initialization_with_original_cpu_environment(self):
+        original=self.f.plan()
+        plan=c.make_plan(**original['references'],cpu_pairs=original['cpu_pairs'],
+            model_factory_lifecycle='PERSISTENT_PER_CORE_WORKER',compilation_cache_directory=str(self.f.root/'cache'))
+        order=[]
+        def cache(path):
+            self.assertEqual(os.environ['JAX_PLATFORMS'],'cpu')
+            self.assertEqual(os.environ['OMP_NUM_THREADS'],'1')
+            order.append('cache');return {'unit':True}
+        def precision():order.append('original-precision-and-devices');return {'unit':True}
+        with patch.dict(os.environ,{},clear=False), \
+             patch.object(worker.continuation,'cpu_allocation',return_value={}), \
+             patch.object(worker.os,'sched_setaffinity',create=True), \
+             patch.object(worker.os,'sched_getaffinity',return_value={0},create=True), \
+             patch.object(worker,'configure_compilation_cache',side_effect=cache), \
+             patch.object(worker.study,'_configure_precision',side_effect=precision), \
+             patch.object(worker.sys,'stdin',io.StringIO('')):
+            self.assertEqual(asyncio.run(worker.serve(plan,self.f.root,[0,1])),0)
+        self.assertEqual(order,['cache','original-precision-and-devices'])
 
     def test_explicit_plan_and_stop_marker_drain_without_next_attempt(self):
         original=self.f.plan()
