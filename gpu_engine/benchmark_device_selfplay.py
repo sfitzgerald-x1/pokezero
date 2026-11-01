@@ -31,6 +31,37 @@ class Carry(NamedTuple):
     physical_views: object
     ticks: object
     observation_checksum: object
+    error_views: object
+
+
+class ActorResult(NamedTuple):
+    policy_logits: object
+    value: object
+    finite: object
+
+
+def run_actor(params, config, observations, *, actor_kind):
+    """Actual selected actor; no fabricated auxiliary heads for v5 inference."""
+    from . import engine_device_observation as encoder
+    if actor_kind == 'champion23':
+        inputs = [encoder.champion_inputs(o) for o in observations]
+        paired = {key: j.stack((inputs[0][key], inputs[1][key]), axis=1)
+                  for key in inputs[0]}
+        out = champion.forward(params, **paired, c=config, compute_dtype='bfloat16')
+        finite = (j.all(j.isfinite(out.policy_logits), axis=-1) & j.isfinite(out.value)
+            & j.all(j.isfinite(out.opponent_action_logits), axis=-1))
+        return ActorResult(out.policy_logits, out.value, finite)
+    if actor_kind != 'v5-public29':
+        raise ValueError('explicit champion23 or v5-public29 actor required')
+    from . import v5_model
+    inputs = [encoder.actor_inputs(o) for o in observations]
+    b = observations[0].numeric_features.shape[0]
+    paired = {key: j.stack((inputs[0][key], inputs[1][key]), axis=1).reshape(
+        (2*b,) + inputs[0][key].shape[1:]) for key in inputs[0]}
+    out = v5_model.forward(params, paired, config, compute_dtype='bfloat16')
+    finite = out.valid & j.all(j.isfinite(out.policy_logits), axis=-1) & j.isfinite(out.value)
+    if out.value_logits is not None:finite &= j.all(j.isfinite(out.value_logits), axis=-1)
+    return ActorResult(out.policy_logits.reshape(b, 2, 9), out.value.reshape(b, 2), finite.reshape(b, 2))
 
 
 def select_rows(mask, new, old):
@@ -61,9 +92,10 @@ def sample_keys(root_ids, requests, *, sampling_seed):
 
 
 def retire(carry, after, updated_trackers, initial, initial_public, *, failure, requested, errors,
-           max_requests, observation_checksum=0):
+           max_requests, observation_checksum=0, error_views=0):
     """Retain every declared cell once, including failures/caps; no redraw."""
     assigned = carry.ids >= 0
+    requested = requested & assigned[:, None]
     count = carry.requests + assigned.astype(j.int32)
     done = assigned & after.done & ~failure
     failed = assigned & failure
@@ -95,11 +127,12 @@ def retire(carry, after, updated_trackers, initial, initial_public, *, failure, 
         turns, decisions, carry.error_counts + errors,
         carry.requested_views + j.sum(requested, dtype=j.int32),
         carry.physical_views + 2 * len(ids), carry.ticks + 1,
-        carry.observation_checksum + j.asarray(observation_checksum, j.uint32))
+        carry.observation_checksum + j.asarray(observation_checksum, j.uint32),
+        carry.error_views + j.asarray(error_views, j.int32))
 
 
 def make_driver(config, engine_tables, observation_tables, *,
-                sampling_seed, max_requests=4096, chunk_steps=16):
+                sampling_seed, max_requests=4096, chunk_steps=16, actor_kind='champion23'):
     """One compiled worker; engine and tracker writes share the same device step."""
     from . import engine_device_observation as encoder
     from . import engine_device_trackers as public
@@ -110,13 +143,8 @@ def make_driver(config, engine_tables, observation_tables, *,
             j.full((len(c.ids),), side, j.int32)), observation_tables,
             observer_sides=j.full((len(c.ids),), side, j.int32),
             legal_action_mask=masks[:, side]) for side in range(2)]
-        inputs = [encoder.champion_inputs(o) for o in observations]
-        paired = {key: j.stack((inputs[0][key], inputs[1][key]), axis=1)
-                  for key in inputs[0]}
-        output = champion.forward(params, **paired, c=config, compute_dtype='bfloat16')
-        # All three real heads are computed and checked, not a discarded shadow.
-        finite = (j.all(j.isfinite(output.policy_logits), axis=-1)
-            & j.isfinite(output.value) & j.all(j.isfinite(output.opponent_action_logits), axis=-1))
+        output = run_actor(params, config, observations, actor_kind=actor_kind)
+        finite = output.finite
         logits = j.nan_to_num(output.policy_logits, nan=0., posinf=0., neginf=0.)
         safe_output = output._replace(policy_logits=logits)
         legal = j.stack([o.legal_action_mask for o in observations], axis=1)
@@ -128,12 +156,18 @@ def make_driver(config, engine_tables, observation_tables, *,
             for side in range(2)], axis=1)
         requested = request_seats(state) & (c.ids >= 0)[:, None]
         flags = j.stack([o.error for o in observations], axis=1)
-        errors = j.sum(((flags[..., None] & (1 << j.arange(len(encoder.ERROR_KINDS)))) != 0)
+        encoder_errors = j.sum(((flags[..., None] & (1 << j.arange(len(encoder.ERROR_KINDS)))) != 0)
             & requested[..., None], axis=(0, 1), dtype=j.int32)
+        actor_errors = j.sum(requested & ~finite, dtype=j.int32)
+        errors = j.concatenate((encoder_errors, actor_errors[None]))
+        error_views = j.sum(requested & ((flags != 0) | ~finite), dtype=j.int32)
         public_out = transition.step_with_public(state, actions, engine_tables, c.trackers,
             belief_tables=observation_tables.belief)
         out = public_out.step
-        failure = out.invalid_actions | j.any(requested & ~finite, axis=1)
+        # An observation/actor refusal keeps a real view and legal fallback;
+        # retain its kind/union count and continue the game. Only an actual
+        # engine advancement refusal ends that declared game as failed.
+        failure = out.invalid_actions
         trackers = public_out.trackers
         # Retain ALL29 outputs, including public belief tails not consumed by
         # the champion23 adapter. Otherwise XLA could prune encoder work. This
@@ -145,7 +179,7 @@ def make_driver(config, engine_tables, observation_tables, *,
                 checksum += j.sum(value.astype(j.uint32), dtype=j.uint32)
         return retire(c, out.state, trackers, initial, initial_public, failure=failure,
             requested=requested, errors=errors, max_requests=max_requests,
-            observation_checksum=checksum)
+            observation_checksum=checksum, error_views=error_views)
     def chunk(c, initial, initial_public, root_ids, params):
         def body(c, _):
             # No policy/engine work after the fixed finite cohort is exhausted.
@@ -166,14 +200,19 @@ def initialize(initial, initial_public, batch):
     return Carry(state, public, j.arange(batch, dtype=j.int32),
         j.zeros(batch, j.int32), j.asarray(batch, j.int32),
         j.zeros(n, bool), j.zeros(n, bool), j.zeros(n, bool), zero, zero,
-        j.zeros(len(encoder.ERROR_KINDS), j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32),
-        j.asarray(0, j.uint32))
+        j.zeros(len(encoder.ERROR_KINDS)+1, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32),
+        j.asarray(0, j.uint32), j.asarray(0, j.int32))
 
 
 def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
+    from . import engine_device_observation as encoder
     complete, capped, failed, turns, decisions = map(np.asarray,
         (carry.completed, carry.capped, carry.failed, carry.turns, carry.decisions))
     n = len(complete)
+    names=list(encoder.ERROR_KINDS)+['actor_nonfinite']
+    if (np.asarray(carry.error_counts).shape != (len(names),)
+            or int(np.asarray(carry.decisions).sum()) != int(np.asarray(carry.requested_views))):
+        raise ValueError('typed error kinds and actual decision/view accounting required')
     if seconds <= 0 or np.any(complete.astype(int) + capped + failed > 1):
         raise ValueError('positive wall and disjoint whole-roster outcomes required')
     unattempted = n - int(np.asarray(carry.cursor))
@@ -188,6 +227,9 @@ def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
         actual_requested_views=int(np.asarray(carry.requested_views)),
         physical_encoder_forward_rows=int(np.asarray(carry.physical_views)),
         error_counts=np.asarray(carry.error_counts).tolist(),
+        error_kind_names=names,
+        producer_error_views=int(np.asarray(carry.error_views)),
+        producer_error_fraction=float(np.asarray(carry.error_views))/max(1,int(np.asarray(carry.requested_views))),
         completed_turns=turns[complete].tolist(), all_final_turns=turns.tolist(),
         decisions_by_game=decisions.tolist(), completed=complete.tolist(),
         capped=capped.tolist(), failed=failed.tolist(), ticks=int(np.asarray(carry.ticks)),
@@ -234,7 +276,7 @@ def run_finite(compiled, start, initial, initial_public, root_ids, params, *, pr
 
 def measure_pair(params, config, engine_tables, observation_tables, warm_initial,
                  initial, warm_public, initial_public, warm_roots, roots, *, batch, sampling_seed,
-                 max_requests=4096, chunk_steps=16, progress=None):
+                 max_requests=4096, chunk_steps=16, progress=None, actor_kind='champion23'):
     """Disjoint full warmup cohort followed by the whole declared measured one."""
     warm_roots, roots = np.asarray(warm_roots), np.asarray(roots)
     n = initial.done.shape[0]
@@ -247,7 +289,7 @@ def measure_pair(params, config, engine_tables, observation_tables, warm_initial
     warm_start = jax.block_until_ready(initialize(warm_initial, warm_public, batch))
     roots = j.asarray(roots, j.uint32); warm_roots = j.asarray(warm_roots, j.uint32)
     driver = make_driver(config, engine_tables, observation_tables,
-        sampling_seed=sampling_seed, max_requests=max_requests, chunk_steps=chunk_steps)
+        sampling_seed=sampling_seed, max_requests=max_requests, chunk_steps=chunk_steps, actor_kind=actor_kind)
     before = time.perf_counter()
     lowered = driver.lower(start, initial, initial_public, roots, params)
     lowering = time.perf_counter()-before
@@ -264,7 +306,7 @@ def measure_pair(params, config, engine_tables, observation_tables, warm_initial
         progress=report('WARM_FULL_MEASURED'))
     result = summary(finished, seconds=seconds, batch=batch,
         compile_seconds=compilation, warmup_seconds=warm_seconds)
-    result.update(lowering_seconds=lowering, chunk_steps=chunk_steps,
+    result.update(lowering_seconds=lowering, chunk_steps=chunk_steps, actor_kind=actor_kind,
         max_requests_per_game=max_requests,
         warmup_summary=summary(warm, seconds=warm_seconds, batch=batch,
             compile_seconds=compilation, warmup_seconds=0),
