@@ -54,6 +54,7 @@ def policy_work(s,step):
     else:
         require(physical==4096 and admit+shadow==4096 and encoder==2048,'actual model/encoder shape differs')
     require(admit<=2*s['active_engine_rows'],'admitted/discarded geometry differs')
+    require(admit<=2*n,'admitted owners exceed pre-policy capture-valid inputs')
     return skipped
 
 

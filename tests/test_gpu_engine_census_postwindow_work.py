@@ -80,6 +80,11 @@ class PostwindowTests(unittest.TestCase):
   normal=dict(active_engine_rows=512,policy_input_capture_valid_rows=0,policy_work_skipped=False,policy_work_skip_reason=None,bf16_physical_owner_rows=4096,admitted_policy_owner_rows=0,shadow_discarded_owner_rows=4096,shadow_actual_encoder_rows=2048,bf16_forward_ms=2.,bf16_compile_ms=0.,shadow_actual_encoder_ms=[1.,1.],phases_ms=dict(original_request_rows=0))
   skipped=dict(normal,policy_work_skipped=True,policy_work_skip_reason='POST_TIMING_WINDOW_NO_ACTIVE_CAPTURE_VALID_GAME',bf16_physical_owner_rows=0,shadow_discarded_owner_rows=0,shadow_actual_encoder_rows=0,shadow_actual_encoder_ms=[]);skipped.pop('bf16_forward_ms');skipped.pop('bf16_compile_ms')
   self.assertFalse(self.auditor.policy_work(normal,31));self.assertTrue(self.auditor.policy_work(skipped,32))
+  eligible=dict(normal,policy_input_capture_valid_rows=1,admitted_policy_owner_rows=2,shadow_discarded_owner_rows=4094)
+  self.assertFalse(self.auditor.policy_work(eligible,31))
+  for valid,owners in ((0,2),(1,3)):
+   with self.subTest(valid=valid,owners=owners),self.assertRaisesRegex(ValueError,'pre-policy capture-valid'):
+    self.auditor.policy_work(dict(normal,policy_input_capture_valid_rows=valid,admitted_policy_owner_rows=owners,shadow_discarded_owner_rows=4096-owners),31)
   for step,change in ((31,{}),(32,dict(policy_input_capture_valid_rows=1)),(32,dict(bf16_forward_ms=0.)),(32,dict(bf16_compile_ms=None)),(32,dict(shadow_actual_encoder_rows=1)),(32,dict(admitted_policy_owner_rows=1)),(32,dict(policy_work_skip_reason='none')),(32,dict(phases_ms=dict(original_request_rows=1)))):
    with self.subTest(step=step,change=change),self.assertRaises(ValueError):self.auditor.policy_work(dict(skipped,**change),step)
   with self.assertRaises(ValueError):self.auditor.policy_work(normal,32)
