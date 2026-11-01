@@ -27,7 +27,7 @@ class PressureEntryOwningTests(unittest.TestCase):
         cls.catalog=encoder_fixture.V4EncoderTests.catalog
         cls.metadata=deepcopy(f.metadata)
         cls.metadata['vocabulary'].update(species=['_none','snorlax','absol','gardevoir'],
-            abilities=['_none','pressure','trace'],types=['_none','normal','fighting','flying','poison','ground',
+            abilities=['_none','pressure','trace'],items=['_none'],types=['_none','normal','fighting','flying','poison','ground',
                 'rock','bug','ghost','steel','fire','water','grass','electric','psychic','ice','dragon','dark'])
         cls.entry=entry.from_metadata(cls.metadata)
         cls.engine=f.engine_table._replace(entry=cls.entry)

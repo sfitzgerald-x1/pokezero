@@ -1,11 +1,12 @@
-"""Actual fresh-constructor Intimidate0->-1, partial input coverage only.
+"""Actual positive Intimidate writes, partial input coverage only.
 
 Source raw29 is one composite receipt for the literal ability announcement
 followed by the literal target atk-1 line. Original typed constructor/cursor
 and accounting/risk transport are required at this owning source cutpoint;
 these device values do not attest copied/fabricated constructor origin. Existing
 host constructor/source-witness guards establish that actual callsite. Later
-entries, blocked/capped/no-output attempts stay UNKNOWN. No boost carry is added.
+entries require their immediately preceding literal installation. Blocked,
+capped/no-output attempts stay UNKNOWN. No boost carry is added.
 """
 from typing import NamedTuple
 import jax.numpy as jnp
@@ -21,6 +22,86 @@ class Write(NamedTuple):
     target_substitute:object
     old_stage:object
     new_stage:object
+
+
+def ordinary_prefix(tape,index,cursor):
+    """Same-call RAW6 -> RAW29; current cursor is AFTER that installation.
+
+    Used before emission at index=count and by the original lower scan at the
+    actual receipt index. No final-state reconstruction or generic entry token.
+    """
+    from . import engine_lifecycle_callbacks as life
+    b=tape.count.shape[0];rows=jnp.arange(b);c=tape.words.shape[1]
+    index=jnp.broadcast_to(jnp.asarray(index,jnp.int32),(b,));at=jnp.clip(index-1,0,c-1)
+    raw=tape.words[rows,at];side=raw[:,3];safe=jnp.clip(side,0,1)
+    generation=tape.event_generation[rows,at].at[rows,safe].add(1)
+    return (life._valid(cursor)&cursor.initialized&(cursor.turn>0)&(cursor.phase==0)
+        &jnp.all(cursor.established,axis=1)&(tape.stream_id==cursor.stream_id)
+        &(index>0)&(index<=tape.count)&(index<=c)
+        &(raw[:,0]==life.SWITCH_INSTALLED)&(raw[:,1]==side)&(side>=0)&(side<2)
+        &(raw[:,2]>=0)&(raw[:,2]<6)&(raw[:,4]>=0)&(raw[:,4]<6)&(raw[:,2]!=raw[:,4])
+        &(raw[:,4]==cursor.physical_active[rows,safe])
+        &((raw[:,5]==0)|(raw[:,5]==1))&jnp.all(raw[:,6:]==0,axis=1)
+        &(tape.event_turn[rows,at]==cursor.turn)&(tape.event_phase[rows,at]==0)
+        &jnp.all(generation==cursor.generation,axis=1))
+
+
+def ordinary_owned(tape,index,cursor):
+    """Exact positive ordinary raw29 schema/clock/installation identity."""
+    b=tape.count.shape[0];rows=jnp.arange(b);index=jnp.broadcast_to(jnp.asarray(index,jnp.int32),(b,))
+    at=jnp.clip(index,0,tape.words.shape[1]-1);raw=tape.words[rows,at]
+    side=raw[:,1];safe=jnp.clip(side,0,1);previous=tape.words[rows,jnp.clip(index-1,0,tape.words.shape[1]-1)]
+    return (ordinary_prefix(tape,index,cursor)&(index<tape.count)
+        &(raw[:,0]==INTIMIDATE)&(side>=0)&(side<2)&(raw[:,3]==1-side)
+        &(previous[:,3]==side)&(previous[:,4]==raw[:,2])
+        &(raw[:,2]==cursor.physical_active[rows,safe])&(raw[:,4]==cursor.physical_active[rows,1-safe])
+        &(raw[:,5]>0)&(raw[:,6]>-6)&(raw[:,6]<=6)&(raw[:,7]==raw[:,6]-1)
+        &jnp.all(raw[:,8:]==0,axis=1)&jnp.all(tape.switch_details[rows,at]==0,axis=1)
+        &(tape.event_turn[rows,at]==cursor.turn)&(tape.event_phase[rows,at]==0)
+        &jnp.all(tape.event_generation[rows,at]==cursor.generation,axis=1))
+
+
+def record_ordinary_device(tape,ticket,side,physical,target_physical,write,table,*,requested):
+    """Observe the SAME positive old->old-1 write; no numerical assignment."""
+    from . import engine_execution_completeness as execution, engine_kernel_frame_risk as risks
+    if type(write) is not Write:raise ValueError('literal actual Intimidate write required')
+    b=tape.count.shape[0];rows=jnp.arange(b)
+    if type(side) is int:side=jnp.full(b,side,jnp.int32)
+    for x in (side,physical,target_physical,*write):execution._shape(x,(b,),jnp.int32)
+    execution._shape(requested,(b,),jnp.bool_)
+    for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+        execution._shape(getattr(tape,name),(8,),jnp.uint32)
+    context=execution._context(tape)
+    if context is None:return tape
+    ledger=context.ledger;slot,same=execution._ticket(ledger,ticket)
+    bound=jnp.zeros(b,bool)
+    if type(context.risks) is risks.Context:
+        bound,_=risks._bound(context.risks.carry,tape,context.risks.tables)
+        bound &= context.risks.carry.opened&(context.risks.carry.frame==ledger.frame)
+    safe=jnp.clip(side,0,1);n=table.intimidate.shape[0]
+    valid=(bound&same&execution._validate(ledger,context.tables)&(ledger.refusal==0)
+        &((tape.refusal&~public.UNINSTRUMENTED)==0)
+        &(ledger.site[rows,slot]==int(execution.Site.INTIMIDATE_ATTEMPT))
+        &(ledger.side[rows,slot]==side)&(ledger.start[rows,slot]==tape.count)
+        &(ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)
+        &jnp.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1)
+        &ordinary_prefix(tape,tape.count,tape.cursor)&(side>=0)&(side<2)
+        &(physical==tape.cursor.physical_active[rows,safe])
+        &(target_physical==tape.cursor.physical_active[rows,1-safe])
+        &(tape.words[rows,jnp.clip(tape.count-1,0,tape.words.shape[1]-1),3]==side)
+        &(write.actor_ability>0)&(write.actor_ability<n)&table.intimidate[jnp.clip(write.actor_ability,0,n-1)]
+        &(write.target_ability>=0)&(write.target_ability<n)&~table.attack_drop_immune[jnp.clip(write.target_ability,0,n-1)]
+        &(write.target_hp>0)&(write.target_substitute==0)&(write.old_stage>-6)&(write.old_stage<=6)
+        &(write.new_stage==write.old_stage-1))
+    inside=(tape.count>=0)&(tape.count<tape.words.shape[1]);at=jnp.clip(tape.count,0,tape.words.shape[1]-1)
+    valid &= ~inside|jnp.all(tape.switch_details[rows,at]==0,axis=1)
+    z=jnp.zeros_like(tape.count)
+    tape=public._append(tape,INTIMIDATE,side,physical,1-side,target_physical,
+        (write.actor_ability,write.old_stage,write.new_stage,z,z),requested&valid)
+    ledger=execution.unhandled(ledger,ticket,active=requested&~valid,tables=context.tables)
+    ledger=execution.emitted(ledger,ticket,tape,active=requested&valid,tables=context.tables)
+    tape=execution._put_context(tape,ledger,context)
+    return tape._replace(refusal=tape.refusal|jnp.where(requested&(~valid|~inside),UNKNOWN_INTIMIDATE,0))
 
 
 def _constructor(tape):

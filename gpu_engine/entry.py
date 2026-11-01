@@ -205,9 +205,9 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
         _intimidate_initial=(intimidate_callbacks._constructor(_weather_trace)&(foe_hp>0)
             &(_intimidate_substitute==0)&~table.attack_drop_immune[_intimidate_target_ability]
             &(state.boosts[rows,foe,foe_active,0]==0))
-        # Preserve historical ordinary/blocked attempts under their own site.
-        # Constructor-only credit and legacy attempts are disjoint per row.
-        _weather_trace=execution_accounting.unhandled_attempt(_weather_trace,
+        # Ordinary/blocked attempts retain their own requested obligation.
+        # Only the SAME positive write with a fresh installation can capture it.
+        _weather_trace,_intimidate_ordinary_ticket=execution_accounting.open_attempt(_weather_trace,
             execution_accounting.Site.INTIMIDATE_ATTEMPT,side,
             active=_intimidate_requested&~_intimidate_initial)
         _weather_trace,_intimidate_ticket=execution_accounting.open_attempt(_weather_trace,
@@ -222,6 +222,9 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
         _weather_trace=intimidate_callbacks.record_device(_weather_trace,_intimidate_ticket,side,active,foe_active,
             intimidate_callbacks.Write(ability,_intimidate_target_ability,foe_hp,_intimidate_substitute,
                 old,boosts[rows,foe,foe_active,0]),table,requested=_intimidate_requested&_intimidate_initial)
+        _weather_trace=intimidate_callbacks.record_ordinary_device(_weather_trace,_intimidate_ordinary_ticket,side,active,foe_active,
+            intimidate_callbacks.Write(ability,_intimidate_target_ability,foe_hp,_intimidate_substitute,
+                old,boosts[rows,foe,foe_active,0]),table,requested=_intimidate_requested&~_intimidate_initial)
         return state._replace(boosts=boosts),knocked_out,_weather_trace
     return state._replace(boosts=boosts),knocked_out
 

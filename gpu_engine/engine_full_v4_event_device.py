@@ -816,8 +816,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         spikes_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
         spikes_called=(called[:,0]==subject)&(called[:,1]==slots[rows,safe])&(called[:,2]==tables.causal.base.public_ids[spikes_move])&(called[:,3]==semantic[:,2])&(called[:,4]+1==index)
         identity &= ~spikes | (live[rows,safe]&live[rows,1-safe]&(semantic[:,6]==1-subject)&spikes_called)
-        identity &= ~intimidate | (~state.causal.cursor.initialized&(state.sequence==0)
-            &live[rows,safe]&live[rows,1-safe]&(semantic[:,2]==0)&(semantic[:,3]==0))
+        identity &= ~intimidate | (live[rows,safe]&live[rows,1-safe]&(semantic[:,3]==0)
+            &((~state.causal.cursor.initialized&(state.sequence==0)&(semantic[:,2]==0))
+                |(state.causal.cursor.initialized&(state.sequence>0)&(semantic[:,2]>0))))
         identity &= ~trace_copy | (live[rows,safe]&live[rows,1-safe])
         # One actual MOVE must be followed by the COMPLETE literal SPA->SPD
         # pair; neither a single boost nor a migrated suffix can represent it.
@@ -1036,8 +1037,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
         toxic_enc=jnp.where(direct_control|toxic_attempt|no_damage_header|flash_ended|sub_damage|protect_block|color_change|pinch,new_slot+1,semantic[:,8])
+        # Intimidate is TWO source lines: the ability actor and boost target
+        # can have different public encounters after an ordinary installation.
+        toxic_encounters=jnp.where(intimidate[:,None],
+            current_slots[rows[:,None],jnp.clip(result[:,:,6],0,1)]+1,toxic_enc[:,None])
         prefix = raw_kind == causal.life.TURNLOOP_PREFIX
-        result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes|prefix)[:,None], toxic_enc[:,None], result[:, :, 9]))
+        result = result.at[:, :, 9].set(jnp.where(toxic & ~(weather_event|spikes|prefix)[:,None], toxic_encounters, result[:, :, 9]))
         result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)),
             jnp.where(semantic[:, 12, None] == 1, -1, hp[:, None]), result[:, :, 11]))
         result = result.at[:, :, 12].set(jnp.where(toxic & condition[:, None] & (~substitute[:,None]|(schema[:,:,11]>=0)), maximum[:, None], result[:, :, 12]))
