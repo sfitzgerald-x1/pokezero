@@ -177,22 +177,27 @@ def ground_shape(g):
         life._typed(value,(len(value),),j.bool_)
 
 
+def pack_ground(g):
+    """Exact flat Risk.Tables representation; empty means no capability."""
+    if g is None:return j.zeros((0,),j.int32)
+    ground_shape(g)
+    return j.concatenate((g.electric.reshape(1),g.ground.reshape(1),
+        g.abilities.astype(j.int32),g.items.astype(j.int32)))
+
+
 def _ground_source(tape,context):
     from . import engine_execution_completeness as ex
     actual=ex._context(tape);data=context.data;g=data.ground_immunity;b=len(tape.count)
     if g is None or actual is None or actual.risks is None:return j.zeros(b,bool)
     ground_shape(g)
     t=actual.risks.tables;other=t.thunder_wave_ground_immunity
-    if type(other)is not GroundData:return j.zeros(b,bool)
+    expected=pack_ground(g);life._typed(other,expected.shape,j.int32)
     good=ex._validate(actual.ledger,context.accounting)&ex._tape(actual.ledger,tape,context.accounting)&actual.ledger.opened
     good &= j.any(data.binding!=0)&j.all(data.binding==t.thunder_wave_binding)
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):
         life._typed(getattr(tape,name),(8,),j.uint32);life._typed(getattr(data,name),(8,),j.uint32)
         good &= j.all(getattr(tape,name)==getattr(data,name))
-    for name in g._fields:
-        value=getattr(g,name);shape=()if name in ('electric','ground')else(len(value),);dtype=j.int32 if not shape else j.bool_
-        life._typed(value,shape,dtype);life._typed(getattr(other,name),shape,dtype)
-        good &= j.all(value==getattr(other,name))
+    good &= j.all(other==expected)
     return good
 
 
