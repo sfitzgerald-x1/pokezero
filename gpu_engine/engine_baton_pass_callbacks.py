@@ -2,7 +2,8 @@
 
 RAW54 START=[54,side,old,move,0,turn,frame,generation,publicSlot,secondary].
 RAW54 INSTALL=[54,side,old,new,1,turn,frame,startGeneration,publicSlot,0]
-followed by the genuine RAW6 installation with its truthful Baton flag1.
+followed by optional SAME-call RAW60 Natural Cure and genuine RAW6 installation
+with its truthful Baton flag1. The three words use ONE Site39 claim.
 Missing public history, private request or unported transfer remains UNKNOWN.
 """
 import hashlib,json,subprocess
@@ -39,6 +40,7 @@ class Data(NamedTuple):
     quiet_items:object
     outgoing_dormant_abilities:object=None
     outgoing_insomnia_status:object=None
+    natural_cure:object=None
 class History(NamedTuple):
     stream_id:object
     frame:object
@@ -106,7 +108,7 @@ const dormantHook={insomnia:'onUpdate',naturalcure:'onSwitchOut'};
 const dormant=(e)=>e.exists&&e.gen<=3&&Object.hasOwn(dormantHook,e.id)&&typeof e[dormantHook[e.id]]==='function'&&!hooks.filter(n=>n!==dormantHook[e.id]).some(n=>typeof e[n]!=='undefined');
 const passiveStatusHooks=Object.fromEntries(['brn','psn'].map(id=>[id,Object.fromEntries(['onBeforeSwitchOut','onSwitchOut','onSwitchIn','onCopy'].map(n=>[n,typeof d.conditions.get(id)[n]]))]));
 const dormantSources=Object.fromEntries(Object.entries(dormantHook).map(([id,hook])=>{const e=d.abilities.get(id);return[id,{hook,body:''+e[hook],otherHooks:hooks.filter(n=>n!==hook).map(n=>typeof e[n])}]}));
-process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,move:{id:m.id,gen:m.gen,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,selfSwitch:m.selfSwitch,onHit:(''+m.onHit),selfHit:(''+m.self.onHit)},toxicSwitchIn:''+d.conditions.get('tox').onSwitchIn,copyVolatile:''+P.prototype.copyVolatileFrom,clearVolatile:''+P.prototype.clearVolatile,paralysis:{beforeMove:''+d.conditions.get('par').onBeforeMove,beforeSwitchOut:typeof d.conditions.get('par').onBeforeSwitchOut,switchOut:typeof d.conditions.get('par').onSwitchOut,switchIn:typeof d.conditions.get('par').onSwitchIn},substitute:{id:d.conditions.get('substitute').id,noCopy:d.conditions.get('substitute').noCopy,onCopy:typeof d.conditions.get('substitute').onCopy},passiveStatusHooks,outgoingInsomniaStatus:meta.vocabulary.abilities.map(n=>{const e=d.abilities.get(n);return e.id==='insomnia'&&dormant(e)}),dormantSources,outgoingDormant:meta.vocabulary.abilities.map(n=>dormant(d.abilities.get(n))),abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
+process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,move:{id:m.id,gen:m.gen,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,selfSwitch:m.selfSwitch,onHit:(''+m.onHit),selfHit:(''+m.self.onHit)},toxicSwitchIn:''+d.conditions.get('tox').onSwitchIn,copyVolatile:''+P.prototype.copyVolatileFrom,clearVolatile:''+P.prototype.clearVolatile,paralysis:{beforeMove:''+d.conditions.get('par').onBeforeMove,beforeSwitchOut:typeof d.conditions.get('par').onBeforeSwitchOut,switchOut:typeof d.conditions.get('par').onSwitchOut,switchIn:typeof d.conditions.get('par').onSwitchIn},substitute:{id:d.conditions.get('substitute').id,noCopy:d.conditions.get('substitute').noCopy,onCopy:typeof d.conditions.get('substitute').onCopy},passiveStatusHooks,naturalCure:meta.vocabulary.abilities.map(n=>{const e=d.abilities.get(n);return e.id==='naturalcure'&&dormant(e)}),clearStatus:''+P.prototype.clearStatus,setStatus:''+P.prototype.setStatus,outgoingInsomniaStatus:meta.vocabulary.abilities.map(n=>{const e=d.abilities.get(n);return e.id==='insomnia'&&dormant(e)}),dormantSources,outgoingDormant:meta.vocabulary.abilities.map(n=>dormant(d.abilities.get(n))),abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
     value=json.loads(subprocess.check_output([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata).encode(),timeout=30))
     if json.dumps(value['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(value['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original Baton source drift')
     if hashlib.sha256(value['toxicSwitchIn'].encode()).hexdigest()!=TOXIC_SWITCH_IN_SHA256:raise ValueError('canonical original toxic switch reset required')
@@ -119,13 +121,15 @@ process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tr
         actual=value['dormantSources'][name]
         if actual['hook']!=hook or hashlib.sha256(actual['body'].encode()).hexdigest()!=digest or actual['otherHooks']!=['undefined']*7:raise ValueError('canonical original dormant outgoing ability required')
     if value['passiveStatusHooks']!={n:{hook:'undefined'for hook in('onBeforeSwitchOut','onSwitchOut','onSwitchIn','onCopy')}for n in('brn','psn')}:raise ValueError('canonical original burn/poison quiet departure required')
+    if hashlib.sha256(value['clearStatus'].encode()).hexdigest()!='f5b1ccd6e2ebe252e45f333700da580b4ca464abc5e799759f86f720c5512a99' or hashlib.sha256(value['setStatus'].encode()).hexdigest()!='1078d45febffb2ca663eca5c04d18d154304aaa467b57bf22535d90715172ef0':raise ValueError('canonical original Natural Cure status removal required')
+    if catalog.engine_table.entry is None or not np.array_equal(np.asarray(catalog.engine_table.entry.natural_cure),np.asarray(value['naturalCure'],bool)):raise ValueError('same original Natural Cure installed ability namespace required')
     row=value['move'];names=metadata['vocabulary']['moves'];ids=[i for i,n in enumerate(names)if n=='batonpass']
     move=ids[0]if len(ids)==1 else 0;t=catalog.engine_table
     if move:
         if not(row['id']=='batonpass'and row['gen']==2 and row['category']=='Status'and row['target']=='self'and row['power']==0 and row['accuracy']is True and row['priority']==0 and row['selfSwitch']=='copyvolatile'and t.baton is not None and bool(t.baton.move[move])and int(t.power[move])==0 and bool(t.always_hit[move])and int(catalog.ids[move])>0 and catalog.targets[move]==0):raise ValueError('canonical original Baton columns required')
     payload=dict(schema='pokezero.baton.boost-substitute.toxic-paralysis-insomnia-brn-psn-source.v6',source=value,engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding,move=move)
     words=lambda v:j.asarray(v,j.uint32)
-    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),j.asarray(value['abilities']),j.asarray(value['items']),j.asarray(value['outgoingDormant']),j.asarray([BURN_STATUS,POISON_STATUS,len(value['abilities'])]+[int(x)for x in value['outgoingInsomniaStatus']],j.int32))
+    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),j.asarray(value['abilities']),j.asarray(value['items']),j.asarray(value['outgoingDormant']),j.asarray([BURN_STATUS,POISON_STATUS,len(value['abilities'])]+[int(x)for x in value['outgoingInsomniaStatus']],j.int32),j.asarray(value['naturalCure']))
 
 def shape(d):
     if type(d)is not Data:raise ValueError('typed original Baton capability required')
@@ -134,6 +138,7 @@ def shape(d):
     for v in d[6:8]:life._typed(v,(len(v),),j.bool_)
     if d.outgoing_dormant_abilities is not None:life._typed(d.outgoing_dormant_abilities,d.quiet_abilities.shape,j.bool_)
     if d.outgoing_insomnia_status is not None:life._typed(d.outgoing_insomnia_status,(3+len(d.quiet_abilities),),j.int32)
+    if d.natural_cure is not None:life._typed(d.natural_cure,d.quiet_abilities.shape,j.bool_)
 def snapshot(s):return Private(*(getattr(s,n)for n in PRIVATE_FIELDS))
 def suspend(s):return Suspension(*(getattr(s,n)for n in SUSPENSION_FIELDS))
 def equal(a,b):
@@ -174,13 +179,15 @@ def _bound(tape,data):
         actual=t.baton_outgoing_dormant_abilities;life._typed(actual,data.outgoing_dormant_abilities.shape,j.bool_);good &= j.all(actual==data.outgoing_dormant_abilities)
     if data.outgoing_insomnia_status is not None:
         actual=t.baton_outgoing_insomnia_status;life._typed(actual,data.outgoing_insomnia_status.shape,j.int32);good &= j.all(actual==data.outgoing_insomnia_status)
+    if data.natural_cure is not None:
+        life._typed(t.baton_natural_cure,data.natural_cure.shape,j.bool_);good &= j.all(data.natural_cure==t.baton_natural_cure)
     return good
 
 def _data(tape):
     t=tape.execution.risks.tables
     cap=getattr(t,'baton_outgoing_insomnia_status',None)
     if cap is not None and cap.shape==(0,):cap=None
-    return Data(t.baton_binding,t.engine_binding,t.source_binding,t.move_binding,t.producer_binding,t.baton_move,t.baton_abilities,t.baton_items,getattr(t,'baton_outgoing_dormant_abilities',None),cap)
+    return Data(t.baton_binding,t.engine_binding,t.source_binding,t.move_binding,t.producer_binding,t.baton_move,t.baton_abilities,t.baton_items,getattr(t,'baton_outgoing_dormant_abilities',None),cap,getattr(t,'baton_natural_cure',None))
 def public_substitute(pub):
     """Literal original public volatile namespace; every other bit stays closed."""
     from . import public_active
@@ -231,7 +238,9 @@ def _ability_quiet(ability,status,counter,data,*,outgoing=False):
     if outgoing and dormant is not None:
         life._typed(dormant,data.quiet_abilities.shape,j.bool_)
         result |= (status==0)&(counter==0)&dormant[j.clip(ability,0,len(dormant)-1)]
-    if outgoing:result |= _insomnia_status(ability,status,counter,data)
+    if outgoing:
+        from . import engine_natural_cure_callbacks as nc
+        result |= _insomnia_status(ability,status,counter,data)|nc.source_status(ability,status,counter,data)
     return result
 
 def _quiet(s,side,physical,data,*,outgoing_toxic=False,outgoing_paralysis=False,outgoing_substitute=False,outgoing_dormant=False):
@@ -242,7 +251,9 @@ def _quiet(s,side,physical,data,*,outgoing_toxic=False,outgoing_paralysis=False,
     # PAR has no switch hook. The actual before-move result is still `acts`;
     # only this outgoing source-bound path may retain PAR, never the recipient.
     if outgoing_paralysis:status_ok |= (status==PARALYSIS_STATUS)&(counter==0)
-    if outgoing_dormant:status_ok |= _insomnia_status(ability,status,counter,data)
+    if outgoing_dormant:
+        from . import engine_natural_cure_callbacks as nc
+        status_ok |= _insomnia_status(ability,status,counter,data)|nc.source_status(ability,status,counter,data)
     good=(physical>=0)&(physical<6)&(s.hp[r,seat,mon]>0)&status_ok&(ability>0)&(ability<len(data.quiet_abilities))&_ability_quiet(ability,status,counter,data,outgoing=outgoing_dormant)&(item>=0)&(item<len(data.quiet_items))&data.quiet_items[j.clip(item,0,len(data.quiet_items)-1)]
     good &= (ability==s.base_ability[r,seat,mon])&j.all(s.types[r,seat,mon]==s.base_types[r,seat,mon],axis=1)&(s.spikes[r,seat]==0)&j.all(s.trap_source<0,axis=(1,2))
     sub=s.substitute_hp[r,seat,mon]
@@ -354,31 +365,42 @@ def copied_private(before,side,outgoing,incoming):
     r=j.arange(len(side));seat=j.clip(side,0,1);old=j.clip(outgoing,0,5);new=j.clip(incoming,0,5)
     return before._replace(substitute_hp=before.substitute_hp.at[r,seat,new].set(before.substitute_hp[r,seat,old]))
 
-def departed_private(before,side,outgoing):
+def departed_private(before,side,outgoing,data=None):
     """Same original entry.depart TOX-counter reset; no physical write here.
 
-    Major status remains on the outgoing mon and never transfers. Original
+    Major status remains on the outgoing mon and never transfers, except the
+    explicit source-bound Natural Cure departure below. Original
     tox.onSwitchIn resets its own stage; the existing kernel clears that private
     clock on departure. This predicts only that actual already-existing write.
     """
     r=j.arange(len(side));seat=j.clip(side,0,1);old=j.clip(outgoing,0,5)
     counter=before.status_counter[r,seat,old]
     expected=j.where(before.status[r,seat,old]==TOXIC_STATUS,0,counter)
-    return before._replace(status_counter=before.status_counter.at[r,seat,old].set(expected),substitute_hp=before.substitute_hp.at[r,seat,old].set(0))
+    from . import engine_natural_cure_callbacks as nc
+    cure=j.zeros_like(side,bool)if data is None else nc.source_status(before.ability[r,seat,old],before.status[r,seat,old],counter,data)
+    return before._replace(status=before.status.at[r,seat,old].set(j.where(cure,0,before.status[r,seat,old])),status_counter=before.status_counter.at[r,seat,old].set(j.where(cure,0,expected)),substitute_hp=before.substitute_hp.at[r,seat,old].set(0))
+
+def cure_install(rec,data):
+    from . import engine_natural_cure_callbacks as nc
+    r=j.arange(len(rec.side));side=j.clip(rec.side,0,1);old=j.clip(rec.outgoing,0,5)
+    return (rec.code==INSTALL)&nc.source_status(rec.before.ability[r,side,old],rec.before.status[r,side,old],rec.before.status_counter[r,side,old],data)
 
 def reveal_matches(tape,state,side,outgoing,incoming):
     if tape.execution is None or tape.execution.baton_transaction is None:return j.zeros_like(side,bool)
     tr=tape.execution.baton_transaction;rec=tr.record;h=rec.history;r=j.arange(len(side));seat=j.clip(side,0,1);old=j.clip(outgoing,0,5);new=j.clip(incoming,0,5)
+    from . import engine_natural_cure_callbacks as nc
+    cure=cure_install(rec,_data(tape));capture=nc.matches_baton(tape,rec,stage=1)
     expected=rec.boost_after.at[r,seat,old].set(0)
-    return rec.known&(rec.code==INSTALL)&(rec.side==side)&(rec.outgoing==outgoing)&(rec.incoming==incoming)&tr.request_ok&(tape.count==rec.start+1)&j.all(state.active.at[r,seat].set(old)==h.active,axis=1)&equal(departed_private(copied_private(rec.before,side,outgoing,incoming),side,outgoing),snapshot(state))&j.all(state.boosts==expected,axis=(1,2,3))
+    return (~cure|capture)&rec.known&(rec.code==INSTALL)&(rec.side==side)&(rec.outgoing==outgoing)&(rec.incoming==incoming)&tr.request_ok&(tape.count==rec.start+1+cure.astype(j.int32))&j.all(state.active.at[r,seat].set(old)==h.active,axis=1)&equal(departed_private(copied_private(rec.before,side,outgoing,incoming),side,outgoing,_data(tape)),snapshot(state))&j.all(state.boosts==expected,axis=(1,2,3))
 def finish_install(tape,state,current_side,*,eligible):
     if tape.execution is None or tape.execution.baton_transaction is None:return tape
     from . import engine_execution_completeness as ex
-    tr=tape.execution.baton_transaction;rec=tr.record;r=j.arange(len(tape.count));side=j.clip(rec.side,0,1);at=j.clip(rec.start+1,0,tape.words.shape[1]-1);raw=tape.words[r,at]
-    good=rec.known&(rec.code==INSTALL)&(tape.count==rec.start+2)&(raw[:,0]==life.SWITCH_INSTALLED)&(raw[:,1]==rec.side)&(raw[:,2]==rec.outgoing)&(raw[:,3]==rec.side)&(raw[:,4]==rec.incoming)&(raw[:,6]==1)&j.all(raw[:,7:]==0,axis=1)
+    from . import engine_natural_cure_callbacks as nc
+    tr=tape.execution.baton_transaction;rec=tr.record;r=j.arange(len(tape.count));side=j.clip(rec.side,0,1);cure=cure_install(rec,_data(tape));at=j.clip(rec.start+1+cure.astype(j.int32),0,tape.words.shape[1]-1);raw=tape.words[r,at]
+    good=rec.known&(rec.code==INSTALL)&(tape.count==rec.start+2+cure.astype(j.int32))&(~cure|nc.matches_baton(tape,rec,stage=1))&(raw[:,0]==life.SWITCH_INSTALLED)&(raw[:,1]==rec.side)&(raw[:,2]==rec.outgoing)&(raw[:,3]==rec.side)&(raw[:,4]==rec.incoming)&(raw[:,6]==1)&j.all(raw[:,7:]==0,axis=1)
     good &= (tape.cursor.physical_active[r,side]==rec.incoming)&(tape.cursor.generation[r,side]==rec.history.generation[r,side]+1)&tape.cursor.established[r,side]
     expected=rec.boost_after.at[r,side,j.clip(rec.outgoing,0,5)].set(0)
-    good &= equal(departed_private(copied_private(rec.before,rec.side,rec.outgoing,rec.incoming),rec.side,rec.outgoing),snapshot(state))&j.all(expected==state.boosts,axis=(1,2,3))
+    good &= equal(departed_private(copied_private(rec.before,rec.side,rec.outgoing,rec.incoming),rec.side,rec.outgoing,_data(tape)),snapshot(state))&j.all(expected==state.boosts,axis=(1,2,3))
     ticket=ex.Ticket(tape.stream_id,tape.execution.tables.inventory_binding,rec.frame,rec.slot,rec.serial);c=ex._context(tape)
     requested=(rec.code==INSTALL)&eligible&(rec.side==current_side);ledger=ex.unhandled(c.ledger,ticket,active=requested&~good,tables=c.tables);ledger=ex.emitted(ledger,ticket,tape,active=requested&good,tables=c.tables)
     rec=rec._replace(finalized=j.where(requested,good,rec.finalized),boost_after=rows(requested,rec.boost_after,state.boosts),after=rows(requested,rec.after,snapshot(state)));h=tr.history._replace(side=j.where(requested&good,-1,tr.history.side),ready=tr.history.ready&~(requested&good))
@@ -391,13 +413,13 @@ def owned(tape,index,code=None):
     if tape.execution is None or tape.execution.baton_transaction is None:return j.zeros(b,bool)
     tr=tape.execution.baton_transaction;rec=tr.record;h=rec.history;history_shape(h,b);d=_data(tape);side=j.clip(rec.side,0,1);old=j.clip(rec.outgoing,0,5);new=j.clip(rec.incoming,0,5)
     history_shape(h._replace(private=rec.before),b);history_shape(h._replace(private=rec.after),b)
-    ledger=tape.execution.ledger;start=rec.start;pos=j.clip(start,0,tape.words.shape[1]-1);raw=tape.words[r,pos];length=j.where(rec.code==START,1,2)
+    ledger=tape.execution.ledger;start=rec.start;pos=j.clip(start,0,tape.words.shape[1]-1);raw=tape.words[r,pos];length=j.where(rec.code==START,1,2+cure_install(rec,d).astype(j.int32))
     claim=ledger.claimed[r,pos];slot=j.clip(claim-1,0,ledger.site.shape[1]-1)
     good=_bound(tape,d)&rec.known&rec.finalized&(rec.frame==ledger.frame)&(rec.side>=0)&(rec.side<2)&(rec.outgoing>=0)&(rec.outgoing<6)&(rec.frame==tape.execution.ledger.frame)
     good &= (start>=0)&(start+length<=tape.count)&(at>=start)&(at<start+length)&(claim==rec.slot+1)&(claim>0)&(claim<=ledger.count)&(ledger.site[r,slot]==int(ex.Site.BATON_PASS))&(ledger.side[r,slot]==rec.side)&(ledger.serial[r,slot]==rec.serial)&(ledger.stage[r,slot]==2)&(ledger.start[r,slot]==start)&(ledger.end[r,slot]==start+length)
     expected=j.stack((j.full(b,BATON_PASS,j.int32),rec.side,rec.outgoing,j.where(rec.code==START,d.move_id,rec.incoming),rec.code,h.turn,h.frame,h.generation[r,side],h.public_slot,j.where(rec.code==START,rec.secondary.astype(j.int32),0)),axis=1)
     good &= j.all(raw==expected,axis=1)&((rec.code==START)|(rec.code==INSTALL))&((raw[:,9]==0)|(raw[:,9]==1))
-    for n in range(2):
+    for n in range(3):
         p=j.clip(start+n,0,tape.words.shape[1]-1);used=n<length
         valid=(ledger.claimed[r,p]==claim)&j.all(ledger.words[r,p]==tape.words[r,p],axis=1)&(ledger.event_turn[r,p]==tape.event_turn[r,p])&(ledger.event_phase[r,p]==tape.event_phase[r,p])&j.all(ledger.event_generation[r,p]==tape.event_generation[r,p],axis=1)
         valid &= (tape.event_turn[r,p]==ledger.turn[r,slot])&(tape.event_phase[r,p]==ledger.phase[r,slot])&j.all(tape.event_generation[r,p]==ledger.generation[r,slot],axis=1)
@@ -406,13 +428,15 @@ def owned(tape,index,code=None):
     declared=(start>0)&(decl[:,0]==public.MOVE)&(decl[:,1]==rec.side)&(decl[:,2]==rec.outgoing)&(decl[:,3]==1-rec.side)&(decl[:,5]==d.move_id)&j.all(decl[:,6:]==0,axis=1)
     declared &= (tape.event_turn[r,prefix]==h.turn)&j.all(tape.event_generation[r,prefix]==h.generation,axis=1)
     good &= j.where(rec.code==START,declared&(h.frame==rec.frame)&equal(rec.before,rec.after)&equal(h.private,rec.before)&j.all(h.boosts==rec.boost_before,axis=(1,2,3)),True)
-    installed=tape.words[r,j.clip(start+1,0,tape.words.shape[1]-1)]
+    from . import engine_natural_cure_callbacks as nc
+    cure=cure_install(rec,d);installed_at=j.clip(start+1+cure.astype(j.int32),0,tape.words.shape[1]-1)
+    installed=tape.words[r,installed_at]
     expected_after=h.boosts.at[r,side,new].set(h.boosts[r,side,old]);expected_after=expected_after.at[r,side,old].set(0)
     transfer=(rec.incoming>=0)&(rec.incoming<6)&(rec.incoming!=rec.outgoing)&h.ready&(h.frame+1==rec.frame)&tr.request_ok&(tr.recipient==rec.incoming)&tr.public.known[r,side]&tr.public.pending[r,side]
-    transfer &= equal(departed_private(copied_private(rec.before,rec.side,rec.outgoing,rec.incoming),rec.side,rec.outgoing),rec.after)&(tr.public.substitute[r,side]==(rec.before.substitute_hp[r,side,old]>0))
+    transfer &= (~cure|nc.matches_baton(tape,rec,stage=2))&equal(departed_private(copied_private(rec.before,rec.side,rec.outgoing,rec.incoming),rec.side,rec.outgoing,d),rec.after)&(tr.public.substitute[r,side]==(rec.before.substitute_hp[r,side,old]>0))
     transfer &= j.all(tr.order==h.order,axis=(1,2))&equal(h.private,rec.before)&j.all(h.boosts==rec.boost_before,axis=(1,2,3))&j.all(expected_after==rec.boost_after,axis=(1,2,3))
     transfer &= (installed[:,0]==life.SWITCH_INSTALLED)&(installed[:,1]==rec.side)&(installed[:,2]==rec.outgoing)&(installed[:,3]==rec.side)&(installed[:,4]==rec.incoming)&(installed[:,5]==1)&(installed[:,6]==1)&j.all(installed[:,7:]==0,axis=1)
-    details=j.stack(tuple(getattr(rec.before,n)[r,side,new]for n in ('species','level','gender','hp','max_hp','status')),axis=1);transfer &= j.all(tape.switch_details[r,j.clip(start+1,0,tape.words.shape[1]-1)]==details,axis=1)
+    details=j.stack(tuple(getattr(rec.before,n)[r,side,new]for n in ('species','level','gender','hp','max_hp','status')),axis=1);transfer &= j.all(tape.switch_details[r,installed_at]==details,axis=1)
     good &= j.where(rec.code==INSTALL,transfer,True)
     if code is not None:good &= rec.code==code
     return good

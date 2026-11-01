@@ -76,6 +76,9 @@ class Site(IntEnum):
     SELF_DESTRUCT = 40 # reserved separately reviewed composite
     BATON_PASS = 39
     SLEEP_TALK = 42
+    WHIRLWIND = 43 # reserved separate input
+    FOCUS_PREPARATION = 44 # reserved separate input
+    NATURAL_CURE = 45
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -197,6 +200,7 @@ class Context(NamedTuple):
     baton_transaction: object = None # exact source/public/request two-boundary transaction
     self_destruct: object = None # row-only actual self-KO/target/faint composite
     thunder_wave_immunity: object = None # max2 SAME-call natural-immunity receipts
+    natural_cure: object = None # SAME actual departure snapshots; ordinary or Baton composite
 
 
 UNKNOWN_EXECUTION = 512

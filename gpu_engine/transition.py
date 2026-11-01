@@ -546,13 +546,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         do_switch = switches[rows,side] & continues & (~switch_faint | replacement)
         if _lifecycle_trace:
             switch_baton=work.baton_pass[rows,side]
-            # Refuse live outgoing Natural Cure and a possible incoming cure
-            # before departure/Ability Start can erase their source status.
+            # Retain outgoing Natural Cure before departure for the exact same-call
+            # receipt below; unported incoming cures still refuse immediately.
             departure=jnp.zeros_like(do_switch)
             if table.entry is not None:
                 departure=(_active(work.status,work,side)!=m.NONE) & (_active(work.hp,work,side)>0) & table.entry.natural_cure[_active(work.ability,work,side)]
             incoming=status_callbacks.entry_cure_possible(table,work.status[rows,side,target[rows,side]])
-            _public_trace=status_callbacks.unknown(_public_trace,do_switch & (departure | incoming))
+            _public_trace=status_callbacks.unknown(_public_trace,do_switch & incoming)
         installed = installed.at[rows,side].set(do_switch)
         if _lifecycle_trace:
             from . import engine_baton_pass_callbacks as baton_callbacks
@@ -567,7 +567,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace,_flash_pending=_flash_end.begin(_public_trace,work,side,
                 eligible=do_switch,baton=switch_baton,
                 context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None)
+        if _lifecycle_trace:
+            from . import engine_natural_cure_callbacks as natural_cure_callbacks
+            _public_trace,_natural_cure_pending=natural_cure_callbacks.begin(_public_trace,work,side,target[rows,side],table,
+                _direct_hit_context if _direct_hit_registered else None,eligible=do_switch,baton=switch_baton)
+            _public_trace=status_callbacks.unknown(_public_trace,do_switch & departure & ~natural_cure_callbacks.prospective(_natural_cure_pending))
         work=arrival.depart(work,side,table.entry,eligible=do_switch)
+        if _lifecycle_trace:
+            _public_trace=natural_cure_callbacks.finish(_public_trace,_natural_cure_pending,work)
         if _lifecycle_trace:
             _public_trace=_flash_end.finish(_public_trace,_flash_pending,work)
         work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
