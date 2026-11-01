@@ -332,6 +332,9 @@ def _leech_history(runtime,core,publics,healthy):
     data=context.data.leech_seed;active_tables=runtime['catalog'].active.device
     proof=_checked_leech_history_proof(runtime.get('leech_history_proof'),
         leech_callbacks.history_from_public,context,data,active_tables)
+    if proof is None:
+        return leech_callbacks.history_from_public(core.engine,core.cursor,publics,
+            healthy=healthy,data=data,active_tables=active_tables)
     return proof(core.engine,core.cursor,publics,healthy,data,active_tables)
 
 
@@ -510,11 +513,14 @@ def _prepare_leech_history_proof(function,context,data,active_tables):
 
 
 def _checked_leech_history_proof(proof,function,context,data,active_tables):
-    """Reject missing/replaced code or current holders before invocation."""
-    original=_LEECH_HISTORY_ORIGINS.get(proof) if callable(proof) else None
+    """Cache provenance selects code reuse, never runtime admission."""
+    try:
+        original=_LEECH_HISTORY_ORIGINS.get(proof) if callable(proof) else None
+    except TypeError:
+        return None
     if (original is None or original[0] is not function or original[1] is not context
             or original[2] is not data or original[3] is not active_tables):
-        raise ValueError('original prepared Leech history proof and current source holders required')
+        return None
     return proof
 
 

@@ -89,7 +89,7 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
         self.assertTrue(bool(compare((engine,newer,fresh,healthy,data,table)).seeded.all()))
         self.assertIs(driver._checked_leech_history_proof(proof,leech.history_from_public,context,data,table),proof)
 
-    def test_current_gates_and_callable_origins_refuse_drift(self):
+    def test_current_gates_and_untrusted_cache_use_current_eager_fallback(self):
         args=inert_inputs();engine,cursor,pubs,healthy,data,table=args
         context=SimpleNamespace(data=SimpleNamespace(leech_seed=data));catalog=SimpleNamespace(active=SimpleNamespace(device=table))
         proof=driver._prepare_leech_history_proof(leech.history_from_public,context,data,table)
@@ -101,15 +101,35 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
             self.assertIsNone(driver._leech_history(current,core,pubs,healthy))
         foreign_context=SimpleNamespace(data=SimpleNamespace(leech_seed=data))
         foreign_data=data._replace(binding=data.binding+1);foreign_table=table._replace(binding=table.binding+1)
-        foreign_proof=driver._prepare_leech_history_proof(leech.history_from_public,foreign_context,data,table)
-        for change in (dict(leech_history_proof=None),dict(leech_history_proof=lambda *a:None),
+        def never(*a,**k):raise AssertionError('untrusted cached callable invoked')
+        foreign_proof=driver._prepare_leech_history_proof(never,foreign_context,data,table)
+        class UnhashableCallable:
+            __hash__=None
+            def __call__(self,*a):return never(*a)
+        # A known callable with stale origin must not run either; its current
+        # holder equality controls code selection, not original admission.
+        driver._LEECH_HISTORY_ORIGINS[never]=(leech.history_from_public,context,data,table)
+        for change in (dict(leech_history_proof=None),dict(leech_history_proof=lambda *a:never(*a)),
+                dict(leech_history_proof=UnhashableCallable()),dict(leech_history_proof=[]),
                 dict(leech_history_proof=foreign_proof),dict(direct_hit_context=foreign_context),
                 dict(catalog=SimpleNamespace(active=SimpleNamespace(device=foreign_table)))):
-            with self.subTest(change=tuple(change)),self.assertRaises(ValueError):driver._leech_history(dict(runtime,**change),core,pubs,healthy)
+            current=dict(runtime,**change)
+            if 'leech_history_proof' not in change:current['leech_history_proof']=never
+            with self.subTest(change=tuple(change)):
+                expected=leech.history_from_public(engine,cursor,pubs,healthy=healthy,
+                    data=current['direct_hit_context'].data.leech_seed,active_tables=current['catalog'].active.device)
+                equal_tree(self,driver._leech_history(current,core,pubs,healthy),expected)
         missing=dict(runtime);missing.pop('leech_history_proof')
-        with self.assertRaises(ValueError):driver._leech_history(missing,core,pubs,healthy)
-        with patch.object(context.data,'leech_seed',foreign_data),self.assertRaises(ValueError):driver._leech_history(runtime,core,pubs,healthy)
-        with patch.object(leech,'history_from_public',lambda *a,**k:None),self.assertRaises(ValueError):driver._leech_history(runtime,core,pubs,healthy)
+        equal_tree(self,driver._leech_history(missing,core,pubs,healthy),proof(*args))
+        with patch.object(context.data,'leech_seed',foreign_data):
+            expected=leech.history_from_public(engine,cursor,pubs,healthy=healthy,data=foreign_data,active_tables=table)
+            equal_tree(self,driver._leech_history(dict(runtime,leech_history_proof=never),core,pubs,healthy),expected)
+        sentinel=object()
+        with patch.object(leech,'history_from_public',return_value=sentinel) as current:
+            self.assertIs(driver._leech_history(runtime,core,pubs,healthy),sentinel)
+            current.assert_called_once_with(engine,cursor,pubs,healthy=healthy,data=data,active_tables=table)
+        with patch.object(leech,'history_from_public',side_effect=ValueError('original current helper error')):
+            with self.assertRaisesRegex(ValueError,'original current helper error'):driver._leech_history(runtime,core,pubs,healthy)
         equal_tree(self,driver._leech_history(runtime,core,pubs,healthy),proof(*args))
 
     def test_once_prepared_dynamic_call_scope_and_all_original_boundaries(self):
