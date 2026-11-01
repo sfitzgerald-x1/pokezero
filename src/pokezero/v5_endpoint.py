@@ -190,7 +190,8 @@ def _config_for(row,configs):return replace(configs[row['arm']][row['seat']=='p2
 def _checked_result(row,result,configs,protocol):
     _keys(result,('row','recipe','namespace','invocation_id'))
     actual=result['row'];recipe=result['recipe'];config=configs[row['arm']][row['seat']=='p2']
-    _keys(actual,('offset','seed','fp_seed','status','score','duration_seconds','reason','source_result_sha256','source_game','invocation_id'))
+    _keys(actual,('offset','seed','fp_seed','status','score','duration_seconds','reason','source_result_sha256','source_game','invocation_id')
+        + (('worker_compilation',) if 'worker_compilation' in actual else ()))
     for key in ('offset','seed','fp_seed'):
         if actual.get(key)!=row[key]:raise ValueError('original endpoint game/seed pairing differs')
     if actual.get('status') not in ('COMPLETE','CAPPED','REFUSED','FAILED'):raise ValueError('actual terminal endpoint disposition required')
@@ -482,6 +483,8 @@ def child(reference):
     if any(p!=policies[0] for p in policies):raise ValueError('one original owned-worker memory policy required')
     _memory(policies[0],apply=True)
     protocol,configs=_protocol(recipe,parse_configs=True);directory=Path(request['directory'])
+    from .owning_worker_runtime import configure_compilation_cache
+    configure_compilation_cache(directory/'jax-compilation-cache')
     with _ownership(directory):
         store=Store(directory,recipe,protocol,configs,resume=request['resume'])
         store.interrupt_older(request['invocation'])
