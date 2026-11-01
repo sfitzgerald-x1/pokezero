@@ -446,7 +446,7 @@ def _toxic_span_matches(tape,ticket,side,physical,target,move,attempt):
     status_words=jnp.stack((jnp.full_like(side,status.STATUS_APPLIED),absent,absent,1-side,target,
         attempt.old_status,attempt.new_status,jnp.full_like(side,status.PRIMARY),zero,zero),axis=1)
     same &= (~applied|jnp.all(tape.words[rows,first]==status_words,axis=1))
-    same &= (_validate(ledger,context.tables)&_tape(ledger,tape,context.tables)&(toxic.supported_raw(expected)|toxic.substitute_failure_source(tape,expected))
+    same &= (_validate(ledger,context.tables)&_tape(ledger,tape,context.tables)&(toxic.supported_raw(expected)|toxic.substitute_failure_source(tape,expected)|toxic.existing_status_source(tape,expected))
         &(attempt.old_counter>=0)&(attempt.old_counter<=15)&(attempt.new_counter>=0)&(attempt.new_counter<=15)
         &(ledger.site[rows,slot]==int(Site.TOXIC_ATTEMPT))&(ledger.side[rows,slot]==1-side)
         &(tape.count==start+1+applied.astype(jnp.int32))&jnp.all(raw==expected,axis=1)&(start>0)
