@@ -1,11 +1,12 @@
 """Opt-in chunked device rollout -> original v5 TrainingBatch/cache.
 
 No Session, captured FULL, event tape, host fold, or per-step host transfer.
-The caller owns a fixed declaration, actual constructor and two original actor
-archives. One parameter tree per seat is shared across this cohort, never
-broadcast into one 9M-weight copy per game. The declared B/D historical pool
-assignment planner is NOT replaced here. D's actual teacher consumer is absent
-and refuses explicitly; its root public-carry handoff is available separately.
+The caller owns a fixed declaration, actual constructor and original actor
+archives. The default shares one parameter tree per seat across the cohort.
+An explicit immutable actor bank gathers the original per-game assignments
+without broadcasting a 9M-weight copy per game. The declared B/D historical
+pool planner is not replaced. D's actual teacher consumer is absent and
+refuses explicitly; its root public-carry handoff is available separately.
 """
 from dataclasses import asdict, dataclass
 from typing import NamedTuple
@@ -41,6 +42,56 @@ class Bindings:
         for value in (self.category_sha256,self.source_sha256,self.declaration_sha256,*self.actor_archives):contract._binding(value)
         if len(self.actor_archives)!=2 or len(self.learner_sides)!=2 or any(type(x)is not bool for x in self.learner_sides) or not any(self.learner_sides):
             raise ValueError('two actual actor archives and explicit learner seat assignment required')
+
+@dataclass(frozen=True)
+class ActorBank:
+    """Immutable, already-decided actor assignment; never a new pool planner.
+
+    Parameter trees are supplied once per archive to the prepared collector.
+    Only row indices, not weights, are repeated for games sharing an actor.
+    """
+    bindings:Bindings
+    actor_archives:tuple
+    streams:tuple
+    actor_indices:tuple
+    learner_mask:tuple
+    assignment_sha256:str
+    def __post_init__(self):
+        for name in ('actor_archives','streams'):
+            object.__setattr__(self,name,tuple(getattr(self,name)))
+        for name in ('actor_indices','learner_mask'):
+            object.__setattr__(self,name,tuple(tuple(row) for row in getattr(self,name)))
+        if type(self.bindings)is not Bindings:raise ValueError('original rollout bindings required')
+        contract._binding(self.assignment_sha256)
+        for digest in self.actor_archives:contract._binding(digest)
+        if not self.actor_archives or len(set(self.actor_archives))!=len(self.actor_archives):
+            raise ValueError('unique original actor archive bank required')
+        b=len(self.streams)
+        if not b or len(set(self.streams))!=b or any(type(x)is not int or not 0<x<2**31 for x in self.streams):
+            raise ValueError('ordered unique declared streams required')
+        if len(self.actor_indices)!=b or any(len(row)!=2 or any(type(x)is not int or not 0<=x<len(self.actor_archives) for x in row) for row in self.actor_indices):
+            raise ValueError('exact per-game/per-seat actor indices required')
+        if len(self.learner_mask)!=b or any(len(row)!=2 or any(type(x)is not bool for x in row) for row in self.learner_mask) or not any(any(row) for row in self.learner_mask):
+            raise ValueError('explicit per-game/per-seat learner mask required')
+
+
+def actor_bank_from_assignments(bindings,actor_archives,*,current_archive,assignments):
+    """Consume the ORIGINAL planner output without sampling/reordering it.
+
+    The historical probability and 32-snapshot retention remain decisions of
+    that unchanged planner. This adapter uses its exact stream/learner_side/
+    opponent archive fields, including a current-vs-current chosen opponent.
+    """
+    archives=tuple(actor_archives);lookup={digest:i for i,digest in enumerate(archives)}
+    if current_archive not in lookup:raise ValueError('declared current actor missing from bank')
+    rows=tuple(assignments);indices=[];learners=[];streams=[]
+    for row in rows:
+        side=row['learner_side'];opponent=row['opponent']['archive_sha256']
+        if type(side)is not int or side not in (0,1) or opponent not in lookup:
+            raise ValueError('original learner seat/opponent archive missing from bank')
+        pair=[lookup[opponent],lookup[opponent]];pair[side]=lookup[current_archive]
+        indices.append(tuple(pair));learners.append((side==0,side==1));streams.append(row['stream_id'])
+    return ActorBank(bindings,archives,tuple(streams),tuple(indices),tuple(learners),_sha(rows))
 
 class Labels(NamedTuple):
     move:object # engine move ID -> full original semantic class, -1 unknown
@@ -88,6 +139,8 @@ class Frames(NamedTuple):
     hidden_targets:object
     hidden_species:object
     hidden_mask:object
+    actor_indices:object=None # bank only; [B,2], same original assignment every frame
+    learner_mask:object=None  # bank only; [B,2], historical seats never become PPO rows
 
 class Rollout(NamedTuple):
     carry:object
@@ -136,13 +189,13 @@ def _physical(public):
 
 
 def make_collector(engine_tables,observation_tables,model_config,labels,bindings,*,
-        sampling_seed,chunk_steps=8,max_requests=4096):
-    """Prepare once; returned JIT accepts (carry, (seat0params,seat1params)).
+        sampling_seed,chunk_steps=8,max_requests=4096,actor_bank=None):
+    """Prepare once; returned JIT accepts (carry, tuple(original_params)).
 
-    No weight bank is broadcast per game. The caller must group exactly the
-    authoritative declared actor assignments; this initial entry does not
-    implement the B/D .5 historical/32-snapshot planner. D never falls back to
-    the old captured-FULL provider.
+    Default: two original seat trees. With actor_bank: one tree per declared
+    archive, grouped by its predeclared row indices before the device loop.
+    No weights are broadcast per game. The original B/D .5 historical/
+    32-snapshot planner remains authoritative. D never falls back to FULL.
     """
     if type(model_config)is not V5ModelConfig or type(bindings)is not Bindings:raise ValueError('explicit model/config bindings required')
     if model_config.arm=='D':raise ValueError('device D teacher consumer not integrated; no old FULL fallback')
@@ -150,20 +203,41 @@ def make_collector(engine_tables,observation_tables,model_config,labels,bindings
         raise ValueError('same actual actor category/full-label namespace required')
     if any(type(x)is not int or x<=0 for x in (chunk_steps,max_requests)) or type(sampling_seed)is not int or not 0<=sampling_seed<2**32:
         raise ValueError('finite chunk/request bounds and original sampling seed required')
+    if actor_bank is not None and (type(actor_bank)is not ActorBank or actor_bank.bindings!=bindings):
+        raise ValueError('same immutable actor bank/bindings required')
+    # Known indices are grouped ONCE before the device loop. Every real
+    # (row,seat) appears in exactly one group. No padding or per-game weights.
+    groups=() if actor_bank is None else tuple((actor,tuple(2*row+side for row,pair in enumerate(actor_bank.actor_indices)
+        for side in (0,1) if pair[side]==actor)) for actor in range(len(actor_bank.actor_archives)))
+    groups=tuple((actor,indices) for actor,indices in groups if indices)
     # Static class offset without attaching Python metadata to device labels.
     move_classes=len(bindings.label_vocabulary.moves)
     def advance(c,params):
         state=c.state;b=len(c.streams);r=j.arange(b)[:,None];sides=j.arange(2)[None,:]
+        if actor_bank is not None and b!=len(actor_bank.streams):raise ValueError('same fixed declared actor-bank cohort required')
         live=c.status==RUNNING;state=state._replace(done=state.done|~live)
         requested=sampling.request_seats(state)&live[:,None]
         physical=_physical(c.public)
         masks=transition.action_mask(state,engine_tables)
         observations=[encoder.encode(state,trackers.readout(c.public,j.full(b,s,j.int32)),observation_tables,
             observer_sides=j.full(b,s,j.int32),legal_action_mask=masks[:,s]) for s in range(2)]
-        outputs=[v5_model.forward(params[s],encoder.actor_inputs(observations[s]),model_config,compute_dtype='bfloat16') for s in range(2)]
-        raw_logits=j.stack([o.policy_logits for o in outputs],axis=1);values=j.stack([o.value for o in outputs],axis=1)
-        finite=j.stack([o.valid&j.isfinite(o.value)&(j.abs(o.value)<=1)&j.all(j.isfinite(o.policy_logits),axis=-1)
-            & (j.all(j.isfinite(o.value_logits),axis=-1) if o.value_logits is not None else True) for o in outputs],axis=1)
+        def output_finite(o):
+            return o.valid&j.isfinite(o.value)&(j.abs(o.value)<=1)&j.all(j.isfinite(o.policy_logits),axis=-1)\
+                &(j.all(j.isfinite(o.value_logits),axis=-1) if o.value_logits is not None else True)
+        if actor_bank is None:
+            outputs=[v5_model.forward(params[s],encoder.actor_inputs(observations[s]),model_config,compute_dtype='bfloat16') for s in range(2)]
+            raw_logits=j.stack([o.policy_logits for o in outputs],axis=1);values=j.stack([o.value for o in outputs],axis=1)
+            finite=j.stack([output_finite(o) for o in outputs],axis=1)
+        else:
+            inputs=jax.tree.map(lambda *xs:j.stack(xs,axis=1).reshape((2*b,)+xs[0].shape[1:]),
+                *(encoder.actor_inputs(o) for o in observations))
+            raw_logits=j.zeros((2*b,9),j.float32);values=j.zeros(2*b,j.float32);finite=j.zeros(2*b,bool)
+            for actor,indices in groups:
+                at=j.asarray(indices,j.int32)
+                out=v5_model.forward(params[actor],jax.tree.map(lambda x:x[at],inputs),model_config,compute_dtype='bfloat16')
+                raw_logits=raw_logits.at[at].set(out.policy_logits);values=values.at[at].set(out.value)
+                finite=finite.at[at].set(output_finite(out))
+            raw_logits=raw_logits.reshape(b,2,9);values=values.reshape(b,2);finite=finite.reshape(b,2)
         legal=j.stack([o.legal_action_mask for o in observations],axis=1)
         safe_logits=j.where(legal,j.nan_to_num(raw_logits,nan=0.,posinf=0.,neginf=0.),-j.inf)
         safe_logits=j.where(j.any(legal,axis=-1)[...,None],safe_logits,0.)
@@ -175,6 +249,7 @@ def make_collector(engine_tables,observation_tables,model_config,labels,bindings
         errors=j.stack([o.error for o in observations],axis=1)
         input_valid=finite&(errors==0)&j.any(legal,axis=-1)&j.isfinite(probabilities)&(probabilities>0)
         input_refused=live&j.any(requested&~input_valid,axis=1)
+        if actor_bank is not None:input_refused=input_refused|(live&(c.streams!=j.asarray(actor_bank.streams,j.int32)))
         # A training collector does not label fallback behavior as the named
         # raw actor. Bad input/actor ends that declared cell without retry.
         step_state=state._replace(done=state.done|input_refused)
@@ -208,14 +283,19 @@ def make_collector(engine_tables,observation_tables,model_config,labels,bindings
         hs=c.truth.species[r[:,:,None],foe[:,:,None],positions]
         hm=c.truth.known[r[:,:,None],foe[:,:,None],positions]&(physical[:,:,6:]>=0)&requested[:,:,None]&~refused[:,None,None]
         valid=requested&input_valid&~refused[:,None]
-        trainable=valid&j.asarray(bindings.learner_sides)[None,:]
+        learner_mask=None if actor_bank is None else j.asarray(actor_bank.learner_mask,bool)
+        actor_indices=None if actor_bank is None else j.asarray(actor_bank.actor_indices,j.int32)
+        trainable=valid&(j.asarray(bindings.learner_sides)[None,:] if actor_bank is None else learner_mask)
         stack=lambda name:j.stack([getattr(o,name) for o in observations],axis=1)
         record=Frames(stack('numeric_features'),stack('categorical_ids'),stack('token_type_ids'),stack('attention_mask'),
             legal,c.streams,c.frames,state.turn,requested,trainable,valid,errors,actions,engine_actions,probabilities,values,finite,live&~refused,physical,
-            opponent_targets,opponent_mask,hidden,hs,hm)
+            opponent_targets,opponent_mask,hidden,hs,hm,actor_indices,learner_mask)
         return carry,record
     def collect(c,params):
-        if len(params)!=2:raise ValueError('two explicit original seat parameter trees required')
+        if actor_bank is None and len(params)!=2:
+            raise ValueError('two explicit original seat parameter trees required')
+        if actor_bank is not None and len(params)!=len(actor_bank.actor_archives):
+            raise ValueError('one explicit original parameter tree per declared actor required')
         carry,frames=jax.lax.scan(lambda c,_:advance(c,params),c,None,length=chunk_steps)
         return Rollout(carry,frames)
     return jax.jit(collect)
@@ -280,7 +360,7 @@ def _complete_gae(values,outcome,loss_config,discount):
         policy_lambda=loss_config.policy_lambda,value_lambda=loss_config.value_lambda)
     return a.numpy(),target.numpy()
 
-def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discount=1.):
+def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discount=1.,actor_bank=None):
     """Batch-boundary adapter into the ORIGINAL validated v5 cache/trainer API.
 
     Retains actual all29 inputs. Terminal unknowns never manufacture PPO,
@@ -305,6 +385,15 @@ def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discoun
     if len(battle_ids)!=b or len(seeds)!=b or len(set(battle_ids))!=b:raise ValueError('original declared battle/seed rows required')
     if any(not np.array_equal(x.carry.streams,carry.streams) for x in rolls):raise ValueError('same fixed cohort, no refill required')
     f=jax.tree.map(lambda *xs:np.concatenate(xs,axis=0),*(x.frames for x in rolls))
+    if actor_bank is None:
+        if f.actor_indices is not None or f.learner_mask is not None:raise ValueError('bank rollout requires its exact original assignment binding')
+    else:
+        if type(actor_bank)is not ActorBank or actor_bank.bindings!=bindings or tuple(map(int,carry.streams))!=actor_bank.streams:
+            raise ValueError('same original actor-bank declaration required at boundary')
+        expected_actors=np.broadcast_to(np.asarray(actor_bank.actor_indices,np.int32),f.policy_valid.shape)
+        expected_learners=np.broadcast_to(np.asarray(actor_bank.learner_mask,bool),f.policy_valid.shape)
+        if f.actor_indices is None or f.learner_mask is None or not np.array_equal(f.actor_indices,expected_actors) or not np.array_equal(f.learner_mask,expected_learners) or not np.array_equal(f.trainable,f.policy_valid&expected_learners):
+            raise ValueError('literal row actor/learner assignments differ from declaration')
     addresses=np.argwhere(f.trainable)
     if not len(addresses):raise ValueError('no valid actual learner decisions; retain raw rollout and dispositions')
     n=len(addresses);take=lambda name:np.asarray(getattr(f,name))[tuple(addresses.T)]
@@ -322,14 +411,19 @@ def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discoun
     source_hashes=[];terminal_hashes=[];metadata=[]
     outcome=np.zeros(n,np.float32);om=np.zeros(n,bool);end_hp=np.zeros((n,12),np.float32);end_mask=np.zeros((n,12),bool)
     for i,(row,owner) in enumerate(zip(rows,owners)):
+        archives=bindings.actor_archives if actor_bank is None else actor_bank.actor_archives
+        actor=owner if actor_bank is None else int(f.actor_indices[step[i],row,owner])
+        opponent=1-owner if actor_bank is None else int(f.actor_indices[step[i],row,1-owner])
         body={'schema':SCHEMA,'source_sha256':bindings.source_sha256,'declaration_sha256':bindings.declaration_sha256,
-            'actor_archives':bindings.actor_archives,'stream':int(streams[i]),'frame':int(frames[i]),'owner':int(owner),
+            'actor_archives':archives,'stream':int(streams[i]),'frame':int(frames[i]),'owner':int(owner),
             'numeric':numbers[i].tolist(),'categorical':cats[i].tolist(),'roles':roles[i].tolist(),'attention':attention[i].tolist(),
             'legal':legal[i].tolist(),'action':int(actions[i]),'engine_action':int(engine_actions[i]),
             'probability':float(prob[i]),'value':float(values[i]),'physical':physical[i].tolist()}
+        if actor_bank is not None:body.update(actor_index=actor,opponent_actor_index=opponent,learner=True,assignment_sha256=actor_bank.assignment_sha256)
         source_hashes.append(_sha(body))
         meta={'device_rollout_schema':SCHEMA,'source_frame_sha256':source_hashes[-1],'v5_return_known':statuses[i]=='COMPLETE',
-            'actor_archive_sha256':bindings.actor_archives[owner],'opponent_archive_sha256':bindings.actor_archives[1-owner]}
+            'actor_archive_sha256':archives[actor],'opponent_archive_sha256':archives[opponent]}
+        if actor_bank is not None:meta.update(actor_bank_assignment_sha256=actor_bank.assignment_sha256,actor_bank_index=actor,opponent_actor_bank_index=opponent,learner=True)
         metadata.append(meta)
         terminal_hashes.append(None if statuses[i]=='IN_PROGRESS' else _sha({'stream':int(streams[i]),'frame':int(carry.terminal_frame[row]),
             'status':statuses[i],'winner':int(carry.winner[row]) if statuses[i]=='COMPLETE' else None,
@@ -350,7 +444,7 @@ def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discoun
     for i,key in enumerate(keys):groups.setdefault((key[0],key[2]),[]).append(i)
     for (stream,owner),indices in groups.items():
         indices=sorted(indices,key=lambda i:int(frames[i]));row=int(rows[indices[0]])
-        full=f.requested[:,row,owner]&np.asarray(bindings.learner_sides[owner])
+        full=f.requested[:,row,owner]&(np.asarray(bindings.learner_sides[owner]) if actor_bank is None else f.learner_mask[:,row,owner])
         good=f.trainable[:,row,owner]
         if statuses[indices[0]]!='COMPLETE' or np.any(full&~good):continue
         a,target=_complete_gae(values[indices],float(outcome[indices[-1]]),loss_config,discount)
