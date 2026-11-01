@@ -66,7 +66,8 @@ def _legacy_ambiguous(ledger):
     return result
 
 
-def make_plan(*, prespec, declaration, ledger, closure, cpu_pairs, total_timeout_seconds=TOTAL_SECONDS):
+def make_plan(*, prespec, declaration, ledger, closure, cpu_pairs, total_timeout_seconds=TOTAL_SECONDS,
+        model_factory_lifecycle='FRESH_PER_CELL_PROCESS', compilation_cache_directory=None):
     """Bind compact original artifacts and a separately captured closure receipt.
 
     Closure records source_run_closed=True, original prespec/declaration/ledger
@@ -111,20 +112,32 @@ def make_plan(*, prespec, declaration, ledger, closure, cpu_pairs, total_timeout
         'distant total-time backstop required')
     remaining = [i for i, cell in enumerate(original['cells'])
         if cell['status'] == 'NOT_ATTEMPTED' and i not in possible]
-    return dict(schema=SCHEMA, references=refs, cpu_pairs=[list(pair) for pair in cpu_pairs],
+    require(model_factory_lifecycle in ('FRESH_PER_CELL_PROCESS', 'PERSISTENT_PER_CORE_WORKER'),
+        'explicit worker lifecycle required')
+    if model_factory_lifecycle == 'PERSISTENT_PER_CORE_WORKER':
+        require(type(compilation_cache_directory) is str and Path(compilation_cache_directory).is_absolute(),
+            'explicit absolute persistent compilation cache required')
+    else:
+        require(compilation_cache_directory is None, 'legacy lifecycle cannot silently configure cache')
+    result = dict(schema=SCHEMA, references=refs, cpu_pairs=[list(pair) for pair in cpu_pairs],
         max_workers=len(cpu_pairs), ordered_indices=remaining, potentially_attempted_indices=possible,
         original_completed_sha256=study.digest([(i, cell) for i, cell in enumerate(original['cells'])
             if cell['status'] == 'COMPLETE']), prior_duration_upper_bound_seconds=bound,
         stall_floor_seconds=FLOOR_SECONDS, stall_longest_multiplier=4,
-        total_timeout_seconds=total_timeout_seconds, model_factory_lifecycle='FRESH_PER_CELL_PROCESS',
+        total_timeout_seconds=total_timeout_seconds, model_factory_lifecycle=model_factory_lifecycle,
         policy_rng='EXISTING_SEED_OWNER_DECISION_ROUND', retries=0, refill=False,
         original_prespec_unchanged=True, execution_authority='SCOTT_FIXED_ORDER_CONTINUATION_DIRECTIVE')
+    if model_factory_lifecycle == 'PERSISTENT_PER_CORE_WORKER':
+        result['compilation_cache_directory'] = compilation_cache_directory
+    return result
 
 
 def validate_plan(plan):
     require(type(plan) is dict and plan.get('schema') == SCHEMA, 'explicit continuation plan required')
     expected = make_plan(**plan['references'], cpu_pairs=plan['cpu_pairs'],
-        total_timeout_seconds=plan['total_timeout_seconds'])
+        total_timeout_seconds=plan['total_timeout_seconds'],
+        model_factory_lifecycle=plan['model_factory_lifecycle'],
+        compilation_cache_directory=plan.get('compilation_cache_directory'))
     require(study.canonical(plan) == study.canonical(expected), 'continuation plan drift')
 
 
@@ -306,9 +319,28 @@ async def run_continuation(plan, output, *, worker=None, clock=time.monotonic, e
     free = list(range(plan['max_workers']))
     active = {}
     exhausted = False
+    drained = False
+    pool = None
+    if worker is None and plan['model_factory_lifecycle'] == 'PERSISTENT_PER_CORE_WORKER':
+        from .owning_encoder_worker import Pool
+        pool = Pool(output/'plan.json', plan, output)
+        worker = pool.invoke
+    def drain_requested():
+        path = output/'stop-dispatch.json'
+        if not path.exists():return False
+        value = json.loads(path.read_bytes())
+        require(value == dict(schema='pokezero.B3-stop-dispatch.v1',
+            plan_sha256=study.prespec_file_sha256(plan), stop_new_dispatch=True),
+            'exact bound stop-dispatch request required')
+        ledger['continuation']['drain_requested'] = value
+        publish()
+        return True
     try:
         while active or not exhausted:
             while free and not exhausted:
+                if drain_requested():
+                    drained = exhausted = True
+                    break
                 index = next(pending, None)
                 if index is None:
                     exhausted = True
@@ -335,6 +367,8 @@ async def run_continuation(plan, output, *, worker=None, clock=time.monotonic, e
                     and all(_finite(value) for value in timing.values())
                     and timing['completed_epoch'] >= timing['started_epoch'], 'actual per-game timing required')
                 ledger['cells'][index].update(checked, timing=timing, worker_precision=receipt.get('precision'))
+                if 'worker_compilation' in receipt:
+                    ledger['cells'][index]['worker_compilation'] = receipt['worker_compilation']
                 longest = max(longest, timing['duration_seconds'])
                 last_completion = clock()
                 free.append(slot); free.sort()
@@ -345,7 +379,7 @@ async def run_continuation(plan, output, *, worker=None, clock=time.monotonic, e
         unresolved = any(c['status'] != 'COMPLETE' for c in ledger['cells'])
         ledger['status'], ledger['actual_exit'] = ('FAILED', 1) if unresolved else ('COMPLETE', 0)
         if unresolved:
-            ledger['failure'] = dict(error_type='UnresolvedPriorCells', no_retry=True)
+            ledger['failure'] = dict(error_type='DispatchDrainRequested' if drained else 'UnresolvedPriorCells', no_retry=True)
     except BaseException as error:
         ledger['status'], ledger['actual_exit'] = 'FAILED', 1
         ledger['failure'] = dict(error_type=type(error).__name__, **study._failure_diagnostics(error), no_retry=True)
@@ -359,6 +393,12 @@ async def run_continuation(plan, output, *, worker=None, clock=time.monotonic, e
         for task in active:
             task.cancel()
         await asyncio.gather(*active, return_exceptions=True)
+        if pool is not None:
+            try:await pool.close()
+            except BaseException as error:
+                ledger['status'], ledger['actual_exit'] = 'FAILED', 1
+                ledger['failure'] = dict(error_type=type(error).__name__,
+                    **study._failure_diagnostics(error), no_retry=True)
         for index in ledger['continuation']['dispatch_order']:
             if ledger['cells'][index]['status'] == 'ATTEMPTED':
                 ledger['cells'][index]['status'] = 'UNKNOWN_ATTEMPTED'
