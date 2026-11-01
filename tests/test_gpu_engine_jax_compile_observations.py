@@ -28,6 +28,21 @@ class FakeMonitor:
 class CompileObservationTests(unittest.TestCase):
  def setUp(self):self.m=FakeMonitor();self.p=patch.object(c,'_runtime',return_value=(self.m,dict(jax_version='literal-test',supported=True)));self.p.start()
  def tearDown(self):self.p.stop();self.assertIsNone(c._CURRENT.get());self.assertIsNone(c._PHASE.get())
+ def test_census_retains_fixed_warm_records_after_large_startup_prefix(self):
+  tree=ast.parse(Path('gpu_engine/benchmark_capture_gap_census.py').read_text())
+  call=next(n for n in ast.walk(tree)if isinstance(n,ast.Call)and ast.unparse(n.func)=='compile_observations.Observer')
+  options={k.arg:ast.literal_eval(k.value)for k in call.keywords};o=c.Observer(**options).start()
+  try:
+   for _ in range(5000):self.m.event('/jax/compilation_cache/cache_hits')
+   for step in range(8,32):
+    c.sample_step(step)
+    for _ in range(28):self.m.event('/jax/compilation_cache/cache_hits')
+  finally:o.close()
+  result=o.snapshot(samples=[dict(step=i)for i in range(32)],warmup=8,steps=24)
+  self.assertEqual(sum(r['sample_step']is not None and 8<=r['sample_step']<32 for r in result['records']),672)
+  self.assertEqual(result['fixed_declared_warm_window']['event_count'],672)
+  self.assertEqual(result['dropped_event_count'],0)
+  self.assertIsNone(result['pure_compiler_only_ms'])
  def test_cache_duration_nonnegative_finite_literals_only(self):
   o=c.Observer().start()
   try:

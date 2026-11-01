@@ -651,7 +651,7 @@ def measure(runtime,pool,team_indices,*,stream_ids,plan,constructor_seed,samplin
         engine_move_names=list(move_names),
         attempts='All2048declaredfreshconstructorrows are attempted before dispatch; no retry/refill.')
     journal.write(dict(status='ATTEMPTED_CONSTRUCTION_UNKNOWN',**envelope,**ledger.summary()))
-    compile_observer=compile_observations.Observer().start()if collect_compile_events else None
+    compile_observer=compile_observations.Observer(capacity=16384).start()if collect_compile_events else None
     try:
         backend=_Runtime(runtime,plan,pool,indices,streams,constructor_seed,gender_initialization)
         report=_run(backend,plan,streams,sampling_seed=sampling_seed,ledger=ledger,
