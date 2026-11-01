@@ -405,22 +405,23 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
         on, oc, bad_own = features.project_mon(num[:, 1:7], cat[:, 1:7], own_facts,
             active=gather(active), present=gather(present), tables=tables.features,
             last_moves=getattr(public, 'own_last_moves', None), borrowed_ability=getattr(public, 'own_borrowed_ability', None),
-            volatiles=getattr(public, 'own_volatiles', None), substitute_fraction=own_sub)
+            volatiles=getattr(public, 'own_volatiles', None), substitute_fraction=own_sub,
+            status=gather(j.where(alive, own['status'], 0)))
         fn, fc, bad_foe = features.project_mon(foe_num, foe_cat, foe_facts,
             active=public.active, present=public.present, tables=tables.features,
             last_moves=getattr(public, 'last_moves', None), borrowed_ability=getattr(public, 'borrowed_ability', None),
-            volatiles=getattr(public, 'volatiles', None), substitute_fraction=foe_sub)
+            volatiles=getattr(public, 'volatiles', None), substitute_fraction=foe_sub, status=public.status)
         field, bad_field = features.project_field(num[:, 0], getattr(public, 'field_features', None))
         stat_num, stat_cat, stat_on, bad_stats = features.project_stats(getattr(public, 'stats_features', None), tables.features, b)
         if own_facts is not None and 'rest_sleep' in own_facts:
-            on = on.at[..., _index('WAKE_KNOWN')].set((own_facts['rest_sleep'] != 0) & (gather(own['status']) == 5))
+            on = on.at[..., _index('WAKE_KNOWN')].set((own_facts['rest_sleep'] != 0) & gather(present & alive & (own['status'] == 5)))
         if foe_facts is not None and 'rest_sleep' in foe_facts and belief_result is not None:
             from .public_belief_features import _bits
             selected = _bits(belief_result.effective, tables.belief.variant_valid.shape[-1])
             ability_ids = _lookup(tables.belief.variant_ability, _lookup(tables.belief.source_species, public.species))
             has_early = j.any(selected & (ability_ids == tables.belief.early_bird) & (tables.belief.early_bird > 0), axis=-1)
             known = (public.ability > 0) | ((belief_result.count > 0) & ~has_early)
-            fn = fn.at[..., _index('WAKE_KNOWN')].set((foe_facts['rest_sleep'] != 0) & (public.status == 5) & known)
+            fn = fn.at[..., _index('WAKE_KNOWN')].set(public.present & (foe_facts['rest_sleep'] != 0) & (public.status == 5) & known)
         num = num.at[:, 1:7].set(on).at[:, 0].set(field).at[:, 22].set(stat_num)
         cat = cat.at[:, 1:7].set(oc).at[:, 22].set(stat_cat)
         foe_num, foe_cat = fn, fc

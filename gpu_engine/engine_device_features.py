@@ -66,7 +66,7 @@ def _column(name):return s.v4_numeric_index(getattr(s, 'NUMERIC_' + name))
 
 
 def project_mon(numeric, categorical, facts, *, active, present, tables, last_moves=None,
-                borrowed_ability=None, volatiles=None, substitute_fraction=None):
+                borrowed_ability=None, volatiles=None, substitute_fraction=None, status=None):
     facts = {} if facts is None else facts
     bad = j.zeros((numeric.shape[0],), bool)
     for key, (name, divisor, active_only) in MON_FIELDS.items():
@@ -76,9 +76,11 @@ def project_mon(numeric, categorical, facts, *, active, present, tables, last_mo
         bad |= j.any(~j.isfinite(value) | (value < 0), axis=-1)
         use = present & active if active_only else present
         value = j.where(use, j.clip(j.nan_to_num(value) / divisor, 0., 1.), 0)
-        # Sleep counters are zero whenever this public observer says not asleep.
-        if key in ('sleep_turns', 'rest_sleep') and 'sleeping' in facts:
-            value = j.where(facts['sleeping'], value, 0)
+        # Original _encode_mon_exact_state always gates on actual current
+        # condition status, independently of retained counters/Rest evidence.
+        if key in ('sleep_turns', 'rest_sleep'):
+            sleeping = j.zeros_like(present) if status is None else status == 5
+            value = j.where(sleeping, value, 0)
         numeric = numeric.at[..., _column(name)].set(value)
     if substitute_fraction is not None:
         numeric = numeric.at[..., _column('SUB_HP_FRACTION')].set(j.where(present & active, substitute_fraction, 0))
