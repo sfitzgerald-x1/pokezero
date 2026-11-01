@@ -27,6 +27,7 @@ class Data(NamedTuple):
     producer_binding: object
     candidates: object
     return_move: object = None # canonical source-bound dynamic Return only
+    seismic_move: object = None # original fixed-LEVEL source, literal power0
 
 
 class Write(NamedTuple):
@@ -58,6 +59,7 @@ class Pending(NamedTuple):
     requested: object
     actor_happiness: object = None
     caller_move: object = None
+    actor_level: object = None
 
 
 class Captured(NamedTuple):
@@ -77,9 +79,9 @@ const fs=require('fs'),path=require('path'),root=process.argv[1],m=JSON.parse(fs
 const verified=require(process.argv[2]).build(root,m),{Dex}=require(path.join(root,'dist/sim/dex.js')),d=Dex.mod('gen3');
 const sub=d.moves.get('substitute').condition;
 const rows=m.vocabulary.moves.map(id=>{const x=d.moves.get(id);return {id:x.id,exists:x.exists,gen:x.gen,target:x.target,power:x.basePower,
- returnCallback:x.id==='return'&&x.basePowerCallback?require('crypto').createHash('sha256').update(x.basePowerCallback.toString()).digest('hex'):null,category:x.category,bypass:!!x.flags.bypasssub,callbacks:Object.keys(x).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&x[k]!==undefined),
+ damage:x.damage||null,fixedExotic:!!(x.multihit||x.recoil||x.drain||x.heal||x.self||x.secondary||x.secondaries||x.boosts||x.status||x.volatileStatus||x.sideCondition||x.slotCondition||x.condition||x.weather||x.terrain||x.pseudoWeather||x.selfdestruct||x.forceSwitch||x.selfSwitch||x.ohko),returnCallback:x.id==='return'&&x.basePowerCallback?require('crypto').createHash('sha256').update(x.basePowerCallback.toString()).digest('hex'):null,category:x.category,bypass:!!x.flags.bypasssub,callbacks:Object.keys(x).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&x[k]!==undefined),
  exotic:!!(x.multihit||x.damage||x.recoil||x.drain||x.heal||x.self||x.secondary?.self||(Array.isArray(x.secondaries)&&x.secondaries.some(v=>v.self))||x.boosts||x.status||x.volatileStatus||x.sideCondition||x.slotCondition||x.condition||x.weather||x.terrain||x.pseudoWeather||x.selfdestruct||x.forceSwitch||x.selfSwitch||x.ohko)}});
-process.stdout.write(JSON.stringify({rows,substitute:{hit:sub.onTryPrimaryHit.toString(),end:sub.onEnd.toString()},source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));
+process.stdout.write(JSON.stringify({rows,getDamage:require('crypto').createHash('sha256').update(require(path.join(root,'dist/sim/battle-actions.js')).BattleActions.prototype.getDamage.toString()).digest('hex'),substitute:{hit:sub.onTryPrimaryHit.toString(),end:sub.onEnd.toString()},source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));
 """
     run=subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],
         input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30)
@@ -88,7 +90,7 @@ process.stdout.write(JSON.stringify({rows,substitute:{hit:sub.onTryPrimaryHit.to
             or json.dumps(source['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json):
         raise ValueError('original Substitute source changed')
     table=catalog.engine_table
-    mask=np.zeros(len(table.power),bool);return_move=0
+    mask=np.zeros(len(table.power),bool);return_move=0;seismic_move=0
     for i,(name,row) in enumerate(zip(metadata['vocabulary']['moves'],source['rows'],strict=True)):
         mask[i]=bool(i>0 and name==row['id'] and row['exists'] and row['gen']<=3
             and row['target'] in ('normal','allAdjacent','allAdjacentFoes') and row['category'] in ('Physical','Special')
@@ -102,19 +104,26 @@ process.stdout.write(JSON.stringify({rows,substitute:{hit:sub.onTryPrimaryHit.to
             if (i<=0 or row['id']!='return' or not row['exists'] or row['gen']>3 or row['target']!='normal' or row['category']!='Physical' or row['power']!=0 or row['callbacks']!=['basePowerCallback'] or row['returnCallback']!='a2bce14a77c22d55d42a7e1bd68c59689ef9a08d57dbabb645afb96a6ac2ecac' or row['exotic'] or row['bypass'] or int(table.power[i])!=0 or catalog.ids[i]<=0 or catalog.targets[i]!=1):raise ValueError('canonical original Return Substitute source required')
             if return_move:raise ValueError('unique canonical Return row required')
             return_move=int(i);mask[i]=True
-    payload=dict(source=source,candidates=mask.tolist(),return_move=return_move,engine=catalog.engine_binding,
+    if table.damage_moves is not None:
+        for i,(name,row)in enumerate(zip(metadata['vocabulary']['moves'],source['rows'],strict=True)):
+            if name!='seismictoss' or i==0 or catalog.ids[i]<=0:continue
+            dm=table.damage_moves
+            if (seismic_move or row['id']!='seismictoss' or not row['exists'] or row['gen']>3 or row['target']!='normal' or row['category']!='Physical' or row['power']!=0 or row['damage']!='level' or row['callbacks'] or row['fixedExotic'] or row['bypass'] or int(table.power[i])!=0 or int(table.type[i])!=2 or not bool(table.physical[i]) or int(table.accuracy[i])!=100 or bool(table.always_hit[i]) or int(table.priority[i])!=0 or not bool(dm.level_damage[i]) or int(dm.constant_damage[i])!=0 or int(dm.recoil_den[i])!=0 or bool(dm.struggle[i]) or catalog.targets[i]!=1):raise ValueError('canonical original fixed-LEVEL Seismic Toss Substitute source required')
+            if source['getDamage']!='dfd031900da8c77e5e1a2721858d8d4a7804bc7def1b7a1d486220521a6a7f12' or hashlib.sha256(source['substitute']['hit'].encode()).hexdigest()!='050e1c1fbdb80ea3ab7bc63909eb72433cb45e9c49ff7889e16ec2c207528a24':raise ValueError('original fixed-LEVEL Substitute source changed')
+            seismic_move=i;mask[i]=True
+    payload=dict(source=source,candidates=mask.tolist(),return_move=return_move,seismic_move=seismic_move,engine=catalog.engine_binding,
         producer=catalog.binding,helper=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     words=lambda x:j.asarray(x,j.uint32)
     return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True,default=lambda x:np.asarray(x).tolist()).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),
-        words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(mask),j.asarray(return_move,j.int32))
+        words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(mask),j.asarray(return_move,j.int32),j.asarray(seismic_move,j.int32))
 
 
 def shape(data):
     if type(data) is not Data:raise ValueError('typed original Substitute damage data required')
     for x in data[:5]:life._typed(x,(8,),j.uint32)
     life._typed(data.candidates,(len(data.candidates),),j.bool_)
-    life._typed(data.return_move,(),j.int32)
+    life._typed(data.return_move,(),j.int32);life._typed(data.seismic_move,(),j.int32)
 
 
 def _return_power(context,move,power,happiness,caller_move):
@@ -130,19 +139,43 @@ def _return_power(context,move,power,happiness,caller_move):
     return ~required|good
 
 
-def route(context,move,*,acts,power,hit,immune,protected,enduring,bypass,absorbed,sub_hp,actor_happiness=None,caller_move=None):
+
+def _fixed(context,move):
+    data=context.data.substitute_damage;shape(data)
+    from . import engine_direct_hit_controls as direct
+    return (data.seismic_move>0)&(move==data.seismic_move)&direct.fixed_level_move_device(context.data,move)
+
+
+def _source_power(context,move,power,level,caller):
+    """Literal zero power and current same-call level; no default level."""
+    data=context.data.substitute_damage;shape(data)
+    required=(data.seismic_move>0)&(move==data.seismic_move)
+    valid=j.zeros_like(move,bool)
+    if level is not None and caller is not None:
+        b=len(move)
+        for x in(power,level,caller):life._typed(x,(b,),j.int32)
+        valid=_fixed(context,move)&(power==0)&(level>0)&(level<=100)&(caller==move)
+    return j.where(required,valid,power>0)
+
+def route(context,move,*,acts,power,hit,immune,protected,enduring,bypass,absorbed,sub_hp,actor_happiness=None,caller_move=None,actor_level=None):
     if context is None or context.data.substitute_damage is None:return j.zeros_like(acts)
     data=context.data.substitute_damage;shape(data)
     valid=(move>0)&(move<len(data.candidates))
-    return (_return_power(context,move,power,actor_happiness,caller_move)&acts&valid&data.candidates[j.clip(move,0,len(data.candidates)-1)]&(power>0)
+    return (_return_power(context,move,power,actor_happiness,caller_move)&acts&valid&data.candidates[j.clip(move,0,len(data.candidates)-1)]&_source_power(context,move,power,actor_level,caller_move)
         &hit&~immune&~protected&~enduring&~bypass&~absorbed&(sub_hp>0))
 
 
-def valid_write(write,b):
+def valid_write(write,b,*,pending=None):
     if type(write) is not Write:raise ValueError('literal Substitute damage Write required')
     for i,x in enumerate(write):life._typed(x,(b,),j.bool_ if 1<=i<=7 else j.int32)
     from .engine_direct_hit_controls import _positive_ratio
-    return ((write.power>0)&write.hit&~write.immune&~write.protected&~write.enduring
+    source=write.power>0
+    if pending is not None:
+        source=_source_power(pending.context,pending.move,write.power,pending.actor_level,pending.caller_move)
+        fixed=_fixed(pending.context,pending.move)
+        if pending.actor_level is None:source &= ~fixed
+        else:source &= ~fixed|(write.damage==pending.actor_level)
+    return (source&write.hit&~write.immune&~write.protected&~write.enduring
         &~write.bypass&~write.absorbed&_positive_ratio(write.numerator,write.denominator)
         &(write.old_sub>0)&(write.old_sub<=1_000_000)&(write.damage>0)
         &(write.dealt==j.minimum(write.old_sub,write.damage))&(write.dealt>0)
@@ -151,9 +184,10 @@ def valid_write(write,b):
 
 
 def raw_words(p,write):
-    effect=j.where(write.numerator>write.denominator,1,j.where(write.numerator<write.denominator,-1,0))
+    fixed=_fixed(p.context,p.move)
+    effect=j.where(fixed,0,j.where(write.numerator>write.denominator,1,j.where(write.numerator<write.denominator,-1,0)))
     return j.stack((j.full_like(p.actor,SUBSTITUTE_DAMAGE),p.actor,p.physical,1-p.actor,p.target,
-        p.move,write.old_sub,write.new_sub,write.critical.astype(j.int32),effect),axis=1)
+        p.move,write.old_sub,write.new_sub,(write.critical&~fixed).astype(j.int32),effect),axis=1)
 
 
 def validate_raw(raw):
@@ -191,7 +225,7 @@ def span_matches(tape,p,write):
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):bound &= j.all(getattr(data,name)==getattr(tape,name))
     start=ledger.start[rows,slot];at=j.clip(start,0,tape.words.shape[1]-1)
     raw=tape.words[rows,at]
-    good=(bound&same&valid_write(write,b)&_return_power(p.context,p.move,write.power,p.actor_happiness,p.caller_move)&p.requested&(p.move>0)&(p.move<len(data.candidates))
+    good=(bound&same&valid_write(write,b,pending=p)&_return_power(p.context,p.move,write.power,p.actor_happiness,p.caller_move)&p.requested&(p.move>0)&(p.move<len(data.candidates))
         &data.candidates[j.clip(p.move,0,len(data.candidates)-1)]
         &(ledger.site[rows,slot]==int(ex.Site.SUBSTITUTE_DAMAGE))&(ledger.side[rows,slot]==1-p.actor)
         &(start>0)&(tape.count==start+1)&validate_raw(raw)&j.all(raw==raw_words(p,write),axis=1)
@@ -203,7 +237,7 @@ def record(tape,p,write):
     from . import engine_execution_completeness as ex
     raw=raw_words(p,write);before=tape
     tape=public._append(tape,SUBSTITUTE_DAMAGE,p.actor,p.physical,1-p.actor,p.target,
-        tuple(raw[:,i]for i in range(5,10)),p.requested&valid_write(write,len(tape.count))&_return_power(p.context,p.move,write.power,p.actor_happiness,p.caller_move))
+        tuple(raw[:,i]for i in range(5,10)),p.requested&valid_write(write,len(tape.count),pending=p)&_return_power(p.context,p.move,write.power,p.actor_happiness,p.caller_move))
     actual=ex._context(tape)
     if actual is None:return before
     good=span_matches(tape,p,write)
@@ -224,4 +258,7 @@ def owned_raw(tape,index,raw,cursor=None):
         &(ledger.side[rows,slot]==raw[:,3])&(ledger.stage[rows,slot]==2)
         &(ledger.start[rows,slot]==index)&(ledger.end[rows,slot]==index+1)
         &j.all(ledger.words[:,index]==raw,axis=1))
+    if actual.risks is not None:
+        fixed=(actual.risks.tables.seismic_toss_move>0)&(raw[:,5]==actual.risks.tables.seismic_toss_move)
+        same &= ~fixed|((raw[:,8]==0)&(raw[:,9]==0))
     return same&_declaration(tape,index,raw,current,ledger.turn[rows,slot],ledger.phase[rows,slot],ledger.generation[rows,slot])
