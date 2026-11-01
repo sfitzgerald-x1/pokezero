@@ -856,7 +856,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5])&(raw[:,7]<=1_000_000)
             & (raw[:,2]==raw[:,5]-raw[:,6])&(raw[:,8]>=0)&(raw[:,8]<=6)
             & (tables.substitute_move>0)&(raw[:,9]==tables.substitute_move))
-        event_ok=jnp.where(substitute,generation_ok & clock_ok & substitute_ok,event_ok)
+        substitute_failure=substitute_callbacks.owned_failure(tape,index)
+        event_ok=jnp.where(substitute,generation_ok & clock_ok & (substitute_ok|substitute_failure),event_ok)
         toxic_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity & (phase==0)
             & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
             & (incoming==cursor.physical_active[rows,safe_side])
@@ -965,6 +966,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
         semantic=jnp.where((weather_chip|leftovers_heal|status_damage|substitute|self_heal|entry_spikes)[:,None],chip_semantic,semantic)
+        sub_fail_payload=jnp.stack((status_enc,jnp.full_like(z,public_active.STALL_FAIL),z,z,z,z,z,z),axis=1)
+        sub_fail_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),sub_fail_payload),axis=1)
+        semantic=jnp.where((substitute&substitute_failure)[:,None],sub_fail_semantic,semantic)
         recoil_own=state.owner==actor_side
         recoil_percent=(100*raw[:,7]+jnp.maximum(1,raw[:,8])-1)//jnp.maximum(1,raw[:,8])
         recoil_percent=jnp.where((raw[:,7]<raw[:,8])&(recoil_percent==100),99,recoil_percent)

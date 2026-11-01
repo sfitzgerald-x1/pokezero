@@ -374,13 +374,16 @@ def compile_adapter(metadata, projector, *, catalog):
             if copied is not None and int(lower.device.trace_public_ability[ability_id])>0:
                 trace_copy[ability_id]=add(f'|-ability|{ident[0]}|{copied}|Trace|[from] ability: Trace|[of] {ident[1]}',inputs.Kind.TRACE)
                 if not trace_copy[ability_id]:raise ValueError('FULL writer lacks exact supported Trace copy schema')
-    substitute_created=np.zeros(7,np.int32)
+    substitute_created=np.zeros(9,np.int32)
     if int(lower.device.substitute_move)>0:
         for status,token in enumerate(tokens):
             suffix=(' '+token) if token else ''
             substitute_created[status]=add((f'|-start|{ident[0]}|Substitute',
                 f'|-damage|{ident[0]}|71/100{suffix}'),inputs.Kind.CONDITION)
             if not substitute_created[status]:raise ValueError('FULL writer lacks exact Substitute start/damage schemas')
+        substitute_created[7]=add(f'|-fail|{ident[0]}|move: Substitute',inputs.Kind.ACTIVE)
+        substitute_created[8]=add(f'|-fail|{ident[0]}|move: Substitute|[weak]',inputs.Kind.ACTIVE)
+        if np.any(substitute_created[7:]<=0):raise ValueError('original Substitute failure schemas required')
     toxic_no_effect=np.zeros(5,np.int32)
     if int(lower.device.toxic_move)>0:
         pid=int(lower.device.base.public_ids[int(lower.device.toxic_move)])
@@ -583,7 +586,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.primary_sleep_status,(len(tables.causal.base.public_ids),),jnp.int32)
     causal.base._shape(tables.sleep_powder_status,(),jnp.int32)
     causal.base._shape(tables.trace_copy,tables.causal.trace_public_ability.shape,jnp.int32)
-    causal.base._shape(tables.substitute_created,(7,),jnp.int32)
+    causal.base._shape(tables.substitute_created,(9,),jnp.int32)
     causal.base._shape(tables.toxic_no_effect,(5,),jnp.int32)
     causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
     causal.base._shape(tables.pinch_items,tables.pinch_items.shape,jnp.int32)
@@ -658,6 +661,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_attempt=raw_kind==protect_callbacks.PROTECT_ATTEMPT
         protect_block=raw_kind==protect_callbacks.PROTECT_BLOCK
         substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
+        sub_failure=(kind==int(inputs.Kind.ACTIVE))&(raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
         toxic_code=toxic_callbacks.outcome_device(tape.words[:,index])
         toxic_sub_failure=(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)&(kind==int(inputs.Kind.ACTIVE))&toxic_callbacks.substitute_failure_raw(tape.words[:,index])
         toxic_attempt=((kind==int(inputs.Kind.NONPROC))|toxic_sub_failure)&(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)
@@ -730,6 +734,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sleep_miss_safe=tables.no_damage_miss[jnp.clip(tape.words[:,index,5],0,len(tables.no_damage_miss)-1)]
         key=jnp.where(sleep_miss,jnp.where(sleep_miss_safe,tables.no_damage[no_damage.MISS,0],0),key)
         key=jnp.where(substitute,tables.substitute_created[chip_status],key)
+        key=jnp.where(sub_failure,tables.substitute_created[jnp.where(tape.words[:,index,1]>0,7,8)],key)
         key=jnp.where(pressure,tables.pressure_start,key)
         key=jnp.where(intimidate,tables.intimidate,key)
         key=jnp.where(entry_spikes,tables.entry_spikes_damage[jnp.clip(semantic[:,11],0,6)],key)
@@ -1001,7 +1006,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         substitute_called=((called[:,0]==subject)&(called[:,1]==new_slot)
             &(called[:,2]==tables.causal.base.public_ids[substitute_move])
             &(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
-        identity &= ~substitute | (substitute_called & live[rows,safe] & (chip_status==previous_status)
+        identity &= ~(substitute|sub_failure) | ((~sub_failure|substitute_callbacks.owned_failure(tape,index))&substitute_called & live[rows,safe] & (chip_status==previous_status)
             &(observed_hp[rows,safe,safe_slot]==old_visible)
             &(observed_maximum[rows,safe,safe_slot]==max_visible))
         identity &= ~entry_spikes | (live[rows,safe]&(chip_status==previous_status)

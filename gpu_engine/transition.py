@@ -1056,7 +1056,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _substitute_write=substitute_callbacks.Write(_substitute_old_hp,_active(work.hp,work,side),
                     max_hp,_active(work.status,work,side),sub_hp,_active(work.substitute_hp,work,side))
                 _public_trace=substitute_callbacks.record_device(_public_trace,side,work.active[rows,side],
-                    move,_substitute_write,_substitute_context,eligible=_substitute_requested)
+                    move,_substitute_write,_substitute_context,eligible=_substitute_requested,caller_move=caller_move)
                 if _substitute_registered:
                     _public_trace=execution_accounting.capture_substitute_write(_public_trace,_substitute_ticket,
                         side,work.active[rows,side],move,_substitute_write,requested=_substitute_requested)

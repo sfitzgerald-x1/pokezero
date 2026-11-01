@@ -399,7 +399,7 @@ def _substitute_span_matches(tape,ticket,side,physical,move,write):
     if context is None:return jnp.zeros_like(tape.count,bool)
     ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=len(tape.count);rows=jnp.arange(b)
     for x in (side,physical,move):_shape(x,(b,),jnp.int32)
-    valid=substitute.validate_write_device(write,b)
+    valid=substitute.validate_write_device(write,b)|(substitute.owned_failure(tape,ledger.start[rows,slot],stage=1)|substitute.owned_failure(tape,ledger.start[rows,slot]))
     start=ledger.start[rows,slot];at=jnp.clip(start,0,tape.words.shape[1]-1)
     prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
     raw=tape.words[rows,at];decl=tape.words[rows,prefix];safe=jnp.clip(side,0,1)
