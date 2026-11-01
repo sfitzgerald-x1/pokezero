@@ -16,7 +16,50 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     const key=role+':'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
     used.add(key);audit({kind:'COUPLED',nonce:c.nonce,role,side,raw:value});return value;
   }
+  // Sleep and Encore share the SAME engine coordinate draws[actor][7].
+  // An unexpected second duration consumer must remain unresolved, not become
+  // two independent roles which silently reuse one finite tape coordinate.
+  function duration(c,role,side){
+    const key='duration_draw7:'+side;
+    if(used.has(key))return unknown('REPEATED_ROLE',key);
+    used.add(key);return take(c,role,side,c.draws[side][7]);
+  }
   const seat=b=>b.activePokemon?.side?.n;
+  const encoreFrames=new WeakMap();let boundRandom;
+  let encoreCallbackPath='';
+  if(pokemonPath){
+    const path=require('path'),crypto=require('crypto');
+    const resolved=require.resolve(pokemonPath),{Pokemon}=require(resolved);
+    const {Dex}=require(path.join(path.dirname(resolved),'dex.js'));
+    const dex=Dex.mod('gen3'),condition=dex.conditions.get('encore');
+    const original=condition.durationCallback,start=condition.onStart,add=Pokemon.prototype.addVolatile;
+    const hash=f=>typeof f==='function'?crypto.createHash('sha256').update(f.toString()).digest('hex'):'';
+    const sourceOK=hash(original)==='5fa95c56ee1187568ff774129ba7816873d4d6a4806130268725463caea45786'
+      &&hash(start)==='65cca25468443dea05dd74c855318f3668d29f5a791838ef10d845536937eeca'
+      &&hash(add)==='cddf90eeb6711d33592f46b063e3f804f395d5dfe9ec8ccd833540d4280add51';
+    encoreCallbackPath=path.resolve(path.dirname(resolved),'../data/mods/gen3/moves.js');
+    // Original condition tables are frozen. Scope the original addVolatile
+    // caller instead; never replace a condition/callback or fabricate a draw.
+    Pokemon.prototype.addVolatile=function scopedEncoreAdd(status,source,effect,linkedStatus){
+      const c=control();
+      if(!c||(status!=='encore'&&status!==condition))return add.apply(this,arguments);
+      if(!sourceOK||condition.durationCallback!==original||condition.onStart!==start
+        ||Pokemon.prototype.addVolatile!==scopedEncoreAdd)return unknown('ENCORE_DURATION_SOURCE',null);
+      const battle=this.battle,actor=battle?seat(battle):undefined,target=this,sides=battle?.sides;
+      const same=(actor===0||actor===1)&&battle.gen===3&&battle.dex===dex
+        &&source instanceof Pokemon&&target instanceof Pokemon&&source.battle===battle
+        &&battle.activePokemon===source&&battle.activeTarget===target&&effect===battle.activeMove
+        &&effect?.id==='encore'&&!effect.sourceEffect&&battle.random===boundRandom
+        &&source.hp>0&&target.hp>0&&source.side?.n===actor&&target.side?.n===1-actor
+        &&sides?.length===2&&sides[actor]===source.side&&sides[1-actor]===target.side
+        &&source.side.active?.length===1&&source.side.active[0]===source
+        &&target.side.active?.length===1&&target.side.active[0]===target
+        &&target.addVolatile===scopedEncoreAdd;
+      if(!same||encoreFrames.has(battle))return unknown('ENCORE_DURATION_CONTEXT',{actor});
+      encoreFrames.set(battle,{nonce:c.nonce,actor,target,source,effect,pokemonPath:resolved});
+      try{return add.apply(this,arguments);}finally{encoreFrames.delete(battle);}
+    };
+  }
   const caller=()=>new Error().stack.split('\n')[3]||'';
   const oldChance=Battle.prototype.randomChance,oldRandom=Battle.prototype.random,oldSample=Battle.prototype.sample;
   Battle.prototype.randomChance=function(n,d){
@@ -47,9 +90,21 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     const from=caller(),s=seat(this);if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
     if(from.includes('randomizer')&&m===16&&n===undefined)return 15-take(c,'damage',s,c.draws[s][5]);
     if(from.includes('secondaries')&&m===100&&n===undefined)return take(c,'secondary',s,c.secondary[s]);
-    if(this.effect?.id==='slp'&&m===2&&n===6)return 2+take(c,'sleep_duration',s,c.draws[s][7]);
+    const encore=encoreFrames.get(this);
+    if(encore&&m===3&&n===7){
+      const stack=new Error().stack.split('\n'),v=encore.target.volatiles?.encore;
+      if(encore.nonce!==c.nonce||encore.actor!==s||this.activePokemon!==encore.source
+        ||this.activeTarget!==encore.target||this.activeMove!==encore.effect
+        ||v?.target!==encore.target||v.source!==encore.source||v.sourceEffect!==encore.effect
+        ||!from.includes('durationCallback ('+encoreCallbackPath+':')
+        ||!stack.some(x=>x.includes('Pokemon.addVolatile ('+encore.pokemonPath+':')))
+        return unknown('ENCORE_DURATION_CONTEXT',{from,s});
+      return 3+duration(c,'encore_duration',s);
+    }
+    if(this.effect?.id==='slp'&&m===2&&n===6)return 2+duration(c,'sleep_duration',s);
     return unknown('RANDOM',{from,m,n,effect:this.effect?.id});
   };
+  boundRandom=Battle.prototype.random;
   Battle.prototype.sample=function(items){
     const c=control();if(!c){
       const from=caller();
