@@ -63,6 +63,7 @@ class Core(NamedTuple):
     frame_inputs: object = None  # PRIVATE original per-frame witness carry
     frame_input_report: object = None  # PRIVATE current frame input evidence
     terminal_closeout: object = None  # Actual final direct-KO receipt AND both owner drains
+    baton_history: object = None # row-only genuine consumed source transaction
 
 
 class BasicPublic(NamedTuple):
@@ -231,7 +232,7 @@ def _report_rows(ok, before, after):
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
            leftovers_context=None,execution_tables=None,status_residual_context=None,kernel_risk_tables=None,
-           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None,swords_dance_context=None,spikes_context=None,thunder_wave_context=None,sleep_powder_context=None,hypothetical_profile=None,terminal_observer=False,leech_history=None):
+           direct_hit_context=None,substitute_context=None,toxic_context=None,recoil_context=None,calm_mind_context=None,swords_dance_context=None,spikes_context=None,thunder_wave_context=None,sleep_powder_context=None,hypothetical_profile=None,terminal_observer=False,leech_history=None,baton_public=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -260,6 +261,10 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         if leech_history is None:leech_history=leech_callbacks.empty_history(tape.cursor,direct_hit_context.data.leech_seed)
         leech_callbacks.history_shape(leech_history,b)
         tape=tape._replace(execution=tape.execution._replace(leech_history=leech_history))
+    if type(direct_hit_context) is direct_hit_controls.RegisteredContext and direct_hit_context.data.baton_pass is not None and baton_public is not None and execution_tables is not None and kernel_risk_tables is not None:
+        from . import engine_baton_pass_callbacks as baton_callbacks
+        if core.baton_history is None:raise ValueError('owning Baton history unavailable')
+        tape=baton_callbacks.prepare(tape,core.engine,core.baton_history,baton_public,core.requests,core.orders,engine_actions,direct_hit_context.data.baton_pass)
     if terminal_observer:
         from . import engine_terminal_callbacks as terminal
         if execution_tables is None or kernel_risk_tables is None or direct_hit_context is None:
@@ -288,6 +293,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         context=tape.execution._replace(ledger=ledger,
             leech_history=leech_callbacks.commit_history(source_ready,tape.execution.leech_history,result.callbacks.execution.leech_history),
             secondary_status=result.callbacks.execution.secondary_status,
+            baton_transaction=None if tape.execution.baton_transaction is None else baton_callbacks.rows(source_ready,tape.execution.baton_transaction,result.callbacks.execution.baton_transaction),
             diagnostics=_rows(source_ready,
             tape.execution.diagnostics,result.callbacks.execution.diagnostics))
         if kernel_risk_tables is not None:
@@ -745,14 +751,14 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         status_residual_mode=status_residual_mode,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
             weather_speed.retain_device(profile,state,streams,speed_profile.device)),
-        frame=jax.jit(lambda core, act, chance, active=None,leech_history=None:
+        frame=jax.jit(lambda core, act, chance, active=None,leech_history=None,baton_public=None:
             _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active,
                 weather_profile_data=None if speed_profile is None else speed_profile.device,
                 leftovers_context=leftovers_context,status_residual_context=status_residual_context,
                 execution_tables=None if execution_compiled is None else execution_compiled.device,
                 kernel_risk_tables=None if kernel_risk_compiled is None else kernel_risk_compiled.device,
                 direct_hit_context=direct_hit_context,substitute_context=substitute_context,toxic_context=toxic_context,recoil_context=recoil_context,calm_mind_context=calm_mind_context,swords_dance_context=swords_dance_context,spikes_context=spikes_context,thunder_wave_context=thunder_wave_context,sleep_powder_context=sleep_powder_context,
-                terminal_observer=frame_input_mode=='source-witness' and direct_hit_mode=='kernel-event',leech_history=leech_history)),
+                terminal_observer=frame_input_mode=='source-witness' and direct_hit_mode=='kernel-event',leech_history=leech_history,baton_public=baton_public)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted,current_types=None,current_encore=None:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static,current_types,current_encore)),
         installations=jax.jit(life.apply_installations),
@@ -916,6 +922,9 @@ def _consume_accounted(r,state,frame,active,timing_callback,previous_reports,hos
         observer,report=_timed(timing_callback,f'admission_p{index+1}',admission_phase,
             observer,facts,encoded,projection,error,core.admitted,active,previous, _host_timings=host_timings)
         observers.append(observer);reports.append(report)
+    if core.baton_history is not None and frame.callbacks.execution is not None and frame.callbacks.execution.baton_transaction is not None:
+        from . import engine_baton_pass_callbacks as baton_callbacks
+        core=core._replace(baton_history=_rows(active,core.baton_history,baton_callbacks.mature(core.baton_history,frame,tuple(o.accounting for o in observers),tuple(o.retained for o in observers),core.requests)))
     return Result(DriverState(core,tuple(observers)),tuple(reports))
 
 
@@ -971,6 +980,9 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
         None if snapshot.callbacks.execution is None else snapshot.callbacks.execution.ledger,
         None if snapshot.callbacks.execution is None or snapshot.callbacks.execution.risks is None
             else snapshot.callbacks.execution.risks.carry)
+    if r['direct_hit_mode']=='kernel-event' and r['execution_compiled'] is not None and r['direct_hit_context'] is not None and r['direct_hit_context'].data.baton_pass is not None:
+        from . import engine_baton_pass_callbacks as baton_callbacks
+        core=core._replace(baton_history=baton_callbacks.empty_history(core.engine,core.cursor,jnp.stack(tuple(o.request_to_physical for o in core.orders),axis=1)))
     if r['frame_witness_compiled'] is not None:
         from . import engine_source_frame_witness as frame_witness
         _checked_witness(r,constructed=snapshot)
@@ -1080,7 +1092,12 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
         chance = transition.sample_chance_inputs(core.engine) if chance_inputs is None else chance_inputs
         leech_history=_leech_history(r,core,tuple(o.retained for o in old_state.observers),
             core.admitted & old_state.observers[0].retained_healthy & old_state.observers[1].retained_healthy)
-        frame = _timed(observe, 'engine', r['frame'], core, engine_actions, chance, executed,leech_history, _host_timings=host_timings)
+        baton_public=None
+        if r['direct_hit_mode']=='kernel-event' and r['execution_compiled'] is not None and r['direct_hit_context'] is not None and r['direct_hit_context'].data.baton_pass is not None:
+            from . import engine_baton_pass_callbacks as baton_callbacks
+            baton_public=baton_callbacks.public_proof(core.engine,core.cursor,tuple(o.retained for o in old_state.observers),
+                core.admitted & old_state.observers[0].retained_healthy & old_state.observers[1].retained_healthy,r['direct_hit_context'].data.baton_pass)
+        frame = _timed(observe, 'engine', r['frame'], core, engine_actions, chance, executed,leech_history,baton_public, _host_timings=host_timings)
         def requests_phase(core, frame):
             orders = tuple(r['installations'](ledger, frame) for ledger in core.orders)
             unsafe = tuple(r['unsafe'](value, frame.state) for value in core.unsafe)
@@ -1107,6 +1124,7 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
                 frame.weather_profile,frame.state,frame.cursor.stream_id)
             candidate = core._replace(engine=frame.state, cursor=frame.cursor, orders=orders, unsafe=unsafe,
                 requests=requests, admitted=admitted, frame_number=core.frame_number+executed.astype(jnp.int32),
+                baton_history=core.baton_history if frame.callbacks.execution is None or frame.callbacks.execution.baton_transaction is None else frame.callbacks.execution.baton_transaction.history,
                 weather_profile=profile,execution=None if frame.callbacks.execution is None else frame.callbacks.execution.ledger)
             candidate=candidate._replace(risks=None if frame.callbacks.execution is None
                 or frame.callbacks.execution.risks is None else frame.callbacks.execution.risks.carry)

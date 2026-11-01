@@ -132,7 +132,9 @@ class TransitionObserverWiringTests(unittest.TestCase):
             with self.subTest(parent_observer=name):
                 with self.assertRaisesRegex(NameError, "move_type"):
                     eval(compile(ast.Expression(call), str(SOURCE), "eval"), {}, env)
-        fixed = SOURCE.read_text()
+        fixed = subprocess.check_output(
+            ["git", "show", "afc80dc70525b7eb8723233015ce6495614bef08:gpu_engine/transition.py"],
+            cwd=ROOT, text=True)
         self.assertEqual(parent.count("resolved_type=move_type)"), 1)
         self.assertEqual(parent.count(",move_type)"), 1)
         expected = parent.replace("resolved_type=move_type)", "resolved_type=typ)").replace(
@@ -147,7 +149,7 @@ class TransitionObserverWiringTests(unittest.TestCase):
                     isinstance(t, ast.Name) and t.id == name for t in n.targets)))
 
         for file, name, count in (
-                ("engine_source_frame_witness.py", "SOURCE_PINS", 77),
+                ("engine_source_frame_witness.py", "SOURCE_PINS", 79),
                 ("chance_consumers.py", "SOURCE_PINS", 13),
                 ("ordinary_law.py", "MAPPING_PINS", 6),
                 ("conditional_law.py", "MAPPING_PINS", 4)):

@@ -212,6 +212,8 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
         ('species','level','gender','hp','max_hp','status')],axis=1)
     species,level,gender,hp,maximum,status=details.T
     known=(species>0)&(level>0)&(level<=100)&(gender>=0)&(gender<=2)&(hp>0)&(hp<=maximum)&(status>=0)&(status<=6)
+    from . import engine_baton_pass_callbacks as baton_callbacks
+    owned_baton=baton_callbacks.reveal_matches(tape,state,side,outgoing,incoming)
     before=tape.count;index=jnp.minimum(before,tape.words.shape[1]-1)
     room=before<tape.words.shape[1]
     flags=jnp.asarray(baton,jnp.int32);replacing=jnp.asarray(replacement,jnp.int32)
@@ -228,7 +230,7 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
     gen=cursor.generation.at[rows,side].add((eligible&(not initial)).astype(jnp.int32))
     # Baton is a genuine new reveal/private swap, but its unported public flag
     # context must never silently reuse an old public encounter as established.
-    established=active('established',~jnp.asarray(baton))
+    established=active('established',~jnp.asarray(baton)|owned_baton)
     cursor=cursor._replace(generation=gen,physical_to_public=mapping,
         next_slot=active('next_slot',cursor.next_slot[rows,side]+(eligible&new).astype(jnp.int32)),
         physical_active=active('physical_active',incoming),public_slot=active('public_slot',public_slot),
@@ -236,7 +238,7 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
         revealed_species_id=active('revealed_species_id',species),
         admitted=cursor.admitted&~(eligible&~room)&~(requested&~safe))
     return tape._replace(cursor=cursor,refusal=tape.refusal
-        |jnp.where(eligible&~known,UNKNOWN_DETAILS,0)|jnp.where(eligible&baton,UNKNOWN_BATON,0)
+        |jnp.where(eligible&~known,UNKNOWN_DETAILS,0)|jnp.where(eligible&baton&~owned_baton,UNKNOWN_BATON,0)
         |jnp.where(requested&~safe,CLOCK,0))
 
 
