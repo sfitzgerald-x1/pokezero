@@ -104,11 +104,8 @@ def _plan(document,profile,arm,category_vocabulary):
     return result
 
 
-def load_inputs(*,declaration,expected_declaration_sha256,runtime,expected_runtime_sha256,arm,enable_v5=False):
-    """Hash/read only; no source compiler, engine constructor or model allocation."""
-    if enable_v5 is not True:raise ValueError('explicit v5 worker enablement required before artifact access')
-    declaration_document=_record(dict(path=str(declaration),sha256=expected_declaration_sha256))
-    runtime_document=_record(dict(path=str(runtime),sha256=expected_runtime_sha256))
+def _runtime_metadata(runtime_document,*,expected_pool_sha256):
+    """Shared original artifact validation, without a training Plan."""
     _keys(runtime_document,('schema','source_commit','control_inventory','category_vocabulary','constructor_pool',
         'gender_policy','showdown','versions','memory_policy','precision_policy'))
     if runtime_document['schema']!=SCHEMA or re.fullmatch('[0-9a-f]{40}',runtime_document['source_commit']) is None:
@@ -118,7 +115,7 @@ def load_inputs(*,declaration,expected_declaration_sha256,runtime,expected_runti
     profile=phase.ChampionProfile.read(inventory['path'],expected_sha256=inventory['sha256'])
     vocabulary=_record(runtime_document['category_vocabulary'])
     _record(runtime_document['constructor_pool'],json_value=False)
-    if runtime_document['constructor_pool']['sha256']!=declaration_document['pool_sha256']:
+    if runtime_document['constructor_pool']['sha256']!=expected_pool_sha256:
         raise ValueError('original declared constructor pool differs')
     gender=None if runtime_document['gender_policy'] is None else _record(runtime_document['gender_policy'])
     show=runtime_document['showdown'];_keys(show,('root','commit','compiled_tree_sha256','node'))
@@ -142,6 +139,15 @@ def load_inputs(*,declaration,expected_declaration_sha256,runtime,expected_runti
             or precision['jax_x64'] is not False or precision['jax_matmul']!='highest'
             or precision['torch_matmul'] not in ('highest','high','medium')):
         raise ValueError('explicit common bf16 precision/runtime arithmetic policy required')
+    return profile,vocabulary,gender,resolved
+
+
+def load_inputs(*,declaration,expected_declaration_sha256,runtime,expected_runtime_sha256,arm,enable_v5=False):
+    """Hash/read only; no source compiler, engine constructor or model allocation."""
+    if enable_v5 is not True:raise ValueError('explicit v5 worker enablement required before artifact access')
+    declaration_document=_record(dict(path=str(declaration),sha256=expected_declaration_sha256))
+    runtime_document=_record(dict(path=str(runtime),sha256=expected_runtime_sha256))
+    profile,vocabulary,gender,resolved=_runtime_metadata(runtime_document,expected_pool_sha256=declaration_document['pool_sha256'])
     plan=_plan(declaration_document,profile,arm,resolved)
     uses_gender=any(b.gender_seed is not None for iteration in plan.iterations for b in iteration)
     if uses_gender!=(gender is not None):raise ValueError('explicit gender policy must match declared gender recipe')
@@ -206,6 +212,32 @@ def _source(runtime):
 
 
 def prepare_runtime(inputs):
+    """Original training wrapper; compilation is shared with nontraining capture."""
+    return _prepare_runtime(inputs.runtime,inputs.vocabulary,expected_pool_sha256=inputs.plan.pool_sha256)
+
+
+def prepare_capture_runtime(bank_reference,*,runtime,expected_runtime_sha256,enable_v5=False):
+    """Prepare the real NONTRAINING bank without a Plan, actor or constructor.
+
+    bank_reference uses the original capture schema's path/SHA256 record.
+    Return (prepared, pool, public_config, contract, gender_policy), ready for
+    the original actor loader and collect_declared_bank. This call compiles
+    original source; it does not load models or execute the declared games.
+    """
+    if enable_v5 is not True:raise ValueError('explicit v5 capture enablement required before artifact access')
+    runtime_document=_record(dict(path=str(runtime),sha256=expected_runtime_sha256))
+    from . import v5_evaluation_capture as capture
+    bank=capture.load_bank(bank_reference)
+    heldout=capture._artifact(bank.document['heldout_roster']).document()
+    _,vocabulary,gender,_=_runtime_metadata(runtime_document,expected_pool_sha256=heldout['pool_sha256'])
+    uses_gender=any(b.gender_seed is not None for b in bank.batches)
+    if uses_gender!=(gender is not None):raise ValueError('explicit gender policy must match declared gender recipe')
+    _source(runtime_document);_memory(runtime_document['memory_policy'],apply=True);_probe(runtime_document)
+    prepared,pool,public,contract=_prepare_runtime(runtime_document,vocabulary,expected_pool_sha256=heldout['pool_sha256'])
+    return prepared,pool,public,contract,gender
+
+
+def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
     """Original checked compilation only. Never load champion weights or teams."""
     from .category_vocab import CategoryVocabulary
     from .dex import load_showdown_dex_cached
@@ -222,7 +254,7 @@ def prepare_runtime(inputs):
         engine_spikes_callbacks as spikes,engine_thunder_wave_callbacks as thunder,engine_sleep_powder_callbacks as powder,engine_retained_encoder_driver as driver)
     import jax.numpy as j
     from gpu_engine.mechanics import SLP
-    runtime=inputs.runtime;show=runtime['showdown'];contract=ActorContract.champion();v=inputs.vocabulary
+    show=runtime['showdown'];contract=ActorContract.champion();v=vocabulary
     vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases'])
     belief=load_gen3_randbat_source_cached(show['root']);dex=load_showdown_dex_cached(show['root'])
     if belief.metadata.source_hash!=contract.belief_set_source_hash:raise ValueError('original public belief source differs')
@@ -230,7 +262,7 @@ def prepare_runtime(inputs):
         checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
     pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path'])
     metadata=pool.metadata()
-    if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=inputs.plan.pool_sha256
+    if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=expected_pool_sha256
             or metadata['compiled_tree']['sha256']!=show['compiled_tree_sha256']):
         raise ValueError('original constructor source binding differs')
     tables=transition.tables_from_metadata(metadata)
