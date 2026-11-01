@@ -155,6 +155,7 @@ class Session:
 _PREPARED = weakref.WeakKeyDictionary()
 _SESSIONS = weakref.WeakKeyDictionary()
 _REQUEST_PROOF_ORIGINS = weakref.WeakKeyDictionary()
+_LEECH_HISTORY_ORIGINS = weakref.WeakKeyDictionary()
 
 
 def _basic_initialize(catalog, context, streams):
@@ -328,8 +329,10 @@ def _leech_history(runtime,core,publics,healthy):
     context=runtime['direct_hit_context']
     if context is None or context.data.leech_seed is None or runtime['direct_hit_mode']!='kernel-event':return None
     from . import engine_leech_seed_callbacks as leech_callbacks
-    return leech_callbacks.history_from_public(core.engine,core.cursor,publics,data=context.data.leech_seed,
-        active_tables=runtime['catalog'].active.device,healthy=healthy)
+    data=context.data.leech_seed;active_tables=runtime['catalog'].active.device
+    proof=_checked_leech_history_proof(runtime.get('leech_history_proof'),
+        leech_callbacks.history_from_public,context,data,active_tables)
+    return proof(core.engine,core.cursor,publics,healthy,data,active_tables)
 
 
 def _request(engine, ledger, original, retained, unsafe, arrival, admitted, statics, current_types=None,current_encore=None):
@@ -494,6 +497,25 @@ def _checked_request_proof_pair(pair,function,context,**static):
                 or any(static[k] is not value for k,value in original[3])):
             raise ValueError('current request proof source holders changed')
     return pair
+
+
+def _prepare_leech_history_proof(function,context,data,active_tables):
+    """Retain code only; all public, physical and table arrays stay inputs."""
+    def proof(engine,cursor,publics,healthy,current_data,current_active_tables):
+        return function(engine,cursor,publics,healthy=healthy,data=current_data,
+            active_tables=current_active_tables)
+    compiled=jax.jit(proof)
+    _LEECH_HISTORY_ORIGINS[compiled]=(function,context,data,active_tables)
+    return compiled
+
+
+def _checked_leech_history_proof(proof,function,context,data,active_tables):
+    """Reject missing/replaced code or current holders before invocation."""
+    original=_LEECH_HISTORY_ORIGINS.get(proof) if callable(proof) else None
+    if (original is None or original[0] is not function or original[1] is not context
+            or original[2] is not data or original[3] is not active_tables):
+        raise ValueError('original prepared Leech history proof and current source holders required')
+    return proof
 
 
 def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic', leftovers_compiled=None,
@@ -770,6 +792,11 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = Prepared(binding)
     request_type_proofs=None;request_encore_proofs=None
+    leech_history_proof=None
+    if direct_hit_context is not None and direct_hit_context.data.leech_seed is not None and direct_hit_mode=='kernel-event':
+        from . import engine_leech_seed_callbacks as leech_callbacks
+        leech_history_proof=_prepare_leech_history_proof(leech_callbacks.history_from_public,
+            direct_hit_context,direct_hit_context.data.leech_seed,catalog.active.device)
     if direct_hit_context is not None and direct_hit_context.data.color_change is not None and direct_hit_mode=='kernel-event':
         from . import engine_color_change_callbacks as color
         request_type_proofs=_prepare_request_proof_pair(color.expected_owned_types,
@@ -783,6 +810,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
             data=direct_hit_context.data.encore,active_tables=catalog.active.device,rules=request['rules'].device)
     _PREPARED[result] = dict(binding=binding, prepared=weakref.ref(result),request_compiled=request_compiled, own_compiled=own_compiled,
         request_type_proofs=request_type_proofs,request_encore_proofs=request_encore_proofs,
+        leech_history_proof=leech_history_proof,
         own=record, request=request, catalog=catalog, context=context, public=public_handle, fake=fake_forward,
         public_mode=public_mode, check_public=check_public, register_public=register_public,
         speed_profile=speed_profile,leftovers_compiled=leftovers_compiled,
