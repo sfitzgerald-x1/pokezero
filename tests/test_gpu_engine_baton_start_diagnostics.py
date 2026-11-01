@@ -93,7 +93,7 @@ class BatonStartDiagnosticsTests(unittest.TestCase):
   for name in('transition.py','state.py','baton.py','engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py'):
    if name=='engine_retained_encoder_driver.py':
     assert_frozen_function_overlay(self,'gpu_engine/'+name,'7e9580207defb397e81313d0ace17d38eb8a6aea',{'_frame':'974a4cebab4629043944e922ebe5af1d4da49e5b'})
-   else:self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('11f946c7e2592388064c6f1908ff7f9a849c2b6b'if name=='engine_kernel_frame_risk.py'else '974a4cebab4629043944e922ebe5af1d4da49e5b'if name in('transition.py','engine_execution_completeness.py','engine_full_v4_event_device.py')else BASE)+':gpu_engine/'+name]),name)
+   else:self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('bca26eaa00a63eccedf26cd4c62da4bae76c2584'if name=='engine_kernel_frame_risk.py'else '974a4cebab4629043944e922ebe5af1d4da49e5b'if name in('transition.py','engine_execution_completeness.py','engine_full_v4_event_device.py')else BASE)+':gpu_engine/'+name]),name)
   for f,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('ordinary_law.py','MAPPING_PINS'),('conditional_law.py','MAPPING_PINS')]:
    t=ast.parse(Path('gpu_engine',f).read_text());pins=ast.literal_eval(next(n.value for n in t.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id==key for x in n.targets)))
    for name,v in pins.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),v)

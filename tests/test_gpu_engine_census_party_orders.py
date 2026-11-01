@@ -56,7 +56,7 @@ class CensusPartyOrderTests(unittest.TestCase):
    else:self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('974a4cebab4629043944e922ebe5af1d4da49e5b'if name=='transition.py'else BASE)+':gpu_engine/'+name]),name)
   # Later reviewed observers update their owned pins. Keep the CURRENT
   # witness body exact and validate every CURRENT pin against its actual file.
-  old=ast.parse(subprocess.check_output(['git','show','974a4cebab4629043944e922ebe5af1d4da49e5b'+':gpu_engine/engine_source_frame_witness.py'],text=True));new=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text())
+  old=ast.parse(subprocess.check_output(['git','show','bca26eaa00a63eccedf26cd4c62da4bae76c2584'+':gpu_engine/engine_source_frame_witness.py'],text=True));new=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text())
   is_pins=lambda n:isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='SOURCE_PINS'for t in n.targets)
   pins=ast.literal_eval(next(n.value for n in new.body if is_pins(n)))
   self.assertEqual(len(pins),85)
