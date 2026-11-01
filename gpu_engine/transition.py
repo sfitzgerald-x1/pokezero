@@ -1004,9 +1004,6 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _direct_ko_pending=recoil_callbacks.with_ko_amount(_direct_ko_pending,recoil)
             _recoil_captured=kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
                 work.active[rows,side],work.active[rows,foe],move,_direct_write)
-            _public_trace,_recoil_pending=recoil_callbacks.prepare_device(_public_trace,_recoil_captured,recoil,
-                _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),
-                _active(work.status,work,side),_recoil_context,eligible=acts,target_ko=_direct_ko_pending,caller_move=caller_move)
         if _lifecycle_trace:
             _literal_outcome=kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
                 hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes)
@@ -1015,6 +1012,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _active(work.hp,work,side),_active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),
                     _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
                     target_types=_active(work.types,work,foe),item=_active(work.item,work,foe),ability=_active(work.ability,work,foe))
+            if _recoil_context is not None:
+                # Open Site14 only after the actual no-damage Site10 pair. On
+                # positive/KO paths finish above emits nothing: same boundary.
+                _recoil_no_damage=no_damage_callbacks.Captured(_no_damage_pending,_direct_write,_active(work.hp,work,side),
+                    _active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),
+                    _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
+                    _active(work.types,work,foe),_active(work.item,work,foe),_active(work.ability,work,foe))
+                _public_trace,_recoil_pending=recoil_callbacks.prepare_device(_public_trace,_recoil_captured,recoil,
+                    _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),
+                    _active(work.status,work,side),_recoil_context,eligible=acts,target_ko=_direct_ko_pending,caller_move=caller_move,
+                    no_damage=_recoil_no_damage,no_damage_outcome=_literal_outcome)
             from . import engine_outcome_diagnostics as outcome_diagnostics
             _public_trace=outcome_diagnostics.record_on_tape(_public_trace,_literal_outcome,move,side,
                 work.active[rows,side],work.active[rows,foe],eligible=acts,active=live)
