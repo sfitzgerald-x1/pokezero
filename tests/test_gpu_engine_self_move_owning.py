@@ -44,6 +44,9 @@ class SelfMoveOwningTests(unittest.TestCase):
   original_flags=json.loads(subprocess.check_output(['node','-e',"const d=require(process.argv[1]).Dex.mod('gen3');console.log(JSON.stringify(JSON.parse(process.argv[2]).map(n=>!!d.moves.get(n).flags.failencore)))",str(showdown_root()/'dist/sim/dex.js'),json.dumps(cls.metadata['vocabulary']['moves'])],text=True))
   for row,flag in zip(cls.metadata['moves'],original_flags):
    if row is not None:row.setdefault('flags',{})['failencore']=flag
+  # Original denied Rest envelopes remain explicit in the success fixture.
+  for family,name in (('abilities','insomnia'),('items','lumberry')):
+   if name not in cls.metadata['vocabulary'][family]:cls.metadata['vocabulary'][family].append(name)
   cls.table=tr.tables_from_metadata(cls.metadata);cls.producer=public.compile_catalog(cls.metadata,cls.table,public_moves=cls.catalog.moves,dex=cls.dex,exposure=public.HealthExposure(public.SHOWDOWN,'gen3randombattle',True,False))
   rules=request.load_source_rules(showdown_root(),cls.metadata);req=request.compile_request_source(cls.metadata,vocabulary=cls.catalog.vocabulary,dex=cls.dex,checkpoint_sha256='a'*64,rules=rules,lifecycle_catalog=cls.producer);facts=own.compile_own_facts(req,cls.catalog)
   cls.helper=direct.compile_direct_hit_controls(engine_catalog=cls.producer,metadata=cls.metadata,source_rules=rules)
@@ -96,7 +99,7 @@ class SelfMoveOwningTests(unittest.TestCase):
     with self.assertRaises(ValueError):cb.owned(t._replace(**{field:j.broadcast_to(getattr(t,field),(8,8))}),1)
    self.assertFalse(bool(cb.owned(t._replace(event_turn=t.event_turn.at[:,1].add(1)),1).any()))
    self.assertFalse(bool(cb.captured_matches(t._replace(cursor=t.cursor._replace(turn=t.cursor.turn+1)),c).any()))
-  # Successful Rest, sleeping Sleep Talk, absent Wish history/expiry stay UNKNOWN.
+  # An unproved Rest afterstate, sleeping Sleep Talk, absent Wish history/expiry stay UNKNOWN.
   for code,name,bad in ((cb.REST_FAIL,'rest',s._replace(hp=s.hp.at[rows,actor,phys].set(99))),(cb.SLEEP_FAIL,'sleeptalk',s._replace(status=s.status.at[rows,actor,phys].set(5))),(cb.WISH_TICK,'wish',s._replace(wish_counter=s.wish_counter.at[rows,actor].set(1)))):
    move=z+names.index(name);t=public.move(start,actor,phys,bad.active[rows,1-actor],move,eligible=yes);t,p=cb.begin(t,bad,actor,move,self.runtime['direct_hit_context'],code=code,eligible=yes);t,c=cb.finish(t,p,bad);self.assertFalse(bool(cb.captured_matches(t,c).any()));self.assertTrue(bool((t.refusal!=0).all()))
 

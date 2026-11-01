@@ -946,6 +946,17 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         failed_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),
             semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),failed_payload),axis=1)
         semantic=jnp.where((failed_weather|self_move)[:,None],failed_semantic,semantic)
+        sm_code=raw[:,3]&~self_move_callbacks.SECONDARY
+        sm_status=self_move&(sm_code==self_move_callbacks.REST_STATUS)
+        sm_heal=self_move&(sm_code==self_move_callbacks.REST_HEAL)
+        sm_status_payload=jnp.stack((actor_enc,jnp.ones_like(z),z,z,z,z,z,z),axis=1)
+        sm_status_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.STATUS)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),sm_status_payload),axis=1)
+        sm_own=state.owner==actor_side
+        sm_percent=(100*raw[:,6]+jnp.maximum(1,raw[:,7])-1)//jnp.maximum(1,raw[:,7])
+        sm_heal_payload=jnp.stack((actor_enc,jnp.where(sm_own,raw[:,6],sm_percent),jnp.where(sm_own,raw[:,7],100),jnp.ones_like(z),z,z,z,z),axis=1)
+        sm_heal_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),sm_heal_payload),axis=1)
+        semantic=jnp.where(sm_status[:,None],sm_status_semantic,semantic)
+        semantic=jnp.where(sm_heal[:,None],sm_heal_semantic,semantic)
         chip_percent=(100*raw[:,6]+jnp.maximum(1,raw[:,7])-1)//jnp.maximum(1,raw[:,7])
         chip_percent=jnp.where((raw[:,6]<raw[:,7])&(chip_percent==100),99,chip_percent)
         chip_payload=jnp.stack((status_enc,jnp.where(own,raw[:,6],chip_percent),
