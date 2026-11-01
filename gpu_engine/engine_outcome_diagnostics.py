@@ -27,6 +27,8 @@ BEFORE_MOVE_FIELDS=('actor_side','actor_physical','move','caller_move','eligible
 
 BATON_START_FIELDS=('actor_side', 'actor_physical', 'move', 'caller_move', 'eligible', 'acts', 'begin_valid', 'registered_bound', 'data_bound', 'transaction_present', 'history_side', 'public_known', 'public_pending', 'public_substitute', 'hp', 'maximum', 'status', 'counter', 'ability', 'base_ability', 'item', 'type0', 'type1', 'base_type0', 'base_type1', 'substitute_hp', 'confusion_counter', 'volatile_uint32', 'protect_counter', 'choice_move', 'encore_move', 'encore_counter', 'charge_move', 'charge_counter', 'spikes', 'any_trap_source', 'pending_residual', 'any_forced_switch', 'any_baton_pass', 'ability_namespace_size', 'item_namespace_size', 'quiet_ability_lookup', 'quiet_item_lookup', 'boost0', 'boost1', 'boost2', 'boost3', 'boost4', 'boost5', 'boost6', 'public_boost0', 'public_boost1', 'public_boost2', 'public_boost3', 'public_boost4', 'public_boost5', 'public_boost6', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk')
 
+NO_DAMAGE_FIELDS=('actor_side', 'actor_physical', 'target_physical', 'move', 'caller_move', 'requested', 'accuracy_hit', 'move_type', 'ability', 'status', 'hp', 'maximum', 'volatile_uint32', 'substitute_hp', 'actor_hp', 'explodes', 'actor_hp_type', 'actor_hp_power', 'target_type0', 'target_type1', 'item', 'absorption_blocked', 'absorption_hp', 'absorption_volatile_uint32', 'write_power', 'write_critical', 'write_hit', 'write_immune', 'write_numerator', 'write_denominator', 'write_substitute', 'write_protected', 'write_enduring', 'write_old_hp', 'write_new_hp', 'write_maximum', 'current_actor_hp', 'current_volatile_uint32', 'current_substitute_hp', 'current_actor_hp_type', 'current_actor_hp_power', 'current_type0', 'current_type1', 'current_item', 'current_ability', 'move_namespace_size', 'ability_namespace_size', 'item_namespace_size', 'candidate', 'selected_type', 'dynamic_type', 'levitate_source', 'levitate_move', 'ground_type', 'flying_type', 'levitate_lookup', 'allowed_item_lookup', 'finish_scheduled', 'header_code', 'finish_matches', 'room', 'use', 'stream_id', 'frame', 'raw_count', 'turn', 'phase', 'generation0', 'generation1', 'prior_tape_refusal', 'prior_execution_refusal', 'prior_kernel_risk')
+
 class Capture(NamedTuple):
     words:object
     valid:object
@@ -45,6 +47,12 @@ class Capture(NamedTuple):
     baton_start_valid:object=None
     baton_start_count:object=None
     baton_start_overflow:object=None
+    no_damage_words:object=None
+    no_damage_known:object=None
+    no_damage_malformed:object=None
+    no_damage_valid:object=None
+    no_damage_count:object=None
+    no_damage_overflow:object=None
 
 def empty(batch):
     return Capture(j.zeros((batch,CAPACITY,len(FIELDS)),j.int32),j.zeros((batch,CAPACITY),bool),
@@ -54,7 +62,9 @@ def empty(batch):
         j.zeros((batch,CAPACITY,len(BEFORE_MOVE_FIELDS)),j.int32),j.zeros((batch,CAPACITY),bool),
         j.zeros(batch,j.int32),j.zeros(batch,bool),
         j.zeros((batch,CAPACITY,len(BATON_START_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(BATON_START_FIELDS)),bool),
-        j.zeros((batch,CAPACITY),bool),j.zeros(batch,j.int32),j.zeros(batch,bool))
+        j.zeros((batch,CAPACITY),bool),j.zeros(batch,j.int32),j.zeros(batch,bool),
+        j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),j.int32),j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),bool),
+        j.zeros((batch,CAPACITY,len(NO_DAMAGE_FIELDS)),bool),j.zeros((batch,CAPACITY),bool),j.zeros(batch,j.int32),j.zeros(batch,bool))
 
 def _valid(value,b):
     return type(value) is Capture and all(getattr(a,'shape',None)==shape and getattr(a,'dtype',None)==j.dtype(dtype)
@@ -95,6 +105,49 @@ def _valid_before_move(value,b):
 def _valid_baton_start(value,b):
     return _valid(value,b) and all(getattr(a,'shape',None)==shape and getattr(a,'dtype',None)==j.dtype(dtype)
         for a,shape,dtype in zip(value[12:17],((b,CAPACITY,len(BATON_START_FIELDS)),(b,CAPACITY,len(BATON_START_FIELDS)),(b,CAPACITY),(b,),(b,)),(j.int32,j.bool_,j.bool_,j.int32,j.bool_)))
+
+def _valid_no_damage(value,b):
+    return _valid(value,b) and all(getattr(a,'shape',None)==shape and getattr(a,'dtype',None)==j.dtype(dtype)
+        for a,shape,dtype in zip(value[17:23],((b,CAPACITY,len(NO_DAMAGE_FIELDS)),)*3+((b,CAPACITY),(b,),(b,)),(j.int32,j.bool_,j.bool_,j.bool_,j.int32,j.bool_)))
+
+def record_no_damage_on_tape(tape,p,w,*,scheduled,code,matched,room,use,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,target_types,item,ability):
+    """Original finish operands and already-evaluated results, never admission.
+
+    Missing optional values and malformed shapes have separate diagnostic
+    masks. Storage absence/overflow changes no public/source/risk fact.
+    """
+    c=getattr(tape,'execution',None);capture=getattr(c,'diagnostics',None);b=len(tape.count)
+    if not _valid_no_damage(capture,b):return tape
+    active=getattr(p,'requested',None)
+    if getattr(active,'shape',None)!=(b,)or getattr(active,'dtype',None)!=j.dtype(bool):return tape
+    before=p.before;data=p.context.data.no_damage;values={}
+    for name,field in [('actor_side','actor'),('actor_physical','physical'),('target_physical','target'),('move','move'),('caller_move','caller_move'),('requested','requested')]:values[name]=getattr(p,field,None)
+    for name,field in [('accuracy_hit','accuracy_hit'),('move_type','move_type'),('ability','ability'),('status','status'),('hp','hp'),('maximum','maximum'),('volatile_uint32','volatile'),('substitute_hp','sub_hp'),('actor_hp','actor_hp'),('explodes','explodes'),('actor_hp_type','actor_hp_type'),('actor_hp_power','actor_hp_power'),('item','item')]:values[name]=getattr(before,field,None)
+    def column(value,i):
+        if value is None:return None
+        return value[:,i]if getattr(value,'shape',None)==(b,2)else j.zeros((b,1),j.int32)
+    for name,value in [('target_type',before.target_types),('current_type',target_types)]:
+        for i in range(2):values[name+str(i)]=column(value,i)
+    values.update(absorption_blocked=p.absorbed.blocked,absorption_hp=p.absorbed.hp,absorption_volatile_uint32=p.absorbed.volatile)
+    for name,value in zip(w._fields,w):values['write_'+name]=value
+    values.update(current_actor_hp=actor_hp,current_volatile_uint32=volatile,current_substitute_hp=sub_hp,current_actor_hp_type=actor_hp_type,current_actor_hp_power=actor_hp_power,current_item=item,current_ability=ability)
+    def lookup(table,ids):
+        if table is None or ids is None:return None
+        if getattr(table,'ndim',None)!=1 or not len(table)or getattr(ids,'shape',None)!=(b,)or getattr(ids,'dtype',None)!=j.dtype(j.int32):return j.zeros((b,1),j.int32)
+        return table[j.clip(ids,0,len(table)-1)],(ids>=0)&(ids<len(table))
+    for name,table in [('candidate',data.candidates),('selected_type',data.move_types),('dynamic_type',data.dynamic_type)]:values[name]=lookup(table,p.move)
+    values.update(move_namespace_size=j.full(b,len(data.candidates),j.int32),ability_namespace_size=j.full(b,len(data.levitate),j.int32),item_namespace_size=j.full(b,len(data.levitate_items),j.int32))
+    values.update(levitate_source=j.broadcast_to(data.levitate_source,(b,)),levitate_move=j.broadcast_to(data.levitate_move,(b,)),ground_type=j.broadcast_to(data.ground_type,(b,)),flying_type=j.broadcast_to(data.flying_type,(b,)),levitate_lookup=lookup(data.levitate,before.ability),allowed_item_lookup=lookup(data.levitate_items,before.item))
+    values.update(finish_scheduled=scheduled,header_code=code,finish_matches=matched,room=room,use=use,stream_id=tape.stream_id,frame=c.ledger.frame,raw_count=tape.count,turn=tape.cursor.turn,phase=tape.cursor.phase,generation0=tape.cursor.generation[:,0],generation1=tape.cursor.generation[:,1],prior_tape_refusal=tape.refusal,prior_execution_refusal=c.ledger.refusal,prior_kernel_risk=None if c.risks is None else c.risks.carry.risk)
+    words=[];known=[];malformed=[]
+    for name in NO_DAMAGE_FIELDS:
+        value=values.get(name);mask=j.ones(b,bool);missing=value is None
+        if type(value)is tuple and len(value)==2:value,mask=value
+        valid=getattr(value,'shape',None)==(b,)and getattr(value,'dtype',None)in(j.dtype(j.int32),j.dtype(j.uint32),j.dtype(bool))and getattr(mask,'shape',None)==(b,)and getattr(mask,'dtype',None)==j.dtype(bool)
+        words.append(value.astype(j.int32)if valid else j.zeros(b,j.int32));known.append(mask if valid else j.zeros(b,bool));malformed.append(j.full(b,not missing and not valid,bool))
+    words=j.stack(words,axis=1);known=j.stack(known,axis=1);malformed=j.stack(malformed,axis=1);rows=j.arange(b);slot=j.clip(capture.no_damage_count,0,CAPACITY-1);room=(capture.no_damage_count>=0)&(capture.no_damage_count<CAPACITY);write=active&room
+    updated=capture._replace(no_damage_words=capture.no_damage_words.at[rows,slot].set(j.where(write[:,None],words,capture.no_damage_words[rows,slot])),no_damage_known=capture.no_damage_known.at[rows,slot].set(j.where(write[:,None],known,capture.no_damage_known[rows,slot])),no_damage_malformed=capture.no_damage_malformed.at[rows,slot].set(j.where(write[:,None],malformed,capture.no_damage_malformed[rows,slot])),no_damage_valid=capture.no_damage_valid.at[rows,slot].set(capture.no_damage_valid[rows,slot]|write),no_damage_count=j.where(write,capture.no_damage_count+1,capture.no_damage_count),no_damage_overflow=capture.no_damage_overflow|(active&~room))
+    return tape._replace(execution=c._replace(diagnostics=updated))
 
 def record_baton_start_on_tape(tape,values,*,active):
     """Literal source operands only; unknown fields have explicit known=False.
@@ -199,6 +252,24 @@ def baton_start_guard_values(record):
     result['public_boosts_equal']=calc(fields,lambda *v:v[:7]==v[7:])
     return result
 
+def no_damage_groups(record):
+    """Nonexclusive diagnostic groups from stored literals, not cause labels."""
+    def calc(names,fn):
+        values=[record.get(n)for n in names]
+        return None if any(type(v)not in(int,bool)for v in values)else bool(fn(*values))
+    groups={}
+    for name in ('candidate','levitate_source','levitate_lookup','allowed_item_lookup','finish_scheduled','finish_matches','room','use'):
+        groups[name]=calc((name,),lambda x:x==1)
+    groups['ordinary_caller']=calc(('move','caller_move'),lambda x,y:x==y)
+    groups['canonical_levitate_move']=calc(('move','levitate_move'),lambda x,y:y>0 and x==y)
+    groups['non_flying_target']=calc(('target_type0','target_type1','flying_type'),lambda x,y,f:x!=f and y!=f)
+    groups['static_type_join']=calc(('move_type','selected_type','dynamic_type'),lambda x,y,d:x==y)if record.get('dynamic_type')==0 else None
+    groups['zero_volatile']=calc(('volatile_uint32',),lambda x:x==0)
+    groups['target_private_conserved']=calc(('hp','write_old_hp','write_new_hp','maximum','write_maximum'),lambda h,o,n,m,w:h==o==n and m==w)
+    groups['current_type_item_ability_join']=calc(('target_type0','target_type1','item','ability','current_type0','current_type1','current_item','current_ability'),lambda *v:v[:4]==v[4:])
+    return groups
+
+
 def refused_rows(capture,refused,*,_host_cache=None):
     """Copy each used array once, then serialize ONLY refused host rows.
 
@@ -213,6 +284,8 @@ def refused_rows(capture,refused,*,_host_cache=None):
     before_available=_valid_before_move(capture,len(refused))if available else False
     baton_available=_valid_baton_start(capture,len(refused))if available else False
     baton_present=type(capture)is Capture and any(x is not None for x in capture[12:17])
+    no_damage_available=_valid_no_damage(capture,len(refused))if available else False
+    no_damage_present=type(capture)is Capture and any(x is not None for x in capture[17:23])
     cache={}if _host_cache is None else _host_cache
     def host(value):
         key=id(value)
@@ -222,6 +295,7 @@ def refused_rows(capture,refused,*,_host_cache=None):
     residual_copied=tuple(host(value)for value in capture[4:8])if residual_available and len(indices)else None
     before_copied=tuple(host(value)for value in capture[8:12])if before_available and len(indices)else None
     baton_copied=tuple(host(value)for value in capture[12:17])if baton_available and len(indices)else None
+    no_damage_copied=tuple(host(value)for value in capture[17:23])if no_damage_available and len(indices)else None
     for row in indices:
         item={'row':int(row),'available':available}
         if available:
@@ -249,5 +323,19 @@ def refused_rows(capture,refused,*,_host_cache=None):
                     records.append(values)
                 item['baton_start'].update(count=int(count[row]),overflow=bool(overflow[row]),records=records)
             else:item['baton_start']['reason']='MISSING_OR_MALFORMED_STORAGE'
+        if no_damage_present:
+            result_data=dict(available=no_damage_available,capacity=CAPACITY,scope='Actual finish operands/header code/scheduled/final result. Nonexclusive diagnostic groups, never causes or admission.')
+            if no_damage_available:
+                words,known,malformed,valid,count,overflow=no_damage_copied;records=[]
+                for record,mask,bad in zip(words[row][valid[row]],known[row][valid[row]],malformed[row][valid[row]],strict=True):
+                    values={name:int(value)if yes else None for name,value,yes in zip(NO_DAMAGE_FIELDS,record,mask,strict=True)}
+                    for n in ('volatile_uint32','absorption_volatile_uint32','current_volatile_uint32'):
+                        if values[n]is not None:values[n]&=0xffffffff
+                    values['malformed_fields']=[n for n,v in zip(NO_DAMAGE_FIELDS,bad,strict=True)if v]
+                    values['unavailable_fields']=[n for n,v in values.items()if v is None]
+                    values['diagnostic_groups']=no_damage_groups(values);records.append(values)
+                result_data.update(count=int(count[row]),overflow=bool(overflow[row]),records=records)
+            else:result_data['reason']='MISSING_OR_MALFORMED_STORAGE'
+            item['no_damage_finish']=result_data
         result.append(item)
     return dict(schema='pokezero.literal-refused-outcomes.v1',capacity=CAPACITY,rows=result)

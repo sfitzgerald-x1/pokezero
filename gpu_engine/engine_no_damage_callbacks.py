@@ -339,9 +339,14 @@ def matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_pow
 
 def finish(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,*,target_types=None,item=None,ability=None):
     from . import engine_execution_completeness as ex
-    requested=p.requested&scheduled(p,w);good=matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,stage=1,target_types=target_types,item=item,ability=ability)
+    scheduled_result=scheduled(p,w)
+    requested=p.requested&scheduled_result;good=matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,stage=1,target_types=target_types,item=item,ability=ability)
     room=(tape.count>=0)&(tape.count<=tape.words.shape[1]-2);use=requested&good&room
     header,facts=words(p,w)
+    from . import engine_outcome_diagnostics as diagnostics
+    tape=diagnostics.record_no_damage_on_tape(tape,p,w,scheduled=scheduled_result,code=header[:,6],matched=good,room=room,use=use,
+        actor_hp=actor_hp,volatile=volatile,sub_hp=sub_hp,actor_hp_type=actor_hp_type,actor_hp_power=actor_hp_power,
+        target_types=target_types,item=item,ability=ability)
     for kind,raw in ((TARGET_NO_DAMAGE,header),(ABSORB_FACTS,facts)):tape=public._append(tape,kind,p.actor,p.physical,1-p.actor,p.target,tuple(raw[:,i]for i in range(5,10)),use)
     actual=ex._context(tape)
     ledger=ex.unhandled(actual.ledger,p.ticket,active=requested&~(good&room),tables=actual.tables)
