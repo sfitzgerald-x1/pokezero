@@ -166,6 +166,18 @@ def _row_select(mask, before, after):
     return jax.tree.map(choose,before,after)
 
 
+def _bound_engine_move_names(request):
+    """Decode the ORIGINAL checked request record's canonical metadata JSON."""
+    import json
+    metadata=json.loads(request['metadata'])
+    names=metadata['vocabulary']['moves']
+    if type(names)is not list or not names or any(type(name)is not str or not name for name in names):
+        raise ValueError('original canonical engine move vocabulary required')
+    if len(names)!=len(request['engine_table'].power):
+        raise ValueError('engine move vocabulary/table geometry differs')
+    return tuple(names)
+
+
 class _Runtime:
     """Original runtime edges; diagnostic receipts cannot enter the Session."""
     def __init__(self,runtime,plan,pool,indices,streams,constructor_seed,gender):
@@ -179,7 +191,7 @@ class _Runtime:
         if self.static.get('frame_input_mode')!='source-witness' or self.static['execution_compiled'] is None or self.static['kernel_risk_compiled'] is None:
             raise ValueError('same original full source-witness census runtime required')
         self.plan=plan;self.streams=streams;self.table=self.static['request']['engine_table']
-        self.move_names=tuple(self.static['request']['metadata']['vocabulary']['moves'])
+        self.move_names=_bound_engine_move_names(self.static['request'])
         started=time.perf_counter_ns()
         self.session=driver.construct(pool,indices,prepared=self.record['prepared'],stream_ids=j.asarray(streams),seed=constructor_seed,
             **({}if gender is None else dict(gender_initialization=gender)))
@@ -448,11 +460,12 @@ def measure(runtime,pool,team_indices,*,stream_ids,plan,constructor_seed,samplin
     source=retained._source_snapshot();receipt=source_provenance._pool(pool,rehash=True)
     if np.any(indices>=len(pool.arrays['species'])):raise ValueError('declared teamindex outside bound pool')
     if journal_path is None:raise ValueError('exclusive remote census journal path required')
+    move_names=_bound_engine_move_names(retained.driver._checked(retained._checked(runtime)['prepared'])['request'])
     ledger=Ledger(plan,streams);journal=Journal(journal_path,max_bytes=max_journal_bytes)
     envelope=dict(source=source,runtime_binding=runtime.binding,pool_receipt=receipt,plan=plan.__dict__,
         constructor_seed=constructor_seed,sampling_seed=sampling_seed,
         original_team_indices=indices.tolist(),original_stream_ids=streams.tolist(),
-        engine_move_names=list(retained.driver._checked(retained._checked(runtime)['prepared'])['request']['metadata']['vocabulary']['moves']),
+        engine_move_names=list(move_names),
         attempts='All2048declaredfreshconstructorrows are attempted before dispatch; no retry/refill.')
     journal.write(dict(status='ATTEMPTED_CONSTRUCTION_UNKNOWN',**envelope,**ledger.summary()))
     try:
