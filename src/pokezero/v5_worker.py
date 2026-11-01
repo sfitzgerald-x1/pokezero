@@ -241,7 +241,7 @@ def prepare_runtime(inputs):
         checkpoint_sha256=contract.checkpoint_sha256,rules=rules,lifecycle_catalog=lifecycle)
     facts=own.compile_own_facts(request,catalog)
     helpers=dict(leftovers_compiled=leftovers.compile_leftovers(metadata,engine_catalog=lifecycle),leftovers_mode='retained',
-        status_residual_compiled=status.compile_status_residual(metadata,engine_catalog=lifecycle),status_residual_mode='kernel-event',
+        status_residual_compiled=status.compile_status_residual(metadata,engine_catalog=lifecycle,source_rules=rules),status_residual_mode='kernel-event',
         direct_hit_compiled=hit.compile_direct_hit_controls(engine_catalog=lifecycle,metadata=metadata,source_rules=rules),direct_hit_mode='kernel-event',
         substitute_compiled=substitute.compile_substitute(engine_catalog=lifecycle,metadata=metadata,source_rules=rules),substitute_mode='kernel-event',
         toxic_compiled=toxic.compile_toxic(engine_catalog=lifecycle,metadata=metadata,source_rules=rules),toxic_mode='kernel-event')
