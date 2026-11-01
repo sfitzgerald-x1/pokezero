@@ -72,6 +72,8 @@ class Site(IntEnum):
     SELF_MOVE_INPUT = 36
     HEAL_BELL = 37
     SELF_BOOST_INPUT = 38
+    BEFORE_MOVE_BLOCKED = 41
+    SELF_DESTRUCT = 40 # reserved separately reviewed composite
     BATON_PASS = 39
 
 

@@ -25,6 +25,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from pokezero.dex import normalize_id
+from . import engine_before_move_blocked_callbacks as before_move_blocked_callbacks
 from . import engine_lifecycle_callbacks as life, engine_public_event_device as base
 from . import engine_public_events as public, public_inputs as inputs, public_toxic
 from . import engine_secondary_status_callbacks as secondary_callbacks
@@ -610,6 +611,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         rough = kind == rough_callbacks.ROUGH_SKIN_HP
         belly = kind == belly_callbacks.BELLY_DRUM
         sleep_blocked = kind == sleep_blocked_callbacks.SLEEP_BLOCKED
+        before_move_blocked = kind == before_move_blocked_callbacks.BEFORE_MOVE_BLOCKED
         heal_bell = kind == heal_bell_callbacks.HEAL_BELL
         self_move = kind == self_move_callbacks.SELF_MOVE_INPUT
         encore = kind == encore_callbacks.ENCORE
@@ -823,6 +825,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sleep_blocked_ok=(tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)
             &(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&sleep_blocked_callbacks.owned(tape,index))
         event_ok=jnp.where(sleep_blocked,generation_ok&clock_ok&sleep_blocked_ok,event_ok)
+        bm_ok=tables.status_events&~tables.raw_begin&actor_ok&cursor.initialized&(phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])&before_move_blocked_callbacks.owned(tape,index)
+        event_ok=jnp.where(before_move_blocked,generation_ok&clock_ok&bm_ok,event_ok)
         intimidate_ok=(tables.status_events & ~tables.raw_begin & actor_ok & status_identity
             &~cursor.initialized&(turn==0)&(phase==0)&(actor_physical==0)&(incoming==0)
             &(actor_side>=0)&(actor_side<2)&(side==1-actor_side)
@@ -1046,6 +1050,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         sleep_payload=jnp.stack((actor_enc,jnp.full_like(z,public_sleep.CANT_SLEEP),z,z,z,z,z,z),axis=1)
         sleep_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.SLEEP)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),sleep_payload),axis=1)
         semantic=jnp.where(sleep_blocked[:,None],sleep_semantic,semantic)
+        bm_payload=jnp.stack((actor_enc,jnp.full_like(z,public_active.STALL_BREAK),z,z,z,z,z,z),axis=1)
+        bm_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),bm_payload),axis=1)
+        semantic=jnp.where(before_move_blocked[:,None],bm_semantic,semantic)
         intimidate_payload=jnp.stack((status_enc,z,jnp.full_like(z,-1),jnp.full_like(z,public_mon_state.DELTA),jnp.ones_like(z),z,z,z),axis=1)
         intimidate_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.BOOST)),semantic_sequence,
             turn,phase,absent,absent,side,status_slot),axis=1),intimidate_payload),axis=1)
