@@ -254,6 +254,10 @@ def _matches_status_final_device(tape,state):
     if c is None or c.status is None:return jnp.zeros(b,bool)
     s=c.status;_typed_status(s,b);rows=jnp.arange(b);ledger=tape.execution.ledger;slot=jnp.clip(s.slot,0,ledger.site.shape[1]-1);victim=jnp.clip(s.side,0,1);physical=jnp.clip(s.physical,0,5)
     good=(_bound(tape,c)&s.enabled&(c.candidates==0)&(s.candidates==1)&(s.slot>=0)&(s.slot<ledger.count)&(ledger.serial[rows,slot]==s.serial)&(ledger.side[rows,slot]==s.side)&status.owned_lethal(tape,ledger.start[rows,slot],s.data))
+    raw=tape.words[rows,jnp.clip(ledger.start[rows,slot],0,tape.words.shape[1]-1)]
+    good &= ((raw[:,3]==s.side)&(raw[:,4]==s.physical)&(raw[:,5]==s.old_hp)
+        &(raw[:,5]==s.before_hp[rows,victim,physical])
+        &(raw[:,7]==s.before_max_hp[rows,victim,physical]))
     expected=s.before_hp.at[rows,victim,physical].set(0)
     good &= ((c.finalized==1)&~c.before_done&(c.before_winner==-1)&c.final_done
         &(s.side>=0)&(s.side<2)&(s.physical>=0)&(s.physical<6)&(s.old_hp>0)&(s.old_hp==s.before_hp[rows,victim,physical])

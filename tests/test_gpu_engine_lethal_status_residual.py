@@ -110,3 +110,13 @@ class LethalStatusResidualTests(unittest.TestCase):
   import test_gpu_engine_terminal_source as old_tests
   old_tests.TerminalTransportAndCountingTests().test_b8_global_and_original_snapshot_cannot_be_row_selected_or_mutated()
   subprocess.run([__import__('sys').executable,'-c','from gpu_engine import benchmark_capture_gap_census, engine_source_frame_witness, engine_full_v4_event_device'],check=True,capture_output=True,text=True)
+
+ def test_final_raw_is_joined_to_captured_status_party_member(self):
+  t,cap=self.pending();final,state=self.finalize(self.emit(t,cap),cap)
+  self.assertEqual(terminal.matches_final_device(final,state).tolist(),[True]*8)
+  for column,value in ((5,32),(7,256),(4,2),(3,1)):
+   words=final.words.at[0,2,column].set(value)
+   if column in (3,4):words=words.at[0,3,column].set(value)
+   ledger=final.execution.ledger._replace(words=final.execution.ledger.words.at[0,2].set(words[0,2]).at[0,3].set(words[0,3]))
+   changed=final._replace(words=words,execution=final.execution._replace(ledger=ledger))
+   self.assertEqual(terminal.matches_final_device(changed,state).tolist(),[False]+[True]*7,column)
