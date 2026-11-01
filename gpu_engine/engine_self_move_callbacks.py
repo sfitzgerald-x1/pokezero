@@ -27,6 +27,8 @@ class Data(NamedTuple):
     candidates:object
     rest_abilities:object
     rest_items:object
+    talking:object=None # original full SleepTalkTable, explicit source-bound only
+    talking_source:object=None # literal source pool before kernel Struggle exclusion
 class Pending(NamedTuple):
     context:object
     ticket:object
@@ -62,10 +64,12 @@ const fs=require('fs'),path=require('path'),crypto=require('crypto'),root=proces
 const verified=require(process.argv[2]).build(root,meta),d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),out={};
 for(const id of ['rest','sleeptalk','wish']) {const m=d.moves.get(id),hashes={};for(const k of ['onTry','onHit'])if(m[k])hashes[k]=crypto.createHash('sha256').update(m[k].toString()).digest('hex');if(id==='wish')hashes.onEnd=crypto.createHash('sha256').update(m.condition.onEnd.toString()).digest('hex');out[id]={hashes,target:m.target,category:m.category,power:m.basePower,accuracy:m.accuracy,slot:m.slotCondition||'',sleepUsable:!!m.sleepUsable,duration:m.condition?.duration||0,order:m.condition?.onResidualOrder||0};}
 const {Battle}=require(path.join(root,'dist/sim/battle.js')),{Pokemon}=require(path.join(root,'dist/sim/pokemon.js')),hash=x=>crypto.createHash('sha256').update(x.toString()).digest('hex');
+const talk_hooks={before:hash(d.conditions.get('slp').onBeforeMove),use:hash(d.data.Scripts.actions.useMoveInner)};
+const talk_callable=meta.vocabulary.moves.map((n,i)=>{const m=d.moves.get(n);return !!(i&&m.exists&&!m.flags.nosleeptalk&&!m.flags.charge)});
 const rest_hooks={sleepStart:hash(d.conditions.get('slp').onStart),heal:hash(Battle.prototype.heal),setStatus:hash(Pokemon.prototype.setStatus)};
 const rest_immune=meta.vocabulary.abilities.map(n=>['insomnia','vitalspirit','comatose'].includes(d.abilities.get(n).id));
 const rest_items=meta.vocabulary.items.map((n,i)=>{const x=d.items.get(n);return (i===0||x.exists)&&!x.onAfterSetStatus&&!x.onUpdate&&!x.onTryHeal});
-process.stdout.write(JSON.stringify({out,rest_hooks,rest_immune,rest_items,source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
+process.stdout.write(JSON.stringify({out,talkFrom:d.conditions.get('sleeptalk').name,talk_hooks,talk_callable,rest_hooks,rest_immune,rest_items,source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
     descriptor=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
     if json.dumps(descriptor['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(descriptor['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original source tree changed')
     if descriptor['rest_hooks']!=REST_HOOKS:raise ValueError('original Rest sleep/heal source changed')
@@ -84,17 +88,27 @@ process.stdout.write(JSON.stringify({out,rest_hooks,rest_immune,rest_items,sourc
         else:index=0
         ids.append(index)
     if not mask.any():return None
+    talking=table.sleep_talk if ids[1]>0 else None
+    if talking is not None:
+        if descriptor['talkFrom']!='sleeptalk':raise ValueError('original literal Sleep Talk source annotation changed')
+        if descriptor['talk_hooks']!={'before': '69a6ba02bb56466f43b8fd6422165dff5caca176790b2495be2a7a0e5793e672', 'use': '8c35e507bccb4bc25d13e24d582895097cd14ea6b24630b163e6ffafc7b4a160'}:raise ValueError('original Sleep Talk callback chronology changed')
+        if not np.array_equal(talking.callable,np.asarray(descriptor['talk_callable'],bool)&np.array([n!='struggle'for n in names])) or not np.array_equal(talking.early_bird,np.array([n=='earlybird'for n in metadata['vocabulary']['abilities']])):raise ValueError('original installed Sleep Talk selection required')
     rest_abilities=np.zeros(len(metadata['vocabulary']['abilities']),bool);rest_items=np.zeros(len(metadata['vocabulary']['items']),bool)
     if table.secondary is not None:rest_abilities=np.asarray(rules.device.ability_supported)&~np.asarray(descriptor['rest_immune'],bool)
     if table.items is not None:rest_items=np.asarray(descriptor['rest_items'],bool)&~np.asarray(table.items.lum)
-    payload=dict(schema='pokezero.literal-self-move.partial.v2',rest_abilities=rest_abilities.tolist(),rest_items=rest_items.tolist(),descriptor=descriptor,engine=np.asarray(catalog.engine_binding).tolist(),source=np.asarray(catalog.source_binding).tolist(),moves=np.asarray(catalog.move_binding).tolist(),producer=catalog.binding,ids=ids)
+    payload=dict(talking=None if talking is None else {k:np.asarray(x).tolist()for k,x in zip(talking._fields,talking)},schema='pokezero.literal-self-move.partial.v3',rest_abilities=rest_abilities.tolist(),rest_items=rest_items.tolist(),descriptor=descriptor,engine=np.asarray(catalog.engine_binding).tolist(),source=np.asarray(catalog.source_binding).tolist(),moves=np.asarray(catalog.move_binding).tolist(),producer=catalog.binding,ids=ids)
     words=lambda x:j.asarray(x,j.uint32)
-    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(ids,j.int32),j.asarray(mask),j.asarray(rest_abilities),j.asarray(rest_items))
+    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(ids,j.int32),j.asarray(mask),j.asarray(rest_abilities),j.asarray(rest_items),talking,None if talking is None else j.asarray(descriptor['talk_callable'],j.bool_))
 
 def shape(d):
     if type(d)is not Data:raise ValueError('typed original self-move data required')
     for x in d[:5]:life._typed(x,(8,),j.uint32)
     life._typed(d.move_ids,(3,),j.int32);life._typed(d.candidates,(len(d.candidates),),j.bool_)
+    if d.talking is not None:
+        from .sleep_talk import SleepTalkTable
+        if type(d.talking)is not SleepTalkTable:raise ValueError('original installed Sleep Talk table required')
+        life._typed(d.talking_source,d.candidates.shape,j.bool_)
+        for x,shape in((d.talking.move,d.candidates.shape),(d.talking.callable,d.candidates.shape),(d.talking.early_bird,d.rest_abilities.shape)):life._typed(x,shape,j.bool_)
     life._typed(d.rest_abilities,(len(d.rest_abilities),),j.bool_);life._typed(d.rest_items,(len(d.rest_items),),j.bool_)
 
 def _bound(tape,context):

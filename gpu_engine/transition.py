@@ -665,6 +665,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace,_before_move_blocked_pending=before_move_blocked_callbacks.begin(_public_trace,work,side,move,caller_move,chance[:,1:4],
                 _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,
                 eligible=eligible,sleep_usable=sleep_usable,loafing=loafing)
+        if _lifecycle_trace:
+            from . import engine_sleep_talk_callbacks as sleep_talk_callbacks
+            _public_trace,_sleep_talk_pending=sleep_talk_callbacks.begin(_public_trace,work,side,caller_move,chosen_slot,
+                _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table.sleep_talk,
+                choice_roll=sleep_talk_draws[rows,side],eligible=eligible,sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
@@ -770,11 +775,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             from . import engine_self_move_callbacks as self_move_callbacks
             _self_move_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None
             _sleep_failure=self_move_callbacks.awake_failure(_public_trace,work,side,caller_move,_self_move_context,eligible=caller_acts,acts=acts)
+        if _lifecycle_trace:
+            _public_trace,_sleep_talk_capture=sleep_talk_callbacks.finish(_public_trace,_sleep_talk_pending,work,before,move,
+                usable if table.sleep_talk is not None else jnp.zeros_like(acts),sleep_talk_draws[rows,side],acts=acts,caller_acts=caller_acts)
+            _sleep_talk_supported=sleep_talk_callbacks.captured_matches(_public_trace,_sleep_talk_capture)
         if _public_trace is not None:
             # A genuine ordinary declaration is known here, after the actual
             # suppression/preparation gates and before any main-hit callback.
             _public_trace = public_callbacks.move(_public_trace,side,work.active[rows,side],
-                work.active[rows,foe],caller_move,eligible=caller_acts,
+                work.active[rows,foe],caller_move,eligible=caller_acts & ~(_sleep_talk_supported if _lifecycle_trace else jnp.zeros_like(acts)),
                 unsupported=charge_locked | ((sleep_usable | ~acts) & ~(_sleep_failure if _lifecycle_trace else jnp.zeros_like(acts))))
         if _lifecycle_trace:
             from . import engine_protect_callbacks as protect_callbacks
