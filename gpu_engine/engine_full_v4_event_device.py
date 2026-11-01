@@ -381,7 +381,7 @@ def compile_adapter(metadata, projector, *, catalog):
             substitute_created[status]=add((f'|-start|{ident[0]}|Substitute',
                 f'|-damage|{ident[0]}|71/100{suffix}'),inputs.Kind.CONDITION)
             if not substitute_created[status]:raise ValueError('FULL writer lacks exact Substitute start/damage schemas')
-    toxic_no_effect=np.zeros(3,np.int32)
+    toxic_no_effect=np.zeros(5,np.int32)
     if int(lower.device.toxic_move)>0:
         pid=int(lower.device.base.public_ids[int(lower.device.toxic_move)])
         if pid>0:
@@ -390,7 +390,13 @@ def compile_adapter(metadata, projector, *, catalog):
                 raise ValueError('original Toxic MOVE [miss] retained words changed')
             toxic_no_effect[toxic_callbacks.MISS]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
             toxic_no_effect[toxic_callbacks.PLAIN_TYPE_IMMUNITY]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
-            if not np.all(toxic_no_effect[1:]):raise ValueError('original Toxic no-effect schemas missing')
+            blank=add(f'|move|{ident[0]}|Toxic||[still]',inputs.Kind.MOVE)
+            patched=templates[plain].copy();patched[mains[plain],6:8]=-1
+            # Toxic normally targets the foe. Original absent-target TENDENCY
+            # defaults to that same foe, so it needs no additional patch.
+            if not blank or mains[plain]!=mains[blank] or not np.array_equal(patched,templates[blank]):raise ValueError('original Toxic failed MOVE target-erasure schema changed')
+            toxic_no_effect[toxic_callbacks.SUBSTITUTE_BLOCK]=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
+            if not np.all(toxic_no_effect[[1,2,4]]):raise ValueError('original Toxic no-effect schemas missing')
     no_damage_keys=np.zeros((9,7),np.int32)
     no_damage_keys[no_damage.MISS,:]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
     no_damage_keys[no_damage.TYPE_IMMUNE,:]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
@@ -578,7 +584,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.sleep_powder_status,(),jnp.int32)
     causal.base._shape(tables.trace_copy,tables.causal.trace_public_ability.shape,jnp.int32)
     causal.base._shape(tables.substitute_created,(7,),jnp.int32)
-    causal.base._shape(tables.toxic_no_effect,(3,),jnp.int32)
+    causal.base._shape(tables.toxic_no_effect,(5,),jnp.int32)
     causal.base._shape(tables.recoil_damage,(7,),jnp.int32)
     causal.base._shape(tables.pinch_items,tables.pinch_items.shape,jnp.int32)
     if tables.pinch_items.ndim!=1 or not len(tables.pinch_items):raise ValueError("original pinch item namespace required")
@@ -650,8 +656,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_attempt=raw_kind==protect_callbacks.PROTECT_ATTEMPT
         protect_block=raw_kind==protect_callbacks.PROTECT_BLOCK
         substitute=condition & (raw_kind==substitute_callbacks.SUBSTITUTE_CREATED)
-        toxic_attempt=(kind==int(inputs.Kind.NONPROC)) & (raw_kind==toxic_callbacks.TOXIC_ATTEMPT)
         toxic_code=toxic_callbacks.outcome_device(tape.words[:,index])
+        toxic_sub_failure=(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)&(kind==int(inputs.Kind.ACTIVE))&toxic_callbacks.substitute_failure_raw(tape.words[:,index])
+        toxic_attempt=((kind==int(inputs.Kind.NONPROC))|toxic_sub_failure)&(raw_kind==toxic_callbacks.TOXIC_ATTEMPT)
         pressure=(kind==int(inputs.Kind.ABILITY)) & (raw_kind==pressure_callbacks.PRESSURE_START)
         pressure_visible=pressure & (state.causal.owner==semantic[:,6])
         trace_copy=(kind==int(inputs.Kind.TRACE))&(raw_kind==trace_callbacks.TRACE_COPY)
@@ -715,7 +722,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # Kind9 already emits the sole STATUS line. Kind26 is its checked
         # same-call accounting continuation and contributes no public words.
         toxic_write=toxic_attempt&(toxic_code==toxic_callbacks.STATUS_WRITE)
-        key=jnp.where(toxic_attempt,tables.toxic_no_effect[jnp.clip(toxic_code,0,2)],key)
+        key=jnp.where(toxic_attempt,tables.toxic_no_effect[jnp.clip(toxic_code,0,4)],key)
         key=jnp.where(toxic_write,0,key)
         sleep_miss=toxic_attempt&powder_callbacks.owned_miss_device(tape,index)
         sleep_miss_safe=tables.no_damage_miss[jnp.clip(tape.words[:,index,5],0,len(tables.no_damage_miss)-1)]
@@ -755,7 +762,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         error = jnp.where(present & (error == 0) & ~good, int(inputs.Error.PAYLOAD), error)
         schema = tables.templates[key]
         subject = jnp.where(direct_control,tape.words[:,index,3],jnp.where(entry_weather|move_weather,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6])))
-        subject=jnp.where(toxic_attempt,jnp.where(toxic_code==toxic_callbacks.MISS,tape.words[:,index,1],tape.words[:,index,3]),subject)
+        subject=jnp.where(toxic_attempt,jnp.where((toxic_code==toxic_callbacks.MISS)|toxic_sub_failure,tape.words[:,index,1],tape.words[:,index,3]),subject)
         subject=jnp.where(trace_copy,semantic[:,4],jnp.where(intimidate,tape.words[:,index,1],subject))
         subject=jnp.where(spikes,tape.words[:,index,1],subject)
         subject=jnp.where(flash_ended|protect_block|color_change,tape.words[:,index,3],subject)
@@ -823,16 +830,19 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # The validated receipt immediately follows its original MOVE.  Match
         # that exact emitted declaration before applying the same retroactive
         # target erasure as original Battle.attrLastMove; no comparison change.
-        erase_pid=jnp.where(sm_sleep,sm_pid,protect_pid)
+        toxic_pid=tables.causal.base.public_ids[jnp.clip(tape.words[:,index,5],0,len(tables.causal.base.public_ids)-1)]
+        erase_pid=jnp.where(toxic_sub_failure,toxic_pid,jnp.where(sm_sleep,sm_pid,protect_pid))
         protect_move_key=tables.moves[jnp.clip(erase_pid,0,len(tables.moves)-1)]
         protect_declaration=count-tables.length[protect_move_key]+tables.main[protect_move_key]
         protect_declaration_at=jnp.clip(protect_declaration,0,capacity-1)
         protect_previous=words[rows,protect_declaration_at]
-        protect_erases_target=(protect_attempt&protect_failed)|sm_sleep
+        protect_erases_target=(protect_attempt&protect_failed)|sm_sleep|toxic_sub_failure
+        erase_target_side=jnp.where(toxic_sub_failure,toxic_victim,called[:,0])
+        erase_target_slot=jnp.where(toxic_sub_failure,slots[rows,toxic_victim],called[:,1])
         protect_previous_ok=(protect_declaration>=0)&(protect_declaration<count)
         protect_previous_ok &= (protect_previous[:,0]==int(inputs.Kind.MOVE))
         protect_previous_ok &= (protect_previous[:,4]==called[:,0])&(protect_previous[:,5]==called[:,1])
-        protect_previous_ok &= (protect_previous[:,6]==called[:,0])&(protect_previous[:,7]==called[:,1])
+        protect_previous_ok &= (protect_previous[:,6]==erase_target_side)&(protect_previous[:,7]==erase_target_slot)
         protect_previous_ok &= (protect_previous[:,9]==erase_pid)
         protect_previous_ok &= (protect_previous[:,2]==semantic[:,2])&(protect_previous[:,3]==semantic[:,3])
         protect_tendency_at=jnp.clip(count-1,0,capacity-1)
@@ -840,8 +850,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         from . import public_tendency
         protect_previous_ok &= protect_declaration<count-1
         protect_previous_ok &= (protect_previous_tendency[:,0]==int(inputs.Kind.TENDENCY))&(protect_previous_tendency[:,8]==public_tendency.MOVE)
-        protect_previous_ok &= (protect_previous_tendency[:,6]==called[:,0])&(protect_previous_tendency[:,10]==erase_pid)&(protect_previous_tendency[:,11]==called[:,0])
+        protect_previous_ok &= (protect_previous_tendency[:,6]==called[:,0])&(protect_previous_tendency[:,10]==erase_pid)&(protect_previous_tendency[:,11]==erase_target_side)
         protect_previous_ok &= (protect_previous_tendency[:,2]==semantic[:,2])&(protect_previous_tendency[:,3]==semantic[:,3])
+        identity &= ~toxic_sub_failure|toxic_callbacks.owned_substitute_failure(tape,index)
         identity &= ~protect_erases_target | protect_previous_ok
         identity &= ~protect_block | (live[rows,safe]&live[rows,1-safe]&(called[:,0]==tape.words[:,index,1])&(called[:,1]==slots[rows,1-safe])&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
         spikes_move=jnp.clip(tape.words[:,index,3],0,tables.causal.base.public_ids.shape[0]-1)
@@ -1088,6 +1099,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         for col, value, active in ((9, semantic[:, 9], arrival), (10, semantic[:, 9], move),
                 (11, semantic[:, 6], move), (12, semantic[:, 2], kind == int(inputs.Kind.TURN))):
             result = result.at[:, :, col].set(jnp.where(tendency & active[:, None], value[:, None], result[:, :, col]))
+        result=result.at[:,:,11].set(jnp.where(tendency&toxic_sub_failure[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency & toxic_attempt[:,None]
             & (toxic_code==toxic_callbacks.PLAIN_TYPE_IMMUNITY)[:,None],subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&leech[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
