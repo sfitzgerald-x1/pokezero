@@ -106,6 +106,8 @@ def load_factory(archive,*,catalog,contract,expected_archive_sha256,expected_che
     result=Factory(contract,catalog,params,config,adapter,json.dumps(metadata,sort_keys=True,allow_nan=False),
         encoder,append,forward,float(learner_seconds),deterministic,compute_dtype)
     _FACTORIES[result]=tuple(getattr(result,name) for name in result.__dataclass_fields__)
+    from pokezero.owning_worker_runtime import register_factory
+    register_factory(result,lambda:dict(fold=encoder.step,encode=encoder.encode_step,append=append,forward=forward))
     _checked(result);return result
 
 

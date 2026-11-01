@@ -579,6 +579,8 @@ def child(reference):
     _check_request(request,protocol,Artifact(**payload['protocol']),payload['expected_run_declaration_sha256'])
     if directory.parent!=request.run_directory/'artifacts' or Path(reference.path)!=directory/'request.json':
         raise ValueError('original owned evaluation request directory required')
+    from .owning_worker_runtime import configure_compilation_cache
+    configure_compilation_cache(directory/'jax-compilation-cache')
     configs=tuple(replace(c,checkpoint=request.checkpoint_path) for c in panels[request.declared_games]);report=directory/'worker-report.json'
     try:
         # No actual panel before source/data/runtime checks and genuine metric inputs.

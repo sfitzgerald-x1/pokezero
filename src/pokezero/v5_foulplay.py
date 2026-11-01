@@ -168,7 +168,10 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
     publish()
     for row in rows:
         if row['status']!='NOT_ATTEMPTED':continue
-        row.update(status='RUNNING',invocation_id=invocation);publish();clock=time.monotonic()
+        from .owning_worker_runtime import compilation_snapshot
+        row.update(status='RUNNING',invocation_id=invocation,
+            worker_compilation=dict(before=compilation_snapshot(factory)))
+        publish();clock=time.monotonic()
         try:
             result=await old._run_controlled_foulplay_games(config,policy=_TransportOnly(),
                 policy_id='v5-raw-'+recipe['archive_sha256'][:12],vocab=factory.catalog.vocabulary,
@@ -186,7 +189,9 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
             row.update(status='REFUSED' if isinstance(error,ValueError) else 'FAILED',score=None,
                 reason=type(error).__name__+': '+str(error)[:1024])
             if isinstance(error,TimeoutError):
+                row['worker_compilation']['after']=compilation_snapshot(factory)
                 row['duration_seconds']=time.monotonic()-clock;publish();break
+        row['worker_compilation']['after']=compilation_snapshot(factory)
         row['duration_seconds']=time.monotonic()-clock;publish()
     return report()
 
