@@ -15,6 +15,7 @@ from . import engine_public_events as public,engine_lifecycle_callbacks as life,
 
 TARGET_NO_DAMAGE,ABSORB_FACTS=33,34
 MISS,TYPE_IMMUNE,WATER_HEAL,WATER_FULL,VOLT_HEAL,VOLT_FULL,FLASH_START,FLASH_REPEAT=range(1,9)
+LEVITATE_IMMUNE=9
 
 class Data(NamedTuple):
     binding:object
@@ -34,6 +35,11 @@ class Data(NamedTuple):
     electric_type:object
     fire_type:object
     protect_miss:object=None # explicit original accuracy-before-TryHit source
+    levitate_move:object=None
+    ground_type:object=None
+    flying_type:object=None
+    levitate_items:object=None
+    levitate_source:object=None
 
 class Before(NamedTuple):
     accuracy_hit:object
@@ -48,6 +54,8 @@ class Before(NamedTuple):
     explodes:object
     actor_hp_type:object
     actor_hp_power:object
+    target_types:object=None # genuine pre-TryHit snapshot; new branch closed if absent
+    item:object=None
 
 class Pending(NamedTuple):
     context:object
@@ -69,6 +77,9 @@ class Captured(NamedTuple):
     sub_hp:object
     actor_hp_type:object
     actor_hp_power:object
+    target_types:object=None
+    item:object=None
+    ability:object=None
 
 def compile_data(engine_catalog,metadata=None,source_rules=None):
     """Private host compiler from ORIGINAL immutable numerical columns."""
@@ -107,18 +118,37 @@ def compile_data(engine_catalog,metadata=None,source_rules=None):
         script=r"""
 const fs=require('fs'),path=require('path'),crypto=require('crypto'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
 const checked=require(process.argv[2]).build(root,meta),f=require(path.join(root,'dist/data/mods/gen3/scripts.js')).Scripts.actions.tryMoveHit;
-process.stdout.write(JSON.stringify({tryMoveHit:crypto.createHash('sha256').update(f.toString()).digest('hex'),source_tree:checked.source_tree,compiled_tree:checked.compiled_tree}));"""
+const d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),P=require(path.join(root,'dist/sim/pokemon.js')).Pokemon,h=f=>crypto.createHash('sha256').update(f.toString()).digest('hex'),q=d.moves.get('earthquake'),a=d.abilities.get('levitate');
+process.stdout.write(JSON.stringify({tryMoveHit:h(f),runImmunity:h(P.prototype.runImmunity),isGrounded:h(P.prototype.isGrounded),earthquake:{id:q.id,gen:q.gen,power:q.basePower,type:q.type,category:q.category,target:q.target,accuracy:q.accuracy,priority:q.priority,ignoreImmunity:q.ignoreImmunity,callbacks:Object.keys(q).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&q[k]!==undefined)},levitate:{id:a.id,gen:a.gen,callbacks:Object.keys(a).filter(k=>/^on/.test(k)&&a[k]!==undefined)},source_tree:checked.source_tree,compiled_tree:checked.compiled_tree}));"""
         descriptor=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
         if descriptor['tryMoveHit']!='af529997d52b6d856301bc8f958ead5963f68abc58d9568c82df24f212b0a97f':raise ValueError('original Gen3 accuracy-before-TryHit source required')
+        if (descriptor['runImmunity']!='4c7cbdb0b36ed635276037455e9ee78593e79268c4c97c70a1a892d6651c198d'
+                or descriptor['isGrounded']!='41fe7f621f5d22f868652eb3a41e25e8858ca58c0194e2aaab865808830838e6'
+                or descriptor['earthquake']!=dict(id='earthquake',gen=1,power=100,type='Ground',category='Physical',target='allAdjacent',accuracy=100,priority=0,ignoreImmunity=False,callbacks=[])
+                or descriptor['levitate']!=dict(id='levitate',gen=3,callbacks=[])):
+            raise ValueError('original Gen3 Earthquake/Levitate grounding source required')
         if json.dumps(descriptor['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(descriptor['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original no-damage source changed')
-    payload=dict(schema='pokezero.literal-no-damage-target.v2',protect_miss_source=descriptor,producer=engine_catalog.binding,
+    quake=0;ground=j.array(0,j.int32);flying=j.array(0,j.int32)
+    allowed_items=j.zeros(1,j.bool_)
+    if t.entry is not None:
+        ground=t.entry.ground_type;flying=t.entry.flying_type
+        public_id=engine_catalog.public_moves.ids.get('earthquake',0)
+        for i,pid in enumerate(engine_catalog.ids):
+            if (i>0 and pid==public_id and public_id>0 and candidates[i] and int(t.power[i])==100
+                    and int(t.type[i])==int(ground) and bool(t.physical[i]) and int(t.accuracy[i])==100
+                    and not bool(t.always_hit[i]) and int(t.priority[i])==0):quake=i
+        if t.items is not None:
+            allowed_items=t.items.leftovers.at[0].set(True)
+    payload=dict(schema='pokezero.literal-no-damage-target.v3',protect_miss_source=descriptor,producer=engine_catalog.binding,
+        levitate_move=quake,ground_type=int(ground),flying_type=int(flying),levitate_items=np.asarray(allowed_items).tolist(),
         candidates=candidates.tolist(),move_types=np.asarray(t.type).tolist(),dynamic_type=dynamic.tolist(),dark_type=int(dark),abilities=[np.asarray(v).tolist()for v in columns],
         source=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     words=lambda v:j.asarray(v,j.uint32)
     return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding),dtype='>u4').astype(np.uint32)),j.array(candidates),t.type,j.array(dynamic),dark,
-        *columns,*type_ids,j.array(descriptor is not None,j.bool_))
+        *columns,*type_ids,j.array(descriptor is not None,j.bool_),j.array(quake,j.int32),ground,flying,
+        allowed_items,j.array(descriptor is not None and quake>0,j.bool_))
 
 def _shape(data):
     if type(data)is not Data:raise ValueError('original no-damage Data required')
@@ -129,6 +159,8 @@ def _shape(data):
     life._typed(data.dark_type,(),j.int32);life._typed(data.protect_miss,(),j.bool_)
     for v in (data.water,data.volt,data.flash,data.levitate):life._typed(v,(len(data.water),),j.bool_)
     for v in (data.water_type,data.electric_type,data.fire_type):life._typed(v,(),j.int32)
+    for v in (data.levitate_move,data.ground_type,data.flying_type):life._typed(v,(),j.int32)
+    life._typed(data.levitate_items,(len(data.levitate_items),),j.bool_);life._typed(data.levitate_source,(),j.bool_)
 
 def prepare(tape,ticket,actor,physical,target,move,before,context,*,requested,caller_move=None):
     if type(before)is not Before:raise ValueError('literal pre-TryHit operands required')
@@ -165,6 +197,15 @@ def _code(p,w):
     same=(a.hp==before.hp)&(a.volatile==before.volatile)
     miss=~before.accuracy_hit&~w.hit&~w.immune&positive_ratio&~a.blocked&same
     pure=before.accuracy_hit&w.hit&w.immune&(w.numerator==0)&((w.denominator==1)|(w.denominator==2))&~a.blocked&~data.levitate[abi]&same
+    levitate=j.zeros(b,bool)
+    if before.target_types is not None and before.item is not None and p.caller_move is not None:
+        life._typed(before.target_types,(b,2),j.int32);life._typed(before.item,(b,),j.int32);life._typed(p.caller_move,(b,),j.int32)
+        levitate=(data.levitate_source&(data.levitate_move>0)&(p.move==data.levitate_move)&(p.caller_move==p.move)
+            &before.accuracy_hit&w.hit&w.immune&positive_ratio&(w.power==100)&~a.blocked&same
+            &(before.move_type==data.ground_type)&data.levitate[abi]&(before.volatile==0)
+            &j.all((before.target_types>=0)&(before.target_types<18),axis=1)&(before.target_types[:,0]>0)
+            &~j.any(before.target_types==data.flying_type,axis=1)
+            &(before.item>=0)&(before.item<len(data.levitate_items))&data.levitate_items[j.clip(before.item,0,len(data.levitate_items)-1)])
     absorb=before.accuracy_hit&~w.hit&~w.immune&positive_ratio&a.blocked
     healed=absorb&(a.hp>before.hp)&(a.hp<=before.maximum)&(a.volatile==before.volatile)
     full=absorb&(before.hp==before.maximum)&same
@@ -181,6 +222,7 @@ def _code(p,w):
         life._typed(p.caller_move,(b,),j.int32);protect.shape(p.context.data.protect)
         source_move=p.context.data.protect.block_candidates[j.clip(p.move,0,len(data.candidates)-1)]
         protected_miss=data.protect_miss&miss&w.protected&(p.caller_move==p.move)&source_move
+    code=j.where(levitate,LEVITATE_IMMUNE,code)
     return j.where(valid&(~w.protected|protected_miss),code,0)
 
 def scheduled(pending,write):
@@ -192,6 +234,10 @@ def words(p,w):
     header=j.stack((z+TARGET_NO_DAMAGE,p.actor,p.physical,1-p.actor,p.target,p.move,code,before.hp,p.absorbed.hp,before.maximum),axis=1)
     facts=j.stack((z+ABSORB_FACTS,p.actor,p.physical,1-p.actor,p.target,p.move,before.ability,before.status,
         jax.lax.bitcast_convert_type(before.volatile,j.int32),jax.lax.bitcast_convert_type(p.absorbed.volatile,j.int32)),axis=1)
+    if before.target_types is not None and before.item is not None:
+        packed=before.target_types[:,0]|(before.target_types[:,1]<<5)
+        facts=facts.at[:,8].set(j.where(code==LEVITATE_IMMUNE,packed,facts[:,8]))
+        facts=facts.at[:,9].set(j.where(code==LEVITATE_IMMUNE,before.item,facts[:,9]))
     return header,facts
 
 def valid_raw_pair(header,facts,data):
@@ -205,6 +251,11 @@ def valid_raw_pair(header,facts,data):
         &(move>0)&(move<len(data.candidates))&data.candidates[j.clip(move,0,len(data.candidates)-1)]
         &(abi>=0)&(abi<len(data.water))&(facts[:,7]>=0)&(facts[:,7]<=6)&(header[:,7]>0)&(header[:,7]<=header[:,9])&(header[:,8]>0)&(header[:,8]<=header[:,9])
         &(((code==MISS)|(code==TYPE_IMMUNE))&same
+            |(code==LEVITATE_IMMUNE)&(data.levitate_move>0)&(move==data.levitate_move)&data.levitate[safe]
+              &(typ==data.ground_type)&(header[:,7]==header[:,8])&(facts[:,8]>=0)&(facts[:,8]<1024)
+              &((facts[:,8]&31)>0)&((facts[:,8]&31)<18)&((facts[:,8]>>5)<18)
+              &((facts[:,8]&31)!=data.flying_type)&((facts[:,8]>>5)!=data.flying_type)
+              &(facts[:,9]>=0)&(facts[:,9]<len(data.levitate_items))&data.levitate_items[j.clip(facts[:,9],0,len(data.levitate_items)-1)]
             |((code==WATER_HEAL)&data.water[safe]&((typ==data.water_type)|dynamic)|(code==VOLT_HEAL)&data.volt[safe]&((typ==data.electric_type)|dynamic))&(header[:,8]>header[:,7])&(before==after)
             |((code==WATER_FULL)&data.water[safe]&((typ==data.water_type)|dynamic)|(code==VOLT_FULL)&data.volt[safe]&((typ==data.electric_type)|dynamic))&same&(header[:,7]==header[:,9])
             |((code==FLASH_START)|(code==FLASH_REPEAT))&data.flash[safe]&((typ==data.fire_type)|dynamic)&(facts[:,7]!=m.FRZ)&(header[:,7]==header[:,8])
@@ -224,7 +275,7 @@ def _bound(tape,p):
     good &= j.all(p.context.data.binding==actual.risks.tables.direct_hit_binding)
     return good
 
-def matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,*,stage):
+def matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,*,stage,target_types=None,item=None,ability=None):
     from . import engine_execution_completeness as ex
     actual=ex._context(tape)
     if actual is None:return j.zeros_like(tape.count,bool)
@@ -235,6 +286,11 @@ def matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_pow
     source &= (outcome.substitute==w.substitute)&(outcome.protected==w.protected)&(outcome.enduring==w.enduring)
     source &= (actor_hp_type==p.before.actor_hp_type)&(actor_hp_power==p.before.actor_hp_power)
     source &= (outcome.recoil==0)&~outcome.explodes&(actor_hp==p.before.actor_hp)&(volatile==p.absorbed.volatile)&(sub_hp==p.before.sub_hp)
+    current=j.zeros(len(p.actor),bool)
+    if target_types is not None and item is not None and ability is not None and p.before.target_types is not None and p.before.item is not None:
+        life._typed(target_types,(len(p.actor),2),j.int32);life._typed(item,p.actor.shape,j.int32);life._typed(ability,p.actor.shape,j.int32)
+        current=j.all(target_types==p.before.target_types,axis=1)&(item==p.before.item)&(ability==p.before.ability)
+    source &= (code!=LEVITATE_IMMUNE)|current
     safe=j.clip(p.actor,0,1)
     source &= (ledger.site[rows,slot]==int(ex.Site.DIRECT_HIT))&(ledger.side[rows,slot]==1-p.actor)&(ledger.stage[rows,slot]==stage)
     source &= life._valid(tape.cursor)&(p.physical==tape.cursor.physical_active[rows,safe])&(p.target==tape.cursor.physical_active[rows,1-safe])
@@ -251,9 +307,9 @@ def matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_pow
             source &= (tape.event_turn[rows,at]==ledger.turn[rows,slot])&(tape.event_phase[rows,at]==ledger.phase[rows,slot])&j.all(tape.event_generation[rows,at]==ledger.generation[rows,slot],axis=1)
     return source
 
-def finish(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power):
+def finish(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,*,target_types=None,item=None,ability=None):
     from . import engine_execution_completeness as ex
-    requested=p.requested&scheduled(p,w);good=matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,stage=1)
+    requested=p.requested&scheduled(p,w);good=matches(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_power,stage=1,target_types=target_types,item=item,ability=ability)
     room=(tape.count>=0)&(tape.count<=tape.words.shape[1]-2);use=requested&good&room
     header,facts=words(p,w)
     for kind,raw in ((TARGET_NO_DAMAGE,header),(ABSORB_FACTS,facts)):tape=public._append(tape,kind,p.actor,p.physical,1-p.actor,p.target,tuple(raw[:,i]for i in range(5,10)),use)
@@ -265,7 +321,7 @@ def finish(tape,p,w,outcome,actor_hp,volatile,sub_hp,actor_hp_type,actor_hp_powe
 
 def captured_matches(tape,captured,outcome):
     if type(captured)is not Captured:return j.zeros_like(tape.count,bool)
-    return matches(tape,captured.pending,captured.write,outcome,captured.actor_hp,captured.volatile,captured.sub_hp,captured.actor_hp_type,captured.actor_hp_power,stage=2)
+    return matches(tape,captured.pending,captured.write,outcome,captured.actor_hp,captured.volatile,captured.sub_hp,captured.actor_hp_type,captured.actor_hp_power,stage=2,target_types=captured.target_types,item=captured.item,ability=captured.ability)
 
 def owned_pair(tape,index,data):
     """Completed captured Site10 snapshot at FULL time, not after-frame clocks."""
@@ -277,6 +333,14 @@ def owned_pair(tape,index,data):
     if actual is None:return j.zeros(b,bool),header,facts
     ledger=actual.ledger;claim=ledger.claimed[rows,first];slot=j.clip(claim-1,0,ledger.site.shape[1]-1)
     good=ex._validate(ledger,actual.tables)&ex._tape(ledger,tape,actual.tables)&valid_raw_pair(header,facts,data)
+    source=j.zeros(b,bool)
+    if actual.risks is not None:
+        tables=actual.risks.tables;life._typed(tables.levitate_immunity,(),j.bool_)
+        source=tables.levitate_immunity&j.any(tables.no_damage_binding!=0)
+        for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+            life._typed(getattr(tape,name),(8,),j.uint32);life._typed(getattr(tables,name),(8,),j.uint32)
+            source &= j.all(getattr(tape,name)==getattr(tables,name))
+    good &= (header[:,6]!=LEVITATE_IMMUNE)|source
     good &= (start>0)&(start+1<tape.count)&(claim>0)&(claim<=ledger.count)&(ledger.claimed[rows,second]==claim)
     good &= (ledger.site[rows,slot]==int(ex.Site.DIRECT_HIT))&(ledger.stage[rows,slot]==2)&(ledger.start[rows,slot]==start)&(ledger.end[rows,slot]==start+2)
     prefix=j.clip(start-1,0,tape.words.shape[1]-1);decl=tape.words[rows,prefix]

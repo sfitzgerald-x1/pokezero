@@ -931,7 +931,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _no_damage_before=no_damage_callbacks.Before(_direct_accuracy_hit,typ,_active(work.ability,work,foe),
                 _active(work.status,work,foe),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
                 _active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),_active(work.hp,work,side),explodes,
-                _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side))
+                _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
+                _active(work.types,work,foe),_active(work.item,work,foe))
             _no_damage_pending=no_damage_callbacks.prepare(_public_trace,_direct_ticket,side,work.active[rows,side],
                 work.active[rows,foe],move,_no_damage_before,_direct_hit_context,requested=_direct_requested,caller_move=caller_move)
         if table.absorption is not None:
@@ -1012,7 +1013,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _direct_hit_context is not None and _direct_hit_registered:
                 _public_trace=no_damage_callbacks.finish(_public_trace,_no_damage_pending,_direct_write,_literal_outcome,
                     _active(work.hp,work,side),_active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),
-                    _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side))
+                    _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
+                    target_types=_active(work.types,work,foe),item=_active(work.item,work,foe),ability=_active(work.ability,work,foe))
             from . import engine_outcome_diagnostics as outcome_diagnostics
             _public_trace=outcome_diagnostics.record_on_tape(_public_trace,_literal_outcome,move,side,
                 work.active[rows,side],work.active[rows,foe],eligible=acts,active=live)
@@ -1027,7 +1029,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 captured_protect_block=_protect_block_capture,
                 captured_no_damage=(no_damage_callbacks.Captured(_no_damage_pending,_direct_write,_active(work.hp,work,side),
                     _active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),
-                    _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side))
+                    _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
+                    _active(work.types,work,foe),_active(work.item,work,foe),_active(work.ability,work,foe))
                     if _direct_hit_context is not None and _direct_hit_registered else None))
         if table.effects is not None:
             effects = table.effects

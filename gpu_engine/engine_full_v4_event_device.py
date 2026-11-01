@@ -445,9 +445,12 @@ def compile_adapter(metadata, projector, *, catalog):
             if not blank or mains[plain]!=mains[blank] or not np.array_equal(patched,templates[blank]):raise ValueError('original Thunder Wave failed MOVE target-erasure schema changed')
             toxic_no_effect[toxic_callbacks.SUBSTITUTE_BLOCK]=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
             if not toxic_no_effect[toxic_callbacks.SUBSTITUTE_BLOCK]:raise ValueError('original Thunder Wave failure schema missing')
-    no_damage_keys=np.zeros((9,7),np.int32)
+    no_damage_keys=np.zeros((10,7),np.int32)
     no_damage_keys[no_damage.MISS,:]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
     no_damage_keys[no_damage.TYPE_IMMUNE,:]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
+    if catalog.abilities.ids.get('levitate',0)>0:
+        no_damage_keys[no_damage.LEVITATE_IMMUNE,:]=add(f'|-immune|{ident[0]}|[from] ability: Levitate',inputs.Kind.NONPROC)
+        if not np.all(no_damage_keys[no_damage.LEVITATE_IMMUNE]):raise ValueError('original tagged Levitate immunity schema missing')
     self_heal=np.zeros(7,np.int32)
     # Runtime chip_status is PUBLIC, exactly the original tokens order above.
     for status,token in enumerate(tokens):
@@ -653,7 +656,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     causal.base._shape(tables.protect_block,(),jnp.int32)
     causal.base._shape(tables.protect_still_moves,tables.moves.shape,jnp.bool_)
     causal.base._shape(tables.no_damage_miss,tables.causal.no_damage.candidates.shape,jnp.bool_)
-    causal.base._shape(tables.no_damage,(9,7),jnp.int32)
+    causal.base._shape(tables.no_damage,(10,7),jnp.int32)
     causal.base._shape(tables.self_heal,(7,),jnp.int32)
     causal.base._shape(tables.wonder_guard_immune,(),jnp.int32)
     causal.base._shape(tables.belly_drum_setboost,(),jnp.int32)
@@ -858,7 +861,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         key=jnp.where(calm_mind,tables.calm_mind[jnp.clip(tape.words[:,index,4]-2,0,1)],key)
         key=jnp.where(swords_dance,tables.swords_dance,key)
         nd_miss_safe=tables.no_damage_miss[jnp.clip(nd_raw[:,5],0,len(tables.no_damage_miss)-1)]
-        key=jnp.where(no_damage_header,jnp.where((nd_code!=no_damage.MISS)|nd_miss_safe,tables.no_damage[jnp.clip(nd_code,0,8),jnp.clip(nd_status,0,6)],0),key)
+        key=jnp.where(no_damage_header,jnp.where((nd_code!=no_damage.MISS)|nd_miss_safe,tables.no_damage[jnp.clip(nd_code,0,9),jnp.clip(nd_status,0,6)],0),key)
         wonder_immunity=no_damage_header&(nd_code==no_damage.TYPE_IMMUNE)&(tables.causal.wonder_guard_engine_ability>0)&(nd_facts[:,6]==tables.causal.wonder_guard_engine_ability)
         key=jnp.where(wonder_immunity,tables.wonder_guard_immune,key)
         key=jnp.where(no_damage_facts,0,key)
@@ -1259,7 +1262,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         result=result.at[:,:,11].set(jnp.where(tendency&encore[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&color_change[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&protect_block[:,None],subject[:,None],result[:,:,11]))
-        result=result.at[:,:,11].set(jnp.where(tendency&no_damage_header[:,None]&((nd_code==no_damage.TYPE_IMMUNE)|(nd_code==no_damage.WATER_FULL)|(nd_code==no_damage.VOLT_FULL)|(nd_code==no_damage.FLASH_REPEAT)|(nd_code==no_damage.FLASH_START)|nd_heal)[:,None],subject[:,None],result[:,:,11]))
+        result=result.at[:,:,11].set(jnp.where(tendency&no_damage_header[:,None]&((nd_code==no_damage.TYPE_IMMUNE)|(nd_code==no_damage.LEVITATE_IMMUNE)|(nd_code==no_damage.WATER_FULL)|(nd_code==no_damage.VOLT_FULL)|(nd_code==no_damage.FLASH_REPEAT)|(nd_code==no_damage.FLASH_START)|nd_heal)[:,None],subject[:,None],result[:,:,11]))
         result=result.at[:,:,11].set(jnp.where(tendency&sub_damage[:,None]&(schema[:,:,11]>=0),subject[:,None],result[:,:,11]))
         raw_control = kinds == int(inputs.Kind.RAW_BEGIN)
         # Original HP_ABSORB lexical metadata packs the healed proc's public
