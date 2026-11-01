@@ -20,10 +20,9 @@ DEFERRED={
  'truant_loaf':'Private clock is not polled; public activation hook not implemented.',
  'sleepClause':'Needs original public causal attribution, not private party status polling.',
  'hazard_credit':'Hazard exposure is public; causal setter credit not yet retained.',
- 'matchup_tendency':'Marginal switch/stay counts are present; matchup matrix not yet retained.',
+ 'tendency_outcomes':'Blocked-attack/pursuit/weather attribution remains deferred; basic switch/stay/opportunity counters are public.',
  'confusion_self_damage':'Ordinary direct-damage fractions are recorded; confusion self-hit damage metric remains deferred.',
  'item_swap_transform':'No corresponding numerical engine handler in this transition; item_swapped stays zero.',
- 'turns_active_vs_active':'Matchup-conditioned active time needs an explicit public pair carry.',
  'item_credit':'Consumed native items are retained/revealed, but removal attribution is not implemented.',
 }
 
@@ -62,6 +61,7 @@ def feature(c,side,physical,name,value,use,*,add=False):
     use=use&(slot>=0)&(slot<6)&(physical>=0)&(physical<6)
     values=t.mon_features;old=values[name];v=old[r,side,at]
     new=j.where(use,v+value if add else value,v)
+    if name in ('switched_before_attack','stayed_and_attacked','turns_active_total'):new=j.minimum(64,new)
     return c._replace(trackers=t._replace(mon_features={**values,name:old.at[r,side,at].set(new)}))
 
 def _narrow(c,side,physical,fact,use,kind):
@@ -85,11 +85,53 @@ def initialize(state,belief_tables=None):
         shown_ability=z,original_ability=z,shown_item=z,item_removed=j.zeros_like(z,bool),shown_types=j.zeros((b,2,6,2),j.int32),borrowed_ability=z,
         mon_features={key:(z.astype(j.float32) if key.startswith('last_damage') else z) for key in MON_KEYS},
         damage_exact_dealt=z.astype(j.float32),damage_exact_taken=z.astype(j.float32),
+        tendency=tr.Tendency(j.zeros((b,2),bool),j.full((b,2),-1,j.int32),j.zeros((b,2),j.int32),
+            j.zeros((b,2),j.int32),j.zeros((b,2,6,6,2),j.int32)),
         public_volatiles=j.zeros((b,2,6,len(VOLATILE_NAMES)),bool),field_features={'weather_upkeeps':j.zeros(b,j.int32),
             'weather_permanent':j.zeros(b,bool),'wish_turns':j.zeros((b,2),j.int32),'wish_pending':j.zeros((b,2),bool)})
     c=Context(t,belief_tables)
     for side in range(2):c=install(c,state,side,j.ones(b,bool),initial=True)
-    return c
+    # Original startup emits switches, then TURN1 before the first request.
+    return public_turn(c,state,~state.done,state.turn+1)
+
+
+def public_turn(c,state,use,turn):
+    """Actual next ordinary-request boundary, not the private engine counter."""
+    t=c.trackers
+    for side in range(2):
+        p=state.active[_r(state),side]
+        for name in ('turns_active','turns_active_total'):
+            c=feature(c,side,p,name,j.ones_like(p),use,add=True)
+    return c._replace(trackers=c.trackers._replace(turn=j.where(use,turn,t.turn)))
+
+
+def opportunity(c,side,use):
+    t=c.trackers;td=t.tendency;r=j.arange(len(t.error))
+    fresh=use&(td.opportunity_turn[r,side]!=t.turn)
+    turns=td.opportunity_turn.at[r,side].set(j.where(use,t.turn,td.opportunity_turn[r,side]))
+    counts=td.opportunities.at[r,side].set(j.minimum(64,td.opportunities[r,side]+fresh))
+    return c._replace(trackers=t._replace(tendency=td._replace(opportunity_turn=turns,opportunities=counts)))
+
+
+def switch_decision(c,state,side,use,*,baton):
+    """Same actual switch before departure; forced/Baton are not decisions."""
+    t=c.trackers;td=t.tendency;r=_r(state);p=state.active[r,side]
+    voluntary=use&~baton&(_get(state,'hp',side)>0)
+    bail=voluntary&~td.moved[r,side]
+    c=feature(c,side,p,'switched_before_attack',j.ones_like(p),bail,add=True)
+    c=matchup(c,side,bail,0)
+    t=c.trackers;td=t.tendency
+    counts=td.switches.at[r,side].set(j.minimum(64,td.switches[r,side]+voluntary))
+    c=c._replace(trackers=t._replace(tendency=td._replace(switches=counts)))
+    return opportunity(c,side,voluntary)
+
+
+def matchup(c,side,use,kind):
+    t=c.trackers;td=t.tendency;r=j.arange(len(t.error));a=t.active_slot[r,side];f=t.active_slot[r,1-side]
+    good=use&(a>=0)&(f>=0);a=j.clip(a,0,5);f=j.clip(f,0,5)
+    old=td.matchup[r,side,a,f,kind]
+    values=td.matchup.at[r,side,a,f,kind].set(j.minimum(8,old+good))
+    return c._replace(trackers=t._replace(tendency=td._replace(matchup=values)))
 
 
 def install(c,state,side,use,*,initial=False):
@@ -116,6 +158,10 @@ def install(c,state,side,use,*,initial=False):
     # switch resets public volatiles, not cumulative shown move/PP knowledge.
     for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap'):
         c=feature(c,side,p,name,j.zeros(b,j.int32),use)
+    c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,j.full((b,),-1,j.int32),use))
+    td=c.trackers.tendency
+    c=c._replace(trackers=c.trackers._replace(tendency=td._replace(
+        moved=td.moved.at[r,side].set(j.where(use,False,td.moved[r,side])))))
     c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,j.zeros((b,len(VOLATILE_NAMES)),bool),use))
     if not initial:c=feature(c,side,p,'switches',j.ones(b,j.int32),use,add=True)
     return c
@@ -131,7 +177,7 @@ def observe(c,state,use):
             c=feature(c,side,p,key,j.zeros_like(p),changed)
         c=c._replace(trackers=tr._observe(c.trackers,state,side,p,use,identity=False))
     t=c.trackers
-    return c._replace(trackers=t._replace(turn=j.where(use,state.turn,t.turn),weather=j.where(use,state.weather,t.weather),
+    return c._replace(trackers=t._replace(weather=j.where(use,state.weather,t.weather),
         spikes=j.where(use[:,None],state.spikes,t.spikes)))
 
 
@@ -225,10 +271,20 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     charge=(use&j.asarray(pp_use)).astype(j.int32)*(1+extra.astype(j.int32))
     pp=t.pp_used.at[r,side,slot,at].set(count+charge)
     c=c._replace(trackers=t._replace(observed_moves=observed,pp_used=pp))
+    # The existing child hook has count_turn=False; its original [from] line
+    # reveals the child but cannot replace last-used move. A preparation hook
+    # is an actual ordinary MOVE header, despite deferring its physical PP.
+    header=count_turn or preparation
+    if header:c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,move,declared))
     if not preparation:
-        c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,move,declared))
         c=feature(c,side,p,'moves_shown',j.ones_like(move),declared,add=True)
-        if count_turn:c=feature(c,side,p,'stayed_and_attacked',j.ones_like(move),declared,add=True)
+    if header:
+        t=c.trackers;td=t.tendency;first=declared&~td.moved[r,side]
+        c=feature(c,side,p,'stayed_and_attacked',j.ones_like(move),first,add=True)
+        c=matchup(c,side,first,1)
+        t=c.trackers;td=t.tendency
+        c=c._replace(trackers=t._replace(tendency=td._replace(moved=td.moved.at[r,side].set(td.moved[r,side]|declared))))
+        c=opportunity(c,side,declared&(_get(state,'charge_move',side)==0))
     return _narrow(c,side,p,move,declared&evidence,'move') if original else c
 
 
@@ -274,14 +330,18 @@ def turn_end(c,before,after,ordinary):
     c=observe(c,after,~before.done)
     for side in range(2):
         p=after.active[_r(after),side];alive=ordinary&(_get(after,'hp',side)>0)
-        for name in ('turns_active','turns_active_total'):c=feature(c,side,p,name,j.ones_like(p),alive,add=True)
         for name,active in [('toxic_stage',_get(after,'status',side)==4),
                             ('confusion_turns',_get(after,'confusion_counter',side)>0),('encore_turns',_get(after,'encore_counter',side)>0)]:
             c=feature(c,side,p,name,j.ones_like(p),alive&active,add=True)
             c=feature(c,side,p,name,j.zeros_like(p),ordinary&~active)
     t=c.trackers;fields=t.field_features
     up=fields['weather_upkeeps']+(ordinary&(after.weather!=0)).astype(j.int32)
-    return c._replace(trackers=t._replace(field_features={**fields,'weather_upkeeps':up}))
+    c=c._replace(trackers=t._replace(field_features={**fields,'weather_upkeeps':up}))
+    # A paused action/residual or forced replacement has no next TURN line.
+    # A completed replacement may open that line even without residual work.
+    ready=(~before.done&~after.done&~after.pending_residual&~j.any(after.forced_switch,axis=1)
+        &(c.trackers.turn<after.turn+1))
+    return public_turn(c,after,ready,after.turn+1)
 
 
 def color_change(c,before,after,side,use):
@@ -345,7 +405,7 @@ def wish(c,side,use,*,start=False):
 def before_move(c,state,side,result,use):
     p=state.active[_r(state),side]
     c=feature(c,side,p,'sleep_turns',j.ones_like(p),use&(_get(state,'status',side)==5)&(result.status==5),add=True)
-    return c
+    return opportunity(c,side,use&~result.can_act&~result.confusion_self_hit)
 
 
 def volatile(c,state,side,name,value,use):
@@ -363,6 +423,7 @@ def baton_copy(c,state,side,outgoing,use):
     for name in ('confusion_turns','sub_present','meanlook_trap'):
         value=c.trackers.mon_features[name][r,side,src]
         c=feature(c,side,p,name,value,use)
+    c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,j.full_like(p,-2),use))
     return c
 
 

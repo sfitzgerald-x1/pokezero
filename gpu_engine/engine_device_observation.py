@@ -406,7 +406,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
             active=gather(active), present=gather(present), tables=tables.features,
             last_moves=getattr(public, 'own_last_moves', None), borrowed_ability=getattr(public, 'own_borrowed_ability', None),
             volatiles=getattr(public, 'own_volatiles', None), substitute_fraction=own_sub,
-            status=gather(j.where(alive, own['status'], 0)))
+            status=gather(j.where(alive, own['status'], 0)), opponent_tendency=False)
         fn, fc, bad_foe = features.project_mon(foe_num, foe_cat, foe_facts,
             active=public.active, present=public.present, tables=tables.features,
             last_moves=getattr(public, 'last_moves', None), borrowed_ability=getattr(public, 'borrowed_ability', None),
@@ -529,7 +529,7 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                 elif section == 'belief' and kind == 'numeric' and column < 64:
                     status, reason = ('TRACKED', 'public posterior input from tracker') if posterior else (
                         'ZERO', 'deferred public posterior narrowing hook; no sampled-world posterior')
-                if section == 'stats':reason = 'deferred tendency/event counters; structurally zero in first cut'
+                if section == 'stats':reason = 'deferred individual outcome/credit counter; token structure follows original compiled stats mask'
                 if section == 'opponent' and kind == 'numeric' and column in (*BELIEF_COLUMNS, *EXPECTED_COLUMNS, _index('TRAPPER_ALIVE')):
                     status, reason = 'TRACKED', 'original source-ordered mask reduction/public reveal algebra; no sampled hidden facts'
                 if section in ('opponent', 'belief') and kind == 'categorical' and column in BELIEF_CATEGORIES:
@@ -542,6 +542,12 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                 for key, item in mapping.items():
                     if facts is not None and key in facts and kind == 'numeric' and column == _index(item[0]):
                         status, reason = 'TRACKED', 'actual public tracker raw ' + key + '; original divisor ' + str(item[1])
+                if section == 'stats' and facts is not None and ((kind == 'numeric' and column == _index('PRESENT'))
+                        or (kind == 'categorical' and column == reference.CATEGORY_ROLE)):
+                    status, reason = 'TRACKED', 'original compiled stats_block controls stats token presence/role independently of individual counters'
+                if section == 'own' and kind == 'numeric' and column in {
+                        _index(features.MON_FIELDS[key][0]) for key in features.TENDENCY_FIELDS}:
+                    status, reason = 'ZERO', 'structurally opponent-only original tendency columns; owning exact-state columns are separate'
                 if facts is not None and section in ('own', 'opponent') and 'rest_sleep' in facts and kind == 'numeric' and column == _index('WAKE_KNOWN'):
                     status, reason = 'TRACKED', 'public Rest sleep + request-known/source-semantic EarlyBird certainty'
                 if section in ('own', 'opponent') and kind == 'categorical':

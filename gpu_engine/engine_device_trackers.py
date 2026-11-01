@@ -60,6 +60,7 @@ class PublicView(NamedTuple):
     own_volatiles:object=None
     item_removed:object=None
     own_item_removed:object=None
+    stats_features:object=None
 
 class Trackers(NamedTuple):
     physical_to_public:object # [B,2,6], private identity cursor only; never an encoder feature
@@ -95,6 +96,15 @@ class Trackers(NamedTuple):
     damage_exact_taken:object=None
     public_volatiles:object=None
     item_removed:object=None
+    tendency:object=None
+
+
+class Tendency(NamedTuple):
+    moved:object                  # [B,2], first move of current stay
+    opportunity_turn:object       # [B,2], public turn already counted
+    switches:object               # [B,2], voluntary original switches
+    opportunities:object          # [B,2], ordinary move/cant/switch decisions
+    matchup:object                # [B,2,6,6,2], public encounter switch/stay counts
 
 
 def _shape(x,shape,dtype,name):
@@ -209,6 +219,16 @@ def readout(trackers,observer_sides):
     z=j.zeros((b,6),j.int32)
     optional=lambda name:None if getattr(trackers,name) is None else take(name)
     mon=None if trackers.mon_features is None else {key:value[r,foe] for key,value in trackers.mon_features.items()}
+    stats=None
+    if trackers.tendency is not None:
+        td=trackers.tendency
+        facing=j.clip(trackers.active_slot[r,owner],0,5)
+        pair=td.matchup[r[:,None],foe[:,None],j.arange(6)[None,:],facing[:,None]]
+        pair=j.where((trackers.active_slot[r,owner]>=0)[:,None,None],pair,0)
+        mon={**mon,'switched_vs_active':pair[...,0],'stayed_vs_active':pair[...,1]}
+        stats={'opp_switch_count':td.switches[r,foe],
+            'opp_decision_opportunities':td.opportunities[r,foe],
+            'my_switch_turns':td.switches[r,owner]}
     own_mon=None
     own_last=None
     own_borrowed=None
@@ -220,7 +240,9 @@ def readout(trackers,observer_sides):
         def own(value):
             got=value[r[:,None],owner[:,None],j.clip(slots,0,5)]
             return j.where(slots>=0,got,0)
-        own_mon={key:own(value) for key,value in trackers.mon_features.items()}
+        # Original tendency writer overlays only the opponent six tokens.
+        own_mon={key:own(value) for key,value in trackers.mon_features.items()
+            if key not in ('switched_before_attack','stayed_and_attacked','turns_active_total')}
         own_last=own(trackers.last_moves)
         own_borrowed=own(trackers.borrowed_ability)
         own_removed=own(trackers.item_removed)
@@ -245,7 +267,7 @@ def readout(trackers,observer_sides):
         z if trackers.shown_item is None else take('shown_item'),
         trackers.error|j.where((observer_sides<0)|(observer_sides>1),BAD_OBSERVER,0),None,
         trackers.turn,trackers.weather,trackers.spikes,optional('belief_mask'),optional('observed_moves'),
-        optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed)
+        optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats)
 
 
 def clone_for_worlds(trackers,root_rows):
