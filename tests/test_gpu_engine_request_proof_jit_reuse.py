@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 from types import SimpleNamespace
 import unittest
+import weakref
 BASE='0d51ac06e34af37ad868850456c5209b2b045e29'
 SOURCE=Path('gpu_engine/engine_retained_encoder_driver.py')
 
@@ -18,7 +19,7 @@ class RequestProofReuseTests(unittest.TestCase):
   def jit(fn):
    def invoke(*args):calls.append((fn,args));return fn(*args)
    wrappers.append(invoke);return invoke
-  ns=dict(jax=SimpleNamespace(jit=jit));exec(compile(ast.Module([function(tree(),'_prepare_request_proof_pair')],[]),'<actual preparation factory>','exec'),ns)
+  ns=dict(jax=SimpleNamespace(jit=jit),_REQUEST_PROOF_ORIGINS=weakref.WeakKeyDictionary());exec(compile(ast.Module([function(tree(),'_prepare_request_proof_pair')],[]),'<actual preparation factory>','exec'),ns)
   static=object()
   def expected(engine,before,public,*,owner,tape,healthy,data):
    self.assertIs(data,static)
@@ -41,7 +42,7 @@ class RequestProofReuseTests(unittest.TestCase):
    calls.append((engine,owner))
    if not healthy:raise ValueError('literal current proof refuses')
    return engine,owner
-  ns=dict(jax=SimpleNamespace(jit=lambda fn:fn));exec(compile(ast.Module([function(tree(),'_prepare_request_proof_pair')],[]),'<actual preparation factory>','exec'),ns);pair=ns['_prepare_request_proof_pair'](expected);first=object();second=object()
+  ns=dict(jax=SimpleNamespace(jit=lambda fn:fn),_REQUEST_PROOF_ORIGINS=weakref.WeakKeyDictionary());exec(compile(ast.Module([function(tree(),'_prepare_request_proof_pair')],[]),'<actual preparation factory>','exec'),ns);pair=ns['_prepare_request_proof_pair'](expected);first=object();second=object()
   with self.assertRaises(ValueError):pair[0](first,None,None,None,False)
   self.assertEqual(pair[0](second,None,None,None,True),(second,0));self.assertEqual(calls,[(first,0),(second,0)])
 
@@ -73,4 +74,40 @@ class RequestProofReuseTests(unittest.TestCase):
   self.assertEqual([ast.unparse(x.args[0])for x in pairs],['color.expected_owned_types','encore_callbacks.expected_request'])
   for name in ('engine_color_change_callbacks.py','engine_encore_callbacks.py','transition.py','v4_encoder.py','engine_kernel_frame_risk.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+
+ def test_actual_current_call_disabled_predicates_match_original(self):
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':'+str(SOURCE)],text=True));new=tree()
+  def fragment(t):
+   phase=next(n for n in ast.walk(function(t,'advance'))if isinstance(n,ast.FunctionDef)and n.name=='requests_phase');inside=False;body=[]
+   for n in phase.body:
+    target=n.targets[0].id if isinstance(n,ast.Assign)and isinstance(n.targets[0],ast.Name)else None
+    if target=='current_types':inside=True
+    if target=='requests':break
+    if inside:body.append(deepcopy(n))
+   return ast.Module(body,[])
+  context=SimpleNamespace(data=SimpleNamespace(color_change=object(),encore=object()))
+  for mode,current in [('diagnostic',context),('off',context),('kernel-event',None),('kernel-event',SimpleNamespace(data=SimpleNamespace(color_change=None,encore=None)))]:
+   def never(*args):raise AssertionError('disabled capability called retained proof')
+   r=dict(direct_hit_mode=mode,direct_hit_context=current,request_type_proofs=(never,never),request_encore_proofs=(never,never))
+   for t in (old,new):
+    ns=dict(r=r);exec(compile(fragment(t),'<actual disabled request proof phase>','exec'),ns);self.assertEqual((ns['current_types'],ns['current_encore']),((None,None),(None,None)))
+  def predicates(t):
+   phase=next(n for n in ast.walk(function(t,'advance'))if isinstance(n,ast.FunctionDef)and n.name=='requests_phase')
+   return [dump(n.test)for n in phase.body if isinstance(n,ast.If)and 'direct_context' in ast.unparse(n.test)]
+  self.assertEqual(predicates(old),predicates(new))
+
+ def test_enabled_original_context_function_and_static_identities_mandatory(self):
+  ns=dict(jax=SimpleNamespace(jit=lambda fn:fn),_REQUEST_PROOF_ORIGINS=weakref.WeakKeyDictionary())
+  nodes=[function(tree(),n)for n in ('_prepare_request_proof_pair','_checked_request_proof_pair')];exec(compile(ast.Module(nodes,[]),'<actual proof origin validators>','exec'),ns)
+  context=object();data=object();categories=object();tables=object()
+  def expected(*args,**kwargs):return kwargs['owner']
+  pair=ns['_prepare_request_proof_pair'](expected,_context=context,data=data,categories=categories,type_tables=tables);check=ns['_checked_request_proof_pair']
+  self.assertIs(check(pair,expected,context,data=data,categories=categories,type_tables=tables),pair)
+  for changed in ('context','data','categories','type_tables','function'):
+   values=dict(context=context,data=data,categories=categories,type_tables=tables,function=expected);values[changed]=object()
+   with self.subTest(changed=changed),self.assertRaises(ValueError):check(pair,values['function'],values['context'],data=values['data'],categories=values['categories'],type_tables=values['type_tables'])
+  with self.assertRaises(ValueError):check(tuple(reversed(pair)),expected,context,data=data,categories=categories,type_tables=tables)
+  with self.assertRaises(ValueError):check((lambda *a:None,lambda *a:None),expected,context,data=data,categories=categories,type_tables=tables)
+  self.assertEqual([fn(None,None,None,None,True)for fn in pair],[0,1])
+
 if __name__=='__main__':unittest.main()

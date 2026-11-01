@@ -148,6 +148,7 @@ class Session:
 
 _PREPARED = weakref.WeakKeyDictionary()
 _SESSIONS = weakref.WeakKeyDictionary()
+_REQUEST_PROOF_ORIGINS = weakref.WeakKeyDictionary()
 
 
 def _basic_initialize(catalog, context, streams):
@@ -459,7 +460,7 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
         projection.full_line_consumers_complete, encoded.full_encoder_admitted, no)
 
 
-def _prepare_request_proof_pair(function, **static):
+def _prepare_request_proof_pair(function, *, _context=None, **static):
     """Keep only compiled code per owner; every proof input remains current.
 
     The source/catalog guards at the original phase boundaries remain outside
@@ -470,8 +471,23 @@ def _prepare_request_proof_pair(function, **static):
         def proof(engine,before,public_state,tape,healthy):
             return function(engine,before,public_state,owner=owner,tape=tape,
                 healthy=healthy,**dict(static))
-        return jax.jit(proof)
+        compiled=jax.jit(proof)
+        _REQUEST_PROOF_ORIGINS[compiled]=(owner,function,_context,static)
+        return compiled
     return tuple(bind(owner) for owner in (0,1))
+
+
+def _checked_request_proof_pair(pair,function,context,**static):
+    """Current enabled source holders must still match the retained code."""
+    if type(pair) is not tuple or len(pair)!=2:
+        raise ValueError('original prepared request proof pair required')
+    for owner,proof in enumerate(pair):
+        original=_REQUEST_PROOF_ORIGINS.get(proof)
+        if (original is None or original[0]!=owner or original[1] is not function
+                or original[2] is not context or tuple(static)!=tuple(k for k,_ in original[3])
+                or any(static[k] is not value for k,value in original[3])):
+            raise ValueError('current request proof source holders changed')
+    return pair
 
 
 def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic', leftovers_compiled=None,
@@ -751,11 +767,13 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     if direct_hit_context is not None and direct_hit_context.data.color_change is not None and direct_hit_mode=='kernel-event':
         from . import engine_color_change_callbacks as color
         request_type_proofs=_prepare_request_proof_pair(color.expected_owned_types,
+            _context=direct_hit_context,
             data=direct_hit_context.data.color_change,categories=public_handle.device.causal.color_categories,
             type_tables=catalog.types.device)
     if direct_hit_context is not None and direct_hit_context.data.encore is not None and direct_hit_mode=='kernel-event':
         from . import engine_encore_callbacks as encore_callbacks
         request_encore_proofs=_prepare_request_proof_pair(encore_callbacks.expected_request,
+            _context=direct_hit_context,
             data=direct_hit_context.data.encore,active_tables=catalog.active.device,rules=request['rules'].device)
     _PREPARED[result] = dict(binding=binding, prepared=weakref.ref(result),request_compiled=request_compiled, own_compiled=own_compiled,
         request_type_proofs=request_type_proofs,request_encore_proofs=request_encore_proofs,
@@ -1135,13 +1153,20 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
             admitted = core.admitted & frame.cursor.admitted & ((frame.callbacks.refusal & ~events.UNINSTRUMENTED) == 0)
             current_types=(None,None)
             direct_context=r['direct_hit_context']
-            if r['request_type_proofs'] is not None:
+            if direct_context is not None and direct_context.data.color_change is not None and r['direct_hit_mode']=='kernel-event':
+                from . import engine_color_change_callbacks as color
+                proofs=_checked_request_proof_pair(r['request_type_proofs'],color.expected_owned_types,direct_context,
+                    data=direct_context.data.color_change,categories=r['public'].device.causal.color_categories,
+                    type_tables=r['catalog'].types.device)
                 current_types=tuple(proof(frame.state,core.engine,observer.retained,frame.callbacks,observer.retained_healthy)
-                    for proof,observer in zip(r['request_type_proofs'],old_state.observers))
+                    for proof,observer in zip(proofs,old_state.observers))
             current_encore=(None,None)
-            if r['request_encore_proofs'] is not None:
+            if direct_context is not None and direct_context.data.encore is not None and r['direct_hit_mode']=='kernel-event':
+                from . import engine_encore_callbacks as encore_callbacks
+                proofs=_checked_request_proof_pair(r['request_encore_proofs'],encore_callbacks.expected_request,direct_context,
+                    data=direct_context.data.encore,active_tables=r['catalog'].active.device,rules=r['request']['rules'].device)
                 current_encore=tuple(proof(frame.state,core.engine,observer.retained,frame.callbacks,observer.retained_healthy)
-                    for proof,observer in zip(r['request_encore_proofs'],old_state.observers))
+                    for proof,observer in zip(proofs,old_state.observers))
             requests = tuple(r['request_fast'](frame.state, ledger, original, retained, history,
                 frame.after_registry, admitted,types,encore) for ledger, original, retained, history,types,encore in
                 zip(orders, core.originals, core.constructors, unsafe,current_types,current_encore))
