@@ -26,6 +26,7 @@ class Pending(NamedTuple):
     actor_hp_before:object
     target_party_before:object
     requested:object
+    actor_happiness:object=None
 
 
 def _literal(p,b,terminal_last=None):
@@ -35,7 +36,13 @@ def _literal(p,b,terminal_last=None):
     w=hit._typed_write(p.write,b);data=p.context.data;life._typed(data.ko_candidates,(int(data.ko_candidates.shape[0]),),jnp.bool_)
     rows=jnp.arange(b);target=jnp.clip(p.target_physical,0,5)
     other=jnp.arange(6)[None,:]!=target[:,None]
-    return ((w.power>0)&w.hit&~w.immune&~w.substitute&~w.protected&~w.enduring
+    life._typed(data.return_ko_move,(),jnp.int32)
+    is_return=(data.return_ko_move>0)&(p.move==data.return_ko_move)
+    return_power=jnp.zeros(b,bool)
+    if p.actor_happiness is not None:
+        life._typed(p.actor_happiness,(b,),jnp.int32)
+        return_power=(p.actor_happiness>=0)&(p.actor_happiness<=255)&(w.power==jnp.maximum(1,p.actor_happiness*10//25))
+    return ((~is_return|return_power)&(w.power>0)&w.hit&~w.immune&~w.substitute&~w.protected&~w.enduring
         &hit._positive_ratio(w.numerator,w.denominator)&(w.old_hp>0)&(w.new_hp==0)&(w.maximum>=w.old_hp)
         &(p.actor_hp_before>0)&jnp.all(p.target_party_before>=0,axis=1)
         &(p.target_party_before[rows,target]==w.old_hp)&(jnp.any(other&(p.target_party_before>0),axis=1)
@@ -60,12 +67,12 @@ def _prefix(tape,p):
     return good,slot,start
 
 
-def prepare_controls_device(tape,ticket,actor,actor_physical,target_physical,move,write,context,actor_hp_before,target_party_before,*,eligible):
+def prepare_controls_device(tape,ticket,actor,actor_physical,target_physical,move,write,context,actor_hp_before,target_party_before,*,eligible,actor_happiness=None):
     """AFTER SAME HP assignment, BEFORE HP callback/early outcome. No credit."""
     from . import engine_execution_completeness as ex
     b=tape.count.shape[0];life._typed(eligible,(b,),jnp.bool_)
     requested=eligible&(write.new_hp==0)
-    p=Pending(context,ticket,actor,actor_physical,target_physical,move,write,actor_hp_before,target_party_before,requested)
+    p=Pending(context,ticket,actor,actor_physical,target_physical,move,write,actor_hp_before,target_party_before,requested,actor_happiness)
     good,_,start=_prefix(tape,p);good &= tape.count==start
     critical,effect=hit.annotation_flags_device(write,data=context.data,move=move)
     need=critical.astype(jnp.int32)+effect.astype(jnp.int32)

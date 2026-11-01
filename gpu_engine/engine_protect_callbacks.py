@@ -194,7 +194,7 @@ def begin_block(tape,state,actor,move,old_hit,actual_protected,protectable,conte
     from . import engine_execution_completeness as ex
     if context is None or context.data.protect is None:return tape,None
     d=context.data.protect;b=len(move);rows=j.arange(b);physical=state.active[rows,actor];target=state.active[rows,1-actor]
-    requested=eligible&actual_protected&protectable
+    requested=eligible&old_hit&actual_protected&protectable
     positions=j.arange(tape.words.shape[1])[None,:]
     successes=(positions<tape.count[:,None])&(tape.words[:,:,0]==PROTECT_ATTEMPT)&((tape.words[:,:,6]&SUCCESS)!=0)
     successes &= (tape.words[:,:,1]==(1-actor)[:,None])&(tape.words[:,:,2]==target[:,None])
