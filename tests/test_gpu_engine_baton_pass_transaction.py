@@ -139,6 +139,33 @@ class BatonTransactionTests(unittest.TestCase):
  def test_private_fixture_requests(self):
   x=self.initial();requests=self.produced(x.s,x.orders,x.regs,x.cursor);self.assertEqual([q.actions.admitted.tolist()for q in requests],[[True,True],[True,True]])
 class BatonCallerBindingsTests(unittest.TestCase):
+ def test_exact_saved_suspension_copy_and_current_state_join(self):
+  s=state.empty_state(2);saved=cb.suspend(s);self.assertTrue(bool(cb.equal(saved,cb.suspend(s)).all()))
+  self.assertEqual(tuple(saved._fields),cb.SUSPENSION_FIELDS)
+  for name in cb.SUSPENSION_FIELDS:
+   current=getattr(s,name);changed=~current if current.dtype==j.bool_ else current+1
+   bad=s._replace(**{name:changed});self.assertFalse(bool(cb.equal(saved,cb.suspend(bad)).any()),name)
+   np.testing.assert_array_equal(getattr(saved,name),current)
+  cb.suspension_shape(saved,2)
+  for name in cb.SUSPENSION_FIELDS:
+   value=getattr(saved,name)
+   for bad in (value[...,None],value.astype(j.float32)):
+    with self.assertRaises(ValueError,msg=name):cb.suspension_shape(saved._replace(**{name:bad}),2)
+  tree=ast.parse(Path('gpu_engine/engine_baton_pass_callbacks.py').read_text());prepare=next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='prepare');joined=[n for n in ast.walk(prepare)if isinstance(n,ast.Call)and isinstance(n.func,ast.Name)and n.func.id=='equal'and ast.unparse(n.args[0])=='h.suspended'];self.assertEqual(len(joined),1);self.assertEqual(ast.unparse(joined[0].args[1]),'suspend(state)')
+  final=next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='finalize_request');self.assertIn('suspended=suspend(state)',ast.unparse(final))
+ def test_maturation_joins_the_exact_consumed_history(self):
+  from unittest.mock import patch
+  s=state.empty_state(2);z=j.zeros(2,j.int32);cursor=SimpleNamespace(stream_id=z+9100,turn=z,generation=j.zeros((2,2),j.int32));h=cb.empty_history(s,cursor,j.broadcast_to(j.arange(6),(2,2,6)))._replace(side=z,frame=z,public_slot=z)
+  rec=cb.empty_record(h)._replace(code=z,slot=z,serial=z+1);trn=cb.Transaction(h,None,None,None,None,rec);frame=SimpleNamespace(callbacks=SimpleNamespace(execution=SimpleNamespace(baton_transaction=trn)))
+  ledger=SimpleNamespace(site=j.full((2,1),39,j.int32),stream_id=h.stream_id,refusal=z,stage=j.full((2,1),3,j.int32),serial=j.ones((2,1),j.int32));pub=SimpleNamespace(cursor=SimpleNamespace(stream_id=h.stream_id),context=SimpleNamespace(tendency=SimpleNamespace(baton=j.ones((2,2),bool))),mons=SimpleNamespace(boosts=j.zeros((2,2,7),j.int32)))
+  def request(kind):return SimpleNamespace(actions=SimpleNamespace(admitted=j.ones(2,bool),facts=SimpleNamespace(request=SimpleNamespace(kind=j.full(2,int(kind),j.int32)))))
+  requests=(request(private_requests.RequestKind.FORCE_SWITCH),request(private_requests.RequestKind.WAIT))
+  with patch.object(cb,'owned',return_value=j.ones(2,bool)):
+   self.assertEqual(cb.mature(h,frame,(ledger,ledger),(pub,pub),requests).ready.tolist(),[True,True])
+   for altered in (h._replace(private=h.private._replace(hp=h.private.hp.at[0,0,0].add(1))),h._replace(suspended=h.suspended._replace(queued_actor=h.suspended.queued_actor.at[0].add(1)))):
+    self.assertEqual(cb.mature(altered,frame,(ledger,ledger),(pub,pub),requests).ready.tolist(),[False,True])
+   changed=h._replace(order=h.order.at[0,0,1].set(5));other=frame.callbacks.execution.baton_transaction._replace(history=changed);badframe=SimpleNamespace(callbacks=SimpleNamespace(execution=SimpleNamespace(baton_transaction=other)))
+   self.assertEqual(cb.mature(h,badframe,(ledger,ledger),(pub,pub),requests).ready.tolist(),[False,True])
  def test_actual_production_observer_operands(self):
   source=Path('gpu_engine/transition.py').read_text();step=static._step(source);self.assertEqual(static._undefined_step_globals(source),set());sentinel=object();side=j.array([0,1],j.int32);rows=j.arange(2);target=j.array([[3,0],[0,3]],j.int32);yes=j.ones(2,bool)
   names=('before_copy','after_copy','finish_install','begin_start','finish_start','finalize_request');spy=SimpleNamespace(**{n:(lambda *a,**kw:(a,kw))for n in names});env=dict(baton_callbacks=spy,_public_trace=sentinel,work=sentinel,side=side,target=target,rows=rows,_direct_hit_context=sentinel,_direct_hit_registered=True,do_switch=yes,_baton_copy=sentinel,_baton_start=sentinel,move=sentinel,caller_move=sentinel,acts=yes,caller_acts=yes,passed=yes,hit=yes,immune=~yes)

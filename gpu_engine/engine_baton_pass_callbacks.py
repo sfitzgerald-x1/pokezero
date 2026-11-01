@@ -17,6 +17,8 @@ BATON_PASS=54
 START,INSTALL=0,1
 PRIVATE_FIELDS=('hp','max_hp','status','species','level','gender','stats','moves','pp','item','ability','base_ability','types','base_types','hidden_power_type','hidden_power_power','happiness')
 Private=NamedTuple('Private',[(n,object)for n in PRIVATE_FIELDS])
+SUSPENSION_FIELDS=('turn','pending_residual','baton_pass','forced_switch','queued_actor','queued_actions','queued_stall','residual_draws','phazing_draws','secondary_draws','sleep_talk_draws','replacement_count','keys')
+Suspension=NamedTuple('Suspension',[(n,object)for n in SUSPENSION_FIELDS])
 class Data(NamedTuple):
     binding:object
     engine_binding:object
@@ -38,6 +40,7 @@ class History(NamedTuple):
     boosts:object
     private:object
     order:object
+    suspended:object
 class PublicProof(NamedTuple):
     boosts:object
     known:object
@@ -102,20 +105,28 @@ def shape(d):
     life._typed(d.move_id,(),j.int32)
     for v in d[6:]:life._typed(v,(len(v),),j.bool_)
 def snapshot(s):return Private(*(getattr(s,n)for n in PRIVATE_FIELDS))
+def suspend(s):return Suspension(*(getattr(s,n)for n in SUSPENSION_FIELDS))
 def equal(a,b):
     out=j.ones(len(a[0]),bool)
     for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b),strict=True):out &= j.all(x==y,axis=tuple(range(1,x.ndim)))if x.ndim>1 else x==y
     return out
 def rows(use,a,b):return jax.tree.map(lambda x,y:j.where(use.reshape((len(use),)+(1,)*(x.ndim-1)),y,x),a,b)
 def empty_history(state,cursor,order):
-    b=len(cursor.stream_id);return History(cursor.stream_id,j.full(b,-1,j.int32),cursor.turn,cursor.generation,state.active,j.full(b,-1,j.int32),j.full(b,-1,j.int32),j.zeros(b,bool),state.boosts,snapshot(state),order)
+    b=len(cursor.stream_id);return History(cursor.stream_id,j.full(b,-1,j.int32),cursor.turn,cursor.generation,state.active,j.full(b,-1,j.int32),j.full(b,-1,j.int32),j.zeros(b,bool),state.boosts,snapshot(state),order,suspend(state))
 def history_shape(h,b):
-    if type(h)is not History or type(h.private)is not Private:raise ValueError('typed same-source Baton history required')
+    if type(h)is not History or type(h.private)is not Private or type(h.suspended)is not Suspension:raise ValueError('typed same-source Baton history required')
     for n in ('stream_id','frame','turn','side','public_slot'):life._typed(getattr(h,n),(b,),j.int32)
     life._typed(h.ready,(b,),j.bool_);life._typed(h.generation,(b,2),j.int32);life._typed(h.active,(b,2),j.int32);life._typed(h.boosts,(b,2,6,7),j.int32);life._typed(h.order,(b,2,6),j.int32)
     for name,v in zip(PRIVATE_FIELDS,h.private,strict=True):
         tail=(6,)if name=='stats'else(4,)if name in ('moves','pp')else(2,)if name in ('types','base_types')else()
         life._typed(v,(b,2,6)+tail,j.int32)
+    suspension_shape(h.suspended,b)
+def suspension_shape(s,b):
+    if type(s)is not Suspension:raise ValueError('typed same-source Baton suspension required')
+    for name,v in zip(SUSPENSION_FIELDS,s,strict=True):
+        tail=(2,12)if name=='residual_draws'else(2,)if name in ('baton_pass','forced_switch','queued_actions','queued_stall','phazing_draws','secondary_draws','sleep_talk_draws','keys')else()
+        dtype=j.bool_ if name in ('pending_residual','baton_pass','forced_switch')else j.uint32 if name=='keys'else j.int32
+        life._typed(v,(b,)+tail,dtype)
 
 def empty_record(h):
     b=len(h.side);z=j.zeros(b,j.int32);return Record(j.zeros(b,bool),j.zeros(b,bool),z,z,z,z,z,h.side,h.side,h.side,j.zeros(b,bool),h,h.private,h.boosts,h.boosts)
@@ -147,9 +158,9 @@ def prepare(tape,state,h,proof,requests,orders,actions,data):
     """The SAME already-produced request/party permutation, no replacement guess."""
     from . import private_requests as req
     b=len(tape.count);r=j.arange(b);side=j.clip(h.side,0,1);target=actions[r,side]-4;order=j.stack(tuple(x.request_to_physical for x in orders),axis=1)
-    history_shape(h,b)
+    history_shape(h,b);suspension_shape(suspend(state),b)
     life._typed(proof.boosts,(b,2,7),j.int32);life._typed(proof.known,(b,2),j.bool_);life._typed(proof.pending,(b,2),j.bool_)
-    good=_bound(tape,data)&h.ready&(h.side>=0)&(h.frame+1==tape.execution.ledger.frame)&(h.stream_id==tape.stream_id)&(h.turn==tape.cursor.turn)&j.all(h.generation==tape.cursor.generation,axis=1)&j.all(h.active==state.active,axis=1)&equal(h.private,snapshot(state))&j.all(h.boosts==state.boosts,axis=(1,2,3))&j.all(order==h.order,axis=(1,2))
+    good=_bound(tape,data)&h.ready&equal(h.suspended,suspend(state))&(h.side>=0)&(h.frame+1==tape.execution.ledger.frame)&(h.stream_id==tape.stream_id)&(h.turn==tape.cursor.turn)&j.all(h.generation==tape.cursor.generation,axis=1)&j.all(h.active==state.active,axis=1)&equal(h.private,snapshot(state))&j.all(h.boosts==state.boosts,axis=(1,2,3))&j.all(order==h.order,axis=(1,2))
     for owner,q in enumerate(requests):
         actual=q.actions;packet=actual.facts.request;own=h.side==owner
         good &= j.all(actual.boundary.engine_binding==tape.engine_binding,axis=1)&(orders[owner].generation==h.generation[:,owner])&j.all(orders[owner].engine_binding==tape.engine_binding,axis=1)
@@ -185,7 +196,7 @@ def begin_start(tape,state,side,move,caller,context,*,acts,eligible):
     good=registered&_bound(tape,d)&(caller==move)&acts&~state.pending_residual&~j.any(state.forced_switch,axis=1)&(tr.history.side<0)&tr.public.known[r,seat]&~tr.public.pending[r,seat]
     good &= _quiet(state,side,physical,d)&j.all(tr.public.boosts[r,seat]==state.boosts[r,seat,physical],axis=1)&~j.any(state.baton_pass,axis=1)
     tape,ticket=ex.open_attempt(tape,ex.Site.BATON_PASS,side,active=requested)
-    h=History(tape.stream_id,ticket.frame,tape.cursor.turn,tape.cursor.generation,state.active,side,tape.cursor.public_slot[r,seat],j.zeros(len(side),bool),state.boosts,snapshot(state),tr.order)
+    h=History(tape.stream_id,ticket.frame,tape.cursor.turn,tape.cursor.generation,state.active,side,tape.cursor.public_slot[r,seat],j.zeros(len(side),bool),state.boosts,snapshot(state),tr.order,suspend(state))
     return tape,Pending(ticket,requested,good,side,physical,j.full_like(side,-1),h,snapshot(state),state.boosts)
 def finish_start(tape,p,state,passed,secondary):
     if p is None:return tape
@@ -201,7 +212,8 @@ def finalize_request(tape,state):
     if tape.execution is None or tape.execution.baton_transaction is None:return tape
     tr=tape.execution.baton_transaction;rec=tr.record;h=rec.history;r=j.arange(len(h.side));side=j.clip(h.side,0,1)
     good=rec.known&(rec.code==START)&state.pending_residual&state.baton_pass[r,side]&state.forced_switch[r,side]&~state.forced_switch[r,1-side]&j.all(state.active==h.active,axis=1)&equal(h.private,snapshot(state))&j.all(h.boosts==state.boosts,axis=(1,2,3))
-    rec=rec._replace(finalized=j.where(rec.code==START,good,rec.finalized));tr=tr._replace(record=rec)
+    h=h._replace(suspended=suspend(state))
+    rec=rec._replace(history=rows(good,rec.history,h),finalized=j.where(rec.code==START,good,rec.finalized));tr=tr._replace(record=rec,history=rows(good,tr.history,h))
     return tape._replace(execution=tape.execution._replace(baton_transaction=tr))
 
 def before_copy(tape,state,side,target,context,*,eligible):
@@ -288,7 +300,7 @@ def mature(history,frame,ledgers,publics,requests):
     if history is None:return None
     tr=frame.callbacks.execution.baton_transaction
     if tr is None:return history
-    rec=tr.record;r=j.arange(len(history.side));side=j.clip(history.side,0,1);good=owned(frame.callbacks,rec.start,START)
+    rec=tr.record;r=j.arange(len(history.side));side=j.clip(history.side,0,1);history_shape(history,len(history.side));good=owned(frame.callbacks,rec.start,START)&equal(history,tr.history)&equal(history,rec.history)
     for ledger in ledgers:
         slot=j.clip(rec.slot,0,ledger.site.shape[1]-1)
         good &= (ledger.stream_id==history.stream_id)&(ledger.refusal==0)&(ledger.stage[r,slot]==3)&(ledger.serial[r,slot]==rec.serial)&(ledger.site[r,slot]==39)
