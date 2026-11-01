@@ -997,7 +997,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             hp_raw[:,3]==raw[:,3])&(hp_raw[:,4]==raw[:,4])&(hp_raw[:,5]==raw[:,7])&(
             hit_max>=raw[:,6])&(hit_max<=1_000_000)&(~needs_effect|pair_same)
         identity &= ~direct_control | (called_hit & control_order & hit_suffix
-            & ((raw[:,7]>0)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)) & live[rows,safe]
+            & ((raw[:,7]>0)|direct_ko_callbacks.validate_owned_control_device(tape,index,raw)|recoil_callbacks.validate_owned_ko_control(tape,index,raw)) & live[rows,safe]
             & (observed_hp[rows,safe,safe_slot]==hit_old_visible)
             & (observed_maximum[rows,safe,safe_slot]==hit_max_visible))
         old_percent=(100*raw[:,5]+jnp.maximum(1,raw[:,7])-1)//jnp.maximum(1,raw[:,7])
