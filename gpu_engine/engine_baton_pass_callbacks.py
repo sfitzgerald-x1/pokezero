@@ -22,6 +22,7 @@ INSOMNIA_UPDATE_SHA256='259090f315b83537cc5d7091bc08a37a051007304d7392fb6e8ac90a
 NATURAL_CURE_SWITCH_OUT_SHA256='bbd17c399abcaecf20ec77369b6228b574b1a451a448b202daccc7e9210c3cc4'
 TOXIC_STATUS=4
 PARALYSIS_STATUS=1
+BURN_STATUS,POISON_STATUS=2,3
 START,INSTALL=0,1
 PRIVATE_FIELDS=('hp','max_hp','status','species','level','gender','stats','moves','pp','item','ability','base_ability','types','base_types','hidden_power_type','hidden_power_power','happiness','status_counter','substitute_hp')
 Private=NamedTuple('Private',[(n,object)for n in PRIVATE_FIELDS])
@@ -37,6 +38,7 @@ class Data(NamedTuple):
     quiet_abilities:object
     quiet_items:object
     outgoing_dormant_abilities:object=None
+    outgoing_insomnia_status:object=None
 class History(NamedTuple):
     stream_id:object
     frame:object
@@ -102,8 +104,9 @@ const hooks=['onStart','onEnd','onBeforeSwitchOut','onSwitchOut','onSwitchIn','o
 const quiet=(e)=>e.exists&&e.gen<=3&&!hooks.some(n=>typeof e[n]!=='undefined');
 const dormantHook={insomnia:'onUpdate',naturalcure:'onSwitchOut'};
 const dormant=(e)=>e.exists&&e.gen<=3&&Object.hasOwn(dormantHook,e.id)&&typeof e[dormantHook[e.id]]==='function'&&!hooks.filter(n=>n!==dormantHook[e.id]).some(n=>typeof e[n]!=='undefined');
+const passiveStatusHooks=Object.fromEntries(['brn','psn'].map(id=>[id,Object.fromEntries(['onBeforeSwitchOut','onSwitchOut','onSwitchIn','onCopy'].map(n=>[n,typeof d.conditions.get(id)[n]]))]));
 const dormantSources=Object.fromEntries(Object.entries(dormantHook).map(([id,hook])=>{const e=d.abilities.get(id);return[id,{hook,body:''+e[hook],otherHooks:hooks.filter(n=>n!==hook).map(n=>typeof e[n])}]}));
-process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,move:{id:m.id,gen:m.gen,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,selfSwitch:m.selfSwitch,onHit:(''+m.onHit),selfHit:(''+m.self.onHit)},toxicSwitchIn:''+d.conditions.get('tox').onSwitchIn,copyVolatile:''+P.prototype.copyVolatileFrom,clearVolatile:''+P.prototype.clearVolatile,paralysis:{beforeMove:''+d.conditions.get('par').onBeforeMove,beforeSwitchOut:typeof d.conditions.get('par').onBeforeSwitchOut,switchOut:typeof d.conditions.get('par').onSwitchOut,switchIn:typeof d.conditions.get('par').onSwitchIn},substitute:{id:d.conditions.get('substitute').id,noCopy:d.conditions.get('substitute').noCopy,onCopy:typeof d.conditions.get('substitute').onCopy},dormantSources,outgoingDormant:meta.vocabulary.abilities.map(n=>dormant(d.abilities.get(n))),abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
+process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,move:{id:m.id,gen:m.gen,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,selfSwitch:m.selfSwitch,onHit:(''+m.onHit),selfHit:(''+m.self.onHit)},toxicSwitchIn:''+d.conditions.get('tox').onSwitchIn,copyVolatile:''+P.prototype.copyVolatileFrom,clearVolatile:''+P.prototype.clearVolatile,paralysis:{beforeMove:''+d.conditions.get('par').onBeforeMove,beforeSwitchOut:typeof d.conditions.get('par').onBeforeSwitchOut,switchOut:typeof d.conditions.get('par').onSwitchOut,switchIn:typeof d.conditions.get('par').onSwitchIn},substitute:{id:d.conditions.get('substitute').id,noCopy:d.conditions.get('substitute').noCopy,onCopy:typeof d.conditions.get('substitute').onCopy},passiveStatusHooks,outgoingInsomniaStatus:meta.vocabulary.abilities.map(n=>{const e=d.abilities.get(n);return e.id==='insomnia'&&dormant(e)}),dormantSources,outgoingDormant:meta.vocabulary.abilities.map(n=>dormant(d.abilities.get(n))),abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
     value=json.loads(subprocess.check_output([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata).encode(),timeout=30))
     if json.dumps(value['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(value['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original Baton source drift')
     if hashlib.sha256(value['toxicSwitchIn'].encode()).hexdigest()!=TOXIC_SWITCH_IN_SHA256:raise ValueError('canonical original toxic switch reset required')
@@ -115,13 +118,14 @@ process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tr
     for name,hook,digest in [('insomnia','onUpdate',INSOMNIA_UPDATE_SHA256),('naturalcure','onSwitchOut',NATURAL_CURE_SWITCH_OUT_SHA256)]:
         actual=value['dormantSources'][name]
         if actual['hook']!=hook or hashlib.sha256(actual['body'].encode()).hexdigest()!=digest or actual['otherHooks']!=['undefined']*7:raise ValueError('canonical original dormant outgoing ability required')
+    if value['passiveStatusHooks']!={n:{hook:'undefined'for hook in('onBeforeSwitchOut','onSwitchOut','onSwitchIn','onCopy')}for n in('brn','psn')}:raise ValueError('canonical original burn/poison quiet departure required')
     row=value['move'];names=metadata['vocabulary']['moves'];ids=[i for i,n in enumerate(names)if n=='batonpass']
     move=ids[0]if len(ids)==1 else 0;t=catalog.engine_table
     if move:
         if not(row['id']=='batonpass'and row['gen']==2 and row['category']=='Status'and row['target']=='self'and row['power']==0 and row['accuracy']is True and row['priority']==0 and row['selfSwitch']=='copyvolatile'and t.baton is not None and bool(t.baton.move[move])and int(t.power[move])==0 and bool(t.always_hit[move])and int(catalog.ids[move])>0 and catalog.targets[move]==0):raise ValueError('canonical original Baton columns required')
-    payload=dict(schema='pokezero.baton.boost-substitute.toxic-paralysis-source.v5',source=value,engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding,move=move)
+    payload=dict(schema='pokezero.baton.boost-substitute.toxic-paralysis-insomnia-brn-psn-source.v6',source=value,engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding,move=move)
     words=lambda v:j.asarray(v,j.uint32)
-    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),j.asarray(value['abilities']),j.asarray(value['items']),j.asarray(value['outgoingDormant']))
+    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),j.asarray(value['abilities']),j.asarray(value['items']),j.asarray(value['outgoingDormant']),j.asarray([BURN_STATUS,POISON_STATUS,len(value['abilities'])]+[int(x)for x in value['outgoingInsomniaStatus']],j.int32))
 
 def shape(d):
     if type(d)is not Data:raise ValueError('typed original Baton capability required')
@@ -129,6 +133,7 @@ def shape(d):
     life._typed(d.move_id,(),j.int32)
     for v in d[6:8]:life._typed(v,(len(v),),j.bool_)
     if d.outgoing_dormant_abilities is not None:life._typed(d.outgoing_dormant_abilities,d.quiet_abilities.shape,j.bool_)
+    if d.outgoing_insomnia_status is not None:life._typed(d.outgoing_insomnia_status,(3+len(d.quiet_abilities),),j.int32)
 def snapshot(s):return Private(*(getattr(s,n)for n in PRIVATE_FIELDS))
 def suspend(s):return Suspension(*(getattr(s,n)for n in SUSPENSION_FIELDS))
 def equal(a,b):
@@ -167,11 +172,15 @@ def _bound(tape,data):
         actual=getattr(t,'baton_'+n);life._typed(actual,v.shape,v.dtype);good &= j.all(actual==v)
     if data.outgoing_dormant_abilities is not None:
         actual=t.baton_outgoing_dormant_abilities;life._typed(actual,data.outgoing_dormant_abilities.shape,j.bool_);good &= j.all(actual==data.outgoing_dormant_abilities)
+    if data.outgoing_insomnia_status is not None:
+        actual=t.baton_outgoing_insomnia_status;life._typed(actual,data.outgoing_insomnia_status.shape,j.int32);good &= j.all(actual==data.outgoing_insomnia_status)
     return good
 
 def _data(tape):
     t=tape.execution.risks.tables
-    return Data(t.baton_binding,t.engine_binding,t.source_binding,t.move_binding,t.producer_binding,t.baton_move,t.baton_abilities,t.baton_items,getattr(t,'baton_outgoing_dormant_abilities',None))
+    cap=getattr(t,'baton_outgoing_insomnia_status',None)
+    if cap is not None and cap.shape==(0,):cap=None
+    return Data(t.baton_binding,t.engine_binding,t.source_binding,t.move_binding,t.producer_binding,t.baton_move,t.baton_abilities,t.baton_items,getattr(t,'baton_outgoing_dormant_abilities',None),cap)
 def public_substitute(pub):
     """Literal original public volatile namespace; every other bit stays closed."""
     from . import public_active
@@ -208,12 +217,21 @@ def prepare(tape,state,h,proof,requests,orders,actions,data):
     tr=Transaction(h,proof,good,j.clip(target,0,5),order,empty_record(h))
     return tape._replace(execution=tape.execution._replace(baton_transaction=tr))
 
+def _insomnia_status(ability,status,counter,data):
+    """Canonical Insomnia's onUpdate is dormant only under these bound facts."""
+    cap=getattr(data,'outgoing_insomnia_status',None)
+    if cap is None:return j.zeros_like(status,bool)
+    life._typed(cap,(3+len(data.quiet_abilities),),j.int32)
+    header=j.all(cap[:3]==j.array([BURN_STATUS,POISON_STATUS,len(data.quiet_abilities)],j.int32))
+    return header&((status==BURN_STATUS)|(status==POISON_STATUS))&(counter==0)&(ability>0)&(ability<len(data.quiet_abilities))&(cap[3+j.clip(ability,0,len(data.quiet_abilities)-1)]==1)
+
 def _ability_quiet(ability,status,counter,data,*,outgoing=False):
     result=data.quiet_abilities[j.clip(ability,0,len(data.quiet_abilities)-1)]
     dormant=getattr(data,'outgoing_dormant_abilities',None)
     if outgoing and dormant is not None:
         life._typed(dormant,data.quiet_abilities.shape,j.bool_)
         result |= (status==0)&(counter==0)&dormant[j.clip(ability,0,len(dormant)-1)]
+    if outgoing:result |= _insomnia_status(ability,status,counter,data)
     return result
 
 def _quiet(s,side,physical,data,*,outgoing_toxic=False,outgoing_paralysis=False,outgoing_substitute=False,outgoing_dormant=False):
@@ -224,6 +242,7 @@ def _quiet(s,side,physical,data,*,outgoing_toxic=False,outgoing_paralysis=False,
     # PAR has no switch hook. The actual before-move result is still `acts`;
     # only this outgoing source-bound path may retain PAR, never the recipient.
     if outgoing_paralysis:status_ok |= (status==PARALYSIS_STATUS)&(counter==0)
+    if outgoing_dormant:status_ok |= _insomnia_status(ability,status,counter,data)
     good=(physical>=0)&(physical<6)&(s.hp[r,seat,mon]>0)&status_ok&(ability>0)&(ability<len(data.quiet_abilities))&_ability_quiet(ability,status,counter,data,outgoing=outgoing_dormant)&(item>=0)&(item<len(data.quiet_items))&data.quiet_items[j.clip(item,0,len(data.quiet_items)-1)]
     good &= (ability==s.base_ability[r,seat,mon])&j.all(s.types[r,seat,mon]==s.base_types[r,seat,mon],axis=1)&(s.spikes[r,seat]==0)&j.all(s.trap_source<0,axis=(1,2))
     sub=s.substitute_hp[r,seat,mon]
@@ -255,6 +274,9 @@ def _start_diagnostics(tape,state,side,move,caller,data,*,acts,eligible,transact
     for field,prefix in [('types','type'),('base_types','base_type')]:
         value=mon(base,field,(2,))
         for i in range(2):values[prefix+str(i)]=None if value is None else(value[0][:,i],value[1])
+    status=base.status[r,seat,safe];counter=base.status_counter[r,seat,safe];ability=base.ability[r,seat,safe]
+    status_ok=((status==0)&(counter==0))|((status==TOXIC_STATUS)&(counter>=0)&(counter<=15))|((status==PARALYSIS_STATUS)&(counter==0))|_insomnia_status(ability,status,counter,data)
+    values['quiet_status_lookup']=(status_ok,known)
     values.update(spikes=(state.spikes[r,seat],(side>=0)&(side<2)),any_trap_source=j.any(state.trap_source>=0,axis=(1,2)),pending_residual=state.pending_residual,any_forced_switch=j.any(state.forced_switch,axis=1),any_baton_pass=j.any(state.baton_pass,axis=1))
     for i in range(7):values['boost'+str(i)]=(state.boosts[r,seat,safe,i],known)
     pub=None if transaction is None else transaction.public
