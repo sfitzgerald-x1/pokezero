@@ -872,10 +872,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # if the subsequent target hit misses, is protected, immune or a sub.
         # Damage inputs were resolved while the user's ability was still active.
         if _lifecycle_trace:
-            _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_DESTRUCT,
-                explodes,active=live)
+            from . import engine_self_destruct_callbacks as self_destruct_callbacks
+            _public_trace,_self_destruct_pending=self_destruct_callbacks.begin(_public_trace,work,side,move,caller_move,
+                _direct_hit_context if _direct_hit_registered else None,requested=explodes)
         work=work._replace(hp=_set_active(work.hp,work,side,
             jnp.where(explodes,0,_active(work.hp,work,side))))
+        if _lifecycle_trace:
+            _public_trace,_self_destruct_pending=self_destruct_callbacks.self_write(_public_trace,_self_destruct_pending,work)
+            _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_DESTRUCT,
+                explodes,active=live)
         bypass_sub = jnp.zeros_like(acts)
         if _lifecycle_trace:
             _risk_protected=jnp.zeros_like(acts)
@@ -903,6 +908,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _sub_damage_pending=substitute_damage_callbacks.Pending(_direct_hit_context,_sub_damage_ticket,
                 side,work.active[rows,side],work.active[rows,foe],move,_sub_damage_requested,_active(work.happiness,work,side),caller_move,_active(work.level,work,side),_active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),typ)
             _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)) & ~_sub_damage_requested & ~_protect_block_mask
+            if _lifecycle_trace and _self_destruct_pending is not None:_direct_requested &= ~_self_destruct_pending.requested
             _public_trace,_direct_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.DIRECT_HIT,foe,active=_direct_requested)
             _direct_ko_actor_before=_active(work.hp,work,side)
@@ -947,6 +953,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _direct_hit_context is not None:
             _direct_write=direct_hit_controls.HitWrite(power,critical,hit,immune,num,den,hits_sub,
                 _risk_protected,enduring[rows,foe],hp,foe_hp,_active(work.max_hp,work,foe))
+            if _lifecycle_trace:
+                _public_trace=self_destruct_callbacks.target_write(_public_trace,_self_destruct_pending,_direct_write,secondary=acts & hit & ~immune)
             if _direct_hit_registered:
                 _public_trace=direct_hit_controls.record_registered_direct_hit_controls_device(
                     _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
@@ -1470,6 +1478,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     captured=(kernel_risks.CapturedSpikes(_spikes_context,_spikes_ticket,side,
                         work.active[rows,side],move,_spikes_write) if _spikes_context is not None else None))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
+        if _lifecycle_trace:
+            _public_trace=self_destruct_callbacks.actor_faint(_public_trace,work)
         if _public_trace is not None:
             _public_trace = public_callbacks.faint(_public_trace,foe,work.active[rows,foe],
                 eligible=acts & hit & ~hits_sub & (dealt>0) & (foe_hp==0))
@@ -1478,6 +1488,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.hp,work,side),work.hp[rows,foe],work.active[rows,side],work.active[rows,foe],
                 recoil_after=(recoil_callbacks.Write(work.active[rows,side],work.active[rows,foe],_active(work.ability,work,side),
                     _recoil_before.old_hp,_active(work.hp,work,side),_active(work.max_hp,work,side),_active(work.status,work,side))if _recoil_context is not None else None))
+
+        if _lifecycle_trace:
+            _public_trace=self_destruct_callbacks.finish(_public_trace,work)
 
         if table.phazing is not None:
             work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],

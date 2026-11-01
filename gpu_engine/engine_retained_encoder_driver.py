@@ -294,6 +294,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
             leech_history=leech_callbacks.commit_history(source_ready,tape.execution.leech_history,result.callbacks.execution.leech_history),
             secondary_status=result.callbacks.execution.secondary_status,
             baton_transaction=None if tape.execution.baton_transaction is None else baton_callbacks.rows(source_ready,tape.execution.baton_transaction,result.callbacks.execution.baton_transaction),
+            self_destruct=result.callbacks.execution.self_destruct,
             diagnostics=_rows(source_ready,
             tape.execution.diagnostics,result.callbacks.execution.diagnostics))
         if kernel_risk_tables is not None:

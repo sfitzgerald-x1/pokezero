@@ -73,6 +73,7 @@ class Site(IntEnum):
     HEAL_BELL = 37
     SELF_BOOST_INPUT = 38
     BATON_PASS = 39
+    SELF_DESTRUCT = 40
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -192,6 +193,7 @@ class Context(NamedTuple):
     leech_history: object = None # actual owning public/current seed source-slot facts
     party_orders: object = None # actual BEFORE-frame owner permutations, never guessed
     baton_transaction: object = None # exact source/public/request two-boundary transaction
+    self_destruct: object = None # row-only actual self-KO/target/faint composite
 
 
 UNKNOWN_EXECUTION = 512

@@ -137,6 +137,12 @@ class Tables(NamedTuple):
     baton_move: object
     baton_abilities: object
     baton_items: object
+    self_destruct_binding: object
+    self_destruct_candidates: object
+    self_destruct_powers: object
+    self_destruct_damp: object
+    self_destruct_abilities: object
+    self_destruct_items: object
 
 
 @dataclass(frozen=True,eq=False)
@@ -219,6 +225,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     color_binding=np.zeros(8,np.uint32);color_abilities=np.zeros(len(table.secondary.color_change) if table.secondary is not None else 1,bool);color_candidates=np.zeros(m,bool);color_types=np.zeros(m,np.int32);color_dynamic=np.zeros(m,bool)
     heal_binding=np.zeros(8,np.uint32);heal_candidates=np.zeros(m,bool);heal_family=np.zeros(m,np.int32)
     heal_bell_binding=np.zeros(8,np.uint32);heal_bell_move=0;heal_bell_candidates=np.zeros(m,bool);heal_bell_soundproof=np.zeros(len(table.effects.soundproof)if table.effects is not None else 1,bool)
+    self_destruct_binding=np.zeros(8,np.uint32);self_destruct_candidates=np.zeros(m,bool);self_destruct_powers=np.zeros(m,np.int32);self_destruct_damp=np.zeros(1,bool);self_destruct_abilities=np.zeros(1,bool);self_destruct_items=np.zeros(1,bool)
     if direct_hit_compiled is not None:
         from . import engine_direct_hit_controls as direct
         direct_data=direct.check_compiled(direct_hit_compiled)
@@ -228,6 +235,9 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         direct_binding=np.asarray(direct_data.binding,np.uint32)
         no_damage_binding=np.asarray(direct_data.no_damage.binding,np.uint32)
         ko_candidates=np.asarray(direct_data.ko_candidates,bool)
+        if direct_data.self_destruct is not None:
+            from . import engine_self_destruct_callbacks as sd
+            data=direct_data.self_destruct;sd.shape(data);self_destruct_binding=np.asarray(data.binding);self_destruct_candidates=np.asarray(data.candidates);self_destruct_powers=np.asarray(data.powers);self_destruct_damp=np.asarray(data.damp);self_destruct_abilities=np.asarray(data.quiet_abilities);self_destruct_items=np.asarray(data.quiet_items)
         if direct_data.heal_bell is not None:
             from . import engine_heal_bell_callbacks as heal_bell_callbacks
             data=direct_data.heal_bell;heal_bell_callbacks.shape(data);heal_bell_move=int(data.move)
@@ -390,7 +400,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
         # A possible proc is not an actual write: status/reflection callbacks
         # and stats/flinch branch guards retain their existing sticky refusals.
         risk[(chance!=0)&~candidate]|=FIELD_VOLATILE
-    flag(table.self_destruct,'move',SELF_HP)
+    if table.self_destruct is not None:risk[np.asarray(table.self_destruct.move)&~self_destruct_candidates]|=SELF_HP
     if table.damage_moves is not None:risk[(np.asarray(table.damage_moves.recoil_den)!=0)&~recoil_candidate]|=SELF_HP
     flag(table.solar_beam,'move',BLOCKED_ACTION);flag(table.focus_punch,'move',BLOCKED_ACTION)
     branch=np.zeros(len(Branch)+1,np.int32)
@@ -403,7 +413,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     branch[Branch.HEAL_BELL]=FIELD_VOLATILE
     files=('transition.py','secondary.py','entry.py','effects.py','absorption.py','sustain.py',
         'linked_traps.py','encore.py','mechanics.py','engine_execution_completeness.py','engine_kernel_frame_risk.py')
-    inventory=dict(heal_bell_binding=heal_bell_binding.tolist(),heal_bell_move=heal_bell_move,heal_bell_soundproof=heal_bell_soundproof.tolist(),schema=SCHEMA,baton_binding=baton_binding.tolist(),baton_move=baton_move,baton_abilities=baton_abilities.tolist(),baton_items=baton_items.tolist(),declared={x.name:int(x) for x in Branch},
+    inventory=dict(self_destruct_binding=self_destruct_binding.tolist(),self_destruct_candidates=self_destruct_candidates.tolist(),self_destruct_powers=self_destruct_powers.tolist(),self_destruct_damp=self_destruct_damp.tolist(),self_destruct_abilities=self_destruct_abilities.tolist(),self_destruct_items=self_destruct_items.tolist(),heal_bell_binding=heal_bell_binding.tolist(),heal_bell_move=heal_bell_move,heal_bell_soundproof=heal_bell_soundproof.tolist(),schema=SCHEMA,baton_binding=baton_binding.tolist(),baton_move=baton_move,baton_abilities=baton_abilities.tolist(),baton_items=baton_items.tolist(),declared={x.name:int(x) for x in Branch},
         source_files={f:hashlib.sha256(Path(__file__).with_name(f).read_bytes()).hexdigest() for f in files},
         pinch_binding=pinch_binding.tolist(),pinch_stats=pinch_stats.tolist(),
         scope='DECLARED_CUTPOINT_IDENTITY_ONLY_UNWIRED_NO_COMPLETENESS',
@@ -415,7 +425,7 @@ def compile_risks(engine_catalog,accounting_compiled,*,direct_hit_compiled=None,
     words=lambda x:jnp.asarray(x,jnp.uint32)
     device=Tables(words(np.frombuffer(hashlib.sha256(raw.encode()).digest(),dtype='>u4').astype(np.uint32)),
         words(engine_catalog.engine_binding),words(engine_catalog.source_binding),words(engine_catalog.move_binding),
-        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths),words(heal_bell_binding),jnp.asarray(heal_bell_move,jnp.int32),jnp.asarray(heal_bell_soundproof),words(baton_binding),jnp.asarray(baton_move,jnp.int32),jnp.asarray(baton_abilities),jnp.asarray(baton_items))
+        record[0].producer_binding,record[0].inventory_binding,jnp.asarray(risk),jnp.asarray(branch),words(direct_binding),jnp.asarray(candidate),jnp.asarray(seismic,jnp.int32),words(substitute_binding),jnp.asarray(substitute_candidate),words(toxic_binding),jnp.asarray(toxic_candidate),words(recoil_binding),jnp.asarray(recoil_candidate),words(calm_binding),jnp.asarray(calm_candidate),words(swords_binding),jnp.asarray(swords_candidate),words(spikes_binding),jnp.asarray(spikes_candidate),jnp.asarray(ko_candidates),words(thunder_binding),words(powder_binding),jnp.asarray(powder_candidate),jnp.asarray(thunder_candidate),words(no_damage_binding),words(plain_binding),jnp.asarray(plain_candidates),jnp.asarray(plain_status),words(pinch_binding),jnp.asarray(pinch_stats),words(bulk_binding),jnp.asarray(bulk_candidates),words(protect_binding),jnp.asarray(protect_candidates),jnp.asarray(protect_blocks),words(color_binding),jnp.asarray(color_abilities),jnp.asarray(color_candidates),jnp.asarray(color_types),jnp.asarray(color_dynamic),jnp.asarray(powder_miss),words(heal_binding),jnp.asarray(heal_candidates),words(belly_binding),jnp.asarray(belly_candidates),words(sleep_block_binding),jnp.asarray(sleep_block_moves),words(encore_binding),jnp.asarray(encore_move,jnp.int32),words(leech_binding),jnp.asarray(leech_move,jnp.int32),words(self_move_binding),jnp.asarray(self_move_ids,jnp.int32),jnp.asarray(toxic_substitute_failure,jnp.bool_),jnp.asarray(substitute_failure,jnp.bool_),jnp.asarray(toxic_existing_status,jnp.bool_),jnp.asarray(heal_family,jnp.int32),jnp.asarray(recoil_ko,jnp.bool_),jnp.asarray(recoil_rock_head_source,jnp.bool_),jnp.asarray(recoil_rock_head),words(self_boost_binding),jnp.asarray(self_boost_stats),jnp.asarray(self_boost_deltas),jnp.asarray(self_boost_lengths),words(heal_bell_binding),jnp.asarray(heal_bell_move,jnp.int32),jnp.asarray(heal_bell_soundproof),words(baton_binding),jnp.asarray(baton_move,jnp.int32),jnp.asarray(baton_abilities),jnp.asarray(baton_items),words(self_destruct_binding),jnp.asarray(self_destruct_candidates),jnp.asarray(self_destruct_powers),jnp.asarray(self_destruct_damp),jnp.asarray(self_destruct_abilities),jnp.asarray(self_destruct_items))
     result=Compiled(device);_COMPILED[result]=(device,tuple(device),engine_catalog,accounting_compiled,raw,direct_hit_compiled,substitute_compiled,toxic_compiled,recoil_compiled,calm_mind_compiled,spikes_compiled,swords_dance_compiled,thunder_wave_compiled,sleep_powder_compiled)
     return result
 
@@ -503,6 +513,10 @@ def _bound(carry,tape,tables):
     accounting._shape(tables.protect_binding,(8,),jnp.uint32)
     accounting._shape(tables.protect_candidates,tables.direct_candidates.shape,jnp.bool_)
     accounting._shape(tables.protect_block_candidates,tables.direct_candidates.shape,jnp.bool_)
+    accounting._shape(tables.self_destruct_binding,(8,),jnp.uint32)
+    accounting._shape(tables.self_destruct_candidates,(len(tables.selected_risk),),jnp.bool_)
+    accounting._shape(tables.self_destruct_powers,(len(tables.selected_risk),),jnp.int32)
+    for value in (tables.self_destruct_damp,tables.self_destruct_abilities,tables.self_destruct_items):accounting._shape(value,(len(value),),jnp.bool_)
     accounting._shape(tables.recoil_binding,(8,),jnp.uint32)
     accounting._shape(tables.recoil_ko,(),jnp.bool_)
     accounting._shape(tables.recoil_rock_head_source,(),jnp.bool_)
@@ -864,7 +878,10 @@ def observe_outcome_device(carry,tape,outcome,tables,*,eligible,active,captured_
         recoil_ok=(recoil.matches_pending(tape,pending_recoil)&supported_direct
             &jnp.any(tables.recoil_binding!=0)&jnp.all(tables.recoil_binding==pending_recoil.context.data.binding)
             &(o.recoil==pending_recoil.recoil))
-    value=jnp.where(unsupported,TARGET_OUTCOME,0)|jnp.where(o.explodes|(((o.recoil>0)|recoil_needed)&~recoil_ok),SELF_HP,0)
+    from . import engine_self_destruct_callbacks as sd
+    sd_supported=sd.matches_outcome(tape,o)
+    unsupported &= ~sd_supported
+    value=jnp.where(unsupported,TARGET_OUTCOME,0)|jnp.where((o.explodes&~sd_supported)|(((o.recoil>0)|recoil_needed)&~recoil_ok),SELF_HP,0)
     value |= jnp.where((o.power<0)|(o.numerator<0)|(o.denominator<=0)|(o.recoil<0),NAMESPACE,0)
     return _observe(carry,tape,tables,Branch.HIT_OUTCOME,jnp.where(eligible,value,0),active=active)
 
@@ -999,6 +1016,9 @@ def observe_branch_device(carry,tape,branch,attempted,tables,*,active,captured_b
     if type(branch) is not Branch or int(branch)<6:raise ValueError('named actual unsupported write branch required')
     attempted=_vector(attempted,len(carry.stream_id),jnp.bool_)
     supported=jnp.zeros_like(attempted)
+    if branch is Branch.SELF_DESTRUCT:
+        from . import engine_self_destruct_callbacks as sd
+        supported=sd.self_matches(tape,None if tape.execution is None else tape.execution.self_destruct)
     if branch is Branch.HEAL_BELL:
         from . import engine_heal_bell_callbacks as heal_bell_callbacks
         supported=heal_bell_callbacks.captured_matches(tape,captured_heal_bell)
