@@ -55,8 +55,10 @@ class HostCopyTests(unittest.TestCase):
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_outcome_diagnostics.py'],text=True));new=ast.parse(Path(d.__file__).read_text())
   keep=lambda tree:ast.Module(body=[n for n in tree.body if not isinstance(n,ast.FunctionDef)or n.name!='refused_rows'],type_ignores=[])
   self.assertEqual(ast.dump(keep(old),include_attributes=False),ast.dump(keep(new),include_attributes=False))
-  for path in('transition.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py'):
+  for path in('transition.py','engine_kernel_frame_risk.py'):
    self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+path]))
+  # Built-in timing's guarded driver delta is separately exact-AST checked
+  # against c028 by test_gpu_engine_builtin_host_timing.
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_source_frame_witness.py'],text=True));new=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text())
   keep=lambda tree:ast.Module(body=[n for n in tree.body if not isinstance(n,ast.Assign)or not any(isinstance(t,ast.Name)and t.id=='SOURCE_PINS'for t in n.targets)],type_ignores=[])
   self.assertEqual(ast.dump(keep(old),include_attributes=False),ast.dump(keep(new),include_attributes=False))

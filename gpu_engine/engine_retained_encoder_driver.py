@@ -1016,14 +1016,20 @@ def latest_diagnostics(session):
     return record['diagnostics']
 
 
-def advance(session, engine_actions, *, active_rows=None, timing_callback=None, chance_inputs=None):
+def advance(session, engine_actions, *, active_rows=None, timing_callback=None, chance_inputs=None, collect_timings=False):
     """Source component advance; never a model rollout or implicit CLI enable.
 
     The API takes no external frame: its sole core result is consumed here once.
     A host Session retains one current carry; cached kernels cannot bypass the
     original static guards or let a replaced/stale carry resume silently.
+    collect_timings records the original synchronized phase intervals internally;
+    it cannot be combined with an arbitrary external timing observer.
     """
-    host_timings = {} if timing_callback is not None else None
+    if type(collect_timings) is not bool:
+        raise ValueError('collect_timings must be an explicit bool')
+    if collect_timings and timing_callback is not None:
+        raise ValueError('built-in timing and external timing callback are mutually exclusive')
+    host_timings = {} if collect_timings or timing_callback is not None else None
     advance_start = time.perf_counter_ns() if host_timings is not None else None
     with _host_span(host_timings, 'initial_guards_ms'):
         record = _session(session)
@@ -1065,7 +1071,11 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
                 _checked(session.prepared)
                 source._constructed(record['constructed'])
                 _checked_witness(r,session=session)
-        observe = None if timing_callback is None else checked_timing
+        def built_in_timing(name, milliseconds):
+            # Original synchronized _timed interval, with no external observer.
+            # Normal phase/source/session guards remain in their original sites.
+            host_timings['phase.'+name+'_ms']=milliseconds
+        observe = built_in_timing if collect_timings else (None if timing_callback is None else checked_timing)
         chance = transition.sample_chance_inputs(core.engine) if chance_inputs is None else chance_inputs
         leech_history=_leech_history(r,core,tuple(o.retained for o in old_state.observers),
             core.admitted & old_state.observers[0].retained_healthy & old_state.observers[1].retained_healthy)
