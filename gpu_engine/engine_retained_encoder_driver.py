@@ -15,6 +15,7 @@ actual frame, after both full folds. Global B4/physics qualification stays false
 Only a pure FAKE forward interface is exposed for source integration tests.
 """
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import hashlib
 import json
@@ -156,6 +157,14 @@ _PREPARED = weakref.WeakKeyDictionary()
 _SESSIONS = weakref.WeakKeyDictionary()
 _REQUEST_PROOF_ORIGINS = weakref.WeakKeyDictionary()
 _LEECH_HISTORY_ORIGINS = weakref.WeakKeyDictionary()
+_HOST_GUARD_TIMING = ContextVar('pokezero_driver_host_guard_timing', default=None)
+
+
+class _HostGuardTimingScope:
+    """Shared lexical lifetime, including copies of the current Context."""
+    __slots__ = ('timings','group','active')
+    def __init__(self,timings,group):
+        self.timings,self.group,self.active = timings,group,True
 
 
 def _basic_initialize(catalog, context, streams):
@@ -873,50 +882,70 @@ def _checked(prepared):
         r = _PREPARED.get(prepared) if type(prepared) is Prepared else None
         if r is None or prepared.binding is not r['binding']:
             raise ValueError('original prepared driver required')
-        own._checked(r['own_compiled'])
-        source._checked(r['request_compiled'])
-        r['check_public'](r['public'])
-        if r['execution_compiled'] is not None:execution._checked(r['execution_compiled'])
+        with _guard_span('own'):
+            own._checked(r['own_compiled'])
+        with _guard_span('request_source'):
+            source._checked(r['request_compiled'])
+        with _guard_span('public'):
+            r['check_public'](r['public'])
+        if r['execution_compiled'] is not None:
+            with _guard_span('accounting'):
+                execution._checked(r['execution_compiled'])
         if r['no_output_compiled'] is not None:
             from . import engine_leftovers_no_output as no_output
-            no_output.check_compiled(r['no_output_compiled'])
-        if r['kernel_risk_compiled'] is not None:kernel_risks.check_compiled(r['kernel_risk_compiled'])
+            with _guard_span('no_output'):
+                no_output.check_compiled(r['no_output_compiled'])
+        if r['kernel_risk_compiled'] is not None:
+            with _guard_span('risk'):
+                kernel_risks.check_compiled(r['kernel_risk_compiled'])
         if r['calm_mind_compiled'] is not None:
             from . import engine_calm_mind_callbacks as calm_callbacks
-            calm_callbacks.check_compiled(r['calm_mind_compiled'])
+            with _guard_span('calm_mind'):
+                calm_callbacks.check_compiled(r['calm_mind_compiled'])
         if r['swords_dance_compiled'] is not None:
             from . import engine_swords_dance_callbacks as swords_callbacks
-            swords_callbacks.check_compiled(r['swords_dance_compiled'])
+            with _guard_span('swords_dance'):
+                swords_callbacks.check_compiled(r['swords_dance_compiled'])
         if r['recoil_compiled'] is not None:
             from . import engine_recoil_callbacks as recoil_callbacks
-            recoil_callbacks.check_compiled(r['recoil_compiled'])
+            with _guard_span('recoil'):
+                recoil_callbacks.check_compiled(r['recoil_compiled'])
         if r['toxic_compiled'] is not None:
             from . import engine_toxic_callbacks as toxic_callbacks
-            toxic_callbacks.check_compiled(r['toxic_compiled'])
+            with _guard_span('toxic'):
+                toxic_callbacks.check_compiled(r['toxic_compiled'])
         if r['substitute_compiled'] is not None:
             from . import engine_substitute_callbacks as substitute_callbacks
-            substitute_callbacks.check_compiled(r['substitute_compiled'])
+            with _guard_span('substitute'):
+                substitute_callbacks.check_compiled(r['substitute_compiled'])
         if r['direct_hit_compiled'] is not None:
             from . import engine_direct_hit_controls as direct_hit_controls
-            direct_hit_controls.check_compiled(r['direct_hit_compiled'])
+            with _guard_span('direct_hit'):
+                direct_hit_controls.check_compiled(r['direct_hit_compiled'])
         if r['spikes_compiled'] is not None:
             from . import engine_spikes_callbacks as spikes_callbacks
-            spikes_callbacks.check_compiled(r['spikes_compiled'])
+            with _guard_span('spikes'):
+                spikes_callbacks.check_compiled(r['spikes_compiled'])
         if r['thunder_wave_compiled'] is not None:
             from . import engine_thunder_wave_callbacks as thunder_wave_callbacks
-            thunder_wave_callbacks.check_compiled(r['thunder_wave_compiled'])
+            with _guard_span('thunder_wave'):
+                thunder_wave_callbacks.check_compiled(r['thunder_wave_compiled'])
         if r['sleep_powder_compiled'] is not None:
             from . import engine_sleep_powder_callbacks as sleep_powder_callbacks
-            sleep_powder_callbacks.check_compiled(r['sleep_powder_compiled'])
-        if r['speed_profile'] is not None:weather_speed.check_profile(r['speed_profile'])
+            with _guard_span('sleep_powder'):
+                sleep_powder_callbacks.check_compiled(r['sleep_powder_compiled'])
+        if r['speed_profile'] is not None:
+            with _guard_span('speed_profile'):
+                weather_speed.check_profile(r['speed_profile'])
         if r['leftovers_compiled'] is not None:
             from . import engine_leftovers_callbacks as leftovers_callbacks
-            leftovers_callbacks.check_compiled(r['leftovers_compiled'])
+            with _guard_span('leftovers'):
+                leftovers_callbacks.check_compiled(r['leftovers_compiled'])
         if r['status_residual_compiled'] is not None:
             from . import engine_status_residual_callbacks as status_residual_callbacks
-            status_residual_callbacks.check_compiled(r['status_residual_compiled'])
+            with _guard_span('status_residual'):
+                status_residual_callbacks.check_compiled(r['status_residual_compiled'])
         return r
-
 
 @contextmanager
 def _host_span(timings, name):
@@ -925,10 +954,40 @@ def _host_span(timings, name):
         yield
         return
     start = time.perf_counter_ns()
+    scope = _HostGuardTimingScope(timings,name) if name in ('initial_guards_ms','extra_guards_ms') else None
+    token = _HOST_GUARD_TIMING.set(scope)
     try:
         yield
     finally:
-        timings[name] = timings.get(name, 0.) + (time.perf_counter_ns()-start)/1e6
+        if scope is not None:scope.active = False
+        try:
+            timings[name] = timings.get(name, 0.) + (time.perf_counter_ns()-start)/1e6
+        finally:
+            _HOST_GUARD_TIMING.reset(token)
+
+
+@contextmanager
+def _guard_span(name):
+    """Overlapping actual host call cost, only inside an enabled guard span.
+
+    Absent keys mean unexecuted/unmeasured. Counts include entered calls that
+    raise; timings never cache validity or influence the original result.
+    """
+    scope = _HOST_GUARD_TIMING.get()
+    if scope is None or not scope.active:
+        yield
+        return
+    timings,group = scope.timings,scope.group
+    prefix = 'guard_call.'+group+'.'+name
+    start = time.perf_counter_ns()
+    try:
+        yield
+    finally:
+        if scope.active:
+            elapsed = (time.perf_counter_ns()-start)/1e6
+            if scope.active:
+                timings[prefix+'_calls'] = timings.get(prefix+'_calls',0) + 1
+                timings[prefix+'_ms'] = timings.get(prefix+'_ms',0.) + elapsed
 
 
 def _timed(callback, name, function, *args, _host_timings=None):
@@ -951,9 +1010,11 @@ def _checked_witness(r, *, constructed=None, session=None):
     if compiled is not None:
         from . import engine_source_frame_witness as frame_witness
         if constructed is None and session is None:
-            frame_witness.check_compiled(compiled)
+            with _guard_span('witness_compiled'):
+                frame_witness.check_compiled(compiled)
         else:
-            frame_witness.check_host_origin(compiled,constructed=constructed,session=session)
+            with _guard_span('witness_host_origin'):
+                frame_witness.check_host_origin(compiled,constructed=constructed,session=session)
 
 
 def _consume_accounted(r,state,frame,active,timing_callback,previous_reports,host_timings=None):
