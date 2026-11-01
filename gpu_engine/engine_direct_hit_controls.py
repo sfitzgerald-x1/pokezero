@@ -25,6 +25,7 @@ data/copies are trusted transport, not proof of caller origin or single use.
 from dataclasses import dataclass
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import NamedTuple
 import weakref
@@ -69,6 +70,7 @@ class Data(NamedTuple):
     encore: object = None # original apply/residual/request lifecycle
     leech_seed: object = None # original seed assignment + paired residual source slot
     self_move: object = None # partial original self-move failures/Wish start
+    return_ko_move: object = None # canonical source-bound Return; actual happiness required
 
 
 class Context(NamedTuple):
@@ -117,6 +119,27 @@ def _host():
         raise ValueError('checked direct-hit host boundary cannot be traced')
 
 
+def _compile_return_ko(catalog,metadata,rules):
+    """Bind existing original Return resolver; no power or HP is synthesized."""
+    from . import engine_request_source as request
+    origin=request._rules_origin(rules)
+    script=r"""
+const fs=require('fs'),path=require('path'),crypto=require('crypto'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
+const verified=require(process.argv[2]).build(root,meta),d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),m=d.moves.get('return');
+process.stdout.write(JSON.stringify({id:m.id,power:m.basePower,type:m.type,category:m.category,target:m.target,accuracy:m.accuracy,callback:crypto.createHash('sha256').update(m.basePowerCallback.toString()).digest('hex'),callbacks:Object.keys(m).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&m[k]!==undefined),exotic:!!(m.multihit||m.damage||m.recoil||m.drain||m.heal||m.self||m.secondary||m.secondaries||m.boosts||m.status||m.volatileStatus||m.sideCondition||m.slotCondition||m.condition||m.weather||m.selfdestruct||m.forceSwitch||m.selfSwitch||m.ohko),source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
+    row=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
+    if (row['id'],row['power'],row['type'],row['category'],row['target'],row['accuracy'],row['callback'],row['callbacks'],row['exotic'])!=('return',0,'Normal','Physical','normal',100,'a2bce14a77c22d55d42a7e1bd68c59689ef9a08d57dbabb645afb96a6ac2ecac',['basePowerCallback'],False):raise ValueError('original canonical Return resolver required')
+    if json.dumps(row['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(row['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('Return source tree changed')
+    names=metadata['vocabulary']['moves'];table=catalog.engine_table;wanted=np.asarray([n=='return'for n in names],bool)
+    if table.variable_moves is None or not wanted.any():return 0,row
+    if not np.array_equal(table.variable_moves.returns,wanted):raise ValueError('original installed Return resolver required')
+    ids=np.flatnonzero(wanted)
+    if len(ids)!=1:return 0,row
+    move=int(ids[0]);normal=metadata['vocabulary']['types'].index('normal')
+    if not(move>0 and int(catalog.ids[move])>0 and int(catalog.targets[move])==1 and int(table.power[move])==0 and int(table.type[move])==normal and bool(table.physical[move]) and int(table.accuracy[move])==100 and not bool(table.always_hit[move])):raise ValueError('original canonical Return numerical row required')
+    return move,row
+
+
 def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=None):
     """Bind the original immutable kernel catalog outside every owning JIT."""
     _host()
@@ -146,7 +169,9 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
                 and int(table.damage_moves.constant_damage[i])==0
                 and int(table.damage_moves.recoil_den[i])==0 and not bool(table.damage_moves.struggle[i])):
             seismic=i
-    ko=(np.asarray(table.power)>0)&(np.asarray(engine_catalog.ids)>0)&(np.asarray(engine_catalog.targets)==1)
+    return_ko=0;return_source=None
+    if metadata is not None and source_rules is not None:return_ko,return_source=_compile_return_ko(engine_catalog,metadata,source_rules)
+    ko=((np.asarray(table.power)>0)|((return_ko>0)&(np.arange(count)==return_ko)))&(np.asarray(engine_catalog.ids)>0)&(np.asarray(engine_catalog.targets)==1)
     ko &= np.arange(count)!=int(table.struggle)
     if table.damage_moves is not None:ko &= np.asarray(table.damage_moves.recoil_den)==0
     if table.self_destruct is not None:ko &= ~np.asarray(table.self_destruct.move)
@@ -184,7 +209,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
     if metadata is not None:
         from . import engine_self_move_callbacks as self_move_callbacks
         self_move_data=self_move_callbacks.compile_data(engine_catalog,metadata,source_rules)
-    payload = dict(schema=SCHEMA, self_move_binding=None if self_move_data is None else np.asarray(self_move_data.binding).tolist(), leech_binding=None if leech_data is None else np.asarray(leech_data.binding).tolist(), encore_binding=None if encore_data is None else np.asarray(encore_data.binding).tolist(), sleep_blocked_binding=None if sleep_block_data is None else np.asarray(sleep_block_data.binding).tolist(), belly_drum_binding=None if belly_data is None else np.asarray(belly_data.binding).tolist(), self_heal_binding=None if heal_data is None else np.asarray(heal_data.binding).tolist(), pinch_binding=None if pinch_data is None else np.asarray(pinch_data.binding).tolist(), color_change_binding=None if color_data is None else np.asarray(color_data.binding).tolist(), rough_skin_binding=None if rough_skin_data is None else np.asarray(rough_skin_data.binding).tolist(), primary_plain_binding=None if plain_data is None else np.asarray(plain_data.binding).tolist(), bulk_up_binding=None if bulk_up_data is None else np.asarray(bulk_up_data.binding).tolist(), protect_binding=None if protect_data is None else np.asarray(protect_data.binding).tolist(), substitute_damage_binding=None if substitute_damage_data is None else np.asarray(substitute_damage_data.binding).tolist(), secondary_binding=None if secondary_data is None else np.asarray(secondary_data.binding).tolist(), no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
+    payload = dict(schema=SCHEMA, return_ko_move=return_ko,return_source=return_source, self_move_binding=None if self_move_data is None else np.asarray(self_move_data.binding).tolist(), leech_binding=None if leech_data is None else np.asarray(leech_data.binding).tolist(), encore_binding=None if encore_data is None else np.asarray(encore_data.binding).tolist(), sleep_blocked_binding=None if sleep_block_data is None else np.asarray(sleep_block_data.binding).tolist(), belly_drum_binding=None if belly_data is None else np.asarray(belly_data.binding).tolist(), self_heal_binding=None if heal_data is None else np.asarray(heal_data.binding).tolist(), pinch_binding=None if pinch_data is None else np.asarray(pinch_data.binding).tolist(), color_change_binding=None if color_data is None else np.asarray(color_data.binding).tolist(), rough_skin_binding=None if rough_skin_data is None else np.asarray(rough_skin_data.binding).tolist(), primary_plain_binding=None if plain_data is None else np.asarray(plain_data.binding).tolist(), bulk_up_binding=None if bulk_up_data is None else np.asarray(bulk_up_data.binding).tolist(), protect_binding=None if protect_data is None else np.asarray(protect_data.binding).tolist(), substitute_damage_binding=None if substitute_damage_data is None else np.asarray(substitute_damage_data.binding).tolist(), secondary_binding=None if secondary_data is None else np.asarray(secondary_data.binding).tolist(), no_damage_binding=np.asarray(no_damage_data.binding).tolist(), producer=engine_catalog.binding,
         engine=engine_catalog.engine_binding, source=engine_catalog.source_binding,
         moves=engine_catalog.move_binding, move_count=count, seismic_toss_move=seismic,ko_candidates=ko.tolist(),
         kinds=[CRITICAL, SUPER_EFFECTIVE, RESISTED],
@@ -198,7 +223,7 @@ def compile_direct_hit_controls(*, engine_catalog, metadata=None, source_rules=N
         words(engine_catalog.engine_binding), words(engine_catalog.source_binding),
         words(engine_catalog.move_binding),
         words(np.frombuffer(bytes.fromhex(engine_catalog.binding), dtype='>u4').astype(np.uint32)),
-        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data,secondary_data,substitute_damage_data,protect_data,plain_data,bulk_up_data,rough_skin_data,color_data,pinch_data,heal_data,belly_data,sleep_block_data,encore_data,leech_data,self_move_data)
+        jnp.array(count, jnp.int32),jnp.array(seismic,jnp.int32),jnp.asarray(ko),no_damage_data,secondary_data,substitute_damage_data,protect_data,plain_data,bulk_up_data,rough_skin_data,color_data,pinch_data,heal_data,belly_data,sleep_block_data,encore_data,leech_data,self_move_data,jnp.array(return_ko,jnp.int32))
     result = Compiled(data)
     _COMPILED[result] = (data, tuple(data), engine_catalog,source_rules)
     return result
@@ -244,6 +269,7 @@ def _check(tape, data):
         life._typed(value, (8,), jnp.uint32)
     life._typed(data.move_count, (), jnp.int32)
     life._typed(data.seismic_toss_move, (), jnp.int32)
+    life._typed(data.return_ko_move, (), jnp.int32)
     if data.ko_candidates.ndim!=1 or len(data.ko_candidates)<2:raise ValueError('exact original KO move domain required')
     life._typed(data.ko_candidates,(len(data.ko_candidates),),jnp.bool_)
     from . import engine_no_damage_callbacks as no_damage

@@ -938,7 +938,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_direct_ko_pending=direct_ko_callbacks.prepare_controls_device(
                     _public_trace,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,
                     _direct_write,_direct_hit_context,_direct_ko_actor_before,_direct_ko_party_before,
-                    eligible=_direct_requested)
+                    eligible=_direct_requested,actor_happiness=_active(work.happiness,work,side))
             else:
                 _public_trace=direct_hit_controls.record_direct_hit_controls_device(
                     _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
