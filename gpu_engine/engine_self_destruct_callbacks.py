@@ -23,6 +23,7 @@ class Data(NamedTuple):
  damp:object
  quiet_abilities:object
  quiet_items:object
+ own_tempo:object
 class Before(NamedTuple):
  hp:object
  maximum:object
@@ -30,6 +31,8 @@ class Before(NamedTuple):
  abilities:object
  items:object
  active:object
+ confusion:object=None
+ volatile:object=None
 class Record(NamedTuple):
  requested:object
  self_ok:object
@@ -48,6 +51,7 @@ class Record(NamedTuple):
  secondary:object
 
 STATIC_CALLBACK_SHA256='26759547257248edbbf4ba3a036f3aecff3dacc794bf5193286fcf29870d1b07'
+CONDITIONAL_ABILITIES={'owntempo':{'id':'owntempo','exists':True,'gen':3,'callbacks':['onUpdate','onTryAddVolatile','onHit'],'hashes':{'onUpdate':'5243847c2cfa47c10e5a335ca923119b4fd02109a52a7d7c052df42cd64486fc','onTryAddVolatile':'7d81c3354002da0207a13e6a4760b8cdde1607889c9eaca7c2ae471420daf912','onHit':'e89796b838326e915cb369976ace2a5067a2e05e5ae4270c9870ffb02a101c61'}},'poisonpoint':{'id':'poisonpoint','exists':True,'gen':3,'callbacks':['onDamagingHit'],'hashes':{'onDamagingHit':'b4a5798da1900cd7dcd944129ae286b03f276e44b777c19b5c9b56ae273d9afd'}}}
 
 def compile_data(catalog,metadata,rules):
  from . import engine_request_source as request
@@ -60,11 +64,13 @@ const checked=require(process.argv[2]).build(root,meta),d=require(path.join(root
 const B=require(path.join(root,'dist/sim/battle.js')).Battle,P=require(path.join(root,'dist/sim/pokemon.js')).Pokemon,A=require(path.join(root,'dist/sim/battle-actions.js')).BattleActions;const hash=f=>crypto.createHash('sha256').update(f.toString()).digest('hex');
 const callbacks={useMoveInner:hash(d.data.Scripts.actions.useMoveInner),faintMessages:hash(B.prototype.faintMessages),faint:hash(P.prototype.faint),getDamage:hash(d.data.Scripts.actions.getDamage||A.prototype.getDamage),tryMoveHit:hash(d.data.Scripts.actions.tryMoveHit||A.prototype.tryMoveHit)};
 const quiet=e=>e.exists&&e.gen<=3&&!['onDamage','onDamagingHit','onAfterDamage','onAfterMoveSecondary','onAfterMoveSecondarySelf','onUpdate','onAfterSubDamage','onEnd','onFaint','onBeforeFaint','onAfterFaint'].some(k=>e[k]!==undefined);
-const compatibleAbility=e=>quiet(e)||(e.exists&&e.gen<=3&&e.id==='static'&&typeof e.onDamagingHit==='function'&&!['onDamage','onAfterDamage','onAfterMoveSecondary','onAfterMoveSecondarySelf','onUpdate','onAfterSubDamage','onEnd','onFaint','onBeforeFaint','onAfterFaint'].some(k=>e[k]!==undefined));
-process.stdout.write(JSON.stringify({callbacks,static_callback:hash(d.abilities.get('static').onDamagingHit),source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,moves:['explosion','selfdestruct'].map(n=>{const m=d.moves.get(n);return {id:m.id,gen:m.gen,power:m.basePower,type:m.type,category:m.category,target:m.target,accuracy:m.accuracy,priority:m.priority,selfdestruct:m.selfdestruct,contact:!!m.flags.contact,callbacks:Object.keys(m).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&m[k]!==undefined),exotic:!!(m.multihit||m.recoil||m.drain||m.secondary||m.secondaries||m.self||m.boosts||m.status||m.volatileStatus||m.forceSwitch||m.selfSwitch)}}),abilities:meta.vocabulary.abilities.map(n=>compatibleAbility(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
+const compatibleAbility=e=>quiet(e)||(e.exists&&e.gen<=3&&['static','poisonpoint'].includes(e.id)&&typeof e.onDamagingHit==='function'&&!['onDamage','onAfterDamage','onAfterMoveSecondary','onAfterMoveSecondarySelf','onUpdate','onAfterSubDamage','onEnd','onFaint','onBeforeFaint','onAfterFaint'].some(k=>e[k]!==undefined))||(e.exists&&e.gen<=3&&e.id==='owntempo'&&typeof e.onUpdate==='function'&&!['onDamage','onDamagingHit','onAfterDamage','onAfterMoveSecondary','onAfterMoveSecondarySelf','onAfterSubDamage','onEnd','onFaint','onBeforeFaint','onAfterFaint'].some(k=>e[k]!==undefined));
+const descriptor=n=>{const a=d.abilities.get(n),callbacks=Object.keys(a).filter(k=>/^on/.test(k)&&a[k]!==undefined);return {id:a.id,exists:a.exists,gen:a.gen,callbacks,hashes:Object.fromEntries(callbacks.filter(k=>typeof a[k]==='function').map(k=>[k,hash(a[k])]))};};
+process.stdout.write(JSON.stringify({callbacks,own_tempo:meta.vocabulary.abilities.map(n=>d.abilities.get(n).id==='owntempo'),conditional_abilities:Object.fromEntries(['owntempo','poisonpoint'].map(n=>[n,descriptor(n)])),static_callback:hash(d.abilities.get('static').onDamagingHit),source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,moves:['explosion','selfdestruct'].map(n=>{const m=d.moves.get(n);return {id:m.id,gen:m.gen,power:m.basePower,type:m.type,category:m.category,target:m.target,accuracy:m.accuracy,priority:m.priority,selfdestruct:m.selfdestruct,contact:!!m.flags.contact,callbacks:Object.keys(m).filter(k=>(/^on/.test(k)||/Callback$/.test(k))&&m[k]!==undefined),exotic:!!(m.multihit||m.recoil||m.drain||m.secondary||m.secondaries||m.self||m.boosts||m.status||m.volatileStatus||m.forceSwitch||m.selfSwitch)}}),abilities:meta.vocabulary.abilities.map(n=>compatibleAbility(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
  v=json.loads(subprocess.check_output([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata).encode(),timeout=30))
  if v['callbacks']!={'useMoveInner': '8c35e507bccb4bc25d13e24d582895097cd14ea6b24630b163e6ffafc7b4a160', 'faintMessages': '62f5ba2782de2f0716c5071a3555ac238a430105b1e2e04e8b96b9cb6c9e5c4b', 'faint': '2ba9a893c499af2d32dd02dcfc255a63ba03f9308cf6fa2f51f98940dc315a28', 'getDamage': 'dfd031900da8c77e5e1a2721858d8d4a7804bc7def1b7a1d486220521a6a7f12', 'tryMoveHit': 'af529997d52b6d856301bc8f958ead5963f68abc58d9568c82df24f212b0a97f'}:raise ValueError('exact original Gen3 self-KO/damage/faint callbacks required')
  if v['static_callback']!=STATIC_CALLBACK_SHA256:raise ValueError('original conditional Static callback required')
+ if v['conditional_abilities']!=CONDITIONAL_ABILITIES:raise ValueError('original conditional OwnTempo/PoisonPoint callbacks required')
  if json.dumps(v['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(v['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original self-destruct source drift')
  names=metadata['vocabulary']['moves'];t=catalog.engine_table;c=np.zeros(len(names),bool);powers=np.zeros(len(names),np.int32)
  for row in v['moves']:
@@ -77,17 +83,17 @@ process.stdout.write(JSON.stringify({callbacks,static_callback:hash(d.abilities.
    c[move]=True;powers[move]=expected
  damp=np.asarray([n=='damp'for n in metadata['vocabulary']['abilities']],bool)
  if t.self_destruct is None or not np.array_equal(t.self_destruct.damp,damp):raise ValueError('original Damp guard required')
- payload=dict(schema='pokezero.self-destruct.static-noncontact.composite.v2',source=v,candidates=c.tolist(),powers=powers.tolist(),engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding)
+ payload=dict(schema='pokezero.self-destruct.conditional-abilities.composite.v3',source=v,candidates=c.tolist(),powers=powers.tolist(),engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding)
  words=lambda x:j.asarray(x,j.uint32)
- return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(c),j.asarray(powers),j.asarray(damp),j.asarray(v['abilities']),j.asarray(v['items']))
+ return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(c),j.asarray(powers),j.asarray(damp),j.asarray(v['abilities']),j.asarray(v['items']),j.asarray(v['own_tempo']))
 def shape(d):
  if type(d)is not Data:raise ValueError('typed self-destruct capability required')
  for v in d[:5]:life._typed(v,(8,),j.uint32)
- for v in (d.candidates,d.damp,d.quiet_abilities,d.quiet_items):life._typed(v,(len(v),),j.bool_)
- life._typed(d.powers,d.candidates.shape,j.int32)
+ for v in (d.candidates,d.damp,d.quiet_abilities,d.quiet_items,d.own_tempo):life._typed(v,(len(v),),j.bool_)
+ life._typed(d.powers,d.candidates.shape,j.int32);life._typed(d.own_tempo,d.quiet_abilities.shape,j.bool_)
 def _data(tape):
  t=tape.execution.risks.tables
- return Data(t.self_destruct_binding,t.engine_binding,t.source_binding,t.move_binding,t.producer_binding,t.self_destruct_candidates,t.self_destruct_powers,t.self_destruct_damp,t.self_destruct_abilities,t.self_destruct_items)
+ return Data(t.self_destruct_binding,t.engine_binding,t.source_binding,t.move_binding,t.producer_binding,t.self_destruct_candidates,t.self_destruct_powers,t.self_destruct_damp,t.self_destruct_abilities,t.self_destruct_items,t.self_destruct_own_tempo)
 def _bound(tape,d):
  from . import engine_execution_completeness as ex
  shape(d);ctx=ex._context(tape)
@@ -104,11 +110,22 @@ def _put(tape,rec):
  return tape._replace(execution=tape.execution._replace(self_destruct=rec))
 def snapshot(s):
  r=j.arange(len(s.hp));sides=j.arange(2)[None,:]
- return Before(s.hp,s.max_hp,s.status,s.ability[r[:,None],sides,s.active],s.item[r[:,None],sides,s.active],s.active)
+ return Before(s.hp,s.max_hp,s.status,s.ability[r[:,None],sides,s.active],s.item[r[:,None],sides,s.active],s.active,s.confusion_counter,s.volatile)
 def equal(a,b):
  out=j.ones(len(a[0]),bool)
- for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b),strict=True):out &= j.all(x==y,axis=tuple(range(1,x.ndim)))if x.ndim>1 else x==y
+ for x,y in zip(a,b,strict=True):
+  if x is None:continue # Legacy Before has no new capability facts.
+  if y is None:return out&False
+  out &= j.all(x==y,axis=tuple(range(1,x.ndim)))if x.ndim>1 else x==y
  return out
+def _conditional_current(before,d):
+ """Only exact OwnTempo may use its newly captured inactive-update facts."""
+ b=len(before.active);r=j.arange(b);seats=j.arange(2)[None,:];ability=before.abilities
+ own=d.own_tempo[j.clip(ability,0,len(d.own_tempo)-1)]
+ if before.confusion is None or before.volatile is None:return ~j.any(own,axis=1)
+ life._typed(before.confusion,(b,2,6),j.int32);life._typed(before.volatile,(b,2,6),j.uint32)
+ good=(before.confusion[r[:,None],seats,before.active]==0)&(before.volatile[r[:,None],seats,before.active]==0)
+ return j.all(~own|good,axis=1)
 def _literal(rec,b):
  from . import engine_direct_hit_controls as hit
  if type(rec)is not Record or type(rec.before)is not Before:raise ValueError('typed same-call self-destruct receipt required')
@@ -116,6 +133,8 @@ def _literal(rec,b):
  for n in ('side','move','caller','slot','serial','frame','start'):life._typed(getattr(rec,n),(b,),j.int32)
  for n in ('hp','maximum','status'):life._typed(getattr(rec.before,n),(b,2,6),j.int32)
  for n in ('abilities','items','active'):life._typed(getattr(rec.before,n),(b,2),j.int32)
+ if rec.before.confusion is not None:life._typed(rec.before.confusion,(b,2,6),j.int32)
+ if rec.before.volatile is not None:life._typed(rec.before.volatile,(b,2,6),j.uint32)
  life._typed(rec.self_after,(b,2,6),j.int32);hit._typed_write(rec.write,b)
 def begin(tape,state,side,move,caller,context,*,requested):
  from . import engine_execution_completeness as ex,engine_direct_hit_controls as hit
@@ -126,6 +145,7 @@ def begin(tape,state,side,move,caller,context,*,requested):
  good &= ~j.any(d.damp[j.clip(before.abilities,0,len(d.damp)-1)]&(before.hp[r[:,None],j.arange(2)[None,:],active]>0),axis=1)
  for s in (0,1):
   ability=before.abilities[:,s];item=before.items[:,s];good &= (ability>0)&(ability<len(d.quiet_abilities))&d.quiet_abilities[j.clip(ability,0,len(d.quiet_abilities)-1)]&(item>=0)&(item<len(d.quiet_items))&d.quiet_items[j.clip(item,0,len(d.quiet_items)-1)]
+ good &= _conditional_current(before,d)
  good &= j.all(j.any((before.hp>0)&(j.arange(6)[None,None,:]!=active[:,:,None]),axis=2),axis=1)
  tape,ticket=ex.open_attempt(tape,ex.Site.SELF_DESTRUCT,side,active=requested);c=ex._context(tape);slot,_=ex._ticket(c.ledger,ticket);start=c.ledger.start[r,slot];at=j.clip(start-1,0,tape.words.shape[1]-1);raw=tape.words[r,at]
  good &= (start>0)&(raw[:,0]==public.MOVE)&(raw[:,1]==side)&(raw[:,2]==physical)&(raw[:,3]==1-side)&(raw[:,4]==target)&(raw[:,5]==move)&j.all(raw[:,6:]==0,axis=1)
@@ -143,6 +163,7 @@ def self_write(tape,rec,state):
 def _before_valid(rec,d):
  b=len(rec.side);r=j.arange(b);side=j.clip(rec.side,0,1);active=rec.before.active;old=rec.before.hp[r,side,active[r,side]]
  good=(rec.caller==rec.move)&(rec.move>0)&(rec.move<len(d.candidates))&d.candidates[j.clip(rec.move,0,len(d.candidates)-1)]&(rec.side>=0)&(rec.side<2)&(old>0)&j.all((active>=0)&(active<6),axis=1)&j.all((rec.before.hp>=0)&(rec.before.hp<=rec.before.maximum)&(rec.before.maximum>0)&(rec.before.maximum<=1000000)&(rec.before.status>=0)&(rec.before.status<=6),axis=(1,2))
+ good &= _conditional_current(rec.before,d)
  good &= j.all(j.any((rec.before.hp>0)&(j.arange(6)[None,None,:]!=active[:,:,None]),axis=2),axis=1)
  for seat in (0,1):
   a=rec.before.abilities[:,seat];i=rec.before.items[:,seat];good &= (a>0)&(a<len(d.damp))&(a<len(d.quiet_abilities))&~d.damp[j.clip(a,0,len(d.damp)-1)]&d.quiet_abilities[j.clip(a,0,len(d.quiet_abilities)-1)]&(i>=0)&(i<len(d.quiet_items))&d.quiet_items[j.clip(i,0,len(d.quiet_items)-1)]
