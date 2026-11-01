@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import time
 import random
 import numpy as np
+from . import jax_compile_observations as compile_observations
 
 SCHEMA = 'pokezero.capture_gap_census.diagnostic.v1'
 
@@ -302,9 +303,10 @@ class _Runtime:
         self.plan=plan;self.streams=streams;self.table=self.static['request']['engine_table']
         self.move_names=_bound_engine_move_names(self.static['request'])
         started=time.perf_counter_ns()
-        self.session=driver.construct(pool,indices,prepared=self.record['prepared'],stream_ids=j.asarray(streams),seed=constructor_seed,
-            **({}if gender is None else dict(gender_initialization=gender)))
-        jax.block_until_ready(self.session.result)
+        with compile_observations.phase('construction.driver.construct'):
+            self.session=driver.construct(pool,indices,prepared=self.record['prepared'],stream_ids=j.asarray(streams),seed=constructor_seed,
+                **({}if gender is None else dict(gender_initialization=gender)))
+            jax.block_until_ready(self.session.result)
         self.construction_ms=(time.perf_counter_ns()-started)/1e6
         self.engine=self.session.state.core.engine
         self.cursor=self.session.state.core.cursor
@@ -367,14 +369,16 @@ class _Runtime:
         core=self.session.state.core._replace(engine=self.engine,
             admitted=self.session.state.core.admitted&j.asarray(ledger.capture_good))
         encoded=[];encode_ms=[];own_admitted=[]
-        for observer in self.session.state.observers:
+        for owner,observer in enumerate(self.session.state.observers):
             start=time.perf_counter_ns()
-            facts,out=self.jax.block_until_ready(self.static['encode_fast'](core,observer))
+            with compile_observations.phase('shadow.encode_p'+str(owner+1)):
+                facts,out=self.jax.block_until_ready(self.static['encode_fast'](core,observer))
             encode_ms.append((time.perf_counter_ns()-start)/1e6)
             encoded.append(out.observation);own_admitted.append(np.asarray(facts.admitted))
         args=tuple(j.stack([getattr(obs,name)for obs in encoded],axis=1).reshape((2*self.plan.batch,)+getattr(encoded[0],name).shape[1:])
             for name in ('numeric_features','categorical_ids','token_type_ids','attention_mask'))
-        heads,compile_ms,forward_ms=self.retained._network(record,args)
+        with compile_observations.phase('bf16.original_network'):
+            heads,compile_ms,forward_ms=self.retained._network(record,args)
         physical_rows=2*self.plan.batch
         if heads.policy_logits.shape!=(physical_rows,9)or heads.value.shape!=(physical_rows,)or heads.opponent_action_logits.shape!=(physical_rows,9):
             raise ValueError('original fixedshape three model heads required')
@@ -429,10 +433,12 @@ class _Runtime:
             args=(self.engine,self.cursor,self.profile,j.asarray(actions),chance,j.asarray(fallback))
             if self.diag_executable is None:
                 build=time.perf_counter_ns()
-                self.diag_executable=self.diag.lower(*args).compile()
+                with compile_observations.phase('fallback.original_lower_compile'):
+                    self.diag_executable=self.diag.lower(*args).compile()
                 phases['diagnostic_fallback_lower_compile_ms']=(time.perf_counter_ns()-build)/1e6
             start=time.perf_counter_ns()
-            state,cursor,profile,diag_callbacks,bad,_,diag_good,diag_namespace=self.jax.block_until_ready(self.diag_executable(*args))
+            with compile_observations.phase('fallback.original_execute'):
+                state,cursor,profile,diag_callbacks,bad,_,diag_good,diag_namespace=self.jax.block_until_ready(self.diag_executable(*args))
             phases['diagnostic_fallback_engine_ms']=(time.perf_counter_ns()-start)/1e6
             self.engine,self.cursor,self.profile=state,cursor,profile
             invalid|=fallback&host(bad);executed|=fallback&~host(bad)
@@ -522,6 +528,7 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
             stop='NO_LIVE_DECLARED_ROWS';break
         if clock()-started>=plan.max_elapsed_seconds:
             stop='WALL_BACKSTOP_UNKNOWN';break
+        compile_observations.sample_step(step)
         began=clock();cache_before=backend.cache_snapshot()
         host_start=time.perf_counter_ns()
         policy_input_capture_valid_rows=int((active&ledger.capture_good).sum())
@@ -597,6 +604,7 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
             publication=clock();publish(ledger.summary());samples[-1]['journal_publication_ms']=(clock()-publication)*1000
         samples[-1]['inclusive_step_wall_ms']=(clock()-began)*1000
         samples[-1]['elapsed_ms_scope']='Synchronized step including diagnostic capture; journalpublication separately reported.'
+        compile_observations.sample_step(None)
     report=ledger.summary()
     report.update(stop=stop,plan=plan.__dict__,elapsed_seconds=clock()-started,samples=samples,
         compile_scope='BF16 and diagnosticfallback lowering+compile explicit; original driver phase coldcall-inclusive and cache deltas recorded.',
@@ -621,10 +629,11 @@ def _run(backend,plan,streams,*,sampling_seed,clock=time.perf_counter,ledger=Non
 
 
 def measure(runtime,pool,team_indices,*,stream_ids,plan,constructor_seed,sampling_seed,
-            gender_initialization=None,enable_diagnostic=False,journal_path=None,max_journal_bytes=64*1024*1024):
+            gender_initialization=None,enable_diagnostic=False,journal_path=None,max_journal_bytes=64*1024*1024,collect_compile_events=False):
     """Explicit source-only callable; no loading/launch/default CLI side effect."""
     if enable_diagnostic is not True or type(plan)is not Plan:
         raise ValueError('explicit finite diagnostic plan required')
+    if type(collect_compile_events)is not bool:raise ValueError('explicit bool compile diagnostics flag required')
     plan.validate();indices=np.array(team_indices,copy=True);streams=np.array(stream_ids,copy=True)
     if indices.shape!=(plan.batch,2)or indices.dtype.kind not in'iu'or np.any(indices<0)or len(np.unique(indices))!=indices.size:
         raise ValueError('all4096freshdistinct declared teamindices required')
@@ -642,16 +651,21 @@ def measure(runtime,pool,team_indices,*,stream_ids,plan,constructor_seed,samplin
         engine_move_names=list(move_names),
         attempts='All2048declaredfreshconstructorrows are attempted before dispatch; no retry/refill.')
     journal.write(dict(status='ATTEMPTED_CONSTRUCTION_UNKNOWN',**envelope,**ledger.summary()))
+    compile_observer=compile_observations.Observer().start()if collect_compile_events else None
     try:
         backend=_Runtime(runtime,plan,pool,indices,streams,constructor_seed,gender_initialization)
         report=_run(backend,plan,streams,sampling_seed=sampling_seed,ledger=ledger,
             publish=lambda partial:journal.write(dict(status='RUNNING_DIAGNOSTIC',**envelope,**partial)))
         source_provenance._pool(pool,rehash=True);retained._checked(runtime,session=backend.session)
         if retained._source_snapshot()!=source:raise RuntimeError('census source changed during measurement')
+        if compile_observer is not None:
+            compile_observer.close()
+            report['jax_compile_observations']=compile_observer.snapshot(samples=report['samples'],warmup=plan.timing_warmup,steps=plan.timing_steps)
         report.update(envelope,construction_ms=backend.construction_ms,status='COMPLETE_DIAGNOSTIC_PROGRAM',actual_exit=0)
         journal.write(report)
         return report
     except BaseException as error:
+        if compile_observer is not None:compile_observer.close()
         journal.write(dict(status='FAILED_DIAGNOSTIC_PROGRAM',actual_exit=1,**envelope,**ledger.summary(),
             failure=dict(error_type=type(error).__name__,message=str(error)[:4096])))
         raise

@@ -15,13 +15,13 @@ PHASES=('engine','requests','public_pair','encode_p1','admission_p1','encode_p2'
 
 class BuiltinTimingTests(unittest.TestCase):
  def fake(self,*,builtin=False,callback=False,mutate=False):
-  Core=namedtuple('Core','engine frame_number admitted requests orders unsafe originals constructors weather_profile execution risks cursor')
+  Core=namedtuple('Core','engine frame_number admitted requests orders unsafe originals constructors weather_profile execution risks cursor baton_history')
   State=namedtuple('State','core observers')
-  yes=np.ones(1,bool);engine=NS(done=~yes);core=Core(engine,np.zeros(1,np.int32),yes,(),(),(),(),(),None,None,None,None)
+  yes=np.ones(1,bool);engine=NS(done=~yes);core=Core(engine,np.zeros(1,np.int32),yes,(),(),(),(),(),None,None,None,None,None)
   observers=tuple(NS(retained='public-original',retained_healthy=yes,projection=NS(causal=NS(admitted=yes)))for _ in range(2))
   state=State(core,observers);result=d.Result(state,());session=d.Session(NS(),state,result)
   record=dict(advancing=False,constructed=object(),state=state,result=result);trace=[];poison=[False];waits=[]
-  r=dict(execution_compiled=object(),retain_speed=None,public_mode='retained-full',direct_hit_context=None)
+  r=dict(execution_compiled=object(),retain_speed=None,public_mode='retained-full',direct_hit_mode='closed',direct_hit_context=None)
   def checked(_):
    trace.append('checked')
    if poison[0]:raise ValueError('actual external static mutation')
