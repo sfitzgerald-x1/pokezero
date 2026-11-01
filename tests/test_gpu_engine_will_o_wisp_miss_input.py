@@ -121,6 +121,10 @@ class WispMissTests(unittest.TestCase):
   tape,c,_=self.component();self.assertFalse(bool(cb.captured_matches(tape,c._replace(pending=c.pending._replace(before=None))).any()));self.assertFalse(bool(cb.captured_matches(tape,c._replace(after=None)).any()));self.assertFalse(bool(cb.captured_matches(tape,c._replace(pending=c.pending._replace(caller=None))).any()))
   active=j.array([True]*6+[False]*2);t,c,_=self.component(active=active);self.assertEqual(t.count.tolist(),[2]*6+[0]*2);self.assertEqual(cb.captured_matches(t,c).tolist(),active.tolist())
   sticky=t._replace(refusal=t.refusal|64);observed=risk.primary_status_on_tape(sticky,active,active=active,captured_primary_plain=c);self.assertTrue(bool(j.all((observed.refusal&64)!=0)))
+  # Packed int32 counter overflow must never alias contradictory actual input
+  # into an emitted receipt; the other seven rows remain supported.
+  bad,_,_=self.component(attempt_change={'new_counter':j.zeros(8,j.int32).at[0].set(1<<28)})
+  self.assertEqual(bad.count.tolist(),[1]+[2]*7);self.assertEqual(cb.owned_miss(bad,1).tolist(),[False]+[True]*7)
   # Original successful pair remains its original two-word continuation even
   # when the new optional before/after miss inputs are omitted.
   _,_,_,old,capture=fixture.PrimaryPlainStatusTests.component(self,consume=False)

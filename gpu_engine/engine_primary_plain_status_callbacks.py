@@ -218,8 +218,9 @@ def _miss_current(tape,p,w,after):
     raw=primary.words_device(p.side,p.physical,p.target,p.move,w)
     good=(p.valid&p.requested&_bound(tape,p.context)&(p.caller==p.move)&miss_raw(raw,d.wisp_miss)
         &(w.old_status==p.old_status)&(w.old_counter==p.old_counter)&_unchanged(p.before,after,b))
-    if p.before is None:return good&False
+    if p.before is None or after is None:return good&False
     rows=j.arange(b);foe=1-p.side
+    good &= (w.new_counter==0)&(after[4][rows,foe]==w.new_counter)
     good &= (p.before[0][rows,p.side]==p.physical)&(p.before[0][rows,foe]==p.target)
     good &= j.all((p.before[1]>0)&(p.before[1]<=p.before[2]),axis=1)
     good &= (p.before[3][rows,foe]==w.old_status)&(p.before[4][rows,foe]==w.old_counter)
