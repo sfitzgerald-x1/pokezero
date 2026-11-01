@@ -788,6 +788,9 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         # schema, even though the unchanged kernel ratio is already zero.
         wonder_immunity=(header[:,6]==no_damage.TYPE_IMMUNE)&(tables.wonder_guard_engine_ability>0)&(facts[:,6]==tables.wonder_guard_engine_ability)
         no_damage_ok &= ~wonder_immunity|(tables.wonder_guard_public_ability>0)
+        levitate_immunity=header[:,6]==no_damage.LEVITATE_IMMUNE
+        levitate_public=tables.trace_public_ability[jnp.clip(facts[:,6],0,len(tables.trace_public_ability)-1)]
+        no_damage_ok &= ~levitate_immunity|((levitate_public>0)&no_damage.owned_pair(tape,index,tables.no_damage)[0])
         for offset in (0,1):
             at=jnp.clip(no_damage_start+offset,0,capacity-1)
             no_damage_ok &= (tape.event_turn[rows,at]==turn)&(tape.event_phase[rows,at]==phase)&jnp.all(tape.event_generation[rows,at]==cursor.generation,axis=1)
