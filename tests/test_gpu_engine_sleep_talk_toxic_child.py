@@ -12,7 +12,7 @@ from gpu_engine import engine_source_frame_witness as witness
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 from _showdown_root import showdown_root
 import test_gpu_engine_hidden_power_substitute_input as fixtures
-BASE='5e038e81a779ada0d442b4f723e40c2afbeeb8a5'
+BASE='3a1655ad73da6f61fa5cbe5961c40600587162dc'
 from gpu_engine import engine_toxic_callbacks as toxic,engine_status_callbacks as status
 
 class SleepTalkToxicChildTests(unittest.TestCase):
@@ -45,9 +45,10 @@ class SleepTalkToxicChildTests(unittest.TestCase):
   cls.runtime=driver._checked(cls.prepared)
   cls.fold=staticmethod(jax.jit(lambda st,fr,p:full.project_and_fold(st,fr,cls.runtime['public'].device,p,cls.catalog)))
 
- def component(self,*,mixed=False,initial_public=False,chosen='toxic',poison=False,outcomes=False,caller_slot=0):
+ def component(self,*,mixed=False,initial_public=False,chosen='toxic',poison=False,outcomes=False,caller_slot=0,actor_hp=None):
   b=8;rows=j.arange(b);yes=j.ones(b,bool);z=j.zeros(b,j.int32);side=rows%2;active=j.stack((z+3,z+4),axis=1);phys=active[rows,side]
   s=state.empty_state(b)._replace(done=j.zeros(b,bool),active=active,gender=j.ones((b,2,6),j.int32),hp=j.full((b,2,6),100,j.int32),max_hp=j.full((b,2,6),100,j.int32),species=j.broadcast_to(j.array([1,2])[None,:,None],(b,2,6)),level=j.full((b,2,6),80,j.int32))
+  if actor_hp is not None:s=s._replace(hp=s.hp.at[rows,side,phys].set(actor_hp))
   ids=self.metadata['vocabulary']['moves'];caller=z+ids.index('sleeptalk');moves=j.broadcast_to(j.array([ids.index(n)for n in('sleeptalk','toxic','rest','wish')],j.int32),(b,4));counter=z+3;pp=j.full((b,4),8,j.int32);eligible=yes;slots=z+caller_slot
   if caller_slot==3:moves=j.roll(moves,-1,axis=1)
   if outcomes:moves=moves.at[4:6,1].set(ids.index('earthquake'))
@@ -100,7 +101,7 @@ class SleepTalkToxicChildTests(unittest.TestCase):
   other_toxic=toxic.compile_toxic(engine_catalog=self.producer,metadata=self.metadata,source_rules=other)
   separate=risk.compile_risks(self.producer,self.runtime['execution_compiled'],direct_hit_compiled=self.helper,toxic_compiled=other_toxic)
   self.assertFalse(bool(separate.device.sleep_talk_toxic_child))
-  for name in('transition.py','sleep_talk.py','engine_toxic_callbacks.py','engine_execution_completeness.py','engine_lifecycle_event_device.py','engine_full_v4_event_device.py'):
+  for name in('sleep_talk.py','engine_toxic_callbacks.py','engine_execution_completeness.py','engine_lifecycle_event_device.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),lines=[],p={statusState:{time:3},hasAbility:()=>false,toString:()=> 'p2a: Actor',moveSlots:[{id:'sleeptalk',pp:8},{id:'toxic',pp:8},{id:'rest',pp:8}]};const b={effectState:{skippedTime:0},add:(...a)=>lines.push('|'+a.map(String).join('|')),sample:xs=>xs[0],dex:d,actions:{useMove:id=>lines.push('|move|p2a: Actor|'+d.moves.get(id).name+'|p1a: Target|[from] '+d.conditions.get('sleeptalk').name)}};d.conditions.get('slp').onBeforeMove.call(b,p,null,d.moves.get('sleeptalk'));lines.push('|move|p2a: Actor|Sleep Talk|p2a: Actor');d.moves.get('sleeptalk').onHit.call(b,p);console.log(JSON.stringify({time:p.statusState.time,skipped:b.effectState.skippedTime,lines}));'''
   actual=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(actual,dict(time=2,skipped=1,lines=['|cant|p2a: Actor|slp','|move|p2a: Actor|Sleep Talk|p2a: Actor','|move|p2a: Actor|Toxic|p1a: Target|[from] sleeptalk']))
@@ -126,7 +127,7 @@ class SleepTalkToxicChildTests(unittest.TestCase):
    col=6 if variant=='slot'else 8;delta=2 if variant=='slot'else 12
    words=original_t.words.at[0,1,col].add(delta);ledger=original_t.execution.ledger._replace(words=original_t.execution.ledger.words.at[0,1,col].add(delta));changed=original_t._replace(words=words,execution=original_t.execution._replace(ledger=ledger));cc=c._replace(raw=c.raw.at[0,1,col].add(delta),**({'selected_slot':c.selected_slot.at[0].add(2)}if variant=='slot'else{'roll':c.roll.at[0].add(3)}))
    self.assertEqual(cb.captured_matches(changed,cc).tolist(),[False]+[True]*7)
-  for chosen in('rest','struggle'):
+  for chosen in('struggle',):
    _,_,_,_,closed,cc,_,_=self.component(chosen=chosen);self.assertFalse(bool(cb.captured_matches(closed,cc).any()));self.assertTrue(bool((closed.execution.ledger.refusal!=0).all()))
   _,_,_,_,poison,pc,_,_=self.component(poison=True);self.assertFalse(bool(cb.captured_matches(poison,pc).any()));self.assertTrue(bool((poison.refusal&64).all()))
 

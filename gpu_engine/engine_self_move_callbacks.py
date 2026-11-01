@@ -1,7 +1,8 @@
 """Same-call RAW51 inputs: full-HP Rest fail, awake Sleep Talk fail, Wish start/tick.
 
 Successful Rest uses its literal status then silent-heal same-write pair.
-Called moves, Wish history/expiry and missing public output remain unsupported. Failed guards retain requested UNKNOWN.
+Only source-bound Sleep Talk called Rest while already asleep is added below.
+Other called moves, Wish history/expiry and missing public output remain unsupported. Failed guards retain requested UNKNOWN.
 """
 import hashlib,json,subprocess
 from pathlib import Path
@@ -15,6 +16,7 @@ REST_FAIL,SLEEP_FAIL,WISH_START,WISH_TICK=range(4)
 SECONDARY=4
 # Two named parts in one existing Site36 span; bit2 remains literal dispatch.
 REST_STATUS,REST_HEAL=8,16
+REST_ASLEEP_FAIL=32 # original Rest.onTry false; RAW8/9 carry unchanged sleep clock
 REST_HOOKS={'sleepStart':'2017d525d9167ebc4341bd2e63202528fd7ea10c59b66070c1cd5206f3bed3c8','heal':'75d2b2e30f95f52a9adc9847fae763fe92145535416f69ebb0ec0782d9d65ddb','setStatus':'1078d45febffb2ca663eca5c04d18d154304aaa467b57bf22535d90715172ef0'}
 SOURCE={'rest':{'onTry':'d4b2d4552ebc64b4d569c934b81c348d0f9aac342f7368047cef17d730577be5','onHit':'05f8e437d8566c60900b0a4999dac0341fcfc18137a2abb9c8716964c0d7a179'},'sleeptalk':{'onTry':'aef2554ca54ab070bcb041558d16e30eeaa63310c528d71d0c7ab6b40d79542d','onHit':'203359a676bb58c1492dfdb7293174560abf06abb26b02cd993ac797df6f9483'},'wish':{'onEnd':'8f43feb1254f761b08f8e40b8d82d5de7874a9ddc7577292284ca23cc1b930df'}}
 class Data(NamedTuple):
@@ -50,6 +52,8 @@ class Pending(NamedTuple):
     ability:object
     item:object
     volatile:object
+    moves:object
+    pp:object
 class Captured(NamedTuple):
     pending:object
     raw:object
@@ -132,6 +136,24 @@ def valid_raw(raw,ids):
     common=(raw[:,0]==SELF_MOVE_INPUT)&(raw[:,1]>=0)&(raw[:,1]<2)&(raw[:,2]>=0)&(raw[:,2]<6)&(raw[:,3]>=0)&(raw[:,3]<8)&(raw[:,5]>0)&(raw[:,5]<=raw[:,6])&(raw[:,6]<=1_000_000)&(raw[:,7]>=0)&(raw[:,7]<=6)
     return common&j.where(code==REST_FAIL,(ids[0]>0)&(raw[:,4]==ids[0])&(raw[:,5]==raw[:,6])&(raw[:,7]!=5)&(raw[:,8]==raw[:,9]),j.where(code==SLEEP_FAIL,(ids[1]>0)&(raw[:,4]==ids[1])&(raw[:,7]!=5)&~sec&(raw[:,8]==raw[:,9]),(ids[2]>0)&(raw[:,4]==ids[2])&j.where(code==WISH_START,(raw[:,8]==0)&(raw[:,9]==2),(raw[:,8]==2)&(raw[:,9]==1)&~sec)))
 
+def _sleep_rest_header(tape,index,side,physical,move,counter):
+    """Exact same-call CLOCK/CALL/child, already claimed by original Site42."""
+    from . import engine_sleep_talk_callbacks as talk
+    c=tape.execution;b=len(tape.count);rows=j.arange(b)
+    if c is None or c.risks is None:return j.zeros(b,bool)
+    t=c.risks.tables;life._typed(t.sleep_talk_rest_failure,(),j.bool_)
+    idx=j.broadcast_to(j.asarray(index,j.int32),(b,));a=tape.words[rows,j.clip(idx-3,0,tape.words.shape[1]-1)];z=tape.words[rows,j.clip(idx-2,0,tape.words.shape[1]-1)]
+    return (t.sleep_talk_rest_failure&(idx>=3)&talk.owned(tape,idx-1)
+        &(a[:,0]==talk.SLEEP_TALK)&(a[:,3]==talk.CLOCK)&(z[:,0]==talk.SLEEP_TALK)&(z[:,3]==talk.CALL)
+        &(a[:,1]==side)&(a[:,2]==physical)&(z[:,1]==side)&(z[:,2]==physical)
+        &(a[:,6]==counter)&(counter>0)&(counter<=4)&(z[:,5]==move)&(move==t.self_move_ids[0])&(move>0))
+
+def _sleep_rest_raw(raw,ids):
+    return ((raw[:,0]==SELF_MOVE_INPUT)&(raw[:,1]>=0)&(raw[:,1]<2)&(raw[:,2]>=0)&(raw[:,2]<6)
+        &((raw[:,3]==REST_ASLEEP_FAIL)|(raw[:,3]==REST_ASLEEP_FAIL+SECONDARY))&(ids[0]>0)&(raw[:,4]==ids[0])
+        &(raw[:,5]>0)&(raw[:,5]<=raw[:,6])&(raw[:,6]<=1_000_000)&(raw[:,7]==5)
+        &(raw[:,8]>0)&(raw[:,8]<=4)&(raw[:,9]==raw[:,8]))
+
 def owned(tape,index,*,stage=2):
     from . import engine_execution_completeness as ex
     c=ex._context(tape);b=len(tape.count);rows=j.arange(b);idx=j.broadcast_to(j.asarray(index,j.int32),(b,));at=j.clip(idx,0,tape.words.shape[1]-1);raw=tape.words[rows,at]
@@ -141,12 +163,13 @@ def owned(tape,index,*,stage=2):
     for name in ('engine_binding','source_binding','move_binding','producer_binding'):
         life._typed(getattr(tape,name),(8,),j.uint32);life._typed(getattr(t,name),(8,),j.uint32);good &= j.all(getattr(tape,name)==getattr(t,name))
     claim=ledger.count if stage==1 else ledger.claimed[rows,at];slot=j.clip(claim-1,0,ledger.site.shape[1]-1);tick=(raw[:,3]&3)==WISH_TICK
-    good &= valid_raw(raw,t.self_move_ids)&(idx>=0)&(idx<tape.count)&(claim>0)&(claim<=ledger.count)&j.all(tape.switch_details[rows,at]==0,axis=1)
+    asleep=_sleep_rest_raw(raw,t.self_move_ids)&_sleep_rest_header(tape,idx,raw[:,1],raw[:,2],raw[:,4],raw[:,8])
+    good &= (valid_raw(raw,t.self_move_ids)|asleep)&(idx>=0)&(idx<tape.count)&(claim>0)&(claim<=ledger.count)&j.all(tape.switch_details[rows,at]==0,axis=1)
     good &= (ledger.site[rows,slot]==j.where(tick,int(ex.Site.WISH),int(ex.Site.SELF_MOVE_INPUT)))&(ledger.side[rows,slot]==raw[:,1])&(ledger.stage[rows,slot]==stage)&(ledger.start[rows,slot]==idx)&(ledger.no_output_kind[rows,slot]==0)
     good &= j.where(stage==1,tape.count==idx+1,ledger.end[rows,slot]==idx+1)
     good &= (tape.event_turn[rows,at]==ledger.turn[rows,slot])&(tape.event_phase[rows,at]==ledger.phase[rows,slot])&j.all(tape.event_generation[rows,at]==ledger.generation[rows,slot],axis=1)
     prev=j.clip(idx-1,0,tape.words.shape[1]-1);decl=tape.words[rows,prev]
-    declaration=(idx>0)&(decl[:,0]==public.MOVE)&(decl[:,1]==raw[:,1])&(decl[:,2]==raw[:,2])&(decl[:,3]==1-raw[:,1])&(decl[:,5]==raw[:,4])&j.all(decl[:,6:]==0,axis=1)&(tape.event_turn[rows,prev]==ledger.turn[rows,slot])&(tape.event_phase[rows,prev]==ledger.phase[rows,slot])&j.all(tape.event_generation[rows,prev]==ledger.generation[rows,slot],axis=1)
+    declaration=(idx>0)&(decl[:,0]==public.MOVE)&(decl[:,1]==raw[:,1])&(decl[:,2]==raw[:,2])&(decl[:,3]==j.where(asleep,raw[:,1],1-raw[:,1]))&(decl[:,5]==raw[:,4])&j.all(decl[:,6:]==0,axis=1)&(tape.event_turn[rows,prev]==ledger.turn[rows,slot])&(tape.event_phase[rows,prev]==ledger.phase[rows,slot])&j.all(tape.event_generation[rows,prev]==ledger.generation[rows,slot],axis=1)
     # A silent tick is only the same frame's exact fresh START, not private history.
     indices=j.arange(tape.words.shape[1]);prior=tape.words;claims=ledger.claimed;slots=j.clip(claims-1,0,ledger.site.shape[1]-1)
     start=(indices[None,:]<idx[:,None])&(prior[:,:,0]==SELF_MOVE_INPUT)&((prior[:,:,3]&3)==WISH_START)&(prior[:,:,1]==raw[:,1,None])&(prior[:,:,2]==raw[:,2,None])&(prior[:,:,4]==raw[:,4,None])&(prior[:,:,6]==raw[:,6,None])&(prior[:,:,8]==0)&(prior[:,:,9]==2)
@@ -160,40 +183,50 @@ def owned(tape,index,*,stage=2):
     start &= (indices[None,:]>0)&(declarations[:,:,0]==public.MOVE)&(declarations[:,:,1]==prior[:,:,1])&(declarations[:,:,2]==prior[:,:,2])&(declarations[:,:,3]==1-prior[:,:,1])&(declarations[:,:,5]==prior[:,:,4])&j.all(declarations[:,:,6:]==0,axis=2)
     start &= (tape.event_turn[:,previous]==tape.event_turn)&(tape.event_phase[:,previous]==tape.event_phase)&j.all(tape.event_generation[:,previous]==tape.event_generation,axis=2)
     good &= j.where(tick,j.sum(start,axis=1)==1,declaration)
-    if stage==1:good &= (raw[:,2]==tape.cursor.physical_active[rows,j.clip(raw[:,1],0,1)])&(ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)&j.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1)&(tick|(decl[:,4]==tape.cursor.physical_active[rows,j.clip(1-raw[:,1],0,1)]))
+    if stage==1:good &= (raw[:,2]==tape.cursor.physical_active[rows,j.clip(raw[:,1],0,1)])&(ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)&j.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1)&(tick|(decl[:,4]==tape.cursor.physical_active[rows,j.clip(j.where(asleep,raw[:,1],1-raw[:,1]),0,1)]))
     else:good &= (ledger.claimed[rows,at]==claim)&j.all(ledger.words[rows,at]==raw,axis=1)&(ledger.event_turn[rows,at]==tape.event_turn[rows,at])&(ledger.event_phase[rows,at]==tape.event_phase[rows,at])&j.all(ledger.event_generation[rows,at]==tape.event_generation[rows,at],axis=1)
     return good|_owned_rest(tape,index,stage=stage)
 
-def begin(tape,state,side,move,context,*,code,eligible,secondary=None):
+def begin(tape,state,side,move,context,*,code,eligible,secondary=None,caller_move=None):
     from . import engine_execution_completeness as ex
     if context is None or context.data.self_move is None:return tape,None
     if type(code)is not int or code not in(REST_FAIL,SLEEP_FAIL,WISH_START,WISH_TICK):raise ValueError('static original self-move cutpoint required')
     b=len(tape.count);rows=j.arange(b);side=j.broadcast_to(j.asarray(side,j.int32),(b,));move=j.broadcast_to(j.asarray(move,j.int32),(b,));life._typed(eligible,(b,),j.bool_)
     if secondary is None:secondary=j.zeros(b,bool)
     life._typed(secondary,(b,),j.bool_);d=context.data.self_move;good=_bound(tape,context);seat=j.clip(side,0,1);physical=state.active[rows,seat];at=(rows,seat,physical);hp=state.hp[at];maximum=state.max_hp[at];status=state.status[at];counter=state.wish_counter[rows,seat]
+    caller=move if caller_move is None else j.broadcast_to(j.asarray(caller_move,j.int32),(b,))
+    asleep=j.zeros(b,bool)
+    if code==REST_FAIL:
+        parent=tape.words[rows,j.clip(tape.count-2,0,tape.words.shape[1]-1)];selected=j.clip(parent[:,6],0,3);caller_slot=parent[:,8]%4
+        asleep=(caller==d.move_ids[1])&(move==d.move_ids[0])&(status==5)
+        asleep &= _sleep_rest_header(tape,tape.count,side,physical,move,state.status_counter[at])
+        asleep &= (state.moves[at][rows,selected]==move)&(state.moves[at][rows,caller_slot]==caller)
+        asleep &= (state.pp[at][rows,selected]==parent[:,7])&(state.pp[at][rows,caller_slot]==parent[:,9])
+    eligible &= (caller==move)|asleep
     requested=eligible&((counter>0)if code==WISH_TICK else(move==d.move_ids[min(code,2)])&(move>0))
     good &= (side>=0)&(side<2)&(physical==tape.cursor.physical_active[rows,seat])&(hp>0)&(maximum<=1_000_000)&(hp<=maximum)
     ability=state.ability[at];item=state.item[at];volatile=state.volatile[at]
     positive=(hp<maximum)&(status!=5)
-    actual_code=j.where(positive,REST_STATUS,REST_FAIL)if code==REST_FAIL else j.full(b,code,j.int32)
+    actual_code=j.where(asleep,REST_ASLEEP_FAIL,j.where(positive,REST_STATUS,REST_FAIL))if code==REST_FAIL else j.full(b,code,j.int32)
     if code==REST_FAIL:
         allowed=(ability>=0)&(ability<len(d.rest_abilities))&d.rest_abilities[j.clip(ability,0,len(d.rest_abilities)-1)]
         allowed &= (item>=0)&(item<len(d.rest_items))&d.rest_items[j.clip(item,0,len(d.rest_items)-1)]
         allowed &= (state.status_counter[at]>=0)&(state.status_counter[at]<=15)&(state.sleep_skipped[at]==0)&~state.rest_origin[at]&(volatile==0)
-        good &= (status>=0)&(status<=6)&(status!=5)&j.where(positive,allowed,hp==maximum)
+        good &= asleep|((status>=0)&(status<=6)&(status!=5)&j.where(positive,allowed,hp==maximum))
     else:good &= (status!=5)if code==SLEEP_FAIL else(counter==0)if code==WISH_START else(counter==2)
     good &= (tape.cursor.phase==0)if code!=WISH_TICK else j.ones(b,bool)
     tape,ticket=ex.open_attempt(tape,ex.Site.WISH if code==WISH_TICK else ex.Site.SELF_MOVE_INPUT,side,active=requested)
-    return tape,Pending(context,ticket,side,physical,move,actual_code,hp,maximum,status,state.status_counter[at],state.sleep_skipped[at],state.rest_origin[at],counter,state.wish_amount[rows,seat],secondary,requested,good,ability,item,volatile)
+    return tape,Pending(context,ticket,side,physical,move,actual_code,hp,maximum,status,state.status_counter[at],state.sleep_skipped[at],state.rest_origin[at],counter,state.wish_amount[rows,seat],secondary,requested,good,ability,item,volatile,state.moves[at],state.pp[at])
 
 def finish(tape,p,state):
     if p is None:return tape,None
     from . import engine_execution_completeness as ex
     b=len(tape.count);rows=j.arange(b);at=(rows,j.clip(p.side,0,1),p.physical);counter=state.wish_counter[rows,j.clip(p.side,0,1)]
-    raw=j.stack((j.full(b,SELF_MOVE_INPUT,j.int32),p.side,p.physical,p.code+SECONDARY*p.secondary.astype(j.int32),p.move,p.hp,p.maximum,p.status,p.wish_counter,counter),axis=1)
+    raw=j.stack((j.full(b,SELF_MOVE_INPUT,j.int32),p.side,p.physical,p.code+SECONDARY*p.secondary.astype(j.int32),p.move,p.hp,p.maximum,p.status,j.where(p.code==REST_ASLEEP_FAIL,p.counter,p.wish_counter),j.where(p.code==REST_ASLEEP_FAIL,state.status_counter[at],counter)),axis=1)
     positive=p.code==REST_STATUS
-    valid=~positive&p.valid&_bound(tape,p.context)&valid_raw(raw,p.context.data.self_move.move_ids)&(state.active[rows,j.clip(p.side,0,1)]==p.physical)
+    valid=~positive&p.valid&_bound(tape,p.context)&(valid_raw(raw,p.context.data.self_move.move_ids)|(_sleep_rest_raw(raw,p.context.data.self_move.move_ids)&_sleep_rest_header(tape,tape.count,p.side,p.physical,p.move,p.counter)))&(state.active[rows,j.clip(p.side,0,1)]==p.physical)
     for actual,old in((state.hp[at],p.hp),(state.max_hp[at],p.maximum),(state.status[at],p.status),(state.status_counter[at],p.counter),(state.sleep_skipped[at],p.sleep_skipped),(state.rest_origin[at],p.rest_origin)):valid &= actual==old
+    valid &= (p.code!=REST_ASLEEP_FAIL)|((state.ability[at]==p.ability)&(state.item[at]==p.item)&(state.volatile[at]==p.volatile)&(counter==p.wish_counter)&j.all(state.moves[at]==p.moves,axis=1)&j.all(state.pp[at]==p.pp,axis=1))
     amount=state.wish_amount[rows,j.clip(p.side,0,1)];valid &= amount==j.where(p.code==WISH_START,p.maximum//2,p.wish_amount)
     valid &= j.where(p.code==WISH_TICK,p.wish_amount==p.maximum//2,True)
     room=(tape.count>=0)&(tape.count<tape.words.shape[1]);address=j.clip(tape.count,0,tape.words.shape[1]-1);valid &= ~room|j.all(tape.switch_details[rows,address]==0,axis=1)
@@ -210,7 +243,9 @@ def captured_matches(tape,c):
     p=c.pending;rows=j.arange(len(tape.count));ledger=tape.execution.ledger;slot,same=ex._ticket(ledger,p.ticket);idx=ledger.start[rows,slot];raw=tape.words[rows,j.clip(idx,0,tape.words.shape[1]-1)]
     heal=tape.words[rows,j.clip(idx+1,0,tape.words.shape[1]-1)]
     before_after=(raw[:,5]==p.status)&(raw[:,6]==5)&(raw[:,7]==p.counter)&(raw[:,8]==3)&(heal[:,5]==p.hp)&(heal[:,6]==p.maximum)&(heal[:,7]==p.maximum)&(heal[:,8]==5)
-    return owned(tape,idx)&same&p.requested&p.valid&_bound(tape,p.context)&j.all(raw==c.raw,axis=1)&j.where(p.code==REST_STATUS,before_after,True)&(ledger.end[rows,slot]==tape.count)&(ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)&j.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1)&(p.physical==tape.cursor.physical_active[rows,j.clip(p.side,0,1)])
+    expected=j.stack((j.full_like(p.side,SELF_MOVE_INPUT),p.side,p.physical,p.code+SECONDARY*p.secondary.astype(j.int32),p.move,p.hp,p.maximum,p.status,p.counter,p.counter),axis=1)
+    exact=((raw[:,3]&~SECONDARY)!=REST_ASLEEP_FAIL)|((p.code==REST_ASLEEP_FAIL)&j.all(raw==expected,axis=1))
+    return owned(tape,idx)&exact&same&p.requested&p.valid&_bound(tape,p.context)&j.all(raw==c.raw,axis=1)&j.where(p.code==REST_STATUS,before_after,True)&(ledger.end[rows,slot]==tape.count)&(ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)&j.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1)&(p.physical==tape.cursor.physical_active[rows,j.clip(p.side,0,1)])
 
 
 def _owned_rest(tape,index,*,stage=2):
