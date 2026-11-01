@@ -91,6 +91,14 @@ class FocusPunchInputTests(unittest.TestCase):
   bad=t._replace(words=t.words.at[0,1,7].add(1));self.assertFalse(bool(cb.matches_selected(bad,x.capture,x.after,x.actor,x.move,x.move)[0]))
   for change in (dict(dual=True),dict(prior=True)):
    bad=self.component(**change);self.assertEqual(int(bad.tape.count[0]),1);self.assertEqual(int(bad.tape.execution.ledger.stage[0,1]),1);self.assertTrue(bool((bad.tape.refusal[0]&256)!=0));self.assertTrue(bool(cb.owned(bad.tape,1)[1]))
+ def test_available_before_snapshot_conservation_refuses_copied_valid_bit(self):
+  x=self.component();t=self.declare(x);p=x.capture.pending;who=int(p.side[0]);phys=int(p.physical[0]);at=(0,who,phys)
+  changes=[dict(ability=p.before.ability.at[at].set(0),base_ability=p.before.base_ability.at[at].set(0)),dict(pending_residual=p.before.pending_residual.at[0].set(True)),dict(charge_move=p.before.charge_move.at[at].set(p.move[0]))]
+  for change in changes:
+   before=p.before._replace(**change);after=x.after._replace(**change);forged=p._replace(before=before);capture=x.capture._replace(pending=forged,after=after)
+   self.assertEqual(cb.matches_selected(t,capture,after,x.actor,x.move,x.move).tolist(),[False]+[True]*7)
+   emitted,_=cb.finish(x.opened,forged,after);self.assertEqual(cb.owned(emitted,1).tolist(),[False]+[True]*7)
+   self.assertEqual(int(emitted.count[0]),1);self.assertEqual(int(emitted.execution.ledger.stage[0,1]),1);self.assertTrue(bool((emitted.refusal[0]&256)!=0))
  def test_cold_import_orders(self):
   for names in [('gpu_engine.benchmark_retained_games','gpu_engine.engine_focus_punch_callbacks','gpu_engine.engine_full_v4_event_device'),('gpu_engine.engine_full_v4_event_device','gpu_engine.engine_focus_punch_callbacks','gpu_engine.benchmark_retained_games')]:
    r=subprocess.run([sys.executable,'-B','-c','import importlib;'+''.join('importlib.import_module('+repr(n)+');'for n in names)],env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1'),capture_output=True,text=True,timeout=30);self.assertEqual(r.returncode,0,r.stderr)

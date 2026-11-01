@@ -126,6 +126,16 @@ def owned(tape,index,*,stage=2):
     if stage==2:good &= (ledger.claimed[rows,safe]==claim)&j.all(ledger.words[rows,safe]==raw,axis=1)&(ledger.event_turn[rows,safe]==tape.event_turn[rows,safe])&(ledger.event_phase[rows,safe]==tape.event_phase[rows,safe])&j.all(ledger.event_generation[rows,safe]==tape.event_generation[rows,safe],axis=1)
     return good
 
+def _available_before(p,tape):
+    """Re-read the SAME available operands; a saved valid bit is insufficient."""
+    d=p.context.data.focus_punch;s=p.before;b=len(p.side);rows=j.arange(b)
+    if type(s)is not BattleState:raise ValueError('actual pre-preparation BattleState required')
+    seat=j.clip(p.side,0,1);physical=j.clip(p.physical,0,5);at=(rows,seat,physical);slot=j.clip(p.slot,0,3);ability=s.ability[at]
+    good=(p.side>=0)&(p.side<2)&(p.physical>=0)&(p.physical<6)&(s.active[rows,seat]==p.physical)&(p.move==d.move)&(d.move>0)&(p.slot>=0)&(p.slot<4)&(s.moves[at+(slot,)]==p.move)&(s.pp[at+(slot,)]>0)
+    good &= (ability>=0)&(ability<len(d.abilities))&d.abilities[j.clip(ability,0,len(d.abilities)-1)]&(s.base_ability[at]==ability)&(s.hp[at]>0)
+    good &= j.all(s.active==tape.cursor.physical_active,axis=1)&j.all(s.volatile==0,axis=(1,2))&~s.pending_residual&~s.done&j.all(~s.forced_switch,axis=1)&j.all(~s.entry_pending,axis=1)&j.all(s.charge_move==0,axis=(1,2))
+    return good
+
 def _same_write(p,state):
     if type(state)is not BattleState:raise ValueError('actual after-preparation BattleState required')
     b=len(p.side);rows=j.arange(b);expected=p.before.volatile.at[rows,p.side,p.physical].set(j.uint32(FOCUS_PUNCH));good=j.all(state.volatile==expected,axis=(1,2))
@@ -138,7 +148,7 @@ def finish(tape,p,state):
     if p is None:return tape,None
     from . import engine_execution_completeness as ex
     if type(state)is not BattleState:raise ValueError('actual after-preparation BattleState required')
-    good=p.valid&_bound(tape,p.context)&_same_write(p,state)
+    good=p.valid&_bound(tape,p.context)&_available_before(p,tape)&_same_write(p,state)
     raw=_raw(p);use=p.requested&good;before=tape.count
     tape=public._append(tape,FOCUS_PREPARATION,p.side,p.physical,p.move,j.zeros_like(p.move),tuple(raw[:,i]for i in range(5,10)),use)
     valid=good&owned(tape,before,stage=1);_,same=ex._ticket(tape.execution.ledger,p.ticket);valid &= same
@@ -153,7 +163,7 @@ def matches_selected(tape,c,state,side,move,caller_move):
     p=c.pending;b=len(tape.count);rows=j.arange(b)
     for x in (side,move,caller_move):life._typed(x,(b,),j.int32)
     slot,same=ex._ticket(tape.execution.ledger,p.ticket);ledger=tape.execution.ledger;at=ledger.start[rows,slot];raw=tape.words[rows,j.clip(at,0,tape.words.shape[1]-1)]
-    good=same&p.requested&p.valid&_bound(tape,p.context)&_same_write(p,c.after)&owned(tape,at)&j.all(raw==c.raw,axis=1)&j.all(raw==_raw(p),axis=1)
+    good=same&p.requested&p.valid&_bound(tape,p.context)&_available_before(p,tape)&_same_write(p,c.after)&owned(tape,at)&j.all(raw==c.raw,axis=1)&j.all(raw==_raw(p),axis=1)
     good &= (side==p.side)&(move==p.move)&(caller_move==p.move)&(state.active[rows,j.clip(side,0,1)]==p.physical)&(state.hp[rows,p.side,p.physical]>0)&(state.volatile[rows,p.side,p.physical]==FOCUS_PUNCH)&(state.confusion_counter[rows,p.side,p.physical]==0)
     # The actual ordinary MOVE is the current declaration, following this
     # preparation exactly once; a trailing/called/foreign header cannot borrow it.
