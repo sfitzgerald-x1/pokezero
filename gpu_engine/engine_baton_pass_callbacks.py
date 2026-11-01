@@ -18,6 +18,8 @@ TOXIC_SWITCH_IN_SHA256='36fcc82af87dfb5bbcdc39bdfcf2e763d57721d27df52e5fcce3afc4
 COPY_VOLATILE_SHA256='c3499e9e26b9f935bc8eacc3c6620d03f00263e483d5dd24abf99b56bed1a6db'
 CLEAR_VOLATILE_SHA256='bad93b384074efda34ac198ef3acabbed50f249f6464d9a030a4181a10839885'
 PAR_BEFORE_MOVE_SHA256='713407730186869cd1e77e250eec0ff6ceb40b018e884725ebcbff59cbbaf66f'
+INSOMNIA_UPDATE_SHA256='259090f315b83537cc5d7091bc08a37a051007304d7392fb6e8ac90a5d4fca66'
+NATURAL_CURE_SWITCH_OUT_SHA256='bbd17c399abcaecf20ec77369b6228b574b1a451a448b202daccc7e9210c3cc4'
 TOXIC_STATUS=4
 PARALYSIS_STATUS=1
 START,INSTALL=0,1
@@ -34,6 +36,7 @@ class Data(NamedTuple):
     move_id:object
     quiet_abilities:object
     quiet_items:object
+    outgoing_dormant_abilities:object=None
 class History(NamedTuple):
     stream_id:object
     frame:object
@@ -95,8 +98,12 @@ def compile_data(catalog,metadata,rules):
     script=r"""
 const fs=require('fs'),path=require('path'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
 const checked=require(process.argv[2]).build(root,meta),d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),m=d.moves.get('batonpass'),P=require(path.join(root,'dist/sim/pokemon.js')).Pokemon;
-const quiet=(e)=>e.exists&&e.gen<=3&&!['onStart','onEnd','onBeforeSwitchOut','onSwitchOut','onSwitchIn','onAnySwitchIn','onAllySwitchIn','onUpdate'].some(n=>typeof e[n]!=='undefined');
-process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,move:{id:m.id,gen:m.gen,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,selfSwitch:m.selfSwitch,onHit:(''+m.onHit),selfHit:(''+m.self.onHit)},toxicSwitchIn:''+d.conditions.get('tox').onSwitchIn,copyVolatile:''+P.prototype.copyVolatileFrom,clearVolatile:''+P.prototype.clearVolatile,paralysis:{beforeMove:''+d.conditions.get('par').onBeforeMove,beforeSwitchOut:typeof d.conditions.get('par').onBeforeSwitchOut,switchOut:typeof d.conditions.get('par').onSwitchOut,switchIn:typeof d.conditions.get('par').onSwitchIn},substitute:{id:d.conditions.get('substitute').id,noCopy:d.conditions.get('substitute').noCopy,onCopy:typeof d.conditions.get('substitute').onCopy},abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
+const hooks=['onStart','onEnd','onBeforeSwitchOut','onSwitchOut','onSwitchIn','onAnySwitchIn','onAllySwitchIn','onUpdate'];
+const quiet=(e)=>e.exists&&e.gen<=3&&!hooks.some(n=>typeof e[n]!=='undefined');
+const dormantHook={insomnia:'onUpdate',naturalcure:'onSwitchOut'};
+const dormant=(e)=>e.exists&&e.gen<=3&&Object.hasOwn(dormantHook,e.id)&&typeof e[dormantHook[e.id]]==='function'&&!hooks.filter(n=>n!==dormantHook[e.id]).some(n=>typeof e[n]!=='undefined');
+const dormantSources=Object.fromEntries(Object.entries(dormantHook).map(([id,hook])=>{const e=d.abilities.get(id);return[id,{hook,body:''+e[hook],otherHooks:hooks.filter(n=>n!==hook).map(n=>typeof e[n])}]}));
+process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tree:checked.compiled_tree,move:{id:m.id,gen:m.gen,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,priority:m.priority,selfSwitch:m.selfSwitch,onHit:(''+m.onHit),selfHit:(''+m.self.onHit)},toxicSwitchIn:''+d.conditions.get('tox').onSwitchIn,copyVolatile:''+P.prototype.copyVolatileFrom,clearVolatile:''+P.prototype.clearVolatile,paralysis:{beforeMove:''+d.conditions.get('par').onBeforeMove,beforeSwitchOut:typeof d.conditions.get('par').onBeforeSwitchOut,switchOut:typeof d.conditions.get('par').onSwitchOut,switchIn:typeof d.conditions.get('par').onSwitchIn},substitute:{id:d.conditions.get('substitute').id,noCopy:d.conditions.get('substitute').noCopy,onCopy:typeof d.conditions.get('substitute').onCopy},dormantSources,outgoingDormant:meta.vocabulary.abilities.map(n=>dormant(d.abilities.get(n))),abilities:meta.vocabulary.abilities.map(n=>quiet(d.abilities.get(n))),items:meta.vocabulary.items.map((n,i)=>!i||quiet(d.items.get(n)))}));"""
     value=json.loads(subprocess.check_output([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata).encode(),timeout=30))
     if json.dumps(value['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(value['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original Baton source drift')
     if hashlib.sha256(value['toxicSwitchIn'].encode()).hexdigest()!=TOXIC_SWITCH_IN_SHA256:raise ValueError('canonical original toxic switch reset required')
@@ -105,19 +112,23 @@ process.stdout.write(JSON.stringify({source_tree:checked.source_tree,compiled_tr
     par=value['paralysis']
     if hashlib.sha256(par['beforeMove'].encode()).hexdigest()!=PAR_BEFORE_MOVE_SHA256 or any(par[n]!='undefined'for n in ('beforeSwitchOut','switchOut','switchIn')):raise ValueError('canonical original paralysis before-move and quiet departure required')
     if value['substitute']!=dict(id='substitute',noCopy=False,onCopy='undefined'):raise ValueError('canonical original Substitute transfer required')
+    for name,hook,digest in [('insomnia','onUpdate',INSOMNIA_UPDATE_SHA256),('naturalcure','onSwitchOut',NATURAL_CURE_SWITCH_OUT_SHA256)]:
+        actual=value['dormantSources'][name]
+        if actual['hook']!=hook or hashlib.sha256(actual['body'].encode()).hexdigest()!=digest or actual['otherHooks']!=['undefined']*7:raise ValueError('canonical original dormant outgoing ability required')
     row=value['move'];names=metadata['vocabulary']['moves'];ids=[i for i,n in enumerate(names)if n=='batonpass']
     move=ids[0]if len(ids)==1 else 0;t=catalog.engine_table
     if move:
         if not(row['id']=='batonpass'and row['gen']==2 and row['category']=='Status'and row['target']=='self'and row['power']==0 and row['accuracy']is True and row['priority']==0 and row['selfSwitch']=='copyvolatile'and t.baton is not None and bool(t.baton.move[move])and int(t.power[move])==0 and bool(t.always_hit[move])and int(catalog.ids[move])>0 and catalog.targets[move]==0):raise ValueError('canonical original Baton columns required')
-    payload=dict(schema='pokezero.baton.boost-substitute.toxic-paralysis-source.v4',source=value,engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding,move=move)
+    payload=dict(schema='pokezero.baton.boost-substitute.toxic-paralysis-source.v5',source=value,engine=catalog.engine_binding,moves=catalog.move_binding,producer=catalog.binding,move=move)
     words=lambda v:j.asarray(v,j.uint32)
-    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),j.asarray(value['abilities']),j.asarray(value['items']))
+    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),j.asarray(value['abilities']),j.asarray(value['items']),j.asarray(value['outgoingDormant']))
 
 def shape(d):
     if type(d)is not Data:raise ValueError('typed original Baton capability required')
     for v in d[:5]:life._typed(v,(8,),j.uint32)
     life._typed(d.move_id,(),j.int32)
-    for v in d[6:]:life._typed(v,(len(v),),j.bool_)
+    for v in d[6:8]:life._typed(v,(len(v),),j.bool_)
+    if d.outgoing_dormant_abilities is not None:life._typed(d.outgoing_dormant_abilities,d.quiet_abilities.shape,j.bool_)
 def snapshot(s):return Private(*(getattr(s,n)for n in PRIVATE_FIELDS))
 def suspend(s):return Suspension(*(getattr(s,n)for n in SUSPENSION_FIELDS))
 def equal(a,b):
@@ -154,11 +165,13 @@ def _bound(tape,data):
     t=c.risks.tables
     for n,v in [('binding',data.binding),('move',data.move_id),('abilities',data.quiet_abilities),('items',data.quiet_items)]:
         actual=getattr(t,'baton_'+n);life._typed(actual,v.shape,v.dtype);good &= j.all(actual==v)
+    if data.outgoing_dormant_abilities is not None:
+        actual=t.baton_outgoing_dormant_abilities;life._typed(actual,data.outgoing_dormant_abilities.shape,j.bool_);good &= j.all(actual==data.outgoing_dormant_abilities)
     return good
 
 def _data(tape):
     t=tape.execution.risks.tables
-    return Data(t.baton_binding,t.engine_binding,t.source_binding,t.move_binding,t.producer_binding,t.baton_move,t.baton_abilities,t.baton_items)
+    return Data(t.baton_binding,t.engine_binding,t.source_binding,t.move_binding,t.producer_binding,t.baton_move,t.baton_abilities,t.baton_items,getattr(t,'baton_outgoing_dormant_abilities',None))
 def public_substitute(pub):
     """Literal original public volatile namespace; every other bit stays closed."""
     from . import public_active
@@ -195,7 +208,15 @@ def prepare(tape,state,h,proof,requests,orders,actions,data):
     tr=Transaction(h,proof,good,j.clip(target,0,5),order,empty_record(h))
     return tape._replace(execution=tape.execution._replace(baton_transaction=tr))
 
-def _quiet(s,side,physical,data,*,outgoing_toxic=False,outgoing_paralysis=False,outgoing_substitute=False):
+def _ability_quiet(ability,status,counter,data,*,outgoing=False):
+    result=data.quiet_abilities[j.clip(ability,0,len(data.quiet_abilities)-1)]
+    dormant=getattr(data,'outgoing_dormant_abilities',None)
+    if outgoing and dormant is not None:
+        life._typed(dormant,data.quiet_abilities.shape,j.bool_)
+        result |= (status==0)&(counter==0)&dormant[j.clip(ability,0,len(dormant)-1)]
+    return result
+
+def _quiet(s,side,physical,data,*,outgoing_toxic=False,outgoing_paralysis=False,outgoing_substitute=False,outgoing_dormant=False):
     r=j.arange(len(side));seat=j.clip(side,0,1);mon=j.clip(physical,0,5);ability=s.ability[r,seat,mon];item=s.item[r,seat,mon]
     status=s.status[r,seat,mon];counter=s.status_counter[r,seat,mon]
     status_ok=(status==0)&(counter==0)
@@ -203,7 +224,7 @@ def _quiet(s,side,physical,data,*,outgoing_toxic=False,outgoing_paralysis=False,
     # PAR has no switch hook. The actual before-move result is still `acts`;
     # only this outgoing source-bound path may retain PAR, never the recipient.
     if outgoing_paralysis:status_ok |= (status==PARALYSIS_STATUS)&(counter==0)
-    good=(physical>=0)&(physical<6)&(s.hp[r,seat,mon]>0)&status_ok&(ability>0)&(ability<len(data.quiet_abilities))&data.quiet_abilities[j.clip(ability,0,len(data.quiet_abilities)-1)]&(item>=0)&(item<len(data.quiet_items))&data.quiet_items[j.clip(item,0,len(data.quiet_items)-1)]
+    good=(physical>=0)&(physical<6)&(s.hp[r,seat,mon]>0)&status_ok&(ability>0)&(ability<len(data.quiet_abilities))&_ability_quiet(ability,status,counter,data,outgoing=outgoing_dormant)&(item>=0)&(item<len(data.quiet_items))&data.quiet_items[j.clip(item,0,len(data.quiet_items)-1)]
     good &= (ability==s.base_ability[r,seat,mon])&j.all(s.types[r,seat,mon]==s.base_types[r,seat,mon],axis=1)&(s.spikes[r,seat]==0)&j.all(s.trap_source<0,axis=(1,2))
     sub=s.substitute_hp[r,seat,mon]
     good &= ((sub>=0)&(sub<=s.max_hp[r,seat,mon])&(s.max_hp[r,seat,mon]<=1_000_000)) if outgoing_substitute else sub==0
@@ -244,7 +265,9 @@ def _start_diagnostics(tape,state,side,move,caller,data,*,acts,eligible,transact
     for field,ns in [('ability','abilities'),('item','items')]:
         table=getattr(data,'quiet_'+ns,None);value=mon(base,field)
         if value is not None and getattr(table,'ndim',None)==1 and len(table)>0:
-            ids=value[0];values[field+'_namespace_size']=j.full(b,len(table),j.int32);values['quiet_'+field+'_lookup']=(table[j.clip(ids,0,len(table)-1)],value[1])
+            ids=value[0];lookup=table[j.clip(ids,0,len(table)-1)]
+            if field=='ability':lookup=_ability_quiet(ids,base.status[r,seat,safe],base.status_counter[r,seat,safe],data,outgoing=True)
+            values[field+'_namespace_size']=j.full(b,len(table),j.int32);values['quiet_'+field+'_lookup']=(lookup,value[1])
     before=tape if prior is None else prior;context=getattr(before,'execution',None)
     values.update(stream_id=before.stream_id,frame=None if context is None else context.ledger.frame,raw_count=before.count,turn=before.cursor.turn,phase=before.cursor.phase,generation0=before.cursor.generation[:,0],generation1=before.cursor.generation[:,1],prior_tape_refusal=before.refusal,prior_execution_refusal=None if context is None else context.ledger.refusal,prior_kernel_risk=None if context is None or context.risks is None else context.risks.carry.risk)
     requested=eligible&(move==data.move_id)&(data.move_id>0)
@@ -261,7 +284,7 @@ def begin_start(tape,state,side,move,caller,context,*,acts,eligible):
     requested=eligible&(move==d.move_id)&(d.move_id>0)
     data_bound=_bound(tape,d)
     good=registered&data_bound&(caller==move)&acts&~state.pending_residual&~j.any(state.forced_switch,axis=1)&(tr.history.side<0)&tr.public.known[r,seat]&~tr.public.pending[r,seat]
-    good &= _quiet(state,side,physical,d,outgoing_toxic=True,outgoing_paralysis=True,outgoing_substitute=True)&j.all(tr.public.boosts[r,seat]==state.boosts[r,seat,physical],axis=1)&~j.any(state.baton_pass,axis=1)
+    good &= _quiet(state,side,physical,d,outgoing_toxic=True,outgoing_paralysis=True,outgoing_substitute=True,outgoing_dormant=True)&j.all(tr.public.boosts[r,seat]==state.boosts[r,seat,physical],axis=1)&~j.any(state.baton_pass,axis=1)
     good &= tr.public.substitute[r,seat]==(state.substitute_hp[r,seat,physical]>0)
     prior=tape
     tape,ticket=ex.open_attempt(tape,ex.Site.BATON_PASS,side,active=requested)
@@ -294,7 +317,7 @@ def before_copy(tape,state,side,target,context,*,eligible):
     registered=direct._registered_bound(tape,context)
     tr=tape.execution.baton_transaction;h=tr.history;d=context.data.baton_pass;r=j.arange(len(side));seat=j.clip(side,0,1);old=state.active[r,seat]
     requested=eligible&state.baton_pass[r,seat]
-    good=registered&_bound(tape,d)&tr.request_ok&(side==h.side)&(target==tr.recipient)&(old==h.active[r,seat])&_quiet(state,side,old,d,outgoing_toxic=True,outgoing_paralysis=True,outgoing_substitute=True)&_quiet(state,side,target,d)&equal(h.private,snapshot(state))&j.all(h.boosts==state.boosts,axis=(1,2,3))
+    good=registered&_bound(tape,d)&tr.request_ok&(side==h.side)&(target==tr.recipient)&(old==h.active[r,seat])&_quiet(state,side,old,d,outgoing_toxic=True,outgoing_paralysis=True,outgoing_substitute=True,outgoing_dormant=True)&_quiet(state,side,target,d)&equal(h.private,snapshot(state))&j.all(h.boosts==state.boosts,axis=(1,2,3))
     tape,ticket=ex.open_attempt(tape,ex.Site.BATON_PASS,side,active=requested)
     return tape,Pending(ticket,requested,good,side,old,target,h,snapshot(state),state.boosts)
 def after_copy(tape,p,state):
