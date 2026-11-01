@@ -10,7 +10,8 @@ import hashlib
 import json
 from pathlib import Path
 import os
-from types import MappingProxyType
+import subprocess
+from types import MappingProxyType, ModuleType
 
 import numpy as np
 
@@ -59,7 +60,7 @@ def _owner_complete(job,pod):
 
 def validate_inputs(manifest,*,expected_cells=512):
     """Final-file/provenance admission before any device evaluation."""
-    if (type(manifest)is not dict or set(manifest)!={'schema','original_root','files','final_owner','runtime_plan'}
+    if (type(manifest)is not dict or set(manifest)!={'schema','original_root','files','final_owner','runtime_plan','original_reducer'}
             or manifest['schema']!=SCHEMA or set(manifest['files'])!=set(FILES)
             or set(manifest['final_owner'])!={'job','pod'}):
         raise ValueError('complete final stored-collection manifest required')
@@ -94,11 +95,45 @@ def validate_inputs(manifest,*,expected_cells=512):
         ref=manifest['files'][key]
         if (saved.get('sha256')!=ref['sha256'] or saved.get('bytes')!=Path(ref['path']).stat().st_size):
             raise ValueError('original summary file binding differs: '+key)
-    # The unchanged reducer must have exactly the original scientific meaning.
-    reducer_path='gpu_engine/device_observation_parity.py'
-    if bindings.get('source_files',{}).get(reducer_path)!=collector.digest(Path(__file__).with_name('device_observation_parity.py')):
-        raise ValueError('original reducer bytes must be unchanged')
+    # Original provenance belongs to its exact frozen source, not the current
+    # reviewed comparator. No substituted "equivalent" implementation.
+    _frozen_reducer(bindings,reference=manifest['original_reducer'])
     return root,plan,summary,bindings,runtime_plan
+
+
+def _frozen_reducer(bindings,*,reference=None):
+    name='gpu_engine/device_observation_parity.py'
+    expected=bindings.get('source_files',{}).get(name)
+    if not collector._hex(expected):raise ValueError('original reducer source identity missing')
+    if reference is None:
+        # Compatibility for direct helper callers: read a genuine immutable
+        # Git blob, never the current file or a caller's fake legacy class.
+        commit=bindings.get('source_commit')
+        if not collector._hex(commit,40):raise ValueError('original Git source revision missing')
+        payload=subprocess.check_output(['git','show',commit+':'+name],cwd=collector.ROOT)
+        location=commit+':'+name
+    else:
+        path=_verify_file(reference)
+        if reference['sha256']!=expected:raise ValueError('original reducer reference differs from recorded source')
+        payload=path.read_bytes();location=str(path)
+    if hashlib.sha256(payload).hexdigest()!=expected:raise ValueError('frozen original reducer bytes differ')
+    module=ModuleType('pokezero_frozen_original_parity_'+expected);module.__file__=location
+    exec(compile(payload,location,'exec'),module.__dict__)
+    if module.SHAPES!=SHAPES:raise ValueError('old/new observation tensor contracts differ')
+    return module.AgreementParity
+
+
+def _legacy_reproduction(root,decisions_path,summary,bindings,original_reducer):
+    original=original_reducer(source_bindings=bindings)
+    for row,_ in _records(decisions_path):
+        candidate,reference,_=_load_row(root,row)
+        original.add(decision_id=row['decision_id'],turn=row['turn'],line_kinds=row['line_kinds'],
+            agreement=row['agreement'],reference=reference,candidate=candidate,refusal=row['refusal'])
+    report=original.report()
+    expected={key:summary.get(key)for key in report}
+    if collector._json(report).encode()!=collector._json(expected).encode():
+        raise ValueError('original frozen legacy report canonical bytes differ')
+    return report,hashlib.sha256(collector._json(report).encode()).hexdigest()
 
 
 @lru_cache(maxsize=1)
@@ -213,10 +248,14 @@ class Replay:
         return candidate,error_bits,pre_error,post_error
 
 
-def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisions_path,writer):
+def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisions_path,writer,*,original_reducer_reference=None):
     """Streaming record join; no Native object, chance draw or policy selection."""
-    old=AgreementParity(source_bindings=old_bindings)
-    new=AgreementParity(source_bindings=dict(mode='STORED_REENCODING',original=old_bindings,current=runtime.bindings))
+    original_reducer=_frozen_reducer(old_bindings,reference=original_reducer_reference)
+    # Complete byte-exact legacy reproduction BEFORE creating any new-mode
+    # accumulator or evaluating a new candidate/device step.
+    original_report,original_report_sha=_legacy_reproduction(root,decisions_path,summary,old_bindings,original_reducer)
+    new=AgreementParity(source_bindings=dict(mode='STORED_REENCODING',original=old_bindings,current=runtime.bindings),
+        comparison_mode='source_routing_coordinates')
     physical=iter(_records(physical_path));decisions=iter(_records(decisions_path))
     next_physical=next(physical,None);next_decision=next(decisions,None);roots=[];seen=set();rows=0
     for cell,original_final in zip(plan['cells'],summary['cells']):
@@ -249,9 +288,7 @@ def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisi
                             or row.get('agreement')is not record.get('pre_agreement')):
                         raise ValueError('original decision address/physical/agreement binding differs')
                     seen.add(row['decision_id']);rows+=1
-                    original_candidate,reference,path=_load_row(root,row)
-                    old.add(decision_id=row['decision_id'],turn=row['turn'],line_kinds=row['line_kinds'],
-                        agreement=row['agreement'],reference=reference,candidate=original_candidate,refusal=row['refusal'])
+                    _,reference,path=_load_row(root,row)
                     # Current PRE was already checked/encoded. A subsequent
                     # POST failure stops future carry; it cannot erase this
                     # independently recorded current PRE decision.
@@ -272,9 +309,6 @@ def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisi
             original_cell_status=original_final['status']))
         writer.event(dict(kind='END_STORED_REENCODING',**roots[-1]))
     if next_physical is not None or next_decision is not None:raise ValueError('extra/foreign original records')
-    original_report=old.report()
-    for key,value in original_report.items():
-        if summary.get(key)!=value:raise ValueError('original stored reducer/table differs: '+key)
     result=new.report()
     # These denominators are frozen source inputs, not a new eligibility test.
     for key in ('attempted','agreement','state_disagreement','state_agreement_unknown'):
@@ -283,6 +317,8 @@ def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisi
         new_team_generation_calls=0,new_chance_sampling_calls=0,full_game_throughput=None,
         original_cells=summary['cells'],reencoding_cells=roots,original_counts=summary['counts'],
         original_report_recomputed_exact=True,stored_rows_retained=rows,
+        original_legacy_report_sha256=original_report_sha,
+        frozen_original_reducer_sha256=old_bindings['source_files']['gpu_engine/device_observation_parity.py'],
         replay_integrity_requirement_met=not any(row['reencoding_stopped']is not None for row in roots),
         replay_integrity_failed_roots=sum(row['reencoding_stopped']is not None for row in roots),
         provenance_qualification_status=('INELIGIBLE_REPLAY_INTEGRITY_FAILURE'
@@ -302,9 +338,10 @@ def run(manifest,*,out,enable_reencoding=False):
     try:
         (out/'manifest.json').write_text(collector._json(manifest)+'\n')
         result=reencode_records(runtime,root,plan,summary,bindings,manifest['files']['physical']['path'],
-            manifest['files']['decisions']['path'],writer)
+            manifest['files']['decisions']['path'],writer,original_reducer_reference=manifest['original_reducer'])
     finally:writer.close()
     for ref in manifest['files'].values():_verify_file(ref)
+    _verify_file(manifest['original_reducer'])
     result['input_manifest']=manifest
     result['output_files']={p.name:dict(sha256=collector.digest(p),bytes=p.stat().st_size)
         for p in (out/'manifest.json',out/'decisions.jsonl',out/'physical.jsonl',out/'journal.jsonl')}

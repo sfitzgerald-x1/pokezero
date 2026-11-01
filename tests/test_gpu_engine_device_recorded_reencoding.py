@@ -3,6 +3,7 @@ import ast
 import copy
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace as NS
@@ -15,6 +16,8 @@ import numpy as np
 from gpu_engine import device_recorded_reencoding as r, device_observation_collector as c
 from gpu_engine.device_observation_parity import AgreementParity, SHAPES
 from gpu_engine.state import empty_state
+
+LEGACY_SOURCE_COMMIT='9d5b6f72d1db13027c6716957c5c571689611e41'
 
 
 def view(value=0):
@@ -61,17 +64,19 @@ class Runtime:
         return NS(step=NS(state=after,invalid_actions=np.array([False])),trackers=t+1)
 
 
-def dataset(folder,*,reference_value=0):
+def dataset(folder,*,reference_value=0,routing_mismatch=False):
     root=Path(folder)/'old';writer=c.Evidence(root)
     cells=[dict(stream_id=10+n,root_id=20+n,native_seed=30+n,team_indices=[2*n,2*n+1])for n in range(2)]
     refdoc=dict(path='/not-loaded',sha256='a'*64)
-    plan=dict(schema=c.SCHEMA,source_commit='a'*40,pool=refdoc,vocabulary=refdoc,labels=refdoc,gender_policy=refdoc,
+    plan=dict(schema=c.SCHEMA,source_commit=LEGACY_SOURCE_COMMIT,pool=refdoc,vocabulary=refdoc,labels=refdoc,gender_policy=refdoc,
         showdown_root='/not-loaded',node='/not-loaded',node_sha256='b'*64,constructor_seed=1,sampling_seed=2,
         gender_seed=3,gender_domain=4,max_requests=2,max_turns=100,cells=cells,
         policy='PCG64_SEEDSEQUENCE_UNIFORM_PHYSICAL_LEGAL_V1')
+    oldsource=subprocess.check_output(['git','show',LEGACY_SOURCE_COMMIT+':gpu_engine/device_observation_parity.py'],cwd=c.ROOT)
+    (root/'original-reducer.py').write_bytes(oldsource)
     bindings={'test':'original','source_commit':plan['source_commit'],
-        'source_files':{'gpu_engine/device_observation_parity.py':c.digest(Path(r.__file__).with_name('device_observation_parity.py'))}}
-    old=AgreementParity(source_bindings=bindings);final=[]
+        'source_files':{'gpu_engine/device_observation_parity.py':hashlib.sha256(oldsource).hexdigest()}}
+    old=r._frozen_reducer(bindings)(source_bindings=bindings);final=[]
     flags=[[True,None],[False,True]]
     for n,cell in enumerate(cells):
         writer.event(dict(kind='START',**cell,status='ATTEMPTED'))
@@ -85,9 +90,11 @@ def dataset(folder,*,reference_value=0):
                 row=dict(decision_id=f"{cell['stream_id']}-{step}-{side}",stream_id=cell['stream_id'],
                     root_id=cell['root_id'],request=step,owner_side=side,turn=step,agreement=flags[n][step],
                     line_kinds=['move'],refusal=None,physical_binding_sha256=sha,candidate_error=0,reference_metadata={'literal':'unchanged'})
-                writer.decision(row,view(reference_value),view(reference_value))
+                original_view=view(reference_value)
+                if routing_mismatch:original_view['switch_targets']=np.arange(1,6,dtype=np.int32)
+                writer.decision(row,original_view,original_view)
                 old.add(decision_id=row['decision_id'],turn=step,line_kinds=['move'],agreement=row['agreement'],
-                    reference=view(reference_value),candidate=view(reference_value))
+                    reference=original_view,candidate=original_view)
         value=dict(cell,status='TERMINAL',executed_steps=2);final.append(value);writer.event(dict(kind='END',**value))
     writer.close()
     (root/'plan.json').write_text(c._json(plan)+'\n');(root/'source-bindings.json').write_text(c._json(bindings)+'\n')
@@ -166,7 +173,8 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
             (root/'job.json').write_text(c._json(job));(root/'pod.json').write_text(c._json(pod))
             ref=lambda path:dict(path=str(path),sha256=c.digest(path))
             manifest=dict(schema=r.SCHEMA,original_root=str(root),files={k:ref(root/v)for k,v in r.FILES.items()},
-                final_owner=dict(job=ref(root/'job.json'),pod=ref(root/'pod.json')),runtime_plan=ref(root/'runtime-plan.json'))
+                final_owner=dict(job=ref(root/'job.json'),pod=ref(root/'pod.json')),runtime_plan=ref(root/'runtime-plan.json'),
+                original_reducer=ref(root/'original-reducer.py'))
             r.validate_inputs(manifest,expected_cells=2)
             with self.assertRaises(ValueError):r.validate_inputs(manifest)  # PUBLIC entry requires512
             runtime_plan['sampling_seed']+=1;(root/'runtime-plan.json').write_text(c._json(runtime_plan))
@@ -181,6 +189,30 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
             with self.assertRaises(ValueError):r._load_row(root,row)
             (root/'physical.jsonl').write_text('{}\n')
             with self.assertRaises(ValueError):r._verify_file(manifest['files']['physical'])
+
+    def test_frozen_legacy_bytes_before_new_routing_mode_and_no_substituted_source(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root,plan,summary,bindings=dataset(folder,routing_mismatch=True)
+            cls=r._frozen_reducer(bindings,reference=dict(path=str(root/'original-reducer.py'),sha256=c.digest(root/'original-reducer.py')))
+            with self.assertRaises(TypeError):cls(source_bindings=bindings,comparison_mode='source_routing_coordinates')
+            writer=c.Evidence(Path(folder)/'new');runtime=Runtime()
+            try:out=r.reencode_records(runtime,root,plan,summary,bindings,root/'physical.jsonl',root/'decisions.jsonl',writer)
+            finally:writer.close()
+            self.assertEqual(out['comparison_mode'],'source_routing_coordinates')
+            self.assertTrue(out['original_report_recomputed_exact']);self.assertEqual(out['original_counts']['joint_match'],4)
+            self.assertEqual(out['counts']['joint_match'],4)
+            self.assertEqual(out['switch_target_routing_coordinates']['raw_differing_views'],4)
+            self.assertEqual(out['switch_target_routing_coordinates']['raw_differing_slots'],[4]*5)
+            current=Path(r.__file__).with_name('device_observation_parity.py')
+            with self.assertRaises(ValueError):r._frozen_reducer(bindings,reference=dict(path=str(current),sha256=c.digest(current)))
+            # Equal-valued different JSON number types cannot count as byte-
+            # exact original report reproduction. No new source input runs.
+            summary['counts']['attempted']=8.0;runtime=Runtime();writer=c.Evidence(Path(folder)/'bad')
+            try:
+                with self.assertRaisesRegex(ValueError,'canonical bytes'):
+                    r.reencode_records(runtime,root,plan,summary,bindings,root/'physical.jsonl',root/'decisions.jsonl',writer)
+            finally:writer.close()
+            self.assertEqual(runtime.calls,[])
 
     def test_enablement_no_runtime_and_no_native_sampler_constructor_calls(self):
         with patch.object(c,'prepare',side_effect=AssertionError('must not prepare')):
