@@ -18,6 +18,7 @@ from .state import LEECH_SEED
 
 LEECH=49
 START,DRAIN,HEAL=range(3)
+LIQUID_OOZE_SHA='119fe9ac79a246279e33bcf91cd00dc8bdf5dee1738601cc0941ce1e83609e24'
 HASHES={'onStart':'f52802c2b776c0bb78b571cbe448748d567959ce264afe08d52f3a2b3b9162eb','onResidual':'8c05994767627467fd6ef8cd8ce3db75384cad370936043ec3f8bf50adc1dc2e','onTryImmunity':'64f745bd193049175756b01a76b9b09d8c011c779f4032febfddc51c20fdbddd'}
 class Data(NamedTuple):
     binding:object
@@ -27,6 +28,8 @@ class Data(NamedTuple):
     producer_binding:object
     move_id:object
     installed:object
+    liquid_ooze_id:object
+    ability_count:object
 class History(NamedTuple):
     binding:object                 # GLOBAL8, including B==8
     engine_binding:object
@@ -54,6 +57,7 @@ class Pending(NamedTuple):
     recipient_status:object
     old_volatile:object
     expected:object
+    victim_ability:object
     secondary:object
     requested:object
     valid:object
@@ -72,20 +76,24 @@ def compile_data(catalog,metadata,rules):
     script=r"""
 const fs=require('fs'),path=require('path'),crypto=require('crypto'),root=process.argv[1],meta=JSON.parse(fs.readFileSync(0,'utf8'));
 const verified=require(process.argv[2]).build(root,meta),d=require(path.join(root,'dist/sim/dex.js')).Dex.mod('gen3'),m=d.moves.get('leechseed'),hashes={};
+const ooze=d.abilities.get('liquidooze'),liquid_ooze={id:ooze.id,exists:ooze.exists,gen:ooze.gen,sha:crypto.createHash('sha256').update(ooze.onSourceTryHeal.toString()).digest('hex')};
 for(const[k,fn]of[['onStart',m.condition.onStart],['onResidual',m.condition.onResidual],['onTryImmunity',m.onTryImmunity]])hashes[k]=crypto.createHash('sha256').update(fn.toString()).digest('hex');
-process.stdout.write(JSON.stringify({hashes,order:m.condition.onResidualOrder,suborder:m.condition.onResidualSubOrder,id:m.id,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,type:m.type,volatile:m.volatileStatus,source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
+process.stdout.write(JSON.stringify({liquid_ooze,hashes,order:m.condition.onResidualOrder,suborder:m.condition.onResidualSubOrder,id:m.id,category:m.category,target:m.target,power:m.basePower,accuracy:m.accuracy,type:m.type,volatile:m.volatileStatus,source_tree:verified.source_tree,compiled_tree:verified.compiled_tree}));"""
     d=json.loads(subprocess.run([origin.node,'-e',script,origin.root,str(Path(request.__file__).with_name('request_source_rules.cjs'))],input=json.dumps(metadata,allow_nan=False),capture_output=True,text=True,check=True,timeout=30).stdout)
     if d['hashes']!=HASHES or(d['order'],d['suborder'],d['id'],d['category'],d['target'],d['power'],d['accuracy'],d['type'],d['volatile'])!=(10,5,'leechseed','Status','normal',0,90,'Grass','leechseed')or json.dumps(d['source_tree'],sort_keys=True)!=origin.source_tree_json or json.dumps(d['compiled_tree'],sort_keys=True)!=origin.compiled_tree_json:raise ValueError('original Gen3 Leech Seed source changed')
+    if d['liquid_ooze']!={'id':'liquidooze','exists':True,'gen':3,'sha':LIQUID_OOZE_SHA}:raise ValueError('original Gen3 Liquid Ooze cancellation source changed')
+    ability_names=metadata['vocabulary']['abilities'];ooze_id=ability_names.index('liquidooze')if 'liquidooze'in ability_names else 0
     move=names.index('leechseed');t=catalog.engine_table
     if not np.array_equal(table.seed,np.array([n=='leechseed'for n in names]))or int(table.grass_type)!=metadata['vocabulary']['types'].index('grass')or int(t.power[move])!=0 or int(t.accuracy[move])!=90 or bool(t.always_hit[move])or int(t.type[move])!=int(table.grass_type)or int(t.priority[move])!=0 or metadata['moves'][move].get('category')!='Status'or int(catalog.targets[move])!=1 or int(catalog.ids[move])<=0:raise ValueError('original installed seed row required')
-    payload=dict(schema='pokezero.literal-single-seed-source-slot.v1',descriptor=d,engine=catalog.engine_binding,source=catalog.source_binding,moves=catalog.move_binding,producer=catalog.binding,installed={k:np.asarray(v).tolist()for k,v in zip(table._fields,table)})
+    payload=dict(schema='pokezero.literal-single-seed-source-slot.v1',descriptor=d,liquid_ooze_id=ooze_id,ability_names=ability_names,engine=catalog.engine_binding,source=catalog.source_binding,moves=catalog.move_binding,producer=catalog.binding,installed={k:np.asarray(v).tolist()for k,v in zip(table._fields,table)})
     words=lambda x:j.asarray(x,j.uint32)
-    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),table)
+    return Data(words(np.frombuffer(hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).digest(),dtype='>u4').astype(np.uint32)),words(catalog.engine_binding),words(catalog.source_binding),words(catalog.move_binding),words(np.frombuffer(bytes.fromhex(catalog.binding),dtype='>u4').astype(np.uint32)),j.asarray(move,j.int32),table,j.asarray(ooze_id,j.int32),j.asarray(len(ability_names),j.int32))
 
 def shape(data):
     if type(data)is not Data:raise ValueError('typed original Leech Seed data required')
     for x in data[:5]:life._typed(x,(8,),j.uint32)
     life._typed(data.move_id,(),j.int32)
+    life._typed(data.liquid_ooze_id,(),j.int32);life._typed(data.ability_count,(),j.int32)
     for x in(data.installed.seed,data.installed.wish,data.installed.spin):life._typed(x,data.installed.seed.shape,j.bool_)
     life._typed(data.installed.grass_type,(),j.int32)
 
@@ -143,6 +151,12 @@ def _known(tape,data,target,physical):
     for name in('engine_binding','source_binding','move_binding','producer_binding'):good &= j.all(getattr(h,name)==getattr(tape,name))
     return good
 
+def _supported_victim(data,ability):
+    # Original onSourceTryHeal belongs to the drained victim (the heal source),
+    # not the current recipient. TryHeal runs BEFORE the full-HP early return.
+    life._typed(ability,(len(ability),),j.int32)
+    return (ability>=0)&(ability<data.ability_count)&((data.liquid_ooze_id==0)|(ability!=data.liquid_ooze_id))
+
 def _pending(tape,state,source,target,context,site,requested,valid,expected,secondary=None):
     from . import engine_execution_completeness as ex
     b=len(tape.count);rows=j.arange(b);ss=j.clip(source,0,1);ts=j.clip(target,0,1);sp=state.active[rows,ss];tp=state.active[rows,ts];at=(rows,ts,tp);src=(rows,ss,sp)
@@ -150,7 +164,7 @@ def _pending(tape,state,source,target,context,site,requested,valid,expected,seco
     life._typed(secondary,(b,),j.bool_)
     valid &= (source>=0)&(source<2)&(target==1-source)&(state.hp[src]>0)&(sp==tape.cursor.physical_active[rows,ss])&(tp==tape.cursor.physical_active[rows,ts])
     tape,ticket=ex.open_attempt(tape,site,j.where(int(site)==35,source,j.where(int(site)==6,target,source)),active=requested)
-    return tape,Pending(context,ticket,source,sp,target,tp,state.hp[at],state.max_hp[at],state.status[at],state.hp[src],state.max_hp[src],state.status[src],state.volatile[at],expected,secondary,requested,valid)
+    return tape,Pending(context,ticket,source,sp,target,tp,state.hp[at],state.max_hp[at],state.status[at],state.hp[src],state.max_hp[src],state.status[src],state.volatile[at],expected,state.ability[at],secondary,requested,valid)
 
 def begin_seed(tape,state,side,move,context,table,*,eligible,secondary):
     from . import engine_execution_completeness as ex
@@ -171,6 +185,9 @@ def begin_drain(tape,state,target,context,*,eligible):
     b=len(tape.count);rows=j.arange(b);life._typed(target,(b,),j.int32);life._typed(eligible,(b,),j.bool_);ts=j.clip(target,0,1);tp=state.active[rows,ts];ss=j.clip(1-target,0,1);sp=state.active[rows,ss]
     requested=eligible&(state.hp[rows,ts,tp]>0)&((state.volatile[rows,ts,tp]&j.uint32(LEECH_SEED))!=0)
     good=_bound(tape,context)&_known(tape,context.data.leech_seed,target,tp)&(state.hp[rows,ss,sp]>0)
+    good &= _supported_victim(context.data.leech_seed,state.ability[rows,ts,tp])
+    # requested deliberately remains the original active obligation. An Ooze
+    # victim still opens unhandled Site6 and Site7 while numerical code runs.
     return _pending(tape,state,1-target,target,context,ex.Site.LEECH_DRAIN,requested,good,j.zeros(b,j.int32))
 
 def valid_raw(raw,move):
@@ -235,6 +252,7 @@ def finish_drain(tape,p,state,result):
     raw=j.stack((j.full(b,LEECH,j.int32),p.source,p.source_physical,p.target,p.target_physical,j.full(b,DRAIN,j.int32),p.old_hp,state.hp[at],p.maximum,p.status),axis=1)
     valid=p.valid&_bound(tape,p.context)&valid_raw(raw,p.context.data.leech_seed.move_id)&(state.hp[at]==result.hp)&(state.hp[src]==p.recipient_hp)&(state.status[at]==p.status)&(state.status[src]==p.recipient_status)&(state.volatile[at]==p.old_volatile)
     valid &= (state.active[rows,j.clip(p.target,0,1)]==p.target_physical)&(state.active[rows,j.clip(p.source,0,1)]==p.source_physical)&(state.max_hp[at]==p.maximum)&(state.max_hp[src]==p.recipient_max)
+    valid &= (state.ability[at]==p.victim_ability)&_supported_victim(p.context.data.leech_seed,state.ability[at])
     tape,capture,_=_emit(tape,p,raw,result,valid);return tape,capture
 
 def begin_heal(tape,state,capture):
@@ -250,6 +268,7 @@ def finish_heal(tape,p,state):
     raw=j.stack((j.full(b,LEECH,j.int32),p.source,p.source_physical,p.target,p.target_physical,j.full(b,HEAL,j.int32),p.recipient_hp,state.hp[src],p.recipient_max,p.recipient_status),axis=1)
     valid=p.valid&_bound(tape,p.context)&valid_raw(raw,p.context.data.leech_seed.move_id)&(state.hp[src]==p.expected)&(state.hp[at]==p.old_hp)&(state.status[src]==p.recipient_status)&(state.status[at]==p.status)
     valid &= (state.active[rows,j.clip(p.target,0,1)]==p.target_physical)&(state.active[rows,j.clip(p.source,0,1)]==p.source_physical)&(state.max_hp[at]==p.maximum)&(state.max_hp[src]==p.recipient_max)
+    valid &= (state.ability[at]==p.victim_ability)&_supported_victim(p.context.data.leech_seed,state.ability[at])
     tape,capture,_=_emit(tape,p,raw,None,valid);return tape,capture
 
 def captured_matches(tape,capture):
