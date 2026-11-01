@@ -133,8 +133,14 @@ class AtomicDiagnosticsTests(unittest.TestCase):
     if isinstance(n.value,ast.IfExp)and ast.unparse(n.value.test)=='return_diagnostics':return ast.Return(ast.Name('result',ast.Load()))
     return self.generic_visit(n)
   self.assertEqual(ast.dump(a,include_attributes=False),ast.dump(EraseAtomic().visit(b),include_attributes=False))
-  old_body={n.name:ast.dump(n,include_attributes=False)for n in old.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))and n.name!='advance'}
-  new_body={n.name:ast.dump(n,include_attributes=False)for n in new.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))and n.name not in ('advance','AdvanceWithDiagnostics')}
+  # Independently reviewed once-Prepared Leech code reuse changes only these
+  # helpers. Bind their CURRENT bodies exactly; keep every other current
+  # driver helper and the actual advance reverse proof under the old check.
+  leech_names={'prepare','_leech_history','_prepare_leech_history_proof','_checked_leech_history_proof'}
+  leech_reference=ast.parse(subprocess.check_output(['git','show','7e9580207defb397e81313d0ace17d38eb8a6aea:gpu_engine/engine_retained_encoder_driver.py'],text=True))
+  for name in leech_names:self.assertEqual(ast.dump(fn(new,name),include_attributes=False),ast.dump(fn(leech_reference,name),include_attributes=False),name)
+  old_body={n.name:ast.dump(n,include_attributes=False)for n in old.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))and n.name!='advance'and n.name not in leech_names}
+  new_body={n.name:ast.dump(n,include_attributes=False)for n in new.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))and n.name not in ('advance','AdvanceWithDiagnostics')and n.name not in leech_names}
   self.assertEqual(old_body,new_body)
   # This historical whole-module delta belongs to the atomic component.
   # Current census behavior and current source pins are checked separately.
