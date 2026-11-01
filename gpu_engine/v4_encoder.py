@@ -88,6 +88,7 @@ class Catalog:
 
 
 _CATALOGS = weakref.WeakKeyDictionary()
+_STATIC_PLANS = weakref.WeakKeyDictionary()
 
 
 def _static_snapshot(value, seen):
@@ -140,13 +141,74 @@ def _check_static(value, snapshot):
             _check_static(current, child)
 
 
+class _StaticPlan(NamedTuple):
+    record: tuple
+    nodes: tuple
+    roots: tuple
+
+
+def _compile_static_plan(record):
+    """Only expected traversal instructions; never a cached guard result."""
+    nodes=[]
+    def node(snapshot):
+        original,children=snapshot;index=len(nodes);nodes.append(None)
+        if not children:
+            nodes[index]=(original,None,())
+        else:
+            kind,entries=children
+            targets=tuple((key,node(child))for key,child in entries)if kind in('attrs','mapping')else tuple(node(child)for child in entries)
+            nodes[index]=(original,kind,targets)
+        return index
+    roots=tuple((name,node(snapshot))for name,snapshot in record)
+    return _StaticPlan(record,tuple(nodes),roots)
+
+
+def _current_attributes(parent,entries):
+    for key,index in entries:
+        yield getattr(parent,key),index
+
+
+def _current_mapping(parent,entries):
+    for key,index in entries:
+        yield parent[key],index
+
+
+def _check_catalog_plan(catalog,plan):
+    # Every read uses the CURRENT parent on this invocation. In particular the
+    # plan contains no captured actual-parent traversal or acceptance cache.
+    # Sequence zip/iteration order is the original recursive validator's order.
+    stack=[iter(_current_attributes(catalog,plan.roots))]
+    while stack:
+        try:value,index=next(stack[-1])
+        except StopIteration:
+            stack.pop();continue
+        original,kind,entries=plan.nodes[index]
+        if value is not original:
+            raise ValueError('original encoder catalog edges required')
+        if kind=='attrs':
+            stack.append(iter(_current_attributes(value,entries)))
+        elif kind=='mapping':
+            if tuple(value)!=tuple(key for key,_ in entries):
+                raise ValueError('original encoder catalog namespace required')
+            stack.append(iter(_current_mapping(value,entries)))
+        elif kind is not None:
+            if len(value)!=len(entries):
+                raise ValueError('original encoder static sequence required')
+            stack.append(iter(zip(value,entries)))
+
+
 def check_catalog(catalog):
     """Checked host boundary for the actual compiled encoder lifetime."""
     record = _CATALOGS.get(catalog) if type(catalog) is Catalog else None
     if record is None:
         raise ValueError('original compiled v4 encoder catalog required')
-    for name, snapshot in record:
-        _check_static(getattr(catalog, name), snapshot)
+    plan = _STATIC_PLANS.get(catalog)
+    if type(plan) is _StaticPlan and plan.record is record:
+        _check_catalog_plan(catalog,plan)
+    else:
+        # Older/unregistered plans retain the exact original recursive check.
+        for name, snapshot in record:
+            _check_static(getattr(catalog, name), snapshot)
     if isinstance(jnp.zeros((), jnp.int32), jax.core.Tracer):
         raise ValueError('checked encoder catalog boundary cannot be traced')
     return catalog
@@ -203,6 +265,7 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
         sleep,toxic,tendency,refresh,lifecycle,clause,context,features,expected,hazard,actions,masks,binding,checkpoint_sha256)
     seen = set()
     _CATALOGS[catalog] = tuple((f.name, _static_snapshot(getattr(catalog, f.name), seen)) for f in fields(catalog))
+    _STATIC_PLANS[catalog] = _compile_static_plan(_CATALOGS[catalog])
     return catalog
 
 
