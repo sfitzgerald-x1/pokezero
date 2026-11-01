@@ -57,6 +57,7 @@ from . import engine_pressure_callbacks as pressure_callbacks
 from . import engine_trace_callbacks as trace_callbacks
 from . import engine_substitute_callbacks as substitute_callbacks
 from . import engine_toxic_callbacks as toxic_callbacks
+from . import engine_thunder_wave_callbacks as thunder_callbacks
 from . import engine_recoil_callbacks as recoil_callbacks
 from . import engine_rough_skin_callbacks as rough_callbacks
 from . import engine_swords_dance_callbacks as swords_dance_callbacks
@@ -436,6 +437,14 @@ def compile_adapter(metadata, projector, *, catalog):
             toxic_no_effect[5]=add(f'|-fail|{ident[0]}|tox',inputs.Kind.ACTIVE)
             toxic_no_effect[6]=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
             if not np.all(toxic_no_effect[[1,2,4,5,6]]):raise ValueError('original Toxic no-effect schemas missing')
+    if int(lower.device.thunder_wave_move)>0:
+        pid=int(lower.device.base.public_ids[int(lower.device.thunder_wave_move)])
+        if pid>0:
+            plain=int(moves[pid]);blank=add(f'|move|{ident[0]}|Thunder Wave||[still]',inputs.Kind.MOVE)
+            patched=templates[plain].copy();patched[mains[plain],6:8]=-1
+            if not blank or mains[plain]!=mains[blank] or not np.array_equal(patched,templates[blank]):raise ValueError('original Thunder Wave failed MOVE target-erasure schema changed')
+            toxic_no_effect[toxic_callbacks.SUBSTITUTE_BLOCK]=add(f'|-fail|{ident[0]}',inputs.Kind.ACTIVE)
+            if not toxic_no_effect[toxic_callbacks.SUBSTITUTE_BLOCK]:raise ValueError('original Thunder Wave failure schema missing')
     no_damage_keys=np.zeros((9,7),np.int32)
     no_damage_keys[no_damage.MISS,:]=add(f'|-miss|{ident[0]}|{ident[1]}',inputs.Kind.NONPROC)
     no_damage_keys[no_damage.TYPE_IMMUNE,:]=add(f'|-immune|{ident[0]}',inputs.Kind.NONPROC)
@@ -967,7 +976,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         protect_previous_ok &= (protect_previous_tendency[:,0]==int(inputs.Kind.TENDENCY))&(protect_previous_tendency[:,8]==public_tendency.MOVE)
         protect_previous_ok &= (protect_previous_tendency[:,6]==called[:,0])&(protect_previous_tendency[:,10]==erase_pid)&(protect_previous_tendency[:,11]==erase_target_side)
         protect_previous_ok &= (protect_previous_tendency[:,2]==semantic[:,2])&(protect_previous_tendency[:,3]==semantic[:,3])
-        identity &= ~toxic_sub_failure|toxic_callbacks.owned_substitute_failure(tape,index)
+        identity &= ~toxic_sub_failure|(toxic_callbacks.owned_substitute_failure(tape,index)|thunder_callbacks.owned_substitute_failure(tape,index))
         identity &= ~toxic_existing|toxic_callbacks.owned_existing_status(tape,index)
         identity &= ~protect_erases_target | (protect_previous_ok&(~heal_half_full|tables.self_move_still[jnp.clip(erase_pid,0,len(tables.self_move_still)-1)]))
         identity &= ~protect_block | (live[rows,safe]&live[rows,1-safe]&(called[:,0]==tape.words[:,index,1])&(called[:,1]==slots[rows,1-safe])&(called[:,2]==protect_pid)&(called[:,3]==semantic[:,2])&(called[:,4]+1==index))
