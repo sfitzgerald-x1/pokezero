@@ -113,6 +113,21 @@ class OrdinaryIntimidateTests(unittest.TestCase):
   for name in('_constructor','record_device'):
    self.assertEqual(ast.dump(next(n for n in original.body if isinstance(n,ast.FunctionDef)and n.name==name)),ast.dump(next(n for n in current.body if isinstance(n,ast.FunctionDef)and n.name==name)))
   initial_fixture.InitialIntimidateOwningTests.test_default_entry_ast_unchanged_and_original_gen3_callback_pair(self)
+ def test_all_four_global_namespaces_require_exact_uint32_eight_before_context(self):
+  names=('engine_binding','source_binding','move_binding','producer_binding')
+  fields={name:j.arange(8,dtype=j.uint32)for name in names}
+  fields['count']=j.zeros(8,j.int32)
+  tape=SimpleNamespace(**fields);vector=j.zeros(8,j.int32)
+  write=intimidate.Write(*(vector for _ in range(6)))
+  def emit(value):
+   return intimidate.record_ordinary_device(value,None,vector,vector,vector,write,
+    self.table.entry,requested=j.ones(8,bool))
+  self.assertIs(emit(tape),tape) # No original context: no receipt/admission.
+  for name in names:
+   for malformed in (j.zeros((1,8),j.uint32),j.zeros((8,8),j.uint32),
+       j.zeros((0,),j.uint32),j.zeros((8,),j.int32),j.zeros((8,),j.float32)):
+    with self.subTest(name=name,shape=malformed.shape,dtype=malformed.dtype):
+     with self.assertRaises(ValueError):emit(SimpleNamespace(**dict(fields,**{name:malformed})))
 
 
 if __name__=='__main__':unittest.main()

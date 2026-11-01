@@ -69,6 +69,8 @@ def record_ordinary_device(tape,ticket,side,physical,target_physical,write,table
     if type(side) is int:side=jnp.full(b,side,jnp.int32)
     for x in (side,physical,target_physical,*write):execution._shape(x,(b,),jnp.int32)
     execution._shape(requested,(b,),jnp.bool_)
+    for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+        execution._shape(getattr(tape,name),(8,),jnp.uint32)
     context=execution._context(tape)
     if context is None:return tape
     ledger=context.ledger;slot,same=execution._ticket(ledger,ticket)
