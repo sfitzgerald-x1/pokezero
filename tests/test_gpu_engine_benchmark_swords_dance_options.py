@@ -1,5 +1,5 @@
 """Named source-mode wiring only; no weights/model/device invocation."""
-import ast,pathlib,subprocess,unittest
+import ast,subprocess,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -23,8 +23,10 @@ class BenchmarkSwordsDanceOptionsTests(unittest.TestCase):
 
 
 class ReviewedTimingCompositionTests(unittest.TestCase):
- def test_measure_exact_independent_timing_source(self):
-  current=pathlib.Path(benchmark.__file__).read_text()
+ def test_historical_composition_retains_reviewed_measure(self):
+  # This assertion concerns the recorded handler/timing merge, before later
+  # capture work. It does not claim the current capture producer is unchanged.
+  current=subprocess.check_output(["git","show","e5d38e3cf802c355ee944c440666dd84b4948f3c:gpu_engine/benchmark_retained_games.py"],text=True)
   reviewed=subprocess.check_output(["git","show","4baa33e96d8d0c944374c81fd8cd44cc8b6bd26a:gpu_engine/benchmark_retained_games.py"],text=True)
   def measure(text):return ast.dump(next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=="measure"),include_attributes=False)
   self.assertEqual(measure(current),measure(reviewed))

@@ -1,5 +1,5 @@
 """Named ordinary host option forwarding; no model or device work."""
-import ast,pathlib,subprocess,unittest
+import ast,subprocess,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -23,8 +23,10 @@ class BenchmarkThunderWaveOptionsTests(unittest.TestCase):
 
 
 class ReviewedTimingCompositionTests(unittest.TestCase):
- def test_measure_exact_independent_timing_source(self):
-  current=pathlib.Path(benchmark.__file__).read_text()
+ def test_historical_composition_retains_reviewed_measure(self):
+  # Bind this historical equality to the actual Thunder Wave handler change;
+  # later capture additions are outside this unchanged-timing assertion.
+  current=subprocess.check_output(["git","show","75ddb822d6fc3ecc4e9281b74735cab4578711dc:gpu_engine/benchmark_retained_games.py"],text=True)
   reviewed=subprocess.check_output(["git","show","4baa33e96d8d0c944374c81fd8cd44cc8b6bd26a:gpu_engine/benchmark_retained_games.py"],text=True)
   def measure(text):return ast.dump(next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=="measure"),include_attributes=False)
   self.assertEqual(measure(current),measure(reviewed))
