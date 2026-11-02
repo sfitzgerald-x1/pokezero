@@ -90,7 +90,7 @@ def _mon_feature(view, name, slot, *, required=True):
     return value[0, slot].item()
 
 
-def _rebase(root, assignment, active):
+def _rebase(root, assignment, active, *, state):
     """Only sampled coordinates replace redacted peer identity bookkeeping.
 
     Encounter-slot PUBLIC arrays remain untouched. No sampled hidden species
@@ -103,7 +103,16 @@ def _rebase(root, assignment, active):
     for public_slot, physical in assignment.items():
         mapping[physical] = public_slot
     order = np.asarray([active, *[i for i in range(6) if i != active]], np.int32)
+    history = t.damage_history
+    if history is not None:
+        # Only the future HP baseline comes from this materialized sample.
+        # Keep all public shown and exact-owner accumulated sums unchanged;
+        # never scale shown past losses into invented exact peer history.
+        history = history._replace(
+            hp=history.hp.at[0, foe].set(state.hp[0, foe, active]),
+            maximum=history.maximum.at[0, foe].set(state.max_hp[0, foe, active]))
     return t._replace(
+        damage_history=history,
         physical_to_public=t.physical_to_public.at[0, foe].set(j.asarray(mapping)),
         active_physical=t.active_physical.at[0, foe].set(active),
         own_order=t.own_order.at[0, foe].set(j.asarray(order)))
@@ -315,7 +324,7 @@ def materialize(root, start, tables, recipe):
         arrays['entry_pending'][0] = False
         arrays['done'][0], arrays['winner'][0] = False, -1
         state = type(state)(**{name: j.asarray(value) for name, value in arrays.items()})
-        carry = _rebase(root, assignment, active)
+        carry = _rebase(root, assignment, active, state=state)
         return World(start.world, state, carry, (), seed, root.reply_private_history_available)
     except (ValueError, KeyError, IndexError, TypeError) as error:
         return World(start.world, None, None, (str(error),), seed, False)
