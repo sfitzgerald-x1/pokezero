@@ -179,16 +179,21 @@ def _protocol(reference,*,parse_configs=False,checkpoint=None):
     # model loading in the child, and all source artifacts are rechecked there.
     vocabulary=Artifact(**runtime['category_vocabulary']).document()
     category_sha=run._sha(dict(tokens=vocabulary['tokens'],oov_buckets=vocabulary['oov_buckets'],aliases=vocabulary['aliases']))
-    for key,schema in (('positions',POSITIONS),('siblings',SIBLINGS)):
+    from . import v5_device_evaluation_bank as device_bank
+    device_headers=[]
+    for key,schema,device_schema in (('positions',POSITIONS,device_bank.POSITIONS),('siblings',SIBLINGS,device_bank.SIBLINGS)):
         with Path(value[key]['path']).open() as stream:header=json.loads(next(stream))
         base_header={'schema','split','rows','category_vocabulary_sha256','label_vocabulary_sha256'}
-        if set(header) not in (base_header,base_header|{'capture_bank','capture_source'}):
+        device = header['schema']==device_schema
+        device_headers.append(device)
+        if set(header) not in (base_header,base_header|{'capture_bank','capture_source'},base_header|{'device_bank','device_source','category_count'}):
             raise ValueError('complete fixed mechanism header required')
-        if (header['schema']!=schema or header['split']!='PHASE_C_FIXED_HELDOUT'
+        if (header['schema'] not in (schema,device_schema) or header['split']!='PHASE_C_FIXED_HELDOUT'
                 or type(header['rows']) is not int or header['rows']<=0
                 or header['label_vocabulary_sha256']!=value['label_vocabulary_sha256']
                 or header['category_vocabulary_sha256']!=category_sha):
             raise run.MissingDependency('fixed actual heldout positions and full sibling data required before FP')
+    if device_headers[0]!=device_headers[1]:raise ValueError('cannot mix legacy and device mechanism banks')
     return value,panels
 
 
@@ -313,12 +318,18 @@ def _mechanism_arithmetic(protocol,factory,data):
         actual_ranking_accuracy='UNMEASURED_NO_MATCHED_TERMINAL_CONTINUATIONS',fitted_models=0)
 
 
-def _capture_resolver():
+def _capture_resolver(protocol=None):
     """Fixed original producer integration; never a caller readiness boolean.
 
     The fixed resolver requires the original nontraining collector/branch
     records. A numeric fixture or hexadecimal tag alone cannot replace them.
     """
+    if protocol is not None:
+        from . import v5_device_evaluation_bank as device_bank
+        with Path(protocol['positions']['path']).open() as stream:header=json.loads(next(stream))
+        if header['schema']==device_bank.POSITIONS:
+            return SimpleNamespace(require_original_capture=device_bank.require_device_bank,
+                resolve_original_capture=device_bank.resolve_device_bank,evaluate_original_capture=device_bank.evaluate_device_bank)
     name=__package__+'.v5_evaluation_capture'
     try:module=importlib.import_module(name)
     except ModuleNotFoundError as error:
@@ -332,7 +343,7 @@ def _capture_resolver():
 
 def mechanism(protocol,factory,data):
     """Production entry cannot turn hand-authored record metadata into claims."""
-    return _capture_resolver().evaluate_original_capture(protocol,factory,data)
+    return _capture_resolver(protocol).evaluate_original_capture(protocol,factory,data)
 
 
 def _atomic(path,value):
@@ -499,13 +510,13 @@ class EvaluationHook:
     def __post_init__(self):
         if type(self.protocol) is not Artifact:raise ValueError('original digest-bound protocol artifact required')
         run.c._binding(self.expected_run_declaration_sha256);protocol,_=_protocol(self.protocol)
-        _capture_resolver().require_original_capture(protocol)
+        _capture_resolver(protocol).require_original_capture(protocol)
 
     def __call__(self,request):
         from . import v5_foulplay as fp
         protocol,panels=_protocol(self.protocol,parse_configs=True,checkpoint=request.checkpoint_path);_check_request(request,protocol,self.protocol,self.expected_run_declaration_sha256)
-        _capture_resolver().require_original_capture(protocol)
-        _capture_resolver().resolve_original_capture(protocol,request)
+        _capture_resolver(protocol).require_original_capture(protocol)
+        _capture_resolver(protocol).resolve_original_capture(protocol,request)
         if request.declared_games not in panels:raise run.MissingDependency('exact declared milestone panel missing')
         if not callable(request.progress_callback):raise run.MissingDependency('original durable run completion sink required before panel')
         directory=request.run_directory/'artifacts'/('evaluation-'+str(request.declared_games)+'-'+uuid.uuid4().hex)
@@ -587,7 +598,7 @@ def child(reference):
         from .v5_worker import _source
         runtime=Artifact(**protocol['runtime']).document();_source(runtime)
         _require_foulplay_source(protocol,tuple(config.foulplay_root for config in configs))
-        captured=_capture_resolver().resolve_original_capture(protocol,request);factory=_factory(protocol,request)
+        captured=_capture_resolver(protocol).resolve_original_capture(protocol,request);factory=_factory(protocol,request)
         mechanisms=mechanism(protocol,factory,captured)
         progress=asyncio.run(_concurrent_panel(configs,factory,protocol,directory/'progress.json',namespace))
         rows=progress['rows'];known=[r['score'] for r in rows if r['status']=='COMPLETE'];unknown=1000-len(known)
