@@ -952,6 +952,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _direct_hit_context if _direct_hit_registered else None,requested=explodes)
         work=work._replace(hp=_set_active(work.hp,work,side,
             jnp.where(explodes,0,_active(work.hp,work,side))))
+        if _device_public is not None:
+            # Self-Destruct emits faint, not a damage condition for its user.
+            device_public.observe(_device_public,work,explodes,record_damage=False)
         if _lifecycle_trace:
             _public_trace,_self_destruct_pending=self_destruct_callbacks.self_write(_public_trace,_self_destruct_pending,work)
             _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_DESTRUCT,
@@ -1029,6 +1032,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
         if _device_public is not None:
             device_public.damage(_device_public,work,side,jnp.where(hits_sub,0,dealt),jnp.where(hits_sub,0,dealt),acts)
+            device_public.negative_hp_line(_device_public,work,foe,acts & ~hits_sub & (dealt>0),source_class=device_public.negative_items.HP_ACTION)
             device_public.observe(_device_public,work,acts)
         if _direct_hit_context is not None and _direct_hit_registered:
             _sub_damage_write=substitute_damage_callbacks.Write(power,hit,immune,_risk_protected,
@@ -1210,6 +1214,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             target_hp=jnp.where(split,jnp.minimum(_active(work.max_hp,work,foe),average),target_hp)
             work=work._replace(hp=_set_active(work.hp,work,side,hp))
             work=work._replace(hp=_set_active(work.hp,work,foe,target_hp))
+            if _device_public is not None:
+                # Original Pain Split uses -sethp, excluded by damage totals.
+                device_public.hp_line(_device_public,work,side,split,
+                    source_class=device_public.HP_ACTION,record_damage=False)
+                device_public.hp_line(_device_public,work,foe,split,
+                    source_class=device_public.HP_ACTION,record_damage=False)
             boosts = _active(work.boosts,work,side)
             # Gen3 Belly Drum reads live HP after earlier moves, fails at
             # half HP or +6 Attack, and pays a floored direct HP cost. The
@@ -1566,6 +1576,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 recoil>0,active=live)
         hp = jnp.maximum(0,_active(work.hp,work,side)-recoil)
         work = work._replace(hp=_set_active(work.hp,work,side,hp))
+        if _device_public is not None:
+            device_public.hp_line(_device_public,work,side,recoil>0,
+                source_class=device_public.HP_ACTION)
         if _recoil_context is not None:
             _public_trace=recoil_callbacks.record_device(_public_trace,_recoil_pending,recoil_callbacks.Write(
                 _recoil_before.actor_physical,_recoil_before.target_physical,_recoil_before.ability,
@@ -1705,11 +1718,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 else:
                     _wish_tick_pending=None
                     _public_trace=execution_accounting.unhandled_attempt(_public_trace,execution_accounting.Site.WISH,side,active=ordinary & (work.wish_counter[:,side]>0))
+            if _device_public is not None:_device_wish_before=work
             wish = recovery.wish_residual(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 work.wish_counter[:,side],eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,wish.hp),
                 wish_counter=work.wish_counter.at[:,side].set(wish.counter))
             if _device_public is not None:device_public.wish(_device_public,side,ordinary)
+            if _device_public is not None:
+                device_public.hp_line(_device_public,work,side,
+                    ordinary & (wish.hp>_active(_device_wish_before.hp,_device_wish_before,side)),
+                    source_class=device_public.HP_PRE_ITEM)
             if _lifecycle_trace:
                 _public_trace,_wish_tick_capture=self_move_callbacks.finish(_public_trace,_wish_tick_pending,work)
     if table.weather is not None:
@@ -1731,10 +1749,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _faint_before_hp=work.hp
         for side in range(2):
             if _lifecycle_trace:_weather_old_hp=_active(work.hp,work,side)
+            if _device_public is not None:_device_weather_old_hp=_active(work.hp,work,side)
             hp = climate.chip(table.weather,effective_weather,_active(work.types,work,side),
                 _active(work.ability,work,side),_active(work.hp,work,side),
                 _active(work.max_hp,work,side),eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,hp))
+            if _device_public is not None:
+                device_public.hp_line(_device_public,work,side,ordinary & (hp<_device_weather_old_hp),
+                    source_class=device_public.HP_PRE_ITEM)
             if _lifecycle_trace:
                 _weather_before_count=_public_trace.count
                 _public_trace=weather_effect_callbacks.weather_chip(_public_trace,side,work.active[rows,side],
@@ -1876,6 +1898,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _active(work.status_counter, work, side), active=eligible & status_event)
         work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
+        if _device_public is not None:
+            # Leftovers has its own source-local notification. This baseline
+            # update prevents a later status loss being netted against healing.
+            device_public.observe(_device_public,work,eligible & heal_event)
+            device_public.hp_line(_device_public,work,side,
+                eligible & status_event & (residual.hp<hp),source_class=device_public.HP_POST_ITEM)
         if _leftovers_context is not None:
             if _leftovers_registered and _leftovers_context.no_output_tables is not None:
                 if table.items is not None:
@@ -1971,6 +1999,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_leech_capture=leech_callbacks.finish_drain(_public_trace,_leech_pending,work,drained)
                 _public_trace,_leech_heal_pending=leech_callbacks.begin_heal(_public_trace,work,_leech_capture)
             work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
+            if _device_public is not None:
+                device_public.hp_line(_device_public,work,side,
+                    eligible & seed_event & (drained.hp<_active(_device_residual_before.hp,_device_residual_before,side)),
+                    source_class=device_public.HP_UNKNOWN)
+                device_public.hp_line(_device_public,work,foe,
+                    eligible & seed_event & (drained.recipient_hp!=_active(_device_residual_before.hp,_device_residual_before,foe)),
+                    source_class=device_public.HP_UNKNOWN)
             if _lifecycle_trace:
                 _public_trace,_leech_heal_capture=leech_callbacks.finish_heal(_public_trace,_leech_heal_pending,work)
         if table.encore is not None:
@@ -2038,7 +2073,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work.volatile & jnp.uint32(~(FLINCH|FOCUS_PUNCH|FOCUS_LOST) & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     if _device_public is not None:
-        device_public.turn_end(_device_public,state,work,ordinary)
+        device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & ~work.done,
+            leftovers=None if table.items is None else table.items.leftovers)
     result = StepResult(work, invalid, placeholders)
     if _device_public is not None:return device_public.PublicStepResult(result,_device_public.trackers)
     if _lifecycle_trace:
