@@ -109,8 +109,27 @@ class Root:
     address: contract.DecisionAddress
     own: object                    # Only own indexed private cells, never foe.
     view: object                   # Host snapshot of safe public readout.
-    public: object                 # Device root-public clone for SAME leaf.
+    public: object                 # Owner-safe REDACTED carry; rebase foe cursor.
     source_binding_sha256: str
+    reply_private_history_available: bool = False
+
+
+def _redact_peer_private(cloned, owner):
+    """Preserve learner readout, without preserving another owner's knowledge.
+
+    These are NOT generic zeros meaning known history. The unavailable halves
+    cannot feed a reply policy until the explicit history-availability contract
+    is met. The real foe's private coordinate assignment is never a world map.
+    """
+    foe = 1-owner
+    return cloned._replace(
+        physical_to_public=cloned.physical_to_public.at[:, foe].set(-1),
+        active_physical=cloned.active_physical.at[:, foe].set(-1),
+        own_order=cloned.own_order.at[:, foe].set(-1),
+        damage_exact_taken=None if cloned.damage_exact_taken is None else
+            cloned.damage_exact_taken.at[:, foe].set(0),
+        damage_exact_dealt=None if cloned.damage_exact_dealt is None else
+            cloned.damage_exact_dealt.at[:, owner].set(0))
 
 
 def detach_root(context, source, *, row, owner, enable_device_worlds=False):
@@ -133,8 +152,17 @@ def detach_root(context, source, *, row, owner, enable_device_worlds=False):
         for name in OWN_MON_FIELDS + OWN_SIDE_FIELDS}
     address = contract.DecisionAddress(int(context.streams[row]),
         int(context.frames[row]), owner)
-    return Root(address, _freeze(own), _freeze(dict(view._asdict())), cloned,
-        source.binding_sha256)
+    snapshot = _freeze(dict(view._asdict()))
+    # Original opponent-own materialization admits the full-health birth only
+    # when no prior private HP/status history is needed. An actual frame0 is
+    # that boundary. Later unknown exact-damage history is not fabricated from
+    # displayed fractions or read from the live foe's supplemental arrays.
+    history_available = (address.frame == 0 and
+        not np.any(np.asarray(view.error)) and
+        np.all(np.asarray(view.hp_fraction)[np.asarray(view.present)] == 1) and
+        not np.any(np.asarray(view.status)[np.asarray(view.present)]))
+    return Root(address, _freeze(own), snapshot, _redact_peer_private(cloned, owner),
+        source.binding_sha256, bool(history_available))
 
 
 @dataclass(frozen=True)

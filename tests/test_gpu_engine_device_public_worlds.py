@@ -181,12 +181,15 @@ class DevicePublicWorldsTests(unittest.TestCase):
                 def __array__(self, *args):raise AssertionError('full private host conversion')
             state = SimpleNamespace(**{name: OwnOnly(name) for name in
                 worlds.OWN_MON_FIELDS + worlds.OWN_SIDE_FIELDS})
-            view = SimpleNamespace(_asdict=lambda: {'error': np.zeros(1, np.int32)})
+            view = SimpleNamespace(error=np.zeros(1, np.int32), hp_fraction=np.ones((1, 6)),
+                present=np.ones((1, 6), bool), status=np.zeros((1, 6), np.int32))
+            view._asdict = lambda: {key: value for key, value in vars(view).items() if key != '_asdict'}
             cloned = object();original_public = object()
             context = RootContext(state, original_public, np.asarray([80, 81]), np.asarray([2, 3]))
             compiled = compile_fixture()
             with patch.object(worlds.public, 'clone_for_worlds', return_value=cloned) as gather, \
-                    patch.object(worlds.public, 'readout', return_value=view) as readout:
+                    patch.object(worlds.public, 'readout', return_value=view) as readout, \
+                    patch.object(worlds, '_redact_peer_private', return_value=cloned):
                 got = worlds.detach_root(context, compiled, row=1, owner=owner, enable_device_worlds=True)
                 self.assertIs(got.public, cloned)
                 self.assertEqual(got.address, contract.DecisionAddress(81, 3, owner))
@@ -213,6 +216,44 @@ class DevicePublicWorldsTests(unittest.TestCase):
         root = replace(root, view=worlds._freeze(view), source_binding_sha256=compiled.binding_sha256)
         self.assertEqual(len(worlds._revealed(root, compiled)[0][2]), 2)
         self.assertEqual(worlds.plan_starts(root, compiled, recipe).source_fixture_unknown_mass, 0)
+
+    def test_peer_private_carry_redaction_preserves_exact_learner_view(self):
+        import jax
+        import jax.numpy as j
+        from gpu_engine.state import empty_state
+        from gpu_engine.engine_device_public_hooks import initialize
+        from gpu_engine.v5_device_rollout import RootContext
+        # Typed empty storage with declared synthetic fields, not a generated
+        # team or an engine step. initialize here is public tracker algebra.
+        state = empty_state(1)._replace(species=j.arange(1, 13, dtype=j.int32).reshape(1, 2, 6),
+            hp=j.full((1, 2, 6), 100, j.int32),max_hp=j.full((1, 2, 6),100,j.int32),
+            level=j.full((1, 2, 6),80,j.int32),gender=j.zeros((1, 2, 6),j.int32),
+            active=j.asarray([[1, 3]],j.int32),done=j.asarray([False]))
+        initial=initialize(state).trackers
+        compiled=compile_fixture()
+        for owner in (0, 1):
+            raw=initial._replace(
+                damage_exact_taken=j.arange(12,dtype=j.float32).reshape(1,2,6)/100,
+                damage_exact_dealt=j.arange(12,24,dtype=j.float32).reshape(1,2,6)/100)
+            before=worlds.public.readout(raw,j.asarray([owner],j.int32))
+            context=RootContext(state,raw,j.asarray([81],j.int32),j.asarray([0],j.int32))
+            got=worlds.detach_root(context,compiled,row=0,owner=owner,enable_device_worlds=True)
+            after=worlds.public.readout(got.public,j.asarray([owner],j.int32))
+            for a,b in zip(jax.tree.leaves(before),jax.tree.leaves(after)):
+                np.testing.assert_array_equal(a,b)
+            foe=1-owner
+            np.testing.assert_array_equal(got.public.physical_to_public[:,foe],-1)
+            np.testing.assert_array_equal(got.public.own_order[:,foe],-1)
+            np.testing.assert_array_equal(got.public.active_physical[:,foe],-1)
+            np.testing.assert_array_equal(got.public.damage_exact_taken[:,foe],0)
+            np.testing.assert_array_equal(got.public.damage_exact_dealt[:,owner],0)
+            np.testing.assert_array_equal(got.public.damage_exact_taken[:,owner],raw.damage_exact_taken[:,owner])
+            np.testing.assert_array_equal(got.public.damage_exact_dealt[:,foe],raw.damage_exact_dealt[:,foe])
+            # Any later root keeps this unavailable, irrespective of the live
+            # foe's actual private supplement values. It is not a known zero.
+            later=worlds.detach_root(context._replace(frames=j.asarray([2],j.int32)),
+                compiled,row=0,owner=owner,enable_device_worlds=True)
+            self.assertFalse(later.reply_private_history_available)
 
 
 if __name__ == '__main__':
