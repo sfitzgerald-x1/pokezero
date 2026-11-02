@@ -132,8 +132,11 @@ def retire(carry, after, updated_trackers, initial, initial_public, *, failure, 
 
 
 def make_driver(config, engine_tables, observation_tables, *,
-                sampling_seed, max_requests=4096, chunk_steps=16, actor_kind='champion23'):
+                sampling_seed, max_requests=4096, chunk_steps=16, actor_kind='champion23',
+                donate_carry=False):
     """One compiled worker; engine and tracker writes share the same device step."""
+    if type(donate_carry) is not bool:
+        raise ValueError('literal carry donation opt-in required')
     from . import engine_device_observation as encoder
     from . import engine_device_trackers as public
     def advance(c, initial, initial_public, root_ids, params):
@@ -186,7 +189,7 @@ def make_driver(config, engine_tables, observation_tables, *,
             c = jax.lax.cond(j.any(c.ids >= 0), lambda x: advance(x, initial, initial_public, root_ids, params), lambda x: x, c)
             return c, None
         return jax.lax.scan(body, c, None, length=chunk_steps)[0]
-    return jax.jit(chunk)
+    return jax.jit(chunk, donate_argnums=(0,)) if donate_carry else jax.jit(chunk)
 
 
 def initialize(initial, initial_public, batch):
@@ -202,6 +205,18 @@ def initialize(initial, initial_public, batch):
         j.zeros(n, bool), j.zeros(n, bool), j.zeros(n, bool), zero, zero,
         j.zeros(len(encoder.ERROR_KINDS)+1, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32), j.asarray(0, j.int32),
         j.asarray(0, j.uint32), j.asarray(0, j.int32))
+
+
+def own_carry_buffers(carry):
+    """One private device copy PER leaf, before any donated execution.
+
+    Initialization may share bank slices, counters and tracker feature arrays.
+    Copy each occurrence separately: neither the immutable bank/params nor two
+    donated leaves may share a buffer. None remains a structural empty leaf.
+    The supported JAX device_put(may_alias=False) contract forces each copy.
+    """
+    return jax.block_until_ready(jax.tree.map(
+        lambda value: jax.device_put(value, may_alias=False), carry))
 
 
 def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
@@ -237,7 +252,8 @@ def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
         scope='Real direct encoder; zero manifest retained. Timing alone is not parity/coverage/strength/canary/B4 qualification.')
 
 
-def run_finite(compiled, start, initial, initial_public, root_ids, params, *, progress=None, stall_floor_seconds=600):
+def run_finite(compiled, start, initial, initial_public, root_ids, params, *, progress=None,
+               stall_floor_seconds=600, donate_carry=False):
     """Whole finite cohort including tail/dispatch/scalar accounting wall time.
 
     Stall guard grows with the longest observed completed game so far; it is
@@ -254,7 +270,10 @@ def run_finite(compiled, start, initial, initial_public, root_ids, params, *, pr
         c = compiled(c, initial, initial_public, root_ids, params)
         completed_mask, retired, active, cursor = jax.device_get((c.completed,
             j.sum(c.completed | c.capped | c.failed), j.sum(c.ids >= 0), c.cursor))
-        completed_mask = np.asarray(completed_mask)
+        # CPU device_get can expose a borrowed view. A later donated call may
+        # reuse its buffer; the host lifetime/stall snapshot must own its bytes.
+        completed_mask = (np.array(completed_mask, copy=True) if donate_carry
+                          else np.asarray(completed_mask))
         completed = int(completed_mask.sum()); retired, active, cursor = map(int, (retired, active, cursor))
         now = time.perf_counter()
         # New assignments/completions can occur inside a chunk. The preceding
@@ -276,8 +295,11 @@ def run_finite(compiled, start, initial, initial_public, root_ids, params, *, pr
 
 def measure_pair(params, config, engine_tables, observation_tables, warm_initial,
                  initial, warm_public, initial_public, warm_roots, roots, *, batch, sampling_seed,
-                 max_requests=4096, chunk_steps=16, progress=None, actor_kind='champion23'):
+                 max_requests=4096, chunk_steps=16, progress=None, actor_kind='champion23',
+                 donate_carry=False):
     """Disjoint full warmup cohort followed by the whole declared measured one."""
+    if type(donate_carry) is not bool:
+        raise ValueError('literal carry donation opt-in required')
     warm_roots, roots = np.asarray(warm_roots), np.asarray(roots)
     n = initial.done.shape[0]
     if (warm_initial.done.shape != initial.done.shape or warm_roots.shape != (n,)
@@ -287,9 +309,15 @@ def measure_pair(params, config, engine_tables, observation_tables, warm_initial
         (initial, warm_initial, warm_public, initial_public, params))
     start = jax.block_until_ready(initialize(initial, initial_public, batch))
     warm_start = jax.block_until_ready(initialize(warm_initial, warm_public, batch))
+    ownership_seconds = None
+    if donate_carry:
+        before = time.perf_counter()
+        start, warm_start = own_carry_buffers(start), own_carry_buffers(warm_start)
+        ownership_seconds = time.perf_counter()-before
     roots = j.asarray(roots, j.uint32); warm_roots = j.asarray(warm_roots, j.uint32)
     driver = make_driver(config, engine_tables, observation_tables,
-        sampling_seed=sampling_seed, max_requests=max_requests, chunk_steps=chunk_steps, actor_kind=actor_kind)
+        sampling_seed=sampling_seed, max_requests=max_requests, chunk_steps=chunk_steps, actor_kind=actor_kind,
+        donate_carry=donate_carry)
     before = time.perf_counter()
     lowered = driver.lower(start, initial, initial_public, roots, params)
     lowering = time.perf_counter()-before
@@ -301,12 +329,15 @@ def measure_pair(params, config, engine_tables, observation_tables, warm_initial
     def report(phase):
         return (lambda value: progress(dict(value, phase=phase, batch=batch))) if progress else None
     warm, warm_seconds = run_finite(compiled, warm_start, warm_initial, warm_public, warm_roots, params,
-        progress=report('DISJOINT_FULL_WARMUP'))
+        progress=report('DISJOINT_FULL_WARMUP'), donate_carry=donate_carry)
     finished, seconds = run_finite(compiled, start, initial, initial_public, roots, params,
-        progress=report('WARM_FULL_MEASURED'))
+        progress=report('WARM_FULL_MEASURED'), donate_carry=donate_carry)
     result = summary(finished, seconds=seconds, batch=batch,
         compile_seconds=compilation, warmup_seconds=warm_seconds)
     result.update(lowering_seconds=lowering, chunk_steps=chunk_steps, actor_kind=actor_kind,
+        donate_carry=donate_carry, carry_ownership_setup_seconds=ownership_seconds,
+        carry_ownership_scope=('INDEPENDENT_COPY_PER_LEAF_BEFORE_WARMUP_AND_MEASUREMENT'
+            if donate_carry else 'LEGACY_NO_DONATION'),
         max_requests_per_game=max_requests,
         warmup_summary=summary(warm, seconds=warm_seconds, batch=batch,
             compile_seconds=compilation, warmup_seconds=0),
