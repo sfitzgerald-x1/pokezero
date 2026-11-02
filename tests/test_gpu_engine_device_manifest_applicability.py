@@ -29,9 +29,9 @@ class ManifestApplicabilityTests(unittest.TestCase):
         rows = observation.column_manifest(installed_readout())
         by = {(r['section'], r['kind'], r['column']): r for r in rows}
         self.assertEqual(len(by), 1038)
-        self.assertEqual(Counter(r['status'] for r in rows), {'DIRECT': 76, 'TRACKED': 315, 'ZERO': 647})
+        self.assertEqual(Counter(r['status'] for r in rows), {'DIRECT': 76, 'TRACKED': 316, 'ZERO': 646})
         missing = {'field': (105, 106, 111, 112, 115, 116), 'own': (37,), 'opponent': (37,),
-            'stats': (123, 124, 126, 127, 128, 129, 130, 131), 'belief': (131,)}
+            'stats': (123, 124, 126, 127, 128, 129, 130, 131)}
         for section, columns in missing.items():
             for column in columns:
                 row = by[section, 'numeric', column]
@@ -45,7 +45,7 @@ class ManifestApplicabilityTests(unittest.TestCase):
             self.assertTrue(row['reason'].startswith('unavailable:'), row)
         zero = [r for r in rows if r['status'] == 'ZERO']
         self.assertEqual(sum(r['reason'].startswith('structurally') for r in zero), 616)
-        self.assertEqual(sum(r['reason'].startswith('deferred') for r in zero), 17)
+        self.assertEqual(sum(r['reason'].startswith('deferred') for r in zero), 16)
         self.assertEqual(sum(r['reason'].startswith('unavailable:') for r in zero), 8)
         self.assertEqual(sum(r['reason'].startswith('unavailable hidden') for r in zero), 6)
 
@@ -58,10 +58,12 @@ class ManifestApplicabilityTests(unittest.TestCase):
                 ('stats', 'categorical', 0), ('own', 'numeric', 80), ('own', 'categorical', 17),
                 ('opponent', 'numeric', 99), ('opponent', 'categorical', 3)]:
             self.assertTrue(by[section, kind, column]['reason'].startswith('structurally'))
-        for section, column in [('field', 107), ('own', 24), ('opponent', 31), ('stats', 121), ('belief', 131)]:
+        for section, column in [('field', 107), ('own', 24), ('opponent', 31), ('stats', 121)]:
             row = by[section, 'numeric', column]
             self.assertEqual(row['status'], 'ZERO')
             self.assertTrue(row['reason'].startswith('deferred'), row)
+        self.assertEqual(by['belief', 'numeric', 131]['status'], 'TRACKED')
+        self.assertIn('frozen investment_belief_narrowing=False', by['belief', 'numeric', 131]['reason'])
 
 
 if __name__ == '__main__':
