@@ -1,6 +1,9 @@
 """Declared cost algebra/fake callbacks only; no model, world or game calls."""
-from dataclasses import replace
+from dataclasses import asdict,replace
 import json
+from pathlib import Path
+import tempfile
+import weakref
 from types import SimpleNamespace as NS
 import unittest
 from typing import NamedTuple
@@ -10,6 +13,7 @@ import numpy as np
 from pokezero import v5_run as runs,v5_contract as c,v5_gumbel as g
 from gpu_engine import device_d_cost as cost,v5_device_teacher as teacher,v5_device_rollout as rollout,v5_device_evaluation_bank as saved
 from tests import test_v5_run as fixtures
+from pokezero import v5_device_evaluation_bank as schema
 
 
 class InertState(NamedTuple):
@@ -18,7 +22,8 @@ class InertState(NamedTuple):
 
 def plan():
     old=fixtures.plan('D');games=tuple(runs.Game(9000+i,'declared-'+str(i),20000+i,(2*i,2*i+1))for i in range(256))
-    return replace(old,iterations=((runs.Batch(games,100,200),),))
+    batches=tuple(runs.Batch(games[16*k:16*k+16],100+k,200+k,300+k,500,tuple(16*k+i for i in range(16)))for k in range(16))
+    return replace(old,iterations=(batches,),max_requests=1024)
 
 
 def inputs():
@@ -29,7 +34,20 @@ def inputs():
     namespace=dict(source_commit='1'*40,source_sha256='d'*64,public_source_hash='literal-original-source',pool_sha256=p.pool_sha256,
         pool_metadata_sha256='e'*64,category_vocabulary_sha256=p.model.category_vocabulary_sha256,label_vocabulary_sha256=p.model.label_vocabulary.sha256)
     entries=[dict(selector=dict(stream=a.stream,frame=a.frame,owner=a.owner),status='SAVED',artifact={'path':'inert','sha256':'4'*64},reason=None)for a in cost.select(p)]
-    return provider,snapshot,dict(schema='pokezero.device_heldout_saved_roots.v1',namespace=namespace,cost_roots=entries)
+    # Keep an actual hash-bound declaration alive for this inert Provider.
+    temporary=tempfile.TemporaryDirectory();weakref.finalize(provider,temporary.cleanup)
+    directory=Path(temporary.name);path=directory/'declaration.json'
+    doc=dict(schema=schema.DECLARATION,role='NONTRAINING_EVALUATION',stop_rule=schema.STOP_RULE,
+        source_commit=namespace['source_commit'],source_sha256=namespace['source_sha256'],pool_sha256=p.pool_sha256,
+        category_vocabulary_sha256=p.model.category_vocabulary_sha256,category_count=p.model.category_vocab_size,
+        label_vocabulary=asdict(p.model.label_vocabulary),
+        actors=[dict(archive=dict(path='/inert/bank-A.npz',sha256='5'*64),checkpoint_sha256='6'*64)]*2,
+        batches=[asdict(b)for b in p.iterations[0]],max_requests=p.max_requests,output_directory=str(directory/'output'),
+        training_roster_index=dict(path='/inert/roster.json',sha256='7'*64),cost_recipe_seed=p.selection_seed,
+        cost_selectors=[entry['selector']for entry in entries])
+    path.write_text(runs._json(doc))
+    return provider,snapshot,dict(schema='pokezero.device_heldout_saved_roots.v1',namespace=namespace,cost_roots=entries,
+        cost_recipe_seed=p.selection_seed,declaration=dict(path=str(path),sha256=runs._file_sha(path)))
 
 
 class DeviceDCostTests(unittest.TestCase):
@@ -129,5 +147,29 @@ class DeviceDCostTests(unittest.TestCase):
         with patch.object(saved,'load_root'),patch.object(cost,'actor')as actor:
             with self.assertRaisesRegex(ValueError,'predeclared'):cost.run(provider,snapshot,'unused',index,enable_cost=True)
             actor.assert_not_called()
+
+    def test_actual_declaration_hash_and_complete_batch_recipe_refuse_before_actor(self):
+        mutations=('constructor','sampling','gender_seed','gender_domain','gender_roots','game','batch_order','pool','selection','index_seed','cap','hash','declared_recipe')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                provider,snapshot,index=inputs();p=provider.plan;batches=list(p.iterations[0]);first=batches[0]
+                if mutation in ('constructor','sampling','gender_seed','gender_domain','gender_roots','game'):
+                    field={'constructor':'constructor_seed','sampling':'sampling_seed','gender_seed':'gender_seed',
+                        'gender_domain':'gender_domain','gender_roots':'gender_root_ids','game':'games'}[mutation]
+                    value=(tuple(x+1 for x in first.gender_root_ids)if mutation=='gender_roots'else
+                        (replace(first.games[0],seed=first.games[0].seed+1),)+first.games[1:]if mutation=='game'else getattr(first,field)+1)
+                    batches[0]=replace(first,**{field:value});provider.plan=replace(p,iterations=(tuple(batches),))
+                elif mutation=='batch_order':provider.plan=replace(p,iterations=(tuple(reversed(batches)),))
+                elif mutation=='pool':provider.plan=replace(p,pool_sha256='8'*64);index['namespace']['pool_sha256']='8'*64
+                elif mutation=='selection':provider.plan=replace(p,selection_seed=p.selection_seed+1)
+                elif mutation=='index_seed':index['cost_recipe_seed']+=1
+                elif mutation=='cap':provider.plan=replace(p,max_requests=p.max_requests+1)
+                else:
+                    path=Path(index['declaration']['path']);doc=json.loads(path.read_text())
+                    doc['batches'][0]['constructor_seed']+=1;path.write_text(runs._json(doc))
+                    if mutation=='declared_recipe':index['declaration']['sha256']=runs._file_sha(path)
+                with patch.object(cost,'actor')as actor:
+                    with self.assertRaises(ValueError):cost.run(provider,snapshot,'unused',index,enable_cost=True)
+                    actor.assert_not_called()
 
 if __name__=='__main__':unittest.main()

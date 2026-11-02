@@ -159,8 +159,25 @@ def run(provider,snapshot,archive_path,index,*,enable_cost=False):
         pool_metadata_sha256=binding_doc['pool_metadata_sha256'],category_vocabulary_sha256=provider.plan.model.category_vocabulary_sha256,
         label_vocabulary_sha256=provider.plan.model.label_vocabulary.sha256)
     if namespace!=expected:raise ValueError('saved bank/actual Prepared source, pool and namespaces differ')
+    from pokezero import v5_device_evaluation_bank as schema
+    try:
+        declaration,batches,_games,labels=schema.declaration(index['declaration'])
+    except (KeyError,TypeError,OSError)as error:
+        raise ValueError('hash-bound actual saved-bank declaration required')from error
+    plan=provider.plan
+    if (plan.iterations!=(batches,)or plan.pool_sha256!=declaration['pool_sha256']
+            or plan.selection_seed!=declaration['cost_recipe_seed']
+            or index.get('cost_recipe_seed')!=declaration['cost_recipe_seed']
+            or plan.max_requests!=declaration['max_requests']
+            or declaration['source_commit']!=expected['source_commit']
+            or declaration['source_sha256']!=expected['source_sha256']
+            or declaration['category_vocabulary_sha256']!=expected['category_vocabulary_sha256']
+            or declaration['category_count']!=plan.model.category_vocab_size
+            or labels!=plan.model.label_vocabulary):
+        raise ValueError('saved-bank declaration/actual D cost Plan recipe or namespace differs')
     declared=select(provider.plan);entries=index['cost_roots']
-    if len(entries)!=40 or tuple(c.DecisionAddress(**x['selector'])for x in entries)!=declared:
+    if (len(entries)!=40 or tuple(c.DecisionAddress(**x['selector'])for x in entries)!=declared
+            or [x['selector']for x in entries]!=declaration['cost_selectors']):
         raise ValueError('exact40 predeclared Recipe-selected cost slots required')
     for entry in entries:
         if set(entry)!=set(('selector','status','artifact','reason'))or entry['status']not in ('SAVED','UNREACHED','REFUSED'):
