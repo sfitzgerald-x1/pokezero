@@ -540,13 +540,14 @@ def _evaluate_snapshot(store,snapshot,hook):
     return outcome.status=='RESULT'
 
 
-def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None):
+def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,measure_timings=False):
     """Bounded collect/cache/train iterations, with explicit original RNG resume.
 
     Backend collects only fixed supplied batches and writes a genuine v5 cache;
     no outcome-dependent allocation exists. An explicitly declared external
     milestone hook records its result; it never promotes or retunes an arm.
     """
+    if type(measure_timings)is not bool:raise ValueError('explicit runtime timing choice required')
     if enable_v5 is not True or type(plan) is not Plan:raise ValueError('explicit v5 finite run enablement required')
     milestones={}
     if plan.evaluation is not None:
@@ -557,6 +558,14 @@ def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None):
     require_treatment_ready(plan,backend)
     backend.check_plan(plan)
     store=Store(path,plan,resume=resume)
+    def measured(scope,callback,*args,**kwargs):
+        if not measure_timings:return callback(*args,**kwargs)
+        clock=time.perf_counter();status='FAILED'
+        try:
+            result=callback(*args,**kwargs);status='COMPLETE';return result
+        finally:
+            store.emit('RUNTIME_PHASE',scope=scope,wall_seconds=time.perf_counter()-clock,status=status,
+                timing_scope='host wall inclusive of original operation and its data I/O; not pure GPU compute')
     if plan.evaluation is not None:_evaluation_history(store)
     checkpoints=store.matching('CHECKPOINT')
     if checkpoints:
@@ -568,13 +577,13 @@ def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None):
             scheduled=plan.train.learning_rate_schedule!='constant'
             options=(dict(expected_learning_rate_window=learning_rate_window(plan,checkpoint['iteration']))
                 if scheduled and checkpoint['iteration']>=0 else {})
-            runtime=training.load_checkpoint(snapshot,enable_v5=True,expected_model_config=plan.model,
+            runtime=measured('TRAINER_RESUME',training.load_checkpoint,snapshot,enable_v5=True,expected_model_config=plan.model,
                 expected_loss_config=plan.loss,expected_train_config=plan.train,**options)
     else:
-        runtime=training.create(plan.model,plan.loss,plan.train,enable_v5=True)
-        checkpoint=store.checkpoint(runtime,iteration=-1)
+        runtime=measured('TRAINER_CREATE_COLD',training.create,plan.model,plan.loss,plan.train,enable_v5=True)
+        checkpoint=measured('CHECKPOINT_WRITE',store.checkpoint,runtime,iteration=-1)
     snapshots=[Snapshot(**value) for value in store.matching('SNAPSHOT')]
-    if not snapshots:snapshots=[store.snapshot(checkpoint,iteration=-1)]
+    if not snapshots:snapshots=[measured('ACTOR_EXPORT',store.snapshot,checkpoint,iteration=-1)]
     for snapshot in snapshots:
         store.resolve(snapshot['checkpoint'],snapshot['checkpoint_sha256'])
         store.resolve(snapshot['archive'],snapshot['archive_sha256'])
@@ -637,11 +646,11 @@ def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None):
                 if plan.train.learning_rate_schedule!='constant' else {})
             while (runtime.progress is None or not runtime.progress['complete']
                     or options and checkpoint['iteration']!=iteration):
-                report=training.train_caches(runtime,paths,max_updates=plan.checkpoint_updates,**options)
+                report=measured('TRAIN_CACHES_INCLUSIVE',training.train_caches,runtime,paths,max_updates=plan.checkpoint_updates,**options)
                 store.emit('TRAIN_PROGRESS',iteration=iteration,steps=runtime.steps,rows=runtime.rows)
-                checkpoint=store.checkpoint(runtime,iteration=iteration)
+                checkpoint=measured('CHECKPOINT_WRITE',store.checkpoint,runtime,iteration=iteration)
                 if report['complete']:break
-            current=store.snapshot(checkpoint,iteration=iteration);snapshots.append(current)
+            current=measured('ACTOR_EXPORT',store.snapshot,checkpoint,iteration=iteration);snapshots.append(current)
         published=Snapshot(**existing[0]) if existing else current
         if iteration in milestones and not _evaluate_snapshot(store,published,evaluation_hook):
             store.emit('STOP',iteration=iteration,reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY')

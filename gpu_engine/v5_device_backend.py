@@ -48,9 +48,11 @@ def prepare(catalog,source,pool,*,source_commit):
 
 class RuntimeBackend:
     """Device-mode backend for the unchanged v5_run.run callback contract."""
-    def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None):
+    def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None,measure_runtime=False):
         if type(prepared)is not Prepared or type(chunk_steps)is not int or chunk_steps<=0:
             raise ValueError('prepared device runtime and finite chunk required')
+        if type(measure_runtime)is not bool:raise ValueError('explicit runtime timing choice required')
+        self.measure_runtime=measure_runtime;self._initializer_executables={}
         self.teacher=teacher
         self.prepared=prepared;self.pool=pool;self.gender_policy=gender_policy;self.chunk_steps=chunk_steps
         self.actors={};self._plan=None;self.labels=None;self.declaration_sha256=None;self.model_sha256=None
@@ -133,12 +135,36 @@ class RuntimeBackend:
         raw=_gender(raw,self.pool,indices,gender_initialization)
         truth=rollout.constructor_truth(raw,self.pool,indices,source=self.prepared.source,
             compiled_source=self.prepared.catalog.source,vocabulary=self._plan.model.label_vocabulary)
-        initialized=self.initialize(raw)
+        if self.measure_runtime:
+            signature=tuple((x.shape,str(x.dtype))for x in jax.tree.leaves(raw))
+            if signature not in self._initializer_executables:
+                started=time.perf_counter();lowered=self.initialize.lower(raw)
+                self._phase['initializer_lower_seconds']+=time.perf_counter()-started
+                started=time.perf_counter();self._initializer_executables[signature]=lowered.compile()
+                self._phase['initializer_compile_seconds']+=time.perf_counter()-started
+                self._phase['initializer_compile_calls']+=1
+            initialized=jax.block_until_ready(self._initializer_executables[signature](raw))
+        else:initialized=self.initialize(raw)
         return rollout.initialize(initialized,np.asarray([g.stream_id for g in batch.games],np.int32),truth=truth)
 
     def collect(self,prepared,store,on_end,check_progress):
         plan=prepared['plan'];batch=prepared['batch'];self.check_plan(plan);check_progress()
-        started=time.monotonic();carry=self._construct(batch);closed=set()
+        started=time.monotonic();wall_started=time.perf_counter()
+        self._phase={key:0. for key in ('initializer_lower_seconds','initializer_compile_seconds','collector_lower_seconds','collector_compile_seconds',
+            'constructor_wall_seconds','kernel_blocked_seconds','teacher_wall_seconds','host_transfer_wall_seconds','spool_write_wall_seconds','game_cache_wall_seconds','cache_merge_wall_seconds')}
+        self._phase.update(initializer_compile_calls=0,collector_compile_calls=0)
+        construction=time.perf_counter();carry=self._construct(batch);closed=set()
+        self._phase['constructor_wall_seconds']=time.perf_counter()-construction
+        execute=prepared['collector']
+        if self.measure_runtime:
+            from .v5_device_timing import Counts
+            counts=Counts(len(batch.games))
+            if 'compiled_collector'not in prepared:
+                clock=time.perf_counter();lowered=execute.lower(carry,prepared['params'])
+                self._phase['collector_lower_seconds']=time.perf_counter()-clock
+                clock=time.perf_counter();prepared['compiled_collector']=lowered.compile()
+                self._phase['collector_compile_seconds']=time.perf_counter()-clock;self._phase['collector_compile_calls']=1
+            execute=prepared['compiled_collector']
         bank=prepared['bank'];binding=dict(schema='pokezero.device_actor_bank.v1',source_binding=json.loads(self.prepared.source_binding_json),
             declaration_sha256=prepared['bindings'].declaration_sha256,assignment_sha256=bank.assignment_sha256,
             actor_archives=bank.actor_archives,streams=bank.streams,actor_indices=bank.actor_indices,learner_mask=bank.learner_mask,
@@ -148,27 +174,50 @@ class RuntimeBackend:
         receipt=store.artifact(f'rollouts/device-bank-{uuid.uuid4().hex}.json',runs._json(binding).encode(),kind='DEVICE_ACTOR_BANK')
         options={} if self.teacher is None else dict(teacher_recipe=self.teacher.recipe)
         spool=Spool(store,bank,bank_sha256=receipt['sha256'],**options)
+        warm_loop_started=time.perf_counter()
         for _ in range((plan.max_requests+self.chunk_steps-1)//self.chunk_steps):
             check_progress()
-            device=prepared['collector'](carry,prepared['params']);carry=device.carry
+            clock=time.perf_counter();device=execute(carry,prepared['params'])
+            if self.measure_runtime:device=jax.block_until_ready(device)
+            self._phase['kernel_blocked_seconds']+=time.perf_counter()-clock;carry=device.carry
             # Keep the live world/public carry on device. The original batch
             # adapter needs raw Frames plus literal terminal fields, not a
             # duplicate hidden world/constructor truth on the host each chunk.
+            clock=time.perf_counter()
             host=rollout.boundary(device._replace(carry=carry._replace(state=None,public=None,truth=None),roots=None))
+            self._phase['host_transfer_wall_seconds']+=time.perf_counter()-clock
+            if self.measure_runtime:counts.add(host.frames.requested)
+            clock=time.perf_counter()
             labels=None if self.teacher is None else self.teacher.label_chunk(device.roots,host.frames,bank,prepared['params'])
+            self._phase['teacher_wall_seconds']+=time.perf_counter()-clock
             del device
+            clock=time.perf_counter()
             if self.teacher is None:spool.append(host)
             else:spool.append(host,teacher_records=labels)
+            self._phase['spool_write_wall_seconds']+=time.perf_counter()-clock
             for row,game in enumerate(batch.games):
                 status=int(host.carry.status[row])
                 if status!=rollout.RUNNING and game.stream_id not in closed:
                     on_end(game.stream_id,rollout.STATUS[status],duration_seconds=time.monotonic()-started,
                         requests=int(host.carry.frames[row]),terminal_frame=int(host.carry.terminal_frame[row]))
                     closed.add(game.stream_id)
+                    clock=time.perf_counter()
                     spool.finalize_game(row,game,bindings=prepared['bindings'],loss_config=plan.loss,discount=plan.discount)
+                    self._phase['game_cache_wall_seconds']+=time.perf_counter()-clock
             if len(closed)==len(batch.games):break
         if len(closed)!=len(batch.games):raise ValueError('finite device collector left a declared game unclosed')
-        if not spool.parts:return None
-        (store.path/'caches').mkdir(exist_ok=True)
-        relative=f'caches/cache-{uuid.uuid4().hex}';spool.merge(store.path/relative)
-        return relative,runs._file_sha(store.path/relative/'metadata.json')
+        result=None
+        if spool.parts:
+            (store.path/'caches').mkdir(exist_ok=True)
+            relative=f'caches/cache-{uuid.uuid4().hex}';clock=time.perf_counter();spool.merge(store.path/relative)
+            self._phase['cache_merge_wall_seconds']=time.perf_counter()-clock
+            result=relative,runs._file_sha(store.path/relative/'metadata.json')
+        if self.measure_runtime:
+            report=counts.report(host.carry.status,kernel_seconds=self._phase['kernel_blocked_seconds'],collection_seconds=time.perf_counter()-wall_started)
+            warm_loop_seconds=time.perf_counter()-warm_loop_started
+            store.emit('DEVICE_RUNTIME_TIMING',**report,phases=self._phase,
+                warm_loop_including_cache_io_seconds=warm_loop_seconds,
+                completed_per_warm_loop_wall_second=None if warm_loop_seconds<=0 else report['complete']/warm_loop_seconds,
+                timing_scope='explicit lower/compile before actual chunks; blocked actual kernel calls, no warmup games; constructor wall includes initializer lower/compile',
+                actor_load_scope='verified original archive loading is batch preparation before collect; not kernel wall')
+        return result
