@@ -5,8 +5,8 @@ The caller owns a fixed declaration, actual constructor and original actor
 archives. The default shares one parameter tree per seat across the cohort.
 An explicit immutable actor bank gathers the original per-game assignments
 without broadcasting a 9M-weight copy per game. The declared B/D historical
-pool planner is not replaced. D's actual teacher consumer is absent and
-refuses explicitly; its root public-carry handoff is available separately.
+pool planner is not replaced. D requires an explicit original-recipe teacher;
+its PRE public-carry handoff stays on device until selected at a chunk boundary.
 """
 from dataclasses import asdict, dataclass
 from typing import NamedTuple
@@ -141,10 +141,12 @@ class Frames(NamedTuple):
     hidden_mask:object
     actor_indices:object=None # bank only; [B,2], same original assignment every frame
     learner_mask:object=None  # bank only; [B,2], historical seats never become PPO rows
+    raw_policy_logits:object=None # D only: original PRE actor logits, never resampled
 
 class Rollout(NamedTuple):
     carry:object
     frames:object
+    roots:object=None # D only, one PRE RootContext per scan step; never bulk host copied
 
 class RootContext(NamedTuple):
     state:object
@@ -189,7 +191,7 @@ def _physical(public):
 
 
 def make_collector(engine_tables,observation_tables,model_config,labels,bindings,*,
-        sampling_seed,chunk_steps=8,max_requests=4096,actor_bank=None):
+        sampling_seed,chunk_steps=8,max_requests=4096,actor_bank=None,retain_teacher_roots=False):
     """Prepare once; returned JIT accepts (carry, tuple(original_params)).
 
     Default: two original seat trees. With actor_bank: one tree per declared
@@ -198,7 +200,9 @@ def make_collector(engine_tables,observation_tables,model_config,labels,bindings
     32-snapshot planner remains authoritative. D never falls back to FULL.
     """
     if type(model_config)is not V5ModelConfig or type(bindings)is not Bindings:raise ValueError('explicit model/config bindings required')
-    if model_config.arm=='D':raise ValueError('device D teacher consumer not integrated; no old FULL fallback')
+    if type(retain_teacher_roots)is not bool or retain_teacher_roots!=(model_config.arm=='D'):
+        raise ValueError('device D teacher consumer requires explicit PRE roots; no old FULL fallback')
+    if retain_teacher_roots and actor_bank is None:raise ValueError('D requires the exact original actor bank')
     if model_config.category_vocabulary_sha256!=bindings.category_sha256 or model_config.label_vocabulary.sha256!=bindings.label_vocabulary.sha256:
         raise ValueError('same actual actor category/full-label namespace required')
     if any(type(x)is not int or x<=0 for x in (chunk_steps,max_requests)) or type(sampling_seed)is not int or not 0<=sampling_seed<2**32:
@@ -289,15 +293,18 @@ def make_collector(engine_tables,observation_tables,model_config,labels,bindings
         stack=lambda name:j.stack([getattr(o,name) for o in observations],axis=1)
         record=Frames(stack('numeric_features'),stack('categorical_ids'),stack('token_type_ids'),stack('attention_mask'),
             legal,c.streams,c.frames,state.turn,requested,trainable,valid,errors,actions,engine_actions,probabilities,values,finite,live&~refused,physical,
-            opponent_targets,opponent_mask,hidden,hs,hm,actor_indices,learner_mask)
-        return carry,record
+            opponent_targets,opponent_mask,hidden,hs,hm,actor_indices,learner_mask,raw_logits if retain_teacher_roots else None)
+        return carry,(record,public_root_context(c)) if retain_teacher_roots else record
     def collect(c,params):
         if actor_bank is None and len(params)!=2:
             raise ValueError('two explicit original seat parameter trees required')
         if actor_bank is not None and len(params)!=len(actor_bank.actor_archives):
             raise ValueError('one explicit original parameter tree per declared actor required')
-        carry,frames=jax.lax.scan(lambda c,_:advance(c,params),c,None,length=chunk_steps)
-        return Rollout(carry,frames)
+        carry,records=jax.lax.scan(lambda c,_:advance(c,params),c,None,length=chunk_steps)
+        if retain_teacher_roots:
+            frames,roots=records
+            return Rollout(carry,frames,roots)
+        return Rollout(carry,records)
     return jax.jit(collect)
 
 
@@ -367,7 +374,7 @@ def _complete_gae(values,outcome,loss_config,discount):
         policy_lambda=loss_config.policy_lambda,value_lambda=loss_config.value_lambda)
     return a.numpy(),target.numpy()
 
-def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discount=1.,actor_bank=None):
+def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discount=1.,actor_bank=None,teacher_records=None,teacher_recipe=None):
     """Batch-boundary adapter into the ORIGINAL validated v5 cache/trainer API.
 
     Retains actual all29 inputs. Terminal unknowns never manufacture PPO,
@@ -375,14 +382,20 @@ def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discoun
     any missing/invalid learner decision disables PPO for that owner/stream.
     Raw requested/error rows remain in host_rollouts even when not trainable.
     This entry does not substitute for the configured historical assignment
-    planner and does not produce D/private-teacher labels.
+    planner. Explicit D records use the original public-leaf target algebra;
+    no private critic or replacement trainer is introduced.
     """
     from types import MappingProxyType
     from pokezero.dataset import TrainingBatch
     from pokezero import v5_data
     from pokezero.v5_loss import V5LossConfig
-    if type(bindings)is not Bindings or type(loss_config)is not V5LossConfig or loss_config.arm=='D':
-        raise ValueError('bound actual A/B rollout and original loss recipe required; D consumer absent')
+    if type(bindings)is not Bindings or type(loss_config)is not V5LossConfig:
+        raise ValueError('bound actual rollout and original loss recipe required')
+    if loss_config.arm=='D':
+        from .v5_device_teacher import validate_records
+        if teacher_records is None or actor_bank is None:raise ValueError('D consumer absent: original teacher records/bank required')
+    elif teacher_records is not None or teacher_recipe is not None:
+        raise ValueError('teacher labels belong only to the explicit D treatment')
     if isinstance(discount,bool) or not isinstance(discount,(int,float)) or not np.isfinite(discount) or not 0<=discount<=1:
         raise ValueError('finite declared discount required')
     rolls=tuple(host_rollouts)
@@ -401,6 +414,8 @@ def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discoun
         expected_learners=np.broadcast_to(np.asarray(actor_bank.learner_mask,bool),f.policy_valid.shape)
         if f.actor_indices is None or f.learner_mask is None or not np.array_equal(f.actor_indices,expected_actors) or not np.array_equal(f.learner_mask,expected_learners) or not np.array_equal(f.trainable,f.policy_valid&expected_learners):
             raise ValueError('literal row actor/learner assignments differ from declaration')
+    teacher_by_address=None
+    if loss_config.arm=='D':teacher_by_address=validate_records(f,actor_bank,teacher_recipe,teacher_records)
     addresses=np.argwhere(f.trainable)
     if not len(addresses):raise ValueError('no valid actual learner decisions; retain raw rollout and dispositions')
     n=len(addresses);take=lambda name:np.asarray(getattr(f,name))[tuple(addresses.T)]
@@ -469,6 +484,19 @@ def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discoun
         outcome_targets=outcome,outcome_target_mask=om,privileged_view_mask=empty,
         privileged_categorical_ids=np.zeros((n,1,29,41),np.int32),privileged_numeric_features=np.zeros((n,1,29,132),np.float32),
         privileged_token_type_ids=np.zeros((n,1,29),np.int32),privileged_attention_mask=np.zeros((n,1,29),bool))
+    search_policy=np.zeros((n,9),np.float32);search_value=np.zeros(n,np.float32)
+    search_pm=np.zeros(n,bool);search_vm=np.zeros(n,bool)
+    if teacher_by_address is not None:
+        records=[teacher_by_address[key] for key in keys]
+        sidecar.update(search_status=tuple(x['status']for x in records),
+            search_refusal=tuple(x['refusal']for x in records),
+            root_improvement_records=tuple(x['improvement']for x in records))
+        for i,record in enumerate(records):
+            if record['status']=='LABELED':
+                target=contract.search_target_columns(contract.RootImprovement(**record['improvement']),
+                    float(outcome[i]) if om[i] else None,tuple(map(bool,legal[i])))
+                search_policy[i]=target['search_policy_target'];search_value[i]=target['search_value_target']
+                search_pm[i]=target['search_policy_target_mask'];search_vm[i]=target['search_value_target_mask']
     batch=TrainingBatch(categorical_ids=cats[:,None],numeric_features=numbers[:,None],token_type_ids=roles[:,None],
         attention_mask=attention[:,None],history_mask=np.ones((n,1),bool),legal_action_mask=legal,action_indices=actions,
         rewards=rewards,returns=outcome,value_estimates=values,value_estimate_mask=np.ones(n,bool),
@@ -478,8 +506,8 @@ def training_batch(host_rollouts,bindings,*,battle_ids,seeds,loss_config,discoun
         battle_ids=tuple(battle_ids[row] for row in rows),seeds=tuple(int(seeds[row]) for row in rows),format_ids=('gen3randombattle',)*n,
         player_ids=tuple(('p1','p2')[owner] for owner in owners),turn_indices=tuple(map(int,turns)),
         terminal_capped=tuple(s=='CAPPED' for s in statuses),step_metadata=tuple(metadata),
-        search_policy_targets=np.zeros((n,9),np.float32),search_policy_target_mask=empty,
-        search_value_targets=zero,search_value_target_mask=empty,v5_columns=MappingProxyType(sidecar))
+        search_policy_targets=search_policy,search_policy_target_mask=search_pm,
+        search_value_targets=search_value,search_value_target_mask=search_vm,v5_columns=MappingProxyType(sidecar))
     v5_data.validate_batch(batch)
     return batch
 

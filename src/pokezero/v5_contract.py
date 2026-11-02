@@ -407,6 +407,25 @@ class RootImprovement:
             raise ValueError('root value must equal the improved-policy completed-Q expectation')
 
 
+def search_target_columns(root_improvement, outcome, legal):
+    """Original D policy/value target algebra, also used by direct device rows.
+
+    A missing game outcome never becomes a zero-valued known value target.
+    This helper accepts no observation substitute and changes no PPO columns.
+    """
+    if type(root_improvement) is not RootImprovement:
+        raise ValueError('original typed root improvement required')
+    if outcome is not None:
+        _real(outcome, low=-1, high=1)
+        if outcome not in (-1, 0, 1):
+            raise ValueError('literal final game outcome must be loss/tie/win')
+    root_improvement.validate(legal)
+    return dict(search_policy_target=root_improvement.policy_target,
+        search_policy_target_mask=True,
+        search_value_target=0.0 if outcome is None else (outcome + root_improvement.root_value) / 2,
+        search_value_target_mask=outcome is not None)
+
+
 @dataclass(frozen=True)
 class V5Labels:
     address: DecisionAddress
@@ -465,11 +484,8 @@ class V5Labels:
             final_hp_targets=tuple(0.0 if x is None else x.final_hp_fraction for x in self.pokemon_end),
             pokemon_end_target_mask=tuple(x is not None for x in self.pokemon_end))
         if self.root_improvement is not None:
-            self.root_improvement.validate(observation.legal_action_mask)
-            result.update(search_policy_target=self.root_improvement.policy_target,
-                search_policy_target_mask=True,
-                search_value_target=0.0 if self.outcome is None else (self.outcome + self.root_improvement.root_value) / 2,
-                search_value_target_mask=self.outcome is not None)
+            result.update(search_target_columns(self.root_improvement, self.outcome,
+                observation.legal_action_mask))
         return result
 
 
