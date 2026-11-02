@@ -36,7 +36,10 @@ def facts(owner=0, frame=2):
         pp=j.full((1,2,6,4),10,j.int32),gender=j.zeros((1,2,6),j.int32),
         active=j.zeros((1,2),j.int32),entry_pending=j.zeros((1,2),bool),done=j.asarray([False]))
     belief=SimpleNamespace(species_initial_mask=j.tile(j.asarray([[3,0]],j.uint32),(8,1)),
-        species_types=j.tile(j.asarray([[1,0]],j.int32),(8,1)))
+        species_types=j.tile(j.asarray([[1,0]],j.int32),(8,1)),
+        # The source-visible ledger also needs the literal engine-ID
+        # capacities. This fixture never emits ability/item exclusions.
+        ability_mask=j.zeros((8,3,2),j.uint32),item_mask=j.zeros((8,3,2),j.uint32))
     tracker=initialize(state,belief).trackers
     context=RootContext(state,tracker,j.asarray([81],j.int32),j.asarray([frame],j.int32))
     root=plans.detach_root(context,source,row=0,owner=owner,enable_device_worlds=True)
