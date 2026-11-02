@@ -94,6 +94,8 @@ class DeviceBackendTests(unittest.TestCase):
    constructor.assert_called_once_with(plan.iterations[0][0]);self.assertEqual(len(seen),1)
    self.assertIs(seen[0][0],carry);self.assertIs(seen[0][1],pending['params']);self.assertEqual(gae.call_count,2)
    self.assertEqual([x[0]for x in ended],[(101,'COMPLETE'),(202,'COMPLETE')])
+   self.assertEqual([x[1]['terminal_winner']for x in ended],np.asarray(raw.carry.winner).tolist())
+   self.assertEqual([x[1]['actor_bank_sha256']for x in ended],[store.matching('DEVICE_ACTOR_BANK')[0]['sha256']]*2)
    self.assertEqual(r._file_sha(store.path/cache/'metadata.json'),digest)
    batch=next(b.v5_data.iter_cache_batches(store.path/cache,batch_size=4))
    self.assertEqual(tuple(batch.player_ids),('p1','p2','p1','p2'))
@@ -120,6 +122,26 @@ class DeviceBackendTests(unittest.TestCase):
   self.assertIs(labels.call_args.args[0],after_gender);self.assertIs(labels.call_args.kwargs['source'],prepared.source)
   self.assertIs(labels.call_args.kwargs['compiled_source'],prepared.catalog.source);initialize.assert_called_once_with(after_gender)
   self.assertIs(register.call_args.args[0],initialized);np.testing.assert_array_equal(register.call_args.args[1],[101,202])
+
+ def test_terminal_journal_fields_keep_wins_ties_and_unknowns_distinct(self):
+  cases=(((d.COMPLETE,0),(d.COMPLETE,1)),((d.COMPLETE,2),(d.CAPPED,0)),((d.REFUSED,1),(d.CAPPED,2)))
+  for case in cases:
+   with self.subTest(case=case),tempfile.TemporaryDirectory()as root:
+    plan,backend,store,snapshots,assignments,carry=self.setup_backend(root)
+    with patch('pokezero.v5_contract.source_variant_census',return_value={'source_rows_sha256':'0'*64}),\
+     patch.object(b.v5_model,'load',side_effect=lambda path,**kw:({'inert':j.array(0)},plan.model,{'checkpoint_sha256':kw['expected_checkpoint_sha256']})),\
+     patch.object(d,'make_collector',return_value=None):
+     pending=backend.prepare_batch(plan,plan.iterations[0][0],snapshots[0],assignments,store)
+    raw,_=bank_tests.DeviceActorBankTests().run_inert(pending['bank'],bindings=pending['bindings'])
+    raw=raw._replace(carry=raw.carry._replace(status=j.array([x[0]for x in case]),winner=j.array([x[1]for x in case])))
+    pending['collector']=lambda actual,params:raw
+    inert_spool=NS(append=lambda host:None,finalize_game=lambda *a,**kw:None,parts=[])
+    ended=[]
+    with patch.object(backend,'_construct',return_value=carry),patch.object(b,'Spool',return_value=inert_spool):
+     self.assertIsNone(backend.collect(pending,store,lambda *a,**kw:ended.append((a,kw)),lambda:None))
+    self.assertEqual([x[0][1]for x in ended],[d.STATUS[x[0]]for x in case])
+    self.assertEqual([x[1]['terminal_winner']for x in ended],[winner if status==d.COMPLETE else None for status,winner in case])
+    self.assertEqual([x[1]['actor_bank_sha256']for x in ended],[store.matching('DEVICE_ACTOR_BANK')[0]['sha256']]*2)
 
  def test_real_raw_source_axis_and_compiled_constructor_matching_are_distinct(self):
   variant=Gen3RandbatVariant('a','set','Swalot','role',80,('Tackle','Surf','Protect','Rest'),'Sticky Hold','Leftovers')

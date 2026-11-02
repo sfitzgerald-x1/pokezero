@@ -199,7 +199,9 @@ class RuntimeBackend:
                 status=int(host.carry.status[row])
                 if status!=rollout.RUNNING and game.stream_id not in closed:
                     on_end(game.stream_id,rollout.STATUS[status],duration_seconds=time.monotonic()-started,
-                        requests=int(host.carry.frames[row]),terminal_frame=int(host.carry.terminal_frame[row]))
+                        requests=int(host.carry.frames[row]),terminal_frame=int(host.carry.terminal_frame[row]),
+                        terminal_winner=int(host.carry.winner[row]) if status==rollout.COMPLETE else None,
+                        actor_bank_sha256=receipt['sha256'])
                     closed.add(game.stream_id)
                     clock=time.perf_counter()
                     spool.finalize_game(row,game,bindings=prepared['bindings'],loss_config=plan.loss,discount=plan.discount)

@@ -551,6 +551,24 @@ def _evaluate_snapshot(store,snapshot,hook):
     return outcome.status=='RESULT'
 
 
+def _journal_diagnostics(value):
+    """Keep accepted-update diagnostics JSON-safe without inventing a value.
+
+    A diagnostic can overflow even when an update is otherwise accepted. Its
+    kind and sign remain explicit; optimizer state and strict journal encoding
+    are untouched. Finite values, identities and collection order are retained.
+    """
+    if isinstance(value,float) and not math.isfinite(value):
+        return dict(kind='NONFINITE_DIAGNOSTIC',
+            classification='NAN' if math.isnan(value) else 'INFINITY',
+            sign='negative' if math.copysign(1.,value)<0 else 'positive')
+    if isinstance(value,dict):
+        return {key:_journal_diagnostics(item) for key,item in value.items()}
+    if isinstance(value,list):return [_journal_diagnostics(item) for item in value]
+    if isinstance(value,tuple):return tuple(_journal_diagnostics(item) for item in value)
+    return value
+
+
 def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,measure_timings=False):
     """Bounded collect/cache/train iterations, with explicit original RNG resume.
 
@@ -658,7 +676,11 @@ def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,me
             while (runtime.progress is None or not runtime.progress['complete']
                     or options and checkpoint['iteration']!=iteration):
                 report=measured('TRAIN_CACHES_INCLUSIVE',training.train_caches,runtime,paths,max_updates=plan.checkpoint_updates,**options)
-                store.emit('TRAIN_PROGRESS',iteration=iteration,steps=runtime.steps,rows=runtime.rows)
+                # Preserve the original per-update diagnostics with their step
+                # and row identities. Do not recompute losses or average away
+                # changes needed for the declared dilution/cycling checks.
+                store.emit('TRAIN_PROGRESS',iteration=iteration,steps=runtime.steps,rows=runtime.rows,
+                    updates=_journal_diagnostics(report.get('updates',[])))
                 checkpoint=measured('CHECKPOINT_WRITE',store.checkpoint,runtime,iteration=iteration)
                 if report['complete']:break
             current=measured('ACTOR_EXPORT',store.snapshot,checkpoint,iteration=iteration);snapshots.append(current)

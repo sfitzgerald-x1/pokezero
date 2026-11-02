@@ -87,6 +87,53 @@ class V5RunTests(unittest.TestCase):
             stack.enter_context(patch.object(r.Store,'checkpoint',checkpoint))
             return r.run(plan,path,backend=backend,resume=resume,enable_v5=True)
 
+    def test_journal_keeps_each_original_update_with_its_step_and_rows(self):
+        class RecordedTraining(FakeTraining):
+            def __init__(self):
+                super().__init__();self.original_updates=[]
+            def train(self,runtime,paths,*,max_updates):
+                before=len(self.traces)
+                result=super().train(runtime,paths,max_updates=max_updates)
+                updates=[dict(optimizer_step=step,owner_rows=4,loss=weight,
+                    entropy=.25+step/100,uniform_kl=step/1000)
+                    for step,_,weight in self.traces[before:]]
+                self.original_updates.extend(updates)
+                return dict(result,updates=updates)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'run';recipe=plan();trainer=RecordedTraining()
+            result=self.execute(path,recipe,FakeBackend(),trainer)
+            events=r.Store(path,recipe,resume=True).matching('TRAIN_PROGRESS')
+            self.assertEqual([update for event in events for update in event['updates']],trainer.original_updates)
+            self.assertEqual([u['optimizer_step'] for u in trainer.original_updates],list(range(1,7)))
+            self.assertEqual(sum(u['owner_rows'] for u in trainer.original_updates),result['rows'])
+            for event in events:
+                self.assertEqual(event['updates'][-1]['optimizer_step'],event['steps'])
+                self.assertEqual(event['rows'],4*event['steps'])
+
+    def test_nonfinite_diagnostics_never_prevent_accepted_update_checkpoint(self):
+        class NonfiniteTraining(FakeTraining):
+            def train(self,runtime,paths,*,max_updates):
+                result=super().train(runtime,paths,max_updates=max_updates)
+                return dict(result,updates=[dict(optimizer_step=runtime.steps,owner_rows=4,
+                    gradient_norm=float('inf'),nested=[float('-inf'),float('-nan'),.125,None,False])])
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'run';recipe=plan();trainer=NonfiniteTraining()
+            result=self.execute(path,recipe,FakeBackend(),trainer)
+            self.assertEqual(result['status'],'COMPLETE_DECLARATION')
+            store=r.Store(path,recipe,resume=True)
+            for event in store.matching('TRAIN_PROGRESS'):
+                update=event['updates'][0]
+                self.assertEqual(update['optimizer_step'],event['steps'])
+                self.assertEqual(update['owner_rows'],4)
+                self.assertEqual(update['gradient_norm'],dict(kind='NONFINITE_DIAGNOSTIC',classification='INFINITY',sign='positive'))
+                self.assertEqual(update['nested'][:2],[
+                    dict(kind='NONFINITE_DIAGNOSTIC',classification='INFINITY',sign='negative'),
+                    dict(kind='NONFINITE_DIAGNOSTIC',classification='NAN',sign='negative')])
+                self.assertEqual(update['nested'][2:],[.125,None,False])
+                self.assertTrue(any(c['steps']==event['steps'] for c in store.matching('CHECKPOINT')))
+            # Strict JSON still rejects non-finite values outside this boundary.
+            with self.assertRaises(ValueError):r._json(dict(unrelated=float('inf')))
+
     def test_two_real_api_phases_are_ordered_scratch_history_and_independent_B_seed(self):
         for arm,replicate in (('A',0),('B',0),('B',1)):
             with self.subTest(arm=arm,replicate=replicate),tempfile.TemporaryDirectory() as directory:
@@ -101,6 +148,7 @@ class V5RunTests(unittest.TestCase):
                 store=r.Store(Path(directory)/'run',recipe,resume=True)
                 self.assertEqual(len(store.matching('SNAPSHOT')),3)
                 self.assertEqual(len(store.matching('DATASET_TRANSITION')),1)
+                self.assertTrue(all(event['updates']==[] for event in store.matching('TRAIN_PROGRESS')))
 
     def test_resume_preserves_optimizer_rng_cursor_without_replaying_games(self):
         recipe=plan();full=FakeTraining();full_backend=FakeBackend()
