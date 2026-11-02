@@ -18,7 +18,7 @@ class ComponentTests(unittest.TestCase):
         return dict(schema=smoke.SCHEMA,fixture_kind='NON_GAME',games=0,updates_per_arm=2,rows_per_arm=2,
             unit_schedule_coordinates=dict(start_game=0,end_game=1,total_games=2000000),
             arms=[dict(arm=a,replicate=r)for a,r in smoke.ROLES],
-            remote_new_root='/shared/scott/pokezero-v5-cuda-training-component-UNIT')
+            remote_new_root='/shared/fixture/pokezero-v5-cuda-training-component-UNIT')
 
     def batch(self,arm):
         row=fixtures.row()
@@ -41,7 +41,7 @@ class ComponentTests(unittest.TestCase):
         for update in (dict(games=1),dict(fixture_kind='GAME'),dict(rows_per_arm=512),
                 dict(updates_per_arm=3),dict(arms=list(reversed(self.plan()['arms']))),
                 dict(unit_schedule_coordinates=dict(start_game=0,end_game=2000000,total_games=2000000)),
-                dict(remote_new_root='/shared/scott/model0')):
+                dict(remote_new_root='/shared/fixture/model0')):
             with self.subTest(update=update),self.assertRaises(ValueError):smoke.validate_plan(dict(self.plan(),**update))
 
     def test_original_fixture_arrays_preserved_no_observed_or_terminal_truth(self):
