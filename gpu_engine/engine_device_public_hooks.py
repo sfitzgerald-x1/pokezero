@@ -346,7 +346,7 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
     up=fields['weather_upkeeps']+(ordinary&(after.weather!=0)).astype(j.int32)
     c=c._replace(trackers=t._replace(field_features={**fields,'weather_upkeeps':up}))
     if upkeep is not None:
-        c=c._replace(trackers=negative_items.upkeep(c.trackers,c.belief_tables,leftovers,upkeep))
+        c=c._replace(trackers=negative_items.upkeep(c.trackers,c.belief_tables,leftovers,upkeep,current_state=after))
     # A paused action/residual or forced replacement has no next TURN line.
     # A completed replacement may open that line even without residual work.
     ready=(~before.done&~after.done&~after.pending_residual&~j.any(after.forced_switch,axis=1)

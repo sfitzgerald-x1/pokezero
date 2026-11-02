@@ -143,6 +143,20 @@ class DeviceNegativeItemsTests(unittest.TestCase):
         self.assertEqual(ast.dump(Remove().visit(old), include_attributes=False),
                          ast.dump(Remove().visit(current), include_attributes=False))
 
+    def test_unavailable_hp_cannot_become_snapshot_or_current_absence_evidence(self):
+        s, tables, leftovers, _ = fixture(batch=3)
+        c = h.initialize(s, tables)
+        invalid = s._replace(max_hp=s.max_hp.at[0, 1, 0].set(0),
+                             hp=s.hp.at[1, 1, 0].set(201))
+        h.negative_hp_line(c, invalid, 1, True, source_class=n.HP_ACTION)
+        self.assertEqual(c.trackers.negative_items.known[:, 1, 0].tolist(), [False, False, True])
+        # No new HP-line notification: current generic observation itself
+        # flags unavailable HP. Its clamped endpoint cannot authorize pruning.
+        low = s._replace(hp=s.hp.at[:, 1, 0].set(160))
+        h.negative_hp_line(c, low, 1, True, source_class=n.HP_ACTION)
+        h.turn_end(c, s, invalid, j.zeros(3, bool), upkeep=j.ones(3, bool), leftovers=leftovers)
+        self.assertEqual(c.trackers.belief_mask[:, 1, 0, 0].tolist(), [255, 255, 3])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -33,15 +33,19 @@ def hp_line(trackers, state, side, use, *, source_class):
     at = j.clip(slot, 0, 5)
     use = j.broadcast_to(j.asarray(use, bool), r.shape) & (slot >= 0) & (slot < 6)
     use &= (physical >= 0) & (physical < 6)
-    percent = tr._percent(state.hp[r, side, physical], state.max_hp[r, side, physical])
-    update = use & ((source_class == HP_ACTION) | (source_class == HP_PRE_ITEM))
-    discard = use & (source_class != HP_ACTION) & (source_class != HP_PRE_ITEM) & (source_class != HP_POST_ITEM)
+    hp = state.hp[r, side, physical]; maximum = state.max_hp[r, side, physical]
+    # _percent clamps for display. A malformed condition is not a known HP
+    # observation and must not preserve prior evidence, even after the slot.
+    valid = (maximum > 0) & (hp >= 0) & (hp <= maximum)
+    percent = tr._percent(hp, maximum)
+    update = use & valid & ((source_class == HP_ACTION) | (source_class == HP_PRE_ITEM))
+    discard = use & (~valid | ((source_class != HP_ACTION) & (source_class != HP_PRE_ITEM) & (source_class != HP_POST_ITEM)))
     values = carry.percent.at[r, side, at].set(j.where(update, percent, carry.percent[r, side, at]))
     known = carry.known.at[r, side, at].set(j.where(discard, False, update | carry.known[r, side, at]))
     return trackers._replace(negative_items=State(values, known))
 
 
-def upkeep(trackers, belief_tables, leftovers, use):
+def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
     """Apply only the original Leftovers non-proc rule, then expire evidence.
 
     ``leftovers`` is the existing startup item-namespace vector, not a current
@@ -65,6 +69,16 @@ def upkeep(trackers, belief_tables, leftovers, use):
             if trackers.mon_features is not None and 'item_swapped' in trackers.mon_features:
                 changed |= trackers.mon_features['item_swapped'][r, side, at] != 0
             valid = use & (slot >= 0) & (slot < 6) & trackers.present[r, side, at]
+            # Validate the current condition itself, not its clamped display
+            # or unrelated sticky identity/status errors. No current operands
+            # means no absence conclusion. Exact values are not retained.
+            if current_state is None:
+                valid &= False
+            else:
+                physical = current_state.active[r, side]
+                hp = current_state.hp[r, side, physical]
+                maximum = current_state.max_hp[r, side, physical]
+                valid &= (maximum > 0) & (hp >= 0) & (hp <= maximum)
             valid &= (species > 0) & (species < excluded.shape[0])
             valid &= (trackers.hp_percent[r, side, at] > 0) & ~trackers.fainted[r, side, at]
             valid &= carry.known[r, side, at] & (carry.percent[r, side, at] < 100)
