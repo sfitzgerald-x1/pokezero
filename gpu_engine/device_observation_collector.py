@@ -172,6 +172,19 @@ class Runtime:
     gender_policy: dict
     bindings: dict
 
+    def column_manifests(self, trackers):
+        """Actual installed readout keys only; no tensor transfer or encoding."""
+        import jax.numpy as j
+        from . import engine_device_trackers as public, engine_device_observation as encoder
+        rows=[]
+        for side in (0,1):
+            try:
+                view=public.readout(trackers,j.full((1,),side,j.int32))
+                rows.append(dict(owner_side=side,status='RECORDED',columns=encoder.column_manifest(public=view)))
+            except OSError:raise
+            except Exception as error:rows.append(dict(owner_side=side,status='UNKNOWN',error=_error(error),columns=None))
+        return rows
+
     def construct(self, cell):
         import jax
         import jax.numpy as j
@@ -321,7 +334,7 @@ def _candidate(observation):
     return {key: np.asarray(getattr(observation, key))[0] for key in SHAPES}
 
 
-def collect_game(runtime, cell, writer, reducer, *, env_factory=None, coupling_factory=None, folder=None):
+def collect_game(runtime, cell, writer, reducer, *, env_factory=None, coupling_factory=None, folder=None, manifest_sink=None):
     """One fixed cell once. Only output/storage failures abort the whole cohort."""
     from . import finite_gameplay_comparison as comparison, finite_stream_comparison as original
     env_factory = original.OwningShowdownEnv if env_factory is None else env_factory
@@ -333,6 +346,7 @@ def collect_game(runtime, cell, writer, reducer, *, env_factory=None, coupling_f
     writer.event(dict(kind='START', **root))
     try:
         state, trackers, raw = runtime.construct(cell)
+        if manifest_sink is not None:manifest_sink(trackers,cell)
         parties = runtime.parties(raw, cell)
         identities = [[comparison.fidelity.toid(mon['species']) for mon in party] for party in parties]
         writer.boundary(dict(kind='CONSTRUCTOR', stream_id=cell['stream_id'], raw=runtime.boundary(raw),
@@ -471,28 +485,80 @@ def _record_views(writer, reducer, cell, request, turn, requested, candidates, r
             reference=refs[side], candidate=candidates[side], refusal=errors[side])
 
 
-def collect(plan, *, out, enable_collection=False):
+class _Comparisons:
+    """The same add arguments drive the chosen report and original strict math."""
+    def __init__(self,bindings,mode):
+        from .device_observation_parity import AgreementParity
+        self.selected=AgreementParity(source_bindings=bindings,comparison_mode=mode)
+        self.strict=self.selected if mode=='legacy_strict' else AgreementParity(source_bindings=bindings)
+
+    def add(self,**row):
+        self.selected.add(**row)
+        if self.strict is not self.selected:self.strict.add(**row)
+
+    def report(self):return self.selected.report()
+
+
+class _ColumnManifest:
+    """The first declared cell's initialized trackers; never a later substitute."""
+    def __init__(self,runtime,out,first):
+        self.runtime=runtime;self.path=Path(out)/'column-manifest.json';self.first=first;self.record=None
+
+    def _write(self,rows,reason=None):
+        if rows is not None and (type(rows) is not list or len(rows)!=2 or [r['owner_side'] for r in rows]!=[0,1]):
+            raise ValueError('both actual owner manifests required')
+        record=dict(schema='pokezero.device-installed-column-manifest.v1',
+            status='RECORDED' if rows is not None and all(r['status']=='RECORDED' for r in rows) else 'UNKNOWN',
+            source_commit=self.runtime.bindings.get('source_commit'),cell=self.first,owners=rows,reason=reason,
+            origin='Actual initialized tracker readouts from first declared game; static keys and optional-tail presence only, no tensor contents copied.')
+        payload=_json(record)+'\n'
+        with self.path.open('x') as stream:stream.write(payload)
+        self.record=record
+
+    def capture(self,trackers,cell):
+        if cell!=self.first or self.record is not None:return
+        try:self._write(self.runtime.column_manifests(trackers))
+        except OSError:raise
+        except Exception as error:self._write(None,_error(error))
+
+    def finish(self,cells):
+        if self.record is None:
+            self._write(None,dict(kind='FIRST_DECLARED_GAME_NOT_INITIALIZED',
+                cell_status=cells[0]['status'] if cells else 'UNKNOWN'))
+        return dict(path=str(self.path),sha256=digest(self.path),status=self.record['status'])
+
+
+def collect(plan, *, out, enable_collection=False, comparison_mode='legacy_strict'):
     if enable_collection is not True: raise ValueError('explicit prospective collection enablement required')
+    if comparison_mode not in ('legacy_strict','source_routing_coordinates'):
+        raise ValueError('explicit supported observation comparison mode required')
     validate_plan(plan)
     out = Path(out)
     if '..' in out.parts or not any(out.is_relative_to(p) for p in (Path('/shared/scott'), Path('/store'))):
         raise ValueError('large evidence must remain at an explicit remote output path')
     if out.exists(): raise ValueError('fresh output required; never resume/refill a declared bank')
     runtime = prepare(plan)
-    from .device_observation_parity import AgreementParity
-    reducer = AgreementParity(source_bindings=runtime.bindings)
+    reducer = _Comparisons(runtime.bindings,comparison_mode)
     writer = Evidence(out); cells = []
+    manifest=_ColumnManifest(runtime,out,plan['cells'][0])
     try:
         (out/'plan.json').write_text(_json(plan)+'\n')
         (out/'source-bindings.json').write_text(_json(runtime.bindings)+'\n')
+        (out/'comparison-config.json').write_text(_json(dict(schema='pokezero.device-comparison-choice.v1',
+            comparison_mode=comparison_mode,source_commit=plan['source_commit'],
+            plan_sha256=hashlib.sha256(_json(plan).encode()).hexdigest(),
+            scope='Prospective comparison choice only; physical eligibility/policy/columns unchanged, raw routing coordinates retained, no semantic routing-equivalence claim.'))+'\n')
         with tempfile.TemporaryDirectory(prefix='native-control-', dir=out) as folder:
             for cell in plan['cells']:
-                cells.append(collect_game(runtime, cell, writer, reducer, folder=folder))
+                cells.append(collect_game(runtime, cell, writer, reducer, folder=folder,manifest_sink=manifest.capture))
                 pending = out/'progress.tmp'
                 pending.write_text(_json(dict(completed_cells=len(cells),
                     declared_cells=len(plan['cells']), actual_steps=sum(c['executed_steps'] for c in cells)))+'\n')
                 os.replace(pending, out/'progress.json')
     finally: writer.close()
+    manifest_reference=manifest.finish(cells)
+    strict_path=out/'legacy-strict-report.json'
+    with strict_path.open('x') as stream:stream.write(_json(reducer.strict.report())+'\n')
     report = reducer.report()
     report.update(collection_schema=SCHEMA, declared_cells=len(plan['cells']), cells=cells,
         cell_status_counts=dict(Counter(c['status'] for c in cells)),
@@ -500,13 +566,18 @@ def collect(plan, *, out, enable_collection=False):
         candidate_error_views=sum(c['candidate_error_views'] for c in cells),
         candidate_error_kind_views=dict(sum((Counter(c['candidate_error_kind_views']) for c in cells), Counter())),
         policy=plan['policy'], model_calls=0, team_generation_calls=0,
+        comparison_mode=comparison_mode,
+        legacy_strict_report=dict(path=str(strict_path),sha256=digest(strict_path)),
+        installed_column_manifest=manifest_reference,
+        raw_switch_coordinate_evidence='Every reference/candidate switch_targets remains literal in row NPZs. Separate strict report retains raw-coordinate joint failures; source-routing report also gives per-lane differences. No semantic routing equivalence is asserted.',
         observation_timing_scope='OFFLINE_COMPARISON; not selfplay throughput',
         physical_agreement_scope='Continuous PRE original represented12-party state/dynamic types/requested/terminal agreement and resolved prior chance; not full volatile/queue/RNG identity. POST affects NEXT eligibility only.',
         artifact_files={p.name: dict(bytes=p.stat().st_size, sha256=digest(p))
-            for p in (out/'plan.json', out/'source-bindings.json', out/'decisions.jsonl', out/'physical.jsonl', out/'journal.jsonl')})
+            for p in (out/'plan.json', out/'source-bindings.json',out/'comparison-config.json',out/'decisions.jsonl', out/'physical.jsonl', out/'journal.jsonl',strict_path,manifest.path)})
     (out/'summary.json').write_text(_json(report)+'\n')
     return dict(summary_path=str(out/'summary.json'), summary_sha256=digest(out/'summary.json'),
-        declared_cells=len(cells), qualification=report['qualification'], full_B4_pass=False)
+        declared_cells=len(cells), qualification=report['qualification'], full_B4_pass=False,
+        comparison_mode=comparison_mode,legacy_strict_report=report['legacy_strict_report'],installed_column_manifest=manifest_reference)
 
 
 def main(argv=None):
@@ -514,10 +585,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True); parser.add_argument('--expected-config-sha256', required=True)
     parser.add_argument('--out', required=True); parser.add_argument('--enable-collection', action='store_true')
+    parser.add_argument('--comparison-mode',choices=('legacy_strict','source_routing_coordinates'),default='legacy_strict')
     args = parser.parse_args(argv)
     if not args.enable_collection: parser.error('--enable-collection is required before any work')
     plan = checked_document(dict(path=args.config, sha256=args.expected_config_sha256))
-    print(_json(collect(plan, out=args.out, enable_collection=True)), flush=True)
+    print(_json(collect(plan, out=args.out, enable_collection=True,comparison_mode=args.comparison_mode)), flush=True)
 
 
 if __name__ == '__main__': main()
