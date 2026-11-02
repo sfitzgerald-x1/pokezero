@@ -395,8 +395,12 @@ def _prefix_accounting(snapshot,chosen,ends,bindings):
             row['last']=record.get('after',record['before'])['state']
     for record,_ in _records(snapshot['files']['decisions']['path']):
         row=rows[record['stream_id']];address=(record.get('request'),record.get('owner_side'))
-        if row['addresses'].pop(address,None)!=record.get('physical_binding_sha256'):
+        binding=record.get('physical_binding_sha256')
+        if (any(type(x)is not int for x in address)or address[1]not in (0,1)
+                or address not in row['addresses']or not collector._hex(binding)
+                or row['addresses'][address]!=binding):
             raise ValueError('prefix retained decision/STEP address differs')
+        row['addresses'].pop(address)
         error=record.get('candidate_error')
         if type(error)is not int or not 0<=error<(1<<len(kinds)):
             raise ValueError('prefix original candidate error bits differ')
