@@ -99,6 +99,7 @@ class Trackers(NamedTuple):
     tendency:object=None
     damage_history:object=None    # Current public-round sums + owning HP baseline
     negative_items:object=None
+    public_port:object=None
 
 
 class Tendency(NamedTuple):
@@ -262,6 +263,21 @@ def readout(trackers,observer_sides):
         fields.update(self_wish_turns=raw['wish_turns'][r,owner],opp_wish_turns=raw['wish_turns'][r,foe],
             self_wish_pending=raw['wish_pending'][r,owner],opp_wish_pending=raw['wish_pending'][r,foe],
             weather_turns=j.where(trackers.weather>0,j.where(raw['weather_permanent'],5,j.maximum(0,5-raw['weather_upkeeps'])),0))
+    if trackers.public_port is not None:
+        h=trackers.public_port
+        active_slot=trackers.active_slot[r,foe]
+        loaf=h.known[r,foe]&h.loaf[r,foe]
+        mon={**({}if mon is None else mon),'truant_loaf':j.where(j.arange(6)[None,:]==active_slot[:,None],loaf[:,None],False)}
+        own_active=trackers.own_order[r,owner]==trackers.active_physical[r,owner,None]
+        own_mon={**({}if own_mon is None else own_mon),'truant_loaf':own_active&(h.known[r,owner]&h.loaf[r,owner])[:,None]}
+        hazard=h.hazards.sum(axis=-1)
+        fields={**({}if fields is None else fields),
+            'self_sleep_clause':h.holder[r,owner]>=0,'opp_sleep_clause':h.holder[r,foe]>=0,
+            'sleep_clause_blocks_self':j.any(h.victims[r,foe],axis=-1),'sleep_clause_blocks_opp':j.any(h.victims[r,owner],axis=-1),
+            'self_hazard_credit':hazard[r,owner,1],'opp_hazard_credit':hazard[r,foe,0]}
+        stats={**({}if stats is None else stats),'blocked_on_our_attack':h.blocked[r,owner],'pursuit_intercept_predict':h.pursuit[r,foe]}
+        reveals=h.weather[r,foe].reshape(b,6)
+        stats.update({'weather_reveal_'+str(i):reveals[:,i]for i in range(6)})
     return PublicView(trackers.own_order[r,owner],take('species'),take('level'),take('gender'),
         take('hp_percent').astype(j.float32)/100.0,take('status'),active,present,take('fainted'),
         j.zeros((b,6,2),j.int32) if trackers.shown_types is None else take('shown_types'),take('boosts'),
