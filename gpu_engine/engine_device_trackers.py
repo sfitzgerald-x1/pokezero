@@ -97,6 +97,7 @@ class Trackers(NamedTuple):
     public_volatiles:object=None
     item_removed:object=None
     tendency:object=None
+    damage_history:object=None    # Current public-round sums + owning HP baseline
 
 
 class Tendency(NamedTuple):
