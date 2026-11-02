@@ -65,14 +65,14 @@ class Executor:
     child_view: object
 
 
-def make_executor(prepared, config, *, sampling_seed):
+def make_executor(prepared, config):
     """Actual original BF16 public actors, engine mapping and explicit chance."""
     tables = prepared.engine_tables; observations = prepared.observation_tables
     def views(state, public):
         mask = transition.action_mask(state,tables) & sampling.request_seats(state)[...,None]
         return tuple(encoder.encode(state,trackers.readout(public,j.full(len(state.done),side,j.int32)),observations,
             observer_sides=j.full(len(state.done),side,j.int32),legal_action_mask=mask[:,side]) for side in (0,1))
-    def query(state, public, streams, frame, params):
+    def query(state, public, streams, frame, params, sampling_seed):
         obs = views(state,public)
         out = [v5_model.forward(params[s],encoder.actor_inputs(obs[s]),config,compute_dtype='bfloat16') for s in (0,1)]
         logits = j.stack([o.policy_logits for o in out],axis=1)
@@ -137,7 +137,7 @@ def _collect_batch(executor, initialized, batch, owners, plan, params, directory
     status = [None]*len(live); terminals = [None]*len(live)
     while live.any():
         state = state._replace(done=state.done|j.asarray(~live))
-        query = jax.block_until_ready(executor.query(state,public,streams,frames,params))
+        query = jax.block_until_ready(executor.query(state,public,streams,frames,params,j.asarray(batch.sampling_seed,j.uint32)))
         valid = np.asarray(query['input_valid']); requested = np.asarray(query['requested'])
         for row in np.flatnonzero(live):
             frame = int(frames[row]); owner = owners[row]
@@ -259,6 +259,9 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
                     if position['status']=='REFUSED':entry.update(status='REFUSED',reason=position['reason'])
     save_index()
     initialize = jax.jit(lambda raw:transition.initialize_with_public(raw,prepared.engine_tables,belief_tables=prepared.observation_tables.belief))
+    # One compiled code family for the worker. Batch RNG declarations remain
+    # fresh dynamic arguments, not distinct closed-over JIT function objects.
+    executor = make_executor(prepared,config)
     for batch_index,batch in enumerate(batches):
         start = batch_index*16; indices = np.asarray([g.team_indices for g in batch.games],np.int32)
         if any(s!='NOT_ATTEMPTED' for s in journal['status'][start:start+16]):
@@ -273,7 +276,6 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
         raw = _gender(raw,pool,indices,dict(policy=gender_policy,seed=batch.gender_seed,domain=batch.gender_domain,
             root_ids=np.asarray(batch.gender_root_ids,np.uint32)))
         initialized = jax.block_until_ready(initialize(raw))
-        executor = make_executor(prepared,config,sampling_seed=batch.sampling_seed)
         status = _collect_batch(executor,initialized,batch,[(start+i)%2 for i in range(16)],plan,parameters,directory,namespace,cost_entries,start,save_index)
         journal['status'][start:start+16]=status; _publish(journal_path,journal,mutable=True)
         save_index()
