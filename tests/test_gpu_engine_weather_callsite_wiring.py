@@ -45,7 +45,7 @@ class WeatherCallsiteTests(unittest.TestCase):
         actual,events=transition.initialize(s,engine,_weather_trace=r)
         self.assertIs(actual,s);self.assertIs(events,r)
 
-    def test_whole_default_transition_ast_stays_equal_to_actual_main_parent(self):
+    def test_whole_default_transition_ast_stays_equal_to_frozen_device_measurement(self):
         class Strip(ast.NodeTransformer):
             def visit_ClassDef(self,node):
                 if node.name=='WeatherProfileTracedStep':
@@ -65,7 +65,10 @@ class WeatherCallsiteTests(unittest.TestCase):
             if any(isinstance(x,ast.Name) and x.id=='WeatherProfileTracedStep' for x in ast.walk(tree)):
                 raise ValueError('observer type is reachable from the default program')
             return ast.dump(tree,include_attributes=False)
-        old=subprocess.check_output(['git','show','d38caf8808a87cb64319b8e3bf2f358c10729399:gpu_engine/transition.py'])
+        # Device public tracking intentionally adds module imports and hooks.
+        # Pin the complete program to the measured device source, rather than
+        # claiming that the later architecture is the pre-device weather tree.
+        old=subprocess.check_output(['git','show','6e06de1f5920d09861e7e106cbe1ea648194a3f0:gpu_engine/transition.py'])
         from pathlib import Path
         current=Path(transition.__file__).read_text()
         baseline=normalized(old)
