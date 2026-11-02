@@ -27,7 +27,7 @@ from .benchmark_device_selfplay import request_seats
 REPLY_HISTORY_APPROXIMATION = {
     'scope': 'SAMPLED_OPPONENT_OWN_REPLY_POLICY_INPUT_ONLY',
     'treatment': 'DECLARED_UNKNOWN_ZERO',
-    'columns': ('own.LAST_DAMAGE_TAKEN', 'foe.LAST_DAMAGE_DEALT'),
+    'columns': ('own.LAST_DAMAGE_TAKEN', 'foe.LAST_DAMAGE_DEALT', 'field.SELF_HAZARD_CREDIT'),
     'reason': 'Prior exact sampled-opponent victim-HP history is not public. '
         'Actual opponent-owned damage supplements are redacted, never borrowed.',
     'exact_known_zero': False,

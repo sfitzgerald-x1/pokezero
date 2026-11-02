@@ -16,6 +16,7 @@ from pokezero import v5_device_evaluation_bank as schema
 from gpu_engine import state, engine_device_trackers as trackers, engine_device_observation as encoder
 from gpu_engine import device_root_snapshot as snapshots, v5_device_evaluation_bank as producer
 from gpu_engine import engine_device_damage_history as damage, engine_device_negative_items as negative
+from gpu_engine import engine_device_public_port as public_port
 from gpu_engine import engine_device_visible_belief as visible_belief
 from gpu_engine.v5_device_rollout import RootContext
 from gpu_engine.engine_device_public_hooks import Initialized, PublicStepResult
@@ -37,7 +38,7 @@ def observation(b, offset=0):
 def initial(b):
     s=state.empty_state(b)._replace(done=j.zeros(b,bool),species=j.ones((b,2,6),j.int32),
         hp=j.full((b,2,6),10,j.int32),max_hp=j.full((b,2,6),10,j.int32),level=j.full((b,2,6),50,j.int32))
-    t=trackers.initialize(s)._replace(damage_history=damage.initialize(s),negative_items=negative.empty(b),
+    t=trackers.initialize(s)._replace(damage_history=damage.initialize(s),negative_items=negative.empty(b),public_port=public_port.initialize(b),
         mon_features={'unit_current':j.zeros((b,2,6),j.float32)})
     return Initialized(s,t)
 

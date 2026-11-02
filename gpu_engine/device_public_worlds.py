@@ -26,6 +26,7 @@ from pokezero.determinization import (
 from pokezero.randbat import Gen3RandbatSource
 from pokezero.v5_gumbel import Recipe
 from . import engine_device_trackers as public
+from . import engine_device_public_port as public_port
 
 
 SCHEMA = 'pokezero.device-public-source-world-plans.v1'
@@ -134,6 +135,7 @@ def _redact_peer_private(cloned, owner):
             dealt=history.dealt.at[:, owner, 1].set(0))
     return cloned._replace(
         damage_history=history,
+        public_port=public_port.redact_for_owner(cloned.public_port,owner),
         physical_to_public=cloned.physical_to_public.at[:, foe].set(-1),
         active_physical=cloned.active_physical.at[:, foe].set(-1),
         own_order=cloned.own_order.at[:, foe].set(-1),

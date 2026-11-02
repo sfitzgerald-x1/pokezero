@@ -225,6 +225,7 @@ class DevicePublicWorldsTests(unittest.TestCase):
         import jax.numpy as j
         from gpu_engine.state import empty_state
         from gpu_engine.engine_device_public_hooks import initialize
+        from gpu_engine import engine_device_public_port as port
         from gpu_engine.v5_device_rollout import RootContext
         # Typed empty storage with declared synthetic fields, not a generated
         # team or an engine step. initialize here is public tracker algebra.
@@ -235,7 +236,9 @@ class DevicePublicWorldsTests(unittest.TestCase):
         initial=initialize(state).trackers
         compiled=compile_fixture()
         for owner in (0, 1):
-            raw=initial._replace(
+            ph=port.initialize(1)
+            ph=ph._replace(hazards=j.arange(8,dtype=j.float32).reshape(1,2,2,2)/100)
+            raw=initial._replace(public_port=ph,
                 damage_exact_taken=j.arange(12,dtype=j.float32).reshape(1,2,6)/100,
                 damage_exact_dealt=j.arange(12,24,dtype=j.float32).reshape(1,2,6)/100)
             before=worlds.public.readout(raw,j.asarray([owner],j.int32))
@@ -252,6 +255,9 @@ class DevicePublicWorldsTests(unittest.TestCase):
             np.testing.assert_array_equal(got.public.damage_exact_dealt[:,owner],0)
             np.testing.assert_array_equal(got.public.damage_exact_taken[:,owner],raw.damage_exact_taken[:,owner])
             np.testing.assert_array_equal(got.public.damage_exact_dealt[:,foe],raw.damage_exact_dealt[:,foe])
+            np.testing.assert_array_equal(got.public.public_port.hazards[:,foe,1],0)
+            np.testing.assert_array_equal(got.public.public_port.hazards[:,owner],raw.public_port.hazards[:,owner])
+            np.testing.assert_array_equal(got.public.public_port.hazards[:,foe,0],raw.public_port.hazards[:,foe,0])
             # Any later root keeps this unavailable, irrespective of the live
             # foe's actual private supplement values. It is not a known zero.
             later=worlds.detach_root(context._replace(frames=j.asarray([2],j.int32)),
