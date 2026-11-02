@@ -1723,7 +1723,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work.wish_counter[:,side],eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,wish.hp),
                 wish_counter=work.wish_counter.at[:,side].set(wish.counter))
-            if _device_public is not None:device_public.wish(_device_public,side,ordinary)
+            if _device_public is not None:device_public.wish(_device_public,side,ordinary,
+                resolved=ordinary & (wish.hp>_active(_device_wish_before.hp,_device_wish_before,side)))
             if _device_public is not None:
                 device_public.hp_line(_device_public,work,side,
                     ordinary & (wish.hp>_active(_device_wish_before.hp,_device_wish_before,side)),

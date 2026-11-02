@@ -262,8 +262,13 @@ def readout(trackers,observer_sides):
     if trackers.field_features is not None:
         raw=trackers.field_features
         fields={key:(value[r,owner] if value.ndim==2 else value) for key,value in raw.items()}
-        fields.update(self_wish_turns=raw['wish_turns'][r,owner],opp_wish_turns=raw['wish_turns'][r,foe],
-            self_wish_pending=raw['wish_pending'][r,owner],opp_wish_pending=raw['wish_pending'][r,foe],
+        wish_turns=raw['wish_turns'];wish_pending=raw['wish_pending']
+        if 'wish_set_turn' in raw:
+            declared=raw['wish_set_turn'];elapsed=trackers.turn[:,None]-declared
+            wish_pending=(declared>=0)&(elapsed<=1)
+            wish_turns=j.where((declared>=0)&(elapsed>=0)&(elapsed<=1),2-elapsed,0)
+        fields.update(self_wish_turns=wish_turns[r,owner],opp_wish_turns=wish_turns[r,foe],
+            self_wish_pending=wish_pending[r,owner],opp_wish_pending=wish_pending[r,foe],
             weather_turns=j.where(trackers.weather>0,j.where(raw['weather_permanent'],5,j.maximum(0,5-raw['weather_upkeeps'])),0))
     visible=trackers.visible_belief
     belief_mask=optional('belief_mask') if visible is None else visible.visible_hard[r,foe]
