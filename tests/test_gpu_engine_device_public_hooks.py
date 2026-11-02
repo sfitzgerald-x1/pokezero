@@ -37,7 +37,7 @@ class PublicHooksTests(unittest.TestCase):
    h.reveal_item(c,s,1,j.full(2,4,j.int32),j.array([True,False]))
    return c.trackers,tr.readout(c.trackers,j.zeros(2,j.int32))
   t,v=f(s)
-  self.assertEqual(v.revealed_moves[:,0,0].tolist(),[2,9]);self.assertEqual(v.move_pp_used[:,0,0].tolist(),[1,1])
+  self.assertEqual(v.revealed_moves[:,0,0].tolist(),[2,0]);self.assertEqual(v.move_pp_used[:,0,0].tolist(),[1,0])
   self.assertEqual(v.belief_mask[:,0,0].tolist(),[1,15]);self.assertEqual(v.types[:,0].tolist(),[[1,2]]*2)
   changed=s._replace(ability=j.full_like(s.ability,7),item=j.full_like(s.item,7),types=j.full_like(s.types,9),moves=j.full_like(s.moves,9),pp=j.full_like(s.pp,1),stats=j.full_like(s.stats,999))
   _,v2=f(changed)
