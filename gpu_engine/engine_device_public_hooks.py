@@ -12,6 +12,7 @@ from . import engine_device_negative_items as negative_items
 from .public_active import NAMES as VOLATILE_NAMES
 from . import engine_device_damage_history as damage_history
 from . import engine_device_public_port as port
+from . import engine_device_visible_belief as visible_belief
 
 # Same-write HP notification classes for the separate public negative-item
 # updater. These are static provenance labels, not an event/witness roster.
@@ -67,6 +68,12 @@ def feature(c,side,physical,name,value,use,*,add=False):
     if name in ('switched_before_attack','stayed_and_attacked','turns_active_total'):new=j.minimum(64,new)
     return c._replace(trackers=t._replace(mon_features={**values,name:old.at[r,side,at].set(new)}))
 
+def _refresh(c,side,physical,use):
+    """One actual subject's source upsert/replace; no endpoint-wide refresh."""
+    physical=j.broadcast_to(j.asarray(physical,j.int32),(len(c.trackers.error),))
+    return c._replace(trackers=visible_belief.refresh(c.trackers,c.belief_tables,side,physical,use))
+
+
 def _narrow(c,side,physical,fact,use,kind):
     if c.belief_tables is None:return c
     t=c.trackers;r=j.arange(len(t.error));p=j.clip(physical,0,5);slot=t.physical_to_public[r,side,p];at=j.clip(slot,0,5)
@@ -78,7 +85,8 @@ def _narrow(c,side,physical,fact,use,kind):
     # Zero means no public fact, not evidence for a missing source variant.
     bits=j.where((fact==0)[:,None],j.uint32(0xffffffff),bits)
     use=use&(slot>=0)&(slot<6)
-    return c._replace(trackers=t._replace(belief_mask=t.belief_mask.at[r,side,at].set(j.where(use[:,None],old&bits,old))))
+    c=c._replace(trackers=t._replace(belief_mask=t.belief_mask.at[r,side,at].set(j.where(use[:,None],old&bits,old))))
+    return _refresh(c,side,physical,use&(fact!=0))
 
 
 def initialize(state,belief_tables=None,*,port_tables=None):
@@ -118,7 +126,13 @@ def public_turn(c,state,use,turn):
                 c=feature(c,side,p,name,value,use)
             for name,value in (('damage_exact_taken',taken[:,side,1]),('damage_exact_dealt',dealt[:,side,1])):
                 c=c._replace(trackers=_write(c.trackers,name,side,p,value,use))
-    return c._replace(trackers=c.trackers._replace(turn=j.where(use,turn,t.turn)))
+    c=c._replace(trackers=c.trackers._replace(turn=j.where(use,turn,t.turn)))
+    # Original TURN replaces each living active belief, even if hard bits did
+    # not change. A snapshot read itself never performs this operation.
+    for side in range(2):
+        slot=j.clip(c.trackers.active_slot[_r(state),side],0,5)
+        c=_refresh(c,side,state.active[_r(state),side],use&~c.trackers.fainted[_r(state),side,slot])
+    return c
 
 
 def opportunity(c,side,use):
@@ -189,7 +203,7 @@ def install(c,state,side,use,*,initial=False):
         moved=td.moved.at[r,side].set(j.where(use,False,td.moved[r,side])))))
     c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,j.zeros((b,len(VOLATILE_NAMES)),bool),use))
     if not initial:c=feature(c,side,p,'switches',j.ones(b,j.int32),use,add=True)
-    return c
+    return _refresh(c,side,p,use)
 
 
 def observe(c,state,use,*,record_damage=True,rest_side=None,rest_mask=False):
@@ -201,12 +215,16 @@ def observe(c,state,use,*,record_damage=True,rest_side=None,rest_mask=False):
     for side in range(2):
         t=c.trackers;p=state.active[:,side];slot=j.clip(t.physical_to_public[r,side,p],0,5)
         status=_get(state,'status',side);changed=use&(t.status[r,side,slot]!=status)
+        hp=_get(state,'hp',side);maximum=_get(state,'max_hp',side)
+        valid=(maximum>0)&(hp>=0)&(hp<=maximum)&(status>=0)&(status<=6)
+        condition_changed=changed|(use&(t.hp_percent[r,side,slot]!=tr._percent(hp,maximum)))
         rest=j.zeros_like(use)if rest_side is None else (j.asarray(rest_side)==side)&j.asarray(rest_mask)
         c=c._replace(trackers=port.condition(t,side,p,t.status[r,side,slot],status,use,
             rest=rest,faint=_get(state,'hp',side)==0))
         for key in ('sleep_turns','rest_sleep','toxic_stage'):
             c=feature(c,side,p,key,j.zeros_like(p),changed)
         c=c._replace(trackers=tr._observe(c.trackers,state,side,p,use,identity=False))
+        c=_refresh(c,side,p,condition_changed&valid)
     t=c.trackers
     return c._replace(trackers=t._replace(weather=j.where(use,state.weather,t.weather),
         spikes=j.where(use[:,None],state.spikes,t.spikes)))
@@ -221,7 +239,12 @@ def hp_line(c,state,side,use,*,source_class,record_damage=True):
     updates the baseline with record_damage=False; self-faint has no HP line.
     """
     c=negative_hp_line(c,state,side,use,source_class=source_class)
-    return observe(c,state,use,record_damage=record_damage)
+    c=observe(c,state,use,record_damage=record_damage)
+    # A literal HP/-sethp line upserts its subject even when the rounded
+    # percentage is unchanged. Never refresh the other seat just because this
+    # operation also polls its endpoint.
+    hp=_get(state,'hp',side);maximum=_get(state,'max_hp',side)
+    return _refresh(c,side,state.active[_r(state),side],_mask(use,len(c.trackers.error))&(maximum>0)&(hp>=0)&(hp<=maximum))
 
 
 def reveal_ability(c,state,side,use,*,ability=None,original=True):
@@ -233,13 +256,13 @@ def reveal_ability(c,state,side,use,*,ability=None,original=True):
         c=c._replace(trackers=_write(c.trackers,'original_ability',side,p,ability,use&(borrowed==0)))
         c=_narrow(c,side,p,ability,use&(borrowed==0),'ability')
     else:c=c._replace(trackers=port.trace(c.trackers,c.port_tables,side,ability,use))
-    return c
+    return _refresh(c,side,p,use)
 
 
 def reveal_item(c,state,side,item,use,*,original=True):
     p=state.active[_r(state),side];use=_mask(use,len(c.trackers.error))
     c=c._replace(trackers=_write(c.trackers,'shown_item',side,p,item,use))
-    return _narrow(c,side,p,item,use,'item') if original else c
+    return _narrow(c,side,p,item,use,'item') if original else _refresh(c,side,p,use)
 
 
 def entry(c,before,after,side,table,use):
@@ -278,7 +301,7 @@ def depart(c,before,after,side,table,use):
     # A borrowed ability ends silently; known original identity is not guessed.
     c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,c.trackers.original_ability[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)],use&(c.trackers.borrowed_ability[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)]!=0)))
     c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.zeros_like(use,j.int32),use))
-    return c
+    return _refresh(c,side,p,use&~c.trackers.fainted[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)])
 
 
 def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,preparation=False):
@@ -331,7 +354,8 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
         t=c.trackers;td=t.tendency
         c=c._replace(trackers=t._replace(tendency=td._replace(moved=td.moved.at[r,side].set(td.moved[r,side]|declared))))
         c=opportunity(c,side,declared&(_get(state,'charge_move',side)==0))
-    return _narrow(c,side,p,move,declared&evidence,'move') if original else c
+    c=_narrow(c,side,p,move,declared&evidence,'move') if original else c
+    return _refresh(c,side,p,declared&~j.asarray(preparation))
 
 
 def item_changes(c,before,after,use):
@@ -356,6 +380,7 @@ def party_cure(c,before,after,side,use,table=None):
         c=c._replace(trackers=port.condition(c.trackers,side,j.full(len(r),p,j.int32),before.status[r,side,p],after.status[r,side,p],yes))
         for name in ('sleep_turns','rest_sleep','toxic_stage'):
             c=feature(c,side,p,name,j.zeros(len(r),j.int32),cured)
+        c=_refresh(c,side,p,yes)
     c=c._replace(trackers=port.team_cure(c.trackers,side,use))
     return c
 
@@ -479,7 +504,8 @@ def before_move(c,state,side,result,use,*,loafing=False,sleep_usable=False):
     truant_cant=use&j.asarray(loafing)&((result.status!=5)|j.asarray(sleep_usable))&(result.status!=6)
     c=c._replace(trackers=port.anchor(c.trackers,side,truant_cant,loaf=True))
     c=feature(c,side,p,'sleep_turns',j.ones_like(p),use&(_get(state,'status',side)==5)&(result.status==5),add=True)
-    return opportunity(c,side,use&~result.can_act&~result.confusion_self_hit)
+    c=opportunity(c,side,use&~result.can_act&~result.confusion_self_hit)
+    return _refresh(c,side,p,use&(_get(state,'status',side)==5)&(result.status==5))
 
 
 def volatile(c,state,side,name,value,use):
