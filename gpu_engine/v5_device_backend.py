@@ -6,7 +6,6 @@ Only a supplied fixed batch is collected, with no replacement or refill.
 """
 from dataclasses import dataclass
 import hashlib
-import io
 import json
 import time
 import uuid
@@ -16,6 +15,7 @@ import numpy as np
 from pokezero import v5_run as runs,v5_data
 from . import transition,engine_device_observation as encoder,source_provenance,v5_model
 from . import v5_device_rollout as rollout
+from .v5_device_spool import Spool
 
 
 @dataclass(frozen=True)
@@ -128,7 +128,7 @@ class RuntimeBackend:
 
     def collect(self,prepared,store,on_end,check_progress):
         plan=prepared['plan'];batch=prepared['batch'];self.check_plan(plan);check_progress()
-        started=time.monotonic();carry=self._construct(batch);closed=set();chunks=[]
+        started=time.monotonic();carry=self._construct(batch);closed=set()
         bank=prepared['bank'];binding=dict(schema='pokezero.device_actor_bank.v1',source_binding=json.loads(self.prepared.source_binding_json),
             declaration_sha256=prepared['bindings'].declaration_sha256,assignment_sha256=bank.assignment_sha256,
             actor_archives=bank.actor_archives,streams=bank.streams,actor_indices=bank.actor_indices,learner_mask=bank.learner_mask,
@@ -136,31 +136,25 @@ class RuntimeBackend:
             constructor_seed=batch.constructor_seed,sampling_seed=batch.sampling_seed,gender_seed=batch.gender_seed,
             gender_domain=batch.gender_domain,gender_root_ids=batch.gender_root_ids)
         receipt=store.artifact(f'rollouts/device-bank-{uuid.uuid4().hex}.json',runs._json(binding).encode(),kind='DEVICE_ACTOR_BANK')
+        spool=Spool(store,bank,bank_sha256=receipt['sha256'])
         for _ in range((plan.max_requests+self.chunk_steps-1)//self.chunk_steps):
             check_progress()
             device=prepared['collector'](carry,prepared['params']);carry=device.carry
             # Keep the live world/public carry on device. The original batch
             # adapter needs raw Frames plus literal terminal fields, not a
             # duplicate hidden world/constructor truth on the host each chunk.
-            host=rollout.boundary(device._replace(carry=carry._replace(state=None,public=None,truth=None)));chunks.append(host)
-            # Preserve every raw requested/refused/historical row at this
-            # explicit chunk boundary, including batches with no PPO rows.
-            arrays={name:value for name,value in zip(host.frames._fields,host.frames) if value is not None}
-            arrays.update({f'final_{name}':getattr(host.carry,name)for name in ('streams','frames','status','winner','terminal_frame','terminal_hp','terminal_max_hp')})
-            arrays['metadata_json']=np.frombuffer(runs._json(dict(bank_sha256=receipt['sha256'],chunk=len(chunks)-1)).encode(),np.uint8)
-            blob=io.BytesIO();np.savez_compressed(blob,**arrays)
-            store.artifact(f'rollouts/device-chunk-{uuid.uuid4().hex}.npz',blob.getvalue(),kind='DEVICE_ROLLOUT_CHUNK',bank_sha256=receipt['sha256'])
+            host=rollout.boundary(device._replace(carry=carry._replace(state=None,public=None,truth=None)));del device
+            spool.append(host)
             for row,game in enumerate(batch.games):
                 status=int(host.carry.status[row])
                 if status!=rollout.RUNNING and game.stream_id not in closed:
                     on_end(game.stream_id,rollout.STATUS[status],duration_seconds=time.monotonic()-started,
                         requests=int(host.carry.frames[row]),terminal_frame=int(host.carry.terminal_frame[row]))
                     closed.add(game.stream_id)
+                    spool.finalize_game(row,game,bindings=prepared['bindings'],loss_config=plan.loss,discount=plan.discount)
             if len(closed)==len(batch.games):break
         if len(closed)!=len(batch.games):raise ValueError('finite device collector left a declared game unclosed')
-        if not any(np.any(chunk.frames.trainable)for chunk in chunks):return None
-        training=rollout.training_batch(chunks,prepared['bindings'],actor_bank=bank,
-            battle_ids=tuple(g.battle_id for g in batch.games),seeds=tuple(g.seed for g in batch.games),loss_config=plan.loss,discount=plan.discount)
+        if not spool.parts:return None
         (store.path/'caches').mkdir(exist_ok=True)
-        relative=f'caches/cache-{uuid.uuid4().hex}';v5_data.write_cache(store.path/relative,training)
+        relative=f'caches/cache-{uuid.uuid4().hex}';spool.merge(store.path/relative)
         return relative,runs._file_sha(store.path/relative/'metadata.json')

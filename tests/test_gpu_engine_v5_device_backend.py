@@ -100,9 +100,10 @@ class DeviceBackendTests(unittest.TestCase):
    self.assertTrue(all(meta['actor_archive_sha256']==snapshots[0]['archive_sha256']for meta in batch.step_metadata))
    self.assertEqual([m['opponent_archive_sha256']for m in batch.step_metadata],[snapshots[1]['archive_sha256'],snapshots[2]['archive_sha256']]*2)
    chunks=store.matching('DEVICE_ROLLOUT_CHUNK');self.assertEqual(len(chunks),1)
-   with np.load(store.resolve(chunks[0]['path'],chunks[0]['sha256']),allow_pickle=False)as archive:
-    self.assertEqual(archive['numeric_features'].shape,(3,2,2,29,132));self.assertEqual(archive['actor_indices'][0].tolist(),[[0,1],[2,0]])
-    self.assertFalse(archive['trainable'][:,0,1].any());self.assertFalse(archive['trainable'][:,1,0].any())
+   raw=json.loads(store.resolve(chunks[0]['path'],chunks[0]['sha256']).read_text())
+   array=lambda name:np.swapaxes(np.load(store.path/raw['frames'][name]['path'],allow_pickle=False),0,1)
+   self.assertEqual(array('numeric_features').shape,(3,2,2,29,132));self.assertEqual(array('actor_indices')[0].tolist(),[[0,1],[2,0]])
+   self.assertFalse(array('trainable')[:,0,1].any());self.assertFalse(array('trainable')[:,1,0].any())
 
  def test_constructor_uses_original_selection_seed_gender_and_fresh_initializer(self):
   plan,prepared,carry=inputs();batch=replace(plan.iterations[0][0],gender_seed=9,gender_domain=10,gender_root_ids=(31,32))
