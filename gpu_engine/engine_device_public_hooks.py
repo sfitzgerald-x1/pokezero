@@ -321,7 +321,9 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     old=t.observed_moves[r,side,slot];has=j.any(old==move[:,None],axis=1);empty=j.argmax(old==0,axis=1)
     at=j.where(has,j.argmax(old==move[:,None],axis=1),empty)
     declared=use&(move>0)
-    room=has|j.any(old==0,axis=1);use=declared&room
+    # Struggle is an ordinary MOVE header but is never a real-set reveal or
+    # PP charge in the original public_moves.record_move writer.
+    room=has|j.any(old==0,axis=1);use=declared&evidence&room
     previous=t.observed_moves[r,side,slot,at]
     observed=t.observed_moves.at[r,side,slot,at].set(j.where(use,move,previous))
     count=t.pp_used[r,side,slot,at]
