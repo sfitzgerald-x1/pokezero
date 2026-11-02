@@ -65,6 +65,8 @@ jobs:
       - name: Install CPU test environment and build pinned source oracle
         run: |
           python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+          python -c 'import jax, numpy, torch; print("CPU dependencies:", jax.__version__, numpy.__version__, torch.__version__); assert torch.version.cuda is None'
           npm ci --prefix "$POKEZERO_SHOWDOWN_ROOT"
           npm run build --prefix "$POKEZERO_SHOWDOWN_ROOT"
       - name: Prepare small fresh real-team test fixture
