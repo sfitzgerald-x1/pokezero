@@ -6235,7 +6235,7 @@ async def _run_controlled_foulplay_games(
                         phase_progress=phase_progress,
                         **({"owning_actor_factory": actor_factory, "actor_runtime": actor_runtime}
                            if actor_factory is not None else {}),
-                        **({'actor_version':'v5'} if actor_version=='v5' else {}),
+                        **({'actor_version':actor_version} if actor_version in ('v5','canary-v4') else {}),
                     )
                 )
             finally:
@@ -7552,7 +7552,7 @@ async def _run_single_game(
     seed = kwargs["seed"]
     session = OwningWireSession(config, factory, actor_runtime, seed=seed,
         battle_id=f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}", start_seed=showdown_seed_from_int(seed),
-        **({'actor_version':'v5'} if actor_version=='v5' else {}))
+        **({'actor_version':actor_version} if actor_version in ('v5','canary-v4') else {}))
     callback = kwargs.get("trajectory_callback")
     captured: list[BattleTrajectory] = []
     error: BaseException | None = None
