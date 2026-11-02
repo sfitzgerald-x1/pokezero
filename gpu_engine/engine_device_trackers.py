@@ -97,6 +97,7 @@ class Trackers(NamedTuple):
     public_volatiles:object=None
     item_removed:object=None
     tendency:object=None
+    negative_items:object=None
 
 
 class Tendency(NamedTuple):
