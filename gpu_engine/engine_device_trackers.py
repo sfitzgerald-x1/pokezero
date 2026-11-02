@@ -61,6 +61,8 @@ class PublicView(NamedTuple):
     item_removed:object=None
     own_item_removed:object=None
     stats_features:object=None
+    belief_pin:object=None
+    belief_pin_active:object=None
 
 class Trackers(NamedTuple):
     physical_to_public:object # [B,2,6], private identity cursor only; never an encoder feature
@@ -99,6 +101,7 @@ class Trackers(NamedTuple):
     tendency:object=None
     damage_history:object=None    # Current public-round sums + owning HP baseline
     negative_items:object=None
+    visible_belief:object=None     # standing pins + explicitly source-refreshed basis
 
 
 class Tendency(NamedTuple):
@@ -262,14 +265,17 @@ def readout(trackers,observer_sides):
         fields.update(self_wish_turns=raw['wish_turns'][r,owner],opp_wish_turns=raw['wish_turns'][r,foe],
             self_wish_pending=raw['wish_pending'][r,owner],opp_wish_pending=raw['wish_pending'][r,foe],
             weather_turns=j.where(trackers.weather>0,j.where(raw['weather_permanent'],5,j.maximum(0,5-raw['weather_upkeeps'])),0))
+    visible=trackers.visible_belief
+    belief_mask=optional('belief_mask') if visible is None else visible.visible_hard[r,foe]
     return PublicView(trackers.own_order[r,owner],take('species'),take('level'),take('gender'),
         take('hp_percent').astype(j.float32)/100.0,take('status'),active,present,take('fainted'),
         j.zeros((b,6,2),j.int32) if trackers.shown_types is None else take('shown_types'),take('boosts'),
         z if trackers.original_ability is None else take('original_ability'),
         z if trackers.shown_item is None else take('shown_item'),
         trackers.error|j.where((observer_sides<0)|(observer_sides>1),BAD_OBSERVER,0),None,
-        trackers.turn,trackers.weather,trackers.spikes,optional('belief_mask'),optional('observed_moves'),
-        optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats)
+        trackers.turn,trackers.weather,trackers.spikes,belief_mask,optional('observed_moves'),
+        optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats,
+        None if visible is None else visible.visible_pin[r,foe],None if visible is None else visible.visible_pin_active[r,foe])
 
 
 def clone_for_worlds(trackers,root_rows):

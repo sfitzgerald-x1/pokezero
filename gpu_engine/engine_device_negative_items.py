@@ -7,6 +7,7 @@ the snapshot; upkeep consumes it once. No held item or private party is read.
 from typing import NamedTuple
 import jax.numpy as j
 from . import engine_device_trackers as tr
+from . import engine_device_visible_belief as visible_belief
 
 HP_ACTION = 0
 HP_PRE_ITEM = 1
@@ -56,11 +57,11 @@ def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
     if carry is None:
         return trackers
     use = j.broadcast_to(j.asarray(use, bool), trackers.error.shape)
-    hard = trackers.belief_mask
     if belief_tables is not None and leftovers is not None:
         if leftovers.shape != (belief_tables.item_mask.shape[1],) or leftovers.dtype != j.bool_:
             raise ValueError('Leftovers and belief item namespaces must match')
-        excluded = j.bitwise_or.reduce(j.where(leftovers[None, :, None], belief_tables.item_mask, j.uint32(0)), axis=1)
+        # This vector names the one canonical item, not a private holder.
+        item=j.argmax(leftovers).astype(j.int32)
         r = j.arange(len(trackers.error))
         for side in range(2):
             slot = trackers.active_slot[r, side]; at = j.clip(slot, 0, 5)
@@ -79,13 +80,13 @@ def upkeep(trackers, belief_tables, leftovers, use, *, current_state=None):
                 hp = current_state.hp[r, side, physical]
                 maximum = current_state.max_hp[r, side, physical]
                 valid &= (maximum > 0) & (hp >= 0) & (hp <= maximum)
-            valid &= (species > 0) & (species < excluded.shape[0])
+            valid &= (species > 0) & (species < belief_tables.item_mask.shape[0])
             valid &= (trackers.hp_percent[r, side, at] > 0) & ~trackers.fainted[r, side, at]
             valid &= carry.known[r, side, at] & (carry.percent[r, side, at] < 100)
             valid &= (trackers.shown_item[r, side, at] == 0) & ~changed
-            bits = excluded[j.clip(species, 0, excluded.shape[0] - 1)]
-            old = hard[r, side, at]
-            hard = hard.at[r, side, at].set(j.where(valid[:, None], old & ~bits, old))
+            valid &= j.sum(leftovers.astype(j.int32))==1
+            trackers=visible_belief.exclude(trackers,belief_tables,side,trackers.active_physical[r,side],
+                j.full(len(use),item,j.int32),valid,kind='item')
     # No new HP publication next turn means no new evidence, even if HP stayed low.
     carry = carry._replace(known=j.where(use[:, None, None], False, carry.known))
-    return trackers._replace(belief_mask=hard, negative_items=carry)
+    return trackers._replace(negative_items=carry)

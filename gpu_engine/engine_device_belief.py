@@ -46,6 +46,7 @@ class Tables(NamedTuple):
     source_move_evidence: object
     public_foe_targeted: object
     public_pressure: object
+    standing_pins_enabled: object  # exact resolved checkpoint provenance bit
 
 
 def compile_tables(metadata, catalog):
@@ -87,7 +88,8 @@ def compile_tables(metadata, catalog):
         np.asarray(species_types, np.int32), np.asarray(public_move, np.int32),
         np.asarray([bool(i) and normalize_id(n) != 'struggle' for i, n in enumerate(v['moves'])], bool),
         np.asarray(feature.move_tables.foe_targeted)[engine_moves],
-        np.asarray([bool(i) and normalize_id(n) == 'pressure' for i, n in enumerate(v['abilities'])], bool))
+        np.asarray([bool(i) and normalize_id(n) == 'pressure' for i, n in enumerate(v['abilities'])], bool),
+        np.asarray(catalog.masks.investment_belief_narrowing,bool))
     # Preserve primitive dtype (especially uint32 bitmasks and compact spreads).
     return Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)))
 
@@ -130,6 +132,12 @@ def project(view, tables):
     pin_active = _optional(view, 'belief_pin_active', j.zeros((b, 6), bool))
     if pin.shape != (b, 6, 2) or pin.dtype != j.uint32 or pin_active.shape != (b, 6) or pin_active.dtype != j.bool_:
         raise ValueError('public pin requires Bx6x2 uint32 and Bx6 bool activity')
+    enabled=tables.standing_pins_enabled
+    if enabled.shape!=() or enabled.dtype!=j.bool_:raise ValueError('resolved standing-pin capability requires scalar bool')
+    # The actual frozen B2/champion catalog rejects a true provenance mask.
+    # Optional pin transport is not permission to enable either Tier2 producer.
+    # Keep its typed/namespace checks, but disabled pins cannot change any view.
+    pin_active=pin_active&enabled
     malformed |= j.any((pin & ~pool) != 0, axis=(1, 2))
     pin = pin & pool
     intersection = base & pin
