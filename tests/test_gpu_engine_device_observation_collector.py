@@ -203,7 +203,7 @@ class DeviceObservationCollectorTests(unittest.TestCase):
         bad=copy.deepcopy(p);bad['cells'][0]['team_indices']=[1,1]
         with self.assertRaises(ValueError):c.validate_plan(bad)
         with patch.object(c,'prepare',side_effect=AssertionError('must not prepare')):
-            with self.assertRaises(ValueError):c.collect(p,out='/shared/scott/no-work')
+            with self.assertRaises(ValueError):c.collect(p,out='/shared/fixture/no-work')
             with self.assertRaises(ValueError):c.collect(p,out='/tmp/local-data',enable_collection=True)
         with tempfile.TemporaryDirectory()as folder:
             path=Path(folder)/'config';path.write_text(json.dumps(p))
