@@ -1,7 +1,6 @@
 """Declared cost algebra/fake callbacks only; no model, world or game calls."""
 from dataclasses import replace
 import json
-import sys
 from types import SimpleNamespace as NS
 import unittest
 from typing import NamedTuple
@@ -9,7 +8,7 @@ from unittest.mock import patch
 import jax.numpy as j
 import numpy as np
 from pokezero import v5_run as runs,v5_contract as c,v5_gumbel as g
-from gpu_engine import device_d_cost as cost,v5_device_teacher as teacher,v5_device_rollout as rollout
+from gpu_engine import device_d_cost as cost,v5_device_teacher as teacher,v5_device_rollout as rollout,v5_device_evaluation_bank as saved
 from tests import test_v5_run as fixtures
 
 
@@ -70,8 +69,13 @@ class DeviceDCostTests(unittest.TestCase):
         report=cost.summarize(records)
         self.assertEqual(report['timed_provider_attempts'],20);self.assertEqual(report['usable_labeled'],10)
         self.assertEqual(report['cold_first_label_seconds'],100.);self.assertEqual(report['p95_label_seconds'],2.)
-        self.assertEqual(report['full_roster_p95_upper_seconds'],'unbounded');self.assertEqual(report['cost_admission'],'PASS')
+        self.assertEqual(report['full_roster_p95_upper_seconds'],'unbounded');self.assertEqual(report['cost_admission'],'INSUFFICIENT_USABLE_LABELS')
         self.assertEqual(report['warm_descriptive_p95_label_seconds'],2.)
+        usable=[dict(status='LABELED',label_seconds=x)for x in values]
+        usable.extend(dict(status='UNREACHED',label_seconds=None)for _ in range(20))
+        self.assertEqual(cost.summarize(usable)['cost_admission'],'PASS')
+        only_refusals=[dict(status='PROVIDER_REFUSED',label_seconds=0.)for _ in range(40)]
+        self.assertEqual(cost.summarize(only_refusals)['cost_admission'],'INSUFFICIENT_USABLE_LABELS')
         bad=[dict(status='LABELED',label_seconds=31.)for _ in range(40)]
         self.assertEqual(cost.summarize(bad)['cost_admission'],'FAIL')
         with self.assertRaises(ValueError):cost.summarize(records[:-1])
@@ -96,8 +100,7 @@ class DeviceDCostTests(unittest.TestCase):
             self.assertTrue(frames.policy_valid.all());self.assertEqual(frames.numeric_features[0,0,1,0,0],1.25)
             owner=bank.learner_mask[0].index(True);address=dict(stream=bank.streams[0],frame=int(roots.frames[0,0]),owner=owner)
             seen.append(address);return [dict(address=address,status='REFUSED',refusal='actual explicit unknown world',improvement=None)]
-        module=NS(load_root=load)
-        with patch.dict(sys.modules,{'gpu_engine.v5_device_evaluation_bank':module}),\
+        with patch.object(saved,'load_root',side_effect=load),\
                 patch.object(cost,'actor',return_value=(param,dict(parameter_count=99)))as actor,patch.object(cost,'_observer',return_value=observe),\
                 patch.object(cost.v5_model,'forward',side_effect=forward),patch.object(cost.jax,'jit',side_effect=lambda fn:fn),\
                 patch.object(cost.jax,'block_until_ready',side_effect=lambda x:x),patch.object(cost,'request_seats',return_value=j.ones((1,2),bool)),\
@@ -111,11 +114,11 @@ class DeviceDCostTests(unittest.TestCase):
 
     def test_foreign_namespace_or_changed_selector_refuses_before_model(self):
         provider,snapshot,index=inputs();index['namespace']['pool_sha256']='f'*64
-        with patch.dict(sys.modules,{'gpu_engine.v5_device_evaluation_bank':NS(load_root=lambda *a:None)}),patch.object(cost,'actor')as actor:
+        with patch.object(saved,'load_root'),patch.object(cost,'actor')as actor:
             with self.assertRaisesRegex(ValueError,'namespaces differ'):cost.run(provider,snapshot,'unused',index,enable_cost=True)
             actor.assert_not_called()
         provider,snapshot,index=inputs();index['cost_roots'].reverse()
-        with patch.dict(sys.modules,{'gpu_engine.v5_device_evaluation_bank':NS(load_root=lambda *a:None)}),patch.object(cost,'actor')as actor:
+        with patch.object(saved,'load_root'),patch.object(cost,'actor')as actor:
             with self.assertRaisesRegex(ValueError,'predeclared'):cost.run(provider,snapshot,'unused',index,enable_cost=True)
             actor.assert_not_called()
 
