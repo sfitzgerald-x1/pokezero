@@ -19,6 +19,8 @@ from . import device_observation_collector as collector
 from .device_observation_parity import AgreementParity, SHAPES
 
 SCHEMA='pokezero.device-recorded-reencoding.v1'
+PREFIX_SCHEMA='pokezero.device-recorded-reencoding.completed-prefix.v1'
+PREFIX_COUNT=8  # predeclared first8, never first8successful/outcome-selected
 FILES={'plan':'plan.json','summary':'summary.json','source_bindings':'source-bindings.json',
        'physical':'physical.jsonl','decisions':'decisions.jsonl','journal':'journal.jsonl'}
 
@@ -350,15 +352,194 @@ def run(manifest,*,out,enable_reencoding=False):
         new_games=0,full_B4_pass=False)
 
 
+def _owner_running(job,pod):
+    uid=job.get('metadata',{}).get('uid')
+    if (not uid or pod.get('status',{}).get('phase')!='Running'
+            or type(job.get('status',{}).get('active'))is not int or job['status']['active']<1
+            or not any(x.get('kind')=='Job'and x.get('uid')==uid for x in pod.get('metadata',{}).get('ownerReferences',[]))
+            or any(x.get('type')in('Complete','Failed')and x.get('status')=='True'
+                for x in job.get('status',{}).get('conditions',[]))):
+        raise ValueError('actual RUNNING source owner snapshot/ownership required')
+    states=pod.get('status',{}).get('containerStatuses',[])
+    if not states or any('running'not in x.get('state',{})for x in states):
+        raise ValueError('source owner running container evidence required')
+
+
+def _prefix_accounting(snapshot,chosen,ends,bindings):
+    """Join retained rows to original END counters before deriving a report."""
+    import ast
+    from collections import Counter
+    name='gpu_engine/engine_device_observation.py'
+    payload=subprocess.check_output(['git','show',bindings['source_commit']+':'+name],cwd=collector.ROOT)
+    if hashlib.sha256(payload).hexdigest()!=bindings.get('source_files',{}).get(name):
+        raise ValueError('original encoder error namespace source differs')
+    names=[ast.literal_eval(node.value)for node in ast.parse(payload).body
+        if isinstance(node,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='ERROR_KINDS'for t in node.targets)]
+    if (len(names)!=1 or type(names[0])is not tuple or not names[0]
+            or any(type(x)is not str for x in names[0])or len(set(names[0]))!=len(names[0])):
+        raise ValueError('original encoder error namespace missing')
+    kinds=names[0]
+    rows={cell['stream_id']:dict(steps=0,successful=0,views=0,errors=0,kinds=Counter(),last=None,addresses={})for cell in chosen}
+    for record,record_sha in _records(snapshot['files']['physical']['path']):
+        row=rows[record['stream_id']]
+        if record.get('kind')=='CONSTRUCTOR':row['last']=record['initialized']['state']
+        elif record.get('kind')=='STEP':
+            if type(record.get('request'))is not int or record['request']!=row['steps']:
+                raise ValueError('prefix retained STEP sequence differs')
+            requested=record['before']['requested']
+            if type(requested)is not list or len(requested)!=2 or any(type(x)is not bool for x in requested):
+                raise ValueError('prefix original requested seats differ')
+            for side,use in enumerate(requested):
+                if use:row['addresses'][(record['request'],side)]=record_sha
+            row['steps']+=1;row['successful']+=int('after'in record)
+            row['last']=record.get('after',record['before'])['state']
+    for record,_ in _records(snapshot['files']['decisions']['path']):
+        row=rows[record['stream_id']];address=(record.get('request'),record.get('owner_side'))
+        binding=record.get('physical_binding_sha256')
+        if (any(type(x)is not int for x in address)or address[1]not in (0,1)
+                or address not in row['addresses']or not collector._hex(binding)
+                or row['addresses'][address]!=binding):
+            raise ValueError('prefix retained decision/STEP address differs')
+        row['addresses'].pop(address)
+        error=record.get('candidate_error')
+        if type(error)is not int or not 0<=error<(1<<len(kinds)):
+            raise ValueError('prefix original candidate error bits differ')
+        row['views']+=1;row['errors']+=int(error!=0)
+        row['kinds'].update(kind for bit,kind in enumerate(kinds)if error&(1<<bit))
+    for cell,end in zip(chosen,ends):
+        row=rows[cell['stream_id']]
+        for key,value in [('executed_steps',row['successful']),('requested_views',row['views']),('candidate_error_views',row['errors'])]:
+            if type(end.get(key))is not int or end[key]!=value:
+                raise ValueError('prefix END '+key+' differs from retained rows')
+        if row['addresses']or end.get('candidate_error_kind_views')!=dict(row['kinds']):
+            raise ValueError('prefix END views/error-kind counts differ from retained rows')
+        if row['last']is not None:
+            for key,field in [('final_turn','turn'),('final_done','done'),('final_winner','winner')]:
+                if key in end and (type(end[key])is not type(row['last'][field][0])or end[key]!=row['last'][field][0]):
+                    raise ValueError('prefix END '+key+' differs from retained final boundary')
+
+
+def validate_prefix_inputs(manifest):
+    """Immutable completed first8 snapshot; never impersonates final512 data."""
+    required={'schema','original_plan','original_source_bindings','original_reducer','runtime_plan',
+        'source_owner','selection','snapshot'}
+    if type(manifest)is not dict or set(manifest)!=required or manifest['schema']!=PREFIX_SCHEMA:
+        raise ValueError('explicit completed-prefix diagnostic manifest required')
+    if (manifest['selection']!={'policy':'FIRST_DECLARATION_ROWS_ALL_DISPOSITIONS','count':PREFIX_COUNT,
+            'original_declared_cells':512} or type(manifest['selection'].get('count'))is not int
+            or type(manifest['selection'].get('original_declared_cells'))is not int):
+        raise ValueError('predeclared first8of512 only; no status/outcome selection')
+    if type(manifest['source_owner'])is not dict or set(manifest['source_owner'])!={'job','pod'}:
+        raise ValueError('actual running owner references required')
+    _owner_running(_document(manifest['source_owner']['job']),_document(manifest['source_owner']['pod']))
+    plan=_document(manifest['original_plan']);bindings=_document(manifest['original_source_bindings'])
+    runtime_plan=_document(manifest['runtime_plan'])
+    collector.validate_plan(plan);collector.validate_plan(runtime_plan)
+    if (len(plan['cells'])!=512 or bindings.get('source_commit')!=plan['source_commit']
+            or {k:v for k,v in plan.items()if k!='source_commit'}!={k:v for k,v in runtime_plan.items()if k!='source_commit'}):
+        raise ValueError('full original512 plan/source must remain unchanged')
+    for key in ('pool','vocabulary','labels','gender_policy'):
+        if bindings.get(key)!=plan[key]:raise ValueError('original prefix source binding differs: '+key)
+    _frozen_reducer(bindings,reference=manifest['original_reducer'])
+    snapshot=manifest['snapshot']
+    if type(snapshot)is not dict or set(snapshot)!={'root','files','end_boundary'}:
+        raise ValueError('immutable prefix snapshot files/boundary required')
+    root=Path(snapshot['root']).resolve()
+    if type(snapshot['files'])is not dict or set(snapshot['files'])!={'physical','decisions','journal'}:
+        raise ValueError('all frozen prefix record files required')
+    for key,ref in snapshot['files'].items():
+        path=_verify_file(ref)
+        if path.resolve().parent!=root or path.name!=FILES[key]:raise ValueError('foreign prefix snapshot file')
+    chosen=plan['cells'][:PREFIX_COUNT];starts=[];ends=[];last=None
+    for row,row_sha in _records(snapshot['files']['journal']['path']):
+        last=(row,row_sha)
+        if row.get('kind')=='START':starts.append(row)
+        elif row.get('kind')=='END':ends.append(row)
+        else:raise ValueError('prefix journal record kind differs')
+    if len(starts)!=PREFIX_COUNT or len(ends)!=PREFIX_COUNT:
+        raise ValueError('every one of first8 declaration roots must have actual END')
+    for cell,start,end in zip(chosen,starts,ends):
+        if (any(start.get(k)!=v or end.get(k)!=v for k,v in cell.items())
+                or type(end.get('status'))is not str or end['status']=='ATTEMPTED'):
+            raise ValueError('prefix identities/order/END differ; failed/refused roots cannot be filtered')
+    expected_end={'stream_id':chosen[-1]['stream_id'],'journal_end_sha256':last[1]}
+    if last[0].get('kind')!='END'or snapshot['end_boundary']!=expected_end:
+        raise ValueError('snapshot must end exactly at eighth original END')
+    selected={cell['stream_id']for cell in chosen}
+    for key in ('physical','decisions'):
+        for row,_ in _records(snapshot['files'][key]['path']):
+            if row.get('stream_id')not in selected:raise ValueError('out-of-prefix record retained')
+    _prefix_accounting(snapshot,chosen,ends,bindings)
+    return root,plan,bindings,runtime_plan,[{k:v for k,v in row.items()if k!='kind'}for row in ends]
+
+
+def run_prefix(manifest,*,out,enable_reencoding=False):
+    """Explicit first8 diagnostic; fullFINAL default never accepts this schema."""
+    if enable_reencoding is not True:raise ValueError('explicit stored diagnostic enablement required')
+    root,full_plan,bindings,runtime_plan,finals=validate_prefix_inputs(manifest)
+    out=Path(out)
+    if ('..'in out.parts or not any(out.is_relative_to(p)for p in (Path('/shared/scott'),Path('/store')))
+            or out.exists()):raise ValueError('fresh remote-only prefix diagnostic output required')
+    cls=_frozen_reducer(bindings,reference=manifest['original_reducer'])
+    baseline=cls(source_bindings=bindings)
+    snapshot=manifest['snapshot']
+    for row,_ in _records(snapshot['files']['decisions']['path']):
+        candidate,reference,_=_load_row(root,row)
+        baseline.add(decision_id=row['decision_id'],turn=row['turn'],line_kinds=row['line_kinds'],
+            agreement=row['agreement'],reference=reference,candidate=candidate,refusal=row['refusal'])
+    legacy_report=baseline.report()
+    derived=dict(legacy_report)
+    derived.update(cells=finals,declared_cells=PREFIX_COUNT,
+        scope='DERIVED_DIAGNOSTIC_FIRST8_PREFIX_ONLY; not an original512 finalsummary',
+        original_full_declared_cells=512,selection=manifest['selection'])
+    # This bounded in-memory iteration view does not alter the original plan
+    # file, its declaration/seed addresses, or the full runtime compiler plan.
+    selected_plan=dict(full_plan,cells=full_plan['cells'][:PREFIX_COUNT])
+    runtime=collector.prepare(runtime_plan)
+    writer=collector.Evidence(out)
+    try:
+        (out/'manifest.json').write_text(collector._json(manifest)+'\n')
+        prefix_baseline=dict(schema=PREFIX_SCHEMA+'.original-reducer',diagnostic_prefix_only=True,
+            full_B4_pass=False,numerical_gate_only=False,original_declared_roots=512,
+            selected_diagnostic_roots=PREFIX_COUNT,original_prefix_dispositions=finals,
+            selection=manifest['selection'],frozen_original_reducer_report=legacy_report,
+            scope='Exact original reducer math on immutable selected first8 only; nested mathematical thresholds are not a full-dataset gate.')
+        (out/'prefix-original-legacy-summary.json').write_text(collector._json(prefix_baseline)+'\n')
+        result=reencode_records(runtime,root,selected_plan,derived,bindings,
+            snapshot['files']['physical']['path'],snapshot['files']['decisions']['path'],writer,
+            original_reducer_reference=manifest['original_reducer'])
+    finally:writer.close()
+    for ref in snapshot['files'].values():_verify_file(ref)
+    for key in ('original_plan','original_source_bindings','original_reducer','runtime_plan'):_verify_file(manifest[key])
+    result.update(mode='STORED_REENCODING_COMPLETED_PREFIX_DIAGNOSTIC',diagnostic_prefix_only=True,
+        original_declared_roots=512,selected_diagnostic_roots=PREFIX_COUNT,unselected_roots=512-PREFIX_COUNT,
+        unselected_diagnostic_status='UNKNOWN_NOT_EVALUATED; original dispositions unavailable/unchanged',
+        original_full_plan=manifest['original_plan'],source_owner_snapshot_status='RUNNING_AT_SNAPSHOT',
+        original_counts_scope='FIRST8_DIAGNOSTIC_PREFIX_ONLY; full512 final counts unavailable/unchanged',
+        original_full_cohort_counts=None,
+        selection=manifest['selection'],input_manifest=manifest,numerical_gate_only=False,
+        full_B4_pass=False,collection_provenance_independently_verified=False,
+        qualification='DIAGNOSTIC_COMPLETED_PREFIX_ONLY; no formal gate, fresh roots/outcomes/strength/throughput',
+        output_files={p.name:dict(sha256=collector.digest(p),bytes=p.stat().st_size)for p in
+            (out/'manifest.json',out/'prefix-original-legacy-summary.json',out/'decisions.jsonl',out/'physical.jsonl',out/'journal.jsonl')})
+    path=out/'summary.json';path.write_text(collector._json(result)+'\n')
+    return dict(mode=result['mode'],summary_path=str(path),summary_sha256=collector.digest(path),
+        original_declared_roots=512,selected_diagnostic_roots=PREFIX_COUNT,unselected_roots=504,
+        new_games=0,full_B4_pass=False)
+
+
 def main(argv=None):
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest',required=True);parser.add_argument('--expected-manifest-sha256',required=True)
     parser.add_argument('--out',required=True);parser.add_argument('--enable-reencoding',action='store_true')
+    parser.add_argument('--diagnostic-completed-prefix',action='store_true',
+        help='explicit immutable first8 diagnostic snapshot; never a final512/gate run')
     args=parser.parse_args(argv)
     if not args.enable_reencoding:parser.error('--enable-reencoding is required before work')
     manifest=_document(dict(path=args.manifest,sha256=args.expected_manifest_sha256))
-    print(collector._json(run(manifest,out=args.out,enable_reencoding=True)),flush=True)
+    execute=run_prefix if args.diagnostic_completed_prefix else run
+    print(collector._json(execute(manifest,out=args.out,enable_reencoding=True)),flush=True)
 
 
 if __name__=='__main__':main()
