@@ -19,6 +19,7 @@ from . import engine_device_visible_belief as visible_belief
 HP_ACTION,HP_PRE_ITEM,HP_POST_ITEM,HP_UNKNOWN=range(4)
 
 MON_KEYS=('turns_active','turns_active_total','sleep_turns','rest_sleep','toxic_stage',
+          'sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending',
           'confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap',
           'last_damage_dealt','last_damage_taken','switched_before_attack','stayed_and_attacked',
           'moves_shown','switches','item_swapped')
@@ -117,6 +118,10 @@ def public_turn(c,state,use,turn):
         p=state.active[_r(state),side]
         for name in ('turns_active','turns_active_total'):
             c=feature(c,side,p,name,j.ones_like(p),use,add=True)
+        # Original public Toxic stage advances on TURN, not on residual work.
+        t=c.trackers;slot=j.clip(t.active_slot[_r(state),side],0,5)
+        stage=t.mon_features['toxic_stage'][_r(state),side,slot]
+        c=feature(c,side,p,'toxic_stage',j.minimum(16,stage+1),use&(stage>0))
     if c.trackers.damage_history is not None:
         history,taken,dealt=damage_history.settle(c.trackers.damage_history,use)
         c=c._replace(trackers=c.trackers._replace(damage_history=history))
@@ -195,7 +200,12 @@ def install(c,state,side,use,*,initial=False):
             types=c.belief_tables.species_types[j.clip(species,0,tab.shape[0]-1)]
             c=c._replace(trackers=_write(c.trackers,'shown_types',side,p,j.where(known[:,None],types,0),use))
     # switch resets public volatiles, not cumulative shown move/PP knowledge.
-    for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap'):
+    t=c.trackers;at=j.clip(t.active_slot[r,side],0,5)
+    count=t.mon_features['sleep_turns'][r,side,at]
+    skipped=t.mon_features['sleep_skipped_turns'][r,side,at]
+    c=feature(c,side,p,'sleep_turns',j.maximum(0,count-skipped),use&(_get(state,'status',side)==5))
+    for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap',
+                 'sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending','toxic_stage'):
         c=feature(c,side,p,name,j.zeros(b,j.int32),use)
     c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,j.full((b,),-1,j.int32),use))
     td=c.trackers.tendency
@@ -221,8 +231,10 @@ def observe(c,state,use,*,record_damage=True,rest_side=None,rest_mask=False):
         rest=j.zeros_like(use)if rest_side is None else (j.asarray(rest_side)==side)&j.asarray(rest_mask)
         c=c._replace(trackers=port.condition(t,side,p,t.status[r,side,slot],status,use,
             rest=rest,faint=_get(state,'hp',side)==0))
-        for key in ('sleep_turns','rest_sleep','toxic_stage'):
+        for key in ('sleep_turns','rest_sleep','sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending'):
             c=feature(c,side,p,key,j.zeros_like(p),changed)
+        c=feature(c,side,p,'toxic_stage',j.where(status==4,1,0),changed)
+        c=feature(c,side,p,'toxic_stage',j.zeros_like(p),use&(hp==0))
         c=c._replace(trackers=tr._observe(c.trackers,state,side,p,use,identity=False))
         c=_refresh(c,side,p,condition_changed&valid)
     t=c.trackers
@@ -240,6 +252,15 @@ def hp_line(c,state,side,use,*,source_class,record_damage=True):
     """
     c=negative_hp_line(c,state,side,use,source_class=source_class)
     c=observe(c,state,use,record_damage=record_damage)
+    if source_class==HP_POST_ITEM:
+        # A newly arrived poisoned member starts at known public stage0.
+        # Its first actual living poison-residual line exposes stage1; STATUS
+        # already initialized other new poison to1. Never tick here again.
+        r=_r(state);p=state.active[r,side];slot=j.clip(c.trackers.active_slot[r,side],0,5)
+        stage=c.trackers.mon_features['toxic_stage'][r,side,slot]
+        hp=_get(state,'hp',side);maximum=_get(state,'max_hp',side)
+        first=_mask(use,len(r))&(_get(state,'status',side)==4)&(stage==0)&(hp>0)&(maximum>=hp)
+        c=feature(c,side,p,'toxic_stage',j.ones_like(p),first)
     # A literal HP/-sethp line upserts its subject even when the rounded
     # percentage is unchanged. Never refresh the other seat just because this
     # operation also polls its endpoint.
@@ -310,6 +331,14 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     Original source target semantics and only publicly running Pressure can
     double a caller charge. Called Sleep Talk children remain uncharged.
     """
+    # Gen3 emits cant(slp) even for Sleep Talk/Snore, then an actual usable
+    # original MOVE classifies that cant as skippedTime. Called children and
+    # preparation-only declarations must not consume it twice.
+    r=_r(state);p=state.active[r,side];slot=j.clip(c.trackers.active_slot[r,side],0,5)
+    facts=c.trackers.mon_features
+    skipped=use&j.asarray(original)&~j.asarray(preparation)&(facts['sleep_cant_pending'][r,side,slot]!=0)&(facts['sleep_usable_pending'][r,side,slot]!=0)
+    c=feature(c,side,p,'sleep_skipped_turns',j.ones_like(p),skipped,add=True)
+    for key in ('sleep_cant_pending','sleep_usable_pending'):c=feature(c,side,p,key,j.zeros_like(p),skipped)
     actual_move=move
     if c.belief_tables is not None and hasattr(c.belief_tables,'public_move'):
         valid=(move>=0)&(move<len(c.belief_tables.public_move))
@@ -378,7 +407,7 @@ def party_cure(c,before,after,side,use,table=None):
         c=c._replace(trackers=c.trackers._replace(status=old.at[r,side,at].set(j.where(yes,after.status[r,side,p],old[r,side,at]))))
         cured=yes&(after.status[r,side,p]==0)
         c=c._replace(trackers=port.condition(c.trackers,side,j.full(len(r),p,j.int32),before.status[r,side,p],after.status[r,side,p],yes))
-        for name in ('sleep_turns','rest_sleep','toxic_stage'):
+        for name in ('sleep_turns','rest_sleep','toxic_stage','sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending'):
             c=feature(c,side,p,name,j.zeros(len(r),j.int32),cured)
         c=_refresh(c,side,p,yes)
     c=c._replace(trackers=port.team_cure(c.trackers,side,use))
@@ -412,14 +441,20 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
     c=observe(c,after,~before.done)
     for side in range(2):
         p=after.active[_r(after),side];alive=ordinary&(_get(after,'hp',side)>0)
-        for name,active in [('toxic_stage',_get(after,'status',side)==4),
-                            ('confusion_turns',_get(after,'confusion_counter',side)>0),('encore_turns',_get(after,'encore_counter',side)>0)]:
+        for name,active in [('confusion_turns',_get(after,'confusion_counter',side)>0),('encore_turns',_get(after,'encore_counter',side)>0)]:
             c=feature(c,side,p,name,j.ones_like(p),alive&active,add=True)
             c=feature(c,side,p,name,j.zeros_like(p),ordinary&~active)
     t=c.trackers;fields=t.field_features
     up=fields['weather_upkeeps']+(ordinary&(after.weather!=0)).astype(j.int32)
     c=c._replace(trackers=t._replace(field_features={**fields,'weather_upkeeps':up}))
     if upkeep is not None:
+        facts=c.trackers.mon_features
+        pending=facts['sleep_cant_pending']!=0
+        on=_mask(upkeep,len(c.trackers.error))[:,None,None]
+        c=c._replace(trackers=c.trackers._replace(mon_features={**facts,
+            'sleep_skipped_turns':j.where(on&pending,0,facts['sleep_skipped_turns']),
+            'sleep_cant_pending':j.where(on,0,facts['sleep_cant_pending']),
+            'sleep_usable_pending':j.where(on,0,facts['sleep_usable_pending'])}))
         c=c._replace(trackers=port.upkeep(c.trackers,upkeep))
         c=c._replace(trackers=negative_items.upkeep(c.trackers,c.belief_tables,leftovers,upkeep,current_state=after))
     # A paused action/residual or forced replacement has no next TURN line.
@@ -503,7 +538,10 @@ def before_move(c,state,side,result,use,*,loafing=False,sleep_usable=False):
     p=state.active[_r(state),side]
     truant_cant=use&j.asarray(loafing)&((result.status!=5)|j.asarray(sleep_usable))&(result.status!=6)
     c=c._replace(trackers=port.anchor(c.trackers,side,truant_cant,loaf=True))
-    c=feature(c,side,p,'sleep_turns',j.ones_like(p),use&(_get(state,'status',side)==5)&(result.status==5),add=True)
+    asleep=use&(_get(state,'status',side)==5)&(result.status==5)
+    c=feature(c,side,p,'sleep_turns',j.ones_like(p),asleep,add=True)
+    c=feature(c,side,p,'sleep_cant_pending',j.ones_like(p),asleep)
+    c=feature(c,side,p,'sleep_usable_pending',j.asarray(sleep_usable,j.int32),asleep)
     c=opportunity(c,side,use&~result.can_act&~result.confusion_self_hit)
     return _refresh(c,side,p,use&(_get(state,'status',side)==5)&(result.status==5))
 
