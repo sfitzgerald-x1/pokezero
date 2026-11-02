@@ -24,6 +24,7 @@ from . import v5_run as run
 SCHEMA='pokezero.v5.milestone_evaluation.v1'
 POSITIONS='pokezero.v5.fixed_outcome_positions.v1'
 SIBLINGS='pokezero.v5.actual_fixed_siblings.v1'
+HOST_REQUEST_FIELDS=('progress_callback','prior_completions')
 
 
 def _keys(value,names):
@@ -393,7 +394,7 @@ def _lost_inflight(rows):
     return rows
 
 
-def _panel_predecessor(panel,request_document,protocol_reference,configs):
+def _panel_predecessor(panel,request_document,protocol_reference,configs,*,prior_completions=()):
     """Read the declared attempt chain; retain all prior non-dispatchable rows."""
     attempts=sorted(panel.glob('attempt-*'));previous=None;reference=None
     expected=_fixed_rows(configs)
@@ -410,16 +411,34 @@ def _panel_predecessor(panel,request_document,protocol_reference,configs):
                 or payload.get('resume_progress')!=(asdict(reference)if reference else None)):
             raise ValueError('original panel continuation binding differs')
         progress=directory/'progress.json'
-        if not progress.exists():continue  # No dispatch is possible before this publication.
+        report=directory/'report.json'
+        saved=None
+        if report.exists():
+            saved=json.loads(report.read_bytes())
+            if (saved.get('schema')!=SCHEMA or saved.get('namespace')!=run._sha(payload)
+                    or saved.get('request')!=request_document):
+                raise ValueError('original immutable panel report binding differs')
+        if not progress.exists():
+            if saved is not None and saved['rows']!=_lost_inflight(previous if previous is not None else expected):
+                raise ValueError('panel report records dispatch without its progress ledger')
+            continue  # No dispatch is possible before this publication.
         ref=Artifact(str(progress),run._file_sha(progress));document=ref.document()
         if document['namespace']!=run._sha(payload):raise ValueError('original panel progress namespace differs')
         rows=document['rows'];_completed_receipts(rows,expected,configs)
+        if saved is not None and saved['rows']!=rows:
+            raise ValueError('panel progress changed from its immutable report')
         if previous is not None:
             for old,current in zip(_lost_inflight(previous),rows):
                 if old['status']!='NOT_ATTEMPTED' and current!=old:
                     raise ValueError('previously attempted panel cell changed or replayed')
         previous=rows;reference=ref
-    return len(attempts),reference,_lost_inflight(previous if previous is not None else expected)
+    carried=_lost_inflight(previous if previous is not None else expected)
+    actual={r.cell_ordinal:r for r in _completed_receipts(carried,expected,configs,protocol_path=protocol_reference.path)}
+    for receipt in prior_completions:
+        run._checked_evaluation_completion(receipt)
+        if actual.get(receipt.cell_ordinal)!=receipt:
+            raise ValueError('panel progress lost or changed a durable run-journal completion')
+    return len(attempts),reference,carried
 
 
 async def _concurrent_panel(configs,factory,protocol,progress_path,namespace,*,initial_rows=None):
@@ -500,7 +519,7 @@ def _factory(protocol,request):
 
 def _request_document(request):
     return {key:(asdict(request.snapshot) if key=='snapshot' else str(getattr(request,key)) if key.endswith('_path') or key=='run_directory'
-        else getattr(request,key)) for key in request.__dataclass_fields__ if key!='progress_callback'}
+        else getattr(request,key)) for key in request.__dataclass_fields__ if key not in HOST_REQUEST_FIELDS}
 
 
 def _pin_actor(protocol):
@@ -522,7 +541,7 @@ def _pin_actor(protocol):
 
 
 def _restore_request(value):
-    _keys(value,(k for k in run.EvaluationRequest.__dataclass_fields__ if k!='progress_callback'))
+    _keys(value,(k for k in run.EvaluationRequest.__dataclass_fields__ if k not in HOST_REQUEST_FIELDS))
     return run.EvaluationRequest(**dict(value,snapshot=run.Snapshot(**value['snapshot']),
         **{key:Path(value[key]) for key in ('run_directory','checkpoint_path','archive_path')}))
 
@@ -564,7 +583,7 @@ class EvaluationHook:
         panel=request.run_directory/'artifacts'/('evaluation-'+str(request.declared_games)+'-'+run._sha(document))
         panel.mkdir(parents=True,exist_ok=True)
         configs=panels[request.declared_games];expected=_fixed_rows(configs)
-        attempt,predecessor,carried=_panel_predecessor(panel,document,self.protocol,configs)
+        attempt,predecessor,carried=_panel_predecessor(panel,document,self.protocol,configs,prior_completions=request.prior_completions)
         directory=panel/f'attempt-{attempt:06d}'
         directory.mkdir(parents=True,exist_ok=False)
         payload=dict(protocol=asdict(self.protocol),expected_run_declaration_sha256=self.expected_run_declaration_sha256,

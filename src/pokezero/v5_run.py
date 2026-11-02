@@ -120,6 +120,7 @@ class EvaluationRequest:
     checkpoint_path:Path
     archive_path:Path
     progress_callback:object=None  # Host-only, excluded from immutable binding.
+    prior_completions:tuple=()  # Original journal facts, not new game dispatches.
 
 
 @dataclass(frozen=True)
@@ -535,7 +536,7 @@ def _evaluate_snapshot(store,snapshot,hook):
         store.emit('EVALUATION_GAME_END',**bound,status='COMPLETE',duration_seconds=receipt.duration_seconds,
             completion=asdict(receipt))
         completed[receipt.cell_ordinal]=receipt
-    request=replace(request,progress_callback=actual_completion)
+    request=replace(request,progress_callback=actual_completion,prior_completions=tuple(completed.values()))
     try:
         outcome=hook(request)
         if type(outcome) is not EvaluationOutcome:raise ValueError('typed evaluation outcome required')

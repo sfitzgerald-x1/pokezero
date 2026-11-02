@@ -298,9 +298,25 @@ class EvaluationTests(unittest.TestCase):
             # A completed cell rewritten in a later continuation cannot be accepted.
             latest=attempts[-1]/'progress.json';changed=json.loads(latest.read_bytes());changed['rows'][0]['reason']='mutated'
             e._atomic(latest,changed)
-            with patch.object(fp,'supervise_panel')as launch,self.assertRaisesRegex(ValueError,'changed or replayed'):
+            with patch.object(fp,'supervise_panel')as launch,self.assertRaisesRegex(ValueError,'changed'):
                 hook(request)
             launch.assert_not_called()
+
+    def test_interruption_before_report_cannot_drop_durable_completion_from_progress(self):
+        with tempfile.TemporaryDirectory()as temp:
+            root=Path(temp);ref,protocol,_,request=self.fixture(root)
+            configs=e._pairs(protocol,parse_configs=True,checkpoint=request.checkpoint_path)[500000]
+            panel=request.run_directory/'artifacts'/('evaluation-500000-'+r._sha(e._request_document(request)))
+            directory=panel/'attempt-000000';directory.mkdir(parents=True)
+            payload=dict(protocol=asdict(ref),expected_run_declaration_sha256=request.declaration_sha256,
+                request=e._request_document(request),directory=str(directory),resume_progress=None)
+            r._publish(directory/'request.json',r._json(payload).encode())
+            expected=e._fixed_rows(configs);rows=json.loads(r._json(expected));source=game(configs[0],rows[0]['seed'])
+            rows[0].update(status='COMPLETE',score=1.,duration_seconds=.2,source_game=source,source_result_sha256=r._sha(source))
+            receipt=e._completed_receipts(rows,expected,configs,protocol_path=ref.path)[0]
+            e._atomic(directory/'progress.json',dict(namespace=r._sha(payload),rows=expected))
+            with self.assertRaisesRegex(ValueError,'durable run-journal completion'):
+                e._panel_predecessor(panel,e._request_document(request),ref,configs,prior_completions=(receipt,))
 
     def test_owned_worker_failure_retains_full_unknown_bank_without_zero_score_or_replay(self):
         with tempfile.TemporaryDirectory() as temp:
