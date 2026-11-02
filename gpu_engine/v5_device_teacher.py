@@ -85,11 +85,12 @@ def validate_records(frames,bank,recipe,records):
 
 class Provider:
     """Construct once from genuine Prepared+Plan, before any real constructor."""
-    def __init__(self,prepared,plan):
+    def __init__(self,prepared,plan,*,batch_joint=True):
         from .v5_device_backend import Prepared
         from pokezero.v5_run import Plan,_sha
         if type(prepared)is not Prepared or type(plan)is not Plan or plan.model.arm!='D':
             raise ValueError('actual prepared device D Plan required')
+        if type(batch_joint)is not bool:raise ValueError('explicit joint batching bool required')
         if prepared.pool_sha256!=plan.pool_sha256 or prepared.category_sha256!=plan.model.category_vocabulary_sha256 or prepared.category_size!=plan.model.category_vocab_size:
             raise ValueError('same declared device source/pool/category required')
         self.prepared=prepared;self.plan=plan;self.recipe=original.Recipe(plan.selection_seed)
@@ -98,8 +99,9 @@ class Provider:
             expected_source_hash=prepared.source.metadata.source_hash,
             expected_source_rows_sha256=plan.model.label_vocabulary.source_binding_sha256)
         self.materializer=states.compile_tables(self.source,json.loads(prepared.metadata_json))
-        self.executor=teacher.make_executor(prepared.engine_tables,prepared.observation_tables,enable_device_teacher=True)
-        self.forwards={}
+        self.executor=teacher.make_executor(prepared.engine_tables,prepared.observation_tables,
+            enable_device_teacher=True,batch_joint=batch_joint)
+        self.batch_joint=batch_joint;self.forwards={};self.joint_forwards={}
 
     def bind(self,bank,params):
         if (bank.bindings.source_sha256!=self.prepared.source_sha256
@@ -115,6 +117,11 @@ class Provider:
             if digest not in self.forwards:
                 self.forwards[digest]=(p,jax.jit(lambda inputs,p=p:v5_model.forward(p,inputs,self.plan.model,compute_dtype='bfloat16')))
             elif self.forwards[digest][0]is not p:raise ValueError('verified archive parameter identity changed')
+        if getattr(self,'batch_joint',False):
+            self.joint_forwards={k:v for k,v in self.joint_forwards.items()if k in bank.actor_archives}
+            for digest in bank.actor_archives:
+                if digest not in self.joint_forwards:
+                    self.joint_forwards[digest]=jax.jit(jax.vmap(self.forwards[digest][1]))
 
     def label_chunk(self,device_roots,frames,bank,params):
         from .v5_device_rollout import RootContext
@@ -139,11 +146,13 @@ class Provider:
                 plans=worlds.plan_starts(root,self.source,self.recipe)
                 inputs={name:getattr(frames,name)[step,row,owner][None,None]for name in INPUTS}
                 inputs['history_mask']=np.ones((1,1),bool)
+                options={}if not getattr(self,'batch_joint',False)else dict(
+                    learner_batch_forward=self.joint_forwards[base['actor_archive_sha256']])
                 result=teacher.price(plans,self.materializer,self.executor,self.recipe,
                     root_logits=tuple(map(float,frames.raw_policy_logits[step,row,owner])),
                     root_legal=tuple(map(bool,frames.legal_action_mask[step,row,owner])),root_inputs=inputs,
                     opponent_forward=self.forwards[base['opponent_archive_sha256']][1],
-                    learner_forward=self.forwards[base['actor_archive_sha256']][1],enable_device_teacher=True)
+                    learner_forward=self.forwards[base['actor_archive_sha256']][1],enable_device_teacher=True,**options)
                 record['diagnostics']=dict(world_reports=result.world_reports,missing_worlds=result.missing_worlds,
                     actual_teacher_calls=result.actual_teacher_calls,reply_input_approximation=result.reply_input_approximation)
                 if result.status=='LABELED':

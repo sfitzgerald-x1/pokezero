@@ -109,7 +109,7 @@ class DeviceDCostTests(unittest.TestCase):
         with self.assertRaises(ValueError):cost.summarize([dict(status='LABELED',label_seconds=float('nan'))]*40)
 
     def test_actual_provider_frames_both_seats_archive_and_saved_slot_accounting(self):
-        provider,snapshot,index=inputs();calls=[];seen=[];param=object()
+        provider,snapshot,index=inputs();calls=[];seen=[];notifications=[];param=object()
         index['cost_roots'][-1].update(status='UNREACHED',artifact=None,reason='original game ended before frame24')
         def load(entry,index):
             a=entry['selector'];context=rollout.RootContext(InertState(j.asarray([a['frame']],j.int32)),j.zeros(1),j.asarray([a['stream']],j.int32),j.asarray([a['frame']],j.int32))
@@ -131,14 +131,25 @@ class DeviceDCostTests(unittest.TestCase):
                 patch.object(cost.v5_model,'forward',side_effect=forward),patch.object(cost.jax,'jit',side_effect=lambda fn:fn),\
                 patch.object(cost.jax,'block_until_ready',side_effect=lambda x:x),patch.object(cost,'request_seats',return_value=j.ones((1,2),bool)),\
                 patch.object(provider,'label_chunk',side_effect=label):
-            result=cost.run(provider,snapshot,'strict-current-source-archive',index,enable_cost=True)
+            result=cost.run(provider,snapshot,'strict-current-source-archive',index,enable_cost=True,
+                progress_callback=notifications.append)
         actor.assert_called_once();self.assertEqual(len(calls),78);self.assertEqual(len(seen),39)
         self.assertEqual(result['summary']['timed_provider_attempts'],39);self.assertEqual(result['summary']['usable_labeled'],0)
         self.assertEqual(result['summary']['dispositions'],{'PROVIDER_REFUSED':39,'UNREACHED':1})
         self.assertTrue(result['records'][0]['cold_first_label_call']);self.assertFalse(result['records'][1]['cold_first_label_call'])
         self.assertEqual(seen,[entry['selector']for entry in index['cost_roots'][:-1]])
+        self.assertEqual(len(notifications),40)
+        self.assertEqual(notifications,result['records'])
+        self.assertEqual([r['ordinal']for r in notifications],list(range(40)))
+        notifications[0]['provider_record']['refusal']='changed callback-owned copy'
+        self.assertEqual(result['records'][0]['provider_record']['refusal'],'actual explicit unknown world')
 
     def test_foreign_namespace_or_changed_selector_refuses_before_model(self):
+        provider,snapshot,index=inputs()
+        with patch.object(cost,'actor')as actor:
+            with self.assertRaisesRegex(ValueError,'callback'):
+                cost.run(provider,snapshot,'unused',index,enable_cost=True,progress_callback=True)
+            actor.assert_not_called()
         provider,snapshot,index=inputs();index['namespace']['pool_sha256']='f'*64
         with patch.object(saved,'load_root'),patch.object(cost,'actor')as actor:
             with self.assertRaisesRegex(ValueError,'namespaces differ'):cost.run(provider,snapshot,'unused',index,enable_cost=True)

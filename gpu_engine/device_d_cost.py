@@ -140,7 +140,17 @@ def _observer(provider):
     return jax.jit(observe)
 
 
-def run(provider,snapshot,archive_path,index,*,enable_cost=False):
+def _progress_slots(declared,entries,records,callback):
+    """Operational completion notification, strictly outside measured calls."""
+    import json
+    for ordinal,pair in enumerate(zip(declared,entries)):
+        yield ordinal,pair
+        if callback is not None:
+            # No callback can mutate a scientific record or its nested labels.
+            callback(json.loads(runs._json(records[-1])))
+
+
+def run(provider,snapshot,archive_path,index,*,enable_cost=False,progress_callback=None):
     """Actual once-only offline cohort; caller supplies genuine startup objects.
 
     The bank's canonical loader verifies primitive typed NPZ/source bindings.
@@ -149,6 +159,8 @@ def run(provider,snapshot,archive_path,index,*,enable_cost=False):
     """
     if enable_cost is not True or type(provider)is not teacher.Provider:
         raise ValueError('explicit genuine saved-bank D Provider required')
+    if progress_callback is not None and not callable(progress_callback):
+        raise ValueError('operational progress callback must be callable')
     if type(index)is not dict or index.get('schema')!='pokezero.device_heldout_saved_roots.v1':
         raise ValueError('original immutable saved-root index required')
     from . import v5_device_evaluation_bank as saved
@@ -196,7 +208,7 @@ def run(provider,snapshot,archive_path,index,*,enable_cost=False):
     observe=_observer(provider)
     forward=jax.jit(lambda p,inputs:v5_model.forward(p,inputs,provider.plan.model,compute_dtype='bfloat16'))
     records=[];integrity=True
-    for ordinal,(address,entry)in enumerate(zip(declared,entries)):
+    for ordinal,(address,entry)in _progress_slots(declared,entries,records,progress_callback):
         record=dict(ordinal=ordinal,address=dict(stream=address.stream,frame=address.frame,owner=address.owner),
             status='UNREACHED',reason=entry.get('reason'),label_seconds=None,root_input_seconds=None,
             provider_record=None,cold_first_label_call=False)

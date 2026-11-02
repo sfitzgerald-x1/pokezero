@@ -6,7 +6,7 @@ own hypothetical party plus root-cloned/actually advanced PUBLIC knowledge.
 No private critic, protocol/fold, capture certificate or survivor-only pricing
 exists here. Make one Executor per worker; its pure JIT functions are retained.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jax
 import jax.numpy as j
@@ -42,9 +42,36 @@ class Executor:
     dispatch: object
     sample: object
     advance: object
+    joint: object = None
 
 
-def make_executor(engine_tables, observation_tables, *, enable_device_teacher=False):
+JOINT_LANES = 81
+
+
+def _make_joint(executor):
+    """One fixed-size map of independent original one-row computations.
+
+    Each lane sees the SAME original root and chance capsule, with a separate
+    functional state/public carry. Mapping the one-row program preserves its
+    global tracker namespaces; flattening them into an ordinary game batch
+    would not. Padding repeats a real pair and is never reduced as reply mass.
+    No actor is captured here: actor reuse belongs to the verified Provider.
+    """
+    def single(state, public, own, peer, owner, requested, pair, chance):
+        actions = j.full((1, 2), -1, j.int32)
+        chosen = executor.dispatch(own, state, owner, pair[:1])
+        actions = actions.at[:, owner[0]].set(chosen)
+        reply = executor.dispatch(peer, state, 1-owner, pair[1:])
+        actions = actions.at[:, 1-owner[0]].set(j.where(requested, reply, -1))
+        after = executor.advance(state, public, actions, chance)
+        masks = executor.legal(after.step.state)
+        view = executor.observe(after.step.state, after.trackers, owner, masks[:, owner[0]])
+        return (after.step.invalid_actions, after.step.state.done,
+            after.step.state.winner, view.observation.error, view.inputs)
+    return jax.jit(jax.vmap(single, in_axes=(None, None, None, None, None, None, 0, None)))
+
+
+def make_executor(engine_tables, observation_tables, *, enable_device_teacher=False, batch_joint=False):
     """Retain original numerical/public/encoder functions once per worker.
 
     Construction defines cached functions only; no world, model or transition
@@ -53,7 +80,9 @@ def make_executor(engine_tables, observation_tables, *, enable_device_teacher=Fa
     """
     if enable_device_teacher is not True:
         raise ValueError('explicit direct-device teacher enablement required')
-    return Executor(
+    if type(batch_joint) is not bool:
+        raise ValueError('explicit joint batching bool required')
+    executor = Executor(
         jax.jit(lambda state: transition.action_mask(state, engine_tables) &
             request_seats(state)[..., None]),
         jax.jit(lambda state, public, owner, legal: leaf.from_public(state, public,
@@ -65,6 +94,7 @@ def make_executor(engine_tables, observation_tables, *, enable_device_teacher=Fa
         jax.jit(lambda state, public, actions, chance: transition.step_with_public(
             state, actions, engine_tables, public,
             belief_tables=observation_tables.belief, chance_inputs=chance)))
+    return replace(executor, joint=_make_joint(executor)) if batch_joint else executor
 
 
 @dataclass(frozen=True)
@@ -114,8 +144,70 @@ def _same_inputs(actual, expected):
             raise ValueError('actual learner root input differs: '+key)
 
 
+def _batched_prices(executor, world, own, peer, owner, requested, order,
+                    replies, chance, forward, counts):
+    """Return every required pair or its literal refusal; no serial fallback.
+
+    The fixed81 shape avoids recompilation for each legal-reply count. The
+    actor also evaluates terminal and padded lanes; report that work explicitly
+    and ignore those predictions only where the original procedure uses an
+    actual terminal outcome or has no required pair. All useful nonterminal
+    rows receive the same finite/valid/error checks as the serial reference.
+    """
+    if not callable(forward):
+        raise ValueError('verified cached batched learner callback required')
+    pairs = tuple((a, r) for a in order for r in replies)
+    if not 1 <= len(pairs) <= JOINT_LANES:
+        raise ValueError('literal nonempty joint denominator required')
+    padded = pairs + (pairs[0],)*(JOINT_LANES-len(pairs))
+    counts['transitions'] += JOINT_LANES
+    counts['batch_invocations'] += 1
+    invalid, done, winner, error, inputs = jax.block_until_ready(executor.joint(
+        world.state, world.public, own.observation, peer.observation,
+        j.asarray([owner], j.int32), j.asarray(requested), j.asarray(padded, j.int32), chance))
+    arrays = tuple(_host(x) for x in (invalid, done, winner, error))
+    if any(x.shape != (JOINT_LANES, 1) for x in arrays):
+        raise ValueError('literal mapped one-row branch geometry required')
+    invalid, done, winner, error = (x[:, 0] for x in arrays)
+    counts['public_leaf'] += JOINT_LANES
+    counts['padding_transitions'] += JOINT_LANES-len(pairs)
+    counts['padding_forward_rows'] += JOINT_LANES-len(pairs)
+    counts['terminal_forward_rows'] += int(np.count_nonzero(done[:len(pairs)]))
+    output = jax.block_until_ready(forward(inputs))
+    logits, values, valid = map(np.asarray, (output.policy_logits, output.value, output.valid))
+    if (logits.shape != (JOINT_LANES, 1, 9) or values.shape != (JOINT_LANES, 1)
+            or valid.shape != (JOINT_LANES, 1) or valid.dtype != np.bool_):
+        raise ValueError('literal mapped actor output geometry required')
+    usable = valid[:, 0] & np.isfinite(logits[:, 0]).all(axis=-1) \
+        & np.isfinite(values[:, 0]) & (np.abs(values[:, 0]) <= 1)
+    grid, errors, completed = [[None]*9 for _ in range(9)], [], 0
+    for row, (action, reply) in enumerate(pairs):
+        reason = None
+        if invalid[row]:
+            reason = 'hypothetical original action route invalid'
+        elif done[row]:
+            result = int(winner[row])
+            if result not in (0, 1, 2):
+                reason = 'hypothetical terminal winner unavailable'
+            else:
+                value = 0. if result == 2 else (1. if result == owner else -1.)
+        elif error[row]:
+            reason = 'current direct-encoder input error'
+        elif not usable[row]:
+            reason = 'current public actor output refused/nonfinite'
+        else:
+            value = float(values[row, 0])
+        if reason is None:
+            grid[action][reply] = value
+            completed += 1
+        else:
+            errors.append((action, reply, 'ValueError: '+reason))
+    return grid, errors, completed
+
+
 def price(plans, materializer, executor, recipe, *, root_logits, root_legal,
-          root_inputs, opponent_forward, learner_forward, enable_device_teacher=False):
+          root_inputs, opponent_forward, learner_forward, enable_device_teacher=False,
+          learner_batch_forward=None):
     """Price ALL legal root/reply pairs in BOTH declared source worlds.
 
     One original chance block is sampled per world and reused by every joint
@@ -134,6 +226,9 @@ def price(plans, materializer, executor, recipe, *, root_logits, root_legal,
             plans.selected != recipe.selected(root.address)):
         raise ValueError('same root/source/original recipe selection required')
     counts = dict(reply_policy=0, public_leaf=0, chance=0, transitions=0)
+    if executor.joint is not None:
+        counts.update(batch_invocations=0, padding_transitions=0,
+            padding_forward_rows=0, terminal_forward_rows=0)
     if not plans.selected:
         return Result('UNSELECTED', None, (), (), 0, None, counts, None)
     if (len(plans.starts) != 2 or tuple(start.world for start in plans.starts) != (0, 1)):
@@ -179,6 +274,19 @@ def price(plans, materializer, executor, recipe, *, root_logits, root_legal,
             report.update(required_pairs=required, opponent_requested=requested,
                 reply_legal=peer_legal, reply_logits=peer_logits)
             errors = []
+            if executor.joint is not None:
+                grid, errors, completed = _batched_prices(executor, world, own, peer,
+                    root.address.owner, requested, order, replies, chance,
+                    learner_batch_forward, counts)
+                report.update(status='COMPLETE' if not errors else 'REFUSED',
+                    completed_pairs=completed, unknown_pairs=required-completed,
+                    joint_values=grid, reason=None if not errors else 'unknown-required-public-leaf',
+                    errors=tuple(errors), execution=dict(strategy='FIXED81_MAPPED_ORIGINAL_ONE_ROW',
+                        transition_rows=JOINT_LANES, actor_forward_rows=JOINT_LANES,
+                        padding_rows=JOINT_LANES-required,
+                        terminal_predictions='COMPUTED_AND_IGNORED_IN_FAVOR_OF_ACTUAL_OUTCOME'))
+                prices.append(original.WorldPrices(requested, peer_legal, peer_logits, grid))
+                continue
             for action in order:
                 for reply in replies:
                     try:
