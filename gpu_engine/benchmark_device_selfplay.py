@@ -133,12 +133,15 @@ def retire(carry, after, updated_trackers, initial, initial_public, *, failure, 
 
 def make_driver(config, engine_tables, observation_tables, *,
                 sampling_seed, max_requests=4096, chunk_steps=16, actor_kind='champion23',
-                donate_carry=False):
+                donate_carry=False, dense_public_updates=False):
     """One compiled worker; engine and tracker writes share the same device step."""
     if type(donate_carry) is not bool:
         raise ValueError('literal carry donation opt-in required')
+    if type(dense_public_updates) is not bool:
+        raise ValueError('literal dense public-update opt-in required')
     from . import engine_device_observation as encoder
     from . import engine_device_trackers as public
+    public_kwargs = dict(dense_public_updates=True) if dense_public_updates else {}
     def advance(c, initial, initial_public, root_ids, params):
         state = c.state
         masks = transition.action_mask(state, engine_tables)
@@ -165,7 +168,7 @@ def make_driver(config, engine_tables, observation_tables, *,
         errors = j.concatenate((encoder_errors, actor_errors[None]))
         error_views = j.sum(requested & ((flags != 0) | ~finite), dtype=j.int32)
         public_out = transition.step_with_public(state, actions, engine_tables, c.trackers,
-            belief_tables=observation_tables.belief)
+            belief_tables=observation_tables.belief, **public_kwargs)
         out = public_out.step
         # An observation/actor refusal keeps a real view and legal fallback;
         # retain its kind/union count and continue the game. Only an actual
@@ -253,7 +256,8 @@ def summary(carry, *, seconds, batch, compile_seconds, warmup_seconds):
 
 
 def run_finite(compiled, start, initial, initial_public, root_ids, params, *, progress=None,
-               stall_floor_seconds=600, donate_carry=False):
+               stall_floor_seconds=600, donate_carry=False, dense_tail_compiled=None,
+               route_counts=None):
     """Whole finite cohort including tail/dispatch/scalar accounting wall time.
 
     Stall guard grows with the longest observed completed game so far; it is
@@ -266,8 +270,17 @@ def run_finite(compiled, start, initial, initial_public, root_ids, params, *, pr
     previous_cursor = int(np.asarray(c.cursor)); birth[:previous_cursor] = begin
     seen = np.zeros(c.completed.shape, bool)
     previous_boundary = begin
+    active = len(c.ids)
     while True:
-        c = compiled(c, initial, initial_public, root_ids, params)
+        # Use only already-read preceding chunk boundary facts. Never gather
+        # lanes, rerun policy, or add a dynamic conditional to the device graph.
+        dense = (dense_tail_compiled is not None and len(c.ids) == 2048
+            and previous_cursor == len(c.completed) and 1 <= active <= 16)
+        if route_counts is not None:
+            key = 'dense_chunks' if dense else 'scatter_chunks'
+            route_counts[key] = route_counts.get(key, 0) + 1
+        current = dense_tail_compiled if dense else compiled
+        c = current(c, initial, initial_public, root_ids, params)
         completed_mask, retired, active, cursor = jax.device_get((c.completed,
             j.sum(c.completed | c.capped | c.failed), j.sum(c.ids >= 0), c.cursor))
         # CPU device_get can expose a borrowed view. A later donated call may
@@ -296,10 +309,12 @@ def run_finite(compiled, start, initial, initial_public, root_ids, params, *, pr
 def measure_pair(params, config, engine_tables, observation_tables, warm_initial,
                  initial, warm_public, initial_public, warm_roots, roots, *, batch, sampling_seed,
                  max_requests=4096, chunk_steps=16, progress=None, actor_kind='champion23',
-                 donate_carry=False):
+                 donate_carry=False, adaptive_dense_tail=False):
     """Disjoint full warmup cohort followed by the whole declared measured one."""
     if type(donate_carry) is not bool:
         raise ValueError('literal carry donation opt-in required')
+    if type(adaptive_dense_tail) is not bool:
+        raise ValueError('literal adaptive dense-tail opt-in required')
     warm_roots, roots = np.asarray(warm_roots), np.asarray(roots)
     n = initial.done.shape[0]
     if (warm_initial.done.shape != initial.done.shape or warm_roots.shape != (n,)
@@ -326,12 +341,30 @@ def measure_pair(params, config, engine_tables, observation_tables, warm_initial
     compiled = lowered.compile()
     compilation = time.perf_counter()-before
     if progress:progress(dict(phase='COMPILED', batch=batch, compile_seconds=compilation))
+    dense_compiled = None
+    dense_lowering = dense_compilation = None
+    if adaptive_dense_tail and batch == 2048:
+        dense_driver = make_driver(config, engine_tables, observation_tables,
+            sampling_seed=sampling_seed, max_requests=max_requests, chunk_steps=chunk_steps,
+            actor_kind=actor_kind, donate_carry=donate_carry, dense_public_updates=True)
+        before = time.perf_counter()
+        dense_lowered = dense_driver.lower(start, initial, initial_public, roots, params)
+        dense_lowering = time.perf_counter()-before
+        if progress:progress(dict(phase='DENSE_TAIL_LOWERED', batch=batch, lowering_service_seconds=dense_lowering))
+        before = time.perf_counter()
+        dense_compiled = dense_lowered.compile()
+        dense_compilation = time.perf_counter()-before
+        if progress:progress(dict(phase='DENSE_TAIL_COMPILED', batch=batch, compile_service_seconds=dense_compilation))
     def report(phase):
         return (lambda value: progress(dict(value, phase=phase, batch=batch))) if progress else None
+    warm_routes = {} if adaptive_dense_tail else None
+    measured_routes = {} if adaptive_dense_tail else None
+    adaptive_warm = {} if not adaptive_dense_tail else dict(dense_tail_compiled=dense_compiled, route_counts=warm_routes)
+    adaptive_measured = {} if not adaptive_dense_tail else dict(dense_tail_compiled=dense_compiled, route_counts=measured_routes)
     warm, warm_seconds = run_finite(compiled, warm_start, warm_initial, warm_public, warm_roots, params,
-        progress=report('DISJOINT_FULL_WARMUP'), donate_carry=donate_carry)
+        progress=report('DISJOINT_FULL_WARMUP'), donate_carry=donate_carry, **adaptive_warm)
     finished, seconds = run_finite(compiled, start, initial, initial_public, roots, params,
-        progress=report('WARM_FULL_MEASURED'), donate_carry=donate_carry)
+        progress=report('WARM_FULL_MEASURED'), donate_carry=donate_carry, **adaptive_measured)
     result = summary(finished, seconds=seconds, batch=batch,
         compile_seconds=compilation, warmup_seconds=warm_seconds)
     result.update(lowering_seconds=lowering, chunk_steps=chunk_steps, actor_kind=actor_kind,
@@ -342,4 +375,11 @@ def measure_pair(params, config, engine_tables, observation_tables, warm_initial
         warmup_summary=summary(warm, seconds=warm_seconds, batch=batch,
             compile_seconds=compilation, warmup_seconds=0),
         requested_views_producer_error_denominator=result['actual_requested_views'])
+    if adaptive_dense_tail:
+        result.update(adaptive_dense_tail=True, dense_tail_width_eligible=batch == 2048,
+            dense_tail_route_scope='FULL_WIDTH_2048_AFTER_ALL_DECLARED_ASSIGNED_AT_HOST_CHUNK_BOUNDARY_WITH_1_TO_16_LIVE',
+            dense_tail_lowering_service_seconds=dense_lowering,
+            dense_tail_compile_service_seconds=dense_compilation,
+            warm_route_counts={key:warm_routes.get(key, 0) for key in ('scatter_chunks','dense_chunks')},
+            measured_route_counts={key:measured_routes.get(key, 0) for key in ('scatter_chunks','dense_chunks')})
     return result

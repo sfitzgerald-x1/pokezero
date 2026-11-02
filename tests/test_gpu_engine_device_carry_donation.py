@@ -154,7 +154,13 @@ class CarryDonationTests(unittest.TestCase):
     def test_original_numerical_policy_retirement_bodies_are_exact(self):
         base=subprocess.check_output(['git','show','2589b072534989fdf6e4e6534b9fb14152ec45ea:gpu_engine/benchmark_device_selfplay.py'],cwd=Path(__file__).parents[1])
         current=Path(b.__file__).read_bytes()
-        def functions(payload):return {n.name:ast.dump(n,include_attributes=False)for n in ast.walk(ast.parse(payload))if isinstance(n,ast.FunctionDef)}
+        def functions(payload):
+            tree=ast.parse(payload)
+            # Erase only the new static optional update-route keyword. Its
+            # False/default mapping is checked separately by the route tests.
+            for node in ast.walk(tree):
+                if isinstance(node,ast.Call):node.keywords=[k for k in node.keywords if not(k.arg is None and isinstance(k.value,ast.Name) and k.value.id=='public_kwargs')]
+            return {n.name:ast.dump(n,include_attributes=False)for n in ast.walk(tree)if isinstance(n,ast.FunctionDef)}
         old,new=functions(base),functions(current)
         for name in('run_actor','select_rows','request_seats','physical_actions','sample_keys','retire','initialize','summary','advance','chunk','body'):
             self.assertEqual(old[name],new[name],name)
