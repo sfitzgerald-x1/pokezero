@@ -151,13 +151,22 @@ class PublicHooksTests(unittest.TestCase):
     if any(isinstance(x,ast.Name) and x.id=='_device_public' for x in ast.walk(n.test)):return None
     return self.generic_visit(n)
    def visit_Call(self,n):
-    n=self.generic_visit(n);n.keywords=[k for k in n.keywords if k.arg!='_device_public'];return n
+    n=self.generic_visit(n);n.keywords=[k for k in n.keywords if k.arg!='_device_public']
+    if isinstance(n.func,ast.Name) and n.func.id=='MoveTable':
+     n.args=[a for a in n.args if not(isinstance(a,ast.Call) and isinstance(a.func,ast.Attribute)
+      and isinstance(a.func.value,ast.Name) and a.func.value.id=='public_port' and a.func.attr=='compile_tables')]
+    return n
+   def visit_ClassDef(self,n):
+    n=self.generic_visit(n)
+    if n.name=='MoveTable':
+     n.body=[a for a in n.body if not(isinstance(a,ast.AnnAssign) and isinstance(a.target,ast.Name) and a.target.id=='public_port')]
+    return n
    def visit_arguments(self,n):
     n=self.generic_visit(n);pairs=[(a,d) for a,d in zip(n.kwonlyargs,n.kw_defaults) if a.arg!='_device_public']
     n.kwonlyargs=[a for a,d in pairs];n.kw_defaults=[d for a,d in pairs];return n
   for name in ('transition.py','secondary.py'):
    path='gpu_engine/'+name;base=ast.parse(subprocess.check_output(['git','show',BASE+':'+path],text=True));current=ast.parse(Path(path).read_text())
-   current.body=[n for n in current.body if not(isinstance(n,ast.ImportFrom) and any(a.name=='engine_device_public_hooks' for a in n.names)) and not(isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('step_with_public','initialize_with_public'))]
+   current.body=[n for n in current.body if not(isinstance(n,ast.ImportFrom) and any(a.name in ('engine_device_public_hooks','engine_device_public_port') for a in n.names)) and not(isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in ('step_with_public','initialize_with_public'))]
    current=Erase().visit(current)
    self.assertEqual(ast.dump(current,include_attributes=False),ast.dump(base,include_attributes=False),name)
 
