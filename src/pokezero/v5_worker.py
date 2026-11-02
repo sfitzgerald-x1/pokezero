@@ -216,6 +216,27 @@ def prepare_runtime(inputs):
     return _prepare_runtime(inputs.runtime,inputs.vocabulary,expected_pool_sha256=inputs.plan.pool_sha256)
 
 
+def prepare_device_runtime(inputs):
+    """Static device preparation only; no retained-FULL driver or actor load."""
+    from .category_vocab import CategoryVocabulary
+    from .dex import load_showdown_dex_cached
+    from .randbat import load_gen3_randbat_source_cached
+    from .live_protocol_actor import ActorContract
+    from gpu_engine import source_provenance,public_belief,v4_encoder,v5_device_backend
+    runtime=inputs.runtime;v=inputs.vocabulary;show=runtime['showdown'];contract=ActorContract.champion()
+    vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases'])
+    source=load_gen3_randbat_source_cached(show['root']);dex=load_showdown_dex_cached(show['root'])
+    if source.metadata.source_hash!=contract.belief_set_source_hash:raise ValueError('original public belief source differs')
+    catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+    pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path']);metadata=pool.metadata()
+    if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=inputs.plan.pool_sha256
+            or metadata['compiled_tree']['sha256']!=show['compiled_tree_sha256']):
+        raise ValueError('original constructor source binding differs')
+    prepared=v5_device_backend.prepare(catalog,source,pool,source_commit=runtime['source_commit'])
+    return prepared,pool,None,None
+
+
 def prepare_capture_runtime(bank_reference,*,runtime,expected_runtime_sha256,enable_v5=False):
     """Prepare the real NONTRAINING bank without a Plan, actor or constructor.
 
@@ -300,16 +321,20 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
     return prepared,pool,public,contract
 
 
-def execute(inputs,run_root,*,resume=False,evaluation_hook=None):
+def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False):
     from . import v5_run as run,v5_phasec as phase
     _absolute(str(run_root))
     if type(resume) is not bool:raise ValueError('explicit resume choice required')
+    if type(device_rollout)is not bool:raise ValueError('explicit device rollout choice required')
+    if device_rollout and inputs.plan.model.arm=='D':
+        raise run.MissingDependency('device D public-world teacher consumer is not integrated; no FULL fallback')
     # No fake/default executor, zero-result success or panel bypass.
     if getattr(inputs.plan,'evaluation',None) is None or not callable(evaluation_hook):
         raise run.MissingDependency('declared reviewed evaluation protocol and genuine panel executor required')
     _source(inputs.runtime);_memory(inputs.runtime['memory_policy'],apply=True);_probe(inputs.runtime)
-    prepared,pool,public,contract=prepare_runtime(inputs)
-    backend=phase.build_backend(inputs.plan,prepared,pool,public_config=public,actor_contract=contract,gender_policy=inputs.gender_policy)
+    prepared,pool,public,contract=prepare_device_runtime(inputs) if device_rollout else prepare_runtime(inputs)
+    options=dict(device_rollout=True) if device_rollout else {}
+    backend=phase.build_backend(inputs.plan,prepared,pool,public_config=public,actor_contract=contract,gender_policy=inputs.gender_policy,**options)
     return run.run(inputs.plan,run_root,backend=backend,resume=resume,enable_v5=True,evaluation_hook=evaluation_hook)
 
 
@@ -319,7 +344,7 @@ def main(argv=None,*,evaluation_hook=None):
     parser.add_argument('--arm',required=True,choices=('A0','B0','D0','B1'))
     for name in ('declaration','expected-declaration-sha256','runtime','expected-runtime-sha256','run-root'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--evaluation-protocol');parser.add_argument('--expected-evaluation-protocol-sha256')
-    parser.add_argument('--resume',action='store_true');args=parser.parse_args(argv)
+    parser.add_argument('--resume',action='store_true');parser.add_argument('--device-rollout',action='store_true');args=parser.parse_args(argv)
     inputs=load_inputs(declaration=args.declaration,expected_declaration_sha256=args.expected_declaration_sha256,
         runtime=args.runtime,expected_runtime_sha256=args.expected_runtime_sha256,arm=args.arm,enable_v5=args.enable_v5)
     if (args.evaluation_protocol is None)!=(args.expected_evaluation_protocol_sha256 is None):
@@ -334,7 +359,8 @@ def main(argv=None,*,evaluation_hook=None):
     if args.inspect_only:
         print(json.dumps(dict(status='BOUND_INPUTS_ONLY_NO_RUNTIME_OR_MODEL',arm=args.arm,declaration_sha256=inputs.declaration_sha256)))
         return 0
-    result=execute(inputs,_absolute(args.run_root),resume=args.resume,evaluation_hook=evaluation_hook)
+    options=dict(device_rollout=True) if args.device_rollout else {}
+    result=execute(inputs,_absolute(args.run_root),resume=args.resume,evaluation_hook=evaluation_hook,**options)
     print(json.dumps(dict(status=result['status'],steps=result.get('steps'),rows=result.get('rows'),
         reason=result.get('reason'),disposition_counts=dict(Counter(result.get('statuses',{}).values())),
         scientific_qualification=False),allow_nan=False))
