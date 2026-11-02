@@ -105,7 +105,12 @@ class OwningActorFactory:
 
 def require_actor_factory(config, factory, *, actor_version='champion-v4'):
     validate_encoder_config(config)
-    _require(type(actor_version) is str and actor_version in ('champion-v4','v5'), 'explicit owning actor version required')
+    _require(type(actor_version) is str and actor_version in ('champion-v4','v5','canary-v4'), 'explicit owning actor version required')
+    if actor_version=='canary-v4':
+        from .b4_device_canary_runtime import check_factory
+        check_factory(config,factory)
+        _require(not os.environ.get('POKEZERO_TRAIT_CAPTURE'),'omniscient trait capture forbidden in owning path')
+        return factory
     if actor_version=='v5':
         from gpu_engine.v5_live_protocol import Factory, check_factory
         _require(config.encoder_kind=='jax-owning' and type(factory) is Factory
@@ -351,6 +356,8 @@ class OwningWireSession:
                 v5_label_vocabulary_sha256=self.factory.config.label_vocabulary.sha256,
                 v4_routing_tokens_sha256=self.factory.contract.category_vocab_sha256)
                 if self.actor_version=='v5' else {}),
+            **(dict(actor_version='canary-v4',canary_checkpoint_sha256=self.factory.contract.checkpoint_sha256)
+                if self.actor_version=='canary-v4' else {}),
             actor_namespace=self.factory.contract.namespace,
             status='FAILED_CLOSED_UNQUALIFIED' if failed else 'CLOSED_UNQUALIFIED',
             actual_owner_terminal_seen=self.terminal_seen,

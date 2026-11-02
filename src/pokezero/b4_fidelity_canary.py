@@ -90,6 +90,7 @@ class Plan:
     stall_floor_seconds:float=1800.
     stall_multiplier:float=5.
     backstop_seconds:float=30*86400.
+    bootstrap_seed:int=0
 
     def __post_init__(self):
         object.__setattr__(self,'iterations',tuple(tuple(x) for x in self.iterations))
@@ -112,12 +113,13 @@ class Plan:
         require(self.champion_sha256==CHAMPION_SHA and len(self.source_commit)==40,'original9375/source binding')
         require(type(self.max_requests) is int and self.max_requests>0 and self.stall_floor_seconds==1800. and
                 self.stall_multiplier==5. and self.backstop_seconds==30*86400.,'finite cap/adaptive watchdog')
+        require(type(self.bootstrap_seed) is int and 0<=self.bootstrap_seed<2**64,'declared paired-bootstrap seed')
         require(len(self.fp_configs)==2,'both original FP seats')
         first=self.fp_configs[0]
         for side,config in zip(('p1','p2'),self.fp_configs):
             require(config['games']==PANEL_SEEDS and config['pokezero_player']==side and config['policy_mode']=='raw' and
                     config['search_time_ms']==1000 and config.get('opponent_policy_mode','foul-play')=='foul-play' and
-                    config.get('capture_driver','checkpoint')=='checkpoint' and config.get('encoder_kind','legacy-mixed')=='legacy-mixed' and
+                    config.get('capture_driver','checkpoint')=='checkpoint' and config.get('encoder_kind','legacy-mixed') in ('legacy-mixed','jax-owning') and
                     config.get('value_checkpoint') is None and
                     not config.get('live_continuation_smoke',False) and not config.get('live_continuation_oracle',False),
                     'fixed500 seeds x both seats, original raw Python/Showdown champion vs FP1000ms')
@@ -216,11 +218,22 @@ def checkpoint_payload(path,*,expected_sha256):
     return neural.require_torch().load(io.BytesIO(blob),map_location='cpu',weights_only=True)
 
 
-def run(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=False,enable_canary=False):
+def run(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=False,enable_canary=False,device_path=False):
     """Real source path; no default runtime, artifacts, seed bank or v5 model."""
     require(enable_canary is True and type(plan) is Plan,'explicit original champion canary required')
     require(file_sha(checkpoint)==CHAMPION_SHA,'exact untouched original9375 checkpoint required')
-    from gpu_engine import b4_canary_collection as engine,champion
+    require(type(device_path) is bool,'explicit canary collection path')
+    from gpu_engine import champion
+    if device_path:
+        from gpu_engine import b4_device_canary_collection as engine
+        require(all(x.get('encoder_kind')=='jax-owning' for x in plan.fp_configs),'device canary requires B2 endpoint')
+        # Validate the original B2 configuration before allocating the trainer
+        # or consuming any declared training cell. This only constructs config.
+        from .b4_canary_endpoint import cells,configuration
+        first=cells(plan)
+        for cell in (first[0],first[2]):configuration(plan,cell,checkpoint)
+    else:
+        from gpu_engine import b4_canary_collection as engine
     from . import dataset
     book=Journal(path,plan,resume=resume);progress=Progress(plan)
     original=checkpoint_payload(checkpoint,expected_sha256=CHAMPION_SHA)
@@ -300,10 +313,17 @@ def run(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=
     prior=book.matching('CANARY_TRAINING_END')
     if prior:require(prior==[ending],'immutable final checkpoint differs')
     else:book.emit('CANARY_TRAINING_END',**ending)
-    return dict(status='FINAL_CHECKPOINT_NOT_EVALUATED',checkpoint=current,declared_games=declared)
+    report=dict(status='FINAL_CHECKPOINT_NOT_EVALUATED',checkpoint=current,declared_games=declared)
+    if device_path:
+        statuses={g.stream_id:'NOT_ATTEMPTED' for iteration in plan.iterations for batch in iteration for g in batch.games}
+        for event in book.matching('GAME_END',phase='COLLECT'):statuses[event['stream_id']]=event['status']
+        report['dispositions']={name:list(statuses.values()).count(name) for name in ('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED','UNKNOWN')}
+        require(sum(report['dispositions'].values())==DECLARED_GAMES,'full fixed device-canary denominator')
+        report['collection_path']='DEVICE_PUBLIC_V4_NO_CAPTURE'
+    return report
 
 
-async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canary=False):
+async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canary=False,device_path=False):
     """Fixed paired raw FP endpoints only; attempted cells never repeat on resume."""
     require(enable_canary is True and type(plan) is Plan,'explicit separate canary endpoint')
     require(file_sha(champion_checkpoint)==CHAMPION_SHA,'untouched paired control checkpoint')
@@ -315,8 +335,19 @@ async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canar
     import fcntl
     with (book.path/'fp-invocation.lock').open('a+b') as lock:
         fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
-        try:return await evaluate_with_sigterm(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint)
+        try:return await evaluate_with_sigterm(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint,device_path=device_path)
         finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN)
+
+
+def run_device(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=False,enable_canary=False):
+    """Explicit new device path; original archived capture entry stays separate."""
+    return run(plan,path,checkpoint=checkpoint,prepared=prepared,pool=pool,gender_policy=gender_policy,
+        device=device,resume=resume,enable_canary=enable_canary,device_path=True)
+
+
+async def evaluate_device(plan,path,*,champion_checkpoint,final_checkpoint,enable_canary=False):
+    return await evaluate(plan,path,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint,
+        enable_canary=enable_canary,device_path=True)
 
 
 def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep):
