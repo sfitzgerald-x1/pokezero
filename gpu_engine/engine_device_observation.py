@@ -504,6 +504,27 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
     field = {'PRESENT', 'TURN_COUNT', 'SELF_HAZARDS', 'OPP_HAZARDS', 'SELF_HAZARD_EXPECTED', 'OPP_HAZARD_EXPECTED'}
     action = {'HP_FRACTION', 'ACTIVE', 'LEGAL', 'PRESENT', 'LEVEL', 'BASE_POWER', 'PRIORITY', 'ACCURACY',
         'EFFECT_CHANCE', 'SELF_HP_COST', 'MOVE_PP_FRACTION'} | {n for n in own if n.startswith(('BASE_', 'ACTUAL_'))}
+    # Original B2 writers are sparse by token role. In particular, unnamed
+    # positions inside the 16 PP/validity and six weather-reveal ranges are
+    # still role-specific; absence of a NUMERIC_* name is not a missing hook.
+    field_columns = {_index(n) for n in ('PRESENT', 'TURN_COUNT', 'SELF_HAZARDS', 'OPP_HAZARDS')}
+    field_columns |= {_index(item[0]) for item in features.FIELD_FIELDS.values()}
+    field_columns |= {_index('SELF_HAZARD_EXPECTED'), _index('OPP_HAZARD_EXPECTED')}
+    stats_columns = {_index('PRESENT'), *(_index(item[0]) for item in features.STATS_FIELDS.values()),
+        *(reference.v4_numeric_index(reference.NUMERIC_STAT_WEATHER_REVEAL_OFFSET + i) for i in range(6))}
+    mon_columns = {_index(n) for n in own} | {_index(item[0]) for item in features.MON_FIELDS.values()}
+    mon_columns |= {_index('WAKE_KNOWN'), _index('TOXIC_STAGE')}
+    own_columns = mon_columns - {_index(features.MON_FIELDS[key][0]) for key in features.TENDENCY_FIELDS}
+    opponent_columns = mon_columns | set(BELIEF_COLUMNS) | set(EXPECTED_COLUMNS)
+    active_categories = {reference.CATEGORY_LAST_USED_MOVE, reference.CATEGORY_TRACED_ABILITY,
+        *range(reference.CATEGORY_VOLATILE_OFFSET, reference.CATEGORY_VOLATILE_OFFSET + 6)}
+    role_numeric = {'field': field_columns, 'own': own_columns, 'opponent': opponent_columns,
+        'stats': stats_columns}
+    role_categorical = {'field': {0, 1, 2},
+        'own': {0, 1, 2, 4, 5, reference.CATEGORY_BELIEF_ABILITY_OFFSET,
+            reference.CATEGORY_BELIEF_ITEM_OFFSET} | active_categories,
+        'opponent': {0, 1, 2, 4, 5, *BELIEF_CATEGORIES} | active_categories,
+        'stats': {reference.CATEGORY_ROLE}}
     result = []
     for section, produced, mode in (('field', field, 'DIRECT'), ('own', own, 'DIRECT'),
             ('opponent', foe, 'TRACKED'), ('actions', action, 'DIRECT'), ('stats', set(), 'ZERO'), ('belief', set(), 'ZERO')):
@@ -571,6 +592,10 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                     status, reason = 'TRACKED', 'original source prior + public hard/pin mask fallback; uniform current sampler'
                     if column == 131 and (public is None or getattr(public, 'belief_pin', None) is None):
                         status, reason = 'ZERO', 'deferred public damage-evidence pin producer; no fabricated pin conflict'
+                # A zero-initialized dictionary key does not establish an
+                # original public write: current physics has no Trick handler.
+                if section in ('own', 'opponent') and kind == 'numeric' and column == _index('ITEM_SWAPPED'):
+                    status, reason = 'ZERO', 'unavailable: current physical engine has no Trick item-swap handler'
                 if status == 'ZERO':
                     if section in ('actions', 'belief') or (section in ('own', 'opponent') and kind == 'numeric' and any(n.startswith(('STAT_', 'SELF_', 'OPP_', 'TT_', 'TM2_')) for n in labels)):
                         reason = 'structurally not applicable to this token section'
@@ -582,6 +607,22 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                         reason = 'structurally not applicable: owning party is request-known, not an opponent belief'
                     if section == 'opponent' and any(n.startswith('ACTUAL_') for n in labels):
                         reason = 'unavailable hidden opponent actual stats; only public/source expected bounds are permitted'
+                    applicable = role_numeric if kind == 'numeric' else role_categorical
+                    if section in applicable and column not in applicable[section] and not reason.startswith('unavailable hidden'):
+                        if not reason.startswith('structurally not applicable: owning party'):
+                            reason = 'structurally not applicable to this token section'
+                    if section in ('own', 'opponent') and kind == 'numeric':
+                        if column == _index('WRAP_TRAP_TURNS'):
+                            reason = 'unavailable: current physical engine has no partial-trap duration handler'
+                        elif column == _index('CHOICE_LOCKED'):
+                            reason = 'unavailable: original public lock requires item acquisition; current engine has no Trick handler'
+                        elif column == _index('ITEM_SWAPPED'):
+                            reason = 'unavailable: current physical engine has no Trick item-swap handler'
+                    if section == 'field' and kind == 'numeric' and column in {
+                            _index('SELF_ITEMS_REMOVED_CREDIT'), _index('OPP_ITEMS_REMOVED_CREDIT')}:
+                        reason = 'unavailable: original removal credit requires Knock Off; current engine has no removal handler'
+                    if section == 'belief' and kind == 'numeric' and column == 131:
+                        reason = 'deferred public damage-evidence pin producer; no fabricated pin conflict'
                 start, stop = {'field': (0, 1), 'own': (1, 7), 'opponent': (7, 13),
                     'actions': (13, 22), 'stats': (22, 23), 'belief': (23, 29)}[section]
                 result.append(dict(section=section, token_start=start, token_stop=stop,
