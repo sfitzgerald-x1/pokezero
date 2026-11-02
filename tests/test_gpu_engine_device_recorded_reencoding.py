@@ -216,7 +216,7 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
 
     def test_enablement_no_runtime_and_no_native_sampler_constructor_calls(self):
         with patch.object(c,'prepare',side_effect=AssertionError('must not prepare')):
-            with self.assertRaises(ValueError):r.run({},out='/shared/scott/not-created')
+            with self.assertRaises(ValueError):r.run({},out='/shared/fixture/not-created')
         tree=ast.parse(Path(r.__file__).read_text())
         forbidden={'sample','sample_chance_inputs','construct','pool_sets','pack_sets','game','step_with_chance',
             'OwningShowdownEnv','ChanceControl','compare_trace','captured_words','build_v5_model','choose_legal'}
