@@ -20,8 +20,8 @@ def _stat(path):
 
 
 class Spool:
-    def __init__(self,store,bank,*,bank_sha256):
-        self.store=store;self.bank=bank;self.bank_sha256=bank_sha256
+    def __init__(self,store,bank,*,bank_sha256,teacher_recipe=None):
+        self.store=store;self.bank=bank;self.bank_sha256=bank_sha256;self.teacher_recipe=teacher_recipe
         self.root=store.path/'rollouts'/('spool-'+uuid.uuid4().hex);self.root.mkdir(parents=True)
         self.records=[];self.stats={};self.parts=[];self.has_training=np.zeros(len(bank.streams),bool)
 
@@ -31,7 +31,7 @@ class Spool:
         return dict(path=str(path.relative_to(self.store.path)),shape=list(value.shape),dtype=value.dtype.str,
             sha256=v5_data._file_sha(path))
 
-    def append(self,host):
+    def append(self,host,*,teacher_records=None):
         """One host chunk -> immutable batch-major .npy files, no full copy."""
         ordinal=len(self.records);folder=self.root/str(ordinal);folder.mkdir()
         record=dict(schema='pokezero.device_rollout_spool.v1',bank_sha256=self.bank_sha256,chunk=ordinal,
@@ -40,6 +40,15 @@ class Spool:
             record['frames'][name]=None if value is None else self._save(folder/(name+'.npy'),np.swapaxes(value,0,1))
         for name in ('streams','frames','status','winner','terminal_frame','terminal_hp','terminal_max_hp'):
             record['final'][name]=self._save(folder/('final_'+name+'.npy'),getattr(host.carry,name))
+        if self.teacher_recipe is not None:
+            from .v5_device_teacher import validate_records
+            if teacher_records is None:raise ValueError('D spool requires every requested teacher slot')
+            validate_records(host.frames,self.bank,self.teacher_recipe,teacher_records)
+            data=(json.dumps(teacher_records,sort_keys=True,allow_nan=False)+'\n').encode()
+            description=self.store.artifact(str((folder/'teacher.json').relative_to(self.store.path)),data,kind='DEVICE_TEACHER_CHUNK',bank_sha256=self.bank_sha256)
+            file=self.store.path/description['path'];file.chmod(0o444);self.stats[str(file)]=_stat(file)
+            record['teacher']=dict(path=description['path'],sha256=description['sha256'])
+        elif teacher_records is not None:raise ValueError('teacher records require original Recipe')
         self.has_training|=np.any(host.frames.trainable,axis=(0,2))
         self.store.artifact(str((folder/'metadata.json').relative_to(self.store.path)),
             (json.dumps(record,sort_keys=True)+'\n').encode(),kind='DEVICE_ROLLOUT_CHUNK',bank_sha256=self.bank_sha256)
@@ -78,8 +87,19 @@ class Spool:
     def finalize_game(self,row,game,*,bindings,loss_config,discount):
         if not self.has_training[row]:return
         bank=replace(self.bank,streams=(self.bank.streams[row],),actor_indices=(self.bank.actor_indices[row],),learner_mask=(self.bank.learner_mask[row],))
+        options={}
+        if self.teacher_recipe is not None:
+            labels=[]
+            for record in self.records:
+                description=record['teacher'];file=self.store.path/description['path'];before=_stat(file)
+                if before!=self.stats[str(file)]or v5_data._file_sha(file)!=description['sha256']:
+                    raise ValueError('owned teacher records changed')
+                items=json.loads(file.read_text())
+                if _stat(file)!=before:raise ValueError('owned teacher records changed during read')
+                labels.extend(x for x in items if x['address']['stream']==game.stream_id)
+            options=dict(teacher_records=labels,teacher_recipe=self.teacher_recipe)
         batch=rollout.training_batch((self.game(row),),bindings,actor_bank=bank,battle_ids=(game.battle_id,),seeds=(game.seed,),
-            loss_config=loss_config,discount=discount)
+            loss_config=loss_config,discount=discount,**options)
         folder=self.root/'games';folder.mkdir(exist_ok=True);path=folder/str(row)
         v5_data.write_cache(path,batch)
         for p in path.iterdir():p.chmod(0o444)

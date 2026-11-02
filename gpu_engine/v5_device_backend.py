@@ -48,18 +48,25 @@ def prepare(catalog,source,pool,*,source_commit):
 
 class RuntimeBackend:
     """Device-mode backend for the unchanged v5_run.run callback contract."""
-    def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8):
+    def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None):
         if type(prepared)is not Prepared or type(chunk_steps)is not int or chunk_steps<=0:
             raise ValueError('prepared device runtime and finite chunk required')
+        self.teacher=teacher
         self.prepared=prepared;self.pool=pool;self.gender_policy=gender_policy;self.chunk_steps=chunk_steps
         self.actors={};self._plan=None;self.labels=None;self.declaration_sha256=None;self.model_sha256=None
         self.initialize=jax.jit(lambda state:transition.initialize_with_public(state,prepared.engine_tables,
             belief_tables=prepared.observation_tables.belief))
 
-    def require_teacher(self):raise runs.MissingDependency('device D public-world teacher consumer is not integrated; no FULL fallback')
+    def require_teacher(self):
+        from .v5_device_teacher import Provider
+        if type(self.teacher)is not Provider or self.teacher.prepared is not self.prepared:
+            raise runs.MissingDependency('device D requires a genuine configured public-world teacher; no FULL fallback')
 
     def check_plan(self,plan):
-        if plan.model.arm=='D':self.require_teacher()
+        if plan.model.arm=='D':
+            self.require_teacher()
+            if self.teacher.plan!=plan:raise ValueError('same original D teacher Plan required')
+        elif self.teacher is not None:raise ValueError('D teacher cannot label A/B treatment')
         if self.prepared.pool_sha256!=plan.pool_sha256:raise ValueError('original declared constructor pool differs')
         if self._plan is not None and plan is not self._plan and plan!=self._plan:
             raise ValueError('one original worker plan required')
@@ -102,12 +109,15 @@ class RuntimeBackend:
         # and order, before the bank's plain immutable JSON binding.
         recorded_assignments=json.loads(runs._json(assignments))
         bank=rollout.actor_bank_from_assignments(bindings,required,current_archive=current['archive_sha256'],assignments=recorded_assignments)
+        options={} if plan.model.arm!='D' else dict(retain_teacher_roots=True)
+        params=tuple(self.actors[key][0] for key in required)
+        if self.teacher is not None:self.teacher.bind(bank,params)
         collector=rollout.make_collector(self.prepared.engine_tables,self.prepared.observation_tables,plan.model,self.labels,bindings,
-            sampling_seed=batch.sampling_seed,chunk_steps=self.chunk_steps,max_requests=plan.max_requests,actor_bank=bank)
+            sampling_seed=batch.sampling_seed,chunk_steps=self.chunk_steps,max_requests=plan.max_requests,actor_bank=bank,**options)
         # One callable per prepared assignment bank; reused for every device
         # chunk. Group topology/shape changes may require a new compilation.
         return dict(plan=plan,batch=batch,bindings=bindings,bank=bank,collector=collector,
-            params=tuple(self.actors[key][0] for key in required))
+            params=params)
 
     def _construct(self,batch):
         indices=np.asarray([game.team_indices for game in batch.games],np.int32)
@@ -136,15 +146,19 @@ class RuntimeBackend:
             constructor_seed=batch.constructor_seed,sampling_seed=batch.sampling_seed,gender_seed=batch.gender_seed,
             gender_domain=batch.gender_domain,gender_root_ids=batch.gender_root_ids)
         receipt=store.artifact(f'rollouts/device-bank-{uuid.uuid4().hex}.json',runs._json(binding).encode(),kind='DEVICE_ACTOR_BANK')
-        spool=Spool(store,bank,bank_sha256=receipt['sha256'])
+        options={} if self.teacher is None else dict(teacher_recipe=self.teacher.recipe)
+        spool=Spool(store,bank,bank_sha256=receipt['sha256'],**options)
         for _ in range((plan.max_requests+self.chunk_steps-1)//self.chunk_steps):
             check_progress()
             device=prepared['collector'](carry,prepared['params']);carry=device.carry
             # Keep the live world/public carry on device. The original batch
             # adapter needs raw Frames plus literal terminal fields, not a
             # duplicate hidden world/constructor truth on the host each chunk.
-            host=rollout.boundary(device._replace(carry=carry._replace(state=None,public=None,truth=None)));del device
-            spool.append(host)
+            host=rollout.boundary(device._replace(carry=carry._replace(state=None,public=None,truth=None),roots=None))
+            labels=None if self.teacher is None else self.teacher.label_chunk(device.roots,host.frames,bank,prepared['params'])
+            del device
+            if self.teacher is None:spool.append(host)
+            else:spool.append(host,teacher_records=labels)
             for row,game in enumerate(batch.games):
                 status=int(host.carry.status[row])
                 if status!=rollout.RUNNING and game.stream_id not in closed:
