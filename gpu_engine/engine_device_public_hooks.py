@@ -9,6 +9,11 @@ import jax
 import jax.numpy as j
 from . import engine_device_trackers as tr
 from .public_active import NAMES as VOLATILE_NAMES
+from . import engine_device_damage_history as damage_history
+
+# Same-write HP notification classes for the separate public negative-item
+# updater. These are static provenance labels, not an event/witness roster.
+HP_ACTION,HP_PRE_ITEM,HP_POST_ITEM,HP_UNKNOWN=range(4)
 
 MON_KEYS=('turns_active','turns_active_total','sleep_turns','rest_sleep','toxic_stage',
           'confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap',
@@ -89,6 +94,7 @@ def initialize(state,belief_tables=None):
             j.zeros((b,2),j.int32),j.zeros((b,2,6,6,2),j.int32)),
         public_volatiles=j.zeros((b,2,6,len(VOLATILE_NAMES)),bool),field_features={'weather_upkeeps':j.zeros(b,j.int32),
             'weather_permanent':j.zeros(b,bool),'wish_turns':j.zeros((b,2),j.int32),'wish_pending':j.zeros((b,2),bool)})
+    t=t._replace(damage_history=damage_history.initialize(state))
     c=Context(t,belief_tables)
     for side in range(2):c=install(c,state,side,j.ones(b,bool),initial=True)
     # Original startup emits switches, then TURN1 before the first request.
@@ -102,6 +108,15 @@ def public_turn(c,state,use,turn):
         p=state.active[_r(state),side]
         for name in ('turns_active','turns_active_total'):
             c=feature(c,side,p,name,j.ones_like(p),use,add=True)
+    if c.trackers.damage_history is not None:
+        history,taken,dealt=damage_history.settle(c.trackers.damage_history,use)
+        c=c._replace(trackers=c.trackers._replace(damage_history=history))
+        for side in range(2):
+            p=state.active[_r(state),side]
+            for name,value in (('last_damage_taken',taken[:,side,0]),('last_damage_dealt',dealt[:,side,0])):
+                c=feature(c,side,p,name,value,use)
+            for name,value in (('damage_exact_taken',taken[:,side,1]),('damage_exact_dealt',dealt[:,side,1])):
+                c=c._replace(trackers=_write(c.trackers,name,side,p,value,use))
     return c._replace(trackers=c.trackers._replace(turn=j.where(use,turn,t.turn)))
 
 
@@ -144,6 +159,13 @@ def install(c,state,side,use,*,initial=False):
         t=t._replace(own_order=t.own_order.at[r,side].set(j.where(use[:,None],swapped,order)))
     t=tr._install(t,state,side,use);slot=t.active_slot[r,side];at=j.clip(slot,0,5)
     c=c._replace(trackers=t)
+    if c.trackers.damage_history is not None:
+        c=c._replace(trackers=c.trackers._replace(damage_history=damage_history.arrive(
+            c.trackers.damage_history,state,side,use)))
+        for name in ('last_damage_dealt','last_damage_taken'):
+            c=feature(c,side,p,name,j.zeros(b,j.float32),use)
+        for name in ('damage_exact_dealt','damage_exact_taken'):
+            c=c._replace(trackers=_write(c.trackers,name,side,p,j.zeros(b,j.float32),use))
     if c.belief_tables is not None:
         species=_get(state,'species',side);tab=c.belief_tables.species_initial_mask
         known=(species>0)&(species<tab.shape[0]);bits=tab[j.clip(species,0,tab.shape[0]-1)]
@@ -167,9 +189,12 @@ def install(c,state,side,use,*,initial=False):
     return c
 
 
-def observe(c,state,use):
+def observe(c,state,use,*,record_damage=True):
     """Actual current public HP/status/stages/field only; never poll benches."""
     use=_mask(use,len(c.trackers.error));r=_r(state)
+    if c.trackers.damage_history is not None:
+        c=c._replace(trackers=c.trackers._replace(damage_history=damage_history.observe(
+            c.trackers.damage_history,state,use,tr._percent,record_damage=record_damage)))
     for side in range(2):
         t=c.trackers;p=state.active[:,side];slot=j.clip(t.physical_to_public[r,side,p],0,5)
         status=_get(state,'status',side);changed=use&(t.status[r,side,slot]!=status)
@@ -179,6 +204,17 @@ def observe(c,state,use):
     t=c.trackers
     return c._replace(trackers=t._replace(weather=j.where(use,state.weather,t.weather),
         spikes=j.where(use[:,None],state.spikes,t.spikes)))
+
+
+def hp_line(c,state,side,use,*,source_class,record_damage=True):
+    """Actual HP-line write cutpoint; use is original line emission eligibility.
+
+    The negative-item composition attaches its public-only notification here
+    BEFORE observe updates the public HP snapshot. No classification is guessed
+    from a final state or from a shown-percent difference. Pain Split's -sethp
+    updates the baseline with record_damage=False; self-faint has no HP line.
+    """
+    return observe(c,state,use,record_damage=record_damage)
 
 
 def reveal_ability(c,state,side,use,*,ability=None,original=True):
@@ -319,6 +355,9 @@ def damage(c,state,side,dealt,taken,use):
     current=tr._percent(_get(state,'hp',foe),_get(state,'max_hp',foe))
     shown=j.maximum(0,previous-current).astype(j.float32)/100.0
     exact=taken.astype(j.float32)/j.maximum(_get(state,'max_hp',foe),1).astype(j.float32)
+    if c.trackers.damage_history is not None:
+        return c._replace(trackers=c.trackers._replace(damage_history=damage_history.direct(
+            c.trackers.damage_history,side,shown,exact,use & (taken>0))))
     c=c._replace(trackers=_write(c.trackers,'damage_exact_dealt',side,state.active[r,side],exact,use))
     c=c._replace(trackers=_write(c.trackers,'damage_exact_taken',foe,p,exact,use))
     c=feature(c,side,state.active[r,side],'last_damage_dealt',shown,use)

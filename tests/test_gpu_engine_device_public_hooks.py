@@ -72,6 +72,7 @@ class PublicHooksTests(unittest.TestCase):
   s=state();s=s._replace(hp=s.hp.at[:,1,0].set(199),max_hp=s.max_hp.at[:,1,0].set(513))
   c=h.initialize(s,tables());after=s._replace(hp=s.hp.at[:,1,0].set(99))
   h.damage(c,after,0,j.full(2,100,j.int32),j.full(2,100,j.int32),j.ones(2,bool));h.observe(c,after,j.ones(2,bool))
+  h.public_turn(c,after,j.ones(2,bool),c.trackers.turn+1)
   a=tr.readout(c.trackers,j.zeros(2,j.int32));b=tr.readout(c.trackers,j.ones(2,j.int32))
   np.testing.assert_allclose(a.own_mon_features['last_damage_dealt'][:,0],.19)
   np.testing.assert_allclose(b.mon_features['last_damage_dealt'][:,0],100/513)
