@@ -92,7 +92,8 @@ def initialize(state,belief_tables=None,*,port_tables=None):
         tendency=tr.Tendency(j.zeros((b,2),bool),j.full((b,2),-1,j.int32),j.zeros((b,2),j.int32),
             j.zeros((b,2),j.int32),j.zeros((b,2,6,6,2),j.int32)),
         public_volatiles=j.zeros((b,2,6,len(VOLATILE_NAMES)),bool),field_features={'weather_upkeeps':j.zeros(b,j.int32),
-            'weather_permanent':j.zeros(b,bool),'wish_turns':j.zeros((b,2),j.int32),'wish_pending':j.zeros((b,2),bool)})
+            'weather_permanent':j.zeros(b,bool),'wish_turns':j.zeros((b,2),j.int32),'wish_pending':j.zeros((b,2),bool),
+            'wish_set_turn':j.full((b,2),-1,j.int32)})
     t=t._replace(damage_history=damage_history.initialize(state),public_port=port.initialize(b))
     c=Context(t,belief_tables,port_tables)
     for side in range(2):c=install(c,state,side,j.ones(b,bool),initial=True)
@@ -453,13 +454,24 @@ def weather(c,before,after,use,*,permanent=False,side=None):
     return observe(c,after,use)
 
 
-def wish(c,side,use,*,start=False):
-    t=c.trackers;f=t.field_features;r=j.arange(len(t.error));old=f['wish_turns'][r,side];pending=f['wish_pending'][r,side]
-    value=j.zeros_like(old) if start else old+1
-    enabled=use if start else use&pending
-    turns=f['wish_turns'].at[r,side].set(j.where(enabled,value,old))
-    waiting=f['wish_pending'].at[r,side].set(j.where(enabled,j.asarray(start)|(value<2),pending))
-    return c._replace(trackers=t._replace(field_features={**f,'wish_turns':turns,'wish_pending':waiting}))
+def wish(c,side,use,*,start=False,resolved=False):
+    """Public declaration/actual heal only; silent expiry uses public TURN.
+
+    The original parser stores the declaration turn, not the numerical engine
+    counter or elapsed residual ticks. A pending second declaration cannot
+    rearm. A full-HP landing has no heal line and stays pending until TURN.
+    """
+    t=c.trackers;f=t.field_features;r=j.arange(len(t.error));use=_mask(use,len(r))
+    old=f['wish_set_turn'][r,side];arm=(old<0)|((t.turn-old)>1)
+    declared=j.where(use&j.asarray(start)&arm,t.turn,old)
+    declared=j.where(use&~j.asarray(start)&_mask(resolved,len(r)),-1,declared)
+    elapsed=t.turn-declared
+    pending=(declared>=0)&(elapsed<=1)
+    remaining=j.where((declared>=0)&(elapsed>=0)&(elapsed<=1),2-elapsed,0)
+    return c._replace(trackers=t._replace(field_features={**f,
+        'wish_set_turn':f['wish_set_turn'].at[r,side].set(declared),
+        'wish_turns':f['wish_turns'].at[r,side].set(j.where(use,remaining,f['wish_turns'][r,side])),
+        'wish_pending':f['wish_pending'].at[r,side].set(j.where(use,pending,f['wish_pending'][r,side]))}))
 
 
 def before_move(c,state,side,result,use,*,loafing=False,sleep_usable=False):
