@@ -37,6 +37,35 @@ def _read_result(path):
     return value
 
 
+def _cpu_pairs(plan, pairs=None):
+    """Placement may move; the scientific worker-count/slot law may not."""
+    if pairs is None:return plan.fp_cpu_pairs
+    from . import b4_fidelity_canary as c
+    c.require(type(pairs) in (tuple,list) and len(pairs)==len(plan.fp_cpu_pairs) and
+        all(type(pair) in (tuple,list) and len(pair)==2 and
+            all(type(cpu) is int and cpu>=0 for cpu in pair) for pair in pairs) and
+        len({cpu for pair in pairs for cpu in pair})==2*len(pairs),
+        'runtime CPU pairs must preserve worker count and use distinct literal cores')
+    return tuple(tuple(pair) for pair in pairs)
+
+
+def _request_pairs(request, plan):
+    """Old requests retain old placement; moved requests bind their own file."""
+    from . import b4_fidelity_canary as c
+    digest=request.get('endpoint_cpu_runtime_sha256')
+    if 'endpoint_cpu_runtime_sha256' not in request:pairs=plan.fp_cpu_pairs
+    else:
+        c.require(type(digest) is str and len(digest)==64 and all(x in '0123456789abcdef' for x in digest),
+            'literal endpoint runtime identity required')
+        value=_read_result(Path(request['run_directory'])/'fp-cpu-runtime'/(digest+'.json'))
+        c.require(set(value)=={'schema','declaration_sha256','cpu_pairs','cpu_topology'} and
+            value['schema']=='pokezero.b4.canary.endpoint-cpu-runtime.v1' and c.sha(value)==digest and
+            value['declaration_sha256']==request['declaration_sha256'],'endpoint runtime/source binding differs')
+        pairs=_cpu_pairs(plan,value['cpu_pairs'])
+    c.require(request['cpu_pair']==list(pairs[request['cell']['slot']]),'original ordinal/runtime core mapping differs')
+    return pairs
+
+
 def cells(plan):
     from . import b4_fidelity_canary as c
     return tuple(dict(ordinal=4*offset+2*seat+arm_index,offset=offset,seat=seat,arm=arm,
@@ -53,13 +82,13 @@ def _checked_cell(cell,plan):
         cell['slot']==(cell['ordinal']+cell['offset'])%len(plan.fp_cpu_pairs),'exact typed original ordinal/slot required')
 
 
-def configuration(plan,cell,checkpoint):
+def configuration(plan,cell,checkpoint,*,cpu_pairs=None):
     from dataclasses import fields
     from . import foulplay_bridge as fp
     _checked_cell(cell,plan);raw=plan.fp_configs[cell['seat']]
     values={**raw,'checkpoint':Path(checkpoint),'games':1,'seed_start':raw['seed_start']+cell['offset'],
         'foulplay_random_seed':raw['foulplay_random_seed']+cell['offset'],
-        'foulplay_cpu_affinity':plan.fp_cpu_pairs[cell['slot']][1]}
+        'foulplay_cpu_affinity':_cpu_pairs(plan,cpu_pairs)[cell['slot']][1]}
     for field in fields(fp.ControlledFoulPlayConfig):
         if field.name in values and values[field.name] is not None and 'Path' in str(field.type):values[field.name]=Path(values[field.name])
     return fp.ControlledFoulPlayConfig(**values)
@@ -80,7 +109,7 @@ def checked_result(value,request,plan):
         value['checkpoint_sha256']==request['checkpoint_sha256'],'original cell result binding differs')
     duration=value['duration_seconds'];c.require(type(duration) in (int,float) and math.isfinite(duration)
         and 0<=duration<=plan.backstop_seconds,'literal actual cell duration')
-    config=configuration(plan,request['cell'],request['checkpoint'])
+    config=configuration(plan,request['cell'],request['checkpoint'],cpu_pairs=_request_pairs(request,plan))
     if value['error'] is not None:
         c.require(type(value['error']) is str and value['status']=='UNKNOWN' and value['score'] is None,'failure cannot become a score')
     else:
@@ -142,7 +171,7 @@ async def _finish_owned_cleanup(process):
         raise
 
 
-async def evaluate_with_sigterm(plan,book,*,champion_checkpoint,final_checkpoint,device_path=False):
+async def evaluate_with_sigterm(plan,book,*,champion_checkpoint,final_checkpoint,device_path=False,endpoint_cpu_pairs=None):
     """Own TERM for this public invocation, then restore/defer caller handlers.
 
     A separate endpoint task makes repeated termination idempotent while its
@@ -164,7 +193,8 @@ async def evaluate_with_sigterm(plan,book,*,champion_checkpoint,final_checkpoint
     loop.add_signal_handler(signal.SIGTERM,terminate)
     installed=registry.get(signal.SIGTERM)
     try:
-        child=asyncio.create_task(evaluate_declared(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint,device_path=device_path))
+        options={} if endpoint_cpu_pairs is None else dict(endpoint_cpu_pairs=endpoint_cpu_pairs)
+        child=asyncio.create_task(evaluate_declared(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint,device_path=device_path,**options))
         if received:cancel_once()
         try:
             value=await asyncio.shield(child);cleanup_finished=True;return value
@@ -212,7 +242,7 @@ def pin_owned_actor(pair):
         except ProcessLookupError:pass
 
 
-def check_placement(plan):
+def check_placement(plan,*,cpu_pairs=None):
     """Read-only parent check. Launcher taskset is an ordinary runtime action."""
     from .owning_encoder_continuation import cpu_allocation
     available=None
@@ -228,8 +258,9 @@ def check_placement(plan):
                 available.update(range(start,end+1))
             break
     if available is None:raise ValueError('Linux effective cpuset required before endpoint')
-    topology=cpu_allocation(plan.fp_cpu_pairs,available=available)
-    actors={pair[0] for pair in plan.fp_cpu_pairs}
+    pairs=_cpu_pairs(plan,cpu_pairs)
+    topology=cpu_allocation(pairs,available=available)
+    actors={pair[0] for pair in pairs}
     for tid in Path('/proc/self/task').iterdir():
         try:
             if not set(os.sched_getaffinity(int(tid.name)))<=actors:
@@ -247,11 +278,12 @@ async def worker(request_path,expected_sha256,*,runtime=None,expected_pair=None)
     if expected_pair is None:pin_owned_actor(tuple(request['cpu_pair']))
     elif tuple(request['cpu_pair'])!=tuple(expected_pair):raise ValueError('persistent worker core pair changed')
     from . import b4_fidelity_canary as c,foulplay_bridge as fp,v5_foulplay
-    c.require(set(request)=={'schema','run_directory','declaration_sha256','cell','checkpoint','checkpoint_sha256','cpu_pair'} and
+    keys={'schema','run_directory','declaration_sha256','cell','checkpoint','checkpoint_sha256','cpu_pair'}
+    c.require(set(request) in (keys,keys|{'endpoint_cpu_runtime_sha256'}) and
         c.encoded(request)==blob and request['schema']=='pokezero.b4.canary.fp-request.v1','original cell request schema')
     root=Path(request['run_directory']);plan=c.load_plan(root/'declaration.json',expected_sha256=request['declaration_sha256'])
     cell=request['cell'];_checked_cell(cell,plan)
-    c.require(request['cpu_pair']==list(plan.fp_cpu_pairs[cell['slot']]),'original ordinal/core mapping differs')
+    pairs=_request_pairs(request,plan)
     c.require(Path(request_path).resolve()==root/'fp-requests'/f"{cell['ordinal']}.json",'original owned request path')
     start_path=root/'fp-starts'/f"{cell['ordinal']}.json"
     c.require(start_path.read_bytes()==c.encoded(_start(request,expected_sha256)),'durable original start must precede attempt')
@@ -263,7 +295,7 @@ async def worker(request_path,expected_sha256,*,runtime=None,expected_pair=None)
     with claim.open('xb') as stream:stream.write(blob);stream.flush();os.fsync(stream.fileno())
     c._sync_directory(claim.parent);c._sync_directory(root)
     c.require(c.file_sha(request['checkpoint'])==request['checkpoint_sha256'],'original selected model artifact differs')
-    config=configuration(plan,cell,request['checkpoint']);started=time.monotonic();game=document=None
+    config=configuration(plan,cell,request['checkpoint'],cpu_pairs=pairs);started=time.monotonic();game=document=None
     try:
         result=(await fp.run_controlled_foulplay_benchmark(config) if runtime is None else
             await runtime.run(config,expected_checkpoint_sha256=request['checkpoint_sha256']))
@@ -281,23 +313,39 @@ async def worker(request_path,expected_sha256,*,runtime=None,expected_pair=None)
     return 0
 
 
-async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint,device_path=False):
+async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint,device_path=False,endpoint_cpu_pairs=None):
     from . import b4_fidelity_canary as c
-    topology=check_placement(plan)  # Never mutate threaded controller affinity.
+    pairs=_cpu_pairs(plan,endpoint_cpu_pairs)
+    topology=check_placement(plan) if endpoint_cpu_pairs is None else check_placement(plan,cpu_pairs=pairs)
     root=book.path.resolve();declaration=c.file_sha(root/'declaration.json')
     if type(device_path)is not bool:raise ValueError('explicit endpoint path required')
     if device_path and not all(x.get('encoder_kind')=='jax-owning' for x in plan.fp_configs):
         raise ValueError('device canary requires original B2 owning endpoint')
-    pool=WorkerPool(root,plan) if device_path else None
+    pool=(WorkerPool(root,plan) if endpoint_cpu_pairs is None else WorkerPool(root,plan,cpu_pairs=pairs)) if device_path else None
     snapshots={arm:dict(checkpoint=str(Path(path).resolve()),sha256=c.file_sha(path)) for arm,path in
         [('CONTROL',champion_checkpoint),('CANARY',final_checkpoint)]}
-    _write(root/'fp-snapshot.json',dict(declaration_sha256=declaration,cpu_topology=topology,**snapshots))
+    frozen=dict(declaration_sha256=declaration,cpu_topology=topology,**snapshots)
+    runtime=None
+    if endpoint_cpu_pairs is not None:
+        placement=dict(schema='pokezero.b4.canary.endpoint-cpu-runtime.v1',declaration_sha256=declaration,
+            cpu_pairs=pairs,cpu_topology=topology)
+        runtime=c.sha(placement);_write(root/'fp-cpu-runtime'/(runtime+'.json'),placement)
+        if (root/'fp-snapshot.json').exists():
+            previous=_read_result(root/'fp-snapshot.json')
+            c.require({k:v for k,v in previous.items() if k!='cpu_topology'}==
+                {k:v for k,v in frozen.items() if k!='cpu_topology'},'original frozen endpoint checkpoint differs')
+            frozen=previous  # Retain first placement as provenance, never rewrite it.
+    _write(root/'fp-snapshot.json',frozen)
     roster=cells(plan);rows=[dict(**cell,status='NOT_ATTEMPTED',score=None) for cell in roster]
     progress=c.Progress(plan);book.emit('BATCH_STARTED',stage='FP_ENDPOINT')
+    recorded={}
     def request_for(cell):
+        if cell['ordinal'] in recorded:return recorded[cell['ordinal']]
         snapshot=snapshots[cell['arm']]
-        return dict(schema='pokezero.b4.canary.fp-request.v1',run_directory=str(root),declaration_sha256=declaration,
-            cell=cell,checkpoint=snapshot['checkpoint'],checkpoint_sha256=snapshot['sha256'],cpu_pair=list(plan.fp_cpu_pairs[cell['slot']]))
+        request=dict(schema='pokezero.b4.canary.fp-request.v1',run_directory=str(root),declaration_sha256=declaration,
+            cell=cell,checkpoint=snapshot['checkpoint'],checkpoint_sha256=snapshot['sha256'],cpu_pair=list(pairs[cell['slot']]))
+        if runtime is not None:request['endpoint_cpu_runtime_sha256']=runtime
+        return request
     def retain(cell,value,*,receipt=None):
         row=dict(**cell,status=value['status'],score=value['score'],source_game=value.get('source_game'),reason=value.get('error'),
             duration_seconds=value['duration_seconds'],result_sha256=c.sha(value) if receipt else None,result=receipt)
@@ -312,7 +360,13 @@ async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint,dev
         key={k:cell[k] for k in ('arm','offset','seat')};ended=book.matching('FP_END',**key);started=book.matching('FP_START',**key)
         result=root/'fp-results'/f"{cell['ordinal']}.json"
         if started:
-            request=request_for(cell);request_path=root/'fp-requests'/f"{cell['ordinal']}.json";start_path=root/'fp-starts'/request_path.name
+            request_path=root/'fp-requests'/f"{cell['ordinal']}.json";start_path=root/'fp-starts'/request_path.name
+            request=request_for(cell)
+            if endpoint_cpu_pairs is not None:
+                saved=_read_result(request_path);ignored={'cpu_pair','endpoint_cpu_runtime_sha256'}
+                c.require({k:v for k,v in saved.items() if k not in ignored}==
+                    {k:v for k,v in request.items() if k not in ignored},'original saved endpoint request differs')
+                _request_pairs(saved,plan);recorded[cell['ordinal']]=saved;request=saved
             c.require(len(started)==1 and all(started[0][k]==cell[k] for k in cell) and
                 request_path.read_bytes()==c.encoded(request) and started[0]['request_sha256']==c.sha(request) and
                 start_path.read_bytes()==c.encoded(_start(request,c.sha(request))) and
@@ -378,20 +432,22 @@ async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint,dev
         paired_seed_means=[None if paired[2*i] is None or paired[2*i+1] is None else (paired[2*i]+paired[2*i+1])/2 for i in range(c.PANEL_SEEDS)],
         interval_unit='Original paired seed block (both seats); no IID-cell significance claim',max_workers=len(plan.fp_cpu_pairs))
     report.update(paired_interval(rows,seed=plan.bootstrap_seed,blocks=c.PANEL_SEEDS))
+    if runtime is not None:report['endpoint_cpu_runtime_sha256']=runtime
     book.emit('FP_ENDPOINT',report=report);return report
 
 
 class WorkerPool:
     """One owned process/core pair, two immutable model holders, fresh games."""
-    def __init__(self, root, plan):
+    def __init__(self, root, plan, *, cpu_pairs=None):
         self.root, self.plan, self.workers = Path(root), plan, {}
+        self.cpu_pairs=_cpu_pairs(plan,cpu_pairs)
     async def launch(self, request_path):
         from . import b4_fidelity_canary as c
         request = json.loads(Path(request_path).read_bytes()); slot = request['cell']['slot']
         if slot not in self.workers:
             folder = self.root / 'fp-worker-errors'; folder.mkdir(exist_ok=True)
             log = (folder / (str(slot) + '-' + str(time.time_ns()) + '.log')).open('xb')
-            pair = self.plan.fp_cpu_pairs[slot]
+            pair = self.cpu_pairs[slot]
             try:
                 process = await _spawn_owned(sys.executable, '-B', '-m', 'pokezero.b4_device_canary_runtime',
                     '--cpu-pair', str(pair[0]), str(pair[1]), stdin=asyncio.subprocess.PIPE,

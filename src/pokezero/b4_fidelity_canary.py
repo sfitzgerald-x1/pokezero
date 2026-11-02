@@ -323,7 +323,7 @@ def run(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',resume=
     return report
 
 
-async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canary=False,device_path=False):
+async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canary=False,device_path=False,endpoint_cpu_pairs=None):
     """Fixed paired raw FP endpoints only; attempted cells never repeat on resume."""
     require(enable_canary is True and type(plan) is Plan,'explicit separate canary endpoint')
     require(file_sha(champion_checkpoint)==CHAMPION_SHA,'untouched paired control checkpoint')
@@ -335,7 +335,8 @@ async def evaluate(plan,path,*,champion_checkpoint,final_checkpoint,enable_canar
     import fcntl
     with (book.path/'fp-invocation.lock').open('a+b') as lock:
         fcntl.flock(lock.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
-        try:return await evaluate_with_sigterm(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint,device_path=device_path)
+        options={} if endpoint_cpu_pairs is None else dict(endpoint_cpu_pairs=endpoint_cpu_pairs)
+        try:return await evaluate_with_sigterm(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint,device_path=device_path,**options)
         finally:fcntl.flock(lock.fileno(),fcntl.LOCK_UN)
 
 
@@ -345,9 +346,10 @@ def run_device(plan,path,*,checkpoint,prepared,pool,gender_policy,device='cuda',
         device=device,resume=resume,enable_canary=enable_canary,device_path=True)
 
 
-async def evaluate_device(plan,path,*,champion_checkpoint,final_checkpoint,enable_canary=False):
+async def evaluate_device(plan,path,*,champion_checkpoint,final_checkpoint,enable_canary=False,endpoint_cpu_pairs=None):
+    options={} if endpoint_cpu_pairs is None else dict(endpoint_cpu_pairs=endpoint_cpu_pairs)
     return await evaluate(plan,path,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint,
-        enable_canary=enable_canary,device_path=True)
+        enable_canary=enable_canary,device_path=True,**options)
 
 
 def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep):
