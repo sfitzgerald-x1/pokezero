@@ -122,7 +122,18 @@ def _redact_peer_private(cloned, owner):
     is met. The real foe's private coordinate assignment is never a world map.
     """
     foe = 1-owner
+    history = cloned.damage_history
+    if history is not None:
+        # Shown losses are public. Exact victim losses belong only to that
+        # victim's owner: learner dealt measures the peer's private HP, while
+        # peer dealt measures the learner's own HP. The unavailable halves are
+        # declared unknown-zero, not reconstructed past sampled-world history.
+        history = history._replace(hp=history.hp.at[:, foe].set(0),
+            maximum=history.maximum.at[:, foe].set(0),
+            taken=history.taken.at[:, foe, 1].set(0),
+            dealt=history.dealt.at[:, owner, 1].set(0))
     return cloned._replace(
+        damage_history=history,
         physical_to_public=cloned.physical_to_public.at[:, foe].set(-1),
         active_physical=cloned.active_physical.at[:, foe].set(-1),
         own_order=cloned.own_order.at[:, foe].set(-1),
