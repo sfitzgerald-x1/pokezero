@@ -34,7 +34,8 @@ def fixture(batch=2, survivors=(0, 1), count=8):
     pool = j.asarray([[0, 0], [(1 << count) - 1, 0]], j.uint32)
     left = sum(1 << i for i in range(count) if i not in survivors)
     item = j.broadcast_to(pool[:, None, :], (2, 3, 2)).at[:, 1].set(j.asarray([left, 0], j.uint32))
-    tables = NS(species_initial_mask=pool, item_mask=item)
+    tables = NS(species_initial_mask=pool, item_mask=item,
+        ability_mask=j.broadcast_to(pool[:,None,:],(2,2,2)))
     return state, tables, j.asarray([False, True, False]), source
 
 

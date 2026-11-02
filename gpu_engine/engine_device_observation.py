@@ -590,8 +590,8 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                     labels = ([f'posterior_weight_{column}'] if column < 64 else [f'prior_weight_{column - 64}'] if column < 128 else
                         [('prior_count/64', 'posterior_count/64', 'reason/3', 'pin_conflict')[column - 128]])
                     status, reason = 'TRACKED', 'original source prior + public hard/pin mask fallback; uniform current sampler'
-                    if column == 131 and (public is None or getattr(public, 'belief_pin', None) is None):
-                        status, reason = 'ZERO', 'deferred public damage-evidence pin producer; no fabricated pin conflict'
+                    if column == 131:
+                        status, reason = 'TRACKED', 'produced constant0: frozen investment_belief_narrowing=False disables both standing-pin producers'
                 # A zero-initialized dictionary key does not establish an
                 # original public write: current physics has no Trick handler.
                 if section in ('own', 'opponent') and kind == 'numeric' and column == _index('ITEM_SWAPPED'):
