@@ -379,6 +379,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             or _direct_hit_context is not _recoil_context.direct
             or type(_direct_hit_context) is not direct_hit_controls.RegisteredContext):
             raise ValueError('typed SAME original registered recoil/direct-hit context required')
+    if _lifecycle_trace:
+        _direct_hit_registered=False
     if _direct_hit_context is not None:
         from . import engine_direct_hit_controls as direct_hit_controls
         _direct_hit_registered=type(_direct_hit_context) is direct_hit_controls.RegisteredContext

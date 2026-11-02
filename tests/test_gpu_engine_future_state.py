@@ -21,6 +21,7 @@ def fixture():
     for side in range(2):
         for p in range(6):
             data["types"][side][p] = [1, 0]
+            data["base_types"][side][p] = [1, 0]
             data["stats"][side][p] = [1000, 200, 200, 200, 200, 301 if side == 0 else 199]
     data.update(queued_actor=-1, done=False, winner=-1)
     data['last_action_index'] = [-1, -1]
@@ -193,6 +194,25 @@ class FutureStateTests(unittest.TestCase):
         self.assertIn("side_two.pokemon[5].moves[3].pp", dict(left.key))
         self.assertIn("side_one.pokemon[0].base_ability", dict(left.key))
         self.assertEqual(set(dict(native.certificate.field_policies)), set(data))
+
+    def test_original_types_are_distinct_and_cannot_be_changed_or_inferred(self):
+        data, meta = fixture()
+        data['types'][1][5] = [2, 0]
+        native = self.construct(data, meta)
+        self.assertEqual(native.state.side_two.pokemon[5].types, ('fire', 'typeless'))
+        self.assertEqual(native.state.side_two.pokemon[5].base_types, ('normal', 'typeless'))
+        left = f.canonical_jax_future(data, None, meta, certificate=native.certificate)
+        self.assertEqual(left.key, f.canonical_native_future(native.state, native.certificate).key)
+        changed = deepcopy(data); changed['base_types'][1][5] = [3, 0]
+        refused = f.canonical_jax_future(changed, None, meta, certificate=native.certificate)
+        self.assertIsInstance(refused, f.Refused)
+        self.assertIn('RETAINED_BASE_TYPES_CHANGED', {gap.code for gap in refused.gaps})
+        native.state.side_two.pokemon[5].base_types = ('ice', 'typeless')
+        self.assertIs(type(f.canonical_native_future(native.state, native.certificate)), f.Refused)
+        data.pop('base_types')
+        refused = f.native_input_from_jax(data, None, meta, module=FAKE)
+        self.assertIsInstance(refused, f.Refused)
+        self.assertIn('ORIGINAL_BASE_TYPES_REQUIRED', {gap.code for gap in refused.gaps})
 
     def test_native_original_ability_cannot_contradict_its_certificate(self):
         native=self.construct()

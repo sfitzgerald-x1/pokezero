@@ -222,7 +222,7 @@ def matches_outcome(tape,o):
  for n in ('power','critical','hit','immune','numerator','denominator','substitute','protected','enduring'):good &= getattr(o,n)==getattr(rec.write,n)
  return good&o.explodes&~o.absorbed&(o.recoil==0)
 def actor_faint(tape,state):
- rec=tape.execution.self_destruct
+ rec=tape.execution.self_destruct if tape.execution is not None else None
  if rec is None:return tape
  b=len(tape.count);r=j.arange(b);side=j.clip(rec.side,0,1);physical=rec.before.active[r,side]
  good,_=_span(tape,rec,complete=False)
@@ -230,7 +230,7 @@ def actor_faint(tape,state):
  return public.faint(tape,rec.side,physical,eligible=good)
 def finish(tape,state):
  from . import engine_execution_completeness as ex
- rec=tape.execution.self_destruct
+ rec=tape.execution.self_destruct if tape.execution is not None else None
  if rec is None:return tape
  good,length=_span(tape,rec,complete=True);b=len(tape.count);r=j.arange(b);side=j.clip(rec.side,0,1);target=rec.before.active[r,1-side];expected=rec.self_after.at[r,1-side,target].set(rec.write.new_hp)
  good &= equal(rec.before._replace(hp=expected),snapshot(state))&(tape.count==rec.start+length)
