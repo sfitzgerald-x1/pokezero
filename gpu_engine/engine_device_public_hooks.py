@@ -11,6 +11,7 @@ from . import engine_device_trackers as tr
 from . import engine_device_negative_items as negative_items
 from .public_active import NAMES as VOLATILE_NAMES
 from . import engine_device_damage_history as damage_history
+from . import engine_device_public_port as port
 
 # Same-write HP notification classes for the separate public negative-item
 # updater. These are static provenance labels, not an event/witness roster.
@@ -23,10 +24,6 @@ MON_KEYS=('turns_active','turns_active_total','sleep_turns','rest_sleep','toxic_
 DEFERRED={
  'wrap_trap_turns':'No supported numerical wrap-duration handler.',
  'choice_locked':'Opponent choice lock is not publicly revealed by engine state alone.',
- 'truant_loaf':'Private clock is not polled; public activation hook not implemented.',
- 'sleepClause':'Needs original public causal attribution, not private party status polling.',
- 'hazard_credit':'Hazard exposure is public; causal setter credit not yet retained.',
- 'tendency_outcomes':'Blocked-attack/pursuit/weather attribution remains deferred; basic switch/stay/opportunity counters are public.',
  'confusion_self_damage':'Ordinary direct-damage fractions are recorded; confusion self-hit damage metric remains deferred.',
  'item_swap_transform':'No corresponding numerical engine handler in this transition; item_swapped stays zero.',
  'item_credit':'Consumed native items are retained/revealed, but removal attribution is not implemented.',
@@ -35,9 +32,9 @@ DEFERRED={
 class Context:
     # Trace-local builder only. No shared/global object and no validity cache;
     # wrappers return the immutable arrays, never this Python object.
-    __slots__=('trackers','belief_tables')
-    def __init__(self,trackers,belief_tables=None):
-        self.trackers=trackers;self.belief_tables=belief_tables
+    __slots__=('trackers','belief_tables','port_tables')
+    def __init__(self,trackers,belief_tables=None,port_tables=None):
+        self.trackers=trackers;self.belief_tables=belief_tables;self.port_tables=port_tables
     def _replace(self,**values):
         for key,value in values.items():setattr(self,key,value)
         return self
@@ -84,7 +81,7 @@ def _narrow(c,side,physical,fact,use,kind):
     return c._replace(trackers=t._replace(belief_mask=t.belief_mask.at[r,side,at].set(j.where(use[:,None],old&bits,old))))
 
 
-def initialize(state,belief_tables=None):
+def initialize(state,belief_tables=None,*,port_tables=None):
     t=tr.initialize(state);b=len(t.error);z=j.zeros((b,2,6),j.int32)
     t=t._replace(observed_moves=j.zeros((b,2,6,4),j.int32),pp_used=j.zeros((b,2,6,4),j.int32),
         negative_items=negative_items.empty(b),
@@ -96,8 +93,8 @@ def initialize(state,belief_tables=None):
             j.zeros((b,2),j.int32),j.zeros((b,2,6,6,2),j.int32)),
         public_volatiles=j.zeros((b,2,6,len(VOLATILE_NAMES)),bool),field_features={'weather_upkeeps':j.zeros(b,j.int32),
             'weather_permanent':j.zeros(b,bool),'wish_turns':j.zeros((b,2),j.int32),'wish_pending':j.zeros((b,2),bool)})
-    t=t._replace(damage_history=damage_history.initialize(state))
-    c=Context(t,belief_tables)
+    t=t._replace(damage_history=damage_history.initialize(state),public_port=port.initialize(b))
+    c=Context(t,belief_tables,port_tables)
     for side in range(2):c=install(c,state,side,j.ones(b,bool),initial=True)
     # Original startup emits switches, then TURN1 before the first request.
     return public_turn(c,state,~state.done,state.turn+1)
@@ -106,6 +103,7 @@ def initialize(state,belief_tables=None):
 def public_turn(c,state,use,turn):
     """Actual next ordinary-request boundary, not the private engine counter."""
     t=c.trackers
+    c=c._replace(trackers=port.turn(c.trackers,use,turn))
     for side in range(2):
         p=state.active[_r(state),side]
         for name in ('turns_active','turns_active_total'):
@@ -160,6 +158,7 @@ def install(c,state,side,use,*,initial=False):
         swapped=order.at[r,position].set(order[:,0]).at[:,0].set(p)
         t=t._replace(own_order=t.own_order.at[r,side].set(j.where(use[:,None],swapped,order)))
     t=tr._install(t,state,side,use);slot=t.active_slot[r,side];at=j.clip(slot,0,5)
+    t=port.arrival(t,c.port_tables,state,side,use)
     t=negative_items.hp_line(t,state,side,use,source_class=negative_items.HP_ACTION)
     c=c._replace(trackers=t)
     if c.trackers.damage_history is not None:
@@ -192,7 +191,7 @@ def install(c,state,side,use,*,initial=False):
     return c
 
 
-def observe(c,state,use,*,record_damage=True):
+def observe(c,state,use,*,record_damage=True,rest_side=None,rest_mask=False):
     """Actual current public HP/status/stages/field only; never poll benches."""
     use=_mask(use,len(c.trackers.error));r=_r(state)
     if c.trackers.damage_history is not None:
@@ -201,6 +200,9 @@ def observe(c,state,use,*,record_damage=True):
     for side in range(2):
         t=c.trackers;p=state.active[:,side];slot=j.clip(t.physical_to_public[r,side,p],0,5)
         status=_get(state,'status',side);changed=use&(t.status[r,side,slot]!=status)
+        rest=j.zeros_like(use)if rest_side is None else (j.asarray(rest_side)==side)&j.asarray(rest_mask)
+        c=c._replace(trackers=port.condition(t,side,p,t.status[r,side,slot],status,use,
+            rest=rest,faint=_get(state,'hp',side)==0))
         for key in ('sleep_turns','rest_sleep','toxic_stage'):
             c=feature(c,side,p,key,j.zeros_like(p),changed)
         c=c._replace(trackers=tr._observe(c.trackers,state,side,p,use,identity=False))
@@ -229,6 +231,7 @@ def reveal_ability(c,state,side,use,*,ability=None,original=True):
     if original:
         c=c._replace(trackers=_write(c.trackers,'original_ability',side,p,ability,use&(borrowed==0)))
         c=_narrow(c,side,p,ability,use&(borrowed==0),'ability')
+    else:c=c._replace(trackers=port.trace(c.trackers,c.port_tables,side,ability,use))
     return c
 
 
@@ -247,7 +250,8 @@ def entry(c,before,after,side,table,use):
     blocked=starts&table.intimidate[ability]&(_get(before,'hp',1-side)>0)&(_get(before,'substitute_hp',1-side)==0)&table.attack_drop_immune[_get(before,'ability',1-side)]
     c=reveal_ability(c,before,1-side,blocked)
     changed=starts&(table.weather_ability[ability]!=0)&((before.weather!=after.weather)|(before.weather_counter!=after.weather_counter))
-    c=weather(c,before,after,changed,permanent=True)
+    c=c._replace(trackers=port.spikes(c.trackers,before,after,side,use,tr._percent))
+    c=weather(c,before,after,changed,permanent=True,side=side)
     if table.trace is not None:
         copied=starts&table.trace[ability]&(_get(before,'hp',1-side)>0)
         c=reveal_ability(c,before,side,copied,ability=ability)
@@ -314,7 +318,9 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     # The child [from] line and preparation-only -singleturn annotation can
     # reveal a move, but neither is an ordinary MOVE header/decision datum.
     header=count_turn
-    if header:c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,move,declared))
+    if header:
+        c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,move,declared))
+        c=c._replace(trackers=port.anchor(c.trackers,side,declared,loaf=False))
     if not preparation:
         c=feature(c,side,p,'moves_shown',j.ones_like(move),declared,add=True)
     if header:
@@ -346,8 +352,10 @@ def party_cure(c,before,after,side,use,table=None):
         yes=changed&(slot>=0)
         c=c._replace(trackers=c.trackers._replace(status=old.at[r,side,at].set(j.where(yes,after.status[r,side,p],old[r,side,at]))))
         cured=yes&(after.status[r,side,p]==0)
+        c=c._replace(trackers=port.condition(c.trackers,side,j.full(len(r),p,j.int32),before.status[r,side,p],after.status[r,side,p],yes))
         for name in ('sleep_turns','rest_sleep','toxic_stage'):
             c=feature(c,side,p,name,j.zeros(len(r),j.int32),cured)
+    c=c._replace(trackers=port.team_cure(c.trackers,side,use))
     return c
 
 
@@ -386,6 +394,7 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
     up=fields['weather_upkeeps']+(ordinary&(after.weather!=0)).astype(j.int32)
     c=c._replace(trackers=t._replace(field_features={**fields,'weather_upkeeps':up}))
     if upkeep is not None:
+        c=c._replace(trackers=port.upkeep(c.trackers,upkeep))
         c=c._replace(trackers=negative_items.upkeep(c.trackers,c.belief_tables,leftovers,upkeep,current_state=after))
     # A paused action/residual or forced replacement has no next TURN line.
     # A completed replacement may open that line even without residual work.
@@ -434,10 +443,11 @@ def public_move_state(c,before,after,side,move,use):
     return observe(c,after,use)
 
 
-def weather(c,before,after,use,*,permanent=False):
+def weather(c,before,after,use,*,permanent=False,side=None):
     t=c.trackers;fields=t.field_features
     changed=use&((before.weather!=after.weather)|(before.weather_counter!=after.weather_counter))
-    c=c._replace(trackers=t._replace(field_features={**fields,
+    if side is not None:c=c._replace(trackers=port.weather(c.trackers,side,after.weather,changed,ability=permanent))
+    c=c._replace(trackers=c.trackers._replace(field_features={**fields,
         'weather_upkeeps':j.where(changed,0,fields['weather_upkeeps']),
         'weather_permanent':j.where(changed,j.asarray(permanent)&(after.weather!=0),fields['weather_permanent'])}))
     return observe(c,after,use)
@@ -452,8 +462,10 @@ def wish(c,side,use,*,start=False):
     return c._replace(trackers=t._replace(field_features={**f,'wish_turns':turns,'wish_pending':waiting}))
 
 
-def before_move(c,state,side,result,use):
+def before_move(c,state,side,result,use,*,loafing=False,sleep_usable=False):
     p=state.active[_r(state),side]
+    truant_cant=use&j.asarray(loafing)&((result.status!=5)|j.asarray(sleep_usable))&(result.status!=6)
+    c=c._replace(trackers=port.anchor(c.trackers,side,truant_cant,loaf=True))
     c=feature(c,side,p,'sleep_turns',j.ones_like(p),use&(_get(state,'status',side)==5)&(result.status==5),add=True)
     return opportunity(c,side,use&~result.can_act&~result.confusion_self_hit)
 
@@ -484,3 +496,11 @@ def withdraw(c,state,side,physical,use):
     for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap'):
         c=feature(c,side,physical,name,j.zeros(b,j.int32),use)
     return c
+
+
+def port_count(c,side,use,name):
+    return c._replace(trackers=port.count(c.trackers,side,use,name))
+
+
+def port_protect(c,side,acts,accuracy_pass,protected,protectable):
+    return c._replace(trackers=port.protect(c.trackers,side,acts,accuracy_pass,protected,protectable))
