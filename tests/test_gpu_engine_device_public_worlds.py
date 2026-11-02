@@ -184,7 +184,7 @@ class DevicePublicWorldsTests(unittest.TestCase):
             view = SimpleNamespace(error=np.zeros(1, np.int32), hp_fraction=np.ones((1, 6)),
                 present=np.ones((1, 6), bool), status=np.zeros((1, 6), np.int32))
             view._asdict = lambda: {key: value for key, value in vars(view).items() if key != '_asdict'}
-            cloned = object();original_public = object()
+            cloned = SimpleNamespace(hp_percent=np.full((1,2,6),100,np.int32));original_public = object()
             context = RootContext(state, original_public, np.asarray([80, 81]), np.asarray([2, 3]))
             compiled = compile_fixture()
             with patch.object(worlds.public, 'clone_for_worlds', return_value=cloned) as gather, \

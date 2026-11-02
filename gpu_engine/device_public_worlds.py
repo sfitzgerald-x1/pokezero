@@ -152,7 +152,8 @@ def detach_root(context, source, *, row, owner, enable_device_worlds=False):
         for name in OWN_MON_FIELDS + OWN_SIDE_FIELDS}
     address = contract.DecisionAddress(int(context.streams[row]),
         int(context.frames[row]), owner)
-    snapshot = _freeze(dict(view._asdict()))
+    snapshot = _freeze({**dict(view._asdict()),
+        'hp_percent': cloned.hp_percent[:, 1-owner]})
     # Original opponent-own materialization admits the full-health birth only
     # when no prior private HP/status history is needed. An actual frame0 is
     # that boundary. Later unknown exact-damage history is not fabricated from
