@@ -83,7 +83,7 @@ def compile_source(source, metadata, *, expected_source_hash,
             census['species_over_capacity']):
         raise ValueError('original public source identity/ordered capacity differs')
     vocabulary = metadata['vocabulary']
-    for name in ('species', 'moves', 'abilities', 'items'):
+    for name in ('species', 'moves', 'abilities', 'items', 'types'):
         values = vocabulary[name]
         if (not isinstance(values, (list, tuple)) or not values or
                 any(type(item) is not str for item in values) or
@@ -96,7 +96,7 @@ def compile_source(source, metadata, *, expected_source_hash,
         move_metadata=_freeze(dict(copied.move_metadata)),
         species_metadata=_freeze(dict(copied.species_metadata)))
     namespaces = {name: list(vocabulary[name]) for name in
-        ('species', 'moves', 'abilities', 'items')}
+        ('species', 'moves', 'abilities', 'items', 'types')}
     binding = hashlib.sha256(json.dumps((SCHEMA, expected_source_hash,
         expected_source_rows_sha256, namespaces), sort_keys=True,
         separators=(',', ':')).encode()).hexdigest()

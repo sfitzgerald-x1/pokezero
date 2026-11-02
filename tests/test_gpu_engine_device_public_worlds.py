@@ -37,7 +37,8 @@ def source_fixture():
         'species': ['', *[u.species for u in universes.values()]],
         'moves': ['', 'tackle', 'surf', 'rest', 'protect'],
         'abilities': ['', 'insomnia', 'pressure'],
-        'items': ['', 'oranberry', 'leftovers']}}
+        'items': ['', 'oranberry', 'leftovers'],
+        'types': ['', 'Normal']}}
     return source, metadata
 
 
@@ -154,6 +155,8 @@ class DevicePublicWorldsTests(unittest.TestCase):
         baseline = worlds.plan_starts(root, compiled, recipe)
         source.universes.clear();source.species_metadata.clear()
         metadata['vocabulary']['species'][1] = 'foreign'
+        metadata['vocabulary']['types'][1] = 'Ghost'
+        self.assertEqual(compiled.vocabulary['types'], ('', 'Normal'))
         self.assertEqual(worlds.plan_starts(root, compiled, recipe), baseline)
         with self.assertRaises(TypeError):compiled.original.species_metadata['alpha'] = {}
         fresh, meta = source_fixture()

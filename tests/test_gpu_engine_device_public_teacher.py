@@ -104,6 +104,10 @@ class DevicePublicTeacherTests(unittest.TestCase):
         changed=replace(first.opponent_fixtures[0],evs={**first.opponent_fixtures[0].evs,'atk':252})
         bad=mapping.materialize(root,replace(first,opponent_fixtures=(changed,*first.opponent_fixtures[1:])),tables,recipe)
         self.assertIsNone(bad.state);self.assertIn('source spread',bad.refusals[0])
+        foreign={'vocabulary':{**{key:list(value) for key,value in tables.source.vocabulary.items()},
+            'types':['','Ghost','Normal']},'moves':[None,*[{'pp':10} for _ in range(4)]]}
+        with self.assertRaisesRegex(ValueError,'namespace differs'):
+            mapping.compile_tables(tables.source,foreign)
 
     def executor(self, owner, *, failed_pair=None):
         calls={'sample':[],'advance':[],'observe':[],'opponent':[],'learner':[]}
