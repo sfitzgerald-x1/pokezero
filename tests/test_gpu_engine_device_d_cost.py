@@ -76,6 +76,14 @@ class DeviceDCostTests(unittest.TestCase):
         self.assertEqual(cost.summarize(usable)['cost_admission'],'PASS')
         only_refusals=[dict(status='PROVIDER_REFUSED',label_seconds=0.)for _ in range(40)]
         self.assertEqual(cost.summarize(only_refusals)['cost_admission'],'INSUFFICIENT_USABLE_LABELS')
+        self.assertIsNone(cost.summarize(only_refusals)['p95_label_seconds'])
+        # Fast refusals must not lower the successful-label tail used by the
+        # gate:40attempts may omit two slow values where20labels omit only one.
+        mixed=[dict(status='LABELED',label_seconds=x)for x in ([2.]*18+[31.,100.])]
+        mixed.extend(dict(status='PROVIDER_REFUSED',label_seconds=0.)for _ in range(20))
+        self.assertEqual(cost.summarize(mixed)['p95_all_provider_attempt_seconds'],2.)
+        self.assertEqual(cost.summarize(mixed)['p95_label_seconds'],31.)
+        self.assertEqual(cost.summarize(mixed)['cost_admission'],'FAIL')
         bad=[dict(status='LABELED',label_seconds=31.)for _ in range(40)]
         self.assertEqual(cost.summarize(bad)['cost_admission'],'FAIL')
         with self.assertRaises(ValueError):cost.summarize(records[:-1])

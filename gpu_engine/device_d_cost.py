@@ -105,16 +105,16 @@ def summarize(records):
         else:
             if row.get('label_seconds')is not None:raise ValueError('unpriced slot cannot claim completed label time')
             lower.append(0.);upper.append(math.inf)
-    p95=_percentile(values);bound=_percentile(upper)
+    attempts_p95=_percentile(values);p95=_percentile(labeled);bound=_percentile(upper)
     return dict(fixed_slots=40,timed_provider_attempts=len(values),usable_labeled=len(labeled),unavailable_or_unpriced=40-len(values),
-        p95_label_seconds=p95,p95_labeled_only_seconds=_percentile(labeled),
+        p95_label_seconds=p95,p95_all_provider_attempt_seconds=attempts_p95,
         warm_descriptive_p95_label_seconds=_percentile(values[1:]),cold_first_label_seconds=None if not values else values[0],
         warm_descriptive_scope='calls after first measured provider call; may include first-exercised branch JIT, not a pure-warm claim',
         full_roster_p95_lower_seconds=_percentile(lower),full_roster_p95_upper_seconds='unbounded'if math.isinf(bound)else bound,
         threshold_seconds=THRESHOLD_SECONDS,minimum20_timed=len(values)>=20,minimum20_usable_labels=len(labeled)>=20,
-        cost_admission='INSUFFICIENT_TIMED_ROOTS'if len(values)<20 else 'INSUFFICIENT_USABLE_LABELS'if len(labeled)<20 else 'PASS'if p95<=THRESHOLD_SECONDS else 'FAIL',
+        cost_admission='INSUFFICIENT_TIMED_ROOTS'if len(values)<20 else 'INSUFFICIENT_USABLE_LABELS'if len(labeled)<20 else 'PASS'if max(p95,attempts_p95)<=THRESHOLD_SECONDS else 'FAIL',
         dispositions={status:sum(x['status']==status for x in records)for status in sorted(set(x['status']for x in records))},
-        p95_definition='nearest rank ceil(.95*n); cold-first INCLUDED; provider refusals remain separately named timed paths',
+        p95_definition='nearest rank ceil(.95*n); usable-label and all-attempt p95 reported separately; admission requires both <=30s and20usable labels; every cold call retained in its actual disposition',
         stop_rule='one fixed cost cohort; one repair only for invalid producer; no performance retries or replacement roots',
         scope='OFFLINE_SAVED_ROOT_LABEL_COST_ONLY_ZERO_NEW_GAMES_OR_OUTCOMES',scientific_strength_qualification=False)
 
