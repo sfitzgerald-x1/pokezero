@@ -8,6 +8,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as j
 from . import engine_device_trackers as tr
+from . import engine_device_negative_items as negative_items
 from .public_active import NAMES as VOLATILE_NAMES
 from . import engine_device_damage_history as damage_history
 
@@ -86,6 +87,7 @@ def _narrow(c,side,physical,fact,use,kind):
 def initialize(state,belief_tables=None):
     t=tr.initialize(state);b=len(t.error);z=j.zeros((b,2,6),j.int32)
     t=t._replace(observed_moves=j.zeros((b,2,6,4),j.int32),pp_used=j.zeros((b,2,6,4),j.int32),
+        negative_items=negative_items.empty(b),
         last_moves=z,tendencies=j.zeros((b,2,6,2),j.int32),belief_mask=j.zeros((b,2,6,2),j.uint32),
         shown_ability=z,original_ability=z,shown_item=z,item_removed=j.zeros_like(z,bool),shown_types=j.zeros((b,2,6,2),j.int32),borrowed_ability=z,
         mon_features={key:(z.astype(j.float32) if key.startswith('last_damage') else z) for key in MON_KEYS},
@@ -158,6 +160,7 @@ def install(c,state,side,use,*,initial=False):
         swapped=order.at[r,position].set(order[:,0]).at[:,0].set(p)
         t=t._replace(own_order=t.own_order.at[r,side].set(j.where(use[:,None],swapped,order)))
     t=tr._install(t,state,side,use);slot=t.active_slot[r,side];at=j.clip(slot,0,5)
+    t=negative_items.hp_line(t,state,side,use,source_class=negative_items.HP_ACTION)
     c=c._replace(trackers=t)
     if c.trackers.damage_history is not None:
         c=c._replace(trackers=c.trackers._replace(damage_history=damage_history.arrive(
@@ -209,11 +212,12 @@ def observe(c,state,use,*,record_damage=True):
 def hp_line(c,state,side,use,*,source_class,record_damage=True):
     """Actual HP-line write cutpoint; use is original line emission eligibility.
 
-    The negative-item composition attaches its public-only notification here
-    BEFORE observe updates the public HP snapshot. No classification is guessed
+    Notify the public-only negative-item updater BEFORE observe updates the
+    public HP snapshot. No classification is guessed
     from a final state or from a shown-percent difference. Pain Split's -sethp
     updates the baseline with record_damage=False; self-faint has no HP line.
     """
+    c=negative_hp_line(c,state,side,use,source_class=source_class)
     return observe(c,state,use,record_damage=record_damage)
 
 
@@ -364,7 +368,13 @@ def damage(c,state,side,dealt,taken,use):
     return feature(c,foe,p,'last_damage_taken',shown,use)
 
 
-def turn_end(c,before,after,ordinary):
+def negative_hp_line(c,state,side,use,*,source_class):
+    # Called before observe at each actual HP-line cutpoint. The shared hp_line
+    # hook composes this notification with observer-relative damage history.
+    return c._replace(trackers=negative_items.hp_line(c.trackers,state,side,use,source_class=source_class))
+
+
+def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
     c=observe(c,after,~before.done)
     for side in range(2):
         p=after.active[_r(after),side];alive=ordinary&(_get(after,'hp',side)>0)
@@ -375,6 +385,8 @@ def turn_end(c,before,after,ordinary):
     t=c.trackers;fields=t.field_features
     up=fields['weather_upkeeps']+(ordinary&(after.weather!=0)).astype(j.int32)
     c=c._replace(trackers=t._replace(field_features={**fields,'weather_upkeeps':up}))
+    if upkeep is not None:
+        c=c._replace(trackers=negative_items.upkeep(c.trackers,c.belief_tables,leftovers,upkeep,current_state=after))
     # A paused action/residual or forced replacement has no next TURN line.
     # A completed replacement may open that line even without residual work.
     ready=(~before.done&~after.done&~after.pending_residual&~j.any(after.forced_switch,axis=1)

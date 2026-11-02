@@ -1032,6 +1032,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
         if _device_public is not None:
             device_public.damage(_device_public,work,side,jnp.where(hits_sub,0,dealt),jnp.where(hits_sub,0,dealt),acts)
+            device_public.negative_hp_line(_device_public,work,foe,acts & ~hits_sub & (dealt>0),source_class=device_public.negative_items.HP_ACTION)
             device_public.observe(_device_public,work,acts)
         if _direct_hit_context is not None and _direct_hit_registered:
             _sub_damage_write=substitute_damage_callbacks.Write(power,hit,immune,_risk_protected,
@@ -2072,7 +2073,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work.volatile & jnp.uint32(~(FLINCH|FOCUS_PUNCH|FOCUS_LOST) & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     if _device_public is not None:
-        device_public.turn_end(_device_public,state,work,ordinary)
+        device_public.turn_end(_device_public,state,work,ordinary,upkeep=residual_ready & ~work.done,
+            leftovers=None if table.items is None else table.items.leftovers)
     result = StepResult(work, invalid, placeholders)
     if _device_public is not None:return device_public.PublicStepResult(result,_device_public.trackers)
     if _lifecycle_trace:
