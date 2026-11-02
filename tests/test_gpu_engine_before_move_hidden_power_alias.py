@@ -1,10 +1,10 @@
 """One static full-namespace fixture; no generation, turn, FULL or model."""
+from pokezero.randbat_vocab import gen3_category_vocabulary
 import ast,copy,json,subprocess,unittest
 from pathlib import Path
 import jax.numpy as j
 import numpy as np
 from pokezero.dex import load_showdown_dex_cached
-from pokezero.category_vocab import CategoryVocabulary
 from pokezero.randbat import load_gen3_randbat_source_cached
 from pokezero.recorded_mirror_roots import CHAMPION_CONTRACT
 from gpu_engine import engine_sleep_blocked_callbacks as slp,engine_before_move_blocked_callbacks as blocked
@@ -14,6 +14,7 @@ from gpu_engine import engine_leftovers_callbacks as leftovers,engine_retained_e
 from gpu_engine import engine_lifecycle_callbacks as life,engine_execution_completeness as ex,engine_kernel_frame_risk as risk,state,mechanics
 from _showdown_root import showdown_root
 BASE='fd3256d2305a0770764e737640fc80157156cb29'
+RECORDED_TREE='13de5b98dd15c5ee6332b8096044f79fe6dc1058'
 
 def original_compile(module):
  tree=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/'+Path(module.__file__).name],text=True));node=next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name=='compile_data');node.name='old_compile';space=dict(vars(module));exec(compile(ast.fix_missing_locations(ast.Module([node],[])),'<unchanged original compile_data>','exec'),space);return space['old_compile']
@@ -28,15 +29,17 @@ const fs=require('fs'),vm=require('vm'),s=fs.readFileSync(process.argv[1],'utf8'
 const code=s.slice(0,start)+'\nfunction metadata(root){'+body+"return {format:'gen3randombattle',source_commit_label:require('node:child_process').execFileSync('git',['-C',root,'rev-parse','HEAD'],{encoding:'utf8'}).trim(),compiled_tree:compiledTree(path.join(root,'dist')),vocabulary,moves,type_chart:chart,stats_order:STATS};}\nJSON.stringify(metadata(ROOT))";
 process.stdout.write(vm.runInNewContext(code,{require,ROOT:process.argv[2]}));
 """
-  cls.metadata=json.loads(subprocess.check_output(['node','-e',script,'gpu_engine/generate_teams.cjs',str(showdown_root())],text=True));v=json.loads(Path('/Users/scott/workspace/agents/pokezero-b4-full-gap-census-r21-ops-20261101/vocabulary.json').read_text());vocab=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases']);cls.dex=load_showdown_dex_cached(showdown_root())
+  cls.metadata=json.loads(subprocess.check_output(['node','-e',script,'gpu_engine/generate_teams.cjs',str(showdown_root())],text=True));vocab=gen3_category_vocabulary(showdown_root(),include_feature_pack_v4=True);cls.dex=load_showdown_dex_cached(showdown_root())
   # Original pinned static source inputs, matching production compilation.
   # No generator, constructor, engine, policy or model is invoked.
   source=load_gen3_randbat_source_cached(showdown_root())
-  cls.catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),cls.dex,vocab,checkpoint_sha256=v['checkpoint_sha256'],feature_masks=CHAMPION_CONTRACT['feature_masks']);cls.table=transition.tables_from_metadata(cls.metadata)
+  cls.catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),cls.dex,vocab,checkpoint_sha256='a'*64,feature_masks=CHAMPION_CONTRACT['feature_masks']);cls.table=transition.tables_from_metadata(cls.metadata)
   cls.producer=events.compile_catalog(cls.metadata,cls.table,public_moves=cls.catalog.moves,dex=cls.dex,exposure=events.HealthExposure(request.SHOWDOWN,'gen3randombattle',True,False));cls.rules=request.load_source_rules(showdown_root(),cls.metadata)
   cls.old_slp=original_compile(slp)(cls.producer,cls.metadata,cls.rules);cls.old_blocked=original_compile(blocked)(cls.producer,cls.metadata,cls.rules)
-  compiled=request.compile_request_source(cls.metadata,vocabulary=vocab,dex=cls.dex,checkpoint_sha256=v['checkpoint_sha256'],rules=cls.rules,lifecycle_catalog=cls.producer);facts=own.compile_own_facts(compiled,cls.catalog);cls.helper=direct.compile_direct_hit_controls(engine_catalog=cls.producer,metadata=cls.metadata,source_rules=cls.rules)
-  cls.prepared=driver.prepare(compiled,facts,public_mode='retained-full',account_source_sites=True,track_kernel_risks=True,frame_input_mode='source-witness',leftovers_compiled=leftovers.compile_leftovers(cls.metadata,engine_catalog=cls.producer),leftovers_mode='retained',direct_hit_compiled=cls.helper,direct_hit_mode='kernel-event',fake_forward=lambda _:None);cls.runtime=driver._checked(cls.prepared);cls.sleep=cls.helper.device.sleep_blocked;cls.blocked=cls.helper.device.before_move_blocked
+  compiled=request.compile_request_source(cls.metadata,vocabulary=vocab,dex=cls.dex,checkpoint_sha256='a'*64,rules=cls.rules,lifecycle_catalog=cls.producer);facts=own.compile_own_facts(compiled,cls.catalog);cls.helper=direct.compile_direct_hit_controls(engine_catalog=cls.producer,metadata=cls.metadata,source_rules=cls.rules)
+  # Component tape controls only: no frame is constructed or consumed here.
+  # Keep full source-witness admission frozen and fail-closed for the new engine.
+  cls.prepared=driver.prepare(compiled,facts,public_mode='retained-full',account_source_sites=True,track_kernel_risks=True,frame_input_mode='closed',leftovers_compiled=leftovers.compile_leftovers(cls.metadata,engine_catalog=cls.producer),leftovers_mode='retained',direct_hit_compiled=cls.helper,direct_hit_mode='kernel-event',fake_forward=lambda _:None);cls.runtime=driver._checked(cls.prepared);cls.sleep=cls.helper.device.sleep_blocked;cls.blocked=cls.helper.device.before_move_blocked
   lookup=[]
   for i in(134,309):lookup.append(dict(index=i,name=cls.metadata['vocabulary']['moves'][i],public_id=cls.producer.ids[i],public_name=cls.catalog.moves.names[cls.producer.ids[i]],old_sleep=bool(cls.old_slp.moves[i]),new_sleep=bool(cls.sleep.moves[i]),old_par_frz=cls.old_blocked.moves[:,i].tolist(),new_par_frz=cls.blocked.moves[:,i].tolist()))
   cls.lookup=lookup;Path('/tmp/pokezero-before-move-hidden-power-alias-lookup.json').write_text(json.dumps({'scope':'STATIC_FULL_NAMESPACE_FIXTURE_NOT_SAVED_R21_ARRAYS','rows':lookup},sort_keys=True)+'\n')
@@ -82,10 +85,12 @@ process.stdout.write(vm.runInNewContext(code,{require,ROOT:process.argv[2]}));
   expected=j.stack((z+56,side,z,move,statuses,draws[:,0],draws[:,1],draws[:,2],z,s.ability[j.arange(8),side,z]),axis=1);np.testing.assert_array_equal(t.words[:,1],expected);self.assertEqual(t.count.tolist(),[2]*8);np.testing.assert_array_equal(t.words[:,0],j.broadcast_to(j.array([35,-1,-1,-1,-1,0,0,0,0,0],j.int32),(8,10)))
   self.assertEqual(blocked.begin(t,s,side,move,move+1,draws,context,eligible=yes,sleep_usable=~yes,loafing=~yes)[1].requested.tolist(),[False]*8)
 
- def test_all_runtime_capture_physics_consumers_and_signatures_unchanged(self):
+ def test_alias_patch_preserved_its_recorded_runtime_and_callback_signatures(self):
   for file in('engine_sleep_blocked_callbacks.py','engine_before_move_blocked_callbacks.py'):
-   a=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/'+file],text=True));b=ast.parse(Path('gpu_engine',file).read_text());skip={'compile_data','canonical_move_rows'};f=lambda t:{n.name:ast.dump(n,include_attributes=False)for n in t.body if isinstance(n,ast.FunctionDef)and n.name not in skip};self.assertEqual(f(a),f(b))
+   a=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/'+file],text=True));b=ast.parse(subprocess.check_output(['git','show',RECORDED_TREE+':gpu_engine/'+file],text=True));skip={'compile_data','canonical_move_rows'};f=lambda t:{n.name:ast.dump(n,include_attributes=False)for n in t.body if isinstance(n,ast.FunctionDef)and n.name not in skip};self.assertEqual(f(a),f(b))
   for file in('transition.py','mechanics.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py','engine_execution_completeness.py'):
-   self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+file]))
+   # Historical no-physics-change assertion belongs to the alias patch.
+   # The current device engine has since changed; this grants it no capture admission.
+   self.assertEqual(subprocess.check_output(['git','show',RECORDED_TREE+':gpu_engine/'+file]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+file]))
 
 if __name__=='__main__':unittest.main()

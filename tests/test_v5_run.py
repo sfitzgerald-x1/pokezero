@@ -225,7 +225,6 @@ class V5RunTests(unittest.TestCase):
             with self.assertRaises(ValueError):store.artifact('../foreign.json',b'foreign',kind='OWNING_HISTORY')
 
 
-if __name__=='__main__':unittest.main()
 
 
 class SupervisorRepairTests(unittest.TestCase):
@@ -282,3 +281,5 @@ class SupervisorRepairTests(unittest.TestCase):
     def test_still_present_group_refuses_after_finite_cleanup(self):
         with self.assertRaisesRegex(RuntimeError,'process group remains'):
             self.invoke(finish=True,orphan=True,persistent=True)
+
+if __name__=='__main__':unittest.main()

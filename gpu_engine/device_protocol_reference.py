@@ -63,7 +63,8 @@ class Reference:
         # Preserve the first lost prefix. Subsequent views cannot silently use
         # a stale fold or skip the unsupported line and regain qualification.
         if self.refusal is None:
-            text=str(error);match=re.search(r'kind=([^ ]+)',text)
+            text=str(error)
+            match=re.search(r'kind=([^ ]+)',text)
             self.refusal=dict(source='B2_PROTOCOL',kind=match.group(1)if match else kind,
                 column=column,reason=type(error).__name__+': '+text[:2000])
         return dict(self.refusal)

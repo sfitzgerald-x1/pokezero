@@ -104,7 +104,6 @@ class TerminalSourceTests(unittest.TestCase):
    a=next(n for n in old.body if isinstance(n,ast.FunctionDef) and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name==name)
    self.assertEqual(ast.dump(a),ast.dump(b))
 
-if __name__=='__main__':unittest.main()
 
 class TerminalTransportAndCountingTests(unittest.TestCase):
  def context(self,b=8):
@@ -156,3 +155,5 @@ class TerminalTransportAndCountingTests(unittest.TestCase):
    out=f.c.collect_session(session,actor=actor,pool=object(),team_indices=indices,ledger=ledger,max_requests=1,sampling_seed=97,enable_v5=True)
    self.assertEqual(out.ledger['counts']['COMPLETE'],0);self.assertEqual(out.ledger['counts']['REFUSED'],1)
    self.assertTrue(all(d.row.labels.outcome is None for d in out.decisions))
+
+if __name__=='__main__':unittest.main()

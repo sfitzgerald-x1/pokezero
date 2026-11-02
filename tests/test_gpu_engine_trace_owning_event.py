@@ -1,4 +1,5 @@
 """Prospective literal entry fixtures only; no games/Native/models or replay."""
+from _showdown_root import showdown_root_str
 import ast
 from copy import deepcopy
 import hashlib
@@ -109,7 +110,7 @@ class TraceOwningEventTests(unittest.TestCase):
    return next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=='enter')
   old_entry=subprocess.check_output(['git','show','cc42bce4:gpu_engine/entry.py'],text=True)
   self.assertEqual(dump_default_program(enter_body(old_entry)),dump_default_program(enter_body(Path('gpu_engine/entry.py').read_text())))
-  root=Path('/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a')
+  root=Path(showdown_root_str())
   callback=(root/'data/mods/gen3/abilities.ts').read_text().split('\ttrace: {',1)[1].split('\n\t},',1)[0]
   self.assertIn('pokemon.setAbility(ability, target)',callback);self.assertIn('onUpdate: undefined',callback)
   self.assertIn('this.battle.gen > 3',(root/'sim/pokemon.ts').read_text())
@@ -172,7 +173,7 @@ process.stdout.write(JSON.stringify({ability:p.ability,lines,calls,update:typeof
   import json,shutil
   node=shutil.which('node')
   if node is None:self.skipTest('node unavailable')
-  data=json.loads(subprocess.check_output([node,'-e',script,'/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'],text=True))
+  data=json.loads(subprocess.check_output([node,'-e',script,showdown_root_str()],text=True))
   self.assertEqual(data,dict(ability='sturdy',lines=['-ability|p1a: Porygon2|Sturdy|Trace|[from] ability: Trace|[of] p2a: Donphan'],calls=['End'],update='undefined'))
 
  def test_frozen_source_pins_and_legacy_copy_path_stay_closed(self):

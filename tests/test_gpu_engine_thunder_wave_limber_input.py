@@ -1,4 +1,5 @@
 """Same-call Limber status interruption; typed helpers, no engine turns."""
+from _component_evidence import capture_path
 import ast,json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
@@ -18,7 +19,6 @@ from _showdown_root import showdown_root
 import test_gpu_engine_thunder_wave_substitute_failure as fixture
 import test_gpu_engine_thunder_wave_ground_immunity as ground_fixture
 BASE='de4180168925e163cb87d3220d58975086f8e96f'
-E=Path('/Users/scott/workspace/agents/pokezero-b4-driver-independent-review-evidence-20261030')
 class ThunderLimberTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
@@ -124,5 +124,5 @@ class ThunderLimberTests(unittest.TestCase):
   Path('/tmp/pokezero-thunder-limber-original-both-full.json').write_text(json.dumps(packets)+'\n')
   for packet in packets:self.assertEqual(packet['error'],0);self.assertTrue(packet['admitted']);np.testing.assert_array_equal(packet['actual'],packet['expected'])
   self.assertEqual(ex.join_consumed_owners(*ledgers,tables=self.runtime['execution_compiled'].device)[1].tolist(),[True]*8)
-  (E/'thunder-wave-limber-original-both-full-compact.json').write_text(json.dumps(packets,sort_keys=True)+'\n')
+  capture_path(self,'thunder-wave-limber-original-both-full-compact.json').write_text(json.dumps(packets,sort_keys=True)+'\n')
 from gpu_engine import engine_full_v4_event_device as full

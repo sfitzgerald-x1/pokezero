@@ -1,4 +1,5 @@
 """Exact original public warning, no simulator/game/model/checkpoint execution."""
+from _showdown_root import showdown_root_str
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -15,7 +16,7 @@ class Turn500LexicalTests(unittest.TestCase):
             '93b11525588ee0d97d4a64e077e55e4a252a88f66c0f3a56d84867dea0aa612f')
         import os
         root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT',
-            '/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'))
+            showdown_root_str()))
         self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),
             'f76228a1354b5d0f307ca2d16101294ad3a2308b')
         source=(root/'sim/battle.ts').read_text()

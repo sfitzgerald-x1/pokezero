@@ -3,6 +3,7 @@
 No stored engine root is replayed. Static original Dex rows and tiny entry/FULL
 components exercise original writer words; no Battle/Native/model is created.
 """
+from _showdown_root import showdown_root_str
 from copy import deepcopy
 from pathlib import Path
 import ast,json,subprocess,shutil,unittest
@@ -21,7 +22,7 @@ class AbilityIdentLexicalTests(unittest.TestCase):
   fixture.TraceOwningEventTests.setUpClass();cls.f=fixture.TraceOwningEventTests()
   node=shutil.which('node')
   if node is None:raise unittest.SkipTest('node unavailable')
-  cls.root=Path('/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a')
+  cls.root=Path(showdown_root_str())
   script="const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');const d=Dex.mod('gen3');process.stdout.write(JSON.stringify(['deoxys','deoxysattack','deoxysdefense','deoxysspeed','hooh','nidoranf','nidoranm','marowak'].map(x=>{let s=d.species.get(x);return {id:s.id,name:s.name,baseSpecies:s.baseSpecies,types:s.types,baseStats:s.baseStats,weightkg:s.weightkg}})))"
   cls.rows=json.loads(subprocess.check_output([node,'-e',script,str(cls.root)],text=True))
   species=dict(cls.f.catalog.dex.species)

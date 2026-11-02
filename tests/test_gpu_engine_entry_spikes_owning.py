@@ -1,4 +1,5 @@
 """Inert original entry/FULL components; no step kernel, world/game or model."""
+from _showdown_root import showdown_root_str
 import ast,json,subprocess
 from copy import deepcopy
 from pathlib import Path
@@ -111,7 +112,7 @@ class EntrySpikesTests(unittest.TestCase):
   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata');b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata')
   self.assertEqual([ast.dump(x)for x in a.body[-1].value.args],[ast.dump(x)for x in b.body[-1].value.args[:-3]])
   script="const{Dex}=require(process.argv[1]+'/dist/sim/dex.js');const c=Dex.mod('gen3').conditions.get('spikes');const rows=[];for(let layers=1;layers<=3;layers++)for(const grounded of[false,true])for(const boots of[false,true]){const calls=[];c.onEntryHazard.call({effectState:{layers},damage:x=>calls.push(x)},{maxhp:254,isGrounded:()=>grounded,hasItem:x=>{if(x!=='heavydutyboots')throw Error('wrong guard');return boots;}});rows.push({layers,grounded,boots,calls});}process.stdout.write(JSON.stringify(rows));"
-  rows=json.loads(subprocess.check_output(['node','-e',script,'/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'],text=True))
+  rows=json.loads(subprocess.check_output(['node','-e',script,showdown_root_str()],text=True))
   for row in rows:self.assertEqual(row['calls'],[[0,3,4,6][row['layers']]*254/24]if row['grounded']and not row['boots']else[])
 
 

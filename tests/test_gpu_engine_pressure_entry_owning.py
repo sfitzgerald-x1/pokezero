@@ -1,4 +1,5 @@
 """Pinned owner-only entry callback/component fixtures, no battle/kernel/model."""
+from _showdown_root import showdown_root_str
 from copy import deepcopy
 from pathlib import Path
 import unittest
@@ -66,7 +67,7 @@ class PressureEntryOwningTests(unittest.TestCase):
         for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b)):np.testing.assert_array_equal(x,y)
 
     def test_effective_source_owner_split_and_original_writer_words_both_owners(self):
-        root=Path('/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a')
+        root=Path(showdown_root_str())
         source=(root/'data/mods/gen3/abilities.ts').read_text()
         body=source.split('\tpressure: {',1)[1].split('\n\t},',1)[0]
         self.assertIn("this.addSplit(pokemon.side.id, ['-ability', pokemon, 'Pressure', '[silent]']);",body)

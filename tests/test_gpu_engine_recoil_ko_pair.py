@@ -1,4 +1,5 @@
 """Literal prospective helper transactions only; no engine/world/game execution."""
+from _showdown_root import showdown_root_str
 import ast
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ from gpu_engine import v4_encoder as v4,public_wire,engine_request_source as req
 import test_gpu_engine_recoil_owning_event as fixture
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 
-ROOT='/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'
+ROOT=showdown_root_str()
 class RecoilKOPairTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):

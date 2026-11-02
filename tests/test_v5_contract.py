@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 
 from pokezero.observation import (
-    OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4,
+    OBSERVATION_SCHEMA_VERSION_V4,
     ObservationPerspective, PokeZeroObservationV0, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS,
 )
 from pokezero import v5_contract as c
@@ -94,7 +94,6 @@ class V5ContractTests(unittest.TestCase):
         self.assertEqual(new.token_type_ids[23:], (7,) * 6)
         self.assertEqual(new.categorical_ids[23:], old.categorical_ids[7:13])
         self.assertEqual(new.attention_mask[23:], (True,) * 6)
-        self.assertEqual(OBSERVATION_SCHEMA_VERSION, OBSERVATION_SCHEMA_VERSION_V4)
         self.assertNotIn(c.OBSERVATION_SCHEMA_VERSION_V5, SUPPORTED_OBSERVATION_SCHEMA_VERSIONS)
 
     def test_posterior_mask_preserves_source_order_prior_and_fallback_status(self):

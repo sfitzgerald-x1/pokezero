@@ -89,7 +89,9 @@ class DeviceTeacherTests(unittest.TestCase):
             self.assertIs(source,provider.source);self.assertTrue(enable_device_worlds)
             return NS(address=c.DecisionAddress(int(context.streams[row]),int(context.frames[row]),owner))
         def price(plans,materializer,executor,recipe,**kw):
-            key=plans.root.address;match=next(x for x in items if x['address']==asdict(key));seen.append(asdict(key))
+            key=plans.root.address
+            match=next(x for x in items if x['address']==asdict(key))
+            seen.append(asdict(key))
             self.assertIs(kw['opponent_forward'],provider.forwards[match['opponent_archive_sha256']][1])
             self.assertIs(kw['learner_forward'],provider.forwards[match['actor_archive_sha256']][1])
             self.assertEqual(kw['root_inputs']['numeric_features'].shape,(1,1,29,132));self.assertEqual(len(kw['root_logits']),9)

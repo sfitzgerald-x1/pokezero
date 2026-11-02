@@ -1,4 +1,5 @@
 """Literal kernel self-boost/FULL tests; no models/Native/worlds/games."""
+from _showdown_root import showdown_root_str
 import ast,json,os,shutil,subprocess,unittest
 from copy import deepcopy
 from dataclasses import replace
@@ -56,7 +57,7 @@ class CalmMindOwningTests(unittest.TestCase):
   before=ast.parse(subprocess.check_output(['git','show','e5d38e3c:gpu_engine/transition.py'],text=True));after=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
   node=shutil.which('node')
   if not node:self.skipTest('node unavailable')
-  root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT','/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'));self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
+  root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT',showdown_root_str()));self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
   script="const root=process.argv[1];const {Dex}=require(root+'/dist/sim/dex.js');const {Battle}=require(root+'/dist/sim/battle.js');const m=Dex.mod('gen3').moves.get('calmmind');const lines=[];const p={hp:100,isActive:true,boosts:{spa:0,spd:0},getCappedBoost:x=>x,boostBy(x){const k=Object.keys(x)[0];this.boosts[k]+=x[k];return x[k]},toString:()=> 'p1a: Snorlax'};Battle.prototype.boost.call({gen:3,runEvent:(event,t,s,e,x)=>x,add:(...x)=>lines.push(x.map(String).join('|'))},m.boosts,p,p,m);process.stdout.write(JSON.stringify(lines));"
   self.assertEqual(json.loads(subprocess.check_output([node,'-e',script,str(root)],text=True)),['-boost|p1a: Snorlax|spa|1','-boost|p1a: Snorlax|spd|1'])
  def test_actual_pair_same_numeric_rng_and_original_both_full_consumers(self):

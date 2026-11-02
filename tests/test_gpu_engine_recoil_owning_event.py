@@ -1,4 +1,5 @@
 """Prospective literal kernel component roots, never games/Native/models/replay."""
+from _showdown_root import showdown_root_str
 import ast
 from copy import deepcopy
 from dataclasses import replace
@@ -185,5 +186,5 @@ const foe={toString:()=> 'p2a: Donphan'},battle={gen:3,dex,clampIntRange:(x,min)
 Battle.prototype.spreadDamage.call(battle,[34],[actor],foe,'recoil');
 process.stdout.write(JSON.stringify({recoil:move.recoil,values,lines,rockhead:dex.abilities.get('rockhead').onDamage.call({activeMove:move},34,actor,foe,{id:'recoil'})}));
 """
-  actual=json.loads(subprocess.check_output([node,'-e',script,'/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'],text=True))
+  actual=json.loads(subprocess.check_output([node,'-e',script,showdown_root_str()],text=True))
   self.assertEqual(actual,dict(recoil=[1,3],values=[1,1,1,1,34],lines=['-damage|p1a: Snorlax|233/267|[from] Recoil|[of] p2a: Donphan'],rockhead=None))

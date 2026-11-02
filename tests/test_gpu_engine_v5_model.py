@@ -20,9 +20,8 @@ from pokezero import v5_contract as contract
 from pokezero.v5_model import MODEL_INPUTS, TOKEN_ROLES, V5ModelConfig
 
 
-_LOCAL_TORCH = '/Users/scott/workspace/agents/pokezero-confusion-before-substitute-clean/.venv/bin/python'
 TORCH_PYTHON = os.environ.get('POKEZERO_TEST_TORCH_PYTHON') or (
-    sys.executable if importlib.util.find_spec('torch') else _LOCAL_TORCH if Path(_LOCAL_TORCH).is_file() else None)
+    sys.executable if importlib.util.find_spec('torch') else None)
 
 
 def emit_fixture(directory, arm, replicate):

@@ -1,4 +1,5 @@
 """Fixed-level source input at actual write; no worlds/models/Native/games."""
+from _showdown_root import showdown_root_str
 import ast,json,subprocess,shutil,unittest,os
 from copy import deepcopy
 from dataclasses import replace
@@ -111,6 +112,6 @@ class SeismicTossOwningTests(unittest.TestCase):
   node=shutil.which('node')
   if not node:self.skipTest('node unavailable')
   script="const root=process.argv[1];const {Dex}=require(root+'/dist/sim/dex.js');const {BattleActions}=require(root+'/dist/sim/battle-actions.js');const move=Dex.mod('gen3').moves.get('seismictoss');const self=new Proxy({},{get:()=>{throw Error('unused damage/critical/annotation hook read')}});const source=new Proxy({level:73},{get:(x,k)=>{if(k!=='level')throw Error('unexpected source read');return x[k]}});const target={runImmunity:()=>true};const amount=BattleActions.prototype.getDamage.call(self,source,target,move);process.stdout.write(JSON.stringify([move.id,move.basePower,move.damage,move.type,move.category,amount]));"
-  root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT','/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'))
+  root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT',showdown_root_str()))
   self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN);self.assertTrue((root/'dist/sim/dex.js').is_file())
   result=json.loads(subprocess.check_output([node,'-e',script,str(root)],text=True));self.assertEqual(result,['seismictoss',0,'level','Fighting','Physical',73])

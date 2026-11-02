@@ -185,6 +185,8 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/transitions.py",
         "src/pokezero/transitions_fold.py",
         "src/pokezero/turn_merged.py",
+        "src/pokezero/v5_contract.py",
+        "src/pokezero/v5_data.py",
         "src/pokezero/value_calibration.py",
     }
 )

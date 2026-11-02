@@ -1,4 +1,5 @@
 """Actual typed departure helpers, source writer and consumer; no engine turn."""
+from _component_evidence import capture_path
 import ast,json,subprocess,symtable,unittest
 from copy import deepcopy
 from pathlib import Path
@@ -133,4 +134,4 @@ class NaturalCureTests(unittest.TestCase):
    record=captures[2+owner]
    for row in range(b):
     a=row%2;wire,_=public_wire.project_lines(wire_before[row],['|','|t:|1',f'|move|p{a+1}a: {name}|Baton Pass|p{a+1}a: {name}'],**kw);_,packets=public_wire.project_lines(wire,['|','|t:|1',f'|-curestatus|p{a+1}a: {name}|tox|[from] ability: Natural Cure',f'|switch|p{a+1}a: {incoming_name}|{incoming_name}, L80, M|100/100'],**kw);expected=np.array([e.words()for packet in packets for e in packet.events],np.int32);actual=np.asarray(record['words']).transpose(1,0,2,3)[row][np.asarray(record['valid']).transpose(1,0,2)[row]];exact.append(dict(owner=owner,row=row,actual=actual.tolist(),expected=expected.tolist()));Path('/tmp/pokezero-natural-cure-baton-word-comparisons.json').write_text(json.dumps(exact,sort_keys=True)+'\n');np.testing.assert_array_equal(actual,expected)
-  Path('/Users/scott/workspace/agents/pokezero-b4-driver-independent-review-evidence-20261030/natural-cure-baton-original-full-compact.json').write_text(json.dumps(exact,sort_keys=True)+'\n')
+  capture_path(self,'natural-cure-baton-original-full-compact.json').write_text(json.dumps(exact,sort_keys=True)+'\n')

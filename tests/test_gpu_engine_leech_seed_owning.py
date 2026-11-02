@@ -1,4 +1,5 @@
 """Original Leech Seed helper transactions; no scientific games/models."""
+from _component_evidence import capture_path
 import ast,json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
@@ -107,7 +108,7 @@ class LeechSeedOwningTests(unittest.TestCase):
   frame=life.LifecycleResult(after,t.cursor,t,life.snapshot(cursor),life.snapshot(t.cursor),j.zeros(8,bool),j.zeros(8,j.int32));pubs=[];ledgers=[]
   for owner,(stream,pub)in enumerate(consumers):
    ledger,got=self.consume(stream,frame,pub);pubs.append(got.public);ledgers.append(ledger)
-   capture=Path('/Users/scott/workspace/agents/pokezero-b4-driver-independent-review-evidence-20261030/leech-seed-component-owner'+str(owner)+'.json');capture.write_text(json.dumps(dict(error=got.projection.error.tolist(),refusal=ledger.refusal.tolist(),words=[np.asarray(got.projection.frames.words[:,r])[np.asarray(got.projection.frames.valid[:,r])].tolist()for r in(0,1,7)]))+'\n')
+   capture=capture_path(self,'leech-seed-component-owner'+str(owner)+'.json');capture.write_text(json.dumps(dict(error=got.projection.error.tolist(),refusal=ledger.refusal.tolist(),words=[np.asarray(got.projection.frames.words[:,r])[np.asarray(got.projection.frames.valid[:,r])].tolist()for r in(0,1,7)]))+'\n')
    self.assertEqual(got.projection.error.tolist(),[0]*8);self.assertEqual(ex.report(ledger,tables=self.runtime['execution_compiled'].device).scoped_drained.tolist(),[True]*8)
    for row in(0,1,7):
     ids,lines=self.wire_prefix(row,owner);src=row%2;tar=1-src;status=' psn'if row==7 else'';targethp=160 if owner==tar else 80;targetmax=201 if owner==tar else 100

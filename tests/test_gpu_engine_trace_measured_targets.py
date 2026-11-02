@@ -1,4 +1,5 @@
 """New literal constructor components for measured Trace targets; no games/replay."""
+from _showdown_root import showdown_root_str
 import ast
 from copy import deepcopy
 from dataclasses import replace
@@ -127,7 +128,7 @@ class TraceMeasuredTargetsTests(unittest.TestCase):
     assert_hp_rng_mutations_detected(self,current,dump_default_program(original))
    else:self.assertEqual(after,before)
   for name,expected in witness.SOURCE_PINS.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),expected)
-  root=Path('/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a')
+  root=Path(showdown_root_str())
   for name in ('sim/pokemon.ts','data/mods/gen3/abilities.ts'):
    self.assertEqual((root/name).read_bytes(),subprocess.check_output(['git','show','f76228a:'+name],cwd=root))
   self.assertIn('this.battle.gen > 3',(root/'sim/pokemon.ts').read_text())

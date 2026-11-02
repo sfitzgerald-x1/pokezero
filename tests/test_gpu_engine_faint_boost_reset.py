@@ -1,4 +1,5 @@
 """Measured dead-slot stage correction, tiny original default components only."""
+from _showdown_root import showdown_root_str
 import ast
 from pathlib import Path
 import subprocess
@@ -106,7 +107,7 @@ class FaintBoostResetTests(unittest.TestCase):
         assert_hp_rng_mutations_detected(self,normalized,baseline)
 
     def test_pinned_original_faint_clear_source_and_minimal_call_order(self):
-        source=Path('/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a')
+        source=Path(showdown_root_str())
         battle=(source/'sim/battle.ts').read_text();pokemon=(source/'sim/pokemon.ts').read_text()
         faint=battle[battle.index('\tfaintMessages('):battle.index('\tcheckWin(',battle.index('\tfaintMessages('))]
         self.assertIn('pokemon.clearVolatile(false);',faint)

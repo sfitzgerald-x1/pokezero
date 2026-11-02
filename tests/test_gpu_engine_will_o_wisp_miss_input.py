@@ -1,4 +1,5 @@
 """Named original Wisp miss at actual status-setter cutpoints; no engine turn."""
+from _component_evidence import capture_path
 import ast,json,subprocess,symtable,unittest
 from copy import deepcopy
 from pokezero.dex import ShowdownDex,load_showdown_dex_cached
@@ -113,7 +114,7 @@ class WispMissTests(unittest.TestCase):
    for old,new in zip(jax.tree.leaves(stream),jax.tree.leaves(bad.projection.state),strict=True):np.testing.assert_array_equal(old[0],new[0])
    for old,new in zip(jax.tree.leaves(p),jax.tree.leaves(bad.public),strict=True):np.testing.assert_array_equal(old[0],new[0])
   joined,good=ex.join_consumed_owners(*ledgers,tables=f.runtime['execution_compiled'].device);self.assertEqual(good.tolist(),[True]*b);self.assertTrue(bool(ex.report(joined,tables=f.runtime['execution_compiled'].device).scoped_drained.all()))
-  Path('/Users/scott/workspace/agents/pokezero-b4-driver-independent-review-evidence-20261030/will-o-wisp-miss-original-both-full-compact.json').write_text(json.dumps(dict(original=original,captures=captures),sort_keys=True)+'\n')
+  capture_path(self,'will-o-wisp-miss-original-both-full-compact.json').write_text(json.dumps(dict(original=original,captures=captures),sort_keys=True)+'\n')
 
  def test_final_liveness_missing_snapshot_success_and_row_isolation(self):
   def dead(s,side,physical,target):return s._replace(hp=s.hp.at[j.arange(8),side,physical].set(0))

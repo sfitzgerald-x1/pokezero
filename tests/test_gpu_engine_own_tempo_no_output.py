@@ -1,4 +1,5 @@
 """Literal Own Tempo empty-update admission; no games/models/Native/replay."""
+from _showdown_root import showdown_root_str
 import ast
 from copy import deepcopy
 import hashlib
@@ -105,7 +106,7 @@ class OwnTempoNoOutputTests(unittest.TestCase):
         self.assertEqual(out.execution.risks.carry.counts[4].tolist(),context.carry.counts[4].tolist())
 
     def test_effective_original_callback_empty_has_no_line_and_default_AST_unchanged(self):
-        root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT','/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'))
+        root=Path(os.environ.get('POKEZERO_SHOWDOWN_ROOT',showdown_root_str()))
         self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
         self.assertTrue((root/'dist/sim/dex.js').is_file(),'pinned compiled Showdown root required')
         script=r'''

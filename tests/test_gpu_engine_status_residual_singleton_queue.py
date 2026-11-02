@@ -1,4 +1,5 @@
 """SAME queue operands + original writers only; no engine step/game/model."""
+from _showdown_root import showdown_root_str
 import ast,json,subprocess,unittest
 from pathlib import Path
 import jax
@@ -12,7 +13,7 @@ from gpu_engine.state import empty_state
 import test_gpu_engine_engine_weather_public as fixture
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
 
-ROOT='/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'
+ROOT=showdown_root_str()
 class SingletonStatusQueueTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):

@@ -1,4 +1,5 @@
 """Literal Spikes owning write/FULL/field encoder; no worlds/models/Native/games."""
+from _showdown_root import showdown_root_str
 import ast,json,os,shutil,subprocess,unittest
 from copy import deepcopy
 from dataclasses import replace
@@ -131,7 +132,7 @@ class SpikesOwningTests(unittest.TestCase):
   other=events.compile_catalog(self.metadata,self.table,public_moves=self.catalog.moves,dex=ShowdownDex(moves,self.catalog.dex.species,self.catalog.dex.type_chart),exposure=fixtures.engine_fixture.EnginePublicEventsTests.exposure)
   self.assertEqual(other.ids[self.metadata['vocabulary']['moves'].index('surf')],0);self.assertGreater(other.ids[self.move],0)
   before=ast.parse(subprocess.check_output(['git','show','e5d38e3c:gpu_engine/transition.py'],text=True));after=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
-  root=Path('/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a');self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
+  root=Path(showdown_root_str());self.assertEqual(subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip(),events.SHOWDOWN)
   node=shutil.which('node');self.assertIsNotNone(node)
   script="const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');const m=Dex.mod('gen3').moves.get('spikes');const foe={toString:()=> 'p2a: Absol'};const p={side:{foe:{active:[foe]}}};const target=Battle.prototype.getRandomTarget.call({dex:Dex.mod('gen3'),gameType:'singles'},p,m);const rows=[];for(const n of [0,1,2,3]){const lines=[];const ctx={effectState:{layers:n},add:(...x)=>lines.push(x.map(String))};const side={toString:()=> 'p2: Player'};const ret=(n?m.condition.onSideRestart:m.condition.onSideStart).call(ctx,side);rows.push({lines,layers:ctx.effectState.layers,blocked:ret===false})}console.log(JSON.stringify({target:String(target),rows}));"
   d=json.loads(subprocess.check_output([node,'-e',script,str(root)],text=True));self.assertEqual(d['target'],'p2a: Absol');self.assertEqual([r['layers'] for r in d['rows']],[1,2,3,3]);self.assertEqual([len(r['lines']) for r in d['rows']],[1,1,1,0]);self.assertTrue(d['rows'][3]['blocked'])

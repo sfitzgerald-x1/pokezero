@@ -1,4 +1,5 @@
 """Original same-call Sub/recoil writers only; no engine turn/model/game."""
+from _component_evidence import capture_path
 import ast,json,subprocess,unittest
 from pathlib import Path
 import jax
@@ -95,7 +96,7 @@ class DoubleEdgeSubstituteTests(unittest.TestCase):
     lines=[f'|move|{ids[tar]}|Substitute|{ids[tar]}',f'|-start|{ids[tar]}|Substitute',f'|-damage|{ids[tar]}|'+('198/264'if owner==tar else'75/100'),f'|move|{ids[a]}|Double-Edge|{ids[tar]}']+original['lines']+['|','|upkeep','|turn|2']
     if owner!=a:lines=[line.replace('263/285','93/100')for line in lines]
     wire,_=public_wire.project_lines(public_wire.WireState(),prefix,**v4.wire_kwargs(self.catalog));_,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog));expected=np.array([v.words()for packet in packets for v in packet.events],np.int32);actual=np.asarray(got.projection.frames.words[:,row])[np.asarray(got.projection.frames.valid[:,row])];np.testing.assert_array_equal(actual,expected);captures.append(dict(owner=owner,row=row,expected=expected.tolist(),actual=actual.tolist()))
-  Path('/Users/scott/workspace/agents/pokezero-b4-driver-independent-review-evidence-20261030/double-edge-substitute-original-both-full-compact.json').write_text(json.dumps(captures,sort_keys=True)+'\n')
+  capture_path(self,'double-edge-substitute-original-both-full-compact.json').write_text(json.dumps(captures,sort_keys=True)+'\n')
  def test_source_default_and_actual_transition_operand_binding(self):
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());self.assertEqual(dump_default_program(old),dump_default_program(new));assert_hp_rng_mutations_detected(self,new,dump_default_program(old));witness._source()
   call=next(n for n in ast.walk(new)if isinstance(n,ast.Call)and ast.unparse(n.func)=='recoil_callbacks.prepare_device');extra=next(k.value for k in call.keywords if k.arg=='substitute_damage');self.assertEqual(ast.unparse(extra),'substitute_damage_callbacks.Captured(_sub_damage_pending, _sub_damage_write)')

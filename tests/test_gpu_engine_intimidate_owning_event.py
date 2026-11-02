@@ -1,4 +1,5 @@
 """Actual initialization/entry/FULL components; no world/model/Native/game."""
+from _showdown_root import showdown_root_str
 import ast
 from copy import deepcopy
 from dataclasses import replace
@@ -113,4 +114,4 @@ class InitialIntimidateOwningTests(unittest.TestCase):
   node=shutil.which('node')
   if node is None:self.skipTest('node unavailable')
   script="const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');const a=Dex.mod('gen3').abilities.get('intimidate');const lines=[];const q={volatiles:{},toString:()=> 'p2a: Celebi'};const p={adjacentFoes:()=>[q],toString:()=> 'p1a: Arbok'};a.onStart.call({add:(...x)=>lines.push(x.map(String).join('|')),boost:(x,t,s,e,f)=>{if(x.atk!==-1||t!==q||s!==p||e!==null||f!==true)throw Error('wrong args');lines.push('-unboost|'+q+'|atk|1')}},p);process.stdout.write(JSON.stringify(lines));"
-  self.assertEqual(json.loads(subprocess.check_output([node,'-e',script,'/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'],text=True)),['-ability|p1a: Arbok|Intimidate|boost','-unboost|p2a: Celebi|atk|1'])
+  self.assertEqual(json.loads(subprocess.check_output([node,'-e',script,showdown_root_str()],text=True)),['-ability|p1a: Arbok|Intimidate|boost','-unboost|p2a: Celebi|atk|1'])

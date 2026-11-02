@@ -1,4 +1,5 @@
 """RockHead source-owned nonempty private transaction, exact zero public output."""
+from _showdown_root import showdown_root_str
 import ast,json,subprocess,unittest
 from pathlib import Path
 import jax
@@ -10,7 +11,7 @@ from gpu_engine import engine_kernel_frame_risk as risk,engine_execution_complet
 from gpu_engine import engine_public_events as events,engine_lifecycle_callbacks as life
 from gpu_engine import engine_full_v4_event_device as full,public_wire,v4_encoder as v4,damage_moves
 from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
-ROOT='/Users/scott/workspace/agents/pokemon-showdown-timing-smoke-f76228a'
+ROOT=showdown_root_str()
 BASE='1376098de0a5fc55e78660bbf3f90c446a26cea5'
 class RockHeadSilentInputTests(unittest.TestCase):
  @classmethod
