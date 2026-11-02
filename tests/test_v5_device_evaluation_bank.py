@@ -16,6 +16,7 @@ from pokezero import v5_device_evaluation_bank as schema
 from gpu_engine import state, engine_device_trackers as trackers, engine_device_observation as encoder
 from gpu_engine import device_root_snapshot as snapshots, v5_device_evaluation_bank as producer
 from gpu_engine import engine_device_damage_history as damage, engine_device_negative_items as negative
+from gpu_engine import engine_device_visible_belief as visible_belief
 from gpu_engine.v5_device_rollout import RootContext
 from gpu_engine.engine_device_public_hooks import Initialized, PublicStepResult
 from gpu_engine.transition import StepResult
@@ -88,6 +89,7 @@ class DeviceHeldoutBankTests(unittest.TestCase):
             index=dict(schema=schema.ROOT_INDEX,namespace=namespace,cost_roots=[entry])
             restored,source=producer.load_root(entry,index)
             for a,b in zip(jax.tree.leaves(root),jax.tree.leaves(restored),strict=True):np.testing.assert_array_equal(a,b)
+            self.assertIsNone(restored.public.visible_belief)
             np.testing.assert_array_equal(source['observations'][0].error_counts,np.arange(9))
             self.assertIsNone(restored.public.tendency)
             self.assertEqual(source['namespace'],namespace)
@@ -99,6 +101,20 @@ class DeviceHeldoutBankTests(unittest.TestCase):
             bad=directory/'missing.npz';np.savez(bad,**arrays)
             forged=dict(entry,artifact=dict(path=str(bad),sha256=run._file_sha(bad)))
             with self.assertRaisesRegex(ValueError,'schema changed'):snapshots.load(forged,index)
+            # Actual new carry class with its real default-zero pin fields;
+            # never fill this missing tail while loading an older snapshot.
+            pools=j.asarray([[0,0],[3,0]],j.uint32)
+            tables=NS(species_initial_mask=pools,
+                ability_mask=j.broadcast_to(pools[:,None],(2,2,2)),item_mask=j.broadcast_to(pools[:,None],(2,2,2)))
+            public=root.public._replace(belief_mask=j.broadcast_to(pools[1],(1,2,6,2)))
+            public=visible_belief.refresh(public,tables,1,root.state.active[:,1],True)
+            current=root._replace(public=public)
+            ref=snapshots.save(directory/'current.npz',current,fields,namespace=namespace,selector=selector)
+            current_entry=dict(entry,artifact=ref)
+            loaded,_=producer.load_root(current_entry,dict(index,cost_roots=[current_entry]))
+            self.assertIs(type(loaded.public.visible_belief),visible_belief.State)
+            self.assertFalse(bool(loaded.public.visible_belief.pin_active.any()))
+            for a,b in zip(jax.tree.leaves(current),jax.tree.leaves(loaded),strict=True):np.testing.assert_array_equal(a,b)
 
     def test_controller_finite_dispositions_all_legal_siblings_and_no_outcome_copy(self):
         with tempfile.TemporaryDirectory() as d:
@@ -106,7 +122,8 @@ class DeviceHeldoutBankTests(unittest.TestCase):
             for name in ('roots','positions','games'):(root/name).mkdir()
             batch=run.Batch(tuple(run.Game(100+i,'u'+str(i),200+i,(2*i,2*i+1)) for i in range(3)),1,2)
             init=initial(3);seen=[]
-            def query(s,p,streams,frames,params):
+            def query(s,p,streams,frames,params,sampling_seed):
+                self.assertEqual(int(sampling_seed),batch.sampling_seed)
                 return dict(observations=(observation(len(streams)),observation(len(streams),1)),
                     policy_logits=j.zeros((len(streams),2,9),j.float32),policy_finite=j.ones((len(streams),2),bool),
                     requested=j.ones((len(streams),2),bool),actions=j.zeros((len(streams),2),j.int32),
@@ -197,8 +214,18 @@ class DeviceHeldoutBankTests(unittest.TestCase):
                 patch.object(producer.v5_model,'forward',side_effect=fake_forward), \
                 patch.object(producer.encoder,'map_actions',side_effect=lambda obs,s,side,choice:choice), \
                 patch.object(producer.transition,'sample_chance_inputs',return_value=j.ones((2,2),j.int32)):
-            executor=producer.make_executor(prepared,object(),sampling_seed=9)
-            result=jax.block_until_ready(executor.query(init.state,init.trackers,j.asarray([3,4]),j.asarray([0,12]),({},{})))
+            executor=producer.make_executor(prepared,object())
+            streams=j.asarray([3,4]);frames=j.asarray([0,12])
+            outputs=[]
+            for seed in (9,10):
+                result=jax.block_until_ready(executor.query(init.state,init.trackers,streams,frames,({},{}),j.asarray(seed,j.uint32)))
+                keys=producer.sampling.sample_keys(streams,frames,sampling_seed=seed)
+                safe=j.broadcast_to(j.asarray([0.,0.]+[-j.inf]*7),(4,9))
+                expected=jax.vmap(jax.random.categorical)(keys.reshape(-1,2),safe).reshape(2,2)
+                np.testing.assert_array_equal(result['actions'],expected)
+                outputs.append(result)
+        # Same shapes with a changed declared seed use the same traced code;
+        # no whole actor tree or result is cached by game/seat.
         self.assertEqual(calls,['bfloat16','bfloat16']);self.assertEqual(result['actions'].shape,(2,2))
         np.testing.assert_array_equal(result['input_valid'],True)
 

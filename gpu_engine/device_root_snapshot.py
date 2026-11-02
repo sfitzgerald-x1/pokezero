@@ -8,13 +8,14 @@ import jax
 import jax.numpy as j
 from . import state, engine_device_trackers as trackers, engine_device_observation as observation
 from . import engine_device_damage_history as damage, engine_device_negative_items as negative
+from . import engine_device_visible_belief as visible_belief
 from .v5_device_rollout import RootContext
 
 SCHEMA = 'pokezero.device_heldout_pre_root.v1'
 SOURCE_FIELDS = ('observations', 'requested', 'policy_logits', 'policy_finite', 'actions')
 _TYPES = {c.__module__+'.'+c.__name__: c for c in
     (RootContext, state.BattleState, trackers.Trackers, trackers.Tendency,
-     damage.History, negative.State, observation.Observation)}
+     damage.History, negative.State, visible_belief.State, observation.Observation)}
 
 
 def _json(value):
