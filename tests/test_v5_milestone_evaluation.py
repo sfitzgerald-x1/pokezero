@@ -92,7 +92,7 @@ class MilestoneEvaluationTests(unittest.TestCase):
             self.execute(path,recipe,fixture.FakeBackend(),fixture.FakeTraining(),
                 lambda request:self.fail('completed panel replayed'),resume=True)
 
-    def test_exception_stops_current_invocation_then_resume_skips_unknown_and_continues(self):
+    def test_exception_stops_invocation_then_resume_reenters_original_panel_before_next_iteration(self):
         with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory() as temp:
             recipe=self.recipe();path=Path(temp)/'run';trainer=fixture.FakeTraining();backend=fixture.FakeBackend()
             def fail(request):raise RuntimeError('fake-panel-failure')
@@ -104,8 +104,9 @@ class MilestoneEvaluationTests(unittest.TestCase):
             resumed=[];second=fixture.FakeBackend()
             def hook(request):resumed.append(request.declared_games);return self.result(request)
             result=self.execute(path,recipe,second,trainer,hook,resume=True)
-            self.assertEqual((result['status'],resumed,second.collect_calls),('COMPLETE_DECLARATION',[4],[3,4]))
+            self.assertEqual((result['status'],resumed,second.collect_calls),('COMPLETE_DECLARATION',[2,4],[3,4]))
             self.assertEqual(len(r.Store(path,recipe,resume=True).matching('EVALUATION_STARTED')),2)
+            self.assertEqual(len(r.Store(path,recipe,resume=True).matching('EVALUATION_RESUMED')),1)
 
     def test_interrupted_start_and_result_before_iteration_commit_never_replay(self):
         for after_result in (False,True):
@@ -121,10 +122,10 @@ class MilestoneEvaluationTests(unittest.TestCase):
                 requests=[]
                 def hook(request):requests.append(request.declared_games);return self.result(request)
                 result=self.execute(path,recipe,fixture.FakeBackend(),trainer,hook,resume=True)
-                self.assertEqual((result['status'],requests,trainer.latest.steps),('COMPLETE_DECLARATION',[4],6))
+                self.assertEqual((result['status'],requests,trainer.latest.steps),('COMPLETE_DECLARATION',[4]if after_result else[2,4],6))
                 store=r.Store(path,recipe,resume=True)
-                self.assertEqual(len(store.matching('EVALUATION_UNKNOWN')),0 if after_result else 1)
-                if not after_result:self.assertIn('not-replayed',store.matching('EVALUATION_UNKNOWN')[0]['outcome']['reason'])
+                self.assertEqual(len(store.matching('EVALUATION_UNKNOWN')),0)
+                self.assertEqual(len(store.matching('EVALUATION_RESUMED')),0 if after_result else 1)
 
     def test_explicit_unknown_bad_outcomes_and_mutated_inputs_never_grant_result(self):
         for mode in ('unknown','wrongtype','foreign-report','mutated-checkpoint'):

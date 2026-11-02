@@ -239,6 +239,69 @@ class EvaluationTests(unittest.TestCase):
             self.assertFalse(report['scientific_qualification']);self.assertEqual(report['unknown_cells'],999)
             self.assertEqual(report['score_bounds'],[.001,1.]);self.assertEqual(r._file_sha(request.run_directory/outcome.report),outcome.report_sha256)
 
+    def test_continuation_dispatches_only_untouched_suffix_and_never_lost_inflight(self):
+        with tempfile.TemporaryDirectory()as temp:
+            root=Path(temp);ref,protocol,_,request=self.fixture(root)
+            configs=e._pairs(protocol,parse_configs=True,checkpoint=request.checkpoint_path)[500000]
+            rows=e._fixed_rows(configs);source=game(configs[0],rows[0]['seed'])
+            rows[0].update(status='COMPLETE',score=1.,duration_seconds=.2,source_game=source,source_result_sha256=r._sha(source))
+            rows[1].update(status='REFUSED',reason='original refusal')
+            rows[2].update(status='RUNNING',invocation_id='lost-original-process')
+            original=json.loads(r._json(rows));started=[]
+            async def fake(config,factory,*,game_offsets,progress_callback,enable_v5):
+                index=2*game_offsets[0]+(config.pokezero_player=='p2');started.append(index)
+                self.assertEqual(config.foulplay_cpu_affinity,protocol['foulplay_cpus'][index%4])
+                await asyncio.sleep(0)
+                actual={k:rows[index][k]for k in ('offset','seed','fp_seed','score','source_game','source_result_sha256','duration_seconds')}
+                actual.update(status='REFUSED',reason='fake unsupported')
+                result=dict(rows=[actual]);progress_callback(result);return result
+            with patch.object(fp,'run_panel',side_effect=fake):
+                result=asyncio.run(e._concurrent_panel(configs,object(),protocol,root/'continued.json','n'*64,initial_rows=rows))
+            self.assertEqual(started,list(range(3,1000)))
+            self.assertEqual(result['rows'][:2],original[:2])
+            self.assertEqual(result['rows'][2],dict(original[2],status='FAILED',reason='interrupted-inflight-result-unknown-not-replayed'))
+            self.assertEqual(rows,original);self.assertEqual(len(result['rows']),1000)
+
+    def test_hook_keeps_immutable_attempts_and_joins_prior_completed_rows(self):
+        with tempfile.TemporaryDirectory()as temp:
+            root=Path(temp);ref,protocol,_,request=self.fixture(root)
+            configs=e._pairs(protocol,parse_configs=True,checkpoint=request.checkpoint_path)[500000]
+            attempts=[];delivered=[];request=replace(request,progress_callback=delivered.append)
+            hook=e.EvaluationHook(ref,request.declaration_sha256)
+            def supervisor(command,*,progress_path,**kwargs):
+                child=Path(command[command.index('--request')+1]);payload=json.loads(child.read_bytes())
+                attempts.append(child.parent)
+                if len(attempts)==1:
+                    self.assertIsNone(payload['resume_progress']);rows=e._fixed_rows(configs)
+                    rows[1].update(status='RUNNING',invocation_id='original-dispatch')
+                    index=0;status='UNKNOWN';code=1
+                else:
+                    previous=e.Artifact(**payload['resume_progress']).document()
+                    rows=e._lost_inflight(previous['rows']);self.assertEqual(rows[1]['status'],'FAILED')
+                    for value in rows[2:]:value.update(status='REFUSED',reason='fake-remaining-unknown')
+                    index=2;status='RESULT';code=0
+                source=game(configs[index%2],rows[index]['seed'])
+                rows[index].update(status='COMPLETE',score=1.,duration_seconds=.2,source_game=source,source_result_sha256=r._sha(source))
+                namespace=r._sha(payload);e._atomic(progress_path,dict(schema=fp.SCHEMA,namespace=namespace,rows=rows))
+                r._publish(child.parent/'worker-report.json',r._json(dict(schema=e.SCHEMA,status=status,namespace=namespace,
+                    request=payload['request'],rows=rows,reason='fake-interruption'if code else None)).encode())
+                kwargs['sleep'](0);return dict(exit_code=code,stop_reason=None)
+            with patch.object(fp,'supervise_panel',side_effect=supervisor):
+                first=hook(request);saved={p:p.read_bytes()for p in attempts[0].iterdir()if p.is_file()}
+                second=hook(request)
+            self.assertEqual((first.status,second.status),('UNKNOWN','RESULT'))
+            self.assertNotEqual(first.report,second.report)
+            self.assertTrue(all(p.read_bytes()==blob for p,blob in saved.items()))
+            self.assertEqual([x.cell_ordinal for x in delivered],[0,0,2])
+            final=json.loads((request.run_directory/second.report).read_bytes())
+            self.assertEqual((final['known_completed'],final['unknown_cells'],final['disposition_counts']['FAILED']),(2,998,1))
+            # A completed cell rewritten in a later continuation cannot be accepted.
+            latest=attempts[-1]/'progress.json';changed=json.loads(latest.read_bytes());changed['rows'][0]['reason']='mutated'
+            e._atomic(latest,changed)
+            with patch.object(fp,'supervise_panel')as launch,self.assertRaisesRegex(ValueError,'changed or replayed'):
+                hook(request)
+            launch.assert_not_called()
+
     def test_owned_worker_failure_retains_full_unknown_bank_without_zero_score_or_replay(self):
         with tempfile.TemporaryDirectory() as temp:
             _,_,_,request=self.fixture(Path(temp));ref=e.Artifact(str(Path(temp).resolve()/'protocol.json'),request.protocol_sha256)
@@ -317,6 +380,34 @@ class EvaluationTests(unittest.TestCase):
             store.emit('EVALUATION_GAME_END',**original['payload'])
             with self.assertRaisesRegex(ValueError,'open original attempt|replayed'):r._evaluation_history(store)
 
+    def test_process_loss_redelivers_completed_source_without_new_game_progress(self):
+        import test_v5_milestone_evaluation as milestone
+        harness=milestone.MilestoneEvaluationTests()
+        with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory()as temp:
+            path=Path(temp)/'run';base=run_fixture.plan()
+            protocol=dict(schema=e.SCHEMA,model_sha256=r._sha(base.model.metadata()),panels=[dict(declared_games=count,
+                seeds=list(range(101,601)),configs=[dict(seed_start=101,foulplay_random_seed=1000,pokezero_player=seat,
+                    pokezero_username='Unit',foulplay_username='Peer')for seat in ('p1','p2')])for count in (2,4)])
+            ref=artifact(Path(temp)/'protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256']))
+            cfg=NS(pokezero_username='Unit',foulplay_username='Peer',pokezero_player='p1')
+            def receipt(offset):
+                source=game(cfg,101+offset)
+                return r.EvaluationCompletion(2*offset,offset,101+offset,'p1',3.,r._json(source),r._sha(source),
+                    'Unit','Peer',ref['path'],1000+offset)
+            def interrupted(request):request.progress_callback(receipt(0));raise KeyboardInterrupt('lost parent')
+            with self.assertRaises(KeyboardInterrupt):
+                harness.execute(path,recipe,run_fixture.FakeBackend(),run_fixture.FakeTraining(),interrupted)
+            def continued(request):
+                request.progress_callback(receipt(0))
+                with self.assertRaisesRegex(ValueError,'replayed'):request.progress_callback(receipt(0))
+                request.progress_callback(receipt(1));return harness.result(request)
+            result=harness.execute(path,recipe,run_fixture.FakeBackend(),run_fixture.FakeTraining(),continued,resume=True)
+            self.assertEqual(result['status'],'COMPLETE_DECLARATION')
+            store=r.Store(path,recipe,resume=True);r._evaluation_history(store)
+            self.assertEqual(len(store.matching('EVALUATION_RESUMED')),1)
+            self.assertEqual(len(store.matching('EVALUATION_GAME_END',declared_games=2)),2)
+            self.assertEqual(len(store.matching('EVALUATION_GAME_END',declared_games=4)),2)
+
     def test_outer_supervisor_advances_only_on_actual_complete_evaluation_event(self):
         for status in ('COMPLETE','REFUSED'):
             with self.subTest(status=status),tempfile.TemporaryDirectory() as temp:
@@ -365,7 +456,9 @@ class EvaluationTests(unittest.TestCase):
 
     def test_owned_child_binds_policy_before_typed_runtime_and_never_uses_unreviewed_executor(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);ref,protocol,_,request=self.fixture(root);directory=request.run_directory/'artifacts'/'evaluation-unit';directory.mkdir(parents=True)
+            root=Path(temp);ref,protocol,_,request=self.fixture(root)
+            directory=request.run_directory/'artifacts'/('evaluation-500000-'+r._sha(e._request_document(request)))/'attempt-000000'
+            directory.mkdir(parents=True)
             payload=dict(protocol=asdict(ref),expected_run_declaration_sha256=request.declaration_sha256,
                 request=e._request_document(request),directory=str(directory))
             child_ref=e.Artifact(**artifact(directory/'request.json',payload));order=[]

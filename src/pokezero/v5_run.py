@@ -107,7 +107,7 @@ class EvaluationProtocol:
 
     def metadata(self):
         return dict(protocol_sha256=self.protocol_sha256,interval_games=EVALUATION_INTERVAL_GAMES,
-            progress='DECLARED_GAME_ORDINAL',attempts='DURABLE_START_NO_AUTOMATIC_REPLAY')
+            progress='DECLARED_GAME_ORDINAL',attempts='RESUME_NOT_ATTEMPTED_NO_CELL_REPLAY')
 
 
 @dataclass(frozen=True)
@@ -465,7 +465,7 @@ def _checked_evaluation_start(store,event):
 
 
 def _evaluation_history(store):
-    """Verify attempted panels, then conservatively close interrupted starts."""
+    """Verify panel attempts; an interrupted panel keeps its untouched suffix."""
     declaration_sha256=_sha(json.loads((store.path/'declaration.json').read_bytes()))
     if store.matching('RUN_STARTED')!=[dict(declaration_sha256=declaration_sha256)]:
         raise ValueError('original accepted run declaration binding required')
@@ -480,7 +480,7 @@ def _evaluation_history(store):
             iteration=event['payload']['iteration']
             if iteration not in published or _sha(_evaluation_binding(store,published[iteration])) not in closed:
                 raise ValueError('milestone iteration completed without an attempted evaluation disposition')
-        if event['kind'] not in ('EVALUATION_STARTED','EVALUATION_RESULT','EVALUATION_UNKNOWN','EVALUATION_GAME_END'):continue
+        if event['kind'] not in ('EVALUATION_STARTED','EVALUATION_RESUMED','EVALUATION_RESULT','EVALUATION_UNKNOWN','EVALUATION_GAME_END'):continue
         if store.plan.evaluation is None:raise ValueError('evaluation journal requires original opted-in declaration')
         payload=event['payload'];iteration=payload.get('iteration')
         if iteration not in published:raise ValueError('evaluation requires one original published snapshot')
@@ -492,6 +492,11 @@ def _evaluation_history(store):
         if event['kind']=='EVALUATION_STARTED':
             if key in starts or set(payload)!=set(expected):raise ValueError('evaluation attempt replay/extra fields')
             starts[key]=_checked_evaluation_start(store,event)
+        elif event['kind']=='EVALUATION_RESUMED':
+            if (key not in starts or payload!=starts[key]
+                    or key in closed and closed[key].status!='UNKNOWN'):
+                raise ValueError('only an unfinished original evaluation can resume')
+            closed.pop(key,None)
         elif event['kind']=='EVALUATION_GAME_END':
             if key not in starts or key in closed:
                 raise ValueError('evaluation completion requires open original attempt')
@@ -503,28 +508,33 @@ def _evaluation_history(store):
             if event['kind']!='EVALUATION_'+outcome.status:raise ValueError('evaluation disposition differs')
             if outcome.report is not None:store.resolve(outcome.report,outcome.report_sha256)
             closed[key]=outcome
-    for key,binding in starts.items():
-        if key not in closed:
-            outcome=EvaluationOutcome('UNKNOWN',reason='interrupted-evaluation-attempt-not-replayed')
-            store.emit('EVALUATION_UNKNOWN',**binding,outcome=asdict(outcome));closed[key]=outcome
     return closed
 
 
 def _evaluate_snapshot(store,snapshot,hook):
-    """Return False only for a newly attempted UNKNOWN; resume never replays it."""
+    """Resume the same panel, with idempotent completed-cell delivery only."""
     binding=_evaluation_binding(store,snapshot);key=_sha(binding)
-    if store.matching('EVALUATION_STARTED',evaluation_sha256=key):return True
+    outcomes=[e['payload']['outcome']for e in store.events
+        if e['kind'] in ('EVALUATION_RESULT','EVALUATION_UNKNOWN') and e['payload'].get('evaluation_sha256')==key]
+    if outcomes and outcomes[-1]['status']=='RESULT':return True
     request=_evaluation_request(store,snapshot)
     bound=dict(**binding,evaluation_sha256=key)
-    store.emit('EVALUATION_STARTED',**bound)
-    completed=set()
+    store.emit('EVALUATION_RESUMED' if store.matching('EVALUATION_STARTED',evaluation_sha256=key) else 'EVALUATION_STARTED',**bound)
+    completed={e['completion']['cell_ordinal']:EvaluationCompletion(**e['completion'])for e in
+        store.matching('EVALUATION_GAME_END',evaluation_sha256=key)}
+    carried=set(completed);delivered=set()
     def actual_completion(receipt):
         _checked_evaluation_completion(receipt)
         _checked_completion_protocol(receipt,bound)
-        if receipt.cell_ordinal in completed:raise ValueError('completed evaluation cell replayed')
+        if receipt.cell_ordinal in completed:
+            if completed[receipt.cell_ordinal]!=receipt:raise ValueError('completed evaluation source changed on resume')
+            if receipt.cell_ordinal not in carried or receipt.cell_ordinal in delivered:
+                raise ValueError('completed evaluation cell replayed')
+            delivered.add(receipt.cell_ordinal)
+            return  # The stored panel ledger is delivered again, never its game.
         store.emit('EVALUATION_GAME_END',**bound,status='COMPLETE',duration_seconds=receipt.duration_seconds,
             completion=asdict(receipt))
-        completed.add(receipt.cell_ordinal)
+        completed[receipt.cell_ordinal]=receipt
     request=replace(request,progress_callback=actual_completion)
     try:
         outcome=hook(request)
@@ -695,7 +705,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
     """
     started=time.monotonic();last=started;longest=0.;seen=0;previous=None;phase='PREPARE';last_steps=-1
     evaluation_store=Store.__new__(Store);evaluation_store.path=Path(path);evaluation_store.plan=plan;evaluation_store.events=[]
-    evaluation_starts={};evaluation_closed=set();evaluation_cells={}
+    evaluation_starts={};evaluation_closed={};evaluation_cells={}
     milestones=(evaluation_milestones(sum(len(b.games) for b in batches) for batches in plan.iterations)
         if plan.evaluation is not None else {})
     process=popen(command,start_new_session=True)
@@ -712,13 +722,20 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
                     previous=digest;seen+=1;payload=event['payload']
                     if type(payload) is not dict:raise ValueError('original journal payload required')
                     kind=event['kind']
-                    if kind in ('RUN_STARTED','CHECKPOINT','SNAPSHOT','EVALUATION_STARTED','EVALUATION_GAME_END',
+                    if kind in ('RUN_STARTED','CHECKPOINT','SNAPSHOT','EVALUATION_STARTED','EVALUATION_RESUMED','EVALUATION_GAME_END',
                             'EVALUATION_RESULT','EVALUATION_UNKNOWN','ITERATION_COMPLETE'):
                         evaluation_store.events.append(event)
                     if kind=='EVALUATION_STARTED':
                         key=payload.get('evaluation_sha256')
                         if key in evaluation_starts:raise ValueError('evaluation start replayed')
                         evaluation_starts[key]=_checked_evaluation_start(evaluation_store,event)
+                    elif kind=='EVALUATION_RESUMED':
+                        key=payload.get('evaluation_sha256')
+                        if (key not in evaluation_starts or payload!=evaluation_starts[key]
+                                or key in evaluation_closed and evaluation_closed[key]!='UNKNOWN'):
+                            raise ValueError('only an unfinished original evaluation can resume')
+                        evaluation_closed.pop(key,None)
+                        last=time.monotonic()
                     elif kind=='EVALUATION_GAME_END':
                         key=payload.get('evaluation_sha256')
                         if key not in evaluation_starts or key in evaluation_closed:
@@ -733,7 +750,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
                         outcome=EvaluationOutcome(**payload['outcome'])
                         if kind!='EVALUATION_'+outcome.status:raise ValueError('evaluation disposition changed')
                         if outcome.report is not None:evaluation_store.resolve(outcome.report,outcome.report_sha256)
-                        evaluation_closed.add(key)
+                        evaluation_closed[key]=outcome.status
                     elif kind=='ITERATION_COMPLETE' and payload.get('iteration') in milestones:
                         if not any(key in evaluation_closed and binding['iteration']==payload['iteration']
                                 for key,binding in evaluation_starts.items()):

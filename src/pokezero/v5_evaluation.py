@@ -384,9 +384,50 @@ def _completed_receipts(rows,expected,configs,*,protocol_path=None):
     return completed
 
 
-async def _concurrent_panel(configs,factory,protocol,progress_path,namespace):
+def _lost_inflight(rows):
+    """A dispatched cell is never relaunched, even if its result was lost."""
+    rows=json.loads(run._json(rows))
+    for row in rows:
+        if row['status']=='RUNNING':
+            row.update(status='FAILED',reason='interrupted-inflight-result-unknown-not-replayed')
+    return rows
+
+
+def _panel_predecessor(panel,request_document,protocol_reference,configs):
+    """Read the declared attempt chain; retain all prior non-dispatchable rows."""
+    attempts=sorted(panel.glob('attempt-*'));previous=None;reference=None
+    expected=_fixed_rows(configs)
+    for index,directory in enumerate(attempts):
+        if directory.name!=f'attempt-{index:06d}' or not directory.is_dir():
+            raise ValueError('original ordered panel attempts required')
+        if not (directory/'request.json').exists():
+            if any(directory.iterdir()):raise ValueError('unbound panel attempt contains data')
+            continue  # Parent interruption before request publication: no dispatch.
+        payload=json.loads((directory/'request.json').read_bytes())
+        if (payload['request']!=request_document or payload['protocol']!=asdict(protocol_reference)
+                or payload['expected_run_declaration_sha256']!=request_document['declaration_sha256']
+                or payload['directory']!=str(directory)
+                or payload.get('resume_progress')!=(asdict(reference)if reference else None)):
+            raise ValueError('original panel continuation binding differs')
+        progress=directory/'progress.json'
+        if not progress.exists():continue  # No dispatch is possible before this publication.
+        ref=Artifact(str(progress),run._file_sha(progress));document=ref.document()
+        if document['namespace']!=run._sha(payload):raise ValueError('original panel progress namespace differs')
+        rows=document['rows'];_completed_receipts(rows,expected,configs)
+        if previous is not None:
+            for old,current in zip(_lost_inflight(previous),rows):
+                if old['status']!='NOT_ATTEMPTED' and current!=old:
+                    raise ValueError('previously attempted panel cell changed or replayed')
+        previous=rows;reference=ref
+    return len(attempts),reference,_lost_inflight(previous if previous is not None else expected)
+
+
+async def _concurrent_panel(configs,factory,protocol,progress_path,namespace,*,initial_rows=None):
     from . import v5_foulplay as fp
-    rows=_fixed_rows(configs);invocation=uuid.uuid4().hex;next_cell=0;stop=False
+    expected=_fixed_rows(configs)
+    rows=expected if initial_rows is None else _lost_inflight(initial_rows)
+    _completed_receipts(rows,expected,configs)
+    invocation=uuid.uuid4().hex;next_cell=next((i for i,row in enumerate(rows)if row['status']=='NOT_ATTEMPTED'),len(rows));stop=False
     active={};slots=len(protocol['foulplay_cpus'])
     def publish():
         _atomic(progress_path,dict(schema=fp.SCHEMA,namespace=namespace,invocation_id=invocation,rows=rows))
@@ -519,12 +560,17 @@ class EvaluationHook:
         _capture_resolver(protocol).resolve_original_capture(protocol,request)
         if request.declared_games not in panels:raise run.MissingDependency('exact declared milestone panel missing')
         if not callable(request.progress_callback):raise run.MissingDependency('original durable run completion sink required before panel')
-        directory=request.run_directory/'artifacts'/('evaluation-'+str(request.declared_games)+'-'+uuid.uuid4().hex)
+        document=_request_document(request)
+        panel=request.run_directory/'artifacts'/('evaluation-'+str(request.declared_games)+'-'+run._sha(document))
+        panel.mkdir(parents=True,exist_ok=True)
+        configs=panels[request.declared_games];expected=_fixed_rows(configs)
+        attempt,predecessor,carried=_panel_predecessor(panel,document,self.protocol,configs)
+        directory=panel/f'attempt-{attempt:06d}'
         directory.mkdir(parents=True,exist_ok=False)
         payload=dict(protocol=asdict(self.protocol),expected_run_declaration_sha256=self.expected_run_declaration_sha256,
-            request=_request_document(request),directory=str(directory))
+            request=document,directory=str(directory),resume_progress=asdict(predecessor)if predecessor else None)
         child=directory/'request.json';run._publish(child,run._json(payload).encode());namespace=run._sha(payload)
-        progress=directory/'progress.json';seen={};configs=panels[request.declared_games];expected=_fixed_rows(configs)
+        progress=directory/'progress.json';seen={}
         def drain():
             if not progress.is_file():return
             document=json.loads(progress.read_bytes())
@@ -548,7 +594,7 @@ class EvaluationHook:
         worker_digest=None
         if not worker_report.is_file():
             value=dict(schema=SCHEMA,status='UNKNOWN',reason='owned-panel-ended-without-final-report',namespace=namespace,
-                request=payload['request'],rows=json.loads(progress.read_bytes())['rows'] if progress.is_file() else expected,
+                request=payload['request'],rows=json.loads(progress.read_bytes())['rows'] if progress.is_file() else carried,
                 scientific_qualification=False)
         else:
             blob=worker_report.read_bytes();worker_digest=hashlib.sha256(blob).hexdigest();value=json.loads(blob)
@@ -588,10 +634,19 @@ def child(reference):
     _memory(runtime['memory_policy'],apply=True)
     protocol,panels=_protocol(Artifact(**payload['protocol']),parse_configs=True,checkpoint=request.checkpoint_path);namespace=run._sha(payload)
     _check_request(request,protocol,Artifact(**payload['protocol']),payload['expected_run_declaration_sha256'])
-    if directory.parent!=request.run_directory/'artifacts' or Path(reference.path)!=directory/'request.json':
+    panel=request.run_directory/'artifacts'/('evaluation-'+str(request.declared_games)+'-'+run._sha(payload['request']))
+    if (directory.parent!=panel or Path(reference.path)!=directory/'request.json'
+            or not directory.name.startswith('attempt-')):
         raise ValueError('original owned evaluation request directory required')
+    initial_rows=None
+    if payload.get('resume_progress') is not None:
+        prior=Artifact(**payload['resume_progress'])
+        if (Path(prior.path).parent.parent!=panel or Path(prior.path).name!='progress.json'
+                or Path(prior.path).parent.name>=directory.name):
+            raise ValueError('earlier original panel progress required')
+        initial_rows=prior.document()['rows']
     from .owning_worker_runtime import configure_compilation_cache
-    configure_compilation_cache(directory/'jax-compilation-cache')
+    configure_compilation_cache(request.run_directory/'jax-compilation-cache')
     configs=tuple(replace(c,checkpoint=request.checkpoint_path) for c in panels[request.declared_games]);report=directory/'worker-report.json'
     try:
         # No actual panel before source/data/runtime checks and genuine metric inputs.
@@ -600,7 +655,7 @@ def child(reference):
         _require_foulplay_source(protocol,tuple(config.foulplay_root for config in configs))
         captured=_capture_resolver(protocol).resolve_original_capture(protocol,request);factory=_factory(protocol,request)
         mechanisms=mechanism(protocol,factory,captured)
-        progress=asyncio.run(_concurrent_panel(configs,factory,protocol,directory/'progress.json',namespace))
+        progress=asyncio.run(_concurrent_panel(configs,factory,protocol,directory/'progress.json',namespace,initial_rows=initial_rows))
         rows=progress['rows'];known=[r['score'] for r in rows if r['status']=='COMPLETE'];unknown=1000-len(known)
         partial=any(r['status'] in ('RUNNING','NOT_ATTEMPTED') for r in rows)
         value=dict(schema=SCHEMA,status='UNKNOWN' if partial else 'RESULT',reason='unattempted/inflight-original-cells-remain' if partial else None,
@@ -609,7 +664,7 @@ def child(reference):
             mechanisms=mechanisms,scientific_qualification=False,physics_qualified=False,strength_qualified=False)
     except Exception as error:
         value=dict(schema=SCHEMA,status='UNKNOWN',reason=type(error).__name__+': '+str(error),namespace=namespace,request=payload['request'],
-            rows=json.loads((directory/'progress.json').read_bytes())['rows'] if (directory/'progress.json').is_file() else _fixed_rows(configs),
+            rows=json.loads((directory/'progress.json').read_bytes())['rows'] if (directory/'progress.json').is_file() else _lost_inflight(initial_rows if initial_rows is not None else _fixed_rows(configs)),
             scientific_qualification=False)
     run._publish(report,run._json(value).encode());return 0 if value['status']=='RESULT' else 1
 
