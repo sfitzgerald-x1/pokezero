@@ -135,7 +135,7 @@ class DeviceRecordedPrefixTests(unittest.TestCase):
             manifest['source_owner']['pod']['sha256']=c.digest(manifest['source_owner']['pod']['path'])
             with self.assertRaises(ValueError):r.validate_prefix_inputs(manifest)
             with patch.object(c,'prepare',side_effect=AssertionError('must not prepare')):
-                with self.assertRaises(ValueError):r.run_prefix(manifest,out='/shared/scott/not-created')
+                with self.assertRaises(ValueError):r.run_prefix(manifest,out='/shared/fixture/not-created')
         tree=ast.parse(Path(r.__file__).read_text())
         previous=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/device_recorded_reencoding.py'],cwd=c.ROOT,text=True))
         old={x.name:ast.dump(x,include_attributes=False)for x in previous.body if isinstance(x,ast.FunctionDef)}
