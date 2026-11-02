@@ -315,23 +315,55 @@ def write_cache(path,batch):
     return metadata
 
 
-def iter_cache_batches(path,*,batch_size):
+def _file_identity(path):
+    value=Path(path).stat()
+    return (value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns,value.st_ctime_ns)
+
+
+def _require_cache_identities(identities):
+    try:unchanged=all(_file_identity(path)==identity for path,identity in identities.items())
+    except OSError:unchanged=False
+    if not unchanged:raise ValueError('verified v5 cache files changed during reader session')
+
+
+class VerifiedCache:
+    """One immutable, digest-verified shard, reused only within its owner process.
+
+    Every new opening retains the original metadata/array SHA checks. Reuse
+    checks file identity, size and both modification/change timestamps; any
+    change fails closed. This object is never serialized into a checkpoint.
+    """
+    def __init__(self,path):
+        path=Path(path);file=path/'metadata.json'
+        identities={file:_file_identity(file)}
+        metadata=json.loads(file.read_text())
+        check=dict(metadata);claimed=check.pop('metadata_sha256',None)
+        if metadata.get('schema_version')!=CACHE_SCHEMA or claimed!=_sha(check):raise ValueError('v5 cache schema/metadata changed')
+        arrays={}
+        for name,description in metadata['arrays'].items():
+            file=path/(name+'.npy');identities[file]=_file_identity(file)
+            if _file_sha(file)!=description['sha256']:raise ValueError('v5 cache array bytes changed')
+            value=np.load(file,mmap_mode='r',allow_pickle=False)
+            if list(value.shape)!=description['shape'] or value.dtype.str!=description['dtype']:raise ValueError('v5 cache shape/dtype changed')
+            arrays[name]=value
+        _require_cache_identities(identities)
+        base={field.name:None for field in fields(TrainingBatch) if field.name!='v5_columns'}
+        base.update(metadata['base_json']);base.update({name[6:]:value for name,value in arrays.items() if name.startswith('base__')})
+        cols={**metadata['v5_static'],**metadata['v5_rows'],**{name[4:]:value for name,value in arrays.items() if name.startswith('v5__')}}
+        self._batch=TrainingBatch(**base,v5_columns=MappingProxyType(cols))
+        if self._batch.batch_size!=metadata['example_count']:raise ValueError('v5 cache row denominator changed')
+        self._identities=identities
+
+    def batches(self,*,batch_size,start_batch=0):
+        if type(batch_size) is not int or batch_size<=0:raise ValueError('positive v5 batch size required')
+        count=(self._batch.batch_size+batch_size-1)//batch_size
+        if type(start_batch) is not int or not 0<=start_batch<=count:raise ValueError('v5 cache batch cursor outside finite shard')
+        _require_cache_identities(self._identities)
+        from .dataset import slice_training_batch
+        for start in range(start_batch*batch_size,self._batch.batch_size,batch_size):
+            yield slice_training_batch(self._batch,start,min(start+batch_size,self._batch.batch_size))
+
+
+def iter_cache_batches(path,*,batch_size,start_batch=0):
     if type(batch_size) is not int or batch_size<=0:raise ValueError('positive v5 batch size required')
-    path=Path(path);metadata=json.loads((path/'metadata.json').read_text())
-    check=dict(metadata);claimed=check.pop('metadata_sha256',None)
-    if metadata.get('schema_version')!=CACHE_SCHEMA or claimed!=_sha(check):raise ValueError('v5 cache schema/metadata changed')
-    arrays={}
-    for name,description in metadata['arrays'].items():
-        file=path/(name+'.npy')
-        if _file_sha(file)!=description['sha256']:raise ValueError('v5 cache array bytes changed')
-        value=np.load(file,mmap_mode='r',allow_pickle=False)
-        if list(value.shape)!=description['shape'] or value.dtype.str!=description['dtype']:raise ValueError('v5 cache shape/dtype changed')
-        arrays[name]=value
-    base={field.name:None for field in fields(TrainingBatch) if field.name!='v5_columns'}
-    base.update(metadata['base_json']);base.update({name[6:]:value for name,value in arrays.items() if name.startswith('base__')})
-    cols={**metadata['v5_static'],**metadata['v5_rows'],**{name[4:]:value for name,value in arrays.items() if name.startswith('v5__')}}
-    batch=TrainingBatch(**base,v5_columns=MappingProxyType(cols))
-    if batch.batch_size!=metadata['example_count']:raise ValueError('v5 cache row denominator changed')
-    from .dataset import slice_training_batch
-    for start in range(0,batch.batch_size,batch_size):
-        yield slice_training_batch(batch,start,min(start+batch_size,batch.batch_size))
+    yield from VerifiedCache(path).batches(batch_size=batch_size,start_batch=start_batch)

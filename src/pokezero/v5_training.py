@@ -29,6 +29,7 @@ CHECKPOINT_SCHEMA = 'pokezero.checkpoint.v5'
 TRAINER_SCHEMA = 'pokezero.cache_trainer.v5'
 BOOTSTRAP_SCHEMA = 'pokezero.public_value_bootstrap.v5'
 _SCHEDULED = weakref.WeakKeyDictionary()
+_CACHE_READERS = weakref.WeakKeyDictionary()
 
 
 @dataclass(frozen=True)
@@ -342,6 +343,33 @@ def _cache_manifest(paths,batch_size):
     return result
 
 
+class _CacheReader:
+    """Ordered metadata roster plus at most one active verified shard."""
+    def __init__(self,paths,batch_size):
+        self.paths=paths;self.batch_size=batch_size
+        self.identities={path/'metadata.json':v5_data._file_identity(path/'metadata.json') for path in paths}
+        self.manifest=_cache_manifest(paths,batch_size)
+        v5_data._require_cache_identities(self.identities)
+        self.active=None;self.shard=None
+
+    def batches(self,shard,start):
+        if self.shard!=shard:
+            self.active=None;self.shard=None
+            active=v5_data.VerifiedCache(self.paths[shard])
+            v5_data._require_cache_identities(self.identities)
+            self.active=active;self.shard=shard
+        return self.active.batches(batch_size=self.batch_size,start_batch=start)
+
+
+def _cache_reader(runtime,paths):
+    reader=_CACHE_READERS.get(runtime)
+    if reader is None or reader.paths!=paths or reader.batch_size!=runtime.train_config.batch_size:
+        reader=_CacheReader(paths,runtime.train_config.batch_size)
+        _CACHE_READERS[runtime]=reader
+    v5_data._require_cache_identities(reader.identities)
+    return reader
+
+
 def _validate_progress(progress):
     if progress is None:return
     if (set(progress)!={'manifest','epochs','epoch','cache','batch','complete'}
@@ -377,7 +405,7 @@ def train_caches(runtime,paths,*,max_updates=None,learning_rate_window=None):
         raise ValueError('nonnegative update budget required')
     if runtime in _SCHEDULED:_validate_optimizer(runtime)
     paths=tuple(Path(path) for path in paths)
-    manifest=_cache_manifest(paths,runtime.train_config.batch_size)
+    reader=_cache_reader(runtime,paths);manifest=json.loads(json.dumps(reader.manifest))
     scheduled=runtime.train_config.learning_rate_schedule!='constant'
     if scheduled:
         if type(learning_rate_window) is not DeclaredGameWindow:
@@ -408,9 +436,8 @@ def train_caches(runtime,paths,*,max_updates=None,learning_rate_window=None):
     metrics=[];progress=runtime.progress
     while not progress['complete'] and (max_updates is None or len(metrics)<max_updates):
         shard=progress['cache'];start=progress['batch']
-        batches=v5_data.iter_cache_batches(paths[shard],batch_size=runtime.train_config.batch_size)
-        for index,batch in enumerate(batches):
-            if index<start:continue
+        batches=reader.batches(shard,start)
+        for batch in batches:
             metrics.append(_update(runtime,batch) if scheduled else update(runtime,batch))
             if not scheduled:_advance_progress(progress)
             if max_updates is not None and len(metrics)>=max_updates:break
