@@ -89,6 +89,8 @@ def checked_result(value,request,plan):
             and benchmark['seed_start']==config.seed_start and benchmark['pokezero_player']==config.pokezero_player
             and benchmark['foulplay_random_seed_schedule']['seeds']==[config.foulplay_random_seed]
             and benchmark['game_results']==[game] and game['seed']==config.seed_start,'actual original FP source result differs')
+        if config.encoder_kind=='jax-owning':
+            c.require(benchmark.get('encoder_kind')=='jax-owning','canary endpoint must retain actual B2 encoding')
         score=v5_foulplay._score(config,game)
         c.require(value['score']==score and value['status']==('COMPLETE' if score is not None else 'UNKNOWN'),
             'literal terminal score differs')
@@ -140,7 +142,7 @@ async def _finish_owned_cleanup(process):
         raise
 
 
-async def evaluate_with_sigterm(plan,book,*,champion_checkpoint,final_checkpoint):
+async def evaluate_with_sigterm(plan,book,*,champion_checkpoint,final_checkpoint,device_path=False):
     """Own TERM for this public invocation, then restore/defer caller handlers.
 
     A separate endpoint task makes repeated termination idempotent while its
@@ -162,7 +164,7 @@ async def evaluate_with_sigterm(plan,book,*,champion_checkpoint,final_checkpoint
     loop.add_signal_handler(signal.SIGTERM,terminate)
     installed=registry.get(signal.SIGTERM)
     try:
-        child=asyncio.create_task(evaluate_declared(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint))
+        child=asyncio.create_task(evaluate_declared(plan,book,champion_checkpoint=champion_checkpoint,final_checkpoint=final_checkpoint,device_path=device_path))
         if received:cancel_once()
         try:
             value=await asyncio.shield(child);cleanup_finished=True;return value
@@ -236,12 +238,14 @@ def check_placement(plan):
     return topology
 
 
-async def worker(request_path,expected_sha256):
+async def worker(request_path,expected_sha256,*,runtime=None,expected_pair=None):
     """One actual original benchmark, after durable START/claim and pinning."""
     # Standard library only until this child's CPU mask is installed.
     blob=Path(request_path).read_bytes()
     if hashlib.sha256(blob).hexdigest()!=expected_sha256:raise ValueError('original cell request digest differs')
-    request=json.loads(blob);pin_owned_actor(tuple(request['cpu_pair']))
+    request=json.loads(blob)
+    if expected_pair is None:pin_owned_actor(tuple(request['cpu_pair']))
+    elif tuple(request['cpu_pair'])!=tuple(expected_pair):raise ValueError('persistent worker core pair changed')
     from . import b4_fidelity_canary as c,foulplay_bridge as fp,v5_foulplay
     c.require(set(request)=={'schema','run_directory','declaration_sha256','cell','checkpoint','checkpoint_sha256','cpu_pair'} and
         c.encoded(request)==blob and request['schema']=='pokezero.b4.canary.fp-request.v1','original cell request schema')
@@ -261,7 +265,8 @@ async def worker(request_path,expected_sha256):
     c.require(c.file_sha(request['checkpoint'])==request['checkpoint_sha256'],'original selected model artifact differs')
     config=configuration(plan,cell,request['checkpoint']);started=time.monotonic();game=document=None
     try:
-        result=await fp.run_controlled_foulplay_benchmark(config)
+        result=(await fp.run_controlled_foulplay_benchmark(config) if runtime is None else
+            await runtime.run(config,expected_checkpoint_sha256=request['checkpoint_sha256']))
         document=result.to_dict()
         if len(result.games)==1:game=result.games[0].to_dict()
         c.require(result.config==config and result.checkpoint_sha256==request['checkpoint_sha256'] and
@@ -276,10 +281,14 @@ async def worker(request_path,expected_sha256):
     return 0
 
 
-async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint):
+async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint,device_path=False):
     from . import b4_fidelity_canary as c
     topology=check_placement(plan)  # Never mutate threaded controller affinity.
     root=book.path.resolve();declaration=c.file_sha(root/'declaration.json')
+    if type(device_path)is not bool:raise ValueError('explicit endpoint path required')
+    if device_path and not all(x.get('encoder_kind')=='jax-owning' for x in plan.fp_configs):
+        raise ValueError('device canary requires original B2 owning endpoint')
+    pool=WorkerPool(root,plan) if device_path else None
     snapshots={arm:dict(checkpoint=str(Path(path).resolve()),sha256=c.file_sha(path)) for arm,path in
         [('CONTROL',champion_checkpoint),('CANARY',final_checkpoint)]}
     _write(root/'fp-snapshot.json',dict(declaration_sha256=declaration,cpu_topology=topology,**snapshots))
@@ -328,7 +337,8 @@ async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint):
                        'untracked attempted source cannot become a fresh cell')
     pending=[cell for cell in roster if rows[cell['ordinal']]['status']=='NOT_ATTEMPTED'];next_cell=0;active={};stop=False
     async def one(cell,request):
-        value=checked_result(await launch(root/'fp-requests'/f"{cell['ordinal']}.json"),request,plan)
+        launch_cell=launch if pool is None else pool.launch
+        value=checked_result(await launch_cell(root/'fp-requests'/f"{cell['ordinal']}.json"),request,plan)
         retain(cell,value,receipt=str(root/'fp-results'/f"{cell['ordinal']}.json"))
         return value['error'] is not None
     try:
@@ -353,6 +363,7 @@ async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint):
     finally:
         for _,task in active.values():task.cancel()
         results=await asyncio.gather(*(task for _,task in active.values()),return_exceptions=True)
+        if pool is not None:await pool.close()
         for result in results:
             if isinstance(result,Exception):raise result
     paired=[]
@@ -366,7 +377,89 @@ async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint):
         automatic_fidelity_pass=False,uncertainty='No equivalence margin or significance pass inferred; paired interval/result review required',rows=rows,
         paired_seed_means=[None if paired[2*i] is None or paired[2*i+1] is None else (paired[2*i]+paired[2*i+1])/2 for i in range(c.PANEL_SEEDS)],
         interval_unit='Original paired seed block (both seats); no IID-cell significance claim',max_workers=len(plan.fp_cpu_pairs))
+    report.update(paired_interval(rows,seed=plan.bootstrap_seed,blocks=c.PANEL_SEEDS))
     book.emit('FP_ENDPOINT',report=report);return report
+
+
+class WorkerPool:
+    """One owned process/core pair, two immutable model holders, fresh games."""
+    def __init__(self, root, plan):
+        self.root, self.plan, self.workers = Path(root), plan, {}
+    async def launch(self, request_path):
+        from . import b4_fidelity_canary as c
+        request = json.loads(Path(request_path).read_bytes()); slot = request['cell']['slot']
+        if slot not in self.workers:
+            folder = self.root / 'fp-worker-errors'; folder.mkdir(exist_ok=True)
+            log = (folder / (str(slot) + '-' + str(time.time_ns()) + '.log')).open('xb')
+            pair = self.plan.fp_cpu_pairs[slot]
+            try:
+                process = await _spawn_owned(sys.executable, '-B', '-m', 'pokezero.b4_device_canary_runtime',
+                    '--cpu-pair', str(pair[0]), str(pair[1]), stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE, stderr=log, start_new_session=True)
+            except BaseException:
+                log.close(); raise
+            self.workers[slot] = (process, log)
+        process, _ = self.workers[slot]
+        if process.returncode is not None:raise RuntimeError('owned canary worker stopped; no automatic retry')
+        line = json.dumps(dict(path=str(request_path), sha256=c.file_sha(request_path))) + '\n'
+        process.stdin.write(line.encode()); await process.stdin.drain()
+        reply = await process.stdout.readline()
+        if not reply or json.loads(reply) != {'exit': 0}:raise RuntimeError('owned B2 cell failed; no automatic retry')
+        return _read_result(self.root / 'fp-results' / Path(request_path).name)
+    async def close(self):
+        errors = []
+        for process, log in self.workers.values():
+            try:await _finish_owned_cleanup(process)
+            except BaseException as error:errors.append(error)
+            finally:log.flush();os.fsync(log.fileno());log.close()
+        self.workers.clear()
+        if errors:raise errors[0]
+
+
+def paired_interval(rows, *, seed, blocks=500, replicates=10000):
+    """Original seed blocks keep both seats together and every missing cell."""
+    from types import SimpleNamespace
+    from .capstone_analysis import _percentile, _stratified_bootstrap_means
+    if (type(blocks)is not int or blocks<=0 or type(seed)is not int or not 0<=seed<2**64
+            or type(replicates)is not int or replicates<=0 or len(rows)!=blocks*4):
+        raise ValueError('complete declared paired canary roster/bootstrap required')
+    outcomes={}
+    for ordinal,row in enumerate(rows):
+        offset, seat, arm = row['offset'], row['seat'], row['arm']
+        if (row['ordinal']!=ordinal or ordinal!=4*offset+2*seat+(arm=='CANARY')
+                or not 0<=offset<blocks or seat not in (0,1) or arm not in ('CONTROL','CANARY')):
+            raise ValueError('original fixed pair order required')
+        if row['status'] not in ('COMPLETE','UNKNOWN','NOT_ATTEMPTED'):raise ValueError('literal endpoint disposition required')
+        value=row['score'] if row['status']=='COMPLETE' else None
+        if row['status']=='COMPLETE' and (type(value)not in (int,float) or value not in (0.,.5,1.)):
+            raise ValueError('actual terminal score required')
+        if row['status']!='COMPLETE' and row['score'] is not None:raise ValueError('unknown cannot become score')
+        outcomes[offset,seat,arm]=value
+    lower=[];upper=[];matched=[];whole=[];unknown=0
+    for offset in range(blocks):
+        lo=hi=0.;known=[]
+        for seat in (0,1):
+            a,b=outcomes[offset,seat,'CANARY'],outcomes[offset,seat,'CONTROL']
+            lo+=(0. if a is None else a)-(1. if b is None else b)
+            hi+=(1. if a is None else a)-(0. if b is None else b)
+            unknown+=int(a is None)+int(b is None)
+            if a is not None and b is not None:matched.append(a-b);known.append(a-b)
+        lower.append(lo/2);upper.append(hi/2)
+        if len(known)==2:whole.append(sum(known)/2)
+    def draws(values):
+        if len(set(values))==1:return (values[0],)*replicates
+        return _stratified_bootstrap_means(tuple(SimpleNamespace(band='CANARY',delta=v) for v in values),
+            replicates=replicates,seed=seed)
+    interval=[_percentile(tuple(draws(lower)),.05),_percentile(tuple(draws(upper)),.95)]
+    return dict(paired_seed_bootstrap_90=interval, bootstrap=dict(seed=seed,replicates=replicates,confidence=.9,
+        unit='ORIGINAL_SEED_BLOCK_BOTH_SEATS',method='PAIRED_PERCENTILE_MISSING_CELL_ENVELOPE'),
+        full_roster_identification_bounds=[sum(lower)/blocks,sum(upper)/blocks],
+        matched_complete_cell_mean=None if not matched else sum(matched)/len(matched),
+        complete_seed_point=None if not whole else sum(whole)/len(whole),unknown_cells_across_models=unknown,
+        canary_failed=interval[1]<0, equivalence_established=False,
+        failure_rule='FAIL_ONLY_IF_PAIRED_90_INTERVAL_ENTIRELY_BELOW_ZERO',
+        stop_rule='one canary; at most one mismatch-driven tracker repair and one retry; never a third',
+        uncertainty='Approximate paired seed-block percentile interval; missing-cell bounds are not a confidence interval')
 
 
 if __name__=='__main__':

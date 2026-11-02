@@ -109,8 +109,9 @@ class CanaryTests(unittest.TestCase):
                     result=c.supervise_owned(['unit-no-process'],plan=recipe,path=root,popen=lambda *a,**k:Child(),sleep=sleep)
                 self.assertEqual(result['stop_reason'],expected);cleanup.assert_called_once()
 
-    def _run(self,root,recipe,*,resume=False,collect_calls=None,train_calls=None):
-        import gpu_engine.b4_canary_collection as engine
+    def _run(self,root,recipe,*,resume=False,collect_calls=None,train_calls=None,device_path=False):
+        if device_path:import gpu_engine.b4_device_canary_collection as engine
+        else:import gpu_engine.b4_canary_collection as engine
         import gpu_engine.champion as champion
         calls=[] if collect_calls is None else collect_calls;updates=[] if train_calls is None else train_calls
         cfg=model_config();payload=dict(schema_version=neural.neural_policy_schema_version_for_model_config(cfg),
@@ -137,7 +138,7 @@ class CanaryTests(unittest.TestCase):
         with patch.object(c,'file_sha',side_effect=sha),patch.object(c,'checkpoint_payload',return_value=payload),\
              patch.object(neural,'EntityTokenTransformerPolicy',FakeModel),patch.object(neural,'train_transformer_policy',side_effect=train),\
              patch.object(neural,'save_transformer_checkpoint',side_effect=save),patch.object(champion,'export',side_effect=export),patch.object(engine,'Backend',Backend):
-            result=c.run(recipe,root,checkpoint='/untouched',prepared=object(),pool=object(),gender_policy=object(),device='cpu',resume=resume,enable_canary=True)
+            result=c.run(recipe,root,checkpoint='/untouched',prepared=object(),pool=object(),gender_policy=object(),device='cpu',resume=resume,enable_canary=True,device_path=device_path)
         return result,calls,updates
 
     def test_original_trainer_strict_weights_final_only_schedule_and_resume_no_replay(self):

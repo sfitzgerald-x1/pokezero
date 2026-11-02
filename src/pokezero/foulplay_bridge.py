@@ -6149,7 +6149,7 @@ async def _run_controlled_foulplay_games(
         else require_actor_factory(config, owning_actor_factory,actor_version=actor_version))
     if actor_factory is not None and actor_version=='v5' and actor_runtime is not actor_factory:
         raise ValueError('explicit original v5 factory runtime required')
-    if actor_factory is not None and actor_version=='champion-v4' and (type(actor_runtime) is not tuple or len(actor_runtime) != 3):
+    if actor_factory is not None and actor_version in ('champion-v4','canary-v4') and (type(actor_runtime) is not tuple or len(actor_runtime) != 3):
         raise ValueError("owning actor requires an explicit bound runtime")
     if game_offsets is not None and (actor_version!='v5' or type(game_offsets) is not tuple
             or not game_offsets or any(type(i) is not int or not 0<=i<config.games for i in game_offsets)
