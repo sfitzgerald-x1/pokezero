@@ -30,16 +30,25 @@ class Request:
     opponent_actor:int
 
 
-def make_kernel(executor,model,*,capacity,block_rows,mixed_learners=False):
-    """No constructor/model execution on creation; parameters are runtime data."""
+def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False):
+    """Preserve original actor programs, inside one frame device invocation.
+
+    Transitions map roots/worlds/joint branches together. Actor call geometry
+    stays one-row for peer and fixed81 mapped one-row for leaf, as in serial.
+    BF16 XLA programs with different row/parameter batching are NOT equivalent
+    at the fixed tolerance. Device maps retain those original programs while
+    removing host-per-root dispatch; archive weights remain verified constants.
+    """
     if capacity%block_rows or executor.joint is None:raise ValueError('bounded mapped joint executor required')
     def forward(params,inputs):return v5_model.forward(params,inputs,model,compute_dtype='bfloat16')
+    peers=tuple(jax.jit(lambda inputs,p=p:forward(p,inputs))for p in params)
+    leaves=tuple(jax.jit(jax.vmap(peer))for peer in peers)
     def views(state,public,owner):
         masks=executor.legal(state);seat=j.asarray([owner],j.int32)
         own=executor.observe(state,public,seat,masks[:,owner])
         peer=executor.observe(state,public,1-seat,masks[:,1-owner])
         return own.observation,peer.observation,own.inputs,peer.inputs
-    def compute_block(a,params):
+    def compute_block(a):
         b=block_rows;n=2*b
         states,publics=a['states'],a['publics']
         flatten=lambda x:x.reshape((n,)+x.shape[2:])
@@ -57,32 +66,36 @@ def make_kernel(executor,model,*,capacity,block_rows,mixed_learners=False):
             same=j.all(value==expected,axis=tuple(range(1,value.ndim)))
             pre=j.where((pre==0)&~same,3+index,pre)
         pre=j.where((pre==0)&(peer.error[:,0]!=0),8,pre)
-        # One parameter tree per archive in the bounded bank, never per game.
-        peer_params=jax.tree.map(lambda x:x[a['peer_actor']],params)
-        peer_batched=jax.tree.map(lambda x:x.reshape((b,2)+x.shape[2:]),peer_inputs)
-        prediction=jax.vmap(forward)(peer_params,peer_batched)
+        # Original peer callback observes ONE row, with its verified archive
+        # captured exactly as in Provider.bind. No dynamic parameter batching.
+        prediction=jax.lax.map(lambda pair:jax.lax.switch(pair[0],peers,pair[1]),
+            (j.repeat(a['peer_actor'],2),peer_inputs))
         logits=prediction.policy_logits.reshape(n,9);pv=prediction.value.reshape(n);valid=prediction.valid.reshape(n)
         usable=valid&j.all(j.isfinite(logits),axis=-1)&j.isfinite(pv)&(j.abs(pv)<=1)
         pre=j.where((pre==0)&requested&~usable,9,pre)
         logits=j.where(requested[:,None],logits,0.)
-        # Padding selects actual legal pairs. Only the original required grid
-        # enters reduction; the same world chance capsule is shared by all81.
-        actions=j.where(root_legal,j.arange(9),j.argmax(root_legal,axis=-1)[:,None])
-        replies=j.where(legal,j.arange(9),j.argmax(legal,axis=-1)[:,None])
-        replies=j.where(requested[:,None],replies,0)
-        aa=j.broadcast_to(actions[:,:,None],(n,9,9));rr=j.broadcast_to(replies[:,None,:],(n,9,9))
-        pairs=j.stack((aa,rr),axis=-1).reshape(n,81,2)
+        # EXACT original action-order x ascending replies, padded with the
+        # first original pair. Keep actor row positions as well as row shapes.
+        # Changing BF16 batch row layout must not alter a target's rounding.
+        reply_count=j.where(requested,j.sum(legal,axis=-1),1)
+        reply_order=j.argsort(j.where(legal,j.arange(9),j.arange(9)+9),axis=-1)
+        reply_order=j.where(requested[:,None],reply_order,0)
+        order=j.repeat(a['order'],2,axis=0);sizes=j.repeat(a['order_size'],2)
+        ordinal=j.broadcast_to(j.arange(81),(n,81));required=sizes*reply_count
+        action_row=j.where(ordinal<required[:,None],ordinal//reply_count[:,None],0)
+        reply_row=j.where(ordinal<required[:,None],ordinal%reply_count[:,None],0)
+        pairs=j.stack((j.take_along_axis(order,action_row,axis=1),
+            j.take_along_axis(reply_order,reply_row,axis=1)),axis=-1)
         chance=jax.vmap(executor.sample)(states)
         invalid,done,winner,error,inputs=jax.vmap(executor.joint)(states,publics,own,peer,
             owners[:,None],requested[:,None],pairs,chance)
         invalid,done,winner,error=(x[:,:,0]for x in (invalid,done,winner,error))
+        # Keep the original fixed81 actor vmap intact for each world. The
+        # physical/public transition grid above is still fully root-batched.
         if mixed_learners:
-            own_params=jax.tree.map(lambda x:x[a['learner_actor']],params)
-            inputs=jax.tree.map(lambda x:x.reshape((b,162)+x.shape[3:]),inputs)
-            prediction=jax.vmap(forward)(own_params,inputs)
-        else:
-            inputs=jax.tree.map(lambda x:x.reshape((n*81,)+x.shape[3:]),inputs)
-            prediction=forward(jax.tree.map(lambda x:x[0],params),inputs)
+            prediction=jax.lax.map(lambda pair:jax.lax.switch(pair[0],leaves,pair[1]),
+                (j.repeat(a['learner_actor'],2),inputs))
+        else:prediction=jax.lax.map(leaves[0],inputs)
         values=prediction.value.reshape(n,81);valid=prediction.valid.reshape(n,81)
         leaf_logits=prediction.policy_logits.reshape(n,81,9)
         usable=valid&j.all(j.isfinite(leaf_logits),axis=-1)&j.isfinite(values)&(j.abs(values)<=1)
@@ -91,15 +104,15 @@ def make_kernel(executor,model,*,capacity,block_rows,mixed_learners=False):
         terminal=j.where(winner==2,0.,j.where(winner==owners[:,None],1.,-1.))
         values=j.where(done,terminal,values)
         return dict(pre=pre.reshape(b,2),peer_logits=logits.reshape(b,2,9),peer_legal=legal.reshape(b,2,9),
-            requested=requested.reshape(b,2),values=values.reshape(b,2,9,9),errors=errors.reshape(b,2,9,9),
-            done=done.reshape(b,2,9,9))
+            requested=requested.reshape(b,2),values=values.reshape(b,2,81),errors=errors.reshape(b,2,81),
+            done=done.reshape(b,2,81))
     def empty():
         b=block_rows
         return dict(pre=j.zeros((b,2),j.int32),peer_logits=j.zeros((b,2,9),j.float32),peer_legal=j.zeros((b,2,9),bool),
-            requested=j.zeros((b,2),bool),values=j.zeros((b,2,9,9),j.float32),errors=j.zeros((b,2,9,9),j.int32),done=j.zeros((b,2,9,9),bool))
-    def run(data,params):
+            requested=j.zeros((b,2),bool),values=j.zeros((b,2,81),j.float32),errors=j.zeros((b,2,81),j.int32),done=j.zeros((b,2,81),bool))
+    def run(data):
         blocks=jax.tree.map(lambda x:x.reshape((capacity//block_rows,block_rows)+x.shape[1:]),data)
-        result=jax.lax.map(lambda a:jax.lax.cond(j.any(a['active']),lambda:compute_block(a,params),empty),blocks)
+        result=jax.lax.map(lambda a:jax.lax.cond(j.any(a['active']),lambda:compute_block(a),empty),blocks)
         return jax.tree.map(lambda x:x.reshape((capacity,)+x.shape[2:]),result)
     return jax.jit(run)
 
@@ -133,8 +146,7 @@ class FramePricer:
         if not 0<len(params)<=self.actor_capacity:raise ValueError('declared actor bank exceeds fixed capacity')
         key=tuple(map(id,params))
         if key!=self.param_key:
-            padded=tuple(params)+(params[0],)*(self.actor_capacity-len(params))
-            self.params=jax.tree.map(lambda *x:j.stack(x),*padded);self.param_key=key
+            self.params=tuple(params);self.param_key=key;self.kernels={}
             # Retain identities as well as integer ids: a later archive bank
             # cannot accidentally reuse a collected Python object's id.
             self.source_params=tuple(params)
@@ -176,19 +188,23 @@ class FramePricer:
                 result=np.full(self.capacity,default,dtype);result[:count]=values;return result
             data=dict(states=stacked([w.state for w in flat],True),publics=stacked([w.public for w in flat],True),
                 expected=stacked([r.root_inputs for r in requests]),
-                legal=np.zeros((self.capacity,9),bool),active=np.arange(self.capacity)<count,
+                legal=np.zeros((self.capacity,9),bool),order=np.zeros((self.capacity,9),np.int32),
+                order_size=np.ones(self.capacity,np.int32),active=np.arange(self.capacity)<count,
                 owner=vector([r.plans.root.address.owner for r in requests],np.int32),
                 peer_actor=vector([r.opponent_actor for r in requests],np.int32),
                 learner_actor=vector([r.learner_actor for r in requests],np.int32))
             data['legal'][:count]=[r.root_legal for r in requests];data['legal'][count:,0]=True
+            for i,r in enumerate(requests):
+                order=recipe.pricing_order(r.plans.root.address,r.root_logits,r.root_legal)
+                data['order'][i]=order+(order[0],)*(9-len(order));data['order_size'][i]=len(order)
             mixed=any(r.learner_actor!=0 for r in requests)
             device_data=jax.device_put(data)
             if mixed not in self.kernels:
-                fn=make_kernel(self.executor,self.model,capacity=self.capacity,block_rows=self.block_rows,mixed_learners=mixed)
-                clock=time.perf_counter();lowered=fn.lower(device_data,self.params);lower_seconds=time.perf_counter()-clock
+                fn=make_kernel(self.executor,self.model,params=self.params,capacity=self.capacity,block_rows=self.block_rows,mixed_learners=mixed)
+                clock=time.perf_counter();lowered=fn.lower(device_data);lower_seconds=time.perf_counter()-clock
                 clock=time.perf_counter();self.kernels[mixed]=lowered.compile();compile_seconds=time.perf_counter()-clock
             # Exactly one device invocation for the entire selected frame.
-            clock=time.perf_counter();output=jax.device_get(jax.block_until_ready(self.kernels[mixed](device_data,self.params)))
+            clock=time.perf_counter();output=jax.device_get(jax.block_until_ready(self.kernels[mixed](device_data)))
             device_seconds=time.perf_counter()-clock
         evaluated=0 if output is None else ((len(requests)+self.block_rows-1)//self.block_rows)*self.block_rows
         work=dict(evaluated_root_slots=evaluated,evaluated_world_slots=2*evaluated,evaluated_joint_slots=162*evaluated,
@@ -199,7 +215,8 @@ class FramePricer:
             pre_refused_available_worlds=0 if output is None else sum(w.state is not None and int(output['pre'][i,wi])!=0 for i,pair in enumerate(worlds)for wi,w in enumerate(pair)))
         finished=time.perf_counter();self.last_timing=dict(roots=len(requests),world_prepare_seconds=prepared-started,
             batch_pack_and_device_seconds=finished-prepared,device_invocations=int(output is not None),block_rows=self.block_rows,
-            lower_seconds=lower_seconds,compile_seconds=compile_seconds,device_seconds=device_seconds,**work)
+            lower_seconds=lower_seconds,compile_seconds=compile_seconds,device_seconds=device_seconds,
+            actor_strategy='ORIGINAL_ROW1_PEER_FIXED81_LEAF_DEVICE_MAP',**work)
         return tuple(self._result(i,r,pair,output,recipe)for i,(r,pair)in enumerate(zip(requests,worlds)))
 
     def _result(self,index,request,worlds,output,recipe):
@@ -223,11 +240,13 @@ class FramePricer:
             counts['reply_policy']+=int(requested);counts['chance']+=1;counts['transitions']+=81;counts['public_leaf']+=81
             if not world.reply_private_history_available:approximations.append(dict(world=start.world,**serial.REPLY_HISTORY_APPROXIMATION))
             grid=[[None]*9 for _ in range(9)];errors=[];completed=0
+            ordinal=0
             for action in order:
                 for reply in replies:
-                    error=int(output['errors'][index,wi,action,reply])
+                    error=int(output['errors'][index,wi,ordinal])
                     if error:errors.append((action,reply,'ValueError: '+error_reasons[error]))
-                    else:grid[action][reply]=float(output['values'][index,wi,action,reply]);completed+=1
+                    else:grid[action][reply]=float(output['values'][index,wi,ordinal]);completed+=1
+                    ordinal+=1
             required=len(order)*len(replies)
             report.update(status='COMPLETE'if not errors else'REFUSED',required_pairs=required,completed_pairs=completed,
                 unknown_pairs=required-completed,joint_values=grid,opponent_requested=requested,reply_legal=legal,reply_logits=logits,
