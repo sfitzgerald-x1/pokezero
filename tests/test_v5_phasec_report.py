@@ -55,12 +55,39 @@ class SavedThroughputReportTests(unittest.TestCase):
             self.assertEqual(actual['full_study_wall_seconds'],3000.)
             self.assertEqual(actual['threshold'],'RECOVERED_REPORT_ONLY_NO_AUTOMATIC_ADMISSION')
             self.assertIsNone(actual['training']['data_seconds_per_update'])
+            self.assertIsNone(actual['training']['updates'])
+            self.assertIsNone(actual['training']['prior_durable_updates'])
+            self.assertEqual(actual['training']['original_completed_updates'],10)
+            self.assertEqual(actual['training']['original_completed_row_visits'],20)
             self.assertIsNone(actual['training']['gpu_kernel_seconds_per_sampled_update'])
             self.assertEqual(actual['training']['concurrent_gpu_attribution']['missing_cpu_scopes'],3)
             self.assertEqual(actual['report_repair']['original_owner']['exit_code'],1)
             self.assertEqual((root/'ct-training-trace.json').read_bytes(),raw_trace)
             self.assertEqual(owner.read_bytes(),raw_owner)
             self.assertFalse((root/'ct-result.json').exists())
+
+    def test_component_measurements_require_exact_durable_cohort_rows(self):
+        with tempfile.TemporaryDirectory()as folder:
+            root=Path(folder);events,declaration,owner,banks=self.evidence(root)
+            timing=dict(updates=10,prior_durable_updates=0,cache_prepare_seconds=1.,batch_slice_seconds=1.,
+                tensor_conversion_seconds=1.,update_wall_seconds=2.,training_datasets=[
+                    dict(invocation_dataset_ordinal=i,updates=5,start_step=i*5,end_step=(i+1)*5,
+                        start_rows=i*10,end_rows=(i+1)*10,row_visits=10,
+                        cache_prepare_seconds=.5,batch_slice_seconds=.5,tensor_conversion_seconds=.5,update_wall_seconds=1.)for i in (0,1)])
+            counter=root/'ct-training-counters.json'
+            with patch.object(report,'saved_events',return_value=(events,declaration)),patch.object(ct,'collector_banks',return_value=banks):
+                for change in ('row_visits','end_rows','updates','total'):
+                    bad=copy.deepcopy(timing)
+                    if change=='total':bad['batch_slice_seconds']=1000.
+                    else:bad['training_datasets'][0][change]=1000
+                    counter.write_text(json.dumps(dict(schema='pokezero.ct-training-counters.v1',counters=bad)))
+                    with self.assertRaises(ValueError):report.repair_completed_report(root,owner)
+                    self.assertFalse((root/'ct-result-report-repair.json').exists())
+                counter.write_text(json.dumps(dict(schema='pokezero.ct-training-counters.v1',counters=timing)))
+                actual=report.repair_completed_report(root,owner)
+            self.assertEqual(actual['training']['updates'],10)
+            self.assertEqual(actual['training']['data_seconds_per_update'],.2)
+            self.assertEqual([x['row_visits']for x in actual['training']['training_datasets']],[10,10])
 
     def test_incomplete_reload_interruption_roster_or_artifact_never_becomes_completion(self):
         with tempfile.TemporaryDirectory()as folder:
