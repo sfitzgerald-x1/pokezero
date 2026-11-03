@@ -15,6 +15,7 @@ import signal
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 
@@ -333,6 +334,7 @@ def _publish(path,blob):
 
 class Store:
     def __init__(self,path,plan,*,resume=False):
+        self._journal_lock=threading.RLock()
         self.path=Path(path);self.plan=plan;self.path.mkdir(parents=True,exist_ok=True)
         declaration=self.path/'declaration.json';blob=_json(plan.manifest()).encode()
         if resume:
@@ -354,6 +356,9 @@ class Store:
         if not self.events:self.emit('RUN_STARTED',declaration_sha256=_sha(json.loads(declaration.read_bytes())))
 
     def emit(self,kind,**payload):
+        with self._journal_lock:return self._emit(kind,**payload)
+
+    def _emit(self,kind,**payload):
         event=dict(sequence=len(self.events),previous=self.events[-1]['sha256'] if self.events else None,
             time=time.time(),kind=kind,payload=payload)
         event['sha256']=_sha(event)
@@ -361,8 +366,9 @@ class Store:
         self.events.append(event);return event
 
     def matching(self,kind,**fields):
-        return [event['payload'] for event in self.events if event['kind']==kind
-            and all(event['payload'].get(key)==value for key,value in fields.items())]
+        with self._journal_lock:
+            return [event['payload'] for event in self.events if event['kind']==kind
+                and all(event['payload'].get(key)==value for key,value in fields.items())]
 
     def resolve(self,relative,digest):
         path=(self.path/relative).resolve()
@@ -633,7 +639,7 @@ def run(plan,path,*,backend,**kwargs):
         if close is not None:close()
 
 
-def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,measure_timings=False):
+def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,measure_timings=False,iteration_policy_lag=0):
     """Bounded collect/cache/train iterations, with explicit original RNG resume.
 
     Backend collects only fixed supplied batches and writes a genuine v5 cache;
@@ -641,6 +647,8 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
     milestone hook records its result; it never promotes or retunes an arm.
     """
     if type(measure_timings)is not bool:raise ValueError('explicit runtime timing choice required')
+    if type(iteration_policy_lag)is not int or iteration_policy_lag not in (0,1):
+        raise ValueError('explicit zero or one iteration policy lag required')
     if enable_v5 is not True or type(plan) is not Plan:raise ValueError('explicit v5 finite run enablement required')
     milestones={}
     if plan.evaluation is not None:
@@ -651,6 +659,11 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
     require_treatment_ready(plan,backend)
     backend.check_plan(plan)
     store=Store(path,plan,resume=resume)
+    policy=store.matching('EXECUTION_POLICY')
+    if policy and policy!=[dict(iteration_policy_lag=iteration_policy_lag)]:
+        raise ValueError('original execution policy cannot change on resume')
+    if iteration_policy_lag and not policy:store.emit('EXECUTION_POLICY',iteration_policy_lag=1)
+    timing_iteration=None
     def measured(scope,callback,*args,**kwargs):
         if not measure_timings:return callback(*args,**kwargs)
         clock=time.perf_counter();status='FAILED'
@@ -658,6 +671,7 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
             result=callback(*args,**kwargs);status='COMPLETE';return result
         finally:
             store.emit('RUNTIME_PHASE',scope=scope,wall_seconds=time.perf_counter()-clock,status=status,
+                **(dict(iteration=timing_iteration)if iteration_policy_lag else{}),
                 timing_scope='host wall inclusive of original operation and its data I/O; not pure GPU compute')
     if plan.evaluation is not None:_evaluation_history(store)
     checkpoints=store.matching('CHECKPOINT')
@@ -696,11 +710,20 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
         from .v5_phasec_throughput import recover_published_parts
         recover_published_parts(store,plan)
     ordinal={g.stream_id:i for i,g in enumerate(plan.games)}
-    for iteration,batches in enumerate(plan.iterations):
-        if store.matching('ITERATION_COMPLETE',iteration=iteration):continue
-        current=max((x for x in snapshots if x['iteration']<iteration),key=lambda x:x['iteration'])
-        past=[x for x in snapshots if x['iteration']<current['iteration']]
+    cancel=threading.Event()
+    def collect_iteration(iteration,current,past):
+        batches=plan.iterations[iteration]
         progress=Progress(plan.watchdog)
+        original_check=progress.check
+        def check():
+            if cancel.is_set():raise RuntimeError('owned collection cancelled after pipeline failure')
+            original_check()
+        progress.check=check
+        if iteration_policy_lag:
+            if not store.matching('COLLECTION_ITERATION_STARTED',iteration=iteration):
+                store.emit('COLLECTION_ITERATION_STARTED',iteration=iteration,actor=asdict(current))
+            collection_start_epoch=next(e['time']for e in store.events if e['kind']=='COLLECTION_ITERATION_STARTED'
+                and e['payload']['iteration']==iteration)
         pending=[]
         def publish_cache(index,result):
             if result is not None:
@@ -719,7 +742,9 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
             remaining=[g.stream_id for g in plan.games if statuses[g.stream_id]=='NOT_ATTEMPTED']
             if [g.stream_id for g in batch.games]!=remaining[:len(batch.games)]:raise ValueError('next fixed not-attempted prefix required')
             assignments=tuple(assignment(plan,g,ordinal[g.stream_id],current,past) for g in batch.games)
-            try:prepared_batch=backend.prepare_batch(plan,batch,current,assignments,store)
+            try:
+                if iteration_policy_lag:progress.check()
+                prepared_batch=backend.prepare_batch(plan,batch,current,assignments,store)
             except Exception as error:
                 store.emit('STOP',iteration=iteration,reason='PREPARATION: '+type(error).__name__+': '+str(error))
                 return dict(status='STOPPED',reason='PREPARATION: '+str(error),statuses=statuses)
@@ -749,32 +774,92 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
             store.emit('STOP',iteration=iteration,reason='NO_ACTUAL_TRAINING_ROWS_NO_REFILL')
             return dict(status='STOPPED',reason='NO_ACTUAL_TRAINING_ROWS_NO_REFILL',statuses=statuses)
         paths=[store.resolve(x['path'],x['sha256']) for x in caches]
-        existing=store.matching('SNAPSHOT',iteration=iteration)
-        if not existing:
-            if runtime.progress is not None and runtime.progress['complete'] and checkpoint['iteration']!=iteration:
-                store.emit('DATASET_TRANSITION',iteration=iteration,prior_complete_cursor=runtime.progress)
-                if plan.train.learning_rate_schedule=='constant':
-                    runtime.progress=None  # Only after the exact previous finite cursor completed.
-            options=(dict(learning_rate_window=learning_rate_window(plan,iteration))
-                if plan.train.learning_rate_schedule!='constant' else {})
-            while (runtime.progress is None or not runtime.progress['complete']
-                    or options and checkpoint['iteration']!=iteration):
-                report=measured('TRAIN_CACHES_INCLUSIVE',training.train_caches,runtime,paths,max_updates=plan.checkpoint_updates,**options)
-                # Preserve the original per-update diagnostics with their step
-                # and row identities. Do not recompute losses or average away
-                # changes needed for the declared dilution/cycling checks.
-                store.emit('TRAIN_PROGRESS',iteration=iteration,steps=runtime.steps,rows=runtime.rows,
-                    updates=_journal_diagnostics(report.get('updates',[])))
-                checkpoint=measured('CHECKPOINT_WRITE',store.checkpoint,runtime,iteration=iteration)
-                if report['complete']:break
-            current=measured('ACTOR_EXPORT',store.snapshot,checkpoint,iteration=iteration);snapshots.append(current)
-        published=Snapshot(**existing[0]) if existing else current
-        if iteration in milestones and not _evaluate_snapshot(store,published,evaluation_hook):
-            store.emit('STOP',iteration=iteration,reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY')
-            return dict(status='STOPPED',reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY',statuses=statuses,
-                steps=runtime.steps,rows=runtime.rows,scientific_qualification=False)
-        store.emit('ITERATION_COMPLETE',iteration=iteration,snapshot=published,
-            counts={name:list(statuses.values()).count(name) for name in ('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED')})
+        if iteration_policy_lag and not store.matching('COLLECTION_ITERATION_COMPLETE',iteration=iteration):
+            store.emit('COLLECTION_ITERATION_COMPLETE',iteration=iteration,wall_seconds=time.time()-collection_start_epoch,
+                actor=asdict(current),policy_lag=1,original_start_epoch=collection_start_epoch,includes_interruption=resume)
+        return dict(status='COLLECTION_COMPLETE',paths=paths)
+
+    def actors(iteration):
+        latest=iteration-(2 if iteration_policy_lag and iteration else 1)
+        current=max((x for x in snapshots if x.iteration<=latest),key=lambda x:x.iteration)
+        past=tuple(x for x in snapshots if x.iteration<current.iteration)
+        if iteration_policy_lag:
+            binding=dict(iteration=iteration,policy_lag=1,current=asdict(current),past=[asdict(x)for x in past])
+            recorded=store.matching('ITERATION_ACTOR_BINDING',iteration=iteration)
+            if recorded and recorded!=[binding]:raise ValueError('frozen lagged actor binding changed')
+            if not recorded:
+                # An authorized transition can retain an old iteration-zero
+                # prefix only when its exact assignments already match.
+                for started in store.matching('BATCH_STARTED',iteration=iteration):
+                    for actual in started['assignments']:
+                        game=next(g for g in plan.games if g.stream_id==actual['stream_id'])
+                        expected=json.loads(_json(assignment(plan,game,ordinal[game.stream_id],current,past)))
+                        if actual!=expected:raise ValueError('existing collector prefix used a different acting policy')
+                store.emit('ITERATION_ACTOR_BINDING',**binding)
+        return current,past
+
+    from concurrent.futures import ThreadPoolExecutor
+    executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='v5-collect-next')if iteration_policy_lag else None
+    prefetched={}
+    try:
+        for iteration,batches in enumerate(plan.iterations):
+            timing_iteration=iteration
+            if store.matching('ITERATION_COMPLETE',iteration=iteration):continue
+            current,past=actors(iteration)
+            collection=prefetched.pop(iteration,None)
+            if collection is None:collection=collect_iteration(iteration,current,past)
+            if collection['status']!='COLLECTION_COMPLETE':return collection
+            paths=collection['paths']
+            next_collection=None;window=None
+            if executor is not None and iteration+1<len(plan.iterations):
+                next_current,next_past=actors(iteration+1)
+                start=dict(training_iteration=iteration,collection_iteration=iteration+1,
+                    actor=asdict(next_current),policy_lag=1)
+                starts=store.matching('POLICY_LAG_WINDOW_STARTED',training_iteration=iteration)
+                if starts and starts!=[start]:raise ValueError('original pipeline window differs')
+                if not starts:store.emit('POLICY_LAG_WINDOW_STARTED',**start)
+                window=next(e for e in store.events if e['kind']=='POLICY_LAG_WINDOW_STARTED'
+                    and e['payload']['training_iteration']==iteration)
+                next_collection=executor.submit(collect_iteration,iteration+1,next_current,next_past)
+            existing=store.matching('SNAPSHOT',iteration=iteration)
+            if not existing:
+                if runtime.progress is not None and runtime.progress['complete'] and checkpoint['iteration']!=iteration:
+                    store.emit('DATASET_TRANSITION',iteration=iteration,prior_complete_cursor=runtime.progress)
+                    if plan.train.learning_rate_schedule=='constant':
+                        runtime.progress=None  # Only after the exact previous finite cursor completed.
+                options=(dict(learning_rate_window=learning_rate_window(plan,iteration))
+                    if plan.train.learning_rate_schedule!='constant' else {})
+                while (runtime.progress is None or not runtime.progress['complete']
+                        or options and checkpoint['iteration']!=iteration):
+                    if next_collection is not None and next_collection.done():
+                        next_result=next_collection.result()
+                        if next_result['status']!='COLLECTION_COMPLETE':return next_result
+                    report=measured('TRAIN_CACHES_INCLUSIVE',training.train_caches,runtime,paths,max_updates=plan.checkpoint_updates,**options)
+                    # Preserve the original per-update diagnostics with their step
+                    # and row identities. Do not recompute losses or average away
+                    # changes needed for the declared dilution/cycling checks.
+                    store.emit('TRAIN_PROGRESS',iteration=iteration,steps=runtime.steps,rows=runtime.rows,
+                        updates=_journal_diagnostics(report.get('updates',[])))
+                    checkpoint=measured('CHECKPOINT_WRITE',store.checkpoint,runtime,iteration=iteration)
+                    if report['complete']:break
+                current=measured('ACTOR_EXPORT',store.snapshot,checkpoint,iteration=iteration);snapshots.append(current)
+            published=Snapshot(**existing[0]) if existing else current
+            if next_collection is not None:
+                prefetched[iteration+1]=next_collection.result()
+                if prefetched[iteration+1]['status']!='COLLECTION_COMPLETE':return prefetched[iteration+1]
+                if not store.matching('POLICY_LAG_WINDOW_COMPLETE',training_iteration=iteration):
+                    store.emit('POLICY_LAG_WINDOW_COMPLETE',training_iteration=iteration,collection_iteration=iteration+1,
+                        wall_seconds=time.time()-window['time'],original_start_epoch=window['time'],
+                        includes_interruption=resume,scope='one full next collection plus five-epoch prior training/checkpoint/export; overlap, not additive')
+            if iteration in milestones and not _evaluate_snapshot(store,published,evaluation_hook):
+                store.emit('STOP',iteration=iteration,reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY')
+                return dict(status='STOPPED',reason='EVALUATION_UNKNOWN_NO_AUTOMATIC_REPLAY',statuses=statuses,
+                    steps=runtime.steps,rows=runtime.rows,scientific_qualification=False)
+            store.emit('ITERATION_COMPLETE',iteration=iteration,snapshot=published,
+                counts={name:list(statuses.values()).count(name) for name in ('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED')})
+    finally:
+        cancel.set()
+        if executor is not None:executor.shutdown(wait=True,cancel_futures=True)
     return dict(status='COMPLETE_DECLARATION',statuses=statuses,steps=runtime.steps,rows=runtime.rows,
         scientific_qualification=False)
 
@@ -811,7 +896,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
     Observation errors and interruption clean only this new process session.
     """
     started=time.monotonic();last=started;longest=0.;seen=0;previous=None;phase='PREPARE';last_steps=-1
-    evaluation_store=Store.__new__(Store);evaluation_store.path=Path(path);evaluation_store.plan=plan;evaluation_store.events=[]
+    evaluation_store=Store.__new__(Store);evaluation_store.path=Path(path);evaluation_store.plan=plan;evaluation_store.events=[];evaluation_store._journal_lock=threading.RLock()
     evaluation_starts={};evaluation_closed={};evaluation_cells={};evaluation_dispatched=set()
     milestones=(evaluation_milestones(sum(len(b.games) for b in batches) for batches in plan.iterations)
         if plan.evaluation is not None else {})

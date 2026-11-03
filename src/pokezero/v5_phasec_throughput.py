@@ -1,8 +1,10 @@
-"""Finite C-T measurement: the original B-shape 20k collection and five epochs.
+"""Finite C-T measurement: original collection and five-epoch training.
 
 Instrumentation and resident cache policy are process-local. No training math,
 row order, optimizer, checkpoint cursor or collector cell is replaced. All
 profiling overhead remains in the measured end-to-end wall time.
+The explicit lag route declares two20k cohorts and reports the fixed overlap
+period beside all fill/drain work; it never selects a faster later window.
 """
 from contextlib import contextmanager
 import json
@@ -18,9 +20,10 @@ COMPILE_SECONDS = ('initializer_lower_seconds','initializer_compile_seconds','co
 COMPILE_CALLS = ('initializer_compile_calls','collector_compile_calls')
 
 
-def collector_phase_totals(reports, *, interrupted_banks=0):
+def collector_phase_totals(reports, *, interrupted_banks=0,expected_banks=10):
     reports=tuple(reports)
-    if type(interrupted_banks)is not int or not 0<=interrupted_banks<=10 or len(reports)+interrupted_banks!=10:
+    if (type(expected_banks)is not int or expected_banks not in (10,20)
+            or type(interrupted_banks)is not int or not 0<=interrupted_banks<=expected_banks or len(reports)+interrupted_banks!=expected_banks):
         raise ValueError('all ten original 20k collector banks required')
     totals={name:0.0 for name in COLLECTOR_PHASES}
     compilation={name:0.0 for name in COMPILE_SECONDS};calls={name:0 for name in COMPILE_CALLS}
@@ -188,7 +191,13 @@ def gpu_trace_categories(document):
 
 def gate_report(smoke, timing):
     wall = smoke['original_run_wall_seconds']
-    if (smoke['declared_games'] != 20000 or smoke['status'] != 'COMPLETE_DECLARATION'
+    lag=smoke.get('iteration_policy_lag',0)
+    if type(lag)is not int or lag not in (0,1):raise ValueError('literal execution policy required')
+    counts=smoke['dispositions']
+    if (any(type(v)is not int or v<0 for v in counts.values())or sum(counts.values())!=smoke['declared_games']
+            or counts.get('RUNNING',0)or counts.get('NOT_ATTEMPTED',0)):
+        raise ValueError('all declared cell dispositions required')
+    if (smoke['declared_games'] != (40000 if lag else 20000) or smoke['status'] != 'COMPLETE_DECLARATION'
             or smoke['jax_reload'] != 'VERIFIED_ORIGINAL_TRAINED_ARCHIVE_LOADED'
             or type(smoke['steps']) is not int or smoke['steps']<=0
             or type(timing['updates'])is not int or timing['updates']<=0
@@ -196,12 +205,29 @@ def gate_report(smoke, timing):
             or timing['updates']+timing.get('prior_durable_updates',0) != smoke['steps']
             or isinstance(wall,bool) or not isinstance(wall,(int,float)) or not math.isfinite(wall) or wall<=0):
         raise ValueError('one full original 20k collection/five-epoch training result required')
+    full_study_wall=wall
+    if lag:
+        windows=smoke['pipeline_windows']
+        if (lag!=1 or smoke['pipeline_iterations']!=2 or len(windows)!=1
+                or windows[0]['training_iteration']!=0 or windows[0]['collection_iteration']!=1
+                or {x['iteration']for x in smoke['complete_iterations']}!={0,1}
+                or {x['iteration']for x in smoke['collection_iterations']}!={0,1}
+                or [x['current']['iteration']for x in smoke['acting_snapshots']]!=[-1,-1]):
+            raise ValueError('fixed two-cohort fill/overlap/drain evidence required')
+        datasets=timing.get('training_datasets',[])
+        if (len(datasets)!=2 or [x['iteration_ordinal']for x in datasets]!=[0,1]
+                or any(x['updates']<=0 or x['end_step']-x['start_step']!=x['updates']or x['row_visits']<=0 for x in datasets)
+                or sum(x['updates']for x in datasets)!=timing['updates']):
+            raise ValueError('both original finite training budgets required')
+        wall=windows[0]['wall_seconds']
+        if isinstance(wall,bool)or not isinstance(wall,(int,float))or not math.isfinite(wall)or not 0<wall<=full_study_wall:
+            raise ValueError('finite original pipeline window inside full study required')
     rate = 20000/wall
     arm=smoke.get('model_arm','B')
     threshold=('D_GE5'if rate>=5 else'D_GE1_LT5'if rate>=1 else'D_LT1_HOLD')if arm=='D'else(
         'TARGET20_MET'if rate>=20 else'FLOOR5_MET_TARGET20_MISSED'if rate>=5 else'BELOW_BINDING5')
     if timing.get('prior_durable_updates',0):threshold='RECOVERED_TRAINED_PREFIX_NO_AUTOMATIC_ADMISSION'
-    return dict(schema=SCHEMA,model_arm=arm,declared_games=20000,iteration_wall_seconds=wall,
+    report=dict(schema=SCHEMA,model_arm=arm,declared_games=smoke['declared_games'],iteration_wall_seconds=wall,
         declared_games_per_second=rate,
         natural_complete_per_second=smoke['dispositions'].get('COMPLETE',0)/wall,
         dispositions=smoke['dispositions'],
@@ -211,10 +237,45 @@ def gate_report(smoke, timing):
         timing_scope='Original run wall, including collection compile, cache I/O, five epochs, checkpoint and export. Preparation and final strict JAX reload separately reported. Instrumentation overhead retained.',
         limitations='Nominal fixed20k numerator beside natural completions and all unknown dispositions; no strength claim. Host walls can overlap; sampled GPU kernel times are not extrapolated into a gate denominator.',
         original_pipeline=smoke)
+    if lag:
+        report.update(gate_numerator_games=20000,iteration_policy_lag=1,full_study_wall_seconds=full_study_wall,
+            full_study_declared_games_per_second=40000/full_study_wall,
+            natural_complete_per_second=smoke['dispositions'].get('COMPLETE',0)/full_study_wall,
+            timing_scope='Fixed window: collection1 and five-epoch training0/checkpoint/export concurrently; starts after collection0, ends when both stages finish. Full40k fill/drain and both training budgets reported alongside, never hidden.',
+            full_study_timing_scope='Both complete20k cohorts and five epochs each, including fill/drain, all setup within original run and profiling. Final strict JAX reload separately reported.')
+        if windows[0]['includes_interruption']:report['threshold']='RECOVERED_DIAGNOSTIC_NO_AUTOMATIC_ADMISSION'
+    return report
+
+
+def learner_trace_categories(document):
+    """Join GPU durations to runtime launches inside tagged learner updates.
+
+    Other GPU streams may contain simultaneous JAX work. Time overlap alone
+    never makes those kernels learner work. Unjoined events stay explicit.
+    """
+    events=document['traceEvents']
+    scopes=[e for e in events if e.get('name')=='pokezero.learner_update'and e.get('ph')=='X']
+    if len(scopes)!=len(PROFILE_UPDATES):raise ValueError('all four tagged learner updates required')
+    correlations=set();external_ids=set()
+    for e in events:
+        if e.get('cat')=='cpu_op'and type(e.get('args',{}).get('External id'))is int and e['args']['External id']>0:
+            if any(e.get('pid')==s.get('pid')and s['ts']<=e['ts']<=s['ts']+s['dur']for s in scopes):
+                external_ids.add(e['args']['External id'])
+        if e.get('cat')!='cuda_runtime' or type(e.get('args',{}).get('correlation'))is not int:continue
+        if any(e.get('pid')==s.get('pid')and e.get('tid')==s.get('tid')and s['ts']<=e['ts']<=s['ts']+s['dur']for s in scopes):
+            correlations.add(e['args']['correlation'])
+    categories=gpu_trace_categories(document)
+    selected=[e for e in events if e.get('cat')in ('kernel','gpu_memcpy','gpu_memset')and
+        (e.get('args',{}).get('correlation')in correlations or e.get('args',{}).get('External id')in external_ids)]
+    learner=gpu_trace_categories(dict(traceEvents=selected))
+    other={name:dict(events=categories[name]['events']-learner[name]['events'],seconds=categories[name]['seconds']-learner[name]['seconds'])for name in categories}
+    return dict(learner=learner,other_or_unattributed=other,tagged_updates=len(scopes),runtime_correlations=len(correlations),
+        torch_external_ids=len(external_ids),
+        scope='GPU events joined to tagged learner CUDA launches or their Torch cpu_op external IDs, including autograd threads. Other/unjoined GPU work is separate; temporal overlap alone never attributes a kernel.')
 
 
 @contextmanager
-def instrument_training(run_root, resident_cache_bytes):
+def instrument_training(run_root, resident_cache_bytes,*,concurrent_collection=False):
     """Wrap original calls; collect CPU data walls and a fixed four-update trace."""
     if type(resident_cache_bytes) is not int or resident_cache_bytes<=0:
         raise ValueError('positive explicit host residency budget required')
@@ -222,6 +283,7 @@ def instrument_training(run_root, resident_cache_bytes):
     originals = []
     state = dict(updates=0,prior_durable_updates=None,cache_prepare_seconds=0.0,batch_slice_seconds=0.0,
         tensor_conversion_seconds=0.0,update_wall_seconds=0.0,profile_updates=[])
+    active_dataset=None;datasets={}
     profiler = None
     retained_trace=Path(run_root)/'ct-training-trace.json'
     from pokezero.v5_data import _file_sha
@@ -240,7 +302,10 @@ def instrument_training(run_root, resident_cache_bytes):
             def measured(*args,**kwargs):
                 start=time.perf_counter()
                 try:return original(*args,**kwargs)
-                finally:state[field]+=time.perf_counter()-start
+                finally:
+                    elapsed=time.perf_counter()-start
+                    state[field]+=elapsed
+                    if active_dataset is not None:datasets[active_dataset][field]+=elapsed
             return measured
         return decorator
 
@@ -253,9 +318,20 @@ def instrument_training(run_root, resident_cache_bytes):
 
     def resident(original):
         def measured(*args,**kwargs):
+            nonlocal active_dataset
             if 'resident_cache_bytes' in kwargs:
                 raise ValueError('C-T owns its declared residency budget')
-            return original(*args,**kwargs,resident_cache_bytes=resident_cache_bytes)
+            if not concurrent_collection:return original(*args,**kwargs,resident_cache_bytes=resident_cache_bytes)
+            runtime,paths=args[:2];identity=tuple(map(str,paths))
+            if identity not in datasets:
+                datasets[identity]=dict(iteration_ordinal=len(datasets),cache_paths=list(identity),updates=0,
+                    cache_prepare_seconds=0.,batch_slice_seconds=0.,tensor_conversion_seconds=0.,update_wall_seconds=0.,
+                    start_step=runtime.steps,start_rows=runtime.rows)
+            active_dataset=identity
+            try:return original(*args,**kwargs,resident_cache_bytes=resident_cache_bytes)
+            finally:
+                datasets[identity].update(end_step=runtime.steps,end_rows=runtime.rows)
+                active_dataset=None
         return measured
     install(training,'train_caches',resident)
 
@@ -271,11 +347,18 @@ def instrument_training(run_root, resident_cache_bytes):
                 profiler=torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,torch.profiler.ProfilerActivity.CUDA])
                 profiler.__enter__()
             start=time.perf_counter()
-            result=original(runtime,batch)
+            from contextlib import nullcontext
+            with (training._torch().profiler.record_function('pokezero.learner_update')
+                    if concurrent_collection and ordinal in PROFILE_UPDATES else nullcontext()):
+                result=original(runtime,batch)
             # The original update already synchronizes finite checks and its
             # scalar diagnostics. Profiling adds no alternative optimizer path.
-            state['update_wall_seconds']+=time.perf_counter()-start
+            elapsed=time.perf_counter()-start
+            state['update_wall_seconds']+=elapsed
             state['updates']+=1
+            if active_dataset is not None:
+                datasets[active_dataset]['update_wall_seconds']+=elapsed
+                datasets[active_dataset]['updates']+=1
             if ordinal in PROFILE_UPDATES:
                 state['profile_updates'].append(ordinal)
                 profiler.step()
@@ -300,12 +383,23 @@ def instrument_training(run_root, resident_cache_bytes):
             state['gpu_profile_scope']='CURRENT_INVOCATION_ORIGINAL_GLOBAL_UPDATES'
         state['gpu_trace_path']=str(trace_path);state['gpu_trace_sha256']=_file_sha(trace_path)
         state['gpu_sample_categories']=gpu_trace_categories(json.loads(trace_path.read_bytes()))
+        if concurrent_collection:
+            attribution=learner_trace_categories(json.loads(trace_path.read_bytes()))
+            state['concurrent_gpu_attribution']=attribution
+            state['gpu_sample_categories']=attribution['learner']
         state['gpu_sample_updates']=len(PROFILE_UPDATES)
         state['gpu_sample_update_ordinals']=list(PROFILE_UPDATES)
         state['gpu_kernel_seconds_per_sampled_update']=state['gpu_sample_categories']['kernel']['seconds']/len(PROFILE_UPDATES)
         state['data_seconds_per_update']=(state['batch_slice_seconds']+state['tensor_conversion_seconds'])/state['updates']
         state['data_scope']='CURRENT INVOCATION updates only: CPU slice plus tensor conversion wall, including blocking transfers. Prefix component times unavailable; one-time resident preparation separate.'
         state['gpu_scope']='Only actual kernel trace-category durations on fixed updates8..11; memcpy/memset separate, no CPU annotation spans. Diagnostic sample, not full-iteration GPU total.'
+        if concurrent_collection:state['gpu_scope']=attribution['scope']
+        if concurrent_collection:
+            state['training_datasets']=list(datasets.values())
+            for value in state['training_datasets']:
+                if not value['updates']:raise ValueError('actual updates required for each declared dataset')
+                value['data_seconds_per_update']=(value['batch_slice_seconds']+value['tensor_conversion_seconds'])/value['updates']
+                value['row_visits']=value['end_rows']-value['start_rows']
     finally:
         if profiler is not None:
             profiler.__exit__(None,None,None)
@@ -331,20 +425,22 @@ def collector_banks(events):
 
 
 def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0,model_arm='B',teacher_frame_batch=False,resume_trained=False,
-        raw_retention_every=1,transient_raw_root=None,teacher_queue_chunks=0):
+        raw_retention_every=1,transient_raw_root=None,teacher_queue_chunks=0,iteration_policy_lag=0):
     if enable_ct is not True:
         raise ValueError('explicit finite C-T execution required')
     if type(raw_retention_every)is not int or raw_retention_every<=0:raise ValueError('positive fixed raw retention interval required')
     if type(resume_trained)is not bool or resume_trained and not resume:raise ValueError('trained continuation requires original resume')
+    if type(iteration_policy_lag)is not int or iteration_policy_lag not in (0,1):raise ValueError('explicit zero or one iteration lag required')
     if model_arm=='D'and teacher_frame_batch is not True:raise ValueError('D-T requires the batched teacher route')
     from contextlib import nullcontext
     from pokezero import v5_device_smoke
     with (continue_pretraining_iteration(run_root,allow_trained_prefix=resume_trained)if resume else nullcontext(None))as recovery:
-        with instrument_training(run_root,resident_cache_bytes) as timing:
+        with instrument_training(run_root,resident_cache_bytes,**(dict(concurrent_collection=True)if iteration_policy_lag else{})) as timing:
             options={}if cache_workers==0 else dict(cache_workers=cache_workers)
             if model_arm!='B':options['model_arm']=model_arm
             if teacher_frame_batch:options['teacher_frame_batch']=True
             if teacher_queue_chunks:options['teacher_queue_chunks']=teacher_queue_chunks
+            if iteration_policy_lag:options['iteration_policy_lag']=iteration_policy_lag
             if raw_retention_every!=1 or transient_raw_root is not None:
                 options.update(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
             original=v5_device_smoke.execute(config,run_root,enable_smoke=True,**options)
@@ -360,7 +456,8 @@ def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,
     banks=collector_banks(events)
     missing=([(p['iteration'],p['batch'])for p in recovery['recovered_banks']if (p['iteration'],p['batch'])not in banks]
         if recovery else [])
-    report['collector_phase_walls']=collector_phase_totals(banks.values(),interrupted_banks=len(missing))
+    report['collector_phase_walls']=collector_phase_totals(banks.values(),interrupted_banks=len(missing),
+        **(dict(expected_banks=20)if iteration_policy_lag else{}))
     report['collector_phase_walls']['unavailable_bank_keys']=missing
     report['cache_pipeline']=[dict(bank=list(key),**p['cache_pipeline'])for key,p in sorted(banks.items())if 'cache_pipeline'in p]
     report['teacher_queue']=[dict(bank=list(key),**p['teacher_queue'])for key,p in sorted(banks.items())if p.get('teacher_queue')is not None]
@@ -390,11 +487,12 @@ def main(argv=None):
     parser.add_argument('--teacher-frame-batch',action='store_true')
     parser.add_argument('--teacher-queue-chunks',type=int,default=0)
     parser.add_argument('--raw-retention-every',type=int,default=1)
+    parser.add_argument('--iteration-policy-lag',type=int,choices=(0,1),default=0)
     parser.add_argument('--transient-raw-root')
     args=parser.parse_args(argv)
     config=v5_worker._record(dict(path=args.config,sha256=args.expected_config_sha256))
     report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers,model_arm=args.model_arm,teacher_frame_batch=args.teacher_frame_batch,teacher_queue_chunks=args.teacher_queue_chunks,resume_trained=args.resume_trained,
-        raw_retention_every=args.raw_retention_every,transient_raw_root=args.transient_raw_root)
+        raw_retention_every=args.raw_retention_every,transient_raw_root=args.transient_raw_root,iteration_policy_lag=args.iteration_policy_lag)
     print(json.dumps(dict(status=report['threshold'],result=str(Path(args.run_root)/'ct-result.json'))))
     return 0
 

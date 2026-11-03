@@ -322,7 +322,7 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
 
 
 def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False,
-        raw_retention_every=1,transient_raw_root=None,resident_cache_bytes=None,teacher_queue_chunks=0):
+        raw_retention_every=1,transient_raw_root=None,resident_cache_bytes=None,teacher_queue_chunks=0,iteration_policy_lag=0):
     from . import v5_run as run,v5_phasec as phase
     _absolute(str(run_root))
     if type(resume) is not bool:raise ValueError('explicit resume choice required')
@@ -330,6 +330,8 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     if resident_cache_bytes is not None and (type(resident_cache_bytes)is not int or resident_cache_bytes<=0):
         raise ValueError('positive resident cache byte budget required')
     if type(device_rollout)is not bool:raise ValueError('explicit device rollout choice required')
+    if type(iteration_policy_lag)is not int or iteration_policy_lag not in (0,1) or iteration_policy_lag and not device_rollout:
+        raise ValueError('one-iteration lag requires the explicit device route')
     if type(device_teacher)is not bool or device_teacher and (not device_rollout or inputs.plan.model.arm!='D'):
         raise ValueError('explicit D device teacher route required')
     if device_rollout and inputs.plan.model.arm=='D' and not device_teacher:
@@ -350,7 +352,8 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     from contextlib import nullcontext
     from .v5_training import resident_cache_policy
     with (nullcontext()if resident_cache_bytes is None else resident_cache_policy(resident_cache_bytes)):
-        return run.run(inputs.plan,run_root,backend=backend,resume=resume,enable_v5=True,evaluation_hook=evaluation_hook)
+        return run.run(inputs.plan,run_root,backend=backend,resume=resume,enable_v5=True,evaluation_hook=evaluation_hook,
+            **(dict(iteration_policy_lag=iteration_policy_lag)if iteration_policy_lag else{}))
 
 
 def main(argv=None,*,evaluation_hook=None):
@@ -367,6 +370,7 @@ def main(argv=None,*,evaluation_hook=None):
     parser.add_argument('--raw-retention-every',type=int,default=1)
     parser.add_argument('--transient-raw-root')
     parser.add_argument('--resident-cache-bytes',type=int)
+    parser.add_argument('--iteration-policy-lag',type=int,choices=(0,1),default=0)
     args=parser.parse_args(argv)
     inputs=load_inputs(declaration=args.declaration,expected_declaration_sha256=args.expected_declaration_sha256,
         runtime=args.runtime,expected_runtime_sha256=args.expected_runtime_sha256,arm=args.arm,enable_v5=args.enable_v5)
@@ -396,6 +400,7 @@ def main(argv=None,*,evaluation_hook=None):
     if args.raw_retention_every!=1 or args.transient_raw_root is not None:
         options.update(raw_retention_every=args.raw_retention_every,transient_raw_root=args.transient_raw_root)
     if args.resident_cache_bytes is not None:options['resident_cache_bytes']=args.resident_cache_bytes
+    if args.iteration_policy_lag:options['iteration_policy_lag']=args.iteration_policy_lag
     result=execute(inputs,_absolute(args.run_root),resume=args.resume,evaluation_hook=evaluation_hook,**options)
     print(json.dumps(dict(status=result['status'],steps=result.get('steps'),rows=result.get('rows'),
         reason=result.get('reason'),disposition_counts=dict(Counter(result.get('statuses',{}).values())),
