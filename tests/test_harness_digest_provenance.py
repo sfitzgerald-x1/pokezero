@@ -187,7 +187,14 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/turn_merged.py",
         "src/pokezero/v5_contract.py",
         "src/pokezero/v5_data.py",
+        # Resident-cache loading validates the original capped bootstrap at
+        # load time. That deliberate edge reaches trainer, loss, model and
+        # precision helpers; keep the full static closure in the digest.
+        "src/pokezero/v5_loss.py",
+        "src/pokezero/v5_model.py",
+        "src/pokezero/v5_training.py",
         "src/pokezero/value_calibration.py",
+        "src/pokezero/value_precision_probe.py",
     }
 )
 
