@@ -99,7 +99,7 @@ class Search(OriginalSearch):
                 bad|=(~j.isfinite(predictions.policy_logits)).any()|(~j.isfinite(predictions.value)).any()
                 actions=[]
                 for side,e in enumerate(encoded):
-                    chosen=j.argmax(j.where(masks[0,side],predictions.policy_logits[side],-j.inf)).astype(j.int32)
+                    chosen=j.argmax(j.where(e.observation.legal_action_mask[0],predictions.policy_logits[side],-j.inf)).astype(j.int32)
                     physical=leaf.map_actions(e,state,chosen[None])[0]
                     actions.append(j.where(requested[0,side],physical,-1))
                     bad|=requested[0,side]&(e.observation.error[0]!=0)
@@ -158,7 +158,9 @@ class Search(OriginalSearch):
             rows.extend(e.inputs for e in encoded)
             maps=[];legal=[]
             for side,e in enumerate(encoded):
-                valid=tuple(map(bool,_host(masks)[0,side]));legal.append(valid)
+                # NN logits and map_actions both use the encoder's canonical
+                # request order, not the physical engine action lanes.
+                valid=tuple(map(bool,_host(e.observation.legal_action_mask)[0]));legal.append(valid)
                 if requested[side]and not any(valid):raise worlds.Refusal('REQUESTED_ACTION_SURFACE_EMPTY')
                 maps.append(tuple(int(_host(leaf.map_actions(e,node.state,j.asarray([a],j.int32)))[0])for a in range(9)))
             surfaces.append(dict(requested=requested,legal=legal,maps=maps))

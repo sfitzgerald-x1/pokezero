@@ -49,7 +49,61 @@ def summarize(roster,records,*,worlds,constructor_only):
         stop_rule='Constructor miss: one refusal-driven source batch and one remeasurement, then stop. No root redraw/refill.')
 
 
-def freeze_prefix(run_directory,*,declaration_sha256,count=64,seed=20261103):
+def _retired_claims(root,path,digest,*,declaration_sha256,count):
+    """Read an explicitly closed attempt, never infer closure from a claim.
+
+    The root owner supplies durable terminal receipts after stopping dispatch
+    and verifying all workers terminated. Bind those original bytes, and the
+    request/claim/START bytes, without manufacturing a scored result file.
+    """
+    import hashlib
+    from pathlib import Path
+    from .phase_d_ladder_panel import read_bound,validate,checked_cell
+    if path is None:
+        if digest is not None:raise ValueError('retired-claim manifest path required')
+        return {}
+    manifest=read_bound(path,digest)
+    if (manifest.get('schema')!='pokezero.champion-search-ladder.retired-claims.v1'
+            or manifest.get('declaration_sha256')!=declaration_sha256):
+        raise ValueError('same original retired-claim declaration required')
+    reference=manifest['closure'];closure=read_bound(reference['path'],reference['sha256'])
+    if (closure.get('schema')!='pokezero.champion-search-ladder.attempt-closure.v1'
+            or closure.get('declaration_sha256')!=declaration_sha256
+            or type(closure.get('attempt_id'))is not str or not closure['attempt_id'].strip()
+            or closure.get('state')!='CLOSED' or closure.get('dispatch_stopped')is not True
+            or closure.get('all_workers_terminated')is not True):
+        raise ValueError('retired claims require a closed attempt and terminated workers')
+    evidence=closure.get('terminal_evidence')
+    if type(evidence)is not list or not evidence:raise ValueError('original terminal attempt evidence required')
+    for receipt in evidence:
+        if hashlib.sha256(Path(receipt['path']).read_bytes()).hexdigest()!=receipt['sha256']:
+            raise ValueError('original terminal attempt evidence differs')
+    rows=manifest['cells'];ordinals=[row['cell']['ordinal']for row in rows]
+    if (len(set(ordinals))!=len(ordinals)or sorted(ordinals)!=sorted(closure.get('retired_ordinals',()))
+            or any(type(n)is not int or n%6 or not 0<=n<6*count for n in ordinals)):
+        raise ValueError('exact fixed-prefix retired RAW cells required')
+    retired={}
+    for row in rows:
+        cell=row['cell'];ordinal=cell['ordinal']
+        if (root/'results'/f'{ordinal}.json').exists():raise ValueError('retired claim already has a result')
+        request=read_bound(root/'requests'/f'{ordinal}.json',row['request_sha256'])
+        claim=read_bound(root/'claims'/f'{ordinal}.json',row['claim_sha256'])
+        start=read_bound(root/'starts'/f'{ordinal}.json',row['start_sha256'])
+        if (request!=claim or request.get('schema')!='pokezero.champion-search-ladder.raw-request.v1'
+                or request.get('cell')!=cell or request.get('declaration_sha256')!=declaration_sha256
+                or Path(request['run_directory']).resolve()!=root
+                or start!={'cell':cell,'request_sha256':row['request_sha256']}):
+            raise ValueError('same original retired request/claim/start required')
+        declaration=validate(read_bound(request['declaration'],declaration_sha256))
+        checked_cell(declaration,cell)
+        retired[ordinal]=dict(cell=cell,status='UNKNOWN',disposition='RETIRED_CLAIM_NO_RESULT',
+            request_sha256=row['request_sha256'],claim_sha256=row['claim_sha256'],start_sha256=row['start_sha256'],
+            closure_sha256=reference['sha256'],attempt_id=closure['attempt_id'])
+    return retired
+
+
+def freeze_prefix(run_directory,*,declaration_sha256,count=64,seed=20261103,
+                  retired_claims=None,retired_claims_sha256=None):
     """Freeze first64 declared RAW games; closed status never selects survivors.
 
     Caller waits for this exact prefix to close. Every durable prefix in its
@@ -59,18 +113,24 @@ def freeze_prefix(run_directory,*,declaration_sha256,count=64,seed=20261103):
     from pathlib import Path
     import json
     from . import phase_d_owning_capture as capture,phase_d_saved_roots as roots
-    root=Path(run_directory)
+    root=Path(run_directory).resolve()
     if count!=64:raise ValueError('prospectively fixed first64 RAW cells required')
+    retired=_retired_claims(root,retired_claims,retired_claims_sha256,
+        declaration_sha256=declaration_sha256,count=count)
     rows=[];captures=0;closed=[]
     for pair in range(count):
         ordinal=6*pair;path=root/'results'/f'{ordinal}.json'
-        if not path.exists():raise ValueError('fixed RAW prefix not closed: '+str(pair))
-        result=json.loads(path.read_bytes());cell=result['cell']
+        if path.exists():result=json.loads(path.read_bytes())
+        elif ordinal in retired:result=retired[ordinal]
+        else:raise ValueError('fixed RAW prefix not closed: '+str(pair))
+        cell=result['cell']
         if (cell.get('arm')!='RAW'or cell.get('pair_ordinal')!=pair or cell.get('ordinal')!=ordinal
-                or result.get('declaration_sha256')!=declaration_sha256
+                or (ordinal not in retired and result.get('declaration_sha256')!=declaration_sha256)
                 or result.get('status')not in ('COMPLETE','UNKNOWN','FAILED','CAPPED')):
             raise ValueError('original closed RAW prefix cell binding differs')
-        closed.append(dict(pair_ordinal=pair,status=result['status']))
+        closed.append(dict(pair_ordinal=pair,status=result['status'],
+            **({k:result[k]for k in ('disposition','request_sha256','claim_sha256','start_sha256','closure_sha256','attempt_id')}
+               if ordinal in retired else {})))
         wire=root/'owning-wire'/f'{ordinal}.jsonl'
         if not wire.exists():continue
         captures+=1
@@ -81,4 +141,5 @@ def freeze_prefix(run_directory,*,declaration_sha256,count=64,seed=20261103):
     selected=roots.select(rows,declaration)
     return dict(declaration=declaration,selected=selected,capture_prefix=dict(pair_ordinals=[0,count-1],declared_games=count,
         games_with_capture=captures,games_without_capture=count-captures,eligible_root_records=len(rows),closed_cells=closed,
-        rule='First64 declared RAW cells, all closed dispositions retained; no score/constructor/outcome selection.'))
+        retired_claim_manifest_sha256=retired_claims_sha256,
+        rule='First64 declared RAW cells, all closed dispositions and retired partial captures retained; no score/constructor/outcome selection.'))
