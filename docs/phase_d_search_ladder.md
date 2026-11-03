@@ -44,6 +44,18 @@ against B2's public candidate bits. Unsupported clocks and mapping failures
 remain named refused world slots. The original retained-driver route remains
 unchanged. All requested 16/32-world roots remain in the construction table.
 
+`phase_d_constructor_coverage.py` runs that same construction on the host while
+the shared GPU evaluates the value bank. It selects CPU before importing JAX,
+accepts no model archive, and reuses one worker's compiled B2 functions. Use
+`--worlds 16` or `--worlds 32` on the same frozen roster, with distinct output
+directories and an optional persistent `--compilation-cache`. Interrupted
+claims stay unknown and only not-attempted roots resume. This table reports
+construction coverage/refusals, and makes no search latency or GPU performance
+claim. It shares the original single coverage fix/retest budget. The GPU
+Search delegates to the exact same `ProtocolConstructor.prepare` body using
+its existing compiled functions, seen set and public session dictionary; the
+separate saved-root search timing admission still requires the GPU.
+
 The rung order is R1 (2 worlds, value), R3 (32 worlds, value), R4 (32 worlds,
 8 sampled chances), R7 (32 worlds, depth 2), and R5 (8 worlds, 8 raw-policy
 rollout leaves). All legal replies are priced by the frozen champion's
