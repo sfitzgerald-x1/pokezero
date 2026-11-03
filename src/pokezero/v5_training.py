@@ -344,27 +344,48 @@ def _cache_manifest(paths,batch_size):
 
 
 class _CacheReader:
-    """Ordered metadata roster plus at most one active verified shard."""
-    def __init__(self,paths,batch_size):
-        self.paths=paths;self.batch_size=batch_size
+    """Original order, with one mapped shard or a bounded resident iteration."""
+    def __init__(self,paths,batch_size,resident_cache_bytes=None):
+        self.paths=paths;self.batch_size=batch_size;self.resident_cache_bytes=resident_cache_bytes
         self.identities={path/'metadata.json':v5_data._file_identity(path/'metadata.json') for path in paths}
         self.manifest=_cache_manifest(paths,batch_size)
         v5_data._require_cache_identities(self.identities)
         self.active=None;self.shard=None
+        self.resident=None
+        if resident_cache_bytes is not None:
+            if type(resident_cache_bytes) is not int or resident_cache_bytes<=0:
+                raise ValueError('positive finite resident cache byte budget required')
+            required=0;per_cache=[]
+            for path in paths:
+                metadata=json.loads((path/'metadata.json').read_text())
+                size=0
+                for description in metadata['arrays'].values():
+                    shape=description['shape'];dtype=np.dtype(description['dtype'])
+                    if dtype.hasobject or any(type(x) is not int or x<0 for x in shape):
+                        raise ValueError('finite typed resident cache shape required')
+                    size+=math.prod(shape)*dtype.itemsize
+                required+=size;per_cache.append(size)
+            if required>resident_cache_bytes:
+                raise ValueError('resident iteration exceeds explicit cache byte budget')
+            self.resident=tuple(v5_data.VerifiedCache(path,resident_bytes=size)
+                for path,size in zip(paths,per_cache))
+            v5_data._require_cache_identities(self.identities)
 
     def batches(self,shard,start):
         if self.shard!=shard:
             self.active=None;self.shard=None
-            active=v5_data.VerifiedCache(self.paths[shard])
+            active=(self.resident[shard] if self.resident is not None else
+                v5_data.VerifiedCache(self.paths[shard]))
             v5_data._require_cache_identities(self.identities)
             self.active=active;self.shard=shard
         return self.active.batches(batch_size=self.batch_size,start_batch=start)
 
 
-def _cache_reader(runtime,paths):
+def _cache_reader(runtime,paths,resident_cache_bytes=None):
     reader=_CACHE_READERS.get(runtime)
-    if reader is None or reader.paths!=paths or reader.batch_size!=runtime.train_config.batch_size:
-        reader=_CacheReader(paths,runtime.train_config.batch_size)
+    if (reader is None or reader.paths!=paths or reader.batch_size!=runtime.train_config.batch_size
+            or reader.resident_cache_bytes!=resident_cache_bytes):
+        reader=_CacheReader(paths,runtime.train_config.batch_size,resident_cache_bytes)
         _CACHE_READERS[runtime]=reader
     v5_data._require_cache_identities(reader.identities)
     return reader
@@ -398,14 +419,14 @@ def _advance_progress(progress):
             progress['complete']=progress['epoch']==progress['epochs']
 
 
-def train_caches(runtime,paths,*,max_updates=None,learning_rate_window=None):
+def train_caches(runtime,paths,*,max_updates=None,learning_rate_window=None,resident_cache_bytes=None):
     """Continue the exact ordered finite dataset; no refill, shuffle or replay."""
     if type(runtime) is not Runtime:raise ValueError('v5 runtime required')
     if max_updates is not None and (type(max_updates) is not int or max_updates<0):
         raise ValueError('nonnegative update budget required')
     if runtime in _SCHEDULED:_validate_optimizer(runtime)
     paths=tuple(Path(path) for path in paths)
-    reader=_cache_reader(runtime,paths);manifest=json.loads(json.dumps(reader.manifest))
+    reader=_cache_reader(runtime,paths,resident_cache_bytes);manifest=json.loads(json.dumps(reader.manifest))
     scheduled=runtime.train_config.learning_rate_schedule!='constant'
     if scheduled:
         if type(learning_rate_window) is not DeclaredGameWindow:

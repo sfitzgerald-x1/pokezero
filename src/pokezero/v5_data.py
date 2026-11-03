@@ -333,7 +333,10 @@ class VerifiedCache:
     checks file identity, size and both modification/change timestamps; any
     change fails closed. This object is never serialized into a checkpoint.
     """
-    def __init__(self,path):
+    def __init__(self,path,*,resident_bytes=None):
+        if resident_bytes is not None and (type(resident_bytes) is not int or resident_bytes<=0):
+            raise ValueError('positive finite resident cache byte budget required')
+        copied_bytes=0
         path=Path(path);file=path/'metadata.json'
         identities={file:_file_identity(file)}
         metadata=json.loads(file.read_text())
@@ -345,6 +348,12 @@ class VerifiedCache:
             if _file_sha(file)!=description['sha256']:raise ValueError('v5 cache array bytes changed')
             value=np.load(file,mmap_mode='r',allow_pickle=False)
             if list(value.shape)!=description['shape'] or value.dtype.str!=description['dtype']:raise ValueError('v5 cache shape/dtype changed')
+            if resident_bytes is not None:
+                copied_bytes+=value.nbytes
+                if copied_bytes>resident_bytes:
+                    raise ValueError('resident cache exceeds explicit byte budget')
+                value=np.array(value,copy=True,order='K')
+                value.flags.writeable=False
             arrays[name]=value
         _require_cache_identities(identities)
         base={field.name:None for field in fields(TrainingBatch) if field.name!='v5_columns'}

@@ -46,6 +46,60 @@ def count_update(owner,batch):
 
 
 class CacheSessionTests(unittest.TestCase):
+    def test_resident_iteration_keeps_exact_order_and_reuses_every_verified_shard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);paths=[root/'one',root/'two']
+            originals=[cache(paths[0],0,5),cache(paths[1],5,3)]
+            owner=runtime(3);mapped=runtime(3)
+            with patch.object(training,'update',side_effect=count_update):
+                expected=training.train_caches(mapped,paths)
+            with patch.object(data,'_file_sha',wraps=data._file_sha) as digest,\
+                    patch.object(training,'update',side_effect=count_update):
+                updates=[]
+                while owner.progress is None or not owner.progress['complete']:
+                    updates+=training.train_caches(owner,paths,max_updates=1,
+                        resident_cache_bytes=10**8)['updates']
+                arrays=sum(len(json.loads((p/'metadata.json').read_text())['arrays'])for p in paths)
+                self.assertEqual(digest.call_count,arrays)
+            self.assertEqual(updates,expected['updates'])
+            self.assertEqual((owner.steps,owner.rows,owner.progress),(mapped.steps,mapped.rows,mapped.progress))
+            reader=training._CACHE_READERS[owner]
+            self.assertEqual(len(reader.resident),2)
+            for resident,original in zip(reader.resident,originals):
+                self.assertEqual(payload(resident._batch),payload(original))
+                array=resident._batch.numeric_features
+                self.assertNotIsInstance(array,np.memmap)
+                self.assertFalse(array.flags.writeable)
+
+    def test_resident_budget_refuses_before_array_open_and_actual_headers_enforce_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'cache';cache(path,0,3)
+            for budget in (True,0,-1,1):
+                with self.subTest(budget=budget),patch.object(data,'VerifiedCache') as opened:
+                    with self.assertRaisesRegex(ValueError,'byte budget'):
+                        training.train_caches(runtime(),[path],max_updates=0,resident_cache_bytes=budget)
+                    opened.assert_not_called()
+            with self.assertRaisesRegex(ValueError,'byte budget'):
+                data.VerifiedCache(path,resident_bytes=1)
+
+    def test_resident_resume_keeps_original_cursor_and_mutated_sources_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'cache';cache(path,0,5);owner=runtime(2)
+            with patch.object(training,'update',side_effect=count_update):
+                training.train_caches(owner,[path],max_updates=2,resident_cache_bytes=10**8)
+                resumed=runtime(2);resumed.progress=json.loads(json.dumps(owner.progress))
+                resumed.steps=owner.steps;resumed.rows=owner.rows
+                a=training.train_caches(owner,[path],resident_cache_bytes=10**8)
+                b=training.train_caches(resumed,[path],resident_cache_bytes=10**8)
+                self.assertEqual(a,b)
+            other=runtime(2)
+            with patch.object(training,'update',side_effect=count_update) as update:
+                training.train_caches(other,[path],max_updates=1,resident_cache_bytes=10**8)
+                target=path/'base__returns.npy';target.write_bytes(target.read_bytes()+b'x')
+                with self.assertRaisesRegex(ValueError,'files changed'):
+                    training.train_caches(other,[path],max_updates=1,resident_cache_bytes=10**8)
+                self.assertEqual(update.call_count,1)
+
     def test_direct_cursor_preserves_every_base_and_sidecar_column_without_slicing_prefix(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'cache';original=cache(path,0,9)
