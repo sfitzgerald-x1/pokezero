@@ -74,7 +74,9 @@ def construct(context, backend, iteration, current, past, ordinal):
             (current.archive_sha256,) * 2, (True, True), backend.declaration_sha256)
         bank = rollout.actor_bank_from_assignments(bindings, required, current_archive=current.archive_sha256, assignments=recorded)
         blocks.append((jax.block_until_ready(backend._construct(batch)), bank, batch.sampling_seed))
-    roster = v2.roster_from_blocks(blocks);jax.block_until_ready(roster.device)
+    window = () if plan.model.arm == 'A' or plan.historical_fraction == 0 else tuple(past[-plan.historical_window:])
+    archives, groups = v2.canonical_groups(current.archive_sha256, [s.archive_sha256 for s in window])
+    roster = v2.roster_from_blocks(blocks, archives=archives, groups=groups);jax.block_until_ready(roster.device)
     return roster, kinds
 
 
@@ -129,7 +131,7 @@ def main(argv=None):
     runtime.model.load_state_dict(state);trainer = v2t.Trainer(runtime)
     backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
     ordinal = {g.stream_id: i for i, g in enumerate(plan.games)}
-    block_base = 0;reports = []
+    block_base = 0;reports = [];collectors = {}
     reference_ends = {e['payload']['stream_id']: e['payload'] for e in events if e['kind'] == 'GAME_END'}
     for iteration in range(len(plan.iterations)):
         phase = {};clock = time.perf_counter();start = clock
@@ -138,10 +140,16 @@ def main(argv=None):
             now = time.perf_counter();phase[name] = now - clock;clock = now
         current = snapshots[-1];past = tuple(s for s in snapshots if s.iteration < current.iteration)
         roster, kinds = construct(context, backend, iteration, current, past, ordinal);mark('construct')
-        collector = v2c.RefillCollector(context['prepared'].engine_tables, context['prepared'].observation_tables, plan.model,
-            backend.labels, roster, lanes=args.lanes, max_requests=plan.max_requests)
         actor_params = tuple(params[digest] for digest in roster.actor_archives)
-        collector.compile(actor_params, threads=args.compile_threads);mark('collector_compile')
+        key = (len(roster.groups), roster.games)
+        if key in collectors:
+            collector = collectors[key].rebind(roster);reused = True
+        else:
+            collector = v2c.RefillCollector(context['prepared'].engine_tables, context['prepared'].observation_tables, plan.model,
+                backend.labels, roster, lanes=args.lanes, max_requests=plan.max_requests,
+                layout_counts=v2c.expected_counts(roster.groups, roster.games, plan.historical_fraction))
+            collector.compile(actor_params, threads=args.compile_threads);collectors[key] = collector;reused = False
+        mark('collector_compile')
         result = collector.run(actor_params);mark('collect')
         rows = v2c.finalize(result, loss_config=plan.loss, discount=plan.discount);mark('finalize')
         audited = []
@@ -177,7 +185,8 @@ def main(argv=None):
         games = roster.games;total = time.perf_counter() - start
         updates = train_report['updates']
         report = dict(iteration=iteration, games=games, rows=rows.n, dispositions=rows.stats['dispositions'], opponents=kinds,
-            actor_archives=len(roster.actor_archives), lane_groups=len(roster.groups), phase_seconds=phase, iteration_seconds=total,
+            actor_archives=len(roster.actor_archives), lane_groups=len(roster.groups), collector_reused=reused,
+            phase_seconds=phase, iteration_seconds=total,
             games_per_second=games / total,
             games_per_second_excluding_compile=games / (total - phase['collector_compile']),
             training=dict(updates=len(updates), steps=runtime.steps, rows=runtime.rows, mode=trainer.mode_report(),
@@ -187,6 +196,7 @@ def main(argv=None):
         reports.append(report);log('ITERATION', **{k: v for k, v in report.items() if k != 'audit'})
         block_base += len(plan.iterations[iteration])
         del rows, result, collector, roster, actor_params;gc.collect()
+        if len(collectors) > 2:collectors.pop(next(iter(collectors)))  # bound compiled-kernel memory
         for digest in list(params):
             if digest not in {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}:del params[digest]
     total = time.perf_counter() - wall_start

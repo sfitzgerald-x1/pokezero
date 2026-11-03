@@ -85,7 +85,29 @@ class Roster:
     def counts(self):return np.bincount(self.group_of_game, minlength=len(self.groups)).astype(np.int64)
 
 
-def roster_from_blocks(blocks):
+def canonical_groups(current_archive, past_archives):
+    """Archive order and actor-pair groups fixed by the snapshot history alone.
+
+    Archive 0 is the current actor and archives 1..h the historical ones in the
+    given order. Groups are self-play (0, 0) then, per historical archive k,
+    (0, k) and (k, 0) for the two learner seats. Iterations with the same number
+    of historical snapshots therefore share one lane layout and one compiled
+    kernel set, whatever the planner's per-game draws were.
+    """
+    archives = (current_archive, *tuple(past_archives))
+    if len(set(archives)) != len(archives):raise ValueError('distinct current and historical archives required')
+    groups = ((0, 0),) + tuple(pair for k in range(1, len(archives)) for pair in ((0, k), (k, 0)))
+    return archives, groups
+
+
+def expected_counts(groups, games, historical_fraction):
+    """Planner-expected games per canonical group (positive, used for lane layout only)."""
+    h = (len(groups) - 1) // 2
+    if h == 0:return (float(games),)
+    return (games * (1 - historical_fraction),) + (games * historical_fraction / (2 * h),) * (2 * h)
+
+
+def roster_from_blocks(blocks, *, archives=None, groups=None):
     """Concatenate original construction blocks into one refill roster.
 
     Each block is (carry, actor_bank, sampling_seed): carry is the
@@ -93,11 +115,15 @@ def roster_from_blocks(blocks):
     (state_from_pool with batch.constructor_seed, _gender, constructor_truth,
     initialize_with_public); actor_bank is the block's original ActorBank from
     actor_bank_from_assignments; sampling_seed is batch.sampling_seed.
+
+    ``archives``/``groups`` (see ``canonical_groups``) fix the archive order and
+    group list; groups may then hold zero games. By default both follow first
+    appearance in the blocks.
     """
     blocks = tuple(blocks)
     if not blocks:raise ValueError('nonempty declared roster required')
     bindings = blocks[0][1].bindings
-    archives = []
+    seen = []
     for carry, bank, seed in blocks:
         if type(bank) is not rollout.ActorBank or bank.bindings != bindings:
             raise ValueError('same original bindings and ActorBank per block required')
@@ -106,7 +132,11 @@ def roster_from_blocks(blocks):
         if type(seed) is not int or not 0 <= seed < 2**32:raise ValueError('original uint32 block sampling seed required')
         if np.asarray(carry.status).any() or np.asarray(carry.frames).any():raise ValueError('fresh unplayed block carry required')
         for digest in bank.actor_archives:
-            if digest not in archives:archives.append(digest)
+            if digest not in seen:seen.append(digest)
+    if archives is None:archives = seen
+    elif not set(seen) <= set(archives) or len(set(archives)) != len(archives):
+        raise ValueError('explicit archive order must cover every block actor once')
+    archives = list(archives)
     lookup = {digest: i for i, digest in enumerate(archives)}
     pairs, learner, streams, seeds = [], [], [], []
     for carry, bank, seed in blocks:
@@ -114,7 +144,11 @@ def roster_from_blocks(blocks):
             pairs.append(tuple(lookup[bank.actor_archives[a]] for a in bank.actor_indices[row]))
             learner.append(bank.learner_mask[row]);streams.append(bank.streams[row]);seeds.append(seed)
     if len(set(streams)) != len(streams):raise ValueError('unique declared streams across the roster required')
-    groups = tuple(dict.fromkeys(pairs))
+    if groups is None:groups = tuple(dict.fromkeys(pairs))
+    else:
+        groups = tuple(tuple(map(int, g)) for g in groups)
+        if not set(pairs) <= set(groups) or len(set(groups)) != len(groups):
+            raise ValueError('explicit groups must cover every game actor pair once')
     group_of_game = np.asarray([groups.index(p) for p in pairs], np.int32)
     queue = np.concatenate([np.flatnonzero(group_of_game == g) for g in range(len(groups))]).astype(np.int32)
     counts = np.bincount(group_of_game, minlength=len(groups)).astype(np.int32)
@@ -449,7 +483,7 @@ class RefillCollector:
 
     def __init__(self, engine_tables, observation_tables, model_config, labels, roster, *, lanes,
             max_requests=4096, chunk_steps=8, shrink_factor=4, min_lanes=128, rows_per_game=128,
-            emit_frames=False, donate=True):
+            emit_frames=False, donate=True, layout_counts=None):
         bindings = roster.bindings
         if type(model_config) is not V5ModelConfig or type(bindings) is not rollout.Bindings:
             raise ValueError('explicit model/config bindings required')
@@ -462,11 +496,32 @@ class RefillCollector:
         self.engine_tables = engine_tables;self.observation_tables = observation_tables
         self.model_config = model_config;self.labels = labels;self.roster = roster
         self.max_requests = max_requests;self.chunk_steps = chunk_steps;self.emit_frames = emit_frames
-        layout = lane_layout(roster.counts, lanes)
+        if layout_counts is None:layout_counts = roster.counts
+        elif len(layout_counts) != len(roster.groups) or min(layout_counts) <= 0:
+            raise ValueError('one positive expected count per roster group required')
+        # Integer-valued expectations (planner shares) keep the layout a pure
+        # function of (games, groups, lanes), so rebind() can reuse kernels.
+        layout = lane_layout([max(1, int(round(x))) for x in layout_counts], lanes)
         self.levels = tuple(make_level(x, roster.groups, refill=i == 0)
             for i, x in enumerate(shrink_levels(layout, factor=shrink_factor, min_lanes=min(min_lanes, lanes))))
         self.rows_per_game = rows_per_game;self.donate = donate
         self._jit = {};self._exe = {};self.compile_seconds = {}
+
+    def rebind(self, roster):
+        """Collect a new roster with the SAME compiled kernels.
+
+        Requires identical groups (actor-index pairs), game count, archive count
+        and bindings namespace: the kernels take the roster as an argument and
+        bake in only the lane layout, so nothing is retraced or recompiled.
+        """
+        old = self.roster
+        if (type(roster) is not Roster or roster.groups != old.groups or roster.games != old.games
+                or len(roster.actor_archives) != len(old.actor_archives)
+                or roster.bindings.label_vocabulary.sha256 != old.bindings.label_vocabulary.sha256
+                or roster.bindings.category_sha256 != old.bindings.category_sha256):
+            raise ValueError('rebind requires the same groups, games, archive count and namespaces')
+        self.roster = roster
+        return self
 
     # -- jitted pieces (compiled executables are preferred when present) -----
     def _tick(self, level):

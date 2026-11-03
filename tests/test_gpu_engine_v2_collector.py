@@ -246,6 +246,35 @@ class RefillCollectorTests(unittest.TestCase):
         self.assertEqual(sum(collector.levels[0].layout), 5);self.assertTrue(all(x >= 1 for x in collector.levels[0].layout))
         self.compare_rows(original, store)
 
+    def test_canonical_layout_rebind_reuses_compiled_kernels_for_a_new_roster(self):
+        # Two iterations with the same history size but different planner draws
+        # share one layout; the rebound collector must equal the original pipeline.
+        first, labels, config, bindings = declaration((0, 1, 2, 0, 1, 1, 0, 2, 0))
+        second, _, _, _ = declaration((2, 0, 0, 1, 0, 2, 2, 0, 1))
+        archives, groups = v2.canonical_groups(ARCHIVES[0], ARCHIVES[1:])
+        self.assertEqual(groups, ((0, 0), (0, 1), (1, 0), (0, 2), (2, 0)))
+        counts = v2.expected_counts(groups, 9, 0.5)
+        with seams():
+            original, _ = run_original(second, labels, config, bindings)
+            build = lambda blocks: v2.roster_from_blocks(blocks, archives=archives, groups=groups)
+            roster_a, roster_b = build(first), build(second)
+            collector = v2.RefillCollector(NS(struggle=j.array(2, j.int32)), NS(belief=None), config, labels, roster_a,
+                lanes=5, max_requests=MAX_REQUESTS, chunk_steps=CHUNK, rows_per_game=8, layout_counts=counts,
+                shrink_factor=2, min_lanes=1)
+            layout = collector.levels[0].layout
+            collector.compile(params_for(archives))
+            executables = dict(collector._exe)
+            collector.run(params_for(archives))
+            collector.rebind(roster_b)
+            store = v2.finalize(collector.run(params_for(archives)), loss_config=V5LossConfig())
+        self.assertEqual(collector._exe, executables)
+        fresh = v2.RefillCollector(NS(struggle=j.array(2, j.int32)), NS(belief=None), config, labels, roster_b,
+            lanes=5, max_requests=MAX_REQUESTS, chunk_steps=CHUNK, rows_per_game=8, layout_counts=counts)
+        self.assertEqual(fresh.levels[0].layout, layout)
+        self.compare_rows(original, store)
+        with self.assertRaises(ValueError):
+            collector.rebind(v2.roster_from_blocks(second))
+
     def test_row_buffer_overflow_segments_and_numpy_export_keep_every_row(self):
         blocks, labels, config, bindings = declaration()
         with seams():
