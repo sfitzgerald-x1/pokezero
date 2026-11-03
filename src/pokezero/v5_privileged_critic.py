@@ -118,6 +118,26 @@ def fit_fold(train,validation,epochs,*,train_epoch,validate,snapshot,restore):
     return dict(selected_epoch=chosen,history=history,optimizer_updates=updates)
 
 
+def journal_prefix(journal,start,selected):
+    """Read-only original scientific publication chain through this checkpoint.
+
+    A self-hashed disconnected event is not production-run provenance. Later
+    events are irrelevant: read only the immutable selected prefix, no repair.
+    """
+    sequence=selected['sequence']
+    if type(sequence)is not int or sequence<=0:raise ValueError('positive original checkpoint sequence required')
+    previous=None;last=None
+    for ordinal in range(sequence+1):
+        path=Path(journal)/f'{ordinal:09d}.json'
+        event=json.loads(path.read_bytes());body=dict(event);digest=body.pop('sha256',None)
+        if (type(event.get('sequence'))is not int or event['sequence']!=ordinal
+                or event.get('previous')!=previous or truth().digest(body)!=digest):
+            raise ValueError('original ordered/hash-linked production journal differs')
+        if ordinal==0 and event!=start:raise ValueError('original run-start/declaration binding differs')
+        previous=digest;last=event
+    if last!=selected:raise ValueError('selected checkpoint is not actual original journal publication')
+
+
 def production_binding(config):
     """Original production declaration + durable checkpoint publication, not smoke."""
     from . import v5_run as runs
@@ -135,7 +155,12 @@ def production_binding(config):
     journal=Path(config['run_started_event']['path']).resolve().parent
     if Path(config['checkpoint_event']['path']).resolve().parent!=journal or Path(config['production_declaration']['path']).resolve().parent!=journal.parent:
         raise ValueError('same original production run publication paths required')
-    if (journal.parent/event['payload']['path']).resolve()!=Path(config['checkpoint']['path']).resolve():raise ValueError('checkpoint path differs from original publication')
+    if (Path(config['run_started_event']['path']).name!='000000000.json'
+            or Path(config['checkpoint_event']['path']).name!=f"{event['sequence']:09d}.json"):
+        raise ValueError('original journal filename/sequence differs')
+    journal_prefix(journal,start,event)
+    checkpoint=(journal.parent/event['payload']['path']).resolve()
+    if not checkpoint.is_relative_to(journal.parent)or checkpoint!=Path(config['checkpoint']['path']).resolve():raise ValueError('checkpoint path differs from original publication')
     artifact(config['checkpoint'],json_value=False)
     return declaration,event['payload']
 
@@ -255,7 +280,7 @@ def crossfit(config,rows_reference,output,*,enable_fit=False):
     if predicted!=set(range(len(records))):raise ValueError('every declared row needs one OOS disposition')
     metrics=score_predictions(manifest,records,predictions)
     assignments=truth().folds([r['selector']for r in records],seed=fit.seed)
-    result=dict(metrics=metrics,fit_complete=all(f['optimizer_updates']>0 for f in fold_reports),schema='pokezero.privileged-critic.crossfit.v1',rows=rows_reference,production_checkpoint=config['checkpoint'],production_declaration=config['production_declaration'],fit=asdict(fit),
+    result=dict(metrics=metrics,fit_complete=all(f['optimizer_updates']>0 for f in fold_reports),schema='pokezero.privileged-critic.crossfit.v1',rows=rows_reference,production_checkpoint=config['checkpoint'],production_declaration=config['production_declaration'],production_run_started=config['run_started_event'],production_checkpoint_event=config['checkpoint_event'],fit=asdict(fit),
         folds=fold_reports,predictions=[dict(row_id=r['row_id'],selector=r['selector'],kind=r['kind'],prediction=p,fold=assignments[r['selector']['stream']])for r,p in zip(records,predictions,strict=True)],
         implementation='Original Torch B builder/strict loader, explicit fit precision, deterministic eval frozen trunk; separately scored JAX public baselines may have framework-rounding differences, not an isolated causal conditioning effect',scope='Every root/child/grid prediction OUT OF FOLD; frozen B trunk/public-head epoch0 warmstart; not a final all-bank trained critic or actor',new_games=0,scientific_qualification=False)
     with (output/'crossfit.json').open('x')as f:json.dump(result,f,sort_keys=True,allow_nan=False)
