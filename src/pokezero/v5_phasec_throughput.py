@@ -200,8 +200,9 @@ def gate_report(smoke, timing):
     if (smoke['declared_games'] != (40000 if lag else 20000) or smoke['status'] != 'COMPLETE_DECLARATION'
             or smoke['jax_reload'] != 'VERIFIED_ORIGINAL_TRAINED_ARCHIVE_LOADED'
             or type(smoke['steps']) is not int or smoke['steps']<=0
-            or type(timing['updates'])is not int or timing['updates']<=0
+            or type(timing['updates'])is not int or timing['updates']<0
             or type(timing.get('prior_durable_updates',0))is not int or timing.get('prior_durable_updates',0)<0
+            or timing['updates']==0 and timing.get('prior_durable_updates',0)<=0
             or timing['updates']+timing.get('prior_durable_updates',0) != smoke['steps']
             or isinstance(wall,bool) or not isinstance(wall,(int,float)) or not math.isfinite(wall) or wall<=0):
         raise ValueError('one full original 20k collection/five-epoch training result required')
@@ -214,11 +215,28 @@ def gate_report(smoke, timing):
                 or {x['iteration']for x in smoke['collection_iterations']}!={0,1}
                 or [x['current']['iteration']for x in smoke['acting_snapshots']]!=[-1,-1]):
             raise ValueError('fixed two-cohort fill/overlap/drain evidence required')
-        datasets=timing.get('training_datasets',[])
-        if (len(datasets)!=2 or [x['iteration_ordinal']for x in datasets]!=[0,1]
+        recovered=bool(timing.get('prior_durable_updates',0)or smoke.get('recovered_diagnostic')or windows[0]['includes_interruption'])
+        datasets=timing.get('training_datasets',[]);budgets=smoke.get('cohort_training_budgets',[])
+        if (not recovered and len(datasets)!=2
                 or any(x['updates']<=0 or x['end_step']-x['start_step']!=x['updates']or x['row_visits']<=0 for x in datasets)
                 or sum(x['updates']for x in datasets)!=timing['updates']):
             raise ValueError('both original finite training budgets required')
+        if budgets:
+            if (len(budgets)!=2 or [x['iteration']for x in budgets]!=[0,1]or budgets[0]['start_step']!=0
+                    or budgets[0]['end_step']!=budgets[1]['start_step']or budgets[1]['end_step']!=smoke['steps']
+                    or any(x['end_step']<=x['start_step']or x['row_visits']<=0 for x in budgets)):
+                raise ValueError('original checkpoint-bound cohort budgets differ')
+        elif not recovered:raise ValueError('original checkpoint-bound cohort budgets required')
+        recorded=[]
+        for x in datasets:
+            value=dict(x)
+            ordinal=value.pop('iteration_ordinal',value.get('invocation_dataset_ordinal'))
+            value['invocation_dataset_ordinal']=ordinal
+            matches=[b for b in budgets if b['start_step']<=x['start_step']<x['end_step']<=b['end_step']]
+            if budgets and len(matches)!=1:raise ValueError('current timing cannot be joined to original cohort')
+            value['original_iteration']=matches[0]['iteration']if matches else None
+            value['timing_scope']='CURRENT_INVOCATION_ONLY; unavailable prefix components are not zero'if recovered else'COMPLETE_ORIGINAL_COHORT'
+            recorded.append(value)
         wall=windows[0]['wall_seconds']
         if isinstance(wall,bool)or not isinstance(wall,(int,float))or not math.isfinite(wall)or not 0<wall<=full_study_wall:
             raise ValueError('finite original pipeline window inside full study required')
@@ -238,12 +256,15 @@ def gate_report(smoke, timing):
         limitations='Nominal fixed20k numerator beside natural completions and all unknown dispositions; no strength claim. Host walls can overlap; sampled GPU kernel times are not extrapolated into a gate denominator.',
         original_pipeline=smoke)
     if lag:
+        report['training']=dict(timing,training_datasets=recorded,cohort_training_budgets=budgets,
+            prefix_component_times='UNAVAILABLE_NOT_ZERO'if recovered else'NO_PREFIX',
+            cohort_identity_scope='Original checkpoint step ranges, never fresh invocation ordinals; legacy recovered records without budgets remain explicitly unjoined.')
         report.update(gate_numerator_games=20000,iteration_policy_lag=1,full_study_wall_seconds=full_study_wall,
             full_study_declared_games_per_second=40000/full_study_wall,
             natural_complete_per_second=smoke['dispositions'].get('COMPLETE',0)/full_study_wall,
             timing_scope='Fixed window: collection1 and five-epoch training0/checkpoint/export concurrently; starts after collection0, ends when both stages finish. Full40k fill/drain and both training budgets reported alongside, never hidden.',
             full_study_timing_scope='Both complete20k cohorts and five epochs each, including fill/drain, all setup within original run and profiling. Final strict JAX reload separately reported.')
-        if windows[0]['includes_interruption']:report['threshold']='RECOVERED_DIAGNOSTIC_NO_AUTOMATIC_ADMISSION'
+        if recovered:report['threshold']='RECOVERED_DIAGNOSTIC_NO_AUTOMATIC_ADMISSION'
     return report
 
 
@@ -324,7 +345,7 @@ def instrument_training(run_root, resident_cache_bytes,*,concurrent_collection=F
             if not concurrent_collection:return original(*args,**kwargs,resident_cache_bytes=resident_cache_bytes)
             runtime,paths=args[:2];identity=tuple(map(str,paths))
             if identity not in datasets:
-                datasets[identity]=dict(iteration_ordinal=len(datasets),cache_paths=list(identity),updates=0,
+                datasets[identity]=dict(invocation_dataset_ordinal=len(datasets),cache_paths=list(identity),updates=0,
                     cache_prepare_seconds=0.,batch_slice_seconds=0.,tensor_conversion_seconds=0.,update_wall_seconds=0.,
                     start_step=runtime.steps,start_rows=runtime.rows)
             active_dataset=identity
@@ -390,7 +411,7 @@ def instrument_training(run_root, resident_cache_bytes,*,concurrent_collection=F
         state['gpu_sample_updates']=len(PROFILE_UPDATES)
         state['gpu_sample_update_ordinals']=list(PROFILE_UPDATES)
         state['gpu_kernel_seconds_per_sampled_update']=state['gpu_sample_categories']['kernel']['seconds']/len(PROFILE_UPDATES)
-        state['data_seconds_per_update']=(state['batch_slice_seconds']+state['tensor_conversion_seconds'])/state['updates']
+        state['data_seconds_per_update']=((state['batch_slice_seconds']+state['tensor_conversion_seconds'])/state['updates']if state['updates']else None)
         state['data_scope']='CURRENT INVOCATION updates only: CPU slice plus tensor conversion wall, including blocking transfers. Prefix component times unavailable; one-time resident preparation separate.'
         state['gpu_scope']='Only actual kernel trace-category durations on fixed updates8..11; memcpy/memset separate, no CPU annotation spans. Diagnostic sample, not full-iteration GPU total.'
         if concurrent_collection:state['gpu_scope']=attribution['scope']
@@ -444,7 +465,10 @@ def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,
             if raw_retention_every!=1 or transient_raw_root is not None:
                 options.update(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
             original=v5_device_smoke.execute(config,run_root,enable_smoke=True,**options)
+            if resume and timing['prior_durable_updates']is None:
+                timing['prior_durable_updates']=original['steps']
     if recovery is not None:
+        original['recovered_diagnostic']=True
         if timing['prior_durable_updates']!=recovery['prior_durable_updates']:
             raise ValueError('timed continuation differs from original durable checkpoint')
         original['current_attempt_run_wall_seconds']=original['original_run_wall_seconds']

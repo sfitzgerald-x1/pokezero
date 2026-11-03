@@ -119,18 +119,26 @@ def execute(config,run_root,*,enable_smoke=False,cache_workers=0,model_arm='B',t
         store=runs.Store(run_root,plan,resume=True);snapshot=store.matching('SNAPSHOT',iteration=iterations-1)
         if model_arm=='D':report['teacher']=teacher_table(store,run_root)
         if iteration_policy_lag:
-            cohort_timings=[]
+            cohort_timings=[];training_budgets=[];prior_steps=0;prior_rows=0
             for index in range(iterations):
                 start=next(e['time']for e in store.events if e['kind']=='COLLECTION_ITERATION_STARTED'and e['payload']['iteration']==index)
                 end=next(e['time']for e in store.events if e['kind']=='SNAPSHOT'and e['payload']['iteration']==index)
                 cohort_timings.append(dict(iteration=index,collection_start_epoch=start,snapshot_epoch=end,
                     collection_to_own_trained_snapshot_seconds=end-start))
+                final_snapshot=store.matching('SNAPSHOT',iteration=index)[0]
+                checkpoints=[x for x in store.matching('CHECKPOINT',iteration=index)if x['sha256']==final_snapshot['checkpoint_sha256']]
+                if len(checkpoints)!=1:raise ValueError('actual final checkpoint for each finite training cohort required')
+                checkpoint=checkpoints[0]
+                training_budgets.append(dict(iteration=index,start_step=prior_steps,end_step=checkpoint['steps'],
+                    row_visits=checkpoint['rows']-prior_rows))
+                prior_steps=checkpoint['steps'];prior_rows=checkpoint['rows']
             report.update(iteration_policy_lag=1,pipeline_iterations=iterations,
                 pipeline_windows=store.matching('POLICY_LAG_WINDOW_COMPLETE'),
                 collection_iterations=store.matching('COLLECTION_ITERATION_COMPLETE'),
                 phase_iteration_walls=store.matching('RUNTIME_PHASE'),
                 acting_snapshots=store.matching('ITERATION_ACTOR_BINDING'),
-                complete_iterations=store.matching('ITERATION_COMPLETE'),cohort_latencies=cohort_timings)
+                complete_iterations=store.matching('ITERATION_COMPLETE'),cohort_latencies=cohort_timings,
+                cohort_training_budgets=training_budgets)
         if len(snapshot)!=1:raise ValueError('one original final trained export required')
         from gpu_engine.v5_device_timing import aggregate
         report['collection_runtime']=aggregate(store.matching('DEVICE_RUNTIME_TIMING'),store.matching('GAME_END'))
