@@ -60,21 +60,33 @@ def kernel_profile(trainer, store, window, updates):
     with profile(activities=activities) as prof:
         report = trainer.train(store, window=window, max_updates=updates)
         synchronize()
+    # key_averages lists each op *and* the kernels it launched; count device events only.
+    from torch.autograd import DeviceType
     averages = prof.key_averages()
     attribute = 'self_device_time_total' if hasattr(averages[0], 'self_device_time_total') else 'self_cuda_time_total'
-    total_us = sum(getattr(item, attribute) for item in averages)
-    ranked = sorted(averages, key=lambda item: getattr(item, attribute), reverse=True)[:20]
+    kernels = [item for item in averages if item.device_type in (DeviceType.CUDA, getattr(DeviceType, 'PrivateUse1', None))]
+    total_us = sum(getattr(item, attribute) for item in kernels)
+    ranked = sorted(kernels, key=lambda item: getattr(item, attribute), reverse=True)[:25]
     top = [dict(name=item.key[:160], device_ms_per_update=getattr(item, attribute) / 1e3 / updates,
         calls_per_update=item.count / updates) for item in ranked]
-    return dict(updates=len(report['updates']), kernel_ms_per_update=total_us / 1e3 / updates, top=top)
+    operators = sorted((item for item in averages if item.device_type == DeviceType.CPU),
+        key=lambda item: getattr(item, attribute), reverse=True)[:15]
+    top_ops = [dict(name=item.key[:120], device_ms_per_update=getattr(item, attribute) / 1e3 / updates,
+        calls_per_update=item.count / updates) for item in operators]
+    return dict(updates=len(report['updates']), kernel_ms_per_update=total_us / 1e3 / updates,
+        kernel_launches_per_update=sum(item.count for item in kernels) / updates, top=top, top_operators=top_ops)
 
 
 def parity(store, model, loss, train, state, batch_size, device, emulate):
-    """Dropout-free loss/gradient parity on one real batch: original vs static eager vs compiled."""
+    """Dropout-free loss/gradient parity on one real batch: original vs static eager vs compiled.
+
+    With dropout 0 this runtime's SDPA dispatcher prefers cuDNN attention, which
+    fails here (sublibrary version mismatch). Training (dropout > 0) uses the
+    memory-efficient kernel, so parity pins that backend for all three paths.
+    """
     import torch
+    from torch.nn.attention import SDPBackend, sdpa_kernel
     from pokezero import v2_trainer as v2
-    from pokezero.v5_loss import v5_loss
-    from pokezero.v5_model import forward_v5
     torch._dynamo.reset()
     quiet = replace(model, dropout=0.)
     runtime = v2.create(quiet, loss, replace(train, batch_size=batch_size), enable_v5=True, device=device)
@@ -85,14 +97,9 @@ def parity(store, model, loss, train, state, batch_size, device, emulate):
     results = {}
     for name in ('original', 'static', 'compiled'):
         runtime.model.zero_grad(set_to_none=True)
-        if name == 'original':
-            tensors = dict(batch, **store.bindings, terminal_status=store.terminal_status[:batch_size])
-            with v2._autocast(torch, device, train.precision):
-                total, _ = v5_loss(forward_v5(runtime.model, tensors, include_auxiliary=quiet.treatment), tensors, quiet, loss)
-        else:
-            function = v2._static_forward_loss if name == 'static' else compiled
-            total, _, _ = function(runtime.model, batch, quiet, loss, train.precision, device, experts, counts)
-        total.backward()
+        with sdpa_kernel([SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]):
+            total = _parity_loss(name, runtime, batch, store, quiet, loss, train, device, experts, counts, compiled, batch_size)
+            total.backward()
         results[name] = (float(total), torch.cat([p.grad.reshape(-1).float() for p in runtime.model.parameters()]))
     reference_loss, reference = results['original']
     scale = reference.norm().item()
@@ -103,7 +110,21 @@ def parity(store, model, loss, train, state, batch_size, device, emulate):
             gradient_cosine=torch.nn.functional.cosine_similarity(gradient, reference, dim=0).item())
     del runtime, compiled
     torch._dynamo.reset()
-    return dict(batch_size=batch_size, dropout_disabled_for_parity=True, gradient_norm=scale, **report)
+    return dict(batch_size=batch_size, dropout_disabled_for_parity=True, sdpa_backends=['EFFICIENT_ATTENTION', 'MATH'],
+        gradient_norm=scale, **report)
+
+
+def _parity_loss(name, runtime, batch, store, quiet, loss, train, device, experts, counts, compiled, batch_size):
+    import torch
+    from pokezero import v2_trainer as v2
+    from pokezero.v5_loss import v5_loss
+    from pokezero.v5_model import forward_v5
+    if name == 'original':
+        tensors = dict(batch, **store.bindings, terminal_status=store.terminal_status[:batch_size])
+        with v2._autocast(torch, device, train.precision):
+            return v5_loss(forward_v5(runtime.model, tensors, include_auxiliary=quiet.treatment), tensors, quiet, loss)[0]
+    function = v2._static_forward_loss if name == 'static' else compiled
+    return function(runtime.model, batch, quiet, loss, train.precision, device, experts, counts)[0]
 
 
 def measure(args, store, model, loss, train, state, batch_size, mode, window):
