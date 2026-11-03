@@ -71,6 +71,22 @@ def _source_move(name):
     return 'hiddenpower' if value.startswith('hiddenpower') else canonical_move_id(value)
 
 
+def _physical_protect_counter(successes):
+    """B2 public success streak -> engine's next-attempt denominator."""
+    streak = int(successes)
+    if not 0 <= streak <= showdown._STALL_COUNTER_CAP:
+        raise Refusal('PUBLIC_PROTECT_STREAK_INVALID')
+    return 0 if streak == 0 else 1 << min(streak, 3)
+
+
+def _physical_toxic_counter(upcoming_stage):
+    """B2 upcoming display stage -> completed residuals, with reset/cap."""
+    stage = int(upcoming_stage)
+    if not 0 <= stage <= 16:
+        raise Refusal('PUBLIC_TOXIC_STAGE_INVALID')
+    return max(0, min(15, stage - 1))
+
+
 def _exact_own(request, state, catalog, source, metadata, owner):
     """Copy literal request fields, checking static latent IVs against own stats.
 
@@ -275,8 +291,8 @@ def from_b2(adapter, request, source, metadata, *, address):
         raise Refusal('OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE', ','.join(own_vols))
     own['boosts'][own_slot] = boosts[0,owner,pub_slot]
     own['active_turns'][()] = max(0,int(mon_features['turns_active'][0,owner,pub_slot])-1)
-    own['protect_counter'][own_slot] = mon_features['stall_counter'][0,owner,pub_slot]
-    own['status_counter'][own_slot] = mon_features['toxic_stage'][0,owner,pub_slot] if own['status'][own_slot] == 4 else 0
+    own['protect_counter'][own_slot] = _physical_protect_counter(mon_features['stall_counter'][0,owner,pub_slot])
+    own['status_counter'][own_slot] = _physical_toxic_counter(mon_features['toxic_stage'][0,owner,pub_slot]) if own['status'][own_slot] == 4 else 0
     own['ability'][own_slot] = running[0,owner,pub_slot] or own['ability'][own_slot]
     for name, bit in (('leechseed',LEECH_SEED),('ingrain',ROOTED)):
         if name in own_vols:own['volatile'][own_slot] |= bit
@@ -378,6 +394,35 @@ class WorldSet:
         return len(self.worlds)==self.requested_worlds and all(w.state is not None for w in self.worlds)
 
 
+def _materialize_phase_d(root, start, tables, recipe):
+    """Convert only Phase D's sampled foe physical units after original mapping.
+
+    Keep the shared D materializer and every public tracker/feature untouched.
+    The owner's detached physical counters were converted in from_b2 already.
+    """
+    world = materializer.materialize(root, start, tables, recipe)
+    if world.state is None:
+        return world
+    try:
+        foe = 1 - root.address.owner
+        state = world.state
+        features = root.view['mon_features']
+        counters = state.status_counter
+        protect = state.protect_counter
+        active = int(state.active[0, foe])
+        for physical, (public_slot, _) in enumerate(start.revealed_source_indices):
+            if int(state.status[0, foe, physical]) == 4:
+                counters = counters.at[0, foe, physical].set(
+                    _physical_toxic_counter(features['toxic_stage'][0, public_slot]))
+            if physical == active:
+                protect = protect.at[0, foe, physical].set(
+                    _physical_protect_counter(features['stall_counter'][0, public_slot]))
+        return replace(world, state=state._replace(status_counter=counters, protect_counter=protect))
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        return replace(world, state=None, public=None, refusals=(str(error),),
+            reply_private_history_available=False)
+
+
 def sample_worlds(root, source, tables, *, count, seed):
     """16/32 equally weighted original-public-source draws, never rerolled.
 
@@ -411,6 +456,6 @@ def sample_worlds(root, source, tables, *, count, seed):
                 if hidden is None:failure='original hidden species/variant source unavailable'
                 else:fixtures.extend(hidden)
         start=original.Start(0,world_seed,None if failure else tuple(fixtures),tuple(indices),() if failure is None else (failure,))
-        world=materializer.materialize(root,start,tables,recipe)
+        world=_materialize_phase_d(root,start,tables,recipe)
         worlds.append(replace(world,index=index))
     return WorldSet(root,tuple(worlds),tuple(seeds),count)
