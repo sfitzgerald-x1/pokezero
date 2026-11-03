@@ -75,7 +75,13 @@ def _source_move(name):
 def _own_move(names,name,hp_move):
     # map_spec uses this same device representation: the move ID carries the
     # type, while hidden_power_type/power hold the exact IV-derived facts.
-    value=canonical_move_id(hp_move)if _source_move(name)=='hiddenpower'else _source_move(name)
+    if _source_move(name)=='hiddenpower':
+        value=canonical_move_id(hp_move);literal=canonical_move_id(name)
+        if (not value.startswith('hiddenpower') or value=='hiddenpower'
+                or literal not in ('hiddenpower',value)
+                or (normalize_id(name)!=literal and normalize_id(name)!=normalize_id(hp_move))):
+            raise Refusal('OWN_HIDDEN_POWER_LITERAL_DIFFERS_FROM_CHECKED_IVS',normalize_id(name))
+    else:value=_source_move(name)
     return _lookup(names,value)
 
 
