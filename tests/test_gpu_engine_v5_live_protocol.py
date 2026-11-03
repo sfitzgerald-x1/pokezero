@@ -6,6 +6,7 @@ policy head are faked; original public fold/own request/encoder/append execute.
 from dataclasses import replace
 import json
 import random
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -159,7 +160,10 @@ class V5LiveProtocolTests(unittest.TestCase):
                     expected_label_vocabulary_sha256=self.config.label_vocabulary.sha256,enable_v5=True)
 
     def test_explicit_greedy_raw_mode_preserves_rng_and_bound_callback_cannot_be_replaced(self):
-        with jax.default_matmul_precision('highest'):
+        # This checks selection and callback integrity, not CPU compilation
+        # latency. The separate deadline test advances its clock past60s and
+        # checks fold/forward refusal. Keep the real factory limit unchanged.
+        with jax.default_matmul_precision('highest'),patch.object(p,'time',SimpleNamespace(monotonic=lambda:100.)):
             factory=self.make_factory(deterministic=True,compute_dtype='bfloat16')
             actor=self.actor(stream=51,battle='greedy',factory=factory);self.feed(actor)
             rng=random.Random(12);before=rng.getstate()
