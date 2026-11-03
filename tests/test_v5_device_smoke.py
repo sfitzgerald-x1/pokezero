@@ -28,6 +28,28 @@ class DeviceSmokeTests(unittest.TestCase):
         for key,value in [('games',19999),('model_seed',0),('batch_rows',4096)]:
             with self.assertRaises(ValueError):smoke.build_plan(dict(bank(),**{key:value}),fixtures.profile(),fixtures.vocabulary(),fixtures.category())
 
+    def test_all_arm_shapes_keep_same20k_and_original_training_recipe(self):
+        for arm in ('A','B','D'):
+            plan=smoke.build_plan(bank(),fixtures.profile(),fixtures.vocabulary(),fixtures.category(),arm=arm)
+            self.assertEqual(plan.model.arm,arm);self.assertEqual(plan.loss.arm,arm)
+            self.assertEqual(len(plan.games),20000);self.assertEqual(plan.train.epochs,5)
+        with self.assertRaises(ValueError):smoke.build_plan(bank(),fixtures.profile(),fixtures.vocabulary(),fixtures.category(),arm='C')
+
+    def test_teacher_frame_table_retains_refused_selected_denominator(self):
+        import json
+        from types import SimpleNamespace
+        one=dict(requested=100,selected=25,labeled=20,refused=5,unselected=75)
+        two=dict(requested=80,selected=20,labeled=14,refused=6,unselected=60)
+        rows=[dict(strategy='FRAME_BATCH',by_frame={'0':one,'7':two},batch_timing_totals={'roots':45,'compile_seconds':12.})]*2
+        with tempfile.TemporaryDirectory()as folder:
+            result=smoke.teacher_table(SimpleNamespace(matching=lambda kind:rows),folder)
+            table=json.loads(Path(result['path']).read_text())
+            self.assertEqual(table['rows'][1],[7,160,40,28,12,120,.3])
+            self.assertEqual(result['totals']['selected'],90);self.assertEqual(result['totals']['refused'],22)
+            self.assertEqual(result['refused_share_selected'],22/90);self.assertEqual(result['batch_timing_totals']['compile_seconds'],24)
+            bad=dict(rows[0],by_frame={'0':dict(one,selected=24)})
+            with self.assertRaises(ValueError):smoke.teacher_table(SimpleNamespace(matching=lambda kind:[bad]),folder)
+
     def test_original_run_timing_does_not_change_training_cursor_or_exports(self):
         from tests import test_v5_run as fixture
         from pokezero import v5_run as runs

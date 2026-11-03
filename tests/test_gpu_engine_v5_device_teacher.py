@@ -109,6 +109,29 @@ class DeviceTeacherTests(unittest.TestCase):
             output=provider.label_chunk(raw.roots,raw.frames._replace(trainable=trainable,policy_valid=valid),bank,params)
         self.assertTrue(all(x['status']=='REFUSED'for x in output));self.assertTrue(all(x['diagnostics']is None for x in output))
 
+    def test_frame_batch_groups_roots_without_changing_selection_bindings_or_records(self):
+        raw,bank=inert_d();recipe,items=records(raw,bank);params=tuple({'inert':i}for i in range(4))
+        provider=t.Provider.__new__(t.Provider);provider.prepared=NS(source_sha256=bank.bindings.source_sha256)
+        provider.plan=NS(model=replace(bank_fixture.fixture()[3],arm='D'));provider.recipe=recipe;provider.declaration_sha256=bank.bindings.declaration_sha256
+        provider.source=object();provider.materializer=object();provider.forwards={};provider.frame_batch=True
+        calls=[]
+        def price(requests,materializer,r,p):
+            calls.append(tuple(x.plans.root.address for x in requests));self.assertIs(p,params)
+            result=[]
+            for request in requests:
+                item=next(x for x in items if x['address']==asdict(request.plans.root.address))
+                self.assertEqual(request.root_inputs['numeric_features'].shape,(1,1,29,132))
+                result.append(NS(status=item['status'],reason=item['refusal'],reduction=NS(improvement=None if item['improvement']is None else c.RootImprovement(**item['improvement'])),world_reports=(),missing_worlds=0,actual_teacher_calls={},reply_input_approximation=()))
+            return result
+        provider.frame_pricer=NS(price=price,last_timing=dict(roots=2,world_prepare_seconds=1.,batch_pack_and_device_seconds=2.,device_invocations=1,lower_seconds=0.,compile_seconds=0.,device_seconds=1.))
+        provider.reset_metrics()
+        with patch.object(t.worlds,'detach_root',side_effect=lambda ctx,src,*,row,owner,**kw:NS(address=c.DecisionAddress(int(ctx.streams[row]),int(ctx.frames[row]),owner))),patch.object(t.worlds,'plan_starts',side_effect=lambda root,*a:NS(root=root)):
+            output=provider.label_chunk(raw.roots,raw.frames,bank,params)
+        self.assertEqual([len(x)for x in calls],[2,2]);self.assertEqual([r['status']for r in output],[r['status']for r in items])
+        metrics=provider.metrics();self.assertEqual(metrics['by_frame']['0']['refused_share_selected'],.5)
+        self.assertEqual(metrics['batch_timing_totals']['device_invocations'],2)
+        provider.reset_metrics();self.assertEqual(provider.metrics()['by_frame'],{})
+
     def test_spool_original_cache_complete_capped_targets_once_and_tamper_refusal(self):
         raw,bank=inert_d();recipe,items=records(raw,bank)
         items[-1].update(status='LABELED',refusal=None,improvement=copy.deepcopy(items[0]['improvement']))

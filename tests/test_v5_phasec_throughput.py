@@ -136,6 +136,13 @@ class PhaseCThroughputTests(unittest.TestCase):
             self.assertEqual(report['dispositions']['CAPPED'],20)
             self.assertEqual(original,saved)
 
+    def test_distinct_shape_and_d_slower_admission_keep_full_iteration_wall(self):
+        for wall,status in ((1000,'D_GE5'),(4000,'D_GE5'),(4001,'D_GE1_LT5'),(20000,'D_GE1_LT5'),(20001,'D_LT1_HOLD')):
+            r=ct.gate_report(dict(result(wall),model_arm='D'),{'updates':20100})
+            self.assertEqual(r['threshold'],status);self.assertEqual(r['model_arm'],'D')
+            self.assertEqual(r['target20_met'],wall<=1000)
+        self.assertEqual(ct.gate_report(dict(result(4000),model_arm='A'),{'updates':20100})['threshold'],'FLOOR5_MET_TARGET20_MISSED')
+
     def test_partial_iterations_or_bad_wall_never_receive_an_admission(self):
         for change in ({'declared_games':19999},{'status':'STOPPED'}, {'steps':0},
                 {'jax_reload':'UNAVAILABLE'},*({'original_run_wall_seconds':v}for v in (0,-1,True,float('nan'),float('inf')))):

@@ -188,11 +188,14 @@ def gate_report(smoke, timing):
             or isinstance(wall,bool) or not isinstance(wall,(int,float)) or not math.isfinite(wall) or wall<=0):
         raise ValueError('one full original 20k collection/five-epoch training result required')
     rate = 20000/wall
-    return dict(schema=SCHEMA,declared_games=20000,iteration_wall_seconds=wall,
+    arm=smoke.get('model_arm','B')
+    threshold=('D_GE5'if rate>=5 else'D_GE1_LT5'if rate>=1 else'D_LT1_HOLD')if arm=='D'else(
+        'TARGET20_MET'if rate>=20 else'FLOOR5_MET_TARGET20_MISSED'if rate>=5 else'BELOW_BINDING5')
+    return dict(schema=SCHEMA,model_arm=arm,declared_games=20000,iteration_wall_seconds=wall,
         declared_games_per_second=rate,
         natural_complete_per_second=smoke['dispositions'].get('COMPLETE',0)/wall,
         dispositions=smoke['dispositions'],
-        threshold='TARGET20_MET' if rate>=20 else 'FLOOR5_MET_TARGET20_MISSED' if rate>=5 else 'BELOW_BINDING5',
+        threshold=threshold,target20_met=rate>=20,
         kernel_and_collection=smoke['collection_runtime'],
         host_phase_wall_seconds=smoke['original_phase_wall_seconds'],training=timing,
         timing_scope='Original run wall, including collection compile, cache I/O, five epochs, checkpoint and export. Preparation and final strict JAX reload separately reported. Instrumentation overhead retained.',
@@ -297,14 +300,17 @@ def collector_banks(events):
     return banks
 
 
-def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0):
+def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0,model_arm='B',teacher_frame_batch=False):
     if enable_ct is not True:
         raise ValueError('explicit finite C-T execution required')
+    if model_arm=='D'and teacher_frame_batch is not True:raise ValueError('D-T requires the batched teacher route')
     from contextlib import nullcontext
     from pokezero import v5_device_smoke
     with (continue_pretraining_iteration(run_root)if resume else nullcontext(None))as recovery:
         with instrument_training(run_root,resident_cache_bytes) as timing:
             options={}if cache_workers==0 else dict(cache_workers=cache_workers)
+            if model_arm!='B':options['model_arm']=model_arm
+            if teacher_frame_batch:options['teacher_frame_batch']=True
             original=v5_device_smoke.execute(config,run_root,enable_smoke=True,**options)
     if recovery is not None:
         original['current_attempt_run_wall_seconds']=original['original_run_wall_seconds']
@@ -340,9 +346,11 @@ def main(argv=None):
     parser.add_argument('--enable-ct',action='store_true')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--cache-workers',type=int,default=0)
+    parser.add_argument('--model-arm',choices=('A','B','D'),default='B')
+    parser.add_argument('--teacher-frame-batch',action='store_true')
     args=parser.parse_args(argv)
     config=v5_worker._record(dict(path=args.config,sha256=args.expected_config_sha256))
-    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers)
+    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers,model_arm=args.model_arm,teacher_frame_batch=args.teacher_frame_batch)
     print(json.dumps(dict(status=report['threshold'],result=str(Path(args.run_root)/'ct-result.json'))))
     return 0
 

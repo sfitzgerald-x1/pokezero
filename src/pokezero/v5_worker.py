@@ -321,7 +321,7 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
     return prepared,pool,public,contract
 
 
-def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False,device_teacher=False,cache_workers=0):
+def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False):
     from . import v5_run as run,v5_phasec as phase
     _absolute(str(run_root))
     if type(resume) is not bool:raise ValueError('explicit resume choice required')
@@ -337,6 +337,7 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     prepared,pool,public,contract=prepare_device_runtime(inputs) if device_rollout else prepare_runtime(inputs)
     options=dict(device_rollout=True) if device_rollout else {}
     if cache_workers:options['cache_workers']=cache_workers
+    if teacher_frame_batch:options['teacher_frame_batch']=True
     if device_teacher:options['device_teacher']=True
     backend=phase.build_backend(inputs.plan,prepared,pool,public_config=public,actor_contract=contract,gender_policy=inputs.gender_policy,**options)
     return run.run(inputs.plan,run_root,backend=backend,resume=resume,enable_v5=True,evaluation_hook=evaluation_hook)
@@ -351,6 +352,7 @@ def main(argv=None,*,evaluation_hook=None):
     parser.add_argument('--resume',action='store_true');parser.add_argument('--device-rollout',action='store_true');parser.add_argument('--device-teacher',action='store_true')
     parser.add_argument('--external-evaluation',action='store_true',help='Publish frozen CPU panel requests and continue training')
     parser.add_argument('--cache-workers',type=int,default=0)
+    parser.add_argument('--teacher-frame-batch',action='store_true')
     args=parser.parse_args(argv)
     inputs=load_inputs(declaration=args.declaration,expected_declaration_sha256=args.expected_declaration_sha256,
         runtime=args.runtime,expected_runtime_sha256=args.expected_runtime_sha256,arm=args.arm,enable_v5=args.enable_v5)
@@ -374,6 +376,7 @@ def main(argv=None,*,evaluation_hook=None):
         return 0
     options=dict(device_rollout=True) if args.device_rollout else {}
     if args.cache_workers:options['cache_workers']=args.cache_workers
+    if args.teacher_frame_batch:options['teacher_frame_batch']=True
     if args.device_teacher:options['device_teacher']=True
     result=execute(inputs,_absolute(args.run_root),resume=args.resume,evaluation_hook=evaluation_hook,**options)
     print(json.dumps(dict(status=result['status'],steps=result.get('steps'),rows=result.get('rows'),

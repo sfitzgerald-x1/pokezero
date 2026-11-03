@@ -155,6 +155,7 @@ class RuntimeBackend:
 
     def collect(self,prepared,store,on_end,check_progress):
         plan=prepared['plan'];batch=prepared['batch'];self.check_plan(plan);check_progress()
+        if self.teacher is not None:self.teacher.reset_metrics()
         started=time.monotonic();wall_started=time.perf_counter()
         self._phase={key:0. for key in ('initializer_lower_seconds','initializer_compile_seconds','collector_lower_seconds','collector_compile_seconds',
             'constructor_wall_seconds','kernel_blocked_seconds','teacher_wall_seconds','host_transfer_wall_seconds','spool_write_wall_seconds','game_cache_wall_seconds','cache_merge_wall_seconds')}
@@ -203,12 +204,15 @@ class RuntimeBackend:
             self._phase['host_transfer_wall_seconds']+=time.perf_counter()-clock
             if self.measure_runtime:counts.add(host.frames.requested)
             clock=time.perf_counter()
+            if self.teacher is not None:self.teacher.reset_metrics()
             labels=None if self.teacher is None else self.teacher.label_chunk(device.roots,host.frames,bank,prepared['params'])
             self._phase['teacher_wall_seconds']+=time.perf_counter()-clock
             del device
             clock=time.perf_counter()
             if self.teacher is None:spool.append(host)
-            else:spool.append(host,teacher_records=labels)
+            else:
+                spool.append(host,teacher_records=labels)
+                store.emit('DEVICE_TEACHER_FRAME_COUNTS',bank_streams=list(bank.streams),**self.teacher.metrics())
             self._phase['spool_write_wall_seconds']+=time.perf_counter()-clock
             for row,game in enumerate(batch.games):
                 status=int(host.carry.status[row])
