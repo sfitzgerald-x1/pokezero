@@ -198,6 +198,18 @@ def _checked_evaluation_progress(payload,expected,seen):
 
 
 @dataclass(frozen=True)
+class EvaluationDispatch:
+    """An immutable CPU request, explicitly not a scientific panel outcome."""
+    request:str
+    request_sha256:str
+
+    def __post_init__(self):
+        if type(self.request) is not str or not self.request:
+            raise ValueError('owned CPU evaluation request path required')
+        c._binding(self.request_sha256)
+
+
+@dataclass(frozen=True)
 class EvaluationOutcome:
     """An owned immutable report receipt, or an explicit unknown disposition."""
     status:str
@@ -459,10 +471,22 @@ def _checked_evaluation_start(store,event):
         raise ValueError('original accepted evaluation run declaration required')
     milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
     for earlier in (i for i in milestones if i<iteration):
-        if not any(e['kind'] in ('EVALUATION_RESULT','EVALUATION_UNKNOWN') and e['payload'].get('iteration')==earlier for e in prior):
+        if not any(e['kind'] in ('EVALUATION_RESULT','EVALUATION_UNKNOWN','EVALUATION_DISPATCHED') and e['payload'].get('iteration')==earlier for e in prior):
             raise ValueError('evaluation milestone order differs')
     _evaluation_request(store,snapshot)
     return expected
+
+
+def _checked_evaluation_dispatch(store,snapshot,dispatch):
+    if type(dispatch) is not EvaluationDispatch:
+        raise ValueError('typed original CPU evaluation dispatch required')
+    path=store.resolve(dispatch.request,dispatch.request_sha256)
+    from .v5_deferred_evaluation import checked_dispatch_document
+    request=_evaluation_request(store,snapshot)
+    key=_sha(_evaluation_binding(store,snapshot))
+    prior=tuple(EvaluationCompletion(**x['completion']) for x in store.matching('EVALUATION_GAME_END',evaluation_sha256=key))
+    checked_dispatch_document(json.loads(path.read_bytes()),replace(request,prior_completions=prior))
+    return dispatch
 
 
 def _evaluation_history(store):
@@ -471,7 +495,7 @@ def _evaluation_history(store):
     if store.matching('RUN_STARTED')!=[dict(declaration_sha256=declaration_sha256)]:
         raise ValueError('original accepted run declaration binding required')
     milestones=evaluation_milestones(sum(len(b.games) for b in batches) for batches in store.plan.iterations)
-    starts={};closed={};published={};completed={}
+    starts={};closed={};published={};completed={};dispatched=set()
     for event in store.events:
         if event['kind']=='SNAPSHOT':
             snapshot=Snapshot(**event['payload'])
@@ -479,9 +503,9 @@ def _evaluation_history(store):
             published[snapshot.iteration]=snapshot
         if event['kind']=='ITERATION_COMPLETE' and event['payload'].get('iteration') in milestones:
             iteration=event['payload']['iteration']
-            if iteration not in published or _sha(_evaluation_binding(store,published[iteration])) not in closed:
+            if iteration not in published or _sha(_evaluation_binding(store,published[iteration])) not in set(closed)|dispatched:
                 raise ValueError('milestone iteration completed without an attempted evaluation disposition')
-        if event['kind'] not in ('EVALUATION_STARTED','EVALUATION_RESUMED','EVALUATION_RESULT','EVALUATION_UNKNOWN','EVALUATION_GAME_END'):continue
+        if event['kind'] not in ('EVALUATION_STARTED','EVALUATION_RESUMED','EVALUATION_RESULT','EVALUATION_UNKNOWN','EVALUATION_GAME_END','EVALUATION_DISPATCHED'):continue
         if store.plan.evaluation is None:raise ValueError('evaluation journal requires original opted-in declaration')
         payload=event['payload'];iteration=payload.get('iteration')
         if iteration not in published:raise ValueError('evaluation requires one original published snapshot')
@@ -495,15 +519,20 @@ def _evaluation_history(store):
             starts[key]=_checked_evaluation_start(store,event)
         elif event['kind']=='EVALUATION_RESUMED':
             if (key not in starts or payload!=starts[key]
-                    or key in closed and closed[key].status!='UNKNOWN'):
+                    or key in dispatched or key in closed and closed[key].status!='UNKNOWN'):
                 raise ValueError('only an unfinished original evaluation can resume')
             closed.pop(key,None)
+        elif event['kind']=='EVALUATION_DISPATCHED':
+            if key not in starts or key in closed or key in dispatched or set(payload)!=set(expected)|{'dispatch'}:
+                raise ValueError('one original durable CPU panel dispatch required')
+            _checked_evaluation_dispatch(store,snapshot,EvaluationDispatch(**payload['dispatch']))
+            dispatched.add(key)
         elif event['kind']=='EVALUATION_GAME_END':
-            if key not in starts or key in closed:
+            if key not in starts or key in closed or key in dispatched:
                 raise ValueError('evaluation completion requires open original attempt')
             _checked_evaluation_progress(payload,starts[key],completed.setdefault(key,set()))
         else:
-            if key not in starts or key in closed or set(payload)!=set(expected)|{'outcome'}:
+            if key not in starts or key in closed or key in dispatched or set(payload)!=set(expected)|{'outcome'}:
                 raise ValueError('evaluation result requires one durable original attempt')
             outcome=EvaluationOutcome(**payload['outcome'])
             if event['kind']!='EVALUATION_'+outcome.status:raise ValueError('evaluation disposition differs')
@@ -513,11 +542,16 @@ def _evaluation_history(store):
 
 
 def _evaluate_snapshot(store,snapshot,hook):
-    """Resume the same panel, with idempotent completed-cell delivery only."""
+    """Accept a result or durable external dispatch; only RESULT is a score."""
     binding=_evaluation_binding(store,snapshot);key=_sha(binding)
     outcomes=[e['payload']['outcome']for e in store.events
         if e['kind'] in ('EVALUATION_RESULT','EVALUATION_UNKNOWN') and e['payload'].get('evaluation_sha256')==key]
     if outcomes and outcomes[-1]['status']=='RESULT':return True
+    queued=store.matching('EVALUATION_DISPATCHED',evaluation_sha256=key)
+    if queued:
+        if len(queued)!=1:raise ValueError('CPU panel dispatch replayed')
+        _checked_evaluation_dispatch(store,snapshot,EvaluationDispatch(**queued[0]['dispatch']))
+        return True
     request=_evaluation_request(store,snapshot)
     bound=dict(**binding,evaluation_sha256=key)
     store.emit('EVALUATION_RESUMED' if store.matching('EVALUATION_STARTED',evaluation_sha256=key) else 'EVALUATION_STARTED',**bound)
@@ -539,14 +573,18 @@ def _evaluate_snapshot(store,snapshot,hook):
     request=replace(request,progress_callback=actual_completion,prior_completions=tuple(completed.values()))
     try:
         outcome=hook(request)
-        if type(outcome) is not EvaluationOutcome:raise ValueError('typed evaluation outcome required')
+        if type(outcome) not in (EvaluationOutcome,EvaluationDispatch):raise ValueError('typed evaluation outcome or dispatch required')
         # The callback cannot replace its published input or return a foreign
         # output receipt. Snapshot metadata itself stays the original object.
         if _evaluation_binding(store,snapshot)!=binding:raise ValueError('evaluation input metadata changed during callback')
         _evaluation_request(store,snapshot)
-        if outcome.report is not None:store.resolve(outcome.report,outcome.report_sha256)
+        if type(outcome) is EvaluationDispatch:_checked_evaluation_dispatch(store,snapshot,outcome)
+        elif outcome.report is not None:store.resolve(outcome.report,outcome.report_sha256)
     except Exception as error:
         outcome=EvaluationOutcome('UNKNOWN',reason=type(error).__name__+': '+str(error))
+    if type(outcome) is EvaluationDispatch:
+        store.emit('EVALUATION_DISPATCHED',**bound,dispatch=asdict(outcome))
+        return True
     store.emit('EVALUATION_'+outcome.status,**bound,outcome=asdict(outcome))
     return outcome.status=='RESULT'
 
@@ -728,7 +766,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
     """
     started=time.monotonic();last=started;longest=0.;seen=0;previous=None;phase='PREPARE';last_steps=-1
     evaluation_store=Store.__new__(Store);evaluation_store.path=Path(path);evaluation_store.plan=plan;evaluation_store.events=[]
-    evaluation_starts={};evaluation_closed={};evaluation_cells={}
+    evaluation_starts={};evaluation_closed={};evaluation_cells={};evaluation_dispatched=set()
     milestones=(evaluation_milestones(sum(len(b.games) for b in batches) for batches in plan.iterations)
         if plan.evaluation is not None else {})
     process=popen(command,start_new_session=True)
@@ -746,7 +784,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
                     if type(payload) is not dict:raise ValueError('original journal payload required')
                     kind=event['kind']
                     if kind in ('RUN_STARTED','CHECKPOINT','SNAPSHOT','EVALUATION_STARTED','EVALUATION_RESUMED','EVALUATION_GAME_END',
-                            'EVALUATION_RESULT','EVALUATION_UNKNOWN','ITERATION_COMPLETE'):
+                            'EVALUATION_RESULT','EVALUATION_UNKNOWN','EVALUATION_DISPATCHED','ITERATION_COMPLETE'):
                         evaluation_store.events.append(event)
                     if kind=='EVALUATION_STARTED':
                         key=payload.get('evaluation_sha256')
@@ -755,19 +793,27 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
                     elif kind=='EVALUATION_RESUMED':
                         key=payload.get('evaluation_sha256')
                         if (key not in evaluation_starts or payload!=evaluation_starts[key]
-                                or key in evaluation_closed and evaluation_closed[key]!='UNKNOWN'):
+                                or key in evaluation_dispatched or key in evaluation_closed and evaluation_closed[key]!='UNKNOWN'):
                             raise ValueError('only an unfinished original evaluation can resume')
                         evaluation_closed.pop(key,None)
                         last=time.monotonic()
+                    elif kind=='EVALUATION_DISPATCHED':
+                        key=payload.get('evaluation_sha256');expected=evaluation_starts.get(key)
+                        if (expected is None or key in evaluation_closed or key in evaluation_dispatched
+                                or set(payload)!=set(expected)|{'dispatch'}
+                                or any(payload[k]!=v for k,v in expected.items())):
+                            raise ValueError('one original durable CPU panel dispatch required')
+                        _checked_evaluation_dispatch(evaluation_store,Snapshot(**payload['snapshot']),EvaluationDispatch(**payload['dispatch']))
+                        evaluation_dispatched.add(key)
                     elif kind=='EVALUATION_GAME_END':
                         key=payload.get('evaluation_sha256')
-                        if key not in evaluation_starts or key in evaluation_closed:
+                        if key not in evaluation_starts or key in evaluation_closed or key in evaluation_dispatched:
                             raise ValueError('evaluation progress requires an open original milestone')
                         receipt=_checked_evaluation_progress(payload,evaluation_starts[key],evaluation_cells.setdefault(key,set()))
                         longest=max(longest,receipt.duration_seconds);last=time.monotonic()
                     elif kind in ('EVALUATION_RESULT','EVALUATION_UNKNOWN'):
                         key=payload.get('evaluation_sha256');expected=evaluation_starts.get(key)
-                        if (expected is None or key in evaluation_closed or set(payload)!=set(expected)|{'outcome'}
+                        if (expected is None or key in evaluation_closed or key in evaluation_dispatched or set(payload)!=set(expected)|{'outcome'}
                                 or any(payload[k]!=v for k,v in expected.items())):
                             raise ValueError('evaluation disposition requires one original open milestone')
                         outcome=EvaluationOutcome(**payload['outcome'])
@@ -775,7 +821,7 @@ def supervise_owned(command,*,plan,path,popen=subprocess.Popen,sleep=time.sleep)
                         if outcome.report is not None:evaluation_store.resolve(outcome.report,outcome.report_sha256)
                         evaluation_closed[key]=outcome.status
                     elif kind=='ITERATION_COMPLETE' and payload.get('iteration') in milestones:
-                        if not any(key in evaluation_closed and binding['iteration']==payload['iteration']
+                        if not any((key in evaluation_closed or key in evaluation_dispatched) and binding['iteration']==payload['iteration']
                                 for key,binding in evaluation_starts.items()):
                             raise ValueError('milestone iteration completed without original evaluation disposition')
                     if kind=='GAME_END' and payload['status']=='COMPLETE':
