@@ -134,21 +134,28 @@ def recover_published_parts(store, plan):
 
 
 @contextmanager
-def continue_pretraining_iteration(run_root):
-    """Original resume on the original backend source, before any update.
+def continue_pretraining_iteration(run_root,*,allow_trained_prefix=False):
+    """Original resume; trained prefixes require explicit missing-timing scope.
 
     This controller may be copied outside that clean checkout. Its reporting
     compatibility never changes the engine/source binding of existing caches.
     """
     from pokezero import v5_run as runs
+    if type(allow_trained_prefix)is not bool:raise ValueError('explicit trained-prefix reporting choice required')
     original=runs.run;state={}
     def continued(plan,path,**kwargs):
         if Path(path).resolve()!=Path(run_root).resolve() or 'resume'in kwargs:
             raise ValueError('one original C-T continuation path required')
         store=runs.Store(path,plan,resume=True)
-        if store.matching('TRAIN_PROGRESS') or store.matching('ITERATION_COMPLETE') or any(
-                p['steps']!=0 for p in store.matching('CHECKPOINT')):
+        checkpoints=store.matching('CHECKPOINT');progress=store.matching('TRAIN_PROGRESS')
+        if store.matching('ITERATION_COMPLETE'):raise ValueError('completed original iteration cannot replay')
+        if not allow_trained_prefix and(progress or any(p['steps']!=0 for p in checkpoints)):
             raise ValueError('C-T pretraining recovery cannot erase prior update timings')
+        checkpoint=checkpoints[-1]if checkpoints else dict(steps=0,rows=0)
+        state['prior_durable_updates']=checkpoint['steps'];state['prior_durable_row_visits']=checkpoint.get('rows',0)
+        state['prior_reported_updates']=max((p['steps']for p in progress),default=0)
+        state['uncheckpointed_reported_updates']=max(0,state['prior_reported_updates']-checkpoint['steps'])
+        state['prefix_component_timings']='UNAVAILABLE; durable original RUNTIME_PHASE walls retained'if checkpoint['steps']else'NO_TRAINED_PREFIX'
         first=store.events[0]
         if first['kind']!='RUN_STARTED' or not math.isfinite(first['time']):
             raise ValueError('original durable iteration start required')
@@ -184,13 +191,16 @@ def gate_report(smoke, timing):
     if (smoke['declared_games'] != 20000 or smoke['status'] != 'COMPLETE_DECLARATION'
             or smoke['jax_reload'] != 'VERIFIED_ORIGINAL_TRAINED_ARCHIVE_LOADED'
             or type(smoke['steps']) is not int or smoke['steps']<=0
-            or timing['updates'] != smoke['steps']
+            or type(timing['updates'])is not int or timing['updates']<=0
+            or type(timing.get('prior_durable_updates',0))is not int or timing.get('prior_durable_updates',0)<0
+            or timing['updates']+timing.get('prior_durable_updates',0) != smoke['steps']
             or isinstance(wall,bool) or not isinstance(wall,(int,float)) or not math.isfinite(wall) or wall<=0):
         raise ValueError('one full original 20k collection/five-epoch training result required')
     rate = 20000/wall
     arm=smoke.get('model_arm','B')
     threshold=('D_GE5'if rate>=5 else'D_GE1_LT5'if rate>=1 else'D_LT1_HOLD')if arm=='D'else(
         'TARGET20_MET'if rate>=20 else'FLOOR5_MET_TARGET20_MISSED'if rate>=5 else'BELOW_BINDING5')
+    if timing.get('prior_durable_updates',0):threshold='RECOVERED_TRAINED_PREFIX_NO_AUTOMATIC_ADMISSION'
     return dict(schema=SCHEMA,model_arm=arm,declared_games=20000,iteration_wall_seconds=wall,
         declared_games_per_second=rate,
         natural_complete_per_second=smoke['dispositions'].get('COMPLETE',0)/wall,
@@ -210,10 +220,15 @@ def instrument_training(run_root, resident_cache_bytes):
         raise ValueError('positive explicit host residency budget required')
     from pokezero import v5_training as training, dataset
     originals = []
-    state = dict(updates=0,cache_prepare_seconds=0.0,batch_slice_seconds=0.0,
+    state = dict(updates=0,prior_durable_updates=None,cache_prepare_seconds=0.0,batch_slice_seconds=0.0,
         tensor_conversion_seconds=0.0,update_wall_seconds=0.0,profile_updates=[])
     profiler = None
-    trace_path = Path(run_root)/'ct-training-trace.json'
+    retained_trace=Path(run_root)/'ct-training-trace.json'
+    from pokezero.v5_data import _file_sha
+    retained_sha=_file_sha(retained_trace)if retained_trace.exists()else None
+    # Never overwrite an already durable original profile on a continuation.
+    import uuid
+    trace_path=(Path(run_root)/('ct-training-trace-'+uuid.uuid4().hex+'.json')if retained_sha else retained_trace)
 
     def install(owner,name,callback):
         original = getattr(owner,name)
@@ -244,7 +259,10 @@ def instrument_training(run_root, resident_cache_bytes):
     def update(original):
         def measured(runtime,batch):
             nonlocal profiler
-            ordinal=state['updates']+1
+            if state['prior_durable_updates']is None:state['prior_durable_updates']=runtime.steps
+            if runtime.steps!=state['prior_durable_updates']+state['updates']:
+                raise ValueError('original durable update cursor changed during measurement')
+            ordinal=runtime.steps+1
             if ordinal==PROFILE_UPDATES[0]:
                 torch=training._torch()
                 profiler=torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,torch.profiler.ProfilerActivity.CUDA])
@@ -267,14 +285,23 @@ def instrument_training(run_root, resident_cache_bytes):
     install(training,'_update',update)
     try:
         yield state
-        if tuple(state['profile_updates']) != PROFILE_UPDATES:
-            raise ValueError('all prespecified GPU profile updates required')
-        state['gpu_trace_path']=str(trace_path)
+        prefix=state['prior_durable_updates']
+        if prefix is None:raise ValueError('actual training updates required')
+        if prefix>=PROFILE_UPDATES[-1]:
+            if state['profile_updates']or retained_sha is None or _file_sha(retained_trace)!=retained_sha:
+                raise ValueError('unchanged original prespecified prefix GPU trace required')
+            trace_path=retained_trace;state['gpu_profile_scope']='REUSED_ORIGINAL_PREFIX_UPDATES; not a resumed-update sample'
+        else:
+            if tuple(state['profile_updates']) != PROFILE_UPDATES:
+                raise ValueError('all prespecified GPU profile updates required')
+            state['gpu_profile_scope']='CURRENT_INVOCATION_ORIGINAL_GLOBAL_UPDATES'
+        state['gpu_trace_path']=str(trace_path);state['gpu_trace_sha256']=_file_sha(trace_path)
         state['gpu_sample_categories']=gpu_trace_categories(json.loads(trace_path.read_bytes()))
         state['gpu_sample_updates']=len(PROFILE_UPDATES)
+        state['gpu_sample_update_ordinals']=list(PROFILE_UPDATES)
         state['gpu_kernel_seconds_per_sampled_update']=state['gpu_sample_categories']['kernel']['seconds']/len(PROFILE_UPDATES)
         state['data_seconds_per_update']=(state['batch_slice_seconds']+state['tensor_conversion_seconds'])/state['updates']
-        state['data_scope']='CPU slice plus tensor conversion wall, including blocking transfers; one-time resident preparation separately reported.'
+        state['data_scope']='CURRENT INVOCATION updates only: CPU slice plus tensor conversion wall, including blocking transfers. Prefix component times unavailable; one-time resident preparation separate.'
         state['gpu_scope']='Only actual kernel trace-category durations on fixed updates8..11; memcpy/memset separate, no CPU annotation spans. Diagnostic sample, not full-iteration GPU total.'
     finally:
         if profiler is not None:
@@ -300,19 +327,22 @@ def collector_banks(events):
     return banks
 
 
-def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0,model_arm='B',teacher_frame_batch=False):
+def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0,model_arm='B',teacher_frame_batch=False,resume_trained=False):
     if enable_ct is not True:
         raise ValueError('explicit finite C-T execution required')
+    if type(resume_trained)is not bool or resume_trained and not resume:raise ValueError('trained continuation requires original resume')
     if model_arm=='D'and teacher_frame_batch is not True:raise ValueError('D-T requires the batched teacher route')
     from contextlib import nullcontext
     from pokezero import v5_device_smoke
-    with (continue_pretraining_iteration(run_root)if resume else nullcontext(None))as recovery:
+    with (continue_pretraining_iteration(run_root,allow_trained_prefix=resume_trained)if resume else nullcontext(None))as recovery:
         with instrument_training(run_root,resident_cache_bytes) as timing:
             options={}if cache_workers==0 else dict(cache_workers=cache_workers)
             if model_arm!='B':options['model_arm']=model_arm
             if teacher_frame_batch:options['teacher_frame_batch']=True
             original=v5_device_smoke.execute(config,run_root,enable_smoke=True,**options)
     if recovery is not None:
+        if timing['prior_durable_updates']!=recovery['prior_durable_updates']:
+            raise ValueError('timed continuation differs from original durable checkpoint')
         original['current_attempt_run_wall_seconds']=original['original_run_wall_seconds']
         original['original_run_wall_seconds']=recovery['run_finished_epoch']-recovery['original_run_started_epoch']
         if original['original_run_wall_seconds']<original['current_attempt_run_wall_seconds']:
@@ -345,12 +375,13 @@ def main(argv=None):
     parser.add_argument('--resident-cache-bytes',type=int,required=True)
     parser.add_argument('--enable-ct',action='store_true')
     parser.add_argument('--resume',action='store_true')
+    parser.add_argument('--resume-trained',action='store_true')
     parser.add_argument('--cache-workers',type=int,default=0)
     parser.add_argument('--model-arm',choices=('A','B','D'),default='B')
     parser.add_argument('--teacher-frame-batch',action='store_true')
     args=parser.parse_args(argv)
     config=v5_worker._record(dict(path=args.config,sha256=args.expected_config_sha256))
-    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers,model_arm=args.model_arm,teacher_frame_batch=args.teacher_frame_batch)
+    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers,model_arm=args.model_arm,teacher_frame_batch=args.teacher_frame_batch,resume_trained=args.resume_trained)
     print(json.dumps(dict(status=report['threshold'],result=str(Path(args.run_root)/'ct-result.json'))))
     return 0
 

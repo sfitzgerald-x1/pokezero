@@ -60,6 +60,53 @@ class PhaseCThroughputTests(unittest.TestCase):
                 runs.run(object(),'/tmp/inert')
             recover.assert_not_called()
 
+    def test_trained_prefix_is_explicit_and_checkpoint_loss_stays_visible(self):
+        from pokezero import v5_run as runs
+        class Store:
+            events=[dict(kind='RUN_STARTED',time=10.)]
+            def matching(self,kind):
+                return {'CHECKPOINT':[dict(steps=64,rows=128)],'TRAIN_PROGRESS':[dict(steps=96)],'CT_INTERRUPTED_BANK_RECOVERED':[dict(iteration=0,batch=1)]}.get(kind,[])
+        original=lambda plan,path,**kw:dict(original_resume=kw['resume'])
+        with patch.object(runs,'run',original),patch.object(runs,'Store',return_value=Store()),patch.object(ct,'recover_published_parts'),patch.object(ct.time,'time',return_value=20.):
+            with ct.continue_pretraining_iteration('/tmp/inert',allow_trained_prefix=True)as state:
+                self.assertEqual(runs.run(object(),'/tmp/inert'),dict(original_resume=True))
+                self.assertEqual(state['prior_durable_updates'],64);self.assertEqual(state['prior_reported_updates'],96)
+                self.assertEqual(state['uncheckpointed_reported_updates'],32)
+                self.assertEqual(state['recovered_banks'],[dict(iteration=0,batch=1)])
+            self.assertIs(runs.run,original)
+
+    def test_resume_reuses_original_profile_without_claiming_prefix_data_times(self):
+        import json
+        from types import SimpleNamespace
+        def update(runtime,batch):runtime.steps+=1;return 'original'
+        with tempfile.TemporaryDirectory()as folder:
+            trace=Path(folder)/'ct-training-trace.json'
+            original=json.dumps({'traceEvents':[{'ph':'X','cat':'kernel','dur':40}]}).encode();trace.write_bytes(original)
+            runtime=SimpleNamespace(steps=64)
+            with patch.object(training,'_update',side_effect=update),patch.object(training,'_torch',side_effect=AssertionError('no new profile')):
+                with ct.instrument_training(folder,1024)as state:
+                    self.assertEqual(training._update(runtime,object()),'original')
+                    self.assertEqual(training._update(runtime,object()),'original')
+            self.assertEqual(trace.read_bytes(),original);self.assertEqual(state['updates'],2)
+            self.assertEqual(state['prior_durable_updates'],64);self.assertEqual(state['profile_updates'],[])
+            self.assertEqual(state['gpu_sample_update_ordinals'],[8,9,10,11])
+            self.assertTrue(state['gpu_profile_scope'].startswith('REUSED_ORIGINAL_PREFIX'))
+            r=ct.gate_report(dict(result(1000),steps=66),state)
+            self.assertEqual(r['threshold'],'RECOVERED_TRAINED_PREFIX_NO_AUTOMATIC_ADMISSION')
+            with self.assertRaises(ValueError):ct.gate_report(dict(result(1000),steps=67),state)
+
+    def test_copied_controller_is_compatible_outside_original_checkout(self):
+        import json,runpy
+        from types import SimpleNamespace
+        module=runpy.run_path(ct.__file__,run_name='standalone_ct_controller')
+        with tempfile.TemporaryDirectory()as folder:
+            (Path(folder)/'ct-training-trace.json').write_text(json.dumps({'traceEvents':[]}))
+            runtime=SimpleNamespace(steps=64)
+            def update(r,b):r.steps+=1;return 'original'
+            with patch.object(training,'_update',side_effect=update):
+                with module['instrument_training'](folder,1024)as state:training._update(runtime,object())
+            self.assertEqual(state['prior_durable_updates'],64);self.assertEqual(state['updates'],1)
+
     def test_empty_publication_prefix_recovers_zero_rows_but_contradictions_refuse(self):
         import json
         from types import SimpleNamespace as NS
