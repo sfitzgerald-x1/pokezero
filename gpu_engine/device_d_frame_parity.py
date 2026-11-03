@@ -39,7 +39,7 @@ def comparable(result):
         reply_input_approximation=result.reply_input_approximation)
 
 
-def numeric_summary(a,b,path='root'):
+def numeric_summary(a,b,path='root',*,tolerance=TOLERANCE):
     """Magnitude evidence alongside the unchanged strict difference paths."""
     totals={}
     def walk(x,y,p):
@@ -53,16 +53,54 @@ def numeric_summary(a,b,path='root'):
             row['compared']+=1
             if not(math.isfinite(x)and math.isfinite(y)):row['nonfinite']+=1;return
             delta=abs(x-y);row['max_absolute_difference']=max(row['max_absolute_difference'],delta)
-            row['above_tolerance']+=int(delta>TOLERANCE)
+            row['above_tolerance']+=int(delta>tolerance)
     walk(a,b,path)
     return totals
 
 
-def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,progress_callback=None,chunk_batch=False):
+def vectorized_comparison(a,b):
+    """D3 compares real structure exactly and final label targets within0.01.
+
+    The outcome term cancels: the final outcome-plus-root value target differs
+    by half the root-value delta, for every possible same eventual outcome.
+    No terminal outcome is manufactured for a saved nonterminal root.
+    """
+    ca,cb=comparable(a),comparable(b);errors=[]
+    for key in ('status','reason','missing_worlds','reply_input_approximation'):
+        errors.extend(differences(ca[key],cb[key],key))
+    if len(a.world_reports)!=len(b.world_reports):errors.append('world_reports:length')
+    names=('world','posterior_seed','kernel_seed','status','reason','required_pairs','completed_pairs','unknown_pairs','opponent_requested','reply_legal','errors')
+    for i,(x,y)in enumerate(zip(a.world_reports,b.world_reports)):
+        errors.extend(differences({k:x[k]for k in names if k in x},{k:y[k]for k in names if k in y},f'world[{i}]:branch_structure'))
+        def branch_set(row):
+            grid=row.get('joint_values')
+            return None if grid is None else tuple(tuple(v is not None for v in line)for line in grid)
+        if branch_set(x)!=branch_set(y):errors.append(f'world[{i}]:branch_set')
+    metrics=dict(policy_max_absolute_difference=None,value_target_max_absolute_difference=None,
+        root_value_absolute_difference=None,top_target_action_match=None)
+    x=ca['improvement'];y=cb['improvement']
+    if (x is None)!=(y is None):errors.append('improvement:presence')
+    elif x is not None:
+        for key in ('worlds','depth','leaf','replies','label_only'):
+            errors.extend(differences(x[key],y[key],'improvement.'+key))
+        if tuple(v is not None for v in x['completed_q'])!=tuple(v is not None for v in y['completed_q']):errors.append('improvement:branch_set')
+        px=np.asarray(x['policy_target'],float);py=np.asarray(y['policy_target'],float)
+        finite=px.shape==py.shape==(9,)and np.isfinite(px).all()and np.isfinite(py).all()and math.isfinite(x['root_value'])and math.isfinite(y['root_value'])
+        if not finite:errors.append('targets:nonfinite_or_shape')
+        else:
+            policy=float(np.max(np.abs(px-py)));root=abs(x['root_value']-y['root_value']);value=.5*root
+            metrics.update(policy_max_absolute_difference=policy,value_target_max_absolute_difference=value,
+                root_value_absolute_difference=root,top_target_action_match=int(np.argmax(px))==int(np.argmax(py)))
+            if policy>.01:errors.append('policy_target:absolute_tolerance')
+            if value>.01:errors.append('value_target:absolute_tolerance')
+    return errors,metrics
+
+
+def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,progress_callback=None,chunk_batch=False,vectorized=False):
     if enable_parity is not True or getattr(provider,'frame_batch',False):
         raise ValueError('explicit quarantined original serial provider required')
     if type(execution_source)is not str or len(execution_source)!=40:raise ValueError('separate batch execution source required')
-    if type(chunk_batch)is not bool:raise ValueError('explicit saved-root packing choice required')
+    if type(chunk_batch)is not bool or type(vectorized)is not bool:raise ValueError('explicit saved-root packing choices required')
     requests={};references={};actors=[];method=provider.label_chunk;price=serial.price
     def price_reference(plans,*args,**kwargs):
         result=price(plans,*args,**kwargs)
@@ -96,7 +134,7 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
     declared=cost.select(provider.plan);groups={}
     for address in declared:
         if address in requests:groups.setdefault(0 if chunk_batch else address.frame,[]).append(address)
-    pricer=FramePricer(provider.executor,provider.plan.model,actor_capacity=provider.plan.historical_window+1)
+    pricer=FramePricer(provider.executor,provider.plan.model,actor_capacity=provider.plan.historical_window+1,**(dict(capacity=4096,vectorized=True)if vectorized else{}))
     results={};timings=[]
     for frame,addresses in groups.items():
         priced=pricer.price([requests[a]for a in addresses],provider.materializer,provider.recipe,actors[0])
@@ -110,7 +148,10 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
         if address not in references:raise ValueError('batch priced a root absent from original serial provider')
         a,b=references[address],results[address];row['batch_status']=b.status
         ca,cb=comparable(a),comparable(b)
-        row['differences']=differences(ca,cb);row['numeric_comparison']=numeric_summary(ca,cb)
+        if vectorized:
+            row['differences'],row['target_comparison']=vectorized_comparison(a,b)
+        else:row['differences']=differences(ca,cb)
+        row['numeric_comparison']=numeric_summary(ca,cb,tolerance=.01 if vectorized else TOLERANCE)
         # Materialization moved to CPU, not changed: all physical/public arrays
         # and original world keys must remain byte-equal, independently of Q.
         for wi,(x,y)in enumerate(zip(a.worlds,b.worlds)):
@@ -118,14 +159,28 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
             if x.state is None:continue
             for name in ('state','public'):
                 lx,tx=jax.tree.flatten(getattr(x,name));ly,ty=jax.tree.flatten(getattr(y,name))
-                if tx!=ty or any(not np.array_equal(np.asarray(u),np.asarray(v),equal_nan=True)for u,v in zip(lx,ly)):
+                def same_array(u,v):
+                    u,v=np.asarray(u),np.asarray(v)
+                    return (u.dtype==v.dtype and u.shape==v.shape and u.tobytes()==v.tobytes())if vectorized else np.array_equal(u,v,equal_nan=True)
+                if tx!=ty or any(not same_array(u,v)for u,v in zip(lx,ly)):
                     row['differences'].append(f'world[{wi}]:{name}')
         row['status']='MATCH'if not row['differences']else'MISMATCH'
     totals={status:sum(x['status']==status for x in rows)for status in ('MATCH','MISMATCH','UNAVAILABLE')}
-    return dict(schema='pokezero.device-d-frame-parity.v1',status='PASS'if totals['MATCH']==40 else'FAIL',
-        scope='QUARANTINED_ORIGINAL_FIXED40_SAVED_ROOTS_ZERO_NEW_GAMES',tolerance=TOLERANCE,
+    target_rows=[r['target_comparison']for r in rows if r.get('target_comparison',{}).get('top_target_action_match')is not None]
+    top_matches=sum(r['top_target_action_match']for r in target_rows)
+    passes=totals['MATCH']==40 and(not vectorized or len(target_rows)==32 and top_matches>=31)
+    result=dict(schema='pokezero.device-d-frame-parity.v1',status='PASS'if passes else'FAIL',
+        scope='QUARANTINED_ORIGINAL_FIXED40_SAVED_ROOTS_ZERO_NEW_GAMES',tolerance=.01 if vectorized else TOLERANCE,
         batching='CHUNK'if chunk_batch else'FRAME',
         execution_source=execution_source,original_bank_namespace=index['namespace'],
         serial_snapshot=reference['snapshot'],serial_declaration_sha256=reference['declaration_sha256'],
         totals=totals,serial_dispositions=reference['summary']['dispositions'],rows=rows,batch_timings=timings,
         no_strength_or_throughput_claim=True)
+    if vectorized:
+        result['batching']='D3_VECTORIZED'
+        result['target_summary']=dict(labeled_roots=len(target_rows),top_target_action_matches=top_matches,required_top_matches=31,
+            policy_max_absolute_difference=max((r['policy_max_absolute_difference']for r in target_rows),default=None),
+            value_target_max_absolute_difference=max((r['value_target_max_absolute_difference']for r in target_rows),default=None),
+            root_value_max_absolute_difference=max((r['root_value_absolute_difference']for r in target_rows),default=None),
+            value_scope='Same-outcome final search value target; delta=half root-value delta; original root-value delta also reported, no fabricated outcome.')
+    return result
