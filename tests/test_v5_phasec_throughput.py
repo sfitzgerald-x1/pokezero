@@ -1,5 +1,8 @@
 """C-T denominator, missing cells and actual GPU trace classification controls."""
 import copy
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 import unittest
 
 from pokezero import v5_phasec_throughput as ct, v5_training as training
@@ -25,6 +28,103 @@ class PhaseCThroughputTests(unittest.TestCase):
         with self.assertRaises(ValueError):ct.collector_phase_totals(broken)
         broken=copy.deepcopy(banks);broken[0]['phases']['game_cache_wall_seconds']=float('nan')
         with self.assertRaises(ValueError):ct.collector_phase_totals(broken)
+
+    def test_actual_compile_metadata_is_separate_from_host_walls_and_counts(self):
+        phases={name:1. for name in ct.COLLECTOR_PHASES+ct.COMPILE_SECONDS}
+        phases.update({name:1 for name in ct.COMPILE_CALLS})
+        actual=ct.collector_phase_totals([dict(phases=phases)]*10)
+        self.assertEqual(actual['wall_seconds']['game_cache_wall_seconds'],10.)
+        self.assertEqual(actual['lower_compile_seconds']['collector_compile_seconds'],10.)
+        self.assertEqual(actual['compile_calls']['collector_compile_calls'],10)
+        recovered=ct.collector_phase_totals([dict(phases=phases)]*9,interrupted_banks=1)
+        self.assertEqual(recovered['unavailable_interrupted_banks'],1)
+        for bad in (dict(phases,unexpected=1.),dict(phases,collector_compile_calls=1.5)):
+            with self.assertRaises(ValueError):ct.collector_phase_totals([dict(phases=bad)]*10)
+
+    def test_pretraining_continuation_uses_original_run_and_retains_original_start(self):
+        from types import SimpleNamespace
+        from pokezero import v5_run as runs
+        class Store:
+            events=[dict(kind='RUN_STARTED',time=10.)]
+            def matching(self,kind):return [dict(steps=0)]if kind=='CHECKPOINT'else []
+        original=lambda plan,path,**kw:dict(original_resume=kw['resume'])
+        with patch.object(runs,'run',original),patch.object(runs,'Store',return_value=Store()),                patch.object(ct,'recover_published_parts'),patch.object(ct.time,'time',return_value=20.):
+            with ct.continue_pretraining_iteration('/tmp/inert')as state:
+                self.assertEqual(runs.run(object(),'/tmp/inert'),dict(original_resume=True))
+                self.assertEqual(state['original_run_started_epoch'],10.)
+                self.assertEqual(state['run_finished_epoch'],20.)
+            self.assertIs(runs.run,original)
+        store=Store();store.matching=lambda kind:[dict(steps=1)]if kind=='CHECKPOINT'else []
+        with patch.object(runs,'Store',return_value=store),patch.object(ct,'recover_published_parts')as recover:
+            with ct.continue_pretraining_iteration('/tmp/inert'),self.assertRaisesRegex(ValueError,'prior update timings'):
+                runs.run(object(),'/tmp/inert')
+            recover.assert_not_called()
+
+    def test_empty_publication_prefix_recovers_zero_rows_but_contradictions_refuse(self):
+        import json
+        from types import SimpleNamespace as NS
+        from pokezero import v5_run as runs
+        with tempfile.TemporaryDirectory()as directory:
+            root=Path(directory);game=NS(stream_id=41,battle_id='declared',seed=12,team_indices=(0,1))
+            batch=NS(games=(game,),constructor_seed=21,sampling_seed=31)
+            plan=NS(iterations=((batch,),),manifest=lambda:{'declared':'inert'})
+            body=dict(streams=[41],declaration_sha256=runs._sha(plan.manifest()),games=[dict(stream=41,battle_id='declared',seed=12,team_indices=[0,1])],constructor_seed=21,sampling_seed=31)
+            (root/'bank.json').write_text(json.dumps(body))
+            class Store:
+                path=root
+                def __init__(self,bank,*,ended=False,orphan=False,duplicate=False):
+                    self.bank,self.ended,self.orphan,self.duplicate=bank,ended,orphan,duplicate;self.emitted=[]
+                def matching(self,kind,**kw):
+                    if kind=='BATCH_STARTED':return [dict(iteration=0,batch=0)]*(2 if self.duplicate else 1)
+                    if kind=='DEVICE_ACTOR_BANK'and self.bank:return [dict(path='bank.json',sha256='inert')]
+                    if kind=='DEVICE_ROLLOUT_CHUNK'and self.orphan:return [dict(bank_sha256='unbound')]
+                    if kind=='GAME_END'and self.ended:return [dict(stream_id=41,status='COMPLETE')]
+                    return []
+                def resolve(self,path,digest):return root/path
+                def emit(self,kind,**payload):self.emitted.append((kind,payload))
+            for bank in (False,True):
+                store=Store(bank);records=ct.recover_published_parts(store,plan)
+                self.assertEqual(records[0]['published_game_parts'],0);self.assertIsNone(records[0]['cache'])
+                self.assertEqual(store.emitted[0][0],'CT_INTERRUPTED_BANK_RECOVERED')
+                with self.assertRaises(ValueError):ct.recover_published_parts(Store(bank,ended=True),plan)
+            for store in (Store(False,orphan=True),Store(True,duplicate=True)):
+                with self.assertRaises(ValueError):ct.recover_published_parts(store,plan)
+
+    def test_saved_game_parts_recover_without_engine_and_missing_rows_stay_explicit(self):
+        import json
+        import numpy as np
+        from pokezero import v5_run as runs
+        from gpu_engine import v5_device_rollout as rollout,v5_device_spool as spool_module
+        from tests.test_gpu_engine_v5_device_spool import DeviceSpoolTests
+        with tempfile.TemporaryDirectory()as temporary:
+            plan,store,pending,raw,_=DeviceSpoolTests().example(temporary)
+            batch=plan.iterations[0][0];bank=pending['bank'];bindings=pending['bindings']
+            raw=raw._replace(carry=raw.carry._replace(status=np.array([rollout.COMPLETE,rollout.COMPLETE],np.int32)))
+            body=dict(streams=list(bank.streams),declaration_sha256=runs._sha(plan.manifest()),
+                games=[dict(stream=g.stream_id,battle_id=g.battle_id,seed=g.seed,team_indices=list(g.team_indices))for g in batch.games],
+                constructor_seed=batch.constructor_seed,sampling_seed=batch.sampling_seed,assignment_sha256=bank.assignment_sha256,
+                actor_archives=bank.actor_archives,actor_indices=bank.actor_indices)
+            store.emit('BATCH_STARTED',iteration=0,batch=0,streams=list(bank.streams))
+            reference=store.artifact('rollouts/inert-bank.json',runs._json(body).encode(),kind='DEVICE_ACTOR_BANK')
+            spool=spool_module.Spool(store,bank,bank_sha256=reference['sha256']);spool.append(raw)
+            for game in batch.games:store.emit('GAME_END',iteration=0,batch=0,stream_id=game.stream_id,status='COMPLETE')
+            with patch.object(rollout,'_complete_gae',side_effect=lambda v,o,l,d:(v*0,v*0)):
+                spool.finalize_game(0,batch.games[0],bindings=bindings,loss_config=plan.loss,discount=plan.discount)
+            spool.merge(Path(temporary)/'expected')
+            original_emit=store.emit
+            def interrupted(kind,**payload):
+                if kind=='CACHE':raise KeyboardInterrupt('inert crash after durable recovery')
+                return original_emit(kind,**payload)
+            with patch.object(store,'emit',interrupted),self.assertRaises(KeyboardInterrupt):
+                ct.recover_published_parts(store,plan)
+            with patch.object(spool_module.Spool,'merge',side_effect=AssertionError('replayed recovered merge')):
+                records=ct.recover_published_parts(store,plan)
+            self.assertEqual(records[0]['completed_games_without_published_training_rows'],[batch.games[1].stream_id])
+            self.assertEqual(records[0]['published_game_parts'],1)
+            target=store.path/records[0]['cache']
+            self.assertEqual((target/'metadata.json').read_bytes(),(Path(temporary)/'expected/metadata.json').read_bytes())
+            self.assertEqual(ct.recover_published_parts(store,plan),[])
+            self.assertEqual(len(store.matching('CACHE')),1)
 
     def test_full_iteration_wall_is_the_denominator_and_unknowns_are_retained(self):
         for wall,status in ((1000,'TARGET20_MET'),(4000,'FLOOR5_MET_TARGET20_MISSED'),(4001,'BELOW_BINDING5')):
