@@ -44,6 +44,17 @@ against B2's public candidate bits. Unsupported clocks and mapping failures
 remain named refused world slots. The original retained-driver route remains
 unchanged. All requested 16/32-world roots remain in the construction table.
 
+Own Hidden Power uses the device's typed move ID with the separately stored
+IV-derived type and power, matching the existing pure `map_spec` convention.
+Own happiness is read literally when provided. Otherwise a suffixed owning
+Return/Frustration request ID can determine it only when inversion of the
+pinned Showdown base-power callback leaves one integer in 0..255. The request
+producer is `sim/pokemon.ts:getSwitchRequestData` and the callbacks are in
+`data/moves.ts` at the pinned f76228a revision. No generator default is used:
+plain or ambiguous powers, unavailable sleep clocks, unsupported replacement
+phases and ambiguous own static facts remain refused. This bounded repair
+shares the declared one-batch/one-remeasurement coverage budget.
+
 `phase_d_constructor_coverage.py` runs that same construction on the host while
 the shared GPU evaluates the value bank. It selects CPU before importing JAX,
 accepts no model archive, and reuses one worker's compiled B2 functions. Use
