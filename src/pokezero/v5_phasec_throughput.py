@@ -331,7 +331,7 @@ def collector_banks(events):
 
 
 def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0,model_arm='B',teacher_frame_batch=False,resume_trained=False,
-        raw_retention_every=1,transient_raw_root=None):
+        raw_retention_every=1,transient_raw_root=None,teacher_queue_chunks=0):
     if enable_ct is not True:
         raise ValueError('explicit finite C-T execution required')
     if type(raw_retention_every)is not int or raw_retention_every<=0:raise ValueError('positive fixed raw retention interval required')
@@ -344,6 +344,7 @@ def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,
             options={}if cache_workers==0 else dict(cache_workers=cache_workers)
             if model_arm!='B':options['model_arm']=model_arm
             if teacher_frame_batch:options['teacher_frame_batch']=True
+            if teacher_queue_chunks:options['teacher_queue_chunks']=teacher_queue_chunks
             if raw_retention_every!=1 or transient_raw_root is not None:
                 options.update(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
             original=v5_device_smoke.execute(config,run_root,enable_smoke=True,**options)
@@ -362,6 +363,7 @@ def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,
     report['collector_phase_walls']=collector_phase_totals(banks.values(),interrupted_banks=len(missing))
     report['collector_phase_walls']['unavailable_bank_keys']=missing
     report['cache_pipeline']=[dict(bank=list(key),**p['cache_pipeline'])for key,p in sorted(banks.items())if 'cache_pipeline'in p]
+    report['teacher_queue']=[dict(bank=list(key),**p['teacher_queue'])for key,p in sorted(banks.items())if p.get('teacher_queue')is not None]
     if recovery is not None:
         report['recovery']=recovery
         report['threshold_before_recovery_caveat']=report['threshold']
@@ -386,11 +388,12 @@ def main(argv=None):
     parser.add_argument('--cache-workers',type=int,default=0)
     parser.add_argument('--model-arm',choices=('A','B','D'),default='B')
     parser.add_argument('--teacher-frame-batch',action='store_true')
+    parser.add_argument('--teacher-queue-chunks',type=int,default=0)
     parser.add_argument('--raw-retention-every',type=int,default=1)
     parser.add_argument('--transient-raw-root')
     args=parser.parse_args(argv)
     config=v5_worker._record(dict(path=args.config,sha256=args.expected_config_sha256))
-    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers,model_arm=args.model_arm,teacher_frame_batch=args.teacher_frame_batch,resume_trained=args.resume_trained,
+    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers,model_arm=args.model_arm,teacher_frame_batch=args.teacher_frame_batch,teacher_queue_chunks=args.teacher_queue_chunks,resume_trained=args.resume_trained,
         raw_retention_every=args.raw_retention_every,transient_raw_root=args.transient_raw_root)
     print(json.dumps(dict(status=report['threshold'],result=str(Path(args.run_root)/'ct-result.json'))))
     return 0

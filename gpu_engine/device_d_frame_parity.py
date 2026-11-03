@@ -58,10 +58,11 @@ def numeric_summary(a,b,path='root'):
     return totals
 
 
-def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,progress_callback=None):
+def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,progress_callback=None,chunk_batch=False):
     if enable_parity is not True or getattr(provider,'frame_batch',False):
         raise ValueError('explicit quarantined original serial provider required')
     if type(execution_source)is not str or len(execution_source)!=40:raise ValueError('separate batch execution source required')
+    if type(chunk_batch)is not bool:raise ValueError('explicit saved-root packing choice required')
     requests={};references={};actors=[];method=provider.label_chunk;price=serial.price
     def price_reference(plans,*args,**kwargs):
         result=price(plans,*args,**kwargs)
@@ -94,7 +95,7 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
     if not reference['producer_integrity']:raise ValueError('original fixed saved-root producer failed')
     declared=cost.select(provider.plan);groups={}
     for address in declared:
-        if address in requests:groups.setdefault(address.frame,[]).append(address)
+        if address in requests:groups.setdefault(0 if chunk_batch else address.frame,[]).append(address)
     pricer=FramePricer(provider.executor,provider.plan.model,actor_capacity=provider.plan.historical_window+1)
     results={};timings=[]
     for frame,addresses in groups.items():
@@ -123,6 +124,7 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
     totals={status:sum(x['status']==status for x in rows)for status in ('MATCH','MISMATCH','UNAVAILABLE')}
     return dict(schema='pokezero.device-d-frame-parity.v1',status='PASS'if totals['MATCH']==40 else'FAIL',
         scope='QUARANTINED_ORIGINAL_FIXED40_SAVED_ROOTS_ZERO_NEW_GAMES',tolerance=TOLERANCE,
+        batching='CHUNK'if chunk_batch else'FRAME',
         execution_source=execution_source,original_bank_namespace=index['namespace'],
         serial_snapshot=reference['snapshot'],serial_declaration_sha256=reference['declaration_sha256'],
         totals=totals,serial_dispositions=reference['summary']['dispositions'],rows=rows,batch_timings=timings,

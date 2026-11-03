@@ -322,7 +322,7 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
 
 
 def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False,
-        raw_retention_every=1,transient_raw_root=None,resident_cache_bytes=None):
+        raw_retention_every=1,transient_raw_root=None,resident_cache_bytes=None,teacher_queue_chunks=0):
     from . import v5_run as run,v5_phasec as phase
     _absolute(str(run_root))
     if type(resume) is not bool:raise ValueError('explicit resume choice required')
@@ -342,6 +342,7 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     options=dict(device_rollout=True) if device_rollout else {}
     if cache_workers:options['cache_workers']=cache_workers
     if teacher_frame_batch:options['teacher_frame_batch']=True
+    if teacher_queue_chunks:options['teacher_queue_chunks']=teacher_queue_chunks
     if device_teacher:options['device_teacher']=True
     if raw_retention_every!=1 or transient_raw_root is not None:
         options.update(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
@@ -362,6 +363,7 @@ def main(argv=None,*,evaluation_hook=None):
     parser.add_argument('--external-evaluation',action='store_true',help='Publish frozen CPU panel requests and continue training')
     parser.add_argument('--cache-workers',type=int,default=0)
     parser.add_argument('--teacher-frame-batch',action='store_true')
+    parser.add_argument('--teacher-queue-chunks',type=int,default=0)
     parser.add_argument('--raw-retention-every',type=int,default=1)
     parser.add_argument('--transient-raw-root')
     parser.add_argument('--resident-cache-bytes',type=int)
@@ -389,6 +391,7 @@ def main(argv=None,*,evaluation_hook=None):
     options=dict(device_rollout=True) if args.device_rollout else {}
     if args.cache_workers:options['cache_workers']=args.cache_workers
     if args.teacher_frame_batch:options['teacher_frame_batch']=True
+    if args.teacher_queue_chunks:options['teacher_queue_chunks']=args.teacher_queue_chunks
     if args.device_teacher:options['device_teacher']=True
     if args.raw_retention_every!=1 or args.transient_raw_root is not None:
         options.update(raw_retention_every=args.raw_retention_every,transient_raw_root=args.transient_raw_root)

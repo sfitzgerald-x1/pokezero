@@ -49,7 +49,7 @@ def prepare(catalog,source,pool,*,source_commit):
 class RuntimeBackend:
     """Device-mode backend for the unchanged v5_run.run callback contract."""
     def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None,measure_runtime=False,cache_workers=0,
-            raw_retention_every=1,transient_raw_root=None):
+            raw_retention_every=1,transient_raw_root=None,teacher_queue_chunks=0):
         if type(prepared)is not Prepared or type(chunk_steps)is not int or chunk_steps<=0:
             raise ValueError('prepared device runtime and finite chunk required')
         if type(measure_runtime)is not bool:raise ValueError('explicit runtime timing choice required')
@@ -59,6 +59,10 @@ class RuntimeBackend:
             from pathlib import Path
             if transient_raw_root is None or not Path(transient_raw_root).is_dir():
                 raise ValueError('explicit existing bounded transient raw filesystem required')
+        if (type(teacher_queue_chunks)is not int or not 0<=teacher_queue_chunks<=4
+                or teacher_queue_chunks and (teacher is None or not getattr(teacher,'chunk_batch',False))):
+            raise ValueError('bounded queued labels require the explicit chunk-batched D teacher')
+        self.teacher_queue_chunks=teacher_queue_chunks;self._label_queue=None
         self.raw_retention_every=raw_retention_every;self.transient_raw_root=transient_raw_root;self._raw_spools=[]
         self.cache_workers=cache_workers;self._cache_pool=None;self._cache_merger=None
         self.measure_runtime=measure_runtime;self._initializer_executables={}
@@ -69,6 +73,7 @@ class RuntimeBackend:
             belief_tables=prepared.observation_tables.belief))
 
     def close(self):
+        if self._label_queue is not None:self._label_queue.close(failed=True)
         if self._cache_pool is not None:self._cache_pool.close()
         if self._cache_merger is not None:self._cache_merger.shutdown(wait=True,cancel_futures=True)
         for spool in self._raw_spools:spool.release_raw()
@@ -168,7 +173,7 @@ class RuntimeBackend:
 
     def collect(self,prepared,store,on_end,check_progress):
         plan=prepared['plan'];batch=prepared['batch'];self.check_plan(plan);check_progress()
-        if self.teacher is not None:self.teacher.reset_metrics()
+        if self.teacher is not None and not self.teacher_queue_chunks:self.teacher.reset_metrics()
         started=time.monotonic();wall_started=time.perf_counter()
         self._phase={key:0. for key in ('initializer_lower_seconds','initializer_compile_seconds','collector_lower_seconds','collector_compile_seconds',
             'constructor_wall_seconds','kernel_blocked_seconds','teacher_wall_seconds','host_transfer_wall_seconds','spool_write_wall_seconds','game_cache_wall_seconds','cache_merge_wall_seconds')}
@@ -208,30 +213,13 @@ class RuntimeBackend:
                 self._cache_pool=CpuWorkers(self.cache_workers)
                 self._cache_merger=ThreadPoolExecutor(max_workers=1,thread_name_prefix='cache-merge')
             assembly=BankAssembly(self._cache_pool,spool,bindings=prepared['bindings'],loss_config=plan.loss,discount=plan.discount)
-        warm_loop_started=time.perf_counter()
-        for _ in range((plan.max_requests+self.chunk_steps-1)//self.chunk_steps):
-            check_progress()
-            if assembly is not None:assembly.check()
-            clock=time.perf_counter();device=execute(carry,prepared['params'])
-            if self.measure_runtime:device=jax.block_until_ready(device)
-            self._phase['kernel_blocked_seconds']+=time.perf_counter()-clock;carry=device.carry
-            # Keep the live world/public carry on device. The original batch
-            # adapter needs raw Frames plus literal terminal fields, not a
-            # duplicate hidden world/constructor truth on the host each chunk.
-            clock=time.perf_counter()
-            host=rollout.boundary(device._replace(carry=carry._replace(state=None,public=None,truth=None),roots=None))
-            self._phase['host_transfer_wall_seconds']+=time.perf_counter()-clock
-            if self.measure_runtime:counts.add(host.frames.requested)
-            clock=time.perf_counter()
-            if self.teacher is not None:self.teacher.reset_metrics()
-            labels=None if self.teacher is None else self.teacher.label_chunk(device.roots,host.frames,bank,prepared['params'])
-            self._phase['teacher_wall_seconds']+=time.perf_counter()-clock
-            del device
+        def publish(host,labels,metrics,teacher_seconds):
+            self._phase['teacher_wall_seconds']+=teacher_seconds
             clock=time.perf_counter()
             if self.teacher is None:spool.append(host)
             else:
                 spool.append(host,teacher_records=labels)
-                store.emit('DEVICE_TEACHER_FRAME_COUNTS',bank_streams=list(bank.streams),**self.teacher.metrics())
+                store.emit('DEVICE_TEACHER_FRAME_COUNTS',bank_streams=list(bank.streams),**metrics)
             self._phase['spool_write_wall_seconds']+=time.perf_counter()-clock
             for row,game in enumerate(batch.games):
                 status=int(host.carry.status[row])
@@ -246,7 +234,46 @@ class RuntimeBackend:
                         spool.finalize_game(row,game,bindings=prepared['bindings'],loss_config=plan.loss,discount=plan.discount)
                     else:assembly.submit(row,game)
                     self._phase['game_cache_wall_seconds']+=time.perf_counter()-clock
-            if len(closed)==len(batch.games):break
+        queue=None;queue_report=None
+        if self.teacher_queue_chunks:
+            from .v5_teacher_queue import LabelQueue
+            queue=LabelQueue(self.teacher,capacity=self.teacher_queue_chunks,check_progress=check_progress,publish=publish)
+            self._label_queue=queue
+        warm_loop_started=time.perf_counter()
+        try:
+            for _ in range((plan.max_requests+self.chunk_steps-1)//self.chunk_steps):
+                check_progress()
+                if assembly is not None:assembly.check()
+                if queue is not None:queue.make_room()
+                clock=time.perf_counter();device=execute(carry,prepared['params'])
+                if self.measure_runtime:device=jax.block_until_ready(device)
+                self._phase['kernel_blocked_seconds']+=time.perf_counter()-clock;carry=device.carry
+                # Keep the live world/public carry on device. The original batch
+                # adapter needs raw Frames plus literal terminal fields, not a
+                # duplicate hidden world/constructor truth on the host each chunk.
+                clock=time.perf_counter()
+                host=rollout.boundary(device._replace(carry=carry._replace(state=None,public=None,truth=None),roots=None))
+                self._phase['host_transfer_wall_seconds']+=time.perf_counter()-clock
+                if self.measure_runtime:counts.add(host.frames.requested)
+                if queue is not None:
+                    queue.submit(device.roots,host,bank,prepared['params'])
+                else:
+                    clock=time.perf_counter()
+                    if self.teacher is not None:self.teacher.reset_metrics()
+                    labels=None if self.teacher is None else self.teacher.label_chunk(device.roots,host.frames,bank,prepared['params'])
+                    teacher_seconds=time.perf_counter()-clock
+                    metrics=None if self.teacher is None else self.teacher.metrics()
+                    publish(host,labels,metrics,teacher_seconds)
+                del device
+                # Queue publication can lag acting. Stop at the same physical
+                # terminal chunk; do not advance completed games waiting for labels.
+                if np.all(host.carry.status!=rollout.RUNNING):break
+            if queue is not None:queue.drain();queue_report=queue.report()
+        except BaseException:
+            if queue is not None:queue.close(failed=True)
+            raise
+        finally:
+            if queue is not None:queue.close();self._label_queue=None
         if len(closed)!=len(batch.games):raise ValueError('finite device collector left a declared game unclosed')
         if assembly is not None:
             # Freeze this bank's timing and terminal state before the owner
@@ -265,7 +292,7 @@ class RuntimeBackend:
                 if self.measure_runtime:
                     report=counts.report(status,kernel_seconds=phases['kernel_blocked_seconds'],collection_seconds=total)
                     warm=timing['finished']-warm_loop_started
-                    store.emit('DEVICE_RUNTIME_TIMING',**report,phases=phases,bank_streams=list(bank.streams),
+                    store.emit('DEVICE_RUNTIME_TIMING',**report,phases=phases,bank_streams=list(bank.streams),teacher_queue=queue_report,
                         warm_loop_including_cache_io_seconds=warm,
                         completed_per_warm_loop_wall_second=None if warm<=0 else report['complete']/warm,
                         cache_pipeline=dict(workers=self.cache_workers,maximum_pending_banks=2,
@@ -289,7 +316,7 @@ class RuntimeBackend:
         if self.measure_runtime:
             report=counts.report(host.carry.status,kernel_seconds=self._phase['kernel_blocked_seconds'],collection_seconds=time.perf_counter()-wall_started)
             warm_loop_seconds=time.perf_counter()-warm_loop_started
-            store.emit('DEVICE_RUNTIME_TIMING',**report,phases=self._phase,bank_streams=list(bank.streams),
+            store.emit('DEVICE_RUNTIME_TIMING',**report,phases=self._phase,bank_streams=list(bank.streams),teacher_queue=queue_report,
                 raw_storage=dict(raw_policy,array_file_bytes=spool.raw_bytes),
                 warm_loop_including_cache_io_seconds=warm_loop_seconds,
                 completed_per_warm_loop_wall_second=None if warm_loop_seconds<=0 else report['complete']/warm_loop_seconds,

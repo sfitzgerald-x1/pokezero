@@ -85,7 +85,7 @@ def validate_records(frames,bank,recipe,records):
 
 class Provider:
     """Construct once from genuine Prepared+Plan, before any real constructor."""
-    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False):
+    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False):
         from .v5_device_backend import Prepared
         from pokezero.v5_run import Plan,_sha
         if type(prepared)is not Prepared or type(plan)is not Plan or plan.model.arm!='D':
@@ -93,6 +93,9 @@ class Provider:
         if type(batch_joint)is not bool:raise ValueError('explicit joint batching bool required')
         if type(frame_batch)is not bool or frame_batch and not batch_joint:
             raise ValueError('frame batching requires the original mapped joint executor')
+        if type(chunk_batch)is not bool or chunk_batch and not frame_batch:
+            raise ValueError('chunk batching requires the explicit frame teacher')
+        self.chunk_batch=chunk_batch
         if prepared.pool_sha256!=plan.pool_sha256 or prepared.category_sha256!=plan.model.category_vocabulary_sha256 or prepared.category_size!=plan.model.category_vocab_size:
             raise ValueError('same declared device source/pool/category required')
         self.prepared=prepared;self.plan=plan;self.recipe=original.Recipe(plan.selection_seed)
@@ -124,7 +127,7 @@ class Provider:
 
     def metrics(self):
         from .device_public_teacher_batch import FRAME_WORK_KEYS
-        return dict(strategy='FRAME_BATCH'if getattr(self,'frame_batch',False)else'SERIAL_ROOTS',
+        return dict(strategy=('CHUNK_BATCH'if getattr(self,'chunk_batch',False)else'FRAME_BATCH')if getattr(self,'frame_batch',False)else'SERIAL_ROOTS',
             by_frame={str(frame):dict(value,refused_share_selected=None if not value['selected']else value['refused']/value['selected'])for frame,value in sorted(self.frame_counts.items())},
             batch_timing_totals={key:sum(x.get(key,0)for x in self.batch_timings)for key in ('roots','world_prepare_seconds','batch_pack_and_device_seconds','device_invocations','lower_seconds','compile_seconds','device_seconds')+FRAME_WORK_KEYS})
 
@@ -212,20 +215,25 @@ class Provider:
                 request=Request(plans,tuple(map(float,frames.raw_policy_logits[step,row,owner])),
                     tuple(map(bool,frames.legal_action_mask[step,row,owner])),inputs,
                     int(frames.actor_indices[step,row,owner]),int(frames.actor_indices[step,row,1-owner]))
-                grouped.setdefault(step,[]).append((record,request))
+                grouped.setdefault(0 if getattr(self,'chunk_batch',False)else step,[]).append((record,request))
             except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
                 record.update(status='REFUSED',refusal=type(error).__name__+': '+str(error),improvement=None)
-        for step,items in grouped.items():
-            # A device/producer failure is not converted into fast refusals for
-            # an entire frame. It stops this study and preserves its attempts.
-            results=self.frame_pricer.price([request for _,request in items],self.materializer,self.recipe,params)
-            if len(results)!=len(items):raise ValueError('frame pricing dropped a selected root')
-            self.batch_timings.append(dict(self.frame_pricer.last_timing))
-            for (record,_),result in zip(items,results):
-                record['diagnostics']=dict(world_reports=result.world_reports,missing_worlds=result.missing_worlds,
-                    actual_teacher_calls=result.actual_teacher_calls,reply_input_approximation=result.reply_input_approximation)
-                if result.status=='LABELED':record.update(status='LABELED',refusal=None,improvement=asdict(result.reduction.improvement))
-                elif result.status=='REFUSED':record['refusal']=result.reason or'unknown-required-world-or-reply'
-                else:raise ValueError('selected original recipe returned an unselected result')
+        for step,group in grouped.items():
+            # Queue mode groups original selected requests across chunk frames.
+            # Capacity changes only packing, never world keys or per-root math.
+            capacity=self.frame_pricer.capacity
+            for offset in range(0,len(group),capacity):
+                items=group[offset:offset+capacity]
+                # Device/producer failures stop the study, never fast-refuse a
+                # whole frame or chunk to improve apparent throughput.
+                results=self.frame_pricer.price([request for _,request in items],self.materializer,self.recipe,params)
+                if len(results)!=len(items):raise ValueError('frame pricing dropped a selected root')
+                self.batch_timings.append(dict(self.frame_pricer.last_timing))
+                for (record,_),result in zip(items,results):
+                    record['diagnostics']=dict(world_reports=result.world_reports,missing_worlds=result.missing_worlds,
+                        actual_teacher_calls=result.actual_teacher_calls,reply_input_approximation=result.reply_input_approximation)
+                    if result.status=='LABELED':record.update(status='LABELED',refusal=None,improvement=asdict(result.reduction.improvement))
+                    elif result.status=='REFUSED':record['refusal']=result.reason or'unknown-required-world-or-reply'
+                    else:raise ValueError('selected original recipe returned an unselected result')
         validate_records(frames,bank,self.recipe,records);self.record_metrics(records)
         return records
