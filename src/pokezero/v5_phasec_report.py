@@ -7,6 +7,7 @@ are unavailable, rather than reconstructed from inclusive phase durations.
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from . import v5_phasec_throughput as ct
@@ -67,6 +68,43 @@ def completed_smoke(events,declaration):
     return smoke,event
 
 
+def _work_budgets(smoke):
+    budgets=smoke['cohort_training_budgets']
+    if (len(budgets)!=2 or [x['iteration']for x in budgets]!=[0,1]
+            or budgets[0]['start_step']!=0 or budgets[0]['end_step']!=budgets[1]['start_step']
+            or budgets[1]['end_step']!=smoke['steps']
+            or any(type(x[k])is not int or x[k]<0 for x in budgets for k in ('start_step','end_step','row_visits'))
+            or any(x['end_step']<=x['start_step']or x['row_visits']<=0 for x in budgets)
+            or sum(x['row_visits']for x in budgets)!=smoke['rows']):
+        raise ValueError('original checkpoint-bound completed work differs')
+    return budgets
+
+
+def _checked_component_counters(timing,smoke):
+    budgets=_work_budgets(smoke);datasets=timing.get('training_datasets',[])
+    if (type(timing.get('updates'))is not int or timing['updates']!=smoke['steps']
+            or type(timing.get('prior_durable_updates'))is not int or timing['prior_durable_updates']!=0
+            or len(datasets)!=2):
+        raise ValueError('exact original uninterrupted component update coverage required')
+    rows=0;ordered=[]
+    for budget in budgets:
+        matches=[x for x in datasets if x.get('start_step')==budget['start_step']and x.get('end_step')==budget['end_step']]
+        if len(matches)!=1:raise ValueError('one complete component dataset per original cohort required')
+        value=matches[0]
+        expected=dict(updates=budget['end_step']-budget['start_step'],row_visits=budget['row_visits'],
+            start_rows=rows,end_rows=rows+budget['row_visits'])
+        if any(type(value.get(k))is not int or value[k]!=v for k,v in expected.items()):
+            raise ValueError('component dataset rows/updates differ from durable cohort budget')
+        rows+=budget['row_visits'];ordered.append(value)
+    for key in ('cache_prepare_seconds','batch_slice_seconds','tensor_conversion_seconds','update_wall_seconds'):
+        values=[timing.get(key),*[x.get(key)for x in ordered]]
+        if any(type(x)not in (int,float)or not math.isfinite(x)or x<0 for x in values):
+            raise ValueError('finite original component measurements required')
+        if not math.isclose(values[0],sum(values[1:]),rel_tol=1e-9,abs_tol=1e-6):
+            raise ValueError('component totals differ from original cohort records')
+    return timing
+
+
 def repair_completed_report(run_root,owner_result,*,output=None):
     root=Path(run_root).resolve();owner=json.loads(Path(owner_result).read_bytes())
     if (owner.get('exit_code')not in (0,1)or owner.get('stop_reason')is not None
@@ -91,11 +129,15 @@ def repair_completed_report(run_root,owner_result,*,output=None):
     else:
         # Only the original completion/checkpoint counters survive. The old
         # in-memory timing dictionary cannot be recovered from phase totals.
-        timing=dict(updates=0,prior_durable_updates=smoke['steps'],training_datasets=[],
+        timing=dict(updates=None,prior_durable_updates=None,training_datasets=None,
+            original_completed_updates=smoke['steps'],original_completed_row_visits=smoke['rows'],
+            measured_component_updates=None,cohort_training_budgets=_work_budgets(smoke),
             cache_prepare_seconds=None,batch_slice_seconds=None,tensor_conversion_seconds=None,
             update_wall_seconds=None,data_seconds_per_update=None,
             data_scope='UNAVAILABLE_ORIGINAL_COMPONENT_COUNTERS_NOT_PERSISTED')
         counter_scope='UNAVAILABLE_ORIGINAL_COMPONENT_COUNTERS_NOT_PERSISTED'
+    missing=counter_scope=='UNAVAILABLE_ORIGINAL_COMPONENT_COUNTERS_NOT_PERSISTED'
+    if not missing:_checked_component_counters(timing,smoke)
     stopped=any(x['action']=='DEVICE_STOPPED'for x in timing.get('profiler_activity',[]))
     attribution=ct.learner_trace_categories(document,capture_stopped=stopped)
     available=attribution['per_update_mean_available']
@@ -106,9 +148,18 @@ def repair_completed_report(run_root,owner_result,*,output=None):
         gpu_sample_update_ordinals=list(ct.PROFILE_UPDATES)if available else None,
         gpu_kernel_seconds_per_sampled_update=(attribution['learner']['kernel']['seconds']/len(ct.PROFILE_UPDATES)if available else None),
         gpu_scope=attribution['scope'])
-    if counter_scope!='UNAVAILABLE_ORIGINAL_COMPONENT_COUNTERS_NOT_PERSISTED':
+    if not missing:
         timing['data_seconds_per_update']=((timing['batch_slice_seconds']+timing['tensor_conversion_seconds'])/timing['updates']if timing['updates']else None)
-    report=ct.gate_report(smoke,timing)
+    # The shared gate validator also checks original checkpoint budgets. When
+    # component measurements were lost, use those known WORK counts internally
+    # and publish the unavailable MEASUREMENT fields separately, never a fake
+    # zero-update invocation or invented trained prefix.
+    gate_timing=timing
+    if missing:
+        gate_timing=dict(updates=smoke['steps'],prior_durable_updates=0,training_datasets=[
+            dict(b,updates=b['end_step']-b['start_step'],invocation_dataset_ordinal=b['iteration'])for b in _work_budgets(smoke)])
+    report=ct.gate_report(smoke,gate_timing)
+    if missing:report['training']=timing
     banks=ct.collector_banks(events)
     report['collector_phase_walls']=ct.collector_phase_totals(banks.values(),expected_banks=20)
     report['cache_pipeline']=[dict(bank=list(key),**p['cache_pipeline'])for key,p in sorted(banks.items())if'cache_pipeline'in p]
