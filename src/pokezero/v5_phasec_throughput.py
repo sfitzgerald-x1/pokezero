@@ -268,15 +268,21 @@ def gate_report(smoke, timing):
     return report
 
 
-def learner_trace_categories(document):
+def learner_trace_categories(document, *, capture_stopped=False):
     """Join GPU durations to runtime launches inside tagged learner updates.
 
     Other GPU streams may contain simultaneous JAX work. Time overlap alone
     never makes those kernels learner work. Unjoined events stay explicit.
     """
     events=document['traceEvents']
-    scopes=[e for e in events if e.get('name')=='pokezero.learner_update'and e.get('ph')=='X']
-    if len(scopes)!=len(PROFILE_UPDATES):raise ValueError('all four tagged learner updates required')
+    if type(capture_stopped)is not bool:raise ValueError('literal profiler capture state required')
+    # Kineto can emit a second, GPU-side annotation with the same name.
+    # It is not another learner update. Early device collection stop may also
+    # leave fewer CPU tags than the four updates the instrument attempted.
+    scopes=[e for e in events if e.get('name')=='pokezero.learner_update'
+        and e.get('ph')=='X'and e.get('cat')=='user_annotation']
+    if len(scopes)>len(PROFILE_UPDATES):raise ValueError('unexpected extra CPU learner scopes')
+    complete=len(scopes)==len(PROFILE_UPDATES)and not capture_stopped
     correlations=set();external_ids=set()
     for e in events:
         if e.get('cat')=='cpu_op'and type(e.get('args',{}).get('External id'))is int and e['args']['External id']>0:
@@ -292,7 +298,10 @@ def learner_trace_categories(document):
     other={name:dict(events=categories[name]['events']-learner[name]['events'],seconds=categories[name]['seconds']-learner[name]['seconds'])for name in categories}
     return dict(learner=learner,other_or_unattributed=other,tagged_updates=len(scopes),runtime_correlations=len(correlations),
         torch_external_ids=len(external_ids),
-        scope='GPU events joined to tagged learner CUDA launches or their Torch cpu_op external IDs, including autograd threads. Other/unjoined GPU work is separate; temporal overlap alone never attributes a kernel.')
+        capture_status='FOUR_CPU_SCOPES_RECORDED'if complete else'PARTIAL_OR_UNAVAILABLE_CAPTURE',
+        expected_updates=len(PROFILE_UPDATES),missing_cpu_scopes=len(PROFILE_UPDATES)-len(scopes),
+        observed_update_ordinals=None,per_update_mean_available=complete,
+        scope='Recorded GPU events joined to CPU learner CUDA launches or their Torch cpu_op external IDs, including autograd threads. GPU annotations do not count as updates. Other/unjoined GPU work is separate; temporal overlap alone never attributes a kernel. Partial capture has no per-update mean or inferred update ordinals, and recorded sums do not prove capture completeness.')
 
 
 @contextmanager
@@ -383,6 +392,8 @@ def instrument_training(run_root, resident_cache_bytes,*,concurrent_collection=F
             if ordinal in PROFILE_UPDATES:
                 state['profile_updates'].append(ordinal)
                 profiler.step()
+                state.setdefault('profiler_activity',[]).append(dict(update=ordinal,
+                    action=getattr(getattr(profiler,'current_action',None),'name','UNAVAILABLE')))
             if ordinal==PROFILE_UPDATES[-1]:
                 profiler.__exit__(None,None,None)
                 profiler.export_chrome_trace(str(trace_path))
@@ -392,6 +403,20 @@ def instrument_training(run_root, resident_cache_bytes,*,concurrent_collection=F
     install(training,'_update',update)
     try:
         yield state
+        if concurrent_collection:
+            state['training_datasets']=list(datasets.values())
+            for value in state['training_datasets']:
+                if not value['updates']:raise ValueError('actual updates required for each declared dataset')
+                value['data_seconds_per_update']=(value['batch_slice_seconds']+value['tensor_conversion_seconds'])/value['updates']
+                value['row_visits']=value['end_rows']-value['start_rows']
+        # Preserve the literal counters before optional trace reduction can
+        # fail. A later report repair must not invent lost component timings.
+        import uuid
+        counter_path=Path(run_root)/'ct-training-counters.json'
+        if counter_path.exists():counter_path=Path(run_root)/('ct-training-counters-'+uuid.uuid4().hex+'.json')
+        from pokezero.v5_run import _publish
+        _publish(counter_path,(json.dumps(dict(schema='pokezero.ct-training-counters.v1',counters=state),allow_nan=False)+'\n').encode())
+        state['durable_counters_path']=str(counter_path)
         prefix=state['prior_durable_updates']
         if prefix is None:raise ValueError('actual training updates required')
         if prefix>=PROFILE_UPDATES[-1]:
@@ -405,22 +430,19 @@ def instrument_training(run_root, resident_cache_bytes,*,concurrent_collection=F
         state['gpu_trace_path']=str(trace_path);state['gpu_trace_sha256']=_file_sha(trace_path)
         state['gpu_sample_categories']=gpu_trace_categories(json.loads(trace_path.read_bytes()))
         if concurrent_collection:
-            attribution=learner_trace_categories(json.loads(trace_path.read_bytes()))
+            attribution=learner_trace_categories(json.loads(trace_path.read_bytes()),
+                capture_stopped=any(x['action']=='DEVICE_STOPPED'for x in state.get('profiler_activity',[])))
             state['concurrent_gpu_attribution']=attribution
             state['gpu_sample_categories']=attribution['learner']
-        state['gpu_sample_updates']=len(PROFILE_UPDATES)
-        state['gpu_sample_update_ordinals']=list(PROFILE_UPDATES)
-        state['gpu_kernel_seconds_per_sampled_update']=state['gpu_sample_categories']['kernel']['seconds']/len(PROFILE_UPDATES)
+        available=not concurrent_collection or attribution['per_update_mean_available']
+        state['gpu_profile_attempted_update_ordinals']=list(PROFILE_UPDATES)
+        state['gpu_sample_updates']=len(PROFILE_UPDATES)if available else None
+        state['gpu_sample_update_ordinals']=list(PROFILE_UPDATES)if available else None
+        state['gpu_kernel_seconds_per_sampled_update']=(state['gpu_sample_categories']['kernel']['seconds']/len(PROFILE_UPDATES)if available else None)
         state['data_seconds_per_update']=((state['batch_slice_seconds']+state['tensor_conversion_seconds'])/state['updates']if state['updates']else None)
         state['data_scope']='CURRENT INVOCATION updates only: CPU slice plus tensor conversion wall, including blocking transfers. Prefix component times unavailable; one-time resident preparation separate.'
         state['gpu_scope']='Only actual kernel trace-category durations on fixed updates8..11; memcpy/memset separate, no CPU annotation spans. Diagnostic sample, not full-iteration GPU total.'
         if concurrent_collection:state['gpu_scope']=attribution['scope']
-        if concurrent_collection:
-            state['training_datasets']=list(datasets.values())
-            for value in state['training_datasets']:
-                if not value['updates']:raise ValueError('actual updates required for each declared dataset')
-                value['data_seconds_per_update']=(value['batch_slice_seconds']+value['tensor_conversion_seconds'])/value['updates']
-                value['row_visits']=value['end_rows']-value['start_rows']
     finally:
         if profiler is not None:
             profiler.__exit__(None,None,None)
