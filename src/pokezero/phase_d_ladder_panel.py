@@ -147,7 +147,17 @@ async def raw_worker(request_path,expected_sha256,*,runtime=None,expected_pair=N
         if (result.config!=config or result.checkpoint_sha256!=request['checkpoint_sha256']
                 or result.foulplay_random_seed_schedule!=(config.foulplay_random_seed,)or len(result.games)!=1):
             raise ValueError('original one-cell benchmark binding differs')
-        game=result.games[0].to_dict();score=v5_foulplay._score(config,game)
+        game=result.games[0].to_dict()
+        expected_header=dict(checkpoint_sha256=request['checkpoint_sha256'],policy_mode='raw',
+            seed_start=cell['seed'],pokezero_player=('p1','p2')[cell['seat']])
+        for key in ('encoder_kind','capture_driver','format_id'):
+            if hasattr(config,key):expected_header[key]=getattr(config,key)
+        if (game.get('seed')!=cell['seed'] or game.get('seed')!=config.seed_start
+                or document.get('game_results')!=[game]
+                or any(document.get(key)!=value for key,value in expected_header.items())
+                or document.get('foulplay_random_seed_schedule',{}).get('seeds')!=[cell['fp_seed']]):
+            raise ValueError('literal scored game/benchmark must join original fixed cell and controlled header')
+        score=v5_foulplay._score(config,game)
         value=dict(status='COMPLETE'if score is not None else'UNKNOWN',score=score,error=None)
     except Exception as error:value=dict(status='UNKNOWN',score=None,error=type(error).__name__+': '+str(error))
     value.update(schema=CELL_SCHEMA,request_sha256=expected_sha256,declaration_sha256=request['declaration_sha256'],
