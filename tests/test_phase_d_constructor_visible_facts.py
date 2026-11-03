@@ -8,9 +8,14 @@ class VisibleOwnFacts(unittest.TestCase):
         names=('', 'tackle','hiddenpower','hiddenpowerflying','hiddenpowerfire')
         self.assertEqual(live._own_move(names,'hiddenpowerflying','hiddenpowerflying70'),3)
         self.assertEqual(live._own_move(names,'hiddenpower','hiddenpowerfire60'),4)
+        self.assertEqual(live._own_move(names,'hiddenpowerfire60','hiddenpowerfire60'),4)
         self.assertEqual(live._own_move(('', 'return'),'return102',None),1)
         with self.assertRaisesRegex(live.Refusal,'NAMESPACE_UNAVAILABLE'):
             live._own_move(names,'hiddenpowerice','hiddenpowerice70')
+        for literal,resolved in (('hiddenpowerice','hiddenpowerfire70'),('hiddenpowerfire60','hiddenpowerfire70'),
+                ('hiddenpower',None)):
+            with self.subTest(literal=literal,resolved=resolved),self.assertRaisesRegex(live.Refusal,'OWN_HIDDEN_POWER_LITERAL_DIFFERS'):
+                live._own_move(names,literal,resolved)
 
     def test_literal_max_power_uniquely_proves_own_happiness(self):
         self.assertEqual(live._own_happiness({},('return102',),'own'),255)
