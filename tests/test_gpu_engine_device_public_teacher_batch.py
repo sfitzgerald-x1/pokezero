@@ -158,7 +158,7 @@ class FrameBatchTests(unittest.TestCase):
         with patch.object(mapping,'materialize',side_effect=self.materialize((0,0),missing=((0,0),))),patch.object(batch.v5_model,'forward',side_effect=traced):
             result=pricer.price((r,),self.tables,self.recipe,params)[0]
         work=pricer.last_timing
-        self.assertIn(324,shapes);self.assertEqual(work['evaluated_leaf_forward_rows'],324)
+        self.assertEqual(set(shapes),{1});self.assertEqual(work['evaluated_leaf_forward_rows'],324)
         self.assertEqual(work['evaluated_root_slots'],2);self.assertEqual(work['evaluated_world_slots'],4)
         self.assertEqual(work['padding_root_slots'],1);self.assertEqual(work['padding_world_slots'],2)
         self.assertEqual(work['substituted_world_slots'],1)

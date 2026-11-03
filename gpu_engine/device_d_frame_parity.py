@@ -39,6 +39,25 @@ def comparable(result):
         reply_input_approximation=result.reply_input_approximation)
 
 
+def numeric_summary(a,b,path='root'):
+    """Magnitude evidence alongside the unchanged strict difference paths."""
+    totals={}
+    def walk(x,y,p):
+        if isinstance(x,dict)and isinstance(y,dict):
+            for k in set(x)&set(y):walk(x[k],y[k],p+'.'+str(k))
+        elif isinstance(x,(tuple,list))and isinstance(y,(tuple,list)):
+            for i,(u,v)in enumerate(zip(x,y)):walk(u,v,p+f'[{i}]')
+        elif type(x)in (int,float)and type(y)in (int,float):
+            kind='reply_logits'if 'reply_logits'in p else'joint_values'if 'joint_values'in p else'root_target'if 'improvement'in p else'other_numeric'
+            row=totals.setdefault(kind,dict(compared=0,above_tolerance=0,nonfinite=0,max_absolute_difference=0.))
+            row['compared']+=1
+            if not(math.isfinite(x)and math.isfinite(y)):row['nonfinite']+=1;return
+            delta=abs(x-y);row['max_absolute_difference']=max(row['max_absolute_difference'],delta)
+            row['above_tolerance']+=int(delta>TOLERANCE)
+    walk(a,b,path)
+    return totals
+
+
 def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,progress_callback=None):
     if enable_parity is not True or getattr(provider,'frame_batch',False):
         raise ValueError('explicit quarantined original serial provider required')
@@ -89,7 +108,8 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
             row['reason']=old['reason'];continue
         if address not in references:raise ValueError('batch priced a root absent from original serial provider')
         a,b=references[address],results[address];row['batch_status']=b.status
-        row['differences']=differences(comparable(a),comparable(b))
+        ca,cb=comparable(a),comparable(b)
+        row['differences']=differences(ca,cb);row['numeric_comparison']=numeric_summary(ca,cb)
         # Materialization moved to CPU, not changed: all physical/public arrays
         # and original world keys must remain byte-equal, independently of Q.
         for wi,(x,y)in enumerate(zip(a.worlds,b.worlds)):
