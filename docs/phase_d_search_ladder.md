@@ -1,0 +1,73 @@
+# Champion search ladder
+
+This is a separate, explicit search study on untouched champion 9375. It does
+not wait for a Phase C winner. It changes neither D3's training teacher nor the
+older exact-chance Phase D prerequisite.
+
+The raw producer in `pokezero.phase_d_ladder_panel` reuses the original
+`ChampionWorkerRuntime`, B2 owning encoder, controlled Foul Play runner and
+literal terminal scorer. It claims a cell before numerical work, records its
+owning wire before action selection, and writes each result exclusively. Its
+500-cell screen is the actual common raw control. The full declaration is
+1,000 seeds × both seats, with the first 250 seeds × both seats as the screen.
+Every rung uses those same seeds and Foul Play at 1,000 ms. A CPU actor and
+Foul Play process use distinct dedicated cores; compiled functions and model
+persist, while every game gets fresh providers and history.
+
+`phase_d_ladder_freeze.py` freezes 200 metadata-ranked roots from exactly the
+first 64 closed declared raw cells. It opens only their captures and includes
+partial, capped and failed captures. It never uses a score or a constructor
+result. The four turn bands each contribute 50 roots; an unavailable band is
+reported instead of being filled with easier roots. Missing capture games are
+listed beside the actual root denominator.
+
+The constructor's new `ProtocolInputs` route under
+`v5_public_world.materialize` accepts genuine `PublicRoot` data, B2's public
+carry and the exact own request. It calls the original pure
+`world_battle_spec` → `map_spec` mapping. This route does not fabricate a driver
+Session, History, witness or true-opponent donor. Posterior draws are checked
+against B2's public candidate bits. Unsupported clocks and mapping failures
+remain named refused world slots. The original retained-driver route remains
+unchanged. All requested 16/32-world roots remain in the construction table.
+
+The rung order is R1 (2 worlds, value), R3 (32 worlds, value), R4 (32 worlds,
+8 sampled chances), R7 (32 worlds, depth 2), and R5 (8 worlds, 8 raw-policy
+rollout leaves). All legal replies are priced by the frozen champion's
+opponent-owned policy. The common root operator chooses the largest mean
+completed Q across worlds, replies and chance samples. D's training target's
+`raw logits + Q` policy target is not the acting operator. Raw B2 logits and Q
+are recorded for the aggregation diagnostic. Depth 2 uses the best completed
+second-ply action within each determinized successor, then averages those
+values for the common root action. Rollouts use deterministic raw policy and
+fresh declared chance keys, with caps and any required refusal making the
+whole searched request unavailable. This is an explicit sampled-chance
+ladder; it never silently substitutes samples for the original exact mode.
+
+One GPU server owns the champion and dense world/branch batches for all
+concurrent CPU panel games. No game owns a separate GPU. The constructor-only
+server mode reports no search latency claim. Search timing uses five original
+metadata-ranked roots per turn band (20 total), selected before constructor
+results, with full-request p95 and untimed roots retained as unavailable. The
+30-second admission bar remains against the 60-second acting deadline. The
+panel client waits at most 45 seconds, leaving time for the explicitly counted
+raw fallback; it never retries the root.
+
+A rung's 500-cell point difference of at least three percentage points extends
+its same declaration to 2,000. With missing cells, this implementation requires
+the full-roster worst-case difference to meet three points, rather than using
+a favorable survivor estimate. Reports retain known-pair intervals, missing
+identification bounds, discordance, refusal/fallback shares and timing. The
+paired interval clusters the two seats by seed. No interval is reported from
+zero sample variance. Final arm choice uses reviewed lower bounds with the original missing-cell
+caveat; this reducer does not automatically qualify strength.
+
+The privileged/rollout value bank is a separate producer sharing the same GPU
+allocation. It is not invoked by these import paths. The diagnostic order is
+X1 children head, X2 leaf ablation, X3 oracle worlds, X4 world-count curve,
+X5 leaf fidelity, X6 reply model, X7 aggregation and X8 coverage. One named
+cause permits one fix and one ladder rerun; this source adds no open-ended
+mechanics or visits sweep.
+
+No numerical gate result, construction rate, p95 admission or strength claim
+follows from source or inert tests. Scientific producer review and actual
+fixed-roster measurements are required before dispatch.
