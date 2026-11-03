@@ -124,6 +124,7 @@ def metrics(root_rows,child_rows,*,bins=15):
         if gap<.05:small_gap+=1;continue
         top.append(dict(selector=dict(zip(('stream','frame','owner'),key)),actions=[a['action'],b['action']],gap=gap,
             correct=a['prediction']>b['prediction']))
+    sensitivity=[r for r in top if r['gap']>=.10]
     backups=[r for r in roots if usable(r.get('backup'))]
     bc=calibration([r['backup']for r in backups],[[r['outcome']]for r in backups],bins=bins)
     same_head=calibration([r['prediction']for r in backups],[[r['outcome']]for r in backups],bins=bins)
@@ -134,9 +135,11 @@ def metrics(root_rows,child_rows,*,bins=15):
     return dict(root_slots=len(root_rows),child_slots=len(child_rows),root_known=len(roots),root_unknown=len(root_rows)-len(roots),
         child_known=len(complete),child_unknown=missing_children,root_calibration=rc,child_calibration=cc,
         child_spearman=rho,spearman_full_denominator_bounds=[-1,1]if missing_children else None,
-        top_two=dict(eligible_known=len(top),correct=sum(r['correct']for r in top),resolution=rate,
+        top_two=dict(gap_units='expected_outcome[-1,1]',primary_gap=.05,probability_equivalent=.025,eligible_known=len(top),correct=sum(r['correct']for r in top),resolution=rate,
             unknown_groups=unknown_groups,below_gap_groups=small_gap,rows=top,
             full_denominator_resolution_bounds=None if not(len(top)+unknown_groups)else[sum(r['correct']for r in top)/(len(top)+unknown_groups),(sum(r['correct']for r in top)+unknown_groups)/(len(top)+unknown_groups)]),
+        top_two_probability_gap_05_sensitivity=dict(descriptive_only=True,not_a_bar=True,raw_expected_outcome_gap=.10,probability_gap=.05,
+            eligible_known=len(sensitivity),correct=sum(r['correct']for r in sensitivity),resolution=None if not sensitivity else sum(r['correct']for r in sensitivity)/len(sensitivity),unknown_groups=unknown_groups),
         backup=dict(known=len(backups),unknown=len(root_rows)-len(backups),calibration=bc,matched_head_calibration=same_head,
             scope='Fixed chance/single recorded world; frozen9375 reply policy over ALL legal replies; max over legal own actions'),
         uncertainty=dict(child_truth='64 terminal draws, per-child Monte Carlo stderr and missing-return bounds in truth file',

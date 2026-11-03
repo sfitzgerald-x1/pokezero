@@ -33,13 +33,19 @@ plus predeclared `seed`, positive `max_requests`, and `split_seed`. All referenc
 are real scientific artifact bindings. No absent digest is replaced with a
 placeholder. The original runtime's exact source/PATH/catalog/pool/memory checks
 run before any reconstruction. The archive must identify the original9375
-checkpoint. Both continuation seats use that one frozen raw policy, regardless
+checkpoint. Both continuation seats use that one frozen raw policy with deterministic
+legal argmax and lower-index ties; engine chance, not categorical policy
+sampling, varies across the64 replicates. This is independent
 of the head later evaluated. No training or outcome-conditioned selection runs.
 
 Each original child receives exactly64 fresh continuation IDs. Keys bind seed,
 original root address, own action, recorded reply/chance and replicate ordinal.
-Up to32 children flatten into one 2,048-lane device batch. The last batch uses
-its actual count. The original engine/public step, encoder routing and BF16 raw
+Every continuation call has exactly32 child slots×64=2,048 physical lanes.
+Unavailable and tail children preserve their original slot positions; ignored
+padding copies a verified physical state/public carry and is marked inactive.
+Only actual child dispositions are returned. No padding becomes truth or refill.
+If no verified physical root exists at all, all slots stay missing without
+inventing a padding battle. The original engine/public step, encoder routing and BF16 raw
 policy are used. Caps/view or engine refusals remain unknown returns. Full-target
 means are absent until all64 finish; known outcomes give conservative bounds and
 complete batches report Monte Carlo standard error. This truth is conditional
@@ -64,7 +70,8 @@ is the average squared error against the64 actual terminal win/draw/loss
 returns, not squared error to their sample mean. Probability scale is[0,1].
 ECE uses15 predeclared equal-width bins, Spearman uses average tie ranks, and the
 top-two check selects truth's best two siblings only when their mean-value gap
-is at least0.05. Root/child missing counts and unknown groups remain explicit;
+is at least0.05 in expected-outcome[-1,1] units (0.025 on the win-probability
+scale). A raw0.10/probability0.05 sensitivity is descriptive only, not a bar. Root/child missing counts and unknown groups remain explicit;
 conditional metrics do not become a full-denominator pass. Bars are child
 ECE<=0.03, Spearman>=0.6, top-two resolution>=0.6 and lower matched-root backup
 Brier. Monte Carlo uncertainty and raw-policy/engine bias remain limitations.
