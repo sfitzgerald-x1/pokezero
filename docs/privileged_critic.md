@@ -33,7 +33,11 @@ physical party members in ascending physical order. This is **offline privilege*
 not a claim that unseen identities were public. It does not modify the public
 carry/actor or publish a policy.
 
-Unavailable/error/private rows remain metadata rows with no tensor index. They
+Unavailable/error/private rows remain metadata rows with no tensor index.
+Original REFUSED/FAILED children retain their literal status/reason and all64
+truth dispositions; they are not compared to nonexistent stored observations.
+Terminal proof is separate from the unchanged child truth record; a terminal
+child has no fabricated head observation. They
 are not zero-filled observations. The NPZ contains only actual available rows;
 every array has one unique original row identity. Child targets exist only when
 all64 original truth continuations have terminal outcomes. All missing roots,
@@ -51,7 +55,12 @@ Fit config references are `production_declaration`, `run_started_event`,
 scientific data references(path/SHA256), not operational identity receipts.
 The original declaration must name B and the full2M-game production plan.
 Checkpoint publication must belong to that same original run and have positive
-steps/rows, matching the actual checkpoint. A20k smoke or initial diagnostic
+steps/rows, matching the actual checkpoint. The reader verifies EVERY original
+journal event from RUN_STARTED through that CHECKPOINT: canonical event hash,
+filename/sequence, previous link and actual selected-event equality. A lone
+self-hashed disconnected checkpoint is refused; no journal is repaired. The
+actual trunk selection is predeclared: first B0 production iteration-complete
+checkpoint, not a diagnostic or a best-on-truth checkpoint. A20k smoke or initial diagnostic
 trunk does not qualify. The digest-verified checkpoint bytes are copied to a
 private immutable snapshot consumed by the unchanged strict loader; the source
 checkpoint remains untouched. Scheduled checkpoints also need the original

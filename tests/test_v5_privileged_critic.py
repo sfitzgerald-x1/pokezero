@@ -98,4 +98,20 @@ class FitControllerTests(unittest.TestCase):
   result=c.fit_fold([1],[],3,train_epoch=lambda *a:calls.append(a),validate=lambda ids:None,snapshot=lambda:'public-head',restore=lambda value:self.assertEqual(value,'public-head'))
   self.assertEqual(result['selected_epoch'],0);self.assertEqual(result['optimizer_updates'],0);self.assertFalse(calls)
 
+
+class JournalPrefixTests(unittest.TestCase):
+ def test_hash_linked_prefix_must_include_every_original_event(self):
+  def event(n,kind,previous):
+   body=dict(sequence=n,kind=kind,previous=previous,payload={},time=1.)
+   return dict(body,sha256=c.truth().digest(body))
+  start=event(0,'RUN_STARTED',None);middle=event(1,'TRAIN_END',start['sha256']);selected=event(2,'CHECKPOINT',middle['sha256'])
+  with tempfile.TemporaryDirectory()as d:
+   root=Path(d)
+   for e in (start,middle,selected):(root/f"{e['sequence']:09d}.json").write_text(json.dumps(e))
+   c.journal_prefix(root,start,selected)
+   foreign=event(1,'TRAIN_END','f'*64);(root/'000000001.json').write_text(json.dumps(foreign))
+   with self.assertRaises(ValueError):c.journal_prefix(root,start,selected)
+   (root/'000000001.json').unlink() # This operation owns ONLY this tiny temporary fixture.
+   with self.assertRaises(OSError):c.journal_prefix(root,start,selected)
+
 if __name__=='__main__':unittest.main()
