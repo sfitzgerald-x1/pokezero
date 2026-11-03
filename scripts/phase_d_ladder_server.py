@@ -18,29 +18,10 @@ def build(args):
     import jax
     jax.config.update('jax_enable_x64',False);jax.config.update('jax_default_matmul_precision','highest')
     if len(jax.devices())!=1 or jax.devices()[0].platform!='gpu':raise ValueError('ONE shared GPU required')
-    from pokezero.live_protocol_actor import ActorContract,_vocab_sha
-    from pokezero.category_vocab import CategoryVocabulary
-    from pokezero.dex import load_showdown_dex_cached
-    from pokezero.randbat import load_gen3_randbat_source_cached
-    from pokezero.local_showdown import LocalShowdownConfig
-    from pokezero.observation import ObservationFeatureMasks
-    from pokezero import v5_contract
-    from gpu_engine import public_belief,v4_encoder,device_public_worlds,transition,engine_device_observation
+    from gpu_engine import transition,engine_device_observation
     from gpu_engine.phase_d_ladder_search import Search
-    contract=ActorContract.champion();revision=subprocess.check_output(['git','-C',args.showdown_root,'rev-parse','HEAD'],text=True).strip()
-    dirty=subprocess.check_output(['git','-C',args.showdown_root,'status','--porcelain','--untracked-files=no'],text=True)
-    if revision!=contract.showdown_revision or dirty:raise ValueError('original clean pinned Showdown required')
-    vocab=CategoryVocabulary(**read_bound(args.vocabulary,args.expected_vocabulary_sha256))
-    if _vocab_sha(vocab)!=contract.category_vocab_sha256:raise ValueError('original9375 vocabulary required')
-    metadata=read_bound(args.metadata,args.expected_metadata_sha256)
-    source=load_gen3_randbat_source_cached(args.showdown_root)
-    catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),load_showdown_dex_cached(args.showdown_root),
-        vocab,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
-    bound=device_public_worlds.compile_source(source,metadata,expected_source_hash=contract.belief_set_source_hash,
-        expected_source_rows_sha256=v5_contract.source_variant_census(source)['source_rows_sha256'])
-    masks=dict(contract.feature_masks);masks['opponent_tendency_stats_block']=masks.pop('stats_block')
-    config=LocalShowdownConfig(showdown_root=args.showdown_root,node_binary=args.node_binary,observation_spec=v5_contract.V4_SPEC,
-        category_vocab=vocab,feature_masks=ObservationFeatureMasks(**masks),set_belief_source=True)
+    from gpu_engine.phase_d_protocol_constructor import load_inputs
+    catalog,bound,metadata,config=load_inputs(args)
     return Search(args.archive,expected_archive_sha256=args.expected_archive_sha256,catalog=catalog,source=bound,metadata=metadata,
         engine_tables=transition.tables_from_metadata(metadata),observation_tables=engine_device_observation.compile_tables(metadata,catalog=catalog),
         rung=args.rung,owning_config=config,seed=args.seed,chance_cap=args.branch_cap,lanes=args.lanes,
