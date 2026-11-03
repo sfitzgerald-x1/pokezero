@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 import random
+import re
 
 import jax
 import jax.numpy as j
@@ -69,6 +70,37 @@ def _remap(values, names, target):
 def _source_move(name):
     value = normalize_id(name)
     return 'hiddenpower' if value.startswith('hiddenpower') else canonical_move_id(value)
+
+
+def _own_move(names,name,hp_move):
+    # map_spec uses this same device representation: the move ID carries the
+    # type, while hidden_power_type/power hold the exact IV-derived facts.
+    value=canonical_move_id(hp_move)if _source_move(name)=='hiddenpower'else _source_move(name)
+    return _lookup(names,value)
+
+
+def _own_happiness(mon,moves,species):
+    """Invert a literal own request's resolved power only when it is unique.
+
+    Pinned Showdown f76228a sim/pokemon.ts getSwitchRequestData appends the
+    actual data/moves.ts Return/Frustration callback to the move ID. Happiness
+    is an integer in 0..255. Return102 therefore proves 255; plain Return and most
+    other powers remain ambiguous. No generator default or donor is used.
+    """
+    explicit='happiness'in mon
+    if explicit and(type(mon['happiness'])is not int or not 0<=mon['happiness']<=255):
+        raise Refusal('OWN_HAPPINESS_INVALID')
+    relevant=any(_source_move(x)in ('return','frustration')for x in moves)
+    if not explicit and not relevant:return None
+    candidates={mon['happiness']}if explicit else set(range(256))
+    for move in moves:
+        match=re.fullmatch(r'(return|frustration)([0-9]+)',normalize_id(move))
+        if match is None:continue
+        kind,power=match.groups();power=int(power)
+        candidates={h for h in candidates if max(1,((h if kind=='return'else 255-h)*10)//25)==power}
+    if not candidates:raise Refusal('OWN_HAPPINESS_INVALID')
+    if len(candidates)!=1:raise Refusal('OWN_HAPPINESS_UNAVAILABLE',species)
+    return next(iter(candidates))
 
 
 def _physical_protect_counter(successes):
@@ -176,12 +208,8 @@ def _exact_own(request, state, catalog, source, metadata, owner):
         own['status'][slot] = {'':0,'par':1,'brn':2,'psn':3,'tox':4,'slp':5,'frz':6}[status]
         if status == 'slp':
             raise Refusal('OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE', species)
-        if any(_source_move(x) in ('return', 'frustration') for x in moves) and 'happiness' not in mon:
-            raise Refusal('OWN_HAPPINESS_UNAVAILABLE', species)
-        if 'happiness' in mon:
-            if type(mon['happiness']) is not int or not 0 <= mon['happiness'] <= 255:
-                raise Refusal('OWN_HAPPINESS_INVALID')
-            own['happiness'][slot] = mon['happiness']
+        happiness=_own_happiness(mon,moves,species)
+        if happiness is not None:own['happiness'][slot]=happiness
         if hp_move:
             own['hidden_power_type'][slot] = _lookup(v['types'], hp_move[len('hiddenpower'):-2])
             own['hidden_power_power'][slot] = int(hp_move[-2:])
@@ -192,7 +220,7 @@ def _exact_own(request, state, catalog, source, metadata, owner):
         if public_slot is not None:
             joined[slot] = public_slot
         for k, name in enumerate(moves):
-            move = _lookup(v['moves'], hp_move if _source_move(name) == 'hiddenpower' else _source_move(name))
+            move = _own_move(v['moves'],name,hp_move)
             own['moves'][slot,k] = move
             pp = metadata['moves'][move].get('pp')
             if type(pp) is not int or pp <= 0:
