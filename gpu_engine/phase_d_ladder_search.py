@@ -15,12 +15,9 @@ import jax
 import jax.numpy as j
 import numpy as np
 
-from pokezero.live_protocol_actor import ActorContract,_packet
-from pokezero.recorded_encoder_runner import JaxRecordedAdapter
-from pokezero.v5_contract import DecisionAddress
-from pokezero.v5_teacher_public_root import capture_root
 from .phase_d_search import Search as OriginalSearch,probabilities,_host,SCHEMA
-from . import phase_d_live_worlds as worlds,phase_d_protocol_world as protocol
+from . import phase_d_live_worlds as worlds
+from .phase_d_protocol_constructor import ProtocolConstructor
 from . import transition,device_public_leaf as leaf,engine_device_observation as observation
 from .benchmark_device_selfplay import request_seats
 
@@ -78,6 +75,9 @@ class Search(OriginalSearch):
         self.constructor_only=constructor_worlds is not None
         if self.constructor_only:self.count=constructor_worlds
         self.owning_config=owning_config;self.rollout_max_requests=rollout_max_requests
+        self.constructor=ProtocolConstructor(catalog=self.catalog,source=self.source,metadata=self.metadata,
+            owning_config=owning_config,count=self.count,seed=self.seed,rung=self.rung,
+            saved_root_admission=self.saved_root_admission,functions=self.functions,seen=self.seen,sessions=self.sessions)
         def step(s,p,a,c):
             result=transition.step_with_public(s,a,self.engine_tables,p,
                 belief_tables=self.observation_tables.belief,chance_inputs=c)
@@ -114,38 +114,7 @@ class Search(OriginalSearch):
         self.rollouts=jax.jit(jax.vmap(rollout))
 
     def _prepare_protocol(self,request,index):
-        required={'schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line'}
-        if set(request)!=required or request['schema']!=SCHEMA or request['owner']not in ('p1','p2'):
-            raise worlds.Refusal('MALFORMED_SEARCH_REQUEST')
-        if (type(request['stream_id'])is not int or not 0<request['stream_id']<2**31
-                or type(request['decision_index'])is not int or request['decision_index']<0
-                or type(request['battle_id'])is not str or not request['battle_id'].strip()
-                or type(request['generation'])is not int or request['generation']<=0):
-            raise worlds.Refusal('MALFORMED_SEARCH_ADDRESS')
-        lines=tuple(request['lines']);prefix=hashlib.sha256(''.join(x+'\n'for x in lines).encode()).hexdigest()
-        if prefix!=request['prefix_sha256']or not lines or lines[-1]!=request['own_request_line']:
-            raise worlds.Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH')
-        key=(self.rung,request['battle_id'],request['owner'],request['stream_id']);address=(key,request['decision_index'],prefix)
-        if address in self.seen:raise worlds.Refusal('SEARCH_REQUEST_ALREADY_ATTEMPTED')
-        self.seen.add(address)
-        owner=int(request['owner'][1])-1
-        prior=None if self.saved_root_admission else self.sessions.get(key)
-        if prior is None:
-            adapter=JaxRecordedAdapter(self.catalog,owner_side=owner,compiled_functions=self.functions)
-            adapter.reset(stream_id=request['stream_id'],battle_id=request['battle_id']);old=()
-        else:adapter,old=prior
-        if lines[:len(old)]!=old or len(lines)<=len(old):raise worlds.Refusal('SEARCH_PREFIX_NOT_ORIGINAL_SUCCESSOR')
-        # Original Python public-root capture checks literal owning request and
-        # exact-foe/split contamination before either constructor can consume it.
-        public=capture_root(config=self.owning_config,contract=ActorContract.champion(),lines=lines,
-            address=DecisionAddress(request['stream_id'],request['decision_index'],owner),battle_id=request['battle_id'],seed=self.seed&0xffffffff)
-        packet=_packet(request['own_request_line'],request['owner'])
-        adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
-        if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
-        detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address)
-        made=protocol.sample(public,detached,lines=lines,catalog=self.catalog,source=self.source,metadata=self.metadata,
-            config=self.owning_config,battle_id=request['battle_id'],seed=self.seed,count=self.count)
-        return detached,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
+        return self.constructor.prepare(request,index)
 
     def _surfaces(self,nodes):
         surfaces=[];rows=[]
