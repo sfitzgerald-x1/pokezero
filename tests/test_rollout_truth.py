@@ -38,6 +38,8 @@ class MetricsTests(unittest.TestCase):
   roots=[dict(selector=SEL,prediction=0.,outcome=1,backup=1.)]
   kids=[dict(selector=SEL,action=0,prediction=1.,rollouts=full(1)),dict(selector=SEL,action=1,prediction=-1.,rollouts=full(-1))]
   m=t.metrics(roots,kids);self.assertEqual(m['decision'],'PASS');self.assertTrue(m['bars']['backup_lower'])
+  self.assertEqual(m['top_two']['gap_units'],'expected_outcome[-1,1]');self.assertEqual(m['top_two']['primary_gap'],.05)
+  self.assertTrue(m['top_two_probability_gap_05_sensitivity']['not_a_bar'])
   kids[0]['prediction'],kids[1]['prediction']=-1.,1.
   self.assertEqual(t.metrics(roots,kids)['decision'],'FAIL')
  def test_game_clustered_split_never_splits_frames_or_children(self):
@@ -97,11 +99,20 @@ class InertContinuationTests(unittest.TestCase):
   actor.advance=advance
   kids=[dict(state=source,public=j.zeros((1,1)),selector=dict(SEL,owner=owner),action=0,reply=1,chance_id='a'*64)for owner in (0,1)]
   rows=actor.continuation_batch(kids,t.Recipe(3,max_requests=2))
-  self.assertEqual(len(rows),2);self.assertEqual(len(seen[0][0]),128)
+  self.assertEqual(len(rows),2);self.assertEqual(len(seen[0][0]),2048)
+  self.assertTrue(seen[0][1][128:].all())
   self.assertEqual(rows[0][0]['status'],'REFUSED');self.assertEqual(rows[0][1]['outcome'],1)
   self.assertTrue(all(r['status']=='CAPPED'and r['outcome']is None for r in rows[1]))
   self.assertTrue(np.array_equal(np.asarray(source.keys),np.zeros((1,2),np.uint32)))
   self.assertTrue(np.asarray(seen[1][1])[:64].all())
+  seen.clear()
+  recipe=t.Recipe(3,max_requests=2)
+  mixed=actor.continuation_batch([None,kids[1],None],recipe)
+  self.assertIsNone(mixed[0]);self.assertIsNone(mixed[2]);self.assertEqual(len(mixed[1]),64)
+  self.assertTrue(seen[0][1][:64].all());self.assertFalse(seen[0][1][64:128].any());self.assertTrue(seen[0][1][128:].all())
+  declared=recipe.keys(kids[1]['selector'],0,1,'a'*64)
+  expected=np.asarray(jax.vmap(jax.random.PRNGKey)(j.asarray([x[0]for x in declared],j.uint32)))
+  self.assertTrue(np.array_equal(seen[0][0][64:128],expected))
 
 class ManifestTests(unittest.TestCase):
  def test_actual_counts_are_reported_even_when_human_brief_differs(self):
