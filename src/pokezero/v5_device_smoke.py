@@ -17,7 +17,7 @@ BANK_FIELDS=('run_id','pool_sha256','games','batch_rows','model_seed','stream_st
     'constructor_seed_start','sampling_seed_start','gender_seed','gender_root_start','gender_domain','selection_seed','max_requests')
 
 
-def build_plan(bank,profile,labels,category):
+def build_plan(bank,profile,labels,category,*,arm='B'):
     """Use genuine Plan types and the original B model/loss/optimizer recipe."""
     from . import v5_run as runs,v5_training as training
     from . import v5_phasec as phase
@@ -27,7 +27,8 @@ def build_plan(bank,profile,labels,category):
         if name not in ('run_id','pool_sha256'):
             runs._seed(bank[name])
     if bank['model_seed']in (0,1):raise ValueError('smoke initialization must differ from fixed production seeds')
-    config=profile.configurations(labels,category_vocabulary=category,arm='B',replicate=0)
+    if arm not in ('A','B','D'):raise ValueError('explicit A/B/D model shape required')
+    config=profile.configurations(labels,category_vocabulary=category,arm=arm,replicate=0)
     train=training.TrainConfig(**dict(config['training'],seed=bank['model_seed']))
     batches=[]
     for index,start in enumerate(range(0,GAMES,bank['batch_rows'])):
@@ -37,10 +38,34 @@ def build_plan(bank,profile,labels,category):
             bank['gender_seed'],bank['gender_domain'],tuple(bank['gender_root_start']+i for i in range(start,stop))))
     return runs.Plan(bank['run_id'],config['model'],config['loss'],train,(tuple(batches),),bank['pool_sha256'],
         bank['selection_seed'],config['historical_fraction'],config['historical_window'],bank['max_requests'],
-        runs.Watchdog(1800),checkpoint_updates=32,discount=config['discount'])
+        runs.Watchdog(21600 if arm=='D' else 1800),checkpoint_updates=32,discount=config['discount'])
 
 
-def execute(config,run_root,*,enable_smoke=False,cache_workers=0):
+def teacher_table(store,run_root):
+    """All selected/refused decisions by original frame, not accepted labels."""
+    rows={};strategies=set();timing={}
+    for report in store.matching('DEVICE_TEACHER_FRAME_COUNTS'):
+        strategies.add(report['strategy'])
+        for frame,value in report['by_frame'].items():
+            counts=rows.setdefault(int(frame),dict(requested=0,selected=0,labeled=0,refused=0,unselected=0))
+            for key in counts:counts[key]+=value[key]
+        for key,value in report['batch_timing_totals'].items():timing[key]=timing.get(key,0)+value
+    if not rows:return None
+    columns=('frame','requested','selected','labeled','refused','unselected','refused_share_selected')
+    values=[]
+    for frame,counts in sorted(rows.items()):
+        if counts['selected']!=counts['labeled']+counts['refused']or counts['requested']!=counts['selected']+counts['unselected']:
+            raise ValueError('teacher frame denominator differs')
+        values.append([frame,*(counts[k]for k in columns[1:-1]),None if not counts['selected']else counts['refused']/counts['selected']])
+    path=Path(run_root)/'teacher-frame-table.json'
+    path.write_text(json.dumps(dict(columns=columns,rows=values),allow_nan=False)+'\n')
+    from .v5_data import _file_sha
+    totals={key:sum(v[key]for v in rows.values())for key in ('requested','selected','labeled','refused','unselected')}
+    return dict(path=str(path),sha256=_file_sha(path),frames=len(rows),strategies=sorted(strategies),
+        totals=totals,refused_share_selected=None if not totals['selected']else totals['refused']/totals['selected'],batch_timing_totals=timing)
+
+
+def execute(config,run_root,*,enable_smoke=False,cache_workers=0,model_arm='B',teacher_frame_batch=False):
     """Actual collect -> cache -> original train/checkpoint/export -> JAX load."""
     if enable_smoke is not True:raise ValueError('explicit finite smoke execution required')
     if set(config)!=set(('schema','runtime','labels','bank','persistent_cache'))or config['schema']!=SCHEMA:
@@ -53,7 +78,8 @@ def execute(config,run_root,*,enable_smoke=False,cache_workers=0):
     runtime=worker._record(config['runtime']);labels=contract.LabelVocabulary(**worker._record(config['labels']))
     profile,vocabulary,gender,category=worker._runtime_metadata(runtime,expected_pool_sha256=config['bank']['pool_sha256'])
     if gender is None:raise ValueError('original gender metadata for declared smoke pool required')
-    plan=build_plan(config['bank'],profile,labels,category)
+    plan=build_plan(config['bank'],profile,labels,category,arm=model_arm)
+    if type(teacher_frame_batch)is not bool or teacher_frame_batch and model_arm!='D':raise ValueError('frame teacher batching is D-only')
     # Same source/memory/precision ordering as the original production worker;
     # there is no fabricated production evaluation protocol or readiness object.
     worker._source(runtime);worker._memory(runtime['memory_policy'],apply=True);worker._probe(runtime)
@@ -62,18 +88,23 @@ def execute(config,run_root,*,enable_smoke=False,cache_workers=0):
     from gpu_engine import v5_model
     begin=time.perf_counter();prepared,pool,_,_=worker.prepare_device_runtime(inputs)
     preparation=time.perf_counter()-begin
-    backend=RuntimeBackend(prepared,pool,gender_policy=gender,measure_runtime=True,cache_workers=cache_workers)
+    teacher=None
+    if model_arm=='D':
+        from gpu_engine.v5_device_teacher import Provider
+        teacher=Provider(prepared,plan,frame_batch=teacher_frame_batch)
+    backend=RuntimeBackend(prepared,pool,gender_policy=gender,measure_runtime=True,cache_workers=cache_workers,teacher=teacher)
     begin=time.perf_counter();result=runs.run(plan,run_root,backend=backend,enable_v5=True,measure_timings=True)
     pipeline=time.perf_counter()-begin
     report=dict(schema=SCHEMA,status=result['status'],declared_games=GAMES,steps=result.get('steps'),rows=result.get('rows'),
         dispositions={status:list(result.get('statuses',{}).values()).count(status)for status in ('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED')},
         preparation_cold_inclusive_seconds=preparation,original_run_wall_seconds=pipeline,
         purpose='V5_READY_20K_DIAGNOSTIC_NOT_PRODUCTION_ARM_OR_STRENGTH',stop_rule='one20k measurement; one repair if producer fails; then report',
-        scientific_qualification=False,jax_reload='UNAVAILABLE_NO_COMPLETED_ITERATION')
+        scientific_qualification=False,jax_reload='UNAVAILABLE_NO_COMPLETED_ITERATION',model_arm=model_arm)
     if result['status']=='COMPLETE_DECLARATION':
         if not isinstance(result.get('steps'),int)or result['steps']<=0 or not isinstance(result.get('rows'),int)or result['rows']<=0:
             raise ValueError('actual completed training updates/rows required')
         store=runs.Store(run_root,plan,resume=True);snapshot=store.matching('SNAPSHOT',iteration=0)
+        if model_arm=='D':report['teacher']=teacher_table(store,run_root)
         if len(snapshot)!=1:raise ValueError('one original final trained export required')
         from gpu_engine.v5_device_timing import aggregate
         report['collection_runtime']=aggregate(store.matching('DEVICE_RUNTIME_TIMING'),store.matching('GAME_END'))

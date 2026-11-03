@@ -85,12 +85,14 @@ def validate_records(frames,bank,recipe,records):
 
 class Provider:
     """Construct once from genuine Prepared+Plan, before any real constructor."""
-    def __init__(self,prepared,plan,*,batch_joint=True):
+    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False):
         from .v5_device_backend import Prepared
         from pokezero.v5_run import Plan,_sha
         if type(prepared)is not Prepared or type(plan)is not Plan or plan.model.arm!='D':
             raise ValueError('actual prepared device D Plan required')
         if type(batch_joint)is not bool:raise ValueError('explicit joint batching bool required')
+        if type(frame_batch)is not bool or frame_batch and not batch_joint:
+            raise ValueError('frame batching requires the original mapped joint executor')
         if prepared.pool_sha256!=plan.pool_sha256 or prepared.category_sha256!=plan.model.category_vocabulary_sha256 or prepared.category_size!=plan.model.category_vocab_size:
             raise ValueError('same declared device source/pool/category required')
         self.prepared=prepared;self.plan=plan;self.recipe=original.Recipe(plan.selection_seed)
@@ -102,6 +104,29 @@ class Provider:
         self.executor=teacher.make_executor(prepared.engine_tables,prepared.observation_tables,
             enable_device_teacher=True,batch_joint=batch_joint)
         self.batch_joint=batch_joint;self.forwards={};self.joint_forwards={}
+        self.frame_batch=frame_batch;self.frame_counts={};self.batch_timings=[]
+        if frame_batch:
+            from .device_public_teacher_batch import FramePricer
+            self.frame_pricer=FramePricer(self.executor,plan.model,actor_capacity=plan.historical_window+1)
+
+    def reset_metrics(self):
+        self.frame_counts={};self.batch_timings=[]
+
+    def record_metrics(self,records):
+        if not hasattr(self,'frame_counts'):self.reset_metrics()
+        for record in records:
+            frame=record['address']['frame'];counts=self.frame_counts.setdefault(frame,dict(requested=0,selected=0,labeled=0,refused=0,unselected=0))
+            counts['requested']+=1;status=record['status']
+            if status=='UNSELECTED':counts['unselected']+=1
+            else:
+                counts['selected']+=1
+                counts['labeled'if status=='LABELED'else'refused']+=1
+
+    def metrics(self):
+        from .device_public_teacher_batch import FRAME_WORK_KEYS
+        return dict(strategy='FRAME_BATCH'if getattr(self,'frame_batch',False)else'SERIAL_ROOTS',
+            by_frame={str(frame):dict(value,refused_share_selected=None if not value['selected']else value['refused']/value['selected'])for frame,value in sorted(self.frame_counts.items())},
+            batch_timing_totals={key:sum(x.get(key,0)for x in self.batch_timings)for key in ('roots','world_prepare_seconds','batch_pack_and_device_seconds','device_invocations','lower_seconds','compile_seconds','device_seconds')+FRAME_WORK_KEYS})
 
     def bind(self,bank,params):
         if (bank.bindings.source_sha256!=self.prepared.source_sha256
@@ -126,6 +151,7 @@ class Provider:
     def label_chunk(self,device_roots,frames,bank,params):
         from .v5_device_rollout import RootContext
         if type(device_roots)is not RootContext:raise ValueError('actual retained PRE root contexts required')
+        if getattr(self,'frame_batch',False):return self._label_chunk_batched(device_roots,frames,bank,params)
         self.bind(bank,params);records=[];contexts={}
         for step,row,owner in _requests(frames,bank):
             step,row,owner=map(int,(step,row,owner));base=binding(frames,bank,step,row,owner)
@@ -162,4 +188,44 @@ class Provider:
             except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
                 record.update(status='REFUSED',refusal=type(error).__name__+': '+str(error),improvement=None)
         validate_records(frames,bank,self.recipe,records)
+        self.record_metrics(records)
+        return records
+
+    def _label_chunk_batched(self,device_roots,frames,bank,params):
+        from .device_public_teacher_batch import Request
+        self.bind(bank,params);records=[];grouped={};contexts={}
+        for step,row,owner in _requests(frames,bank):
+            step,row,owner=map(int,(step,row,owner));base=binding(frames,bank,step,row,owner)
+            record=dict(base,recipe_seed=self.recipe.seed,status='UNSELECTED',refusal=None,improvement=None,diagnostics=None)
+            records.append(record);address=c.DecisionAddress(**base['address'])
+            if not self.recipe.selected(address):continue
+            record.update(status='REFUSED',refusal='invalid-actual-root-input')
+            if not frames.trainable[step,row,owner]:continue
+            try:
+                if step not in contexts:contexts[step]=jax.tree.map(lambda x:x[step],device_roots)
+                context=contexts[step]
+                if int(context.streams[row])!=address.stream or int(context.frames[row])!=address.frame:
+                    raise ValueError('PRE root context address differs')
+                root=worlds.detach_root(context,self.source,row=row,owner=owner,enable_device_worlds=True)
+                plans=worlds.plan_starts(root,self.source,self.recipe)
+                inputs={name:getattr(frames,name)[step,row,owner][None,None]for name in INPUTS};inputs['history_mask']=np.ones((1,1),bool)
+                request=Request(plans,tuple(map(float,frames.raw_policy_logits[step,row,owner])),
+                    tuple(map(bool,frames.legal_action_mask[step,row,owner])),inputs,
+                    int(frames.actor_indices[step,row,owner]),int(frames.actor_indices[step,row,1-owner]))
+                grouped.setdefault(step,[]).append((record,request))
+            except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
+                record.update(status='REFUSED',refusal=type(error).__name__+': '+str(error),improvement=None)
+        for step,items in grouped.items():
+            # A device/producer failure is not converted into fast refusals for
+            # an entire frame. It stops this study and preserves its attempts.
+            results=self.frame_pricer.price([request for _,request in items],self.materializer,self.recipe,params)
+            if len(results)!=len(items):raise ValueError('frame pricing dropped a selected root')
+            self.batch_timings.append(dict(self.frame_pricer.last_timing))
+            for (record,_),result in zip(items,results):
+                record['diagnostics']=dict(world_reports=result.world_reports,missing_worlds=result.missing_worlds,
+                    actual_teacher_calls=result.actual_teacher_calls,reply_input_approximation=result.reply_input_approximation)
+                if result.status=='LABELED':record.update(status='LABELED',refusal=None,improvement=asdict(result.reduction.improvement))
+                elif result.status=='REFUSED':record['refusal']=result.reason or'unknown-required-world-or-reply'
+                else:raise ValueError('selected original recipe returned an unselected result')
+        validate_records(frames,bank,self.recipe,records);self.record_metrics(records)
         return records
