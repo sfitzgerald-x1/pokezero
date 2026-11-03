@@ -77,7 +77,12 @@ def prepare(config,source,output,*,enable_prepare=False):
             actual=next(truth_iter)
             if any(actual[k]!=g[k]for k in ('root_id','world_id','reply','chance_id')):raise ValueError('same actual child truth provenance required')
             target=helper.rules().summarize_rollouts(actual['rollouts'])['value'];data=None;why='MISSING_VERIFIED_ROOT'
-            if root is not None:
+            if branch['status']in ('REFUSED','FAILED'):
+                # These are original declared unknowns, not stored views that
+                # may be compared/repaired. Keep their literal reason and all
+                #64 truth dispositions without inventing a private tensor.
+                why=branch.get('reason')or('ORIGINAL_'+branch['status'])
+            elif root is not None:
                 out=helper.child_step(executor,root,fields,g,branch['action'],g['reply'])
                 child_views=view_docs(out.step.state,out.trackers)
                 if bool(out.step.invalid_actions[0]):why='ACTUAL_CHILD_REFUSED'
@@ -85,11 +90,11 @@ def prepare(config,source,output,*,enable_prepare=False):
                     try:data=private(out.step.state,out.trackers,p['selector']['owner'],child_views);why=None
                     except ValueError as error:why=str(error)
                 elif branch['status']=='COMPLETE':
-                    actual=dict(done=bool(out.step.state.done[0]),winner=int(out.step.state.winner[0]),state_id=schema.digest(bank._host(out.step.state)))
-                    if actual!=branch['terminal']:raise ValueError('same original actual child terminal required')
+                    terminal_proof=dict(done=bool(out.step.state.done[0]),winner=int(out.step.state.winner[0]),state_id=schema.digest(bank._host(out.step.state)))
+                    if terminal_proof!=branch['terminal']:raise ValueError('same original actual child terminal required')
                     why='ACTUAL_TERMINAL_NO_HEAD_OBSERVATION'
                 else:raise ValueError('actual stored child public bytes differ')
-            add('child',p['selector'],action=branch['action'],reply=g['reply'],data=data,reason=why,target=target,rollouts=actual['rollouts'])
+            add('child',p['selector'],action=branch['action'],reply=g['reply'],data=data,reason=why,target=target,rollouts=actual['rollouts'],original_status=branch['status'],original_reason=branch.get('reason'))
         gr=dict(grid,rows=[])
         tensors=None
         if grid.get('artifact')is not None:
