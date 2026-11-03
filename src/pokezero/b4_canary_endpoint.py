@@ -1,7 +1,8 @@
 """Fixed-order concurrent ORIGINAL-v4 canary endpoint; import starts nothing.
 
-At most four owned cell processes, each with a declared actor/FP physical-core
-pair. Only a child changes its own affinity, before importing model libraries.
+Finite owned cell processes, each with a bound actor/FP physical-core pair.
+Physical parallelism is independent of original scientific cell slots. Only a
+child changes its own affinity, before importing model libraries.
 """
 import argparse
 import asyncio
@@ -38,15 +39,21 @@ def _read_result(path):
 
 
 def _cpu_pairs(plan, pairs=None):
-    """Placement may move; the scientific worker-count/slot law may not."""
+    """Runtime placement/parallelism may move; declared cells never change."""
     if pairs is None:return plan.fp_cpu_pairs
     from . import b4_fidelity_canary as c
-    c.require(type(pairs) in (tuple,list) and len(pairs)==len(plan.fp_cpu_pairs) and
+    c.require(type(pairs) in (tuple,list) and 1<=len(pairs)<=4*c.PANEL_SEEDS and
         all(type(pair) in (tuple,list) and len(pair)==2 and
             all(type(cpu) is int and cpu>=0 for cpu in pair) for pair in pairs) and
         len({cpu for pair in pairs for cpu in pair})==2*len(pairs),
-        'runtime CPU pairs must preserve worker count and use distinct literal cores')
+        'finite runtime CPU pairs must use distinct literal cores')
     return tuple(tuple(pair) for pair in pairs)
+
+
+def _execution_slot(cell,plan,pairs):
+    """Keep old slot provenance; assign a separate fixed physical slot."""
+    _checked_cell(cell,plan)
+    return cell['slot'] if len(pairs)==len(plan.fp_cpu_pairs) else cell['ordinal']%len(pairs)
 
 
 def _request_pairs(request, plan):
@@ -62,7 +69,7 @@ def _request_pairs(request, plan):
             value['schema']=='pokezero.b4.canary.endpoint-cpu-runtime.v1' and c.sha(value)==digest and
             value['declaration_sha256']==request['declaration_sha256'],'endpoint runtime/source binding differs')
         pairs=_cpu_pairs(plan,value['cpu_pairs'])
-    c.require(request['cpu_pair']==list(pairs[request['cell']['slot']]),'original ordinal/runtime core mapping differs')
+    c.require(request['cpu_pair']==list(pairs[_execution_slot(request['cell'],plan,pairs)]),'original ordinal/runtime core mapping differs')
     return pairs
 
 
@@ -85,10 +92,10 @@ def _checked_cell(cell,plan):
 def configuration(plan,cell,checkpoint,*,cpu_pairs=None):
     from dataclasses import fields
     from . import foulplay_bridge as fp
-    _checked_cell(cell,plan);raw=plan.fp_configs[cell['seat']]
+    _checked_cell(cell,plan);raw=plan.fp_configs[cell['seat']];pairs=_cpu_pairs(plan,cpu_pairs)
     values={**raw,'checkpoint':Path(checkpoint),'games':1,'seed_start':raw['seed_start']+cell['offset'],
         'foulplay_random_seed':raw['foulplay_random_seed']+cell['offset'],
-        'foulplay_cpu_affinity':_cpu_pairs(plan,cpu_pairs)[cell['slot']][1]}
+        'foulplay_cpu_affinity':pairs[_execution_slot(cell,plan,pairs)][1]}
     for field in fields(fp.ControlledFoulPlayConfig):
         if field.name in values and values[field.name] is not None and 'Path' in str(field.type):values[field.name]=Path(values[field.name])
     return fp.ControlledFoulPlayConfig(**values)
@@ -343,7 +350,7 @@ async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint,dev
         if cell['ordinal'] in recorded:return recorded[cell['ordinal']]
         snapshot=snapshots[cell['arm']]
         request=dict(schema='pokezero.b4.canary.fp-request.v1',run_directory=str(root),declaration_sha256=declaration,
-            cell=cell,checkpoint=snapshot['checkpoint'],checkpoint_sha256=snapshot['sha256'],cpu_pair=list(pairs[cell['slot']]))
+            cell=cell,checkpoint=snapshot['checkpoint'],checkpoint_sha256=snapshot['sha256'],cpu_pair=list(pairs[_execution_slot(cell,plan,pairs)]))
         if runtime is not None:request['endpoint_cpu_runtime_sha256']=runtime
         return request
     def retain(cell,value,*,receipt=None):
@@ -399,7 +406,7 @@ async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint,dev
         while next_cell<len(pending) or active:
             progress.check()
             while next_cell<len(pending) and not stop:
-                cell=pending[next_cell];slot=cell['slot']
+                cell=pending[next_cell];slot=_execution_slot(cell,plan,pairs)
                 if slot in active:break  # Never skip declared order for whichever outcome frees a core.
                 request=request_for(cell);digest=_write(root/'fp-requests'/f"{cell['ordinal']}.json",request)
                 start=_start(request,digest);start_sha=_write(root/'fp-starts'/f"{cell['ordinal']}.json",start)
@@ -430,7 +437,7 @@ async def evaluate_declared(plan,book,*,champion_checkpoint,final_checkpoint,dev
         paired_mean=sum(known)/len(known) if known else None,identification_bounds=[(sum(known)-unknown)/len(paired),(sum(known)+unknown)/len(paired)],
         automatic_fidelity_pass=False,uncertainty='No equivalence margin or significance pass inferred; paired interval/result review required',rows=rows,
         paired_seed_means=[None if paired[2*i] is None or paired[2*i+1] is None else (paired[2*i]+paired[2*i+1])/2 for i in range(c.PANEL_SEEDS)],
-        interval_unit='Original paired seed block (both seats); no IID-cell significance claim',max_workers=len(plan.fp_cpu_pairs))
+        interval_unit='Original paired seed block (both seats); no IID-cell significance claim',max_workers=len(pairs))
     report.update(paired_interval(rows,seed=plan.bootstrap_seed,blocks=c.PANEL_SEEDS))
     if runtime is not None:report['endpoint_cpu_runtime_sha256']=runtime
     book.emit('FP_ENDPOINT',report=report);return report
@@ -443,7 +450,8 @@ class WorkerPool:
         self.cpu_pairs=_cpu_pairs(plan,cpu_pairs)
     async def launch(self, request_path):
         from . import b4_fidelity_canary as c
-        request = json.loads(Path(request_path).read_bytes()); slot = request['cell']['slot']
+        request = json.loads(Path(request_path).read_bytes())
+        slot = _execution_slot(request['cell'],self.plan,self.cpu_pairs)
         if slot not in self.workers:
             folder = self.root / 'fp-worker-errors'; folder.mkdir(exist_ok=True)
             log = (folder / (str(slot) + '-' + str(time.time_ns()) + '.log')).open('xb')
