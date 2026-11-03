@@ -222,11 +222,13 @@ def measure(args, context, backend, roster, params, events, lanes):
         bar=dict(occupancy_min=.85, games_per_second_min=250.,
             passed=bool(stats['occupancy'] >= .85 and complete / seconds >= 250.)))
     log('MEASURED', **{k: v for k, v in report.items() if k not in ('per_level', 'compactions', 'compile_seconds')})
+    log('LEVEL_STATS', lanes=lanes, per_level=stats['levels'], compactions=stats['compactions'])
     if events:
         report['reference_games'] = compare_games(result, events);log('GAME_RECORDS', **report['reference_games'])
         caches = sorted((e['payload'] for e in events if e['kind'] == 'CACHE'), key=lambda x: x['batch'])
         report['reference_caches'] = []
-        for entry in caches[:args.compare_caches]:
+        chosen = set(args.compare_batches) if args.compare_batches else {x['batch'] for x in caches[:args.compare_caches]}
+        for entry in (x for x in caches if x['batch'] in chosen):
             batch = plan.iterations[0][entry['batch']];lo, hi = batch.games[0].stream_id, batch.games[-1].stream_id
             if hi > int(roster.streams.max()):continue
             value = compare_cache(store, Path(args.reference_run, entry['path']), plan.model, stream_range=(lo, hi))
@@ -252,7 +254,8 @@ def main(argv=None):
     parser.add_argument('--min-lanes', type=int, default=128)
     parser.add_argument('--rows-per-game', type=int, default=112)
     parser.add_argument('--compile-threads', type=int, default=4)
-    parser.add_argument('--compare-caches', type=int, default=1)
+    parser.add_argument('--compare-caches', type=int, default=1, help='compare the first K reference caches')
+    parser.add_argument('--compare-batches', type=int, nargs='*', default=None, help='explicit reference batch indices to compare')
     parser.add_argument('--log-every', type=float, default=10.)
     parser.add_argument('--clear-caches', action='store_true')
     args = parser.parse_args(argv)
