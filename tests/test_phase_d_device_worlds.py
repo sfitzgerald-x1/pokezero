@@ -86,6 +86,41 @@ class WorldsTests(unittest.TestCase):
         self.assertTrue(all(w.state is None and w.refusals for w in out.worlds))
         self.assertEqual(len(set(out.seeds)),32)
 
+    def test_public_counter_units_preserve_reset_and_saturation(self):
+        self.assertEqual([live._physical_protect_counter(v) for v in range(9)], [0,2,4,8,8,8,8,8,8])
+        self.assertEqual([live._physical_toxic_counter(v) for v in range(17)], [0,0,*range(1,16)])
+        for value in (-1,9):
+            with self.assertRaises(live.Refusal):live._physical_protect_counter(value)
+        for value in (-1,17):
+            with self.assertRaises(live.Refusal):live._physical_toxic_counter(value)
+
+    def test_both_owner_axes_convert_physical_counters_keep_public_features(self):
+        for owner in (0,1):
+            a=self.adapter(owner);req=self.request(owner)
+            own=f'p{owner+1}';peer=f'p{2-owner}'
+            a.feed((f'|move|{own}a: Alpha|Protect|{own}a: Alpha',f'|-singleturn|{own}a: Alpha|Protect',
+                f'|move|{peer}a: Beta|Protect|{peer}a: Beta',f'|-singleturn|{peer}a: Beta|Protect',
+                f'|-status|{own}a: Alpha|tox',f'|-status|{peer}a: Beta|tox',
+                f'|-damage|{own}a: Alpha|273/291 tox|[from] psn',
+                f'|-damage|{peer}a: Beta|94/100 tox|[from] psn','|upkeep','|turn|2'))
+            req['side']['pokemon'][0]['condition']='273/291 tox'
+            root=live.from_b2(a,req,self.source,self.metadata,address=v5_contract.DecisionAddress(1,1,owner))
+            self.assertEqual(int(root.own['protect_counter'][0]),2)
+            self.assertEqual(int(root.own['status_counter'][0]),1)
+            self.assertEqual(a.state.context.active.stall.tolist(),[[1,1]])
+            self.assertEqual(a.state.context.toxic.stage.tolist(),[[2,2]])
+            self.assertEqual(int(root.view['mon_features']['stall_counter'][0,0]),1)
+            self.assertEqual(int(root.view['mon_features']['toxic_stage'][0,0]),2)
+            result=live.sample_worlds(root,self.source,self.tables,count=16,seed=12)
+            self.assertTrue(result.fully_constructed)
+            for world in result.worlds:
+                for side in (0,1):
+                    active=int(world.state.active[0,side])
+                    self.assertEqual(int(world.state.protect_counter[0,side,active]),2)
+                    self.assertEqual(int(world.state.status_counter[0,side,active]),1)
+                np.testing.assert_array_equal(world.public.mon_features['stall_counter'],root.public.mon_features['stall_counter'])
+                np.testing.assert_array_equal(world.public.mon_features['toxic_stage'],root.public.mon_features['toxic_stage'])
+
     def test_exact_chance_program_unchanged_and_current_pins_match(self):
         import ast
         from gpu_engine import chance_consumers
