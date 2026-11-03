@@ -49,6 +49,7 @@ class PhaseCThroughputTests(unittest.TestCase):
             complete_iterations=[dict(iteration=i)for i in (0,1)],collection_iterations=[dict(iteration=i)for i in (0,1)],
             acting_snapshots=[dict(current=dict(iteration=-1))for _ in (0,1)],
             dispositions=dict(COMPLETE=39980,CAPPED=20))
+        smoke['cohort_training_budgets']=[dict(iteration=i,start_step=i*10050,end_step=(i+1)*10050,row_visits=50000)for i in (0,1)]
         timing=dict(updates=20100,training_datasets=[dict(iteration_ordinal=i,updates=10050,
             start_step=i*10050,end_step=(i+1)*10050,row_visits=50000)for i in (0,1)])
         report=ct.gate_report(smoke,timing)
@@ -61,6 +62,17 @@ class PhaseCThroughputTests(unittest.TestCase):
                 dict(smoke,complete_iterations=[dict(iteration=0)])):
             with self.assertRaises(ValueError):ct.gate_report(bad,timing)
         with self.assertRaises(ValueError):ct.gate_report(smoke,dict(updates=20100))
+
+        resumed=dict(timing,updates=10050,prior_durable_updates=10050,
+            training_datasets=[dict(timing['training_datasets'][1],iteration_ordinal=0)])
+        recovered=ct.gate_report(smoke,resumed)
+        self.assertEqual(recovered['threshold'],'RECOVERED_DIAGNOSTIC_NO_AUTOMATIC_ADMISSION')
+        self.assertEqual(recovered['training']['training_datasets'][0]['original_iteration'],1)
+        self.assertEqual(recovered['training']['prefix_component_times'],'UNAVAILABLE_NOT_ZERO')
+        self.assertEqual(recovered['training']['cohort_training_budgets'],smoke['cohort_training_budgets'])
+        finished=ct.gate_report(smoke,dict(updates=0,prior_durable_updates=20100,training_datasets=[]))
+        self.assertEqual(finished['threshold'],'RECOVERED_DIAGNOSTIC_NO_AUTOMATIC_ADMISSION')
+        self.assertEqual(finished['training']['training_datasets'],[])
 
     def test_gpu_profile_joins_main_and_autograd_kernels_but_excludes_overlapping_jax(self):
         events=[]
