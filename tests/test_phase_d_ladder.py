@@ -191,4 +191,47 @@ class AdmissionDenominators(unittest.TestCase):
             (root/'results'/'378.json').unlink()
             with self.assertRaisesRegex(ValueError,'not closed'):a.freeze_prefix(root,declaration_sha256='d'*64)
 
+    def test_freeze_retired_claim_keeps_partial_roots_without_inventing_result(self):
+        from pokezero import phase_d_ladder_admission as a
+        with TemporaryDirectory()as directory:
+            root=Path(directory).resolve();(root/'owning-wire').mkdir()
+            d=raw_fixture.declaration();declaration=root/'declaration.json';panel.write_new(declaration,d)
+            digest=panel.sha(d);cells=panel.cells(d,'RAW')
+            for cell in cells[1:64]:panel.write_new(root/'results'/f"{cell['ordinal']}.json",
+                dict(cell=cell,declaration_sha256=digest,status='UNKNOWN'))
+            cell=cells[0]
+            request=dict(schema='pokezero.champion-search-ladder.raw-request.v1',run_directory=str(root),
+                declaration=str(declaration),declaration_sha256=digest,cell=cell)
+            for name in ('requests','claims'):panel.write_new(root/name/'0.json',request)
+            start=dict(request_sha256=panel.sha(request),cell=cell);panel.write_new(root/'starts'/'0.json',start)
+            terminal=root/'terminal.txt';terminal.write_bytes(b'original inert terminal receipt')
+            closure=dict(schema='pokezero.champion-search-ladder.attempt-closure.v1',attempt_id='original-attempt',
+                declaration_sha256=digest,state='CLOSED',dispatch_stopped=True,all_workers_terminated=True,
+                retired_ordinals=[0],terminal_evidence=[dict(path=str(terminal),sha256=hashlib.sha256(terminal.read_bytes()).hexdigest())])
+            closed=root/'closed.json';panel.write_new(closed,closure)
+            manifest=dict(schema='pokezero.champion-search-ladder.retired-claims.v1',declaration_sha256=digest,
+                closure=dict(path=str(closed),sha256=panel.sha(closure)),cells=[dict(cell=cell,
+                    request_sha256=panel.sha(request),claim_sha256=panel.sha(request),start_sha256=panel.sha(start))])
+            manifest_path=root/'retired.json';panel.write_new(manifest_path,manifest)
+            (root/'owning-wire'/'0.jsonl').write_bytes(b'durable partial capture')
+            def capture(path):
+                self.assertEqual(Path(path).name,'0.jsonl')
+                for row in self.roster():yield dict(row,cell=cell,declaration_sha256=digest)
+            def freeze():return a.freeze_prefix(root,declaration_sha256=digest,
+                retired_claims=manifest_path,retired_claims_sha256=panel.sha(manifest))
+            with patch('pokezero.phase_d_owning_capture.read_capture',side_effect=capture):result=freeze()
+            self.assertEqual(len(result['selected']),200)
+            self.assertEqual(result['capture_prefix']['closed_cells'][0]['disposition'],'RETIRED_CLAIM_NO_RESULT')
+            self.assertEqual(result['capture_prefix']['closed_cells'][0]['status'],'UNKNOWN')
+            self.assertFalse((root/'results'/'0.json').exists())
+            # A lost ongoing claim is not evidence of terminal closure.
+            with self.assertRaisesRegex(ValueError,'not closed'):a.freeze_prefix(root,declaration_sha256=digest)
+            closure['all_workers_terminated']=False;closed.write_bytes(panel.encoded(closure))
+            manifest['closure']['sha256']=panel.sha(closure);manifest_path.write_bytes(panel.encoded(manifest))
+            with self.assertRaisesRegex(ValueError,'terminated workers'):freeze()
+            closure['all_workers_terminated']=True;closed.write_bytes(panel.encoded(closure))
+            manifest['closure']['sha256']=panel.sha(closure);manifest_path.write_bytes(panel.encoded(manifest))
+            (root/'claims'/'0.json').write_bytes(panel.encoded(dict(request,cell=cells[1])))
+            with self.assertRaisesRegex(ValueError,'immutable ladder input differs'):freeze()
+
 if __name__=='__main__':unittest.main()

@@ -21,6 +21,20 @@ result. The four turn bands each contribute 50 roots; an unavailable band is
 reported instead of being filled with easier roots. Missing capture games are
 listed beside the actual root denominator.
 
+An interrupted claimed cell with no result can close only through an explicit
+`--retired-claims PATH --retired-claims-sha256 SHA` manifest. Its schema is
+`pokezero.champion-search-ladder.retired-claims.v1`: the original declaration
+SHA, a bound `closure: {path, sha256}`, and `cells` containing each original
+`cell`, `request_sha256`, `claim_sha256` and `start_sha256`. The closure schema
+is `pokezero.champion-search-ladder.attempt-closure.v1`; it records a nonempty
+`attempt_id`, the same declaration SHA, `state: CLOSED`, `dispatch_stopped:
+true`, `all_workers_terminated: true`, the exact `retired_ordinals`, and
+nonempty `terminal_evidence: [{path, sha256}]` referencing original terminal
+receipts. The root owner creates it after verifying closure. The freezer
+checks those bytes and the original fixed-path request/claim/START bindings,
+retains UNKNOWN and every durable partial capture, and creates no result or
+score. An ongoing or unbound claim cannot make the prefix eligible.
+
 The constructor's new `ProtocolInputs` route under
 `v5_public_world.materialize` accepts genuine `PublicRoot` data, B2's public
 carry and the exact own request. It calls the original pure

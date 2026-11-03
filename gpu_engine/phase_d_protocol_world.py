@@ -117,14 +117,18 @@ def materialize_protocol(root,start,*,inputs,seed):
         # unknown peer-private ledger or exact HP history is synthesized.
         assignment={};pp=np.array(physical.pp,copy=True)
         present=np.asarray(detached.view['present'])[0];species=np.asarray(detached.view['species'])[0]
-        moves=np.asarray(detached.view['revealed_moves'])[0];used=np.asarray(detached.view['pp_used'])[0]
+        moves=np.asarray(detached.view['revealed_moves'])[0];used=np.asarray(detached.view['move_pp_used'])[0]
+        # Public Hidden Power is deliberately generic, while sampled engine
+        # slots retain their typed move IDs. Debit the same canonical move.
+        move_identity=lambda mid:live._source_move(metadata['vocabulary']['moves'][int(mid)])
         for slot,name in enumerate(world.party_species[f'p{foe+1}']):
             matches=[i for i in range(6)if present[i]and normalize_id(metadata['vocabulary']['species'][int(species[i])])==normalize_id(name)]
             if len(matches)>1:raise ValueError('ambiguous-public-encounter')
             if not matches:continue
             public=matches[0];assignment[public]=slot
             for index,mid in enumerate(np.asarray(physical.moves)[0,foe,slot]):
-                charge=sum(int(n)for known,n in zip(moves[public],used[public])if int(known)==int(mid)and int(mid)>0)
+                charge=sum(int(n)for known,n in zip(moves[public],used[public])
+                    if int(known)>0 and int(mid)>0 and move_identity(known)==move_identity(mid))
                 if charge>pp[0,foe,slot,index]:raise ValueError('public-opponent-PP-charge-exceeds-source-max')
                 pp[0,foe,slot,index]-=charge
             if int(physical.status[0,foe,slot])==4:
