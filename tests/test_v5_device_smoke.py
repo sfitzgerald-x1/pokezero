@@ -15,6 +15,18 @@ def bank():
 
 
 class DeviceSmokeTests(unittest.TestCase):
+    def test_lag_study_preserves_first_cohort_and_declares_the_full_second(self):
+        arguments=(bank(),fixtures.profile(),fixtures.vocabulary(),fixtures.category())
+        first=smoke.build_plan(*arguments)
+        pipeline=smoke.build_plan(*arguments,iterations=2)
+        self.assertEqual(pipeline.iterations[0],first.iterations[0])
+        self.assertEqual(len(pipeline.games),40000)
+        self.assertEqual([len(b.games)for b in pipeline.iterations[1]],[2048]*9+[1568])
+        self.assertEqual(pipeline.games[-1].team_indices,(79998,79999))
+        self.assertEqual(pipeline.iterations[1][0].constructor_seed,bank()['constructor_seed_start']+10)
+        self.assertEqual(pipeline.iterations[1][0].gender_root_ids[0],bank()['gender_root_start']+20000)
+        self.assertEqual(pipeline.train.epochs,5)
+
     def test_exact20k_original_controls_disjoint_identity_no_production_substitute(self):
         plan=smoke.build_plan(bank(),fixtures.profile(),fixtures.vocabulary(),fixtures.category())
         self.assertEqual(len(plan.games),20000);self.assertEqual(len(plan.iterations),1)

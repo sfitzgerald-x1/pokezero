@@ -17,6 +17,70 @@ def result(wall):
 
 
 class PhaseCThroughputTests(unittest.TestCase):
+    def test_concurrent_instrumentation_keeps_each_cohort_data_and_update_budget(self):
+        import json
+        from types import SimpleNamespace
+        from pokezero import dataset
+        def update(runtime,batch):runtime.steps+=1;runtime.rows+=10;return 'original'
+        def train(runtime,paths,**kwargs):
+            self.assertEqual(kwargs['resident_cache_bytes'],1024)
+            training._cache_reader(None)
+            for _ in range(2):
+                dataset.slice_training_batch(None);training._training_tensors(None);training._update(runtime,None)
+        with tempfile.TemporaryDirectory()as folder:
+            scopes=[dict(ph='X',name='pokezero.learner_update',pid=1,tid=1,ts=i*100,dur=50)for i in range(4)]
+            (Path(folder)/'ct-training-trace.json').write_text(json.dumps(dict(traceEvents=scopes)))
+            runtime=SimpleNamespace(steps=64,rows=640)
+            with patch.object(training,'_update',side_effect=update),patch.object(training,'train_caches',side_effect=train),\
+                    patch.object(training,'_cache_reader'),patch.object(training,'_training_tensors'),patch.object(dataset,'slice_training_batch'):
+                with ct.instrument_training(folder,1024,concurrent_collection=True)as state:
+                    training.train_caches(runtime,['cohort0']);training.train_caches(runtime,['cohort0'])
+                    training.train_caches(runtime,['cohort1'])
+            self.assertEqual(state['updates'],6)
+            self.assertEqual([x['updates']for x in state['training_datasets']],[4,2])
+            self.assertEqual([x['row_visits']for x in state['training_datasets']],[40,20])
+            for x in state['training_datasets']:
+                self.assertGreaterEqual(x['data_seconds_per_update'],0)
+                self.assertEqual(x['end_step']-x['start_step'],x['updates'])
+
+    def test_fixed_pipeline_window_never_hides_fill_drain_or_changes_numerator(self):
+        smoke=dict(result(3000),declared_games=40000,iteration_policy_lag=1,pipeline_iterations=2,
+            pipeline_windows=[dict(training_iteration=0,collection_iteration=1,wall_seconds=2000.,includes_interruption=False)],
+            complete_iterations=[dict(iteration=i)for i in (0,1)],collection_iterations=[dict(iteration=i)for i in (0,1)],
+            acting_snapshots=[dict(current=dict(iteration=-1))for _ in (0,1)],
+            dispositions=dict(COMPLETE=39980,CAPPED=20))
+        timing=dict(updates=20100,training_datasets=[dict(iteration_ordinal=i,updates=10050,
+            start_step=i*10050,end_step=(i+1)*10050,row_visits=50000)for i in (0,1)])
+        report=ct.gate_report(smoke,timing)
+        self.assertEqual(report['declared_games_per_second'],10.)
+        self.assertEqual(report['gate_numerator_games'],20000)
+        self.assertEqual(report['full_study_declared_games_per_second'],40000/3000)
+        self.assertEqual(report['natural_complete_per_second'],39980/3000)
+        self.assertEqual(report['declared_games'],40000)
+        for bad in (dict(smoke,declared_games=20000),dict(smoke,pipeline_windows=smoke['pipeline_windows']*2),
+                dict(smoke,complete_iterations=[dict(iteration=0)])):
+            with self.assertRaises(ValueError):ct.gate_report(bad,timing)
+        with self.assertRaises(ValueError):ct.gate_report(smoke,dict(updates=20100))
+
+    def test_gpu_profile_joins_main_and_autograd_kernels_but_excludes_overlapping_jax(self):
+        events=[]
+        for i in range(4):
+            start=1000*i
+            events.extend([
+                dict(ph='X',cat='user_annotation',name='pokezero.learner_update',pid=1,tid=10,ts=start,dur=500),
+                dict(ph='X',cat='cuda_runtime',pid=1,tid=10,ts=start+10,dur=1,args={'correlation':i}),
+                dict(ph='X',cat='cpu_op',pid=1,tid=20,ts=start+20,dur=1,args={'External id':100+i}),
+                dict(ph='X',cat='kernel',dur=20,args={'correlation':i}),
+                dict(ph='X',cat='kernel',dur=30,args={'correlation':50+i,'External id':100+i}),
+                dict(ph='X',cat='cuda_runtime',pid=1,tid=11,ts=start+25,dur=1,args={'correlation':90+i}),
+                dict(ph='X',cat='kernel',dur=999,args={'correlation':90+i}),
+            ])
+        report=ct.learner_trace_categories(dict(traceEvents=events))
+        self.assertEqual(report['learner']['kernel']['events'],8)
+        self.assertAlmostEqual(report['learner']['kernel']['seconds'],200e-6)
+        self.assertEqual(report['other_or_unattributed']['kernel']['events'],4)
+        with self.assertRaises(ValueError):ct.learner_trace_categories(dict(traceEvents=[]))
+
     def test_all_collector_write_phases_survive_without_becoming_a_new_denominator(self):
         banks=[{'phases':{name:float(i+1)for name in ct.COLLECTOR_PHASES}}for i in range(10)]
         actual=ct.collector_phase_totals(banks)
