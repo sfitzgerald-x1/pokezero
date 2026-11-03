@@ -280,31 +280,45 @@ def instrument_training(run_root, resident_cache_bytes):
             setattr(owner,name,original)
 
 
-def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False):
+def collector_banks(events):
+    """Join delayed data-writer timings by their original declared streams."""
+    banks={};current=None;stream_banks={}
+    for event in events:
+        if event['kind']=='BATCH_STARTED':
+            p=event['payload'];streams=tuple(p['streams'])
+            if streams in stream_banks:raise ValueError('declared collector streams cannot repeat')
+            stream_banks[streams]=(p['iteration'],p['batch'])
+    for event in events:
+        if event['kind']=='BATCH_STARTED':current=(event['payload']['iteration'],event['payload']['batch'])
+        if event['kind']=='DEVICE_RUNTIME_TIMING':
+            payload=event['payload'];key=stream_banks.get(tuple(payload['bank_streams']))if 'bank_streams'in payload else current
+            if key is None or key in banks:raise ValueError('one literal timing per original collector bank required')
+            banks[key]=payload
+    return banks
+
+
+def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0):
     if enable_ct is not True:
         raise ValueError('explicit finite C-T execution required')
     from contextlib import nullcontext
     from pokezero import v5_device_smoke
     with (continue_pretraining_iteration(run_root)if resume else nullcontext(None))as recovery:
         with instrument_training(run_root,resident_cache_bytes) as timing:
-            original=v5_device_smoke.execute(config,run_root,enable_smoke=True)
+            options={}if cache_workers==0 else dict(cache_workers=cache_workers)
+            original=v5_device_smoke.execute(config,run_root,enable_smoke=True,**options)
     if recovery is not None:
         original['current_attempt_run_wall_seconds']=original['original_run_wall_seconds']
         original['original_run_wall_seconds']=recovery['run_finished_epoch']-recovery['original_run_started_epoch']
         if original['original_run_wall_seconds']<original['current_attempt_run_wall_seconds']:
             raise ValueError('original elapsed wall cannot omit the continuation')
     report=gate_report(original,timing)
-    banks={};current=None
-    for path in sorted((Path(run_root)/'journal').glob('*.json')):
-        event=json.loads(path.read_bytes())
-        if event['kind']=='BATCH_STARTED':current=(event['payload']['iteration'],event['payload']['batch'])
-        if event['kind']=='DEVICE_RUNTIME_TIMING':
-            if current is None or current in banks:raise ValueError('one literal timing per original collector bank required')
-            banks[current]=event['payload']
+    events=[json.loads(path.read_bytes())for path in sorted((Path(run_root)/'journal').glob('*.json'))]
+    banks=collector_banks(events)
     missing=([(p['iteration'],p['batch'])for p in recovery['recovered_banks']if (p['iteration'],p['batch'])not in banks]
         if recovery else [])
     report['collector_phase_walls']=collector_phase_totals(banks.values(),interrupted_banks=len(missing))
     report['collector_phase_walls']['unavailable_bank_keys']=missing
+    report['cache_pipeline']=[dict(bank=list(key),**p['cache_pipeline'])for key,p in sorted(banks.items())if 'cache_pipeline'in p]
     if recovery is not None:
         report['recovery']=recovery
         report['threshold_before_recovery_caveat']=report['threshold']
@@ -325,9 +339,10 @@ def main(argv=None):
     parser.add_argument('--resident-cache-bytes',type=int,required=True)
     parser.add_argument('--enable-ct',action='store_true')
     parser.add_argument('--resume',action='store_true')
+    parser.add_argument('--cache-workers',type=int,default=0)
     args=parser.parse_args(argv)
     config=v5_worker._record(dict(path=args.config,sha256=args.expected_config_sha256))
-    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume)
+    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers)
     print(json.dumps(dict(status=report['threshold'],result=str(Path(args.run_root)/'ct-result.json'))))
     return 0
 

@@ -607,7 +607,23 @@ def _journal_diagnostics(value):
     return value
 
 
-def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,measure_timings=False):
+@dataclass
+class PendingCache:
+    """Background data work; publication happens only on the owner thread."""
+    future: object
+    publish: object
+
+    def result(self):return self.publish(self.future.result())
+
+
+def run(plan,path,*,backend,**kwargs):
+    try:return _run(plan,path,backend=backend,**kwargs)
+    finally:
+        close=getattr(backend,'close',None)
+        if close is not None:close()
+
+
+def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,measure_timings=False):
     """Bounded collect/cache/train iterations, with explicit original RNG resume.
 
     Backend collects only fixed supplied batches and writes a genuine v5 cache;
@@ -664,14 +680,32 @@ def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,me
     # never replay them; only the next declared not-attempted roots may start.
     for stream,status in tuple(statuses.items()):
         if status=='RUNNING':statuses[stream]='FAILED';store.emit('GAME_END',stream_id=stream,status='FAILED',reason='interrupted-original-session-not-replayed')
+    if resume and getattr(backend,'cache_workers',0):
+        # Background cache completion is not a durable CACHE receipt. Recover
+        # only published original game parts, retaining missing rows explicitly.
+        from .v5_phasec_throughput import recover_published_parts
+        recover_published_parts(store,plan)
     ordinal={g.stream_id:i for i,g in enumerate(plan.games)}
     for iteration,batches in enumerate(plan.iterations):
         if store.matching('ITERATION_COMPLETE',iteration=iteration):continue
         current=max((x for x in snapshots if x['iteration']<iteration),key=lambda x:x['iteration'])
         past=[x for x in snapshots if x['iteration']<current['iteration']]
         progress=Progress(plan.watchdog)
+        pending=[]
+        def publish_cache(index,result):
+            if result is not None:
+                cache_path,digest=result
+                store.resolve(cache_path,digest)
+                store.emit('CACHE',iteration=iteration,batch=index,path=cache_path,sha256=digest)
+        def drain(*,all_pending=False):
+            while pending and (all_pending or pending[0][1].future.done()or len(pending)>=2):
+                index,result=pending.pop(0);publish_cache(index,result.result())
         for index,batch in enumerate(batches):
             if all(statuses[g.stream_id]!='NOT_ATTEMPTED' for g in batch.games):continue
+            try:drain()
+            except Exception as error:
+                store.emit('STOP',iteration=iteration,reason='CACHE: '+type(error).__name__+': '+str(error))
+                return dict(status='STOPPED',reason='CACHE: '+str(error),statuses=statuses)
             remaining=[g.stream_id for g in plan.games if statuses[g.stream_id]=='NOT_ATTEMPTED']
             if [g.stream_id for g in batch.games]!=remaining[:len(batch.games)]:raise ValueError('next fixed not-attempted prefix required')
             assignments=tuple(assignment(plan,g,ordinal[g.stream_id],current,past) for g in batch.games)
@@ -694,10 +728,12 @@ def run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,me
                 return dict(status='STOPPED',reason=type(error).__name__+': '+str(error),statuses=statuses)
             for g in batch.games:
                 if statuses[g.stream_id]=='RUNNING':ended(g.stream_id,'FAILED',reason='collector-returned-without-final-disposition')
-            if result is not None:
-                cache_path,digest=result
-                store.resolve(cache_path,digest)
-                store.emit('CACHE',iteration=iteration,batch=index,path=cache_path,sha256=digest)
+            if type(result)is PendingCache:pending.append((index,result))
+            else:publish_cache(index,result)
+        try:drain(all_pending=True)
+        except Exception as error:
+            store.emit('STOP',iteration=iteration,reason='CACHE: '+type(error).__name__+': '+str(error))
+            return dict(status='STOPPED',reason='CACHE: '+str(error),statuses=statuses)
         caches=sorted(store.matching('CACHE',iteration=iteration),key=lambda x:x['batch'])
         if not caches:
             store.emit('STOP',iteration=iteration,reason='NO_ACTUAL_TRAINING_ROWS_NO_REFILL')

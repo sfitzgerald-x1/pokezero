@@ -109,13 +109,15 @@ def bind_plan(profile,vocabulary,*,category_vocabulary,run_id,arm,replicate,iter
         runs.Watchdog(1800,longest_multiplier=5.,backstop_seconds=30*24*3600.),discount=config['discount'])
 
 
-def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,gender_policy=None,device_rollout=False,device_teacher=False):
+def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,gender_policy=None,device_rollout=False,device_teacher=False,cache_workers=0):
     """Explicit device rollout or the unchanged original protocol backend."""
     from gpu_engine import v5_selfplay,v5_depth1_provider
     from .v5_gumbel import Recipe
     if type(plan) is not runs.Plan:raise ValueError('original finite plan required')
     if type(device_rollout)is not bool or type(device_teacher)is not bool:raise ValueError('explicit device rollout/teacher factory flags required')
     if device_teacher and (not device_rollout or plan.model.arm!='D'):raise ValueError('device teacher is only the explicit D device route')
+    if type(cache_workers)is not int or cache_workers<0 or cache_workers and not device_rollout:
+        raise ValueError('CPU cache workers require the explicit device route')
     if device_rollout:
         from gpu_engine.v5_device_backend import RuntimeBackend
         teacher=None
@@ -123,7 +125,7 @@ def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,ge
             if not device_teacher:raise runs.MissingDependency('device D requires explicit public-world teacher enablement; no FULL fallback')
             from gpu_engine.v5_device_teacher import Provider
             teacher=Provider(prepared,plan)
-        return RuntimeBackend(prepared,pool,gender_policy=gender_policy,teacher=teacher)
+        return RuntimeBackend(prepared,pool,gender_policy=gender_policy,teacher=teacher,cache_workers=cache_workers)
     teacher=None
     if plan.model.arm=='D':
         if public_config is None or actor_contract is None:raise runs.MissingDependency('D needs bound original public parser/contract')
