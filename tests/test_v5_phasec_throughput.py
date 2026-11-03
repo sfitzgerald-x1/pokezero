@@ -28,7 +28,7 @@ class PhaseCThroughputTests(unittest.TestCase):
             for _ in range(2):
                 dataset.slice_training_batch(None);training._training_tensors(None);training._update(runtime,None)
         with tempfile.TemporaryDirectory()as folder:
-            scopes=[dict(ph='X',name='pokezero.learner_update',pid=1,tid=1,ts=i*100,dur=50)for i in range(4)]
+            scopes=[dict(ph='X',cat='user_annotation',name='pokezero.learner_update',pid=1,tid=1,ts=i*100,dur=50)for i in range(4)]
             (Path(folder)/'ct-training-trace.json').write_text(json.dumps(dict(traceEvents=scopes)))
             runtime=SimpleNamespace(steps=64,rows=640)
             with patch.object(training,'_update',side_effect=update),patch.object(training,'train_caches',side_effect=train),\
@@ -91,7 +91,50 @@ class PhaseCThroughputTests(unittest.TestCase):
         self.assertEqual(report['learner']['kernel']['events'],8)
         self.assertAlmostEqual(report['learner']['kernel']['seconds'],200e-6)
         self.assertEqual(report['other_or_unattributed']['kernel']['events'],4)
-        with self.assertRaises(ValueError):ct.learner_trace_categories(dict(traceEvents=[]))
+        empty=ct.learner_trace_categories(dict(traceEvents=[]))
+        self.assertEqual(empty['missing_cpu_scopes'],4)
+        self.assertFalse(empty['per_update_mean_available'])
+
+    def test_actual_partial_capture_never_counts_gpu_tags_or_invents_a_four_update_mean(self):
+        scope=dict(ph='X',cat='user_annotation',name='pokezero.learner_update',pid=1,tid=10,ts=0,dur=500)
+        events=[scope,dict(scope,cat='gpu_user_annotation',pid=0),
+            dict(ph='X',cat='cuda_runtime',pid=1,tid=10,ts=10,dur=1,args={'correlation':7}),
+            dict(ph='X',cat='kernel',dur=20,args={'correlation':7}),
+            dict(ph='X',cat='kernel',dur=999,args={'correlation':900})]
+        actual=ct.learner_trace_categories(dict(traceEvents=events))
+        self.assertEqual(actual['tagged_updates'],1)
+        self.assertEqual(actual['missing_cpu_scopes'],3)
+        self.assertIsNone(actual['observed_update_ordinals'])
+        self.assertFalse(actual['per_update_mean_available'])
+        self.assertEqual(actual['learner']['kernel']['seconds'],20e-6)
+        self.assertAlmostEqual(actual['other_or_unattributed']['kernel']['seconds'],999e-6)
+        both=[dict(scope,ts=i*1000)for i in range(4)]
+        both += [dict(e,cat='gpu_user_annotation',pid=0)for e in both]
+        self.assertEqual(ct.learner_trace_categories(dict(traceEvents=both))['tagged_updates'],4)
+        self.assertTrue(ct.learner_trace_categories(dict(traceEvents=both))['per_update_mean_available'])
+        self.assertFalse(ct.learner_trace_categories(dict(traceEvents=both),capture_stopped=True)['per_update_mean_available'])
+
+    def test_partial_trace_is_nonfatal_and_counters_are_durable_before_reduction(self):
+        import json
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory()as folder:
+            trace=Path(folder)/'ct-training-trace.json'
+            trace.write_text(json.dumps(dict(traceEvents=[dict(ph='X',cat='user_annotation',name='pokezero.learner_update',pid=1,tid=1,ts=0,dur=50)])))
+            runtime=SimpleNamespace(steps=64)
+            def update(r,b):r.steps+=1;return 'original'
+            with patch.object(training,'_update',side_effect=update):
+                with ct.instrument_training(folder,1024,concurrent_collection=True)as state:
+                    training._update(runtime,object())
+            self.assertIsNone(state['gpu_kernel_seconds_per_sampled_update'])
+            self.assertIsNone(state['gpu_sample_updates'])
+            saved=json.loads((Path(folder)/'ct-training-counters.json').read_text())
+            self.assertEqual(saved['counters']['updates'],1)
+            with patch.object(training,'_update',side_effect=update),\
+                    patch.object(ct,'learner_trace_categories',side_effect=ValueError('inert reduction failure')):
+                with self.assertRaisesRegex(ValueError,'inert reduction failure'):
+                    with ct.instrument_training(folder,1024,concurrent_collection=True):
+                        training._update(runtime,object())
+            self.assertEqual(len(list(Path(folder).glob('ct-training-counters*.json'))),2)
 
     def test_all_collector_write_phases_survive_without_becoming_a_new_denominator(self):
         banks=[{'phases':{name:float(i+1)for name in ct.COLLECTOR_PHASES}}for i in range(10)]
