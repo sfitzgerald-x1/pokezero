@@ -142,10 +142,10 @@ def run_original(blocks, labels, config, bindings):
     return torch_rows, frames
 
 
-def run_v2(blocks, labels, config, *, lanes, **options):
+def run_v2(blocks, labels, config, *, lanes, rows_per_game=8, **options):
     roster = v2.roster_from_blocks(blocks)
     collector = v2.RefillCollector(NS(struggle=j.array(2, j.int32)), NS(belief=None), config, labels, roster,
-        lanes=lanes, max_requests=MAX_REQUESTS, chunk_steps=CHUNK, rows_per_game=8, **options)
+        lanes=lanes, max_requests=MAX_REQUESTS, chunk_steps=CHUNK, rows_per_game=rows_per_game, **options)
     result = collector.run(params_for(roster.actor_archives))
     store = v2.finalize(result, loss_config=V5LossConfig())
     return roster, collector, result, store
@@ -245,6 +245,18 @@ class RefillCollectorTests(unittest.TestCase):
         self.assertEqual(sorted(roster.groups), sorted({(0, 0), (0, 1), (1, 0), (0, 2), (2, 0)}))
         self.assertEqual(sum(collector.levels[0].layout), 5);self.assertTrue(all(x >= 1 for x in collector.levels[0].layout))
         self.compare_rows(original, store)
+
+    def test_row_buffer_overflow_segments_and_numpy_export_keep_every_row(self):
+        blocks, labels, config, bindings = declaration()
+        with seams():
+            original, _ = run_original(blocks, labels, config, bindings)
+            _, _, result, store = run_v2(blocks, labels, config, lanes=3, rows_per_game=1, shrink_factor=2, min_lanes=1)
+        self.assertGreater(result.stats['row_segments'], 1)
+        self.compare_rows(original, store)
+        host = store.to_numpy();torch_rows = store.to_torch(exact_dtypes=False, status_strings=False)
+        self.assertEqual(len(host['numeric_features']), store.n);self.assertEqual(host['categorical_ids'].dtype, np.int32)
+        for name in v2.DIRECT_FIELDS + v2.TERMINAL_FIELDS:
+            np.testing.assert_array_equal(host[name], torch_rows[name].numpy(), err_msg=name)
 
     def test_layouts_are_proportional_static_and_shrink_per_group(self):
         self.assertEqual(v2.lane_layout([10000, 10000], 2048), (1024, 1024))

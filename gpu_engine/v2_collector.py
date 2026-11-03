@@ -675,7 +675,8 @@ class RowStore:
         return np.stack([get('streams'), get('frames'), get('owners')], axis=1)
 
     def to_numpy(self):
-        out = {name: np.asarray(jax.device_get(value[:self.n])) for name, value in self.arrays.items()}
+        # Copy whole buffers to the host and slice there: no device-side copy of the row buffer.
+        out = {name: np.asarray(jax.device_get(value))[:self.n] for name, value in self.arrays.items()}
         out.update(self._constants(np))
         return out
 
