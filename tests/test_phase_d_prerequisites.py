@@ -79,6 +79,9 @@ class CaptureTests(unittest.TestCase):
             a.decide(a.snapshot_boundary(),rng=random.Random(1))
             self.assertEqual(len(list(capture.read_capture(Path(root)/'0.jsonl'))),1)
             a.close_game()
+            p=Path(root)/'0.jsonl'
+            with p.open('ab') as f:f.write(b'{\"interrupted-tail\":')
+            self.assertEqual(len(list(capture.read_capture(p))),1)
 
 
 class SelectorTests(unittest.TestCase):
@@ -106,3 +109,38 @@ class SelectorTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class QueueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_actual_queue_batches_concurrent_requests_and_preserves_order(self):
+        import asyncio
+        from pokezero.phase_d_search_server import Server
+        class InertSearch:
+            def __init__(self):self.calls=[]
+            def process_many(self,rows):
+                self.calls.append(rows)
+                return [dict(request_id=r['request_id'],status='COMPLETE') for r in rows]
+        search=InertSearch();server=Server.__new__(Server)
+        server._initialize(search,8,.01,16)
+        consumer=asyncio.create_task(server.consume())
+        loop=asyncio.get_running_loop();futures=[]
+        for i in range(4):
+            future=loop.create_future();futures.append(future)
+            await server.queue.put((dict(request_id=str(i)),future,0.))
+        result=await asyncio.gather(*futures)
+        self.assertEqual([r['request_id'] for r in result],list(map(str,range(4))))
+        self.assertEqual(len(search.calls),1);self.assertEqual(len(search.calls[0]),4)
+        await server.queue.put(None);await consumer
+        server.executor.shutdown()
+
+    async def test_queue_failure_is_not_retried(self):
+        import asyncio
+        from pokezero.phase_d_search_server import Server
+        class InertSearch:
+            calls=0
+            def process_many(self,rows):self.calls+=1;raise ValueError('fixture search failure')
+        search=InertSearch();server=Server.__new__(Server);server._initialize(search,8,.001,16)
+        consumer=asyncio.create_task(server.consume());future=asyncio.get_running_loop().create_future()
+        await server.queue.put((dict(request_id='0'),future,0.))
+        with self.assertRaisesRegex(RuntimeError,'fixture'):await future
+        self.assertEqual(search.calls,1);await server.queue.put(None);await consumer;server.executor.shutdown()

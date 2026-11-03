@@ -1,6 +1,7 @@
 """Outcome-blind fixed metadata selector and full-denominator Phase D readout."""
 from collections import Counter
 import hashlib
+import copy
 import math
 
 SCHEMA = 'pokezero.phase-d.saved-roots.v1'
@@ -44,7 +45,9 @@ def select(rows, declaration):
             raise ValueError('duplicate saved root address')
         seen.add(key)
         rank = hashlib.sha256(repr((SCHEMA, declaration['seed'], key)).encode()).digest()
-        groups[band(row['turn'])].append((rank, key, row))
+        metadata={k:copy.deepcopy(row[k]) for k in ('cell','owner','decision_index','turn','prefix_sha256','battle_id',
+            'seed','stream_id','namespace','capture_path','capture_row','declaration_sha256','generation','request_count') if k in row}
+        groups[band(row['turn'])].append((rank, key, metadata))
     quota = declaration['roots_per_band']
     if any(len(group) < quota for group in groups):
         raise ValueError('insufficient genuine saved roots by turn band: ' + repr(tuple(map(len, groups))))
@@ -94,7 +97,7 @@ def summarize(roster, records, *, worlds):
     ordered = sorted(timings + [math.inf] * (n - len(timings)))
     p95 = ordered[math.ceil(.95 * n) - 1]
     return dict(requested_roots=n, requested_worlds=worlds, fully_constructed_roots=full,
-                full_constructor_coverage=full / n, timed_roots=len(timings),
+                full_constructor_coverage=full / n, timed_roots=len(timings),full_search_completed_roots=len(timings),unknown_search_roots=n-len(timings),
                 decision_p95_seconds=p95 if math.isfinite(p95) else None,
                 decision_p95_unavailable=not math.isfinite(p95),
                 by_turn=by_turn, refusals_by_root=dict(refusals),
