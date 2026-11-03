@@ -174,6 +174,12 @@ def materialize(root, start, *, prepared, history, own_static, seed, retained=No
     worlds. It never contains sampled latent values and is not reconditioned
     on a world. Passing a world-derived neural observation is not an API here.
     """
+    # Explicit genuine protocol route; never fabricate retained driver evidence.
+    from .phase_d_protocol_world import ProtocolInputs,materialize_protocol
+    if type(prepared) is ProtocolInputs:
+        if history is not None or own_static is not None or retained is not None:
+            raise ValueError('protocol route cannot carry retained-driver evidence')
+        return materialize_protocol(root,start,inputs=prepared,seed=seed)
     if type(root) is not PublicRoot or type(start) is not BattleStartOverride or type(history) is not capture.History or type(own_static) is not OwnStatic:
         raise ValueError('original public root, owning history and sampled packed override required')
     runtime=driver._checked(prepared);catalog=runtime['catalog']
