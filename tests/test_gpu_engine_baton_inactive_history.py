@@ -8,7 +8,7 @@ import jax
 import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_baton_pass_callbacks as cb
-from gpu_engine import engine_retained_encoder_driver as driver,state,private_requests
+from gpu_engine import engine_retained_encoder_driver as driver,state,private_requests,public_active
 
 class Core(NamedTuple):
  baton_history:object
@@ -38,7 +38,7 @@ class BatonInactiveHistoryTests(unittest.TestCase):
   h=self.history();rec=cb.empty_record(h);tr=cb.Transaction(h,None,None,None,None,rec)
   frame=SimpleNamespace(callbacks=SimpleNamespace(execution=SimpleNamespace(baton_transaction=tr)))
   z=j.zeros(2,j.int32);ledger=SimpleNamespace(site=j.full((2,1),39,j.int32),stream_id=h.stream_id,refusal=z,stage=j.full((2,1),3,j.int32),serial=j.zeros((2,1),j.int32))
-  pub=SimpleNamespace(cursor=SimpleNamespace(stream_id=h.stream_id),context=SimpleNamespace(tendency=SimpleNamespace(baton=j.ones((2,2),bool))),mons=SimpleNamespace(boosts=j.zeros((2,2,7),j.int32)))
+  pub=SimpleNamespace(cursor=SimpleNamespace(stream_id=h.stream_id),context=SimpleNamespace(tendency=SimpleNamespace(baton=j.ones((2,2),bool)),active=SimpleNamespace(volatiles=j.zeros((2,2,len(public_active.NAMES)),bool))),mons=SimpleNamespace(boosts=j.zeros((2,2,7),j.int32)))
   def request(kind):return SimpleNamespace(actions=SimpleNamespace(admitted=j.ones(2,bool),facts=SimpleNamespace(request=SimpleNamespace(kind=j.full(2,int(kind),j.int32)))))
   q=(request(private_requests.RequestKind.FORCE_SWITCH),request(private_requests.RequestKind.WAIT))
   with patch.object(cb,'owned',return_value=j.zeros(2,bool)):
