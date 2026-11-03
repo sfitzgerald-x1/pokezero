@@ -91,11 +91,27 @@ def read_bound(path,digest):
     return json.loads(raw)
 
 
+def vocabulary_from_document(document,contract):
+    """Resolve the original worker's provenance-wrapped vocabulary format."""
+    from pokezero.category_vocab import CategoryVocabulary
+    from pokezero.live_protocol_actor import _vocab_sha
+    if (document['checkpoint_sha256']!=contract.checkpoint_sha256
+            or document['category_vocab_sha256']!=contract.category_vocab_sha256
+            or document['source_hash']!=contract.belief_set_source_hash):
+        raise ValueError('original champion category/source provenance differs')
+    # Provenance fields are not CategoryVocabulary constructor arguments.
+    # Keep the ordered tokens, aliases and OOV band exactly as published.
+    vocab=CategoryVocabulary(tuple(document['tokens']),document['oov_buckets'],document['aliases'])
+    if (_vocab_sha(vocab)!=contract.category_vocab_sha256 or vocab.size!=contract.categorical_vocab_size
+            or type(document['size'])is not int or document['size']!=vocab.size):
+        raise ValueError('literal original category vocabulary differs')
+    return vocab
+
+
 def load_inputs(args):
     """Same pinned static catalog/source/config for host coverage and GPU search."""
     import subprocess
-    from pokezero.live_protocol_actor import ActorContract,_vocab_sha
-    from pokezero.category_vocab import CategoryVocabulary
+    from pokezero.live_protocol_actor import ActorContract
     from pokezero.dex import load_showdown_dex_cached
     from pokezero.randbat import load_gen3_randbat_source_cached
     from pokezero.local_showdown import LocalShowdownConfig
@@ -105,8 +121,7 @@ def load_inputs(args):
     contract=ActorContract.champion();revision=subprocess.check_output(['git','-C',args.showdown_root,'rev-parse','HEAD'],text=True).strip()
     dirty=subprocess.check_output(['git','-C',args.showdown_root,'status','--porcelain','--untracked-files=no'],text=True)
     if revision!=contract.showdown_revision or dirty:raise ValueError('original clean pinned Showdown required')
-    vocab=CategoryVocabulary(**read_bound(args.vocabulary,args.expected_vocabulary_sha256))
-    if _vocab_sha(vocab)!=contract.category_vocab_sha256:raise ValueError('original9375 vocabulary required')
+    vocab=vocabulary_from_document(read_bound(args.vocabulary,args.expected_vocabulary_sha256),contract)
     metadata=read_bound(args.metadata,args.expected_metadata_sha256)
     source=load_gen3_randbat_source_cached(args.showdown_root)
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),load_showdown_dex_cached(args.showdown_root),
