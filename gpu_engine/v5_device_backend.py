@@ -48,16 +48,22 @@ def prepare(catalog,source,pool,*,source_commit):
 
 class RuntimeBackend:
     """Device-mode backend for the unchanged v5_run.run callback contract."""
-    def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None,measure_runtime=False):
+    def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None,measure_runtime=False,cache_workers=0):
         if type(prepared)is not Prepared or type(chunk_steps)is not int or chunk_steps<=0:
             raise ValueError('prepared device runtime and finite chunk required')
         if type(measure_runtime)is not bool:raise ValueError('explicit runtime timing choice required')
+        if type(cache_workers)is not int or cache_workers<0:raise ValueError('explicit nonnegative CPU cache worker count required')
+        self.cache_workers=cache_workers;self._cache_pool=None;self._cache_merger=None
         self.measure_runtime=measure_runtime;self._initializer_executables={}
         self.teacher=teacher
         self.prepared=prepared;self.pool=pool;self.gender_policy=gender_policy;self.chunk_steps=chunk_steps
         self.actors={};self._plan=None;self.labels=None;self.declaration_sha256=None;self.model_sha256=None
         self.initialize=jax.jit(lambda state:transition.initialize_with_public(state,prepared.engine_tables,
             belief_tables=prepared.observation_tables.belief))
+
+    def close(self):
+        if self._cache_pool is not None:self._cache_pool.close()
+        if self._cache_merger is not None:self._cache_merger.shutdown(wait=True,cancel_futures=True)
 
     def require_teacher(self):
         from .v5_device_teacher import Provider
@@ -174,9 +180,18 @@ class RuntimeBackend:
         receipt=store.artifact(f'rollouts/device-bank-{uuid.uuid4().hex}.json',runs._json(binding).encode(),kind='DEVICE_ACTOR_BANK')
         options={} if self.teacher is None else dict(teacher_recipe=self.teacher.recipe)
         spool=Spool(store,bank,bank_sha256=receipt['sha256'],**options)
+        assembly=None
+        if self.cache_workers:
+            from concurrent.futures import ThreadPoolExecutor
+            from .v5_cache_pipeline import CpuWorkers,BankAssembly
+            if self._cache_pool is None:
+                self._cache_pool=CpuWorkers(self.cache_workers)
+                self._cache_merger=ThreadPoolExecutor(max_workers=1,thread_name_prefix='cache-merge')
+            assembly=BankAssembly(self._cache_pool,spool,bindings=prepared['bindings'],loss_config=plan.loss,discount=plan.discount)
         warm_loop_started=time.perf_counter()
         for _ in range((plan.max_requests+self.chunk_steps-1)//self.chunk_steps):
             check_progress()
+            if assembly is not None:assembly.check()
             clock=time.perf_counter();device=execute(carry,prepared['params'])
             if self.measure_runtime:device=jax.block_until_ready(device)
             self._phase['kernel_blocked_seconds']+=time.perf_counter()-clock;carry=device.carry
@@ -204,10 +219,40 @@ class RuntimeBackend:
                         actor_bank_sha256=receipt['sha256'])
                     closed.add(game.stream_id)
                     clock=time.perf_counter()
-                    spool.finalize_game(row,game,bindings=prepared['bindings'],loss_config=plan.loss,discount=plan.discount)
+                    if assembly is None:
+                        spool.finalize_game(row,game,bindings=prepared['bindings'],loss_config=plan.loss,discount=plan.discount)
+                    else:assembly.submit(row,game)
                     self._phase['game_cache_wall_seconds']+=time.perf_counter()-clock
             if len(closed)==len(batch.games):break
         if len(closed)!=len(batch.games):raise ValueError('finite device collector left a declared game unclosed')
+        if assembly is not None:
+            # Freeze this bank's timing and terminal state before the owner
+            # starts the next bank. Workers never touch the run journal.
+            phases=self._phase;status=np.array(host.carry.status,copy=True)
+            kernel_end=time.perf_counter();relative=f'caches/cache-{uuid.uuid4().hex}'
+            (store.path/'caches').mkdir(exist_ok=True)
+            def finish():
+                timing=assembly.finish(store.path/relative)
+                timing['finished']=time.perf_counter();return timing
+            def publish(timing):
+                phases['game_cache_wall_seconds']=timing['worker_seconds']
+                phases['cache_merge_wall_seconds']=timing['merge_seconds']
+                total=timing['finished']-wall_started
+                if self.measure_runtime:
+                    report=counts.report(status,kernel_seconds=phases['kernel_blocked_seconds'],collection_seconds=total)
+                    warm=timing['finished']-warm_loop_started
+                    store.emit('DEVICE_RUNTIME_TIMING',**report,phases=phases,bank_streams=list(bank.streams),
+                        warm_loop_including_cache_io_seconds=warm,
+                        completed_per_warm_loop_wall_second=None if warm<=0 else report['complete']/warm,
+                        cache_pipeline=dict(workers=self.cache_workers,maximum_pending_banks=2,
+                            tail_wait_seconds=timing['wait_seconds'],kernel_bank_wall_seconds=kernel_end-wall_started,
+                            assembly_worker_seconds=timing['worker_seconds'],
+                            worker_dispatch_inclusive_seconds=timing['dispatch_seconds'],bank_finish_monotonic=timing['finished']),
+                        timing_scope='Blocked actual kernels; CPU game_cache is aggregate worker busy time, not wall. Merge and tail writes may overlap next bank; bank durations must not be summed into iteration wall.',
+                        actor_load_scope='verified original archive loading is batch preparation before collect; not kernel wall')
+                if timing['metadata']is None:return None
+                return relative,runs._file_sha(store.path/relative/'metadata.json')
+            return runs.PendingCache(self._cache_merger.submit(finish),publish)
         result=None
         if spool.parts:
             (store.path/'caches').mkdir(exist_ok=True)
@@ -217,7 +262,7 @@ class RuntimeBackend:
         if self.measure_runtime:
             report=counts.report(host.carry.status,kernel_seconds=self._phase['kernel_blocked_seconds'],collection_seconds=time.perf_counter()-wall_started)
             warm_loop_seconds=time.perf_counter()-warm_loop_started
-            store.emit('DEVICE_RUNTIME_TIMING',**report,phases=self._phase,
+            store.emit('DEVICE_RUNTIME_TIMING',**report,phases=self._phase,bank_streams=list(bank.streams),
                 warm_loop_including_cache_io_seconds=warm_loop_seconds,
                 completed_per_warm_loop_wall_second=None if warm_loop_seconds<=0 else report['complete']/warm_loop_seconds,
                 timing_scope='explicit lower/compile before actual chunks; blocked actual kernel calls, no warmup games; constructor wall includes initializer lower/compile',

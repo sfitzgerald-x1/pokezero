@@ -23,13 +23,13 @@ class Spool:
     def __init__(self,store,bank,*,bank_sha256,teacher_recipe=None):
         self.store=store;self.bank=bank;self.bank_sha256=bank_sha256;self.teacher_recipe=teacher_recipe
         self.root=store.path/'rollouts'/('spool-'+uuid.uuid4().hex);self.root.mkdir(parents=True)
-        self.records=[];self.stats={};self.parts=[];self.has_training=np.zeros(len(bank.streams),bool)
+        self.records=[];self.record_refs=[];self.stats={};self.parts=[];self.has_training=np.zeros(len(bank.streams),bool)
 
     def _save(self,path,value):
         with path.open('xb')as stream:np.save(stream,value,allow_pickle=False)
         path.chmod(0o444);self.stats[str(path)]=_stat(path)
         return dict(path=str(path.relative_to(self.store.path)),shape=list(value.shape),dtype=value.dtype.str,
-            sha256=v5_data._file_sha(path))
+            sha256=v5_data._file_sha(path),identity=self.stats[str(path)])
 
     def append(self,host,*,teacher_records=None):
         """One host chunk -> immutable batch-major .npy files, no full copy."""
@@ -47,11 +47,13 @@ class Spool:
             data=(json.dumps(teacher_records,sort_keys=True,allow_nan=False)+'\n').encode()
             description=self.store.artifact(str((folder/'teacher.json').relative_to(self.store.path)),data,kind='DEVICE_TEACHER_CHUNK',bank_sha256=self.bank_sha256)
             file=self.store.path/description['path'];file.chmod(0o444);self.stats[str(file)]=_stat(file)
-            record['teacher']=dict(path=description['path'],sha256=description['sha256'])
+            record['teacher']=dict(path=description['path'],sha256=description['sha256'],identity=self.stats[str(file)])
         elif teacher_records is not None:raise ValueError('teacher records require original Recipe')
         self.has_training|=np.any(host.frames.trainable,axis=(0,2))
-        self.store.artifact(str((folder/'metadata.json').relative_to(self.store.path)),
+        reference=self.store.artifact(str((folder/'metadata.json').relative_to(self.store.path)),
             (json.dumps(record,sort_keys=True)+'\n').encode(),kind='DEVICE_ROLLOUT_CHUNK',bank_sha256=self.bank_sha256)
+        (self.store.path/reference['path']).chmod(0o444)
+        self.record_refs.append(dict(path=reference['path'],sha256=reference['sha256']))
         self.records.append(record)
 
     def _read_row(self,description,row):

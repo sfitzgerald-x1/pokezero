@@ -40,7 +40,7 @@ def build_plan(bank,profile,labels,category):
         runs.Watchdog(1800),checkpoint_updates=32,discount=config['discount'])
 
 
-def execute(config,run_root,*,enable_smoke=False):
+def execute(config,run_root,*,enable_smoke=False,cache_workers=0):
     """Actual collect -> cache -> original train/checkpoint/export -> JAX load."""
     if enable_smoke is not True:raise ValueError('explicit finite smoke execution required')
     if set(config)!=set(('schema','runtime','labels','bank','persistent_cache'))or config['schema']!=SCHEMA:
@@ -62,7 +62,7 @@ def execute(config,run_root,*,enable_smoke=False):
     from gpu_engine import v5_model
     begin=time.perf_counter();prepared,pool,_,_=worker.prepare_device_runtime(inputs)
     preparation=time.perf_counter()-begin
-    backend=RuntimeBackend(prepared,pool,gender_policy=gender,measure_runtime=True)
+    backend=RuntimeBackend(prepared,pool,gender_policy=gender,measure_runtime=True,cache_workers=cache_workers)
     begin=time.perf_counter();result=runs.run(plan,run_root,backend=backend,enable_v5=True,measure_timings=True)
     pipeline=time.perf_counter()-begin
     report=dict(schema=SCHEMA,status=result['status'],declared_games=GAMES,steps=result.get('steps'),rows=result.get('rows'),
