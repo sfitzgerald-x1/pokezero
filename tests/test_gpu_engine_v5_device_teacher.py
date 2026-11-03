@@ -123,7 +123,7 @@ class DeviceTeacherTests(unittest.TestCase):
                 self.assertEqual(request.root_inputs['numeric_features'].shape,(1,1,29,132))
                 result.append(NS(status=item['status'],reason=item['refusal'],reduction=NS(improvement=None if item['improvement']is None else c.RootImprovement(**item['improvement'])),world_reports=(),missing_worlds=0,actual_teacher_calls={},reply_input_approximation=()))
             return result
-        provider.frame_pricer=NS(price=price,last_timing=dict(roots=2,world_prepare_seconds=1.,batch_pack_and_device_seconds=2.,device_invocations=1,lower_seconds=0.,compile_seconds=0.,device_seconds=1.))
+        provider.frame_pricer=NS(capacity=2048,price=price,last_timing=dict(roots=2,world_prepare_seconds=1.,batch_pack_and_device_seconds=2.,device_invocations=1,lower_seconds=0.,compile_seconds=0.,device_seconds=1.))
         provider.reset_metrics()
         with patch.object(t.worlds,'detach_root',side_effect=lambda ctx,src,*,row,owner,**kw:NS(address=c.DecisionAddress(int(ctx.streams[row]),int(ctx.frames[row]),owner))),patch.object(t.worlds,'plan_starts',side_effect=lambda root,*a:NS(root=root)):
             output=provider.label_chunk(raw.roots,raw.frames,bank,params)
@@ -131,6 +131,35 @@ class DeviceTeacherTests(unittest.TestCase):
         metrics=provider.metrics();self.assertEqual(metrics['by_frame']['0']['refused_share_selected'],.5)
         self.assertEqual(metrics['batch_timing_totals']['device_invocations'],2)
         provider.reset_metrics();self.assertEqual(provider.metrics()['by_frame'],{})
+
+    def test_chunk_batch_preserves_exact_records_and_per_frame_refusals(self):
+        raw,bank=inert_d();recipe,items=records(raw,bank);params=tuple({'inert':i}for i in range(4))
+        outputs=[]
+        for chunk,capacity in ((False,2048),(True,2048),(True,3),(True,1)):
+            provider=t.Provider.__new__(t.Provider);provider.recipe=recipe;provider.source=object();provider.materializer=object()
+            provider.frame_batch=True;provider.chunk_batch=chunk;provider.bind=lambda *a:None;provider.reset_metrics();calls=[]
+            def price(requests,*args):
+                calls.append([asdict(x.plans.root.address)for x in requests]);result=[]
+                for request in requests:
+                    item=next(x for x in items if x['address']==asdict(request.plans.root.address))
+                    result.append(NS(status=item['status'],reason=item['refusal'],reduction=NS(improvement=None if item['improvement']is None else c.RootImprovement(**item['improvement'])),world_reports=(),missing_worlds=0,actual_teacher_calls={},reply_input_approximation=()))
+                return result
+            provider.frame_pricer=NS(capacity=capacity,price=price,last_timing={})
+            with patch.object(t.worlds,'detach_root',side_effect=lambda ctx,src,*,row,owner,**kw:NS(address=c.DecisionAddress(int(ctx.streams[row]),int(ctx.frames[row]),owner))),patch.object(t.worlds,'plan_starts',side_effect=lambda root,*a:NS(root=root)):
+                output=provider.label_chunk(raw.roots,raw.frames,bank,params)
+            outputs.append((output,provider.metrics()['by_frame']))
+            self.assertEqual([x for call in calls for x in call],[x['address']for x in items])
+            self.assertTrue(all(len(call)<=capacity for call in calls))
+            self.assertEqual(len(calls),2 if not chunk else (4+capacity-1)//capacity)
+        for output in outputs[1:]:self.assertEqual(output,outputs[0])
+
+    def test_queued_backend_keeps_original_pre_root_cache_and_action_boundary(self):
+        old=backend.RuntimeBackend.__init__
+        def queued(worker,*args,**kw):
+            kw['teacher'].chunk_batch=True;kw['teacher_queue_chunks']=2
+            return old(worker,*args,**kw)
+        with patch.object(backend.RuntimeBackend,'__init__',new=queued):
+            self.test_backend_collect_uses_actual_pre_context_and_original_cache_path()
 
     def test_spool_original_cache_complete_capped_targets_once_and_tamper_refusal(self):
         raw,bank=inert_d();recipe,items=records(raw,bank)
