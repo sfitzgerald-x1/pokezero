@@ -218,7 +218,7 @@ def instrument_training(run_root, resident_cache_bytes):
     """Wrap original calls; collect CPU data walls and a fixed four-update trace."""
     if type(resident_cache_bytes) is not int or resident_cache_bytes<=0:
         raise ValueError('positive explicit host residency budget required')
-    from pokezero import v5_training as training, dataset
+    from pokezero import v5_training as training, dataset, v5_data
     originals = []
     state = dict(updates=0,prior_durable_updates=None,cache_prepare_seconds=0.0,batch_slice_seconds=0.0,
         tensor_conversion_seconds=0.0,update_wall_seconds=0.0,profile_updates=[])
@@ -246,6 +246,9 @@ def instrument_training(run_root, resident_cache_bytes):
 
     install(training,'_cache_reader',wall('cache_prepare_seconds'))
     install(dataset,'slice_training_batch',wall('batch_slice_seconds'))
+    if hasattr(v5_data,'_resident_slice_batch'):
+        install(v5_data,'_resident_slice_batch',wall('batch_slice_seconds'))
+        state['resident_validation']='ONCE_AT_LOAD; exact immutable private slices only'
     install(training,'_training_tensors',wall('tensor_conversion_seconds'))
 
     def resident(original):
@@ -327,9 +330,11 @@ def collector_banks(events):
     return banks
 
 
-def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0,model_arm='B',teacher_frame_batch=False,resume_trained=False):
+def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,cache_workers=0,model_arm='B',teacher_frame_batch=False,resume_trained=False,
+        raw_retention_every=1,transient_raw_root=None):
     if enable_ct is not True:
         raise ValueError('explicit finite C-T execution required')
+    if type(raw_retention_every)is not int or raw_retention_every<=0:raise ValueError('positive fixed raw retention interval required')
     if type(resume_trained)is not bool or resume_trained and not resume:raise ValueError('trained continuation requires original resume')
     if model_arm=='D'and teacher_frame_batch is not True:raise ValueError('D-T requires the batched teacher route')
     from contextlib import nullcontext
@@ -339,6 +344,8 @@ def execute(config,run_root,*,resident_cache_bytes,enable_ct=False,resume=False,
             options={}if cache_workers==0 else dict(cache_workers=cache_workers)
             if model_arm!='B':options['model_arm']=model_arm
             if teacher_frame_batch:options['teacher_frame_batch']=True
+            if raw_retention_every!=1 or transient_raw_root is not None:
+                options.update(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
             original=v5_device_smoke.execute(config,run_root,enable_smoke=True,**options)
     if recovery is not None:
         if timing['prior_durable_updates']!=recovery['prior_durable_updates']:
@@ -379,9 +386,12 @@ def main(argv=None):
     parser.add_argument('--cache-workers',type=int,default=0)
     parser.add_argument('--model-arm',choices=('A','B','D'),default='B')
     parser.add_argument('--teacher-frame-batch',action='store_true')
+    parser.add_argument('--raw-retention-every',type=int,default=1)
+    parser.add_argument('--transient-raw-root')
     args=parser.parse_args(argv)
     config=v5_worker._record(dict(path=args.config,sha256=args.expected_config_sha256))
-    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers,model_arm=args.model_arm,teacher_frame_batch=args.teacher_frame_batch,resume_trained=args.resume_trained)
+    report=execute(config,args.run_root,resident_cache_bytes=args.resident_cache_bytes,enable_ct=args.enable_ct,resume=args.resume,cache_workers=args.cache_workers,model_arm=args.model_arm,teacher_frame_batch=args.teacher_frame_batch,resume_trained=args.resume_trained,
+        raw_retention_every=args.raw_retention_every,transient_raw_root=args.transient_raw_root)
     print(json.dumps(dict(status=report['threshold'],result=str(Path(args.run_root)/'ct-result.json'))))
     return 0
 

@@ -65,9 +65,10 @@ def teacher_table(store,run_root):
         totals=totals,refused_share_selected=None if not totals['selected']else totals['refused']/totals['selected'],batch_timing_totals=timing)
 
 
-def execute(config,run_root,*,enable_smoke=False,cache_workers=0,model_arm='B',teacher_frame_batch=False):
+def execute(config,run_root,*,enable_smoke=False,cache_workers=0,model_arm='B',teacher_frame_batch=False,raw_retention_every=1,transient_raw_root=None):
     """Actual collect -> cache -> original train/checkpoint/export -> JAX load."""
     if enable_smoke is not True:raise ValueError('explicit finite smoke execution required')
+    if type(raw_retention_every)is not int or raw_retention_every<=0:raise ValueError('positive fixed raw retention interval required')
     if set(config)!=set(('schema','runtime','labels','bank','persistent_cache'))or config['schema']!=SCHEMA:
         raise ValueError('literal finite smoke configuration required')
     cache=config['persistent_cache']
@@ -92,7 +93,8 @@ def execute(config,run_root,*,enable_smoke=False,cache_workers=0,model_arm='B',t
     if model_arm=='D':
         from gpu_engine.v5_device_teacher import Provider
         teacher=Provider(prepared,plan,frame_batch=teacher_frame_batch)
-    backend=RuntimeBackend(prepared,pool,gender_policy=gender,measure_runtime=True,cache_workers=cache_workers,teacher=teacher)
+    options={}if raw_retention_every==1 and transient_raw_root is None else dict(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
+    backend=RuntimeBackend(prepared,pool,gender_policy=gender,measure_runtime=True,cache_workers=cache_workers,teacher=teacher,**options)
     begin=time.perf_counter();result=runs.run(plan,run_root,backend=backend,enable_v5=True,measure_timings=True)
     pipeline=time.perf_counter()-begin
     report=dict(schema=SCHEMA,status=result['status'],declared_games=GAMES,steps=result.get('steps'),rows=result.get('rows'),

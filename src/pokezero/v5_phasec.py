@@ -109,7 +109,8 @@ def bind_plan(profile,vocabulary,*,category_vocabulary,run_id,arm,replicate,iter
         runs.Watchdog(1800,longest_multiplier=5.,backstop_seconds=30*24*3600.),discount=config['discount'])
 
 
-def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,gender_policy=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False):
+def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,gender_policy=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False,
+        raw_retention_every=1,transient_raw_root=None):
     """Explicit device rollout or the unchanged original protocol backend."""
     from gpu_engine import v5_selfplay,v5_depth1_provider
     from .v5_gumbel import Recipe
@@ -119,6 +120,10 @@ def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,ge
     if type(teacher_frame_batch)is not bool or teacher_frame_batch and not device_teacher:raise ValueError('frame batching needs the explicit D teacher')
     if type(cache_workers)is not int or cache_workers<0 or cache_workers and not device_rollout:
         raise ValueError('CPU cache workers require the explicit device route')
+    if type(raw_retention_every)is not int or raw_retention_every<=0:
+        raise ValueError('positive fixed raw retention interval required')
+    if not device_rollout and (raw_retention_every!=1 or transient_raw_root is not None):
+        raise ValueError('raw retention choice requires the explicit device route')
     if device_rollout:
         from gpu_engine.v5_device_backend import RuntimeBackend
         teacher=None
@@ -126,7 +131,8 @@ def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,ge
             if not device_teacher:raise runs.MissingDependency('device D requires explicit public-world teacher enablement; no FULL fallback')
             from gpu_engine.v5_device_teacher import Provider
             teacher=Provider(prepared,plan,**(dict(frame_batch=True)if teacher_frame_batch else{}))
-        return RuntimeBackend(prepared,pool,gender_policy=gender_policy,teacher=teacher,cache_workers=cache_workers)
+        options={}if raw_retention_every==1 and transient_raw_root is None else dict(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
+        return RuntimeBackend(prepared,pool,gender_policy=gender_policy,teacher=teacher,cache_workers=cache_workers,**options)
     teacher=None
     if plan.model.arm=='D':
         if public_config is None or actor_contract is None:raise runs.MissingDependency('D needs bound original public parser/contract')

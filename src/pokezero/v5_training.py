@@ -6,6 +6,8 @@ explicit seed/configuration. Each runtime owns its RNG stream and exact finite
 cache cursor; resume continues that stream rather than replaying prior batches.
 """
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, replace
 import hashlib
 import json
@@ -30,6 +32,16 @@ TRAINER_SCHEMA = 'pokezero.cache_trainer.v5'
 BOOTSTRAP_SCHEMA = 'pokezero.public_value_bootstrap.v5'
 _SCHEDULED = weakref.WeakKeyDictionary()
 _CACHE_READERS = weakref.WeakKeyDictionary()
+_RESIDENT_POLICY = ContextVar('v5_resident_cache_bytes',default=None)
+
+
+@contextmanager
+def resident_cache_policy(byte_budget):
+    """Process-local resource choice; never part of optimizer or row state."""
+    if type(byte_budget)is not int or byte_budget<=0:raise ValueError('positive resident cache byte budget required')
+    token=_RESIDENT_POLICY.set(byte_budget)
+    try:yield
+    finally:_RESIDENT_POLICY.reset(token)
 
 
 @dataclass(frozen=True)
@@ -232,7 +244,7 @@ def validate_bootstraps(batch):
     active=np.asarray(batch.terminal_capped,dtype=bool)&np.asarray(batch.ppo_value_target_mask,dtype=bool)
     for index in np.flatnonzero(active):
         capture=batch.step_metadata[index].get('v5_bootstrap')
-        if not isinstance(capture,dict) or capture.get('schema')!=BOOTSTRAP_SCHEMA:
+        if not isinstance(capture,Mapping) or capture.get('schema')!=BOOTSTRAP_SCHEMA:
             raise ValueError('active capped critic target requires actual v5_bootstrap capture')
         original=contract.DecisionAddress(**batch.v5_columns['addresses'][index])
         address=contract.DecisionAddress(**capture.get('address',{}))
@@ -284,8 +296,10 @@ def update(runtime,batch):
 def _update(runtime,batch):
     if type(runtime) is not Runtime:raise ValueError('v5 runtime required')
     if batch.v5_columns is None:raise ValueError('explicit v5 batch required')
-    v5_data.validate_batch(batch);require_v5_bindings(batch.v5_columns,runtime.model_config)
-    validate_bootstraps(batch)
+    if not v5_data._validated_resident_slice(batch):
+        v5_data.validate_batch(batch)
+        validate_bootstraps(batch)
+    require_v5_bindings(batch.v5_columns,runtime.model_config)
     _validate_optimizer(runtime)
     torch=_torch();config=runtime.train_config
     scheduled=config.learning_rate_schedule!='constant'
@@ -422,6 +436,11 @@ def _advance_progress(progress):
 def train_caches(runtime,paths,*,max_updates=None,learning_rate_window=None,resident_cache_bytes=None):
     """Continue the exact ordered finite dataset; no refill, shuffle or replay."""
     if type(runtime) is not Runtime:raise ValueError('v5 runtime required')
+    policy=_RESIDENT_POLICY.get()
+    if policy is not None:
+        if resident_cache_bytes is not None and resident_cache_bytes!=policy:
+            raise ValueError('resident cache resource policy differs')
+        resident_cache_bytes=policy
     if max_updates is not None and (type(max_updates) is not int or max_updates<0):
         raise ValueError('nonnegative update budget required')
     if runtime in _SCHEDULED:_validate_optimizer(runtime)
