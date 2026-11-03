@@ -48,6 +48,7 @@ class CachePipelineTests(unittest.TestCase):
                     assembly.submit(row,games[row])
                 actual=assembly.finish(Path(folder)/'parallel')
                 self.assertGreater(actual['worker_seconds'],0);self.assertEqual(len(workers.processes),1)
+                self.assertGreater(actual['assembly_span_seconds'],0)
                 serial.merge(Path(folder)/'serial');self.compare_bytes(Path(folder)/'serial',Path(folder)/'parallel')
             finally:workers.close()
             self.assertTrue(all(x.poll()is not None for x in workers.processes))
@@ -80,6 +81,7 @@ class CachePipelineTests(unittest.TestCase):
                 self.assertEqual(len(ended),2);self.assertEqual(runs._file_sha(store.path/path/'metadata.json'),digest)
                 timing=store.matching('DEVICE_RUNTIME_TIMING')[0]
                 self.assertEqual(timing['bank_streams'],[101,202]);self.assertEqual(timing['cache_pipeline']['workers'],2)
+                self.assertEqual(timing['phases']['game_cache_wall_seconds'],timing['cache_pipeline']['assembly_elapsed_span_seconds'])
                 self.assertTrue(all(x==owner for x in threads));self.assertEqual(timing['complete'],2)
             finally:backend.close()
 
@@ -188,6 +190,28 @@ class CachePipelineTests(unittest.TestCase):
             result=rf.V5RunTests().execute(Path(folder)/'run',rf.plan(),backend,trainer)
             self.assertEqual(result['status'],'STOPPED');self.assertIn('CACHE',result['reason'])
             self.assertTrue(backend.closed);self.assertEqual(trainer.traces,[])
+
+    def test_unresponsive_pending_worker_rechecks_original_stall_guard_and_stops(self):
+        checks=[]
+        class Backend(rf.FakeBackend):
+            closed=False
+            def collect(self,*args):
+                super().collect(*args)
+                return runs.PendingCache(Future(),lambda x:x)
+            def close(self):self.closed=True
+        def check(progress):
+            checks.append(1)
+            if len(checks)>=3:raise TimeoutError('original no-completed-game stall window')
+        with tempfile.TemporaryDirectory()as folder,patch.object(runs.Progress,'check',check):
+            backend=Backend();trainer=rf.FakeTraining()
+            result=rf.V5RunTests().execute(Path(folder)/'run',rf.plan(),backend,trainer)
+            self.assertEqual(result['status'],'STOPPED');self.assertIn('stall window',result['reason'])
+            self.assertEqual(len(checks),3);self.assertTrue(backend.closed);self.assertEqual(trainer.traces,[])
+
+    def test_finished_worker_timeout_error_is_propagated_without_retrying(self):
+        future=Future();future.set_exception(TimeoutError('worker failed'))
+        with self.assertRaisesRegex(TimeoutError,'worker failed'):
+            runs.PendingCache(future,lambda x:self.fail('published failed worker')).result()
 
 
 if __name__=='__main__':unittest.main()

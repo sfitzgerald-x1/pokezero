@@ -235,7 +235,7 @@ class RuntimeBackend:
                 timing=assembly.finish(store.path/relative)
                 timing['finished']=time.perf_counter();return timing
             def publish(timing):
-                phases['game_cache_wall_seconds']=timing['worker_seconds']
+                phases['game_cache_wall_seconds']=timing['assembly_span_seconds']
                 phases['cache_merge_wall_seconds']=timing['merge_seconds']
                 total=timing['finished']-wall_started
                 if self.measure_runtime:
@@ -246,9 +246,10 @@ class RuntimeBackend:
                         completed_per_warm_loop_wall_second=None if warm<=0 else report['complete']/warm,
                         cache_pipeline=dict(workers=self.cache_workers,maximum_pending_banks=2,
                             tail_wait_seconds=timing['wait_seconds'],kernel_bank_wall_seconds=kernel_end-wall_started,
+                            assembly_elapsed_span_seconds=timing['assembly_span_seconds'],
                             assembly_worker_seconds=timing['worker_seconds'],
                             worker_dispatch_inclusive_seconds=timing['dispatch_seconds'],bank_finish_monotonic=timing['finished']),
-                        timing_scope='Blocked actual kernels; CPU game_cache is aggregate worker busy time, not wall. Merge and tail writes may overlap next bank; bank durations must not be summed into iteration wall.',
+                        timing_scope='Blocked actual kernels; game_cache is elapsed first-submit to last-worker-completion, potentially overlapping kernels and next bank, not additive. Aggregate worker and dispatch durations are separate. Only original iteration wall forms C-T denominator.',
                         actor_load_scope='verified original archive loading is batch preparation before collect; not kernel wall')
                 if timing['metadata']is None:return None
                 return relative,runs._file_sha(store.path/relative/'metadata.json')

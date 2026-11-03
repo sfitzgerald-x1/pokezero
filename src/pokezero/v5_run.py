@@ -613,7 +613,17 @@ class PendingCache:
     future: object
     publish: object
 
-    def result(self):return self.publish(self.future.result())
+    def result(self,*,check_progress=None):
+        from concurrent.futures import TimeoutError
+        while not self.future.done():
+            if check_progress is not None:check_progress()
+            try:self.future.result(timeout=.25)
+            except TimeoutError:
+                # A finished worker can itself have raised TimeoutError. It
+                # remains a failure, not another unfinished wait to retry.
+                if self.future.done():break
+        if check_progress is not None:check_progress()
+        return self.publish(self.future.result())
 
 
 def run(plan,path,*,backend,**kwargs):
@@ -699,7 +709,7 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
                 store.emit('CACHE',iteration=iteration,batch=index,path=cache_path,sha256=digest)
         def drain(*,all_pending=False):
             while pending and (all_pending or pending[0][1].future.done()or len(pending)>=2):
-                index,result=pending.pop(0);publish_cache(index,result.result())
+                index,result=pending.pop(0);publish_cache(index,result.result(check_progress=progress.check))
         for index,batch in enumerate(batches):
             if all(statuses[g.stream_id]!='NOT_ATTEMPTED' for g in batch.games):continue
             try:drain()
