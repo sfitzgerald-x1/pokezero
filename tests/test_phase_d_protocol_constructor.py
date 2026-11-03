@@ -1,5 +1,6 @@
 """Inert extraction, shared-holder and fixed CPU-coverage ledger controls."""
 import ast
+from dataclasses import replace
 import hashlib
 import importlib.util
 import json
@@ -12,8 +13,11 @@ import unittest
 from unittest.mock import patch
 
 from gpu_engine.phase_d_protocol_constructor import ProtocolConstructor
+from gpu_engine import phase_d_protocol_constructor as constructor_module
 from gpu_engine.phase_d_ladder_search import Search
 from pokezero.phase_d_ladder_panel import encoded,write_new
+from pokezero.category_vocab import CategoryVocabulary
+from pokezero.live_protocol_actor import ActorContract,_vocab_sha
 
 
 def script():
@@ -104,6 +108,66 @@ print('CPU selected before JAX; no archive input')
             self.assertIsNone(result['summary']['decision_p95_seconds'])
             record=json.loads((output/'records'/'0.json').read_bytes())
             self.assertEqual(record['constructed_worlds'],0);self.assertIsNone(record['decision_seconds'])
+
+
+class WrappedStartupVocabulary(unittest.TestCase):
+    def fixture(self):
+        vocab=CategoryVocabulary(('field','pokemon:self','species:pikachu'),oov_buckets=7,
+            aliases={'species:pikachucosplay':'species:pikachu'})
+        contract=replace(ActorContract.champion(),category_vocab_sha256=_vocab_sha(vocab),categorical_vocab_size=vocab.size)
+        # The actual published wrapper's nine fields, not flattened dataclass kwargs.
+        document=dict(aliases=dict(vocab.aliases),category_vocab_sha256=contract.category_vocab_sha256,
+            checkpoint_sha256=contract.checkpoint_sha256,oov_buckets=vocab.oov_buckets,
+            scope='ORIGINAL_STATIC_RUNTIME_CATEGORY_VOCABULARY',size=vocab.size,
+            source_hash=contract.belief_set_source_hash,tokens=list(vocab.tokens))
+        return vocab,contract,document
+
+    def test_actual_dataclass_preserves_wrapper_tokens_aliases_and_oov(self):
+        vocab,contract,document=self.fixture()
+        resolved=constructor_module.vocabulary_from_document(document,contract)
+        self.assertIs(type(resolved),CategoryVocabulary)
+        self.assertEqual(resolved.tokens,vocab.tokens);self.assertEqual(resolved.aliases,vocab.aliases)
+        self.assertEqual(resolved.oov_buckets,7);self.assertEqual(resolved.size,vocab.size)
+        self.assertEqual(resolved.encode('species:pikachucosplay'),resolved.encode('species:pikachu'))
+        for name,value in (('checkpoint_sha256','a'*64),('category_vocab_sha256','b'*64),
+                ('source_hash','foreign-source'),('size',vocab.size+1),('oov_buckets',8),
+                ('tokens',list(reversed(document['tokens'])))):
+            with self.subTest(field=name),self.assertRaises(ValueError):
+                constructor_module.vocabulary_from_document(dict(document,**{name:value}),contract)
+
+    def test_load_inputs_uses_wrapped_document_and_actual_startup_config_apis(self):
+        vocab,contract,document=self.fixture()
+        from pokezero import dex,randbat,v5_contract
+        from pokezero.local_showdown import LocalShowdownConfig
+        from gpu_engine import public_belief,v4_encoder,device_public_worlds
+        metadata=dict(source_commit_label=contract.showdown_revision,vocabulary=dict(moves=['','tackle']),moves=[None,dict(pp=35)])
+        source=NS(metadata=NS(source_hash=contract.belief_set_source_hash));bound=object();catalog=object()
+        with TemporaryDirectory()as directory:
+            root=Path(directory);vp=root/'vocabulary.json';mp=root/'metadata.json'
+            write_new(vp,document);write_new(mp,metadata)
+            args=NS(showdown_root='/inert/showdown',node_binary='/inert/node',vocabulary=str(vp),metadata=str(mp),
+                expected_vocabulary_sha256=hashlib.sha256(vp.read_bytes()).hexdigest(),
+                expected_metadata_sha256=hashlib.sha256(mp.read_bytes()).hexdigest())
+            with patch.object(ActorContract,'champion',return_value=contract),\
+                    patch('subprocess.check_output',side_effect=[contract.showdown_revision+'\n','']),\
+                    patch.object(randbat,'load_gen3_randbat_source_cached',autospec=True,return_value=source),\
+                    patch.object(dex,'load_showdown_dex_cached',autospec=True,return_value=object()),\
+                    patch.object(public_belief,'compile_source',autospec=True,return_value=object()),\
+                    patch.object(v4_encoder,'compile_encoder',autospec=True,return_value=catalog)as compile_encoder,\
+                    patch.object(v5_contract,'source_variant_census',autospec=True,return_value=dict(source_rows_sha256='c'*64)),\
+                    patch.object(device_public_worlds,'compile_source',autospec=True,return_value=bound)as compile_source:
+                got_catalog,got_bound,got_metadata,config=constructor_module.load_inputs(args)
+            self.assertIs(got_catalog,catalog);self.assertIs(got_bound,bound);self.assertEqual(got_metadata,metadata)
+            self.assertIs(type(config),LocalShowdownConfig);self.assertEqual(config.category_vocab.tokens,vocab.tokens)
+            self.assertEqual(config.category_vocab.aliases,vocab.aliases);self.assertEqual(config.category_vocab.oov_buckets,7)
+            self.assertEqual(config.node_binary,'/inert/node');self.assertIs(config.observation_spec,v5_contract.V4_SPEC)
+            self.assertEqual(config.feature_masks.opponent_tendency_stats_block,dict(contract.feature_masks)['stats_block'])
+            compiled_vocab=compile_encoder.call_args.args[2]
+            self.assertIs(compiled_vocab,config.category_vocab)
+            self.assertEqual(compile_encoder.call_args.kwargs['feature_masks'],dict(contract.feature_masks))
+            self.assertEqual(compile_source.call_args.args,(source,metadata))
+            self.assertEqual(compile_source.call_args.kwargs,dict(expected_source_hash=contract.belief_set_source_hash,
+                expected_source_rows_sha256='c'*64))
 
 
 if __name__=='__main__':unittest.main()
