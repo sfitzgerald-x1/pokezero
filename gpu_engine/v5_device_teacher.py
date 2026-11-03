@@ -8,6 +8,7 @@ Raw logits and every selected/refused address survive in the disk spool.
 from dataclasses import asdict
 import hashlib
 import json
+import time
 import jax
 import numpy as np
 from pokezero import v5_contract as c, v5_gumbel as original
@@ -85,7 +86,7 @@ def validate_records(frames,bank,recipe,records):
 
 class Provider:
     """Construct once from genuine Prepared+Plan, before any real constructor."""
-    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False):
+    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False,vectorized=False):
         from .v5_device_backend import Prepared
         from pokezero.v5_run import Plan,_sha
         if type(prepared)is not Prepared or type(plan)is not Plan or plan.model.arm!='D':
@@ -95,6 +96,8 @@ class Provider:
             raise ValueError('frame batching requires the original mapped joint executor')
         if type(chunk_batch)is not bool or chunk_batch and not frame_batch:
             raise ValueError('chunk batching requires the explicit frame teacher')
+        if type(vectorized)is not bool or vectorized and not frame_batch:raise ValueError('vectorized pricing requires frame batching')
+        self.vectorized=vectorized
         self.chunk_batch=chunk_batch
         if prepared.pool_sha256!=plan.pool_sha256 or prepared.category_sha256!=plan.model.category_vocabulary_sha256 or prepared.category_size!=plan.model.category_vocab_size:
             raise ValueError('same declared device source/pool/category required')
@@ -110,10 +113,10 @@ class Provider:
         self.frame_batch=frame_batch;self.frame_counts={};self.batch_timings=[]
         if frame_batch:
             from .device_public_teacher_batch import FramePricer
-            self.frame_pricer=FramePricer(self.executor,plan.model,actor_capacity=plan.historical_window+1)
+            self.frame_pricer=FramePricer(self.executor,plan.model,actor_capacity=plan.historical_window+1,**(dict(capacity=4096,vectorized=True)if vectorized else{}))
 
     def reset_metrics(self):
-        self.frame_counts={};self.batch_timings=[]
+        self.frame_counts={};self.batch_timings=[];self.root_prepare_seconds={}
 
     def record_metrics(self,records):
         if not hasattr(self,'frame_counts'):self.reset_metrics()
@@ -127,9 +130,14 @@ class Provider:
 
     def metrics(self):
         from .device_public_teacher_batch import FRAME_WORK_KEYS
-        return dict(strategy=('CHUNK_BATCH'if getattr(self,'chunk_batch',False)else'FRAME_BATCH')if getattr(self,'frame_batch',False)else'SERIAL_ROOTS',
+        report=dict(strategy=('CHUNK_BATCH'if getattr(self,'chunk_batch',False)else'FRAME_BATCH')if getattr(self,'frame_batch',False)else'SERIAL_ROOTS',
             by_frame={str(frame):dict(value,refused_share_selected=None if not value['selected']else value['refused']/value['selected'])for frame,value in sorted(self.frame_counts.items())},
             batch_timing_totals={key:sum(x.get(key,0)for x in self.batch_timings)for key in ('roots','world_prepare_seconds','batch_pack_and_device_seconds','device_invocations','lower_seconds','compile_seconds','device_seconds')+FRAME_WORK_KEYS})
+        if getattr(self,'vectorized',False):
+            report['strategy']='D3_VECTORIZED_FRAME_QUEUE'
+            report['frame_calls']=[dict(x)for x in self.batch_timings]
+            report['root_prepare_by_frame']={str(k):v for k,v in getattr(self,'root_prepare_seconds',{}).items()}
+        return report
 
     def bind(self,bank,params):
         if (bank.bindings.source_sha256!=self.prepared.source_sha256
@@ -204,6 +212,7 @@ class Provider:
             if not self.recipe.selected(address):continue
             record.update(status='REFUSED',refusal='invalid-actual-root-input')
             if not frames.trainable[step,row,owner]:continue
+            preparation_started=time.perf_counter()
             try:
                 if step not in contexts:contexts[step]=jax.tree.map(lambda x:x[step],device_roots)
                 context=contexts[step]
@@ -215,9 +224,14 @@ class Provider:
                 request=Request(plans,tuple(map(float,frames.raw_policy_logits[step,row,owner])),
                     tuple(map(bool,frames.legal_action_mask[step,row,owner])),inputs,
                     int(frames.actor_indices[step,row,owner]),int(frames.actor_indices[step,row,1-owner]))
-                grouped.setdefault(0 if getattr(self,'chunk_batch',False)else step,[]).append((record,request))
+                grouped.setdefault(record['address']['frame']if getattr(self,'vectorized',False)else 0 if getattr(self,'chunk_batch',False)else step,[]).append((record,request))
             except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
                 record.update(status='REFUSED',refusal=type(error).__name__+': '+str(error),improvement=None)
+            finally:
+                if getattr(self,'vectorized',False):
+                    if not hasattr(self,'root_prepare_seconds'):self.root_prepare_seconds={}
+                    frame=record['address']['frame']
+                    self.root_prepare_seconds[frame]=self.root_prepare_seconds.get(frame,0.)+time.perf_counter()-preparation_started
         for step,group in grouped.items():
             # Queue mode groups original selected requests across chunk frames.
             # Capacity changes only packing, never world keys or per-root math.
@@ -228,7 +242,7 @@ class Provider:
                 # whole frame or chunk to improve apparent throughput.
                 results=self.frame_pricer.price([request for _,request in items],self.materializer,self.recipe,params)
                 if len(results)!=len(items):raise ValueError('frame pricing dropped a selected root')
-                self.batch_timings.append(dict(self.frame_pricer.last_timing))
+                self.batch_timings.append(dict(self.frame_pricer.last_timing,frames=sorted({r['address']['frame']for r,_ in items})))
                 for (record,_),result in zip(items,results):
                     record['diagnostics']=dict(world_reports=result.world_reports,missing_worlds=result.missing_worlds,
                         actual_teacher_calls=result.actual_teacher_calls,reply_input_approximation=result.reply_input_approximation)
