@@ -123,7 +123,10 @@ def read_capture(path):
     with Path(path).open('rb') as stream:
         for sequence, raw in enumerate(stream):
             if not raw.endswith(b'\n'):
-                raise ValueError('partial capture row; preserve file, no repair')
+                # An interrupted last write cannot invalidate earlier durable
+                # roots or favor completed games. Preserve the tail untouched;
+                # it is not an eligible root and is never repaired/invented.
+                return
             row = json.loads(raw)
             if (encoded(row) + b'\n' != raw or row.get('schema') != SCHEMA
                     or row.get('sequence') != sequence or row.get('previous_sha256') != prior):
