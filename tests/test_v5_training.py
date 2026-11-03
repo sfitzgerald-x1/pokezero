@@ -54,6 +54,31 @@ class V5TrainingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):torch.set_num_threads(1)
 
+    def test_once_validated_resident_updates_and_scheduled_resume_are_bit_exact(self):
+        for arm,replicate,precision in (('A',0,'float32'),('B',0,'float32'),('D',0,'float32'),('B',1,'float32'),('B',0,'bfloat16')):
+            with self.subTest(arm=arm,replicate=replicate,precision=precision),tempfile.TemporaryDirectory()as directory:
+                root=Path(directory);paths=[]
+                for i in range(2):
+                    path=root/('cache'+str(i));v5_data.write_cache(path,batch(arm,index=i));paths.append(path)
+                model,loss,train=configurations(arm,replicate=replicate,epochs=2,precision=precision)
+                train=replace(train,learning_rate_schedule='mit-thesis')
+                window=training.DeclaredGameWindow(0,4,4)
+                cfg=(model,loss,train);full=training.create(*cfg,enable_v5=True)
+                baseline=training.train_caches(full,paths,learning_rate_window=window)
+                resident=training.create(*cfg,enable_v5=True)
+                with training.resident_cache_policy(10**8):
+                    prefix=training.train_caches(resident,paths,max_updates=1,learning_rate_window=window)
+                file=root/'checkpoint.pt';training.save_checkpoint(file,resident)
+                resumed=training.load_checkpoint(file,enable_v5=True,expected_model_config=model,
+                    expected_loss_config=loss,expected_train_config=train,expected_learning_rate_window=window)
+                with training.resident_cache_policy(10**8):
+                    suffix=training.train_caches(resumed,paths,learning_rate_window=window)
+                self.assertEqual(prefix['updates']+suffix['updates'],baseline['updates'])
+                self.assertEqual((resumed.steps,resumed.rows,resumed.progress),(full.steps,full.rows,full.progress))
+                assert_tree_equal(self,full.model.state_dict(),resumed.model.state_dict())
+                assert_tree_equal(self,full.optimizer.state_dict(),resumed.optimizer.state_dict())
+                assert_tree_equal(self,full.rng,resumed.rng)
+
     def test_explicit_enablement_precedes_model_file_access_and_scratch_rng_is_owned(self):
         cfg=configurations()
         with patch.object(training,'_torch') as backend:

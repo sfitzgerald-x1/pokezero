@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import uuid
+import tempfile
 import numpy as np
 from pokezero import v5_data
 from . import v5_device_rollout as rollout
@@ -19,23 +20,42 @@ def _stat(path):
     s=path.stat();return s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns
 
 
+def retain_raw_bank(ordinal,every):
+    if type(ordinal)is not int or ordinal<0 or type(every)is not int or every<=0:
+        raise ValueError('declared global bank ordinal and positive raw interval required')
+    return (ordinal+1)%every==0
+
+
 class Spool:
-    def __init__(self,store,bank,*,bank_sha256,teacher_recipe=None):
+    def __init__(self,store,bank,*,bank_sha256,teacher_recipe=None,transient_raw_root=None):
         self.store=store;self.bank=bank;self.bank_sha256=bank_sha256;self.teacher_recipe=teacher_recipe
         self.root=store.path/'rollouts'/('spool-'+uuid.uuid4().hex);self.root.mkdir(parents=True)
+        self._raw_directory=(None if transient_raw_root is None else
+            tempfile.TemporaryDirectory(prefix='v5-raw-',dir=transient_raw_root))
+        self.raw_bytes=0
         self.records=[];self.record_refs=[];self.stats={};self.parts=[];self.has_training=np.zeros(len(bank.streams),bool)
 
     def _save(self,path,value):
+        if self._raw_directory is not None:
+            path=Path(self._raw_directory.name)/path.relative_to(self.root)
+            path.parent.mkdir(parents=True,exist_ok=True)
         with path.open('xb')as stream:np.save(stream,value,allow_pickle=False)
         path.chmod(0o444);self.stats[str(path)]=_stat(path)
-        return dict(path=str(path.relative_to(self.store.path)),shape=list(value.shape),dtype=value.dtype.str,
+        self.raw_bytes+=path.stat().st_size
+        return dict(path=str(path if self._raw_directory is not None else path.relative_to(self.store.path)),shape=list(value.shape),dtype=value.dtype.str,
             sha256=v5_data._file_sha(path),identity=self.stats[str(path)])
+
+    def release_raw(self):
+        """Only this object's temporary files; caller first joins all readers."""
+        directory=getattr(self,'_raw_directory',None)
+        if directory is not None:directory.cleanup()
 
     def append(self,host,*,teacher_records=None):
         """One host chunk -> immutable batch-major .npy files, no full copy."""
         ordinal=len(self.records);folder=self.root/str(ordinal);folder.mkdir()
         record=dict(schema='pokezero.device_rollout_spool.v1',bank_sha256=self.bank_sha256,chunk=ordinal,
             steps=host.frames.streams.shape[0],frames={},final={},storage='batch,chunk_step,...; original logical order is chunk_step,batch,...')
+        if self._raw_directory is not None:record['raw_retention']='TRANSIENT_ARRAYS_NOT_RESUMABLE; game caches and teacher labels durable'
         for name,value in zip(host.frames._fields,host.frames):
             record['frames'][name]=None if value is None else self._save(folder/(name+'.npy'),np.swapaxes(value,0,1))
         for name in ('streams','frames','status','winner','terminal_frame','terminal_hp','terminal_max_hp'):

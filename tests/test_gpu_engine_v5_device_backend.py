@@ -135,7 +135,7 @@ class DeviceBackendTests(unittest.TestCase):
     raw,_=bank_tests.DeviceActorBankTests().run_inert(pending['bank'],bindings=pending['bindings'])
     raw=raw._replace(carry=raw.carry._replace(status=j.array([x[0]for x in case]),winner=j.array([x[1]for x in case])))
     pending['collector']=lambda actual,params:raw
-    inert_spool=NS(append=lambda host:None,finalize_game=lambda *a,**kw:None,parts=[])
+    inert_spool=NS(append=lambda host:None,finalize_game=lambda *a,**kw:None,release_raw=lambda:None,parts=[])
     ended=[]
     with patch.object(backend,'_construct',return_value=carry),patch.object(b,'Spool',return_value=inert_spool):
      self.assertIsNone(backend.collect(pending,store,lambda *a,**kw:ended.append((a,kw)),lambda:None))

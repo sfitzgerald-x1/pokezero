@@ -7,10 +7,12 @@ inputs contain only the public29-token observation; optional peer views are
 separate training-only sidecars. Original collection owns capture provenance.
 """
 from dataclasses import asdict, dataclass, fields, replace
+from collections.abc import Mapping
 import hashlib
 import json
 from pathlib import Path
 from types import MappingProxyType
+import weakref
 
 import numpy as np
 
@@ -26,6 +28,66 @@ STATIC = ('schema','observation_schema','category_vocabulary_sha256','label_voca
     'source_binding_sha256','label_vocabulary')
 META_ROWS = ('addresses','source_frame_sha256','terminal_status','search_status','search_refusal',
     'root_improvement_records','terminal_source_sha256')
+_RESIDENT_SLICES = {}
+_RESIDENT_CACHES = weakref.WeakKeyDictionary()
+
+
+def _immutable(value):
+    if isinstance(value,Mapping):return MappingProxyType({key:_immutable(item)for key,item in value.items()})
+    if isinstance(value,(tuple,list)):return tuple(_immutable(item)for item in value)
+    return value
+
+
+def _slice_identity(batch):
+    def identity(value):
+        if isinstance(value,np.ndarray):
+            if value.flags.writeable:raise ValueError('validated resident slice became writeable')
+            return (id(value),value.__array_interface__['data'][0],value.shape,value.strides,value.dtype.str)
+        return id(value)
+    return (tuple(identity(getattr(batch,f.name))for f in fields(batch)),
+        tuple((name,identity(value))for name,value in batch.v5_columns.items()))
+
+
+def _validated_resident_slice(batch):
+    ticket=_RESIDENT_SLICES.get(id(batch))
+    if ticket is None:return False
+    reference,owner,identity=ticket
+    cache=owner()
+    if reference()is not batch or cache is None:return False
+    _resident_source(cache)
+    if _slice_identity(batch)!=identity:raise ValueError('validated resident slice fields changed')
+    return True
+
+
+def _resident_source(cache):
+    proof=_RESIDENT_CACHES.get(cache)
+    if proof is None:raise ValueError('registered validated resident owner required')
+    reference,identity=proof;source=reference()
+    if source is None or cache._batch is not source or _slice_identity(source)!=identity:
+        raise ValueError('validated resident source fields changed')
+    return source
+
+
+def _resident_slice_batch(cache,start,stop):
+    """Private contiguous slice of a fully validated immutable resident cache.
+
+    No general unchecked constructor or caller-provided validation flag exists.
+    Public TrainingBatch construction and arbitrary optimizer inputs still
+    validate normally; the ticket belongs only to this exact object/arrays.
+    """
+    source=_resident_source(cache)
+    if not cache._resident or not 0<=start<stop<=source.batch_size:
+        raise ValueError('nonempty original resident cache slice required')
+    batch=object.__new__(TrainingBatch)
+    for field in fields(source):
+        value=getattr(source,field.name)
+        if field.name=='v5_columns':value=slice_columns(value,start,stop)
+        elif value is not None and not field.name.startswith('row_'):value=value[start:stop]
+        object.__setattr__(batch,field.name,value)
+    key=id(batch)
+    reference=weakref.ref(batch,lambda ref:_RESIDENT_SLICES.pop(key,None))
+    _RESIDENT_SLICES[key]=(reference,weakref.ref(cache),_slice_identity(batch))
+    return batch
 ARRAY_SHAPES = dict(opponent_semantic_action_targets=(),opponent_semantic_action_target_mask=(),
     hidden_set_targets=(6,64),hidden_set_target_mask=(6,),hidden_set_species=(6,),
     survival_targets=(12,),final_hp_targets=(12,),pokemon_end_target_mask=(12,),
@@ -34,8 +96,14 @@ ARRAY_SHAPES = dict(opponent_semantic_action_targets=(),opponent_semantic_action
     privileged_token_type_ids=(1,29),privileged_attention_mask=(1,29))
 
 
+def _jsonable(value):
+    if isinstance(value,Mapping):return {key:_jsonable(item)for key,item in value.items()}
+    if isinstance(value,(tuple,list)):return [_jsonable(item)for item in value]
+    return value
+
+
 def _sha(value):
-    return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(_jsonable(value),sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
 def _file_sha(path):
@@ -311,7 +379,7 @@ def write_cache(path,batch):
         else:save('base__'+name,value)
     for name in ARRAY_SHAPES:save('v5__'+name,batch.v5_columns[name])
     metadata['metadata_sha256']=_sha(metadata)
-    (path/'metadata.json').write_text(json.dumps(metadata,sort_keys=True,allow_nan=False)+'\n')
+    (path/'metadata.json').write_text(json.dumps(_jsonable(metadata),sort_keys=True,allow_nan=False)+'\n')
     return metadata
 
 
@@ -352,8 +420,9 @@ class VerifiedCache:
                 copied_bytes+=value.nbytes
                 if copied_bytes>resident_bytes:
                     raise ValueError('resident cache exceeds explicit byte budget')
-                value=np.array(value,copy=True,order='K')
-                value.flags.writeable=False
+                # bytes-backed ownership cannot be made writeable through a
+                # view/base setflags call after once-at-load validation.
+                value=np.frombuffer(value.tobytes(order='C'),dtype=value.dtype).reshape(value.shape)
             arrays[name]=value
         _require_cache_identities(identities)
         base={field.name:None for field in fields(TrainingBatch) if field.name!='v5_columns'}
@@ -361,6 +430,13 @@ class VerifiedCache:
         cols={**metadata['v5_static'],**metadata['v5_rows'],**{name[4:]:value for name,value in arrays.items() if name.startswith('v5__')}}
         self._batch=TrainingBatch(**base,v5_columns=MappingProxyType(cols))
         if self._batch.batch_size!=metadata['example_count']:raise ValueError('v5 cache row denominator changed')
+        self._resident=resident_bytes is not None
+        if self._resident:
+            from .v5_training import validate_bootstraps
+            validate_bootstraps(self._batch)
+            for field in fields(self._batch):
+                object.__setattr__(self._batch,field.name,_immutable(getattr(self._batch,field.name)))
+            _RESIDENT_CACHES[self]=(weakref.ref(self._batch),_slice_identity(self._batch))
         self._identities=identities
 
     def batches(self,*,batch_size,start_batch=0):
@@ -370,7 +446,9 @@ class VerifiedCache:
         _require_cache_identities(self._identities)
         from .dataset import slice_training_batch
         for start in range(start_batch*batch_size,self._batch.batch_size,batch_size):
-            yield slice_training_batch(self._batch,start,min(start+batch_size,self._batch.batch_size))
+            stop=min(start+batch_size,self._batch.batch_size)
+            yield (_resident_slice_batch(self,start,stop)if self._resident else
+                slice_training_batch(self._batch,start,stop))
 
 
 def iter_cache_batches(path,*,batch_size,start_batch=0):

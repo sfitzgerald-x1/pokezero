@@ -321,10 +321,14 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
     return prepared,pool,public,contract
 
 
-def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False):
+def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False,
+        raw_retention_every=1,transient_raw_root=None,resident_cache_bytes=None):
     from . import v5_run as run,v5_phasec as phase
     _absolute(str(run_root))
     if type(resume) is not bool:raise ValueError('explicit resume choice required')
+    if type(raw_retention_every)is not int or raw_retention_every<=0:raise ValueError('positive fixed raw retention interval required')
+    if resident_cache_bytes is not None and (type(resident_cache_bytes)is not int or resident_cache_bytes<=0):
+        raise ValueError('positive resident cache byte budget required')
     if type(device_rollout)is not bool:raise ValueError('explicit device rollout choice required')
     if type(device_teacher)is not bool or device_teacher and (not device_rollout or inputs.plan.model.arm!='D'):
         raise ValueError('explicit D device teacher route required')
@@ -339,8 +343,13 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     if cache_workers:options['cache_workers']=cache_workers
     if teacher_frame_batch:options['teacher_frame_batch']=True
     if device_teacher:options['device_teacher']=True
+    if raw_retention_every!=1 or transient_raw_root is not None:
+        options.update(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
     backend=phase.build_backend(inputs.plan,prepared,pool,public_config=public,actor_contract=contract,gender_policy=inputs.gender_policy,**options)
-    return run.run(inputs.plan,run_root,backend=backend,resume=resume,enable_v5=True,evaluation_hook=evaluation_hook)
+    from contextlib import nullcontext
+    from .v5_training import resident_cache_policy
+    with (nullcontext()if resident_cache_bytes is None else resident_cache_policy(resident_cache_bytes)):
+        return run.run(inputs.plan,run_root,backend=backend,resume=resume,enable_v5=True,evaluation_hook=evaluation_hook)
 
 
 def main(argv=None,*,evaluation_hook=None):
@@ -353,6 +362,9 @@ def main(argv=None,*,evaluation_hook=None):
     parser.add_argument('--external-evaluation',action='store_true',help='Publish frozen CPU panel requests and continue training')
     parser.add_argument('--cache-workers',type=int,default=0)
     parser.add_argument('--teacher-frame-batch',action='store_true')
+    parser.add_argument('--raw-retention-every',type=int,default=1)
+    parser.add_argument('--transient-raw-root')
+    parser.add_argument('--resident-cache-bytes',type=int)
     args=parser.parse_args(argv)
     inputs=load_inputs(declaration=args.declaration,expected_declaration_sha256=args.expected_declaration_sha256,
         runtime=args.runtime,expected_runtime_sha256=args.expected_runtime_sha256,arm=args.arm,enable_v5=args.enable_v5)
@@ -378,6 +390,9 @@ def main(argv=None,*,evaluation_hook=None):
     if args.cache_workers:options['cache_workers']=args.cache_workers
     if args.teacher_frame_batch:options['teacher_frame_batch']=True
     if args.device_teacher:options['device_teacher']=True
+    if args.raw_retention_every!=1 or args.transient_raw_root is not None:
+        options.update(raw_retention_every=args.raw_retention_every,transient_raw_root=args.transient_raw_root)
+    if args.resident_cache_bytes is not None:options['resident_cache_bytes']=args.resident_cache_bytes
     result=execute(inputs,_absolute(args.run_root),resume=args.resume,evaluation_hook=evaluation_hook,**options)
     print(json.dumps(dict(status=result['status'],steps=result.get('steps'),rows=result.get('rows'),
         reason=result.get('reason'),disposition_counts=dict(Counter(result.get('statuses',{}).values())),

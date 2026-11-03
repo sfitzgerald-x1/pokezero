@@ -30,6 +30,12 @@ class LocalWorkers:
 
 
 class CachePipelineTests(unittest.TestCase):
+    def test_raw_sampling_is_predeclared_global_bank_order(self):
+        self.assertEqual([i for i in range(100)if s.retain_raw_bank(i,50)],[49,99])
+        self.assertTrue(all(s.retain_raw_bank(i,1)for i in range(100)))
+        for ordinal,every in ((True,50),(-1,50),(0,True),(0,0)):
+            with self.assertRaises(ValueError):s.retain_raw_bank(ordinal,every)
+
     def compare_bytes(self,left,right):
         self.assertEqual(sorted(x.name for x in left.iterdir()),sorted(x.name for x in right.iterdir()))
         for path in left.iterdir():self.assertEqual(path.read_bytes(),(right/path.name).read_bytes(),path.name)
@@ -39,7 +45,8 @@ class CachePipelineTests(unittest.TestCase):
             plan,store,pending,raw,games=DeviceSpoolTests().example(folder)
             raw=raw._replace(carry=raw.carry._replace(status=np.full(2,d.CAPPED,np.int32)))
             serial=s.Spool(store,pending['bank'],bank_sha256='a'*64);serial.append(raw)
-            parallel=s.Spool(store,pending['bank'],bank_sha256='a'*64);parallel.append(raw)
+            parallel=s.Spool(store,pending['bank'],bank_sha256='a'*64,transient_raw_root=folder);parallel.append(raw)
+            temporary=Path(parallel._raw_directory.name)
             workers=p.CpuWorkers(1)
             try:
                 assembly=p.BankAssembly(workers,parallel,bindings=pending['bindings'],loss_config=plan.loss,discount=plan.discount)
@@ -51,6 +58,10 @@ class CachePipelineTests(unittest.TestCase):
                 self.assertGreater(actual['assembly_span_seconds'],0)
                 serial.merge(Path(folder)/'serial');self.compare_bytes(Path(folder)/'serial',Path(folder)/'parallel')
             finally:workers.close()
+            parallel.release_raw()
+            self.assertFalse(temporary.exists());self.assertTrue((parallel.root/'games/0/metadata.json').is_file())
+            recovered=s.Spool.__new__(s.Spool);recovered.parts=list(parallel.parts);recovered.bank=parallel.bank
+            recovered.merge(Path(folder)/'recovered');self.compare_bytes(Path(folder)/'serial',Path(folder)/'recovered')
             self.assertTrue(all(x.poll()is not None for x in workers.processes))
 
     def test_device_backend_defers_only_cache_work_and_owner_publishes_timing(self):
@@ -68,6 +79,7 @@ class CachePipelineTests(unittest.TestCase):
                 def lower(self,*args):return self
                 def compile(self):return lambda *args:raw
             prepared['collector']=Collector();backend.measure_runtime=True;backend.cache_workers=2
+            backend.raw_retention_every=50;backend.transient_raw_root=folder
             backend._cache_pool=LocalWorkers();backend._cache_merger=ThreadPoolExecutor(max_workers=1)
             ended=[];owner=threading.get_ident();emitter=store.emit;threads=[]
             def emit(*a,**kw):threads.append(threading.get_ident());return emitter(*a,**kw)
@@ -83,6 +95,9 @@ class CachePipelineTests(unittest.TestCase):
                 self.assertEqual(timing['bank_streams'],[101,202]);self.assertEqual(timing['cache_pipeline']['workers'],2)
                 self.assertEqual(timing['phases']['game_cache_wall_seconds'],timing['cache_pipeline']['assembly_elapsed_span_seconds'])
                 self.assertTrue(all(x==owner for x in threads));self.assertEqual(timing['complete'],2)
+                self.assertFalse(timing['cache_pipeline']['raw_storage']['durable_raw_sample'])
+                self.assertEqual(timing['cache_pipeline']['raw_storage']['global_bank_ordinal'],0)
+                self.assertFalse(backend._raw_spools);self.assertFalse(list(Path(folder).glob('v5-raw-*')))
             finally:backend.close()
 
     def test_delayed_timing_joins_original_bank_instead_of_latest_kernel_bank(self):
@@ -123,7 +138,7 @@ class CachePipelineTests(unittest.TestCase):
             raw,bank=inert_d();recipe,labels=records(raw,bank);loss=V5LossConfig(arm='D')
             games=tuple(replace(g,stream_id=bank.streams[i])for i,g in enumerate(games))
             serial=s.Spool(store,bank,bank_sha256='a'*64,teacher_recipe=recipe)
-            parallel=s.Spool(store,bank,bank_sha256='a'*64,teacher_recipe=recipe)
+            parallel=s.Spool(store,bank,bank_sha256='a'*64,teacher_recipe=recipe,transient_raw_root=folder)
             serial.append(raw,teacher_records=labels);parallel.append(raw,teacher_records=labels)
             assembly=p.BankAssembly(LocalWorkers(),parallel,bindings=bank.bindings,loss_config=loss,discount=plan.discount)
             with patch.object(d,'_complete_gae',side_effect=lambda v,o,l,discount:(v*.2+o,v*.4-o)):
@@ -132,12 +147,16 @@ class CachePipelineTests(unittest.TestCase):
                     assembly.submit(row,games[row])
                 assembly.finish(Path(folder)/'parallel');serial.merge(Path(folder)/'serial')
             self.compare_bytes(Path(folder)/'serial',Path(folder)/'parallel')
+            parallel.release_raw()
+            self.assertTrue((parallel.root/'0/teacher.json').is_file())
+            self.assertTrue((parallel.root/'0/metadata.json').is_file())
 
     def test_worker_failure_and_raw_or_metadata_mutation_never_publish_merge(self):
-        for mutation in ('raw','metadata','worker'):
+        for mutation in ('raw','transient_raw','metadata','worker'):
             with self.subTest(mutation=mutation),tempfile.TemporaryDirectory()as folder:
                 plan,store,pending,raw,games=DeviceSpoolTests().example(folder)
-                spool=s.Spool(store,pending['bank'],bank_sha256='a'*64);spool.append(raw);tasks=[]
+                spool=s.Spool(store,pending['bank'],bank_sha256='a'*64,
+                    **(dict(transient_raw_root=folder)if mutation=='transient_raw'else{}));spool.append(raw);tasks=[]
                 class Queue:
                     def submit(self,request):
                         future=Future();tasks.append((request,future));return future
@@ -145,7 +164,7 @@ class CachePipelineTests(unittest.TestCase):
                 assembly.submit(0,games[0]);request,future=tasks[0]
                 if mutation=='worker':future.set_exception(RuntimeError('owned worker failed'))
                 else:
-                    file=(store.path/spool.records[0]['frames']['numeric_features']['path']if mutation=='raw'
+                    file=(store.path/spool.records[0]['frames']['numeric_features']['path']if mutation in ('raw','transient_raw')
                         else spool.root/'0'/'metadata.json')
                     file.chmod(0o644)
                     if mutation=='metadata':file.write_text('{}')
@@ -155,6 +174,7 @@ class CachePipelineTests(unittest.TestCase):
                 with self.assertRaises(Exception):assembly.check()
                 with self.assertRaises(Exception):assembly.finish(Path(folder)/'must-not-publish')
                 self.assertFalse((Path(folder)/'must-not-publish').exists())
+                spool.release_raw()
 
     def test_pending_bank_overlaps_next_bank_but_never_training(self):
         entered=threading.Event();release=threading.Event();events=[];executor=ThreadPoolExecutor(max_workers=1)

@@ -1,5 +1,5 @@
 """Finite cache order and mutation controls; no Torch, model or game needed."""
-from dataclasses import fields
+from dataclasses import fields,replace
 import gc
 import json
 from pathlib import Path
@@ -31,6 +31,8 @@ def cache(path,start,count):
     rows=[fixture.row(start+i,status='CAPPED' if i==1 else 'COMPLETE',search=i%2==0,
         privileged=i%3==0) for i in range(count)]
     batch=data.attach_batch(fixture.base_batch(rows),rows)
+    # This fixture has no later public bootstrap capture for capped rows.
+    batch=replace(batch,ppo_value_target_mask=tuple(not bool(x)for x in batch.terminal_capped))
     data.write_cache(path,batch)
     return batch
 
@@ -46,6 +48,63 @@ def count_update(owner,batch):
 
 
 class CacheSessionTests(unittest.TestCase):
+    def test_resident_validates_once_and_private_slices_keep_all_bytes_and_guards(self):
+        with tempfile.TemporaryDirectory()as directory:
+            root=Path(directory);original=cache(root/'cache',0,5)
+            with patch.object(data,'validate_batch',wraps=data.validate_batch)as validate,\
+                    patch.object(training,'validate_bootstraps',wraps=training.validate_bootstraps)as bootstraps:
+                reader=data.VerifiedCache(root/'cache',resident_bytes=10**8)
+                pieces=list(reader.batches(batch_size=2))*2
+                self.assertEqual((validate.call_count,bootstraps.call_count),(1,1))
+            expected=[dataset.slice_training_batch(original,i,min(i+2,5))for i in range(0,5,2)]*2
+            self.assertEqual([payload(x)for x in pieces],[payload(x)for x in expected])
+            batch=pieces[0];self.assertTrue(data._validated_resident_slice(batch))
+            with self.assertRaises(ValueError):batch.numeric_features.flags.writeable=True
+            with self.assertRaises(TypeError):batch.v5_columns['addresses'][0]['owner']=1
+            with self.assertRaises(TypeError):batch.v5_columns['label_vocabulary']['moves']=()
+            # Cache output from a valid private slice has the original bytes,
+            # including JSON metadata; freezing is not a new serialization.
+            data.write_cache(root/'actual',batch);data.write_cache(root/'expected',expected[0])
+            for file in (root/'actual').iterdir():self.assertEqual(file.read_bytes(),(root/'expected'/file.name).read_bytes())
+            with patch.object(data,'validate_batch')as validate,patch.object(training,'validate_bootstraps')as bootstraps,\
+                    patch.object(training,'require_v5_bindings'),patch.object(training,'_validate_optimizer'),\
+                    patch.object(training,'_torch',side_effect=RuntimeError('original tensor path')):
+                with self.assertRaisesRegex(RuntimeError,'original tensor path'):training._update(runtime(),batch)
+                validate.assert_not_called();bootstraps.assert_not_called()
+                arbitrary=replace(batch)  # Public constructor still validates.
+                validate.reset_mock();bootstraps.reset_mock()
+                with self.assertRaisesRegex(RuntimeError,'original tensor path'):training._update(runtime(),arbitrary)
+                self.assertEqual((validate.call_count,bootstraps.call_count),(1,1))
+            object.__setattr__(batch,'returns',np.array(batch.returns,copy=True))
+            with self.assertRaisesRegex(ValueError,'resident slice'):data._validated_resident_slice(batch)
+
+    def test_resident_missing_bootstrap_refuses_at_load_and_policy_is_scoped(self):
+        with tempfile.TemporaryDirectory()as directory:
+            root=Path(directory);row=fixture.row(status='CAPPED')
+            invalid=data.attach_batch(fixture.base_batch([row]),[row]);data.write_cache(root/'invalid',invalid)
+            with self.assertRaisesRegex(ValueError,'bootstrap'):data.VerifiedCache(root/'invalid',resident_bytes=10**8)
+            cache(root/'valid',0,3);owner=runtime()
+            with training.resident_cache_policy(10**8),patch.object(training,'update',side_effect=count_update):
+                training.train_caches(owner,[root/'valid'],max_updates=1)
+                self.assertIsNotNone(training._CACHE_READERS[owner].resident)
+                with self.assertRaisesRegex(ValueError,'policy differs'):
+                    training.train_caches(owner,[root/'valid'],max_updates=1,resident_cache_bytes=99)
+            self.assertIsNone(training._RESIDENT_POLICY.get())
+
+    def test_replaced_source_and_unregistered_reader_cannot_mint_trusted_slices(self):
+        with tempfile.TemporaryDirectory()as directory:
+            path=Path(directory)/'cache';cache(path,0,3)
+            reader=data.VerifiedCache(path,resident_bytes=10**8)
+            source=reader._batch
+            invalid=replace(source,ppo_value_target_mask=np.frombuffer(np.ones(3,bool).tobytes(),dtype=bool))
+            with self.assertRaisesRegex(ValueError,'bootstrap'):training.validate_bootstraps(invalid)
+            reader._batch=invalid
+            with self.assertRaisesRegex(ValueError,'resident source'):next(reader.batches(batch_size=2))
+            reader._batch=source
+            forged=data.VerifiedCache.__new__(data.VerifiedCache);forged._resident=True;forged._batch=source
+            with self.assertRaisesRegex(ValueError,'registered validated'):data._resident_slice_batch(forged,0,2)
+            object.__setattr__(source,'returns',np.frombuffer(np.zeros(3).tobytes(),dtype=np.float64))
+            with self.assertRaisesRegex(ValueError,'resident source'):next(reader.batches(batch_size=2))
     def test_resident_iteration_keeps_exact_order_and_reuses_every_verified_shard(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);paths=[root/'one',root/'two']

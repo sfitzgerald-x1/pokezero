@@ -15,7 +15,7 @@ import numpy as np
 from pokezero import v5_run as runs,v5_data
 from . import transition,engine_device_observation as encoder,source_provenance,v5_model
 from . import v5_device_rollout as rollout
-from .v5_device_spool import Spool
+from .v5_device_spool import Spool,retain_raw_bank
 
 
 @dataclass(frozen=True)
@@ -48,11 +48,18 @@ def prepare(catalog,source,pool,*,source_commit):
 
 class RuntimeBackend:
     """Device-mode backend for the unchanged v5_run.run callback contract."""
-    def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None,measure_runtime=False,cache_workers=0):
+    def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None,measure_runtime=False,cache_workers=0,
+            raw_retention_every=1,transient_raw_root=None):
         if type(prepared)is not Prepared or type(chunk_steps)is not int or chunk_steps<=0:
             raise ValueError('prepared device runtime and finite chunk required')
         if type(measure_runtime)is not bool:raise ValueError('explicit runtime timing choice required')
         if type(cache_workers)is not int or cache_workers<0:raise ValueError('explicit nonnegative CPU cache worker count required')
+        if type(raw_retention_every)is not int or raw_retention_every<=0:raise ValueError('positive fixed raw retention interval required')
+        if raw_retention_every!=1:
+            from pathlib import Path
+            if transient_raw_root is None or not Path(transient_raw_root).is_dir():
+                raise ValueError('explicit existing bounded transient raw filesystem required')
+        self.raw_retention_every=raw_retention_every;self.transient_raw_root=transient_raw_root;self._raw_spools=[]
         self.cache_workers=cache_workers;self._cache_pool=None;self._cache_merger=None
         self.measure_runtime=measure_runtime;self._initializer_executables={}
         self.teacher=teacher
@@ -64,6 +71,12 @@ class RuntimeBackend:
     def close(self):
         if self._cache_pool is not None:self._cache_pool.close()
         if self._cache_merger is not None:self._cache_merger.shutdown(wait=True,cancel_futures=True)
+        for spool in self._raw_spools:spool.release_raw()
+        self._raw_spools.clear()
+
+    def _release_spool(self,spool):
+        spool.release_raw()
+        if spool in self._raw_spools:self._raw_spools.remove(spool)
 
     def require_teacher(self):
         from .v5_device_teacher import Provider
@@ -180,7 +193,13 @@ class RuntimeBackend:
             gender_domain=batch.gender_domain,gender_root_ids=batch.gender_root_ids)
         receipt=store.artifact(f'rollouts/device-bank-{uuid.uuid4().hex}.json',runs._json(binding).encode(),kind='DEVICE_ACTOR_BANK')
         options={} if self.teacher is None else dict(teacher_recipe=self.teacher.recipe)
+        ordinal=next(i for i,b in enumerate(b for iteration in plan.iterations for b in iteration)if b==batch)
+        retain_raw=retain_raw_bank(ordinal,self.raw_retention_every)
+        if not retain_raw:options['transient_raw_root']=self.transient_raw_root
         spool=Spool(store,bank,bank_sha256=receipt['sha256'],**options)
+        if not retain_raw:self._raw_spools.append(spool)
+        raw_policy=dict(global_bank_ordinal=ordinal,retain_every=self.raw_retention_every,
+            durable_raw_sample=retain_raw,scope='Raw ndarray intermediates only; original teacher labels, per-game caches and final caches stay durable.')
         assembly=None
         if self.cache_workers:
             from concurrent.futures import ThreadPoolExecutor
@@ -237,6 +256,7 @@ class RuntimeBackend:
             (store.path/'caches').mkdir(exist_ok=True)
             def finish():
                 timing=assembly.finish(store.path/relative)
+                self._release_spool(spool)  # All CPU readers and original merge joined.
                 timing['finished']=time.perf_counter();return timing
             def publish(timing):
                 phases['game_cache_wall_seconds']=timing['assembly_span_seconds']
@@ -249,6 +269,7 @@ class RuntimeBackend:
                         warm_loop_including_cache_io_seconds=warm,
                         completed_per_warm_loop_wall_second=None if warm<=0 else report['complete']/warm,
                         cache_pipeline=dict(workers=self.cache_workers,maximum_pending_banks=2,
+                            raw_storage=dict(raw_policy,array_file_bytes=spool.raw_bytes),
                             tail_wait_seconds=timing['wait_seconds'],kernel_bank_wall_seconds=kernel_end-wall_started,
                             assembly_elapsed_span_seconds=timing['assembly_span_seconds'],
                             assembly_worker_seconds=timing['worker_seconds'],
@@ -264,10 +285,12 @@ class RuntimeBackend:
             relative=f'caches/cache-{uuid.uuid4().hex}';clock=time.perf_counter();spool.merge(store.path/relative)
             self._phase['cache_merge_wall_seconds']=time.perf_counter()-clock
             result=relative,runs._file_sha(store.path/relative/'metadata.json')
+        self._release_spool(spool)
         if self.measure_runtime:
             report=counts.report(host.carry.status,kernel_seconds=self._phase['kernel_blocked_seconds'],collection_seconds=time.perf_counter()-wall_started)
             warm_loop_seconds=time.perf_counter()-warm_loop_started
             store.emit('DEVICE_RUNTIME_TIMING',**report,phases=self._phase,bank_streams=list(bank.streams),
+                raw_storage=dict(raw_policy,array_file_bytes=spool.raw_bytes),
                 warm_loop_including_cache_io_seconds=warm_loop_seconds,
                 completed_per_warm_loop_wall_second=None if warm_loop_seconds<=0 else report['complete']/warm_loop_seconds,
                 timing_scope='explicit lower/compile before actual chunks; blocked actual kernel calls, no warmup games; constructor wall includes initializer lower/compile',
