@@ -10,6 +10,13 @@ SEL=dict(stream=7,frame=4,owner=1)
 def full(value):return [dict(replicate=i,status='COMPLETE',outcome=value,requests=3,reason=None)for i in range(64)]
 
 class MetricsTests(unittest.TestCase):
+ def test_real_serialized_vocabulary_has_computed_not_stored_digest(self):
+  from dataclasses import asdict
+  from pokezero.v5_contract import LabelVocabulary
+  vocabulary=LabelVocabulary('a'*64,('tackle',),(('ditto',1),))
+  metadata=asdict(vocabulary)
+  self.assertNotIn('sha256',metadata)
+  self.assertEqual(producer.label_vocabulary_sha256(metadata),vocabulary.sha256)
  def test_recipe_is_fixed_by_branch_and_replicate_not_head_or_result(self):
   r=t.Recipe(2103300000)
   a=r.keys(SEL,1,2,'a'*64)
@@ -169,7 +176,7 @@ class ReconstructionControllerTests(unittest.TestCase):
   for r in range(16):
    for frame in (0,4,12,24):positions.append(dict(selector=dict(stream=r,frame=frame,owner=0),status='OBSERVED'if r or frame==0 else'REFUSED'))
   batch=SimpleNamespace(games=[SimpleNamespace(team_indices=(2*i,2*i+1),stream_id=i)for i in range(16)],constructor_seed=1,sampling_seed=2,gender_seed=3,gender_domain=4,gender_root_ids=range(16))
-  decl=dict(actors=[dict(archive=dict(path='unused',sha256='a'*64),checkpoint_sha256='b'*64)],category_vocabulary_sha256='c'*64,label_vocabulary=dict(sha256='d'*64))
+  decl=dict(actors=[dict(archive=dict(path='unused',sha256='a'*64),checkpoint_sha256='b'*64)],category_vocabulary_sha256='c'*64,label_vocabulary=dict(source_binding_sha256='d'*64,moves=('tackle',),species_variants=(('ditto',1),)))
   with patch.object(v5_model,'load',return_value=(None,None,None)),patch.object(transition,'state_from_pool',return_value=S(j.zeros(16,bool),j.zeros(16,j.int32))),patch.object(transition,'initialize_with_public',side_effect=lambda s,*a,**k:Init(s,j.zeros((16,1)))),patch.object(engine_request_source,'_gender',side_effect=lambda s,*a:s),patch.object(producer,'accept_root',return_value=True):
    entries=producer.reconstruct(SimpleNamespace(engine_tables=None,observation_tables=SimpleNamespace(belief=None)),SimpleNamespace(arrays={}),None,decl,[batch],positions,dict(namespace={}),__import__('pathlib').Path('/unused'),fakebank,SimpleNamespace(FRAMES=(0,4,12,24)),snapshots)
   self.assertEqual(len(counter),24);self.assertTrue(all(not a[0]for a in counter))

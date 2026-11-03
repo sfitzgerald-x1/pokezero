@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import numpy as np
 from pokezero import rollout_truth as rules
-from .device_rollout_truth import read,publish
+from .device_rollout_truth import read,publish,label_vocabulary_sha256
 
 
 def load_predictor(head,bank):
@@ -27,7 +27,7 @@ def load_predictor(head,bank):
             return out.value,j.all(j.isfinite(out.policy_logits),axis=-1)&j.isfinite(out.value)
     elif head['kind']=='public-v5':
         params,c,meta=v5_model.load(head['archive']['path'],expected_archive_sha256=head['archive']['sha256'],expected_checkpoint_sha256=head['checkpoint_sha256'],
-            expected_category_vocabulary_sha256=bank['category_vocabulary_sha256'],expected_label_vocabulary_sha256=bank['label_vocabulary']['sha256'],enable_v5=True)
+            expected_category_vocabulary_sha256=bank['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(bank['label_vocabulary']),enable_v5=True)
         def forward(docs):
             inputs={k:j.asarray([d[k]for d in docs],dtype)[:,None]for k,dtype in [('numeric_features',j.float32),('categorical_ids',j.int32),('token_type_ids',j.int32),('attention_mask',bool)]}
             inputs['history_mask']=j.ones((len(docs),1),bool)
