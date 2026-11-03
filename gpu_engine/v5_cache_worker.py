@@ -71,7 +71,7 @@ class Assembler:
         spool.has_training=np.zeros(len(spool.bank.streams),bool);spool.has_training[row]=request['has_training']
         spool.finalize_game(row,game,bindings=spool.bank.bindings,loss_config=context['loss'],discount=context['discount'])
         return dict(part=None if not spool.parts else [row,str(spool.parts[0][1]),spool.parts[0][2]],
-            seconds=time.perf_counter()-started)
+            seconds=time.perf_counter()-started,completed_monotonic=time.perf_counter())
 
 
 def main():

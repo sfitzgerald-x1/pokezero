@@ -40,7 +40,8 @@ class CpuWorkers:
         if not line:raise RuntimeError('CPU cache worker exited '+str(process.poll()))
         response=json.loads(line)
         if response.get('ok')is not True:raise RuntimeError('CPU cache assembly: '+response.get('error','invalid response'))
-        return dict(response['result'],dispatch_wall_seconds=time.perf_counter()-started)
+        finished=time.perf_counter()
+        return dict(response['result'],dispatch_wall_seconds=finished-started,completed_monotonic=finished)
 
     def submit(self,request):
         if self.closed:raise RuntimeError('cache workers closed')
@@ -64,7 +65,7 @@ class CpuWorkers:
 class BankAssembly:
     def __init__(self,workers,spool,*,bindings,loss_config,discount):
         if spool.bank.bindings!=bindings:raise ValueError('same original cache binding required')
-        self.workers=workers;self.spool=spool;self.futures=[];self.rows=set()
+        self.workers=workers;self.spool=spool;self.futures=[];self.rows=set();self.first_submit=None
         context=dict(store=str(spool.store.path),bank=asdict(spool.bank),bank_sha256=spool.bank_sha256,
             teacher_seed=None if spool.teacher_recipe is None else spool.teacher_recipe.seed,
             loss=asdict(loss_config),discount=discount)
@@ -75,6 +76,7 @@ class BankAssembly:
     def submit(self,row,game):
         if row in self.rows:raise ValueError('cache row cannot be assembled twice')
         self.rows.add(row)
+        if self.first_submit is None:self.first_submit=time.perf_counter()
         self.futures.append(self.workers.submit(dict(self.reference,row=row,prefix=len(self.spool.records),
             records=list(self.spool.record_refs),has_training=bool(self.spool.has_training[row]),
             game=dict(stream_id=game.stream_id,battle_id=game.battle_id,seed=game.seed))))
@@ -84,12 +86,14 @@ class BankAssembly:
             if future.done():future.result()
 
     def finish(self,path):
-        started=time.perf_counter();busy=0.;dispatched=0.
+        started=time.perf_counter();busy=0.;dispatched=0.;last_finished=self.first_submit
         for future in self.futures:
             result=future.result();busy+=result['seconds'];dispatched+=result.get('dispatch_wall_seconds',result['seconds'])
+            last_finished=max(last_finished,result['completed_monotonic'])
             if result['part']is not None:
                 row,folder,digest=result['part'];self.spool.parts.append((row,Path(folder),digest))
         waited=time.perf_counter()-started;started=time.perf_counter()
         metadata=self.spool.merge(path)
         return dict(metadata=metadata,worker_seconds=busy,dispatch_seconds=dispatched,
+            assembly_span_seconds=0. if self.first_submit is None else last_finished-self.first_submit,
             wait_seconds=waited,merge_seconds=time.perf_counter()-started)
