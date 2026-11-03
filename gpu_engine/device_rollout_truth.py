@@ -175,7 +175,10 @@ class RawExecutor:
             pred=sample.run_actor(params,config,views,actor_kind='champion23')
             legal=j.stack([v.legal_action_mask for v in views],axis=1)
             finite=pred.finite&(j.stack([v.error for v in views],axis=1)==0)&j.any(legal,axis=-1)
-            actions=champion.sample(pred,legal,keys)
+            # Exact at-play RAW9375: legal greedy action; argmax chooses the
+            # lower request index on ties. Replicates randomize engine chance,
+            # never the policy. Absent seats retain the original -1 marker.
+            actions=j.where(j.any(legal,axis=-1),j.argmax(j.where(legal,pred.policy_logits,-j.inf),axis=-1),-1).astype(j.int32)
             physical=j.stack([obs.map_actions(views[side],s,j.full(len(s.done),side,j.int32),j.maximum(actions[:,side],0))for side in (0,1)],axis=1)
             return views,pred.policy_logits,physical,j.all(~requested|finite,axis=1)
         self.query=jax.jit(query)
@@ -185,18 +188,30 @@ class RawExecutor:
         self.view=jax.jit(lambda s,p:query(s,p,j.zeros((len(s.done),2,2),j.uint32))[0])
 
     def continuation_batch(self,children,recipe):
-        """Flatten declared children×64 into one actual device batch."""
+        """Fixed32×64 program, preserving unavailable/tail child lane positions.
+
+        None slots are ignored padding, not a replacement child. Padding copies
+        an actual verified state/public carry and is marked inactive.
+        """
         import jax
         import jax.numpy as j
         import numpy as np
         from gpu_engine import transition
         if not children:return []
-        n=64*len(children)
-        keys=[k for c in children for k in recipe.keys(c['selector'],c['action'],c['reply'],c['chance_id'])]
-        states=jax.tree.map(lambda *xs:j.concatenate(xs,axis=0),*(c['state']for c in children))
-        publics=jax.tree.map(lambda *xs:j.concatenate(xs,axis=0),*(c['public']for c in children))
+        if len(children)>32:raise ValueError('one fixed32-child physical batch required')
+        count=len(children);slots=list(children)+[None]*(32-count);n=2048
+        template=next((c for c in slots if c is not None),getattr(self,'padding',None))
+        if template is None:
+            # No verified physical state anywhere: no safe actor input exists.
+            # Preserve all unknowns, never invent a padding battle.
+            return [None]*count
+        keys=[k for c in slots for k in (recipe.keys(c['selector'],c['action'],c['reply'],c['chance_id'])if c is not None else((0,0),)*64)]
+        states=jax.tree.map(lambda *xs:j.concatenate(xs,axis=0),*((template if c is None else c)['state']for c in slots))
+        publics=jax.tree.map(lambda *xs:j.concatenate(xs,axis=0),*((template if c is None else c)['public']for c in slots))
         s=jax.tree.map(lambda a:j.repeat(a,64,axis=0),states);p=jax.tree.map(lambda a:j.repeat(a,64,axis=0),publics)
-        owners=np.repeat([c['selector']['owner']for c in children],64)
+        owners=np.repeat([0 if c is None else c['selector']['owner']for c in slots],64)
+        scientific=np.repeat([c is not None for c in slots],64)
+        s=s._replace(done=s.done|j.asarray(~scientific))
         s=s._replace(keys=jax.vmap(jax.random.PRNGKey)(j.asarray([x[0]for x in keys],j.uint32)))
         policy=jax.vmap(jax.random.PRNGKey)(j.asarray([x[1]for x in keys],j.uint32))
         rows=[dict(replicate=i%64,status='MISSING',outcome=None,requests=0,reason=None)for i in range(n)]
@@ -205,7 +220,7 @@ class RawExecutor:
             winner=int(s.winner[i])
             if winner not in (0,1,2):raise ValueError('actual continuation terminal winner required')
             rows[i].update(status='COMPLETE',outcome=0 if winner==2 else 1 if winner==owners[i]else -1,reason=None)
-        for i in np.flatnonzero(~live):terminal(i)
+        for i in np.flatnonzero(scientific&~live):terminal(i)
         for step in range(recipe.max_requests):
             if not live.any():break
             s=s._replace(done=s.done|j.asarray(~live))
@@ -220,7 +235,7 @@ class RawExecutor:
             for i in np.flatnonzero(done):terminal(i)
             live&=~(failed|done)
         for i in np.flatnonzero(live):rows[i].update(status='CAPPED',reason='FIXED_CONTINUATION_REQUEST_CAP')
-        return [rows[start:start+64]for start in range(0,n,64)]
+        return [None if c is None else rows[64*i:64*(i+1)]for i,c in enumerate(children)]
 
 
 def child_step(executor,root,fields,group,action,reply):
@@ -279,7 +294,9 @@ def collect(config,source,directory,*,enable_truth=False):
     worker,schema=_import_original(source)
     decl,batches,games,labels,positions,groups,index,manifest=bank_manifest(config,schema)
     prespec=read(config['prespec'])
-    if (prespec['bank_declaration']!=config['declaration']or prespec['seed']!=config['seed']or prespec['rollouts_per_child']!=64):
+    if (prespec['bank_declaration']!=config['declaration']or prespec['seed']!=config['seed']or prespec['rollouts_per_child']!=64
+            or prespec['max_requests']!=config['max_requests']or prespec['split_seed']!=config['split_seed']
+            or prespec['policy']!='FROZEN_RAW_CHAMPION9375_DETERMINISTIC_LEGAL_ARGMAX_BOTH_SEATS_ALL_HEADS_SAME_TRUTH'):
         raise ValueError('same pre-outcome bank/seed/truth declaration required')
     recipe=rules().Recipe(config['seed'],max_requests=config['max_requests'])
     prepared,pool,gender=prepare_original(worker,decl,config['runtime'])
@@ -288,23 +305,31 @@ def collect(config,source,directory,*,enable_truth=False):
         raise ValueError('original engine package already shadowed')
     directory=Path(directory);directory.mkdir(parents=True,exist_ok=False);(directory/'roots').mkdir();(directory/'grids').mkdir()
     manifest.update(producer_files={str(p.relative_to(Path(__file__).resolve().parents[1])):hashlib.sha256(p.read_bytes()).hexdigest()for p in (Path(__file__).resolve(),_RULES_PATH)},prespec=config['prespec'],runtime=config['runtime'],recipe=vars(recipe),raw_actor=config['raw_actor'],
-        critic_split_seed=config['split_seed'],critic_folds=rules().folds([p['selector']for p in positions],seed=config['split_seed']),
+        continuation_policy='DETERMINISTIC_LEGAL_ARGMAX_BOTH_SEATS_LOWER_INDEX_TIES',physical_continuation_batch=2048,padding='Inactive copies of verified state; unavailable/tail slots never truth; if no physical root exists all truth stays missing without execution',critic_split_seed=config['split_seed'],critic_folds=rules().folds([p['selector']for p in positions],seed=config['split_seed']),
         privileged_critic='NOT_TRAINED; actual B checkpoint required; frozen B trunk and original public-head warmstart, small steps, epoch0 eligible. Five game-clustered folds: test k, validation (k+1)%5, train other3. Every reported critic prediction OUT OF FOLD. Crossfit metric distinct from a final all-bank fitted critic. No extra games.')
     publish(directory/'manifest.json',manifest)
     entries=reconstruct(prepared,pool,gender,decl,batches,positions,index,directory/'roots',bank,schema,snapshot)
     root_index=dict(namespace=index['namespace'],cost_roots=entries)
     publish(directory/'reconstructed-root-index.json',root_index)
     executor=RawExecutor(prepared,config['raw_actor'])
+    # One real verified snapshot supplies inactive padding even when a whole
+    # chunk is missing. No private state is invented for that missing chunk.
+    first=next((e for e in entries if e['status']=='SAVED'),None)
+    if first is not None:
+        padding,_=snapshot.load(first,root_index)
+        executor.padding=dict(state=padding.state,public=padding.public)
     import jax
     children=0;known=0;unknown=0
     pending=[]
     def flush(truth):
         nonlocal children,known,unknown
-        selected=[r['_continuation']for r in pending if r.get('_continuation')is not None]
-        results=iter(executor.continuation_batch(selected,recipe))
-        for record in pending:
+        # Keep unavailable children in their ORIGINAL32-child lane slots.
+        results=executor.continuation_batch([r.get('_continuation')for r in pending],recipe)
+        for record,rows in zip(pending,results,strict=True):
             child=record.pop('_continuation',None)
-            if child is not None:record['rollouts']=next(results)
+            if child is not None:
+                if rows is None:raise ValueError('available child lost its fixed-batch dispositions')
+                record['rollouts']=rows
             summary=rules().summarize_rollouts(record['rollouts']);record['summary']=summary
             children+=1;known+=summary['known'];unknown+=summary['unknown']
             truth.write(json.dumps(record,sort_keys=True,allow_nan=False)+'\n')
