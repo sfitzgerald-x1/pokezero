@@ -128,67 +128,71 @@ class Spool:
         self.parts.append((row,path,v5_data._file_sha(path/'metadata.json')))
 
     def merge(self,path):
-        """Original cache format, bounded per-game scatter into disk arrays.
+        return merge_game_parts(path,self.parts,self.bank.streams)
 
-        JSON row metadata remains O(N), as required by the unchanged reader.
-        Dense arrays are never concatenated or held in whole-cohort RAM.
-        """
-        if not self.parts:return None
-        parts=[]
-        for row,p,expected in self.parts:
-            if v5_data._file_sha(p/'metadata.json')!=expected:raise ValueError('ordinary game cache metadata changed')
-            meta=json.loads((p/'metadata.json').read_text());check=dict(meta);claimed=check.pop('metadata_sha256',None)
-            if meta.get('schema_version')!=v5_data.CACHE_SCHEMA or claimed!=v5_data._sha(check):
-                raise ValueError('ordinary game cache schema/metadata changed')
-            parts.append((row,p,meta))
-        first=parts[0][2];n=sum(m['example_count']for _,_,m in parts)
-        coordinates=np.empty(n,dtype=[('frame','i4'),('row','i4'),('owner','i1')]);offset=0
-        for row,_,meta in parts:
-            count=meta['example_count'];addresses=meta['v5_rows']['addresses']
-            if len(addresses)!=count or any(a['stream']!=self.bank.streams[row]for a in addresses):raise ValueError('game cache source address differs')
-            coordinates['frame'][offset:offset+count]=[a['frame']for a in addresses]
-            coordinates['row'][offset:offset+count]=row;coordinates['owner'][offset:offset+count]=[a['owner']for a in addresses];offset+=count
-            if (meta['v5_static']!=first['v5_static']or meta['base_none']!=first['base_none']
-                    or set(meta['arrays'])!=set(first['arrays'])or set(meta['base_json'])!=set(first['base_json'])):
-                raise ValueError('ordinary game cache namespaces differ')
-        order=np.lexsort((coordinates['owner'],coordinates['row'],coordinates['frame']))
-        ordered=coordinates[order]
-        if n>1 and np.any(ordered[1:]==ordered[:-1]):raise ValueError('duplicate original training address')
-        destinations=np.empty(n,np.int64);destinations[order]=np.arange(n,dtype=np.int64)
-        metadata=dict(schema_version=v5_data.CACHE_SCHEMA,example_count=n,v5_static=first['v5_static'],
-            v5_rows={},base_json={},base_none=first['base_none'],arrays={})
-        for section in ('v5_rows','base_json'):
-            for name in first[section]:
-                values=[None]*n;offset=0
-                for _,_,meta in parts:
-                    count=meta['example_count'];items=meta[section][name]
-                    if len(items)!=count:raise ValueError('ordinary cache row metadata differs')
-                    for target,value in zip(destinations[offset:offset+count],items):values[int(target)]=value
-                    offset+=count
-                metadata[section][name]=values
-        path=Path(path);path.mkdir()
-        for name in first['arrays']:
-            descriptions=[m['arrays'][name]for _,_,m in parts];dtype=np.result_type(*(np.dtype(d['dtype'])for d in descriptions))
-            shape=(n,)+tuple(descriptions[0]['shape'][1:])
-            if any(tuple(d['shape'][1:])!=shape[1:]or np.dtype(d['dtype']).kind!=dtype.kind
-                    or (np.dtype(d['dtype'])!=dtype and dtype.kind not in 'US')for d in descriptions):
-                raise ValueError('ordinary cache field geometry/dtype differs')
-            target=path/(name+'.npy');output=np.lib.format.open_memmap(target,mode='w+',dtype=dtype,shape=shape);offset=0
-            try:
-                for (_,folder,meta),description in zip(parts,descriptions):
-                    file=folder/(name+'.npy')
-                    if v5_data._file_sha(file)!=description['sha256']:raise ValueError('ordinary game cache bytes changed')
-                    source=np.load(file,mmap_mode='r',allow_pickle=False)
-                    try:
-                        count=meta['example_count'];output[destinations[offset:offset+count]]=source;offset+=count
-                    finally:source._mmap.close()
-                output.flush()
-            finally:output._mmap.close()
-            metadata['arrays'][name]=dict(shape=list(shape),dtype=dtype.str,sha256=v5_data._file_sha(target))
-        # Same canonical metadata SHA as original _sha, streamed to avoid a
-        # second whole JSON string. Reader/trainer format remains unchanged.
-        digest=hashlib.sha256()
-        for piece in json.JSONEncoder(sort_keys=True,separators=(',',':'),allow_nan=False).iterencode(metadata):digest.update(piece.encode())
-        metadata['metadata_sha256']=digest.hexdigest()
-        with (path/'metadata.json').open('x')as stream:json.dump(metadata,stream,sort_keys=True,allow_nan=False);stream.write('\n')
-        return metadata
+
+def merge_game_parts(path,game_parts,streams):
+    """Original cache format, bounded per-game scatter into disk arrays.
+
+    JSON row metadata remains O(N), as required by the unchanged reader.
+    Dense arrays are never concatenated or held in whole-cohort RAM.
+    """
+    if not game_parts:return None
+    parts=[]
+    for row,p,expected in game_parts:
+        if v5_data._file_sha(p/'metadata.json')!=expected:raise ValueError('ordinary game cache metadata changed')
+        meta=json.loads((p/'metadata.json').read_text());check=dict(meta);claimed=check.pop('metadata_sha256',None)
+        if meta.get('schema_version')!=v5_data.CACHE_SCHEMA or claimed!=v5_data._sha(check):
+            raise ValueError('ordinary game cache schema/metadata changed')
+        parts.append((row,p,meta))
+    first=parts[0][2];n=sum(m['example_count']for _,_,m in parts)
+    coordinates=np.empty(n,dtype=[('frame','i4'),('row','i4'),('owner','i1')]);offset=0
+    for row,_,meta in parts:
+        count=meta['example_count'];addresses=meta['v5_rows']['addresses']
+        if len(addresses)!=count or any(a['stream']!=streams[row]for a in addresses):raise ValueError('game cache source address differs')
+        coordinates['frame'][offset:offset+count]=[a['frame']for a in addresses]
+        coordinates['row'][offset:offset+count]=row;coordinates['owner'][offset:offset+count]=[a['owner']for a in addresses];offset+=count
+        if (meta['v5_static']!=first['v5_static']or meta['base_none']!=first['base_none']
+                or set(meta['arrays'])!=set(first['arrays'])or set(meta['base_json'])!=set(first['base_json'])):
+            raise ValueError('ordinary game cache namespaces differ')
+    order=np.lexsort((coordinates['owner'],coordinates['row'],coordinates['frame']))
+    ordered=coordinates[order]
+    if n>1 and np.any(ordered[1:]==ordered[:-1]):raise ValueError('duplicate original training address')
+    destinations=np.empty(n,np.int64);destinations[order]=np.arange(n,dtype=np.int64)
+    metadata=dict(schema_version=v5_data.CACHE_SCHEMA,example_count=n,v5_static=first['v5_static'],
+        v5_rows={},base_json={},base_none=first['base_none'],arrays={})
+    for section in ('v5_rows','base_json'):
+        for name in first[section]:
+            values=[None]*n;offset=0
+            for _,_,meta in parts:
+                count=meta['example_count'];items=meta[section][name]
+                if len(items)!=count:raise ValueError('ordinary cache row metadata differs')
+                for target,value in zip(destinations[offset:offset+count],items):values[int(target)]=value
+                offset+=count
+            metadata[section][name]=values
+    path=Path(path);path.mkdir()
+    for name in first['arrays']:
+        descriptions=[m['arrays'][name]for _,_,m in parts];dtype=np.result_type(*(np.dtype(d['dtype'])for d in descriptions))
+        shape=(n,)+tuple(descriptions[0]['shape'][1:])
+        if any(tuple(d['shape'][1:])!=shape[1:]or np.dtype(d['dtype']).kind!=dtype.kind
+                or (np.dtype(d['dtype'])!=dtype and dtype.kind not in 'US')for d in descriptions):
+            raise ValueError('ordinary cache field geometry/dtype differs')
+        target=path/(name+'.npy');output=np.lib.format.open_memmap(target,mode='w+',dtype=dtype,shape=shape);offset=0
+        try:
+            for (_,folder,meta),description in zip(parts,descriptions):
+                file=folder/(name+'.npy')
+                if v5_data._file_sha(file)!=description['sha256']:raise ValueError('ordinary game cache bytes changed')
+                source=np.load(file,mmap_mode='r',allow_pickle=False)
+                try:
+                    count=meta['example_count'];output[destinations[offset:offset+count]]=source;offset+=count
+                finally:source._mmap.close()
+            output.flush()
+        finally:output._mmap.close()
+        metadata['arrays'][name]=dict(shape=list(shape),dtype=dtype.str,sha256=v5_data._file_sha(target))
+    # Same canonical metadata SHA as original _sha, streamed to avoid a
+    # second whole JSON string. Reader/trainer format remains unchanged.
+    digest=hashlib.sha256()
+    for piece in json.JSONEncoder(sort_keys=True,separators=(',',':'),allow_nan=False).iterencode(metadata):digest.update(piece.encode())
+    metadata['metadata_sha256']=digest.hexdigest()
+    with (path/'metadata.json').open('x')as stream:json.dump(metadata,stream,sort_keys=True,allow_nan=False);stream.write('\n')
+    return metadata

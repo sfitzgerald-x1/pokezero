@@ -69,6 +69,12 @@ def recover_published_parts(store, plan):
     for iteration,batches in enumerate(plan.iterations):
         for index,batch in enumerate(batches):
             starts=store.matching('BATCH_STARTED',iteration=iteration,batch=index)
+            if any(p.get('deferred_starts',False)for p in starts):
+                if not all(p.get('deferred_starts',False)for p in starts):
+                    raise ValueError('one bank cannot mix device attempts and deferred Python starts')
+                # Actual Python publications and merges are recovered by
+                # their own backend; they are not missing device chunks.
+                continue
             if len(starts)>1:raise ValueError('original collector bank cannot replay')
             if not starts or store.matching('CACHE',iteration=iteration,batch=index):continue
             previous=store.matching('CT_INTERRUPTED_BANK_RECOVERED',iteration=iteration,batch=index)

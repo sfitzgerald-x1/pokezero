@@ -184,7 +184,7 @@ class GameCapture:
 
 
 def collect_game(env,game,*,factories,max_requests,collect_owners=(0,1),start_override=None,
-        check_progress=lambda:None,enable_v5=False):
+        chance_seed=None,check_progress=lambda:None,enable_v5=False):
     """One declared attempt, with unknowns retained and no retry/refill.
 
     This low-level bridge owns neither a study roster nor training admission.
@@ -199,6 +199,8 @@ def collect_game(env,game,*,factories,max_requests,collect_owners=(0,1),start_ov
             or not collect_owners or any(type(x)is not int or x not in(0,1)for x in collect_owners)
             or set(factories)!={0,1}):
         raise ValueError('bounded game, original collecting seats and both raw factories required')
+    if chance_seed is not None and(type(chance_seed)is not int or not 0<=chance_seed<2**32):
+        raise ValueError('explicit uint32 Showdown chance seed required')
     from gpu_engine.v5_live_protocol import check_factory
     from gpu_engine import v5_collection_data as data
     for factory in factories.values():
@@ -219,10 +221,12 @@ def collect_game(env,game,*,factories,max_requests,collect_owners=(0,1),start_ov
                 positions[owner]+=len(lines)
     try:
         check_progress()
-        if start_override is None:env.reset(seed=game.seed,format_id='gen3randombattle')
+        actual_seed=game.seed if chance_seed is None else chance_seed
+        source['chance_seed']=actual_seed
+        if start_override is None:env.reset(seed=actual_seed,format_id='gen3randombattle')
         else:
             if type(start_override)is not BattleStartOverride:raise ValueError('explicit original packed teams required')
-            env.reset_with_start_override(seed=game.seed,start_override=start_override)
+            env.reset_with_start_override(seed=actual_seed,start_override=start_override)
         birth=_teams(env.snapshot());source['birth']=birth;source['birth_sha256']=_sha(birth)
         for owner in(0,1):
             actor=factories[owner].create_actor();actors[owner]=actor
