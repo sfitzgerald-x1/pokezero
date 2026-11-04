@@ -147,6 +147,7 @@ class _Backend(live.JaxBackend):
     def __init__(self,factory,contract,**game):
         _checked(factory)
         self.factory=factory;self.captured=None;self.pending=None;self.deadline=None;self.last_inputs=None
+        self.pending_capture=None;self.last_capture=None
         functions=_CaptureFunctions(self,factory.encoder)
         super().__init__(contract,catalog=factory.catalog,compiled_functions=functions,**game)
 
@@ -165,16 +166,19 @@ class _Backend(live.JaxBackend):
                 if parts[1]=='-sethp' and len(parts)>5:health.append((parts[4],parts[5]))
             if any(ident.startswith(peer) and '/' in hp and hp.split()[0].split('/',1)[1]!='100' for ident,hp in health):
                 raise ValueError('exact peer HP cannot enter owning public actor')
-        self.pending=None;self.last_inputs=None;super().ingest(lines)
+        self.pending=None;self.last_inputs=None;self.pending_capture=None;self.last_capture=None
+        super().ingest(lines)
 
     def budget(self):
         if self.deadline is None or time.monotonic()>=self.deadline:
             raise TimeoutError('v5 learner encode/forward/choice exceeded declared budget')
 
-    def reset_policy(self):self.pending=None;self.last_inputs=None
+    def reset_policy(self):
+        self.pending=None;self.last_inputs=None;self.pending_capture=None;self.last_capture=None
 
     def encode(self,snapshot):
         self.budget();_checked(self.factory);self.captured=None;self.pending=None
+        self.pending_capture=None;self.last_capture=None
         arrays,targets=super().encode(snapshot)
         self.budget()
         if self.captured is None:raise ValueError('original same-call EncodedReport capture missing')
@@ -189,6 +193,7 @@ class _Backend(live.JaxBackend):
             value=appended.legal_action_mask if name=='legal_action_mask' else getattr(appended,name)[:,:23]
             if not np.array_equal(np.asarray(value)[0],arrays[name]):
                 raise ValueError('original V4 routing prefix differs from v5 actor input')
+        self.pending_capture=(snapshot,state,encoded,appended,side)
         self.pending=(snapshot,arrays,inputs);return arrays,targets
 
     def select_action(self,routing,*,rng):
@@ -212,6 +217,7 @@ class _Backend(live.JaxBackend):
         action=(_greedy_action_index(probabilities=probabilities,legal=legal_actions,family_gated=False)
             if self.factory.deterministic else _sample_action(probabilities,legal_actions,rng))
         self.budget();self.last_inputs=inputs
+        self.last_capture=self.pending_capture;self.pending_capture=None
         metadata=json.loads(self.factory.metadata)
         return PolicyDecision(action,'v5-raw-'+metadata['weights_archive_sha256'][:12],1. if self.factory.deterministic else probabilities[action],
             dict(policy_family='v5-raw-owning-protocol',actor='RAW_POLICY',view='PUBLIC',
@@ -247,6 +253,30 @@ class Actor(live.LiveProtocolActor):
         result=super().begin_game(**game)
         self._providers=(self._backend,self._policy,self._policy._select_action,self._policy.reset,self._policy._validate)
         return result
+
+    def decision_v5_observation(self,snapshot,*,frame):
+        """Serialize the SAME successful public encode, without another call.
+
+        The trusted collector supplies its shared pre-step frame ordinal. No
+        simulator state, peer request, hidden label or new forward is accepted.
+        A new wire packet, failed decision or closed game invalidates access.
+        """
+        routing=self.decision_observation(snapshot)
+        self._check_providers();_checked(self.factory)
+        capture=self._backend.last_capture
+        if capture is None or capture[0] is not snapshot:
+            raise ValueError('same completed original v5 encode capture required')
+        _,state,encoded,appended,side=capture
+        from .v5_collection_data import public_observation
+        observer=int(np.asarray(side)[0])
+        species=np.asarray(state.beliefs.species)[0,observer]
+        old,public=public_observation(encoded,appended,row=0,owner=int(self.owner[1])-1,
+            address=c.DecisionAddress(self.stream_id,frame,int(self.owner[1])-1),
+            adapter=self.factory.adapter,public_species=species)
+        for name in live.SHAPES:
+            if not np.array_equal(np.asarray(getattr(old,name)),np.asarray(getattr(routing,name))):
+                raise ValueError('captured v5 prefix differs from original routing input')
+        return old,public
 
     def accept_owner_stream(self,**chunk):
         self._check_providers()
