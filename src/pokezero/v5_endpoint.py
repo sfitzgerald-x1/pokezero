@@ -1,7 +1,9 @@
 """Explicit final-arm endpoint, separate from the unchanged 500k milestones.
 
-Four original frozen raw-v5 snapshots share 1,000 declared seed blocks, both
-seats. Every one of the 8,000 cells remains in the denominator. This module
+Four original arm slots share 1,000 declared seed blocks, both seats. The
+explicit v2 contract holds D after failed cost admission without requiring its
+checkpoint or dispatching its cells. All 8,000 cells remain in the denominator.
+This module
 executes nothing on import and never generates/replaces a bank or trains a model.
 """
 import argparse
@@ -22,9 +24,11 @@ import uuid
 from . import v5_evaluation as evaluation, v5_foulplay as fp, v5_run as run
 
 SCHEMA='pokezero.v5.endpoint.v1'
+HELD_SCHEMA='pokezero.v5.endpoint.v2'
+HELD_D={'D0':'D_T_NOT_ADMITTED'}
 ARMS=('A0','B0','D0','B1')
 CONTRASTS=(('B0-A0','B0','A0'),('D0-B0','D0','B0'),('B1-B0','B1','B0'))
-DISPOSITIONS=('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED','INTERRUPTED')
+DISPOSITIONS=('NOT_ATTEMPTED','RUNNING','COMPLETE','CAPPED','REFUSED','FAILED','INTERRUPTED','HELD')
 METHOD='PAIRED_SEED_BLOCK_PERCENTILE_MISSING_CELL_ENVELOPE_90'
 TRAINING_GAMES=2_000_000
 CORE_SCHEDULE=dict(rule='FIXED_ARM_INDEX_PLUS_SEED_OFFSET_MOD_WORKERS',
@@ -33,6 +37,22 @@ CORE_SCHEDULE=dict(rule='FIXED_ARM_INDEX_PLUS_SEED_OFFSET_MOD_WORKERS',
 
 def _keys(value,names):evaluation._keys(value,names)
 def _ref(value):return evaluation.Artifact(**value)
+
+
+def _held(protocol):
+    if protocol['schema']==SCHEMA:
+        if 'held_arms' in protocol:raise ValueError('held arms require explicit v2 endpoint contract')
+        return {}
+    if protocol['schema']!=HELD_SCHEMA or protocol.get('held_arms')!=HELD_D:
+        raise ValueError('v2 endpoint holds only D0 after failed cost admission')
+    return HELD_D
+
+
+def _active(protocol):return tuple(arm for arm in ARMS if arm not in _held(protocol))
+
+
+def _next_ordinal(rows):
+    return next((row['ordinal'] for row in rows if row['status']=='NOT_ATTEMPTED'),len(rows))
 
 
 def _sync(directory):
@@ -90,14 +110,16 @@ def _protocol(reference,*,parse_configs=False):
     if type(reference) is not evaluation.Artifact:raise ValueError('original digest-bound endpoint Artifact required')
     value=reference.document()
     _keys(value,('schema','seeds','arms','worker_python','foulplay_python','foulplay_commit','foulplay_source',
-        'actor_cpus','foulplay_cpus','watchdog','bootstrap','deterministic','core_schedule'))
-    if value['schema']!=SCHEMA or value['deterministic'] is not True:raise ValueError('explicit raw deterministic v5 endpoint required')
+        'actor_cpus','foulplay_cpus','watchdog','bootstrap','deterministic','core_schedule')
+        + (('held_arms',) if value.get('schema')==HELD_SCHEMA else ()))
+    active=_active(value)
+    if value['deterministic'] is not True:raise ValueError('explicit raw deterministic v5 endpoint required')
     if value['core_schedule']!=CORE_SCHEDULE:raise ValueError('fixed declared pre-outcome core rotation required')
     seeds=value['seeds']
     if (type(seeds) is not list or len(seeds)!=1000 or any(type(x) is not int or not 0<=x<2**32 for x in seeds)
             or seeds!=list(range(seeds[0],seeds[0]+1000))):
         raise ValueError('exact original 1,000 ordered seeds, both seats per arm required')
-    if [a.get('name') for a in value['arms']]!=list(ARMS):raise ValueError('all four final arms in fixed original order required')
+    if [a.get('name') for a in value['arms']]!=list(active):raise ValueError('all active final arms in fixed original order required')
     for key in ('worker_python','foulplay_python','foulplay_source'):_ref(value[key]).verify()
     commit=value['foulplay_commit']
     if type(commit) is not str or len(commit)!=40 or any(x not in '0123456789abcdef' for x in commit):raise ValueError('original FP source revision required')
@@ -167,7 +189,7 @@ def _protocol(reference,*,parse_configs=False):
             elif schedule!=fp_seeds:raise ValueError('same paired original FP seed bank required across arms/seats')
             actual.append(evaluation._config(document) if parse_configs else config)
         configs[arm['name']]=tuple(actual)
-    if len(namespaces)!=1:raise ValueError('same original category/label source across all four arms required')
+    if len(namespaces)!=1:raise ValueError('same original category/label source across all active arms required')
     if any(p!=memory[0] for p in memory):raise ValueError('one explicit original worker memory policy required')
     return value,Configs(MappingProxyType(configs),MappingProxyType(models),TRAINING_GAMES)
 
@@ -180,7 +202,8 @@ def _rows(protocol,configs):
             for arm_index,arm in enumerate(ARMS):
                 ordinal=len(rows);slot=(arm_index+offset)%len(protocol['foulplay_cpus'])
                 rows.append(dict(ordinal=ordinal,arm=arm,offset=offset,seed=seed,seat=seat,fp_seed=schedule[offset],
-                    fp_core=protocol['foulplay_cpus'][slot],slot=slot,status='NOT_ATTEMPTED',result=None,invocation_id=None))
+                    fp_core=protocol['foulplay_cpus'][slot],slot=slot,
+                    status='HELD' if arm in _held(protocol) else 'NOT_ATTEMPTED',result=None,invocation_id=None))
     return rows
 
 
@@ -188,6 +211,7 @@ def _config_for(row,configs):return replace(configs[row['arm']][row['seat']=='p2
 
 
 def _checked_result(row,result,configs,protocol):
+    if row['arm'] in _held(protocol):raise ValueError('held endpoint cells cannot have source results')
     _keys(result,('row','recipe','namespace','invocation_id'))
     actual=result['row'];recipe=result['recipe'];config=configs[row['arm']][row['seat']=='p2']
     _keys(actual,('offset','seed','fp_seed','status','score','duration_seconds','reason','source_result_sha256','source_game','invocation_id')
@@ -238,7 +262,7 @@ class Store:
     def __init__(self,directory,reference,protocol,configs,*,resume=False):
         self.path=Path(directory);self.reference=reference;self.protocol=protocol;self.configs=configs
         self.rows=_rows(protocol,configs);self.events=[];self.path.mkdir(parents=True,exist_ok=True)
-        declaration=dict(schema=SCHEMA,recipe=asdict(reference))
+        declaration=dict(schema=protocol['schema'],recipe=asdict(reference))
         path=self.path/'declaration.json'
         if path.exists():
             if not resume or json.loads(path.read_bytes())!=declaration:raise ValueError('same original endpoint declaration and explicit resume required')
@@ -254,7 +278,7 @@ class Store:
         events=[] if full else list(self.events)
         previous=events[-1]['sha256'] if events else None
         rows=_rows(self.protocol,self.configs) if full else self.rows
-        next_cell=sum(e['kind']=='START' for e in events)
+        next_cell=_next_ordinal(rows)
         paths=sorted((self.path/'journal').glob('*.json'))
         if len(paths)<len(events):raise ValueError('observed endpoint source disappeared')
         for index in range(len(events),len(paths)):
@@ -271,7 +295,8 @@ class Store:
                 raise ValueError('endpoint source/cell order changed')
             if event['kind']=='START':
                 if ordinal!=next_cell:raise ValueError('only next original not-attempted cell may start')
-                row.update(status='RUNNING',invocation_id=event['invocation_id']);next_cell+=1
+                if row['status']!='NOT_ATTEMPTED':raise ValueError('held or closed endpoint cell cannot start')
+                row.update(status='RUNNING',invocation_id=event['invocation_id']);next_cell=_next_ordinal(rows)
             elif event['kind']=='END':
                 if row['status']!='RUNNING' or row['invocation_id']!=event['invocation_id']:raise ValueError('missing/replayed endpoint attempt')
                 actual=_checked_result(row,event['result'],self.configs,self.protocol)
@@ -289,7 +314,7 @@ class Store:
         if type(ordinal) is not int or not 0<=ordinal<len(self.rows):raise ValueError('original endpoint ordinal required')
         row=self.rows[ordinal]
         if type(invocation) is not str or not invocation:raise ValueError('explicit owned endpoint invocation required')
-        if kind=='START' and (ordinal!=sum(e['kind']=='START' for e in self.events) or row['status']!='NOT_ATTEMPTED' or result is not None):
+        if kind=='START' and (ordinal!=_next_ordinal(self.rows) or row['status']!='NOT_ATTEMPTED' or result is not None):
             raise ValueError('only next original not-attempted cell may dispatch')
         if kind=='END':
             if row['status']!='RUNNING' or row['invocation_id']!=invocation:raise ValueError('original open endpoint attempt required')
@@ -307,14 +332,15 @@ class Store:
             if row['status']=='RUNNING':self.emit('INTERRUPTED',row['ordinal'],invocation)
 
     def report(self,invocation):
-        return dict(schema=SCHEMA,recipe=asdict(self.reference),rows=self.rows,invocation_id=invocation,
+        return dict(schema=self.protocol['schema'],recipe=asdict(self.reference),rows=self.rows,invocation_id=invocation,
+            held_arms=dict(_held(self.protocol)),
             counts={s:sum(r['status']==s for r in self.rows) for s in DISPOSITIONS},scientific_qualification=False)
 
 
 async def _execute_cells(store,factories,*,invocation):
     """Fixed original runner, no arbitrary executor callback or scalar fallback."""
-    if set(factories)!=set(ARMS):raise ValueError('all four original endpoint factories required')
-    for arm in ARMS:
+    if set(factories)!=set(_active(store.protocol)):raise ValueError('all and only active endpoint factories required')
+    for arm in _active(store.protocol):
         first=next(r for r in store.rows if r['arm']==arm)
         fp._recipe(_config_for(first,store.configs),factories[arm]) # Original typed/runtime guard, before dispatch.
     active={};stop=False
@@ -407,12 +433,16 @@ def reduce_endpoint(protocol,rows,configs):
             raise ValueError('original endpoint pairing/order differs')
         status=actual['status']
         if status not in DISPOSITIONS:raise ValueError('endpoint disposition differs')
+        if target['status']=='HELD':
+            if status!='HELD' or actual['result'] is not None or actual.get('invocation_id') is not None:
+                raise ValueError('held endpoint cells must remain unattempted unknowns')
+        elif status=='HELD':raise ValueError('an active endpoint cell cannot be relabeled held')
         arm_counts[actual['arm']][status]+=1;score=None
         if actual['result'] is not None:
             result=_checked_result(actual,actual['result'],configs,protocol)
             if result['status']!=status:raise ValueError('source disposition changed')
             if status=='COMPLETE':score=float(result['score'])
-        elif status not in ('NOT_ATTEMPTED','RUNNING','INTERRUPTED'):raise ValueError('observed disposition requires actual original source result')
+        elif status not in ('NOT_ATTEMPTED','RUNNING','INTERRUPTED','HELD'):raise ValueError('observed disposition requires actual original source result')
         outcomes[actual['arm']][(actual['offset'],actual['seat'])]=score
     from .capstone_analysis import _percentile,_stratified_bootstrap_means
     bootstrap=protocol['bootstrap'];contrasts={}
@@ -436,12 +466,14 @@ def reduce_endpoint(protocol,rows,configs):
         interval=[_percentile(tuple(draw_lower),.05),_percentile(tuple(draw_upper),.95)]
         bounds=[sum(lower)/1000,sum(upper)/1000]
         contrasts[label]=dict(candidate=candidate,baseline=baseline,primary=label!='B1-B0',declared_games_per_arm=2000,
+            status='HELD_UNMEASURED' if candidate in _held(protocol) or baseline in _held(protocol) else 'ACTIVE_ARM_CONTRAST',
             declared_seed_blocks=1000,complete_seed_blocks=len(known_blocks),matched_complete_cells=len(matched),unknown_cells_across_arms=unknown,
             matched_complete_cell_mean=sum(matched)/len(matched) if matched else None,
             complete_seed_point=sum(known_blocks)/len(known_blocks) if known_blocks else None,
             fully_identified_point=bounds[0] if unknown==0 else None,full_roster_identification_bounds=bounds,
             paired_seed_bootstrap_90=interval,uncertainty_method=METHOD,
-            supported_positive_primary=(label!='B1-B0' and interval[0]>0 and bounds[0]>0),
+            supported_positive_primary=(label!='B1-B0' and candidate not in _held(protocol)
+                and baseline not in _held(protocol) and interval[0]>0 and bounds[0]>0),
             equivalence_established=False)
     arm_results={}
     for arm in ARMS:
@@ -449,7 +481,9 @@ def reduce_endpoint(protocol,rows,configs):
         arm_results[arm]=dict(counts=arm_counts[arm],declared_cells=2000,known_completed=len(known),unknown_cells=unknown,
             completed_only_score=total/len(known) if known else None,
             full_roster_identification_bounds=[total/2000,(total+unknown)/2000])
-    return dict(schema=SCHEMA,declared_cells=8000,arms=arm_results,contrasts=contrasts,bootstrap=dict(bootstrap,
+    return dict(schema=protocol['schema'],declared_cells=8000,held_arms=dict(_held(protocol)),
+        held_declared_cells=2000*len(_held(protocol)),attemptable_declared_cells=2000*len(_active(protocol)),
+        arms=arm_results,contrasts=contrasts,bootstrap=dict(bootstrap,
         unit='ORIGINAL_SEED_WITH_BOTH_SEATS_TOGETHER',common_draws_across_contrasts=True),
         selection_rule='PRIMARY_CONSERVATIVE_LOWER90_GT_ZERO_AND_FULL_ROSTER_IDENTIFICATION_LOWER_GT_ZERO',
         interpretation='Missing-cell identification bounds are not confidence intervals; bootstrap uncertainty is approximate seed-block percentile inference, not equivalence.',
