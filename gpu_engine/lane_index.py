@@ -59,6 +59,27 @@ def take(x, rows, *indices):
     return out
 
 
+def _hit(b, sizes, indices):
+    wrapped = [_wrap(i, n, b) for i, n in zip(indices, sizes)]
+    k = len(indices);hit = None
+    for axis, (index, n) in enumerate(zip(wrapped, sizes)):
+        shape = [1] * (k + 1);shape[axis + 1] = n
+        onehot = index.reshape((b,) + (1,) * k) == j.arange(n, dtype=index.dtype).reshape(shape)
+        hit = onehot if hit is None else hit & onehot
+    return hit
+
+
+def _store(x, b, sizes, indices, y, *, lifted):
+    """Select y at the written positions with _scatter_impl's dtype handling."""
+    dtype = lax.dtype(x);weak = dtypes.is_weakly_typed(x)
+    xp, yp = promote_dtypes(x, y)
+    if not lifted:
+        yp = j.broadcast_to(yp, (b,) + x.shape[1 + len(indices):])
+        yp = yp.reshape((b,) + (1,) * len(indices) + yp.shape[1:])
+    out = j.where(_expand(_hit(b, sizes, indices), x.ndim), yp, xp)
+    return lax_internal._convert_element_type(out, dtype, weak)
+
+
 def put(x, rows, indices, y):
     """x.at[rows, *indices].set(y)."""
     x = j.asarray(x);indices = tuple(indices);b, sizes = _check(x, rows, indices)
@@ -67,15 +88,27 @@ def put(x, rows, indices, y):
             and j.iinfo(x.dtype).min <= y <= j.iinfo(x.dtype).max):
         y = j.asarray(y, dtype=x.dtype)
     else:y = j.asarray(y)
-    dtype = lax.dtype(x);weak = dtypes.is_weakly_typed(x)
-    xp, yp = promote_dtypes(x, y)
-    yp = j.broadcast_to(yp, (b,) + x.shape[1 + len(indices):])
-    wrapped = [_wrap(i, n, b) for i, n in zip(indices, sizes)]
-    k = len(indices);hit = None
-    for axis, (index, n) in enumerate(zip(wrapped, sizes)):
-        shape = [1] * (k + 1);shape[axis + 1] = n
-        onehot = index.reshape((b,) + (1,) * k) == j.arange(n, dtype=index.dtype).reshape(shape)
-        hit = onehot if hit is None else hit & onehot
-    yb = yp.reshape((b,) + (1,) * k + yp.shape[1:])
-    out = j.where(_expand(hit, x.ndim), yb, xp)
-    return lax_internal._convert_element_type(out, dtype, weak)
+    return _store(x, b, sizes, indices, y, lifted=False)
+
+
+def update(x, rows, indices, fn, *lanes):
+    """x.at[rows, *indices].set(fn(x[rows, *indices], *lanes)), without the read.
+
+    ``fn`` must be elementwise in its arguments (reductions only over trailing
+    axes, written with negative axis numbers). It is evaluated on the whole
+    operand with every lane argument ([B, ...] arrays; scalars pass through)
+    lifted to [B, 1 per index, ...], so each written value is fn of exactly the
+    value the read would return. A read-modify-write chain then never reads a
+    freshly written array back through slices, and fuses into one kernel.
+    """
+    x = j.asarray(x);indices = tuple(indices);b, sizes = _check(x, rows, indices)
+    if math.prod(sizes) > LIMIT:return x.at[(rows,) + indices].set(fn(x[(rows,) + indices], *lanes))
+    k = len(indices);lifted = []
+    for a in lanes:
+        if j.ndim(a) == 0:lifted.append(a);continue  # scalars pass through untouched (weak types kept)
+        a = j.asarray(a)
+        if a.shape[0] != b:raise ValueError('lane arguments need the leading lane axis')
+        lifted.append(a.reshape((b,) + (1,) * k + a.shape[1:]))
+    y = j.asarray(fn(x, *lifted))
+    if y.ndim > x.ndim or j.broadcast_shapes(y.shape, x.shape) != x.shape:raise ValueError('update value must broadcast to the operand')
+    return _store(x, b, sizes, indices, y, lifted=True)

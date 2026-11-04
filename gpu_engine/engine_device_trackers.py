@@ -136,6 +136,9 @@ def _percent(hp,maximum):
     return j.where((hp<positive)&(shown==100),99,shown)
 
 
+def _gated(old,use,value):return j.where(use,value,old)
+
+
 def _observe(t,state,side,physical,rows_active,*,identity):
     """Observe only a known active endpoint; never poll an opponent bench."""
     b=len(rows_active);r=j.arange(b);p=j.clip(physical,0,5)
@@ -148,12 +151,12 @@ def _observe(t,state,side,physical,rows_active,*,identity):
     error=t.error|j.where(use&~valid,BAD_PUBLIC_VALUE,0)
     values={}
     for name,value in [('hp_percent',_percent(hp,maximum)),('status',_li.take(state.status,r,side,p)),('fainted',hp==0)]:
-        old=getattr(t,name);values[name]=_li.put(old,r,(side,at),j.where(use,value,_li.take(old,r,side,at)))
-    old=t.boosts;values['boosts']=_li.put(old,r,(side,at),j.where(use[:,None],_li.take(state.boosts,r,side,p),_li.take(old,r,side,at)))
+        values[name]=_li.update(getattr(t,name),r,(side,at),_gated,use,value)
+    values['boosts']=_li.update(t.boosts,r,(side,at),_gated,use[:,None],_li.take(state.boosts,r,side,p))
     if identity:
         for name in ('species','level','gender'):
-            old=getattr(t,name);values[name]=_li.put(old,r,(side,at),j.where(use,_li.take(getattr(state,name),r,side,p),_li.take(old,r,side,at)))
-        old=t.present;values['present']=_li.put(old,r,(side,at),j.where(use,_li.take(state.species,r,side,p)>0,_li.take(old,r,side,at)))
+            values[name]=_li.update(getattr(t,name),r,(side,at),_gated,use,_li.take(getattr(state,name),r,side,p))
+        values['present']=_li.update(t.present,r,(side,at),_gated,use,_li.take(state.species,r,side,p)>0)
     return t._replace(error=error,**values)
 
 

@@ -45,9 +45,9 @@ def initialize(batch):
 
 def _seat(side,b):return j.broadcast_to(j.asarray(side,j.int32),(b,))
 def _set(old,side,value,use):
-    r=j.arange(len(use));s=_seat(side,len(use));before=_li.take(old,r,s)
-    mask=use.reshape(use.shape+(1,)*(before.ndim-1))
-    return _li.put(old,r,(s,),j.where(mask,value,before))
+    r=j.arange(len(use));s=_seat(side,len(use))
+    mask=use.reshape(use.shape+(1,)*(old.ndim-2))
+    return _li.update(old,r,(s,),lambda v,mask,value:j.where(mask,value,v),mask,value)
 
 
 def arrival(t,tables,state,side,use):
@@ -96,12 +96,11 @@ def condition(t,side,physical,old,new,use,*,rest=False,ability_source=False,fain
     r=j.arange(len(use));s=_seat(side,len(use));slot=_li.take(t.physical_to_public,r,s,j.clip(physical,0,5))
     yes=use&(slot>=0)&(slot<6);at=j.clip(slot,0,5);induced=yes&(old!=5)&(new==5)&~j.asarray(rest)
     holder=_set(h.holder,1-s,at,induced&~j.asarray(ability_source))
-    previous=_li.take(h.victims,r,s,at)
-    victims=_li.put(h.victims,r,(s,at),j.where(induced,True,previous))
+    victims=_li.update(h.victims,r,(s,at),lambda v,induced:j.where(induced,True,v),induced)
     cure=yes&((old!=new)&(new==0)|j.asarray(faint))
     held=_li.take(holder,r,1-s);holder=_set(holder,1-s,j.full_like(at,-1),cure&(held==slot))
     clear=yes&(((old==5)&(new==0))|j.asarray(faint))
-    victims=_li.put(victims,r,(s,at),j.where(clear,False,_li.take(victims,r,s,at)))
+    victims=_li.update(victims,r,(s,at),lambda v,clear:j.where(clear,False,v),clear)
     return t._replace(public_port=h._replace(holder=holder,victims=victims))
 
 

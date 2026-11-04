@@ -74,6 +74,34 @@ class LaneIndexTest(unittest.TestCase):
         np.testing.assert_array_equal(lane_index.put(x, r, (a, a), 7), x.at[r, a, a].set(7))
         with self.assertRaises(ValueError):lane_index.take(x, j.arange(self.B - 1), a[:-1])
 
+    def test_update_matches_read_modify_write(self):
+        rng = np.random.default_rng(3);r = j.arange(self.B);checked = 0
+        def gate(T):return j.asarray(rng.random((self.B,) + (1,) * len(T)) < .5)
+        def ints(T, lo, hi):return j.asarray(rng.integers(lo, hi, (self.B,) + T), j.int32)
+        cases = (
+            (lambda v, use, value: j.where(use, v + value, v), lambda T: (gate(T), ints(T, -5, 5))),
+            (lambda v, use, value: j.minimum(64, j.where(use, v + value, v)), lambda T: (gate(T), ints(T, 0, 90))),
+            (lambda v, use, value: j.where(use, value, v), lambda T: (gate(T), j.asarray((rng.standard_normal((self.B,) + T) * 1e8).astype(np.float32)))),
+            (lambda v, use, value: j.where(use, value, v), lambda T: (gate(T), ints(T, -2**30, 2**30))),
+            (lambda v, use, value: j.where(use, v & value, v), lambda T: (gate(T), ints(T, 0, 2**31 - 1))),
+            (lambda v, use, value: j.where(use, j.any(v != 0, axis=-1, keepdims=True) | value, v), lambda T: (gate(T), j.asarray(rng.random((self.B,) + T) < .5))),
+            (lambda v, use, value: j.where(use, v + value, v), lambda T: (gate(T), 1)),
+            (lambda v, use, value: j.where(use, v + value, v), lambda T: (gate(T), 2.5)),
+            (lambda v, use, value: j.where(use, value, v), lambda T: (True, j.asarray(7))),
+        )
+        for dtype, trailing in itertools.product((j.bool_, j.int32, j.uint32, j.float32), ((), (4,))):
+            x = self.operand(rng, dtype, trailing);sides, slots = self.indices(rng)
+            for (fn, make), side, slot in itertools.product(cases, sides, slots):
+                lanes = make(trailing)
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore', FutureWarning)
+                    try:want = x.at[r, side, slot].set(fn(x[r, side, slot], *lanes))
+                    except TypeError:continue
+                    got = lane_index.update(x, r, (side, slot), fn, *lanes)
+                self.assertEqual(got.dtype, want.dtype)
+                np.testing.assert_array_equal(bits(got), bits(want));checked += 1
+        self.assertGreater(checked, 500)
+
     def test_under_jit(self):
         rng = np.random.default_rng(1);r = j.arange(self.B)
         x = self.operand(rng, j.float32, (4,));side = j.asarray(rng.integers(-2, 3, self.B), j.int32)

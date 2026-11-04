@@ -64,8 +64,8 @@ def refresh(trackers,tables,side,physical,use):
     current=_state(trackers,r,side,at,species)
     materialized,_=original.materialize(current,_Pool(tables.species_initial_mask))
     def copy(old,new):
-        before=_li.take(old,r,side,at)
-        return _li.put(old,r,(side,at),j.where(valid.reshape(valid.shape+(1,)*(before.ndim-1)),new,before))
+        gate=valid.reshape(valid.shape+(1,)*(old.ndim-3))
+        return _li.update(old,r,(side,at),lambda v,gate,new:j.where(gate,new,v),gate,new)
     return trackers._replace(visible_belief=carry._replace(
         visible_hard=copy(carry.visible_hard,current.hard),visible_pin=copy(carry.visible_pin,current.pin),
         visible_pin_active=copy(carry.visible_pin_active,current.pin_active),conflicts=copy(carry.conflicts,materialized.conflicts)))
@@ -116,8 +116,7 @@ def exclude(trackers,tables,side,physical,facts,use,*,kind):
     names=j.bitwise_or.reduce(bits,axis=1);fresh=j.any((names&~before)!=0,axis=-1)&valid
     excluded=table[j.clip(species,0,table.shape[0]-1)[:,None],j.clip(facts,0,table.shape[1]-1)]
     excluded=j.bitwise_or.reduce(excluded,axis=1)
-    hard=trackers.belief_mask;old=_li.take(hard,r,side,at)
-    hard=_li.put(hard,r,(side,at),j.where(fresh[:,None],old&~excluded,old))
-    ledger=_li.put(ledger,r,(side,at),j.where(fresh[:,None],before|names,before))
+    hard=_li.update(trackers.belief_mask,r,(side,at),lambda v,fresh,excluded:j.where(fresh,v&~excluded,v),fresh[:,None],excluded)
+    ledger=_li.update(ledger,r,(side,at),lambda v,fresh,names:j.where(fresh,v|names,v),fresh[:,None],names)
     trackers=trackers._replace(belief_mask=hard,visible_belief=carry._replace(**{field:ledger}))
     return refresh(trackers,tables,side,physical,fresh)

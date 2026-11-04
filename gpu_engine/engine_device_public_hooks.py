@@ -58,17 +58,17 @@ def _mask(mask,b):return j.broadcast_to(j.asarray(mask,j.bool_),(b,))
 def _write(t,name,side,physical,value,use):
     r=j.arange(len(t.error));p=j.clip(physical,0,5);slot=_li.take(t.physical_to_public,r,side,p);at=j.clip(slot,0,5)
     use=use&(physical>=0)&(physical<6)&(slot>=0)&(slot<6)
-    old=getattr(t,name);v=_li.take(old,r,side,at)
-    gate=use.reshape(use.shape+(1,)*(v.ndim-1))
-    return t._replace(**{name:_li.put(old,r,(side,at),j.where(gate,value,v))})
+    old=getattr(t,name);gate=use.reshape(use.shape+(1,)*(old.ndim-3))
+    return t._replace(**{name:_li.update(old,r,(side,at),lambda v,gate,value:j.where(gate,value,v),gate,value)})
 
 def feature(c,side,physical,name,value,use,*,add=False):
     t=c.trackers;r=j.arange(len(t.error));slot=_li.take(t.physical_to_public,r,side,j.clip(physical,0,5));at=j.clip(slot,0,5)
     use=use&(slot>=0)&(slot<6)&(physical>=0)&(physical<6)
-    values=t.mon_features;old=values[name];v=_li.take(old,r,side,at)
-    new=j.where(use,v+value if add else value,v)
-    if name in ('switched_before_attack','stayed_and_attacked','turns_active_total'):new=j.minimum(64,new)
-    return c._replace(trackers=t._replace(mon_features={**values,name:_li.put(old,r,(side,at),new)}))
+    values=t.mon_features;old=values[name];capped=name in ('switched_before_attack','stayed_and_attacked','turns_active_total')
+    def write(v,use,value):
+        new=j.where(use,v+value if add else value,v)
+        return j.minimum(64,new) if capped else new
+    return c._replace(trackers=t._replace(mon_features={**values,name:_li.update(old,r,(side,at),write,use,value)}))
 
 def _refresh(c,side,physical,use):
     """One actual subject's source upsert/replace; no endpoint-wide refresh."""
@@ -83,11 +83,10 @@ def _narrow(c,side,physical,fact,use,kind):
     good=(species>=0)&(species<table.shape[0])&(fact>=0)&(fact<table.shape[1])
     bits=table[j.clip(species,0,table.shape[0]-1),j.clip(fact,0,table.shape[1]-1)]
     bits=j.where(good[:,None],bits,j.uint32(0))
-    old=_li.take(t.belief_mask,r,side,at)
     # Zero means no public fact, not evidence for a missing source variant.
     bits=j.where((fact==0)[:,None],j.uint32(0xffffffff),bits)
     use=use&(slot>=0)&(slot<6)
-    c=c._replace(trackers=t._replace(belief_mask=_li.put(t.belief_mask,r,(side,at),j.where(use[:,None],old&bits,old))))
+    c=c._replace(trackers=t._replace(belief_mask=_li.update(t.belief_mask,r,(side,at),lambda v,use,bits:j.where(use,v&bits,v),use[:,None],bits)))
     return _refresh(c,side,physical,use&(fact!=0))
 
 
