@@ -374,9 +374,11 @@ def main(argv=None):
     parser.add_argument('--components', action='store_true')
     parser.add_argument('--no-scopes', action='store_true')
     parser.add_argument('--frames', type=int, default=40, help='traceback frames kept in HLO locations (attribution depth)')
+    parser.add_argument('--xla-flags', default=None, help='appended to XLA_FLAGS before JAX initializes')
     args = parser.parse_args(argv)
     if not args.out:raise ValueError('explicit output directory required')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
+    if args.xla_flags:os.environ['XLA_FLAGS'] = (os.environ.get('XLA_FLAGS', '') + ' ' + args.xla_flags).strip()
     import jax
     jax.config.update('jax_traceback_in_locations_limit', args.frames)
     if not args.no_scopes:install_scopes()
