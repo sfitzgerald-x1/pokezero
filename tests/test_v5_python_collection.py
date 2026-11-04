@@ -16,6 +16,7 @@ from pokezero.observation import PokeZeroObservationV0,ObservationPerspective
 from pokezero.policy import PolicyDecision
 from pokezero.randbat import Gen3RandbatVariant
 from pokezero.env import TerminalState
+from pokezero.v5_model import V5ModelConfig
 
 NAMES=('blissey','swampert','absol','ditto','groudon','pikachu')
 VOCAB=c.LabelVocabulary('a'*64,('surf','recover'),tuple((n,2)for n in NAMES))
@@ -90,12 +91,16 @@ class Env(p.OwningEnv):
         else:self._publish()
 
 
+def model():return V5ModelConfig(CATEGORIES.size,'b'*64,VOCAB,arm='B')
+
+
 def factories():
     variants=((),)+tuple(tuple(Gen3RandbatVariant(str(i),'original',n,'role',80,
         ('Surf','Recover'),'Pressure','Leftovers')for i in range(2))for n in NAMES)
     source=SimpleNamespace(species_id=lambda n:NAMES.index(n)+1,species_names=('',)+NAMES,variants=variants)
-    return{owner:SimpleNamespace(deterministic=False,config=SimpleNamespace(arm='B',category_vocabulary_sha256='b'*64,
-        label_vocabulary=VOCAB),catalog=SimpleNamespace(vocabulary=CATEGORIES,source=source),create_actor=Actor)for owner in(0,1)}
+    return{owner:SimpleNamespace(deterministic=False,config=model(),metadata=json.dumps({
+        'weights_archive_sha256':'c'*64,'checkpoint_sha256':'d'*64}),
+        catalog=SimpleNamespace(vocabulary=CATEGORIES,source=source),create_actor=Actor)for owner in(0,1)}
 
 
 class PythonCollectionTests(unittest.TestCase):

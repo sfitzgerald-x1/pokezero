@@ -17,6 +17,17 @@ import test_v5_run as run_fixture
 import test_v5_python_collection as capture_fixture
 
 
+def recipe():return replace(run_fixture.plan(),model=capture_fixture.model())
+
+
+def start_batch(store):
+    plan=store.plan;batch=plan.iterations[0][0]
+    snap=r.Snapshot(-1,'initial.pt','d'*64,'initial.npz','c'*64,r._sha(plan.model.metadata()))
+    assignments=[r.assignment(plan,g,i,snap,())for i,g in enumerate(batch.games)]
+    return store.emit('BATCH_STARTED',iteration=0,batch=0,streams=[g.stream_id for g in batch.games],
+        assignments=assignments,actor=snap,deferred_starts=True)
+
+
 def prepared():
     names=capture_fixture.NAMES
     arrays=dict(species=np.tile(np.arange(1,7),(8,1)),moves=np.tile([1,2,0,0],(8,6,1)),
@@ -112,21 +123,37 @@ class PythonBackendTests(unittest.TestCase):
 
     def test_published_result_recovers_without_replay_and_missing_merge_recovers_once(self):
         from gpu_engine import v5_collection_data as data
-        recipe=run_fixture.plan();game=recipe.games[0];result=capture(game)
+        plan=recipe();game=plan.games[0];result=capture(game)
         backend=b.RuntimeBackend(prepared())
         with tempfile.TemporaryDirectory()as folder:
-            store=r.Store(Path(folder)/'run',recipe);store.emit('BATCH_STARTED',iteration=0,batch=0,
-                streams=[1,2],assignments=[],deferred_starts=True)
-            store.emit('GAME_STARTED',stream_id=1,iteration=0,batch=0)
-            path=store.path/'part';data.write_cache(path,result.decisions,loss_config=recipe.loss,batch_size=2)
+            store=r.Store(Path(folder)/'run',plan);started=start_batch(store)
+            store.emit('GAME_STARTED',stream_id=1,iteration=0,batch=0,batch_sequence=started['sequence'])
+            path=store.path/'part';data.write_cache(path,result.decisions,loss_config=plan.loss,batch_size=2)
             part={'path':'part','sha256':r._file_sha(path/'metadata.json')};publish(store,game,result,part=part)
             backend.recover_game_ends(store);backend.recover_game_ends(store)
             self.assertEqual(len(store.matching('GAME_END')),1)
             statuses={1:'COMPLETE',2:'NOT_ATTEMPTED',3:'NOT_ATTEMPTED',4:'NOT_ATTEMPTED'}
             backend.recover_caches(store,statuses);self.assertEqual(store.matching('CACHE'),[])
+            store.emit('GAME_STARTED',stream_id=2,iteration=0,batch=0,batch_sequence=started['sequence'])
+            store.emit('GAME_END',stream_id=2,iteration=0,batch=0,status='FAILED',reason='inert interrupted')
             statuses[2]='FAILED';backend.recover_caches(store,statuses);backend.recover_caches(store,statuses)
             self.assertEqual(len(store.matching('CACHE')),1)
             cache=store.matching('CACHE')[0];self.assertTrue(store.resolve(cache['path'],cache['sha256']).is_dir())
+
+    def test_valid_journal_rejects_wrong_owner_or_actual_actor_cache(self):
+        plan=recipe();game=plan.games[0]
+        for wrong in('owner','actor'):
+            result=capture(game,side=1 if wrong=='owner'else 0)
+            if wrong=='actor':
+                bindings=[dict(x)for x in result.source['actor_bindings']];bindings[0]['archive_sha256']='e'*64
+                result=replace(result,source=dict(result.source,actor_bindings=bindings))
+            with self.subTest(wrong=wrong),tempfile.TemporaryDirectory()as folder:
+                store=r.Store(Path(folder)/'run',plan);started=start_batch(store)
+                store.emit('GAME_STARTED',stream_id=1,iteration=0,batch=0,batch_sequence=started['sequence'])
+                path=store.path/'part';b._write_game_cache(path,result.decisions,plan)
+                publish(store,game,result,part={'path':'part','sha256':r._file_sha(path/'metadata.json')})
+                with self.assertRaisesRegex(ValueError,'cached row owner'if wrong=='owner'else'published actual actors'):
+                    b.RuntimeBackend(prepared()).recover_game_ends(store)
 
     def test_actual_dispatch_failure_does_not_start_queued_suffix(self):
         recipe=run_fixture.plan();backend=b.RuntimeBackend(prepared(),workers=1)

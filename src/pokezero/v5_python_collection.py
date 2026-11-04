@@ -24,6 +24,18 @@ def _sha(value):
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
+def actor_binding(factory):
+    """Actual immutable factory provenance, not caller-declared actor fields."""
+    from gpu_engine.v5_live_protocol import check_factory
+    check_factory(factory)
+    metadata=json.loads(factory.metadata)
+    result=dict(archive_sha256=metadata['weights_archive_sha256'],
+        checkpoint_sha256=metadata['checkpoint_sha256'],model_sha256=_sha(factory.config.metadata()))
+    if any(type(v)is not str or len(v)!=64 or any(c not in '0123456789abcdef'for c in v)for v in result.values()):
+        raise ValueError('actual digest-bound factory provenance required')
+    return result
+
+
 class OwningEnv(LocalShowdownEnv):
     """Keep literal isolated streams alongside the unchanged Python env fold.
 
@@ -40,7 +52,12 @@ class OwningEnv(LocalShowdownEnv):
 
     def reset_with_start_override(self,**kwargs):
         self.owner_lines={'p1':[],'p2':[]}
-        return super().reset_with_start_override(**kwargs)
+        start=kwargs['start_override']
+        if type(start)is not BattleStartOverride or start.observation_format_id!='gen3randombattle':
+            raise ValueError('original Random Battle packed constructor required')
+        # Same original transport seam as finite_stream_comparison's pool
+        # constructor. Relabeling Custom Game would change native rules/HP.
+        return self._reset(seed=kwargs['seed'],format_id='gen3randombattle',start_override=start)
 
     def _apply_event(self,event):
         result=super()._apply_event(event)
@@ -208,7 +225,9 @@ def collect_game(env,game,*,factories,max_requests,collect_owners=(0,1),start_ov
         if factory.deterministic or factory.config.arm=='D':raise ValueError('stochastic A/B raw factories required')
     bindings={(x.config.category_vocabulary_sha256,x.config.label_vocabulary.sha256)for x in factories.values()}
     if len(bindings)!=1:raise ValueError('same original v5 category/label axes required')
-    actors={};positions={0:0,1:0};captures=[];frame=0;status='FAILED';reason=None;source={};aux=Counter()
+    actual_bindings=tuple(actor_binding(factories[owner])for owner in(0,1))
+    actors={};positions={0:0,1:0};captures=[];frame=0;status='FAILED';reason=None
+    source={'actor_bindings':actual_bindings};aux=Counter()
     birth=None;terminal=None
     rngs={owner:random.Random(int(_sha(dict(schema=SCHEMA,seed=game.seed,sampling_seed=game.sampling_seed,
         stream=game.stream,owner=owner)),16))for owner in(0,1)}
@@ -262,6 +281,7 @@ def collect_game(env,game,*,factories,max_requests,collect_owners=(0,1),start_ov
                     hidden.append(label)
                 metadata=dict(producer=SCHEMA,stream=game.stream,frame=frame,owner=owner,physical=physical,
                     choice=decision.action_index,behavior_probability=decision.action_probability,value_estimate=decision.value_estimate,
+                    actor_binding=actual_bindings[owner],opponent_actor_binding=actual_bindings[1-owner],
                     birth_sha256=source['birth_sha256'],owner_prefix_sha256=snapshots[owner].prefix_sha256,
                     own_request_sha256=hashlib.sha256(snapshots[owner].own_request_line.encode()).hexdigest())
                 digest=data.sha(dict(metadata,public_inputs=public.model_inputs()))

@@ -155,6 +155,17 @@ def chance_seed(batch,game):
         constructor_seed=batch.constructor_seed,stream=game.stream_id,cell_seed=game.seed))[:8],16)
 
 
+def _snapshot_binding(snapshot):
+    return {name:snapshot[name]for name in('archive_sha256','checkpoint_sha256','model_sha256')}
+
+
+def _expected_actors(current,assignment):
+    side=assignment['learner_side']
+    if type(side)is not int or side not in(0,1):raise ValueError('original learner owner required')
+    pair=[_snapshot_binding(assignment['opponent'])]*2;pair[side]=_snapshot_binding(current)
+    return pair
+
+
 def _factory(prepared,snapshot,store):
     from .v5_phasec import category_binding
     from gpu_engine import v4_encoder
@@ -246,14 +257,17 @@ class RuntimeBackend:
             raise ValueError('original constructor/action/gender recipe required')
         required={current['archive_sha256'],*(a['opponent']['archive_sha256']for a in assignments)}
         self.factories={k:v for k,v in self.factories.items()if k in required}
-        learner=self._actor(current,store);pairs=[]
+        learner=self._actor(current,store);pairs=[];actor_bindings=[]
         for row in assignments:
             side=row['learner_side']
             if type(side)is not int or side not in(0,1):raise ValueError('original learner seat required')
             opponent=self._actor(row['opponent'],store)
-            pairs.append(({0:learner,1:opponent}if side==0 else{0:opponent,1:learner},side))
+            pair={0:learner,1:opponent}if side==0 else{0:opponent,1:learner}
+            actual=[collection.actor_binding(pair[owner])for owner in(0,1)]
+            if actual!=_expected_actors(current,row):raise ValueError('actual factories differ from original assignment')
+            pairs.append((pair,side));actor_bindings.append(actual)
         return dict(plan=plan,batch=batch,iteration=iteration,index=index,original=full,
-            pairs=tuple(pairs),genders=_genders(self.prepared,batch))
+            pairs=tuple(pairs),actor_bindings=tuple(actor_bindings),genders=_genders(self.prepared,batch))
 
     def _one(self,prepared,row,check_progress,cancel):
         game=prepared['batch'].games[row];factories,side=prepared['pairs'][row]
@@ -290,6 +304,16 @@ class RuntimeBackend:
                             or result.status not in('COMPLETE','CAPPED','REFUSED','FAILED')
                             or type(result.frames)is not int or not 0<=result.frames<=prepared['plan'].max_requests):
                         raise ValueError('actual original game capture required')
+                    row=prepared['batch'].games.index(game);_,side=prepared['pairs'][row]
+                    bindings=prepared['actor_bindings'][row]
+                    if list(result.source.get('actor_bindings',()))!=bindings:
+                        raise ValueError('captured factory identity differs from actual assigned actors')
+                    for captured in result.decisions:
+                        address=captured.row.observation.address;meta=captured.row.step.metadata.get('v5_capture',{})
+                        if (address.stream!=game.stream_id or address.owner!=side
+                                or meta.get('actor_binding')!=bindings[side]
+                                or meta.get('opponent_actor_binding')!=bindings[1-side]):
+                            raise ValueError('captured behavior does not belong to the assigned learner')
                     part=None
                     if result.decisions:
                         (store.path/'python-games').mkdir(exist_ok=True)
@@ -327,12 +351,56 @@ class RuntimeBackend:
             if game not in batch.games or facts['status']not in('COMPLETE','CAPPED','REFUSED','FAILED'):
                 raise ValueError('published game has no original terminal disposition/batch')
             expected_seed=chance_seed(batch,game);source=document['source']
+            starts=store.matching('GAME_STARTED',stream_id=stream)
+            if len(starts)!=1:raise ValueError('publication requires exactly one actual start')
+            sequence=starts[0].get('batch_sequence')
+            if type(sequence)is not int or not 0<=sequence<len(store.events):
+                raise ValueError('actual start lacks its original batch binding')
+            event=store.events[sequence];binding=event['payload']
+            if (event['kind']!='BATCH_STARTED'or binding.get('deferred_starts')is not True
+                    or binding['iteration']!=facts['iteration']or binding['batch']!=facts['batch']
+                    or binding['streams'].count(stream)!=1):
+                raise ValueError('actual start/batch identity differs')
+            assigned=[a for a in binding['assignments']if a['stream_id']==stream]
+            if len(assigned)!=1 or 'actor'not in binding:raise ValueError('original learner/actor assignment missing')
+            actors=_expected_actors(binding['actor'],assigned[0]);owner=assigned[0]['learner_side']
+            if source.get('actor_bindings')!=actors:raise ValueError('published actual actors differ from original assignment')
             if (document['cache']is not None or facts['status']=='COMPLETE'or 'chance_seed'in source):
                 if source.get('chance_seed')!=expected_seed:raise ValueError('published constructor chance address differs')
             if facts['status']=='COMPLETE'and source.get('terminal',{}).get('winner')not in(0,1,2):
                 raise ValueError('complete publication requires its literal terminal source')
             if document['cache']is not None:
-                part=document['cache'];store.resolve(part['path'],part['sha256'])
+                part=document['cache'];folder=store.resolve(part['path'],part['sha256'])
+                meta=json.loads((folder/'metadata.json').read_text())
+                addresses=meta['v5_rows']['addresses'];outer=meta['base_json']['step_metadata']
+                steps=[s.get('v5_capture',{})for s in outer]
+                frames=meta['v5_rows']['source_frame_sha256']
+                if len(addresses)!=meta['example_count']or len(steps)!=len(addresses)or len(frames)!=len(addresses):
+                    raise ValueError('cached original row denominator differs')
+                static=meta['v5_static']
+                if (static['category_vocabulary_sha256']!=store.plan.model.category_vocabulary_sha256
+                        or static['label_vocabulary_sha256']!=store.plan.model.label_vocabulary.sha256):
+                    raise ValueError('cached original actor namespace differs')
+                for address,step,frame_sha in zip(addresses,steps,frames):
+                    if (type(address['stream'])is not int or address['stream']!=stream
+                            or type(address['owner'])is not int or address['owner']!=owner
+                            or type(address['frame'])is not int or not 0<=address['frame']<facts['requests']
+                            or step.get('stream')!=stream or step.get('owner')!=owner or step.get('frame')!=address['frame']
+                            or step.get('source_frame_sha256')!=frame_sha
+                            or step.get('actor_binding')!=actors[owner]
+                            or step.get('opponent_actor_binding')!=actors[1-owner]):
+                        raise ValueError('cached row owner/frame/actual actor differs from original learner')
+                checks={'battle_ids':[game.battle_id]*len(addresses),'seeds':[game.seed]*len(addresses),
+                    'player_ids':['p'+str(owner+1)]*len(addresses),'turn_indices':[a['frame']for a in addresses],
+                    'action_indices':[s['choice']for s in steps],
+                    'action_probabilities':[s['behavior_probability']for s in steps],
+                    'value_estimates':[s['value_estimate']for s in steps]}
+                for name,expected in checks.items():
+                    key='base__'+name;file=folder/(key+'.npy');description=meta['arrays'][key]
+                    if runs._file_sha(file)!=description['sha256']:raise ValueError('cached behavior array bytes changed')
+                    value=np.load(file,allow_pickle=False)
+                    if not np.array_equal(value,np.asarray(expected,dtype=value.dtype)):
+                        raise ValueError('cached behavior/game identity differs from actual row')
             result[stream]=(document,ref)
         return result
 
