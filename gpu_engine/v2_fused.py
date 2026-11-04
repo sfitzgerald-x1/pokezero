@@ -178,6 +178,8 @@ def main(argv=None):
     parser.add_argument('--check-interval', type=int, default=64)
     parser.add_argument('--compile-threads', type=int, default=16)
     parser.add_argument('--audit-every', type=int, default=50)
+    parser.add_argument('--torch-memory-fraction', type=float, default=0.45,
+        help='Torch per-process GPU memory cap after the runtime probe; JAX keeps its own fraction')
     args = parser.parse_args(argv)
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
     out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
@@ -187,6 +189,9 @@ def main(argv=None):
     from gpu_engine import v5_model, v2_collector as v2c, v2_bench_trainer as bench
     from gpu_engine.v5_device_backend import RuntimeBackend
     context = prepare(args);plan = context['plan']
+    if args.torch_memory_fraction is not None:
+        # The runtime probe caps Torch for the file pipeline; V2 holds the row store in Torch too.
+        torch.cuda.set_per_process_memory_fraction(args.torch_memory_fraction, 0)
     log('PREPARED', seconds=context['preparation_seconds'], iterations=len(plan.iterations), games=len(plan.games), **context['declared'])
     events = journal(args.reference_run)
     initial = [e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1]
