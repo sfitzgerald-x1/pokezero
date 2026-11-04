@@ -30,6 +30,7 @@ def main(argv=None):
     parser.add_argument('--games-per-iteration', type=int, default=20000)
     parser.add_argument('--mode', default='cudagraphs');parser.add_argument('--order', default='ordered')
     parser.add_argument('--optimizer', default='fused')
+    parser.add_argument('--extra-cache-root', action='append', default=[], help='more directories to search for caches')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
     import torch
@@ -48,10 +49,13 @@ def main(argv=None):
     if not manifest:raise ValueError('reference checkpoint carries no cache manifest')
     digests = [record['sha256'] for record in manifest]
     by_digest = {}
-    for path in glob.glob(str(run / 'caches' / 'cache-*')):
-        meta = Path(path, 'metadata.json')
-        if meta.exists():by_digest[json.loads(meta.read_text()).get('metadata_sha256')] = Path(path)
+    for root in [run, *(Path(x) for x in args.extra_cache_root)]:
+        for meta in root.rglob('metadata.json'):
+            if not meta.parent.name.startswith('cache-'):continue
+            try:by_digest.setdefault(json.loads(meta.read_text()).get('metadata_sha256'), meta.parent)
+            except (OSError, json.JSONDecodeError):continue
     missing = [d for d in digests if d not in by_digest]
+    if missing:log('MISSING_CACHES', digests=missing, searched=[str(run), *args.extra_cache_root])
     if missing:raise ValueError(f'{len(missing)} reference caches not found')
     paths = [by_digest[d] for d in digests]
     model, loss, train, weights, _ = configurations(run / start.checkpoint)
