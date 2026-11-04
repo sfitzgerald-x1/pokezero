@@ -11,7 +11,7 @@ import jax.numpy as j
 
 from gpu_engine import transition, engine_device_trackers as trackers, engine_device_observation as encoder
 from gpu_engine import benchmark_device_selfplay as sampling, v5_device_rollout as rollout
-from gpu_engine import public_belief_features
+from gpu_engine import public_belief_features, lane_index
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +31,9 @@ def _first_occurrences_unfused(ids, selected, count):
     return f(ids, selected)
 
 
-SUBSTITUTIONS = ((public_belief_features, '_first_occurrences', _first_occurrences_unfused),)
+# lane_index's one-hot select forms exist to fuse in XLA; a warp-per-lane kernel reads a per-lane
+# element with one shuffle, so the CUDA trace uses the plain indexing they were proven equal to.
+SUBSTITUTIONS = ((public_belief_features, '_first_occurrences', _first_occurrences_unfused), (lane_index, 'LIMIT', 0))
 
 
 @contextmanager
@@ -56,4 +58,11 @@ def observe(engine_tables, observation_tables):
         observations = tuple(encoder.encode(state, trackers.readout(public, j.full(b, s, j.int32)), observation_tables,
             observer_sides=j.full(b, s, j.int32), legal_action_mask=masks[:, s])._replace(error_counts=None) for s in range(2))
         return masks, sampling.request_seats(state), rollout._physical(public), observations
+    return fn
+
+
+def step(engine_tables, observation_tables):
+    """The collector's engine step with public carry: transition.step_with_public as v2_collector calls it."""
+    def fn(state, actions, public):
+        return transition.step_with_public(state, actions, engine_tables, public, belief_tables=observation_tables.belief)
     return fn

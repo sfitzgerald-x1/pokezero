@@ -90,7 +90,7 @@ def _observe(ctx):
     state, _, public = ctx['template']
     generated = v2e_gen.compile_function('observe', fn, (state, public))
     log('GENERATED', module='observe', arena_words=generated.module.arena_words, lane_literals=generated.module.lane_literals,
-        source_lines=generated.module.source_lines, consts=len(generated.module.consts), library=str(generated.path))
+        consts=len(generated.module.consts), library=str(generated.path), **generated.module.stats)
     def cuda(s, a, t, c):
         out, err = generated(s, t)
         return out, err
@@ -99,20 +99,34 @@ def _observe(ctx):
     return reference, cuda
 
 
+def _step(ctx):
+    from gpu_engine import v2e_gen, v2e_modules
+    fn = v2e_modules.step(ctx['engine_tables'], ctx['observation_tables'])
+    state, actions, public = ctx['template']
+    generated = v2e_gen.compile_function('step', fn, (state, actions, public), mode='thread')
+    log('GENERATED', module='step', arena_words=generated.module.arena_words, lane_literals=generated.module.lane_literals,
+        consts=len(generated.module.consts), library=str(generated.path), **generated.module.stats)
+    def cuda(s, a, t, c):
+        return generated(s, a, t)
+    def reference(s, a, t, c):
+        return fn(s, a, t), j_zero_err()
+    return reference, cuda
+
+
 def j_zero_err():
     import jax.numpy as j
     return j.zeros((1,), j.uint32)
 
 
-MODULES = dict(identity=_identity, chance=_chance, negative_control=_negative_control, observe=_observe)
-GENERATED = {'observe'}
+MODULES = dict(identity=_identity, chance=_chance, negative_control=_negative_control, observe=_observe, step=_step)
+GENERATED = {'observe', 'step'}
 
 
 # ---------------------------------------------------------------------------
 
 def load_shard(path):
     with np.load(path) as z:
-        leaves = [z[k] for k in sorted(k for k in z.files if k[0] == 'l' and k[1:].isdigit())]
+        leaves = [z[k] for k in sorted((k for k in z.files if k[0] == 'l' and k[1:].isdigit()), key=lambda k: int(k[1:]))]
         return leaves, int(z['tick']), int(z['level'])
 
 
@@ -151,7 +165,7 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
                 log('FIRST_DIFFERENCE', module=module, **first)
     seconds = time.perf_counter() - begin
     return dict(module=module, shards=len(shard_paths), lane_steps=compared, lane_steps_differing=differing,
-        equal=differing == 0, differing_by_leaf={k: v for k, v in totals.items() if v}, output_leaves=len(totals),
+        equal=compared > 0 and differing == 0, differing_by_leaf={k: v for k, v in totals.items() if v}, output_leaves=len(totals),
         first_difference=first, seconds=seconds)
 
 
@@ -181,6 +195,7 @@ def main(argv=None):
     if capture['paths'] != leaf_paths(template):raise ValueError('capture leaf paths differ from the oracle pytrees')
     shards = sorted(Path(args.shards).glob('shard-*.npz'))
     if args.limit:shards = shards[:args.limit]
+    if not shards:raise SystemExit(f'no capture shards under {args.shards}')
     digest, modules = oracle_digest()
     ctx = dict(engine_tables=context['prepared'].engine_tables, observation_tables=context['prepared'].observation_tables)
     report = dict(oracle_digest=digest, oracle_modules=len(modules), source_commit=os.environ.get('V2_SOURCE_COMMIT'),
