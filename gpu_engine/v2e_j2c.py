@@ -57,6 +57,7 @@ class Holder:
     off: int = -1        # arena word offset (arena)
     refs: int = 0        # pending reads
     home: object = None  # thread backend: home(q) -> expression loading word q of a small value
+    deps: list = field(default_factory=list)  # holders kept alive while this one lives
     chunk: int = -1      # thread backend: kernel chunk in which `name` holds the value
 
 
@@ -71,6 +72,7 @@ class Val:
     stride: int = 0           # per-lane words of an 'in' buffer
     imap: object = None       # flat index map onto the holder (lazy broadcast view of a store)
     fn: object = None         # element expression (src 'expr')
+    arr: object = None        # numpy value of a 'const' Val
 
     @property
     def kind(self):
@@ -298,7 +300,7 @@ def thread_index(n):
 class Generator:
     def __init__(self, name, profile=False):
         self.k = Kernel(name);self.env = {};self.profile = profile;self.marks = [];self.live = {};self.temps = []
-        self.cse = {};self.cse_hits = 0
+        self.cse = {};self.cse_hits = 0;self.folds = 0
         self.collective = True   # warp collectives (shuffles, warp scans) available
         self.rolled = 0          # depth of emitted loops that are not fully unrolled
 
@@ -319,7 +321,11 @@ class Generator:
 
     def free_holder(self, h):
         if h.kind == 'arena' and h.off >= 0:self.k.release(h.off, h.words);h.off = -1
-        self.live.pop(h, None)
+        self.live.pop(h, None);self.release_deps(h)
+
+    def release_deps(self, h):
+        deps, h.deps = h.deps, []
+        for d in deps:self.unref(d)
 
     def take_over(self, op, out):
         """out reuses dying op's arena slot in place. The slot moves to a fresh holder and op's holder
@@ -518,7 +524,10 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             dying = {id(v) for v in ins if v.src == 'store' and v.holder.refs == pending[id(v.holder)] == 1}
             before = len(self.k.lines);self.eq_start = before
             key = self.cse_key(e, ins);hit = self.cse.get(key) if key is not None else None
-            if hit is not None and all(self.alive(v) for v in hit[1]):
+            folded = self.constant_fold(e, ins) if hit is None else None
+            if folded is not None:
+                outs = folded;self.folds += 1
+            elif hit is not None and all(self.alive(v) for v in hit[1]):
                 outs = hit[1];self.cse_hits += 1
             else:
                 try:outs = self.equation(e, ins, dying)
@@ -573,9 +582,67 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                 inner = getattr(ins[0], 'neg_of', None)
                 if inner is not None and self.alive(inner):return [self.view(inner, outs[0])]   # XLA: neg(neg(x)) -> x
                 out = self.elementwise(outs[0], ins, lambda a: unary(p, ins[0].dtype, a, params));out.neg_of = ins[0]
+                if ins[0].src == 'store' and out.src == 'store':
+                    # PTX neg.f32 canonicalizes NaN, so the fold (which keeps payloads) must stay available.
+                    ins[0].holder.refs += 1;out.holder.deps.append(ins[0].holder)
                 return [out]
             return [self.elementwise(outs[0], ins, lambda a: unary(p, ins[0].dtype, a, params))]
         raise Unsupported(f'primitive {p}')
+
+    # -- constant folding (XLA folds all-constant subexpressions with its IEEE evaluator) -------
+    FOLD_F32 = {'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'div': np.divide}
+    FOLD_ANY = {'eq': np.equal, 'ne': np.not_equal, 'lt': np.less, 'le': np.less_equal, 'gt': np.greater, 'ge': np.greater_equal}
+    FOLD_INT = {'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'and': np.bitwise_and, 'or': np.bitwise_or,
+        'xor': np.bitwise_xor, 'max': np.maximum, 'min': np.minimum}
+
+    def constant_fold(self, e, ins):
+        """Evaluate an equation whose operands are all literals or closed-over constants, as XLA's
+        constant folding does (IEEE f32, so e.g. a constant division is exact, not div.full). Folds only
+        where the evaluator's result is unambiguous; anything else is generated as usual."""
+        p = e.primitive.name
+        if len(e.outvars) != 1 or not ins or any(v.kind not in ('lit', 'const') or v.imap is not None for v in ins):return None
+        dtype, shape = aval_of(e.outvars[0].aval)
+        if shape != tuple(e.outvars[0].aval.shape):return None   # PRNG key values are never folded
+        if any(hasattr(a, 'aval') and aval_of(a.aval)[1] != tuple(a.aval.shape) for a in e.invars):return None
+        def value(v):
+            if v.kind == 'lit':return np.broadcast_to(np.asarray(v.lit, v.dtype), v.shape)
+            return np.asarray(v.arr)
+        try:
+            xs = [value(v) for v in ins]
+            with np.errstate(all='ignore'):
+                t = ins[0].dtype
+                if p == 'broadcast_in_dim':
+                    bd = tuple(e.params['broadcast_dimensions']);target = [1] * len(shape)
+                    for k, d in enumerate(bd):target[d] = xs[0].shape[k]
+                    r = np.broadcast_to(xs[0].reshape(target), shape)
+                elif p in ('reshape', 'squeeze', 'expand_dims') and len(xs) == 1:
+                    if p == 'reshape' and e.params.get('dimensions') not in (None, ()):return None
+                    r = xs[0].reshape(shape)
+                elif p in self.FOLD_ANY and len(xs) == 2:r = self.FOLD_ANY[p](xs[0], xs[1])
+                elif p == 'select_n':
+                    which = xs[0].astype(np.int32) if xs[0].dtype != np.bool_ else xs[0].astype(np.int32)
+                    r = np.choose(np.broadcast_to(which, np.broadcast_shapes(*[x.shape for x in xs])), [np.broadcast_to(x, np.broadcast_shapes(*[y.shape for y in xs])) for x in xs[1:]])
+                elif t == F32 and p in self.FOLD_F32:r = self.FOLD_F32[p](xs[0].astype(np.float32), xs[1].astype(np.float32))
+                elif t == F32 and p == 'neg':r = -xs[0].astype(np.float32)
+                elif t in SIGNED | UNSIGNED and p in self.FOLD_INT:r = self.FOLD_INT[p](xs[0], xs[1]).astype(t)
+                elif t in SIGNED | UNSIGNED and p == 'neg':r = (-xs[0]).astype(t)
+                elif t == BOOL and p in ('and', 'or', 'xor', 'not'):
+                    r = {'and': np.logical_and, 'or': np.logical_or, 'xor': np.logical_xor}[p](xs[0], xs[1]) if p != 'not' else np.logical_not(xs[0])
+                elif p == 'convert_element_type':
+                    x = xs[0]
+                    if x.dtype == np.float32 and dtype != F32:return None   # f32 -> int saturation/NaN rules: leave to the device
+                    r = x.astype(dtype)
+                else:return None
+            r = np.asarray(r).astype(dtype)
+            if r.dtype == np.float32 and np.isnan(r).any():return None       # NaN payload rules differ between evaluators
+        except (TypeError, ValueError):
+            return None
+        out = Val(dtype, shape, 'lit')
+        flat = r.reshape(-1)
+        if flat.size and np.all(flat.view(np.uint8).reshape(flat.size, -1) == flat[:1].view(np.uint8).reshape(1, -1)):
+            out.lit = flat[0].item();return [out]
+        if LANES in shape:return None
+        return [self.const(np.broadcast_to(r, shape).copy())]
 
     # -- elementwise ----------------------------------------------------------------
     def identity_fold(self, p, ins, out):
@@ -583,7 +650,10 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         as XLA's algebraic simplifier rewrites them for floats too (pinned by the float_identities
         conformance case: -0 and NaN payloads survive)."""
         if ins[0].dtype != F32:return None
-        is_lit = lambda v, value: v.kind == 'lit' and float(v.lit) == value
+        def is_lit(v, value):
+            if v.kind == 'lit':return bool(np.float32(v.lit) == np.float32(value))
+            if v.kind == 'const' and v.arr is not None and v.arr.size:return bool(np.all(np.asarray(v.arr, np.float32) == np.float32(value)))
+            return False
         x = None
         if p in ('max', 'min') and ins[0] is ins[1]:x = ins[0]
         elif p == 'min' and (is_lit(ins[1], np.inf) or is_lit(ins[0], np.inf)):x = ins[0] if is_lit(ins[1], np.inf) else ins[1]
@@ -1331,10 +1401,11 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         if arr.ndim == 0:return Val(np.dtype(arr.dtype), (), 'lit', lit=arr.item())
         if LANES in arr.shape:raise Unsupported(f'constant with lane-sized axis {arr.shape}')
         for k, c in enumerate(self.k.consts):
-            if c is value or (c.shape == arr.shape and c.dtype == arr.dtype and np.array_equal(c, arr)):
-                return Val(np.dtype(arr.dtype), arr.shape, 'const', ptr=f'cs{k}')
+            if c is value or (c.shape == arr.shape and c.dtype == arr.dtype and np.array_equal(c, arr) and
+                    np.array_equal(np.asarray(c).view(np.uint8), arr.view(np.uint8))):
+                return Val(np.dtype(arr.dtype), arr.shape, 'const', ptr=f'cs{k}', arr=c)
         self.k.consts.append(arr)
-        return Val(np.dtype(arr.dtype), arr.shape, 'const', ptr=f'cs{len(self.k.consts) - 1}')
+        return Val(np.dtype(arr.dtype), arr.shape, 'const', ptr=f'cs{len(self.k.consts) - 1}', arr=arr)
 
 
 class ThreadGenerator(Generator):
@@ -1372,7 +1443,7 @@ class ThreadGenerator(Generator):
 
     def free_holder(self, h):
         if h.off >= 0:self.k.release(h.off, h.words);h.off = -1
-        self.live.pop(h, None)
+        self.live.pop(h, None);self.release_deps(h)
 
     def dense_arena(self, v):
         return v if (v.dense and v.kind == 'arena' and v.holder.off >= 0) else self.temp_arena(v)
@@ -1668,5 +1739,5 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(V2eGen_{name}, {ns}::Impl,
 '''
     module = Module(name, files, words, [(np.dtype(a.dtype), tuple(a.shape)) for a in input_avals], list(k.consts),
         [(np.dtype(v.dtype), v.shape) for v in outs], k.lane_literals, g.marks)
-    module.stats.update(chunks=len(chunks), cse_hits=g.cse_hits, lines=module.source_lines, mode=mode, reloads=getattr(g, 'reloads', 0))
+    module.stats.update(chunks=len(chunks), cse_hits=g.cse_hits, folds=g.folds, lines=module.source_lines, mode=mode, reloads=getattr(g, 'reloads', 0))
     return module

@@ -70,6 +70,10 @@ def cases(rng, B):
         x.astype(j.int8) + y.astype(j.int8), jax.lax.clz(x.astype(j.uint8)), jax.lax.clz(x.astype(j.int16)), jax.lax.clz(x),
         jax.lax.select_n(k, x, y, x ^ y), jax.lax.population_count(x.astype(j.int8)))),
         (edgy(B, 14), edgy2(B, 14), small(0, 3, B, 14)))
+    c1 = rng.standard_normal(324).astype(np.float32);c2 = (rng.standard_normal(324) * 7).astype(np.float32);ones = np.ones(324, np.float32)
+    yield ('constant_folds', (lambda a, b: (a + j.where(False, 1.0, 0.0), a * ones, a + (j.float32(0.5) - j.float32(0.5)),
+        a * (j.float32(1.0) / j.float32(3.0) * j.float32(3.0)), j.broadcast_to(j.asarray(c1) / j.asarray(c2), a.shape),
+        a + j.asarray(c1) / j.asarray(c2), -(-j.where(a > b, a, b)), -(-(a * 2.0)))), (cross_f(B, True), cross_f(B, False)))
     keys = j.asarray(rng.integers(0, 2**32, (B, 2), dtype=np.uint64).astype(np.uint32))
     yield ('prng', (lambda k: (jax.vmap(lambda q: jax.random.bits(q, (5,)))(k), jax.vmap(lambda q: jax.random.split(q, 3))(k),
         jax.vmap(lambda q: jax.random.fold_in(q, 7))(k), jax.vmap(lambda q: jax.random.randint(q, (4,), -5, 40))(k),
