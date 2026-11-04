@@ -108,9 +108,6 @@ class SelectorTests(unittest.TestCase):
         self.assertEqual(report['fully_constructed_roots'],0);self.assertEqual(report['refusals_by_root'],{'latent-clock':200})
 
 
-if __name__=='__main__':unittest.main()
-
-
 class QueueTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_queue_batches_concurrent_requests_and_preserves_order(self):
         import asyncio
@@ -144,3 +141,6 @@ class QueueTests(unittest.IsolatedAsyncioTestCase):
         await server.queue.put((dict(request_id='0'),future,0.))
         with self.assertRaisesRegex(RuntimeError,'fixture'):await future
         self.assertEqual(search.calls,1);await server.queue.put(None);await consumer;server.executor.shutdown()
+
+
+if __name__=='__main__':unittest.main()
