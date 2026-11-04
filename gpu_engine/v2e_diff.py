@@ -153,8 +153,8 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
             if lanes:leaves = [x[:lanes] for x in leaves]   # e.g. an odd lane count, to exercise lane-count-dependent addressing
             state, actions, trackers = jax.tree.unflatten(treedef, [jax.numpy.asarray(x) for x in leaves])
             want = call('jax', jax_fn, state, actions, trackers);got = call('cuda', cuda_fn, state, actions, trackers)
-            diffs = lane_differences(want, got);lanes = state.hp.shape[0];compared += lanes
-            any_lane = np.zeros(lanes, bool)
+            diffs = lane_differences(want, got);n = state.hp.shape[0];compared += n
+            any_lane = np.zeros(n, bool)
             for name, d in diffs.items():
                 d = np.asarray(d);totals[name] = totals.get(name, 0) + int(d.sum());any_lane |= d if d.shape == any_lane.shape else d.any()
             differing += int(any_lane.sum())
@@ -183,6 +183,7 @@ def main(argv=None):
     parser.add_argument('--mode', default=None, choices=('warp', 'thread'), help='generator backend (default per module)')
     parser.add_argument('--lanes', type=int, default=0, help='replay only the first N lanes of each shard (0: all)')
     args = parser.parse_args(argv)
+    if args.lanes < 0:parser.error('--lanes must be positive (or 0 for all lanes)')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     import jax
     import jax.numpy as j
