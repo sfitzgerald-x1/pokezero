@@ -13,6 +13,7 @@ from .public_active import NAMES as VOLATILE_NAMES
 from . import engine_device_damage_history as damage_history
 from . import engine_device_public_port as port
 from . import engine_device_visible_belief as visible_belief
+from . import lane_index as _li
 
 # Same-write HP notification classes for the separate public negative-item
 # updater. These are static provenance labels, not an event/witness roster.
@@ -51,23 +52,23 @@ class Initialized(NamedTuple):
 
 
 def _r(state):return j.arange(state.hp.shape[0])
-def _get(state,name,side):return getattr(state,name)[_r(state),side,state.active[_r(state),side]]
+def _get(state,name,side):return _li.take(getattr(state,name),_r(state),side,_li.take(state.active,_r(state),side))
 def _mask(mask,b):return j.broadcast_to(j.asarray(mask,j.bool_),(b,))
 
 def _write(t,name,side,physical,value,use):
-    r=j.arange(len(t.error));p=j.clip(physical,0,5);slot=t.physical_to_public[r,side,p];at=j.clip(slot,0,5)
+    r=j.arange(len(t.error));p=j.clip(physical,0,5);slot=_li.take(t.physical_to_public,r,side,p);at=j.clip(slot,0,5)
     use=use&(physical>=0)&(physical<6)&(slot>=0)&(slot<6)
-    old=getattr(t,name);v=old[r,side,at]
-    gate=use.reshape(use.shape+(1,)*(v.ndim-1))
-    return t._replace(**{name:old.at[r,side,at].set(j.where(gate,value,v))})
+    old=getattr(t,name);gate=use.reshape(use.shape+(1,)*(old.ndim-3))
+    return t._replace(**{name:_li.update(old,r,(side,at),lambda v,gate,value:j.where(gate,value,v),gate,value)})
 
 def feature(c,side,physical,name,value,use,*,add=False):
-    t=c.trackers;r=j.arange(len(t.error));slot=t.physical_to_public[r,side,j.clip(physical,0,5)];at=j.clip(slot,0,5)
+    t=c.trackers;r=j.arange(len(t.error));slot=_li.take(t.physical_to_public,r,side,j.clip(physical,0,5));at=j.clip(slot,0,5)
     use=use&(slot>=0)&(slot<6)&(physical>=0)&(physical<6)
-    values=t.mon_features;old=values[name];v=old[r,side,at]
-    new=j.where(use,v+value if add else value,v)
-    if name in ('switched_before_attack','stayed_and_attacked','turns_active_total'):new=j.minimum(64,new)
-    return c._replace(trackers=t._replace(mon_features={**values,name:old.at[r,side,at].set(new)}))
+    values=t.mon_features;old=values[name];capped=name in ('switched_before_attack','stayed_and_attacked','turns_active_total')
+    def write(v,use,value):
+        new=j.where(use,v+value if add else value,v)
+        return j.minimum(64,new) if capped else new
+    return c._replace(trackers=t._replace(mon_features={**values,name:_li.update(old,r,(side,at),write,use,value)}))
 
 def _refresh(c,side,physical,use):
     """One actual subject's source upsert/replace; no endpoint-wide refresh."""
@@ -77,16 +78,15 @@ def _refresh(c,side,physical,use):
 
 def _narrow(c,side,physical,fact,use,kind):
     if c.belief_tables is None:return c
-    t=c.trackers;r=j.arange(len(t.error));p=j.clip(physical,0,5);slot=t.physical_to_public[r,side,p];at=j.clip(slot,0,5)
-    species=t.species[r,side,at];table=getattr(c.belief_tables,kind+'_mask')
+    t=c.trackers;r=j.arange(len(t.error));p=j.clip(physical,0,5);slot=_li.take(t.physical_to_public,r,side,p);at=j.clip(slot,0,5)
+    species=_li.take(t.species,r,side,at);table=getattr(c.belief_tables,kind+'_mask')
     good=(species>=0)&(species<table.shape[0])&(fact>=0)&(fact<table.shape[1])
     bits=table[j.clip(species,0,table.shape[0]-1),j.clip(fact,0,table.shape[1]-1)]
     bits=j.where(good[:,None],bits,j.uint32(0))
-    old=t.belief_mask[r,side,at]
     # Zero means no public fact, not evidence for a missing source variant.
     bits=j.where((fact==0)[:,None],j.uint32(0xffffffff),bits)
     use=use&(slot>=0)&(slot<6)
-    c=c._replace(trackers=t._replace(belief_mask=t.belief_mask.at[r,side,at].set(j.where(use[:,None],old&bits,old))))
+    c=c._replace(trackers=t._replace(belief_mask=_li.update(t.belief_mask,r,(side,at),lambda v,use,bits:j.where(use,v&bits,v),use[:,None],bits)))
     return _refresh(c,side,physical,use&(fact!=0))
 
 
@@ -115,18 +115,18 @@ def public_turn(c,state,use,turn):
     t=c.trackers
     c=c._replace(trackers=port.turn(c.trackers,use,turn))
     for side in range(2):
-        p=state.active[_r(state),side]
+        p=_li.take(state.active,_r(state),side)
         for name in ('turns_active','turns_active_total'):
             c=feature(c,side,p,name,j.ones_like(p),use,add=True)
         # Original public Toxic stage advances on TURN, not on residual work.
-        t=c.trackers;slot=j.clip(t.active_slot[_r(state),side],0,5)
-        stage=t.mon_features['toxic_stage'][_r(state),side,slot]
+        t=c.trackers;slot=j.clip(_li.take(t.active_slot,_r(state),side),0,5)
+        stage=_li.take(t.mon_features['toxic_stage'],_r(state),side,slot)
         c=feature(c,side,p,'toxic_stage',j.minimum(16,stage+1),use&(stage>0))
     if c.trackers.damage_history is not None:
         history,taken,dealt=damage_history.settle(c.trackers.damage_history,use)
         c=c._replace(trackers=c.trackers._replace(damage_history=history))
         for side in range(2):
-            p=state.active[_r(state),side]
+            p=_li.take(state.active,_r(state),side)
             for name,value in (('last_damage_taken',taken[:,side,0]),('last_damage_dealt',dealt[:,side,0])):
                 c=feature(c,side,p,name,value,use)
             for name,value in (('damage_exact_taken',taken[:,side,1]),('damage_exact_dealt',dealt[:,side,1])):
@@ -135,49 +135,49 @@ def public_turn(c,state,use,turn):
     # Original TURN replaces each living active belief, even if hard bits did
     # not change. A snapshot read itself never performs this operation.
     for side in range(2):
-        slot=j.clip(c.trackers.active_slot[_r(state),side],0,5)
-        c=_refresh(c,side,state.active[_r(state),side],use&~c.trackers.fainted[_r(state),side,slot])
+        slot=j.clip(_li.take(c.trackers.active_slot,_r(state),side),0,5)
+        c=_refresh(c,side,_li.take(state.active,_r(state),side),use&~_li.take(c.trackers.fainted,_r(state),side,slot))
     return c
 
 
 def opportunity(c,side,use):
     t=c.trackers;td=t.tendency;r=j.arange(len(t.error))
-    fresh=use&(td.opportunity_turn[r,side]!=t.turn)
-    turns=td.opportunity_turn.at[r,side].set(j.where(use,t.turn,td.opportunity_turn[r,side]))
-    counts=td.opportunities.at[r,side].set(j.minimum(64,td.opportunities[r,side]+fresh))
+    fresh=use&(_li.take(td.opportunity_turn,r,side)!=t.turn)
+    turns=_li.put(td.opportunity_turn,r,(side,),j.where(use,t.turn,_li.take(td.opportunity_turn,r,side)))
+    counts=_li.put(td.opportunities,r,(side,),j.minimum(64,_li.take(td.opportunities,r,side)+fresh))
     return c._replace(trackers=t._replace(tendency=td._replace(opportunity_turn=turns,opportunities=counts)))
 
 
 def switch_decision(c,state,side,use,*,baton):
     """Same actual switch before departure; forced/Baton are not decisions."""
-    t=c.trackers;td=t.tendency;r=_r(state);p=state.active[r,side]
+    t=c.trackers;td=t.tendency;r=_r(state);p=_li.take(state.active,r,side)
     voluntary=use&~baton&(_get(state,'hp',side)>0)
-    bail=voluntary&~td.moved[r,side]
+    bail=voluntary&~_li.take(td.moved,r,side)
     c=feature(c,side,p,'switched_before_attack',j.ones_like(p),bail,add=True)
     c=matchup(c,side,bail,0)
     t=c.trackers;td=t.tendency
-    counts=td.switches.at[r,side].set(j.minimum(64,td.switches[r,side]+voluntary))
+    counts=_li.put(td.switches,r,(side,),j.minimum(64,_li.take(td.switches,r,side)+voluntary))
     c=c._replace(trackers=t._replace(tendency=td._replace(switches=counts)))
     return opportunity(c,side,voluntary)
 
 
 def matchup(c,side,use,kind):
-    t=c.trackers;td=t.tendency;r=j.arange(len(t.error));a=t.active_slot[r,side];f=t.active_slot[r,1-side]
+    t=c.trackers;td=t.tendency;r=j.arange(len(t.error));a=_li.take(t.active_slot,r,side);f=_li.take(t.active_slot,r,1-side)
     good=use&(a>=0)&(f>=0);a=j.clip(a,0,5);f=j.clip(f,0,5)
-    old=td.matchup[r,side,a,f,kind]
-    values=td.matchup.at[r,side,a,f,kind].set(j.minimum(8,old+good))
+    old=_li.take(td.matchup,r,side,a,f,kind)
+    values=_li.put(td.matchup,r,(side,a,f,kind),j.minimum(8,old+good))
     return c._replace(trackers=t._replace(tendency=td._replace(matchup=values)))
 
 
 def install(c,state,side,use,*,initial=False):
-    t=c.trackers;b=len(t.error);use=_mask(use,b);r=j.arange(b);p=state.active[r,side]
-    old=t.active_physical[r,side];fresh=t.physical_to_public[r,side,j.clip(p,0,5)]<0
+    t=c.trackers;b=len(t.error);use=_mask(use,b);r=j.arange(b);p=_li.take(state.active,r,side)
+    old=_li.take(t.active_physical,r,side);fresh=_li.take(t.physical_to_public,r,side,j.clip(p,0,5))<0
     if not initial:
         # One actual installation, including intermediate drag/Baton installs.
-        order=t.own_order[r,side];position=j.argmax(order==p[:,None],axis=1)
-        swapped=order.at[r,position].set(order[:,0]).at[:,0].set(p)
-        t=t._replace(own_order=t.own_order.at[r,side].set(j.where(use[:,None],swapped,order)))
-    t=tr._install(t,state,side,use);slot=t.active_slot[r,side];at=j.clip(slot,0,5)
+        order=_li.take(t.own_order,r,side);position=j.argmax(order==p[:,None],axis=1)
+        swapped=_li.put(order,r,(position,),order[:,0]).at[:,0].set(p)
+        t=t._replace(own_order=_li.put(t.own_order,r,(side,),j.where(use[:,None],swapped,order)))
+    t=tr._install(t,state,side,use);slot=_li.take(t.active_slot,r,side);at=j.clip(slot,0,5)
     t=port.arrival(t,c.port_tables,state,side,use)
     t=negative_items.hp_line(t,state,side,use,source_class=negative_items.HP_ACTION)
     c=c._replace(trackers=t)
@@ -192,7 +192,7 @@ def install(c,state,side,use,*,initial=False):
         species=_get(state,'species',side);tab=c.belief_tables.species_initial_mask
         known=(species>0)&(species<tab.shape[0]);bits=tab[j.clip(species,0,tab.shape[0]-1)]
         bits=j.where(known[:,None],bits,j.uint32(0))
-        prev=c.trackers.belief_mask[r,side,at]
+        prev=_li.take(c.trackers.belief_mask,r,side,at)
         # Initial call already installed the active encounter in tr.initialize.
         first=use&(fresh|j.asarray(initial))
         c=c._replace(trackers=_write(c.trackers,'belief_mask',side,p,j.where(first[:,None],bits,prev),use))
@@ -200,9 +200,9 @@ def install(c,state,side,use,*,initial=False):
             types=c.belief_tables.species_types[j.clip(species,0,tab.shape[0]-1)]
             c=c._replace(trackers=_write(c.trackers,'shown_types',side,p,j.where(known[:,None],types,0),use))
     # switch resets public volatiles, not cumulative shown move/PP knowledge.
-    t=c.trackers;at=j.clip(t.active_slot[r,side],0,5)
-    count=t.mon_features['sleep_turns'][r,side,at]
-    skipped=t.mon_features['sleep_skipped_turns'][r,side,at]
+    t=c.trackers;at=j.clip(_li.take(t.active_slot,r,side),0,5)
+    count=_li.take(t.mon_features['sleep_turns'],r,side,at)
+    skipped=_li.take(t.mon_features['sleep_skipped_turns'],r,side,at)
     c=feature(c,side,p,'sleep_turns',j.maximum(0,count-skipped),use&(_get(state,'status',side)==5))
     for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap',
                  'sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending','toxic_stage'):
@@ -210,7 +210,7 @@ def install(c,state,side,use,*,initial=False):
     c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,j.full((b,),-1,j.int32),use))
     td=c.trackers.tendency
     c=c._replace(trackers=c.trackers._replace(tendency=td._replace(
-        moved=td.moved.at[r,side].set(j.where(use,False,td.moved[r,side])))))
+        moved=_li.put(td.moved,r,(side,),j.where(use,False,_li.take(td.moved,r,side))))))
     c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,j.zeros((b,len(VOLATILE_NAMES)),bool),use))
     if not initial:c=feature(c,side,p,'switches',j.ones(b,j.int32),use,add=True)
     return _refresh(c,side,p,use)
@@ -223,13 +223,13 @@ def observe(c,state,use,*,record_damage=True,rest_side=None,rest_mask=False):
         c=c._replace(trackers=c.trackers._replace(damage_history=damage_history.observe(
             c.trackers.damage_history,state,use,tr._percent,record_damage=record_damage)))
     for side in range(2):
-        t=c.trackers;p=state.active[:,side];slot=j.clip(t.physical_to_public[r,side,p],0,5)
-        status=_get(state,'status',side);changed=use&(t.status[r,side,slot]!=status)
+        t=c.trackers;p=state.active[:,side];slot=j.clip(_li.take(t.physical_to_public,r,side,p),0,5)
+        status=_get(state,'status',side);changed=use&(_li.take(t.status,r,side,slot)!=status)
         hp=_get(state,'hp',side);maximum=_get(state,'max_hp',side)
         valid=(maximum>0)&(hp>=0)&(hp<=maximum)&(status>=0)&(status<=6)
-        condition_changed=changed|(use&(t.hp_percent[r,side,slot]!=tr._percent(hp,maximum)))
+        condition_changed=changed|(use&(_li.take(t.hp_percent,r,side,slot)!=tr._percent(hp,maximum)))
         rest=j.zeros_like(use)if rest_side is None else (j.asarray(rest_side)==side)&j.asarray(rest_mask)
-        c=c._replace(trackers=port.condition(t,side,p,t.status[r,side,slot],status,use,
+        c=c._replace(trackers=port.condition(t,side,p,_li.take(t.status,r,side,slot),status,use,
             rest=rest,faint=_get(state,'hp',side)==0))
         for key in ('sleep_turns','rest_sleep','sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending'):
             c=feature(c,side,p,key,j.zeros_like(p),changed)
@@ -256,8 +256,8 @@ def hp_line(c,state,side,use,*,source_class,record_damage=True):
         # A newly arrived poisoned member starts at known public stage0.
         # Its first actual living poison-residual line exposes stage1; STATUS
         # already initialized other new poison to1. Never tick here again.
-        r=_r(state);p=state.active[r,side];slot=j.clip(c.trackers.active_slot[r,side],0,5)
-        stage=c.trackers.mon_features['toxic_stage'][r,side,slot]
+        r=_r(state);p=_li.take(state.active,r,side);slot=j.clip(_li.take(c.trackers.active_slot,r,side),0,5)
+        stage=_li.take(c.trackers.mon_features['toxic_stage'],r,side,slot)
         hp=_get(state,'hp',side);maximum=_get(state,'max_hp',side)
         first=_mask(use,len(r))&(_get(state,'status',side)==4)&(stage==0)&(hp>0)&(maximum>=hp)
         c=feature(c,side,p,'toxic_stage',j.ones_like(p),first)
@@ -265,13 +265,13 @@ def hp_line(c,state,side,use,*,source_class,record_damage=True):
     # percentage is unchanged. Never refresh the other seat just because this
     # operation also polls its endpoint.
     hp=_get(state,'hp',side);maximum=_get(state,'max_hp',side)
-    return _refresh(c,side,state.active[_r(state),side],_mask(use,len(c.trackers.error))&(maximum>0)&(hp>=0)&(hp<=maximum))
+    return _refresh(c,side,_li.take(state.active,_r(state),side),_mask(use,len(c.trackers.error))&(maximum>0)&(hp>=0)&(hp<=maximum))
 
 
 def reveal_ability(c,state,side,use,*,ability=None,original=True):
-    p=state.active[_r(state),side];ability=_get(state,'ability',side) if ability is None else ability
-    use=_mask(use,len(c.trackers.error));r=_r(state);slot=j.clip(c.trackers.physical_to_public[r,side,p],0,5)
-    borrowed=c.trackers.borrowed_ability[r,side,slot]
+    p=_li.take(state.active,_r(state),side);ability=_get(state,'ability',side) if ability is None else ability
+    use=_mask(use,len(c.trackers.error));r=_r(state);slot=j.clip(_li.take(c.trackers.physical_to_public,r,side,p),0,5)
+    borrowed=_li.take(c.trackers.borrowed_ability,r,side,slot)
     c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,ability,use))
     if original:
         c=c._replace(trackers=_write(c.trackers,'original_ability',side,p,ability,use&(borrowed==0)))
@@ -281,7 +281,7 @@ def reveal_ability(c,state,side,use,*,ability=None,original=True):
 
 
 def reveal_item(c,state,side,item,use,*,original=True):
-    p=state.active[_r(state),side];use=_mask(use,len(c.trackers.error))
+    p=_li.take(state.active,_r(state),side);use=_mask(use,len(c.trackers.error))
     c=c._replace(trackers=_write(c.trackers,'shown_item',side,p,item,use))
     return _narrow(c,side,p,item,use,'item') if original else _refresh(c,side,p,use)
 
@@ -301,7 +301,7 @@ def entry(c,before,after,side,table,use):
         copied=starts&table.trace[ability]&(_get(before,'hp',1-side)>0)
         c=reveal_ability(c,before,side,copied,ability=ability)
         c=reveal_ability(c,before,1-side,copied)
-        p=after.active[_r(after),side]
+        p=_li.take(after.active,_r(after),side)
         c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,_get(after,'ability',side),copied))
         c=reveal_ability(c,after,side,copied,original=False)
     current=_get(after,'ability',side)
@@ -314,15 +314,15 @@ def entry(c,before,after,side,table,use):
 
 
 def depart(c,before,after,side,table,use):
-    p=before.active[_r(before),side]
+    p=_li.take(before.active,_r(before),side)
     if table is not None:
         cure=use&(_get(before,'hp',side)>0)&(_get(before,'status',side)!=0)&table.natural_cure[_get(before,'ability',side)]
         c=reveal_ability(c,before,side,cure)
         c=observe(c,after,cure)
     # A borrowed ability ends silently; known original identity is not guessed.
-    c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,c.trackers.original_ability[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)],use&(c.trackers.borrowed_ability[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)]!=0)))
+    c=c._replace(trackers=_write(c.trackers,'shown_ability',side,p,_li.take(c.trackers.original_ability,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5)),use&(_li.take(c.trackers.borrowed_ability,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5))!=0)))
     c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,j.zeros_like(use,j.int32),use))
-    return _refresh(c,side,p,use&~c.trackers.fainted[_r(before),side,j.clip(c.trackers.active_slot[_r(before),side],0,5)])
+    return _refresh(c,side,p,use&~_li.take(c.trackers.fainted,_r(before),side,j.clip(_li.take(c.trackers.active_slot,_r(before),side),0,5)))
 
 
 def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,preparation=False):
@@ -334,9 +334,9 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     # Gen3 emits cant(slp) even for Sleep Talk/Snore, then an actual usable
     # original MOVE classifies that cant as skippedTime. Called children and
     # preparation-only declarations must not consume it twice.
-    r=_r(state);p=state.active[r,side];slot=j.clip(c.trackers.active_slot[r,side],0,5)
+    r=_r(state);p=_li.take(state.active,r,side);slot=j.clip(_li.take(c.trackers.active_slot,r,side),0,5)
     facts=c.trackers.mon_features
-    skipped=use&j.asarray(original)&~j.asarray(preparation)&(facts['sleep_cant_pending'][r,side,slot]!=0)&(facts['sleep_usable_pending'][r,side,slot]!=0)
+    skipped=use&j.asarray(original)&~j.asarray(preparation)&(_li.take(facts['sleep_cant_pending'],r,side,slot)!=0)&(_li.take(facts['sleep_usable_pending'],r,side,slot)!=0)
     c=feature(c,side,p,'sleep_skipped_turns',j.ones_like(p),skipped,add=True)
     for key in ('sleep_cant_pending','sleep_usable_pending'):c=feature(c,side,p,key,j.zeros_like(p),skipped)
     actual_move=move
@@ -346,29 +346,29 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
         evidence=valid&c.belief_tables.source_move_evidence[at]
         move=j.where(valid,c.belief_tables.public_move[at],0)
     else:evidence=j.ones_like(use)
-    t=c.trackers;r=_r(state);p=state.active[r,side];slot=j.clip(t.physical_to_public[r,side,p],0,5)
-    old=t.observed_moves[r,side,slot];has=j.any(old==move[:,None],axis=1);empty=j.argmax(old==0,axis=1)
+    t=c.trackers;r=_r(state);p=_li.take(state.active,r,side);slot=j.clip(_li.take(t.physical_to_public,r,side,p),0,5)
+    old=_li.take(t.observed_moves,r,side,slot);has=j.any(old==move[:,None],axis=1);empty=j.argmax(old==0,axis=1)
     at=j.where(has,j.argmax(old==move[:,None],axis=1),empty)
     declared=use&(move>0)
     # Struggle is an ordinary MOVE header but is never a real-set reveal or
     # PP charge in the original public_moves.record_move writer.
     room=has|j.any(old==0,axis=1);use=declared&evidence&room
-    previous=t.observed_moves[r,side,slot,at]
-    observed=t.observed_moves.at[r,side,slot,at].set(j.where(use,move,previous))
-    count=t.pp_used[r,side,slot,at]
+    previous=_li.take(t.observed_moves,r,side,slot,at)
+    observed=_li.put(t.observed_moves,r,(side,slot,at),j.where(use,move,previous))
+    count=_li.take(t.pp_used,r,side,slot,at)
     extra=j.zeros_like(use)
     if (c.belief_tables is not None and hasattr(c.belief_tables,'public_foe_targeted')
             and hasattr(c.belief_tables,'public_pressure')):
         targets=c.belief_tables.public_foe_targeted;pressure=c.belief_tables.public_pressure
-        foe=1-side;foe_slot=j.clip(t.active_slot[r,foe],0,5)
-        copied=t.borrowed_ability[r,foe,foe_slot]
-        running=j.where(copied!=0,copied,t.original_ability[r,foe,foe_slot])
+        foe=1-side;foe_slot=j.clip(_li.take(t.active_slot,r,foe),0,5)
+        copied=_li.take(t.borrowed_ability,r,foe,foe_slot)
+        running=j.where(copied!=0,copied,_li.take(t.original_ability,r,foe,foe_slot))
         valid_ability=(running>0)&(running<len(pressure))
         known_pressure=valid_ability&pressure[j.clip(running,0,len(pressure)-1)]
         target_known=(actual_move>0)&(actual_move<len(targets))
         extra=known_pressure&target_known&targets[j.clip(actual_move,0,len(targets)-1)]
     charge=(use&j.asarray(pp_use)).astype(j.int32)*(1+extra.astype(j.int32))
-    pp=t.pp_used.at[r,side,slot,at].set(count+charge)
+    pp=_li.put(t.pp_used,r,(side,slot,at),count+charge)
     c=c._replace(trackers=t._replace(observed_moves=observed,pp_used=pp))
     # The child [from] line and preparation-only -singleturn annotation can
     # reveal a move, but neither is an ordinary MOVE header/decision datum.
@@ -379,11 +379,11 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     if not preparation:
         c=feature(c,side,p,'moves_shown',j.ones_like(move),declared,add=True)
     if header:
-        t=c.trackers;td=t.tendency;first=declared&~td.moved[r,side]
+        t=c.trackers;td=t.tendency;first=declared&~_li.take(td.moved,r,side)
         c=feature(c,side,p,'stayed_and_attacked',j.ones_like(move),first,add=True)
         c=matchup(c,side,first,1)
         t=c.trackers;td=t.tendency
-        c=c._replace(trackers=t._replace(tendency=td._replace(moved=td.moved.at[r,side].set(td.moved[r,side]|declared))))
+        c=c._replace(trackers=t._replace(tendency=td._replace(moved=_li.put(td.moved,r,(side,),_li.take(td.moved,r,side)|declared))))
         c=opportunity(c,side,declared&(_get(state,'charge_move',side)==0))
     c=_narrow(c,side,p,move,declared&evidence,'move') if original else c
     return _refresh(c,side,p,declared&~j.asarray(preparation))
@@ -393,7 +393,7 @@ def item_changes(c,before,after,use):
     for side in range(2):
         old=_get(before,'item',side);consumed=use&(old>0)&(_get(after,'item',side)==0)
         c=reveal_item(c,before,side,old,consumed)
-        c=c._replace(trackers=_write(c.trackers,'item_removed',side,after.active[_r(after),side],j.ones_like(consumed),consumed))
+        c=c._replace(trackers=_write(c.trackers,'item_removed',side,_li.take(after.active,_r(after),side),j.ones_like(consumed),consumed))
     return observe(c,after,use)
 
 
@@ -403,12 +403,12 @@ def party_cure(c,before,after,side,use,table=None):
     if table is not None:c=reveal_ability(c,before,side,use&table.soundproof[_get(before,'ability',side)])
     r=_r(before)
     for p in range(6):
-        changed=use&(before.status[r,side,p]!=after.status[r,side,p])
-        old=c.trackers.status;slot=c.trackers.physical_to_public[r,side,p];at=j.clip(slot,0,5)
+        changed=use&(_li.take(before.status,r,side,p)!=_li.take(after.status,r,side,p))
+        old=c.trackers.status;slot=_li.take(c.trackers.physical_to_public,r,side,p);at=j.clip(slot,0,5)
         yes=changed&(slot>=0)
-        c=c._replace(trackers=c.trackers._replace(status=old.at[r,side,at].set(j.where(yes,after.status[r,side,p],old[r,side,at]))))
-        cured=yes&(after.status[r,side,p]==0)
-        c=c._replace(trackers=port.condition(c.trackers,side,j.full(len(r),p,j.int32),before.status[r,side,p],after.status[r,side,p],yes))
+        c=c._replace(trackers=c.trackers._replace(status=_li.put(old,r,(side,at),j.where(yes,_li.take(after.status,r,side,p),_li.take(old,r,side,at)))))
+        cured=yes&(_li.take(after.status,r,side,p)==0)
+        c=c._replace(trackers=port.condition(c.trackers,side,j.full(len(r),p,j.int32),_li.take(before.status,r,side,p),_li.take(after.status,r,side,p),yes))
         for name in ('sleep_turns','rest_sleep','toxic_stage','sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending'):
             c=feature(c,side,p,name,j.zeros(len(r),j.int32),cured)
         c=_refresh(c,side,p,yes)
@@ -419,17 +419,17 @@ def party_cure(c,before,after,side,use,table=None):
 def damage(c,state,side,dealt,taken,use):
     # Keep observer-relative fractions; only readout of the OWN victim uses
     # exact HP. Foe-victim public fractions come from shown percentage points.
-    r=_r(state);foe=1-side;p=state.active[r,foe];slot=j.clip(c.trackers.physical_to_public[r,foe,p],0,5)
-    previous=c.trackers.hp_percent[r,foe,slot]
+    r=_r(state);foe=1-side;p=_li.take(state.active,r,foe);slot=j.clip(_li.take(c.trackers.physical_to_public,r,foe,p),0,5)
+    previous=_li.take(c.trackers.hp_percent,r,foe,slot)
     current=tr._percent(_get(state,'hp',foe),_get(state,'max_hp',foe))
     shown=j.maximum(0,previous-current).astype(j.float32)/100.0
     exact=taken.astype(j.float32)/j.maximum(_get(state,'max_hp',foe),1).astype(j.float32)
     if c.trackers.damage_history is not None:
         return c._replace(trackers=c.trackers._replace(damage_history=damage_history.direct(
             c.trackers.damage_history,side,shown,exact,use & (taken>0))))
-    c=c._replace(trackers=_write(c.trackers,'damage_exact_dealt',side,state.active[r,side],exact,use))
+    c=c._replace(trackers=_write(c.trackers,'damage_exact_dealt',side,_li.take(state.active,r,side),exact,use))
     c=c._replace(trackers=_write(c.trackers,'damage_exact_taken',foe,p,exact,use))
-    c=feature(c,side,state.active[r,side],'last_damage_dealt',shown,use)
+    c=feature(c,side,_li.take(state.active,r,side),'last_damage_dealt',shown,use)
     return feature(c,foe,p,'last_damage_taken',shown,use)
 
 
@@ -442,7 +442,7 @@ def negative_hp_line(c,state,side,use,*,source_class):
 def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
     c=observe(c,after,~before.done)
     for side in range(2):
-        p=after.active[_r(after),side];alive=ordinary&(_get(after,'hp',side)>0)
+        p=_li.take(after.active,_r(after),side);alive=ordinary&(_get(after,'hp',side)>0)
         for name,active in [('confusion_turns',_get(after,'confusion_counter',side)>0),('encore_turns',_get(after,'encore_counter',side)>0)]:
             c=feature(c,side,p,name,j.ones_like(p),alive&active,add=True)
             c=feature(c,side,p,name,j.zeros_like(p),ordinary&~active)
@@ -469,7 +469,7 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None):
 def color_change(c,before,after,side,use):
     changed=use&j.any(_get(before,'types',side)!=_get(after,'types',side),axis=1)
     c=reveal_ability(c,after,side,changed)
-    p=after.active[_r(after),side]
+    p=_li.take(after.active,_r(after),side)
     return c._replace(trackers=_write(c.trackers,'shown_types',side,p,_get(after,'types',side),changed))
 
 
@@ -479,14 +479,14 @@ def drag(c,before,after,side,table,use):
     # state; only public handler results are exposed.
     c=depart(c,before,after,side,table,use)
     c=install(c,after,side,use)
-    incoming=before._replace(active=before.active.at[_r(before),side].set(after.active[_r(after),side]))
+    incoming=before._replace(active=_li.put(before.active,_r(before),(side,),_li.take(after.active,_r(after),side)))
     return entry(c,incoming,after,side,table,use) if table is not None else observe(c,after,use)
 
 
 def public_move_state(c,before,after,side,move,use):
     """Observable volatile starts/ends, not private remaining durations."""
     for target in (side,1-side):
-        p=after.active[_r(after),target]
+        p=_li.take(after.active,_r(after),target)
         for key,old,new in (
             ('sub_present',_get(before,'substitute_hp',target)>0,_get(after,'substitute_hp',target)>0),
             ('confusion_turns',_get(before,'confusion_counter',target)>0,_get(after,'confusion_counter',target)>0),
@@ -524,20 +524,20 @@ def wish(c,side,use,*,start=False,resolved=False):
     rearm. A full-HP landing has no heal line and stays pending until TURN.
     """
     t=c.trackers;f=t.field_features;r=j.arange(len(t.error));use=_mask(use,len(r))
-    old=f['wish_set_turn'][r,side];arm=(old<0)|((t.turn-old)>1)
+    old=_li.take(f['wish_set_turn'],r,side);arm=(old<0)|((t.turn-old)>1)
     declared=j.where(use&j.asarray(start)&arm,t.turn,old)
     declared=j.where(use&~j.asarray(start)&_mask(resolved,len(r)),-1,declared)
     elapsed=t.turn-declared
     pending=(declared>=0)&(elapsed<=1)
     remaining=j.where((declared>=0)&(elapsed>=0)&(elapsed<=1),2-elapsed,0)
     return c._replace(trackers=t._replace(field_features={**f,
-        'wish_set_turn':f['wish_set_turn'].at[r,side].set(declared),
-        'wish_turns':f['wish_turns'].at[r,side].set(j.where(use,remaining,f['wish_turns'][r,side])),
-        'wish_pending':f['wish_pending'].at[r,side].set(j.where(use,pending,f['wish_pending'][r,side]))}))
+        'wish_set_turn':_li.put(f['wish_set_turn'],r,(side,),declared),
+        'wish_turns':_li.put(f['wish_turns'],r,(side,),j.where(use,remaining,_li.take(f['wish_turns'],r,side))),
+        'wish_pending':_li.put(f['wish_pending'],r,(side,),j.where(use,pending,_li.take(f['wish_pending'],r,side)))}))
 
 
 def before_move(c,state,side,result,use,*,loafing=False,sleep_usable=False):
-    p=state.active[_r(state),side]
+    p=_li.take(state.active,_r(state),side)
     truant_cant=use&j.asarray(loafing)&((result.status!=5)|j.asarray(sleep_usable))&(result.status!=6)
     c=c._replace(trackers=port.anchor(c.trackers,side,truant_cant,loaf=True))
     asleep=use&(_get(state,'status',side)==5)&(result.status==5)
@@ -549,19 +549,19 @@ def before_move(c,state,side,result,use,*,loafing=False,sleep_usable=False):
 
 
 def volatile(c,state,side,name,value,use):
-    r=_r(state);p=state.active[r,side];slot=j.clip(c.trackers.physical_to_public[r,side,p],0,5)
-    old=c.trackers.public_volatiles[r,side,slot];new=old.at[:,VOLATILE_NAMES.index(name)].set(value)
+    r=_r(state);p=_li.take(state.active,r,side);slot=j.clip(_li.take(c.trackers.physical_to_public,r,side,p),0,5)
+    old=_li.take(c.trackers.public_volatiles,r,side,slot);new=old.at[:,VOLATILE_NAMES.index(name)].set(value)
     return c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,new,use))
 
 
 def baton_copy(c,state,side,outgoing,use):
-    r=_r(state);p=state.active[r,side];src=j.clip(c.trackers.physical_to_public[r,side,outgoing],0,5)
+    r=_r(state);p=_li.take(state.active,r,side);src=j.clip(_li.take(c.trackers.physical_to_public,r,side,outgoing),0,5)
     names={'confusion','leechseed','substitute','solarbeam'}
     allowed=j.asarray([name in names for name in VOLATILE_NAMES])
-    bag=c.trackers.public_volatiles[r,side,src]&allowed[None,:]
+    bag=_li.take(c.trackers.public_volatiles,r,side,src)&allowed[None,:]
     c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
     for name in ('confusion_turns','sub_present','meanlook_trap'):
-        value=c.trackers.mon_features[name][r,side,src]
+        value=_li.take(c.trackers.mon_features[name],r,side,src)
         c=feature(c,side,p,name,value,use)
     c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,j.full_like(p,-2),use))
     return c
