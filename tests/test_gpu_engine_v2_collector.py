@@ -275,6 +275,24 @@ class RefillCollectorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             collector.rebind(v2.roster_from_blocks(second))
 
+    def test_padded_history_slots_keep_rows_equal_and_layout_stable(self):
+        self.assertEqual([v2.history_slots(h) for h in (0, 1, 2, 3, 4, 5, 9, 32)], [0, 1, 2, 4, 4, 8, 16, 32])
+        blocks, labels, config, bindings = declaration((0, 1, 1, 0, 1, 0, 0, 1, 0))
+        archives, groups = v2.canonical_groups(ARCHIVES[0], ARCHIVES[1:2], slots=2)
+        self.assertEqual(len(archives), 3);self.assertTrue(archives[2].startswith(v2.PAD_PREFIX));self.assertEqual(len(groups), 5)
+        wider, _ = v2.canonical_groups(ARCHIVES[0], ARCHIVES[1:3], slots=2)
+        self.assertEqual(len(wider), 3)
+        params = tuple({'actor': j.array(ARCHIVES.index(a) if a in ARCHIVES else 0, j.int32)} for a in archives)
+        with seams():
+            original, _ = run_original(blocks, labels, config, bindings)
+            roster = v2.roster_from_blocks(blocks, archives=archives, groups=groups)
+            self.assertEqual(roster.counts[3:].tolist(), [0, 0])
+            collector = v2.RefillCollector(NS(struggle=j.array(2, j.int32)), NS(belief=None), config, labels, roster,
+                lanes=6, max_requests=MAX_REQUESTS, chunk_steps=CHUNK, rows_per_game=8,
+                layout_counts=v2.expected_counts(groups, 9, 0.5), shrink_factor=2, min_lanes=1)
+            store = v2.finalize(collector.run(params), loss_config=V5LossConfig())
+        self.compare_rows(original, store)
+
     def test_row_buffer_overflow_segments_and_numpy_export_keep_every_row(self):
         blocks, labels, config, bindings = declaration()
         with seams():

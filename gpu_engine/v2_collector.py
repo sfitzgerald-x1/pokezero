@@ -85,16 +85,32 @@ class Roster:
     def counts(self):return np.bincount(self.group_of_game, minlength=len(self.groups)).astype(np.int64)
 
 
-def canonical_groups(current_archive, past_archives):
+PAD_PREFIX = 'unused-history-slot-'
+
+
+def history_slots(count):
+    """Bucket a history size to the next power of two (0, 1, 2, 4, 8, ...)."""
+    if type(count) is not int or count < 0:raise ValueError('nonnegative history size required')
+    return 0 if count == 0 else 1 << (count - 1).bit_length()
+
+
+def canonical_groups(current_archive, past_archives, *, slots=None):
     """Archive order and actor-pair groups fixed by the snapshot history alone.
 
     Archive 0 is the current actor and archives 1..h the historical ones in the
     given order. Groups are self-play (0, 0) then, per historical archive k,
     (0, k) and (k, 0) for the two learner seats. Iterations with the same number
-    of historical snapshots therefore share one lane layout and one compiled
-    kernel set, whatever the planner's per-game draws were.
+    of historical slots therefore share one lane layout and one compiled kernel
+    set, whatever the planner's per-game draws were. ``slots`` (>= h) pads the
+    history with placeholder archives that receive no games, so a growing
+    history only changes layout at bucket boundaries (see ``history_slots``);
+    callers pass the current actor's parameters for placeholder archives.
     """
-    archives = (current_archive, *tuple(past_archives))
+    past = tuple(past_archives)
+    if slots is not None:
+        if type(slots) is not int or slots < len(past):raise ValueError('history slots must cover the real history')
+        past = past + tuple(f'{PAD_PREFIX}{k}' for k in range(len(past), slots))
+    archives = (current_archive, *past)
     if len(set(archives)) != len(archives):raise ValueError('distinct current and historical archives required')
     groups = ((0, 0),) + tuple(pair for k in range(1, len(archives)) for pair in ((0, k), (k, 0)))
     return archives, groups
