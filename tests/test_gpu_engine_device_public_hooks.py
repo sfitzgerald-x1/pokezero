@@ -110,16 +110,16 @@ class PublicHooksTests(unittest.TestCase):
   s=state(6);yes=j.ones(6,bool);r=j.arange(6)
   base=tables();b=NS(**base._asdict(),public_foe_targeted=j.ones(10,bool).at[4].set(False),
        public_pressure=j.zeros(10,bool).at[2].set(True))
-  # Actual private Pressure is deliberately present on EVERY foe. Only public
-  # native or copied Pressure can double a caller's source-targeted charge.
-  s=s._replace(ability=s.ability.at[:,1,0].set(2))
+  # These PP facts are read by seat1 about seat0. Seat1 knows its own active
+  # ability even when the Pressure start line was not shared with seat0.
+  s=s._replace(ability=s.ability.at[:,1,0].set(j.array([2,2,2,3,2,2],j.int32)))
   c=h.initialize(s,b)
   h.reveal_ability(c,s,1,j.array([False,True,False,False,True,True]),ability=j.full(6,2,j.int32))
   h.reveal_ability(c,s,1,j.array([False,False,True,True,False,False]),ability=j.full(6,3,j.int32))
   c.trackers=h._write(c.trackers,'borrowed_ability',1,s.active[:,1],j.full(6,2,j.int32),j.array([False,False,True,False,False,False]))
   move=j.array([2,2,2,2,4,2],j.int32)
   h.move(c,s,0,move,yes,pp_use=j.array([True,True,True,True,True,False]))
-  self.assertEqual(c.trackers.pp_used[:,0,0,0].tolist(),[1,2,2,1,1,0])
+  self.assertEqual(c.trackers.pp_used[:,0,0,0].tolist(),[2,2,2,1,1,0])
   # An observed bench member's genuine party cure clears only its public
   # major-status clocks. Unseen members do not become public encounters.
   asleep=s._replace(active=s.active.at[:,1].set(3),status=s.status.at[:,1,3].set(5))

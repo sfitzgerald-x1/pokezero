@@ -328,8 +328,10 @@ def depart(c,before,after,side,table,use):
 def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,preparation=False):
     """Actual declarations charge public PP, never hidden physical PP cost.
 
-    Original source target semantics and only publicly running Pressure can
-    double a caller charge. Called Sleep Talk children remain uncharged.
+    The ledger for side s is read as opponent knowledge only by seat 1-s.
+    That observer knows its OWN active ability, including owner-only Pressure;
+    using it for PP accounting does not reveal that ability to the acting seat.
+    Original source targeting applies; called Sleep Talk children stay uncharged.
     """
     # Gen3 emits cant(slp) even for Sleep Talk/Snore, then an actual usable
     # original MOVE classifies that cant as skippedTime. Called children and
@@ -360,13 +362,14 @@ def move(c,state,side,move,use,*,pp_use=False,original=True,count_turn=True,prep
     if (c.belief_tables is not None and hasattr(c.belief_tables,'public_foe_targeted')
             and hasattr(c.belief_tables,'public_pressure')):
         targets=c.belief_tables.public_foe_targeted;pressure=c.belief_tables.public_pressure
-        foe=1-side;foe_slot=j.clip(t.active_slot[r,foe],0,5)
-        copied=t.borrowed_ability[r,foe,foe_slot]
-        running=j.where(copied!=0,copied,t.original_ability[r,foe,foe_slot])
+        foe=1-side
+        # This is the receiving observer's exact owning fact, not the acting
+        # seat's hidden opponent fact. Keep all shared reveal arrays untouched.
+        running=_get(state,'ability',foe)
         valid_ability=(running>0)&(running<len(pressure))
-        known_pressure=valid_ability&pressure[j.clip(running,0,len(pressure)-1)]
+        own_pressure=valid_ability&pressure[j.clip(running,0,len(pressure)-1)]&(_get(state,'hp',foe)>0)
         target_known=(actual_move>0)&(actual_move<len(targets))
-        extra=known_pressure&target_known&targets[j.clip(actual_move,0,len(targets)-1)]
+        extra=own_pressure&target_known&targets[j.clip(actual_move,0,len(targets)-1)]
     charge=(use&j.asarray(pp_use)).astype(j.int32)*(1+extra.astype(j.int32))
     pp=t.pp_used.at[r,side,slot,at].set(count+charge)
     c=c._replace(trackers=t._replace(observed_moves=observed,pp_used=pp))
