@@ -322,7 +322,8 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
 
 
 def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False,
-        raw_retention_every=1,transient_raw_root=None,resident_cache_bytes=None,teacher_queue_chunks=0,iteration_policy_lag=0,teacher_vectorized=False):
+        raw_retention_every=1,transient_raw_root=None,resident_cache_bytes=None,teacher_queue_chunks=0,iteration_policy_lag=0,teacher_vectorized=False,
+        python_rollout=False,python_workers=1):
     from . import v5_run as run,v5_phasec as phase
     _absolute(str(run_root))
     if type(resume) is not bool:raise ValueError('explicit resume choice required')
@@ -330,10 +331,17 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     if resident_cache_bytes is not None and (type(resident_cache_bytes)is not int or resident_cache_bytes<=0):
         raise ValueError('positive resident cache byte budget required')
     if type(device_rollout)is not bool:raise ValueError('explicit device rollout choice required')
+    if type(python_rollout)is not bool or python_rollout and device_rollout:
+        raise ValueError('explicit mutually exclusive Python/device rollout choice required')
+    if type(python_workers)is not int or python_workers<1 or not python_rollout and python_workers!=1:
+        raise ValueError('positive Python game workers require the explicit Python route')
+    if python_rollout and (inputs.plan.model.arm=='D'or device_teacher or teacher_frame_batch
+            or teacher_vectorized or teacher_queue_chunks or cache_workers or raw_retention_every!=1 or transient_raw_root is not None):
+        raise ValueError('Python route is raw A/B; device teacher/cache/spool options do not apply')
     if type(teacher_vectorized)is not bool or teacher_vectorized and(not device_teacher or not teacher_frame_batch):
         raise ValueError('vectorized labeling requires the explicit D frame teacher')
-    if type(iteration_policy_lag)is not int or iteration_policy_lag not in (0,1) or iteration_policy_lag and not device_rollout:
-        raise ValueError('one-iteration lag requires the explicit device route')
+    if type(iteration_policy_lag)is not int or iteration_policy_lag not in (0,1) or iteration_policy_lag and not(device_rollout or python_rollout):
+        raise ValueError('one-iteration lag requires an explicit device or Python route')
     if type(device_teacher)is not bool or device_teacher and (not device_rollout or inputs.plan.model.arm!='D'):
         raise ValueError('explicit D device teacher route required')
     if device_rollout and inputs.plan.model.arm=='D' and not device_teacher:
@@ -342,7 +350,11 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     if getattr(inputs.plan,'evaluation',None) is None or not callable(evaluation_hook):
         raise run.MissingDependency('declared reviewed evaluation protocol and genuine panel executor required')
     _source(inputs.runtime);_memory(inputs.runtime['memory_policy'],apply=True);_probe(inputs.runtime)
-    prepared,pool,public,contract=prepare_device_runtime(inputs) if device_rollout else prepare_runtime(inputs)
+    if python_rollout:
+        from . import v5_python_backend
+        backend=v5_python_backend.RuntimeBackend(v5_python_backend.prepare(inputs),workers=python_workers)
+    else:
+        prepared,pool,public,contract=prepare_device_runtime(inputs) if device_rollout else prepare_runtime(inputs)
     options=dict(device_rollout=True) if device_rollout else {}
     if cache_workers:options['cache_workers']=cache_workers
     if teacher_frame_batch:options['teacher_frame_batch']=True
@@ -351,7 +363,8 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     if device_teacher:options['device_teacher']=True
     if raw_retention_every!=1 or transient_raw_root is not None:
         options.update(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
-    backend=phase.build_backend(inputs.plan,prepared,pool,public_config=public,actor_contract=contract,gender_policy=inputs.gender_policy,**options)
+    if not python_rollout:
+        backend=phase.build_backend(inputs.plan,prepared,pool,public_config=public,actor_contract=contract,gender_policy=inputs.gender_policy,**options)
     from contextlib import nullcontext
     from .v5_training import resident_cache_policy
     with (nullcontext()if resident_cache_bytes is None else resident_cache_policy(resident_cache_bytes)):
@@ -366,6 +379,8 @@ def main(argv=None,*,evaluation_hook=None):
     for name in ('declaration','expected-declaration-sha256','runtime','expected-runtime-sha256','run-root'):parser.add_argument('--'+name,required=True)
     parser.add_argument('--evaluation-protocol');parser.add_argument('--expected-evaluation-protocol-sha256')
     parser.add_argument('--resume',action='store_true');parser.add_argument('--device-rollout',action='store_true');parser.add_argument('--device-teacher',action='store_true')
+    parser.add_argument('--python-rollout',action='store_true',help='Explicit owning Showdown A/B backend; never enabled automatically')
+    parser.add_argument('--python-workers',type=int,default=1)
     parser.add_argument('--external-evaluation',action='store_true',help='Publish frozen CPU panel requests and continue training')
     parser.add_argument('--cache-workers',type=int,default=0)
     parser.add_argument('--teacher-frame-batch',action='store_true')
@@ -397,6 +412,8 @@ def main(argv=None,*,evaluation_hook=None):
         print(json.dumps(dict(status='BOUND_INPUTS_ONLY_NO_RUNTIME_OR_MODEL',arm=args.arm,declaration_sha256=inputs.declaration_sha256)))
         return 0
     options=dict(device_rollout=True) if args.device_rollout else {}
+    if args.python_rollout:options['python_rollout']=True
+    if args.python_workers!=1:options['python_workers']=args.python_workers
     if args.cache_workers:options['cache_workers']=args.cache_workers
     if args.teacher_frame_batch:options['teacher_frame_batch']=True
     if args.teacher_vectorized:options['teacher_vectorized']=True
