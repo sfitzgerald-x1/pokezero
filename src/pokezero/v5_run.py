@@ -760,14 +760,14 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
             except Exception as error:
                 store.emit('STOP',iteration=iteration,reason='PREPARATION: '+type(error).__name__+': '+str(error))
                 return dict(status='STOPPED',reason='PREPARATION: '+str(error),statuses=statuses)
-            store.emit('BATCH_STARTED',iteration=iteration,batch=index,streams=[g.stream_id for g in batch.games],assignments=assignments,
-                **(dict(deferred_starts=True)if deferred else{}))
+            batch_event=store.emit('BATCH_STARTED',iteration=iteration,batch=index,streams=[g.stream_id for g in batch.games],assignments=assignments,
+                **(dict(deferred_starts=True,actor=asdict(current))if deferred else{}))
             if not deferred:
                 for g in batch.games:statuses[g.stream_id]='RUNNING'
             def started(stream_id):
                 if stream_id not in {g.stream_id for g in batch.games}or statuses.get(stream_id)!='NOT_ATTEMPTED':
                     raise ValueError('unexpected/replayed actual game start')
-                store.emit('GAME_STARTED',stream_id=stream_id,iteration=iteration,batch=index)
+                store.emit('GAME_STARTED',stream_id=stream_id,iteration=iteration,batch=index,batch_sequence=batch_event['sequence'])
                 statuses[stream_id]='RUNNING'
             def ended(stream_id,status,**facts):
                 if statuses.get(stream_id)!='RUNNING':raise ValueError('unexpected/replayed game completion')
