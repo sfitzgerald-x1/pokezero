@@ -1,8 +1,9 @@
-"""Snapshot-bound v4 B2 runtime for the two declared canary endpoints only.
+"""Snapshot-bound v4 B2 runtime, with an explicit descriptive-label option.
 
 The production9375 factory stays unchanged. This explicit actor version keeps
-its source/category/model/mask contract and substitutes only the hash of one
-of the endpoint's immutable checkpoints. Each worker retains two model/code
+its source/category/model/mask contract and substitutes the immutable checkpoint
+hash. The opt-in lineage option permits only a bound policy label difference.
+Each worker retains two model/code
 holders; every game still creates fresh original B2 providers and histories.
 """
 import argparse
@@ -20,6 +21,26 @@ from .live_protocol_bridge import OwningActorFactory
 _ORIGINS = weakref.WeakKeyDictionary()
 
 
+def _checked_model_hash(model_config, expected, policy_ids=None):
+    """An opt-in descriptive lineage read may differ ONLY in its policy label.
+
+    Keep the native label and native hash in the actor contract. Restoring the
+    explicitly bound reference label must reproduce the entire champion config.
+    This never edits a checkpoint, tensor, feature mask or category ordering.
+    """
+    from .live_protocol_actor import _sha,_canonical
+    native=_sha(_canonical(model_config));checked=dict(model_config)
+    if policy_ids is not None:
+        if (type(policy_ids)is not tuple or len(policy_ids)!=2
+                or any(type(x)is not str or not x for x in policy_ids)
+                or policy_ids[0]==policy_ids[1] or checked.get('policy_id')!=policy_ids[0]):
+            raise ValueError('explicit actual/reference descriptive policy labels required')
+        checked['policy_id']=policy_ids[1]
+    if _sha(_canonical(checked))!=expected:
+        raise ValueError('original9375 configuration required apart from bound descriptive label')
+    return native
+
+
 @dataclass(frozen=True, eq=False)
 class Factory(OwningActorFactory):
     pass
@@ -34,13 +55,16 @@ def check_factory(config, factory):
     owner, checkpoint, contract, backend, policy = origin
     _require(owner() is factory and factory.contract == contract and factory.backend_factory is backend and factory.policy_factory is policy
         and str(Path(config.checkpoint).resolve()) == checkpoint and _checkpoint_sha(checkpoint) == contract.checkpoint_sha256
-        and replace(contract, checkpoint_sha256=ActorContract.champion().checkpoint_sha256) == ActorContract.champion(),
+        and replace(contract, checkpoint_sha256=ActorContract.champion().checkpoint_sha256,
+            model_config_sha256=ActorContract.champion().model_config_sha256) == ActorContract.champion(),
         'same bound original-v4 endpoint snapshot/source required')
 
 
 class Runtime:
     CELL_FIELDS = frozenset(('games', 'seed_start', 'foulplay_random_seed', 'pokezero_player', 'foulplay_cpu_affinity'))
-    def __init__(self): self.bound = {}
+    def __init__(self, *, descriptive_policy_ids=None):
+        self.bound = {}
+        self.descriptive_policy_ids=descriptive_policy_ids
     def prepare(self, config, *, expected_checkpoint_sha256):
         from . import foulplay_bridge as bridge
         from .live_protocol_actor import ActorContract, JaxBackend, RawPolicy, _sha, _canonical, _vocab_sha, _mask_values, _require
@@ -56,13 +80,16 @@ class Runtime:
         identity = {k: v for k, v in asdict(config).items() if k not in self.CELL_FIELDS}
         if checkpoint in self.bound:
             entry = self.bound[checkpoint]
+            model_hash=_checked_model_hash(entry['result'].model_config.to_dict(),
+                contract.model_config_sha256,self.descriptive_policy_ids)
+            contract=replace(contract,model_config_sha256=model_hash)
             _require(entry['identity'] == identity and entry['contract'] == contract, 'worker snapshot/runtime changed')
             check_factory(config, entry['factory']); return entry
         _require(len(self.bound)<2,'only CONTROL and final CANARY snapshots fit one worker')
         model, result = bridge.load_transformer_checkpoint(checkpoint, map_location='cpu')
         mc = result.model_config
-        _require(_sha(_canonical(mc.to_dict())) == contract.model_config_sha256,
-            'fine tuning cannot alter original9375 model configuration')
+        model_hash=_checked_model_hash(mc.to_dict(),contract.model_config_sha256,self.descriptive_policy_ids)
+        contract=replace(contract,model_config_sha256=model_hash)
         bridge._warn_on_belief_provenance_mismatch(config, result)
         spec = bridge.observation_spec_from_model_config(mc)
         vocab = bridge.category_vocab_from_model_config(mc, config.showdown_root)
