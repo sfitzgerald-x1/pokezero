@@ -12,6 +12,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
+import time
 
 import numpy as np
 
@@ -27,7 +28,7 @@ def build_module(module, build_dir=None, workers=None):
     build_dir = Path(build_dir or os.environ.get('V2E_CUDA_BUILD') or Path.home() / '.cache' / 'v2e-cuda')
     h = hashlib.sha256(module.digest.encode())
     for path in sorted(v2e_cuda.SOURCE_DIR.glob('*.cuh')):h.update(path.read_bytes())
-    h.update(repr(v2e_cuda.NVCC_FLAGS).encode())
+    h.update(repr(v2e_cuda.NVCC_FLAGS).encode());h.update(v2e_cuda.toolchain_id().encode())
     key = h.hexdigest()[:16]
     work = build_dir / f'gen-{module.name}-{key}';target = work / f'libv2e-gen-{module.name}.so'
     if target.exists():return target
@@ -43,7 +44,8 @@ def build_module(module, build_dir=None, workers=None):
             raise RuntimeError(f'nvcc failed for {module.name}/{name} ({result.returncode}):\n' + '\n'.join(errors))
         return obj
     units = sorted(n for n in module.files if n.endswith('.cu'))
-    with ThreadPoolExecutor(max_workers=workers or min(32, os.cpu_count() or 8)) as pool:
+    workers = workers or int(os.environ.get('V2E_BUILD_WORKERS', 0)) or min(32, os.cpu_count() or 8)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         objects = list(pool.map(compile_one, units))
     tmp = target.with_suffix(f'.so.tmp{os.getpid()}')
     result = subprocess.run([v2e_cuda.nvcc(), f'-arch={v2e_cuda.ARCH}', '-shared', '-o', str(tmp), *map(str, objects)], capture_output=True, text=True)
@@ -71,6 +73,13 @@ class Generated:
         return jax.tree.unflatten(self.out_tree, out[:-2]), out[-1]
 
 
+def _walk(jaxpr):
+    from jax.extend import core as jcore
+    for e in jaxpr.eqns:
+        yield e
+        for sub in jcore.jaxprs_in_params(e.params):yield from _walk(sub)
+
+
 def trace(fn, example):
     """Closed jaxpr of fn over example's pytree with every leaf's axis 0 set to LANES."""
     import jax
@@ -87,21 +96,33 @@ def trace(fn, example):
     return closed, avals, in_tree, out_tree
 
 
-def compile_function(name, fn, example, build_dir=None, profile=False):
-    """example: tuple of positional arguments (pytrees of arrays with a lane axis)."""
+def compile_function(name, fn, example, build_dir=None, profile=False, mode='warp'):
+    """example: tuple of positional arguments (pytrees of arrays with a lane axis).
+
+    mode: 'warp' (one warp per lane, array-heavy modules) or 'thread' (one thread per lane, scalar-heavy).
+    """
     import jax
     import jax.numpy as j
     from gpu_engine import v2e_modules
-    if name in _registered:return _registered[name]
+    cached = _registered.get(name)
+    if cached is not None:
+        if cached.fn is not fn or cached.mode != mode:raise ValueError(f'generated module {name!r} already compiled for a different function')
+        return cached
+    begin = time.perf_counter()
     with v2e_modules.trace_substitutions():
         closed, avals, in_tree, out_tree = trace(lambda *a: fn(*a), tuple(example))
-    module = v2e_j2c.generate(name, closed, avals, profile=profile)
+    traced = time.perf_counter()
+    module = v2e_j2c.generate(name, closed, avals, profile=profile, mode=mode)
+    generated = time.perf_counter()
     path = build_module(module, build_dir)
+    module.stats.update(trace_s=traced - begin, generate_s=generated - traced, build_s=time.perf_counter() - generated,
+        equations=sum(1 for _ in _walk(closed.jaxpr)))
     lib = ctypes.cdll.LoadLibrary(str(path))
     target = f'v2e_gen_{name}_{module.digest}'
     jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(getattr(lib, f'V2eGen_{name}')), platform='CUDA')
     consts = [j.asarray(c) for c in module.consts]
     fn_ = Generated(module, in_tree, out_tree, consts, target)
     fn_.library = lib;fn_.path = path
+    fn_.fn = fn;fn_.mode = mode
     _registered[name] = fn_
     return fn_

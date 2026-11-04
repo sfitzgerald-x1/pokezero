@@ -55,6 +55,20 @@ __host__ __device__ inline uint32_t random_bits32(Key k, uint32_t index) {
   return x0 ^ x1;
 }
 
+// Word w of threefry(k, (hi, lo)): random_split / random_fold_in elements.
+__host__ __device__ inline uint32_t threefry_word(uint32_t k0, uint32_t k1, uint32_t hi, uint32_t lo, int w) {
+  uint32_t x0 = hi, x1 = lo;
+  threefry2x32(k0, k1, x0, x1);
+  return w ? x1 : x0;
+}
+
+// random_bits (32-bit) element with counter (hi, lo).
+__host__ __device__ inline uint32_t threefry_xor(uint32_t k0, uint32_t k1, uint32_t hi, uint32_t lo) {
+  uint32_t x0 = hi, x1 = lo;
+  threefry2x32(k0, k1, x0, x1);
+  return x0 ^ x1;
+}
+
 // jax.random.randint(k, shape, minval, maxval, int32), flattened element `index`.
 __host__ __device__ inline int32_t randint_i32(Key k, uint32_t index, int32_t minval, int32_t maxval) {
   const Key k1 = split_at(k, 0u), k2 = split_at(k, 1u);
