@@ -114,6 +114,28 @@ class V5LiveProtocolTests(unittest.TestCase):
             terminal=self.actor(stream=32,battle='terminal');self.feed(terminal,lines=('|win|Player1',))
             with self.assertRaises(live.NoAction):terminal.decide(terminal.snapshot_boundary(),rng=random.Random(1))
 
+    def test_training_capture_is_same_successful_encode_and_expires_on_new_wire(self):
+        with jax.default_matmul_precision('highest'):
+            for owner in (0,1):
+                actor=self.actor(owner=owner,stream=91+owner,battle='capture'+str(owner));self.feed(actor)
+                snapshot=actor.snapshot_boundary()
+                with self.assertRaises(ValueError):actor.decision_v5_observation(snapshot,frame=3)
+                actor.decide(snapshot,rng=random.Random(9))
+                count=actor._backend._compiled_functions.calls
+                old,public=actor.decision_v5_observation(snapshot,frame=3)
+                self.assertEqual(public.address,contract.DecisionAddress(91+owner,3,owner))
+                for name in live.SHAPES:
+                    original=getattr(actor.decision_observation(snapshot),name)
+                    np.testing.assert_array_equal(original,getattr(old,name))
+                for name in ('categorical_ids','numeric_features','token_type_ids','attention_mask'):
+                    np.testing.assert_array_equal(np.asarray(getattr(public,name),dtype=np.float32),
+                        np.asarray(actor._backend.last_inputs[name])[0,0])
+                self.assertEqual(count,actor._backend._compiled_functions.calls)
+                self.feed(actor,lines=('|turn|2',))
+                with self.assertRaises(ValueError):actor.decision_v5_observation(snapshot,frame=3)
+                actor.close_game()
+                with self.assertRaises(ValueError):actor.decision_v5_observation(snapshot,frame=3)
+
     def test_deadline_includes_owner_fold_encoding_and_late_forward_cannot_publish_choice(self):
         with jax.default_matmul_precision('highest'):
             actor=self.actor(stream=41,battle='deadline');clock=[10.]
