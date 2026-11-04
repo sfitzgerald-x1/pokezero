@@ -8,6 +8,7 @@ refreshes. No engine/world, damage formula or private opponent fact is read.
 from typing import NamedTuple
 import jax.numpy as j
 from . import public_belief as original
+from . import lane_index as _li
 
 
 class State(NamedTuple):
@@ -34,21 +35,21 @@ def _ensure(trackers, tables):
 def _member(trackers, tables, side, physical, use):
     b=len(trackers.error);r=j.arange(b);physical=j.asarray(physical,j.int32)
     if physical.shape!=(b,):raise ValueError('public belief physical subject requires B rows')
-    slot=trackers.physical_to_public[r,side,j.clip(physical,0,5)];at=j.clip(slot,0,5)
-    species=trackers.species[r,side,at];pools=tables.species_initial_mask
+    slot=_li.take(trackers.physical_to_public,r,side,j.clip(physical,0,5));at=j.clip(slot,0,5)
+    species=_li.take(trackers.species,r,side,at);pools=tables.species_initial_mask
     valid=j.broadcast_to(j.asarray(use,bool),(b,))&(physical>=0)&(physical<6)&(slot>=0)&(slot<6)
-    valid&=trackers.present[r,side,at]&(species>0)&(species<pools.shape[0])
+    valid&=_li.take(trackers.present,r,side,at)&(species>0)&(species<pools.shape[0])
     pool=pools[j.clip(species,0,pools.shape[0]-1)]
     return r,at,species,pool,valid
 
 
 def _state(trackers,r,side,at,species):
-    carry=trackers.visible_belief;hard=trackers.belief_mask[r,side,at]
+    carry=trackers.visible_belief;hard=_li.take(trackers.belief_mask,r,side,at)
     # All admitted subjects have an actual source encounter. Inconsistency is
     # determined by hard==0, as in the existing device projector; no fallback
     # is written into the raw hard mask or standing pin.
     return original.BeliefState(species,j.ones_like(species,bool),hard,
-        carry.pin[r,side,at],carry.pin_active[r,side,at],j.ones_like(species,bool),carry.conflicts[r,side,at])
+        _li.take(carry.pin,r,side,at),_li.take(carry.pin_active,r,side,at),j.ones_like(species,bool),_li.take(carry.conflicts,r,side,at))
 
 
 class _Pool(NamedTuple):
@@ -63,8 +64,8 @@ def refresh(trackers,tables,side,physical,use):
     current=_state(trackers,r,side,at,species)
     materialized,_=original.materialize(current,_Pool(tables.species_initial_mask))
     def copy(old,new):
-        before=old[r,side,at]
-        return old.at[r,side,at].set(j.where(valid.reshape(valid.shape+(1,)*(before.ndim-1)),new,before))
+        before=_li.take(old,r,side,at)
+        return _li.put(old,r,(side,at),j.where(valid.reshape(valid.shape+(1,)*(before.ndim-1)),new,before))
     return trackers._replace(visible_belief=carry._replace(
         visible_hard=copy(carry.visible_hard,current.hard),visible_pin=copy(carry.visible_pin,current.pin),
         visible_pin_active=copy(carry.visible_pin_active,current.pin_active),conflicts=copy(carry.conflicts,materialized.conflicts)))
@@ -87,9 +88,9 @@ def register_variant_survivors(trackers,tables,side,physical,incoming,use):
     current=_state(trackers,r,side,at,species)
     updated,changed=original.narrow_pin(current,incoming,valid=valid)
     return trackers._replace(visible_belief=carry._replace(
-        pin=carry.pin.at[r,side,at].set(updated.pin),
-        pin_active=carry.pin_active.at[r,side,at].set(updated.pin_active),
-        conflicts=carry.conflicts.at[r,side,at].set(updated.conflicts))),changed
+        pin=_li.put(carry.pin,r,(side,at),updated.pin),
+        pin_active=_li.put(carry.pin_active,r,(side,at),updated.pin_active),
+        conflicts=_li.put(carry.conflicts,r,(side,at),updated.conflicts))),changed
 
 
 def exclude(trackers,tables,side,physical,facts,use,*,kind):
@@ -108,15 +109,15 @@ def exclude(trackers,tables,side,physical,facts,use,*,kind):
     if facts.ndim!=2 or facts.shape[0]!=b or facts.shape[1]<1:raise ValueError('public exclusion names require BxK')
     r,at,species,pool,valid=_member(trackers,tables,side,physical,use)
     table=getattr(tables,kind+'_mask');field='excluded_abilities' if kind=='ability' else 'excluded_items'
-    ledger=getattr(carry,field);before=ledger[r,side,at]
+    ledger=getattr(carry,field);before=_li.take(ledger,r,side,at)
     valid&=j.all((facts>0)&(facts<table.shape[1]),axis=-1)
     bits=j.where(j.arange(before.shape[-1])[None,None,:]==facts[...,None]//32,
         j.uint32(1)<<((facts%32)[...,None].astype(j.uint32)),j.uint32(0))
     names=j.bitwise_or.reduce(bits,axis=1);fresh=j.any((names&~before)!=0,axis=-1)&valid
     excluded=table[j.clip(species,0,table.shape[0]-1)[:,None],j.clip(facts,0,table.shape[1]-1)]
     excluded=j.bitwise_or.reduce(excluded,axis=1)
-    hard=trackers.belief_mask;old=hard[r,side,at]
-    hard=hard.at[r,side,at].set(j.where(fresh[:,None],old&~excluded,old))
-    ledger=ledger.at[r,side,at].set(j.where(fresh[:,None],before|names,before))
+    hard=trackers.belief_mask;old=_li.take(hard,r,side,at)
+    hard=_li.put(hard,r,(side,at),j.where(fresh[:,None],old&~excluded,old))
+    ledger=_li.put(ledger,r,(side,at),j.where(fresh[:,None],before|names,before))
     trackers=trackers._replace(belief_mask=hard,visible_belief=carry._replace(**{field:ledger}))
     return refresh(trackers,tables,side,physical,fresh)

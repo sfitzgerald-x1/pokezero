@@ -8,6 +8,7 @@ hooks and appended knowledge fields; this module does not establish parity or th
 from typing import NamedTuple
 import jax
 import jax.numpy as j
+from . import lane_index as _li
 
 SCHEMA='pokezero.engine_device_public_trackers.v2'
 BAD_ACTIVE=1
@@ -138,21 +139,21 @@ def _percent(hp,maximum):
 def _observe(t,state,side,physical,rows_active,*,identity):
     """Observe only a known active endpoint; never poll an opponent bench."""
     b=len(rows_active);r=j.arange(b);p=j.clip(physical,0,5)
-    slot=t.physical_to_public[r,side,p];at=j.clip(slot,0,5)
+    slot=_li.take(t.physical_to_public,r,side,p);at=j.clip(slot,0,5)
     use=rows_active&(physical>=0)&(physical<6)&(slot>=0)&(slot<6)
-    hp=state.hp[r,side,p];maximum=state.max_hp[r,side,p]
-    valid=(maximum>0)&(hp>=0)&(hp<=maximum)&(state.status[r,side,p]>=0)&(state.status[r,side,p]<=6)
+    hp=_li.take(state.hp,r,side,p);maximum=_li.take(state.max_hp,r,side,p)
+    valid=(maximum>0)&(hp>=0)&(hp<=maximum)&(_li.take(state.status,r,side,p)>=0)&(_li.take(state.status,r,side,p)<=6)
     if identity:
-        valid &= (state.species[r,side,p]>0)&(state.level[r,side,p]>0)&(state.level[r,side,p]<=100)&(state.gender[r,side,p]>=-1)&(state.gender[r,side,p]<=2)
+        valid &= (_li.take(state.species,r,side,p)>0)&(_li.take(state.level,r,side,p)>0)&(_li.take(state.level,r,side,p)<=100)&(_li.take(state.gender,r,side,p)>=-1)&(_li.take(state.gender,r,side,p)<=2)
     error=t.error|j.where(use&~valid,BAD_PUBLIC_VALUE,0)
     values={}
-    for name,value in [('hp_percent',_percent(hp,maximum)),('status',state.status[r,side,p]),('fainted',hp==0)]:
-        old=getattr(t,name);values[name]=old.at[r,side,at].set(j.where(use,value,old[r,side,at]))
-    old=t.boosts;values['boosts']=old.at[r,side,at].set(j.where(use[:,None],state.boosts[r,side,p],old[r,side,at]))
+    for name,value in [('hp_percent',_percent(hp,maximum)),('status',_li.take(state.status,r,side,p)),('fainted',hp==0)]:
+        old=getattr(t,name);values[name]=_li.put(old,r,(side,at),j.where(use,value,_li.take(old,r,side,at)))
+    old=t.boosts;values['boosts']=_li.put(old,r,(side,at),j.where(use[:,None],_li.take(state.boosts,r,side,p),_li.take(old,r,side,at)))
     if identity:
         for name in ('species','level','gender'):
-            old=getattr(t,name);values[name]=old.at[r,side,at].set(j.where(use,getattr(state,name)[r,side,p],old[r,side,at]))
-        old=t.present;values['present']=old.at[r,side,at].set(j.where(use,state.species[r,side,p]>0,old[r,side,at]))
+            old=getattr(t,name);values[name]=_li.put(old,r,(side,at),j.where(use,_li.take(getattr(state,name),r,side,p),_li.take(old,r,side,at)))
+        old=t.present;values['present']=_li.put(old,r,(side,at),j.where(use,_li.take(state.species,r,side,p)>0,_li.take(old,r,side,at)))
     return t._replace(error=error,**values)
 
 
@@ -160,14 +161,14 @@ def _install(t,state,side,active_rows):
     # side is either a scalar seat or one actual seat per row (speed order).
     # Pair EVERY seat gather/scatter with its row; [:, side] cross-products a
     # vector side into [B,B] and mixes independent games.
-    b=len(active_rows);r=j.arange(b);physical=state.active[r,side];p=j.clip(physical,0,5)
-    old=t.physical_to_public[r,side,p];fresh=old<0;slot=j.where(fresh,t.next_slot[r,side],old)
+    b=len(active_rows);r=j.arange(b);physical=_li.take(state.active,r,side);p=j.clip(physical,0,5)
+    old=_li.take(t.physical_to_public,r,side,p);fresh=old<0;slot=j.where(fresh,_li.take(t.next_slot,r,side),old)
     good=(physical>=0)&(physical<6)&(slot>=0)&(slot<6)
     use=active_rows&good;at=j.clip(slot,0,5)
-    mapping=t.physical_to_public.at[r,side,p].set(j.where(use,at,old))
-    next_slot=t.next_slot.at[r,side].set(t.next_slot[r,side]+(use&fresh).astype(j.int32))
-    current=t.active_physical.at[r,side].set(j.where(use,physical,t.active_physical[r,side]))
-    current_slot=t.active_slot.at[r,side].set(j.where(use,at,t.active_slot[r,side]))
+    mapping=_li.put(t.physical_to_public,r,(side,p),j.where(use,at,old))
+    next_slot=_li.put(t.next_slot,r,(side,),_li.take(t.next_slot,r,side)+(use&fresh).astype(j.int32))
+    current=_li.put(t.active_physical,r,(side,),j.where(use,physical,_li.take(t.active_physical,r,side)))
+    current_slot=_li.put(t.active_slot,r,(side,),j.where(use,at,_li.take(t.active_slot,r,side)))
     t=t._replace(physical_to_public=mapping,next_slot=next_slot,active_physical=current,active_slot=current_slot,
         error=t.error|j.where(active_rows&~good,BAD_ACTIVE,0))
     return _observe(t,state,side,physical,use,identity=True)
@@ -182,7 +183,7 @@ def initialize(state):
     r=j.arange(b);yes=j.ones(b,bool)
     for side in range(2):
         physical=j.clip(state.active[:,side],0,5)
-        side_order=t.own_order[:,side].at[r,physical].set(0).at[:,0].set(physical)
+        side_order=_li.put(t.own_order[:,side],r,(physical,),0).at[:,0].set(physical)
         t=t._replace(own_order=t.own_order.at[:,side].set(side_order))
         t=_install(t,state,side,yes)
     return t
@@ -209,7 +210,7 @@ def update(trackers,before,after,actions,*,active_rows=None):
         t=_observe(t,after,side,before.active[:,side],use,identity=False)
         incoming=after.active[:,side];p=j.clip(incoming,0,5)
         old_order=t.own_order[:,side];position=j.argmax(old_order==p[:,None],axis=1)
-        swapped=old_order.at[r,position].set(old_order[:,0]).at[:,0].set(p)
+        swapped=_li.put(old_order,r,(position,),old_order[:,0]).at[:,0].set(p)
         changed=use&(incoming>=0)&(incoming<6)&(incoming!=before.active[:,side])
         t=t._replace(own_order=t.own_order.at[:,side].set(j.where(changed[:,None],swapped,old_order)))
         t=_install(t,after,side,use)
@@ -220,28 +221,28 @@ def readout(trackers,observer_sides):
     """No engine/world argument: opposing private data cannot enter this view."""
     b=len(trackers.error);_shape(observer_sides,(b,),j.int32,'observer_sides')
     r=j.arange(b);owner=j.clip(observer_sides,0,1);foe=1-owner
-    take=lambda name:getattr(trackers,name)[r,foe]
+    take=lambda name:_li.take(getattr(trackers,name),r,foe)
     present=take('present');active=(j.arange(6)[None,:]==trackers.active_slot[r,foe,None])&present
     z=j.zeros((b,6),j.int32)
     optional=lambda name:None if getattr(trackers,name) is None else take(name)
-    mon=None if trackers.mon_features is None else {key:value[r,foe] for key,value in trackers.mon_features.items()}
+    mon=None if trackers.mon_features is None else {key:_li.take(value,r,foe) for key,value in trackers.mon_features.items()}
     stats=None
     if trackers.tendency is not None:
         td=trackers.tendency
-        facing=j.clip(trackers.active_slot[r,owner],0,5)
+        facing=j.clip(_li.take(trackers.active_slot,r,owner),0,5)
         pair=td.matchup[r[:,None],foe[:,None],j.arange(6)[None,:],facing[:,None]]
-        pair=j.where((trackers.active_slot[r,owner]>=0)[:,None,None],pair,0)
+        pair=j.where((_li.take(trackers.active_slot,r,owner)>=0)[:,None,None],pair,0)
         mon={**mon,'switched_vs_active':pair[...,0],'stayed_vs_active':pair[...,1]}
-        stats={'opp_switch_count':td.switches[r,foe],
-            'opp_decision_opportunities':td.opportunities[r,foe],
-            'my_switch_turns':td.switches[r,owner]}
+        stats={'opp_switch_count':_li.take(td.switches,r,foe),
+            'opp_decision_opportunities':_li.take(td.opportunities,r,foe),
+            'my_switch_turns':_li.take(td.switches,r,owner)}
     own_mon=None
     own_last=None
     own_borrowed=None
     own_vol=None
     own_removed=None
     if trackers.mon_features is not None:
-        physical=trackers.own_order[r,owner]
+        physical=_li.take(trackers.own_order,r,owner)
         slots=trackers.physical_to_public[r[:,None],owner[:,None],physical]
         def own(value):
             got=value[r[:,None],owner[:,None],j.clip(slots,0,5)]
@@ -257,38 +258,38 @@ def readout(trackers,observer_sides):
             own_vol=j.where((slots>=0)[:,:,None],got,False)
         # Original observer-relative damage semantics: own victim HP is exact,
         # opposing victim HP comes from the shown-percent stream.
-        mon['last_damage_dealt']=trackers.damage_exact_dealt[r,foe]
+        mon['last_damage_dealt']=_li.take(trackers.damage_exact_dealt,r,foe)
         own_mon['last_damage_taken']=own(trackers.damage_exact_taken)
     fields=None
     if trackers.field_features is not None:
         raw=trackers.field_features
-        fields={key:(value[r,owner] if value.ndim==2 else value) for key,value in raw.items()}
+        fields={key:(_li.take(value,r,owner) if value.ndim==2 else value) for key,value in raw.items()}
         wish_turns=raw['wish_turns'];wish_pending=raw['wish_pending']
         if 'wish_set_turn' in raw:
             declared=raw['wish_set_turn'];elapsed=trackers.turn[:,None]-declared
             wish_pending=(declared>=0)&(elapsed<=1)
             wish_turns=j.where((declared>=0)&(elapsed>=0)&(elapsed<=1),2-elapsed,0)
-        fields.update(self_wish_turns=wish_turns[r,owner],opp_wish_turns=wish_turns[r,foe],
-            self_wish_pending=wish_pending[r,owner],opp_wish_pending=wish_pending[r,foe],
+        fields.update(self_wish_turns=_li.take(wish_turns,r,owner),opp_wish_turns=_li.take(wish_turns,r,foe),
+            self_wish_pending=_li.take(wish_pending,r,owner),opp_wish_pending=_li.take(wish_pending,r,foe),
             weather_turns=j.where(trackers.weather>0,j.where(raw['weather_permanent'],5,j.maximum(0,5-raw['weather_upkeeps'])),0))
     visible=trackers.visible_belief
-    belief_mask=optional('belief_mask') if visible is None else visible.visible_hard[r,foe]
+    belief_mask=optional('belief_mask') if visible is None else _li.take(visible.visible_hard,r,foe)
     if trackers.public_port is not None:
         h=trackers.public_port
-        active_slot=trackers.active_slot[r,foe]
-        loaf=h.known[r,foe]&h.loaf[r,foe]
+        active_slot=_li.take(trackers.active_slot,r,foe)
+        loaf=_li.take(h.known,r,foe)&_li.take(h.loaf,r,foe)
         mon={**({}if mon is None else mon),'truant_loaf':j.where(j.arange(6)[None,:]==active_slot[:,None],loaf[:,None],False)}
-        own_active=trackers.own_order[r,owner]==trackers.active_physical[r,owner,None]
-        own_mon={**({}if own_mon is None else own_mon),'truant_loaf':own_active&(h.known[r,owner]&h.loaf[r,owner])[:,None]}
+        own_active=_li.take(trackers.own_order,r,owner)==trackers.active_physical[r,owner,None]
+        own_mon={**({}if own_mon is None else own_mon),'truant_loaf':own_active&(_li.take(h.known,r,owner)&_li.take(h.loaf,r,owner))[:,None]}
         hazard=h.hazards.sum(axis=-1)
         fields={**({}if fields is None else fields),
-            'self_sleep_clause':h.holder[r,owner]>=0,'opp_sleep_clause':h.holder[r,foe]>=0,
-            'sleep_clause_blocks_self':j.any(h.victims[r,foe],axis=-1),'sleep_clause_blocks_opp':j.any(h.victims[r,owner],axis=-1),
-            'self_hazard_credit':hazard[r,owner,1],'opp_hazard_credit':hazard[r,foe,0]}
-        stats={**({}if stats is None else stats),'blocked_on_our_attack':h.blocked[r,owner],'pursuit_intercept_predict':h.pursuit[r,foe]}
-        reveals=h.weather[r,foe].reshape(b,6)
+            'self_sleep_clause':_li.take(h.holder,r,owner)>=0,'opp_sleep_clause':_li.take(h.holder,r,foe)>=0,
+            'sleep_clause_blocks_self':j.any(_li.take(h.victims,r,foe),axis=-1),'sleep_clause_blocks_opp':j.any(_li.take(h.victims,r,owner),axis=-1),
+            'self_hazard_credit':_li.take(hazard,r,owner,1),'opp_hazard_credit':_li.take(hazard,r,foe,0)}
+        stats={**({}if stats is None else stats),'blocked_on_our_attack':_li.take(h.blocked,r,owner),'pursuit_intercept_predict':_li.take(h.pursuit,r,foe)}
+        reveals=_li.take(h.weather,r,foe).reshape(b,6)
         stats.update({'weather_reveal_'+str(i):reveals[:,i]for i in range(6)})
-    return PublicView(trackers.own_order[r,owner],take('species'),take('level'),take('gender'),
+    return PublicView(_li.take(trackers.own_order,r,owner),take('species'),take('level'),take('gender'),
         take('hp_percent').astype(j.float32)/100.0,take('status'),active,present,take('fainted'),
         j.zeros((b,6,2),j.int32) if trackers.shown_types is None else take('shown_types'),take('boosts'),
         z if trackers.original_ability is None else take('original_ability'),
@@ -296,7 +297,7 @@ def readout(trackers,observer_sides):
         trackers.error|j.where((observer_sides<0)|(observer_sides>1),BAD_OBSERVER,0),None,
         trackers.turn,trackers.weather,trackers.spikes,belief_mask,optional('observed_moves'),
         optional('pp_used'),optional('last_moves'),optional('borrowed_ability'),own_last,mon,own_mon,fields,own_borrowed,optional('public_volatiles'),own_vol,optional('item_removed'),own_removed,stats,
-        None if visible is None else visible.visible_pin[r,foe],None if visible is None else visible.visible_pin_active[r,foe])
+        None if visible is None else _li.take(visible.visible_pin,r,foe),None if visible is None else _li.take(visible.visible_pin_active,r,foe))
 
 
 def clone_for_worlds(trackers,root_rows):

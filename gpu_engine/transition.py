@@ -42,6 +42,7 @@ from . import solar_beam as charging
 from . import focus_punch as focusing
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
 from .state import FLINCH, FOCUS_PUNCH, FOCUS_LOST, BattleState, bench_indices, empty_state, legal_actions, usable_moves
+from . import lane_index as _li
 
 
 class MoveTable(NamedTuple):
@@ -136,12 +137,12 @@ def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
 
 def _active(value, state, side):
     rows = jnp.arange(state.hp.shape[0])
-    return value[rows, side, state.active[rows, side]]
+    return _li.take(value,rows,side,_li.take(state.active,rows,side))
 
 
 def _set_active(value, state, side, update):
     rows = jnp.arange(state.hp.shape[0])
-    return value.at[rows, side, state.active[rows, side]].set(update)
+    return _li.put(value,rows,(side,_li.take(state.active,rows,side)),update)
 
 
 def _lum_update(state,table,eligible,_status_trace=None,*,_device_public=None):
@@ -220,7 +221,7 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
     pending_battle = live & jnp.any(state.entry_pending,axis=1)
     for order in range(2):
         side = jnp.where(order == 0,first,1-first)
-        pending = live & state.entry_pending[rows,side]
+        pending = live & _li.take(state.entry_pending,rows,side)
         if _device_public is not None:_device_entry_before=state
         if _weather_trace is not None:
             state,_,_weather_trace = arrival.enter(state,side,table.entry,eligible=pending,
@@ -228,8 +229,7 @@ def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None,_de
         else:
             state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False,startup=state.turn==0)
         if _device_public is not None:device_public.entry(_device_public,_device_entry_before,state,side,table.entry,pending)
-        state = state._replace(entry_pending=state.entry_pending.at[rows,side].set(
-            state.entry_pending[rows,side] & ~pending))
+        state = state._replace(entry_pending=_li.put(state.entry_pending,rows,(side,),_li.take(state.entry_pending,rows,side) & ~pending))
     if _weather_trace is not None:return _lum_update(state,table,pending_battle,_device_public=_device_public),_weather_trace
     return _lum_update(state,table,pending_battle,_device_public=_device_public)
 
@@ -572,25 +572,25 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     callback_speed = jnp.zeros_like(speed)
     for order in range(2):
         side = jnp.where(order == 0,switch_first,1-switch_first)
-        old_active = work.active[rows,side]
+        old_active = _li.take(work.active,rows,side)
         continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
-        do_switch = switches[rows,side] & continues & (~switch_faint | replacement)
+        do_switch = _li.take(switches,rows,side) & continues & (~switch_faint | replacement)
         if _lifecycle_trace:
-            switch_baton=work.baton_pass[rows,side]
+            switch_baton=_li.take(work.baton_pass,rows,side)
             # Retain outgoing Natural Cure before departure for the exact same-call
             # receipt below; unported incoming cures still refuse immediately.
             departure=jnp.zeros_like(do_switch)
             if table.entry is not None:
                 departure=(_active(work.status,work,side)!=m.NONE) & (_active(work.hp,work,side)>0) & table.entry.natural_cure[_active(work.ability,work,side)]
-            incoming=status_callbacks.entry_cure_possible(table,work.status[rows,side,target[rows,side]])
+            incoming=status_callbacks.entry_cure_possible(table,_li.take(work.status,rows,side,_li.take(target,rows,side)))
             _public_trace=status_callbacks.unknown(_public_trace,do_switch & incoming)
-        installed = installed.at[rows,side].set(do_switch)
+        installed = _li.put(installed,rows,(side,),do_switch)
         if _lifecycle_trace:
             from . import engine_baton_pass_callbacks as baton_callbacks
-            _public_trace,_baton_copy=baton_callbacks.before_copy(_public_trace,work,side,target[rows,side],
+            _public_trace,_baton_copy=baton_callbacks.before_copy(_public_trace,work,side,_li.take(target,rows,side),
                 _direct_hit_context if _direct_hit_registered else None,eligible=do_switch)
-        work = passing.copy_to_recipient(work,side,target[rows,side],
-            eligible=do_switch & work.baton_pass[rows,side])
+        work = passing.copy_to_recipient(work,side,_li.take(target,rows,side),
+            eligible=do_switch & _li.take(work.baton_pass,rows,side))
         if _lifecycle_trace:
             _public_trace=baton_callbacks.after_copy(_public_trace,_baton_copy,work)
         if _lifecycle_trace:
@@ -600,12 +600,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None)
         if _lifecycle_trace:
             from . import engine_natural_cure_callbacks as natural_cure_callbacks
-            _public_trace,_natural_cure_pending=natural_cure_callbacks.begin(_public_trace,work,side,target[rows,side],table,
+            _public_trace,_natural_cure_pending=natural_cure_callbacks.begin(_public_trace,work,side,_li.take(target,rows,side),table,
                 _direct_hit_context if _direct_hit_registered else None,eligible=do_switch,baton=switch_baton)
             _public_trace=status_callbacks.unknown(_public_trace,do_switch & departure & ~natural_cure_callbacks.prospective(_natural_cure_pending))
         if _device_public is not None:
             _device_depart_before=work
-            _device_baton=work.baton_pass[rows,side]
+            _device_baton=_li.take(work.baton_pass,rows,side)
             device_public.switch_decision(_device_public,work,side,do_switch & ~replacement,baton=_device_baton)
         work=arrival.depart(work,side,table.entry,eligible=do_switch)
         if _device_public is not None:device_public.depart(_device_public,_device_depart_before,work,side,table.entry,do_switch)
@@ -613,22 +613,22 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace=natural_cure_callbacks.finish(_public_trace,_natural_cure_pending,work)
         if _lifecycle_trace:
             _public_trace=_flash_end.finish(_public_trace,_flash_pending,work)
-        work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
-            baton_pass=work.baton_pass.at[rows,side].set(work.baton_pass[rows,side] & ~do_switch),
-            forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])),
-            active_turns=work.active_turns.at[rows,side].set(jnp.where(do_switch,0,work.active_turns[rows,side])))
+        work = work._replace(active=_li.put(work.active,rows,(side,),jnp.where(do_switch,_li.take(target,rows,side),old_active)),
+            baton_pass=_li.put(work.baton_pass,rows,(side,),_li.take(work.baton_pass,rows,side) & ~do_switch),
+            forced_switch=_li.put(work.forced_switch,rows,(side,),jnp.where(do_switch,False,_li.take(work.forced_switch,rows,side))),
+            active_turns=_li.put(work.active_turns,rows,(side,),jnp.where(do_switch,0,_li.take(work.active_turns,rows,side))))
         if _lifecycle_trace:
-            _public_trace=lifecycle_callbacks.installed(_public_trace,work,side,old_active,target[rows,side],
+            _public_trace=lifecycle_callbacks.installed(_public_trace,work,side,old_active,_li.take(target,rows,side),
                 eligible=do_switch,replacement=replacement,baton=switch_baton)
             _public_trace=baton_callbacks.finish_install(_public_trace,work,side,eligible=do_switch)
         if _device_public is not None:
             device_public.install(_device_public,work,side,do_switch)
             device_public.baton_copy(_device_public,work,side,old_active,do_switch & _device_baton)
             device_public.withdraw(_device_public,work,side,old_active,do_switch)
-        work=history.record_switch(work,side,target[rows,side],eligible=do_switch)
+        work=history.record_switch(work,side,_li.take(target,rows,side),eligible=do_switch)
         # insertChoice snapshots each incoming callback's Speed now; a later
         # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
-        callback_speed = callback_speed.at[rows,side].set(_speeds(work,table)[rows,side])
+        callback_speed = _li.put(callback_speed,rows,(side,),_li.take(_speeds(work,table),rows,side))
         if table.entry is not None:
             if _device_public is not None:_device_entry_before=work
             _faint_before_hp=work.hp
@@ -653,7 +653,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         for order in range(2):
             side = jnp.where(order == 0,first_entry,1-first_entry)
             continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
-            eligible = replacement & installed[rows,side] & continues & ~switch_faint
+            eligible = replacement & _li.take(installed,rows,side) & continues & ~switch_faint
             if _device_public is not None:_device_entry_before=work
             _faint_before_hp=work.hp
             if _lifecycle_trace:
@@ -689,15 +689,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _faint_before_hp=work.hp
         side = jnp.where(order == 0, first, 1 - first)
         foe = 1 - side
-        move = moves[rows, side]
-        chosen_slot=slot[rows,side]
-        move,chosen_slot=repeating.override(work,side,move,chosen_slot,struggle=struggle[rows,side])
+        move = _li.take(moves,rows,side)
+        chosen_slot=_li.take(slot,rows,side)
+        move,chosen_slot=repeating.override(work,side,move,chosen_slot,struggle=_li.take(struggle,rows,side))
         caller_move=move
         charge_locked=_active(work.charge_move,work,side)>0
-        chance = draws[rows, side]
+        chance = _li.take(draws,rows,side)
         move_context = ~replacement | (state.pending_residual & (saved_actor == side))
-        eligible = (live & move_context & ~paused & ~moves_cancelled & ~switches[rows, side]
-            & ~pursuit_used[rows,side] & ~displaced[rows,side] & (_active(work.hp, work, side) > 0))
+        eligible = (live & move_context & ~paused & ~moves_cancelled & ~_li.take(switches,rows,side)
+            & ~_li.take(pursuit_used,rows,side) & ~_li.take(displaced,rows,side) & (_active(work.hp, work, side) > 0))
         sleep_usable=jnp.zeros_like(live);early_bird=jnp.zeros_like(live)
         if table.sleep_talk is not None:
             sleep_usable=table.sleep_talk.move[move]
@@ -720,7 +720,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             from . import engine_sleep_talk_callbacks as sleep_talk_callbacks
             _public_trace,_sleep_talk_pending=sleep_talk_callbacks.begin(_public_trace,work,side,caller_move,chosen_slot,
                 _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table.sleep_talk,
-                choice_roll=sleep_talk_draws[rows,side],eligible=eligible,sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
+                choice_roll=_li.take(sleep_talk_draws,rows,side),eligible=eligible,sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
         if _device_public is not None:_device_before_move=work
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
@@ -731,7 +731,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _lifecycle_trace:
             from . import engine_outcome_diagnostics as _before_move_diagnostics
             _public_trace=_before_move_diagnostics.record_before_move_on_tape(_public_trace,before,side,
-                work.active[rows,side],move,caller_move,_active(work.status,work,side),
+                _li.take(work.active,rows,side),move,caller_move,_active(work.status,work,side),
                 _active(work.status_counter,work,side),_active(work.confusion_counter,work,side),
                 hp=_active(work.hp,work,side),maximum=_active(work.max_hp,work,side),ability=_active(work.ability,work,side),
                 thaw_roll=chance[:,1],paralysis_roll=chance[:,2],confusion_roll=chance[:,3],
@@ -739,7 +739,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing,eligible=eligible,active=live)
         if _lifecycle_trace:
             old_status=_active(work.status,work,side)
-            _public_trace=status_callbacks.changed(_public_trace,side,work.active[rows,side],old_status,
+            _public_trace=status_callbacks.changed(_public_trace,side,_li.take(work.active,rows,side),old_status,
                 before.status,jnp.where(old_status==m.SLP,status_callbacks.WAKE,status_callbacks.THAW),
                 eligible=eligible & (old_status!=m.NONE) & (before.status==m.NONE))
         work=talking.before_move(work,side,before.status,eligible=eligible,sleep_usable=sleep_usable)
@@ -787,28 +787,27 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.solar_beam is not None:
             work=charging.clear(work,side,eligible=eligible & ~before.can_act)
         acts = eligible & before.can_act & ~moves_cancelled
-        active = work.active[rows, side]
-        old_pp = work.pp[rows, side, active, chosen_slot]
-        acts &= charge_locked | struggle[rows,side] | (old_pp>0)
+        active = _li.take(work.active,rows,side)
+        old_pp = _li.take(work.pp,rows,side,active,chosen_slot)
+        acts &= charge_locked | _li.take(struggle,rows,side) | (old_pp>0)
         used_pp = 1
         if table.pressure is not None:
             used_pp = pp_cost.cost(table.pressure,move,_active(work.types,work,side),
                 _active(work.ability,work,foe),_active(work.hp,work,foe))
-        work = work._replace(pp=work.pp.at[rows, side, active, chosen_slot].set(
-            jnp.where(acts & ~charge_locked & ~struggle[rows, side], jnp.maximum(0, old_pp - used_pp), old_pp)))
+        work = work._replace(pp=_li.put(work.pp,rows,(side,active,chosen_slot),jnp.where(acts & ~charge_locked & ~_li.take(struggle,rows,side), jnp.maximum(0, old_pp - used_pp), old_pp)))
         work=work._replace(last_move=_set_active(work.last_move,work,side,
             jnp.where(acts,caller_move,_active(work.last_move,work,side))))
-        work=history.record_move(work,side,chosen_slot,eligible=acts,struggle=struggle[rows,side])
+        work=history.record_move(work,side,chosen_slot,eligible=acts,struggle=_li.take(struggle,rows,side))
         placeholders += acts.astype(jnp.int32)
         caller_acts=acts
         if _device_public is not None:_device_move_before=work
         if _device_public is not None:
             device_public.observe(_device_public,work,eligible)
             device_public.move(_device_public,work,side,caller_move,caller_acts,
-                pp_use=~charge_locked & ~struggle[rows,side],original=not False)
+                pp_use=~charge_locked & ~_li.take(struggle,rows,side),original=not False)
         if table.sleep_talk is not None:
             called,usable=talking.choose(table.sleep_talk,_active(work.moves,work,side),
-                _active(work.pp,work,side),sleep_talk_draws[rows,side])
+                _active(work.pp,work,side),_li.take(sleep_talk_draws,rows,side))
             executes=((_active(work.status,work,side)==m.SLP) & usable
                 & (_active(work.encore_counter,work,side)==0)
                 & (_active(work.choice_move,work,side)==0))
@@ -842,21 +841,21 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _sleep_failure=self_move_callbacks.awake_failure(_public_trace,work,side,caller_move,_self_move_context,eligible=caller_acts,acts=acts)
         if _lifecycle_trace:
             _public_trace,_sleep_talk_capture=sleep_talk_callbacks.finish(_public_trace,_sleep_talk_pending,work,before,move,
-                usable if table.sleep_talk is not None else jnp.zeros_like(acts),sleep_talk_draws[rows,side],acts=acts,caller_acts=caller_acts)
+                usable if table.sleep_talk is not None else jnp.zeros_like(acts),_li.take(sleep_talk_draws,rows,side),acts=acts,caller_acts=caller_acts)
             _sleep_talk_supported=sleep_talk_callbacks.captured_matches(_public_trace,_sleep_talk_capture)
         if _public_trace is not None:
             # A genuine ordinary declaration is known here, after the actual
             # suppression/preparation gates and before any main-hit callback.
-            _public_trace = public_callbacks.move(_public_trace,side,work.active[rows,side],
-                work.active[rows,foe],caller_move,eligible=caller_acts & ~(_sleep_talk_supported if _lifecycle_trace else jnp.zeros_like(acts)),
+            _public_trace = public_callbacks.move(_public_trace,side,_li.take(work.active,rows,side),
+                _li.take(work.active,rows,foe),caller_move,eligible=caller_acts & ~(_sleep_talk_supported if _lifecycle_trace else jnp.zeros_like(acts)),
                 unsupported=charge_locked | ((sleep_usable | ~acts) & ~(_sleep_failure if _lifecycle_trace else jnp.zeros_like(acts))))
         if _lifecycle_trace:
             from . import engine_protect_callbacks as protect_callbacks
             _protect_pending=None;_protect_block_capture=None;_protect_block_mask=jnp.zeros_like(acts)
             if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.protect is not None:
-                _protect_count=jnp.where(state.pending_residual,saved_stall[rows,side],_active(old_stall,work,side))
+                _protect_count=jnp.where(state.pending_residual,_li.take(saved_stall,rows,side),_active(old_stall,work,side))
                 _public_trace,_protect_pending=protect_callbacks.begin(_public_trace,work,side,move,_protect_count,chance[:,8],
-                    jnp.full_like(acts,order==0),~state.pending_residual,~switches[rows,foe],
+                    jnp.full_like(acts,order==0),~state.pending_residual,~_li.take(switches,rows,foe),
                     _direct_hit_context,table.effects,eligible=acts)
             _public_trace,_sleep_pending=self_move_callbacks.begin(_public_trace,work,side,caller_move,_self_move_context,code=self_move_callbacks.SLEEP_FAIL,eligible=_sleep_failure)
             _public_trace,_sleep_capture=self_move_callbacks.finish(_public_trace,_sleep_pending,work)
@@ -970,13 +969,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _risk_absorbed=jnp.zeros_like(acts)
         if table.effects is not None:
             if _lifecycle_trace:
-                _risk_protected=protected[rows,foe] & table.effects.protectable[move]
+                _risk_protected=_li.take(protected,rows,foe) & table.effects.protectable[move]
                 if _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.protect is not None:
                     _public_trace,_protect_block_pending=protect_callbacks.begin_block(_public_trace,work,side,move,hit,
-                        protected[rows,foe],table.effects.protectable[move],_direct_hit_context,eligible=acts)
+                        _li.take(protected,rows,foe),table.effects.protectable[move],_direct_hit_context,eligible=acts)
             if _device_public is not None:
-                device_public.port_protect(_device_public,side,acts,hit,protected[rows,foe],table.effects.protectable[move])
-            hit &= ~(protected[rows,foe] & table.effects.protectable[move])
+                device_public.port_protect(_device_public,side,acts,hit,_li.take(protected,rows,foe),table.effects.protectable[move])
+            hit &= ~(_li.take(protected,rows,foe) & table.effects.protectable[move])
             if _lifecycle_trace and _direct_hit_context is not None and _direct_hit_registered and _direct_hit_context.data.protect is not None:
                 _public_trace,_protect_block_capture=protect_callbacks.finish_block(_public_trace,_protect_block_pending,hit)
                 _protect_block_mask=protect_callbacks.captured_block_matches(_public_trace,_protect_block_capture)
@@ -989,25 +988,25 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             from . import engine_substitute_damage_callbacks as substitute_damage_callbacks
             _sub_damage_requested=substitute_damage_callbacks.route(_direct_hit_context,move,
                 acts=acts,power=power,hit=hit,immune=immune,protected=_risk_protected,
-                enduring=enduring[rows,foe],bypass=bypass_sub,absorbed=_risk_absorbed,
+                enduring=_li.take(enduring,rows,foe),bypass=bypass_sub,absorbed=_risk_absorbed,
                 sub_hp=_active(work.substitute_hp,work,foe),actor_happiness=_active(work.happiness,work,side),caller_move=caller_move,actor_level=_active(work.level,work,side),actor_hp_type=_active(work.hidden_power_type,work,side),actor_hp_power=_active(work.hidden_power_power,work,side),resolved_type=typ)
             _public_trace,_sub_damage_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.SUBSTITUTE_DAMAGE,foe,active=_sub_damage_requested)
             _sub_damage_pending=substitute_damage_callbacks.Pending(_direct_hit_context,_sub_damage_ticket,
-                side,work.active[rows,side],work.active[rows,foe],move,_sub_damage_requested,_active(work.happiness,work,side),caller_move,_active(work.level,work,side),_active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),typ)
+                side,_li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_sub_damage_requested,_active(work.happiness,work,side),caller_move,_active(work.level,work,side),_active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),typ)
             _direct_requested=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)) & ~_sub_damage_requested & ~_protect_block_mask
             if _lifecycle_trace and _self_destruct_pending is not None:_direct_requested &= ~_self_destruct_pending.requested
             _public_trace,_direct_ticket=execution_accounting.open_attempt(_public_trace,
                 execution_accounting.Site.DIRECT_HIT,foe,active=_direct_requested)
             _direct_ko_actor_before=_active(work.hp,work,side)
-            _direct_ko_party_before=work.hp[rows,foe]
+            _direct_ko_party_before=_li.take(work.hp,rows,foe)
             _no_damage_before=no_damage_callbacks.Before(_direct_accuracy_hit,typ,_active(work.ability,work,foe),
                 _active(work.status,work,foe),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
                 _active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),_active(work.hp,work,side),explodes,
                 _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
                 _active(work.types,work,foe),_active(work.item,work,foe))
-            _no_damage_pending=no_damage_callbacks.prepare(_public_trace,_direct_ticket,side,work.active[rows,side],
-                work.active[rows,foe],move,_no_damage_before,_direct_hit_context,requested=_direct_requested,caller_move=caller_move)
+            _no_damage_pending=no_damage_callbacks.prepare(_public_trace,_direct_ticket,side,_li.take(work.active,rows,side),
+                _li.take(work.active,rows,foe),move,_no_damage_before,_direct_hit_context,requested=_direct_requested,caller_move=caller_move)
         if table.absorption is not None:
             # TryHit follows accuracy/Protect but precedes Substitute. Field
             # weather and self effects do not run a Pokemon-targeted TryHit.
@@ -1031,7 +1030,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         hp = _active(work.hp, work, foe)
         sub_hp = _active(work.substitute_hp,work,foe)
         hits_sub = (sub_hp > 0) & ~bypass_sub
-        capacity = jnp.where(hits_sub,sub_hp,jnp.where(enduring[rows,foe],jnp.maximum(0,hp-1),hp))
+        capacity = jnp.where(hits_sub,sub_hp,jnp.where(_li.take(enduring,rows,foe),jnp.maximum(0,hp-1),hp))
         dealt = jnp.where(acts & hit,jnp.minimum(capacity,damage),0)
         foe_hp = hp - jnp.where(hits_sub,0,dealt)
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
@@ -1043,36 +1042,36 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             device_public.observe(_device_public,work,acts)
         if _direct_hit_context is not None and _direct_hit_registered:
             _sub_damage_write=substitute_damage_callbacks.Write(power,hit,immune,_risk_protected,
-                enduring[rows,foe],bypass_sub,_risk_absorbed,critical,num,den,sub_hp,
+                _li.take(enduring,rows,foe),bypass_sub,_risk_absorbed,critical,num,den,sub_hp,
                 _active(work.substitute_hp,work,foe),dealt,damage,hp,foe_hp)
             _public_trace=substitute_damage_callbacks.record(_public_trace,_sub_damage_pending,_sub_damage_write)
         if _direct_hit_context is not None:
             _direct_write=direct_hit_controls.HitWrite(power,critical,hit,immune,num,den,hits_sub,
-                _risk_protected,enduring[rows,foe],hp,foe_hp,_active(work.max_hp,work,foe))
+                _risk_protected,_li.take(enduring,rows,foe),hp,foe_hp,_active(work.max_hp,work,foe))
             if _lifecycle_trace:
                 _public_trace=self_destruct_callbacks.target_write(_public_trace,_self_destruct_pending,_direct_write,secondary=acts & hit & ~immune)
             if _direct_hit_registered:
                 _public_trace=direct_hit_controls.record_registered_direct_hit_controls_device(
-                    _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
+                    _public_trace,side,_li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,
                     _direct_write,_direct_hit_context,eligible=_direct_requested & (_direct_write.new_hp!=0) & ~no_damage_callbacks.scheduled(_no_damage_pending,_direct_write))
                 _public_trace,_direct_ko_pending=direct_ko_callbacks.prepare_controls_device(
-                    _public_trace,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,
+                    _public_trace,_direct_ticket,side,_li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,
                     _direct_write,_direct_hit_context,_direct_ko_actor_before,_direct_ko_party_before,
                     eligible=_direct_requested,actor_happiness=_active(work.happiness,work,side),
                     recoil_before=(recoil_callbacks.KOBefore(_recoil_context,caller_move,_active(work.ability,work,side),
                         _active(work.max_hp,work,side),_active(work.status,work,side),jnp.full_like(move,-1))if _recoil_context is not None else None))
             else:
                 _public_trace=direct_hit_controls.record_direct_hit_controls_device(
-                    _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
+                    _public_trace,side,_li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,
                     _direct_write,_direct_hit_context.data,
                     eligible=acts & ((power>0)|direct_hit_controls.fixed_level_move_device(_direct_hit_context.data,move)))
         if _public_trace is not None:
-            _public_trace = public_callbacks.condition(_public_trace,foe,work.active[rows,foe],
+            _public_trace = public_callbacks.condition(_public_trace,foe,_li.take(work.active,rows,foe),
                 foe_hp,_active(work.max_hp,work,foe),_active(work.status,work,foe),
                 eligible=acts & hit & ~hits_sub & (dealt>0))
         if _direct_hit_context is not None and _direct_hit_registered:
             _public_trace=execution_accounting.capture_direct_hit_write(_public_trace,_direct_ticket,
-                side,work.active[rows,side],work.active[rows,foe],move,_direct_write,
+                side,_li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_direct_write,
                 requested=_direct_requested & (_direct_write.new_hp!=0) & ~no_damage_callbacks.scheduled(_no_damage_pending,_direct_write),data=_direct_hit_context.data)
         if table.focus_punch is not None:
             work=focusing.hit(work,side,move,table.focus_punch,eligible=acts & hit & ~immune & ~hits_sub)
@@ -1083,10 +1082,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _recoil_context is not None:
             _direct_ko_pending=recoil_callbacks.with_ko_amount(_direct_ko_pending,recoil)
             _recoil_captured=kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
-                work.active[rows,side],work.active[rows,foe],move,_direct_write)
+                _li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_direct_write)
         if _lifecycle_trace:
             _literal_outcome=kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
-                hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes)
+                hits_sub,_risk_protected,_li.take(enduring,rows,foe),recoil,explodes)
             if _direct_hit_context is not None and _direct_hit_registered:
                 _public_trace=no_damage_callbacks.finish(_public_trace,_no_damage_pending,_direct_write,_literal_outcome,
                     _active(work.hp,work,side),_active(work.volatile,work,foe),_active(work.substitute_hp,work,foe),
@@ -1106,10 +1105,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     substitute_damage=substitute_damage_callbacks.Captured(_sub_damage_pending,_sub_damage_write))
             from . import engine_outcome_diagnostics as outcome_diagnostics
             _public_trace=outcome_diagnostics.record_on_tape(_public_trace,_literal_outcome,move,side,
-                work.active[rows,side],work.active[rows,foe],eligible=acts,active=live)
+                _li.take(work.active,rows,side),_li.take(work.active,rows,foe),eligible=acts,active=live)
             _public_trace=kernel_risks.outcome_on_tape(_public_trace,_literal_outcome,
                 eligible=acts,active=live,captured_direct=(kernel_risks.CapturedDirectHit(
-                    _direct_hit_context,_direct_ticket,side,work.active[rows,side],work.active[rows,foe],move,_direct_write)
+                    _direct_hit_context,_direct_ticket,side,_li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_direct_write)
                     if _direct_hit_context is not None and _direct_hit_registered else None),
                 captured_substitute_damage=(substitute_damage_callbacks.Captured(_sub_damage_pending,_sub_damage_write)
                     if _direct_hit_context is not None and _direct_hit_registered else None),
@@ -1127,19 +1126,19 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # when the foe switched before move execution). A failed use or a
             # non-stalling turn lets the previous stall counter expire.
             stall = (acts & (effects.protect[move] | effects.endure[move])
-                & (order == 0) & ~state.pending_residual & ~switches[rows,foe])
-            count = jnp.where(state.pending_residual,saved_stall[rows,side],_active(old_stall,work,side))
+                & (order == 0) & ~state.pending_residual & ~_li.take(switches,rows,foe))
+            count = jnp.where(state.pending_residual,_li.take(saved_stall,rows,side),_active(old_stall,work,side))
             stall &= stall_success(count,chance[:,8])
-            protected = protected.at[rows,side].set(stall & effects.protect[move])
-            enduring = enduring.at[rows,side].set(stall & effects.endure[move])
+            protected = _li.put(protected,rows,(side,),stall & effects.protect[move])
+            enduring = _li.put(enduring,rows,(side,),stall & effects.endure[move])
             work = work._replace(protect_counter=_set_active(work.protect_counter,work,side,
                 jnp.where(stall,jnp.minimum(8,jnp.maximum(2,count*2)),
                           _active(work.protect_counter,work,side))))
             if _device_public is not None:
-                device_public.feature(_device_public,side,work.active[rows,side],'stall_counter',jnp.ones_like(move),stall,add=True)
-                device_public.feature(_device_public,side,work.active[rows,side],'stall_counter',jnp.zeros_like(move),acts & ~stall)
+                device_public.feature(_device_public,side,_li.take(work.active,rows,side),'stall_counter',jnp.ones_like(move),stall,add=True)
+                device_public.feature(_device_public,side,_li.take(work.active,rows,side),'stall_counter',jnp.zeros_like(move),acts & ~stall)
             if _lifecycle_trace:
-                _public_trace=protect_callbacks.finish(_public_trace,_protect_pending,work,stall,protected[rows,side],acts&hit&~immune)
+                _public_trace=protect_callbacks.finish(_public_trace,_protect_pending,work,stall,_li.take(protected,rows,side),acts&hit&~immune)
             # Self effects use the active actor, never the opposing target.
             hp = _active(work.hp, work, side)
             max_hp = _active(work.max_hp, work, side)
@@ -1186,7 +1185,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(rest,True,_active(work.rest_origin,work,side))))
             if _device_public is not None:
                 device_public.observe(_device_public,work,acts,rest_side=side,rest_mask=rest)
-                device_public.feature(_device_public,side,work.active[rows,side],'rest_sleep',jnp.ones_like(move),rest)
+                device_public.feature(_device_public,side,_li.take(work.active,rows,side),'rest_sleep',jnp.ones_like(move),rest)
             if _lifecycle_trace:
                 _public_trace,_rest_capture=self_move_callbacks.finish(_public_trace,_rest_pending,work)
                 _public_trace,_self_heal_capture=self_heal_callbacks.finish(_public_trace,_self_heal_pending,work,heal_weather,acts&hit&~immune)
@@ -1195,15 +1194,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _substitute_context is not None:
                 _substitute_write=substitute_callbacks.Write(_substitute_old_hp,_active(work.hp,work,side),
                     max_hp,_active(work.status,work,side),sub_hp,_active(work.substitute_hp,work,side))
-                _public_trace=substitute_callbacks.record_device(_public_trace,side,work.active[rows,side],
+                _public_trace=substitute_callbacks.record_device(_public_trace,side,_li.take(work.active,rows,side),
                     move,_substitute_write,_substitute_context,eligible=_substitute_requested,caller_move=caller_move)
                 if _substitute_registered:
                     _public_trace=execution_accounting.capture_substitute_write(_public_trace,_substitute_ticket,
-                        side,work.active[rows,side],move,_substitute_write,requested=_substitute_requested)
+                        side,_li.take(work.active,rows,side),move,_substitute_write,requested=_substitute_requested)
             if _lifecycle_trace:
                 _public_trace=kernel_risks.substitute_on_tape(_public_trace,acts & effects.substitute[move],active=live,
                     captured=(kernel_risks.CapturedSubstitute(_substitute_context,_substitute_ticket,
-                        side,work.active[rows,side],move,_substitute_write)
+                        side,_li.take(work.active,rows,side),move,_substitute_write)
                         if _substitute_context is not None and _substitute_registered else None))
             # Pain Split assigns HP rather than dealing ordinary damage or
             # healing through callbacks. Read the CURRENT opposing active
@@ -1271,20 +1270,20 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _calm_mind_write=calm_mind_callbacks.Write(_calm_mind_old_spa,boosts[:,2],
                     _calm_mind_old_spd,boosts[:,3],acts & hit & ~immune)
                 _public_trace=calm_mind_callbacks.record_device(_public_trace,_calm_mind_ticket,side,
-                    work.active[rows,side],move,_calm_mind_write,_calm_mind_context,eligible=_calm_mind_requested)
+                    _li.take(work.active,rows,side),move,_calm_mind_write,_calm_mind_context,eligible=_calm_mind_requested)
             if _swords_dance_context is not None:
                 _swords_dance_write=swords_dance_callbacks.Write(_swords_dance_old_atk,boosts[:,0],acts & hit & ~immune)
                 _public_trace=swords_dance_callbacks.record_device(_public_trace,_swords_dance_ticket,side,
-                    work.active[rows,side],move,_swords_dance_write,_swords_dance_context,eligible=_swords_dance_requested)
+                    _li.take(work.active,rows,side),move,_swords_dance_write,_swords_dance_context,eligible=_swords_dance_requested)
             if _lifecycle_trace:
                 _public_trace=kernel_risks.self_boost_on_tape(_public_trace,
                     acts & jnp.any(effects.self_boosts[move]!=0,axis=1),active=live,
                     captured=(kernel_risks.CapturedCalmMind(_calm_mind_context,_calm_mind_ticket,
-                        side,work.active[rows,side],move,_calm_mind_write)
+                        side,_li.take(work.active,rows,side),move,_calm_mind_write)
                         if _calm_mind_context is not None else None),
                     captured_bulk_up=_bulk_up_capture,captured_self_boost=_self_boost_capture,
                     captured_swords=(kernel_risks.CapturedSwordsDance(_swords_dance_context,_swords_dance_ticket,
-                        side,work.active[rows,side],move,_swords_dance_write)
+                        side,_li.take(work.active,rows,side),move,_swords_dance_write)
                         if _swords_dance_context is not None else None))
             # These damaging moves lower their own SpA on a successful hit,
             # including Substitute/KO, but not miss, Protect, immunity or
@@ -1306,8 +1305,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_heal_bell_pending=heal_bell_callbacks.begin(_public_trace,work,side,move,
                     _direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,table,
                     eligible=acts,primary=caller_acts&(caller_move==move),secondary=acts&hit&~immune)
-                team_cured=(acts[:,None] & effects.heal_bell[move,None] & (work.hp[rows,side]>0)
-                    & (work.status[rows,side]!=m.NONE) & ~effects.soundproof[work.ability[rows,side]])
+                team_cured=(acts[:,None] & effects.heal_bell[move,None] & (_li.take(work.hp,rows,side)>0)
+                    & (_li.take(work.status,rows,side)!=m.NONE) & ~effects.soundproof[_li.take(work.ability,rows,side)])
                 _public_trace=status_callbacks.unknown(_public_trace,jnp.any(team_cured,axis=1)&~heal_bell_callbacks.prospective(_heal_bell_pending))
                 work,_heal_bell_mask=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move],_return_write_mask=True)
                 _public_trace,_heal_bell_capture=heal_bell_callbacks.finish(_public_trace,_heal_bell_pending,work,_heal_bell_mask)
@@ -1392,7 +1391,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _public_trace,_primary_plain_pending=plain_primary_callbacks.begin(_public_trace,work,side,move,
                         _direct_hit_context,table,eligible=acts&~_protect_block_mask,caller_move=caller_move)
             if _lifecycle_trace:
-                _public_trace=status_callbacks.changed(_public_trace,foe,work.active[rows,foe],
+                _public_trace=status_callbacks.changed(_public_trace,foe,_li.take(work.active,rows,foe),
                     _active(work.status,work,foe),status,status_callbacks.PRIMARY,eligible=apply_status)
             work = work._replace(status=_set_active(work.status,work,foe,
                 jnp.where(apply_status,status,_active(work.status,work,foe))),
@@ -1425,18 +1424,18 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _toxic_ability_immune,_toxic_sub_block,_toxic_live,apply_status,_risk_protected,_risk_absorbed,
                     immune,acts & hit & ~immune,_toxic_old_status,_active(work.status,work,foe),
                     _toxic_old_counter,_active(work.status_counter,work,foe))
-                _public_trace=toxic_callbacks.record_device(_public_trace,side,work.active[rows,side],
-                    work.active[rows,foe],move,_toxic_attempt,_toxic_context,eligible=_toxic_requested,caller_move=caller_move)
+                _public_trace=toxic_callbacks.record_device(_public_trace,side,_li.take(work.active,rows,side),
+                    _li.take(work.active,rows,foe),move,_toxic_attempt,_toxic_context,eligible=_toxic_requested,caller_move=caller_move)
                 if _toxic_registered:
                     _public_trace=execution_accounting.capture_toxic_attempt(_public_trace,_toxic_ticket,
-                        side,work.active[rows,side],work.active[rows,foe],move,_toxic_attempt,requested=_toxic_requested)
+                        side,_li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_toxic_attempt,requested=_toxic_requested)
             if _thunder_wave_context is not None:
                 _thunder_wave_attempt=thunder_callbacks.Attempt(_thunder_wave_accuracy_hit,hit,_thunder_wave_type_immune,
                     _thunder_wave_ability_immune,_thunder_wave_sub_block,_thunder_wave_live,apply_status,_risk_protected,_risk_absorbed,
                     immune,acts & hit & ~immune,_thunder_wave_old_status,_active(work.status,work,foe),
                     _thunder_wave_old_counter,_active(work.status_counter,work,foe))
-                _public_trace=thunder_callbacks.record_device(_public_trace,_thunder_wave_ticket,side,work.active[rows,side],
-                    work.active[rows,foe],move,_thunder_wave_attempt,_thunder_wave_context,requested=_thunder_wave_requested,
+                _public_trace=thunder_callbacks.record_device(_public_trace,_thunder_wave_ticket,side,_li.take(work.active,rows,side),
+                    _li.take(work.active,rows,foe),move,_thunder_wave_attempt,_thunder_wave_context,requested=_thunder_wave_requested,
                     ground_pending=_thunder_wave_ground_pending,state=work)
                 _public_trace=thunder_callbacks.exclude_cure_device(_public_trace,_thunder_wave_requested,apply_status,
                     _active(work.item,work,foe),table.items)
@@ -1445,21 +1444,21 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _sleep_powder_ability_immune,_sleep_powder_sub_block,_sleep_powder_live,apply_status,_risk_protected,_risk_absorbed,
                     immune,acts & hit & ~immune,_sleep_powder_old_status,_active(work.status,work,foe),
                     _sleep_powder_old_counter,_active(work.status_counter,work,foe))
-                _public_trace=powder_callbacks.record_device(_public_trace,_sleep_powder_ticket,side,work.active[rows,side],
-                    work.active[rows,foe],move,_sleep_powder_attempt,_sleep_powder_context,requested=_sleep_powder_requested)
+                _public_trace=powder_callbacks.record_device(_public_trace,_sleep_powder_ticket,side,_li.take(work.active,rows,side),
+                    _li.take(work.active,rows,foe),move,_sleep_powder_attempt,_sleep_powder_context,requested=_sleep_powder_requested)
                 _public_trace=powder_callbacks.exclude_cure_device(_public_trace,_sleep_powder_requested,apply_status,
                     _active(work.item,work,foe),table.items)
             if _lifecycle_trace:
                 _public_trace=kernel_risks.primary_status_on_tape(_public_trace,acts & (status!=m.NONE),active=live,
                     captured=(kernel_risks.CapturedToxic(_toxic_context,_toxic_ticket,side,
-                        work.active[rows,side],work.active[rows,foe],move,_toxic_attempt)
+                        _li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_toxic_attempt)
                         if _toxic_context is not None and _toxic_registered else None),
                     captured_thunder_wave=(kernel_risks.CapturedThunderWave(_thunder_wave_context,_thunder_wave_ticket,side,
-                        work.active[rows,side],work.active[rows,foe],move,_thunder_wave_attempt)
+                        _li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_thunder_wave_attempt)
                         if _thunder_wave_context is not None else None),
                     captured_protect_block=_protect_block_capture,captured_primary_plain=_primary_plain_capture,
                     captured_sleep_powder=(kernel_risks.CapturedSleepPowder(_sleep_powder_context,_sleep_powder_ticket,side,
-                        work.active[rows,side],work.active[rows,foe],move,_sleep_powder_attempt)
+                        _li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_sleep_powder_attempt)
                         if _sleep_powder_context is not None else None))
             if table.secondary is not None:
                 if _lifecycle_trace:
@@ -1481,13 +1480,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             seeded = recovery.seed_target(table.sustain,move,_active(work.types,work,foe),
                 _active(work.hp,work,foe),_active(work.substitute_hp,work,foe),
                 _active(work.volatile,work,foe),eligible=acts & hit)
-            pending = work.wish_counter[rows,side]
+            pending = _li.take(work.wish_counter,rows,side)
             starts_wish = acts & table.sustain.wish[move] & (pending == 0)
             work = work._replace(volatile=_set_active(work.volatile,work,foe,seeded),
-                wish_counter=work.wish_counter.at[rows,side].set(jnp.where(
+                wish_counter=_li.put(work.wish_counter,rows,(side,),jnp.where(
                     starts_wish,2,pending)),
-                wish_amount=work.wish_amount.at[rows,side].set(jnp.where(
-                    starts_wish,_active(work.max_hp,work,side)//2,work.wish_amount[rows,side])))
+                wish_amount=_li.put(work.wish_amount,rows,(side,),jnp.where(
+                    starts_wish,_active(work.max_hp,work,side)//2,_li.take(work.wish_amount,rows,side))))
             if _device_public is not None:device_public.wish(_device_public,side,starts_wish,start=True)
             if _lifecycle_trace:
                 _public_trace,_wish_capture=self_move_callbacks.finish(_public_trace,_wish_pending,work)
@@ -1512,7 +1511,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.encore is not None:
             # Duration uses the existing uniform [0,4) status-duration column:
             # a dispatched Encore cannot also inflict a primary sleep status.
-            queued=(order==0) & ~state.pending_residual & ~switches[rows,foe] & ~displaced[rows,foe]
+            queued=(order==0) & ~state.pending_residual & ~_li.take(switches,rows,foe) & ~_li.take(displaced,rows,foe)
             if _lifecycle_trace:
                 from . import engine_encore_callbacks as encore_callbacks
                 _encore_pending=None;_encore_capture=None
@@ -1530,12 +1529,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 effective_weather=climate.effective(table.weather,work.weather,
                     work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
             if _lifecycle_trace:
-                work,_public_trace=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
+                work,_public_trace=secondaries.apply(work,side,move,_li.take(secondary_draws,rows,side),table.secondary,
                     eligible=acts & hit & ~immune,effective_weather=effective_weather,
                     substitute_hit=hits_sub,item_table=table.items,_status_trace=_public_trace,
                     _secondary_status_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,_device_public=_device_public)
             else:
-                work=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
+                work=secondaries.apply(work,side,move,_li.take(secondary_draws,rows,side),table.secondary,
                     eligible=acts & hit & ~immune,effective_weather=effective_weather,
                     substitute_hit=hits_sub,item_table=table.items,_device_public=_device_public)
         if table.absorption is not None:
@@ -1552,14 +1551,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(thawed,0,_active(work.status_counter,work,foe))))
         if table.secondary is not None:
             if _lifecycle_trace:
-                work,_public_trace = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
+                work,_public_trace = secondaries.apply_contact(work,side,move,_li.take(phazing_draws,rows,side),table.secondary,
                     eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_status_trace=_public_trace,
                     _rough_skin_context=_direct_hit_context if _direct_hit_context is not None and _direct_hit_registered else None,
                     _rough_skin_capture=(kernel_risks.CapturedDirectHit(_direct_hit_context,_direct_ticket,side,
-                        work.active[rows,side],work.active[rows,foe],move,_direct_write)
+                        _li.take(work.active,rows,side),_li.take(work.active,rows,foe),move,_direct_write)
                         if _direct_hit_context is not None and _direct_hit_registered else None),_device_public=_device_public)
             else:
-                work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
+                work = secondaries.apply_contact(work,side,move,_li.take(phazing_draws,rows,side),table.secondary,
                     eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items,_device_public=_device_public)
         if table.secondary is not None:
             if _lifecycle_trace:
@@ -1574,7 +1573,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # Gen3 applies contact DamagingHit (and immediate Lum cure) before
         # recoil. A source about to faint can still consume its berry first.
         if _recoil_context is not None:
-            _recoil_before=recoil_callbacks.Before(work.active[rows,side],work.active[rows,foe],
+            _recoil_before=recoil_callbacks.Before(_li.take(work.active,rows,side),_li.take(work.active,rows,foe),
                 _active(work.ability,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side),_active(work.status,work,side))
             _public_trace=kernel_risks.recoil_on_tape(_public_trace,recoil,active=live,
                 pending=_recoil_pending,before=_recoil_before)
@@ -1595,40 +1594,40 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             if _lifecycle_trace:
                 weather,counter,_public_trace = climate.set_move(work.weather,work.weather_counter,
                     table.weather.move_weather[move],eligible=acts,_weather_trace=_public_trace,
-                    _actor_side=side,_actor_physical=work.active[rows,side],_move_id=move)
+                    _actor_side=side,_actor_physical=_li.take(work.active,rows,side),_move_id=move)
             else:
                 weather,counter = climate.set_move(work.weather,work.weather_counter,
                     table.weather.move_weather[move],eligible=acts)
             work = work._replace(weather=weather,weather_counter=counter)
             if _device_public is not None:device_public.weather(_device_public,_device_weather_before,work,acts,side=side)
         if table.entry is not None:
-            old_layers = work.spikes[rows,foe]
+            old_layers = _li.take(work.spikes,rows,foe)
             if _spikes_context is not None:
                 _spikes_requested=acts & table.entry.spikes_move[move]
                 _public_trace,_spikes_ticket=execution_accounting.open_attempt(_public_trace,
                     execution_accounting.Site.SPIKES_WRITE,side,active=_spikes_requested)
-            work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
+            work = work._replace(spikes=_li.put(work.spikes,rows,(foe,),jnp.where(
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
             if _spikes_context is not None:
                 _spikes_write=spikes_callbacks.Write(foe,old_layers,
-                    work.spikes[rows,foe],acts & hit & ~immune)
+                    _li.take(work.spikes,rows,foe),acts & hit & ~immune)
                 _public_trace=spikes_callbacks.record_device(_public_trace,_spikes_ticket,side,
-                    work.active[rows,side],move,_spikes_write,_spikes_context,requested=_spikes_requested)
+                    _li.take(work.active,rows,side),move,_spikes_write,_spikes_context,requested=_spikes_requested)
             if _lifecycle_trace:
                 _public_trace=kernel_risks.spikes_on_tape(_public_trace,
                     acts & table.entry.spikes_move[move],active=live,
                     captured=(kernel_risks.CapturedSpikes(_spikes_context,_spikes_ticket,side,
-                        work.active[rows,side],move,_spikes_write) if _spikes_context is not None else None))
+                        _li.take(work.active,rows,side),move,_spikes_write) if _spikes_context is not None else None))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
         if _lifecycle_trace:
             _public_trace=self_destruct_callbacks.actor_faint(_public_trace,work)
         if _public_trace is not None:
-            _public_trace = public_callbacks.faint(_public_trace,foe,work.active[rows,foe],
+            _public_trace = public_callbacks.faint(_public_trace,foe,_li.take(work.active,rows,foe),
                 eligible=acts & hit & ~hits_sub & (dealt>0) & (foe_hp==0))
         if _direct_hit_context is not None and _direct_hit_registered:
             _public_trace=direct_ko_callbacks.finish_device(_public_trace,_direct_ko_pending,
-                _active(work.hp,work,side),work.hp[rows,foe],work.active[rows,side],work.active[rows,foe],
-                recoil_after=(recoil_callbacks.Write(work.active[rows,side],work.active[rows,foe],_active(work.ability,work,side),
+                _active(work.hp,work,side),_li.take(work.hp,rows,foe),_li.take(work.active,rows,side),_li.take(work.active,rows,foe),
+                recoil_after=(recoil_callbacks.Write(_li.take(work.active,rows,side),_li.take(work.active,rows,foe),_active(work.ability,work,side),
                     _recoil_before.old_hp,_active(work.hp,work,side),_active(work.max_hp,work,side),_active(work.status,work,side))if _recoil_context is not None else None))
 
         if _lifecycle_trace:
@@ -1641,34 +1640,33 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _whirlwind_pending=None
             if _lifecycle_trace and _direct_hit_registered and _direct_hit_context.data.whirlwind is not None:
                 from . import engine_whirlwind_callbacks as whirlwind_callbacks
-                _public_trace,_whirlwind_pending=whirlwind_callbacks.begin(_public_trace,work,side,move,caller_move,chosen_slot,phazing_draws[rows,side],_direct_hit_context,table,
+                _public_trace,_whirlwind_pending=whirlwind_callbacks.begin(_public_trace,work,side,move,caller_move,chosen_slot,_li.take(phazing_draws,rows,side),_direct_hit_context,table,
                     eligible=acts,hit=hit,immune=immune,protected=_risk_protected,absorbed=_risk_absorbed)
             if _whirlwind_pending is not None:
-                work,changed,hazard_ko,_public_trace=dragging.drag(work,foe,move,phazing_draws[rows,side],
+                work,changed,hazard_ko,_public_trace=dragging.drag(work,foe,move,_li.take(phazing_draws,rows,side),
                     table.phazing,table.entry,eligible=acts & hit & (hp>0),_public_trace=_public_trace,_whirlwind_pending=_whirlwind_pending)
             else:
-                work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],
+                work,changed,hazard_ko=dragging.drag(work,foe,move,_li.take(phazing_draws,rows,side),
                     table.phazing,table.entry,eligible=acts & hit & (hp>0))
             if _device_public is not None:device_public.drag(_device_public,_device_drag_before,work,foe,table.entry,changed)
-            displaced=displaced.at[rows,foe].set(displaced[rows,foe] | changed)
+            displaced=_li.put(displaced,rows,(foe,),_li.take(displaced,rows,foe) | changed)
             moves_cancelled |= hazard_ko
             if _lifecycle_trace:work,_public_trace=_lum_update(work,table,changed,_public_trace,_device_public=_device_public)
             else:work=_lum_update(work,table,changed,_device_public=_device_public)
         if table.baton is not None:
             bench_alive = jnp.any(
-                (work.hp[rows,side] > 0) & (jnp.arange(6)[None,:] != work.active[rows,side,None]),axis=1)
+                (_li.take(work.hp,rows,side) > 0) & (jnp.arange(6)[None,:] != work.active[rows,side,None]),axis=1)
             passed = acts & table.baton.move[move] & (hp > 0) & bench_alive
             if _lifecycle_trace:
                 from . import engine_baton_pass_callbacks as baton_callbacks
                 _public_trace,_baton_start=baton_callbacks.begin_start(_public_trace,work,side,move,caller_move,
                     _direct_hit_context if _direct_hit_registered else None,acts=acts,eligible=caller_acts)
-            work = work._replace(baton_pass=work.baton_pass.at[rows,side].set(
-                work.baton_pass[rows,side] | passed))
+            work = work._replace(baton_pass=_li.put(work.baton_pass,rows,(side,),_li.take(work.baton_pass,rows,side) | passed))
             if _lifecycle_trace:
                 _public_trace=baton_callbacks.finish_start(_public_trace,_baton_start,work,passed,acts&hit&~immune)
             # Only a first ordinary action can leave an opposing action queued.
             # A resumed Baton is already the final original action.
-            save_foe = passed & (order == 0) & ~state.pending_residual & ~switches[rows,foe]
+            save_foe = passed & (order == 0) & ~state.pending_residual & ~_li.take(switches,rows,foe)
             queued_actor = jnp.where(save_foe,foe,queued_actor)
             paused |= passed
         # All move effects, including self-KO/recoil and forced-entry hazards,
@@ -1767,11 +1765,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     source_class=device_public.HP_PRE_ITEM)
             if _lifecycle_trace:
                 _weather_before_count=_public_trace.count
-                _public_trace=weather_effect_callbacks.weather_chip(_public_trace,side,work.active[rows,side],
+                _public_trace=weather_effect_callbacks.weather_chip(_public_trace,side,_li.take(work.active,rows,side),
                     _weather_old_hp,hp,_active(work.max_hp,work,side),_active(work.status,work,side),weather,
                     eligible=ordinary&(hp<_weather_old_hp),_defer_own_unknown=_weather_observer_context is not None)
                 _public_trace=weather_order_callbacks.annotate_weather_chip(_public_trace,_weather_before_count,
-                    side,work.active[rows,side],end_speed[:,0],end_speed[:,1],
+                    side,_li.take(work.active,rows,side),end_speed[:,0],end_speed[:,1],
                     eligible=ordinary&(hp<_weather_old_hp),_defer_own_unknown=_weather_observer_context is not None)
         if _lifecycle_trace:
             if _weather_observer_context is not None:
@@ -1811,7 +1809,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.entry is not None:
             boosts = _active(work.boosts,work,side)
             speed_boost = (eligible & ability_event & (hp > 0)
-                & (work.active_turns[rows,side] > 0)
+                & (_li.take(work.active_turns,rows,side) > 0)
                 & table.entry.speed_boost[_active(work.ability,work,side)])
             if _lifecycle_trace:
                 # The attempt exists at stage+6 too, even if min leaves no write.
@@ -1825,7 +1823,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if _leftovers_context is not None:
             # Literal BEFORE values precede both the numerical heal and item
             # consumption. No final item/state reconstruction or amount formula.
-            _leftovers_physical=work.active[rows,side]
+            _leftovers_physical=_li.take(work.active,rows,side)
             _leftovers_item=_active(work.item,work,side)
             _leftovers_old_hp=hp
             _leftovers_maximum=_active(work.max_hp,work,side)
@@ -1889,7 +1887,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # Literal BEFORE values at this exact numerical assignment. The
             # kernel-site ticket may capture its exact appended span later;
             # no ticket is consumed or physically qualified by this write.
-            _status_physical=work.active[rows,side]
+            _status_physical=_li.take(work.active,rows,side)
             _status_old_hp=_active(work.hp,work,side)
             _status_maximum=_active(work.max_hp,work,side)
             _status_old_status=_active(work.status,work,side)
@@ -2066,10 +2064,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # An end-of-turn faint replacement enters later and misses this flip.
         for side in range(2):
             active=work.active[:,side]
-            old=work.truant_loaf[rows,side,active]
+            old=_li.take(work.truant_loaf,rows,side,active)
             holder=table.entry.truant[_active(work.ability,work,side)]
             tick=ordinary & ~work.done & (_active(work.hp,work,side)>0) & holder
-            work=work._replace(truant_loaf=work.truant_loaf.at[rows,side,active].set(jnp.where(tick,~old,old)))
+            work=work._replace(truant_loaf=_li.put(work.truant_loaf,rows,(side,active),jnp.where(tick,~old,old)))
     if table.solar_beam is not None:
         work=charging.residual(work,eligible=ordinary)
     if _lifecycle_trace:
