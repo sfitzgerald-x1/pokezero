@@ -136,6 +136,25 @@ def training_summary(updates):
     return dict(iteration_mean=numeric(updates), final_epoch_mean=numeric(final), final_epoch=last_epoch)
 
 
+def file_pipeline_order(keys, batches):
+    """Permutation and segments reproducing the file pipeline's cache order.
+
+    Each declared 2,048-game block was one cache, read in block order; inside a
+    cache rows follow ``np.argwhere(trainable)`` over (chunk step, bank row,
+    owner), and a live game's chunk step equals its frame. So the order is
+    (block, frame, row-in-block, owner), one segment per block.
+    """
+    position = {}
+    for block, batch in enumerate(batches):
+        for row, game in enumerate(batch.games):position[game.stream_id] = (block, row)
+    streams, frames, owners = keys[:, 0], keys[:, 1], keys[:, 2]
+    block = np.asarray([position[int(s)][0] for s in streams], np.int64)
+    row = np.asarray([position[int(s)][1] for s in streams], np.int64)
+    order = np.lexsort((owners, row, frames, block))
+    counts = np.bincount(block[order], minlength=len(batches))
+    return order, tuple(int(c) for c in counts if c)
+
+
 def write_json(path, value):
     temporary = Path(str(path) + '.tmp');temporary.write_text(json.dumps(value, indent=1, default=str) + '\n')
     os.replace(temporary, path)
@@ -154,6 +173,8 @@ def main(argv=None):
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
     parser.add_argument('--order', default='ordered')
+    parser.add_argument('--row-order', choices=('tick', 'file'), default='tick',
+        help='tick: collection order; file: the file pipeline cache order (block, frame, row, owner)')
     parser.add_argument('--check-interval', type=int, default=64)
     parser.add_argument('--compile-threads', type=int, default=16)
     parser.add_argument('--audit-every', type=int, default=50)
@@ -237,8 +258,13 @@ def main(argv=None):
                 status = STATUS[int(records['status'][i])];same['compared'] += 1
                 if ref['status'] == status and ref['terminal_frame'] == int(records['terminal_frame'][i]) and (
                         status != 'COMPLETE' or ref['terminal_winner'] == int(records['winner'][i])):same['equal'] += 1
-        tensors = rows.to_torch(device='cuda', exact_dtypes=True)
-        store = v2t.row_store(tensors, plan.model, plan.loss, store_id=f'v2-iteration-{iteration}');mark('handoff_validate')
+        tensors = rows.to_torch(device='cuda', exact_dtypes=True);segments = None
+        if args.row_order == 'file':
+            order, segments = file_pipeline_order(rows.keys(), plan.iterations[iteration])
+            index = torch.as_tensor(order, device='cuda')
+            tensors = {name: (value.index_select(0, index) if torch.is_tensor(value) and value.ndim and value.shape[0] == rows.n
+                else tuple(value[i] for i in order) if name == 'terminal_status' else value) for name, value in tensors.items()}
+        store = v2t.row_store(tensors, plan.model, plan.loss, segments=segments, store_id=f'v2-iteration-{iteration}');mark('handoff_validate')
         train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
         torch.cuda.synchronize();mark('train')
         del store, tensors;gc.collect()
@@ -273,7 +299,7 @@ def main(argv=None):
     total = time.perf_counter() - wall_start
     games = sum(r['games'] for r in reports)
     summary = dict(schema='v2-fused-measurement.v2', declared=context['declared'], lanes=args.lanes, mode=args.mode,
-        order=args.order, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
+        order=args.order, row_order=args.row_order, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
         games=games, games_per_second_steady_mean=games / max(1e-9, sum(r['steady_seconds'] for r in reports)),
         scope='Throughput of the fused V2 pipeline; not a strength result.')
     write_json(out / 'report.json', summary)
