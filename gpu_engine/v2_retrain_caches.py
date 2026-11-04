@@ -51,7 +51,7 @@ def main(argv=None):
     by_digest = {}
     for root in [run, *(Path(x) for x in args.extra_cache_root)]:
         for meta in root.rglob('metadata.json'):
-            if not meta.parent.name.startswith('cache-'):continue
+            if not meta.parent.name.startswith(('cache-', 'recovered-')):continue  # recovered banks keep their own prefix
             try:by_digest.setdefault(json.loads(meta.read_text()).get('metadata_sha256'), meta.parent)
             except (OSError, json.JSONDecodeError):continue
     missing = [d for d in digests if d not in by_digest]
