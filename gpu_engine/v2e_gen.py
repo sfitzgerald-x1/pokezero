@@ -106,7 +106,8 @@ def compile_function(name, fn, example, build_dir=None, profile=False, mode='war
     from gpu_engine import v2e_modules
     cached = _registered.get(name)
     if cached is not None:
-        if cached.fn is not fn or cached.mode != mode:raise ValueError(f'generated module {name!r} already compiled for a different function')
+        if cached.fn is not fn or cached.mode != mode or cached.profile != profile:
+            raise ValueError(f'generated module {name!r} already compiled for a different function, mode or profile flag')
         return cached
     begin = time.perf_counter()
     with v2e_modules.trace_substitutions():
@@ -123,6 +124,6 @@ def compile_function(name, fn, example, build_dir=None, profile=False, mode='war
     consts = [j.asarray(c) for c in module.consts]
     fn_ = Generated(module, in_tree, out_tree, consts, target)
     fn_.library = lib;fn_.path = path
-    fn_.fn = fn;fn_.mode = mode
+    fn_.fn = fn;fn_.mode = mode;fn_.profile = profile
     _registered[name] = fn_
     return fn_
