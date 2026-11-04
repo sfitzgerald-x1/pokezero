@@ -75,14 +75,23 @@ def _chance():
     return reference, (lambda s, a, t, c: v2e_cuda.chance(s.keys, s.replacement_count))
 
 
-MODULES = dict(identity=_identity, chance=_chance)
+def _negative_control():
+    """Harness self-check: the CUDA side flips one bit of state.hp at lane 3, seat 1, slot 2."""
+    from gpu_engine import v2e_cuda
+    def flipped(s, a, t, c):
+        s2, t2 = v2e_cuda.roundtrip((s, t))[0]
+        return s2._replace(hp=s2.hp.at[3, 1, 2].set(s2.hp[3, 1, 2] ^ 1)), t2
+    return (lambda s, a, t, c: (s, t)), flipped
+
+
+MODULES = dict(identity=_identity, chance=_chance, negative_control=_negative_control)
 
 
 # ---------------------------------------------------------------------------
 
 def load_shard(path):
     with np.load(path) as z:
-        leaves = [z[k] for k in sorted(k for k in z.files if k.startswith('l'))]
+        leaves = [z[k] for k in sorted(k for k in z.files if k[0] == 'l' and k[1:].isdigit())]
         return leaves, int(z['tick']), int(z['level'])
 
 
