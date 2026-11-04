@@ -33,6 +33,7 @@ def main(argv=None):
     index = {tuple(k): i for i, k in enumerate(keys)}
     fields = {};matched = 0;caches = []
     for path in sorted(glob.glob(args.caches)):
+        if not Path(path, 'metadata.json').exists():continue  # still being written by a live run
         batch = next(v5_data.VerifiedCache(Path(path)).batches(batch_size=1 << 30))
         ref_keys = np.asarray([(a['stream'], a['frame'], a['owner']) for a in batch.v5_columns['addresses']], np.int64)
         inside = (ref_keys[:, 0] >= lo) & (ref_keys[:, 0] <= hi)
