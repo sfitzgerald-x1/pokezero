@@ -179,6 +179,8 @@ def _exact_own(request, state, catalog, source, metadata, owner):
         if not base_ability or 'item' not in mon:
             raise Refusal('OWN_ABILITY_OR_ITEM_UNAVAILABLE')
         possible = []
+        from .phase_d_constructor_rules import literal_hidden_power_agrees
+        typed_hp=tuple(normalize_id(x)for x in moves if normalize_id(x).startswith('hiddenpower')and normalize_id(x)!='hiddenpower')
         for variant in universe.variants:
             if (variant.level != level or sorted(map(_source_move, variant.moves)) != sorted(map(_source_move, moves))
                     or normalize_id(variant.ability) != normalize_id(base_ability)):
@@ -195,6 +197,7 @@ def _exact_own(request, state, catalog, source, metadata, owner):
                 continue
             hp_move = next((x for x in fixture.moves if normalize_id(x).startswith('hiddenpower')), None)
             resolved = hidden_power_engine_id(normalize_id(hp_move), fixture.ivs) if hp_move else None
+            if not literal_hidden_power_agrees(typed_hp,resolved):continue
             possible.append((mx, computed, info['types'], resolved))
         identities = {(mx, tuple(st), tuple(types), hp_move) for mx, st, types, hp_move in possible}
         if len(identities) != 1:
@@ -278,7 +281,8 @@ def from_b2(adapter, request, source, metadata, *, address):
     status = np.asarray(STATUS,np.int32)[_host(ctx.sleep.status)]
     hp_num, hp_den = _host(mons.hp_numerator), _host(mons.hp_denominator)
     foe = 1-owner
-    if np.any(present[:,foe] & (hp_den[:,foe] != 100)):
+    fainted=_host(mons.fainted).astype(bool)
+    if np.any(present[:,foe] & np.where(fainted[:,foe],(hp_num[:,foe]!=0)|(hp_den[:,foe]!=0),hp_den[:,foe]!=100)):
         raise Refusal('OPPONENT_LITERAL_PUBLIC_PERCENT_REQUIRED')
     percent = np.where(present, np.ceil(100*hp_num/np.maximum(1,hp_den)),0).astype(np.int32)
     percent = np.where((hp_num<hp_den)&(percent==100),99,percent).astype(np.int32)
