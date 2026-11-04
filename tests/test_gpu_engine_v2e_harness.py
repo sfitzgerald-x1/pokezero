@@ -60,6 +60,29 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(result['lane_steps'], 0)
 
 
+    def test_mixed_lane_counts_are_replayed_in_full(self):
+        import jax
+        from gpu_engine import v2e_diff
+        class S:
+            def __init__(self, hp):self.hp = hp
+        jax.tree_util.register_pytree_node(S, lambda s: ((s.hp,), None), lambda _, c: S(*c))
+        template = (S(j.zeros((1, 3), j.int32)), j.zeros((1, 2), j.int32), S(j.zeros((1, 3), j.int32)))
+        same = lambda s, a, t, c: (s.hp, t.hp)
+        v2e_diff.MODULES['_same'] = lambda: (same, same)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                paths = []
+                for k, lanes in enumerate((1024, 2048, 2048)):
+                    path = Path(d) / f'shard-{k:06d}.npz';paths.append(path)
+                    np.savez_compressed(path, tick=np.int64(k), level=np.int64(0), l000=np.ones((lanes, 3), np.int32),
+                        l001=np.zeros((lanes, 2), np.int32), l002=np.ones((lanes, 3), np.int32))
+                result = v2e_diff.run('_same', paths, template, {}, out=d)
+        finally:
+            del v2e_diff.MODULES['_same']
+        self.assertTrue(result['equal'])
+        self.assertEqual(result['lane_steps'], 1024 + 2048 + 2048)
+
+
 class CaptureSinkTest(unittest.TestCase):
     def test_writes_whole_shards_and_refuses_a_used_directory(self):
         from gpu_engine.v2e_capture import Sink
