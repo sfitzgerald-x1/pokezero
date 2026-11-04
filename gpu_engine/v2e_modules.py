@@ -5,6 +5,7 @@ function of the lane carry. gpu_engine.v2e_gen compiles them to CUDA; the
 harness (gpu_engine.v2e_diff) and the collector use the same definitions.
 """
 from contextlib import contextmanager
+import threading
 
 import jax
 import jax.numpy as j
@@ -31,19 +32,41 @@ def _first_occurrences_unfused(ids, selected, count):
     return f(ids, selected)
 
 
-# lane_index's one-hot select forms exist to fuse in XLA; a warp-per-lane kernel reads a per-lane
-# element with one shuffle, so the CUDA trace uses the plain indexing they were proven equal to.
-SUBSTITUTIONS = ((public_belief_features, '_first_occurrences', _first_occurrences_unfused), (lane_index, 'LIMIT', 0))
+_lane_index_check = lane_index._check
+
+
+def _check_plain_safe(x, rows, indices):
+    """lane_index._check, refusing the one index type whose plain form differs from the select form:
+    unsigned 32-bit indices at or above 2**31 (plain indexing converts them to int32, so they wrap
+    negative and clamp to 0, where the select form clamps to n - 1)."""
+    for index in indices:
+        dtype = j.asarray(index).dtype
+        if j.issubdtype(dtype, j.unsignedinteger) and dtype.itemsize >= 4:
+            raise TypeError('unsigned 32-bit lane index: the plain indexing form differs from the select form at >= 2**31')
+    return _lane_index_check(x, rows, indices)
+
+
+# lane_index's one-hot select forms exist so XLA fuses per-lane point reads and writes. For the CUDA
+# trace they only inflate the program (the step jaxpr drops from 1.59M to 0.60M equations without
+# them), so it uses the plain indexing they were proven bitwise equal to in stage 1; the harness
+# still compares against the unmodified oracle.
+SUBSTITUTIONS = ((public_belief_features, '_first_occurrences', _first_occurrences_unfused), (lane_index, 'LIMIT', 0),
+    (lane_index, '_check', _check_plain_safe))
+_substituting = threading.RLock()
 
 
 @contextmanager
 def trace_substitutions():
-    saved = [(module, name, getattr(module, name)) for module, name, _ in SUBSTITUTIONS]
-    try:
-        for module, name, value in SUBSTITUTIONS:setattr(module, name, value)
-        yield
-    finally:
-        for module, name, value in saved:setattr(module, name, value)
+    """Apply SUBSTITUTIONS for one CUDA trace. Process-wide, so serialized; JAX's trace caches are
+    cleared on exit so no jaxpr traced under them is reused by later (oracle) tracing."""
+    with _substituting:
+        saved = [(module, name, getattr(module, name)) for module, name, _ in SUBSTITUTIONS]
+        try:
+            for module, name, value in SUBSTITUTIONS:setattr(module, name, value)
+            yield
+        finally:
+            for module, name, value in saved:setattr(module, name, value)
+            jax.clear_caches()
 
 
 def observe(engine_tables, observation_tables):

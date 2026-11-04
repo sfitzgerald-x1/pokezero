@@ -88,7 +88,7 @@ def _observe(ctx):
     from gpu_engine import v2e_gen, v2e_modules
     fn = v2e_modules.observe(ctx['engine_tables'], ctx['observation_tables'])
     state, _, public = ctx['template']
-    generated = v2e_gen.compile_function('observe', fn, (state, public))
+    generated = v2e_gen.compile_function('observe', fn, (state, public), mode=ctx.get('mode') or 'warp')
     log('GENERATED', module='observe', arena_words=generated.module.arena_words, lane_literals=generated.module.lane_literals,
         consts=len(generated.module.consts), library=str(generated.path), **generated.module.stats)
     def cuda(s, a, t, c):
@@ -103,7 +103,7 @@ def _step(ctx):
     from gpu_engine import v2e_gen, v2e_modules
     fn = v2e_modules.step(ctx['engine_tables'], ctx['observation_tables'])
     state, actions, public = ctx['template']
-    generated = v2e_gen.compile_function('step', fn, (state, actions, public), mode='thread')
+    generated = v2e_gen.compile_function('step', fn, (state, actions, public), mode=ctx.get('mode') or 'thread')
     log('GENERATED', module='step', arena_words=generated.module.arena_words, lane_literals=generated.module.lane_literals,
         consts=len(generated.module.consts), library=str(generated.path), **generated.module.stats)
     def cuda(s, a, t, c):
@@ -130,7 +130,7 @@ def load_shard(path):
         return leaves, int(z['tick']), int(z['level'])
 
 
-def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=16):
+def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=16, lanes=0):
     import jax
     jax_fn, cuda_fn = MODULES[module](dict(context, template=template)) if module in GENERATED else MODULES[module]()
     treedef = jax.tree.structure(template)
@@ -150,6 +150,7 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
                 yield path, loaded
     if True:
         for path, (leaves, tick, level) in prefetched(list(shard_paths)):
+            if lanes:leaves = [x[:lanes] for x in leaves]   # e.g. an odd lane count, to exercise lane-count-dependent addressing
             state, actions, trackers = jax.tree.unflatten(treedef, [jax.numpy.asarray(x) for x in leaves])
             want = call('jax', jax_fn, state, actions, trackers);got = call('cuda', cuda_fn, state, actions, trackers)
             diffs = lane_differences(want, got);lanes = state.hp.shape[0];compared += lanes
@@ -165,7 +166,7 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
                 log('FIRST_DIFFERENCE', module=module, **first)
     seconds = time.perf_counter() - begin
     return dict(module=module, shards=len(shard_paths), lane_steps=compared, lane_steps_differing=differing,
-        equal=compared > 0 and differing == 0, differing_by_leaf={k: v for k, v in totals.items() if v}, output_leaves=len(totals),
+        equal=compared > 0 and bool(totals) and differing == 0, differing_by_leaf={k: v for k, v in totals.items() if v}, output_leaves=len(totals),
         first_difference=first, seconds=seconds)
 
 
@@ -179,6 +180,8 @@ def main(argv=None):
     parser.add_argument('--arm', default='B', choices=('A', 'B'))
     parser.add_argument('--limit', type=int, default=0, help='first N shards (0: all)')
     parser.add_argument('--build-dir', default=None)
+    parser.add_argument('--mode', default=None, choices=('warp', 'thread'), help='generator backend (default per module)')
+    parser.add_argument('--lanes', type=int, default=0, help='replay only the first N lanes of each shard (0: all)')
     args = parser.parse_args(argv)
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     import jax
@@ -196,12 +199,15 @@ def main(argv=None):
     shards = sorted(Path(args.shards).glob('shard-*.npz'))
     if args.limit:shards = shards[:args.limit]
     if not shards:raise SystemExit(f'no capture shards under {args.shards}')
+    if not args.limit and capture.get('shards') is not None and len(shards) != capture['shards']:
+        raise SystemExit(f"{len(shards)} shards under {args.shards}, capture.json records {capture['shards']}")
     digest, modules = oracle_digest()
-    ctx = dict(engine_tables=context['prepared'].engine_tables, observation_tables=context['prepared'].observation_tables)
+    ctx = dict(engine_tables=context['prepared'].engine_tables, observation_tables=context['prepared'].observation_tables, mode=args.mode)
     report = dict(oracle_digest=digest, oracle_modules=len(modules), source_commit=os.environ.get('V2_SOURCE_COMMIT'),
         capture_commit=capture.get('source_commit'), cuda_library=str(v2e_cuda._loaded['path']), results=[])
     for module in args.modules:
-        result = run(module, shards, template, ctx, out=out);report['results'].append(result);log('DIFF', **result)
+        result = run(module, shards, template, ctx, out=out, lanes=args.lanes);result.update(mode=args.mode, lanes=args.lanes or None)
+        report['results'].append(result);log('DIFF', **result)
         (out / 'diff.json').write_text(json.dumps(report, indent=1, default=str) + '\n')
     log('DONE', equal=all(r['equal'] for r in report['results']))
     return 0 if all(r['equal'] for r in report['results']) else 1

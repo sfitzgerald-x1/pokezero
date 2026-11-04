@@ -28,9 +28,17 @@ def leaf_paths(tree):
     return [jax.tree_util.keystr(path) for path, _ in jax.tree_util.tree_flatten_with_path(tree)[0]]
 
 
+def _save_atomic(path, **arrays):
+    """Write an npz shard under a temporary name and rename it, so a crash never leaves a partial shard."""
+    tmp = path.with_name(path.name + '.part')
+    with open(tmp, 'wb') as f:np.savez_compressed(f, **arrays)
+    os.replace(tmp, path)
+
+
 class Sink:
     def __init__(self, out, *, every, skip, limit, workers=8):
         self.out = Path(out);self.out.mkdir(parents=True, exist_ok=True)
+        if any(self.out.glob('shard-*.npz')):raise SystemExit(f'{self.out} already holds shards; capture into an empty directory')
         self.every = every;self.skip = skip;self.limit = limit;self.calls = 0;self.saved = 0;self.lanes = 0
         self.pool = ThreadPoolExecutor(max_workers=workers);self.lock = threading.Lock();self.futures = []
         self.paths = None;self.level_lanes = {}
@@ -42,8 +50,7 @@ class Sink:
             index = self.saved;self.saved += 1
         arrays = {f'l{i:03d}': np.asarray(x) for i, x in enumerate(leaves)}
         lanes = int(arrays['l000'].shape[0])
-        future = self.pool.submit(np.savez_compressed, self.out / f'shard-{index:06d}.npz', tick=np.int64(call),
-            level=np.int64(level), **arrays)
+        future = self.pool.submit(_save_atomic, self.out / f'shard-{index:06d}.npz', tick=np.int64(call), level=np.int64(level), **arrays)
         with self.lock:
             self.lanes += lanes;self.level_lanes[lanes] = self.level_lanes.get(lanes, 0) + 1;self.futures.append(future)
 
