@@ -122,6 +122,7 @@ static ffi::Error ChanceImpl(cudaStream_t stream, ffi::Buffer<ffi::U32> keys, ff
                              ffi::Result<ffi::Buffer<ffi::S32>> entry_ties, ffi::Result<ffi::Buffer<ffi::S32>> initial_tie,
                              ffi::Result<ffi::Buffer<ffi::U32>> next_keys) {
   const int64_t lanes = static_cast<int64_t>(replacement_count.element_count());
+  if (lanes == 0 && keys.element_count() == 0 && draws->element_count() == 0) return ffi::Error::Success();  // empty batch, as JAX
   if (keys.element_count() != static_cast<size_t>(2 * lanes) || draws->element_count() != static_cast<size_t>(24 * lanes))
     return ffi::Error::InvalidArgument("chance: [B,2] keys, [B] replacement counts and [B,2,12] draws required");
   const int threads = 128;

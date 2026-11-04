@@ -28,9 +28,17 @@ def leaf_paths(tree):
     return [jax.tree_util.keystr(path) for path, _ in jax.tree_util.tree_flatten_with_path(tree)[0]]
 
 
+def _save_atomic(path, **arrays):
+    """Write an npz shard under a temporary name and rename it, so a crash never leaves a partial shard."""
+    tmp = path.with_name(path.name + '.part')
+    with open(tmp, 'wb') as f:np.savez_compressed(f, **arrays)
+    os.replace(tmp, path)
+
+
 class Sink:
     def __init__(self, out, *, every, skip, limit, workers=8):
         self.out = Path(out);self.out.mkdir(parents=True, exist_ok=True)
+        if any(self.out.glob('shard-*.npz')):raise SystemExit(f'{self.out} already holds shards; capture into an empty directory')
         self.every = every;self.skip = skip;self.limit = limit;self.calls = 0;self.saved = 0;self.lanes = 0
         self.pool = ThreadPoolExecutor(max_workers=workers);self.lock = threading.Lock();self.futures = []
         self.paths = None;self.level_lanes = {}
@@ -41,10 +49,10 @@ class Sink:
             if call < self.skip or (call - self.skip) % self.every or (self.limit and self.saved >= self.limit):return
             index = self.saved;self.saved += 1
         arrays = {f'l{i:03d}': np.asarray(x) for i, x in enumerate(leaves)}
-        lanes = int(arrays['l000'].shape[0]);self.lanes += lanes
-        self.level_lanes[lanes] = self.level_lanes.get(lanes, 0) + 1
-        self.futures.append(self.pool.submit(np.savez_compressed, self.out / f'shard-{index:06d}.npz', tick=np.int64(call),
-            level=np.int64(level), **arrays))
+        lanes = int(arrays['l000'].shape[0])
+        future = self.pool.submit(_save_atomic, self.out / f'shard-{index:06d}.npz', tick=np.int64(call), level=np.int64(level), **arrays)
+        with self.lock:
+            self.lanes += lanes;self.level_lanes[lanes] = self.level_lanes.get(lanes, 0) + 1;self.futures.append(future)
 
     def close(self):
         for f in self.futures:f.result()
@@ -79,11 +87,15 @@ def main(argv=None):
         jax.debug.callback(sink, np.int32(state.hp.shape[0]), *jax.tree.leaves(tree), ordered=False)
         return original(state, actions, table, trackers, **kwargs)
     transition.step_with_public = recorded
-    collector = v2.RefillCollector(prepared.engine_tables, prepared.observation_tables, plan.model, backend.labels, roster,
-        lanes=args.lanes, max_requests=plan.max_requests, chunk_steps=args.chunk_steps, rows_per_game=112)
-    begin = time.perf_counter();collector.compile((params,), threads=4);log('COMPILED', seconds=time.perf_counter() - begin)
-    begin = time.perf_counter();result = collector.run((params,));sink.close()
-    transition.step_with_public = original
+    try:
+        collector = v2.RefillCollector(prepared.engine_tables, prepared.observation_tables, plan.model, backend.labels, roster,
+            lanes=args.lanes, max_requests=plan.max_requests, chunk_steps=args.chunk_steps, rows_per_game=112)
+        begin = time.perf_counter();collector.compile((params,), threads=4);log('COMPILED', seconds=time.perf_counter() - begin)
+        begin = time.perf_counter();result = collector.run((params,))
+        jax.effects_barrier()   # every recorded tick's callback has run
+        sink.close()
+    finally:
+        transition.step_with_public = original
     summary = dict(source_commit=os.environ.get('V2_SOURCE_COMMIT'), lanes=args.lanes, games=roster.games, every=args.every,
         skip=args.skip, ticks_seen=sink.calls, shards=sink.saved, lane_steps=sink.lanes, shards_by_lane_count=sink.level_lanes,
         paths=meta['paths'], collect_seconds=time.perf_counter() - begin, kernel_seconds=result.stats['kernel_seconds'])
