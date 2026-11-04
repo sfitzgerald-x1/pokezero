@@ -23,8 +23,17 @@ TARGETS = ('V2eRoundTrip', 'V2eChance', 'V2eDivVariants')
 _loaded = {}
 
 
+def toolchain_id():
+    """nvcc, jax and jaxlib versions (part of every build cache key)."""
+    if 'toolchain' not in _loaded:
+        import jax, jaxlib
+        version = subprocess.run([nvcc(), '--version'], capture_output=True, text=True).stdout
+        _loaded['toolchain'] = f'{version}|jax {jax.__version__}|jaxlib {jaxlib.__version__}'
+    return _loaded['toolchain']
+
+
 def source_hash():
-    h = hashlib.sha256()
+    h = hashlib.sha256(toolchain_id().encode())
     for path in sorted(SOURCE_DIR.glob('*')):
         if path.suffix in ('.cu', '.cuh', '.h'):
             h.update(path.name.encode());h.update(path.read_bytes())
