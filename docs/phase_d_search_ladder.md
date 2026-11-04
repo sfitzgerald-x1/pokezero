@@ -108,3 +108,27 @@ mechanics or visits sweep.
 No numerical gate result, construction rate, p95 admission or strength claim
 follows from source or inert tests. Scientific producer review and actual
 fixed-roster measurements are required before dispatch.
+
+## Reopened constructor: guard-defect batch
+
+The Phase D host constructor keeps the engine, device trackers, D teacher and
+shared determinization unchanged. A present fainted foe has B2's literal0/0
+condition; only live foes require a100denominator. The own sampled packed team
+is reordered to the current request before mapping. Whole packed entries move
+without changing their fields, and the existing physical/request-order equality
+remains an invariant. A literal typed own Hidden Power filters static variants
+before the uniqueness test.
+
+Live foe HP is sampled uniformly from the integer inverse of the actual Gen3
+public display for that world's sampled maximum.100means full. Below full the
+display is min(99,ceil(100*h/M)), so the99bin includes the below-full ceil100
+tail. The world kernel seed owns these reproducible draws; no true opponent HP
+or private packet is read. Public carry is rebased onto the resulting sample.
+
+The one batch is measured on the original200roots at16and32worlds. Its coverage
+bar is55%overall and40%in the latest turn band. Sleep and the other named tail
+remain refusals for this batch. Construction success alone does not establish
+oracle-support, own-state equality or value sensitivity: report unavailable
+validation explicitly. The old captures do not contain certified true-opponent
+state; no truth is reconstructed from guessed choices. Acting search remains
+held until the full validation, coverage and unchanged latency gates pass.

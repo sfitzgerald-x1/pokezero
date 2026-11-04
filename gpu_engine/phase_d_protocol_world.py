@@ -5,7 +5,7 @@ Session, witness or History. The original materialize route for retained-driver
 roots is untouched; its explicit protocol route calls the same typed
 world_battle_spec -> map_spec construction and rebases B2 public carry only.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass,replace
 import hashlib
 import json
 import random
@@ -21,6 +21,7 @@ from pokezero.determinization import _gen3_randbat_belief_start_override_result
 from . import device_public_worlds as public_worlds,device_public_world_state as states
 from . import phase_d_live_worlds as live
 from .v5_hypothetical_state import map_spec
+from .phase_d_constructor_rules import public_hp_bin,request_ordered_packed
 
 SCHEMA='pokezero.phase-d.protocol-materialization.v1'
 
@@ -87,6 +88,12 @@ def materialize_protocol(root,start,*,inputs,seed):
                     and normalize_id(v.item or '')==normalize_id(mon.item or '')for index,v in candidates):
                 raise ValueError('sampled-foe-outside-b2-public-posterior')
         state=root.context.public_materialization_state
+        own_names=tuple(normalize_id(metadata['vocabulary']['species'][int(x)])for x in detached.own['species'])
+        own_key=f'p{owner+1}'
+        sampled_names=tuple(normalize_id(mon.species)for mon in unpack_team(start.player_teams[own_key]))
+        teams=dict(start.player_teams)
+        teams[own_key]=request_ordered_packed(teams[own_key],sampled_names,own_names)
+        start=replace(start,player_teams=teams)
         world=world_battle_spec(state,start,dex=catalog.dex,approximate_sleep_turns=False,
             approximate_substitute_health=False,approximate_partial_trap_turns=False,approximate_hidden_duration_volatiles=False)
         if any(len(x.pokemon)!=6 for x in (world.spec.side_one,world.spec.side_two)):raise ValueError('full-source-six-world-required')
@@ -96,7 +103,6 @@ def materialize_protocol(root,start,*,inputs,seed):
             for member in start.player_teams[seat].split(']'):
                 value=member.split('|')[11];values.append(255 if value==''else int(value))
             mood.append(tuple(values))
-        own_names=tuple(normalize_id(metadata['vocabulary']['species'][int(x)])for x in detached.own['species'])
         mapped_names=tuple(normalize_id(x)for x in world.party_species[f'p{owner+1}'])
         if own_names!=mapped_names:raise ValueError('same-own-request-physical-order-required')
         mood[owner]=tuple(map(int,detached.own['happiness']))
@@ -115,7 +121,8 @@ def materialize_protocol(root,start,*,inputs,seed):
         physical=physical._replace(**updates)
         # A known public PP charge subtracts from sampled source max; no
         # unknown peer-private ledger or exact HP history is synthesized.
-        assignment={};pp=np.array(physical.pp,copy=True)
+        assignment={};pp=np.array(physical.pp,copy=True);hp=np.array(physical.hp,copy=True)
+        hp_rng=random.Random(seed)
         present=np.asarray(detached.view['present'])[0];species=np.asarray(detached.view['species'])[0]
         moves=np.asarray(detached.view['revealed_moves'])[0];used=np.asarray(detached.view['move_pp_used'])[0]
         # Public Hidden Power is deliberately generic, while sampled engine
@@ -126,6 +133,9 @@ def materialize_protocol(root,start,*,inputs,seed):
             if len(matches)>1:raise ValueError('ambiguous-public-encounter')
             if not matches:continue
             public=matches[0];assignment[public]=slot
+            shown=int(detached.view['hp_percent'][0,public])
+            lo,hi=public_hp_bin(int(physical.max_hp[0,foe,slot]),shown)
+            hp[0,foe,slot]=hp_rng.randint(lo,hi)
             for index,mid in enumerate(np.asarray(physical.moves)[0,foe,slot]):
                 charge=sum(int(n)for known,n in zip(moves[public],used[public])
                     if int(known)>0 and int(mid)>0 and move_identity(known)==move_identity(mid))
@@ -136,7 +146,7 @@ def materialize_protocol(root,start,*,inputs,seed):
                     live._physical_toxic_counter(detached.view['mon_features']['toxic_stage'][0,public])))
         active=int(physical.active[0,foe]);active_public=[p for p,v in assignment.items()if v==active]
         if len(active_public)!=1:raise ValueError('sampled-active-public-join-unavailable')
-        physical=physical._replace(pp=j.asarray(pp),protect_counter=physical.protect_counter.at[0,foe,active].set(
+        physical=physical._replace(pp=j.asarray(pp),hp=j.asarray(hp),protect_counter=physical.protect_counter.at[0,foe,active].set(
             live._physical_protect_counter(detached.view['mon_features']['stall_counter'][0,active_public[0]])))
         carry=states._rebase(detached,assignment,active,state=physical)
         body=dict(schema=SCHEMA,prefix=root.owner_lines_sha256,address=vars(root.address),seed=seed,
