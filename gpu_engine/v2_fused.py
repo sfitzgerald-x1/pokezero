@@ -173,7 +173,7 @@ def main(argv=None):
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
     parser.add_argument('--order', default='ordered')
-    parser.add_argument('--row-order', choices=('tick', 'file'), default='tick',
+    parser.add_argument('--row-order', choices=('tick', 'file'), default='file',
         help='tick: collection order; file: the file pipeline cache order (block, frame, row, owner)')
     parser.add_argument('--check-interval', type=int, default=64)
     parser.add_argument('--compile-threads', type=int, default=16)
