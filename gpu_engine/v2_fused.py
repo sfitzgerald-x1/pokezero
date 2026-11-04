@@ -55,7 +55,7 @@ def prepare(args):
     else:
         inputs = worker.load_inputs(declaration=args.declaration, expected_declaration_sha256=args.declaration_sha256,
             runtime=args.runtime, expected_runtime_sha256=args.runtime_sha256, arm=args.plan_arm, enable_v5=True)
-        plan = inputs.plan;runtime = json.loads(inputs.runtime);gender = json.loads(inputs.gender)
+        plan = inputs.plan;runtime = inputs.runtime;gender = inputs.gender_policy
         declared = dict(declaration_sha256=args.declaration_sha256, runtime_sha256=args.runtime_sha256, plan_arm=args.plan_arm)
     try:worker._probe(runtime)
     except ValueError as error:
