@@ -184,4 +184,49 @@ class ReconstructionControllerTests(unittest.TestCase):
   self.assertEqual(sum(e['status']=='SAVED'for e in entries),61)
   self.assertEqual(len(entries),64)
 
+class StoredPredictionTests(unittest.TestCase):
+ def test_score_keeps_same_scalar_inputs_and_forwards_for_independent_recomputation(self):
+  import json,tempfile
+  import numpy as np
+  from pathlib import Path
+  from unittest.mock import patch
+  from gpu_engine import device_rollout_truth_score as score
+  other=dict(SEL,stream=8)
+  positions=[dict(selector=SEL,observation=dict(value=.2),terminal=dict(status='COMPLETE',winner=1)),
+             dict(selector=other,observation=None,terminal=None)]
+  branches=[dict(action=0,status='OBSERVED',observation=dict(value=.1)),dict(action=1,status='COMPLETE'),dict(action=2,status='REFUSED')]
+  group=dict(selector=SEL,reply=0,chance_id='chance',root_id='root',world_id='world',branches=branches)
+  records=[dict(selector=SEL,action=i,reply=0,chance_id='chance',root_id='root',world_id='world',rollouts=full(1))for i in range(3)]
+  manifest=dict(declaration={},positions={},siblings={},declared_children=3,declared_slots=2,source_commit='source',
+                prespec={},recipe=vars(t.Recipe(3,max_requests=2)),raw_actor={})
+  calls=[]
+  def predict(docs):
+   calls.append(docs)
+   return [d['value']if 'value'in d else .4 for d in docs]
+  with tempfile.TemporaryDirectory()as directory:
+   root=Path(directory)
+   grid_file=root/'grid.npz'
+   np.savez(grid_file,**{k:np.zeros((2,1))for k in ('numeric_features','categorical_ids','token_type_ids','attention_mask','legal_action_mask')})
+   grid_ref=dict(path=str(grid_file),sha256=__import__('hashlib').sha256(grid_file.read_bytes()).hexdigest())
+   grids=[dict(selector=SEL,status='OBSERVED',artifact=grid_ref,own_actions=[0],replies=[0,1],reply_weights=[.5,.5],
+               rows=[dict(action=0,reply=0,weight=.5,status='COMPLETE',terminal_value=-1),dict(action=0,reply=1,weight=.5,status='OBSERVED',terminal_value=None)]),
+          dict(selector=other,status='REFUSED')]
+   def jsonl(name,rows):
+    path=root/name;path.write_text(''.join(json.dumps(x)+'\n'for x in rows))
+    return dict(path=str(path),sha256=__import__('hashlib').sha256(path.read_bytes()).hexdigest())
+   summary_ref=producer.publish(root/'summary.json',dict(manifest=manifest,truth=jsonl('truth.jsonl',[manifest,*records]),head_grids=jsonl('grids.jsonl',grids)))
+   config=dict(declaration={},prespec={},raw_actor={},seed=3,max_requests=2)
+   with patch.object(producer,'bank_manifest',return_value=(None,None,None,None,positions,[group],None,manifest)),patch('pokezero.v5_device_evaluation_bank.read_artifact',return_value={}),patch.object(score,'load_predictor',return_value=predict):
+    result=score.evaluate(config,summary_ref,dict(kind='inert'),root/'score.json')
+   saved=producer.read(result['predictions'])
+   self.assertEqual(len(calls),3)
+   self.assertEqual([len(c)for c in calls],[1,1,1])
+   self.assertEqual(saved['grids'][0]['predictions'],[-1,.4])
+   self.assertIsNone(saved['grids'][1]['predictions'])
+   self.assertIsNone(saved['roots'][1]['prediction'])
+   self.assertEqual([x['prediction']for x in saved['children']],[.1,None,None])
+   reconstructed=[dict(row,rollouts=record['rollouts'])for row,record in zip(saved['children'],records,strict=True)]
+   self.assertEqual(result['metrics'],t.metrics(saved['roots'],reconstructed))
+   self.assertEqual(saved['head'],result['head']);self.assertEqual(saved['truth_summary'],summary_ref)
+
 if __name__=='__main__':unittest.main()

@@ -92,12 +92,13 @@ def evaluate(config,summary_reference,head,output):
     for record,group in zip(records,[g for g in groups for _ in g['branches']],strict=True):
         if any(record[k]!=group[k]for k in ('reply','chance_id','root_id','world_id')):raise ValueError('same recorded child world/reply/chance required')
     bank=schema.read_artifact(config['declaration']);predict=load_predictor(head,bank)
-    root_docs=[p['observation']for p in positions if p['observation']is not None];rp=iter(predict(root_docs));roots=[]
+    root_docs=[p['observation']for p in positions if p['observation']is not None];rp=iter(predict(root_docs));roots=[];grid_predictions=[]
     for p,g in zip(positions,grids,strict=True):
         outcome=None
         if p['terminal']is not None and p['terminal']['status']=='COMPLETE':
             winner=p['terminal']['winner'];outcome=0 if winner==2 else 1 if winner==p['selector']['owner']else -1
         root=dict(selector=p['selector'],prediction=None if p['observation']is None else next(rp),outcome=outcome,backup=None)
+        values=None
         if g['status']=='OBSERVED':
             blob=Path(g['artifact']['path']).read_bytes()
             if hashlib.sha256(blob).hexdigest()!=g['artifact']['sha256']:raise ValueError('grid tensor bytes differ')
@@ -109,6 +110,7 @@ def evaluate(config,summary_reference,head,output):
                 pv=iter(predict(docs));values=[next(pv)if r['status']=='OBSERVED'else r['terminal_value']for r in g['rows']]
             root['backup']=backup_from_grid(g,values)
         roots.append(root)
+        grid_predictions.append(dict(selector=g['selector'],status=g['status'],predictions=values))
     docs=[b['observation']for g in groups for b in g['branches']if b['status']=='OBSERVED'];cp=iter(predict(docs));children=[]
     for record,branch in zip(records,[b for g in groups for b in g['branches']],strict=True):
         value=None
@@ -117,7 +119,13 @@ def evaluate(config,summary_reference,head,output):
         # known rollout truth, but no invented head prediction. They remain
         # unknown in head calibration (terminal values still serve backup).
         children.append(dict(selector=record['selector'],action=record['action'],prediction=value,rollouts=record['rollouts']))
-    result=dict(schema='pokezero.rollout-truth.head-score.v1',head=head,truth_summary=summary_reference,bank=manifest,
+    # Preserve the scalar outputs already used above. A stored-result reviewer
+    # can join these to the immutable truth/grid records without another model
+    # forward. Missing predictions and the original ordering remain explicit.
+    predictions=publish(str(output)+'.predictions.json',dict(schema='pokezero.rollout-truth.head-predictions.v1',
+        head=head,truth_summary=summary_reference,bank=manifest,roots=roots,grids=grid_predictions,
+        children=[{k:row[k]for k in ('selector','action','prediction')}for row in children]))
+    result=dict(schema='pokezero.rollout-truth.head-score.v1',head=head,truth_summary=summary_reference,bank=manifest,predictions=predictions,
         metrics=rules.metrics(roots,children),all_checkpoints_share_truth=True,new_games=0,
         privileged_fit='NOT_RUN; manifest game-clustered5fold crossfit is fixed before outcomes; actual B checkpoint/frozen trunk/public-head warmstart; small steps/epoch0 eligible; train fits, validation selects, every test prediction OUT OF FOLD; no claim for a final all-bank fitted critic')
     publish(output,result);return result
