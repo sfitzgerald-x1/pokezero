@@ -138,7 +138,7 @@ class V5SelfplayTests(unittest.TestCase):
             stack.enter_context(patch.object(backend,'_actor',return_value=learner))
             constructed=stack.enter_context(patch.object(self.base.driver,'construct',return_value=session))
             snapshots=dict(archive_sha256='a'*64)
-            plan=NS(model=learner.config,loss=v5_loss.V5LossConfig(arm='B'),train=v5_training.TrainConfig(12),max_requests=1)
+            plan=NS(model=learner.config,loss=v5_loss.V5LossConfig(arm='B'),train=v5_training.TrainConfig(12),max_requests=1,discount=.97)
             batch=run.Batch((run.Game(1,'root0',70,(0,1)),),101,97)
             class Sink:
                 path=Path(directory)
@@ -152,6 +152,7 @@ class V5SelfplayTests(unittest.TestCase):
             constructed.assert_not_called();self.assertFalse(calls.forward_inputs)
             actual_cache=[]
             def write_cache(path,captured,**kwargs):
+                self.assertEqual(kwargs['discount'],plan.discount)
                 actual_cache.extend(captured);Path(path).mkdir(parents=True)
                 (Path(path)/'metadata.json').write_text(json.dumps({'source_fixture_rows':len(captured)}))
             stack.enter_context(patch.object(s.data,'write_cache',side_effect=write_cache))
