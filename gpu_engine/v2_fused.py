@@ -265,8 +265,9 @@ def main(argv=None):
             order, segments = file_pipeline_order(rows.keys(), plan.iterations[iteration])
             index = jnp.asarray(order)
             for name in list(rows.arrays):
-                value = rows.arrays[name][:rows.n];rows.arrays[name] = None
-                rows.arrays[name] = jnp.take(value, index, axis=0);del value
+                # Gather straight from the full buffer (indices < n): no slice copy; free each buffer before the next.
+                value = rows.arrays[name];rows.arrays[name] = None
+                rows.arrays[name] = jnp.take(value, index, axis=0).block_until_ready();del value
             del index
         tensors = rows.to_torch(device='cuda', exact_dtypes=True)
         store = v2t.row_store(tensors, plan.model, plan.loss, segments=segments, store_id=f'v2-iteration-{iteration}');mark('handoff_validate')
