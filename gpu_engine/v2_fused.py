@@ -258,12 +258,17 @@ def main(argv=None):
                 status = STATUS[int(records['status'][i])];same['compared'] += 1
                 if ref['status'] == status and ref['terminal_frame'] == int(records['terminal_frame'][i]) and (
                         status != 'COMPLETE' or ref['terminal_winner'] == int(records['winner'][i])):same['equal'] += 1
-        tensors = rows.to_torch(device='cuda', exact_dtypes=True);segments = None
+        segments = None
         if args.row_order == 'file':
+            # Permute in JAX memory, one field at a time, before the zero-copy hand-off.
+            import jax.numpy as jnp
             order, segments = file_pipeline_order(rows.keys(), plan.iterations[iteration])
-            index = torch.as_tensor(order, device='cuda')
-            tensors = {name: (value.index_select(0, index) if torch.is_tensor(value) and value.ndim and value.shape[0] == rows.n
-                else tuple(value[i] for i in order) if name == 'terminal_status' else value) for name, value in tensors.items()}
+            index = jnp.asarray(order)
+            for name in list(rows.arrays):
+                value = rows.arrays[name][:rows.n];rows.arrays[name] = None
+                rows.arrays[name] = jnp.take(value, index, axis=0);del value
+            del index
+        tensors = rows.to_torch(device='cuda', exact_dtypes=True)
         store = v2t.row_store(tensors, plan.model, plan.loss, segments=segments, store_id=f'v2-iteration-{iteration}');mark('handoff_validate')
         train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
         torch.cuda.synchronize();mark('train')
