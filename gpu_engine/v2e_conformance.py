@@ -70,6 +70,22 @@ def cases(rng, B):
         x.astype(j.int8) + y.astype(j.int8), jax.lax.clz(x.astype(j.uint8)), jax.lax.clz(x.astype(j.int16)), jax.lax.clz(x),
         jax.lax.select_n(k, x, y, x ^ y), jax.lax.population_count(x.astype(j.int8)))),
         (edgy(B, 14), edgy2(B, 14), small(0, 3, B, 14)))
+    keys = j.asarray(rng.integers(0, 2**32, (B, 2), dtype=np.uint64).astype(np.uint32))
+    yield ('prng', (lambda k: (jax.vmap(lambda q: jax.random.bits(q, (5,)))(k), jax.vmap(lambda q: jax.random.split(q, 3))(k),
+        jax.vmap(lambda q: jax.random.fold_in(q, 7))(k), jax.vmap(lambda q: jax.random.randint(q, (4,), -5, 40))(k),
+        jax.random.bits(j.array([1, 2], j.uint32), (k.shape[0], 3)))), (keys,))
+    # An in-place scatter must not clobber a value CSE would hand to a later identical expression.
+    yield ('cse_inplace', (lambda x, s: (lambda c: (c.at[rows(x), s].set(0), x * 2, (x * 2)[:, :5]))(x * 2)), (small(-50, 50, B, 64), small(0, 64, B)))
+    yield ('sort_layout', (lambda x, y, z: (j.sort(x.reshape(x.shape[0], 4, 10), axis=1), j.argsort(x.reshape(x.shape[0], 4, 10), axis=1),
+        j.sort(y, axis=-1), jax.lax.sort((y, z), dimension=1, num_keys=1)[1])), (small(0, 5, B, 40), small(-3000, 3000, B, 1300), small(-9, 9, B, 1300)))
+    yield ('small_combiners', (lambda x, f, s, a, v: (x.at[rows(x), s, a].add(v), x.at[rows(x), s, a].max(v), f.at[rows(f), s, a].min(v.astype(j.float32)),
+        f.at[rows(f), s, a].add(v.astype(j.float32)), x.at[rows(x), s].add(v[:, None]))),
+        (small(-50, 50, B, 2, 6), edgy_f(B, 2, 6), small(-1, 3, B), small(-7, 8, B), small(-9, 9, B)))
+    yield ('float_identities', (lambda a, b: (j.stack([a, b], -1).sum(-1), a + 0.0, a * 1.0, a - 0.0, 0.0 + a, a * -1.0, a / 1.0,
+        j.cumsum(a[:, :1], axis=-1), j.cumsum(b[:, :1].astype(j.int32), axis=-1), a + (-0.0), a - (-0.0), a / 4.0, a * 0.25, -(-a),
+        j.maximum(a, a), a + a, a * 2.0, j.minimum(a, j.float32(np.inf)), j.maximum(a, j.float32(-np.inf)), j.sum(j.stack([a, b], -1) * 1.0, -1),
+        j.maximum(a, j.float32(np.inf)), j.minimum(a, j.float32(-np.inf)), j.abs(j.abs(a)), j.abs(-a), (a + 0.0) * 1.0, -(-(-a)), j.minimum(a, a) - 0.0)),
+        (cross_f(B, True), cross_f(B, False)))
     # Large per-lane values: warp reductions/scans, chunked scatters with duplicates, lazy broadcasts.
     yield ('large_reduce_scan', (lambda x, m, f: (j.sum(x, axis=-1), j.max(x, axis=-1), j.min(x.reshape(x.shape[0], 3, 100), axis=-1), j.any(m, axis=-1),
         j.all(m.reshape(m.shape[0], 4, 75), axis=-1), j.argmax(x, axis=-1), j.argmin(x.reshape(x.shape[0], 3, 100), axis=-1), j.cumsum(x, axis=-1),
@@ -77,7 +93,7 @@ def cases(rng, B):
         j.sum(f[:, 4:6], axis=-1))), (small(-4, 4, B, 300), j.asarray(rng.random((B, 300)) < .995), edgy_f(B, 300)))
     perm = j.asarray(np.stack([rng.permutation(230)[:150] for _ in range(B)]).astype(np.int32))
     yield ('large_scatter', (lambda x, ix, v, f, u: (x.at[rows(x)[:, None], u].set(v[:, :150]), x.at[rows(x)[:, None], ix].add(v), x.at[rows(x)[:, None], ix].max(v),
-        j.zeros_like(f).at[rows(f)[:, None], ix].add(v.astype(j.float32)), f.at[rows(f)[:, None], ix].min(v.astype(j.float32) * 0.5),
+        j.zeros_like(f).at[rows(f)[:, None], u].add(v[:, :150].astype(j.float32), unique_indices=True), f.at[rows(f)[:, None], ix].min(v.astype(j.float32) * 0.5),
         x.at[rows(x)[:, None], u].set(v[:, :150], mode='drop'), x[:, :20].at[rows(x)[:, None], u[:, :30]].set(v[:, :30], mode='drop'))),
         (small(-50, 50, B, 200), small(-5, 210, B, 300), small(-9, 9, B, 300), edgy_f(B, 200), perm))
     yield ('float_sort', (lambda f, k: (j.sort(f, axis=-1), j.argsort(f, axis=-1), jax.lax.sort((k, f, k), dimension=1, num_keys=2)[2], j.sort(f[:, :20], axis=-1))),

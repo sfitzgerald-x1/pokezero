@@ -25,6 +25,7 @@ error word instead, which callers check.
 from dataclasses import dataclass, field
 import hashlib
 import math
+import os
 
 import numpy as np
 
@@ -220,6 +221,7 @@ class Kernel:
     CHUNK_LINES = 2500
 
     def __init__(self, name):
+        if os.environ.get('V2E_CHUNK_LINES'):self.CHUNK_LINES = int(os.environ['V2E_CHUNK_LINES'])
         self.name = name;self.lines = [];self.chunks = [];self.indent = 1;self.words = 0;self.free = [];self.peak = 0
         self.consts = [];self.counter = 0;self.lane_literals = 0;self.smem = 0;self.chunk_smem = []
 
@@ -295,7 +297,7 @@ def thread_index(n):
 
 class Generator:
     def __init__(self, name, profile=False):
-        self.k = Kernel(name);self.env = {};self.profile = profile;self.marks = [];self.live = set();self.temps = []
+        self.k = Kernel(name);self.env = {};self.profile = profile;self.marks = [];self.live = {};self.temps = []
         self.cse = {};self.cse_hits = 0
         self.collective = True   # warp collectives (shuffles, warp scans) available
         self.rolled = 0          # depth of emitted loops that are not fully unrolled
@@ -303,12 +305,12 @@ class Generator:
     # -- storage ------------------------------------------------------------------
     def new_reg(self, out):
         h = Holder('reg', max(1, out.size), out.dtype, name=self.k.var('r'))
-        out.src = 'store';out.holder = h;out.imap = None;self.live.add(h)
+        out.src = 'store';out.holder = h;out.imap = None;self.live[h] = None
         return out
 
     def new_arena(self, out):
         h = Holder('arena', max(1, out.size), out.dtype, off=self.k.alloc(out.size))
-        out.src = 'store';out.holder = h;out.imap = None;self.live.add(h)
+        out.src = 'store';out.holder = h;out.imap = None;self.live[h] = None
         return out
 
     def unref(self, h):
@@ -317,7 +319,15 @@ class Generator:
 
     def free_holder(self, h):
         if h.kind == 'arena' and h.off >= 0:self.k.release(h.off, h.words);h.off = -1
-        self.live.discard(h)
+        self.live.pop(h, None)
+
+    def take_over(self, op, out):
+        """out reuses dying op's arena slot in place. The slot moves to a fresh holder and op's holder
+        is retired, so nothing (in particular a CSE entry) can still read op through it."""
+        old = op.holder
+        h = Holder('arena', old.words, out.dtype, off=old.off)
+        old.off = -1;self.live.pop(old, None)
+        out.src = 'store';out.holder = h;out.imap = None;self.live[h] = None
 
     def spill_live(self):
         """Move every live register value to the arena (kernel-chunk boundary)."""
@@ -332,7 +342,7 @@ class Generator:
     def temp_arena(self, v):
         """Dense arena copy of v valid until release_temps()."""
         h = Holder('arena', max(1, v.size), v.dtype, off=self.k.alloc(v.size))
-        tmp = Val(v.dtype, v.shape, 'store', holder=h);self.live.add(h);h.refs = 1;self.temps.append(h)
+        tmp = Val(v.dtype, v.shape, 'store', holder=h);self.live[h] = None;h.refs = 1;self.temps.append(h)
         base, i = self.k.var('base'), self.k.var('i')
         self.k.open(f'for (int {base} = 0; {base} < {v.size}; {base} += 32)')
         self.k.emit(f'const int {i} = {base} + t < {v.size} ? {base} + t : {v.size - 1};')
@@ -553,12 +563,39 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             if LANES in o.shape[1:]:raise Unsupported(f'{p}: lane size off axis 0 in {o.shape}')
         method = getattr(self, 'p_' + p.replace('-', '_'), None)
         if method is not None:return method(e, ins, outs, params, dying)
-        if p in ELEMENTWISE_BINARY:return [self.elementwise(outs[0], ins, lambda a, b: binary(p, ins[0].dtype, a, b))]
+        if p in ELEMENTWISE_BINARY:
+            folded = self.identity_fold(p, ins, outs[0])
+            if folded is not None:return [folded]
+            return [self.elementwise(outs[0], ins, lambda a, b: binary(p, ins[0].dtype, a, b))]
         if p in COMPARE:return [self.elementwise(outs[0], ins, lambda a, b: compare(p, a, b))]
-        if p in UNARY:return [self.elementwise(outs[0], ins, lambda a: unary(p, ins[0].dtype, a, params))]
+        if p in UNARY:
+            if p == 'neg' and ins[0].dtype == F32:
+                inner = getattr(ins[0], 'neg_of', None)
+                if inner is not None and self.alive(inner):return [self.view(inner, outs[0])]   # XLA: neg(neg(x)) -> x
+                out = self.elementwise(outs[0], ins, lambda a: unary(p, ins[0].dtype, a, params));out.neg_of = ins[0]
+                return [out]
+            return [self.elementwise(outs[0], ins, lambda a: unary(p, ins[0].dtype, a, params))]
         raise Unsupported(f'primitive {p}')
 
     # -- elementwise ----------------------------------------------------------------
+    def identity_fold(self, p, ins, out):
+        """x + 0, 0 + x, x - 0, x * 1, 1 * x, x / 1, max(x, x), min(x, x), min(x, +inf), max(x, -inf) -> x,
+        as XLA's algebraic simplifier rewrites them for floats too (pinned by the float_identities
+        conformance case: -0 and NaN payloads survive)."""
+        if ins[0].dtype != F32:return None
+        is_lit = lambda v, value: v.kind == 'lit' and float(v.lit) == value
+        x = None
+        if p in ('max', 'min') and ins[0] is ins[1]:x = ins[0]
+        elif p == 'min' and (is_lit(ins[1], np.inf) or is_lit(ins[0], np.inf)):x = ins[0] if is_lit(ins[1], np.inf) else ins[1]
+        elif p == 'max' and (is_lit(ins[1], -np.inf) or is_lit(ins[0], -np.inf)):x = ins[0] if is_lit(ins[1], -np.inf) else ins[1]
+        elif p == 'add':x = ins[0] if is_lit(ins[1], 0.0) else (ins[1] if is_lit(ins[0], 0.0) else None)
+        elif p == 'sub':x = ins[0] if is_lit(ins[1], 0.0) else None
+        elif p == 'mul':x = ins[0] if is_lit(ins[1], 1.0) else (ins[1] if is_lit(ins[0], 1.0) else None)
+        elif p == 'div':x = ins[0] if is_lit(ins[1], 1.0) else None
+        if x is None:return None
+        if x.shape == out.shape:return self.view(x, out)
+        return self.elementwise(out, [x], lambda a: a)
+
     def operand_index(self, v, out):
         """(index_fn(i) -> expr, identity) for reading operand v at out element i (numpy broadcasting)."""
         if v.kind == 'lit' or (not v.lane and v.shape == ()):return (lambda i: '0'), False
@@ -842,8 +879,22 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
 
     def p_reduce_sum(self, e, ins, outs, params, dying):
         t = ins[0].dtype
-        if t == F32:return self.reduce(ins, outs, params, literal(0.0, F32), lambda a, x: f'v2e::fadd({a}, {x})', False, limit=2)
+        if t == F32:
+            axes = tuple(params['axes']);src = ins[0];rn = int(math.prod(src.shape[a] for a in axes))
+            if rn == 2:return self.pair_sum(ins[0], outs[0], axes)
+            return self.reduce(ins, outs, params, literal(0.0, F32), lambda a, x: f'v2e::fadd({a}, {x})', False, limit=2)
         return self.reduce(ins, outs, params, literal(0, t) if t != BOOL else 'false', lambda a, x: binary('add', t, a, x), True)
+
+    def pair_sum(self, src, out, axes):
+        """f32 sum over exactly two elements: x0 + x1 without the +0 init (probed: (-0) + (-0) stays -0)."""
+        if src.lane and 0 in axes:raise Unsupported('reduce over lanes')
+        keep = [d for d in range(len(src.shape)) if d not in axes];rshape = [src.shape[d] for d in axes]
+        def at(oc, r):
+            rc = self.k.coords(str(r), rshape);coords = [None] * len(src.shape)
+            for j, d in enumerate(keep):coords[d] = oc[j]
+            for j, d in enumerate(axes):coords[d] = rc[j]
+            return self.flat(src, coords)
+        return [self.produce(out, lambda i, own: f'v2e::fadd({self.get(src, at(self.full_coords(out, i), 0))}, {self.get(src, at(self.full_coords(out, i), 1))})')]
 
     def p_reduce_max(self, e, ins, outs, params, dying):
         t = ins[0].dtype
@@ -924,6 +975,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         src, out = ins[0], outs[0];ax = int(params['axis']);rev = bool(params.get('reverse', False));t = src.dtype;c = ctype(t)
         if src.lane and ax == 0:raise Unsupported('cumsum over lanes')
         n = src.shape[ax]
+        if n == 1:return [self.view(src, out)]
         self.float_order_guard('cumsum', t, n, 1)
         if out.size <= REG:
             # Uniform loop over the scanned axis; each thread keeps the prefix of its own element.
@@ -1079,7 +1131,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             return [out]
         shared = sum(1 for v in ins if v.src == 'store' and v.holder is op.holder)
         if id(op) in dying and op.dense and op.kind == 'arena' and op.holder.words == n and shared == 1:
-            out.src = 'store';out.holder = op.holder;out.imap = None
+            self.take_over(op, out)
         else:
             self.produce(out, lambda i, own: self.get(op, i))
         off = out.holder.off
@@ -1128,8 +1180,13 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             return lambda ptr, u: (f'atomicAnd({ptr}, (uint32_t)({u}));' if which == 'Min' else f'atomicOr({ptr}, (uint32_t)({u}));')
         return None
 
+    def float_combiner_guard(self, params, ins, what):
+        if ins[0].dtype == F32 and not params.get('unique_indices') and ins[2].size > 1:
+            raise Unsupported(f'f32 {what} with possibly duplicate indices (XLA applies duplicates in atomic or tree order)')
+
     def p_scatter_add(self, e, ins, outs, params, dying):
         t = ins[0].dtype
+        self.float_combiner_guard(params, ins, 'scatter_add')
         # Word atomics only for full-width integers (narrow words must stay sign/zero-extended).
         free = (lambda ptr, u: f'atomicAdd({ptr}, (uint32_t)({u}));') if t in SIGNED | UNSIGNED and t.itemsize == 4 else None
         return self.scatter(ins, outs, params, dying, lambda a, u: binary('add', t, a, u), free)
@@ -1144,12 +1201,21 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
 
     def p_scatter_mul(self, e, ins, outs, params, dying):
         t = ins[0].dtype
+        self.float_combiner_guard(params, ins, 'scatter_mul')
         return self.scatter(ins, outs, params, dying, lambda a, u: binary('mul', t, a, u))
 
     # -- sort ------------------------------------------------------------------------------
+    @staticmethod
+    def stability_guard(params, ins):
+        """Both backends sort stably; an unstable XLA sort orders ties arbitrarily, which is only
+        unobservable when the sole operand is an integer key (equal keys are identical bits)."""
+        if not params.get('is_stable', True) and (len(ins) > 1 or ins[0].dtype == F32):
+            raise Unsupported('unstable sort with observable tie order')
+
     def p_sort(self, e, ins, outs, params, dying):
         dim = int(params['dimension']);nk = int(params['num_keys']);src = ins[0]
         if src.lane and dim == 0:raise Unsupported('sort over lanes')
+        self.stability_guard(params, ins)
         ins = [self.dense_arena(v) for v in ins]
         off = 1 if src.lane else 0;ist = strides(src.lshape);n = src.shape[dim]
         keep = [d for d in range(len(src.shape)) if d != dim and not (src.lane and d == 0)]
@@ -1190,7 +1256,13 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
     def p_random_unwrap(self, e, ins, outs, params, dying):
         return [self.view(ins[0], outs[0])]
 
+    @staticmethod
+    def partitionable_guard():
+        import jax
+        if not jax.config.jax_threefry_partitionable:raise Unsupported('PRNG counters assume jax_threefry_partitionable=True')
+
     def key_words(self, keys, kc):
+        self.partitionable_guard()
         return self.get(keys, self.flat(keys, kc + ['0'])), self.get(keys, self.flat(keys, kc + ['1']))
 
     def p_random_bits(self, e, ins, outs, params, dying):
@@ -1278,7 +1350,8 @@ class ThreadGenerator(Generator):
 
     def __init__(self, name, profile=False):
         super().__init__(name, profile)
-        self.collective = False;self.k.CHUNK_LINES = 5000;self.chunk_id = 0;self.eq_start = 0;self.reloads = 0
+        self.collective = False;self.chunk_id = 0;self.eq_start = 0;self.reloads = 0
+        self.k.CHUNK_LINES = int(os.environ.get('V2E_CHUNK_LINES') or 5000)
 
     def mark_cond(self):
         return 'b == 0'
@@ -1294,12 +1367,12 @@ class ThreadGenerator(Generator):
         if v.size > REG:return v
         ptr, size, t = v.ptr, v.size, v.dtype
         h = Holder('arena', size, t, home=lambda q: f'{ptr}[(size_t)b * {size} + {q}]')
-        out = Val(t, v.shape, 'store', holder=h);self.live.add(h)
+        out = Val(t, v.shape, 'store', holder=h);self.live[h] = None
         return out
 
     def free_holder(self, h):
         if h.off >= 0:self.k.release(h.off, h.words);h.off = -1
-        self.live.discard(h)
+        self.live.pop(h, None)
 
     def dense_arena(self, v):
         return v if (v.dense and v.kind == 'arena' and v.holder.off >= 0) else self.temp_arena(v)
@@ -1368,7 +1441,7 @@ class ThreadGenerator(Generator):
 
     def temp_arena(self, v):
         h = Holder('arena', max(1, v.size), v.dtype, off=self.k.alloc(v.size))
-        tmp = Val(v.dtype, v.shape, 'store', holder=h);self.live.add(h);h.refs = 1;self.temps.append(h)
+        tmp = Val(v.dtype, v.shape, 'store', holder=h);self.live[h] = None;h.refs = 1;self.temps.append(h)
         i = self.k.var('i')
         self.loop_open(i, v.size)
         self.k.emit(f'{self.arena_ref(h.off, i)} = {to_word(v.dtype, self.get(v, i))};')
@@ -1419,7 +1492,7 @@ class ThreadGenerator(Generator):
             return [out]
         shared = sum(1 for v in ins if v.src == 'store' and v.holder is op.holder)
         if id(op) in dying and op.dense and op.kind == 'arena' and op.holder.words == n and shared == 1:
-            out.src = 'store';out.holder = op.holder;out.imap = None
+            self.take_over(op, out)
         else:
             self.produce(out, lambda i, own: self.get(op, i))
         off = out.holder.off;u = self.k.var('u')
@@ -1434,12 +1507,13 @@ class ThreadGenerator(Generator):
     def p_sort(self, e, ins, outs, params, dying):
         dim = int(params['dimension']);nk = int(params['num_keys']);src = ins[0]
         if src.lane and dim == 0:raise Unsupported('sort over lanes')
+        self.stability_guard(params, ins)
         ins = [self.dense_arena(v) for v in ins]
         off = 1 if src.lane else 0;ist = strides(src.lshape);n = src.shape[dim]
         keep = [d for d in range(len(src.shape)) if d != dim and not (src.lane and d == 0)]
         keep_shape = [src.shape[d] for d in keep];rows = int(math.prod(keep_shape));step = ist[dim - off]
         stage = [self.new_arena(Val(o.dtype, o.shape, 'store')) for o in outs]
-        perm = Holder('arena', n, np.dtype(np.uint32), off=self.k.alloc(n));self.live.add(perm);perm.refs = 1;self.temps.append(perm)
+        perm = Holder('arena', n, np.dtype(np.uint32), off=self.k.alloc(n));self.live[perm] = None;perm.refs = 1;self.temps.append(perm)
         row = self.k.var('row');self.rolled += 1
         self.k.open(f'for (int {row} = 0; {row} < {rows}; ++{row})')
         rc = self.k.coords(row, keep_shape)
