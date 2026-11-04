@@ -84,7 +84,28 @@ def _negative_control():
     return (lambda s, a, t, c: (s, t)), flipped
 
 
-MODULES = dict(identity=_identity, chance=_chance, negative_control=_negative_control)
+def _observe(ctx):
+    from gpu_engine import v2e_gen, v2e_modules
+    fn = v2e_modules.observe(ctx['engine_tables'], ctx['observation_tables'])
+    state, _, public = ctx['template']
+    generated = v2e_gen.compile_function('observe', fn, (state, public))
+    log('GENERATED', module='observe', arena_words=generated.module.arena_words, lane_literals=generated.module.lane_literals,
+        source_lines=generated.module.source_lines, consts=len(generated.module.consts), library=str(generated.path))
+    def cuda(s, a, t, c):
+        out, err = generated(s, t)
+        return out, err
+    def reference(s, a, t, c):
+        return fn(s, t), j_zero_err()
+    return reference, cuda
+
+
+def j_zero_err():
+    import jax.numpy as j
+    return j.zeros((1,), j.uint32)
+
+
+MODULES = dict(identity=_identity, chance=_chance, negative_control=_negative_control, observe=_observe)
+GENERATED = {'observe'}
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +118,7 @@ def load_shard(path):
 
 def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=16):
     import jax
-    jax_fn, cuda_fn = MODULES[module]()
+    jax_fn, cuda_fn = MODULES[module](dict(context, template=template)) if module in GENERATED else MODULES[module]()
     treedef = jax.tree.structure(template)
     jitted = {}
     def call(fn_name, fn, *args):
