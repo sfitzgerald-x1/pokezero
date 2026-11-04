@@ -68,7 +68,7 @@ class Env(p.OwningEnv):
     def __init__(self,fail=False,cap=False,missing=False):
         self.owner_lines={'p1':[],'p2':[]};self.frame=0;self.fail=fail;self.cap=cap;self.missing=missing
     def reset(self,**kwargs):
-        self.frame=0;self.owner_lines={'p1':[],'p2':[]};self._publish()
+        self.frame=0;self.owner_lines={seat:['|player|p1|One|','|player|p2|Two|']for seat in('p1','p2')};self._publish()
     def _publish(self):
         for seat in('p1','p2'):
             request={'side':{'id':seat,'pokemon':[dict(details=n+', L80')for n in NAMES]},
@@ -184,6 +184,31 @@ class PythonCollectionTests(unittest.TestCase):
             self.assertEqual(left.row.step.action_probability,right.row.step.action_probability)
         self.assertIsNone(changed.decisions[0].row.labels.hidden_sets[0])
         self.assertEqual(changed.auxiliary_refusals['hidden_set_outside_source'],2)
+
+    def test_terminal_player_headers_and_valid_tie_join_without_guessing(self):
+        for names,marker,terminal,expected in(
+                (('One','Two'),'|win|Two',TerminalState('p2',2),1),
+                (('One','Two'),'|tie',TerminalState(None,2),2),
+                (('One','Two'),'|tie|',TerminalState(None,2),2)):
+            lines={seat:['|player|p1|'+names[0]+'|','|player|p2|'+names[1]+'|']for seat in('p1','p2')}
+            self.assertEqual(p._terminal_winner(lines,marker,terminal),expected)
+        for headers,marker,terminal in(
+                (['|player|p1|One|'],'|win|One',TerminalState('p1',2)),
+                (['|player|p1|One|','|player|p2|One|'],'|win|One',TerminalState('p1',2)),
+                (['|player|p1|One|','|player|p2|Two|'],'|win|Other',TerminalState('p1',2)),
+                (['|player|p1|One|','|player|p2|Two|'],'|win|Two',TerminalState('p1',2)),
+                (['|player|p1|One|','|player|p2|Two|'],'|tie',TerminalState('p1',2))):
+            with self.assertRaises(ValueError):p._terminal_winner({seat:headers for seat in('p1','p2')},marker,terminal)
+
+    def test_valid_literal_tie_preserves_zero_outcomes(self):
+        class Draw(Env):
+            def terminal(self):return TerminalState(None,2)if self.frame==2 else None
+            def step(self,actions):
+                super().step(actions)
+                if self.terminal():
+                    for lines in self.owner_lines.values():lines[-1]='|tie'
+        result=self.collect(Draw());self.assertEqual(result.status,'COMPLETE')
+        self.assertTrue(all(x.row.labels.outcome==0 for x in result.decisions))
 
 
 if __name__=='__main__':unittest.main()

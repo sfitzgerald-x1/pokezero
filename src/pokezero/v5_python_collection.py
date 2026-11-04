@@ -146,6 +146,32 @@ def _semantic(choice,request,vocabulary):
     return target if kind+':'+identity in vocabulary.opponent_classes else None
 
 
+def _terminal_winner(owner_lines,marker,terminal):
+    """Join both literal public player headers and terminal to the env result."""
+    names=[]
+    for seat in('p1','p2'):
+        identities={'p1':set(),'p2':set()}
+        for line in owner_lines[seat]:
+            if line.startswith('|player|'):
+                parts=line.split('|')
+                if len(parts)<4 or parts[2]not in identities or not parts[3]:
+                    raise ValueError('literal public player identity is malformed')
+                identities[parts[2]].add(parts[3])
+        if any(len(values)!=1 for values in identities.values()):
+            raise ValueError('public player identities are missing or ambiguous')
+        names.append(tuple(next(iter(identities[player]))for player in('p1','p2')))
+    if names[0]!=names[1]or names[0][0]==names[0][1]:
+        raise ValueError('owning public player identities disagree or are ambiguous')
+    if marker=='|tie'or marker.startswith('|tie|'):
+        winner=2;expected=None
+    elif marker.startswith('|win|')and marker[len('|win|'):]in names[0]:
+        winner=names[0].index(marker[len('|win|'):]);expected=('p1','p2')[winner]
+    else:raise ValueError('owning terminal winner is not a public player identity')
+    if terminal.winner!=expected:
+        raise ValueError('owning terminal marker contradicts the environment winner')
+    return winner
+
+
 @dataclass(frozen=True)
 class GameCapture:
     game:Game
@@ -248,9 +274,10 @@ def collect_game(env,game,*,factories,max_requests,collect_owners=(0,1),start_ov
             final=_ordered_terminal(birth,_teams(env.snapshot()));feed()
             markers=[]
             for owner in(0,1):
-                markers.append(tuple(x for x in env.owner_lines['p'+str(owner+1)]if x.startswith('|win|')or x=='|tie'))
+                markers.append(tuple(x for x in env.owner_lines['p'+str(owner+1)]
+                    if x.startswith('|win|')or x=='|tie'or x.startswith('|tie|')))
             if len(markers[0])!=1 or markers[0]!=markers[1]:raise ValueError('literal owning terminal streams disagree or missing')
-            winner=2 if ended.winner is None else int(ended.winner[1])-1
+            winner=_terminal_winner(env.owner_lines,markers[0][0],ended)
             source['terminal']=dict(teams=final,winner=winner,marker=markers[0][0]);status='COMPLETE'
             terminal=data.TerminalCapture(game.stream,frame,status,_sha(source['terminal']),winner,
                 tuple(tuple(x['hp']for x in side)for side in final),tuple(tuple(x['maxhp']for x in side)for side in final))
