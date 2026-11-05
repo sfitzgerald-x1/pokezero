@@ -90,7 +90,7 @@ def _observe(ctx):
     state, _, public = ctx['template']
     generated = v2e_gen.compile_function('observe', fn, (state, public), mode=ctx.get('mode') or 'warp')
     log('GENERATED', module='observe', arena_words=generated.module.arena_words, lane_literals=generated.module.lane_literals,
-        consts=len(generated.module.consts), library=str(generated.path), **generated.module.stats)
+        library=str(generated.path), **generated.module.stats)
     def cuda(s, a, t, c):
         out, err = generated(s, t)
         return out, err
@@ -105,7 +105,7 @@ def _step(ctx):
     state, actions, public = ctx['template']
     generated = v2e_gen.compile_function('step', fn, (state, actions, public), mode=ctx.get('mode') or 'thread')
     log('GENERATED', module='step', arena_words=generated.module.arena_words, lane_literals=generated.module.lane_literals,
-        consts=len(generated.module.consts), library=str(generated.path), **generated.module.stats)
+        library=str(generated.path), **generated.module.stats)
     def cuda(s, a, t, c):
         return generated(s, a, t)
     def reference(s, a, t, c):

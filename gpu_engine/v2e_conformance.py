@@ -71,9 +71,18 @@ def cases(rng, B):
         jax.lax.select_n(k, x, y, x ^ y), jax.lax.population_count(x.astype(j.int8)))),
         (edgy(B, 14), edgy2(B, 14), small(0, 3, B, 14)))
     c1 = rng.standard_normal(324).astype(np.float32);c2 = (rng.standard_normal(324) * 7).astype(np.float32);ones = np.ones(324, np.float32)
+    e1 = rng.standard_normal(325).astype(np.float32);e2 = (rng.standard_normal(325) * 3).astype(np.float32)
+    nanc = np.resize(np.array([0x7fc00001, 0xffc00005, 0x7f800003, 0x3f800000], np.uint32).view(np.float32), 324)
     yield ('constant_folds', (lambda a, b: (a + j.where(False, 1.0, 0.0), a * ones, a + (j.float32(0.5) - j.float32(0.5)),
         a * (j.float32(1.0) / j.float32(3.0) * j.float32(3.0)), j.broadcast_to(j.asarray(c1) / j.asarray(c2), a.shape),
-        a + j.asarray(c1) / j.asarray(c2), -(-j.where(a > b, a, b)), -(-(a * 2.0)))), (cross_f(B, True), cross_f(B, False)))
+        a + j.asarray(c1) / j.asarray(c2), -(-j.where(a > b, a, b)), -(-(a * 2.0)),
+        a * (jax.lax.optimization_barrier(j.float32(1.0)) / j.float32(3.0)), a + (j.asarray(e1)[1:] / j.asarray(e2)[1:]),
+        a + j.concatenate([j.asarray(c1)[:4], j.asarray(c2)[4:]]) / j.float32(3.0), j.broadcast_to(-j.asarray(nanc), a.shape),
+        a + (j.float32(np.inf) - j.float32(np.inf)), j.broadcast_to(j.asarray(nanc) * j.float32(2.0), a.shape))),
+        (cross_f(B, True), cross_f(B, False)))
+    qn, sn, nn = (np.array([w], np.uint32).view(np.float32)[0] for w in (0x7fc00001, 0x7f800003, 0xffc00005))
+    yield ('nan_constants', (lambda a: (a + qn, a * qn, qn - a, a / qn, qn / a, a + sn, sn * a, a - nn, j.maximum(a, qn), j.minimum(qn, a),
+        j.maximum(a, sn), a + j.float32(np.nan))), (cross_f(B, True),))
     keys = j.asarray(rng.integers(0, 2**32, (B, 2), dtype=np.uint64).astype(np.uint32))
     yield ('prng', (lambda k: (jax.vmap(lambda q: jax.random.bits(q, (5,)))(k), jax.vmap(lambda q: jax.random.split(q, 3))(k),
         jax.vmap(lambda q: jax.random.fold_in(q, 7))(k), jax.vmap(lambda q: jax.random.randint(q, (4,), -5, 40))(k),
