@@ -56,7 +56,7 @@ class ConstructorProvenanceTests(unittest.TestCase):
                 .at[:,replacing,0].set(2 if trace else 0).at[:,1-replacing,0].set(1),
             gender=j.full((1,2,6),1,j.int32).at[:,1,:].set(2),
             entry_pending=j.ones((1,2),bool),done=j.array([False]))
-        state=state._replace(base_ability=state.ability)
+        state=state._replace(base_ability=state.ability,base_types=state.types)
         if happiness is not None:state=state._replace(happiness=j.full((1,2,6),happiness,j.int32))
         data=self.f._sample(state,0)
         arrays={name:np.asarray(data[name]) for name in self.p._POOL_STATE_FIELDS}

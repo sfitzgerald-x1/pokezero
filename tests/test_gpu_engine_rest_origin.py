@@ -36,7 +36,7 @@ class RestOriginTests(unittest.TestCase):
         j=self.j;s=self.empty(batch,seed=819)
         return s._replace(hp=j.full_like(s.hp,50),max_hp=j.full_like(s.max_hp,101),
             stats=j.full_like(s.stats,200).at[...,0].set(101).at[:,0,:,5].set(301),
-            level=j.full_like(s.level,100),types=s.types.at[...,0].set(1),
+            level=j.full_like(s.level,100),types=s.types.at[...,0].set(1),base_types=s.base_types.at[...,0].set(1),
             species=j.broadcast_to(j.arange(1,7),(batch,2,6)),
             moves=j.broadcast_to(j.array([1,2,3,0]),s.moves.shape),pp=j.full_like(s.pp,10).at[...,3].set(0),
             done=j.zeros(batch,bool))

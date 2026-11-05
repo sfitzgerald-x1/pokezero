@@ -102,7 +102,7 @@ def snapshot(path):
 
 def config_from_checkpoint(cfg):
     if (cfg['window_size']!=1 or cfg.get('temporal_aggregator','mean')!='mean'
-            or cfg.get('value_head_hidden_layers',0) not in (0,None)
+            or cfg.get('value_head_hidden_layers',0) not in (0,None,(),[])
             or cfg.get('value_activation','linear') not in ('linear','tanh')):
         raise ValueError('only one-frame mean pooling and linear/tanh single-layer value heads supported')
     return Config(numeric=cfg['numeric_feature_count'],categorical=cfg['categorical_feature_count'],

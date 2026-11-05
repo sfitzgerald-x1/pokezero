@@ -44,7 +44,7 @@ class TraceEntryTests(unittest.TestCase):
         return s._replace(species=j.ones_like(s.species).at[:,side,1].set(2),
             level=j.full_like(s.level,100),stats=j.full_like(s.stats,200).at[...,0].set(1000)
                 .at[:,side,:,5].set(300).at[:,1-side,:,5].set(101),
-            types=s.types.at[...,0].set(1),hp=j.full_like(s.hp,1000),max_hp=j.full_like(s.hp,1000),
+            types=s.types.at[...,0].set(1),base_types=s.base_types.at[...,0].set(1),hp=j.full_like(s.hp,1000),max_hp=j.full_like(s.hp,1000),
             moves=j.ones_like(s.moves),pp=j.full_like(s.pp,10),ability=ability,base_ability=ability,
             gender=j.ones_like(s.gender).at[:,1,:].set(2),status=s.status.at[:,side,1].set(status),
             done=j.zeros_like(s.done))

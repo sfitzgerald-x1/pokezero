@@ -30,6 +30,11 @@ class EntryTable(NamedTuple):
     trace: jax.Array | None = None
     status_cure: jax.Array | None = None
     own_tempo: jax.Array | None = None
+    pressure: jax.Array | None = None
+    trace_copy: jax.Array | None = None
+    spikes_type_count: jax.Array | None = None
+    spikes_item_count: jax.Array | None = None
+    spikes_boots_item: jax.Array | None = None
 
 
 def from_metadata(metadata):
@@ -44,7 +49,9 @@ def from_metadata(metadata):
         jnp.asarray(vocab["types"].index("flying")),jnp.asarray(vocab["types"].index("ground")),
         jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}),flag({"truant"}),
         flag({"trace"}),jnp.asarray([[status in cures.get(name,set()) for status in range(7)]
-            for name in vocab["abilities"]]),flag({"owntempo"}))
+            for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}),flag({"sturdy","naturalcure","oblivious"}),
+        jnp.asarray(len(vocab['types']),jnp.int32),jnp.asarray(len(vocab.get('items',[])),jnp.int32),
+        jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
@@ -68,6 +75,10 @@ def depart(state,side,table,*,eligible):
     # Natural Cure). Restore the immutable constructor ability afterwards.
     state=state._replace(ability=state.ability.at[rows,side,active].set(jnp.where(
         eligible,state.base_ability[rows,side,active],state.ability[rows,side,active])))
+    # clearVolatile -> setSpecies(baseSpecies) restores the original types on
+    # every actual departure, including direct Baton and forced displacement.
+    state=state._replace(types=state.types.at[rows,side,active].set(jnp.where(
+        eligible[:,None],state.base_types[rows,side,active],state.types[rows,side,active])))
     counter=state.status_counter[rows,side,active]
     old_clock=state.truant_loaf[rows,side,active]
     state=state._replace(truant_loaf=state.truant_loaf.at[rows,side,active].set(
@@ -108,17 +119,19 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     layers = jnp.clip(state.spikes[rows,side],0,3)
     if _weather_trace is not None:
         from . import engine_execution_completeness as execution_accounting
+        from . import engine_entry_spikes_callbacks as entry_spikes_callbacks
         # Dispatch precedes grounded/Levitate blocking. An absent numerical HP
         # change cannot silently prove no original source output/hook ran.
-        _weather_trace=execution_accounting.unhandled_attempt(_weather_trace,
-            execution_accounting.Site.ENTRY_HAZARD,side,
-            active=eligible & (hp>0) & (layers>0) & jnp.asarray(hazards))
+        _weather_trace,_entry_spikes_pending=entry_spikes_callbacks.begin(_weather_trace,state,side,layers,table,
+            requested=eligible & (hp>0) & (layers>0) & jnp.asarray(hazards))
     numerator = jnp.array([0,3,4,6],jnp.int32)[layers]
     amount = jnp.maximum(1,state.max_hp[rows,side,active]*numerator//24)
     hit = eligible & (hp > 0) & grounded & (layers > 0) & hazards
     next_hp = jnp.where(hit,jnp.maximum(0,hp-amount),hp)
     knocked_out = hit & (next_hp == 0)
     state = state._replace(hp=state.hp.at[rows,side,active].set(next_hp))
+    if _weather_trace is not None:
+        _weather_trace=entry_spikes_callbacks.finish(_weather_trace,_entry_spikes_pending,state.hp[rows,side,active])
     # Gen3 runs status SwitchIn even after a hazard KO, before faintMessages.
     state=restore_sleep(state,side,eligible=eligible)
     starts = eligible & (next_hp > 0)
@@ -126,6 +139,12 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
         from . import engine_weather_callbacks as callbacks
         _weather_trace=callbacks.unattributed_ability(_weather_trace,
             eligible=starts & (ability!=state.base_ability[rows,side,active]))
+    if _weather_trace is not None and table.pressure is not None:
+        from . import engine_pressure_callbacks as pressure_callbacks
+        # Effective Gen3 onStart is owner-only addSplit. Use the actual
+        # pre-Trace Start ability, after hazards/status SwitchIn, never a copy.
+        _weather_trace=pressure_callbacks.entry_pressure(_weather_trace,side,active,ability,
+            eligible=starts & table.pressure[ability])
     if table.truant is not None:
         old_clock=state.truant_loaf[rows,side,active]
         # Gen3 onSwitchIn: turn0 starts ACT; every later entry starts LOAF.
@@ -140,10 +159,17 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     foe_hp = state.hp[rows,foe,foe_active]
     if table.trace is not None:
         copied=starts & table.trace[ability] & (foe_hp>0)
+        if _weather_trace is not None:
+            from . import engine_trace_callbacks as trace_callbacks
+            _trace_foe_ability=state.ability[rows,foe,foe_active]
+            _weather_trace,_trace_ticket=execution_accounting.open_attempt(_weather_trace,
+                execution_accounting.Site.TRACE_COPY,side,active=copied)
         state=state._replace(ability=state.ability.at[rows,side,active].set(jnp.where(
             copied,state.ability[rows,foe,foe_active],ability)))
         if _weather_trace is not None:
-            _weather_trace=callbacks.unattributed_ability(_weather_trace,eligible=copied)
+            _weather_trace=trace_callbacks.entry_trace(_weather_trace,side,active,foe_active,
+                ability,state.ability[rows,side,active],_trace_foe_ability,table,eligible=copied)
+            _weather_trace=execution_accounting.capture_trace_copy(_weather_trace,_trace_ticket,requested=copied)
     current=state.ability[rows,side,active]
     status=state.status[rows,side,active]
     if table.status_cure is not None:
@@ -156,6 +182,13 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
             rest_origin=state.rest_origin.at[rows,side,active].set(jnp.where(
                 cure,False,state.rest_origin[rows,side,active])))
     if table.own_tempo is not None:
+        if _weather_trace is not None:
+            from . import engine_kernel_frame_risk as kernel_risks
+            # Original Own Tempo Update prints/removes only an existing
+            # confusion volatile. Zero is absent in this state representation;
+            # every nonzero counter (including malformed negatives) stays unknown.
+            _weather_trace=kernel_risks.branch_on_tape(_weather_trace,kernel_risks.Branch.ENTRY_CONFUSION_CURE,
+                starts & table.own_tempo[current] & (state.confusion_counter[rows,side,active]!=0),active=eligible)
         state=state._replace(confusion_counter=state.confusion_counter.at[rows,side,active].set(jnp.where(
             starts & table.own_tempo[current],0,state.confusion_counter[rows,side,active])))
     requested = table.weather_ability[ability]
@@ -172,15 +205,33 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     if _weather_trace is not None:
         # PRE-Trace Start ability, before foe-live/Substitute/immunity/cap
         # branches. The source can print controls with zero numeric change.
-        _weather_trace=execution_accounting.unhandled_attempt(_weather_trace,
+        from . import engine_intimidate_callbacks as intimidate_callbacks
+        _intimidate_requested=starts & table.intimidate[ability]
+        _intimidate_target_ability=state.ability[rows,foe,foe_active]
+        _intimidate_substitute=state.substitute_hp[rows,foe,foe_active]
+        _intimidate_initial=(intimidate_callbacks._constructor(_weather_trace)&(foe_hp>0)
+            &(_intimidate_substitute==0)&~table.attack_drop_immune[_intimidate_target_ability]
+            &(state.boosts[rows,foe,foe_active,0]==0))
+        # Ordinary/blocked attempts retain their own requested obligation.
+        # Only the SAME positive write with a fresh installation can capture it.
+        _weather_trace,_intimidate_ordinary_ticket=execution_accounting.open_attempt(_weather_trace,
             execution_accounting.Site.INTIMIDATE_ATTEMPT,side,
-            active=starts & table.intimidate[ability])
+            active=_intimidate_requested&~_intimidate_initial)
+        _weather_trace,_intimidate_ticket=execution_accounting.open_attempt(_weather_trace,
+            execution_accounting.Site.INTIMIDATE_INITIAL,side,
+            active=_intimidate_requested&_intimidate_initial)
     blocked = ((state.substitute_hp[rows,foe,foe_active] > 0)
         | table.attack_drop_immune[state.ability[rows,foe,foe_active]])
     drops = starts & table.intimidate[ability] & (foe_hp > 0) & ~blocked
     old = state.boosts[rows,foe,foe_active,0]
     boosts = state.boosts.at[rows,foe,foe_active,0].set(jnp.where(drops,jnp.maximum(-6,old-1),old))
     if _weather_trace is not None:
+        _weather_trace=intimidate_callbacks.record_device(_weather_trace,_intimidate_ticket,side,active,foe_active,
+            intimidate_callbacks.Write(ability,_intimidate_target_ability,foe_hp,_intimidate_substitute,
+                old,boosts[rows,foe,foe_active,0]),table,requested=_intimidate_requested&_intimidate_initial)
+        _weather_trace=intimidate_callbacks.record_ordinary_device(_weather_trace,_intimidate_ordinary_ticket,side,active,foe_active,
+            intimidate_callbacks.Write(ability,_intimidate_target_ability,foe_hp,_intimidate_substitute,
+                old,boosts[rows,foe,foe_active,0]),table,requested=_intimidate_requested&~_intimidate_initial)
         return state._replace(boosts=boosts),knocked_out,_weather_trace
     return state._replace(boosts=boosts),knocked_out
 

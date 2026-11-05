@@ -65,6 +65,8 @@ jobs:
       - name: Install CPU test environment and build pinned source oracle
         run: |
           python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+          python -c 'import jax, numpy, torch; print("CPU dependencies:", jax.__version__, numpy.__version__, torch.__version__); assert torch.version.cuda is None'
           npm ci --prefix "$POKEZERO_SHOWDOWN_ROOT"
           npm run build --prefix "$POKEZERO_SHOWDOWN_ROOT"
       - name: Prepare small fresh real-team test fixture
@@ -77,11 +79,19 @@ jobs:
           awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
           swapon --show --bytes
           available_kib=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
-          test "$available_kib" -ge $((30 * 1024 * 1024))
+          # Hosted runners vary in free disk after dependency installation.
+          # Keep six GiB for test outputs; never remove preinstalled assets.
+          swap_gib=$((available_kib / 1024 / 1024 - 6))
+          if (( swap_gib > 24 )); then swap_gib=24; fi
+          printf 'Free disk: %s KiB; additional swap: %s GiB; reserve: 6 GiB\n' "$available_kib" "$swap_gib"
+          if (( swap_gib < 8 )); then
+            echo 'Insufficient disk for eight GiB of swap plus the test-output reserve' >&2
+            exit 1
+          fi
           swap_file=$(mktemp "$RUNNER_TEMP/pokezero-components-swap.XXXXXX")
           sudo chown root:root "$swap_file"
           sudo chmod 600 "$swap_file"
-          sudo fallocate --length 24G "$swap_file"
+          sudo fallocate --length "${swap_gib}G" "$swap_file"
           sudo mkswap "$swap_file"
           sudo swapon "$swap_file"
           awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo

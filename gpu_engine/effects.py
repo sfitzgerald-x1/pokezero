@@ -80,7 +80,7 @@ def from_metadata(metadata):
         flags({"overheat","psychoboost"}))
 
 
-def cure_team(state,side,table,*,eligible):
+def cure_team(state,side,table,*,eligible,_return_write_mask=False):
     """Gen3 Heal Bell cures living own-party status except each Soundproof holder.
 
     The user is not exempt from Soundproof in this generation. Confusion and
@@ -94,7 +94,8 @@ def cure_team(state,side,table,*,eligible):
     for name in ("status","status_counter","sleep_skipped","rest_origin"):
         value=getattr(state,name)
         updates[name]=value.at[rows,side].set(jnp.where(cured,jnp.zeros_like(value[rows,side]),value[rows,side]))
-    return state._replace(**updates)
+    result=state._replace(**updates)
+    return (result,cured) if _return_write_mask else result
 def weather_healing(max_hp, weather):
     """Pinned Gen 3 fractional healing, truncated once (not modern 0.667)."""
     amount = jnp.where(weather == climate.SUN,max_hp * 2 // 3,

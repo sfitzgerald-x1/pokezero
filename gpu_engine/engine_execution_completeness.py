@@ -43,6 +43,42 @@ class Site(IntEnum):
     LEECH_HEAL = 7
     ENTRY_HAZARD = 8
     INTIMIDATE_ATTEMPT = 9
+    DIRECT_HIT = 10
+    SUBSTITUTE_SELF = 11
+    TOXIC_ATTEMPT = 12
+    TRACE_COPY = 13
+    RECOIL_HP = 14
+    INTIMIDATE_INITIAL = 15
+    CALM_MIND = 16
+    SPIKES_WRITE = 17
+    SWORDS_DANCE = 18
+    PRIMARY_PARALYSIS = 19
+    PRIMARY_SLEEP = 20
+    TURNLOOP_PREFIX = 21
+    SECONDARY_STATUS = 22
+    FLASH_FIRE_END = 23
+    SUBSTITUTE_DAMAGE = 24
+    PROTECT_ATTEMPT = 25
+    PROTECT_BLOCK = 26
+    BULK_UP = 27
+    PRIMARY_PLAIN_STATUS = 28
+    ROUGH_SKIN_HP = 29
+    COLOR_CHANGE = 30
+    BELLY_DRUM = 31
+    SELF_HEAL = 32
+    SLEEP_BLOCKED = 33
+    ENCORE = 34
+    LEECH_SEED = 35
+    SELF_MOVE_INPUT = 36
+    HEAL_BELL = 37
+    SELF_BOOST_INPUT = 38
+    BEFORE_MOVE_BLOCKED = 41
+    SELF_DESTRUCT = 40 # reserved separately reviewed composite
+    BATON_PASS = 39
+    SLEEP_TALK = 42
+    WHIRLWIND = 43
+    FOCUS_PREPARATION = 44
+    NATURAL_CURE = 45
 
 
 UNKNOWN_SITE, ORDER, OVERFLOW, NAMESPACE, RECEIPT, CONSUMPTION, UNRESOLVED = (1, 2, 4, 8, 16, 32, 64)
@@ -155,9 +191,21 @@ class Context(NamedTuple):
     """PRIVATE actual lifecycle carry; never an exhaustive-source certificate."""
     ledger: Ledger
     tables: Tables
+    risks: object = None  # PRIVATE actual-kernel diagnostics; never a coverage certificate
+    diagnostics: object = None  # Optional literal operands; never read by admission
+    terminal: object = None  # PRIVATE literal final direct-KO observer
+    secondary_status: object = None # ephemeral SAME-call registered context
+    leech_history: object = None # actual owning public/current seed source-slot facts
+    party_orders: object = None # actual BEFORE-frame owner permutations, never guessed
+    baton_transaction: object = None # exact source/public/request two-boundary transaction
+    self_destruct: object = None # row-only actual self-KO/target/faint composite
+    thunder_wave_immunity: object = None # max2 SAME-call natural-immunity receipts
+    whirlwind: object = None # max2 actual positive ordinary drag transactions
+    natural_cure: object = None # SAME actual departure snapshots; ordinary or Baton composite
 
 
 UNKNOWN_EXECUTION = 512
+UNKNOWN_KERNEL_RISK = 1024
 
 
 def commit_rows(active, before, after):
@@ -213,6 +261,22 @@ def unhandled_attempt(tape, site, side, *, active):
     return _put_context(tape,ledger,context)
 
 
+def capture_turnloop_prefix(tape,ticket,*,requested):
+    """Exactly the first entered scheduler receipt; never an empty-span waiver."""
+    context=_context(tape)
+    if context is None:return tape
+    ledger=context.ledger;rows=jnp.arange(tape.count.shape[0]);slot,same=_ticket(ledger,ticket)
+    start=ledger.start[rows,slot];raw=tape.words[:,0]
+    semantic=(same&(ledger.site[rows,slot]==int(Site.TURNLOOP_PREFIX))&(ledger.side[rows,slot]==0)
+        &(ledger.frame>0)&ledger.opened&(start==0)&(tape.count==1)
+        &tape.cursor.initialized&tape.cursor.admitted&jnp.all(tape.cursor.established,axis=1)
+        &(raw[:,0]==life.TURNLOOP_PREFIX)&jnp.all(raw[:,1:5]==-1,axis=1)&jnp.all(raw[:,5:]==0,axis=1)
+        &jnp.all(tape.switch_details[:,0]==0,axis=1))
+    result=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
+    result=_fail(result,requested,semantic,RECEIPT)
+    return _put_context(tape,result,context)
+
+
 def capture_leftovers_write(tape, ticket, *, requested, positive_write):
     """Reviewed LEFTOVERS site maps ONLY to its single literal kind17 receipt.
 
@@ -235,10 +299,29 @@ def capture_leftovers_write(tape, ticket, *, requested, positive_write):
     return _put_context(tape,ledger,context)
 
 
-def capture_status_residual_write(tape, ticket, *, requested, positive_write):
-    """Map this actual STATUS attempt only to one nonlethal BRN/PSN kind20.
+def capture_trace_copy(tape,ticket,*,requested):
+    """Snapshot only this actual entry copy's one raw27; no consume credit."""
+    context=_context(tape)
+    if context is None:return tape
+    from . import engine_trace_callbacks as trace
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);rows=jnp.arange(tape.count.shape[0])
+    _shape(requested,tape.count.shape,jnp.bool_)
+    start=ledger.start[rows,slot];raw=tape.words[rows,jnp.clip(start,0,tape.words.shape[1]-1)]
+    side=raw[:,3];safe=jnp.clip(side,0,1)
+    semantic=(same&(ledger.site[rows,slot]==int(Site.TRACE_COPY))&(tape.count==start+1)
+        &(raw[:,0]==trace.TRACE_COPY)&(side==ledger.side[rows,slot])&(side>=0)&(side<2)
+        &(raw[:,1]>0)&(raw[:,2]>0)&(raw[:,2]==raw[:,7])&(raw[:,5]==1-side)
+        &(raw[:,4]==tape.cursor.physical_active[rows,safe])
+        &(raw[:,6]==tape.cursor.physical_active[rows,1-safe])&jnp.all(raw[:,8:]==0,axis=1))
+    ledger=unhandled(ledger,ticket,active=requested&~semantic,tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
+    return _put_context(tape,ledger,context)
 
-    This is exact span capture, not consumption credit. TOX, no-output, lethal,
+
+def capture_status_residual_write(tape, ticket, *, requested, positive_write):
+    """Map this actual STATUS attempt only to one literal nonlethal BRN/PSN/TOX kind20.
+
+    This is exact span capture, not consumption credit. No-output, lethal,
     malformed and missing spans stay unhandled. Genuine full consumption by
     both owning perspectives is still required; prior refusals never clear.
     """
@@ -249,15 +332,181 @@ def capture_status_residual_write(tape, ticket, *, requested, positive_write):
     start=ledger.start[rows,slot];index=jnp.clip(start,0,tape.words.shape[1]-1)
     raw=tape.words[rows,index]
     brn_psn=((raw[:,8]==2)&(raw[:,9]==1))|((raw[:,8]==3)&(raw[:,9]==2))
+    toxic=(raw[:,8]==4)&(raw[:,9]==3)&(raw[:,2]==jnp.minimum(raw[:,1]+1,15))
     semantic=(same & (ledger.site[rows,slot]==int(Site.STATUS_RESIDUAL)) & (tape.count==start+1)
-        & (raw[:,0]==20)&(raw[:,3]==ledger.side[rows,slot])&brn_psn
-        & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]==raw[:,1])
+        & (raw[:,0]==20)&(raw[:,3]==ledger.side[rows,slot])
+        & (brn_psn|toxic)&jnp.where(brn_psn,raw[:,2]==raw[:,1],True)
+        & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]>=0)&(raw[:,2]<=15)
         & (raw[:,4]>=0)&(raw[:,4]<6)
         & (raw[:,4]==tape.cursor.physical_active[rows,jnp.clip(raw[:,3],0,1)])
         & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5]))
     accepted=requested & positive_write & semantic
     ledger=unhandled(ledger,ticket,active=requested&~(positive_write&semantic),tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=accepted,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def _direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write,*,data=None,_diagnostic_sink=None):
+    """Read-only literal Site10 span check shared by capture and risk observer.
+
+    This computes facts from the SAME source ticket/write/tape, not a caller
+    accepted flag. Stage/credit belongs to its owning capture/consumer caller.
+    """
+    from . import engine_direct_hit_controls as direct
+    context=_context(tape)
+    if context is None:return jnp.zeros_like(tape.count,dtype=jnp.bool_)
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=tape.count.shape[0];rows=jnp.arange(b)
+    if type(write) is not direct.HitWrite:raise ValueError('literal direct-hit write required')
+    for value in (actor,actor_physical,target_physical,move):_shape(value,(b,),jnp.int32)
+    valid=direct.validate_write_device(write,b,data=data,move=move)
+    start=ledger.start[rows,slot]
+    declaration=tape.words[rows,jnp.clip(start-1,0,tape.words.shape[1]-1)]
+    safe_actor=jnp.clip(actor,0,1)
+    declared=(_diagnostic_header := ((start>0)&(declaration[:,0]==direct.public.MOVE)
+        &(declaration[:,1]==actor)&(declaration[:,2]==actor_physical)
+        &(declaration[:,3]==1-actor)&(declaration[:,4]==target_physical)
+        &(declaration[:,5]==move)&jnp.all(declaration[:,6:]==0,axis=1)))
+    declared &= (_diagnostic_current := (life._valid(tape.cursor)&(actor>=0)&(actor<2)
+        &(actor_physical==tape.cursor.physical_active[rows,safe_actor])
+        &(target_physical==tape.cursor.physical_active[rows,1-safe_actor])
+        &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
+        &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1)))
+    prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
+    declared &= (_diagnostic_stamp := ((tape.event_turn[rows,prefix]==ledger.turn[rows,slot])
+        &(tape.event_phase[rows,prefix]==ledger.phase[rows,slot])
+        &jnp.all(tape.event_generation[rows,prefix]==ledger.generation[rows,slot],axis=1)))
+    critical,effect=direct.annotation_flags_device(write,data=data,move=move)
+    critical=jnp.broadcast_to(critical,(b,));effect=jnp.broadcast_to(effect,(b,))
+    num=jnp.broadcast_to(write.numerator,(b,));den=jnp.broadcast_to(write.denominator,(b,))
+    length=critical.astype(jnp.int32)+effect.astype(jnp.int32)+1
+    first=tape.words[rows,jnp.clip(start,0,tape.words.shape[1]-1)]
+    second=tape.words[rows,jnp.clip(start+critical.astype(jnp.int32),0,tape.words.shape[1]-1)]
+    hp=tape.words[rows,jnp.clip(start+length-1,0,tape.words.shape[1]-1)]
+    expected=jnp.stack((actor,actor_physical,1-actor,target_physical,move,
+        jnp.broadcast_to(write.old_hp,(b,)),jnp.broadcast_to(write.new_hp,(b,)),num,den),axis=1)
+    controls=(~critical|((first[:,0]==direct.CRITICAL)&jnp.all(first[:,1:]==expected,axis=1)))
+    controls &= ~effect|((second[:,0]==jnp.where(num>den,direct.SUPER_EFFECTIVE,direct.RESISTED))
+        & jnp.all(second[:,1:]==expected,axis=1))
+    exact_hp=((hp[:,0]==direct.public.MAIN_HP)&jnp.all(hp[:,1:3]==-1,axis=1)&(hp[:,3]==1-actor)
+        &(hp[:,4]==target_physical)&(hp[:,5]==write.new_hp)&(hp[:,6]==write.maximum)
+        &(hp[:,7]>=0)&(hp[:,7]<=6)&jnp.all(hp[:,8:]==0,axis=1))
+    semantic=((_diagnostic_namespace_valid := _validate(ledger,context.tables)) & (_diagnostic_namespace_tape := _tape(ledger,tape,context.tables)) & same & valid & declared & (_diagnostic_site_match := (ledger.site[rows,slot]==int(Site.DIRECT_HIT)))
+        &(_diagnostic_side_match := (ledger.side[rows,slot]==1-actor))&(_diagnostic_span_count := (tape.count==start+length))&controls&exact_hp)
+    if type(_diagnostic_sink)is dict:
+        _diagnostic_sink.update(actor_side=actor,actor_physical=actor_physical,target_physical=target_physical,move=move,
+            ticket_same=same,ticket_slot=ticket.slot,ticket_serial=ticket.serial,ticket_frame=ticket.frame,ledger_slot=slot,ledger_count=ledger.count,
+            ledger_site=ledger.site[rows,slot],ledger_side=ledger.side[rows,slot],ledger_stage=ledger.stage[rows,slot],ledger_start=start,ledger_end=ledger.end[rows,slot],ledger_opened=ledger.opened,
+            ledger_turn=ledger.turn[rows,slot],ledger_phase=ledger.phase[rows,slot],ledger_generation0=ledger.generation[rows,slot,0],ledger_generation1=ledger.generation[rows,slot,1],
+            write_valid=valid,declared_header=_diagnostic_header,declared_current=_diagnostic_current,declared_stamp=_diagnostic_stamp,declared=declared,
+            critical_annotation=critical,effect_annotation=effect,length=length,controls=controls,exact_hp=exact_hp,semantic=semantic,
+            capacity=jnp.full_like(move,tape.words.shape[1]),stream_id=tape.stream_id,frame=ledger.frame,raw_count=tape.count,turn=tape.cursor.turn,phase=tape.cursor.phase,
+            generation0=tape.cursor.generation[:,0],generation1=tape.cursor.generation[:,1],prior_tape_refusal=tape.refusal,prior_execution_refusal=ledger.refusal,
+            prior_kernel_risk=None if context.risks is None else context.risks.carry.risk)
+        _diagnostic_sink.update({'write_'+name:value for name,value in zip(write._fields,write)})
+        for _diagnostic_name,_diagnostic_word in (('declaration_word',declaration),('first_word',first),('second_word',second),('hp_word',hp)):
+            for _diagnostic_column in range(10):_diagnostic_sink[_diagnostic_name+str(_diagnostic_column)]=_diagnostic_word[:,_diagnostic_column]
+        _diagnostic_sink['namespace_valid']=_diagnostic_namespace_valid
+        _diagnostic_sink['namespace_tape']=_diagnostic_namespace_tape
+        _diagnostic_sink['site_match']=_diagnostic_site_match
+        _diagnostic_sink['side_match']=_diagnostic_side_match
+        _diagnostic_sink['span_count']=_diagnostic_span_count
+    return semantic
+
+
+def capture_direct_hit_write(tape,ticket,actor,actor_physical,target_physical,move,write,*,requested,data=None):
+    """Capture the complete literal positive span; BOTH owners must drain it."""
+    context=_context(tape)
+    if context is None:return tape
+    _shape(requested,tape.count.shape,jnp.bool_)
+    from . import engine_outcome_diagnostics as diagnostics
+    _diagnostic_sink={}if diagnostics.direct_enabled(tape)else None
+    semantic=_direct_hit_span_matches(tape,ticket,actor,actor_physical,target_physical,move,write,data=data,_diagnostic_sink=_diagnostic_sink)
+    if _diagnostic_sink is not None:
+        _diagnostic_sink['requested']=requested
+        tape=diagnostics.record_direct_on_tape(tape,_diagnostic_sink,phase=1,active=requested|_diagnostic_sink['ticket_same'])
+        context=context._replace(diagnostics=tape.execution.diagnostics)
+    ledger=context.ledger
+    ledger=unhandled(ledger,ticket,active=requested&~semantic,tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=requested&semantic,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def _substitute_span_matches(tape,ticket,side,physical,move,write):
+    """Actual self-write after its own declaration, distinct from Site10."""
+    from . import engine_substitute_callbacks as substitute
+    context=_context(tape)
+    if context is None:return jnp.zeros_like(tape.count,bool)
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=len(tape.count);rows=jnp.arange(b)
+    for x in (side,physical,move):_shape(x,(b,),jnp.int32)
+    valid=substitute.validate_write_device(write,b)|(substitute.owned_failure(tape,ledger.start[rows,slot],stage=1)|substitute.owned_failure(tape,ledger.start[rows,slot]))
+    start=ledger.start[rows,slot];at=jnp.clip(start,0,tape.words.shape[1]-1)
+    prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
+    raw=tape.words[rows,at];decl=tape.words[rows,prefix];safe=jnp.clip(side,0,1)
+    expected=jnp.stack((jnp.full_like(side,substitute.SUBSTITUTE_CREATED),write.old_sub_hp,
+        write.new_sub_hp,side,physical,write.old_hp,write.new_hp,write.maximum,write.status,move),axis=1)
+    same &= (_validate(ledger,context.tables)&_tape(ledger,tape,context.tables)&valid
+        &(ledger.site[rows,slot]==int(Site.SUBSTITUTE_SELF))&(ledger.side[rows,slot]==side)
+        &(tape.count==start+1)&jnp.all(raw==expected,axis=1)&(start>0)
+        &(decl[:,0]==substitute.public.MOVE)&(decl[:,1]==side)&(decl[:,2]==physical)
+        &(decl[:,3]==1-side)&(decl[:,4]==tape.cursor.physical_active[rows,1-safe])&(decl[:,5]==move)&jnp.all(decl[:,6:]==0,axis=1)
+        &life._valid(tape.cursor)&(physical==tape.cursor.physical_active[rows,safe])
+        &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
+        &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
+    for index in (prefix,at):
+        same &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])
+            &(tape.event_phase[rows,index]==ledger.phase[rows,slot])
+            &jnp.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
+    return same
+
+
+def capture_substitute_write(tape,ticket,side,physical,move,write,*,requested):
+    context=_context(tape)
+    if context is None:return tape
+    _shape(requested,tape.count.shape,jnp.bool_)
+    same=_substitute_span_matches(tape,ticket,side,physical,move,write)
+    ledger=unhandled(context.ledger,ticket,active=requested&~same,tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=requested&same,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
+def _toxic_span_matches(tape,ticket,side,physical,target,move,attempt):
+    from . import engine_toxic_callbacks as toxic
+    context=_context(tape)
+    if context is None:return jnp.zeros_like(tape.count,bool)
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);b=len(tape.count);rows=jnp.arange(b)
+    expected=toxic.words_device(side,physical,target,move,attempt)
+    applied=toxic.outcome_device(expected)==toxic.STATUS_WRITE
+    start=ledger.start[rows,slot];first=jnp.clip(start,0,tape.words.shape[1]-1)
+    at=jnp.clip(start+applied.astype(jnp.int32),0,tape.words.shape[1]-1)
+    prefix=jnp.clip(start-1,0,tape.words.shape[1]-1)
+    raw=tape.words[rows,at];decl=tape.words[rows,prefix];safe=jnp.clip(side,0,1)
+    from . import engine_status_callbacks as status
+    absent=jnp.full_like(side,-1);zero=jnp.zeros_like(side)
+    status_words=jnp.stack((jnp.full_like(side,status.STATUS_APPLIED),absent,absent,1-side,target,
+        attempt.old_status,attempt.new_status,jnp.full_like(side,status.PRIMARY),zero,zero),axis=1)
+    same &= (~applied|jnp.all(tape.words[rows,first]==status_words,axis=1))
+    same &= (_validate(ledger,context.tables)&_tape(ledger,tape,context.tables)&(toxic.supported_raw(expected)|toxic.substitute_failure_source(tape,expected)|toxic.existing_status_source(tape,expected))
+        &(attempt.old_counter>=0)&(attempt.old_counter<=15)&(attempt.new_counter>=0)&(attempt.new_counter<=15)
+        &(ledger.site[rows,slot]==int(Site.TOXIC_ATTEMPT))&(ledger.side[rows,slot]==1-side)
+        &(tape.count==start+1+applied.astype(jnp.int32))&jnp.all(raw==expected,axis=1)&(start>0)
+        &(decl[:,0]==toxic.public.MOVE)&(decl[:,1]==side)&(decl[:,2]==physical)
+        &(decl[:,3]==1-side)&(decl[:,4]==target)&(decl[:,5]==move)&jnp.all(decl[:,6:]==0,axis=1)
+        &life._valid(tape.cursor)&(physical==tape.cursor.physical_active[rows,safe])
+        &(target==tape.cursor.physical_active[rows,1-safe])
+        &(tape.cursor.turn==ledger.turn[rows,slot])&(tape.cursor.phase==ledger.phase[rows,slot])
+        &jnp.all(tape.cursor.generation==ledger.generation[rows,slot],axis=1))
+    for index in (prefix,first,at):
+        same &= ((tape.event_turn[rows,index]==ledger.turn[rows,slot])&(tape.event_phase[rows,index]==ledger.phase[rows,slot])
+            &jnp.all(tape.event_generation[rows,index]==ledger.generation[rows,slot],axis=1))
+    return same
+
+
+def capture_toxic_attempt(tape,ticket,side,physical,target,move,attempt,*,requested):
+    context=_context(tape)
+    if context is None:return tape
+    _shape(requested,tape.count.shape,jnp.bool_);same=_toxic_span_matches(tape,ticket,side,physical,target,move,attempt)
+    ledger=unhandled(context.ledger,ticket,active=requested&~same,tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=requested&same,tables=context.tables)
     return _put_context(tape,ledger,context)
 
 
@@ -501,8 +750,14 @@ def emitted(ledger, ticket, tape, *, active, tables):
     return _fail(result,active,good,RECEIPT)
 
 
+CONSUMPTION_DIAGNOSTIC_FIELDS = ('namespace_equal','claimed_receipt_exact','all_obligations_emitted',
+    'ledger_opened','sequence_advanced_exactly','public_sequence_equal','public_stream_equal',
+    'causal_stream_equal','claimed_span_has_output','drained','good',
+    'projection_error','component_admitted','emitted_word_count')
+
+
 def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapter_tables, catalog,
-                         weather_hp=None, leftovers=None, status_residual=None,leftovers_no_output=None):
+                         weather_hp=None, leftovers=None, status_residual=None,leftovers_no_output=None,hypothetical_hp=None):
     """Trusted owning closure: actually project/fold before resolving ANY span.
 
     Dynamic objects remain trusted same-core inputs, as in the original full
@@ -519,7 +774,7 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
     # These are the SAME typed contexts guarded by the actual owning driver,
     # not an alternate resolver or a caller-provided consumption result.
     consumed=full.project_and_fold(stream,frame,adapter_tables,public,catalog,
-        weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
+        weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual,hypothetical_hp=hypothetical_hp)
     projection=consumed.projection
     emitted_count=jnp.sum(projection.frames.valid,axis=(0,2),dtype=jnp.int32)
     # A genuine nonempty consumed frame advances the SAME public/transport cursor
@@ -553,6 +808,14 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
     captured=(ledger.stage==2)&(ledger.start>=0)&(ledger.end<=tape.count[:,None])&(positive|silent)
     all_emitted=jnp.all(~present|captured,axis=1)
     good=ns & ledger.opened & exact & all_emitted & drained
+    # Literal pre-accounting-rollback predicates; no diagnostic can grant credit.
+    consumption_diagnostics=jnp.stack((ns,exact,all_emitted,ledger.opened,
+        projection.state.sequence==stream.sequence+emitted_count,
+        consumed.public.cursor.sequence==projection.state.sequence,
+        consumed.public.cursor.stream_id==ledger.stream_id,
+        projection.state.causal.cursor.stream_id==ledger.stream_id,
+        jnp.where(jnp.any(claimed,axis=1),emitted_count>0,True),drained,good,
+        projection.error,projection.component_admitted,emitted_count),axis=1).astype(jnp.int32)
     candidate=ledger._replace(stage=jnp.where(present,3,ledger.stage),opened=jnp.zeros(b,bool),
         upstream_refusal=ledger.upstream_refusal|tape.refusal)
     result=_commit(active & good,ledger,candidate)
@@ -570,6 +833,7 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
     use=active & good & (result.refusal==0)
     error=jnp.where(active & ~use,jnp.where(projection.error!=0,projection.error,int(full.inputs.Error.PAYLOAD)),0)
     safe_projection=projection._replace(state=full._commit(use,stream,projection.state),error=error,
+        consumption_diagnostics=consumption_diagnostics,
         component_admitted=use,chunk=projection.chunk._replace(
             words=jnp.where(use[:,None,None],projection.chunk.words,0),
             valid=projection.chunk.valid & use[:,None],more=projection.chunk.more & use),

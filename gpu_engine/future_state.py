@@ -29,6 +29,7 @@ FIELD_POLICY = {
         "species", "level", "types", "stats", "hp", "max_hp", "moves", "pp",
         "disabled", "item", "ability")},
     "base_ability": "immutable original constructor ability, retained separately from current ability",
+    "base_types": "immutable original constructor types, retained separately from current types",
     "hidden_power_type": "native Hidden Power variant, not metadata alias",
     "hidden_power_power": "native60/70 variant; refuse other referenced powers",
     "happiness": "native Return102; Frustration catalog has no bound happiness parameter",
@@ -84,6 +85,7 @@ NATIVE_PATHS = {
     "happiness": ("MOVES[Return|Frustration].base_power",),
     "gender": ("side[].pokemon[].gender",),
     "types": ("side[].pokemon[].types",),
+    "base_types": ("side[].pokemon[].base_types",),
     "stats": ("side[].pokemon[].maxhp", "side[].pokemon[].{attack,defense,special_attack,special_defense,speed}"),
     "hp": ("side[].pokemon[].hp",), "max_hp": ("side[].pokemon[].maxhp",),
     "status": ("side[].pokemon[].status",),
@@ -156,7 +158,7 @@ SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns"
     "spikes", "wish_counter", "wish_amount", "keys")})
 SHAPES.update({name: () for name in ("queued_actor", "pending_residual", "replacement_count", "weather",
     "weather_counter", "turn", "done", "winner")})
-SHAPES.update(types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
+SHAPES.update(types=(2, 6, 2), base_types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
     boosts=(2, 6, 7), residual_draws=(2, 12))
 
 
@@ -308,6 +310,9 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
         raise ValueError("COUPLED_OUTPUT_REQUIRES_ORIGINAL_CERTIFICATE")
     if certificate is not None and (original_static is not None or original_genders is not None):
         raise ValueError("ambiguous original static provenance")
+    if "base_types" not in data:
+        add("base_types", "ORIGINAL_BASE_TYPES_REQUIRED", "Do not infer original types from possibly changed current types")
+        return None, gaps, (), False, False
     if "base_ability" not in data:
         add("base_ability", "ORIGINAL_BASE_ABILITY_REQUIRED", "Do not infer an original ability from a possibly copied current ability")
         return None, gaps, (), False, False
@@ -453,12 +458,16 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
                 if status == 4 and data["status_counter"][side][p]:
                     add(path+".status_counter", "BENCH_TOXIC_COUNT_NOT_REPRESENTED", "Native switches reset the side Toxic counter; a nonzero stored bench count cannot be silently erased")
             types = tuple("typeless" if (t := _vocab(metadata, "types", value)) == "none" else t for value in data["types"][side][p])
+            base_types = tuple("typeless" if (t := _vocab(metadata, "types", value)) == "none" else t
+                               for value in data["base_types"][side][p])
             stats = data["stats"][side][p]
             if stats[0] != data["max_hp"][side][p]:
                 add(path+".stats[0]", "DISTINCT_HP_STAT", "Native exposes maxhp, not an additional distinct immutable HP stat")
             ability = _vocab(metadata, "abilities", data["ability"][side][p])
             base_ability = _vocab(metadata, "abilities", data["base_ability"][side][p])
-            extras = static.get(path, ("serious", (85,)*6, "none", 1.0, types, base_ability))
+            extras = static.get(path, ("serious", (85,)*6, "none", 1.0, base_types, base_ability))
+            if base_types != extras[4]:
+                add(path+".base_types", "RETAINED_BASE_TYPES_CHANGED", "Original types differ from retained constructor evidence")
             if base_ability != extras[5]:
                 add(path+".base_ability", "RETAINED_BASE_ABILITY_CHANGED", "Original ability differs from retained constructor evidence")
             gender = {-1:"none", 0:"none", 1:"male", 2:"female"}.get(genders[side][p], "none")
@@ -751,6 +760,8 @@ def _canonical_native_future(native_state, certificate, *, boundary="ordinary"):
                 expected_gender = original[2]
                 if mon["gender"] != expected_gender:
                     gaps.append(Gap(f"{name}.pokemon[{p}].gender", "NATIVE_GENDER_CHANGED", "Retained constructor gender changed"))
+                if mon["base_types"] != original[4]:
+                    gaps.append(Gap(f"{name}.pokemon[{p}].base_types", "NATIVE_BASE_TYPES_CHANGED", "Retained original types changed"))
                 if mon["base_ability"] != original[5]:
                     gaps.append(Gap(f"{name}.pokemon[{p}].base_ability", "NATIVE_BASE_ABILITY_CHANGED", "Retained original ability changed"))
                 if mon["pre_transform"]:
