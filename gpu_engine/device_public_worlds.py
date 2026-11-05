@@ -184,7 +184,8 @@ def detach_roots(context, source, *, rows, owners, enable_device_worlds=False):
 
     The same primitive sequence as detach_root runs once, eagerly, over all requested rows (every
     step is row-independent: per-row clone, per-lane readout, per-row redaction), followed by ONE
-    device->host copy. Each returned Root equals detach_root(context, source, row=rows[i],
+    device->host copy (the batch is padded to a power-of-two bucket so executables are reused across
+    frames; padding rows are discarded). Each returned Root equals detach_root(context, source, row=rows[i],
     owner=owners[i])'s byte for byte, except that its redacted public carry is a host numpy copy
     rather than device arrays. This replaces thousands of one-row dispatches and transfers per frame.
     """
@@ -199,17 +200,21 @@ def detach_roots(context, source, *, rows, owners, enable_device_worlds=False):
         raise ValueError('actual root row and owner0/1 required')
     if not rows:
         return ()
-    r, o = j.asarray(rows, j.int32), j.asarray(owners, j.int32)
+    # Eager dispatch compiles every primitive per shape: pad to a power-of-two bucket (repeating the
+    # first root; padding rows are dropped below) so frames of varying root counts reuse executables.
+    count = len(rows);bucket = max(64, 1 << (count-1).bit_length())
+    r = j.asarray(rows + (rows[0],) * (bucket-count), j.int32)
+    o = j.asarray(owners + (owners[0],) * (bucket-count), j.int32)
     cloned = public.clone_for_worlds(context.public, r)
     view = public.readout(cloned, o)
     own = {name: getattr(context.state, name)[r, o] for name in OWN_MON_FIELDS + OWN_SIDE_FIELDS}
-    hp_percent = cloned.hp_percent[j.arange(len(rows)), 1-o]
+    hp_percent = cloned.hp_percent[j.arange(bucket), 1-o]
     # The original redaction, row by row: each row is redacted as the one-row carry it would be.
     single = lambda row, owner: _redact_peer_private(jax.tree.map(lambda x: x[None], row), owner)
     redacted = jax.tree.map(lambda x: x[:, 0], jax.vmap(single)(cloned, o))
     host = jax.device_get((redacted, view, own, hp_percent, context.streams[r], context.frames[r]))
     redacted, view, own, hp_percent, streams, frames = host
-    result = []
+    result = []   # rows past `count` are bucket padding and are never read
     for i, (row, owner) in enumerate(zip(rows, owners)):
         one = lambda x: np.ascontiguousarray(x[i:i+1])
         view_i = jax.tree.map(one, view)

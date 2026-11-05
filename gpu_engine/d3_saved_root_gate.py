@@ -6,7 +6,8 @@ runs gpu_engine.device_d_frame_parity in its D3 vectorized mode. --batched-prep 
 side's roots with worlds.detach_roots and prices them with FramePricer(host_prep=True); the serial
 reference is the same either way. The serial reference runs from THIS tree (not the bank's original
 source commit), so a flag-off run must reproduce the published record before a flag-on run counts.
---compare A B checks that two result files have identical rows (timings excluded). All paths are
+--compare A B checks that two result files have identical rows (timings excluded; floats within
+FLOAT_TOLERANCE, since target deltas move at float64 noise across processes). All paths are
 command-line arguments; the output directory must be new.
 """
 import argparse
@@ -24,13 +25,31 @@ def rows_without_timing(result):
     return [{k: v for k, v in row.items() if 'seconds' not in k} for row in result['rows']]
 
 
+FLOAT_TOLERANCE = 1e-9   # reported float gaps (e.g. serial-vs-batch target deltas) may move at float64 noise
+
+
+def differences(x, y, path=''):
+    """Structural differences between two result rows: exact everywhere except floats (FLOAT_TOLERANCE)."""
+    if isinstance(x, dict) and isinstance(y, dict):
+        if set(x) != set(y):return [path + ':keys']
+        return [d for k in sorted(x) for d in differences(x[k], y[k], path + '.' + k)]
+    if isinstance(x, list) and isinstance(y, list):
+        if len(x) != len(y):return [path + ':length']
+        return [d for i, (u, v) in enumerate(zip(x, y)) for d in differences(u, v, f'{path}[{i}]')]
+    if isinstance(x, float) and isinstance(y, float):
+        return [] if abs(x - y) <= FLOAT_TOLERANCE else [path + f':float {abs(x - y):.3g}']
+    return [] if type(x) is type(y) and x == y else [path + ':value']
+
+
 def compare(a, b):
     ra, rb = json.loads(Path(a).read_text()), json.loads(Path(b).read_text())
     rows_a, rows_b = rows_without_timing(ra), rows_without_timing(rb)
-    differing = [i for i, (x, y) in enumerate(zip(rows_a, rows_b)) if x != y]
+    found = {i: differences(x, y) for i, (x, y) in enumerate(zip(rows_a, rows_b))}
+    differing = [i for i, d in found.items() if d]
     report = dict(equal=len(rows_a) == len(rows_b) and not differing and ra['totals'] == rb['totals'],
         statuses=[ra['status'], rb['status']], totals=[ra['totals'], rb['totals']], rows=[len(rows_a), len(rows_b)],
-        differing_rows=differing[:10], target_summaries=[ra.get('target_summary'), rb.get('target_summary')])
+        differing_rows=differing[:10], first_differences={i: found[i][:5] for i in differing[:3]}, float_tolerance=FLOAT_TOLERANCE,
+        target_summaries=[ra.get('target_summary'), rb.get('target_summary')])
     log('COMPARED', **report)
     return report
 
