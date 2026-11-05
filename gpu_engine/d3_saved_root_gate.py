@@ -60,10 +60,15 @@ def main(argv=None):
     parser.add_argument('--index-sha256', help='sha256 of bank/cost-root-index.json')
     parser.add_argument('--out', help='new output directory')
     parser.add_argument('--batched-prep', action='store_true')
+    parser.add_argument('--execution-source', default=os.environ.get('V2_SOURCE_COMMIT'),
+        help='40-hex commit of THIS tree, recorded as the execution source (default: $V2_SOURCE_COMMIT)')
     parser.add_argument('--compare', nargs=2, metavar=('A', 'B'), help='compare two saved-root-parity.json files and exit')
     args = parser.parse_args(argv)
     if args.compare:return 0 if compare(*args.compare)['equal'] else 1
     if not (args.bank_root and args.index_sha256 and args.out):parser.error('--bank-root, --index-sha256 and --out required')
+    source = args.execution_source or ''
+    if len(source) != 40 or any(c not in '0123456789abcdef' for c in source):
+        parser.error('--execution-source (or V2_SOURCE_COMMIT) must be the 40-hex commit of this tree')
     root, out = Path(args.bank_root), Path(args.out)
     out.mkdir(parents=True, exist_ok=False)
     from pokezero import v5_worker as worker, v5_run as runs
@@ -72,7 +77,7 @@ def main(argv=None):
     profile, vocabulary, gender, category = worker._runtime_metadata(runtime, expected_pool_sha256=pool_sha)
     # worker._source would require this tree to BE the bank's source commit. Here the serial reference
     # runs from this tree on purpose; the flag-off run reproducing the published record is the check.
-    log('SOURCE', bank_source_commit=runtime.get('source_commit'), running_source_commit=os.environ.get('V2_SOURCE_COMMIT'))
+    log('SOURCE', bank_source_commit=runtime.get('source_commit'), running_source_commit=source)
     worker._memory(runtime['memory_policy'], apply=True)   # must precede the first JAX import
     import jax
     try:worker._probe(runtime)
@@ -91,7 +96,6 @@ def main(argv=None):
     def progress(record):
         with (out / 'parity-progress.jsonl').open('a') as f:f.write(json.dumps(record, allow_nan=False) + '\n')
         log('SERIAL_PARITY_SLOT', ordinal=record['ordinal'], status=record['status'])
-    source = os.environ.get('V2_SOURCE_COMMIT') or ''
     result = parity.run(provider, snapshot, snapshot.archive, index, execution_source=source, enable_parity=True,
         progress_callback=progress, chunk_batch=True, vectorized=True, batched_prep=args.batched_prep)
     (out / 'saved-root-parity.json').write_text(json.dumps(result, sort_keys=True, allow_nan=False) + '\n')

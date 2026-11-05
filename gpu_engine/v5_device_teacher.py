@@ -233,11 +233,11 @@ class Provider:
             if not (0<=row<len(streams))or int(streams[row])!=address.stream or int(frames_[row])!=address.frame:continue
             batch.setdefault(step,[]).append((row,owner))
         for step,items in batch.items():
-            try:
-                for (row,owner),root in zip(items,worlds.detach_roots(contexts[step],self.source,rows=[r for r,_ in items],
-                        owners=[o for _,o in items],enable_device_worlds=True)):roots[(step,row,owner)]=root
-            except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
-                for row,owner in items:roots[(step,row,owner)]=error
+            # Rows, owners and addresses are checked above and every primitive is shape-uniform, so a
+            # detach_roots failure is systemic (e.g. device memory), never one root's: it stops the
+            # study instead of refusing the whole step.
+            for (row,owner),root in zip(items,worlds.detach_roots(contexts[step],self.source,rows=[r for r,_ in items],
+                    owners=[o for _,o in items],enable_device_worlds=True)):roots[(step,row,owner)]=root
         detach_seconds=time.perf_counter()-started;grouped={}
         for record,step,row,owner,address in pending:
             preparation_started=time.perf_counter()
@@ -248,7 +248,6 @@ class Provider:
                 if int(streams[row])!=address.stream or int(frames_[row])!=address.frame:
                     raise ValueError('PRE root context address differs')
                 root=roots[(step,row,owner)]
-                if isinstance(root,Exception):raise root
                 plans=worlds.plan_starts(root,self.source,self.recipe)
                 inputs={name:getattr(frames,name)[step,row,owner][None,None]for name in INPUTS};inputs['history_mask']=np.ones((1,1),bool)
                 request=Request(plans,tuple(map(float,frames.raw_policy_logits[step,row,owner])),

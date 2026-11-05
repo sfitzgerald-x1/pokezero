@@ -73,7 +73,25 @@ class VersionPinTest(unittest.TestCase):
             v2e_j2c.PINNED.clear();v2e_j2c.PINNED.update(saved)
 
     def test_installed_versions_are_pinned(self):
-        v2e_j2c.check_pinned_versions()
+        found = v2e_j2c.check_pinned_versions()
+        self.assertEqual((found['jax'], found['jaxlib']), (v2e_j2c.PINNED['jax'], v2e_j2c.PINNED['jaxlib']))
+
+    def test_absent_cuda_plugins_are_accepted_but_other_plugin_versions_refused(self):
+        import importlib.metadata as metadata
+        import os
+        from unittest import mock
+        real = metadata.version
+        def version(name, plugin=None):
+            if name in v2e_j2c.CUDA_PLUGINS:
+                if plugin is None:raise metadata.PackageNotFoundError(name)
+                return plugin
+            return real(name)
+        with mock.patch.dict(os.environ, {'V2E_ALLOW_UNPINNED_JAX': ''}):
+            with mock.patch.object(metadata, 'version', version):
+                found = v2e_j2c.check_pinned_versions()
+            self.assertEqual([found[name] for name in v2e_j2c.CUDA_PLUGINS], [None, None])
+            with mock.patch.object(metadata, 'version', lambda name: version(name, '0.11.0')):
+                with self.assertRaises(v2e_j2c.Unsupported):v2e_j2c.check_pinned_versions()
 
 
 class GenerationTest(unittest.TestCase):

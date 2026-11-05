@@ -5,8 +5,8 @@ loads its iteration -1 actor, constructs the first batch and collects --chunks c
 roots retained. Each variant Provider (--variant: comma-separated extra Provider flags set True, e.g.
 `batched_prep`) labels every chunk; the baseline Provider (frame_batch, chunk_batch, vectorized: the
 D3 JAX teacher, about 0.5 s per root) labels the first --baseline-chunks chunks, and on those every
-variant's label_chunk records must equal the baseline's: exactly, or (reported separately) within the
-saved-root gate's float tolerance. Per provider and chunk it reports label wall time and host
+variant's label_chunk records must equal the baseline's exactly (same process, same programs; the
+saved-root gate's float tolerance is reported as a diagnostic only). Per provider and chunk it reports label wall time and host
 preparation vs pricer device time per priced root; chunk 0 includes compilation, so steady-state
 numbers come from later chunks. All paths are command-line arguments; the output directory must be new.
 """
@@ -14,6 +14,7 @@ import argparse
 import collections
 import hashlib
 import json
+import os
 from pathlib import Path
 import time
 
@@ -42,20 +43,21 @@ def timing(provider, records, label_seconds):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--d3-root', required=True, help='the D3 bank run root (prespec.json, runtime.json, run/)')
-    parser.add_argument('--labels', required=True)
-    parser.add_argument('--labels-sha256', required=True)
     parser.add_argument('--out', required=True, help='new output directory')
     parser.add_argument('--chunks', type=int, default=2)
     parser.add_argument('--baseline-chunks', type=int, default=1, help='chunks the baseline teacher labels and the variants are compared on')
     parser.add_argument('--variant', action='append', default=[], help='comma-separated Provider flags set True, e.g. batched_prep')
+    parser.add_argument('--memory-policy', action='store_true', help="apply the bank runtime's declared JAX memory policy (else the caller's environment)")
     args = parser.parse_args(argv)
     if not args.variant:raise SystemExit('at least one --variant required')
     if not 1 <= args.baseline_chunks <= args.chunks:raise SystemExit('need 1 <= --baseline-chunks <= --chunks')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     root = Path(args.d3_root)
+    from pokezero import v5_worker as worker, v5_run as runs
+    runtime_path = root / 'runtime.json'
+    runtime = worker._record(dict(path=str(runtime_path), sha256=hashlib.sha256(runtime_path.read_bytes()).hexdigest()))
+    if args.memory_policy:worker._memory(runtime['memory_policy'], apply=True)   # must precede the first JAX import
     import jax
-    import numpy as np  # noqa: F401  (the teacher's numpy path)
-    from pokezero import v5_worker as worker, v5_run as runs, v5_contract as contract
     from pokezero.v5_model import V5ModelConfig
     from pokezero.v5_loss import V5LossConfig
     from pokezero import v5_training as training
@@ -63,9 +65,6 @@ def main(argv=None):
     from gpu_engine.v5_device_backend import RuntimeBackend
     from gpu_engine.v5_device_teacher import Provider
     from gpu_engine.d3_saved_root_gate import differences
-    runtime_path = root / 'runtime.json'
-    runtime = worker._record(dict(path=str(runtime_path), sha256=hashlib.sha256(runtime_path.read_bytes()).hexdigest()))
-    worker._record(dict(path=args.labels, sha256=args.labels_sha256))
     profile, vocabulary, gender, _ = worker._runtime_metadata(runtime, expected_pool_sha256=runtime['constructor_pool']['sha256'])
     d = json.loads((root / 'run' / 'declaration.json').read_text())
     loss_fields = {k: v for k, v in d['loss'].items() if k in V5LossConfig.__dataclass_fields__}
@@ -76,7 +75,8 @@ def main(argv=None):
         runs.Watchdog(**d['watchdog']), checkpoint_updates=d['checkpoint_updates'], discount=d['discount'])
     declared = json.loads((root / 'run' / 'journal' / '000000000.json').read_text())['payload']['declaration_sha256']
     if runs._sha(plan.manifest()) != declared:raise SystemExit('rebuilt plan differs from the D3 declaration')
-    log('PLAN', declaration_sha256=declared, arm=plan.model.arm, games=len(d['iterations'][0][0]['games']))
+    log('PLAN', declaration_sha256=declared, arm=plan.model.arm, games=len(d['iterations'][0][0]['games']),
+        memory={k: os.environ.get(k) for k in ('XLA_PYTHON_CLIENT_PREALLOCATE', 'XLA_PYTHON_CLIENT_MEM_FRACTION', 'XLA_PYTHON_CLIENT_ALLOCATOR')})
     try:worker._probe(runtime)
     except ValueError as error:
         log('PROBE_DIFFERS', error=str(error));jax.config.update('jax_enable_x64', False);jax.config.update('jax_default_matmul_precision', 'highest')
@@ -88,7 +88,7 @@ def main(argv=None):
     for variant in args.variant:
         providers[variant] = Provider(prepared, plan, **base, **{flag: True for flag in variant.split(',')})
     backend = RuntimeBackend(prepared, pool, gender_policy=gender, teacher=providers['baseline']);backend.check_plan(plan)
-    events = [json.loads(p.read_text()) for p in sorted((root / 'run' / 'journal').glob('*.json'))[:40]]
+    events = (json.loads(p.read_text()) for p in sorted((root / 'run' / 'journal').glob('*.json')))
     snapshot = next(e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
     params, config, _ = v5_model.load(root / 'run' / snapshot['archive'], expected_archive_sha256=snapshot['archive_sha256'],
         expected_checkpoint_sha256=snapshot['checkpoint_sha256'], expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
@@ -120,12 +120,12 @@ def main(argv=None):
             found = [] if len(a) != len(b) else [(i, d) for i, (x, y) in enumerate(zip(a, b)) for d in [differences(x, y)] if d]
             comparisons[name] = dict(records=[len(a), len(b)], exact=a == b, within_tolerance=len(a) == len(b) and not found,
                 differing_records=len(found), first_differences=[dict(record=i, differences=d[:5]) for i, d in found[:3]])
-            equal = equal and comparisons[name]['within_tolerance']
+            equal = equal and comparisons[name]['exact']
             log('COMPARED', chunk=chunk, variant=name, **comparisons[name])
         report['chunks'].append(dict(chunk=chunk, timings=timings, comparisons=comparisons))
-    report['equal'] = equal;report['compared_chunks'] = args.baseline_chunks
+    report['exact'] = equal;report['compared_chunks'] = args.baseline_chunks
     (out / 'chunk-equality.json').write_text(json.dumps(report, indent=1, default=str) + '\n')
-    log('CHUNK_EQUALITY_COMPLETE', equal=equal, out=str(out / 'chunk-equality.json'))
+    log('CHUNK_EQUALITY_COMPLETE', exact=equal, out=str(out / 'chunk-equality.json'))
     return 0 if equal else 1
 
 

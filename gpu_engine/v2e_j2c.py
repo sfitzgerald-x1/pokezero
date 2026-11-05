@@ -37,6 +37,9 @@ REG = 32
 # reduction combiners). Another version may differ silently, so generation refuses to run on it.
 # V2E_ALLOW_UNPINNED_JAX=1 exists only to re-run the GPU conformance battery when re-pinning.
 PINNED = {'jax': '0.12.0', 'jaxlib': '0.12.0', 'jax-cuda13-plugin': '0.12.0', 'jax-cuda13-pjrt': '0.12.0'}
+# A CPU-only host (CPU CI) has no CUDA plugin, and generated modules can't run there: an absent
+# plugin is accepted, an installed plugin at another version is refused.
+CUDA_PLUGINS = ('jax-cuda13-plugin', 'jax-cuda13-pjrt')
 
 
 def check_pinned_versions():
@@ -45,7 +48,8 @@ def check_pinned_versions():
     for name in PINNED:
         try:found[name] = metadata.version(name)
         except metadata.PackageNotFoundError:found[name] = None
-    differ = {name: (found[name], want) for name, want in PINNED.items() if found[name] != want}
+    differ = {name: (found[name], want) for name, want in PINNED.items()
+        if found[name] != want and not (found[name] is None and name in CUDA_PLUGINS)}
     if differ and os.environ.get('V2E_ALLOW_UNPINNED_JAX') != '1':
         raise Unsupported('jax/jaxlib versions differ from the pinned generator semantics (found, pinned): ' + repr(differ)
             + '; re-run gpu_engine.v2e_conformance on GPU and re-pin before generating')

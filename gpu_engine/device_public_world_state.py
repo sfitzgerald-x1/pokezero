@@ -124,9 +124,13 @@ def world_keys(seeds):
     seeds = np.asarray(seeds, np.uint32)
     if not len(seeds):
         return np.zeros((0, 1, 2), np.uint32)
+    # Padded to a power-of-two bucket (repeating seed 0's slot) so frames of varying world counts
+    # reuse the eager executables; keys are per seed, so padding changes none of the first len(seeds).
+    count = len(seeds);bucket = max(64, 1 << (count-1).bit_length())
+    padded = np.concatenate([seeds, np.full(bucket-count, seeds[0], np.uint32)])
     keys = jax.vmap(lambda s: jax.vmap(jax.random.fold_in, in_axes=(None, 0))(
-        jax.random.PRNGKey(s), j.arange(1, dtype=j.uint32)))(j.asarray(seeds))
-    return np.asarray(jax.device_get(keys))
+        jax.random.PRNGKey(s), j.arange(1, dtype=j.uint32)))(j.asarray(padded))
+    return np.asarray(jax.device_get(keys))[:count]
 
 
 _EMPTY = {}
@@ -195,6 +199,7 @@ def _materialize(root, start, tables, recipe, host_keys=None):
             start.world not in (0, 1) or start.seed != recipe.world_seed(root.address, start.world)):
         raise ValueError('same declared source/root/world/recipe required')
     seed = kernel_seed(root, start.world, recipe)
+    key = None if host_keys is None else np.array(host_keys[seed], np.uint32)   # a missing key is a bug, not a refusal
     try:
         if start.opponent_fixtures is None:
             raise ValueError('source draw refused: '+','.join(start.refusals))
@@ -209,7 +214,7 @@ def _materialize(root, start, tables, recipe, host_keys=None):
             arrays = {name: np.array(value, copy=True) for name, value in state._asdict().items()}
         else:
             arrays = _empty_arrays()
-            arrays['keys'] = np.array(host_keys[seed], np.uint32).reshape(arrays['keys'].shape)
+            arrays['keys'] = key.reshape(arrays['keys'].shape)
         for name in plans.OWN_MON_FIELDS + plans.OWN_SIDE_FIELDS:
             value = np.asarray(own[name])
             if value.shape != arrays[name][0, owner].shape or value.dtype != arrays[name].dtype:
