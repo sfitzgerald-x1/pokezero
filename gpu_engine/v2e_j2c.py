@@ -57,6 +57,7 @@ class Holder:
     off: int = -1        # arena word offset (arena)
     refs: int = 0        # pending reads
     home: object = None  # thread backend: home(q) -> expression loading word q of a small value
+    deps: list = field(default_factory=list)  # holders kept alive while this one lives
     chunk: int = -1      # thread backend: kernel chunk in which `name` holds the value
 
 
@@ -71,6 +72,11 @@ class Val:
     stride: int = 0           # per-lane words of an 'in' buffer
     imap: object = None       # flat index map onto the holder (lazy broadcast view of a store)
     fn: object = None         # element expression (src 'expr')
+    arr: object = None        # numpy value of a 'const' Val (or of a lane-free iota)
+    cderived: bool = False    # computed from constants only (XLA would fold it on the host)
+    lbc: object = None        # per-lane value equal in every lane: lbc[...] (shape lshape), from constants
+    bsig: object = None       # constant-derived values as XLA sees them: None (a constant), a broadcast
+                              # (source shape, broadcast_dimensions, shape), or 'uncertain'
 
     @property
     def kind(self):
@@ -208,6 +214,12 @@ def convert(src, dst, a):
     return f'(({ctype(dst)})({a}))'
 
 
+OPAQUE = {'optimization_barrier'}   # XLA's constant folding stops at these
+CALLS = {'jit', 'pjit', 'closed_call', 'custom_jvp_call', 'custom_vjp_call'}
+DATA_MOVEMENT = {'slice', 'concatenate', 'transpose', 'rev', 'pad', 'dynamic_slice', 'dynamic_update_slice', 'gather',
+    'copy', 'copy_p', 'squeeze', 'expand_dims', 'reshape', 'broadcast_in_dim', 'select_n', 'stack', 'unstack'}
+LANE_FOLDABLE = {'add', 'sub', 'mul', 'div', 'max', 'min', 'and', 'or', 'xor', 'not', 'neg', 'abs', 'floor', 'ceil',
+    'eq', 'ne', 'lt', 'le', 'gt', 'ge', 'select_n', 'convert_element_type', 'broadcast_in_dim'}
 ELEMENTWISE_BINARY = {'add', 'sub', 'mul', 'div', 'rem', 'max', 'min', 'and', 'or', 'xor',
     'shift_left', 'shift_right_logical', 'shift_right_arithmetic'}
 COMPARE = {'eq', 'ne', 'lt', 'le', 'gt', 'ge'}
@@ -298,7 +310,7 @@ def thread_index(n):
 class Generator:
     def __init__(self, name, profile=False):
         self.k = Kernel(name);self.env = {};self.profile = profile;self.marks = [];self.live = {};self.temps = []
-        self.cse = {};self.cse_hits = 0
+        self.cse = {};self.cse_hits = 0;self.folds = 0;self.declined_runtime = False;self.fold_recip = False
         self.collective = True   # warp collectives (shuffles, warp scans) available
         self.rolled = 0          # depth of emitted loops that are not fully unrolled
 
@@ -319,7 +331,11 @@ class Generator:
 
     def free_holder(self, h):
         if h.kind == 'arena' and h.off >= 0:self.k.release(h.off, h.words);h.off = -1
-        self.live.pop(h, None)
+        self.live.pop(h, None);self.release_deps(h)
+
+    def release_deps(self, h):
+        deps, h.deps = h.deps, []
+        for d in deps:self.unref(d)
 
     def take_over(self, op, out):
         """out reuses dying op's arena slot in place. The slot moves to a fresh holder and op's holder
@@ -477,12 +493,12 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             val = np.asarray(atom.val)
             if val.shape:raise Unsupported('non-scalar literal')
             if val.dtype.kind in 'iu' and int(val) in (LANES, -LANES, LANES - 1):self.k.lane_literals += 1
-            return Val(np.dtype(atom.aval.dtype), (), 'lit', lit=val.item())
+            return Val(np.dtype(atom.aval.dtype), (), 'lit', lit=val[()] if val.dtype == np.float32 else val.item(), cderived=True)
         return self.env[atom]
 
     @staticmethod
     def value_key(v):
-        if v.src == 'lit' and not v.shape:return ('lit', str(v.dtype), repr(v.lit))
+        if v.src == 'lit' and not v.shape:return ('lit', str(v.dtype), np.asarray(v.lit, v.dtype).tobytes())   # bits: NaN payloads, -0
         return id(v)
 
     def cse_key(self, e, ins):
@@ -507,6 +523,8 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         for a in jaxpr.outvars:
             if not isinstance(a, jcore.Literal):uses[a] = uses.get(a, 0) + 1
         saved = self.env;self.env = {}
+        neg_fed = {a for e in jaxpr.eqns if e.primitive.name in {'neg'} | CALLS for a in e.invars if not isinstance(a, jcore.Literal)}
+        neg_fed |= {a for a in jaxpr.outvars if not isinstance(a, jcore.Literal)}
         for var, val in zip(jaxpr.invars, args):
             self.env[var] = val
             if val.src == 'store':val.holder.refs += uses.get(var, 0)
@@ -518,9 +536,15 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             dying = {id(v) for v in ins if v.src == 'store' and v.holder.refs == pending[id(v.holder)] == 1}
             before = len(self.k.lines);self.eq_start = before
             key = self.cse_key(e, ins);hit = self.cse.get(key) if key is not None else None
-            if hit is not None and all(self.alive(v) for v in hit[1]):
+            self.declined_runtime = False
+            folded = self.constant_fold(e, ins) if hit is None else None
+            if folded is not None:
+                outs = folded;self.folds += 1
+            elif hit is not None and all(self.alive(v) for v in hit[1]):
                 outs = hit[1];self.cse_hits += 1
             else:
+                if not self.declined_runtime:self.evaluator_guard(e, ins)
+                self.neg_feeds_neg = bool(e.outvars) and e.outvars[0] in neg_fed
                 try:outs = self.equation(e, ins, dying)
                 except Unsupported as error:
                     if getattr(error, 'located', False):raise
@@ -529,6 +553,8 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                     ex.located = True
                     raise ex from None
                 if key is not None:self.cse[key] = (ins, outs)   # ins kept alive: their ids stay unique
+            if ins and all(v.cderived for v in ins) and e.primitive.name not in OPAQUE | CALLS and not self.declined_runtime:
+                for val in outs:val.cderived = True
             for var, val in zip(e.outvars, outs):
                 dropped = type(var).__name__ == 'DropVar'
                 if not dropped:self.env[var] = val
@@ -566,6 +592,11 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         if p in ELEMENTWISE_BINARY:
             folded = self.identity_fold(p, ins, outs[0])
             if folded is not None:return [folded]
+            if p == 'div' and ins[0].dtype == F32 and ins[1].bsig == 'uncertain':
+                raise Unsupported('f32 division by a reshaped or sliced constant broadcast (XLA folding not reproduced)')
+            if p == 'div' and ins[0].dtype == F32 and self.const_like(ins[1]) and not self.plain_const(ins[0]) and not (
+                    ins[0].cderived and self.fold_signature('div', ins, e) != 'recip'):
+                return [self.divide_by_constant(ins[0], ins[1], outs[0])]
             return [self.elementwise(outs[0], ins, lambda a, b: binary(p, ins[0].dtype, a, b))]
         if p in COMPARE:return [self.elementwise(outs[0], ins, lambda a, b: compare(p, a, b))]
         if p in UNARY:
@@ -573,17 +604,260 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                 inner = getattr(ins[0], 'neg_of', None)
                 if inner is not None and self.alive(inner):return [self.view(inner, outs[0])]   # XLA: neg(neg(x)) -> x
                 out = self.elementwise(outs[0], ins, lambda a: unary(p, ins[0].dtype, a, params));out.neg_of = ins[0]
+                if ins[0].src == 'store' and out.src == 'store' and getattr(self, 'neg_feeds_neg', True):
+                    # PTX neg.f32 canonicalizes NaN, so the fold (which keeps payloads) must stay available.
+                    ins[0].holder.refs += 1;out.holder.deps.append(ins[0].holder)
                 return [out]
             return [self.elementwise(outs[0], ins, lambda a: unary(p, ins[0].dtype, a, params))]
         raise Unsupported(f'primitive {p}')
 
+    # -- constant folding (XLA folds all-constant subexpressions with its IEEE evaluator) -------
+    FOLD_F32 = {'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'div': np.divide}
+    FOLD_ANY = {'eq': np.equal, 'ne': np.not_equal, 'lt': np.less, 'le': np.less_equal, 'gt': np.greater, 'ge': np.greater_equal}
+    FOLD_INT = {'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'and': np.bitwise_and, 'or': np.bitwise_or,
+        'xor': np.bitwise_xor, 'max': np.maximum, 'min': np.minimum}
+
+    @staticmethod
+    def is_scalar(v):
+        return v.kind == 'lit' or v.size <= 1
+
+    @staticmethod
+    def plain_const(v):
+        """A constant as XLA sees it (not a broadcast of one)."""
+        return v.kind == 'const' and v.arr is not None and v.bsig is None and v.size > 1
+
+    def const_like(self, v):
+        """A constant or a broadcast of a constant (XLA's m::Constant / m::Broadcast(m::Constant))."""
+        if v.kind == 'lit':return True
+        if not v.cderived or v.bsig == 'uncertain':return False
+        return (v.kind == 'const' and v.arr is not None) or v.lbc is not None
+
+    def reciprocal(self, b):
+        """1 / b computed on the host in IEEE f32 (XLA's InvertConstant), with b's provenance."""
+        with np.errstate(all='ignore'):
+            if b.kind == 'lit':return Val(F32, b.shape, 'lit', lit=np.float32(1.0) / np.float32(b.lit), cderived=True)
+            if b.lbc is not None:
+                r = self.wrap((np.float32(1.0) / np.asarray(b.lbc, np.float32))[None], F32, b.shape, lane_mode=True)
+            else:
+                r = self.const(np.float32(1.0) / np.asarray(b.arr, np.float32))
+        r.bsig = b.bsig;r.cderived = True
+        return r
+
+    def divide_by_constant(self, a, b, out):
+        """XLA's A / C -> A * (1 / C) for a non-constant A and a constant (or broadcast constant) C. The
+        product then folds by the usual rule (or runs at run time, an IEEE multiply on the device)."""
+        recip = self.reciprocal(b)
+        if a.cderived:
+            sig = self.fold_signature('mul', [a, recip], None)
+            if sig not in ('runtime', 'uncertain', 'recip'):
+                lane = out.lane
+                def value(v):
+                    if v.kind == 'lit':return np.asarray(v.lit, np.float32)
+                    if v.lbc is not None:return np.asarray(v.lbc, np.float32)[None]
+                    return np.asarray(v.arr, np.float32)
+                with np.errstate(all='ignore'):
+                    r = np.broadcast_to(value(a) * value(recip), ((1,) + tuple(out.shape[1:])) if lane else out.shape)
+                res = self.wrap(r, F32, out.shape, lane_mode=lane)
+                if res is not None:
+                    res.bsig = sig;res.cderived = True
+                    return res
+            if sig == 'uncertain':raise Unsupported('f32 division of a reshaped or sliced constant broadcast')
+        res = self.elementwise(out, [a, recip], lambda x, y: binary('mul', F32, x, y))
+        res.cderived = False;self.declined_runtime = True   # a runtime product, as in XLA
+        return res
+
+    def fold_signature(self, p, ins, e):
+        """How XLA treats an op whose operands are all constant-derived: the provenance of the folded
+        result, or 'runtime'. HloConstantFolding needs real constant operands (a broadcast of a
+        constant is not one); the algebraic simplifier first sinks broadcasts through elementwise ops
+        when the broadcasts match, or when there is one non-scalar operand. So an elementwise op folds
+        if an operand is a plain constant, if all non-scalar operands are identical broadcasts, or if
+        there is at most one non-scalar broadcast; otherwise XLA evaluates it at run time."""
+        if p == 'broadcast_in_dim':
+            v = ins[0];bd = tuple(e.params['broadcast_dimensions']);shape = tuple(e.outvars[0].aval.shape)
+            if self.is_scalar(v):return None
+            if v.bsig is None:return (tuple(v.shape), bd, shape)
+            if v.bsig == 'uncertain':return 'uncertain'
+            src_shape, inner, _ = v.bsig
+            return (src_shape, tuple(bd[d] for d in inner), shape)
+        nonscalar = [v for v in ins if not self.is_scalar(v)]
+        if any(v.bsig == 'uncertain' for v in nonscalar):return 'uncertain'
+        if p == 'div' and ins[0].dtype == F32:
+            sigs = {v.bsig for v in nonscalar}
+            if all(v.bsig is None for v in nonscalar):return None   # constants only (C/C, k/C, C/k, k/k): exact fold
+            if None not in sigs and len(sigs) == 1:
+                # Broadcasts sink; the inner division folds exactly unless its dividend is a broadcast scalar,
+                # where the simplifier's A / C -> A * (1 / C) fires first (probed: k / bcast(C) = k * RN(1/C)).
+                if self.is_scalar(ins[0]) and not self.is_scalar(ins[1]):self.fold_recip = True
+                return next(iter(sigs))
+            if self.plain_const(ins[0]):return None   # a constant dividend: HloConstantFolding divides exactly
+            return 'recip'                            # the simplifier's A / C -> A * (1 / C) runs first
+        if p in DATA_MOVEMENT:
+            return None if all(v.bsig is None for v in nonscalar) else 'uncertain'
+        if any(v.bsig is None for v in nonscalar):return None   # a plain constant operand: folded
+        sigs = {v.bsig for v in nonscalar}
+        if len(sigs) <= 1:return next(iter(sigs), None)      # matching broadcasts, or a unique one: sunk, then folded
+        return 'runtime'
+
+    def lane_value(self, src, out, bd):
+        """Lane-free value of broadcast_in_dim(src) when src has no lane axis (every lane sees it)."""
+        target = [1] * len(out.shape)
+        for k, d in enumerate(bd):target[d] = src.shape[k]
+        return np.broadcast_to(np.asarray(src.arr).reshape(target), (1,) + tuple(out.lshape))[0]
+
+    def constant_fold(self, e, ins):
+        """Evaluate an equation whose operands are all literals or closed-over constants, as XLA's
+        constant folding does (IEEE f32 on the host, so e.g. a constant division is exact, not div.full).
+        Values broadcast from constants along the lane axis are evaluated at the constant's own shape and
+        broadcast again, as XLA sinks such broadcasts. Folds only where the evaluator's result is
+        unambiguous; anything else is generated as usual (or refused by evaluator_guard)."""
+        p = e.primitive.name
+        if not ins or any(v.imap is not None for v in ins):return None
+        out_lane = bool(e.outvars) and len(e.outvars[0].aval.shape) > 0 and e.outvars[0].aval.shape[0] == LANES
+        lane_mode = any(v.lbc is not None for v in ins) or out_lane   # a lane-shaped result of constants
+        def foldable(v):
+            if v.kind == 'lit':return True
+            if v.lbc is not None:return True
+            return v.kind == 'const' and v.arr is not None
+        if not all(foldable(v) for v in ins):return None
+        if lane_mode and p not in LANE_FOLDABLE:return None
+        self.fold_recip = False
+        sig = self.fold_signature(p, ins, e)
+        if sig in ('runtime', 'recip'):
+            self.declined_runtime = True   # XLA computes this at run time (or rewrites it); so does the device code
+            return None
+        if sig == 'uncertain' and p not in DATA_MOVEMENT and any(v.dtype == F32 for v in ins):
+            return None   # unknown XLA provenance: the guard refuses it
+        avals = [aval_of(o.aval) for o in e.outvars]
+        if any(sh != tuple(o.aval.shape) for (dt, sh), o in zip(avals, e.outvars)):return None   # PRNG keys
+        if any(hasattr(a, 'aval') and aval_of(a.aval)[1] != tuple(a.aval.shape) for a in e.invars):return None
+        if len(e.outvars) != 1 and p != 'unstack':return None
+        dtype, shape = avals[0]
+        eval_shape = ((1,) + tuple(shape[1:])) if lane_mode else shape   # a lane axis of 1 stands for "every lane"
+        def value(v):
+            if v.kind == 'lit':
+                return np.broadcast_to(np.asarray(v.lit, v.dtype), ((1,) + tuple(v.shape[1:])) if (lane_mode and v.lane) else v.shape)
+            if v.lbc is not None:return np.asarray(v.lbc)[None]
+            return np.asarray(v.arr)
+        try:
+            xs = [value(v) for v in ins]
+            with np.errstate(all='ignore'):
+                t = ins[0].dtype
+                if p in DATA_MOVEMENT - {'broadcast_in_dim', 'reshape', 'squeeze', 'expand_dims', 'select_n'}:
+                    r = self.move(e, xs)   # bit-exact data movement, as XLA folds it
+                    if r is None:return None
+                    if p == 'unstack':
+                        res = [self.wrap(np.asarray(x).astype(dt), dt, sh) for x, (dt, sh) in zip(r, avals)]
+                        return None if any(v is None for v in res) else res
+                elif p == 'broadcast_in_dim':
+                    bd = tuple(e.params['broadcast_dimensions']);target = [1] * len(shape)
+                    for k, d in enumerate(bd):target[d] = xs[0].shape[k]
+                    r = np.broadcast_to(xs[0].reshape(target), eval_shape)
+                elif p in ('reshape', 'squeeze', 'expand_dims') and len(xs) == 1 and not lane_mode:
+                    if p == 'reshape' and e.params.get('dimensions') not in (None, ()):return None
+                    if ins[0].kind == 'const':return [self.view(ins[0], Val(dtype, shape, 'store'))]   # same buffer
+                    r = xs[0].reshape(shape)
+                elif p in self.FOLD_ANY and len(xs) == 2:r = self.FOLD_ANY[p](xs[0], xs[1])
+                elif p == 'select_n':
+                    full = np.broadcast_shapes(*[x.shape for x in xs])
+                    r = np.choose(np.broadcast_to(xs[0].astype(np.int32), full), [np.broadcast_to(x, full) for x in xs[1:]])
+                elif t == F32 and p == 'div' and self.fold_recip:
+                    r = xs[0].astype(np.float32) * (np.float32(1.0) / xs[1].astype(np.float32))   # k * RN(1 / C), as XLA rewrites it
+                elif t == F32 and p in self.FOLD_F32:r = self.FOLD_F32[p](xs[0].astype(np.float32), xs[1].astype(np.float32))
+                elif t == F32 and p in ('neg', 'abs', 'floor', 'ceil'):
+                    r = {'neg': np.negative, 'abs': np.abs, 'floor': np.floor, 'ceil': np.ceil}[p](xs[0].astype(np.float32))
+                elif t in SIGNED | UNSIGNED and p in self.FOLD_INT:r = self.FOLD_INT[p](xs[0], xs[1]).astype(t)
+                elif t in SIGNED | UNSIGNED and p == 'neg':r = (-xs[0]).astype(t)
+                elif t == BOOL and p in ('and', 'or', 'xor', 'not'):
+                    r = {'and': np.logical_and, 'or': np.logical_or, 'xor': np.logical_xor}[p](xs[0], xs[1]) if p != 'not' else np.logical_not(xs[0])
+                elif p == 'convert_element_type':
+                    x = xs[0]
+                    if x.dtype == np.float32 and dtype != F32:
+                        # Truncation is unambiguous only for finite in-range values (the guard refuses the rest).
+                        if dtype == BOOL:r = x != 0
+                        else:
+                            info = np.iinfo(dtype)
+                            if not (np.isfinite(x).all() and (x > info.min - 1).all() and (x < info.max + 1).all()):return None
+                            r = np.trunc(x).astype(dtype)
+                    else:r = x.astype(dtype)
+                else:return None
+            # NaN results come from the host FPU, as XLA's evaluator computes them in this same process.
+            r = np.broadcast_to(np.asarray(r).astype(dtype), eval_shape)
+        except (TypeError, ValueError):
+            return None
+        res = self.wrap(r, dtype, shape, lane_mode)
+        if res is None:return None
+        res.bsig = sig
+        return [res]
+
+    def wrap(self, r, dtype, shape, lane_mode=False):
+        """A folded value as a literal (uniform), a constant, or a lane broadcast of a constant."""
+        flat = np.ascontiguousarray(r).reshape(-1)   # broadcast results may be zero-stride views
+        if flat.size and np.all(flat.view(np.uint8).reshape(flat.size, -1) == flat[:1].view(np.uint8).reshape(1, -1)):
+            return Val(dtype, shape, 'lit', lit=flat[0] if flat.dtype == np.float32 else flat[0].item())   # f32 keeps NaN bits
+        if not lane_mode:
+            if LANES in shape:return None
+            return self.const(np.broadcast_to(r, shape).copy())
+        c = self.const(np.ascontiguousarray(r[0]));out = Val(dtype, shape, 'lit')
+        self.lazy(out, lambda i: self.get(c, self.flat(c, self.full_coords(out, i)[1:])));out.lbc = np.asarray(c.arr)
+        return out
+
+    @staticmethod
+    def move(e, xs):
+        """Bit-exact evaluation of a data-movement primitive (numpy, or XLA's CPU backend if available)."""
+        p = e.primitive.name;q = e.params
+        if p in ('copy', 'copy_p'):return xs[0]
+        if p == 'slice':
+            st = q['strides'] or (1,) * len(q['start_indices'])
+            return xs[0][tuple(slice(a, b, c) for a, b, c in zip(q['start_indices'], q['limit_indices'], st))]
+        if p == 'concatenate':return np.concatenate(xs, axis=int(q['dimension']))
+        if p == 'transpose':return np.transpose(xs[0], q['permutation'])
+        if p == 'rev':return np.flip(xs[0], axis=tuple(q['dimensions'])) if q['dimensions'] else xs[0]
+        if p == 'stack':return np.stack(xs, axis=int(q['axis']))
+        if p == 'unstack':return list(np.moveaxis(xs[0], int(q['axis']), 0))
+        try:
+            import jax
+            cpu = jax.devices('cpu')[0]
+        except RuntimeError:
+            return None   # no CPU backend in this process: leave it to the device (the guard decides)
+        with jax.default_device(cpu):
+            r = e.primitive.bind(*[jax.device_put(np.array(x, order='C'), cpu) for x in xs], **q)   # keeps 0-d operands 0-d
+        return np.asarray(r[0] if isinstance(r, (list, tuple)) else r)
+
+    SENSITIVE_F32 = {'div', 'max', 'min', 'neg', 'abs', 'reduce_sum', 'reduce_max', 'reduce_min', 'reduce_prod',
+        'argmax', 'argmin', 'cumsum', 'cummax', 'cummin', 'cumprod', 'sort'}
+
+    def evaluator_guard(self, e, ins):
+        """XLA folds constant-derived subexpressions on the host. Where the host evaluator and the device
+        disagree (division vs div.full, NaN payloads in min/max/neg/abs, reduction order and signed zeros,
+        f32 -> int) and the generator could not fold the same expression, refuse instead of emitting the
+        device form."""
+        if not ins or not all(v.cderived for v in ins) or e.primitive.name in OPAQUE | CALLS:return
+        p = e.primitive.name;f32_in = any(v.dtype == F32 for v in ins)
+        if f32_in and any(getattr(v, 'bsig', None) == 'uncertain' for v in ins) and p not in DATA_MOVEMENT:
+            raise Unsupported(f'f32 {p} on a reshaped or sliced constant broadcast (XLA folding not reproduced)')
+        if (p in self.SENSITIVE_F32 and f32_in) or (p == 'convert_element_type' and ins[0].dtype == F32 and
+                np.dtype(e.params['new_dtype']) != F32):
+            raise Unsupported(f'constant-derived f32 {p} that XLA folds on the host (not reproduced here)')
+
     # -- elementwise ----------------------------------------------------------------
     def identity_fold(self, p, ins, out):
-        """x + 0, 0 + x, x - 0, x * 1, 1 * x, x / 1, max(x, x), min(x, x), min(x, +inf), max(x, -inf) -> x,
+        """op(x, NaN literal) -> that NaN, quieted, sign cleared;
+        x + 0, 0 + x, x - 0, x * 1, 1 * x, x / 1, max(x, x), min(x, x), min(x, +inf), max(x, -inf) -> x,
         as XLA's algebraic simplifier rewrites them for floats too (pinned by the float_identities
         conformance case: -0 and NaN payloads survive)."""
         if ins[0].dtype != F32:return None
-        is_lit = lambda v, value: v.kind == 'lit' and float(v.lit) == value
+        if p in ('add', 'sub', 'mul', 'div', 'max', 'min'):
+            # XLA's GPU codegen folds arithmetic with a NaN literal to that NaN, quieted and with the sign
+            # cleared, whatever the other operand is (probed: 0xffc00005 -> 0x7fc00005, 0x7f800003 -> 0x7fc00003).
+            for v in ins:
+                if v.kind == 'lit' and np.isnan(np.float32(v.lit)):
+                    bits = (int(np.asarray(v.lit, np.float32).view(np.uint32)) | 0x00400000) & 0x7fffffff
+                    return Val(F32, out.shape, 'lit', lit=np.array([bits], np.uint32).view(np.float32)[0], cderived=True)
+        def is_lit(v, value):
+            if v.kind == 'lit':return bool(np.float32(v.lit) == np.float32(value))
+            if v.kind == 'const' and v.arr is not None and v.arr.size:return bool(np.all(np.asarray(v.arr, np.float32) == np.float32(value)))
+            return False
         x = None
         if p in ('max', 'min') and ins[0] is ins[1]:x = ins[0]
         elif p == 'min' and (is_lit(ins[1], np.inf) or is_lit(ins[0], np.inf)):x = ins[0] if is_lit(ins[1], np.inf) else ins[1]
@@ -644,7 +918,10 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         """out shares src's storage/expression with the same flat element order."""
         if src.lane != out.lane and src.src not in ('lit',):raise Unsupported('view across lane axis')
         out.src = src.src;out.holder = src.holder;out.ptr = src.ptr;out.lit = src.lit;out.stride = src.stride
-        out.imap = src.imap;out.fn = src.fn
+        out.imap = src.imap;out.fn = src.fn;out.cderived = src.cderived
+        out.arr = None if src.arr is None else np.asarray(src.arr).reshape(out.shape)
+        out.lbc = None if src.lbc is None or not out.lane else np.asarray(src.lbc).reshape(out.lshape)
+        out.bsig = src.bsig if (src.bsig is None or src.shape == out.shape) else 'uncertain'
         return out
 
     def p_reshape(self, e, ins, outs, params, dying):
@@ -666,13 +943,19 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
     p_copy_p = p_copy
 
     def p_optimization_barrier(self, e, ins, outs, params, dying):
-        return [self.view(v, o) for v, o in zip(ins, outs)]
+        res = []
+        for v, o in zip(ins, outs):
+            if v.src == 'store' and not v.cderived:res.append(self.view(v, o))
+            else:res.append(self.produce(o, lambda i, own, v=v: self.get(v, i)))   # opaque, as XLA's barrier
+            o.cderived = False
+        return res
 
     def lazy(self, out, fn):
         out.src = 'expr';out.fn = fn;out.holder = None;out.imap = None
         return out
 
     def p_iota(self, e, ins, outs, params, dying):
+        # Not a constant for folding purposes: XLA's constant folding leaves iota (and ops on it) to run time.
         out = outs[0];dim = int(params['dimension']);c = ctype(out.dtype)
         if out.lane and dim == 0:return [self.lazy(out, lambda i: f'(({c})b)')]
         d = dim - 1 if out.lane else dim;shape = out.lshape
@@ -688,7 +971,10 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             full = self.full_coords(out, i);coords = [('0' if src.shape[j] == 1 and out.shape[od] != 1 else full[od]) for j, od in enumerate(bd)]
             return self.flat(src, coords)
         if src.src == 'expr' or (src.src in ('in', 'const') and out.size > REG):
-            return [self.lazy(out, lambda i: self.get(src, index(i)))]
+            self.lazy(out, lambda i: self.get(src, index(i)))
+            if src.src == 'const' and src.arr is not None and out.lane:
+                out.lbc = self.lane_value(src, out, bd);out.bsig = (tuple(src.shape), bd, tuple(out.shape))
+            return [out]
         if out.size > REG:
             out.src = 'store';out.holder = src.holder
             inner = src.imap
@@ -1328,13 +1614,14 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
     # -- constants ---------------------------------------------------------------------------
     def const(self, value):
         arr = np.asarray(value)
-        if arr.ndim == 0:return Val(np.dtype(arr.dtype), (), 'lit', lit=arr.item())
+        if arr.ndim == 0:return Val(np.dtype(arr.dtype), (), 'lit', lit=arr[()] if arr.dtype == np.float32 else arr.item(), cderived=True)
         if LANES in arr.shape:raise Unsupported(f'constant with lane-sized axis {arr.shape}')
         for k, c in enumerate(self.k.consts):
-            if c is value or (c.shape == arr.shape and c.dtype == arr.dtype and np.array_equal(c, arr)):
-                return Val(np.dtype(arr.dtype), arr.shape, 'const', ptr=f'cs{k}')
+            if c is value or (c.shape == arr.shape and c.dtype == arr.dtype and np.array_equal(c, arr) and
+                    np.array_equal(np.asarray(c).view(np.uint8), arr.view(np.uint8))):
+                return Val(np.dtype(arr.dtype), arr.shape, 'const', ptr=f'cs{k}', arr=c, cderived=True)
         self.k.consts.append(arr)
-        return Val(np.dtype(arr.dtype), arr.shape, 'const', ptr=f'cs{len(self.k.consts) - 1}')
+        return Val(np.dtype(arr.dtype), arr.shape, 'const', ptr=f'cs{len(self.k.consts) - 1}', arr=arr, cderived=True)
 
 
 class ThreadGenerator(Generator):
@@ -1372,7 +1659,7 @@ class ThreadGenerator(Generator):
 
     def free_holder(self, h):
         if h.off >= 0:self.k.release(h.off, h.words);h.off = -1
-        self.live.pop(h, None)
+        self.live.pop(h, None);self.release_deps(h)
 
     def dense_arena(self, v):
         return v if (v.dense and v.kind == 'arena' and v.holder.off >= 0) else self.temp_arena(v)
@@ -1588,6 +1875,14 @@ def generate(name, closed, input_avals, profile=False, mode='warp'):
         k.emit('}')
     chunks = k.chunks + ([k.lines] if k.lines else [])
     smems = k.chunk_smem + ([k.smem] if k.lines else [])
+    # Constant buffers no generated code reads (intermediate fold results) are not passed to the kernels.
+    import re
+    pattern = re.compile(r'\bcs(\d+)\b')
+    used = sorted({int(m) for lines in chunks for line in lines for m in pattern.findall(line)})
+    if len(used) != len(k.consts):
+        remap = {old: new for new, old in enumerate(used)}
+        chunks = [[pattern.sub(lambda m: f'cs{remap[int(m.group(1))]}', line) for line in lines] for lines in chunks]
+        k.consts = [k.consts[q] for q in used]
     decl = []
     for n, aval in enumerate(input_avals):
         decl.append(f'  const {ctype(aval.dtype)}* __restrict__ in{n} = reinterpret_cast<const {ctype(aval.dtype)}*>(p.in[{n}]);')
@@ -1668,5 +1963,6 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(V2eGen_{name}, {ns}::Impl,
 '''
     module = Module(name, files, words, [(np.dtype(a.dtype), tuple(a.shape)) for a in input_avals], list(k.consts),
         [(np.dtype(v.dtype), v.shape) for v in outs], k.lane_literals, g.marks)
-    module.stats.update(chunks=len(chunks), cse_hits=g.cse_hits, lines=module.source_lines, mode=mode, reloads=getattr(g, 'reloads', 0))
+    module.stats.update(chunks=len(chunks), cse_hits=g.cse_hits, folds=g.folds, consts=len(k.consts), lines=module.source_lines,
+        mode=mode, reloads=getattr(g, 'reloads', 0))
     return module
