@@ -981,9 +981,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _public_trace,_protect_block_capture=protect_callbacks.finish_block(_public_trace,_protect_block_pending,hit)
                 _protect_block_mask=protect_callbacks.captured_block_matches(_public_trace,_protect_block_capture)
             bypass_sub = table.effects.bypass_sub[move]
-        if _device_public is not None and table.entry is not None:
-            device_public.reveal_ability(_device_public,work,foe,acts & hit & (power>0) & (num>0)
-                & (typ==table.entry.ground_type) & table.entry.levitate[_active(work.ability,work,foe)])
+        # Gen3 emits a generic -immune for ordinary Ground/Levitate immunity.
+        # B2 does not mark an ability revealed without an attribution line;
+        # source possibilities can still imply Levitate without that flag.
         if _direct_hit_context is not None and _direct_hit_registered:
             from . import engine_no_damage_callbacks as no_damage_callbacks
             from . import engine_substitute_damage_callbacks as substitute_damage_callbacks
@@ -1143,6 +1143,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # Self effects use the active actor, never the opposing target.
             hp = _active(work.hp, work, side)
             max_hp = _active(work.max_hp, work, side)
+            if _device_public is not None:_device_self_effect_hp=hp
             sub_hp = _active(work.substitute_hp,work,side)
             creates_sub = (acts & effects.substitute[move] & (sub_hp == 0)
                 & (max_hp > 1) & (hp * 4 > max_hp))
@@ -1185,6 +1186,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 rest_origin=_set_active(work.rest_origin,work,side,
                     jnp.where(rest,True,_active(work.rest_origin,work,side))))
             if _device_public is not None:
+                # Successful self-heals and Substitute publish a condition
+                # before residual items. Replace the pre-item HP snapshot at
+                # that write, rather than retaining an earlier damaged HP.
+                device_public.negative_hp_line(_device_public,work,side,
+                    acts & (hp!=_device_self_effect_hp) & (effects.heal_half[move]
+                        | effects.weather_heal[move] | effects.rest[move] | creates_sub),
+                    source_class=device_public.HP_ACTION)
                 device_public.observe(_device_public,work,acts,rest_side=side,rest_mask=rest)
                 device_public.feature(_device_public,side,work.active[rows,side],'rest_sleep',jnp.ones_like(move),rest)
             if _lifecycle_trace:

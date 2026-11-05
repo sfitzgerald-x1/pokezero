@@ -54,5 +54,35 @@ class PublicMoveParityTests(unittest.TestCase):
         self.assertEqual(view.revealed_moves[0,0].tolist(),[1,0,0,0])
         self.assertEqual(view.move_pp_used[0,0].tolist(),[1,0,0,0])
 
+    def test_opponent_pp_uses_observers_own_pressure_without_public_reveal(self):
+        b=3;catalog=self.catalog;rows=j.arange(b)
+        source_id=catalog.source.species_id('snorlax');public_id=catalog.species.species_id('snorlax')
+        belief=public_belief.initialize(j.zeros((b,2,6),j.int32).at[:,0,0].set(source_id),catalog.source.device)
+        mons=public_mon_state.initialize(b,species_binding=catalog.species.device.binding)
+        mons=mons._replace(encounter=mons.encounter.at[:,1,0].set(1),active=mons.active.at[:,1].set(0),
+            species=mons.species.at[:,1,0].set(public_id),source_species=mons.source_species.at[:,1,0].set(source_id))
+        # B2 knows its own active ability, including the Gen3 owner-only
+        # Pressure start line. That knowledge is not a public foe reveal.
+        original=public_moves.record_move(public_moves.initialize(b,catalog.moves.device),belief,mons,
+            catalog.moves.device,catalog.source.device,side=j.ones(b,j.int32),slot=j.zeros(b,j.int32),
+            encounter=j.ones(b,j.int32),move_id=j.full(b,catalog.moves.move_id('surf'),j.int32),
+            opposing_pressure=j.asarray([True,False,True]),valid=j.ones(b,bool))
+        state=empty_state(b)._replace(done=j.zeros(b,bool),species=j.full((b,2,6),2,j.int32),
+            hp=j.full((b,2,6),100,j.int32),max_hp=j.full((b,2,6),100,j.int32),level=j.full((b,2,6),80,j.int32))
+        state=state._replace(ability=state.ability.at[:,0,0].set(j.asarray([2,1,2])))
+        def write(state):
+            c=h.initialize(state,self.tables.belief)
+            h.move(c,state,1,j.ones(b,j.int32),j.ones(b,bool),pp_use=True)
+            return c.trackers,tr.readout(c.trackers,j.zeros(b,j.int32)),tr.readout(c.trackers,j.ones(b,j.int32))
+        carry,observer,other=jax.jit(write)(state)
+        np.testing.assert_array_equal(observer.move_pp_used[:,0,0],original.state.uses[rows,1,0,0])
+        self.assertEqual(observer.move_pp_used[:,0,0].tolist(),[2,1,2])
+        self.assertFalse(bool(carry.shown_ability.any()))
+        self.assertFalse(bool(other.ability.any()))
+        # The observed actor's hidden ability cannot change these PP facts.
+        _,changed,_=jax.jit(write)(state._replace(ability=state.ability.at[:,1,0].set(2)))
+        for a,b in zip(jax.tree.leaves(observer),jax.tree.leaves(changed)):
+            np.testing.assert_array_equal(a,b)
+
 
 if __name__=='__main__':unittest.main()

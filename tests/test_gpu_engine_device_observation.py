@@ -125,18 +125,23 @@ class DeviceObservationTests(unittest.TestCase):
         self.assertTrue(np.isfinite(got.numeric_features).all())
 
     def test_manifest_covers_every_column_and_source_alias_mapping(self):
-        manifest = e.column_manifest()
+        state, public, owners, legal = self.facts(b=1)
+        manifest = e.column_manifest(public=public)
         self.assertEqual(len(manifest), 6 * (132 + 41))
         self.assertEqual(len({(r['section'], r['kind'], r['column']) for r in manifest}), len(manifest))
         self.assertTrue(all(r['status'] in ('DIRECT', 'TRACKED', 'ZERO') and r['reason'] for r in manifest))
-        state, public, owners, legal = self.facts(b=1)
         out = e.encode(state, public, self.tables, observer_sides=owners, legal_action_mask=legal)
         for row in manifest:
             if row['status'] != 'ZERO':continue
+            # Missing synthetic tracker hooks are conservative metadata, not
+            # evidence that a direct readout must be zero. Structural and
+            # unavailable columns still promise literal zero output.
+            if row['reason'].startswith('deferred'):continue
             sl = {'field': slice(0, 1), 'own': slice(1, 7), 'opponent': slice(7, 13),
                 'actions': slice(13, 22), 'stats': slice(22, 23), 'belief': slice(23, 29)}[row['section']]
             a = out.numeric_features if row['kind'] == 'numeric' else out.categorical_ids
-            np.testing.assert_array_equal(a[:, sl, row['column']], 0)
+            with self.subTest(section=row['section'],kind=row['kind'],column=row['column']):
+                np.testing.assert_array_equal(a[:, sl, row['column']], 0)
         # With no observations beyond species, posterior equals the source
         # prior. Missing public hooks do not substitute sampled hidden sets.
         np.testing.assert_allclose(out.numeric_features[:, 23:, :64], out.numeric_features[:, 23:, 64:128], atol=1e-7, rtol=0)
