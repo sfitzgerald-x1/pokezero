@@ -96,6 +96,30 @@ class GenerationTest(unittest.TestCase):
             self.assertIn('v2e::fmul', code)   # bcast(C1) * bcast(1 / C2) at run time, as XLA rewrites it
             self.assertNotIn('v2e::fdiv', code)
 
+    def test_scalar_over_constant_array_folds_exactly(self):
+        # XLA folds k / C and C / k while lowering, before any simplifier rewrite.
+        x = j.zeros((5, 4), j.float32);C = np.array([3.0, 7.0, 0.3, 1.7], np.float32)
+        for fn in (lambda x: x + 0.7 / j.asarray(C), lambda x: x + j.asarray(C) / 0.7):
+            code = ''.join(self.generate(fn, x).files.values())
+            self.assertNotIn('v2e::fdiv', code);self.assertNotIn('v2e::fmul', code)
+        g, outs = folded(lambda: j.float32(0.7) / j.asarray(C))
+        np.testing.assert_array_equal(np.asarray(value(outs[0])).view(np.uint32), (np.float32(0.7) / C).view(np.uint32))
+
+    def test_scalar_over_lane_broadcast_uses_the_reciprocal(self):
+        # k / bcast(C): the broadcast sinks, then A / C -> A * (1 / C) fires on the broadcast-scalar dividend.
+        C = np.array([3.0, 7.0, 0.3, 1.7], np.float32)
+        x = j.zeros((5, 4), j.float32)
+        closed, avals, _, _ = v2e_gen.trace(lambda x: x + 0.7 / j.broadcast_to(j.asarray(C), x.shape), (x,))
+        g = v2e_j2c.Generator('t');ins = [v2e_j2c.Val(np.dtype(a.dtype), tuple(a.shape), 'in', ptr=f'in{n}', stride=4) for n, a in enumerate(avals)]
+        g.run_with_consts(closed.jaxpr, [g.const(c) for c in closed.consts], ins)
+        want = np.float32(0.7) * (np.float32(1.0) / C)
+        self.assertTrue(any(np.array_equal(np.asarray(c).view(np.uint32), want.view(np.uint32)) for c in g.k.consts))
+
+    def test_uncertain_provenance_is_refused(self):
+        x = j.zeros((5, 2, 3), j.float32);C1 = np.arange(1, 5, dtype=np.float32);C2 = np.arange(2, 5, dtype=np.float32)
+        fn = lambda x: x + j.broadcast_to(j.asarray(C1)[:, None], (4, 3))[1:3] / j.broadcast_to(j.asarray(C2)[None, :], (2, 3))
+        with self.assertRaises(v2e_j2c.Unsupported):self.generate(fn, x)
+
     def test_constant_and_broadcast_fold(self):
         x = j.zeros((5, 4, 3), j.float32);C2 = np.arange(2, 5, dtype=np.float32)
         M = np.full((4, 3), 1.5, np.float32) + np.arange(12, dtype=np.float32).reshape(4, 3)

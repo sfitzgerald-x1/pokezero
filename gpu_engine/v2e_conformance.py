@@ -85,7 +85,10 @@ def cases(rng, B):
         j.maximum(a, sn), a + j.float32(np.nan))), (cross_f(B, True),))
     sn_lit = np.array([0x7f800003], np.uint32).view(np.float32)[0]
     divisors = (3.0, 7.0, 10.0, 100.0, 255.0, 0.3, 1e-3, 6.0, 49.0, 1.7, 1e20, 3e-39)
-    yield ('divide_by_constant', (lambda a, b: tuple(a / j.float32(d) for d in divisors) + (b / j.asarray(c2), a / j.asarray(c2), 2.0 / (a + 1.0))),
+    yield ('divide_by_constant', (lambda a, b: tuple(a / j.float32(d) for d in divisors) + (b / j.asarray(c2), a / j.asarray(c2), 2.0 / (a + 1.0),
+        a + 0.7 / j.asarray(c2), a + j.asarray(c2) / 0.7, a + 0.7 / j.broadcast_to(j.asarray(c2), a.shape),
+        a + j.broadcast_to(j.asarray(c1), a.shape) / j.broadcast_to(j.asarray(c2), a.shape),
+        a.reshape(a.shape[0], 4, 81) + j.asarray(c1[:4])[:, None] / j.asarray(c1.reshape(4, 81)))),
         (f32(B, 324), f32(B, 324)))
     yield ('iota_and_lane_folds', (lambda a, b: (a + j.arange(324, dtype=j.float32) / 7.0, a + 1.0 / (j.arange(324, dtype=j.float32) + 1.0),
         j.broadcast_to(j.asarray(nanc), a.shape) * 2.0, j.floor(j.broadcast_to(j.asarray(nanc), a.shape)), a + j.broadcast_to(j.asarray(c1), a.shape) / 3.0,

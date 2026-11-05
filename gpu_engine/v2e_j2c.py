@@ -310,7 +310,7 @@ def thread_index(n):
 class Generator:
     def __init__(self, name, profile=False):
         self.k = Kernel(name);self.env = {};self.profile = profile;self.marks = [];self.live = {};self.temps = []
-        self.cse = {};self.cse_hits = 0;self.folds = 0;self.declined_runtime = False
+        self.cse = {};self.cse_hits = 0;self.folds = 0;self.declined_runtime = False;self.fold_recip = False
         self.collective = True   # warp collectives (shuffles, warp scans) available
         self.rolled = 0          # depth of emitted loops that are not fully unrolled
 
@@ -592,6 +592,8 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         if p in ELEMENTWISE_BINARY:
             folded = self.identity_fold(p, ins, outs[0])
             if folded is not None:return [folded]
+            if p == 'div' and ins[0].dtype == F32 and ins[1].bsig == 'uncertain':
+                raise Unsupported('f32 division by a reshaped or sliced constant broadcast (XLA folding not reproduced)')
             if p == 'div' and ins[0].dtype == F32 and self.const_like(ins[1]) and not self.plain_const(ins[0]) and not (
                     ins[0].cderived and self.fold_signature('div', ins, e) != 'recip'):
                 return [self.divide_by_constant(ins[0], ins[1], outs[0])]
@@ -682,8 +684,12 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         if any(v.bsig == 'uncertain' for v in nonscalar):return 'uncertain'
         if p == 'div' and ins[0].dtype == F32:
             sigs = {v.bsig for v in nonscalar}
-            if not nonscalar or (None not in sigs and len(sigs) == 1):
-                return next(iter(sigs), None)   # broadcasts sink, then the constant division folds exactly
+            if all(v.bsig is None for v in nonscalar):return None   # constants only (C/C, k/C, C/k, k/k): exact fold
+            if None not in sigs and len(sigs) == 1:
+                # Broadcasts sink; the inner division folds exactly unless its dividend is a broadcast scalar,
+                # where the simplifier's A / C -> A * (1 / C) fires first (probed: k / bcast(C) = k * RN(1/C)).
+                if self.is_scalar(ins[0]) and not self.is_scalar(ins[1]):self.fold_recip = True
+                return next(iter(sigs))
             if self.plain_const(ins[0]):return None   # a constant dividend: HloConstantFolding divides exactly
             return 'recip'                            # the simplifier's A / C -> A * (1 / C) runs first
         if p in DATA_MOVEMENT:
@@ -715,10 +721,13 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             return v.kind == 'const' and v.arr is not None
         if not all(foldable(v) for v in ins):return None
         if lane_mode and p not in LANE_FOLDABLE:return None
+        self.fold_recip = False
         sig = self.fold_signature(p, ins, e)
         if sig in ('runtime', 'recip'):
             self.declined_runtime = True   # XLA computes this at run time (or rewrites it); so does the device code
             return None
+        if sig == 'uncertain' and p not in DATA_MOVEMENT and any(v.dtype == F32 for v in ins):
+            return None   # unknown XLA provenance: the guard refuses it
         avals = [aval_of(o.aval) for o in e.outvars]
         if any(sh != tuple(o.aval.shape) for (dt, sh), o in zip(avals, e.outvars)):return None   # PRNG keys
         if any(hasattr(a, 'aval') and aval_of(a.aval)[1] != tuple(a.aval.shape) for a in e.invars):return None
@@ -752,6 +761,8 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                 elif p == 'select_n':
                     full = np.broadcast_shapes(*[x.shape for x in xs])
                     r = np.choose(np.broadcast_to(xs[0].astype(np.int32), full), [np.broadcast_to(x, full) for x in xs[1:]])
+                elif t == F32 and p == 'div' and self.fold_recip:
+                    r = xs[0].astype(np.float32) * (np.float32(1.0) / xs[1].astype(np.float32))   # k * RN(1 / C), as XLA rewrites it
                 elif t == F32 and p in self.FOLD_F32:r = self.FOLD_F32[p](xs[0].astype(np.float32), xs[1].astype(np.float32))
                 elif t == F32 and p in ('neg', 'abs', 'floor', 'ceil'):
                     r = {'neg': np.negative, 'abs': np.abs, 'floor': np.floor, 'ceil': np.ceil}[p](xs[0].astype(np.float32))
