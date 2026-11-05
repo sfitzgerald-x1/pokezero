@@ -173,13 +173,15 @@ def main(argv=None):
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
     parser.add_argument('--order', default='ordered')
-    parser.add_argument('--row-order', choices=('tick', 'file'), default='file',
-        help='tick: collection order; file: the file pipeline cache order (block, frame, row, owner)')
+    parser.add_argument('--row-order', choices=('tick', 'file'), default=None,
+        help='tick: collection order; file (default for new runs): the file pipeline cache order (block, frame, row, owner). '
+             'A resumed run keeps the order recorded in its state.json')
     parser.add_argument('--check-interval', type=int, default=64)
     parser.add_argument('--compile-threads', type=int, default=16)
     parser.add_argument('--audit-every', type=int, default=50)
     parser.add_argument('--torch-memory-fraction', type=float, default=0.45,
-        help='Torch per-process GPU memory cap after the runtime probe; JAX keeps its own fraction')
+        help='Torch per-process GPU memory cap after the runtime probe (V2 also holds the row store in Torch); '
+             '0 keeps the runtime declaration\'s torch_fraction. JAX keeps its own fraction')
     args = parser.parse_args(argv)
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
     out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
@@ -189,7 +191,7 @@ def main(argv=None):
     from gpu_engine import v5_model, v2_collector as v2c, v2_bench_trainer as bench
     from gpu_engine.v5_device_backend import RuntimeBackend
     context = prepare(args);plan = context['plan']
-    if args.torch_memory_fraction is not None:
+    if args.torch_memory_fraction > 0:
         # The runtime probe caps Torch for the file pipeline; V2 holds the row store in Torch too.
         torch.cuda.set_per_process_memory_fraction(args.torch_memory_fraction, 0)
     log('PREPARED', seconds=context['preparation_seconds'], iterations=len(plan.iterations), games=len(plan.games), **context['declared'])
@@ -208,9 +210,15 @@ def main(argv=None):
         checkpoint = out / snapshots[-1].checkpoint
         runtime = v2t.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2_config, expected_model_config=plan.model,
             expected_loss_config=plan.loss, expected_train_config=plan.train, device='cuda')
-        log('RESUMED', completed_iterations=len(reports), checkpoint=str(checkpoint), steps=runtime.steps)
+        recorded = saved.get('row_order')
+        if recorded is None and args.row_order is None:
+            raise SystemExit('state.json does not record its row order (older runs defaulted to tick); pass --row-order explicitly')
+        if recorded is not None and args.row_order not in (None, recorded):
+            raise SystemExit(f'run was recorded with --row-order {recorded}; a resume cannot switch to {args.row_order}')
+        row_order = recorded or args.row_order
+        log('RESUMED', completed_iterations=len(reports), checkpoint=str(checkpoint), steps=runtime.steps, row_order=row_order)
     else:
-        snapshots = [first];reports = []
+        snapshots = [first];reports = [];row_order = args.row_order or 'file'
         model, loss, train, weights, _ = bench.configurations(Path(args.reference_run, first.checkpoint))
         if model != plan.model or loss != plan.loss or train != plan.train:raise ValueError('initial checkpoint recipe differs from plan')
         runtime = v2t.create(plan.model, plan.loss, plan.train, v2_config, enable_v5=True, device='cuda')
@@ -263,8 +271,10 @@ def main(argv=None):
                 status = STATUS[int(records['status'][i])];same['compared'] += 1
                 if ref['status'] == status and ref['terminal_frame'] == int(records['terminal_frame'][i]) and (
                         status != 'COMPLETE' or ref['terminal_winner'] == int(records['winner'][i])):same['equal'] += 1
+        # The row arrays hold their own references; dropping the collector's lets each reordered field free its original.
+        result.segments.clear()
         segments = None
-        if args.row_order == 'file':
+        if row_order == 'file':
             # Permute in JAX memory, one field at a time, before the zero-copy hand-off.
             import jax.numpy as jnp
             order, segments = file_pipeline_order(rows.keys(), plan.iterations[iteration])
@@ -302,7 +312,7 @@ def main(argv=None):
             games_per_second_steady=round(report['games_per_second_steady'], 2), phase_seconds={k: round(v, 1) for k, v in phase.items()},
             history=history, reused=reused, occupancy=round(stats.get('occupancy', 0), 3), dispositions=report['dispositions'],
             final_epoch_loss=report['training'].get('final_epoch_mean', {}).get('loss'), matching=same)
-        write_json(state_path, dict(snapshots=[asdict(s) for s in snapshots], reports=reports))
+        write_json(state_path, dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order))
         del rows, result, roster, tree;gc.collect()
         keep = {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}
         for digest in list(params):
@@ -310,7 +320,7 @@ def main(argv=None):
     total = time.perf_counter() - wall_start
     games = sum(r['games'] for r in reports)
     summary = dict(schema='v2-fused-measurement.v2', declared=context['declared'], lanes=args.lanes, mode=args.mode,
-        order=args.order, row_order=args.row_order, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
+        order=args.order, row_order=row_order, torch_memory_fraction=args.torch_memory_fraction, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
         games=games, games_per_second_steady_mean=games / max(1e-9, sum(r['steady_seconds'] for r in reports)),
         scope='Throughput of the fused V2 pipeline; not a strength result.')
     write_json(out / 'report.json', summary)

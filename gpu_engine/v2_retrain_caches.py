@@ -3,11 +3,15 @@
 Reads the reference run's `train-<iteration>` checkpoint metadata to recover
 its ordered cache roster (progress manifest digests), loads those caches into
 a V2 row store (one ordered segment per cache, as `train_caches` reads them),
-starts from the reference `train-<iteration-1>` weights and trains the same
-epochs under the same declared learning-rate window. Writes a V2 checkpoint,
-exports the actor and records `state.json` so `v2_head_to_head` can name it.
+starts from the reference initial weights and trains the same epochs under
+the learning-rate window recorded in the reference checkpoint. Writes a V2
+checkpoint, exports the actor and records `state.json` so `v2_head_to_head`
+can name it.
 
-This isolates the trainer: same rows, same order, same initial weights.
+Iteration 0 only: it starts from a fresh optimizer, so same rows, same order
+and same initial weights isolate the trainer. Later iterations would also need
+the previous AdamW state, step and row counters and RNG, which this tool does
+not restore.
 
 All paths are command-line arguments.
 """
@@ -25,14 +29,13 @@ from gpu_engine.v2_fused import journal, sha, write_json
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--reference-run', required=True)
-    parser.add_argument('--iteration', type=int, default=0)
-    parser.add_argument('--total-games', type=int, required=True, help='declared games in the reference plan')
-    parser.add_argument('--games-per-iteration', type=int, default=20000)
+    parser.add_argument('--iteration', type=int, default=0, help='must be 0 (see the module docstring)')
     parser.add_argument('--mode', default='cudagraphs');parser.add_argument('--order', default='ordered')
     parser.add_argument('--optimizer', default='fused')
     parser.add_argument('--extra-cache-root', action='append', default=[], help='more directories to search for caches')
     parser.add_argument('--out', required=True)
     args = parser.parse_args(argv)
+    if args.iteration != 0:raise SystemExit('only iteration 0 is supported: later iterations need optimizer state this tool does not restore')
     import torch
     from pokezero import v5_run as runs, v5_training as v5, v2_trainer as v2t
     from gpu_engine import v5_model
@@ -67,7 +70,13 @@ def main(argv=None):
     runtime = v2t.create(model, loss, train, v2t.V2Config(mode=args.mode, order=args.order, optimizer=args.optimizer),
         enable_v5=True, device='cuda')
     runtime.model.load_state_dict(weights);trainer = v2t.Trainer(runtime)
-    window = v5.DeclaredGameWindow(args.iteration * args.games_per_iteration, (args.iteration + 1) * args.games_per_iteration, args.total_games)
+    saved_rate = payload['metadata'].get('learning_rate_state')
+    if train.learning_rate_schedule == 'constant':
+        if saved_rate is not None:raise ValueError('constant reference recipe carries scheduled state')
+        window = None
+    else:
+        if not saved_rate:raise ValueError('scheduled reference checkpoint carries no learning-rate window')
+        window = v5.DeclaredGameWindow(**saved_rate['window'])
     begin = time.perf_counter();report = trainer.train(store, window=window);torch.cuda.synchronize()
     train_seconds = time.perf_counter() - begin
     checkpoint = out / 'artifacts' / f'train-{args.iteration}.pt';v2t.save_checkpoint(checkpoint, runtime)
