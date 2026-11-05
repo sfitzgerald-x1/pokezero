@@ -51,6 +51,8 @@ class AttributionTests(unittest.TestCase):
             with self.subTest(engine=a,showdown=b):
                 self.assertEqual(c.attribute(dict(direction=a),dict(direction=b),foulplay_failed=False),
                     dict(cause='FOULPLAY_CANARY_NOT_FAILED',training_route='V2'))
+        self.assertEqual(c.attribute(None,None,foulplay_failed=False)['training_route'],'V2')
+        with self.assertRaises(ValueError):c.attribute(None,None,foulplay_failed=True)
 
 
 if __name__ == '__main__':unittest.main()
