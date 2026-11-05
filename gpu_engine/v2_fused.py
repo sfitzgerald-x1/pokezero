@@ -320,7 +320,7 @@ def main(argv=None):
     total = time.perf_counter() - wall_start
     games = sum(r['games'] for r in reports)
     summary = dict(schema='v2-fused-measurement.v2', declared=context['declared'], lanes=args.lanes, mode=args.mode,
-        order=args.order, row_order=row_order, torch_memory_fraction=args.torch_memory_fraction, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
+        order=args.order, row_order=row_order, torch_memory_fraction_override=args.torch_memory_fraction if args.torch_memory_fraction > 0 else None, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
         games=games, games_per_second_steady_mean=games / max(1e-9, sum(r['steady_seconds'] for r in reports)),
         scope='Throughput of the fused V2 pipeline; not a strength result.')
     write_json(out / 'report.json', summary)
