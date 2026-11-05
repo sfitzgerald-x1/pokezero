@@ -59,6 +59,51 @@ class ConstantFoldTest(unittest.TestCase):
         self.assertFalse(outs[0].cderived)
 
 
+class VersionPinTest(unittest.TestCase):
+    def test_unpinned_versions_are_refused(self):
+        import os
+        from unittest import mock
+        saved = dict(v2e_j2c.PINNED)
+        try:
+            v2e_j2c.PINNED['jax'] = '0.0.0-not-installed'
+            with mock.patch.dict(os.environ, {'V2E_ALLOW_UNPINNED_JAX': ''}):
+                with self.assertRaises(v2e_j2c.Unsupported):v2e_j2c.check_pinned_versions()
+            with mock.patch.dict(os.environ, {'V2E_ALLOW_UNPINNED_JAX': '1'}):v2e_j2c.check_pinned_versions()
+        finally:
+            v2e_j2c.PINNED.clear();v2e_j2c.PINNED.update(saved)
+
+    def test_installed_versions_are_pinned(self):
+        found = v2e_j2c.check_pinned_versions()
+        self.assertEqual((found['jax'], found['jaxlib']), (v2e_j2c.PINNED['jax'], v2e_j2c.PINNED['jaxlib']))
+
+    def test_cpu_hosts_need_no_cuda_plugin_but_gpu_hosts_need_the_pinned_ones(self):
+        import importlib.metadata as metadata
+        import os
+        from types import SimpleNamespace
+        from unittest import mock
+        real = metadata.version
+        def host(plugins, distributions):
+            """Patch the installed CUDA plugin versions ({name: version}) and jax-cuda* distribution names."""
+            def version(name):
+                if name in v2e_j2c.CUDA_PLUGINS:
+                    if name not in plugins:raise metadata.PackageNotFoundError(name)
+                    return plugins[name]
+                return real(name)
+            listed = [SimpleNamespace(metadata={'Name': name}) for name in distributions]
+            return mock.patch.multiple(metadata, version=version, distributions=lambda: listed)
+        pinned = {name: v2e_j2c.PINNED[name] for name in v2e_j2c.CUDA_PLUGINS}
+        with mock.patch.dict(os.environ, {'V2E_ALLOW_UNPINNED_JAX': ''}):
+            with host({}, []):   # CPU-only host
+                found = v2e_j2c.check_pinned_versions()
+            self.assertEqual([found[name] for name in v2e_j2c.CUDA_PLUGINS], [None, None])
+            with host(pinned, list(pinned)):   # pinned GPU host
+                v2e_j2c.check_pinned_versions()
+            for plugins, distributions in (({name: '0.11.0' for name in pinned}, list(pinned)),   # other plugin version
+                    ({}, ['jax-cuda12-plugin', 'jax_cuda12_pjrt'])):                               # another CUDA's plugins
+                with host(plugins, distributions):
+                    with self.assertRaises(v2e_j2c.Unsupported):v2e_j2c.check_pinned_versions()
+
+
 class GenerationTest(unittest.TestCase):
     def generate(self, fn, *args):
         closed, avals, _, _ = v2e_gen.trace(fn, args)

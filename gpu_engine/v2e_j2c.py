@@ -31,6 +31,29 @@ import numpy as np
 
 LANES = 37
 REG = 32
+
+# The generator mirrors XLA-GPU behavior that was pinned by probes on GB300 with exactly these
+# versions (algebraic simplifier and constant-folding order, A / C -> A * (1 / C), NaN-literal folds,
+# reduction combiners). Another version may differ silently, so generation refuses to run on it.
+# V2E_ALLOW_UNPINNED_JAX=1 exists only to re-run the GPU conformance battery when re-pinning.
+PINNED = {'jax': '0.12.0', 'jaxlib': '0.12.0', 'jax-cuda13-plugin': '0.12.0', 'jax-cuda13-pjrt': '0.12.0'}
+# A CPU-only host (CPU CI: no jax-cuda* distribution at all) needs only jax/jaxlib to match; once any
+# jax-cuda* distribution is installed (a GPU host, whichever CUDA), the pinned plugins are required.
+CUDA_PLUGINS = ('jax-cuda13-plugin', 'jax-cuda13-pjrt')
+
+
+def check_pinned_versions():
+    import importlib.metadata as metadata
+    found = {}
+    for name in PINNED:
+        try:found[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:found[name] = None
+    gpu = any((d.metadata['Name'] or '').lower().replace('_', '-').startswith('jax-cuda') for d in metadata.distributions())
+    differ = {name: (found[name], want) for name, want in PINNED.items() if found[name] != want and (gpu or name not in CUDA_PLUGINS)}
+    if differ and os.environ.get('V2E_ALLOW_UNPINNED_JAX') != '1':
+        raise Unsupported('jax/jaxlib versions differ from the pinned generator semantics (found, pinned): ' + repr(differ)
+            + '; re-run gpu_engine.v2e_conformance on GPU and re-pin before generating')
+    return found
 WARPS = 4          # lanes (warps) per thread block
 PARALLEL_MIN = 64  # reduction length from which order-free reductions use the whole warp
 
@@ -1859,6 +1882,7 @@ def generate(name, closed, input_avals, profile=False, mode='warp'):
 
     mode 'warp': one warp per lane (array-heavy modules); 'thread': one thread per lane (scalar-heavy modules).
     """
+    versions = check_pinned_versions()
     g = (ThreadGenerator if mode == 'thread' else Generator)(name, profile);k = g.k
     ins = []
     for n, aval in enumerate(input_avals):
@@ -1963,6 +1987,6 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(V2eGen_{name}, {ns}::Impl,
 '''
     module = Module(name, files, words, [(np.dtype(a.dtype), tuple(a.shape)) for a in input_avals], list(k.consts),
         [(np.dtype(v.dtype), v.shape) for v in outs], k.lane_literals, g.marks)
-    module.stats.update(chunks=len(chunks), cse_hits=g.cse_hits, folds=g.folds, consts=len(k.consts), lines=module.source_lines,
+    module.stats.update(versions=versions, chunks=len(chunks), cse_hits=g.cse_hits, folds=g.folds, consts=len(k.consts), lines=module.source_lines,
         mode=mode, reloads=getattr(g, 'reloads', 0))
     return module

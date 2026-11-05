@@ -179,6 +179,109 @@ def detach_root(context, source, *, row, owner, enable_device_worlds=False):
         source.binding_sha256, bool(history_available))
 
 
+_DETACH = []
+
+
+def _detach_device():
+    """detach_root's data movement for a batch of (row, owner) pairs as ONE jitted program: per-row
+    clone, own-field gathers and the original one-row redaction mapped over rows. Gathers, selects
+    and scatters of constants only: no arithmetic, so compilation cannot change a value."""
+    if not _DETACH:
+        import jax
+        def run(carry, state, streams, frames, r, o):
+            cloned = public.clone_for_worlds(carry, r)
+            own = {name: value[r, o] for name, value in state.items()}
+            hp_percent = cloned.hp_percent[j.arange(len(r)), 1-o]
+            # The original redaction, row by row: each row is redacted as the one-row carry it would be.
+            single = lambda row, owner: _redact_peer_private(jax.tree.map(lambda x: x[None], row), owner)
+            redacted = jax.tree.map(lambda x: x[:, 0], jax.vmap(single)(cloned, o))
+            return cloned, redacted, own, hp_percent, streams[r], frames[r]
+        _DETACH.append(jax.jit(run))
+    return _DETACH[0]
+
+
+def _skeleton(value):
+    """A pytree's container structure with dict insertion order kept (jax's tree utilities, and so
+    device_get, rebuild dicts with sorted keys)."""
+    if isinstance(value, dict):return {key: _skeleton(item) for key, item in value.items()}
+    if isinstance(value, tuple) and hasattr(value, '_fields'):return type(value)(*map(_skeleton, value))
+    if isinstance(value, (tuple, list)):return type(value)(map(_skeleton, value))
+    return None
+
+
+def _ordered(value, like):
+    """value with every dict rebuilt in the key order of `like` (a _skeleton)."""
+    if isinstance(like, dict):return {key: _ordered(value[key], item) for key, item in like.items()}
+    if isinstance(like, tuple) and hasattr(like, '_fields'):return type(value)(*(_ordered(v, l) for v, l in zip(value, like)))
+    if isinstance(like, (tuple, list)):return type(value)(_ordered(v, l) for v, l in zip(value, like))
+    return value
+
+
+def _row(value, i):
+    """Row i (kept as a batch of one) of every array in a host pytree, dict key order preserved."""
+    if isinstance(value, dict):return {key: _row(item, i) for key, item in value.items()}
+    if isinstance(value, tuple) and hasattr(value, '_fields'):return type(value)(*(_row(item, i) for item in value))
+    if isinstance(value, (tuple, list)):return type(value)(_row(item, i) for item in value)
+    if value is None:return None
+    assert isinstance(value, np.ndarray), type(value)   # an unknown container must not pass as a leaf
+    return np.ascontiguousarray(value[i:i+1])
+
+
+def detach_roots(context, source, *, rows, owners, enable_device_worlds=False):
+    """detach_root for many roots of one context in ONE batched pass (the D3 frame path).
+
+    The same primitive sequence as detach_root runs once over all requested rows (every step is
+    row-independent: per-row clone, per-lane readout, per-row redaction), followed by ONE device->host
+    copy (the batch is padded to a power-of-two bucket so executables are reused across frames;
+    padding rows are discarded). The data movement (clone, own gathers, redaction) is one jitted
+    program; the readout, the only float arithmetic, stays eager exactly as in detach_root, so no
+    fusion can reorder it (eager and jitted `percent / 100.0` are probed equal on CPU and GPU, both
+    folding the literal to a reciprocal multiply, but the readout is kept out of fusion regardless).
+    Each returned Root equals detach_root(context, source, row=rows[i],
+    owner=owners[i])'s byte for byte (dict key order included), except that its redacted public
+    carry holds read-only host numpy views of the batch rather than device arrays: these roots are
+    for the host preparation path (FramePricer(host_prep=True), states.materialize_host), not the
+    serial teacher. This replaces thousands of one-row dispatches and transfers per frame.
+    """
+    import jax
+    from .v5_device_rollout import RootContext
+    if (enable_device_worlds is not True or type(context) is not RootContext
+            or type(source) is not Source):
+        raise ValueError('explicit actual device root context required')
+    rows, owners = tuple(rows), tuple(owners)
+    if len(rows) != len(owners) or any(type(r) is not int or type(o) is not int or o not in (0, 1)
+            or not 0 <= r < len(context.streams) for r, o in zip(rows, owners)):
+        raise ValueError('actual root row and owner0/1 required')
+    if not rows:
+        return ()
+    # Pad to a power-of-two bucket (repeating the first root; padding rows are dropped below) so frames
+    # of varying root counts reuse one compiled program and one set of eager executables per bucket.
+    count = len(rows);bucket = max(64, 1 << (count-1).bit_length())
+    r = j.asarray(rows + (rows[0],) * (bucket-count), j.int32)
+    o = j.asarray(owners + (owners[0],) * (bucket-count), j.int32)
+    state = {name: getattr(context.state, name) for name in OWN_MON_FIELDS + OWN_SIDE_FIELDS}
+    cloned, redacted, own, hp_percent, streams, frames = _detach_device()(context.public, state, context.streams, context.frames, r, o)
+    view = public.readout(cloned, o)
+    order = _skeleton((redacted, view))
+    host = jax.device_get((redacted, view, own, hp_percent, streams, frames))
+    for leaf in jax.tree.leaves(host):
+        if isinstance(leaf, np.ndarray):leaf.flags.writeable = False   # per-root views share these buffers
+    redacted, view, own, hp_percent, streams, frames = host
+    redacted, view = _ordered((redacted, view), order)
+    result = []   # rows past `count` are bucket padding and are never read
+    for i, (row, owner) in enumerate(zip(rows, owners)):
+        view_i = _row(view, i)
+        address = contract.DecisionAddress(int(streams[i]), int(frames[i]), owner)
+        snapshot = _freeze({**dict(view_i._asdict()), 'hp_percent': _row(hp_percent, i)})
+        history_available = (address.frame == 0 and
+            not np.any(np.asarray(view_i.error)) and
+            np.all(np.asarray(view_i.hp_fraction)[np.asarray(view_i.present)] == 1) and
+            not np.any(np.asarray(view_i.status)[np.asarray(view_i.present)]))
+        result.append(Root(address, _freeze({name: own[name][i] for name in OWN_MON_FIELDS + OWN_SIDE_FIELDS}), snapshot,
+            _row(redacted, i), source.binding_sha256, bool(history_available)))
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class Start:
     world: int
