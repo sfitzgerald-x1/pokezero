@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 import random
+import re
 
 import jax
 import jax.numpy as j
@@ -69,6 +70,43 @@ def _remap(values, names, target):
 def _source_move(name):
     value = normalize_id(name)
     return 'hiddenpower' if value.startswith('hiddenpower') else canonical_move_id(value)
+
+
+def _own_move(names,name,hp_move):
+    # map_spec uses this same device representation: the move ID carries the
+    # type, while hidden_power_type/power hold the exact IV-derived facts.
+    if _source_move(name)=='hiddenpower':
+        value=canonical_move_id(hp_move);literal=canonical_move_id(name)
+        if (not value.startswith('hiddenpower') or value=='hiddenpower'
+                or literal not in ('hiddenpower',value)
+                or (normalize_id(name)!=literal and normalize_id(name)!=normalize_id(hp_move))):
+            raise Refusal('OWN_HIDDEN_POWER_LITERAL_DIFFERS_FROM_CHECKED_IVS',normalize_id(name))
+    else:value=_source_move(name)
+    return _lookup(names,value)
+
+
+def _own_happiness(mon,moves,species):
+    """Invert a literal own request's resolved power only when it is unique.
+
+    Pinned Showdown f76228a sim/pokemon.ts getSwitchRequestData appends the
+    actual data/moves.ts Return/Frustration callback to the move ID. Happiness
+    is an integer in 0..255. Return102 therefore proves 255; plain Return and most
+    other powers remain ambiguous. No generator default or donor is used.
+    """
+    explicit='happiness'in mon
+    if explicit and(type(mon['happiness'])is not int or not 0<=mon['happiness']<=255):
+        raise Refusal('OWN_HAPPINESS_INVALID')
+    relevant=any(_source_move(x)in ('return','frustration')for x in moves)
+    if not explicit and not relevant:return None
+    candidates={mon['happiness']}if explicit else set(range(256))
+    for move in moves:
+        match=re.fullmatch(r'(return|frustration)([0-9]+)',normalize_id(move))
+        if match is None:continue
+        kind,power=match.groups();power=int(power)
+        candidates={h for h in candidates if max(1,((h if kind=='return'else 255-h)*10)//25)==power}
+    if not candidates:raise Refusal('OWN_HAPPINESS_INVALID')
+    if len(candidates)!=1:raise Refusal('OWN_HAPPINESS_UNAVAILABLE',species)
+    return next(iter(candidates))
 
 
 def _physical_protect_counter(successes):
@@ -141,6 +179,8 @@ def _exact_own(request, state, catalog, source, metadata, owner):
         if not base_ability or 'item' not in mon:
             raise Refusal('OWN_ABILITY_OR_ITEM_UNAVAILABLE')
         possible = []
+        from .phase_d_constructor_rules import literal_hidden_power_agrees
+        typed_hp=tuple(normalize_id(x)for x in moves if normalize_id(x).startswith('hiddenpower')and normalize_id(x)!='hiddenpower')
         for variant in universe.variants:
             if (variant.level != level or sorted(map(_source_move, variant.moves)) != sorted(map(_source_move, moves))
                     or normalize_id(variant.ability) != normalize_id(base_ability)):
@@ -157,6 +197,7 @@ def _exact_own(request, state, catalog, source, metadata, owner):
                 continue
             hp_move = next((x for x in fixture.moves if normalize_id(x).startswith('hiddenpower')), None)
             resolved = hidden_power_engine_id(normalize_id(hp_move), fixture.ivs) if hp_move else None
+            if not literal_hidden_power_agrees(typed_hp,resolved):continue
             possible.append((mx, computed, info['types'], resolved))
         identities = {(mx, tuple(st), tuple(types), hp_move) for mx, st, types, hp_move in possible}
         if len(identities) != 1:
@@ -176,12 +217,8 @@ def _exact_own(request, state, catalog, source, metadata, owner):
         own['status'][slot] = {'':0,'par':1,'brn':2,'psn':3,'tox':4,'slp':5,'frz':6}[status]
         if status == 'slp':
             raise Refusal('OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE', species)
-        if any(_source_move(x) in ('return', 'frustration') for x in moves) and 'happiness' not in mon:
-            raise Refusal('OWN_HAPPINESS_UNAVAILABLE', species)
-        if 'happiness' in mon:
-            if type(mon['happiness']) is not int or not 0 <= mon['happiness'] <= 255:
-                raise Refusal('OWN_HAPPINESS_INVALID')
-            own['happiness'][slot] = mon['happiness']
+        happiness=_own_happiness(mon,moves,species)
+        if happiness is not None:own['happiness'][slot]=happiness
         if hp_move:
             own['hidden_power_type'][slot] = _lookup(v['types'], hp_move[len('hiddenpower'):-2])
             own['hidden_power_power'][slot] = int(hp_move[-2:])
@@ -192,7 +229,7 @@ def _exact_own(request, state, catalog, source, metadata, owner):
         if public_slot is not None:
             joined[slot] = public_slot
         for k, name in enumerate(moves):
-            move = _lookup(v['moves'], hp_move if _source_move(name) == 'hiddenpower' else _source_move(name))
+            move = _own_move(v['moves'],name,hp_move)
             own['moves'][slot,k] = move
             pp = metadata['moves'][move].get('pp')
             if type(pp) is not int or pp <= 0:
@@ -244,7 +281,8 @@ def from_b2(adapter, request, source, metadata, *, address):
     status = np.asarray(STATUS,np.int32)[_host(ctx.sleep.status)]
     hp_num, hp_den = _host(mons.hp_numerator), _host(mons.hp_denominator)
     foe = 1-owner
-    if np.any(present[:,foe] & (hp_den[:,foe] != 100)):
+    fainted=_host(mons.fainted).astype(bool)
+    if np.any(present[:,foe] & np.where(fainted[:,foe],(hp_num[:,foe]!=0)|(hp_den[:,foe]!=0),hp_den[:,foe]!=100)):
         raise Refusal('OPPONENT_LITERAL_PUBLIC_PERCENT_REQUIRED')
     percent = np.where(present, np.ceil(100*hp_num/np.maximum(1,hp_den)),0).astype(np.int32)
     percent = np.where((hp_num<hp_den)&(percent==100),99,percent).astype(np.int32)

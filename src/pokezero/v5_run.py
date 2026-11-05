@@ -695,16 +695,23 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
         store.resolve(snapshot['checkpoint'],snapshot['checkpoint_sha256'])
         store.resolve(snapshot['archive'],snapshot['archive_sha256'])
         if snapshot['model_sha256']!=_sha(plan.model.metadata()):raise ValueError('historical model namespace differs')
+    if getattr(backend,'deferred_game_starts',False):backend.recover_game_ends(store)
     statuses={g.stream_id:'NOT_ATTEMPTED' for g in plan.games}
     for event in store.events:
         if event['kind']=='BATCH_STARTED':
-            for stream in event['payload']['streams']:statuses[stream]='RUNNING'
+            if not event['payload'].get('deferred_starts',False):
+                for stream in event['payload']['streams']:statuses[stream]='RUNNING'
+        elif event['kind']=='GAME_STARTED':
+            stream=event['payload']['stream_id']
+            if statuses.get(stream)!='NOT_ATTEMPTED':raise ValueError('unexpected/replayed actual game start')
+            statuses[stream]='RUNNING'
         elif event['kind']=='GAME_END':statuses[event['payload']['stream_id']]=event['payload']['status']
     # In-flight roots have no restorable original Session. Preserve attempts,
     # never replay them; only the next declared not-attempted roots may start.
     for stream,status in tuple(statuses.items()):
         if status=='RUNNING':statuses[stream]='FAILED';store.emit('GAME_END',stream_id=stream,status='FAILED',reason='interrupted-original-session-not-replayed')
-    if resume and getattr(backend,'cache_workers',0):
+    if getattr(backend,'deferred_game_starts',False):backend.recover_caches(store,statuses)
+    if resume and (getattr(backend,'cache_workers',0)or getattr(backend,'deferred_game_starts',False)):
         # Background cache completion is not a durable CACHE receipt. Recover
         # only published original game parts, retaining missing rows explicitly.
         from .v5_phasec_throughput import recover_published_parts
@@ -735,6 +742,11 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
                 index,result=pending.pop(0);publish_cache(index,result.result(check_progress=progress.check))
         for index,batch in enumerate(batches):
             if all(statuses[g.stream_id]!='NOT_ATTEMPTED' for g in batch.games):continue
+            deferred=getattr(backend,'deferred_game_starts',False)
+            if deferred:
+                selected=[i for i,g in enumerate(batch.games)if statuses[g.stream_id]=='NOT_ATTEMPTED']
+                batch=replace(batch,games=tuple(batch.games[i]for i in selected),
+                    gender_root_ids=tuple(batch.gender_root_ids[i]for i in selected)if batch.gender_seed is not None else ())
             try:drain()
             except Exception as error:
                 store.emit('STOP',iteration=iteration,reason='CACHE: '+type(error).__name__+': '+str(error))
@@ -748,14 +760,21 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
             except Exception as error:
                 store.emit('STOP',iteration=iteration,reason='PREPARATION: '+type(error).__name__+': '+str(error))
                 return dict(status='STOPPED',reason='PREPARATION: '+str(error),statuses=statuses)
-            store.emit('BATCH_STARTED',iteration=iteration,batch=index,streams=[g.stream_id for g in batch.games],assignments=assignments)
-            for g in batch.games:statuses[g.stream_id]='RUNNING'
+            batch_event=store.emit('BATCH_STARTED',iteration=iteration,batch=index,streams=[g.stream_id for g in batch.games],assignments=assignments,
+                **(dict(deferred_starts=True,actor=asdict(current))if deferred else{}))
+            if not deferred:
+                for g in batch.games:statuses[g.stream_id]='RUNNING'
+            def started(stream_id):
+                if stream_id not in {g.stream_id for g in batch.games}or statuses.get(stream_id)!='NOT_ATTEMPTED':
+                    raise ValueError('unexpected/replayed actual game start')
+                store.emit('GAME_STARTED',stream_id=stream_id,iteration=iteration,batch=index,batch_sequence=batch_event['sequence'])
+                statuses[stream_id]='RUNNING'
             def ended(stream_id,status,**facts):
                 if statuses.get(stream_id)!='RUNNING':raise ValueError('unexpected/replayed game completion')
                 statuses[stream_id]=status
                 if status=='COMPLETE':progress.completed_game(facts['duration_seconds'])
                 store.emit('GAME_END',stream_id=stream_id,status=status,iteration=iteration,batch=index,**facts)
-            try:result=backend.collect(prepared_batch,store,ended,progress.check)
+            try:result=backend.collect(prepared_batch,store,ended,progress.check,**(dict(on_start=started)if deferred else{}))
             except Exception as error:
                 for g in batch.games:
                     if statuses[g.stream_id]=='RUNNING':ended(g.stream_id,'FAILED',reason=type(error).__name__+': '+str(error))

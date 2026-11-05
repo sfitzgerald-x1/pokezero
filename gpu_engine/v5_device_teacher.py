@@ -139,6 +139,9 @@ class Provider:
             report['strategy']='D3_VECTORIZED_FRAME_QUEUE'
             report['frame_calls']=[dict(x)for x in self.batch_timings]
             report['root_prepare_by_frame']={str(k):v for k,v in getattr(self,'root_prepare_seconds',{}).items()}
+        if getattr(self,'batched_prep',False):
+            report['batched_preparation']=True
+            report['root_prepare_timing_scope']='Per-root planning wall plus equal-per-pending-root share of chunk detach wall; cold detach/readout compilation is included, not isolated.'
         return report
 
     def bind(self,bank,params):
