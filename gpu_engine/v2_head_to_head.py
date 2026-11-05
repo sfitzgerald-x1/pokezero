@@ -23,7 +23,7 @@ import time
 import numpy as np
 
 from gpu_engine.v2_bench_collector import log
-from gpu_engine.v2_fused import journal, load_actor
+from gpu_engine.v2_fused import journal
 
 SWAP_OFFSET = 1_000_000_000
 
@@ -58,9 +58,15 @@ def main(argv=None):
     context = prepare(prep);plan = context['plan']
     a = snapshot(args.a_run, args.a_iteration);b = snapshot(args.b_run, args.b_iteration)
     if a.archive_sha256 == b.archive_sha256:raise ValueError('two distinct actors required')
-    for s in (a, b):
-        if s.model_sha256 != runs._sha(plan.model.metadata()):raise ValueError('actor model differs from evaluation model shape')
-    params = (load_actor(plan, a, args.a_run), load_actor(plan, b, args.b_run))
+    def load(snapshot, root):
+        # Same architecture as the evaluation forward; `replicate` (seed label) may differ.
+        from gpu_engine import v5_model
+        params, config, _ = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
+            expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
+            expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+        if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
+        return params
+    params = (load(a, args.a_run), load(b, args.b_run))
     backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
     bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, context['prepared'].source_sha256,
         (a.archive_sha256,) * 2, (True, True), backend.declaration_sha256)

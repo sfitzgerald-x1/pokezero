@@ -293,6 +293,19 @@ class RefillCollectorTests(unittest.TestCase):
             store = v2.finalize(collector.run(params), loss_config=V5LossConfig())
         self.compare_rows(original, store)
 
+    def test_file_pipeline_order_reproduces_original_cache_row_order(self):
+        from types import SimpleNamespace
+        from gpu_engine.v2_fused import file_pipeline_order
+        blocks, labels, config, bindings = declaration()
+        with seams():
+            original, _ = run_original(blocks, labels, config, bindings)
+            _, _, _, store = run_v2(blocks, labels, config, lanes=3, shrink_factor=2, min_lanes=1)
+        batches = [SimpleNamespace(games=tuple(SimpleNamespace(stream_id=s) for s in bank.streams)) for _, bank, _ in blocks]
+        keys = store.keys()
+        order, segments = file_pipeline_order(keys, batches)
+        np.testing.assert_array_equal(keys[order], np.concatenate([k for k, _ in original]))
+        self.assertEqual(segments, tuple(len(k) for k, _ in original))
+
     def test_row_buffer_overflow_segments_and_numpy_export_keep_every_row(self):
         blocks, labels, config, bindings = declaration()
         with seams():
