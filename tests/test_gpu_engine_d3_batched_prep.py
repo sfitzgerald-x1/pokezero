@@ -20,6 +20,11 @@ def batch_context(rows=5):
     context, _, _, tables, _ = teacher_fixtures.facts()
     tile = lambda x: j.concatenate([x] * rows)
     state, public = jax.tree.map(tile, context.state), jax.tree.map(tile, context.public)
+    # Own-only cells that materialization copies unchecked, distinct by row and side, so a wrong-row
+    # or wrong-side own gather cannot pass.
+    row, side = j.arange(rows)[:, None, None], j.arange(2)[None, :, None]
+    state = state._replace(happiness=(200 + 10 * row + 3 * side + j.arange(6)[None, None, :]).astype(state.happiness.dtype),
+        pp=(10 - (row + 2 * side) % 7)[..., None].repeat(4, axis=-1).repeat(6, axis=-2).astype(state.pp.dtype))
     percent = (100 - 7 * j.arange(rows)[:, None, None] - 3 * j.arange(2)[None, :, None] - 11 * j.arange(6)[None, None, :]) % 101
     percent = percent.at[0].set(100).astype(public.hp_percent.dtype)   # row 0: full health, frame 0
     public = public._replace(hp_percent=percent)
@@ -47,12 +52,14 @@ class DetachRootsTest(unittest.TestCase):
         context, tables = batch_context()
         source = tables.source
         pairs = [(r, o) for r in range(5) for o in (0, 1)]
-        for chosen in (pairs[3:4], pairs, [pairs[i % 10] for i in range(64)], [pairs[i % 10] for i in range(65)]):
+        reference = {(r, o): plans.detach_root(context, source, row=r, owner=o, enable_device_worlds=True) for r, o in pairs}
+        self.assertEqual(len({bytes(np.asarray(x.own['happiness'])) for x in reference.values()}), len(pairs))
+        for chosen in (pairs[3:4], pairs, [pairs[i % 10] for i in range(64)], [pairs[(7 * i + 3) % 10] for i in range(65)]):
             batch = plans.detach_roots(context, source, rows=[r for r, _ in chosen], owners=[o for _, o in chosen],
                 enable_device_worlds=True)
             self.assertEqual(len(batch), len(chosen))
             for (row, owner), new in zip(chosen, batch):
-                old = plans.detach_root(context, source, row=row, owner=owner, enable_device_worlds=True)
+                old = reference[(row, owner)]
                 self.assertEqual(new.address, old.address)
                 self.assertEqual((new.source_binding_sha256, new.reply_private_history_available),
                     (old.source_binding_sha256, old.reply_private_history_available))

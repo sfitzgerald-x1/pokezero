@@ -223,6 +223,7 @@ def _row(value, i):
     if isinstance(value, tuple) and hasattr(value, '_fields'):return type(value)(*(_row(item, i) for item in value))
     if isinstance(value, (tuple, list)):return type(value)(_row(item, i) for item in value)
     if value is None:return None
+    assert isinstance(value, np.ndarray), type(value)   # an unknown container must not pass as a leaf
     return np.ascontiguousarray(value[i:i+1])
 
 
