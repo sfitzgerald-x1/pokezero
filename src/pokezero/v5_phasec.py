@@ -110,7 +110,7 @@ def bind_plan(profile,vocabulary,*,category_vocabulary,run_id,arm,replicate,iter
 
 
 def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,gender_policy=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False,
-        raw_retention_every=1,transient_raw_root=None,teacher_queue_chunks=0,teacher_vectorized=False):
+        raw_retention_every=1,transient_raw_root=None,teacher_queue_chunks=0,teacher_vectorized=False,teacher_cuda_leaves=False):
     """Explicit device rollout or the unchanged original protocol backend."""
     from gpu_engine import v5_selfplay,v5_depth1_provider
     from .v5_gumbel import Recipe
@@ -118,6 +118,7 @@ def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,ge
     if type(device_rollout)is not bool or type(device_teacher)is not bool:raise ValueError('explicit device rollout/teacher factory flags required')
     if device_teacher and (not device_rollout or plan.model.arm!='D'):raise ValueError('device teacher is only the explicit D device route')
     if type(teacher_vectorized)is not bool or teacher_vectorized and not teacher_frame_batch:raise ValueError('vectorized labeling requires the explicit frame-batched D route')
+    if type(teacher_cuda_leaves)is not bool or teacher_cuda_leaves and not teacher_vectorized:raise ValueError('generated CUDA leaves require vectorized D3 labeling')
     if type(teacher_frame_batch)is not bool or teacher_frame_batch and not device_teacher:raise ValueError('frame batching needs the explicit D teacher')
     if (type(teacher_queue_chunks)is not int or not 0<=teacher_queue_chunks<=4
             or teacher_queue_chunks and not teacher_frame_batch):
@@ -134,7 +135,8 @@ def build_backend(plan,prepared,pool,*,public_config=None,actor_contract=None,ge
         if plan.model.arm=='D':
             if not device_teacher:raise runs.MissingDependency('device D requires explicit public-world teacher enablement; no FULL fallback')
             from gpu_engine.v5_device_teacher import Provider
-            teacher=Provider(prepared,plan,**(dict(frame_batch=True,**(dict(chunk_batch=True)if teacher_queue_chunks else{}))if teacher_frame_batch else{}),**(dict(vectorized=True)if teacher_vectorized else{}))
+            teacher=Provider(prepared,plan,**(dict(frame_batch=True,**(dict(chunk_batch=True)if teacher_queue_chunks else{}))if teacher_frame_batch else{}),**(dict(vectorized=True)if teacher_vectorized else{}),
+                **(dict(cuda_leaves=True)if teacher_cuda_leaves else{}))
         options={}if raw_retention_every==1 and transient_raw_root is None else dict(raw_retention_every=raw_retention_every,transient_raw_root=transient_raw_root)
         if teacher_queue_chunks:options['teacher_queue_chunks']=teacher_queue_chunks
         return RuntimeBackend(prepared,pool,gender_policy=gender_policy,teacher=teacher,cache_workers=cache_workers,**options)

@@ -3,8 +3,9 @@
 Loads the saved cost bank exactly as the original D3 preflight did (runtime, pool, cost root index
 checked by sha256, declaration, cost plan and snapshot), builds the original serial Provider and
 runs gpu_engine.device_d_frame_parity in its D3 vectorized mode. --batched-prep builds the batch
-side's roots with worlds.detach_roots and prices them with FramePricer(host_prep=True); the serial
-reference is the same either way. The serial reference runs from THIS tree (not the bank's original
+side's roots with worlds.detach_roots and prices them with FramePricer(host_prep=True); --cuda-leaves
+prices the batch side with FramePricer(cuda_leaves=True) (generated CUDA for the per-world engine
+and encoder work); the serial reference is the same either way. The serial reference runs from THIS tree (not the bank's original
 source commit), so a flag-off run must reproduce the published record before a flag-on run counts.
 --compare A B checks that two result files have identical rows (timings excluded). All paths are
 command-line arguments; the output directory must be new.
@@ -41,6 +42,7 @@ def main(argv=None):
     parser.add_argument('--index-sha256', help='sha256 of bank/cost-root-index.json')
     parser.add_argument('--out', help='new output directory')
     parser.add_argument('--batched-prep', action='store_true')
+    parser.add_argument('--cuda-leaves', action='store_true', help='price the batch side with FramePricer(cuda_leaves=True)')
     parser.add_argument('--compare', nargs=2, metavar=('A', 'B'), help='compare two saved-root-parity.json files and exit')
     args = parser.parse_args(argv)
     if args.compare:return 0 if compare(*args.compare)['equal'] else 1
@@ -74,10 +76,10 @@ def main(argv=None):
         log('SERIAL_PARITY_SLOT', ordinal=record['ordinal'], status=record['status'])
     source = os.environ.get('V2_SOURCE_COMMIT') or ''
     result = parity.run(provider, snapshot, snapshot.archive, index, execution_source=source, enable_parity=True,
-        progress_callback=progress, chunk_batch=True, vectorized=True, batched_prep=args.batched_prep)
+        progress_callback=progress, chunk_batch=True, vectorized=True, batched_prep=args.batched_prep, cuda_leaves=args.cuda_leaves)
     (out / 'saved-root-parity.json').write_text(json.dumps(result, sort_keys=True, allow_nan=False) + '\n')
     log('SAVED_ROOT_PARITY_COMPLETE', status=result['status'], totals=result['totals'], batching=result['batching'],
-        timings=result['batch_timings'])
+        cuda_leaves=result.get('cuda_leaves'), timings=result['batch_timings'])
     return 0 if result['status'] == 'PASS' else 1
 
 

@@ -6,6 +6,7 @@ Bounded root blocks keep large frames inside one device invocation. All random
 keys, missing worlds, positive reply mass and original completed-Q math remain.
 """
 from dataclasses import dataclass,replace
+import functools
 import time
 
 import jax
@@ -16,6 +17,21 @@ from pokezero import v5_gumbel as original
 from . import device_public_teacher as serial,device_public_world_state as mapping,v5_model
 
 SERIAL_INPUT_ORDER=('numeric_features','categorical_ids','token_type_ids','attention_mask','history_mask')
+# The generated joint's per-lane arena (54,922 words at the current engine) times 81 branches per
+# world: 24 GiB holds 1,024 worlds, so frames of up to 512 roots run as one joint call and larger
+# ones as a few world slices.
+JOINT_ARENA_BUDGET_BYTES=24<<30
+
+
+def joint_slice_worlds(generated_joint,worlds):
+    """Largest power-of-two count of worlds (dividing `worlds`, itself a power of two) whose joint
+    lanes' arena fits JOINT_ARENA_BUDGET_BYTES; the whole frame when the module has no arena size."""
+    from .v2e_modules import PRICER_JOINT_LANES as lanes
+    module=getattr(generated_joint,'module',None)
+    if module is None:return worlds
+    fit=max(1,JOINT_ARENA_BUDGET_BYTES//(4*int(module.arena_words)*lanes));size=1
+    while size*2<=min(fit,worlds):size*=2
+    return size
 FRAME_WORK_KEYS=('evaluated_root_slots','evaluated_world_slots','evaluated_joint_slots',
     'evaluated_peer_forward_rows','evaluated_leaf_forward_rows','padding_root_slots',
     'padding_world_slots','substituted_world_slots','pre_refused_available_worlds')
@@ -30,7 +46,7 @@ class Request:
     opponent_actor:int
 
 
-def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False,vectorized=False):
+def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False,vectorized=False,generated=None,capture_inputs=False):
     """Preserve original actor programs, inside one frame device invocation.
 
     Transitions map roots/worlds/joint branches together. Actor call geometry
@@ -38,8 +54,18 @@ def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False
     The legacy path retains row-wise BF16 programs. Explicit D3 instead
     evaluates real archive-grouped batches with no sequential root/world map;
     its saved-root gate uses the separately declared target tolerance.
+
+    generated: the pricer's generated CUDA modules (FramePricer(cuda_leaves=True)):
+    {'views', 'sample', 'joint'} v2e_gen.Generated callables of the
+    v2e_modules.pricer_* lane functions. They replace the per-world engine and
+    encoder work (root views, chance capsules and the 81-branch joint) inside
+    the same jitted frame program; the model forwards and the reduction are
+    unchanged. capture_inputs adds the encoded root and leaf actor inputs to
+    the output (equality tooling only).
     """
     if (not vectorized and capacity%block_rows)or executor.joint is None:raise ValueError('bounded mapped joint executor required')
+    if generated is not None and (not vectorized or set(generated)!={'views','sample','joint'}):
+        raise ValueError('generated CUDA leaves require vectorized D3 pricing and the views/sample/joint modules')
     def forward(params,inputs):return v5_model.forward(params,inputs,model,compute_dtype='bfloat16')
     peers=tuple(jax.jit(lambda inputs,p=p:forward(p,inputs))for p in params)
     leaves=tuple(jax.jit(jax.vmap(peer))for peer in peers)
@@ -78,7 +104,8 @@ def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False
         flatten=lambda x:x.reshape((n,)+x.shape[2:])
         states=jax.tree.map(flatten,states);publics=jax.tree.map(flatten,publics)
         owners=j.repeat(a['owner'],2)
-        own,peer,own_inputs,peer_inputs=jax.vmap(views)(states,publics,owners)
+        if generated is not None:(own,peer,own_inputs,peer_inputs),views_error=generated['views'](states,publics,owners)
+        else:own,peer,own_inputs,peer_inputs=jax.vmap(views)(states,publics,owners)
         root_legal=j.repeat(a['legal'],2,axis=0)
         legal=peer.legal_action_mask[:,0];requested=j.any(legal,axis=-1)
         pre=j.where(own.error[:,0]!=0,1,0)
@@ -114,10 +141,31 @@ def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False
         reply_row=j.where(ordinal<required[:,None],ordinal%reply_count[:,None],0)
         pairs=j.stack((j.take_along_axis(order,action_row,axis=1),
             j.take_along_axis(reply_order,reply_row,axis=1)),axis=-1)
-        chance=jax.vmap(executor.sample)(states)
-        invalid,done,winner,error,inputs=jax.vmap(executor.joint)(states,publics,own,peer,
-            owners[:,None],requested[:,None],pairs,chance)
-        invalid,done,winner,error=(x[:,:,0]for x in (invalid,done,winner,error))
+        if generated is not None:
+            # Generated lanes: one per (world, branch), lane = world*81 + branch. Every lane carries
+            # its world's root state, public carry, dispatch targets and chance capsule; the pairs
+            # are laid out in the same order (world-major, then the 81 ordinals above). The joint
+            # runs over world slices so its per-lane arena stays within JOINT_ARENA_BUDGET_BYTES;
+            # the slices are concatenated in world order, so nothing else changes.
+            from .v2e_modules import PRICER_JOINT_LANES as lanes,dispatch_targets
+            chance,sample_error=generated['sample'](states)
+            worlds=(states,publics,dispatch_targets(own),dispatch_targets(peer),owners[:,None],requested[:,None],chance)
+            size=joint_slice_worlds(generated['joint'],n);pieces=[];words=[]
+            for start in range(0,n,size):
+                branches=lambda tree:jax.tree.map(lambda x:j.repeat(x[start:start+size],lanes,axis=0),tree)
+                state,public,own_targets,peer_targets,owner,asked,draw=branches(worlds)
+                piece,word=generated['joint'](state,public,own_targets,peer_targets,owner,asked,pairs[start:start+size].reshape(size*lanes,2),draw)
+                pieces.append(piece);words.append(word[0])
+            invalid,done,winner,error,inputs=jax.tree.map(lambda *xs:xs[0]if len(xs)==1 else j.concatenate(xs,axis=0),*pieces)
+            joint_error=functools.reduce(j.bitwise_or,words)
+            unbranch=lambda x:x.reshape((n,lanes)+x.shape[1:])
+            invalid,done,winner,error=(unbranch(x)[:,:,0]for x in (invalid,done,winner,error))
+            inputs=jax.tree.map(unbranch,inputs)
+        else:
+            chance=jax.vmap(executor.sample)(states)
+            invalid,done,winner,error,inputs=jax.vmap(executor.joint)(states,publics,own,peer,
+                owners[:,None],requested[:,None],pairs,chance)
+            invalid,done,winner,error=(x[:,:,0]for x in (invalid,done,winner,error))
         # Keep the original fixed81 actor vmap intact for each world. The
         # physical/public transition grid above is still fully root-batched.
         if vectorized:
@@ -134,9 +182,12 @@ def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False
         errors=j.where(invalid,1,j.where(done&~terminal_ok,2,j.where(~done&(error!=0),3,j.where(~done&~usable,4,0))))
         terminal=j.where(winner==2,0.,j.where(winner==owners[:,None],1.,-1.))
         values=j.where(done,terminal,values)
-        return dict(pre=pre.reshape(b,2),peer_logits=logits.reshape(b,2,9),peer_legal=legal.reshape(b,2,9),
+        result=dict(pre=pre.reshape(b,2),peer_logits=logits.reshape(b,2,9),peer_legal=legal.reshape(b,2,9),
             requested=requested.reshape(b,2),values=values.reshape(b,2,81),errors=errors.reshape(b,2,81),
             done=done.reshape(b,2,81))
+        if generated is not None:result['generated_errors']=j.stack([views_error[0],sample_error[0],joint_error])
+        if capture_inputs:result.update(own_inputs=own_inputs,peer_inputs=peer_inputs,leaf_inputs=inputs)
+        return result
     def empty():
         b=block_rows
         return dict(pre=j.zeros((b,2),j.int32),peer_logits=j.zeros((b,2,9),j.float32),peer_legal=j.zeros((b,2,9),bool),
@@ -175,15 +226,37 @@ def _numpy_worlds(requests,materializer,recipe):
 
 
 class FramePricer:
-    def __init__(self,executor,model,*,capacity=2048,block_rows=32,actor_capacity=33,vectorized=False,host_prep=False):
+    def __init__(self,executor,model,*,capacity=2048,block_rows=32,actor_capacity=33,vectorized=False,host_prep=False,cuda_leaves=False):
         if (type(capacity)is not int or type(block_rows)is not int or capacity<=0 or block_rows<=0
                 or capacity%block_rows or type(actor_capacity)is not int or actor_capacity<=0):
             raise ValueError('finite explicit root/actor capacities required')
         if type(vectorized)is not bool:raise ValueError('explicit vectorized batching bool required')
         if type(host_prep)is not bool:raise ValueError('explicit host preparation bool required')
-        self.vectorized=vectorized;self.host_prep=host_prep
+        if type(cuda_leaves)is not bool or cuda_leaves and not vectorized:raise ValueError('generated CUDA leaves require vectorized D3 pricing')
+        if cuda_leaves and getattr(executor,'tables',None)is None:raise ValueError('generated CUDA leaves require the executor tables')
+        self.vectorized=vectorized;self.host_prep=host_prep;self.cuda_leaves=cuda_leaves
         self.executor=executor;self.model=model;self.capacity=capacity;self.block_rows=block_rows;self.actor_capacity=actor_capacity
         self.kernels={};self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
+        # Generated modules are compiled once (at the first priced frame, from its world geometry) and
+        # reused across frames and capacities: lane counts are runtime values for generated kernels.
+        self.generated=None;self.generate_seconds=0.;self.capture_inputs=False;self.last_output=None
+
+    def _generate(self,states,publics):
+        """Compile the views/sample/joint lane functions for this executor's tables; the examples
+        are one world's leaf geometry (batch axis of 1), taken from the packed frame."""
+        from . import v2e_gen,v2e_modules
+        clock=time.perf_counter()
+        index,functions=v2e_modules.pricer_functions(*self.executor.tables)
+        one=lambda tree:jax.tree.map(lambda x:jax.ShapeDtypeStruct((1,)+x.shape[2:],x.dtype),tree)
+        state,public=one(states),one(publics);owner=jax.ShapeDtypeStruct((1,),np.int32)
+        own,peer,_,_=jax.eval_shape(functions['views'],state,public,owner)
+        chance=jax.eval_shape(functions['sample'],state)
+        examples=dict(views=(state,public,owner),sample=(state,),
+            joint=(state,public,v2e_modules.dispatch_targets(own),v2e_modules.dispatch_targets(peer),jax.ShapeDtypeStruct((1,1),np.int32),
+                jax.ShapeDtypeStruct((1,1),np.bool_),jax.ShapeDtypeStruct((1,2),np.int32),chance))
+        self.generated={name:v2e_gen.compile_function(f'pricer_{name}_{index}',functions[name],examples[name],mode=v2e_modules.PRICER_MODES[name])
+            for name in v2e_modules.PRICER_MODES}
+        self.generate_seconds=time.perf_counter()-clock
 
     def bind(self,params):
         if not 0<len(params)<=self.actor_capacity:raise ValueError('declared actor bank exceeds fixed capacity')
@@ -256,15 +329,20 @@ class FramePricer:
                         padded=np.full(size,2*capacity,np.int32);padded[:len(indices)]=indices;rows.append(padded)
                     return tuple(rows)
                 data['peer_rows']=actor_rows('opponent_actor');data['leaf_rows']=actor_rows('learner_actor')
-                key=(capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']))
+                key=(capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']),self.capture_inputs)
+            if self.cuda_leaves and self.generated is None:self._generate(data['states'],data['publics'])
             device_data=jax.device_put(data)
             if key not in self.kernels:
-                fn=make_kernel(self.executor,self.model,params=self.params,capacity=capacity,block_rows=self.block_rows,mixed_learners=mixed,vectorized=self.vectorized)
+                fn=make_kernel(self.executor,self.model,params=self.params,capacity=capacity,block_rows=self.block_rows,mixed_learners=mixed,vectorized=self.vectorized,
+                    generated=self.generated,capture_inputs=self.capture_inputs)
                 clock=time.perf_counter();lowered=fn.lower(device_data);lower_seconds=time.perf_counter()-clock
                 clock=time.perf_counter();self.kernels[key]=lowered.compile();compile_seconds=time.perf_counter()-clock
             # Exactly one device invocation for the entire selected frame.
             clock=time.perf_counter();output=jax.device_get(jax.block_until_ready(self.kernels[key](device_data)))
             device_seconds=time.perf_counter()-clock
+            if self.generated is not None and np.any(output['generated_errors']):
+                raise RuntimeError('generated CUDA leaves: cross-lane access check failed '+str(output['generated_errors'].tolist()))
+            self.last_output=output
         evaluated=0 if output is None else capacity if self.vectorized else ((len(requests)+self.block_rows-1)//self.block_rows)*self.block_rows
         work=dict(evaluated_root_slots=evaluated,evaluated_world_slots=2*evaluated,evaluated_joint_slots=162*evaluated,
             evaluated_peer_forward_rows=(sum(map(len,data['peer_rows']))if self.vectorized and output is not None else 2*evaluated),
@@ -281,6 +359,8 @@ class FramePricer:
             self.last_timing['padded_leaf_count']=work['evaluated_leaf_forward_rows']
             self.last_timing['root_capacity']=capacity
             self.last_timing['frame_wall_seconds']=finished-started
+            self.last_timing['cuda_leaves']=self.cuda_leaves
+            if self.cuda_leaves:self.last_timing['generate_seconds']=self.generate_seconds;self.generate_seconds=0.
         return tuple(self._result(i,r,pair,output,recipe)for i,(r,pair)in enumerate(zip(requests,worlds)))
 
     def _result(self,index,request,worlds,output,recipe):

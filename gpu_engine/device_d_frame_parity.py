@@ -97,14 +97,17 @@ def vectorized_comparison(a,b):
 
 
 def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,progress_callback=None,chunk_batch=False,vectorized=False,
-        batched_prep=False):
+        batched_prep=False,cuda_leaves=False):
     """batched_prep: build the batch side's requests with worlds.detach_roots (one batched detach per scan
-    step) and price them with FramePricer(host_prep=True); the serial reference is unchanged."""
+    step) and price them with FramePricer(host_prep=True); the serial reference is unchanged.
+    cuda_leaves: price the batch side with FramePricer(cuda_leaves=True) (generated CUDA for the
+    per-world engine and encoder work); the serial reference is unchanged."""
     if enable_parity is not True or getattr(provider,'frame_batch',False):
         raise ValueError('explicit quarantined original serial provider required')
     if type(execution_source)is not str or len(execution_source)!=40:raise ValueError('separate batch execution source required')
     if type(chunk_batch)is not bool or type(vectorized)is not bool:raise ValueError('explicit saved-root packing choices required')
     if type(batched_prep)is not bool or batched_prep and not vectorized:raise ValueError('batched preparation requires vectorized D3 pricing')
+    if type(cuda_leaves)is not bool or cuda_leaves and not vectorized:raise ValueError('generated CUDA leaves require vectorized D3 pricing')
     requests={};references={};actors=[];method=provider.label_chunk;price=serial.price
     def price_reference(plans,*args,**kwargs):
         result=price(plans,*args,**kwargs)
@@ -148,7 +151,7 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
     for address in declared:
         if address in requests:groups.setdefault(0 if chunk_batch else address.frame,[]).append(address)
     pricer=FramePricer(provider.executor,provider.plan.model,actor_capacity=provider.plan.historical_window+1,
-        **(dict(capacity=4096,vectorized=True,host_prep=batched_prep)if vectorized else{}))
+        **(dict(capacity=4096,vectorized=True,host_prep=batched_prep,cuda_leaves=cuda_leaves)if vectorized else{}))
     results={};timings=[]
     for frame,addresses in groups.items():
         priced=pricer.price([requests[a]for a in addresses],provider.materializer,provider.recipe,actors[0])
@@ -192,6 +195,7 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
         no_strength_or_throughput_claim=True)
     if vectorized:
         result['batching']='D3_VECTORIZED_BATCHED_PREP'if batched_prep else'D3_VECTORIZED'
+        result['cuda_leaves']=cuda_leaves
         result['target_summary']=dict(labeled_roots=len(target_rows),top_target_action_matches=top_matches,required_top_matches=31,
             policy_max_absolute_difference=max((r['policy_max_absolute_difference']for r in target_rows),default=None),
             value_target_max_absolute_difference=max((r['value_target_max_absolute_difference']for r in target_rows),default=None),

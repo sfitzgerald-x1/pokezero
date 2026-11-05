@@ -43,6 +43,9 @@ class Executor:
     sample: object
     advance: object
     joint: object = None
+    # (engine_tables, observation_tables) the callables close over; the frame pricer's generated
+    # CUDA modules trace the same oracle functions over them.
+    tables: object = None
 
 
 JOINT_LANES = 81
@@ -93,7 +96,8 @@ def make_executor(engine_tables, observation_tables, *, enable_device_teacher=Fa
         jax.jit(transition.sample_chance_inputs),
         jax.jit(lambda state, public, actions, chance: transition.step_with_public(
             state, actions, engine_tables, public,
-            belief_tables=observation_tables.belief, chance_inputs=chance)))
+            belief_tables=observation_tables.belief, chance_inputs=chance)),
+        tables=(engine_tables, observation_tables))
     return replace(executor, joint=_make_joint(executor)) if batch_joint else executor
 
 

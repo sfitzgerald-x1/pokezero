@@ -86,7 +86,7 @@ def validate_records(frames,bank,recipe,records):
 
 class Provider:
     """Construct once from genuine Prepared+Plan, before any real constructor."""
-    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False,vectorized=False,batched_prep=False):
+    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False,vectorized=False,batched_prep=False,cuda_leaves=False):
         from .v5_device_backend import Prepared
         from pokezero.v5_run import Plan,_sha
         if type(prepared)is not Prepared or type(plan)is not Plan or plan.model.arm!='D':
@@ -98,7 +98,8 @@ class Provider:
             raise ValueError('chunk batching requires the explicit frame teacher')
         if type(vectorized)is not bool or vectorized and not frame_batch:raise ValueError('vectorized pricing requires frame batching')
         if type(batched_prep)is not bool or batched_prep and not vectorized:raise ValueError('batched preparation requires vectorized D3 pricing')
-        self.vectorized=vectorized;self.batched_prep=batched_prep
+        if type(cuda_leaves)is not bool or cuda_leaves and not vectorized:raise ValueError('generated CUDA leaves require vectorized D3 pricing')
+        self.vectorized=vectorized;self.batched_prep=batched_prep;self.cuda_leaves=cuda_leaves
         self.chunk_batch=chunk_batch
         if prepared.pool_sha256!=plan.pool_sha256 or prepared.category_sha256!=plan.model.category_vocabulary_sha256 or prepared.category_size!=plan.model.category_vocab_size:
             raise ValueError('same declared device source/pool/category required')
@@ -115,7 +116,7 @@ class Provider:
         if frame_batch:
             from .device_public_teacher_batch import FramePricer
             self.frame_pricer=FramePricer(self.executor,plan.model,actor_capacity=plan.historical_window+1,
-                **(dict(capacity=4096,vectorized=True,host_prep=batched_prep)if vectorized else{}))
+                **(dict(capacity=4096,vectorized=True,host_prep=batched_prep,cuda_leaves=cuda_leaves)if vectorized else{}))
 
     def reset_metrics(self):
         self.frame_counts={};self.batch_timings=[];self.root_prepare_seconds={}
