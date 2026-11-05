@@ -94,3 +94,31 @@ as unavailable, never as quick successes. The bars are at least 90% fully
 constructed roots and p95 at most 30 seconds. If coverage misses, make one
 refusal-driven source batch and one remeasurement, then stop. No model, game,
 profile or numerical admission has been run by this source preparation.
+
+## Optional preparation for the D3 training teacher
+
+`v5_worker --device-rollout --device-teacher --teacher-frame-batch
+--teacher-vectorized --teacher-batched-prep` enables the P7 preparation path.
+Queued labeling retains `--teacher-queue-chunks` and its existing grouping.
+The option defaults off and requires the explicit vectorized D teacher.
+
+For each retained scan step, root data movement and redaction share one
+bucketed device program and host transfer. The original public readout stays
+eager. Host arrays preserve dictionary order and are read-only; hypothetical
+worlds use the original per-root random keys, checks, writes and refusals.
+The vectorized pricer and label reductions retain their declared branch sets
+and targets. A systemic batched-detach error stops the study.
+
+Preparation timing assigns the shared chunk-detach wall evenly over its
+pending roots and adds each root's measured planning wall. Per-frame values
+are allocations of that shared cost. First-use detach/readout compilation is
+included in preparation and the complete bank clock; its isolated compile
+time is explicitly unavailable. Pricer and collector compile times retain
+their separately measured fields.
+
+This option supplies no live Showdown constructor coverage or arm admission.
+The original forty-root rule remains exact on statuses, worlds and branches,
+within 0.01 on targets, and at least 31 of 32 top-target actions. A complete
+finite-bank timing and its result review remain required before D admission.
+The optional P7 comparison utility retains its separate stricter diagnostic
+tolerance; that tolerance does not replace the declared D3 gate.

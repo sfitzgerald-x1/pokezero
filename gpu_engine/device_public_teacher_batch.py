@@ -166,13 +166,22 @@ def _host_worlds(requests,materializer,recipe):
     return worlds
 
 
+def _numpy_worlds(requests,materializer,recipe):
+    """_host_worlds' result, built on host numpy: one batched key derivation per frame, then the
+    same per-world materialization checks and writes without device-array dispatches."""
+    seeds=[mapping.kernel_seed(r.plans.root,s.world,recipe)for r in requests for s in r.plans.starts]
+    keys=dict(zip(seeds,mapping.world_keys(seeds)))
+    return [tuple(mapping.materialize_host(r.plans.root,s,materializer,recipe,keys=keys)for s in r.plans.starts)for r in requests]
+
+
 class FramePricer:
-    def __init__(self,executor,model,*,capacity=2048,block_rows=32,actor_capacity=33,vectorized=False):
+    def __init__(self,executor,model,*,capacity=2048,block_rows=32,actor_capacity=33,vectorized=False,host_prep=False):
         if (type(capacity)is not int or type(block_rows)is not int or capacity<=0 or block_rows<=0
                 or capacity%block_rows or type(actor_capacity)is not int or actor_capacity<=0):
             raise ValueError('finite explicit root/actor capacities required')
         if type(vectorized)is not bool:raise ValueError('explicit vectorized batching bool required')
-        self.vectorized=vectorized
+        if type(host_prep)is not bool:raise ValueError('explicit host preparation bool required')
+        self.vectorized=vectorized;self.host_prep=host_prep
         self.executor=executor;self.model=model;self.capacity=capacity;self.block_rows=block_rows;self.actor_capacity=actor_capacity
         self.kernels={};self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
@@ -206,7 +215,7 @@ class FramePricer:
                 raise ValueError('original encoder input keys required')
             if any(type(x)is not int or not 0<=x<len(params)for x in (request.learner_actor,request.opponent_actor)):
                 raise ValueError('verified original actor index required')
-        worlds=_host_worlds(requests,materializer,recipe);prepared=time.perf_counter()
+        worlds=(_numpy_worlds if self.host_prep else _host_worlds)(requests,materializer,recipe);prepared=time.perf_counter()
         available=[w for pair in worlds for w in pair if w.state is not None]
         output=None;lower_seconds=compile_seconds=device_seconds=0.
         if available:

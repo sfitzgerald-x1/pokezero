@@ -323,7 +323,7 @@ def _prepare_runtime(runtime,vocabulary,*,expected_pool_sha256):
 
 def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=False,device_teacher=False,cache_workers=0,teacher_frame_batch=False,
         raw_retention_every=1,transient_raw_root=None,resident_cache_bytes=None,teacher_queue_chunks=0,iteration_policy_lag=0,teacher_vectorized=False,
-        python_rollout=False,python_workers=1):
+        python_rollout=False,python_workers=1,teacher_batched_prep=False):
     from . import v5_run as run,v5_phasec as phase
     _absolute(str(run_root))
     if type(resume) is not bool:raise ValueError('explicit resume choice required')
@@ -336,10 +336,12 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     if type(python_workers)is not int or python_workers<1 or not python_rollout and python_workers!=1:
         raise ValueError('positive Python game workers require the explicit Python route')
     if python_rollout and (inputs.plan.model.arm=='D'or device_teacher or teacher_frame_batch
-            or teacher_vectorized or teacher_queue_chunks or cache_workers or raw_retention_every!=1 or transient_raw_root is not None):
+            or teacher_vectorized or teacher_batched_prep or teacher_queue_chunks or cache_workers or raw_retention_every!=1 or transient_raw_root is not None):
         raise ValueError('Python route is raw A/B; device teacher/cache/spool options do not apply')
     if type(teacher_vectorized)is not bool or teacher_vectorized and(not device_teacher or not teacher_frame_batch):
         raise ValueError('vectorized labeling requires the explicit D frame teacher')
+    if type(teacher_batched_prep)is not bool or teacher_batched_prep and not teacher_vectorized:
+        raise ValueError('batched preparation requires the explicit vectorized D teacher')
     if type(iteration_policy_lag)is not int or iteration_policy_lag not in (0,1) or iteration_policy_lag and not(device_rollout or python_rollout):
         raise ValueError('one-iteration lag requires an explicit device or Python route')
     if type(device_teacher)is not bool or device_teacher and (not device_rollout or inputs.plan.model.arm!='D'):
@@ -359,6 +361,7 @@ def execute(inputs,run_root,*,resume=False,evaluation_hook=None,device_rollout=F
     if cache_workers:options['cache_workers']=cache_workers
     if teacher_frame_batch:options['teacher_frame_batch']=True
     if teacher_vectorized:options['teacher_vectorized']=True
+    if teacher_batched_prep:options['teacher_batched_prep']=True
     if teacher_queue_chunks:options['teacher_queue_chunks']=teacher_queue_chunks
     if device_teacher:options['device_teacher']=True
     if raw_retention_every!=1 or transient_raw_root is not None:
@@ -385,6 +388,7 @@ def main(argv=None,*,evaluation_hook=None):
     parser.add_argument('--cache-workers',type=int,default=0)
     parser.add_argument('--teacher-frame-batch',action='store_true')
     parser.add_argument('--teacher-vectorized',action='store_true')
+    parser.add_argument('--teacher-batched-prep',action='store_true',help='Batch root/world preparation for the explicit vectorized D teacher')
     parser.add_argument('--teacher-queue-chunks',type=int,default=0)
     parser.add_argument('--raw-retention-every',type=int,default=1)
     parser.add_argument('--transient-raw-root')
@@ -417,6 +421,7 @@ def main(argv=None,*,evaluation_hook=None):
     if args.cache_workers:options['cache_workers']=args.cache_workers
     if args.teacher_frame_batch:options['teacher_frame_batch']=True
     if args.teacher_vectorized:options['teacher_vectorized']=True
+    if args.teacher_batched_prep:options['teacher_batched_prep']=True
     if args.teacher_queue_chunks:options['teacher_queue_chunks']=args.teacher_queue_chunks
     if args.device_teacher:options['device_teacher']=True
     if args.raw_retention_every!=1 or args.transient_raw_root is not None:
