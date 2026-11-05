@@ -179,6 +179,51 @@ def detach_root(context, source, *, row, owner, enable_device_worlds=False):
         source.binding_sha256, bool(history_available))
 
 
+def detach_roots(context, source, *, rows, owners, enable_device_worlds=False):
+    """detach_root for many roots of one context in ONE batched pass (the D3 frame path).
+
+    The same primitive sequence as detach_root runs once, eagerly, over all requested rows (every
+    step is row-independent: per-row clone, per-lane readout, per-row redaction), followed by ONE
+    device->host copy. Each returned Root equals detach_root(context, source, row=rows[i],
+    owner=owners[i])'s byte for byte, except that its redacted public carry is a host numpy copy
+    rather than device arrays. This replaces thousands of one-row dispatches and transfers per frame.
+    """
+    import jax
+    from .v5_device_rollout import RootContext
+    if (enable_device_worlds is not True or type(context) is not RootContext
+            or type(source) is not Source):
+        raise ValueError('explicit actual device root context required')
+    rows, owners = tuple(rows), tuple(owners)
+    if len(rows) != len(owners) or any(type(r) is not int or type(o) is not int or o not in (0, 1)
+            or not 0 <= r < len(context.streams) for r, o in zip(rows, owners)):
+        raise ValueError('actual root row and owner0/1 required')
+    if not rows:
+        return ()
+    r, o = j.asarray(rows, j.int32), j.asarray(owners, j.int32)
+    cloned = public.clone_for_worlds(context.public, r)
+    view = public.readout(cloned, o)
+    own = {name: getattr(context.state, name)[r, o] for name in OWN_MON_FIELDS + OWN_SIDE_FIELDS}
+    hp_percent = cloned.hp_percent[j.arange(len(rows)), 1-o]
+    # The original redaction, row by row: each row is redacted as the one-row carry it would be.
+    single = lambda row, owner: _redact_peer_private(jax.tree.map(lambda x: x[None], row), owner)
+    redacted = jax.tree.map(lambda x: x[:, 0], jax.vmap(single)(cloned, o))
+    host = jax.device_get((redacted, view, own, hp_percent, context.streams[r], context.frames[r]))
+    redacted, view, own, hp_percent, streams, frames = host
+    result = []
+    for i, (row, owner) in enumerate(zip(rows, owners)):
+        one = lambda x: np.ascontiguousarray(x[i:i+1])
+        view_i = jax.tree.map(one, view)
+        address = contract.DecisionAddress(int(streams[i]), int(frames[i]), owner)
+        snapshot = _freeze({**dict(view_i._asdict()), 'hp_percent': one(hp_percent)})
+        history_available = (address.frame == 0 and
+            not np.any(np.asarray(view_i.error)) and
+            np.all(np.asarray(view_i.hp_fraction)[np.asarray(view_i.present)] == 1) and
+            not np.any(np.asarray(view_i.status)[np.asarray(view_i.present)]))
+        result.append(Root(address, _freeze({name: own[name][i] for name in own}), snapshot,
+            jax.tree.map(one, redacted), source.binding_sha256, bool(history_available)))
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class Start:
     world: int

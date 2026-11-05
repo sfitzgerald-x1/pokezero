@@ -96,11 +96,15 @@ def vectorized_comparison(a,b):
     return errors,metrics
 
 
-def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,progress_callback=None,chunk_batch=False,vectorized=False):
+def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,progress_callback=None,chunk_batch=False,vectorized=False,
+        batched_prep=False):
+    """batched_prep: build the batch side's requests with worlds.detach_roots (one batched detach per scan
+    step) and price them with FramePricer(host_prep=True); the serial reference is unchanged."""
     if enable_parity is not True or getattr(provider,'frame_batch',False):
         raise ValueError('explicit quarantined original serial provider required')
     if type(execution_source)is not str or len(execution_source)!=40:raise ValueError('separate batch execution source required')
     if type(chunk_batch)is not bool or type(vectorized)is not bool:raise ValueError('explicit saved-root packing choices required')
+    if type(batched_prep)is not bool or batched_prep and not vectorized:raise ValueError('batched preparation requires vectorized D3 pricing')
     requests={};references={};actors=[];method=provider.label_chunk;price=serial.price
     def price_reference(plans,*args,**kwargs):
         result=price(plans,*args,**kwargs)
@@ -111,11 +115,20 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
         # The original cost driver verifies exact40 selectors and typed bank
         # before entering this callback. Only owner/public roots are retained.
         from .v5_device_teacher import _requests,INPUTS
-        for step,row,owner in _requests(frames,bank):
-            step,row,owner=map(int,(step,row,owner))
-            if not frames.trainable[step,row,owner]:continue
-            context=jax.tree.map(lambda x:x[step],roots)
-            root=worlds.detach_root(context,provider.source,row=row,owner=owner,enable_device_worlds=True)
+        selected=[tuple(map(int,x))for x in _requests(frames,bank)]
+        selected=[(step,row,owner)for step,row,owner in selected if frames.trainable[step,row,owner]]
+        batched={}
+        if batched_prep:
+            for step in sorted({x[0] for x in selected}):
+                pairs=[(row,owner)for s,row,owner in selected if s==step]
+                context=jax.tree.map(lambda x:x[step],roots)
+                for (row,owner),root in zip(pairs,worlds.detach_roots(context,provider.source,rows=[r for r,_ in pairs],
+                        owners=[o for _,o in pairs],enable_device_worlds=True)):batched[(step,row,owner)]=root
+        for step,row,owner in selected:
+            if batched_prep:root=batched[(step,row,owner)]
+            else:
+                context=jax.tree.map(lambda x:x[step],roots)
+                root=worlds.detach_root(context,provider.source,row=row,owner=owner,enable_device_worlds=True)
             plans=worlds.plan_starts(root,provider.source,provider.recipe)
             inputs={name:getattr(frames,name)[step,row,owner][None,None]for name in INPUTS}
             inputs['history_mask']=np.ones((1,1),bool)
@@ -134,7 +147,8 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
     declared=cost.select(provider.plan);groups={}
     for address in declared:
         if address in requests:groups.setdefault(0 if chunk_batch else address.frame,[]).append(address)
-    pricer=FramePricer(provider.executor,provider.plan.model,actor_capacity=provider.plan.historical_window+1,**(dict(capacity=4096,vectorized=True)if vectorized else{}))
+    pricer=FramePricer(provider.executor,provider.plan.model,actor_capacity=provider.plan.historical_window+1,
+        **(dict(capacity=4096,vectorized=True,host_prep=batched_prep)if vectorized else{}))
     results={};timings=[]
     for frame,addresses in groups.items():
         priced=pricer.price([requests[a]for a in addresses],provider.materializer,provider.recipe,actors[0])
@@ -177,7 +191,7 @@ def run(provider,snapshot,archive,index,*,execution_source,enable_parity=False,p
         totals=totals,serial_dispositions=reference['summary']['dispositions'],rows=rows,batch_timings=timings,
         no_strength_or_throughput_claim=True)
     if vectorized:
-        result['batching']='D3_VECTORIZED'
+        result['batching']='D3_VECTORIZED_BATCHED_PREP'if batched_prep else'D3_VECTORIZED'
         result['target_summary']=dict(labeled_roots=len(target_rows),top_target_action_matches=top_matches,required_top_matches=31,
             policy_max_absolute_difference=max((r['policy_max_absolute_difference']for r in target_rows),default=None),
             value_target_max_absolute_difference=max((r['value_target_max_absolute_difference']for r in target_rows),default=None),

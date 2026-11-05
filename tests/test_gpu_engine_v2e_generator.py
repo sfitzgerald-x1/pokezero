@@ -59,6 +59,23 @@ class ConstantFoldTest(unittest.TestCase):
         self.assertFalse(outs[0].cderived)
 
 
+class VersionPinTest(unittest.TestCase):
+    def test_unpinned_versions_are_refused(self):
+        import os
+        from unittest import mock
+        saved = dict(v2e_j2c.PINNED)
+        try:
+            v2e_j2c.PINNED['jax'] = '0.0.0-not-installed'
+            with mock.patch.dict(os.environ, {'V2E_ALLOW_UNPINNED_JAX': ''}):
+                with self.assertRaises(v2e_j2c.Unsupported):v2e_j2c.check_pinned_versions()
+            with mock.patch.dict(os.environ, {'V2E_ALLOW_UNPINNED_JAX': '1'}):v2e_j2c.check_pinned_versions()
+        finally:
+            v2e_j2c.PINNED.clear();v2e_j2c.PINNED.update(saved)
+
+    def test_installed_versions_are_pinned(self):
+        v2e_j2c.check_pinned_versions()
+
+
 class GenerationTest(unittest.TestCase):
     def generate(self, fn, *args):
         closed, avals, _, _ = v2e_gen.trace(fn, args)
