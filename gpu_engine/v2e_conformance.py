@@ -84,11 +84,17 @@ def cases(rng, B):
     yield ('nan_constants', (lambda a: (a + qn, a * qn, qn - a, a / qn, qn / a, a + sn, sn * a, a - nn, j.maximum(a, qn), j.minimum(qn, a),
         j.maximum(a, sn), a + j.float32(np.nan))), (cross_f(B, True),))
     sn_lit = np.array([0x7f800003], np.uint32).view(np.float32)[0]
+    divisors = (3.0, 7.0, 10.0, 100.0, 255.0, 0.3, 1e-3, 6.0, 49.0, 1.7, 1e20, 3e-39)
+    yield ('divide_by_constant', (lambda a, b: tuple(a / j.float32(d) for d in divisors) + (b / j.asarray(c2), a / j.asarray(c2), 2.0 / (a + 1.0))),
+        (f32(B, 324), f32(B, 324)))
     yield ('iota_and_lane_folds', (lambda a, b: (a + j.arange(324, dtype=j.float32) / 7.0, a + 1.0 / (j.arange(324, dtype=j.float32) + 1.0),
         j.broadcast_to(j.asarray(nanc), a.shape) * 2.0, j.floor(j.broadcast_to(j.asarray(nanc), a.shape)), a + j.broadcast_to(j.asarray(c1), a.shape) / 3.0,
         j.where(a > 0, a, sn_lit), jax.jit(lambda t: -t)(-j.where(a > b, a, b)),
         a.reshape(a.shape[0], 2, 162) + j.stack([j.asarray(c1[:162]), j.asarray(c1[162:])]) / 3.0,
-        a + j.arange(a.shape[0], dtype=j.float32)[:, None] / 3.0)), (cross_f(B, True), cross_f(B, False)))
+        a + j.arange(a.shape[0], dtype=j.float32)[:, None] / 3.0,
+        a.reshape(a.shape[0], 4, 81) + j.asarray(c1[:4])[:, None] / j.asarray(c2[:81])[None, :],
+        a.reshape(a.shape[0], 4, 81) + (j.asarray(c1[:4])[:, None] / j.asarray(c2[:81])[None, :]) * j.asarray(c1.reshape(4, 81)),
+        a.reshape(a.shape[0], 4, 81) + j.asarray(c1.reshape(4, 81)) / j.asarray(c2[:81])[None, :])), (cross_f(B, True), cross_f(B, False)))
     keys = j.asarray(rng.integers(0, 2**32, (B, 2), dtype=np.uint64).astype(np.uint32))
     yield ('prng', (lambda k: (jax.vmap(lambda q: jax.random.bits(q, (5,)))(k), jax.vmap(lambda q: jax.random.split(q, 3))(k),
         jax.vmap(lambda q: jax.random.fold_in(q, 7))(k), jax.vmap(lambda q: jax.random.randint(q, (4,), -5, 40))(k),

@@ -75,16 +75,31 @@ class GenerationTest(unittest.TestCase):
         m = self.generate(lambda x: x + j.broadcast_to(j.asarray(C), x.shape) / j.float32(3.0), x)
         self.assertNotIn('v2e::fdiv', ''.join(m.files.values()))
 
-    def test_iota_division_stays_a_runtime_division(self):
-        # XLA's constant folding leaves iota to run time, so the division is div.full on the device.
+    def test_iota_division_stays_at_run_time(self):
+        # XLA's constant folding leaves iota to run time (the division becomes a runtime reciprocal multiply).
         x = j.zeros((5, 4), j.float32)
         for fn in (lambda x: x + j.arange(4, dtype=j.float32) / 3.0, lambda x: x + j.arange(x.shape[0], dtype=j.float32)[:, None] / 3.0):
-            self.assertIn('v2e::fdiv', ''.join(self.generate(fn, x).files.values()))
+            self.assertIn('v2e::fmul', ''.join(self.generate(fn, x).files.values()))
+        self.assertIn('v2e::fdiv', ''.join(self.generate(lambda x: x + 1.0 / (j.arange(4, dtype=j.float32) + 1.0), x).files.values()))
 
     def test_unfoldable_constant_reduction_is_refused(self):
         x = j.zeros((5, 4), j.float32);C = np.arange(1, 5, dtype=np.float32)
         with self.assertRaises(v2e_j2c.Unsupported):
             self.generate(lambda x: x + j.max(j.broadcast_to(j.asarray(C), x.shape), axis=1, keepdims=True), x)
+
+    def test_outer_product_of_constant_broadcasts_stays_runtime(self):
+        # XLA folds neither bcast(C1, dims A) / bcast(C2, dims B) nor ops on its result.
+        x = j.zeros((5, 4, 3), j.float32);C1 = np.arange(1, 5, dtype=np.float32);C2 = np.arange(2, 5, dtype=np.float32)
+        M = np.full((4, 3), 1.5, np.float32) + np.arange(12, dtype=np.float32).reshape(4, 3)
+        for fn in (lambda x: x + j.asarray(C1)[:, None] / j.asarray(C2)[None, :], lambda x: x + (j.asarray(C1)[:, None] / j.asarray(C2)[None, :]) * j.asarray(M)):
+            code = ''.join(self.generate(fn, x).files.values())
+            self.assertIn('v2e::fmul', code)   # bcast(C1) * bcast(1 / C2) at run time, as XLA rewrites it
+            self.assertNotIn('v2e::fdiv', code)
+
+    def test_constant_and_broadcast_fold(self):
+        x = j.zeros((5, 4, 3), j.float32);C2 = np.arange(2, 5, dtype=np.float32)
+        M = np.full((4, 3), 1.5, np.float32) + np.arange(12, dtype=np.float32).reshape(4, 3)
+        self.assertNotIn('v2e::fdiv', ''.join(self.generate(lambda x: x + j.asarray(M) / j.asarray(C2)[None, :], x).files.values()))
 
     def test_signaling_nan_literal_keeps_its_bits(self):
         x = j.zeros((5, 4), j.float32);sn = np.array([0x7f800003], np.uint32).view(np.float32)[0]
@@ -96,9 +111,16 @@ class GenerationTest(unittest.TestCase):
         m = self.generate(lambda x: x + (j.copy(j.asarray(C)) * 2.0)[::-1], x)
         self.assertEqual(len(m.consts), 1)
 
+    def test_division_by_a_constant_multiplies_by_the_reciprocal(self):
+        # XLA's simplifier: A / C -> A * (1 / C) with the reciprocal computed on the host.
+        x = j.zeros((5, 4), j.float32)
+        code = ''.join(self.generate(lambda x: x / j.float32(3.0), x).files.values())
+        self.assertNotIn('v2e::fdiv', code)
+        self.assertIn('0x%08xu' % int(np.array([np.float32(1) / np.float32(3)], np.float32).view(np.uint32)[0]), code)
+
     def test_runtime_division_is_generated(self):
         x = j.zeros((5, 4), j.float32)
-        m = self.generate(lambda x: x / j.float32(3.0), x)
+        m = self.generate(lambda x, y: x / y, x, x)
         self.assertIn('v2e::fdiv', ''.join(m.files.values()))
 
 

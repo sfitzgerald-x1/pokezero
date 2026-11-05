@@ -75,6 +75,8 @@ class Val:
     arr: object = None        # numpy value of a 'const' Val (or of a lane-free iota)
     cderived: bool = False    # computed from constants only (XLA would fold it on the host)
     lbc: object = None        # per-lane value equal in every lane: lbc[...] (shape lshape), from constants
+    bsig: object = None       # constant-derived values as XLA sees them: None (a constant), a broadcast
+                              # (source shape, broadcast_dimensions, shape), or 'uncertain'
 
     @property
     def kind(self):
@@ -308,7 +310,7 @@ def thread_index(n):
 class Generator:
     def __init__(self, name, profile=False):
         self.k = Kernel(name);self.env = {};self.profile = profile;self.marks = [];self.live = {};self.temps = []
-        self.cse = {};self.cse_hits = 0;self.folds = 0
+        self.cse = {};self.cse_hits = 0;self.folds = 0;self.declined_runtime = False
         self.collective = True   # warp collectives (shuffles, warp scans) available
         self.rolled = 0          # depth of emitted loops that are not fully unrolled
 
@@ -534,13 +536,14 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             dying = {id(v) for v in ins if v.src == 'store' and v.holder.refs == pending[id(v.holder)] == 1}
             before = len(self.k.lines);self.eq_start = before
             key = self.cse_key(e, ins);hit = self.cse.get(key) if key is not None else None
+            self.declined_runtime = False
             folded = self.constant_fold(e, ins) if hit is None else None
             if folded is not None:
                 outs = folded;self.folds += 1
             elif hit is not None and all(self.alive(v) for v in hit[1]):
                 outs = hit[1];self.cse_hits += 1
             else:
-                self.evaluator_guard(e, ins)
+                if not self.declined_runtime:self.evaluator_guard(e, ins)
                 self.neg_feeds_neg = bool(e.outvars) and e.outvars[0] in neg_fed
                 try:outs = self.equation(e, ins, dying)
                 except Unsupported as error:
@@ -550,7 +553,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
                     ex.located = True
                     raise ex from None
                 if key is not None:self.cse[key] = (ins, outs)   # ins kept alive: their ids stay unique
-            if ins and all(v.cderived for v in ins) and e.primitive.name not in OPAQUE | CALLS:
+            if ins and all(v.cderived for v in ins) and e.primitive.name not in OPAQUE | CALLS and not self.declined_runtime:
                 for val in outs:val.cderived = True
             for var, val in zip(e.outvars, outs):
                 dropped = type(var).__name__ == 'DropVar'
@@ -589,6 +592,9 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         if p in ELEMENTWISE_BINARY:
             folded = self.identity_fold(p, ins, outs[0])
             if folded is not None:return [folded]
+            if p == 'div' and ins[0].dtype == F32 and self.const_like(ins[1]) and not self.plain_const(ins[0]) and not (
+                    ins[0].cderived and self.fold_signature('div', ins, e) != 'recip'):
+                return [self.divide_by_constant(ins[0], ins[1], outs[0])]
             return [self.elementwise(outs[0], ins, lambda a, b: binary(p, ins[0].dtype, a, b))]
         if p in COMPARE:return [self.elementwise(outs[0], ins, lambda a, b: compare(p, a, b))]
         if p in UNARY:
@@ -608,6 +614,84 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
     FOLD_ANY = {'eq': np.equal, 'ne': np.not_equal, 'lt': np.less, 'le': np.less_equal, 'gt': np.greater, 'ge': np.greater_equal}
     FOLD_INT = {'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'and': np.bitwise_and, 'or': np.bitwise_or,
         'xor': np.bitwise_xor, 'max': np.maximum, 'min': np.minimum}
+
+    @staticmethod
+    def is_scalar(v):
+        return v.kind == 'lit' or v.size <= 1
+
+    @staticmethod
+    def plain_const(v):
+        """A constant as XLA sees it (not a broadcast of one)."""
+        return v.kind == 'const' and v.arr is not None and v.bsig is None and v.size > 1
+
+    def const_like(self, v):
+        """A constant or a broadcast of a constant (XLA's m::Constant / m::Broadcast(m::Constant))."""
+        if v.kind == 'lit':return True
+        if not v.cderived or v.bsig == 'uncertain':return False
+        return (v.kind == 'const' and v.arr is not None) or v.lbc is not None
+
+    def reciprocal(self, b):
+        """1 / b computed on the host in IEEE f32 (XLA's InvertConstant), with b's provenance."""
+        with np.errstate(all='ignore'):
+            if b.kind == 'lit':return Val(F32, b.shape, 'lit', lit=np.float32(1.0) / np.float32(b.lit), cderived=True)
+            if b.lbc is not None:
+                r = self.wrap((np.float32(1.0) / np.asarray(b.lbc, np.float32))[None], F32, b.shape, lane_mode=True)
+            else:
+                r = self.const(np.float32(1.0) / np.asarray(b.arr, np.float32))
+        r.bsig = b.bsig;r.cderived = True
+        return r
+
+    def divide_by_constant(self, a, b, out):
+        """XLA's A / C -> A * (1 / C) for a non-constant A and a constant (or broadcast constant) C. The
+        product then folds by the usual rule (or runs at run time, an IEEE multiply on the device)."""
+        recip = self.reciprocal(b)
+        if a.cderived:
+            sig = self.fold_signature('mul', [a, recip], None)
+            if sig not in ('runtime', 'uncertain', 'recip'):
+                lane = out.lane
+                def value(v):
+                    if v.kind == 'lit':return np.asarray(v.lit, np.float32)
+                    if v.lbc is not None:return np.asarray(v.lbc, np.float32)[None]
+                    return np.asarray(v.arr, np.float32)
+                with np.errstate(all='ignore'):
+                    r = np.broadcast_to(value(a) * value(recip), ((1,) + tuple(out.shape[1:])) if lane else out.shape)
+                res = self.wrap(r, F32, out.shape, lane_mode=lane)
+                if res is not None:
+                    res.bsig = sig;res.cderived = True
+                    return res
+            if sig == 'uncertain':raise Unsupported('f32 division of a reshaped or sliced constant broadcast')
+        res = self.elementwise(out, [a, recip], lambda x, y: binary('mul', F32, x, y))
+        res.cderived = False;self.declined_runtime = True   # a runtime product, as in XLA
+        return res
+
+    def fold_signature(self, p, ins, e):
+        """How XLA treats an op whose operands are all constant-derived: the provenance of the folded
+        result, or 'runtime'. HloConstantFolding needs real constant operands (a broadcast of a
+        constant is not one); the algebraic simplifier first sinks broadcasts through elementwise ops
+        when the broadcasts match, or when there is one non-scalar operand. So an elementwise op folds
+        if an operand is a plain constant, if all non-scalar operands are identical broadcasts, or if
+        there is at most one non-scalar broadcast; otherwise XLA evaluates it at run time."""
+        if p == 'broadcast_in_dim':
+            v = ins[0];bd = tuple(e.params['broadcast_dimensions']);shape = tuple(e.outvars[0].aval.shape)
+            if self.is_scalar(v):return None
+            if v.bsig is None:return (tuple(v.shape), bd, shape)
+            if v.bsig == 'uncertain':return 'uncertain'
+            src_shape, inner, _ = v.bsig
+            return (src_shape, tuple(bd[d] for d in inner), shape)
+        nonscalar = [v for v in ins if not self.is_scalar(v)]
+        if any(v.bsig == 'uncertain' for v in nonscalar):return 'uncertain'
+        if p == 'div' and ins[0].dtype == F32:
+            sigs = {v.bsig for v in nonscalar}
+            if not nonscalar or (None not in sigs and len(sigs) == 1):
+                return next(iter(sigs), None)   # broadcasts sink, then the constant division folds exactly
+            if self.plain_const(ins[0]):return None   # a constant dividend: HloConstantFolding divides exactly
+            return 'recip'                            # the simplifier's A / C -> A * (1 / C) runs first
+        if p in DATA_MOVEMENT:
+            return None if all(v.bsig is None for v in nonscalar) else 'uncertain'
+        if any(v.bsig is None for v in nonscalar):return None   # a plain constant operand: folded
+        sigs = {v.bsig for v in nonscalar}
+        if len(sigs) <= 1:return next(iter(sigs), None)      # matching broadcasts, or a unique one: sunk, then folded
+        return 'runtime'
 
     def lane_value(self, src, out, bd):
         """Lane-free value of broadcast_in_dim(src) when src has no lane axis (every lane sees it)."""
@@ -631,6 +715,10 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             return v.kind == 'const' and v.arr is not None
         if not all(foldable(v) for v in ins):return None
         if lane_mode and p not in LANE_FOLDABLE:return None
+        sig = self.fold_signature(p, ins, e)
+        if sig in ('runtime', 'recip'):
+            self.declined_runtime = True   # XLA computes this at run time (or rewrites it); so does the device code
+            return None
         avals = [aval_of(o.aval) for o in e.outvars]
         if any(sh != tuple(o.aval.shape) for (dt, sh), o in zip(avals, e.outvars)):return None   # PRNG keys
         if any(hasattr(a, 'aval') and aval_of(a.aval)[1] != tuple(a.aval.shape) for a in e.invars):return None
@@ -687,7 +775,9 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         except (TypeError, ValueError):
             return None
         res = self.wrap(r, dtype, shape, lane_mode)
-        return None if res is None else [res]
+        if res is None:return None
+        res.bsig = sig
+        return [res]
 
     def wrap(self, r, dtype, shape, lane_mode=False):
         """A folded value as a literal (uniform), a constant, or a lane broadcast of a constant."""
@@ -733,6 +823,8 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         device form."""
         if not ins or not all(v.cderived for v in ins) or e.primitive.name in OPAQUE | CALLS:return
         p = e.primitive.name;f32_in = any(v.dtype == F32 for v in ins)
+        if f32_in and any(getattr(v, 'bsig', None) == 'uncertain' for v in ins) and p not in DATA_MOVEMENT:
+            raise Unsupported(f'f32 {p} on a reshaped or sliced constant broadcast (XLA folding not reproduced)')
         if (p in self.SENSITIVE_F32 and f32_in) or (p == 'convert_element_type' and ins[0].dtype == F32 and
                 np.dtype(e.params['new_dtype']) != F32):
             raise Unsupported(f'constant-derived f32 {p} that XLA folds on the host (not reproduced here)')
@@ -818,6 +910,7 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
         out.imap = src.imap;out.fn = src.fn;out.cderived = src.cderived
         out.arr = None if src.arr is None else np.asarray(src.arr).reshape(out.shape)
         out.lbc = None if src.lbc is None or not out.lane else np.asarray(src.lbc).reshape(out.lshape)
+        out.bsig = src.bsig if (src.bsig is None or src.shape == out.shape) else 'uncertain'
         return out
 
     def p_reshape(self, e, ins, outs, params, dying):
@@ -868,7 +961,8 @@ void launch_{c}(const Params& p, cudaStream_t stream) {{
             return self.flat(src, coords)
         if src.src == 'expr' or (src.src in ('in', 'const') and out.size > REG):
             self.lazy(out, lambda i: self.get(src, index(i)))
-            if src.src == 'const' and src.arr is not None and out.lane:out.lbc = self.lane_value(src, out, bd)
+            if src.src == 'const' and src.arr is not None and out.lane:
+                out.lbc = self.lane_value(src, out, bd);out.bsig = (tuple(src.shape), bd, tuple(out.shape))
             return [out]
         if out.size > REG:
             out.src = 'store';out.holder = src.holder
