@@ -175,13 +175,19 @@ def _numpy_worlds(requests,materializer,recipe):
 
 
 class FramePricer:
-    def __init__(self,executor,model,*,capacity=2048,block_rows=32,actor_capacity=33,vectorized=False,host_prep=False):
+    def __init__(self,executor,model,*,capacity=2048,block_rows=32,actor_capacity=33,vectorized=False,host_prep=False,
+            device_prep=False,materialized_worlds=False):
         if (type(capacity)is not int or type(block_rows)is not int or capacity<=0 or block_rows<=0
                 or capacity%block_rows or type(actor_capacity)is not int or actor_capacity<=0):
             raise ValueError('finite explicit root/actor capacities required')
         if type(vectorized)is not bool:raise ValueError('explicit vectorized batching bool required')
         if type(host_prep)is not bool:raise ValueError('explicit host preparation bool required')
-        self.vectorized=vectorized;self.host_prep=host_prep
+        # device_prep: requests carry device-prepared roots (device_public_prep.Batch); the world tensors
+        # come from the device batch, never from host materialization. materialized_worlds additionally
+        # gives every available World host copies of its arrays (saved-root gates compare them).
+        if type(device_prep)is not bool or type(materialized_worlds)is not bool or (device_prep and not vectorized):
+            raise ValueError('device preparation requires vectorized D3 pricing and explicit bools')
+        self.vectorized=vectorized;self.host_prep=host_prep;self.device_prep=device_prep;self.materialized_worlds=materialized_worlds
         self.executor=executor;self.model=model;self.capacity=capacity;self.block_rows=block_rows;self.actor_capacity=actor_capacity
         self.kernels={};self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
@@ -215,7 +221,12 @@ class FramePricer:
                 raise ValueError('original encoder input keys required')
             if any(type(x)is not int or not 0<=x<len(params)for x in (request.learner_actor,request.opponent_actor)):
                 raise ValueError('verified original actor index required')
-        worlds=(_numpy_worlds if self.host_prep else _host_worlds)(requests,materializer,recipe);prepared=time.perf_counter()
+        device_states=device_publics=None
+        if self.device_prep:
+            from . import device_public_prep as prep
+            worlds,device_states,device_publics=prep.price_worlds(requests,recipe,capacity,materialized=self.materialized_worlds)
+        else:worlds=(_numpy_worlds if self.host_prep else _host_worlds)(requests,materializer,recipe)
+        prepared=time.perf_counter()
         available=[w for pair in worlds for w in pair if w.state is not None]
         output=None;lower_seconds=compile_seconds=device_seconds=0.
         if available:
@@ -230,7 +241,9 @@ class FramePricer:
             count=len(requests)
             def vector(values,dtype,default=0):
                 result=np.full(capacity,default,dtype);result[:count]=values;return result
-            data=dict(states=stacked([w.state for w in flat],True),publics=stacked([w.public for w in flat],True),
+            if self.device_prep:states,publics=device_states,device_publics
+            else:states,publics=stacked([w.state for w in flat],True),stacked([w.public for w in flat],True)
+            data=dict(states=states,publics=publics,
                 expected=stacked([r.root_inputs for r in requests]),
                 legal=np.zeros((capacity,9),bool),order=np.zeros((capacity,9),np.int32),
                 order_size=np.ones(capacity,np.int32),active=np.arange(capacity)<count,
@@ -276,7 +289,8 @@ class FramePricer:
         finished=time.perf_counter();self.last_timing=dict(roots=len(requests),world_prepare_seconds=prepared-started,
             batch_pack_and_device_seconds=finished-prepared,device_invocations=int(output is not None),block_rows=self.block_rows,
             lower_seconds=lower_seconds,compile_seconds=compile_seconds,device_seconds=device_seconds,
-            actor_strategy='D3_VECTORIZED_ROOT_WORLD_JOINT_ARCHIVE_BATCHES'if self.vectorized else'ORIGINAL_ROW1_PEER_FIXED81_LEAF_DEVICE_MAP',**work)
+            actor_strategy='D3_VECTORIZED_ROOT_WORLD_JOINT_ARCHIVE_BATCHES'if self.vectorized else'ORIGINAL_ROW1_PEER_FIXED81_LEAF_DEVICE_MAP',
+            preparation='DEVICE'if self.device_prep else'HOST_NUMPY'if self.host_prep else'HOST_EAGER',**work)
         if self.vectorized:
             self.last_timing['padded_leaf_count']=work['evaluated_leaf_forward_rows']
             self.last_timing['root_capacity']=capacity

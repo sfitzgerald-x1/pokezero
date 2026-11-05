@@ -19,7 +19,7 @@ SOURCE_DIR = Path(__file__).resolve().parent / 'cuda'
 ARCH = 'sm_103'
 NVCC_FLAGS = ('-O3', '-std=c++17', f'-arch={ARCH}', '-fmad=false', '-prec-div=true', '-prec-sqrt=true', '-ftz=false',
     '-Xcompiler', '-fPIC', '-shared', '-lineinfo')
-TARGETS = ('V2eRoundTrip', 'V2eChance', 'V2eDivVariants')
+TARGETS = ('V2eRoundTrip', 'V2eChance', 'V2eDivVariants', 'V2ePrepWorlds', 'V2eMtProbe')
 _loaded = {}
 
 

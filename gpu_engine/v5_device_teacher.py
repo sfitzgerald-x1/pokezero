@@ -86,7 +86,7 @@ def validate_records(frames,bank,recipe,records):
 
 class Provider:
     """Construct once from genuine Prepared+Plan, before any real constructor."""
-    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False,vectorized=False,batched_prep=False):
+    def __init__(self,prepared,plan,*,batch_joint=True,frame_batch=False,chunk_batch=False,vectorized=False,batched_prep=False,device_prep=False):
         from .v5_device_backend import Prepared
         from pokezero.v5_run import Plan,_sha
         if type(prepared)is not Prepared or type(plan)is not Plan or plan.model.arm!='D':
@@ -98,7 +98,10 @@ class Provider:
             raise ValueError('chunk batching requires the explicit frame teacher')
         if type(vectorized)is not bool or vectorized and not frame_batch:raise ValueError('vectorized pricing requires frame batching')
         if type(batched_prep)is not bool or batched_prep and not vectorized:raise ValueError('batched preparation requires vectorized D3 pricing')
-        self.vectorized=vectorized;self.batched_prep=batched_prep
+        # device_prep: detach, source sampling and materialization run on device per root batch
+        # (device_public_prep); it implies the batched detach. Default off: the original path is unchanged.
+        if type(device_prep)is not bool or device_prep and not vectorized:raise ValueError('device preparation requires vectorized D3 pricing')
+        self.vectorized=vectorized;self.batched_prep=batched_prep or device_prep;self.device_prep=device_prep
         self.chunk_batch=chunk_batch
         if prepared.pool_sha256!=plan.pool_sha256 or prepared.category_sha256!=plan.model.category_vocabulary_sha256 or prepared.category_size!=plan.model.category_vocab_size:
             raise ValueError('same declared device source/pool/category required')
@@ -115,10 +118,14 @@ class Provider:
         if frame_batch:
             from .device_public_teacher_batch import FramePricer
             self.frame_pricer=FramePricer(self.executor,plan.model,actor_capacity=plan.historical_window+1,
-                **(dict(capacity=4096,vectorized=True,host_prep=batched_prep)if vectorized else{}))
+                **(dict(capacity=4096,vectorized=True,host_prep=self.batched_prep,device_prep=device_prep)if vectorized else{}))
+        self.preparer=None
+        if device_prep:
+            from .device_public_prep import Preparer
+            self.preparer=Preparer(self.source,self.materializer,self.recipe)
 
     def reset_metrics(self):
-        self.frame_counts={};self.batch_timings=[];self.root_prepare_seconds={}
+        self.frame_counts={};self.batch_timings=[];self.root_prepare_seconds={};self.prepare_timings=[]
 
     def record_metrics(self,records):
         if not hasattr(self,'frame_counts'):self.reset_metrics()
@@ -139,6 +146,12 @@ class Provider:
             report['strategy']='D3_VECTORIZED_FRAME_QUEUE'
             report['frame_calls']=[dict(x)for x in self.batch_timings]
             report['root_prepare_by_frame']={str(k):v for k,v in getattr(self,'root_prepare_seconds',{}).items()}
+            if getattr(self,'device_prep',False):
+                timings=getattr(self,'prepare_timings',[])
+                report['preparation']='DEVICE'
+                report['device_prepare_totals']={key:sum(x.get(key,0)for x in timings)for key in
+                    ('roots','seed_seconds','dispatch_seconds','copy_seconds','decode_seconds','total_seconds')}
+                report['device_prepare_batches']=len(timings)
         return report
 
     def bind(self,bank,params):
@@ -262,8 +275,71 @@ class Provider:
                 self.root_prepare_seconds[frame]=self.root_prepare_seconds.get(frame,0.)+time.perf_counter()-preparation_started+detach_seconds/len(pending)
         return records,grouped
 
+    def _prepare_device(self,device_roots,frames,bank):
+        """_prepare_batched with device preparation: the roots of each pricing group (frame, chunked by the
+        pricer capacity) are detached, sampled and materialized in ONE device batch (device_public_prep), so
+        every FramePricer.price call receives exactly one aligned batch. Records, early refusals, requests
+        and their grouping order are the same as the per-root loop's."""
+        from .device_public_teacher_batch import Request
+        records=[];pending=[]
+        for step,row,owner in _requests(frames,bank):
+            step,row,owner=map(int,(step,row,owner));base=binding(frames,bank,step,row,owner)
+            record=dict(base,recipe_seed=self.recipe.seed,status='UNSELECTED',refusal=None,improvement=None,diagnostics=None)
+            records.append(record);address=c.DecisionAddress(**base['address'])
+            if not self.recipe.selected(address):continue
+            record.update(status='REFUSED',refusal='invalid-actual-root-input')
+            if not frames.trainable[step,row,owner]:continue
+            pending.append((record,step,row,owner,address))
+        started=time.perf_counter()
+        try:host=jax.device_get((device_roots.streams,device_roots.frames))
+        except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:host=error
+        groups={}
+        for record,step,row,owner,address in pending:
+            try:
+                if isinstance(host,Exception):raise host
+                streams,frames_=host
+                if (not 0<=step<streams.shape[0] or not 0<=row<streams.shape[1] or int(streams[step,row])!=address.stream
+                        or int(frames_[step,row])!=address.frame):
+                    raise ValueError('PRE root context address differs')
+            except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
+                record.update(status='REFUSED',refusal=type(error).__name__+': '+str(error),improvement=None);continue
+            groups.setdefault(record['address']['frame'],[]).append((record,step,row,owner,address))
+        address_seconds=time.perf_counter()-started;grouped={};capacity=self.frame_pricer.capacity
+        for frame,items in groups.items():
+            for offset in range(0,len(items),capacity):
+                chunk=items[offset:offset+capacity];clock=time.perf_counter()
+                try:
+                    batch=self.preparer.prepare(device_roots,steps=[x[1]for x in chunk],rows=[x[2]for x in chunk],
+                        owners=[x[3]for x in chunk],addresses=[x[4]for x in chunk])
+                except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
+                    for record,*_ in chunk:record.update(status='REFUSED',refusal=type(error).__name__+': '+str(error),improvement=None)
+                    self.root_prepare_seconds[frame]=self.root_prepare_seconds.get(frame,0.)+time.perf_counter()-clock
+                    continue
+                self.prepare_timings.append(dict(batch.timing,frame=frame))
+                for i,(record,step,row,owner,address) in enumerate(chunk):
+                    try:
+                        inputs={name:getattr(frames,name)[step,row,owner][None,None]for name in INPUTS};inputs['history_mask']=np.ones((1,1),bool)
+                        request=Request(batch.plans[i],tuple(map(float,frames.raw_policy_logits[step,row,owner])),
+                            tuple(map(bool,frames.legal_action_mask[step,row,owner])),inputs,
+                            int(frames.actor_indices[step,row,owner]),int(frames.actor_indices[step,row,1-owner]))
+                        grouped.setdefault(frame,[]).append((record,request))
+                    except (ValueError,RuntimeError,TypeError,KeyError,IndexError)as error:
+                        record.update(status='REFUSED',refusal=type(error).__name__+': '+str(error),improvement=None)
+                self.root_prepare_seconds[frame]=self.root_prepare_seconds.get(frame,0.)+time.perf_counter()-clock
+        if pending:
+            share=address_seconds/len(pending)
+            for record,*_ in pending:
+                frame=record['address']['frame'];self.root_prepare_seconds[frame]=self.root_prepare_seconds.get(frame,0.)+share
+        return records,grouped
+
     def _label_chunk_batched(self,device_roots,frames,bank,params):
         from .device_public_teacher_batch import Request
+        if getattr(self,'device_prep',False):
+            self.bind(bank,params)
+            if not hasattr(self,'root_prepare_seconds'):self.root_prepare_seconds={}
+            if not hasattr(self,'prepare_timings'):self.prepare_timings=[]
+            records,grouped=self._prepare_device(device_roots,frames,bank)
+            return self._price_groups(records,grouped,frames,bank,params)
         if getattr(self,'batched_prep',False):
             self.bind(bank,params)
             if not hasattr(self,'root_prepare_seconds'):self.root_prepare_seconds={}

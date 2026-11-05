@@ -41,6 +41,7 @@ def main(argv=None):
     parser.add_argument('--index-sha256', help='sha256 of bank/cost-root-index.json')
     parser.add_argument('--out', help='new output directory')
     parser.add_argument('--batched-prep', action='store_true')
+    parser.add_argument('--device-prep', action='store_true', help='detach, sample and materialize on device (device_public_prep)')
     parser.add_argument('--compare', nargs=2, metavar=('A', 'B'), help='compare two saved-root-parity.json files and exit')
     args = parser.parse_args(argv)
     if args.compare:return 0 if compare(*args.compare)['equal'] else 1
@@ -74,7 +75,7 @@ def main(argv=None):
         log('SERIAL_PARITY_SLOT', ordinal=record['ordinal'], status=record['status'])
     source = os.environ.get('V2_SOURCE_COMMIT') or ''
     result = parity.run(provider, snapshot, snapshot.archive, index, execution_source=source, enable_parity=True,
-        progress_callback=progress, chunk_batch=True, vectorized=True, batched_prep=args.batched_prep)
+        progress_callback=progress, chunk_batch=True, vectorized=True, batched_prep=args.batched_prep, device_prep=args.device_prep)
     (out / 'saved-root-parity.json').write_text(json.dumps(result, sort_keys=True, allow_nan=False) + '\n')
     log('SAVED_ROOT_PARITY_COMPLETE', status=result['status'], totals=result['totals'], batching=result['batching'],
         timings=result['batch_timings'])

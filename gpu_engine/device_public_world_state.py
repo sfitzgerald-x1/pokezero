@@ -166,6 +166,54 @@ def kernel_seed(root, world, recipe):
     return int.from_bytes(recipe._digest(root.address, 'hypothetical-kernel', world)[:4], 'big')
 
 
+def _write_fixture(tables, mon, arrays, address):
+    """One sampled source fixture's physical cell writes (the body of materialize's fixture loop).
+
+    Raises the same ValueError/KeyError refusals in the same order; the device preparation path
+    runs this once per source variant at startup to tabulate the writes and refusal strings.
+    """
+    universe = tables.source.original.universe_for(mon.species)
+    if universe is None or mon.nature != '' or not any(
+            (v.level, tuple(v.moves), normalize_id(v.ability), normalize_id(v.item)) ==
+            (mon.level, tuple(mon.moves), normalize_id(mon.ability), normalize_id(mon.item))
+            for v in universe.variants):
+        raise ValueError('sampled fixture differs from original source row')
+    spread = _gen3_randbat_fixture_spread({}, species=mon.species,
+        moves=tuple(mon.moves), item=mon.item, level=mon.level,
+        set_source=tables.source.original)
+    if spread is None or dict(mon.evs or {}) != dict(spread['evs']) or dict(mon.ivs or {}) != dict(spread['ivs']):
+        raise ValueError('sampled fixture differs from original source spread')
+    info = tables.source.original.species_metadata.get(_normalize_species_id(mon.species), {})
+    base = info.get('baseStats')
+    types = info.get('types')
+    if base is None or not types or not 1 <= len(types) <= 2:
+        raise ValueError('original sampled species stats/types unavailable')
+    stats = [gen3_stat(int(base[key]), int(mon.ivs[key]), int(mon.evs[key]), mon.level)
+        for key in ('atk', 'def', 'spa', 'spd', 'spe')]
+    maximum = 1 if base['hp'] == 1 else gen3_hp_stat(int(base['hp']), int(mon.ivs['hp']),
+        int(mon.evs['hp']), mon.level)
+    arrays['species'][address] = _id(tables, 'species', mon.species)
+    arrays['level'][address] = mon.level
+    arrays['stats'][address] = [maximum, *stats]
+    arrays['hp'][address] = arrays['max_hp'][address] = maximum
+    arrays['gender'][address] = {'N': 0, 'M': 1, 'F': 2}[mon.gender]
+    arrays['ability'][address] = arrays['base_ability'][address] = _id(tables, 'abilities', mon.ability, absent=True)
+    arrays['item'][address] = _id(tables, 'items', mon.item, absent=True)
+    kinds = [_id(tables, 'types', name) for name in types]
+    arrays['types'][address] = arrays['base_types'][address] = kinds+[0]*(2-len(kinds))
+    if not 1 <= len(mon.moves) <= 4:
+        raise ValueError('sampled source moves unavailable')
+    for slot, name in enumerate(mon.moves):
+        move = _id(tables, 'moves', name)
+        arrays['moves'][address+(slot,)] = move
+        arrays['pp'][address+(slot,)] = tables.max_pp[move]
+        if normalize_id(name).startswith('hiddenpower'):
+            resolved = hidden_power_engine_id(normalize_id(name), mon.ivs)
+            typ = resolved[len('hiddenpower'):-2]
+            arrays['hidden_power_type'][address] = _id(tables, 'types', typ)
+            arrays['hidden_power_power'][address] = int(resolved[-2:])
+
+
 def materialize_host(root, start, tables, recipe, *, keys):
     """materialize() for a detach_roots Root, entirely on host numpy (the D3 frame path).
 
@@ -235,47 +283,7 @@ def _materialize(root, start, tables, recipe, host_keys=None):
                 raise ValueError('owner cross-party trap link has no public current source')
             arrays['trap_source'][0, owner, physical] = active
         for physical, mon in enumerate(start.opponent_fixtures):
-            address = (0, foe, physical)
-            universe = tables.source.original.universe_for(mon.species)
-            if universe is None or mon.nature != '' or not any(
-                    (v.level, tuple(v.moves), normalize_id(v.ability), normalize_id(v.item)) ==
-                    (mon.level, tuple(mon.moves), normalize_id(mon.ability), normalize_id(mon.item))
-                    for v in universe.variants):
-                raise ValueError('sampled fixture differs from original source row')
-            spread = _gen3_randbat_fixture_spread({}, species=mon.species,
-                moves=tuple(mon.moves), item=mon.item, level=mon.level,
-                set_source=tables.source.original)
-            if spread is None or dict(mon.evs or {}) != dict(spread['evs']) or dict(mon.ivs or {}) != dict(spread['ivs']):
-                raise ValueError('sampled fixture differs from original source spread')
-            info = tables.source.original.species_metadata.get(_normalize_species_id(mon.species), {})
-            base = info.get('baseStats')
-            types = info.get('types')
-            if base is None or not types or not 1 <= len(types) <= 2:
-                raise ValueError('original sampled species stats/types unavailable')
-            stats = [gen3_stat(int(base[key]), int(mon.ivs[key]), int(mon.evs[key]), mon.level)
-                for key in ('atk', 'def', 'spa', 'spd', 'spe')]
-            maximum = 1 if base['hp'] == 1 else gen3_hp_stat(int(base['hp']), int(mon.ivs['hp']),
-                int(mon.evs['hp']), mon.level)
-            arrays['species'][address] = _id(tables, 'species', mon.species)
-            arrays['level'][address] = mon.level
-            arrays['stats'][address] = [maximum, *stats]
-            arrays['hp'][address] = arrays['max_hp'][address] = maximum
-            arrays['gender'][address] = {'N': 0, 'M': 1, 'F': 2}[mon.gender]
-            arrays['ability'][address] = arrays['base_ability'][address] = _id(tables, 'abilities', mon.ability, absent=True)
-            arrays['item'][address] = _id(tables, 'items', mon.item, absent=True)
-            kinds = [_id(tables, 'types', name) for name in types]
-            arrays['types'][address] = arrays['base_types'][address] = kinds+[0]*(2-len(kinds))
-            if not 1 <= len(mon.moves) <= 4:
-                raise ValueError('sampled source moves unavailable')
-            for slot, name in enumerate(mon.moves):
-                move = _id(tables, 'moves', name)
-                arrays['moves'][address+(slot,)] = move
-                arrays['pp'][address+(slot,)] = tables.max_pp[move]
-                if normalize_id(name).startswith('hiddenpower'):
-                    resolved = hidden_power_engine_id(normalize_id(name), mon.ivs)
-                    typ = resolved[len('hiddenpower'):-2]
-                    arrays['hidden_power_type'][address] = _id(tables, 'types', typ)
-                    arrays['hidden_power_power'][address] = int(resolved[-2:])
+            _write_fixture(tables, mon, arrays, (0, foe, physical))
         for public_slot, physical in assignment.items():
             address = (0, foe, physical)
             fraction = float(view['hp_fraction'][0, public_slot])
