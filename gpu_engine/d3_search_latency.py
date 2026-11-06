@@ -1,9 +1,10 @@
 """End-to-end wall time per search call at small capacity: which search configs can play at 1,000 ms per move (800 ms rule).
 
 One CALL is one search decision for C roots (C games' moves batched together; --capacities, default 1,4,16), from the D3 bank
-chunk's raw device roots and host frames to each root's move. Roots: the chunk's first C labeled requests, cycled when it has
-fewer (d3_depthn_throughput.prepare: the gate's --d3-root --chunk builder, head override and evaluator header, imported), the
-same C every call. Configs (--configs NAME@W/W; default depth2-fw and depth2-merged at W=2 and 8, depth3-prior-k3 and
+chunk's raw device roots and host frames to each root's move. Roots: the chunk's labeled requests (d3_depthn_throughput.prepare:
+the gate's --d3-root --chunk builder, head override and evaluator header, imported), sorted by decision frame (turn); every
+call of a series prices its own move window of C of them, drawn at evenly spaced quantiles of the frame-sorted chunk so each
+window and each series span early-to-late turns (window_roots). Configs (--configs NAME@W/W; default depth2-fw and depth2-merged at W=2 and 8, depth3-prior-k3 and
 depth3-searched-k3 at W=2), one pricer instance per (config, pricer capacity):
 - d3_depthn_throughput's names are DepthNPricer(fixed_capacity=True, digest=False) built by its Caller; searched = the full-width
   depth-2 pass, searched_maps on the host, depth N at the maps' widths; depth2-fw is DepthNPricer at N=2, k=9.
@@ -59,16 +60,19 @@ one stage, so the stages sum to the call's wall time; seconds a pricer measures 
   EXCLUDED from the end-to-end total = host_prep + world_construction + pricer + solve + return.
 No stage leaves device work queued: a device fence (a tiny op on the default device, block_until_ready) ends host_prep, every
 price() and every return. A solve pool (--solver-pool N > 0) is N spawn workers with 1 BLAS/OpenMP thread each, created before
-any timed call and warmed (solve modules imported, a 2x2 hedge LP solved); its startup seconds are reported in the header,
-never inside a call. W = 2K worlds per root in K recipe blocks: `sequential` = K price passes of C roots inside one call (the
+any timed call and warmed (solve modules and every MODULE:FUNC solver's module imported, a 2x2 hedge LP solved); its startup
+seconds and each worker's state are reported in the header, never inside a call. One pool map may take --solver-timeout
+seconds; past it the pool is torn down and the series (and every later one using it) becomes an error row. W = 2K worlds per root in K recipe blocks: `sequential` = K price passes of C roots inside one call (the
 per-move latency of one game); `packed` (W > 2, unless --no-packed) = ONE pass at pricer capacity K*C holding K rows per
 root (row b*C + i for root i). packed is a TIMING PROXY: price() takes one recipe and materialization refuses a start planned
 under another recipe (device_public_world_state._materialize checks each start's seed against it), so it plans blocks
 1..K-1 as sequential does (their cost counted) but prices K COPIES of block 0's requests under block 0's recipe; the device
 work has the K-block shapes, the values are block 0's K times, not U1's composition.
-Per (config, capacity, W, mode): 1 first (cold) call on move window 0, then --repeats warm calls, warm call i on its own
-window of C roots (the chunk's labeled roots i*C .. i*C+C-1, cycled), so the statistics span N distinct moves, not one move
-re-timed. The first call of a (config, capacity) is its cold call: its compile seconds are reported apart, and it also pays
+Per (config, capacity, W, mode): 1 first (cold) call on move window 0, then --repeats warm calls, warm call i on window i:
+with M = C x (N + 1) slots over the n frame-sorted roots, window i takes the roots at quantile positions floor((k + 1/2) n / M)
+for k = i, i + N + 1, i + 2(N + 1), ... (C of them), so every window spans the chunk's turns and the windows interleave; with
+n < M slots repeat (wrap-around, reported as distinct roots < root slots). The statistics span N distinct moves, not one
+move re-timed; each call records its roots and their frames (turns). The first call of a (config, capacity) is its cold call: its compile seconds are reported apart, and it also pays
 untracked first-use compiles (detach_roots' program, eager readout ops, the fence) inside its stages; no first call enters
 any statistic. Over the warm calls: median, p90 (numpy's linear interpolation) and max of every stage, part and the total;
 a warm call that still compiled (e.g. a new pool size's gather/write) is flagged and logged (WARM_COMPILE). Per call the
@@ -123,9 +127,10 @@ from .d3_depthn_gate import split_searched
 SCHEMA = 'pokezero.search-latency.v1'
 BUDGET_MS = 1000.
 LIMIT_MS = 800.
-RULE = ('a (config, W, mode, solver, pool) fits at capacity C when the p90 over its N distinct move windows (warm call i prices the '
-    'chunk\'s roots i*C .. i*C+C-1, cycled; N = --repeats) of the end-to-end totals is <= 800 ms (200 ms of slack under the 1,000 ms '
-    'per-move budget); the median is shown beside it; the cold call (window 0) is excluded')
+RULE = ('a (config, W, mode, solver, pool) fits at capacity C when the p90 over its N distinct move windows (warm call i prices C '
+    'roots at evenly spaced quantiles of the frame-sorted chunk, interleaved across windows so each spans early-to-late turns; N = --repeats) '
+    'of the end-to-end totals is <= 800 ms (200 ms of slack under the 1,000 ms per-move budget); the median is shown beside it; the cold '
+    'call (window 0) is excluded')
 STAGES = ('root_forward', 'host_prep', 'world_construction', 'pricer', 'solve', 'return')
 SHARED = STAGES[:4]   # every variant of a call shares these; solve and return are each variant's own
 COMPILE = 'compile'
@@ -243,6 +248,8 @@ def parse(argv=None):
         '(search_hedge, PR #1829) or MODULE:FUNC with rule(grid, pi_own, pi_opp) -> value')
     parser.add_argument('--solver-pool', default='0', help='solve pool sizes, comma-separated: 0 = in process, N = a persistent N-process spawn pool '
         '(started before any timed call); every series is solved once per (solver, pool size) on the same frames')
+    parser.add_argument('--solver-timeout', type=float, default=600., help='seconds one pool map may take before the pool is torn down and the series '
+        'becomes an error row (default %(default)s)')
     parser.add_argument('--hedge-module', default=HEDGE_MODULE, help='the search_hedge module (default %(default)s)')
     parser.add_argument('--hedge-commit', default=HEDGE_COMMIT, help='the commit search_hedge.py was shipped from, recorded in the header (default %(default)s)')
     parser.add_argument('--no-packed', dest='packed', action='store_false', help='skip the packed W > 2 mode (one pass at capacity K*C)')
@@ -262,6 +269,7 @@ def parse(argv=None):
         args.solver_specs = parse_solvers(args.solver);args.pool_sizes = tuple(sorted(set(ints(args.solver_pool))))
     except ValueError as error:parser.error(str(error))
     if min(args.pool_sizes) < 0:parser.error('--solver-pool sizes are >= 0 (0 = in process)')
+    if not args.solver_timeout > 0:parser.error('positive --solver-timeout required')
     if args.chunk < 0 or args.repeats < 1 or args.block_lanes < 1 or min(args.capacity_values) < 1:parser.error('--chunk >= 0 and positive --capacities/--repeats/--block-lanes')
     if any(not 1 <= k <= 9 for k in (args.k1_own, args.k1_opp)):parser.error('turn-1 widths must be 1..9')
     if args.max_roots is not None and args.max_roots < 1:parser.error('positive --max-roots required')
@@ -515,39 +523,63 @@ _WORKER_ERROR = None
 POOL_THREADS = {'OMP_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'}
 
 
-def _init_worker(hedge_module):
-    """A spawn worker's start: import the solve modules and, with the hedge, warm its LP path on a 2x2 game without a saddle."""
+_WORKER_STATE = {}
+
+
+def _init_worker(hedge_module, modules=()):
+    """A spawn worker's start: import the solve modules and every MODULE:FUNC solver's module and, with the hedge, warm its LP
+    path on a 2x2 game without a saddle; its state (warm-up value, modules, thread environment) answers start_pool's pings."""
     global _WORKER_ERROR
     try:
         from pokezero import v5_gumbel   # noqa: F401
         from gpu_engine import depth2_backups, depthn_backups   # noqa: F401
-        if hedge_module:importlib.import_module(hedge_module).matrix_game(np.asarray([[1., -1.], [-1., 1.]]))
+        for module in modules:importlib.import_module(module)
+        _WORKER_STATE.update(modules=list(modules), threads={k: os.environ.get(k) for k in POOL_THREADS})
+        if hedge_module:_WORKER_STATE['warm_value'] = float(importlib.import_module(hedge_module).matrix_game(np.asarray([[1., -1.], [-1., 1.]]))[0])
     except Exception as error:_WORKER_ERROR = f'{type(error).__name__}: {error}'
 
 
 def _ping(_):
-    time.sleep(.02);return os.getpid(), _WORKER_ERROR
+    time.sleep(.02);return os.getpid(), _WORKER_ERROR, dict(_WORKER_STATE)
 
 
-def start_pool(size, *, hedge_module=None, timer=time.perf_counter, context=None, timeout=600.):
+class SolvePool:
+    """A started pool with a per-call deadline: map() waits at most `timeout` seconds (map_async(...).get); a timeout tears the
+    pool down and raises (the series becomes an error row), and every later map on it raises at once."""
+    def __init__(self, pool, size, timeout):
+        self.pool, self.size, self.timeout, self.dead = pool, size, timeout, None
+
+    def map(self, fn, units, chunksize=1):
+        import multiprocessing
+        if self.dead:raise RuntimeError(f'the {self.size}-worker solve pool was torn down: {self.dead}')
+        try:return self.pool.map_async(fn, units, chunksize=chunksize).get(timeout=self.timeout)
+        except multiprocessing.TimeoutError:
+            self.dead = f'a solve map exceeded {self.timeout:.0f} s';self.close()
+            raise TimeoutError(f'the {self.size}-worker solve pool: {self.dead}; pool torn down') from None
+
+    def close(self):
+        self.pool.terminate();self.pool.join()
+
+
+def start_pool(size, *, hedge_module=None, modules=(), timer=time.perf_counter, context=None, timeout=600.):
     """A persistent spawn pool of `size` workers (1 BLAS/OpenMP thread each), returned once every worker has started, imported
     the solve modules and warmed the hedge LP: (pool, info). Its startup_seconds are reported apart and never enter a call.
     A worker that dies while starting makes multiprocessing.Pool respawn it forever, so startup is bounded by `timeout` seconds."""
     import multiprocessing
     clock = timer();deadline = time.monotonic() + timeout
-    with patch.dict(os.environ, POOL_THREADS):pool = (context or multiprocessing.get_context('spawn')).Pool(size, initializer=_init_worker, initargs=(hedge_module,))
-    seen, errors = set(), set()
+    with patch.dict(os.environ, POOL_THREADS):pool = (context or multiprocessing.get_context('spawn')).Pool(size, initializer=_init_worker, initargs=(hedge_module, tuple(modules)))
+    seen, errors, states = set(), set(), {}
     while len(seen) < size:
         try:answers = pool.map_async(_ping, range(2 * size), chunksize=1).get(timeout=max(1., deadline - time.monotonic()))
         except multiprocessing.TimeoutError:
             pool.terminate();raise SystemExit(f'the {size}-worker solve pool did not start within {timeout:.0f} s (a worker failing at import is respawned forever)') from None
-        for pid, error in answers:
-            seen.add(pid)
+        for pid, error, state in answers:
+            seen.add(pid);states[pid] = state
             if error:errors.add(error)
         if errors:pool.terminate();raise SystemExit(f'a solve pool worker failed to start: {sorted(errors)[0]}')
         if time.monotonic() > deadline:pool.terminate();raise SystemExit(f'only {len(seen)} of {size} solve pool workers answered within {timeout:.0f} s')
     return pool, dict(workers=size, answered=len(seen), startup_seconds=timer() - clock, start_method='spawn', threads_per_worker=POOL_THREADS,
-        hedge_module=hedge_module, scope='created, imported and warmed before any timed call; per call the solve stage holds slicing, pickling, IPC and the worlds')
+        hedge_module=hedge_module, modules=list(modules), worker_states=[states[pid] for pid in sorted(states)], scope='created, imported and warmed before any timed call; per call the solve stage holds slicing, pickling, IPC and the worlds')
 
 
 def variants_of(solvers):
@@ -706,6 +738,7 @@ def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, ro
     record.update(roots=count, worlds=worlds, mode=mode, blocks=blocks, common_seconds=common, variants={v.name: out[v.name] for v in variants},
         variant_order=[v.name for v in order], pricing=infos, enumerated_leaves=None if any(e is None for e in enumerated) else int(sum(enumerated)),
         window=getattr(roots, 'window', None), root_keys=[list(k) if isinstance(k, tuple) else k for k in getattr(roots, 'keys', [])],
+        frames=[k[1] if isinstance(k, (tuple, list)) and len(k) == 3 else None for k in getattr(roots, 'keys', [])],
         host_prep_steps=prep_info.get('steps'), detach_passes=prep_info.get('detach_passes'), expanded_nodes=expanded_nodes(frames))
     return record, requests
 
@@ -741,6 +774,16 @@ def variant_view(call, name):
         total_seconds=v['total_seconds'], labeled=v['labeled'], refused=v['refused'], moves=v['moves'], leftover_device_arrays=v['leftover_device_arrays'])
 
 
+def windows_of(warm, capacity):
+    """The roots and turns a series' warm calls covered: distinct roots against C x N slots (fewer = wrap-around), the distinct
+    decision frames and their span, each call's window."""
+    distinct = len({json.dumps(k) for c in warm for k in c.get('root_keys') or ()});slots = capacity * len(warm)
+    frames = sorted({f for c in warm for f in c.get('frames') or () if f is not None})
+    return dict(warm=[c.get('window') for c in warm], distinct_roots=distinct, root_slots=slots, wrapped=distinct < slots, frames=frames,
+        frame_span=[frames[0], frames[-1]] if frames else None, per_call_frames=[c.get('frames') for c in warm],
+        scope='distinct roots over the warm windows (fewer than C x N slots: the chunk wrapped); frames = decision frames (turns) covered')
+
+
 def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
     """One series for one variant: the first call apart (its compile, wall and stages), warm-call statistics, leaves, memory and
     every call as this variant saw it."""
@@ -766,8 +809,7 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
         warm_parts={k: distribution([c['parts'].get(k, 0.) for c in warm]) for k in parts},
         warm_calls=len(warm), warm_calls_with_compiles=sum(c['stages'][COMPILE] > 0 for c in warm), warm_compile_seconds=sum(c['stages'][COMPILE] for c in warm),
         labeled=first['labeled'], leftover_device_arrays=max(c['leftover_device_arrays'] for c in calls), leaves=leaves,
-        windows=dict(warm=[c.get('window') for c in warm], distinct_roots=len({json.dumps(k) for c in warm for k in c.get('root_keys') or ()}),
-            root_slots=capacity * len(warm), scope='distinct roots over the warm windows; fewer than C x N when the chunk wraps'),
+        windows=windows_of(warm, capacity),
         spread=dict(leaves_per_world=count_spread([None if c.get('enumerated_leaves') is None else c['enumerated_leaves'] / (capacity * worlds) for c in warm]),
             expanded_nodes=count_spread([c.get('expanded_nodes') for c in warm]), refused_roots=count_spread([c.get('refused') for c in warm]),
             host_prep_steps=count_spread([c.get('host_prep_steps') for c in warm]), scope='per warm call (each its own move window)'),
@@ -783,7 +825,7 @@ def measure_config(name, worlds, args, ctx, progress, *, solver=None, variants=N
     call reports what it compiled. on_series(group) gets each finished (capacity, W, mode) group, error rows included."""
     out, searches = [], {};variants = variants_of(variants if variants is not None else solver)
     for capacity in args.capacity_values:
-        roots_of = lambda window, capacity=capacity: ctx.roots(capacity, window);baseline = memory() or {};first = True
+        roots_of = lambda window, capacity=capacity: ctx.roots(capacity, window, 1 + args.repeats);baseline = memory() or {};first = True
         for w in worlds:
             blocks = w // 2
             for mode in ('sequential',) + (('packed',) if blocks > 1 and args.packed else ()):
@@ -849,11 +891,14 @@ def capture_chunk(captured, *, compile_cache=None):
     if 'frames' not in captured:raise SystemExit('the bank chunk\'s _prepare_batched inputs were not captured (bank_chunk_requests changed shape)')
 
 
-def window_roots(available, capacity, window):
-    """Move window `window`: the labeled roots window*C .. window*C+C-1 of the chunk, cycled."""
-    available = list(available)
+def window_roots(available, capacity, window, windows=1):
+    """Move window `window` of a series' `windows` calls over `available` sorted by decision frame (turn): with M = C x windows
+    slots, the C roots at positions floor((k + 1/2) n / M) for k = window, window + windows, ... Every window spans the chunk's
+    turns, the windows interleave, and with n >= M no root repeats within a series (n < M: positions repeat, a wrap-around)."""
+    available = list(available);n = len(available);slots = capacity * windows
     if not available:raise ValueError('the chunk has no priced request')
-    return [available[(window * capacity + j) % len(available)] for j in range(capacity)]
+    if not 0 <= window < windows:raise ValueError('window index outside the series')
+    return [available[min(n - 1, int((window + j * windows + .5) * n / slots))] for j in range(capacity)]
 
 
 def address_key(request):
@@ -930,9 +975,10 @@ def prepare(args):
     bypass = lambda: patch.object(original.Recipe, 'selected', lambda self, address: True)   # U1's quarter-selection bypass, blocks > 0
     blocks = [(provider.recipe, nullcontext) if b == 0 else (original.Recipe(seed), bypass) for b, seed in enumerate(seeds)]
     ctx = SimpleNamespace(**vars(base));missing = [address_key(r) for r in base.available if address_key(r) not in slot_of]
+    ctx.available = sorted(base.available, key=lambda r: (address_key(r)[1], address_key(r)[0], address_key(r)[2]))   # by decision frame (turn), then game
     if missing:raise SystemExit(f'{len(missing)} labeled roots have no (step, row, owner) in the captured chunk, e.g. {missing[0]}')
-    def roots(capacity, window=0):
-        bound = window_roots(ctx.available, capacity, window)
+    def roots(capacity, window=0, windows=1):
+        bound = window_roots(ctx.available, capacity, window, windows)
         return SimpleNamespace(bound=bound, slots=[slot_of[address_key(r)] for r in bound], window=window, keys=[address_key(r) for r in bound])
     ctx.chunk = SimpleNamespace(roots=captured['roots'], frames=frames, bank=bank);ctx.head_override = bool(args.head_archive);ctx.seeds = seeds;ctx.blocks = blocks
     import jax
@@ -1021,8 +1067,9 @@ def largest_within(p90_by_capacity, limit_ms=LIMIT_MS):
 def select(series, limit_ms=LIMIT_MS):
     """Rows (config, W, mode, solver variant) -> per-capacity warm total median/p90 (an error row: none, so it never fits) and the largest fitting C; per config and
     variant the largest fitting C (with its W) and the largest fitting W (with its C), over sequential rows, packed apart as a proxy."""
-    rows, errors = {}, {}
+    rows, errors, unplaced = {}, {}, []
     for s in series:
+        if s.get('capacity') is None:unplaced.append(s);continue   # an error row with no capacity cannot sit in a capacity column
         rows.setdefault((s['config'], s['worlds'], s['mode'], s.get('variant')), [s, {}])[1][s['capacity']] = s['warm']['total']
         if s.get('error'):errors[(s['config'], s['worlds'], s['mode'], s.get('variant'), s['capacity'])] = f'{s["error"]["type"]}: {s["error"]["message"][:200]}'
     out = []
@@ -1043,7 +1090,18 @@ def select(series, limit_ms=LIMIT_MS):
             largest_capacity=best(seq, lambda r: (r['largest_capacity'], r['worlds'])), largest_worlds=best(seq, lambda r: (r['worlds'], r['largest_capacity'])),
             packed_proxy=None if not packed else dict(largest_capacity=best(packed, lambda r: (r['largest_capacity'], r['worlds'])),
                 largest_worlds=best(packed, lambda r: (r['worlds'], r['largest_capacity']))))
-    return dict(rule=RULE, limit_ms=limit_ms, rows=out, configs=configs)
+    for s in unplaced:   # every config seen has an entry: one that only failed fits nothing and carries its error
+        configs.setdefault(s.get('config'), {}).setdefault(s.get('variant'), dict(measured_worlds=[], largest_capacity=None, largest_worlds=None,
+            packed_proxy=None, error=s.get('error')))
+    return dict(rule=RULE, limit_ms=limit_ms, rows=out, configs=configs,
+        unplaced_errors=[dict(config=s.get('config'), variant=s.get('variant'), **(s.get('error') or {})) for s in unplaced])
+
+
+def window_cell(windows):
+    """distinct / slots (WRAPPED when the chunk repeated roots), turns min-max."""
+    if not windows:return '-'
+    span = '' if not windows.get('frame_span') else f', turns {windows["frame_span"][0]}-{windows["frame_span"][1]}'
+    return f'{windows["distinct_roots"]} / {windows["root_slots"]}' + (' WRAPPED' if windows.get('wrapped') else '') + span
 
 
 def _ms(x):
@@ -1080,23 +1138,24 @@ def markdown(report):
             f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p90_ms"])} {"fit" if r["verdicts"][str(c)] else "over"}')
             if str(c) in r['by_capacity'] else '-' for c in caps]
         largest = ('-' if r['largest_capacity'] is None else str(r['largest_capacity'])) + ('' if r['monotone'] else f' (C={r["largest_capacity_any"]} fits alone)')
-        lines.append(f'| {r["config"]} | {r["worlds"]} | {r["mode"] + (" (proxy)" if r["mode"] == "packed" else "")} | {r["solver"]} | {r["pool"]} | '
+        lines.append(f'| {r["config"]} | {r["worlds"]} | {r["mode"]}{" (proxy)" if r["mode"] == "packed" else ""} | {r["solver"]} | {r["pool"]} | '
             + ' | '.join(cells) + f' | {largest} |')
     lines += ['', 'Largest fitting, sequential (playable today): ' + '; '.join(
         f'{c} [{n}]: C={v["largest_capacity"]["capacity"]} at W={v["largest_capacity"]["worlds"]}, W={v["largest_worlds"]["worlds"]} at C={v["largest_worlds"]["capacity"]}'
         if v['largest_capacity'] else f'{c} [{n}]: none of C={caps} at W={v["measured_worlds"]}' for c, by in sel['configs'].items() for n, v in by.items()) + '.',
-        f'Packed rows are a timing proxy ({PACKED_NOTE}).', '',
+        f'Packed rows are a timing proxy ({PACKED_NOTE}).'] + [f'ERROR without a capacity, {e.get("config")}: {e.get("type")}: {e.get("message")}'
+        for e in sel.get('unplaced_errors', ())] + ['',
         f'### Stage medians (ms), warm calls [{world}]', '',
-        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} blocks >= 1, block 0 in host_prep, + {_short(path["world_builder"])}; source {commit["commit"][:12]}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured |',
-        '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} blocks >= 1, block 0 in host_prep, + {_short(path["world_builder"])}; source {commit["commit"][:12]}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured | roots distinct / slots, turns |',
+        '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for s in report['series']:
         if s.get('error'):
             lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ERROR {s["error"]["type"]}: '
-                + s['error']['message'][:120].replace('|', '/').replace('\n', ' ') + ' |' + ' - |' * (len(STAGES) + 4));continue
+                + s['error']['message'][:120].replace('|', '/').replace('\n', ' ') + ' |' + ' - |' * (len(STAGES) + 5));continue
         w = s['warm'];leaves = s['leaves']
         lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ' + ' | '.join(_ms(w[k]['median_ms']) for k in STAGES)
             + f' | {_ms(w["total"]["median_ms"])} | {_ms(w["total"]["p90_ms"])} | {s["first_call"]["compile_seconds"]:.1f} | {leaves["nominal_per_world"]} / '
-            + ('-' if leaves['measured_per_world'] is None else f'{leaves["measured_per_world"]:.0f}') + ' |')
+            + ('-' if leaves['measured_per_world'] is None else f'{leaves["measured_per_world"]:.0f}') + ' | ' + window_cell(s.get('windows')) + ' |')
     return '\n'.join(lines) + '\n'
 
 
@@ -1107,7 +1166,7 @@ def report_of(args, sections, context, commit, *, isolated_run, partial=False):
         source=context['source'], devices=context['devices'], capacities=list(args.capacity_values), configs={k: list(v) for k, v in args.config_worlds.items()},
         repeats=args.repeats, packed=args.packed, block_lanes=args.block_lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, roots_available=context['roots_available'],
         cycled=context['roots_available'] < max(args.capacity_values), block_seeds=context.get('block_seeds'), compile_cache=context.get('compile_cache'),
-        isolated=isolated_run, memory_scope=t2.MEMORY_SCOPE + ' The captured chunk RootContext stays alive for host_prep and is in every baseline.'
+        isolated=isolated_run, isolate_failures=context.get('isolate_failures', []), memory_scope=t2.MEMORY_SCOPE + ' The captured chunk RootContext stays alive for host_prep and is in every baseline.'
             + (' (isolated: one process per config)' if isolated_run else ' Configs share one process and one compiled-program table.'),
         selection=select(series), partial=partial,
         errors=[dict({k: s[k] for k in ('config', 'capacity', 'worlds', 'mode', 'variant')}, **s['error']) for s in series if s.get('error')], series=series)
@@ -1116,7 +1175,8 @@ def report_of(args, sections, context, commit, *, isolated_run, partial=False):
 
 
 def isolated(args, argv, out):
-    """--isolate: each config in its own subprocess (`--only NAME --out OUT/NAME`); returns ({name: its series}, {name: context})."""
+    """--isolate: each config in its own subprocess (`--only NAME --out OUT/NAME`); returns ({name: its series}, {name: context}, failures).
+    A process that exits non-zero keeps the series its latency.json holds; each series it did not finish becomes an error row with its identity."""
     argv = list(sys.argv[1:] if argv is None else argv);clean, skip = [], False
     for token in argv:
         if skip:skip = False;continue
@@ -1127,17 +1187,31 @@ def isolated(args, argv, out):
         if token.startswith('--compile-cache=') or token == '--no-compile-cache':continue
         clean.append(token)
     clean += ['--compile-cache', args.compile_cache] if args.compile_cache else ['--no-compile-cache']   # every config process shares the parent's cache
-    sections, contexts = {}, {}
+    sections, contexts, failures = {}, {}, []
     for name in args.config_worlds:
         target = out / name
         code = subprocess.call([sys.executable, '-m', 'gpu_engine.d3_search_latency', *clean, '--only', name, '--out', str(target)])
         written = target / 'latency.json';child = json.loads(written.read_text()) if written.exists() else {}
         sections[name] = list((child.get('sections') or {}).get(name, []));contexts[name] = child.get('context')
-        if code != 0:   # the series it finished stay (its latency.json is rewritten after each); the rest is one error row
-            sections[name].append(dict(config=name, capacity=None, worlds=None, mode=None, solver=None, pool=None, variant=None, warm={'total': distribution([])},
-                first_call=None, error=dict(type='SubprocessExit', message=f'the --only {name} process exited {code} after {len(sections[name])} series', traceback=[])))
+        if code != 0:   # the series it finished stay (its latency.json is rewritten after each); every series it did not finish is an error row
+            done = {(x.get('capacity'), x.get('worlds'), x.get('mode'), x.get('variant')) for x in sections[name]}
+            missing = [e for e in expected_series(args, name) if (e['capacity'], e['worlds'], e['mode'], e['variant']) not in done]
+            sections[name] += [dict(e, blocks=e['worlds'] // 2, warm={k: distribution([]) for k in STAGES + ('total',)}, first_call=None, error=dict(type='SubprocessExit',
+                message=f'the --only {name} process exited {code} after {len(done)} series; this series did not run', traceback=[])) for e in missing]
+            failures.append(dict(config=name, exit_code=code, series_written=len(done), series_missing=len(missing)))
     if not any(contexts.values()):raise SystemExit('--isolate: no config process wrote a context (each died before loading the bank)')
-    return sections, contexts
+    return sections, contexts, failures
+
+
+def expected_series(args, name):
+    """Every series one config's run measures, as identities: (capacity, W, mode) by solver variant (make_variants' names)."""
+    for capacity in args.capacity_values:
+        for w in args.config_worlds[name]:
+            for mode in ('sequential',) + (('packed',) if w // 2 > 1 and args.packed else ()):
+                for spec in args.solver_specs:
+                    for size in args.pool_sizes:
+                        yield dict(config=name, capacity=capacity, worlds=w, mode=mode, solver=spec, pool=size, variant=f'{spec}@pool{size}',
+                            pricer_capacity=capacity if mode == 'sequential' else w // 2 * capacity, timing_proxy=mode == 'packed')
 
 
 def main(argv=None):
@@ -1150,7 +1224,7 @@ def main(argv=None):
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     if args.isolate:
         gate.log('LATENCY_START', configs=args.config_worlds, capacities=args.capacity_values, isolate=True)
-        sections, contexts = isolated(args, argv, out);context = next(c for c in contexts.values() if c)
+        sections, contexts, failures = isolated(args, argv, out);context = dict(next(c for c in contexts.values() if c), isolate_failures=failures)
         context['solver_pools'] = [dict(p, config=name) for name, c in contexts.items() if c for p in (c.get('solver_pools') or [])]   # pools per config process
     else:
         ctx = prepare(args)   # solver modules import after the memory policy
@@ -1162,7 +1236,9 @@ def main(argv=None):
         try:
             for size in args.pool_sizes:   # persistent pools, started (and their startup timed) before any call
                 if not size:pools[0] = None;continue
-                pools[size], info = start_pool(size, hedge_module=args.hedge_module if hedge is not None else None);pool_infos.append(info);gate.log('SOLVER_POOL', **info)
+                pool, info = start_pool(size, hedge_module=args.hedge_module if hedge is not None else None,
+                    modules=[parse_solver(spec)[0] for spec in args.solver_specs if parse_solver(spec) is not None])
+                pools[size] = SolvePool(pool, size, args.solver_timeout);pool_infos.append(info);gate.log('SOLVER_POOL', **info)
             variants = make_variants(solvers, pools)
             context = dict(evaluator=ctx.evaluator, root_values=list(ctx.root_values), roots_available=len(ctx.available), source=ctx.source,
                 devices=[d.device_kind for d in jax.devices()], block_seeds=list(ctx.seeds), compile_cache=ctx.compile_cache, solvers=[s.describe() for s in solvers],
@@ -1182,7 +1258,7 @@ def main(argv=None):
             sections = recorder.sections
         finally:
             for pool in pools.values():
-                if pool is not None:pool.terminate();pool.join()
+                if pool is not None:pool.close()
         if args.only:recorder.write(partial=False);return 0
     report = Recorder(out / 'latency.json', lambda sections_, partial: report_of(args, sections_, context, commit, isolated_run=args.isolate, partial=partial))
     report.sections = sections;report = report.write(partial=False)   # evaluator first, then the header

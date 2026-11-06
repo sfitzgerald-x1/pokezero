@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import math
+import os
 from pathlib import Path
 import pickle
 import sys
@@ -117,7 +118,7 @@ class FakeSolver:
         return [dict(status='LABELED', policy_target=(0., 1.) + (0.,) * 7) for _ in requests]
 
     def moves(self, results, requests):
-        return [tool.move_of(r) for r in results]
+        CLOCK.advance(.0002);return [tool.move_of(r) for r in results]   # the return stage costs time, so a total that drops it is caught
 
 
 def address(i):
@@ -145,12 +146,18 @@ def fake_ctx(blocks=4):
         CLOCK.advance(.001);return request(r.root, RECIPES.index(recipe))
     ctx.prep, ctx.replan, ctx.root_forward = prep, replan, lambda roots: CLOCK.advance(.004)
     ctx.check = lambda requests, roots: ctx.checked.append(len(requests))
-    ctx.available = list(range(64))
-    def roots(capacity, window=0):
-        bound = tool.window_roots(ctx.available, capacity, window)
-        return SimpleNamespace(bound=bound, slots=[(0, i, 0) for i in bound], window=window, keys=list(bound))
+    ctx.available = list(range(64))   # already frame-sorted: root i is game 100+i at decision frame (turn) i // 4
+    def roots(capacity, window=0, windows=1):
+        bound = tool.window_roots(ctx.available, capacity, window, windows)
+        return SimpleNamespace(bound=bound, slots=[(0, i, 0) for i in bound], window=window, keys=[(100 + i, i // 4, i % 2) for i in bound])
     ctx.roots = roots
     return ctx
+
+
+def matrix_game(values):
+    """search_hedge.matrix_game's signature for real spawn workers (this module is their stand-in hedge module): the pure maximin."""
+    m = np.asarray(values, np.float64);x = np.zeros(len(m));x[int(np.argmax(m.min(axis=1)))] = 1.
+    return float(m.min(axis=1).max()), x
 
 
 def pessimistic(grid, pi_own, pi_opp):
@@ -331,7 +338,8 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(s['world_construction'], .02);self.assertAlmostEqual(p['world_construction.materialize'], .02)   # the pass and depth N each materialize
         self.assertAlmostEqual(p['pricer.depth2_pass'], .008);self.assertAlmostEqual(p['pricer.searched_maps_host'], .005);self.assertAlmostEqual(p['pricer.depthn'], .008)
         self.assertAlmostEqual(s['pricer'], p['pricer.depth2_pass'] + p['pricer.searched_maps_host'] + p['pricer.depthn'], places=12)
-        self.assertAlmostEqual(s['solve'], .0004);self.assertAlmostEqual(s['return'], 0.)
+        self.assertAlmostEqual(s['solve'], .0004);self.assertAlmostEqual(s['return'], .0002)
+        self.assertAlmostEqual(v['total_seconds'], record['common_seconds'] + s['solve'] + s['return'], places=12)
         self.assertAlmostEqual(p['host_prep.detach'], .002)   # a part measured inside host_prep: noted, never added to the stage
         self.assertEqual((v['labeled'], v['moves'], v['leftover_device_arrays']), (4, [1] * 4, 0))
         self.assertAlmostEqual(record['common_seconds'], s['root_forward'] + s['host_prep'] + s['world_construction'] + s['pricer'], places=12)
@@ -351,7 +359,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(s['root_forward'], .004 + FENCE);self.assertAlmostEqual(s['host_prep'], .003 + FENCE)   # each ends with its fence
         self.assertAlmostEqual(p['pricer.depth2_pass'], .008 + FENCE);self.assertAlmostEqual(p['pricer.depthn'], .008 + FENCE)   # each price() ends synced
         self.assertAlmostEqual(p['pricer.searched_maps_host'], .005)   # the host maps hold no fence
-        self.assertAlmostEqual(s['return'], SYNC + FENCE);self.assertEqual(synced, [[sentinel]])   # the leftover device array is waited on in return
+        self.assertAlmostEqual(s['return'], .0002 + SYNC + FENCE);self.assertEqual(synced, [[sentinel]])   # the leftover device array is waited on in return
         self.assertAlmostEqual(s['solve'], .0004);self.assertEqual(v['leftover_device_arrays'], 1)
         self.assertAlmostEqual(sum(s.values()), record['wall_seconds'], places=12)
 
@@ -359,22 +367,32 @@ class SearchLatencyTests(unittest.TestCase):
         args, ctx = self.args(), fake_ctx();search = tool.Search('depth3-prior-k3', 4, args, ctx, module=MODULE)
         CLOCK.extra = [1., .1, .3, .2]   # the cold call is slow and compiles; warm calls vary
         memory = lambda: dict(process_peak_bytes_so_far=10, bytes_in_use=4)
-        [series] = tool.measure_series(search, ctx, lambda i: ctx.roots(4, i), 2, 'sequential', 3, solver=FakeSolver(), progress=None, memory=memory,
+        [series] = tool.measure_series(search, ctx, lambda i: ctx.roots(4, i, 4), 2, 'sequential', 3, solver=FakeSolver(), progress=None, memory=memory,
             baseline=dict(bytes_in_use=4), capacity=4, timer=CLOCK)
-        warm = [.004 + .003 + .01 + .008 + x + .0004 for x in (.1, .3, .2)]
+        warm = [.004 + .003 + .01 + .008 + x + .0004 + .0002 for x in (.1, .3, .2)]
         self.assertEqual(series['warm_calls'], 3);self.assertEqual(series['warm']['total']['n'], 3)
         self.assertAlmostEqual(series['warm']['total']['median_ms'], 1e3 * np.median(warm), places=6)
         self.assertAlmostEqual(series['warm']['total']['p90_ms'], 1e3 * np.percentile(warm, 90), places=6)
         self.assertAlmostEqual(series['warm']['total']['max_ms'], 1e3 * max(warm), places=6)
-        self.assertAlmostEqual(series['first_call']['compile_seconds'], 2.);self.assertAlmostEqual(series['first_call']['total_seconds'], .004 + .003 + .01 + 1.008 + .0004)
+        self.assertAlmostEqual(series['first_call']['compile_seconds'], 2.);self.assertAlmostEqual(series['first_call']['total_seconds'], .004 + .003 + .01 + 1.008 + .0004 + .0002)
         self.assertEqual((series['warm_calls_with_compiles'], series['warm_compile_seconds']), (0, 0.))
         self.assertAlmostEqual(series['warm']['pricer']['median_ms'], 1e3 * .208, places=6)
         self.assertEqual(len(series['calls']), 4);self.assertEqual(ctx.checked, [4] * 4)   # every call's requests are checked
-        # Each warm call is its own move window of C roots: windows 1..3, roots 4..15, so p90 spans distinct moves, not one move re-timed.
-        self.assertEqual([c['window'] for c in series['calls']], [0, 1, 2, 3]);self.assertEqual(series['calls'][2]['root_keys'], [8, 9, 10, 11])
-        self.assertEqual((series['windows']['warm'], series['windows']['distinct_roots'], series['windows']['root_slots']), ([1, 2, 3], 12, 12))
+        # Each warm call is its own move window: C roots at evenly spaced quantiles of the frame-sorted chunk, interleaved across windows,
+        # so every window and the series span early-to-late turns (the chunk is grouped by turn: consecutive roots are one turn).
+        self.assertEqual([c['window'] for c in series['calls']], [0, 1, 2, 3])
+        self.assertEqual([c['frames'] for c in series['calls']], [[0, 4, 8, 12], [1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15]])
+        self.assertEqual(series['calls'][2]['root_keys'], [[110, 2, 0], [126, 6, 0], [142, 10, 0], [158, 14, 0]])
+        w = series['windows'];self.assertEqual((w['warm'], w['distinct_roots'], w['root_slots'], w['wrapped'], w['frame_span']), ([1, 2, 3], 12, 12, False, [1, 15]))
+        self.assertEqual(w['frames'], [1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15])
         self.assertEqual(series['spread']['host_prep_steps'], dict(min=2., median=2., max=2.));self.assertEqual(series['spread']['refused_roots'], dict(min=0., median=0., max=0.))
-        self.assertEqual(tool.window_roots(range(5), 4, 1), [4, 0, 1, 2])   # cycled past the chunk's end
+        self.assertEqual(tool.window_roots(range(64), 4, 0), [8, 24, 40, 56])   # one window alone still spans the chunk
+        self.assertEqual(tool.window_roots(range(5), 4, 1, 3), [0, 1, 3, 4])   # 12 slots over 5 roots: positions repeat across windows (wrap-around)
+        with self.assertRaises(ValueError):tool.window_roots(range(5), 4, 3, 3)
+        ctx.available = list(range(6));[small] = tool.measure_series(search, ctx, lambda i: ctx.roots(4, i, 4), 2, 'sequential', 3, solver=FakeSolver(),
+            progress=None, memory=memory, baseline={}, capacity=4, timer=CLOCK)
+        self.assertEqual((small['windows']['wrapped'], small['windows']['distinct_roots'], small['windows']['root_slots']), (True, 6, 12))
+        self.assertEqual(tool.window_cell(small['windows']), '6 / 12 WRAPPED, turns 0-1')
         self.assertEqual(series['memory']['peak_over_baseline_in_use'], 6)
         self.assertEqual(series['leaves']['nominal_per_world'], 6561);self.assertEqual(series['leaves']['measured_per_world'], 6561)
 
@@ -587,6 +605,19 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(given, [('head', dict(categorical_ids=(3, 1, 5), history_mask=(3, 1))), ('other', dict(categorical_ids=(1, 1, 5), history_mask=(1, 1)))])
         self.assertEqual(sorted(out), [0, 1]);self.assertEqual(out[0][0].shape, (3, 1, 9))
 
+    def test_root_forwards_host_copy_is_inside_its_stage(self):
+        COPY, copied = .0077, []
+        def program(params, inputs):
+            C = len(inputs['history_mask']);return SimpleNamespace(policy_logits=np.zeros((C, 1, 9)), value=np.zeros((C, 1)), valid=np.ones((C, 1), bool))
+        def device_get(x):copied.append(x);CLOCK.advance(COPY);return x   # the device->host copy is what syncs the forward
+        forward_ctx = SimpleNamespace(root_program=program, params=('head',))
+        root = lambda i: SimpleNamespace(learner_actor=0, root_inputs=dict(categorical_ids=np.zeros((1, 1, 5), np.int32), history_mask=np.ones((1, 1), bool)))
+        args, ctx = self.args(), fake_ctx();ctx.root_forward = lambda roots: tool.root_forward(forward_ctx, SimpleNamespace(bound=[root(i) for i in roots.bound]))
+        with patch('jax.device_get', device_get):
+            record, _ = tool.run_call(tool.Search('depth2-fw', 4, args, ctx, module=MODULE), ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK)
+        self.assertAlmostEqual(record['stages']['root_forward'], COPY);self.assertEqual(len(copied), 1)
+        self.assertEqual([x.shape for x in copied[0]], [(4, 1, 9), (4, 1), (4, 1)])   # logits, value and valid of the C-root batch
+
     def test_check_prepared_and_the_chunk_capture_hook(self):
         start = lambda seed: SimpleNamespace(world=0, seed=seed, refusals=(), revealed_source_indices=((0, 1),))
         make = lambda seed, logits=(0.,) * 9: SimpleNamespace(plans=SimpleNamespace(root=SimpleNamespace(address=SimpleNamespace(stream=1, frame=2, owner=0)),
@@ -707,7 +738,7 @@ class SearchLatencyTests(unittest.TestCase):
         # A series per variant from the same calls; each total is its own, the first call is excluded from every one.
         CLOCK.now = 100.;memory = lambda: {}
         with patch.dict(sys.modules, {tool.HEDGE_MODULE: hedge}):
-            group = tool.measure_series(tool.Search('depth2-fw', 2, args, ctx, module=FRAMES), ctx, lambda i: ctx.roots(2, i), 2, 'sequential', 2, variants=variants,
+            group = tool.measure_series(tool.Search('depth2-fw', 2, args, ctx, module=FRAMES), ctx, lambda i: ctx.roots(2, i, 3), 2, 'sequential', 2, variants=variants,
                 progress=None, memory=memory, baseline={}, capacity=2, timer=CLOCK)
         self.assertEqual([(g['solver'], g['pool'], g['variant']) for g in group], [('learner_max', 0, 'learner_max@pool0'), ('learner_max', 4, 'learner_max@pool4'),
             ('hedge', 0, 'hedge@pool0'), ('hedge', 4, 'hedge@pool4')])
@@ -719,15 +750,35 @@ class SearchLatencyTests(unittest.TestCase):
         rows = tool.select(group)['rows'];self.assertEqual(len(rows), 4);self.assertEqual({r['variant'] for r in rows}, {v.name for v in variants})
 
     def test_real_spawn_pool_matches_in_process(self):
-        pool, info = tool.start_pool(2)
+        here = 'tests.test_gpu_engine_search_latency'   # this module stands in for search_hedge in the workers (its matrix_game: the pure maximin)
+        with patch.dict(os.environ, {k: '7' for k in tool.POOL_THREADS}):pool, info = tool.start_pool(2, hedge_module=here, modules=('gpu_engine.depthn_backups',))
         try:
             self.assertEqual((info['workers'], info['answered'], info['start_method']), (2, 2, 'spawn'));self.assertGreater(info['startup_seconds'], 0.)
+            self.assertEqual(len(info['worker_states']), 2)
+            for state in info['worker_states']:   # every worker ran the warm-up LP, imported the MODULE:FUNC module and runs on 1 BLAS/OpenMP thread
+                self.assertEqual((state['warm_value'], state['modules'], state['threads']), (-1., ['gpu_engine.depthn_backups'], tool.POOL_THREADS))
             deep = depth3_frame([[[[.5, .1], [.2, .3]]] * 4, [[[-.5, .4], [0., -.1]]] * 4]);flat = depth2_frame(([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]))
             for solver, views in ((tool.Solver(), [(deep, 0)]), (tool.Solver(), [(flat, 0), (flat, 0)]),
                     (tool.Solver.load('gpu_engine.depthn_backups:learner_max'), [(deep, 0)])):
                 pooled, clock = solver.solve(views, ROOTS, tool.Clock(), pool=pool), tool.Clock()
                 self.assertEqual(pooled, solver.solve(views, ROOTS, clock));self.assertEqual(pooled[0]['status'], 'LABELED')
         finally:pool.terminate();pool.join()
+
+    def test_a_pool_timeout_tears_the_pool_down_and_becomes_an_error_row(self):
+        import multiprocessing
+        class Stuck:
+            terminated = False
+            def map_async(self, fn, units, chunksize=None):return SimpleNamespace(get=lambda timeout: (_ for _ in ()).throw(multiprocessing.TimeoutError()))
+            def terminate(self):Stuck.terminated = True
+            def join(self):pass
+        pool = tool.SolvePool(Stuck(), 16, 5.)
+        with self.assertRaises(TimeoutError) as raised:pool.map(tool.world_prices, [1])
+        self.assertIn('exceeded 5 s', str(raised.exception));self.assertTrue(Stuck.terminated)
+        with self.assertRaises(RuntimeError):pool.map(tool.world_prices, [1])   # torn down: every later map fails at once
+        args = self.args('--configs', 'depth2-fw@2', '--capacities', '1,2', '--repeats', '1')
+        variants = [SimpleNamespace(name='learner_max@pool16', solver=tool.Solver(), pool=tool.SolvePool(Stuck(), 16, 5.), pool_size=16)]
+        series = tool.measure_config('depth2-fw', (2,), args, fake_ctx(), None, variants=variants, module=FRAMES, memory=lambda: {}, timer=CLOCK)
+        self.assertEqual([(s['capacity'], s['error']['type']) for s in series], [(1, 'TimeoutError'), (2, 'RuntimeError')])
 
     def test_hedge_header_records_the_file_sha256_and_commit(self):
         path = self.hedge_file(b'not the 583555d2 file\n');hedge = stub_hedge(path)
@@ -785,19 +836,41 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual([(e['capacity'], e['type']) for e in report['errors']], [(4, 'RuntimeError')] * 2);self.assertTrue(report['partial'])
         self.assertIn('ERROR RuntimeError', report['summary_markdown']);json.dumps(report, allow_nan=False, default=str)
 
-    def test_isolate_keeps_a_dead_childs_partial_series(self):
-        args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2')
+    def test_isolate_keeps_a_dead_childs_partial_series_and_reports_it(self):
+        args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2', '--capacities', '1,4', '--repeats', '1')
+        done = tool.measure_config('depth2-fw', (2,), self.args('--capacities', '1', '--repeats', '1'), fake_ctx(), None, solver=FakeSolver(), module=MODULE,
+            memory=lambda: {}, timer=CLOCK)
+        for s in done:s['variant'] = 'learner_max@pool0';s['solver'] = 'learner_max'   # as the child's own variant names
+        path = tool.constructor_path(FakeProvider(), dn, real_worlds)
+        context = dict(evaluator={}, root_values=[], roots_available=64, source={}, devices=['cpu'], solvers=[], solver_pools=[], hedge=None,
+            variants=['learner_max@pool0'], world_construction_path=path)
         def call(argv):
             name = argv[argv.index('--only') + 1];out = Path(argv[argv.index('--out') + 1]);out.mkdir(parents=True)
-            if name == 'depth2-fw':
-                (out / 'latency.json').write_text(json.dumps(dict(sections={name: [dict(config=name, capacity=1)]}, context=dict(evaluator={}), partial=True)));return 1
+            if name == 'depth2-fw':   # finished capacity 1, then died
+                (out / 'latency.json').write_text(json.dumps(dict(sections={name: done}, context=context, partial=True), default=str));return 1
             return 1   # died before writing anything
-        with tempfile.TemporaryDirectory() as directory, patch('subprocess.call', side_effect=call):
-            sections, contexts = tool.isolated(args, ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate'], Path(directory))
-        self.assertEqual(sections['depth2-fw'][0], dict(config='depth2-fw', capacity=1));self.assertEqual(sections['depth2-fw'][1]['error']['type'], 'SubprocessExit')
-        self.assertEqual([s.get('error', {}).get('type') for s in sections['depth3-prior-k3']], ['SubprocessExit'])
-        with tempfile.TemporaryDirectory() as directory, patch('subprocess.call', return_value=1), self.assertRaises(SystemExit):
-            tool.isolated(args, ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate'], Path(directory))
+        sections, contexts, failures = self.run_isolated(args, call)
+        self.assertEqual([(s['capacity'], s.get('error', {}).get('type')) for s in sections['depth2-fw']], [(1, None), (4, 'SubprocessExit')])
+        self.assertEqual([(s['capacity'], s['worlds'], s['mode'], s['variant'], s['error']['type']) for s in sections['depth3-prior-k3']],
+            [(1, 2, 'sequential', 'learner_max@pool0', 'SubprocessExit'), (4, 2, 'sequential', 'learner_max@pool0', 'SubprocessExit')])   # their identity
+        self.assertEqual([(f['config'], f['exit_code'], f['series_written'], f['series_missing']) for f in failures], [('depth2-fw', 1, 1, 1), ('depth3-prior-k3', 1, 0, 2)])
+        report = tool.report_of(args, sections, dict(next(c for c in contexts.values() if c), isolate_failures=failures), tool.source_commit(self.tmp(), 'f00d'),
+            isolated_run=True)
+        self.assertEqual(len(report['errors']), 3);self.assertEqual(report['isolate_failures'], failures);self.assertIn('ERROR SubprocessExit', report['summary_markdown'])
+        rows = {(r['config'], r['variant']): r for r in report['selection']['rows']}
+        self.assertEqual(rows['depth2-fw', 'learner_max@pool0']['verdicts']['4'], False);self.assertEqual(rows['depth3-prior-k3', 'learner_max@pool0']['largest_capacity'], None)
+        json.dumps(report, allow_nan=False, default=str)
+        # A row whose identity is unknown (the reviewer's repro) never crashes select or the markdown: it is listed apart.
+        dead = dict(config='depth3-prior-k3', capacity=None, worlds=None, mode=None, solver=None, pool=None, variant=None, warm={'total': tool.distribution([])},
+            first_call=None, error=dict(type='SubprocessExit', message='exited 1 after 0 series', traceback=[]))
+        report = tool.report_of(args, {'depth2-fw': done, 'depth3-prior-k3': [dead]}, context, tool.source_commit(self.tmp(), 'f00d'), isolated_run=True)
+        self.assertEqual(report['selection']['unplaced_errors'][0]['type'], 'SubprocessExit');self.assertIn('ERROR without a capacity', report['summary_markdown'])
+        self.assertEqual(tool.select(done + [dead])['configs']['depth3-prior-k3'][None]['largest_capacity'], None)   # listed, fits nothing
+
+    def run_isolated(self, args, call):
+        with patch('subprocess.call', side_effect=call):return tool.isolated(args, ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate'], self.tmp())
+        with patch('subprocess.call', return_value=1), self.assertRaises(SystemExit):
+            tool.isolated(args, ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate'], self.tmp())
 
     def test_isolate_argv(self):
         args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2');calls = []
@@ -805,7 +878,8 @@ class SearchLatencyTests(unittest.TestCase):
             calls.append(argv);out = Path(argv[argv.index('--out') + 1]);out.mkdir(parents=True)
             (out / 'latency.json').write_text(json.dumps(dict(sections={argv[argv.index('--only') + 1]: []}, context=dict(evaluator={}))));return 0
         argv = ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2']
-        with patch('subprocess.call', side_effect=call):sections, contexts = tool.isolated(args, argv, self.tmp())
+        with patch('subprocess.call', side_effect=call):sections, contexts, failures = tool.isolated(args, argv, self.tmp())
+        self.assertEqual(failures, [])
         self.assertEqual(list(sections), ['depth2-fw', 'depth3-prior-k3']);self.assertEqual(len(calls), 2)
         for c in calls:
             self.assertNotIn('--isolate', c);self.assertEqual(c.count('--out'), 1);self.assertIn('gpu_engine.d3_search_latency', c)
