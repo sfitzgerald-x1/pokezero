@@ -533,8 +533,7 @@ def _init_worker(hedge_module, modules=()):
     try:
         from pokezero import v5_gumbel   # noqa: F401
         from gpu_engine import depth2_backups, depthn_backups   # noqa: F401
-        for module in modules:importlib.import_module(module)
-        _WORKER_STATE.update(modules=list(modules), threads={k: os.environ.get(k) for k in POOL_THREADS})
+        _WORKER_STATE.update(modules=[importlib.import_module(m).__name__ for m in modules], threads={k: os.environ.get(k) for k in POOL_THREADS})
         if hedge_module:_WORKER_STATE['warm_value'] = float(importlib.import_module(hedge_module).matrix_game(np.asarray([[1., -1.], [-1., 1.]]))[0])
     except Exception as error:_WORKER_ERROR = f'{type(error).__name__}: {error}'
 
