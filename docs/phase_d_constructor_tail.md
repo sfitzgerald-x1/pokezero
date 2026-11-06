@@ -37,9 +37,10 @@ and replacement-count domain. Its actual draw, phazing, secondary and Sleep Talk
 arrays populate the suspended capsule. These are **sampled hypothetical future
 randomness**, never recovered original-turn random draws or a native-state
 claim. The constructor does not call a battle transition or rewrite the engine.
-The unchanged legacy `phase_d_chance.SOURCE_PINS` names a different transition
-hash at this baseline; this pre-existing exact-consumer certificate failure
-remains disclosed and is not bypassed by the sampled constructor.
+At the original `3d811479` baseline, `phase_d_chance.SOURCE_PINS` named a
+different transition hash. The [bounded source/domain rebind](phase_d_chance_binding.md)
+records that historical mismatch and updates only identity metadata. It is not
+an exact-consumer qualification or a bypass by the sampled constructor.
 
 Existing B2 current damage sums are copied into the existing damage history:
 shown foe damage remains shown; exact own-victim fractions remain owner-known.
