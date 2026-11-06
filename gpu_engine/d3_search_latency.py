@@ -86,8 +86,11 @@ of capacity K*C), so a first call compiles only what nothing before it did (--is
 The rule: a (config, W, mode) fits at capacity C when the p90 of its warm end-to-end totals is <= 800 ms, leaving 200 ms of
 slack under the 1,000 ms per-move budget. Reported: per config, W and mode the median and p90 per capacity and the largest
 fitting C; per config the largest fitting C (with its W) and the largest fitting W (with its C), over sequential rows (packed
-apart, as a proxy). Progress is JSON lines; latency.json (evaluator first, then the header) goes to a new --out directory and
-the markdown summary is printed at the end of the log.
+apart, as a proxy). Progress is JSON lines; latency.json (evaluator first, then the header) goes to a new --out directory and is
+rewritten atomically after every series (partial: true until the run ends), so a later failure loses nothing measured. A series
+that raises is recorded as an error row per variant (exception type, message, traceback tail) that never fits, and the run
+continues; with --isolate a config whose process dies keeps the series its partial latency.json holds plus an error row. The
+markdown summary is printed at the end of the log.
 """
 import argparse
 from contextlib import ExitStack, contextmanager, nullcontext
@@ -767,10 +770,10 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
 
 
 def measure_config(name, worlds, args, ctx, progress, *, solver=None, variants=None, module=None, programs=None, depth2_module=None, memory=t2.memory_stats,
-        timer=time.perf_counter):
+        timer=time.perf_counter, on_series=None):
     """Every capacity, W and mode of one config, each solved by every variant; one Search per (config, pricer capacity), so a
     packed K*C pricer is reused as the sequential pricer of capacity K*C. The first series of each capacity is marked; its first
-    call reports what it compiled."""
+    call reports what it compiled. on_series(group) gets each finished (capacity, W, mode) group, error rows included."""
     out, searches = [], {};variants = variants_of(variants if variants is not None else solver)
     for capacity in args.capacity_values:
         roots_of = lambda window, capacity=capacity: ctx.roots(capacity, window);baseline = memory() or {};first = True
@@ -778,12 +781,42 @@ def measure_config(name, worlds, args, ctx, progress, *, solver=None, variants=N
             blocks = w // 2
             for mode in ('sequential',) + (('packed',) if blocks > 1 and args.packed else ()):
                 size = capacity if mode == 'sequential' else blocks * capacity
-                if size not in searches:searches[size] = Search(name, size, args, ctx, module=module, programs=programs, depth2_module=depth2_module)
-                group = measure_series(searches[size], ctx, roots_of, w, mode, args.repeats, variants=variants, progress=progress, memory=memory,
-                    baseline=baseline, capacity=capacity, timer=timer)
-                for series in group:series['first_call']['cold_of_config_capacity'] = first
+                try:
+                    if size not in searches:searches[size] = Search(name, size, args, ctx, module=module, programs=programs, depth2_module=depth2_module)
+                    group = measure_series(searches[size], ctx, roots_of, w, mode, args.repeats, variants=variants, progress=progress, memory=memory,
+                        baseline=baseline, capacity=capacity, timer=timer)
+                    for series in group:series['first_call']['cold_of_config_capacity'] = first
+                except Exception as error:   # one failed series never loses the run: an error row per variant, then the next series
+                    group = [error_series(name, capacity, w, mode, v, size, error) for v in variants]
+                    if progress is not None:progress('SERIES_ERROR', config=name, capacity=capacity, worlds=w, mode=mode,
+                        error_type=group[0]['error']['type'], error_message=group[0]['error']['message'])   # gate.log's first parameter is `message`
                 first = False;out.extend(group)
+                if on_series is not None:on_series(group)
     return out
+
+
+def error_series(config, capacity, worlds, mode, variant, pricer_capacity, error):
+    """A series that raised: its identity and the exception (type, message, traceback tail); no statistic, so it never fits."""
+    import traceback
+    return dict(config=config, capacity=capacity, worlds=worlds, mode=mode, solver=getattr(variant.solver, 'spec', None), pool=variant.pool_size,
+        variant=variant.name, blocks=worlds // 2, pricer_capacity=pricer_capacity, timing_proxy=mode == 'packed',
+        error=dict(type=type(error).__name__, message=str(error)[:2000], traceback=[line.rstrip() for line in traceback.format_exception(error)[-8:]]),
+        warm={k: distribution([]) for k in STAGES + ('total',)}, first_call=None)
+
+
+class Recorder:
+    """Every finished series, with latency.json rewritten after each (a temp file renamed over it, so the file is always whole JSON):
+    a failure later in the run loses nothing measured before it. build(sections, partial) makes the payload."""
+    def __init__(self, path, build):
+        self.path, self.build, self.sections = Path(path), build, {}
+
+    def add(self, name, group):
+        self.sections.setdefault(name, []).extend(group);self.write(partial=True)
+
+    def write(self, *, partial):
+        payload = self.build(self.sections, partial);temporary = self.path.with_name(self.path.name + '.writing')
+        temporary.write_text(json.dumps(payload, indent=1, allow_nan=False, default=str) + '\n');os.replace(temporary, self.path)
+        return payload
 
 
 # The bank chunk and the real host prep -------------------------------------------------------------------------------------------------
@@ -979,14 +1012,17 @@ def largest_within(p90_by_capacity, limit_ms=LIMIT_MS):
 
 
 def select(series, limit_ms=LIMIT_MS):
-    """Rows (config, W, mode, solver variant) -> per-capacity warm total median/p90 and the largest fitting C; per config and
+    """Rows (config, W, mode, solver variant) -> per-capacity warm total median/p90 (an error row: none, so it never fits) and the largest fitting C; per config and
     variant the largest fitting C (with its W) and the largest fitting W (with its C), over sequential rows, packed apart as a proxy."""
-    rows = {}
-    for s in series:rows.setdefault((s['config'], s['worlds'], s['mode'], s.get('variant')), [s, {}])[1][s['capacity']] = s['warm']['total']
+    rows, errors = {}, {}
+    for s in series:
+        rows.setdefault((s['config'], s['worlds'], s['mode'], s.get('variant')), [s, {}])[1][s['capacity']] = s['warm']['total']
+        if s.get('error'):errors[(s['config'], s['worlds'], s['mode'], s.get('variant'), s['capacity'])] = f'{s["error"]["type"]}: {s["error"]["message"][:200]}'
     out = []
     for (config, worlds, mode, variant), (one, by) in rows.items():
         out.append(dict(config=config, worlds=worlds, mode=mode, variant=variant, solver=one.get('solver'), pool=one.get('pool'),
-            by_capacity={str(c): dict(median_ms=v['median_ms'], p90_ms=v['p90_ms'], max_ms=v['max_ms']) for c, v in sorted(by.items())},
+            by_capacity={str(c): dict(median_ms=v['median_ms'], p90_ms=v['p90_ms'], max_ms=v['max_ms'], error=errors.get((config, worlds, mode, variant, c)))
+                for c, v in sorted(by.items())},
             **largest_within({c: v['p90_ms'] for c, v in by.items()}, limit_ms)))
     def best(rows_, key):
         fitting = [r for r in rows_ if r['largest_capacity'] is not None]
@@ -1032,7 +1068,8 @@ def markdown(report):
     lines += [
         '| config | W | mode | solver | pool | ' + ' | '.join(f'C={c} median / p90' for c in caps) + ' | largest C, every smaller C fitting too (p90 <= 800 ms) |', '|---|---|---|---|---|' + '---|' * len(caps) + '---|']
     for r in sel['rows']:
-        cells = [f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p90_ms"])} {"fit" if r["verdicts"][str(c)] else "over"}'
+        cells = [('ERROR ' + r['by_capacity'][str(c)]['error'].split(':')[0] if r['by_capacity'][str(c)].get('error') else
+            f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p90_ms"])} {"fit" if r["verdicts"][str(c)] else "over"}')
             if str(c) in r['by_capacity'] else '-' for c in caps]
         largest = ('-' if r['largest_capacity'] is None else str(r['largest_capacity'])) + ('' if r['monotone'] else f' (C={r["largest_capacity_any"]} fits alone)')
         lines.append(f'| {r["config"]} | {r["worlds"]} | {r["mode"] + (" (proxy)" if r["mode"] == "packed" else "")} | {r["solver"]} | {r["pool"]} | '
@@ -1045,6 +1082,9 @@ def markdown(report):
         f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} + {_short(path["world_builder"])}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured |',
         '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for s in report['series']:
+        if s.get('error'):
+            lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ERROR {s["error"]["type"]}: '
+                + s['error']['message'][:120].replace('|', '/').replace('\n', ' ') + ' |' + ' - |' * (len(STAGES) + 4));continue
         w = s['warm'];leaves = s['leaves']
         lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ' + ' | '.join(_ms(w[k]['median_ms']) for k in STAGES)
             + f' | {_ms(w["total"]["median_ms"])} | {_ms(w["total"]["p90_ms"])} | {s["first_call"]["compile_seconds"]:.1f} | {leaves["nominal_per_world"]} / '
@@ -1052,7 +1092,7 @@ def markdown(report):
     return '\n'.join(lines) + '\n'
 
 
-def report_of(args, sections, context, commit, *, isolated_run):
+def report_of(args, sections, context, commit, *, isolated_run, partial=False):
     series = [s for name in args.config_worlds if name in sections for s in sections[name]]
     report = dict(evaluator=context['evaluator'], header=header(context, commit), schema=SCHEMA,
         value_scale=gate.value_scale(context['root_values'], dict(count=0), args.value_reference), weights_affect_speed=t2.WEIGHTS_NOTE,
@@ -1061,7 +1101,8 @@ def report_of(args, sections, context, commit, *, isolated_run):
         cycled=context['roots_available'] < max(args.capacity_values), block_seeds=context.get('block_seeds'), compile_cache=context.get('compile_cache'),
         isolated=isolated_run, memory_scope=t2.MEMORY_SCOPE + ' The captured chunk RootContext stays alive for host_prep and is in every baseline.'
             + (' (isolated: one process per config)' if isolated_run else ' Configs share one process and one compiled-program table.'),
-        selection=select(series), series=series)
+        selection=select(series), partial=partial,
+        errors=[dict({k: s[k] for k in ('config', 'capacity', 'worlds', 'mode', 'variant')}, **s['error']) for s in series if s.get('error')], series=series)
     report['summary_markdown'] = markdown(report)
     return report
 
@@ -1079,8 +1120,12 @@ def isolated(args, argv, out):
     for name in args.config_worlds:
         target = out / name
         code = subprocess.call([sys.executable, '-m', 'gpu_engine.d3_search_latency', *clean, '--only', name, '--out', str(target)])
-        if code != 0:raise SystemExit(f'--isolate: the {name} subprocess exited {code}')
-        child = json.loads((target / 'latency.json').read_text());sections[name] = child['sections'][name];contexts[name] = child.get('context')
+        written = target / 'latency.json';child = json.loads(written.read_text()) if written.exists() else {}
+        sections[name] = list((child.get('sections') or {}).get(name, []));contexts[name] = child.get('context')
+        if code != 0:   # the series it finished stay (its latency.json is rewritten after each); the rest is one error row
+            sections[name].append(dict(config=name, capacity=None, worlds=None, mode=None, solver=None, pool=None, variant=None, warm={'total': distribution([])},
+                first_call=None, error=dict(type='SubprocessExit', message=f'the --only {name} process exited {code} after {len(sections[name])} series', traceback=[])))
+    if not any(contexts.values()):raise SystemExit('--isolate: no config process wrote a context (each died before loading the bank)')
     return sections, contexts
 
 
@@ -1117,17 +1162,20 @@ def main(argv=None):
             names = [args.only] if args.only else list(args.config_worlds);programs = {}
             gate.log('LATENCY_START', configs={n: args.config_worlds[n] for n in names}, capacities=args.capacity_values, roots_available=context['roots_available'],
                 variants=context['variants'], repeats=args.repeats, packed=args.packed, isolate=False)
-            sections = {name: measure_config(name, args.config_worlds[name], args, ctx, gate.log, variants=variants, programs=programs) for name in names}
+            if args.only:build = lambda sections, partial: dict(evaluator=ctx.evaluator, only=args.only, sections=sections, context=context, partial=partial)
+            else:build = lambda sections, partial: report_of(args, sections, context, commit, isolated_run=False, partial=partial)
+            recorder = Recorder(out / 'latency.json', build)
+            for name in names:
+                recorder.sections[name] = []
+                measure_config(name, args.config_worlds[name], args, ctx, gate.log, variants=variants, programs=programs, on_series=lambda group, name=name: recorder.add(name, group))
+            sections = recorder.sections
         finally:
             for pool in pools.values():
                 if pool is not None:pool.terminate();pool.join()
-        if args.only:
-            (out / 'latency.json').write_text(json.dumps(dict(evaluator=ctx.evaluator, only=args.only, sections=sections, context=context),
-                indent=1, allow_nan=False, default=str) + '\n')
-            return 0
-    report = report_of(args, sections, context, commit, isolated_run=args.isolate)
-    (out / 'latency.json').write_text(json.dumps(report, indent=1, allow_nan=False, default=str) + '\n')   # evaluator first, then the header
-    gate.log('LATENCY_COMPLETE', out=str(out / 'latency.json'), selection=report['selection']['configs'], hedge=report['header']['hedge'])
+        if args.only:recorder.write(partial=False);return 0
+    report = Recorder(out / 'latency.json', lambda sections_, partial: report_of(args, sections_, context, commit, isolated_run=args.isolate, partial=partial))
+    report.sections = sections;report = report.write(partial=False)   # evaluator first, then the header
+    gate.log('LATENCY_COMPLETE', out=str(out / 'latency.json'), selection=report['selection']['configs'], hedge=report['header']['hedge'], errors=report['errors'])
     print('=== LATENCY SUMMARY (markdown) ===\n' + report['summary_markdown'] + '=== END LATENCY SUMMARY ===', flush=True)
     return 0
 

@@ -397,7 +397,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual((b['largest_capacity'], b['largest_worlds'], b['packed_proxy']), (None, None, None))
         self.assertIsNone(selection['configs']['c']['v']['largest_capacity'])   # the rule is the p90: a 780 ms median with an 820 ms p90 does not fit
         rows = {(r['config'], r['worlds'], r['mode']): r for r in selection['rows']};self.assertEqual({r['variant'] for r in selection['rows']}, {'v'})
-        self.assertEqual(rows['a', 8, 'packed']['largest_capacity'], 4);self.assertEqual(rows['a', 2, 'sequential']['by_capacity']['4'], total(300.))
+        self.assertEqual(rows['a', 8, 'packed']['largest_capacity'], 4);self.assertEqual(rows['a', 2, 'sequential']['by_capacity']['4'], dict(total(300.), error=None))
         self.assertEqual(selection['limit_ms'], 800.);self.assertIn('<= 800 ms', selection['rule'])
 
     def test_nominal_leaves_and_the_engines_slot_widths(self):
@@ -744,6 +744,52 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertIsNone(tool.depth2_rule_worlds(frame, 1, depthn_backups.learner_max)[1].joint_values[0][0])   # the errored world's cell refuses
         low = tool.depth2_rule_worlds(frame, 0, pessimistic)[0].joint_values[0][0];high = depth2_backups.backup_learner_max(frame, 0)[0].joint_values[0][0]
         self.assertLess(low, high)
+
+    def test_a_failed_series_is_an_error_row_and_the_run_continues(self):
+        class Failing(FakeDepthN):
+            def price(self, requests, *a, **kw):
+                if self.capacity == 4:raise RuntimeError('RESOURCE_EXHAUSTED: out of memory while trying to allocate')
+                return super().price(requests, *a, **kw)
+        args = self.args('--configs', 'depth2-fw@2', '--capacities', '1,4,16', '--repeats', '1');groups, logged = [], []
+        variants = tool.variants_of(FakeSolver()) + [SimpleNamespace(name='fake@pool4', solver=FakeSolver(), pool=None, pool_size=4)]
+        with contextlib.redirect_stdout(io.StringIO()) as printed:   # through the real gate.log: its own keywords (message, time) must not collide
+            series = tool.measure_config('depth2-fw', (2,), args, fake_ctx(), lambda message, **kw: logged.append(message) or gate.log(message, **kw), variants=variants,
+                module=SimpleNamespace(DepthNPricer=Failing), memory=lambda: {}, timer=CLOCK, on_series=groups.append)
+        self.assertIn('"error_type": "RuntimeError"', printed.getvalue())
+        self.assertEqual([[(s['capacity'], 'error' in s) for s in g] for g in groups], [[(1, False)] * 2, [(4, True)] * 2, [(16, False)] * 2])   # C=16 still ran
+        error = series[2]['error'];self.assertEqual((error['type'], series[2]['variant']), ('RuntimeError', 'fake@pool0'));self.assertIn('out of memory', error['message'])
+        self.assertIn('SERIES_ERROR', logged);self.assertTrue(error['traceback'])
+        selection = tool.select(series);row = next(r for r in selection['rows'] if r['variant'] == 'fake@pool0')
+        self.assertEqual((row['largest_capacity'], row['largest_capacity_any'], row['verdicts']), (1, 16, {'1': True, '4': False, '16': True}))   # the error never fits
+        self.assertIn('RuntimeError', row['by_capacity']['4']['error'])
+        # Every finished group is on disk, as whole JSON, before the next series runs.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'latency.json';recorder = tool.Recorder(path, lambda sections, partial: dict(partial=partial, sections=sections))
+            for g in groups:
+                recorder.add('depth2-fw', g);written = json.loads(path.read_text())
+                self.assertTrue(written['partial']);self.assertEqual(len(written['sections']['depth2-fw']), len(recorder.sections['depth2-fw']))
+            self.assertFalse(recorder.write(partial=False)['partial']);self.assertFalse(json.loads(path.read_text())['partial'])
+            self.assertEqual(sorted(p.name for p in Path(directory).iterdir()), ['latency.json'])   # no temp file left behind
+        # The report and its markdown carry the error rows.
+        context = dict(evaluator={}, root_values=[], roots_available=64, source={}, devices=['cpu'], world_construction_path=tool.constructor_path(FakeProvider(), dn, real_worlds),
+            solvers=[], solver_pools=[], hedge=None, variants=[v.name for v in variants])
+        report = tool.report_of(args, {'depth2-fw': series}, context, tool.source_commit(Path(directory), 'f00d'), isolated_run=False, partial=True)
+        self.assertEqual([(e['capacity'], e['type']) for e in report['errors']], [(4, 'RuntimeError')] * 2);self.assertTrue(report['partial'])
+        self.assertIn('ERROR RuntimeError', report['summary_markdown']);json.dumps(report, allow_nan=False, default=str)
+
+    def test_isolate_keeps_a_dead_childs_partial_series(self):
+        args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2')
+        def call(argv):
+            name = argv[argv.index('--only') + 1];out = Path(argv[argv.index('--out') + 1]);out.mkdir(parents=True)
+            if name == 'depth2-fw':
+                (out / 'latency.json').write_text(json.dumps(dict(sections={name: [dict(config=name, capacity=1)]}, context=dict(evaluator={}), partial=True)));return 1
+            return 1   # died before writing anything
+        with tempfile.TemporaryDirectory() as directory, patch('subprocess.call', side_effect=call):
+            sections, contexts = tool.isolated(args, ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate'], Path(directory))
+        self.assertEqual(sections['depth2-fw'][0], dict(config='depth2-fw', capacity=1));self.assertEqual(sections['depth2-fw'][1]['error']['type'], 'SubprocessExit')
+        self.assertEqual([s.get('error', {}).get('type') for s in sections['depth3-prior-k3']], ['SubprocessExit'])
+        with tempfile.TemporaryDirectory() as directory, patch('subprocess.call', return_value=1), self.assertRaises(SystemExit):
+            tool.isolated(args, ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate'], Path(directory))
 
     def test_isolate_argv(self):
         args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2');calls = []
