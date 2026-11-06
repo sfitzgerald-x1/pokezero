@@ -26,8 +26,11 @@ Checks (gate.json; exit code 0 iff all pass):
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
  (e) decision, when every leaf is checked (no --sample-leaves): depth2_backups.learner_max_root on the
      pricer frame and on a copy carrying the oracle's turn-2 head values and child-prior logits (statuses,
-     terminal values and enumeration unchanged); passes iff no root's completed-Q argmax or improved-policy
-     target argmax differs (lowest index on ties). Cell-level learner_max_choice differences are reported.
+     terminal values and enumeration unchanged). A root is a numerical near-tie when its top-two completed-Q gap
+     in either frame is <= q_noise_bound (= the run's value bound: completed-Q is a convex combination of values).
+     Passes iff no non-near-tie root flips its completed-Q or improved-target argmax (lowest index on ties), no
+     root flips labeled/refused, and max |dQ| <= q_noise_bound. Near-tie flips and learner_max_choice cell
+     differences are reported, not gated.
      depth2_backups must be importable (fail closed). --save-arrays writes each call's frame arrays and the
      oracle's per-leaf head values and child logits to arrays-block{B}-call{C}.npz for offline re-runs.
 --sample-leaves N checks all turn-1 children plus N uniformly sampled turn-2 leaves per world (fixed
@@ -114,6 +117,8 @@ CONVENTIONS = (
     'Logits are compared on legal lanes of requested seats only.',
     'Exact: every discrete field and digest, and check (e). Floats (vs D3, vs the oracle, across child blocks): values within 2 x the run\'s depth-1 noise floor (1e-4 if unmeasurable), logits within 0.1, and every value comparison below 0.25 x the p10 cell_a2_spread (the misplacement guard).',
     'Top-k: the oracle selects with its own top_k code but ranks by the PRICER\'s child (and k1_opp root) priors, which (c) checks against the oracle\'s within the logit bound, so a bf16 near-tie cannot fail (d); topk_boundary reports each selection\'s rank-k vs rank-(k+1) gap and how often the oracle\'s own prior would differ.',
+    '(e): exact decisions except numerical near-ties (top-two completed-Q gap <= q_noise_bound, the value bound, in either frame), whose flips are reported, not gated; max |dQ| must stay <= q_noise_bound.',
+    '--depth2-capacity N: Depth2Pricer(capacity=N); calls are split at the smallest pricer capacity, so FramePricer prices the same calls.',
     'Status: FAIL if any check that ran failed; INCOMPLETE if one is unavailable or vacuous (no turn-2 leaf compared, or (e) compared no root); PASS_SAMPLED with --sample-leaves ((e) SKIPPED_SAMPLED); else PASS. A sample always includes every terminal and error leaf the pricer reports.',
     '(e) swaps in the oracle\'s heads only on the lanes (c) checks (requested seats, legal lanes; the root opponent prior too); a waiting seat\'s unused prior keeps the pricer\'s value.',
     'Each world block is a separate call (Depth2Pricer.price takes one recipe); blocks after 0 bypass Recipe.selected, as U1.',
@@ -523,7 +528,11 @@ def summarize(calls, *, spread_p10=None):
         b.update(reference='D3_FRAMEPRICER_DISCRETE_EXACT_FLOATS_WITHIN_RUN_BOUNDS (not bitwise)', values=values)
         b['passed'] = b['passed'] and all(v['passed'] for v in values.values());checks['b'] = b
     if have('c'):checks['c'] = _heads_check(quantities, rule, calls, table)
-    if any('e' in x for x in calls):checks['e'] = merge_decisions([x['e'] for x in calls if 'e' in x])
+    if any('e' in x for x in calls):
+        checks['e'] = e = merge_decisions([x['e'] for x in calls if 'e' in x], q_noise_bound=rule['value_bound'])
+        rule.update(q_noise_bound=rule['value_bound'], max_abs_delta_q=e.get('max_abs_delta_q'), near_tie_roots=e.get('near_tie_roots'),
+            near_tie_flips=e.get('near_tie_flips'), q_noise_rule='(e): a root is a numerical near-tie when its top-two completed-Q gap in either frame '
+                'is <= q_noise_bound (= the value bound); its flips are reported, not gated; max |dQ| must stay <= q_noise_bound')
     if any('invariance' in x for x in calls):
         checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())], rule=rule)
         table.extend(_row('block_invariance', name, m) for name, m in checks['block_invariance']['floats'].items())
@@ -534,7 +543,8 @@ def summarize(calls, *, spread_p10=None):
 
 def tolerance_line(tolerance):
     """The rule's numbers for one log line: floor, 2 x floor, logit bound, p10 spread, guard and each check's max/bound."""
-    keys = ('depth1_noise_floor', 'value_bound', 'value_bound_source', 'logit_bound', 'p10_cell_a2_spread', 'guard_bound', 'guard')
+    keys = ('depth1_noise_floor', 'value_bound', 'value_bound_source', 'logit_bound', 'p10_cell_a2_spread', 'guard_bound', 'guard',
+        'q_noise_bound', 'max_abs_delta_q', 'near_tie_roots', 'near_tie_flips')
     return dict({k: tolerance.get(k) for k in keys}, checks=[{k: r[k] for k in ('check', 'quantity', 'max_abs_difference', 'ratio_to_bound',
         'ratio_to_guard', 'passed')} for r in tolerance.get('table', ())])
 
@@ -609,15 +619,25 @@ def _argmax(values, legal):
     return best
 
 
-def decision_check(frame, data, requests, *, context=None, backups=None):
-    """(e) for ONE call: learner-max root decisions on the pricer frame vs the oracle-heads copy."""
+def _top_two_gap(values, legal):
+    """Top-two completed-Q gap over legal actions; None with fewer than two (no tie is possible)."""
+    ranked = sorted((float(v) for v, ok in zip(values, legal) if ok and v is not None), reverse=True)
+    return ranked[0] - ranked[1] if len(ranked) >= 2 else None
+
+
+def decision_check(frame, data, requests, *, context=None, backups=None, q_noise_bound=None):
+    """(e) for ONE call: learner-max root decisions on the pricer frame vs the oracle-heads copy.
+
+    Records every root's top-two completed-Q gap in both frames and every differing root; the verdict
+    (decision_verdict) needs the run's q_noise_bound, so summarize re-decides over all calls. Without a bound the
+    verdict is strict (only an exactly tied root may flip)."""
     if backups is None:
         try:backups = import_backups()
         except ImportError as error:
             return dict(passed=False, reason='gpu_engine.depth2_backups is not importable (fail closed): ' + str(error), roots=len(requests))
     original = SimpleNamespace(**frame_fields(frame));swapped, counts = oracle_heads_frame(frame, data)
     result = dict(roots=len(requests), roots_compared=0, both_refused=0, status_differs=0, nonfinite_roots=0, argmax_q_differs=0, argmax_target_differs=0,
-        cells_compared=0, cell_choice_differs=0, max_abs_delta_q=0., max_abs_delta_target=0., replaced=counts, first_differing_roots=[],
+        cells_compared=0, cell_choice_differs=0, max_abs_delta_q=0., max_abs_delta_target=0., replaced=counts, differing=[], gaps=[],
         differing_roots=[])
     for q, request in enumerate(requests):
         logits, legal = tuple(map(float, request.root_logits)), tuple(map(bool, request.root_legal))
@@ -626,31 +646,58 @@ def decision_check(frame, data, requests, *, context=None, backups=None):
         if ia is None and ib is None:result['both_refused'] += 1
         qa, qb = (None if i is None else i.completed_q for i in (ia, ib));ta, tb = (None if i is None else i.policy_target for i in (ia, ib))
         pick = lambda v: None if v is None else _argmax(v, legal)
-        q_differs, t_differs = pick(qa) != pick(qb), pick(ta) != pick(tb)
-        if (ia is None) != (ib is None):result['status_differs'] += 1
+        q_differs, t_differs = pick(qa) != pick(qb), pick(ta) != pick(tb);status_differs = (ia is None) != (ib is None)
+        result['status_differs'] += int(status_differs)
         finite = all(v is None or math.isfinite(float(v)) for vector in (qa, qb, ta, tb) if vector is not None for v in vector)
         result['nonfinite_roots'] += int(not finite)
+        address = request.plans.root.address;where = dict(context or {}, root=q, address=[address.stream, address.frame, address.owner])
+        gaps = dict(gap_pricer=None, gap_oracle=None)
         if ia is not None and ib is not None and finite:
-            result['roots_compared'] += 1
+            result['roots_compared'] += 1;gaps = dict(gap_pricer=_top_two_gap(qa, legal), gap_oracle=_top_two_gap(qb, legal))
             deltas = [abs(x - y) for x, y, ok in zip(qa, qb, legal) if ok and x is not None and y is not None]
             result['max_abs_delta_q'] = max([result['max_abs_delta_q']] + deltas)
             result['max_abs_delta_target'] = max([result['max_abs_delta_target']] + [abs(x - y) for x, y in zip(ta, tb)])
+            result['gaps'].append(dict(where, **gaps))
         result['argmax_q_differs'] += int(q_differs);result['argmax_target_differs'] += int(t_differs)
-        if q_differs or t_differs or not finite or (ia is None) != (ib is None):result['differing_roots'].append(q)
-        if (q_differs or t_differs or not finite or (ia is None) != (ib is None)) and len(result['first_differing_roots']) < DECISION_FIRST:
-            address = request.plans.root.address
-            result['first_differing_roots'].append(dict(context or {}, root=q, address=[address.stream, address.frame, address.owner],
-                status=[a.status, b.status], completed_q_pricer=_plain_q(qa), completed_q_oracle_heads=_plain_q(qb),
-                target_pricer=_plain_q(ta), target_oracle_heads=_plain_q(tb), argmax_q=[pick(qa), pick(qb)], argmax_target=[pick(ta), pick(tb)]))
+        if q_differs or t_differs or not finite or status_differs:
+            result['differing_roots'].append(q)
+            result['differing'].append(dict(where, status=[a.status, b.status], status_differs=status_differs, finite=finite,
+                argmax_q_differs=q_differs, argmax_target_differs=t_differs, completed_q_pricer=_plain_q(qa), completed_q_oracle_heads=_plain_q(qb),
+                target_pricer=_plain_q(ta), target_oracle_heads=_plain_q(tb), argmax_q=[pick(qa), pick(qb)], argmax_target=[pick(ta), pick(tb)], **gaps))
         for world in (0, 1):
             if int(original.pre[q, world]) != 0:continue
             ca, cb = backups.learner_max_choice(original, q, world), backups.learner_max_choice(swapped, q, world)
             both = (ca >= 0) | (cb >= 0);result['cells_compared'] += int(both.sum())
             result['cell_choice_differs'] += int(np.count_nonzero(both & (ca != cb)))
-    result['passed'] = (result['argmax_q_differs'] == 0 and result['argmax_target_differs'] == 0 and counts['unmatched_head_leaves'] == 0
-        and result['nonfinite_roots'] == 0)
-    if counts['unmatched_head_leaves']:result['reason'] = 'head-valued pricer leaves without an oracle head value: the copy is incomplete (fail closed)'
-    if result['nonfinite_roots']:result['reason'] = 'non-finite completed-Q or target: decisions are not comparable (fail closed)'
+    return decision_verdict(result, q_noise_bound)
+
+
+def decision_verdict(result, q_noise_bound):
+    """(e)'s verdict under the run's q_noise_bound (the value bound: completed-Q is a convex combination of values).
+
+    A root is a numerical near-tie when its top-two completed-Q gap in EITHER frame is <= q_noise_bound; its argmax
+    flips are reported, not gated. (e) fails on a non-near-tie argmax-Q or argmax-target flip, any status flip, max |dQ|
+    > q_noise_bound, a non-finite Q/target or an incomplete oracle-heads copy. Without a bound: strict (bound 0, no Q guard)."""
+    bound = 0. if q_noise_bound is None else float(q_noise_bound)
+    tie = lambda r: any(g is not None and g <= bound for g in (r['gap_pricer'], r['gap_oracle']))
+    flips = [r for r in result['differing'] if not r['status_differs'] and r['finite']]
+    near, hard = [r for r in flips if tie(r)], [r for r in flips if not tie(r)]
+    unmatched = (result.get('replaced') or {}).get('unmatched_head_leaves', 0)
+    q_noise_ok = q_noise_bound is None or result['max_abs_delta_q'] <= bound
+    result.update(q_noise_bound=q_noise_bound, near_tie_roots=sum(tie(g) for g in result['gaps']), near_tie_flips=len(near),
+        near_tie_flip_roots=[{k: r[k] for k in ('root', 'address', 'gap_pricer', 'gap_oracle', 'argmax_q', 'argmax_target', 'completed_q_pricer',
+            'completed_q_oracle_heads') if k in r} | {k: r[k] for k in ('block', 'call') if k in r} for r in near][:FIRST],
+        argmax_q_differs_non_tie=sum(r['argmax_q_differs'] for r in hard), argmax_target_differs_non_tie=sum(r['argmax_target_differs'] for r in hard),
+        q_noise_within_bound=q_noise_ok, first_differing_roots=[r for r in result['differing'] if r in hard or r['status_differs'] or not r['finite']][:DECISION_FIRST])
+    result['passed'] = (not hard and result['status_differs'] == 0 and result['nonfinite_roots'] == 0 and unmatched == 0 and q_noise_ok)
+    reasons = []
+    if unmatched:reasons.append('head-valued pricer leaves without an oracle head value: the copy is incomplete (fail closed)')
+    if result['nonfinite_roots']:reasons.append('non-finite completed-Q or target: decisions are not comparable (fail closed)')
+    if not q_noise_ok:reasons.append(f'max |dQ| {result["max_abs_delta_q"]:.3g} exceeds q_noise_bound {bound:.3g}: the Q noise is beyond the value bound')
+    if hard:reasons.append(f'{len(hard)} root(s) flip a decision with a top-two gap above q_noise_bound in both frames')
+    if result['status_differs']:reasons.append(f'{result["status_differs"]} root(s) labeled in one frame and refused in the other')
+    if reasons:result['reason'] = '; '.join(reasons)
+    elif 'reason' in result:result.pop('reason')
     return result
 
 
@@ -658,18 +705,23 @@ def _plain_q(values):
     return None if values is None else [None if v is None else float(v) for v in values]
 
 
-def merge_decisions(reports):
-    """Sum per-call decision reports; maxima of deltas; the first DECISION_FIRST differing roots."""
+def merge_decisions(reports, *, q_noise_bound=None):
+    """Merge per-call decision reports and decide (e) under the run's q_noise_bound (decision_verdict)."""
     keys = ('roots', 'roots_compared', 'both_refused', 'status_differs', 'nonfinite_roots', 'argmax_q_differs', 'argmax_target_differs',
         'cells_compared', 'cell_choice_differs')
+    if any('differing' not in r for r in reports):   # a call that could not run (e) at all (e.g. no depth2_backups)
+        return dict({k: sum(r.get(k, 0) for r in reports) for k in keys}, passed=False, q_noise_bound=q_noise_bound,
+            reasons=sorted({r['reason'] for r in reports if r.get('reason')}))
     merged = {k: sum(r.get(k, 0) for r in reports) for k in keys}
     merged.update(max_abs_delta_q=max((r.get('max_abs_delta_q', 0.) for r in reports), default=0.),
         max_abs_delta_target=max((r.get('max_abs_delta_target', 0.) for r in reports), default=0.),
-        first_differing_roots=[x for r in reports for x in r.get('first_differing_roots', ())][:DECISION_FIRST],
-        replaced={k: sum((r.get('replaced') or {}).get(k, 0) for r in reports) for k in ('t2_value', 't1_logits', 'root_logits', 'unmatched_head_leaves')},
-        reasons=sorted({r['reason'] for r in reports if r.get('reason')}), passed=bool(reports) and all(r['passed'] for r in reports),
-        gating='passes iff argmax_q_differs == 0 and argmax_target_differs == 0 (a status flip counts in both); fails closed on '
-            'non-finite Q/targets or an incomplete oracle-heads copy; cell_choice_differs is reported, not gated',
+        differing=[x for r in reports for x in r['differing']], gaps=[g for r in reports for g in r['gaps']],
+        replaced={k: sum((r.get('replaced') or {}).get(k, 0) for r in reports) for k in ('t2_value', 't1_logits', 'root_logits', 'unmatched_head_leaves')})
+    merged = decision_verdict(merged, q_noise_bound)
+    merged.pop('differing');merged.pop('gaps')
+    merged.update(reasons=[merged.pop('reason')] if 'reason' in merged else [],
+        gating='fails on a non-near-tie argmax-Q/target flip, any status flip, max |dQ| > q_noise_bound, non-finite Q/targets or an incomplete '
+            'oracle-heads copy; near-tie flips (top-two gap <= q_noise_bound in either frame) and cell_choice_differs are reported, not gated',
         reference='depth2_backups.learner_max_root: pricer frame vs the same frame with the oracle\'s head values, child priors and root '
             'opponent prior on the lanes (c) checks (requested seats, legal lanes)')
     return merged
@@ -734,9 +786,19 @@ def value_samples(frame, requests, *, backups=None, context=None):
     return dict(samples=dict(samples), roots=roots, unavailable=reason)
 
 
-def values_section(collected, *, oracle_checked):
+def _near_ties(roots, threshold, bands, source):
+    near = [r for r in roots if r['top_two_gap'] is not None and r['top_two_gap'] <= threshold];labeled = len(roots)
+    return dict(threshold=threshold, threshold_source=source, labeled_roots=labeled, near_tie_roots=len(near),
+        share=None if not labeled else len(near) / labeled, by_band={b: sum(r['band'] == b for r in near) for b in bands},
+        e_evaluated=sum(r['e_evaluated'] for r in near),
+        e_exact_on_all=all(r['e_differs'] is False for r in near) if near and all(r['e_evaluated'] for r in near) else None,
+        e_differs_on=[r for r in near if r['e_differs']], roots=near[:FIRST])
+
+
+def values_section(collected, *, oracle_checked, q_noise_bound=None):
     """collected: [(value_samples(...), decision result of the same call or None)]. Percentiles per frame band and in total,
-    and the near-tie share (top-two root Q within NEAR_TIE) with (e)'s verdict on each near-tie root."""
+    and the near-tie share (pricer-frame top-two root Q within q_noise_bound, the run's value bound; VALUE_FALLBACK when
+    unknown) with (e)'s verdict on each near-tie root; near_ties_1e-4 keeps the fixed 1e-4 count."""
     pooled = collections.defaultdict(list);roots = [];reasons = set()
     for result, decision in collected:
         for key, parts in result['samples'].items():pooled[key].extend(parts)
@@ -747,8 +809,8 @@ def values_section(collected, *, oracle_checked):
     join = lambda parts: np.concatenate([np.asarray(x, np.float64).reshape(-1) for x in parts]) if parts else np.zeros(0)
     by_band = {b: {name: percentiles(join(pooled.get((name, b), []))) for name in quantities} for b in bands}
     totals = {name: percentiles(join([x for b in bands for x in pooled.get((name, b), [])])) for name in quantities}
-    near = [r for r in roots if r['top_two_gap'] is not None and r['top_two_gap'] <= NEAR_TIE]
-    labeled = len(roots)
+    threshold, source = ((q_noise_bound, 'q_noise_bound (the run\'s value bound)') if q_noise_bound is not None
+        else (VALUE_FALLBACK, 'fallback 1e-4: no q_noise_bound in this run (no depth-1 floor to measure)'))
     return dict(source='PRICER_FRAME', oracle_checked=oracle_checked,
         scope='the pricer frame\'s own values' + (' (every leaf checked by the oracle: (a)-(e))' if oracle_checked else
             ' - NOT oracle-checked (sampled leaves or --pricer-only)'),
@@ -756,10 +818,7 @@ def values_section(collected, *, oracle_checked):
         definitions=dict(abs_t2_value='|t2_value| at head-valued leaves (status 4)', abs_t1_value='|t1_value| at expanded cells (status 2)',
             cell_a2_spread='max - min over enumerated a2 of sum_r2 pi_opp(r2) v(a2, r2), expanded cells with >= 2 enumerated a2',
             root_q_spread='max - min of learner-max completed-Q over legal root actions, labeled roots'),
-        near_ties=dict(threshold=NEAR_TIE, labeled_roots=labeled, near_tie_roots=len(near), share=None if not labeled else len(near) / labeled,
-            by_band={b: sum(r['band'] == b for r in near) for b in bands}, e_evaluated=sum(r['e_evaluated'] for r in near),
-            e_exact_on_all=all(r['e_differs'] is False for r in near) if near and all(r['e_evaluated'] for r in near) else None,
-            e_differs_on=[r for r in near if r['e_differs']], roots=near[:FIRST]),
+        near_ties=_near_ties(roots, threshold, bands, source), **{'near_ties_1e-4': _near_ties(roots, NEAR_TIE, bands, 'fixed 1e-4')},
         unavailable=sorted(reasons))
 
 
@@ -1030,8 +1089,9 @@ def recheck(directory, *, backups=None, progress=None):
             for check, keys in missing.items():unavailable.setdefault(check, set()).update(keys)
             collected.append((value_samples(saved['frame'], saved['requests'], backups=backups, context=context), evaluation.get('e')))
             sibling.append(sibling_spread(saved['frame'], context=context));info['checks'] = sorted(k for k in evaluation if k != 'geometry')
-    values = values_section(collected, oracle_checked=checked and all('e' in e for e in evaluations))
-    result = summarize(evaluations, spread_p10=values['totals']['cell_a2_spread'].get('p10'))
+    oracle_checked = checked and all('e' in e for e in evaluations)
+    result = summarize(evaluations, spread_p10=values_section(collected, oracle_checked=oracle_checked)['totals']['cell_a2_spread'].get('p10'))
+    values = values_section(collected, oracle_checked=oracle_checked, q_noise_bound=result['tolerance']['value_bound'])
     refusals = merge_refusals([e['refusals'] for e in evaluations if 'refusals' in e])
     skipped = {key: e[f'skipped_{key}'] for e in evaluations for key in ('e', 'block_invariance') if f'skipped_{key}' in e}
     status, reasons = gate_status(result, sampled=not checked, unavailable=unavailable, skipped=skipped)
@@ -1476,15 +1536,16 @@ def split_groups(groups, capacity):
     return [g[i:i + capacity] for g in groups for i in range(0, len(g), capacity) if g[i:i + capacity]]
 
 
-def make_pricer(executor, model, *, widths, actor_capacity, child_block=None):
-    """Depth2Pricer(executor, model, digest=True, widths..., child_block) - imported lazily: it lands on another branch.
+def make_pricer(executor, model, *, widths, actor_capacity, child_block=None, capacity=None):
+    """Depth2Pricer(executor, model, digest=True, widths..., child_block, capacity) - imported lazily: it lands on another branch.
 
-    Options the constructor does not take are dropped, unless they would change what is priced: a width
-    other than 9, or an explicit child_block, then refuse."""
+    Options the constructor does not take are dropped, unless they would change what is priced or how much one call
+    holds: a width other than 9, an explicit child_block or an explicit capacity, then refuse."""
     from gpu_engine.device_depth2_pricer import Depth2Pricer
     options = dict(digest=True, actor_capacity=actor_capacity, **widths)
     required = {k for k, v in widths.items() if v != 9}
     if child_block is not None:options['child_block'] = child_block;required.add('child_block')
+    if capacity is not None:options['capacity'] = capacity;required.add('capacity')
     parameters = inspect.signature(Depth2Pricer).parameters
     if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
         if 'digest' not in parameters:raise SystemExit('Depth2Pricer has no digest option')
@@ -1679,7 +1740,7 @@ DIGEST_NOTE = ('--pricer-only keeps digest=True: Depth2Pricer passes digest into
     'as kernel outputs, so digest=False would compile a different program and miss the gate\'s warm compile cache. The digests are not used.')
 
 
-def pricer_only(args, *, provider, params, groups, pricer, options, seeds, out, source, widths, evaluator=None, root_values=()):
+def pricer_only(args, *, provider, params, groups, pricer, options, seeds, out, source, widths, evaluator=None, root_values=(), split_capacity=None):
     """--pricer-only: the gate's normal Depth2Pricer call on every request group, nothing else; values and refusals from its frame."""
     from pokezero import v5_gumbel as original
     from gpu_engine import device_public_worlds as worlds
@@ -1710,7 +1771,8 @@ def pricer_only(args, *, provider, params, groups, pricer, options, seeds, out, 
     values = values_section(collected, oracle_checked=False)
     report = dict(evaluator=evaluator, value_scale=value_scale(root_values, values['totals'].get('abs_t1_value'), getattr(args, 'value_reference', None)),
         schema=SCHEMA, status='PRICER_ONLY', passed=False, mode='PRICER_ONLY', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
-        block_seeds=list(seeds), max_roots=args.max_roots, pricer_options=options, digest_note=DIGEST_NOTE, calls=calls,
+        block_seeds=list(seeds), max_roots=args.max_roots, pricer_options=options, split_capacity=split_capacity,
+        largest_call=max((c['roots'] for c in calls), default=0), digest_note=DIGEST_NOTE, calls=calls,
         geometry_failures=[c for c in calls if c['geometry']],
         values=values, sibling_spread=merge_sibling_spread(sibling, oracle_checked=False),
         refusals=with_dropped(merge_refusals(refusals), (evaluator or {}).get('dropped_roots', ())),
@@ -1736,6 +1798,7 @@ def main(argv=None):
     parser.add_argument('--sample-leaves', type=int, help='check N sampled turn-2 leaves per world (default: all)')
     parser.add_argument('--oracle-chunk', type=int, default=512, help='oracle specs per vmap invocation')
     parser.add_argument('--child-block', type=int, help='Depth2Pricer child_block (passed through; refused if not accepted)')
+    parser.add_argument('--depth2-capacity', type=int, help='Depth2Pricer(capacity=N): calls hold at most N roots (FramePricer gets the same calls)')
     parser.add_argument('--block-invariance', action='store_true',
         help='price every call with child_block 27 and 81 and require bit-equal output arrays (the 81 frame is checked)')
     parser.add_argument('--save-arrays', action='store_true',
@@ -1783,6 +1846,7 @@ def main(argv=None):
     if args.oracle_chunk < 1 or (args.sample_leaves is not None and args.sample_leaves < 1):
         parser.error('positive --oracle-chunk and --sample-leaves N >= 1 (no --sample-leaves checks every leaf)')
     if args.child_block is not None and args.child_block < 1:parser.error('positive --child-block required')
+    if args.depth2_capacity is not None and args.depth2_capacity < 1:parser.error('positive --depth2-capacity required')
     if args.block_invariance and args.child_block is not None:parser.error('--block-invariance fixes child_block to 27 and 81; drop --child-block')
     if args.pricer_only and args.block_invariance:parser.error('--pricer-only runs one pricer: drop --block-invariance')
     import importlib.util   # fail before loading roots; find_spec does not import JAX
@@ -1811,13 +1875,14 @@ def main(argv=None):
             if left > 0:kept.append(group[:left]);left -= len(kept[-1])
         groups = kept
     blocks = INVARIANCE_BLOCKS if args.block_invariance else (args.child_block,)
-    pricers = [make_pricer(provider.executor, plan.model, widths=widths, actor_capacity=actor_capacity, child_block=b) for b in blocks]
+    pricers = [make_pricer(provider.executor, plan.model, widths=widths, actor_capacity=actor_capacity, child_block=b, capacity=args.depth2_capacity)
+        for b in blocks]
     (pricer, options), invariance = pricers[-1], [p for p, _ in pricers[:-1]]
     capacity = call_capacity(frame_pricer, [p for p, _ in pricers]);groups = split_groups(groups, capacity)
     seeds = world_block_seeds(provider.recipe.seed, args.worlds_blocks)
     if args.pricer_only:
         return pricer_only(args, provider=provider, params=params, groups=groups, pricer=pricer, options=options, seeds=seeds, out=out, source=source,
-            widths=widths, evaluator=evaluator, root_values=root_values)
+            widths=widths, evaluator=evaluator, root_values=root_values, split_capacity=capacity)
     oracle = reference.Oracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=oracle_chunk_progress(log),
         raw_model=head[1] if args.raw_head_check else None)
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), widths=widths, sample_leaves=args.sample_leaves, seeds=seeds,
@@ -1834,8 +1899,10 @@ def main(argv=None):
                     context=dict(block=block, call=call), invariance=invariance, progress=log,
                     save=out / f'arrays-block{block}-call{call}.npz' if args.save_arrays else None, evaluator=evaluator)
                 evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
-    values = values_section([(e['values'], e.get('e')) for e in evaluations if 'values' in e], oracle_checked=args.sample_leaves is None)
-    result = summarize(evaluations, spread_p10=values['totals']['cell_a2_spread'].get('p10'))
+    collected = [(e['values'], e.get('e')) for e in evaluations if 'values' in e]
+    spread = values_section(collected, oracle_checked=args.sample_leaves is None)['totals']['cell_a2_spread'].get('p10')
+    result = summarize(evaluations, spread_p10=spread)
+    values = values_section(collected, oracle_checked=args.sample_leaves is None, q_noise_bound=result['tolerance']['value_bound'])
     log('TOLERANCE', **tolerance_line(result['tolerance']))
     reported = [c for c in calls if c['refusals'] is not None]
     refusals = dict(with_dropped(merge_refusals([c['refusals'] for c in reported]), evaluator.get('dropped_roots', ())),

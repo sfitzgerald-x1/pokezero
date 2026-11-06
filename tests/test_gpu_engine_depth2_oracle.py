@@ -1220,6 +1220,72 @@ class RelativeToleranceTests(GateFixture, unittest.TestCase):
         self.assertIn('2 x depth1_noise_floor', result['tolerance']['rule']);json.dumps(result, allow_nan=False, default=str)
 
 
+def controlled_q(frame, pricer_q, oracle_q):
+    """FakeBackups, except root 0's completed-Q is pricer_q on the pricer frame and oracle_q on the oracle-heads copy."""
+    class Controlled(FakeBackups):
+        @classmethod
+        def learner_max_root(cls, f, q, logits, legal):
+            if q != 0:return super().learner_max_root(f, q, logits, legal)
+            values = pricer_q if f.t2_value is frame['t2_value'] else oracle_q
+            completed = tuple(v if ok else None for v, ok in zip(values, legal))
+            scores = np.where(legal, np.asarray(logits) + np.asarray([v or 0. for v in completed]), -np.inf);target = np.exp(scores - scores.max())
+            return SimpleNamespace(status='LABELED', improvement=SimpleNamespace(completed_q=completed, policy_target=tuple(target / target.sum())))
+    return Controlled
+
+
+class NearTieTests(GateFixture, unittest.TestCase):
+    """(e) with trained heads: a numerical near-tie (top-two completed-Q gap <= q_noise_bound in either frame) may flip."""
+    B0_PRICER = (-.68198, -.9, -.68320) + (0.,) * 6   # the B0-i99 root [1803000036, 4, 0]: gap 1.2e-3
+    B0_ORACLE = (-.68297, -.9, -.68295) + (0.,) * 6   # gap 2e-5: a0 and a2 swap places
+
+    def decide(self, pricer_q, oracle_q, bound):
+        frame, _, data, _ = self.priced()
+        result = gate.decision_check(frame, data, self.requests, context=dict(block=0, call=0), backups=controlled_q(frame, pricer_q, oracle_q))
+        return gate.merge_decisions([result], q_noise_bound=bound)
+
+    def test_a_near_tie_flip_passes_and_is_reported(self):
+        e = self.decide(self.B0_PRICER, self.B0_ORACLE, 4e-3)
+        self.assertTrue(e['passed'], e['reasons']);self.assertEqual((e['argmax_q_differs'], e['argmax_q_differs_non_tie']), (1, 0))
+        self.assertEqual(e['near_tie_flips'], 1);self.assertGreaterEqual(e['near_tie_roots'], 1);self.assertTrue(e['q_noise_within_bound'])
+        flip = e['near_tie_flip_roots'][0]
+        self.assertEqual((flip['root'], flip['argmax_q']), (0, [0, 2]));self.assertAlmostEqual(flip['gap_oracle'], 2e-5, delta=1e-9)
+        self.assertAlmostEqual(flip['gap_pricer'], 1.22e-3, delta=1e-9);self.assertAlmostEqual(e['max_abs_delta_q'], 9.9e-4, delta=1e-9)
+        self.assertEqual(e['first_differing_roots'], [])
+        either = self.decide(self.B0_PRICER, self.B0_ORACLE, 1e-3)   # only the oracle frame's gap (2e-5) is within 1e-3: either frame suffices
+        self.assertTrue(either['passed'], either['reasons']);self.assertEqual(either['near_tie_flips'], 1)
+        strict = self.decide(self.B0_PRICER, self.B0_ORACLE, None)   # without a run bound only exact ties may flip
+        self.assertFalse(strict['passed']);self.assertEqual(strict['argmax_q_differs_non_tie'], 1)
+
+    def test_a_non_tie_flip_fails(self):
+        e = self.decide((.5, .2, .1) + (0.,) * 6, (.2, .5, .1) + (0.,) * 6, 4e-3)
+        self.assertFalse(e['passed']);self.assertEqual((e['argmax_q_differs_non_tie'], e['near_tie_flips']), (1, 0))
+        self.assertEqual(e['first_differing_roots'][0]['root'], 0);self.assertIn('top-two gap above q_noise_bound', e['reasons'][0])
+
+    def test_q_noise_beyond_the_value_bound_fails(self):
+        e = self.decide((.5, .1, 0.) + (0.,) * 6, (.49, .1, 0.) + (0.,) * 6, 4e-3)   # same decision, |dQ| = 1e-2 > 4e-3
+        self.assertFalse(e['passed']);self.assertFalse(e['q_noise_within_bound']);self.assertEqual(e['argmax_q_differs'], 0)
+        self.assertIn('exceeds q_noise_bound', e['reasons'][0])
+        self.assertTrue(self.decide((.5, .1, 0.) + (0.,) * 6, (.49, .1, 0.) + (0.,) * 6, 2e-2)['passed'])
+
+    def test_header_and_values_use_the_run_bound(self):
+        frame, d_results, data, _ = RelativeToleranceTests.shifted(self, 2e-3)   # floor 2e-3: q_noise_bound 4e-3
+        evaluation = gate.evaluate(frame, d_results, self.requests, data, context=dict(block=0, call=0))
+        evaluation['e'] = gate.decision_check(frame, data, self.requests, context=dict(block=0, call=0),
+            backups=controlled_q(frame, self.B0_PRICER, self.B0_ORACLE))
+        result = gate.summarize([evaluation]);rule = result['tolerance']
+        self.assertAlmostEqual(rule['q_noise_bound'], 4e-3, delta=1e-6);self.assertEqual(rule['q_noise_bound'], rule['value_bound'])
+        self.assertAlmostEqual(rule['max_abs_delta_q'], 9.9e-4, delta=1e-9);self.assertEqual(rule['near_tie_flips'], 1)
+        self.assertTrue(result['checks']['e']['passed']);self.assertIn('near_tie_flips', gate.tolerance_line(rule))
+        roots = [dict(root=0, band='0-4', top_two_gap=2e-3, address=[1, 2, 0]), dict(root=1, band='5-9', top_two_gap=5e-5, address=[1, 6, 0]),
+            dict(root=2, band='5-9', top_two_gap=.5, address=[1, 7, 0])]
+        values = gate.values_section([(dict(samples={}, roots=roots, unavailable=None), dict(differing_roots=[0]))], oracle_checked=True, q_noise_bound=4e-3)
+        self.assertEqual((values['near_ties']['threshold'], values['near_ties']['near_tie_roots']), (4e-3, 2))
+        self.assertEqual((values['near_ties_1e-4']['threshold'], values['near_ties_1e-4']['near_tie_roots']), (1e-4, 1))   # the old count stays
+        self.assertEqual([r['root'] for r in values['near_ties']['e_differs_on']], [0])
+        fallback = gate.values_section([(dict(samples={}, roots=roots, unavailable=None), None)], oracle_checked=False)
+        self.assertEqual(fallback['near_ties']['threshold'], 1e-4);self.assertIn('fallback', fallback['near_ties']['threshold_source'])
+
+
 class ReviewTests(GateFixture, unittest.TestCase):
     """The independent review's findings at 41e45122, each pinned."""
     def price_with(self, *, forward_=forward, widths=None, sample=None, chunk=32, pricer_chunk=16):
@@ -1353,10 +1419,10 @@ class PricerBindingTests(unittest.TestCase):
     """The pricer's constructor is not on this branch: bind it by signature, and fail closed."""
     WIDTHS = dict(k_own=9, k_opp=9, k1_own=9, k1_opp=9)
 
-    def make(self, cls, child_block=None, **widths):
+    def make(self, cls, child_block=None, capacity=None, **widths):
         module = SimpleNamespace(Depth2Pricer=cls)
         with patch.dict(sys.modules, {'gpu_engine.device_depth2_pricer': module}):
-            return gate.make_pricer('executor', 'model', widths=dict(self.WIDTHS, **widths), actor_capacity=33, child_block=child_block)
+            return gate.make_pricer('executor', 'model', widths=dict(self.WIDTHS, **widths), actor_capacity=33, child_block=child_block, capacity=capacity)
 
     def test_options_follow_the_constructor_signature(self):
         class Strict:
@@ -1376,6 +1442,12 @@ class PricerBindingTests(unittest.TestCase):
         with self.assertRaises(SystemExit):self.make(NoDigest)
         with self.assertRaises(SystemExit):self.make(FullTurn1, k1_own=2)
         with self.assertRaises(SystemExit):self.make(FullTurn1, child_block=27)
+        with self.assertRaises(SystemExit):self.make(FullTurn1, capacity=512)   # an explicit capacity must reach the pricer
+        class Sized:
+            def __init__(self, executor, model, *, digest=False, capacity=2048):self.capacity = capacity
+        pricer, options = self.make(Sized, capacity=512)
+        self.assertEqual((pricer.capacity, options['capacity']), (512, 512))
+        self.assertEqual(gate.call_capacity(SimpleNamespace(capacity=4096), [pricer]), 512)   # calls split at 512 roots
         class Blocked:
             def __init__(self, executor, model, *, digest=False, child_block=81):self.child_block = child_block
         pricer, options = self.make(Blocked, child_block=27)
@@ -1397,7 +1469,8 @@ class PricerBindingTests(unittest.TestCase):
                     ['--out', str(out), '--recheck', 'arrays', '--head-archive', 'a', '--head-archive-sha256', 'b', '--head-checkpoint-sha256', 'c'],
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--head-model-sha256', 'x'],
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--sample-leaves', '0'],
-                    ['--out', str(out), '--topk-errors', 'full', 'topk', '--d3-root', 'b']):
+                    ['--out', str(out), '--topk-errors', 'full', 'topk', '--d3-root', 'b'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--pricer-only', '--depth2-capacity', '0']):
                 with self.assertRaises(SystemExit) as raised:gate.main(argv)
                 self.assertEqual(raised.exception.code, 2, argv)
         with patch.object(importlib.util, 'find_spec', return_value=None), self.assertRaises(SystemExit) as raised:
