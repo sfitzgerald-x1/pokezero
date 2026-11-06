@@ -52,13 +52,32 @@ Turn-2 entries are 0 or NaN wherever `t1_status != 2`.
 
 ## Backups (pure functions over `Depth2Frame`)
 
-- **`backup_average(frame, root) -> (WorldPrices, WorldPrices)`** (the reference):
-  - each expanded turn-1 cell gets `Σ π_own(a2)·π_opp(r2)·v(a2,r2)`, with each prior a masked softmax over the enumerated legal actions (renormalized under top-k);
-  - a terminal cell keeps its exact value;
-  - any error under an enumerated cell makes the cell `None`, so the root refuses, as in D.
+Agreed with the lead on November 5, with two amendments: the learner-max reference, and the refusal accounting.
 
-  The result is today's depth-1 `WorldPrices` surface. `v5_gumbel.reduce_completed_q` then gives the root target unchanged.
-- **Other backups** (the measurement agent's hedge, learner-max and others) take the same `Depth2Frame` and return the same `WorldPrices` pair, or their own reduction.
+- **`backup_learner_max(frame, root) -> (WorldPrices, WorldPrices)`** (the reference): D's treatment of the root action, carried down one turn. Average over the opponent's reply, then choose.
+  - Each expanded turn-1 cell gets `max over enumerated a2 of Σ_r2 π_opp(r2)·v(a2,r2)`.
+    - `π_opp` is a masked softmax of the opponent's child prior over the enumerated legal replies, renormalized under top-k.
+    - Ties go to the lower index.
+    - A waiting seat contributes only row/column 0, with unit mass.
+  - A terminal cell keeps its exact value.
+  - Any error under an enumerated cell makes the cell `None`, so the root refuses, as in D.
+
+  The result is today's depth-1 `WorldPrices` surface, so `v5_gumbel.reduce_completed_q` gives the root target unchanged.
+- **`backup_average(frame, root)`** (a diagnostic): each expanded cell gets `Σ π_own(a2)·π_opp(r2)·v(a2,r2)`, with both priors as above. It evaluates the learner's own prior play at turn 2, so it can't find a line that prior doesn't already play. It returns the same `WorldPrices` pair.
+- **Other backups** (the measurement agent's hedge and others) take the same `Depth2Frame` and return the same `WorldPrices` pair, or their own reduction.
+
+## Refusal accounting
+
+- **The reference rule** is D's: any error under an enumerated cell refuses the root.
+- **`refusal_summary(frame)`** reports:
+  - the refused roots and the causes;
+  - turn-1 and turn-2 error counts by code;
+  - the turn-2 errors in each refused root.
+- **Gate and measurement runs report:**
+  - the depth-2 root refusal share next to depth 1's (D3 `FramePricer`) on the same requests;
+  - turn-2 error counts by code;
+  - under top-k, the share of roots whose only full-width depth-2 errors sit in cells top-k prunes away (a full-width and a top-k run on the same requests).
+- **Conditional cell mask** (not built unless triggered): if depth 2 refuses more than 2 points more roots than depth 1, an opt-in mask drops an erroring turn-2 cell and renormalizes the priors over the remaining enumerated actions. It refuses only if a whole turn-2 row empties. That is a **semantic deviation from D**, and it must be flagged wherever it's used.
 
 ## Worlds beyond 2
 
