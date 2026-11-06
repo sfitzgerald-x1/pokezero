@@ -335,6 +335,21 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(record['pricing'][0]['depthn']['p1_seconds'], .004 - .0007)
         self.assertEqual(len(requests), 4)
 
+    def test_fences_and_the_leftover_sync_land_in_their_stages(self):
+        FENCE, SYNC, sentinel, synced = .0123, .0456, object(), []   # distinctive amounts: each must show up in exactly its stage
+        args, ctx = self.args(), fake_ctx();ctx.fence = lambda: CLOCK.advance(FENCE)
+        def block_until_ready(x):synced.append(x);CLOCK.advance(SYNC);return x
+        search = tool.Search('depth3-searched-k3', 4, args, ctx, module=MODULE)
+        with patch.object(tool, 'device_arrays', lambda frames: [sentinel]), patch('jax.block_until_ready', block_until_ready):
+            record, _ = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK)
+        s, p, v = record['stages'], record['parts'], record['variants']['fake@pool0']
+        self.assertAlmostEqual(s['host_prep'], .003 + FENCE)   # host_prep ends with its fence
+        self.assertAlmostEqual(p['pricer.depth2_pass'], .008 + FENCE);self.assertAlmostEqual(p['pricer.depthn'], .008 + FENCE)   # each price() ends synced
+        self.assertAlmostEqual(p['pricer.searched_maps_host'], .005)   # the host maps hold no fence
+        self.assertAlmostEqual(s['return'], SYNC + FENCE);self.assertEqual(synced, [[sentinel]])   # the leftover device array is waited on in return
+        self.assertAlmostEqual(s['solve'], .0004);self.assertEqual(v['leftover_device_arrays'], 1)
+        self.assertAlmostEqual(sum(s.values()), record['wall_seconds'], places=12)
+
     def test_cold_calls_are_excluded_from_warm_statistics(self):
         args, ctx = self.args(), fake_ctx();search = tool.Search('depth3-prior-k3', 4, args, ctx, module=MODULE)
         CLOCK.extra = [1., .1, .3, .2]   # the cold call is slow and compiles; warm calls vary
@@ -359,21 +374,27 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(series['leaves']['nominal_per_world'], 6561);self.assertEqual(series['leaves']['measured_per_world'], 6561)
 
     def test_800ms_selection(self):
-        self.assertEqual(tool.largest_within({1: 100., 4: 500., 16: 900.}), dict(largest_capacity=4, monotone=True))
-        self.assertEqual(tool.largest_within({1: 100., 4: 800., 16: 800.1}), dict(largest_capacity=4, monotone=True))   # <= 800 fits
-        self.assertEqual(tool.largest_within({1: 900., 4: 700.}), dict(largest_capacity=4, monotone=False))
-        self.assertEqual(tool.largest_within({1: 801., 4: None}), dict(largest_capacity=None, monotone=True))
-        total = lambda p90: dict(median_ms=p90 - 10, p90_ms=p90, max_ms=p90 + 5)
+        fits = lambda **kw: {k: kw[k] for k in ('largest_capacity', 'largest_capacity_any', 'monotone')}
+        self.assertEqual(fits(**tool.largest_within({1: 100., 4: 500., 16: 900.})), dict(largest_capacity=4, largest_capacity_any=4, monotone=True))
+        self.assertEqual(fits(**tool.largest_within({1: 100., 4: 800., 16: 800.1})), dict(largest_capacity=4, largest_capacity_any=4, monotone=True))   # <= 800 fits
+        # The headline needs every smaller C to fit too: C=1 over the limit leaves no headline even though C=4 fits on its own.
+        verdict = tool.largest_within({1: 900., 4: 700.});self.assertEqual(fits(**verdict), dict(largest_capacity=None, largest_capacity_any=4, monotone=False))
+        self.assertEqual(verdict['verdicts'], {'1': False, '4': True})
+        self.assertEqual(fits(**tool.largest_within({1: 100., 4: 900., 16: 700.})), dict(largest_capacity=1, largest_capacity_any=16, monotone=False))
+        self.assertEqual(fits(**tool.largest_within({1: 801., 4: None})), dict(largest_capacity=None, largest_capacity_any=None, monotone=True))
+        total = lambda p90, median=None: dict(median_ms=p90 - 10 if median is None else median, p90_ms=p90, max_ms=p90 + 5)
         series = [dict(config='a', worlds=w, mode=m, capacity=c, variant='v', warm=dict(total=total(p))) for w, m, c, p in (
             (2, 'sequential', 1, 100.), (2, 'sequential', 4, 300.), (2, 'sequential', 16, 900.), (8, 'sequential', 1, 700.), (8, 'sequential', 4, 1200.),
             (8, 'sequential', 16, 3000.), (8, 'packed', 1, 300.), (8, 'packed', 4, 600.), (8, 'packed', 16, 2000.))] + [
-            dict(config='b', worlds=2, mode='sequential', capacity=c, variant='v', warm=dict(total=total(p))) for c, p in ((1, 900.), (4, 1500.))]
+            dict(config='b', worlds=2, mode='sequential', capacity=c, variant='v', warm=dict(total=total(p))) for c, p in ((1, 900.), (4, 1500.))] + [
+            dict(config='c', worlds=2, mode='sequential', capacity=1, variant='v', warm=dict(total=total(820., median=780.)))]   # median fits, p90 does not
         selection = tool.select(series)
         a, b = selection['configs']['a']['v'], selection['configs']['b']['v']
         self.assertEqual(a['largest_capacity'], dict(capacity=4, worlds=2, mode='sequential'))
         self.assertEqual(a['largest_worlds'], dict(capacity=1, worlds=8, mode='sequential'))
         self.assertEqual(a['packed_proxy']['largest_worlds'], dict(capacity=4, worlds=8, mode='packed'))   # packed apart, never the headline
         self.assertEqual((b['largest_capacity'], b['largest_worlds'], b['packed_proxy']), (None, None, None))
+        self.assertIsNone(selection['configs']['c']['v']['largest_capacity'])   # the rule is the p90: a 780 ms median with an 820 ms p90 does not fit
         rows = {(r['config'], r['worlds'], r['mode']): r for r in selection['rows']};self.assertEqual({r['variant'] for r in selection['rows']}, {'v'})
         self.assertEqual(rows['a', 8, 'packed']['largest_capacity'], 4);self.assertEqual(rows['a', 2, 'sequential']['by_capacity']['4'], total(300.))
         self.assertEqual(selection['limit_ms'], 800.);self.assertIn('<= 800 ms', selection['rule'])

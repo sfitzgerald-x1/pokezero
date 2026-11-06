@@ -533,7 +533,7 @@ class Search:
     digest=False), sharing `programs` (the process's DepthNPricer program table) after binding the evaluator, so no bind resets
     it; depth2-merged one merged Depth2Pricer (merged_pricer) with its own kernel table."""
     def __init__(self, config, capacity, args, ctx, *, module=None, programs=None, depth2_module=None):
-        self.name, self.capacity, self.ctx, self.seen = config, capacity, ctx, set()
+        self.name, self.capacity, self.ctx = config, capacity, ctx
         if config == MERGED:
             self.module = depth2_module or importlib.import_module('gpu_engine.device_depth2_pricer');self.config = check_config(config);self.pass_pricer = None
             self.pricer, self.options = merged_pricer(self.module, ctx.provider.executor, ctx.plan.model, capacity=capacity, actor_capacity=ctx.actor_capacity,
@@ -565,12 +565,13 @@ class Search:
         frame = pricer.price(requests, self.ctx.provider.materializer, recipe, self.ctx.params, **kw)
         self.ctx.fence();clock.lap('pricer', part)
         timing = frame.timing;materialize = float(timing.get('world_prepare_seconds') or 0.)
-        if hasattr(pricer, 'compiles'):compiles = tuple(pricer.compiles)   # DepthNPricer: this call's (key, lower, compile)
-        else:   # Depth2Pricer: this call's lower/compile seconds in its timing (0 when its kernel table already held the key)
+        # Compiles as the pricer reports them for this call (no dedupe): DepthNPricer's `compiles` (reset per price()), Depth2Pricer's
+        # timing lower/compile seconds (0 when its kernel table already held the key).
+        if hasattr(pricer, 'compiles'):compiles = tuple(pricer.compiles)
+        else:
             lower, compile_ = float(timing.get('lower_seconds') or 0.), float(timing.get('compile_seconds') or 0.)
             compiles = ((('depth2_kernel', timing.get('root_capacity'), timing.get('child_block')), lower, compile_),) if lower or compile_ else ()
-        fresh = [c for c in compiles if (id(pricer), repr(c[0])) not in self.seen];self.seen.update((id(pricer), repr(c[0])) for c in fresh)
-        compiled = float(sum(c[1] + c[2] for c in fresh))
+        compiled = float(sum(c[1] + c[2] for c in compiles))
         clock.move(materialize, 'pricer', 'world_construction', source_part=part, target_part='materialize')
         clock.move(compiled, 'pricer', COMPILE, source_part=part, target_part=part)
         number = lambda key: float(timing[key]) if isinstance(timing.get(key), (int, float)) else None
@@ -579,7 +580,7 @@ class Search:
             compile_seconds=compiled, p1_seconds=None if None in (loop, pack, device) else device - (loop - pack), ply_loop_seconds=loop, host_pack_seconds=pack,
             enumerated_leaves=timing.get('enumerated_leaves', timing.get('turn2_enumerated_leaves')),
             evaluated_leaf_lanes=timing.get('evaluated_leaf_lanes', timing.get('turn2_evaluated_leaf_lanes')),
-            compiles=[dict(key=repr(c[0]), lower_seconds=float(c[1]), compile_seconds=float(c[2])) for c in fresh])
+            compiles=[dict(key=repr(c[0]), lower_seconds=float(c[1]), compile_seconds=float(c[2])) for c in compiles])
 
     def price(self, requests, recipe, clock):
         """One pricing of `requests` to a host frame: depth N, or (searched) the pass, the host maps and depth N. Returns (frame, infos)."""
@@ -912,11 +913,14 @@ def header(context, commit):
 
 # Selection and report -----------------------------------------------------------------------------------------------------------------
 def largest_within(p90_by_capacity, limit_ms=LIMIT_MS):
-    """The largest capacity whose p90 <= limit_ms (None if none) and whether every smaller measured capacity fits too."""
-    fit = sorted(c for c, p90 in p90_by_capacity.items() if p90 is not None and p90 <= limit_ms)
-    largest = fit[-1] if fit else None
-    monotone = largest is None or all(p is not None and p <= limit_ms for c, p in p90_by_capacity.items() if c <= largest)
-    return dict(largest_capacity=largest, monotone=monotone)
+    """The headline: the largest capacity C such that C and every smaller measured capacity have p90 <= limit_ms (None when the
+    smallest fails); also every capacity's raw verdict, the largest capacity that fits on its own and whether the two agree."""
+    verdicts = {c: p is not None and p <= limit_ms for c, p in sorted(p90_by_capacity.items())};largest = None
+    for c, fits in verdicts.items():
+        if not fits:break
+        largest = c
+    raw = max((c for c, fits in verdicts.items() if fits), default=None)
+    return dict(largest_capacity=largest, largest_capacity_any=raw, monotone=raw == largest, verdicts={str(c): fits for c, fits in verdicts.items()})
 
 
 def select(series, limit_ms=LIMIT_MS):
@@ -971,10 +975,11 @@ def markdown(report):
             f'{merged.get("fixed_capacity")}, the gate\'s construction); learner_max / MODULE:FUNC solve {MERGED_SOLVE}; hedge solve search_hedge.depth2_hedged_root. '
             'depth2-fw is DepthNPricer at N=2, k=9.']
     lines += [
-        '| config | W | mode | solver | pool | ' + ' | '.join(f'C={c}' for c in caps) + ' | largest C with p90 <= 800 ms |', '|---|---|---|---|---|' + '---|' * len(caps) + '---|']
+        '| config | W | mode | solver | pool | ' + ' | '.join(f'C={c} median / p90' for c in caps) + ' | largest C, every smaller C fitting too (p90 <= 800 ms) |', '|---|---|---|---|---|' + '---|' * len(caps) + '---|']
     for r in sel['rows']:
-        cells = [f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p90_ms"])}' if str(c) in r['by_capacity'] else '-' for c in caps]
-        largest = '-' if r['largest_capacity'] is None else str(r['largest_capacity']) + ('' if r['monotone'] else ' (a smaller C fails)')
+        cells = [f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p90_ms"])} {"fit" if r["verdicts"][str(c)] else "over"}'
+            if str(c) in r['by_capacity'] else '-' for c in caps]
+        largest = ('-' if r['largest_capacity'] is None else str(r['largest_capacity'])) + ('' if r['monotone'] else f' (C={r["largest_capacity_any"]} fits alone)')
         lines.append(f'| {r["config"]} | {r["worlds"]} | {r["mode"] + (" (proxy)" if r["mode"] == "packed" else "")} | {r["solver"]} | {r["pool"]} | '
             + ' | '.join(cells) + f' | {largest} |')
     lines += ['', 'Largest fitting, sequential (playable today): ' + '; '.join(
