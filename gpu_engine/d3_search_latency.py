@@ -28,20 +28,32 @@ one stage, so the stages sum to the call's wall time; seconds a pricer measures 
 - pricer: each price() wall to a host-ready frame minus its materialization and compile: pack, P1, the ply loop, every ply's
   device_get and the host frame; searched adds as_depth2_frame + searched_maps on the host (parts depth2_pass,
   searched_maps_host, depthn). The pricer's own device / P1 / ply-loop / host-pack split is kept per call.
-- solve: per root the backup and the root reduction. --solver learner_max: depth2_backups.backup_learner_max on
-  as_depth2_frame (depth 2, the spec's reference; part as_depth2_frame) or depthn_backups.backup_learner_max (depth >= 3).
-  depth2-merged always solves with depth2_backups.backup_learner_max on its own Depth2Frame (no per-node hook; recorded per row).
-  --solver MODULE:FUNC: depthn_backups.backup(frame, root, rule) at every depth, rule(grid, pi_own, pi_opp) -> value at every
-  node (the hedge solve plugs in here; gpu_engine.depthn_backups:learner_max is its like-for-like baseline: at N=2 it equals
-  depth2_backups without the conversion). Then v5_gumbel.reduce_completed_q per block of two worlds; W = 2K composes the K
-  blocks by the equal-weight mean of their completed-Q (U1's composition: every world weighted 1/W) and re-derives the
-  improved target and root value; any refused block refuses the root.
-- return: each root's move (argmax of the improved target, lowest action on ties) and a block_until_ready on any device array
-  still held by the frames (DepthNPricer.price device_gets every field, so the transfer is inside pricer: expected 0, counted).
+- solve: per root the backup and the root reduction, from per-(root, block) units of host slices (part slice: numpy views;
+  part worlds: world_prices on every unit in process, or worlds_pool: pool.map over a persistent spawn pool, pickling and IPC
+  included; part root_reduce). --solver takes a list (learner_max,hedge,MODULE:FUNC) and --solver-pool a list of pool sizes
+  (0 = in process): every (solver, pool size) solves the SAME priced frames of each call, in an order rotated per call, and
+  has its own end-to-end total = the shared host_prep + world_construction + pricer + its solve + its return.
+  learner_max: depth2_backups.backup_learner_max on as_depth2_frame (depth 2, the reference; part as_depth2_frame) or on the
+  merged Depth2Frame, depthn_backups.backup_learner_max (depth >= 3); then v5_gumbel.reduce_completed_q per block of two
+  worlds; W = 2K composes the K blocks by the equal-weight mean of their completed-Q (U1's composition: every world weighted
+  1/W) and re-derives the improved target and root value; any refused block refuses the root.
+  hedge (gpu_engine.search_hedge of PR #1829, 583555d2, imported lazily; not on this branch): per node
+  search_hedge.matrix_game(the full [own x opp] child grid)[0], priors ignored, through depthn_backups.backup on DepthNPricer
+  frames and search_hedge.depth2_hedged_root on the merged Depth2Frame; at the root search_hedge.bayes_hedge(all W worlds,
+  lam=0, weights 1/W, no iterations) INSTEAD of reduce_completed_q (root logits unused). The header records the module's
+  file sha256 and --hedge-commit.
+  MODULE:FUNC: depthn_backups.backup(frame, root, rule) at every depth, rule(grid, pi_own, pi_opp) -> value at every node
+  (gpu_engine.depthn_backups:learner_max is its like-for-like baseline), then reduce_completed_q as learner_max; the merged
+  Depth2Frame has no per-node hook and solves with depth2_backups learner-max (recorded per row).
+- return: each root's move (learner_max / MODULE:FUNC: argmax of the improved target, lowest action on ties; hedge:
+  search_hedge.sample(strategy, search_uniform(2026110500, address))) and a block_until_ready on any device array still held by
+  the frames (DepthNPricer.price device_gets every field, so the transfer is inside pricer: expected 0, counted).
 - compile: lower + compile seconds of programs the pricers compiled during the call (their `compiles`), moved out of pricer and
   EXCLUDED from the end-to-end total = host_prep + world_construction + pricer + solve + return.
 No stage leaves device work queued: a device fence (a tiny op on the default device, block_until_ready) ends host_prep, every
-price() and return. W = 2K worlds per root in K recipe blocks: `sequential` = K price passes of C roots inside one call (the
+price() and every return. A solve pool (--solver-pool N > 0) is N spawn workers with 1 BLAS/OpenMP thread each, created before
+any timed call and warmed (solve modules imported, a 2x2 hedge LP solved); its startup seconds are reported in the header,
+never inside a call. W = 2K worlds per root in K recipe blocks: `sequential` = K price passes of C roots inside one call (the
 per-move latency of one game); `packed` (W > 2, unless --no-packed) = ONE pass at pricer capacity K*C holding each root's K
 blocks as separate rows (block b, root i at row b*C + i). packed is a TIMING PROXY: price() takes one recipe, so rows of
 blocks k > 0 keep their own planned fixtures but take block 0's kernel seeds (materialization keys) and turn-1 pricing order;
@@ -68,11 +80,13 @@ import argparse
 from contextlib import ExitStack, contextmanager, nullcontext
 import dataclasses
 from dataclasses import replace
+import hashlib
 import importlib
 import importlib.util
 import inspect
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -97,7 +111,21 @@ COMPILE = 'compile'
 LANES = 81
 MODES = ('sequential', 'packed')
 MERGED = 'depth2-merged'   # depth-2 full width on the merged Depth2Pricer (not a d3_depthn_throughput name)
-MERGED_SOLVE = 'depth2_backups.backup_learner_max on the merged Depth2Frame (no per-node hook: --solver does not apply)'
+MERGED_SOLVE = 'depth2_backups.backup_learner_max on the merged Depth2Frame (no per-node hook: a MODULE:FUNC --solver does not apply)'
+# The hedge solver (gpu_engine/search_hedge.py of PR #1829, not on this branch: shipped next to the code, imported lazily).
+HEDGE_MODULE = 'gpu_engine.search_hedge'
+HEDGE_COMMIT = '583555d2'
+HEDGE_REFERENCE_SHA256 = 'bf08d6312f20055dd62412f28054eb012c26a61643ed8a997d51c60ff64f33e6'   # sha256 of search_hedge.py at 583555d2
+HEDGE_SEED = 2026110500   # search_uniform's seed for the move sample (pre-registered)
+HEDGE_LAM = 0.            # bayes_hedge's blend weight: 0 = the zero-sum hedge (pre-registered; worlds weighted 1/W, no iterations)
+HEDGE_SOLVE = ('per node search_hedge.matrix_game(full [own x opp] child grid)[0], priors ignored: depthn_backups.backup on DepthNPricer frames, '
+    'search_hedge.depth2_hedged_root on the merged Depth2Frame; root search_hedge.bayes_hedge(all W worlds, lam=0) instead of reduce_completed_q '
+    '(root logits unused); move search_hedge.sample(strategy, search_uniform(2026110500, address))')
+# Per-root host slices the solve units carry (what depthn_backups / depth2_backups / search_hedge read).
+DEPTHN_ROOT_FIELDS = ('pre', 'root_peer_requested', 'root_peer_logits', 't1_status', 't1_value', 't1_own_actions', 't1_opp_actions', 't1_own_logits',
+    't1_peer_logits', 'leaf_status', 'leaf_value')
+DEPTHN_NODE_FIELDS = ('status', 'value', 'own_actions', 'opp_actions', 'own_logits', 'opp_logits')
+DEPTH2_ROOT_FIELDS = ('pre', 'root_peer_requested', 'root_peer_logits', 't1_status', 't1_value', 't1_own_logits', 't1_peer_logits', 't2_status', 't2_value')
 DEFAULT_CONFIGS = 'depth2-fw@2/8,depth2-merged@2/8,depth3-prior-k3@2,depth3-searched-k3@2'
 CODE_ROOT = Path(__file__).resolve().parent.parent
 # Phase D constructor files (someone else's work): imported only if the timed path uses them, never edited here.
@@ -114,11 +142,14 @@ STAGE_SCOPE = {
         '_numpy_worlds -> materialize_host; part materialize); searched materializes twice (pass and depth N)',
     'pricer': 'price() wall to a host frame minus its materialization and compile (pack, P1, ply loop, per-ply device_get, host frame); searched adds '
         'as_depth2_frame + searched_maps on the host; parts depth2_pass, searched_maps_host, depthn',
-    'solve': 'per root: backup (learner_max: depth2_backups on as_depth2_frame at depth 2, depthn_backups at depth >= 3; MODULE:FUNC: depthn_backups.backup '
-        'with the rule at every node) + reduce_completed_q per block; W > 2: equal-weight mean of the blocks\' completed-Q, target re-derived',
-    'return': 'each root\'s move (argmax of the improved target) + block_until_ready on any device array left in the frames (expected none) + fence',
+    'solve': 'per variant (solver, pool size) on the shared frames: per-(root, block) host slices (part slice), world_prices in process (part worlds) '
+        'or pool.map with pickling and IPC (part worlds_pool), the root reduction (part root_reduce). learner_max: depth2_backups (depth 2: on '
+        'as_depth2_frame, part as_depth2_frame) / depthn_backups + reduce_completed_q per block, W > 2 the equal-weight mean of the blocks\' completed-Q; '
+        'hedge: matrix_game per node + bayes_hedge(all W worlds, lam=0); MODULE:FUNC: depthn_backups.backup with the rule + reduce_completed_q',
+    'return': 'per variant: each root\'s move (argmax of the improved target; hedge: sample(strategy, search_uniform(2026110500, address))) + '
+        'block_until_ready on any device array left in the frames (expected none) + fence',
     'compile': 'lower + compile seconds of programs compiled during the call (the pricers\' compiles); excluded from the total',
-    'total': 'host_prep + world_construction + pricer + solve + return = the call\'s wall time minus compile'}
+    'total': 'per variant: host_prep + world_construction + pricer (shared by the call\'s variants) + its solve + its return; compile excluded'}
 
 
 def ints(text):
@@ -151,11 +182,25 @@ def parse_configs(text, default_worlds):
 
 
 def parse_solver(spec):
-    """'learner_max' -> None; 'MODULE:FUNC' -> (module, func)."""
-    if spec == 'learner_max':return None
+    """'learner_max' or 'hedge' -> None; 'MODULE:FUNC' -> (module, func)."""
+    if spec in ('learner_max', 'hedge'):return None
     module, sep, func = str(spec).partition(':')
-    if not sep or not module or not func or ':' in func:raise ValueError(f'--solver learner_max or MODULE:FUNC, got {spec!r}')
+    if not sep or not module or not func or ':' in func:raise ValueError(f'--solver entries are learner_max, hedge or MODULE:FUNC, got {spec!r}')
     return module, func
+
+
+def parse_solvers(text):
+    """'learner_max,hedge,MODULE:FUNC' -> the solver specs in order (no repeats)."""
+    specs = tuple(x.strip() for x in str(text).split(','))
+    for spec in specs:parse_solver(spec)
+    if len(set(specs)) != len(specs) or '' in specs:raise ValueError(f'--solver: empty or repeated entry in {text!r}')
+    return specs
+
+
+def importable(name):
+    """find_spec without importing the module itself (parent packages only, so no JAX before the memory policy)."""
+    try:return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):return False
 
 
 def parse(argv=None):
@@ -168,7 +213,12 @@ def parse(argv=None):
     parser.add_argument('--worlds', default='2', help='W for --configs entries without @ (even, comma-separated)')
     parser.add_argument('--capacities', default='1,4,16', help='roots per call C (each its own fixed_capacity pricers; 2,8 addable)')
     parser.add_argument('--repeats', type=int, default=10, help='warm calls after the first one, per (config, capacity, W, mode)')
-    parser.add_argument('--solver', default='learner_max', help="per-node solver: learner_max or MODULE:FUNC with rule(grid, pi_own, pi_opp) -> value")
+    parser.add_argument('--solver', default='learner_max', help='solvers timed on the same priced frames, comma-separated: learner_max, hedge '
+        '(search_hedge, PR #1829) or MODULE:FUNC with rule(grid, pi_own, pi_opp) -> value')
+    parser.add_argument('--solver-pool', default='0', help='solve pool sizes, comma-separated: 0 = in process, N = a persistent N-process spawn pool '
+        '(started before any timed call); every series is solved once per (solver, pool size) on the same frames')
+    parser.add_argument('--hedge-module', default=HEDGE_MODULE, help='the search_hedge module (default %(default)s)')
+    parser.add_argument('--hedge-commit', default=HEDGE_COMMIT, help='the commit search_hedge.py was shipped from, recorded in the header (default %(default)s)')
     parser.add_argument('--no-packed', dest='packed', action='store_false', help='skip the packed W > 2 mode (one pass at capacity K*C)')
     parser.add_argument('--k1-own', type=int, default=9, help='turn-1 learner width');parser.add_argument('--k1-opp', type=int, default=9, help='turn-1 opponent width')
     parser.add_argument('--block-lanes', type=int, default=2187, help='DepthNPricer block_lanes')
@@ -182,8 +232,9 @@ def parse(argv=None):
     gate.check_head_arguments(parser, args)
     try:
         args.capacity_values = tuple(sorted(set(ints(args.capacities))));args.config_worlds = parse_configs(args.configs, ints(args.worlds))
-        args.solver_target = parse_solver(args.solver)
+        args.solver_specs = parse_solvers(args.solver);args.pool_sizes = tuple(sorted(set(ints(args.solver_pool))))
     except ValueError as error:parser.error(str(error))
+    if min(args.pool_sizes) < 0:parser.error('--solver-pool sizes are >= 0 (0 = in process)')
     if args.chunk < 0 or args.repeats < 1 or args.block_lanes < 1 or min(args.capacity_values) < 1:parser.error('--chunk >= 0 and positive --capacities/--repeats/--block-lanes')
     if any(not 1 <= k <= 9 for k in (args.k1_own, args.k1_opp)):parser.error('turn-1 widths must be 1..9')
     if args.max_roots is not None and args.max_roots < 1:parser.error('positive --max-roots required')
@@ -191,10 +242,13 @@ def parse(argv=None):
     if args.isolate and args.only:parser.error('--isolate runs --only itself')
     if args.compile_cache is not None and not Path(args.compile_cache).is_absolute():parser.error('--compile-cache must be an absolute directory')
     if Path(args.out).exists():parser.error(f'--out {args.out} exists: this tool never overwrites an output directory')
-    if args.solver_target is not None:
-        try:found = importlib.util.find_spec(args.solver_target[0]) is not None   # imports parent packages only, never the module (JAX after the policy)
-        except (ImportError, ValueError):found = False
-        if not found:parser.error(f'--solver module {args.solver_target[0]} is not importable')
+    for spec in args.solver_specs:
+        target = parse_solver(spec)
+        if target is not None and not importable(target[0]):parser.error(f'--solver module {target[0]} is not importable')
+    if 'hedge' in args.solver_specs:
+        if not importable(args.hedge_module):parser.error(f'--solver hedge needs {args.hedge_module} (gpu_engine/search_hedge.py of PR #1829 at {args.hedge_commit}, '
+            'shipped next to the code; it is not on this branch)')
+        if not importable('scipy'):parser.error('--solver hedge needs scipy (search_hedge solves its LPs with scipy.optimize.linprog / HiGHS)')
     return args
 
 
@@ -203,8 +257,8 @@ class Clock:
     """Contiguous laps of one call: lap(stage, part) charges the time since the previous lap to `stage` (and `stage.part`), so
     every instant between the start and the last lap belongs to exactly one stage. move() re-charges seconds a callee measured
     INSIDE a lap (a pricer's materialization and compile) from one stage to another; the sum never changes."""
-    def __init__(self, timer=time.perf_counter):
-        self.timer = timer;self.stages = dict.fromkeys(STAGES + (COMPILE,), 0.);self.parts = {};self.start = self.last = timer()
+    def __init__(self, timer=time.perf_counter, start=None):
+        self.timer = timer;self.stages = dict.fromkeys(STAGES + (COMPILE,), 0.);self.parts = {};self.start = self.last = timer() if start is None else start
 
     def _add(self, stage, part, seconds):
         self.stages[stage] += seconds
@@ -285,60 +339,172 @@ def compose(improvements, root_logits, root_legal, original):
     return dict(status='LABELED', completed_q=q, policy_target=target, root_value=math.fsum(p * v for p, v in zip(target, q) if v is not None), blocks=K)
 
 
+def load_hedge(name=HEDGE_MODULE, commit=HEDGE_COMMIT):
+    """The search_hedge module, imported lazily; a clear SystemExit when it is not next to the code."""
+    try:return importlib.import_module(name)
+    except ModuleNotFoundError as error:
+        if error.name and (name == error.name or name.startswith(error.name + '.')):
+            raise SystemExit(f'--solver hedge needs {name} (gpu_engine/search_hedge.py of PR #1829 at {commit}, shipped next to the code; '
+                f'it is not on this branch): {error}') from None
+        raise
+
+
+def root_fields(frame, row, kind):
+    """One root's host slices (numpy views; pickling copies only them): a Depth2Frame's DEPTH2_ROOT_FIELDS, or a DepthNFrame's
+    DEPTHN_ROOT_FIELDS, every intermediate ply's DEPTHN_NODE_FIELDS and its depth and slot widths."""
+    if kind == 'depth2':return {k: getattr(frame, k)[row] for k in DEPTH2_ROOT_FIELDS}
+    return dict(depth=int(frame.depth), k_own=tuple(int(x) for x in frame.k_own), k_opp=tuple(int(x) for x in frame.k_opp),
+        nodes=[{k: getattr(node, k)[row] for k in DEPTHN_NODE_FIELDS} for node in frame.nodes], **{k: getattr(frame, k)[row] for k in DEPTHN_ROOT_FIELDS})
+
+
+def unit_rule(unit):
+    """The per-node rule of a depthn unit: learner_max, the hedge's matrix_game value on the full child grid (priors ignored) or
+    MODULE:FUNC (resolved by name, so a pool worker needs no pickled callable); an in-process unit may carry its rule."""
+    if unit.get('rule') is not None:return unit['rule']
+    if unit['solver'] == 'hedge':
+        game = importlib.import_module(unit['hedge']).matrix_game
+        return lambda grid, pi_own, pi_opp: game(grid)[0]
+    from gpu_engine import depthn_backups
+    if unit['solver'] == 'learner_max':return depthn_backups.learner_max
+    module, func = parse_solver(unit['solver']);return getattr(importlib.import_module(module), func)
+
+
+def world_prices(unit):
+    """One (root, block) solve unit -> its two WorldPrices (picklable both ways: the pool's unit of work, and the in-process path).
+    depth2 (a Depth2Frame's slices): hedge -> search_hedge.depth2_hedged_root, else depth2_backups.backup_learner_max. depthn (a
+    DepthNFrame's slices): depthn_backups.backup(view, 0, unit_rule(unit))."""
+    one = lambda x: np.asarray(x)[None];f = unit['fields']
+    if unit['kind'] == 'depth2':
+        if unit['solver'] == 'hedge':
+            hedge = importlib.import_module(unit['hedge']);return tuple(hedge.depth2_hedged_root({k: f[k] for k in hedge.DEPTH2_FIELDS}))
+        from gpu_engine import depth2_backups
+        return depth2_backups.backup_learner_max(SimpleNamespace(**{k: one(v) for k, v in f.items()}), 0)
+    from gpu_engine import depthn_backups
+    view = SimpleNamespace(depth=f['depth'], k_own=f['k_own'], k_opp=f['k_opp'], nodes=tuple(SimpleNamespace(**{k: one(v) for k, v in n.items()}) for n in f['nodes']),
+        **{k: one(f[k]) for k in DEPTHN_ROOT_FIELDS})
+    return depthn_backups.backup(view, 0, unit_rule(unit))
+
+
 class Solver:
-    """The per-root solve (module docstring): rule None = the learner-max reference, else rule(grid, pi_own, pi_opp) -> value at
-    every node through depthn_backups.backup."""
-    def __init__(self, spec='learner_max', rule=None):
-        self.spec, self.rule = spec, rule
+    """The per-root solve (module docstring). spec learner_max (rule None, the reference), hedge (search_hedge) or MODULE:FUNC
+    (rule(grid, pi_own, pi_opp) -> value at every node through depthn_backups.backup). solve() slices every (root, block) into a
+    unit, runs world_prices on each in process or through a pool (pickling and IPC inside the lap), then reduces each root."""
+    def __init__(self, spec='learner_max', rule=None, hedge=None, hedge_name=None):
+        self.spec, self.rule, self.hedge, self.hedge_name = spec, rule, hedge, hedge_name
 
     @classmethod
-    def load(cls, spec):
-        target = parse_solver(spec)
-        if target is None:return cls()
-        rule = getattr(importlib.import_module(target[0]), target[1], None)
-        if not callable(rule):raise ValueError(f'--solver {spec}: {target[1]} is not a callable in {target[0]}')
+    def load(cls, spec, *, hedge_module=HEDGE_MODULE, hedge_commit=HEDGE_COMMIT):
+        if spec == 'learner_max':return cls()
+        if spec == 'hedge':return cls('hedge', hedge=load_hedge(hedge_module, hedge_commit), hedge_name=hedge_module)
+        module, func = parse_solver(spec);rule = getattr(importlib.import_module(module), func, None)
+        if not callable(rule):raise ValueError(f'--solver {spec}: {func} is not a callable in {module}')
         try:inspect.signature(rule).bind(None, None, None)
         except TypeError as error:raise ValueError(f'--solver {spec}: rule(grid, pi_own, pi_opp) -> value required ({error})') from None
         except ValueError:pass   # no introspectable signature (a builtin): trusted
         return cls(spec, rule)
 
     def describe(self):
+        if self.spec == 'hedge':
+            return dict(spec='hedge', stand_in=False, module=self.hedge_name, path=HEDGE_SOLVE, lam=HEDGE_LAM, seed=HEDGE_SEED, weights='1/W', iterations=0)
         if self.rule is None:
-            return dict(spec='learner_max', stand_in=True, path='depth2_backups.backup_learner_max on as_depth2_frame (depth 2); depthn_backups.backup_learner_max '
-                '(depth >= 3); then reduce_completed_q per block', note='learner-max stands in for the hedge solve (another session\'s module)')
-        return dict(spec=self.spec, stand_in=False, rule=dotted(self.rule), path='depthn_backups.backup(frame, root, rule) at every depth; then '
-            'reduce_completed_q per block')
+            return dict(spec='learner_max', stand_in=True, path='depth2_backups.backup_learner_max on as_depth2_frame (depth 2) or the merged Depth2Frame; '
+                'depthn_backups.backup_learner_max (depth >= 3); then reduce_completed_q per block', note='the learner-max reference')
+        return dict(spec=self.spec, stand_in=False, rule=dotted(self.rule), path='depthn_backups.backup(frame, root, rule) at every depth (the merged '
+            'Depth2Frame: depth2_backups learner-max); then reduce_completed_q per block')
 
-    def solve(self, views, requests, clock):
-        """views: one (frame, row offset) per block; requests: the call's block-0 Requests (root prior and legal mask). Laps 'solve'."""
-        from pokezero import v5_gumbel as original
-        from gpu_engine import depthn_backups
-        depth = getattr(views[0][0], 'depth', None)
-        if depth is None:   # the merged Depth2Pricer's Depth2Frame: depth2_backups learner-max, whatever the rule (no per-node hook)
-            from gpu_engine import depth2_backups
-            prices = depth2_backups.backup_learner_max
-        elif self.rule is None and int(depth) == 2:
-            from gpu_engine import depth2_backups
+    def solve(self, views, requests, clock, pool=None):
+        """views: one (frame, row offset) per block; requests: the call's block-0 Requests. Laps 'solve' (parts as_depth2_frame, slice,
+        worlds or worlds_pool, root_reduce); returns one result per root."""
+        depth = getattr(views[0][0], 'depth', None);kind = 'depth2' if depth is None else 'depthn'   # no depth: the merged Depth2Frame
+        if kind == 'depthn' and self.spec == 'learner_max' and int(depth) == 2:   # the depth-2 reference: depth2_backups on as_depth2_frame
             from gpu_engine.device_depthn_pricer import as_depth2_frame
             converted = {}
             for frame, _ in views:
                 if id(frame) not in converted:converted[id(frame)] = as_depth2_frame(frame)
+            views, kind = [(converted[id(frame)], offset) for frame, offset in views], 'depth2'
             clock.lap('solve', 'as_depth2_frame')
-            prices = lambda frame, row: depth2_backups.backup_learner_max(converted[id(frame)], row)
-        elif self.rule is None:prices = depthn_backups.backup_learner_max
-        else:prices = lambda frame, row, rule=self.rule: depthn_backups.backup(frame, row, rule)
-        results = []
-        for i, request in enumerate(requests):
-            blocks = [reduce_block(prices(frame, offset + i), request.root_logits, request.root_legal, original) for frame, offset in views]
-            results.append(compose(blocks, request.root_logits, request.root_legal, original))
-        clock.lap('solve', 'backup_and_reduce')
+        rule = self.rule if pool is None else None   # a pool worker resolves MODULE:FUNC by name
+        units = [dict(solver=self.spec, hedge=self.hedge_name, kind=kind, rule=rule, fields=root_fields(frame, offset + i, kind))
+            for i in range(len(requests)) for frame, offset in views]
+        clock.lap('solve', 'slice')
+        prices = list(pool.map(world_prices, units, chunksize=1)) if pool is not None else [world_prices(u) for u in units]
+        clock.lap('solve', 'worlds' if pool is None else 'worlds_pool')
+        K = len(views);results = [self.reduce(prices[i * K:(i + 1) * K], r) for i, r in enumerate(requests)]
+        clock.lap('solve', 'root_reduce')
         return results
+
+    def reduce(self, pairs, request):
+        """One root from its blocks' WorldPrices pairs: hedge = search_hedge.bayes_hedge over all W worlds (lam=0; None refuses), else
+        reduce_completed_q per block and compose."""
+        from pokezero import v5_gumbel as original
+        if self.spec == 'hedge':
+            choice = self.hedge.bayes_hedge([w for pair in pairs for w in pair], tuple(request.root_legal), lam=HEDGE_LAM)
+            if choice is None:return dict(status='REFUSED', strategy=None, root_value=None, worlds=2 * len(pairs))
+            return dict(status='LABELED', strategy=tuple(float(x) for x in choice.strategy), root_value=float(choice.value), worlds=2 * len(pairs))
+        return compose([reduce_block(pair, request.root_logits, request.root_legal, original) for pair in pairs], request.root_logits, request.root_legal, original)
+
+    def moves(self, results, requests):
+        """learner_max / MODULE:FUNC: argmax of the improved target; hedge: search_hedge.sample(strategy, search_uniform(2026110500, address))."""
+        if self.spec != 'hedge':return [move_of(r) for r in results]
+        return [None if r['strategy'] is None else self.hedge.sample(r['strategy'], self.hedge.search_uniform(HEDGE_SEED, q.plans.root.address))
+            for r, q in zip(results, requests)]
 
 
 def move_of(result):
     """The move: argmax of the improved target, lowest action on ties; None when the root refuses."""
     target = result.get('policy_target')
     return None if target is None else max(range(len(target)), key=lambda a: (target[a], -a))
+
+
+# The solve pool -----------------------------------------------------------------------------------------------------------------------
+_WORKER_ERROR = None
+POOL_THREADS = {'OMP_NUM_THREADS': '1', 'OPENBLAS_NUM_THREADS': '1', 'MKL_NUM_THREADS': '1'}
+
+
+def _init_worker(hedge_module):
+    """A spawn worker's start: import the solve modules and, with the hedge, warm its LP path on a 2x2 game without a saddle."""
+    global _WORKER_ERROR
+    try:
+        from pokezero import v5_gumbel   # noqa: F401
+        from gpu_engine import depth2_backups, depthn_backups   # noqa: F401
+        if hedge_module:importlib.import_module(hedge_module).matrix_game(np.asarray([[1., -1.], [-1., 1.]]))
+    except Exception as error:_WORKER_ERROR = f'{type(error).__name__}: {error}'
+
+
+def _ping(_):
+    time.sleep(.02);return os.getpid(), _WORKER_ERROR
+
+
+def start_pool(size, *, hedge_module=None, timer=time.perf_counter, context=None, timeout=600.):
+    """A persistent spawn pool of `size` workers (1 BLAS/OpenMP thread each), returned once every worker has started, imported
+    the solve modules and warmed the hedge LP: (pool, info). Its startup_seconds are reported apart and never enter a call.
+    A worker that dies while starting makes multiprocessing.Pool respawn it forever, so startup is bounded by `timeout` seconds."""
+    import multiprocessing
+    clock = timer();deadline = time.monotonic() + timeout
+    with patch.dict(os.environ, POOL_THREADS):pool = (context or multiprocessing.get_context('spawn')).Pool(size, initializer=_init_worker, initargs=(hedge_module,))
+    seen, errors = set(), set()
+    while len(seen) < size:
+        try:answers = pool.map_async(_ping, range(2 * size), chunksize=1).get(timeout=max(1., deadline - time.monotonic()))
+        except multiprocessing.TimeoutError:
+            pool.terminate();raise SystemExit(f'the {size}-worker solve pool did not start within {timeout:.0f} s (a worker failing at import is respawned forever)') from None
+        for pid, error in answers:
+            seen.add(pid)
+            if error:errors.add(error)
+        if errors:pool.terminate();raise SystemExit(f'a solve pool worker failed to start: {sorted(errors)[0]}')
+        if time.monotonic() > deadline:pool.terminate();raise SystemExit(f'only {len(seen)} of {size} solve pool workers answered within {timeout:.0f} s')
+    return pool, dict(workers=size, answered=len(seen), startup_seconds=timer() - clock, start_method='spawn', threads_per_worker=POOL_THREADS,
+        hedge_module=hedge_module, scope='created, imported and warmed before any timed call; per call the solve stage holds slicing, pickling, IPC and the worlds')
+
+
+def variants_of(solvers):
+    """A solver (in process) or a list of variants (name, solver, pool, pool_size) -> the variants."""
+    if hasattr(solvers, 'solve'):return [SimpleNamespace(name=f'{getattr(solvers, "spec", "solver")}@pool0', solver=solvers, pool=None, pool_size=0)]
+    return list(solvers)
+
+
+def make_variants(solvers, pools):
+    """Every (solver, pool size) pair, solver-major: pools maps size -> pool (0 -> None, in process)."""
+    return [SimpleNamespace(name=f'{s.spec}@pool{n}', solver=s, pool=pool, pool_size=n) for s in solvers for n, pool in pools.items()]
 
 
 def merged_pricer(module, executor, model, *, capacity, actor_capacity, k1_own, k1_opp):
@@ -421,9 +587,12 @@ class Search:
         return frame, dict(depth2_pass=first, depthn=second, maps_widths=widths, slot_widths=slots)
 
 
-def run_call(search, ctx, roots, worlds, mode, *, solver, timer=time.perf_counter):
-    """One call: host_prep, K - 1 plannings, the pricing (K sequential passes of C roots, or one packed pass at K*C), the solve
-    and the return, as contiguous laps. Returns (record, block-0 requests)."""
+def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, rotate=0, timer=time.perf_counter):
+    """One call: host_prep, K - 1 plannings and the pricing (K sequential passes of C roots, or one packed pass at K*C) once, then
+    for every variant (solver, pool size) its solve and return on the same frames, in an order rotated by `rotate`; all contiguous
+    laps. record['stages'] covers the whole call (solve and return summed over variants: sum == wall_seconds); each variant's
+    end-to-end total = host_prep + world_construction + pricer + its solve + its return. Returns (record, block-0 requests)."""
+    variants = variants_of(variants if variants is not None else solver)
     blocks = worlds // 2;clock = Clock(timer)
     requests, parts = ctx.prep(roots);ctx.fence();clock.lap('host_prep')
     for name, seconds in parts.items():clock.note('host_prep', name, seconds)
@@ -444,54 +613,74 @@ def run_call(search, ctx, roots, worlds, mode, *, solver, timer=time.perf_counte
         with context():frame, info = search.price([r for block in planned for r in block], recipe, clock)
         views = [(frame, block * count) for block in range(blocks)];infos.append(dict(info, block='packed'))
     else:raise ValueError(f'mode in {MODES}')
-    results = solver.solve(views, requests, clock)
-    moves = [move_of(r) for r in results];leftover = device_arrays([frame for frame, _ in views])
-    if leftover:
-        import jax
-        jax.block_until_ready(leftover)
-    ctx.fence();clock.lap('return')
-    record = clock.record()
+    common = sum(clock.stages[s] for s in ('host_prep', 'world_construction', 'pricer'));frames = [frame for frame, _ in views]
+    order = variants[rotate % len(variants):] + variants[:rotate % len(variants)];last = clock.last;out = {}
+    for v in order:
+        sub = Clock(timer, start=last)
+        results = v.solver.solve(views, requests, sub, pool=v.pool)
+        moves = v.solver.moves(results, requests);leftover = device_arrays(frames)
+        if leftover:
+            import jax
+            jax.block_until_ready(leftover)
+        ctx.fence();sub.lap('return');last = sub.last
+        for stage in ('solve', 'return'):clock.stages[stage] += sub.stages[stage]
+        out[v.name] = dict(solver=getattr(v.solver, 'spec', None), pool=v.pool_size, solve_seconds=sub.stages['solve'], return_seconds=sub.stages['return'],
+            parts=dict(sub.parts), total_seconds=common + sub.stages['solve'] + sub.stages['return'], labeled=sum(r['status'] == 'LABELED' for r in results),
+            moves=moves, leftover_device_arrays=len(leftover))
+    clock.last = last;record = clock.record()
     enumerated = [i['depthn'].get('enumerated_leaves') for i in infos]
-    record.update(roots=count, worlds=worlds, mode=mode, blocks=blocks, labeled=sum(r['status'] == 'LABELED' for r in results), moves=moves,
-        leftover_device_arrays=len(leftover), pricing=infos,
-        enumerated_leaves=None if any(e is None for e in enumerated) else int(sum(enumerated)))
+    record.update(roots=count, worlds=worlds, mode=mode, blocks=blocks, common_seconds=common, variants={v.name: out[v.name] for v in variants},
+        variant_order=[v.name for v in order], pricing=infos, enumerated_leaves=None if any(e is None for e in enumerated) else int(sum(enumerated)))
+    del record['total_seconds']   # every variant has its own end-to-end total
     return record, requests
 
 
-def measure_series(search, ctx, roots, worlds, mode, repeats, *, solver, progress, memory, baseline, capacity, timer=time.perf_counter):
-    """1 first call + `repeats` warm calls of one (config, capacity, W, mode); statistics over the warm calls only."""
-    calls = []
+def measure_series(search, ctx, roots, worlds, mode, repeats, *, solver=None, variants=None, progress, memory, baseline, capacity, timer=time.perf_counter):
+    """1 first call + `repeats` warm calls of one (config, capacity, W, mode), every variant solving the same frames (order rotated
+    per call); one series per variant, statistics over the warm calls only."""
+    variants = variants_of(variants if variants is not None else solver);calls = []
     for i in range(1 + repeats):
         with gate.stage(progress, 'latency_call', config=search.name, capacity=capacity, worlds=worlds, mode=mode, call=i, warm=i > 0) as info:
-            record, requests = run_call(search, ctx, roots, worlds, mode, solver=solver, timer=timer)
+            record, requests = run_call(search, ctx, roots, worlds, mode, variants=variants, rotate=i, timer=timer)
             record['memory'] = memory();calls.append(record)
-            info.update(total_ms=1e3 * record['total_seconds'], compile_seconds=record['stages'][COMPILE], labeled=record['labeled'],
-                stages_ms={k: 1e3 * v for k, v in record['stages'].items()})
+            info.update(compile_seconds=record['stages'][COMPILE], common_ms=1e3 * record['common_seconds'],
+                total_ms={k: 1e3 * v['total_seconds'] for k, v in record['variants'].items()},
+                solve_ms={k: 1e3 * v['solve_seconds'] for k, v in record['variants'].items()}, labeled={k: v['labeled'] for k, v in record['variants'].items()})
         if i == 0:ctx.check(requests, roots)
         for entry in record['pricing']:
             for key in ('depth2_pass', 'depthn'):
                 for c in (entry.get(key) or {}).get('compiles', ()):
                     if progress is not None:progress('COMPILE', config=search.name, pricer_capacity=search.capacity, call=i, part=entry[key]['part'], **c)
-    return summarize(calls, search=search, capacity=capacity, worlds=worlds, mode=mode, baseline=baseline, solver=solver)
+    return [summarize(calls, search=search, capacity=capacity, worlds=worlds, mode=mode, baseline=baseline, variant=v) for v in variants]
 
 
-def summarize(calls, *, search, capacity, worlds, mode, baseline, solver=None):
-    """One series: the first call apart (its compile, wall and stages), warm-call statistics, leaves, memory, every call record."""
-    first, warm = calls[0], calls[1:]
+def variant_view(call, name):
+    """One call as one variant saw it: the shared stages with its own solve and return, its end-to-end total and parts."""
+    v = call['variants'][name];stages = {k: call['stages'][k] for k in ('host_prep', 'world_construction', 'pricer', COMPILE)}
+    stages.update(solve=v['solve_seconds'], **{'return': v['return_seconds']})
+    return dict({k: x for k, x in call.items() if k not in ('variants', 'stages', 'parts')}, stages=stages, parts={**call['parts'], **v['parts']},
+        total_seconds=v['total_seconds'], labeled=v['labeled'], moves=v['moves'], leftover_device_arrays=v['leftover_device_arrays'])
+
+
+def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
+    """One series for one variant: the first call apart (its compile, wall and stages), warm-call statistics, leaves, memory and
+    every call as this variant saw it."""
+    calls = [variant_view(c, variant.name) for c in calls];first, warm = calls[0], calls[1:]
     parts = sorted({k for c in warm for k in c['parts']})
     peaks = [c['memory'].get('process_peak_bytes_so_far') for c in calls if c.get('memory') and c['memory'].get('process_peak_bytes_so_far') is not None]
     peak = max(peaks) if peaks else None;enumerated = first.get('enumerated_leaves')
     pass_leaves = [i['depth2_pass'].get('enumerated_leaves') for i in first['pricing'] if 'depth2_pass' in i]
-    widths = search.widths()
+    widths = search.widths();spec = getattr(variant.solver, 'spec', None)
     leaves = dict(nominal_per_world=widths['nominal_leaves_per_world'], measured_per_world=None if enumerated is None else enumerated / (capacity * worlds),
         enumerated=enumerated, scope='measured = the first call\'s enumerated leaves (depth N\'s, searched included) / (C x W); identical calls repeat it')
     if 'depth2_pass' in widths:
         leaves['depth2_pass'] = dict(nominal_per_world=widths['depth2_pass']['nominal_leaves_per_world'],
             measured_per_world=None if not pass_leaves or None in pass_leaves else sum(pass_leaves) / (capacity * worlds))
-    return dict(config=search.name, capacity=capacity, worlds=worlds, mode=mode, blocks=worlds // 2, pricer_capacity=search.capacity,
-        timing_proxy=mode == 'packed', proxy_note=PACKED_NOTE if mode == 'packed' else None, slot_widths=dict(k_own=widths['k_own'], k_opp=widths['k_opp']),
-        engine=search.options, solve=MERGED_SOLVE if search.config['kind'] == 'merged' else getattr(solver, 'spec', None),
-        first_call=dict(compile_seconds=first['stages'][COMPILE], wall_seconds=first['wall_seconds'], total_seconds=first['total_seconds'],
+    solve = (HEDGE_SOLVE if spec == 'hedge' else MERGED_SOLVE) if search.config['kind'] == 'merged' else (HEDGE_SOLVE if spec == 'hedge' else spec)
+    return dict(config=search.name, capacity=capacity, worlds=worlds, mode=mode, solver=spec, pool=variant.pool_size, variant=variant.name, blocks=worlds // 2,
+        pricer_capacity=search.capacity, timing_proxy=mode == 'packed', proxy_note=PACKED_NOTE if mode == 'packed' else None,
+        slot_widths=dict(k_own=widths['k_own'], k_opp=widths['k_opp']), engine=search.options, solve=solve,
+        first_call=dict(compile_seconds=first['stages'][COMPILE], call_wall_seconds=first['wall_seconds'], total_seconds=first['total_seconds'],
             stages=dict(first['stages']), cold_of_config_capacity=None),
         warm={**{s: distribution([c['stages'][s] for c in warm]) for s in STAGES}, 'total': distribution([c['total_seconds'] for c in warm])},
         warm_parts={k: distribution([c['parts'].get(k, 0.) for c in warm]) for k in parts},
@@ -502,11 +691,12 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline, solver=None):
         calls=calls)
 
 
-def measure_config(name, worlds, args, ctx, progress, *, solver, module=None, programs=None, depth2_module=None, memory=t2.memory_stats,
+def measure_config(name, worlds, args, ctx, progress, *, solver=None, variants=None, module=None, programs=None, depth2_module=None, memory=t2.memory_stats,
         timer=time.perf_counter):
-    """Every capacity, W and mode of one config; one Search per (config, pricer capacity), so a packed K*C pricer is reused as the
-    sequential pricer of capacity K*C. The first series of each capacity is marked; its first call reports what it compiled."""
-    out, searches = [], {}
+    """Every capacity, W and mode of one config, each solved by every variant; one Search per (config, pricer capacity), so a
+    packed K*C pricer is reused as the sequential pricer of capacity K*C. The first series of each capacity is marked; its first
+    call reports what it compiled."""
+    out, searches = [], {};variants = variants_of(variants if variants is not None else solver)
     for capacity in args.capacity_values:
         roots = ctx.roots(capacity);baseline = memory() or {};first = True
         for w in worlds:
@@ -514,9 +704,10 @@ def measure_config(name, worlds, args, ctx, progress, *, solver, module=None, pr
             for mode in ('sequential',) + (('packed',) if blocks > 1 and args.packed else ()):
                 size = capacity if mode == 'sequential' else blocks * capacity
                 if size not in searches:searches[size] = Search(name, size, args, ctx, module=module, programs=programs, depth2_module=depth2_module)
-                series = measure_series(searches[size], ctx, roots, w, mode, args.repeats, solver=solver, progress=progress, memory=memory,
+                group = measure_series(searches[size], ctx, roots, w, mode, args.repeats, variants=variants, progress=progress, memory=memory,
                     baseline=baseline, capacity=capacity, timer=timer)
-                series['first_call']['cold_of_config_capacity'] = first;first = False;out.append(series)
+                for series in group:series['first_call']['cold_of_config_capacity'] = first
+                first = False;out.extend(group)
     return out
 
 
@@ -658,9 +849,20 @@ def source_commit(root=CODE_ROOT, given=None, *, run=subprocess.run):
         matches_given=None if not (head and given) else head.startswith(given) or given.startswith(head))
 
 
-def header(context, commit, solver):
-    return dict(world_construction_path=context['world_construction_path'], source_commit=commit, constructor_note=CONSTRUCTOR_NOTE, solver=solver,
-        rule=RULE, limit_ms=LIMIT_MS, budget_ms=BUDGET_MS, stages=STAGE_SCOPE, packed=PACKED_NOTE)
+def hedge_header(module, commit=HEDGE_COMMIT, name=HEDGE_MODULE):
+    """The hedge module actually loaded: its file and sha256, --hedge-commit, and whether the file is 583555d2's (when that is the commit)."""
+    path = getattr(module, '__file__', None);digest = hashlib.sha256(Path(path).read_bytes()).hexdigest() if path and Path(path).is_file() else None
+    return dict(module=name, file=path, sha256=digest, commit=commit, reference_commit=HEDGE_COMMIT, reference_sha256=HEDGE_REFERENCE_SHA256,
+        matches_reference=None if digest is None or commit != HEDGE_COMMIT else digest == HEDGE_REFERENCE_SHA256, lam=HEDGE_LAM, seed=HEDGE_SEED,
+        weights='1/W', iterations=0, solve=HEDGE_SOLVE)
+
+
+def header(context, commit):
+    return dict(world_construction_path=context['world_construction_path'], source_commit=commit, constructor_note=CONSTRUCTOR_NOTE,
+        solvers=context['solvers'], solver_pools=context.get('solver_pools', []), hedge=context.get('hedge'), variants=context.get('variants'),
+        rule=RULE, limit_ms=LIMIT_MS, budget_ms=BUDGET_MS, stages=STAGE_SCOPE, packed=PACKED_NOTE,
+        variants_scope='every (solver, pool size) solves the SAME priced frames of each call, in an order rotated per call; its end-to-end total = '
+            'host_prep + world_construction + pricer (shared) + its own solve and return')
 
 
 # Selection and report -----------------------------------------------------------------------------------------------------------------
@@ -673,23 +875,25 @@ def largest_within(p90_by_capacity, limit_ms=LIMIT_MS):
 
 
 def select(series, limit_ms=LIMIT_MS):
-    """Rows (config, W, mode) -> per-capacity warm total median/p90 and the largest fitting C; per config the largest fitting C
-    (with its W) and the largest fitting W (with its C), over sequential rows, packed rows apart as a proxy."""
+    """Rows (config, W, mode, solver variant) -> per-capacity warm total median/p90 and the largest fitting C; per config and
+    variant the largest fitting C (with its W) and the largest fitting W (with its C), over sequential rows, packed apart as a proxy."""
     rows = {}
-    for s in series:rows.setdefault((s['config'], s['worlds'], s['mode']), {})[s['capacity']] = s['warm']['total']
+    for s in series:rows.setdefault((s['config'], s['worlds'], s['mode'], s.get('variant')), [s, {}])[1][s['capacity']] = s['warm']['total']
     out = []
-    for (config, worlds, mode), by in rows.items():
-        out.append(dict(config=config, worlds=worlds, mode=mode, by_capacity={str(c): dict(median_ms=v['median_ms'], p90_ms=v['p90_ms'], max_ms=v['max_ms']) for c, v in sorted(by.items())},
+    for (config, worlds, mode, variant), (one, by) in rows.items():
+        out.append(dict(config=config, worlds=worlds, mode=mode, variant=variant, solver=one.get('solver'), pool=one.get('pool'),
+            by_capacity={str(c): dict(median_ms=v['median_ms'], p90_ms=v['p90_ms'], max_ms=v['max_ms']) for c, v in sorted(by.items())},
             **largest_within({c: v['p90_ms'] for c, v in by.items()}, limit_ms)))
     def best(rows_, key):
         fitting = [r for r in rows_ if r['largest_capacity'] is not None]
         if not fitting:return None
         r = max(fitting, key=key);return dict(capacity=r['largest_capacity'], worlds=r['worlds'], mode=r['mode'])
     configs = {}
-    for config in dict.fromkeys(r['config'] for r in out):
-        mine = [r for r in out if r['config'] == config];seq = [r for r in mine if r['mode'] == 'sequential'];packed = [r for r in mine if r['mode'] == 'packed']
-        configs[config] = dict(measured_worlds=sorted({r['worlds'] for r in mine}), largest_capacity=best(seq, lambda r: (r['largest_capacity'], r['worlds'])),
-            largest_worlds=best(seq, lambda r: (r['worlds'], r['largest_capacity'])),
+    for config, variant in dict.fromkeys((r['config'], r['variant']) for r in out):
+        mine = [r for r in out if (r['config'], r['variant']) == (config, variant)];seq = [r for r in mine if r['mode'] == 'sequential']
+        packed = [r for r in mine if r['mode'] == 'packed']
+        configs.setdefault(config, {})[variant] = dict(measured_worlds=sorted({r['worlds'] for r in mine}),
+            largest_capacity=best(seq, lambda r: (r['largest_capacity'], r['worlds'])), largest_worlds=best(seq, lambda r: (r['worlds'], r['largest_capacity'])),
             packed_proxy=None if not packed else dict(largest_capacity=best(packed, lambda r: (r['largest_capacity'], r['worlds'])),
                 largest_worlds=best(packed, lambda r: (r['worlds'], r['largest_capacity']))))
     return dict(rule=RULE, limit_ms=limit_ms, rows=out, configs=configs)
@@ -705,41 +909,47 @@ def _short(name):
 
 def markdown(report):
     h = report['header'];path = h['world_construction_path'];commit = h['source_commit'];caps = report['capacities'];sel = report['selection']
-    solver = h['solver'];world = f'world_construction: {_short(path["world_planner"])} (blocks >= 1) + {_short(path["world_builder"])} -> {_short(path["world_materialize"])}'
+    world = f'world_construction: {_short(path["world_planner"])} (blocks >= 1) + {_short(path["world_builder"])} -> {_short(path["world_materialize"])}'
+    pools = '; '.join(f'pool {p["workers"]}: startup {p["startup_seconds"]:.1f} s (excluded)' for p in h['solver_pools']) or 'in process only'
     lines = ['## Search latency: end-to-end ms per call, warm calls (median / p90)', '',
-        f'Rule: {RULE}. Solver: {solver["spec"]}' + (' (stand-in for the hedge solve).' if solver.get('stand_in') else '.'),
+        f'Rule: {RULE}. Solvers: {", ".join(x["spec"] for x in h["solvers"])} (every solver and pool size on the same priced frames); solve pools: {pools}.',
         f'World construction path timed: {path["timed"]}; materializer object {path["materializer"]}; Phase D constructor on the path: '
         f'{"yes" if path["uses_phase_d_constructor"] else "no"}.',
         f'Source commit: {commit["commit"]} ({commit["origin"]}' + ('' if commit.get('dirty') is None else f', dirty={commit["dirty"]}') + ').',
         f'Note: {CONSTRUCTOR_NOTE}', '']
+    if h.get('hedge'):
+        x = h['hedge'];lines[-1:-1] = [f'Hedge: {x["module"]} sha256 {x["sha256"]} (commit {x["commit"]}; 583555d2 file: {x["matches_reference"]}), lam={x["lam"]}, '
+            f'seed {x["seed"]}, weights {x["weights"]}: {HEDGE_SOLVE}.']
     if any(s['config'] == MERGED for s in report['series']):
         merged = next(s['engine'] for s in report['series'] if s['config'] == MERGED)
         lines[-1:-1] = [f'{MERGED}: {merged.get("engine")} (digest={merged.get("digest")}, child_block={merged.get("child_block")}, fixed_capacity='
-            f'{merged.get("fixed_capacity")}, the gate\'s construction); solve {MERGED_SOLVE}. depth2-fw is DepthNPricer at N=2, k=9.']
+            f'{merged.get("fixed_capacity")}, the gate\'s construction); learner_max / MODULE:FUNC solve {MERGED_SOLVE}; hedge solve search_hedge.depth2_hedged_root. '
+            'depth2-fw is DepthNPricer at N=2, k=9.']
     lines += [
-        '| config | W | mode | ' + ' | '.join(f'C={c}' for c in caps) + ' | largest C with p90 <= 800 ms |', '|---|---|---|' + '---|' * len(caps) + '---|']
+        '| config | W | mode | solver | pool | ' + ' | '.join(f'C={c}' for c in caps) + ' | largest C with p90 <= 800 ms |', '|---|---|---|---|---|' + '---|' * len(caps) + '---|']
     for r in sel['rows']:
         cells = [f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p90_ms"])}' if str(c) in r['by_capacity'] else '-' for c in caps]
         largest = '-' if r['largest_capacity'] is None else str(r['largest_capacity']) + ('' if r['monotone'] else ' (a smaller C fails)')
-        lines.append(f'| {r["config"]} | {r["worlds"]} | {r["mode"] + (" (proxy)" if r["mode"] == "packed" else "")} | ' + ' | '.join(cells) + f' | {largest} |')
+        lines.append(f'| {r["config"]} | {r["worlds"]} | {r["mode"] + (" (proxy)" if r["mode"] == "packed" else "")} | {r["solver"]} | {r["pool"]} | '
+            + ' | '.join(cells) + f' | {largest} |')
     lines += ['', 'Largest fitting, sequential (playable today): ' + '; '.join(
-        f'{c}: C={v["largest_capacity"]["capacity"]} at W={v["largest_capacity"]["worlds"]}, W={v["largest_worlds"]["worlds"]} at C={v["largest_worlds"]["capacity"]}'
-        if v['largest_capacity'] else f'{c}: none of C={caps} at W={v["measured_worlds"]}' for c, v in sel['configs'].items()) + '.',
+        f'{c} [{n}]: C={v["largest_capacity"]["capacity"]} at W={v["largest_capacity"]["worlds"]}, W={v["largest_worlds"]["worlds"]} at C={v["largest_worlds"]["capacity"]}'
+        if v['largest_capacity'] else f'{c} [{n}]: none of C={caps} at W={v["measured_worlds"]}' for c, by in sel['configs'].items() for n, v in by.items()) + '.',
         f'Packed rows are a timing proxy ({PACKED_NOTE}).', '',
         f'### Stage medians (ms), warm calls [{world}]', '',
-        f'| config | W | mode | C | host_prep | world_construction ({_short(path["world_planner"])} + {_short(path["world_builder"])}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured |',
-        '|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+        f'| config | W | mode | solver | pool | C | host_prep | world_construction ({_short(path["world_planner"])} + {_short(path["world_builder"])}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured |',
+        '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for s in report['series']:
         w = s['warm'];leaves = s['leaves']
-        lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["capacity"]} | ' + ' | '.join(_ms(w[k]['median_ms']) for k in STAGES)
+        lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ' + ' | '.join(_ms(w[k]['median_ms']) for k in STAGES)
             + f' | {_ms(w["total"]["median_ms"])} | {_ms(w["total"]["p90_ms"])} | {s["first_call"]["compile_seconds"]:.1f} | {leaves["nominal_per_world"]} / '
             + ('-' if leaves['measured_per_world'] is None else f'{leaves["measured_per_world"]:.0f}') + ' |')
     return '\n'.join(lines) + '\n'
 
 
-def report_of(args, sections, context, commit, solver, *, isolated_run):
+def report_of(args, sections, context, commit, *, isolated_run):
     series = [s for name in args.config_worlds if name in sections for s in sections[name]]
-    report = dict(evaluator=context['evaluator'], header=header(context, commit, solver), schema=SCHEMA,
+    report = dict(evaluator=context['evaluator'], header=header(context, commit), schema=SCHEMA,
         value_scale=gate.value_scale(context['root_values'], dict(count=0), args.value_reference), weights_affect_speed=t2.WEIGHTS_NOTE,
         source=context['source'], devices=context['devices'], capacities=list(args.capacity_values), configs={k: list(v) for k, v in args.config_worlds.items()},
         repeats=args.repeats, packed=args.packed, block_lanes=args.block_lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, roots_available=context['roots_available'],
@@ -779,27 +989,40 @@ def main(argv=None):
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     if args.isolate:
         gate.log('LATENCY_START', configs=args.config_worlds, capacities=args.capacity_values, isolate=True)
-        sections, contexts = isolated(args, argv, out);context = next(c for c in contexts.values() if c);solver = context['solver']
+        sections, contexts = isolated(args, argv, out);context = next(c for c in contexts.values() if c)
+        context['solver_pools'] = [dict(p, config=name) for name, c in contexts.items() if c for p in (c.get('solver_pools') or [])]   # pools per config process
     else:
-        ctx = prepare(args);solver_object = Solver.load(args.solver);solver = solver_object.describe()   # the solver module imports after the memory policy
+        ctx = prepare(args)   # solver modules import after the memory policy
+        solvers = [Solver.load(spec, hedge_module=args.hedge_module, hedge_commit=args.hedge_commit) for spec in args.solver_specs]
+        hedge = next((s.hedge for s in solvers if s.spec == 'hedge'), None);pools, pool_infos = {}, []
         import jax
         from gpu_engine import device_depthn_pricer, device_public_worlds
         merged = importlib.import_module('gpu_engine.device_depth2_pricer') if MERGED in args.config_worlds else None
-        context = dict(evaluator=ctx.evaluator, root_values=list(ctx.root_values), roots_available=len(ctx.available), source=ctx.source,
-            devices=[d.device_kind for d in jax.devices()], block_seeds=list(ctx.seeds), compile_cache=ctx.compile_cache, solver=solver,
-            world_construction_path=constructor_path(ctx.provider, device_depthn_pricer, device_public_worlds, merged))
-        gate.log('WORLD_CONSTRUCTION_PATH', **context['world_construction_path'], source_commit=commit['commit'], note=CONSTRUCTOR_NOTE)
-        names = [args.only] if args.only else list(args.config_worlds);programs = {}
-        gate.log('LATENCY_START', configs={n: args.config_worlds[n] for n in names}, capacities=args.capacity_values, roots_available=context['roots_available'],
-            solver=solver['spec'], repeats=args.repeats, packed=args.packed, isolate=False)
-        sections = {name: measure_config(name, args.config_worlds[name], args, ctx, gate.log, solver=solver_object, programs=programs) for name in names}
+        try:
+            for size in args.pool_sizes:   # persistent pools, started (and their startup timed) before any call
+                if not size:pools[0] = None;continue
+                pools[size], info = start_pool(size, hedge_module=args.hedge_module if hedge is not None else None);pool_infos.append(info);gate.log('SOLVER_POOL', **info)
+            variants = make_variants(solvers, pools)
+            context = dict(evaluator=ctx.evaluator, root_values=list(ctx.root_values), roots_available=len(ctx.available), source=ctx.source,
+                devices=[d.device_kind for d in jax.devices()], block_seeds=list(ctx.seeds), compile_cache=ctx.compile_cache, solvers=[s.describe() for s in solvers],
+                solver_pools=pool_infos, hedge=None if hedge is None else hedge_header(hedge, args.hedge_commit, args.hedge_module), variants=[v.name for v in variants],
+                world_construction_path=constructor_path(ctx.provider, device_depthn_pricer, device_public_worlds, merged))
+            gate.log('WORLD_CONSTRUCTION_PATH', **context['world_construction_path'], source_commit=commit['commit'], note=CONSTRUCTOR_NOTE)
+            if context['hedge']:gate.log('HEDGE', **context['hedge'])
+            names = [args.only] if args.only else list(args.config_worlds);programs = {}
+            gate.log('LATENCY_START', configs={n: args.config_worlds[n] for n in names}, capacities=args.capacity_values, roots_available=context['roots_available'],
+                variants=context['variants'], repeats=args.repeats, packed=args.packed, isolate=False)
+            sections = {name: measure_config(name, args.config_worlds[name], args, ctx, gate.log, variants=variants, programs=programs) for name in names}
+        finally:
+            for pool in pools.values():
+                if pool is not None:pool.terminate();pool.join()
         if args.only:
             (out / 'latency.json').write_text(json.dumps(dict(evaluator=ctx.evaluator, only=args.only, sections=sections, context=context),
                 indent=1, allow_nan=False, default=str) + '\n')
             return 0
-    report = report_of(args, sections, context, commit, solver, isolated_run=args.isolate)
+    report = report_of(args, sections, context, commit, isolated_run=args.isolate)
     (out / 'latency.json').write_text(json.dumps(report, indent=1, allow_nan=False, default=str) + '\n')   # evaluator first, then the header
-    gate.log('LATENCY_COMPLETE', out=str(out / 'latency.json'), selection=report['selection']['configs'])
+    gate.log('LATENCY_COMPLETE', out=str(out / 'latency.json'), selection=report['selection']['configs'], hedge=report['header']['hedge'])
     print('=== LATENCY SUMMARY (markdown) ===\n' + report['summary_markdown'] + '=== END LATENCY SUMMARY ===', flush=True)
     return 0
 

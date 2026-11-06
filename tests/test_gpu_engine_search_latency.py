@@ -2,12 +2,17 @@
 exclusion, the 800 ms selection, nominal leaves (and the real engine's slot widths), W=8 sequential and packed composition,
 the --solver plug-in through the real backups, the header's constructor path / commit / note, isolation argv and arguments."""
 import contextlib
+import dataclasses
+import hashlib
 import io
 import json
 import math
 from pathlib import Path
+import pickle
+import sys
 import tempfile
 from types import SimpleNamespace
+import types
 from typing import NamedTuple
 import unittest
 import uuid
@@ -95,15 +100,24 @@ DEPTH2 = SimpleNamespace(Depth2Pricer=FakeDepth2)
 
 
 class FakeSolver:
+    spec = 'fake'
+
     def __init__(self):self.views = []
 
-    def solve(self, views, requests, clock):
+    def solve(self, views, requests, clock, pool=None):
         self.views.append(list(views));CLOCK.advance(.0001 * len(requests) * len(views));clock.lap('solve', 'backup_and_reduce')
         return [dict(status='LABELED', policy_target=(0., 1.) + (0.,) * 7) for _ in requests]
 
+    def moves(self, results, requests):
+        return [tool.move_of(r) for r in results]
+
+
+def address(i):
+    return SimpleNamespace(stream=100 + i, frame=7, owner=i % 2)
+
 
 def request(i, block):
-    return SimpleNamespace(root=i, block=block, root_logits=(0.,) * 9, root_legal=(True,) + (False,) * 8)
+    return SimpleNamespace(root=i, block=block, root_logits=(0.,) * 9, root_legal=(True,) + (False,) * 8, plans=SimpleNamespace(root=SimpleNamespace(address=address(i))))
 
 
 def fake_ctx(blocks=4):
@@ -154,6 +168,81 @@ def depth2_frame(values, errored=()):
 
 
 ROOT = SimpleNamespace(root_logits=(0.,) * 9, root_legal=(True,) + (False,) * 8)
+ROOTS = [request(i, 0) for i in range(2)]
+
+
+def depth3_frame(leaves):
+    """A real N=3 DepthNFrame: R roots, both worlds; turn-1 cell (0,0) expanded with slots on actions (0, 1); its four ply-2 children
+    (node ids 0..3) expanded with slots on actions (0, 1) at equal priors; leaves[r] [node][own slot][opponent slot]."""
+    R, M = len(leaves), 81 * 4;Z = lambda shape, d=np.float32: np.zeros((R, 2) + shape, d);ids = np.arange(M)
+    nodes = dn.PlyNodes(ply=2, parent=ids // 4, parent_own_slot=((ids % 4) // 2).astype(np.int8), parent_opp_slot=(ids % 2).astype(np.int8), status=Z((M,), np.int8),
+        value=Z((M,)), error=Z((M,), np.int8), own_requested=Z((M,), bool), opp_requested=Z((M,), bool), own_legal=Z((M, 9), bool), opp_legal=Z((M, 9), bool),
+        own_logits=Z((M, 9)), opp_logits=Z((M, 9)), own_actions=np.full((R, 2, M, 2), -1, np.int32), opp_actions=np.full((R, 2, M, 2), -1, np.int32))
+    nodes.status[:, :, :4] = 2;nodes.own_actions[:, :, :4] = [0, 1];nodes.opp_actions[:, :, :4] = [0, 1]
+    frame = dataclasses.replace(depth2_frame([[[0., 0.], [0., 0.]]] * R), depth=3, k_own=(2, 2), k_opp=(2, 2), nodes=(nodes,), leaf_status=Z((M, 2, 2), np.int8),
+        leaf_value=Z((M, 2, 2)), leaf_error=Z((M, 2, 2), np.int8))
+    frame.leaf_status[:, :, :4] = 4
+    for r, v in enumerate(leaves):frame.leaf_value[r, :, :4] = v
+    return frame
+
+
+def stub_hedge(path=None):
+    """A stand-in for search_hedge (the real one is PR #1829's and is not on this branch): its names and signatures with simple
+    exact maths (matrix_game = the pure maximin; bayes_hedge = the legal action with the best mean worst case) and a call log."""
+    hedge = types.ModuleType('gpu_engine.search_hedge');hedge.calls = []
+    hedge.DEPTH2_FIELDS = ('pre', 'root_peer_requested', 'root_peer_logits', 't1_status', 't1_value', 't2_status', 't2_value')
+    def matrix_game(values):
+        m = np.asarray(values, np.float64);hedge.calls.append(('matrix_game', m.shape));x = np.zeros(len(m));x[int(np.argmax(m.min(axis=1)))] = 1.
+        return float(m.min(axis=1).max()), x
+    def depth2_hedged_root(fields):
+        hedge.calls.append(('depth2_hedged_root', tuple(sorted(fields))));out = []
+        for w in range(len(fields['pre'])):
+            if int(fields['pre'][w]):out.append(None);continue
+            status, requested = fields['t1_status'][w], bool(fields['root_peer_requested'][w])
+            def cell(a, r):
+                if status[a, r] == 1:return float(fields['t1_value'][w, a, r])
+                t2 = fields['t2_status'][w, a, r]
+                if status[a, r] != 2 or (t2 == 3).any():return None
+                return matrix_game(np.asarray(fields['t2_value'][w, a, r], np.float64)[np.ix_(np.flatnonzero(t2.any(1)), np.flatnonzero(t2.any(0)))])[0]
+            out.append(original.WorldPrices(requested, tuple(bool(status[:, r].any()) for r in range(9)) if requested else (False,) * 9,
+                tuple(map(float, fields['root_peer_logits'][w])), [[cell(a, r) if status[a, r] else None for r in range(9)] for a in range(9)]))
+        return tuple(out)
+    def bayes_hedge(worlds, root_legal, *, lam=0.):
+        worlds = list(worlds);hedge.calls.append(('bayes_hedge', len(worlds), lam))
+        if not worlds or any(w is None for w in worlds):return None
+        worst = {}
+        for a in (a for a in range(9) if root_legal[a]):
+            rows = [[w.joint_values[a][b] for b in ([b for b in range(9) if w.opponent_legal[b]] if w.opponent_requested else [0])] for w in worlds]
+            if any(v is None for row in rows for v in row):return None
+            worst[a] = sum(min(row) for row in rows) / len(rows)
+        best = max(worst, key=lambda a: (worst[a], -a));return SimpleNamespace(strategy=tuple(float(a == best) for a in range(9)), value=worst[best])
+    def search_uniform(seed, address):
+        hedge.calls.append(('search_uniform', seed, (address.stream, address.frame, address.owner)));return .25
+    def sample(strategy, u):
+        hedge.calls.append(('sample', u));return next(a for a, p in enumerate(strategy) if p > 0)
+    for f in (matrix_game, depth2_hedged_root, bayes_hedge, search_uniform, sample):setattr(hedge, f.__name__, f)
+    if path is not None:hedge.__file__ = str(path)
+    return hedge
+
+
+class FrameDepthN(FakeDepthN):
+    """FakeDepthN whose frames are real N=2 DepthNFrames (depth2_frame), so the real solvers run on them."""
+    def price(self, requests, materializer, recipe, params, *, selection_maps=None):
+        fake = super().price(requests, materializer, recipe, params, selection_maps=selection_maps)
+        return dataclasses.replace(depth2_frame([[[.6, -.2], [.1, .1]]] * len(list(requests))), timing=fake.timing)
+
+
+FRAMES = SimpleNamespace(DepthNPricer=FrameDepthN, as_depth2_frame=dn.as_depth2_frame, searched_maps=dn.searched_maps)
+
+
+class FakePool:
+    """pool.map's contract in process: every unit and every result goes through pickle (as the IPC does); the clock pays .001 s per unit."""
+    def __init__(self):self.mapped = []
+
+    def map(self, fn, units, chunksize=None):
+        self.mapped.append((fn, len(units), chunksize));out = []
+        for unit in units:CLOCK.advance(.001);out.append(pickle.loads(pickle.dumps(fn(pickle.loads(pickle.dumps(unit))))))
+        return out
 
 
 class FakeTables:
@@ -205,6 +294,9 @@ class SearchLatencyTests(unittest.TestCase):
     def out(self):
         return str(Path(tempfile.gettempdir()) / f'search-latency-never-{uuid.uuid4().hex}')
 
+    def hedge_file(self, content):
+        path = Path(tempfile.mkdtemp()) / 'search_hedge.py';path.write_bytes(content);return path
+
     def args(self, *extra):
         return tool.parse(['--d3-root', 'r', '--chunk', '0', '--out', self.out(), *extra])
 
@@ -212,17 +304,18 @@ class SearchLatencyTests(unittest.TestCase):
         args, ctx, solver = self.args(), fake_ctx(), FakeSolver()
         search = tool.Search('depth3-searched-k3', 4, args, ctx, module=MODULE)
         record, requests = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=solver, timer=CLOCK)
-        s, p = record['stages'], record['parts']
+        s, p = record['stages'], record['parts'];v = record['variants']['fake@pool0']
         self.assertAlmostEqual(sum(s.values()), record['wall_seconds'], places=12)   # contiguous laps: every instant charged once
-        self.assertAlmostEqual(record['total_seconds'], sum(s[k] for k in tool.STAGES), places=12)
-        self.assertAlmostEqual(record['total_seconds'], record['wall_seconds'] - s['compile'], places=12)   # compile never in the total
+        self.assertAlmostEqual(v['total_seconds'], sum(s[k] for k in tool.STAGES), places=12)
+        self.assertAlmostEqual(v['total_seconds'], record['wall_seconds'] - s['compile'], places=12)   # compile never in the total
         self.assertAlmostEqual(s['host_prep'], .003);self.assertAlmostEqual(s['compile'], 4.)   # both pricers' first-call compiles
         self.assertAlmostEqual(s['world_construction'], .02);self.assertAlmostEqual(p['world_construction.materialize'], .02)   # the pass and depth N each materialize
         self.assertAlmostEqual(p['pricer.depth2_pass'], .008);self.assertAlmostEqual(p['pricer.searched_maps_host'], .005);self.assertAlmostEqual(p['pricer.depthn'], .008)
         self.assertAlmostEqual(s['pricer'], p['pricer.depth2_pass'] + p['pricer.searched_maps_host'] + p['pricer.depthn'], places=12)
         self.assertAlmostEqual(s['solve'], .0004);self.assertAlmostEqual(s['return'], 0.)
         self.assertAlmostEqual(p['host_prep.detach'], .002)   # a part measured inside host_prep: noted, never added to the stage
-        self.assertEqual((record['labeled'], record['moves'], record['leftover_device_arrays']), (4, [1] * 4, 0))
+        self.assertEqual((v['labeled'], v['moves'], v['leftover_device_arrays']), (4, [1] * 4, 0))
+        self.assertAlmostEqual(record['common_seconds'], s['host_prep'] + s['world_construction'] + s['pricer'], places=12)
         self.assertEqual(record['pricing'][0]['maps_widths'], [4, 5]);self.assertEqual(record['pricing'][0]['slot_widths'], [4, 5])
         self.assertAlmostEqual(record['pricing'][0]['depthn']['p1_seconds'], .004 - .0007)
         self.assertEqual(len(requests), 4)
@@ -231,7 +324,7 @@ class SearchLatencyTests(unittest.TestCase):
         args, ctx = self.args(), fake_ctx();search = tool.Search('depth3-prior-k3', 4, args, ctx, module=MODULE)
         CLOCK.extra = [1., .1, .3, .2]   # the cold call is slow and compiles; warm calls vary
         memory = lambda: dict(process_peak_bytes_so_far=10, bytes_in_use=4)
-        series = tool.measure_series(search, ctx, ctx.roots(4), 2, 'sequential', 3, solver=FakeSolver(), progress=None, memory=memory,
+        [series] = tool.measure_series(search, ctx, ctx.roots(4), 2, 'sequential', 3, solver=FakeSolver(), progress=None, memory=memory,
             baseline=dict(bytes_in_use=4), capacity=4, timer=CLOCK)
         warm = [.003 + .01 + .008 + x + .0004 for x in (.1, .3, .2)]
         self.assertEqual(series['warm_calls'], 3);self.assertEqual(series['warm']['total']['n'], 3)
@@ -251,17 +344,17 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(tool.largest_within({1: 900., 4: 700.}), dict(largest_capacity=4, monotone=False))
         self.assertEqual(tool.largest_within({1: 801., 4: None}), dict(largest_capacity=None, monotone=True))
         total = lambda p90: dict(median_ms=p90 - 10, p90_ms=p90, max_ms=p90 + 5)
-        series = [dict(config='a', worlds=w, mode=m, capacity=c, warm=dict(total=total(p))) for w, m, c, p in (
+        series = [dict(config='a', worlds=w, mode=m, capacity=c, variant='v', warm=dict(total=total(p))) for w, m, c, p in (
             (2, 'sequential', 1, 100.), (2, 'sequential', 4, 300.), (2, 'sequential', 16, 900.), (8, 'sequential', 1, 700.), (8, 'sequential', 4, 1200.),
             (8, 'sequential', 16, 3000.), (8, 'packed', 1, 300.), (8, 'packed', 4, 600.), (8, 'packed', 16, 2000.))] + [
-            dict(config='b', worlds=2, mode='sequential', capacity=c, warm=dict(total=total(p))) for c, p in ((1, 900.), (4, 1500.))]
+            dict(config='b', worlds=2, mode='sequential', capacity=c, variant='v', warm=dict(total=total(p))) for c, p in ((1, 900.), (4, 1500.))]
         selection = tool.select(series)
-        a, b = selection['configs']['a'], selection['configs']['b']
+        a, b = selection['configs']['a']['v'], selection['configs']['b']['v']
         self.assertEqual(a['largest_capacity'], dict(capacity=4, worlds=2, mode='sequential'))
         self.assertEqual(a['largest_worlds'], dict(capacity=1, worlds=8, mode='sequential'))
         self.assertEqual(a['packed_proxy']['largest_worlds'], dict(capacity=4, worlds=8, mode='packed'))   # packed apart, never the headline
         self.assertEqual((b['largest_capacity'], b['largest_worlds'], b['packed_proxy']), (None, None, None))
-        rows = {(r['config'], r['worlds'], r['mode']): r for r in selection['rows']}
+        rows = {(r['config'], r['worlds'], r['mode']): r for r in selection['rows']};self.assertEqual({r['variant'] for r in selection['rows']}, {'v'})
         self.assertEqual(rows['a', 8, 'packed']['largest_capacity'], 4);self.assertEqual(rows['a', 2, 'sequential']['by_capacity']['4'], total(300.))
         self.assertEqual(selection['limit_ms'], 800.);self.assertIn('<= 800 ms', selection['rule'])
 
@@ -326,7 +419,7 @@ class SearchLatencyTests(unittest.TestCase):
         values = ([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]);frame = depth2_frame(values);requests = [ROOT, ROOT]
         solve = lambda solver, views=((frame, 0),): (lambda clock: (solver.solve(list(views), requests, clock), clock))(tool.Clock(CLOCK))
         reference, clock = solve(tool.Solver.load('learner_max'))   # depth 2: depth2_backups on as_depth2_frame
-        self.assertIn('solve.as_depth2_frame', clock.parts);self.assertIn('solve.backup_and_reduce', clock.parts)
+        self.assertIn('solve.as_depth2_frame', clock.parts);self.assertEqual({'solve.slice', 'solve.worlds', 'solve.root_reduce'} - set(clock.parts), set())
         self.assertAlmostEqual(reference[0]['completed_q'][0], .2, places=6);self.assertAlmostEqual(reference[1]['completed_q'][0], .4, places=6)
         baseline, clock = solve(tool.Solver.load('gpu_engine.depthn_backups:learner_max'))   # the plug-in path's like-for-like baseline
         self.assertNotIn('solve.as_depth2_frame', clock.parts)
@@ -381,16 +474,20 @@ class SearchLatencyTests(unittest.TestCase):
         args = self.args('--configs', 'depth2-fw@2,depth3-prior-k3@2', '--capacities', '1,2', '--repeats', '1');memory = lambda: {}
         sections = {name: tool.measure_config(name, w, args, fake_ctx(), None, solver=FakeSolver(), module=MODULE, memory=memory, timer=CLOCK)
             for name, w in args.config_worlds.items()}
+        hedge = stub_hedge(self.hedge_file(b'stub hedge'))
         context = dict(evaluator=dict(override=True), root_values=[], roots_available=1, source={}, devices=['cpu'], block_seeds=[7], compile_cache=None,
-            world_construction_path=path, solver=tool.Solver().describe())
-        report = tool.report_of(args, sections, context, commit, context['solver'], isolated_run=False)
+            world_construction_path=path, solvers=[tool.Solver().describe(), tool.Solver('hedge', hedge=hedge, hedge_name=tool.HEDGE_MODULE).describe()],
+            solver_pools=[dict(workers=16, startup_seconds=3.5)], hedge=tool.hedge_header(hedge, tool.HEDGE_COMMIT), variants=['fake@pool0'])
+        report = tool.report_of(args, sections, context, commit, isolated_run=False)
         self.assertEqual(list(report)[:2], ['evaluator', 'header'])
         self.assertEqual((report['header']['world_construction_path'], report['header']['source_commit']['commit'], report['header']['constructor_note']),
             (path, 'abc123def', tool.CONSTRUCTOR_NOTE))
         self.assertIn('Codex\'s constructor batch 2 (own PP carry, removed items, sleep clocks)', tool.CONSTRUCTOR_NOTE)
         md = report['summary_markdown']
-        for text in (path['timed'], 'abc123def', tool.CONSTRUCTOR_NOTE, '<= 800 ms', 'learner_max', 'fake_numpy_worlds', '| depth3-prior-k3 | 2 | sequential |'):
+        for text in (path['timed'], 'abc123def', tool.CONSTRUCTOR_NOTE, '<= 800 ms', 'learner_max, hedge', 'fake_numpy_worlds', '| depth3-prior-k3 | 2 | sequential | fake | 0 |',
+                'pool 16: startup 3.5 s (excluded)', hashlib.sha256(b'stub hedge').hexdigest(), 'commit 583555d2', 'seed 2026110500'):
             self.assertIn(text, md)
+        self.assertEqual((report['header']['hedge']['sha256'], report['header']['solver_pools'][0]['workers']), (hashlib.sha256(b'stub hedge').hexdigest(), 16))
         self.assertTrue(report['cycled']);json.dumps(report, allow_nan=False, default=str)
 
     def test_host_prep_rebuilds_exactly_c_roots_with_one_detach_per_step(self):
@@ -477,6 +574,101 @@ class SearchLatencyTests(unittest.TestCase):
             results = solver.solve([(frame, 0)], [ROOT, ROOT], tool.Clock(CLOCK))
             self.assertAlmostEqual(results[0]['completed_q'][0], .2, places=6);self.assertAlmostEqual(results[1]['completed_q'][0], .4, places=6)
 
+    def test_hedge_solve_with_a_stub_search_hedge(self):
+        hedge = stub_hedge()
+        with patch.dict(sys.modules, {tool.HEDGE_MODULE: hedge}):
+            solver = tool.Solver.load('hedge');self.assertIs(solver.hedge, hedge);self.assertEqual(solver.describe()['lam'], 0.)
+            # DepthNPricer N=2: depthn_backups.backup with matrix_game on every expanded cell's full 2x2 child grid; bayes_hedge at the root.
+            frame = depth2_frame(([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]));clock = tool.Clock(CLOCK)
+            results = solver.solve([(frame, 0)], ROOTS, clock)
+            self.assertEqual([c for c in hedge.calls if c[0] == 'matrix_game'], [('matrix_game', (2, 2))] * 4)   # 2 roots x 2 worlds x 1 cell
+            self.assertEqual([c for c in hedge.calls if c[0] == 'bayes_hedge'], [('bayes_hedge', 2, 0.)] * 2)   # one LP per root over its W worlds, lam=0
+            self.assertAlmostEqual(results[0]['root_value'], .1, places=6);self.assertAlmostEqual(results[1]['root_value'], .3, places=6)   # the maximin, not learner-max
+            self.assertNotIn('solve.as_depth2_frame', clock.parts);self.assertIsNone(results[0].get('policy_target'))
+            hedge.calls.clear();moves = solver.moves(results, ROOTS)
+            self.assertEqual(moves, [0, 0]);self.assertEqual(hedge.calls[0], ('search_uniform', 2026110500, (100, 7, 0)))   # the pre-registered seed, the root's address
+            # W = 4 (two blocks): ONE bayes_hedge over all four worlds; a refused world refuses the root.
+            hedge.calls.clear();other = depth2_frame(([[.2, .2], [0., 0.]], [[.1, .1], [.1, .1]]), errored=((1, 0),))
+            results = solver.solve([(frame, 0), (other, 0)], ROOTS, tool.Clock(CLOCK))
+            self.assertEqual([c for c in hedge.calls if c[0] == 'bayes_hedge'], [('bayes_hedge', 4, 0.)] * 2)
+            self.assertAlmostEqual(results[0]['root_value'], (.1 + .2) / 2, places=6);self.assertEqual(results[1]['status'], 'REFUSED')
+            self.assertEqual(solver.moves(results, ROOTS)[1], None)
+            # N=3: the rule at every node (4 ply-2 nodes + the turn-1 cell per world), through the per-root slices of every ply.
+            hedge.calls.clear();deep = depth3_frame([[[[.5, .1], [.2, .3]]] * 4, [[[-.5, .4], [0., -.1]]] * 4])
+            results = solver.solve([(deep, 0)], ROOTS, tool.Clock(CLOCK))
+            self.assertEqual(len([c for c in hedge.calls if c[0] == 'matrix_game']), 2 * 2 * 5)
+            self.assertAlmostEqual(results[0]['root_value'], .2, places=6);self.assertAlmostEqual(results[1]['root_value'], -.1, places=6)
+            # The merged Depth2Frame: search_hedge.depth2_hedged_root on the root's DEPTH2_FIELDS slices, once per (root, block).
+            hedge.calls.clear();merged = dn.as_depth2_frame(frame)
+            results = solver.solve([(merged, 0)], ROOTS, tool.Clock(CLOCK))
+            roots = [c for c in hedge.calls if c[0] == 'depth2_hedged_root'];self.assertEqual(roots, [('depth2_hedged_root', tuple(sorted(hedge.DEPTH2_FIELDS)))] * 2)
+            self.assertAlmostEqual(results[0]['root_value'], .1, places=6);self.assertAlmostEqual(results[1]['root_value'], .3, places=6)
+        with self.assertRaises(SystemExit) as raised:tool.Solver.load('hedge', hedge_module='gpu_engine.no_such_hedge_module')
+        self.assertIn('PR #1829', str(raised.exception.code));self.assertIn('583555d2', str(raised.exception.code))
+
+    def test_unit_slices_rebuild_the_frames_backups(self):
+        from gpu_engine import depthn_backups
+        deep = depth3_frame([[[[.5, .1], [.2, .3]], [[.0, .9], [.4, .4]], [[-.2, .6], [.1, -.3]], [[.7, .7], [-.7, .2]]], [[[-.5, .4], [0., -.1]]] * 4])
+        for r in range(2):
+            unit = dict(solver='learner_max', hedge=None, kind='depthn', rule=None, fields=tool.root_fields(deep, r, 'depthn'))
+            for mine, theirs in zip(tool.world_prices(pickle.loads(pickle.dumps(unit))), depthn_backups.backup_learner_max(deep, r)):
+                self.assertEqual(mine.joint_values, theirs.joint_values);self.assertEqual(mine.opponent_logits, theirs.opponent_logits)
+        size = lambda frame: len(pickle.dumps(dict(solver='learner_max', hedge=None, kind='depthn', rule=None, fields=tool.root_fields(frame, 0, 'depthn'))))
+        self.assertEqual(size(deep), size(depth3_frame([[[[.5, .1], [.2, .3]]] * 4] * 6)))   # one root's slices: independent of the frame's root count
+
+    def test_pool_timing_accounting_on_shared_frames(self):
+        hedge, pool = stub_hedge(), FakePool();args, ctx = self.args(), fake_ctx()
+        with patch.dict(sys.modules, {tool.HEDGE_MODULE: hedge}):
+            variants = tool.make_variants([tool.Solver(), tool.Solver.load('hedge')], {0: None, 4: pool})
+            self.assertEqual([v.name for v in variants], ['learner_max@pool0', 'learner_max@pool4', 'hedge@pool0', 'hedge@pool4'])
+            search = tool.Search('depth2-fw', 2, args, ctx, module=FRAMES)
+            record, _ = tool.run_call(search, ctx, ctx.roots(2), 4, 'sequential', variants=variants, rotate=1, timer=CLOCK)
+        s, v = record['stages'], record['variants'];common = s['host_prep'] + s['world_construction'] + s['pricer']
+        self.assertEqual(len(search.pricer.log), 2)   # priced once (two blocks), solved by all four variants
+        self.assertEqual(record['variant_order'], ['learner_max@pool4', 'hedge@pool0', 'hedge@pool4', 'learner_max@pool0'])   # rotated per call
+        self.assertAlmostEqual(sum(s.values()), record['wall_seconds'], places=12);self.assertAlmostEqual(record['common_seconds'], common, places=12)
+        self.assertAlmostEqual(s['solve'] + s['return'], sum(x['solve_seconds'] + x['return_seconds'] for x in v.values()), places=12)
+        for name, x in v.items():
+            self.assertAlmostEqual(x['total_seconds'], common + x['solve_seconds'] + x['return_seconds'], places=12)
+            self.assertIn('solve.worlds_pool' if x['pool'] else 'solve.worlds', x['parts'])
+        self.assertAlmostEqual(v['hedge@pool4']['parts']['solve.worlds_pool'], .001 * 2 * 2);self.assertAlmostEqual(v['hedge@pool0']['solve_seconds'], 0.)   # IPC is in solve
+        self.assertEqual([(fn, n, chunk) for fn, n, chunk in pool.mapped], [(tool.world_prices, 4, 1)] * 2)   # (root, block) units, both solvers
+        self.assertEqual(v['learner_max@pool0']['moves'], v['learner_max@pool4']['moves']);self.assertEqual(v['hedge@pool0']['moves'], v['hedge@pool4']['moves'])
+        self.assertEqual((v['learner_max@pool0']['labeled'], v['hedge@pool4']['labeled']), (2, 2))
+        # A series per variant from the same calls; each total is its own, the first call is excluded from every one.
+        CLOCK.now = 100.;memory = lambda: {}
+        with patch.dict(sys.modules, {tool.HEDGE_MODULE: hedge}):
+            group = tool.measure_series(tool.Search('depth2-fw', 2, args, ctx, module=FRAMES), ctx, ctx.roots(2), 2, 'sequential', 2, variants=variants,
+                progress=None, memory=memory, baseline={}, capacity=2, timer=CLOCK)
+        self.assertEqual([(g['solver'], g['pool'], g['variant']) for g in group], [('learner_max', 0, 'learner_max@pool0'), ('learner_max', 4, 'learner_max@pool4'),
+            ('hedge', 0, 'hedge@pool0'), ('hedge', 4, 'hedge@pool4')])
+        for g in group:
+            self.assertEqual(g['warm_calls'], 2)
+            for c in g['calls']:self.assertAlmostEqual(c['total_seconds'], sum(c['stages'][k] for k in tool.STAGES), places=12)
+        self.assertGreater(group[3]['warm']['solve']['median_ms'], group[2]['warm']['solve']['median_ms'])   # the pool's pickling/IPC shows in its solve
+        self.assertEqual(group[2]['solve'], tool.HEDGE_SOLVE);self.assertEqual(group[0]['solve'], 'learner_max')
+        rows = tool.select(group)['rows'];self.assertEqual(len(rows), 4);self.assertEqual({r['variant'] for r in rows}, {v.name for v in variants})
+
+    def test_real_spawn_pool_matches_in_process(self):
+        pool, info = tool.start_pool(2)
+        try:
+            self.assertEqual((info['workers'], info['answered'], info['start_method']), (2, 2, 'spawn'));self.assertGreater(info['startup_seconds'], 0.)
+            deep = depth3_frame([[[[.5, .1], [.2, .3]]] * 4, [[[-.5, .4], [0., -.1]]] * 4]);flat = depth2_frame(([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]))
+            for solver, views in ((tool.Solver(), [(deep, 0)]), (tool.Solver(), [(flat, 0), (flat, 0)]),
+                    (tool.Solver.load('gpu_engine.depthn_backups:learner_max'), [(deep, 0)])):
+                pooled, clock = solver.solve(views, ROOTS, tool.Clock(), pool=pool), tool.Clock()
+                self.assertEqual(pooled, solver.solve(views, ROOTS, clock));self.assertEqual(pooled[0]['status'], 'LABELED')
+        finally:pool.terminate();pool.join()
+
+    def test_hedge_header_records_the_file_sha256_and_commit(self):
+        path = self.hedge_file(b'not the 583555d2 file\n');hedge = stub_hedge(path)
+        head = tool.hedge_header(hedge, tool.HEDGE_COMMIT)
+        self.assertEqual((head['module'], head['file'], head['sha256'], head['commit'], head['reference_sha256'], head['matches_reference']),
+            (tool.HEDGE_MODULE, str(path), hashlib.sha256(b'not the 583555d2 file\n').hexdigest(), '583555d2', tool.HEDGE_REFERENCE_SHA256, False))
+        self.assertEqual((head['lam'], head['seed'], head['weights'], head['iterations']), (0., 2026110500, '1/W', 0))
+        self.assertIsNone(tool.hedge_header(hedge, 'f00dcafe')['matches_reference'])   # another commit: 583555d2's sha256 does not apply
+        self.assertIsNone(tool.hedge_header(stub_hedge(), tool.HEDGE_COMMIT)['sha256'])   # no file (the in-memory stub)
+
     def test_isolate_argv(self):
         args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2');calls = []
         def call(argv):
@@ -493,24 +685,28 @@ class SearchLatencyTests(unittest.TestCase):
         args = self.args()
         self.assertEqual(args.config_worlds, {'depth2-fw': (2, 8), 'depth2-merged': (2, 8), 'depth3-prior-k3': (2,), 'depth3-searched-k3': (2,)})
         self.assertEqual(list(args.config_worlds)[:2], ['depth2-fw', 'depth2-merged'])   # the merged pricer's rows sit next to depth2-fw
-        self.assertEqual((args.capacity_values, args.repeats, args.solver, args.solver_target, args.packed), ((1, 4, 16), 10, 'learner_max', None, True))
+        self.assertEqual((args.capacity_values, args.repeats, args.solver_specs, args.pool_sizes, args.packed, args.hedge_commit),
+            ((1, 4, 16), 10, ('learner_max',), (0,), True, '583555d2'))
         args = self.args('--configs', 'depth3-prior-k2,depth2-k4@4/2', '--worlds', '2,8', '--capacities', '8,2,8', '--no-packed',
             '--solver', 'tests.test_gpu_engine_search_latency:pessimistic')
         self.assertEqual(args.config_worlds, {'depth3-prior-k2': (2, 8), 'depth2-k4': (2, 4)});self.assertEqual(args.capacity_values, (2, 8))
-        self.assertEqual(args.solver_target, ('tests.test_gpu_engine_search_latency', 'pessimistic'));self.assertFalse(args.packed)
+        self.assertEqual(args.solver_specs, ('tests.test_gpu_engine_search_latency:pessimistic',));self.assertFalse(args.packed)
+        args = self.args('--solver', 'learner_max,hedge', '--solver-pool', '16,0', '--hedge-module', 'tests.test_gpu_engine_search_latency', '--hedge-commit', 'abc')
+        self.assertEqual((args.solver_specs, args.pool_sizes, args.hedge_module, args.hedge_commit), (('learner_max', 'hedge'), (0, 16), 'tests.test_gpu_engine_search_latency', 'abc'))
         existing = tempfile.mkdtemp()
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
             for extra in (['--configs', 'depth1'], ['--configs', 'depth2-searched-k3'], ['--configs', 'depth3-prior-k10'], ['--configs', 'depth2-fw@3'],
                     ['--configs', 'bogus'], ['--configs', 'depth2-fw,depth2-fw'], ['--capacities', '0,4'], ['--repeats', '0'], ['--solver', 'nocolon'],
                     ['--solver', 'no_such_module_xyz:f'], ['--only', 'depth3-prior-k2'], ['--isolate', '--only', 'depth2-fw'], ['--compile-cache', 'relative/dir'],
-                    ['--head-archive', 'a']):
+                    ['--head-archive', 'a'], ['--solver', 'hedge,hedge'], ['--solver', 'learner_max,'], ['--solver-pool', '-1'], ['--solver-pool', 'x'],
+                    ['--solver', 'learner_max,hedge', '--hedge-module', 'gpu_engine.no_such_hedge_module']):
                 with self.assertRaises(SystemExit) as raised:tool.parse(['--d3-root', 'r', '--chunk', '0', '--out', self.out(), *extra])
                 self.assertEqual(raised.exception.code, 2, extra)
             with self.assertRaises(SystemExit) as raised:tool.parse(['--d3-root', 'r', '--chunk', '0', '--out', existing])
             self.assertEqual(raised.exception.code, 2)
             with self.assertRaises(SystemExit) as raised:tool.main(['--d3-root', 'r', '--chunk', '0', '--out', existing])   # never overwritten
             self.assertEqual(raised.exception.code, 2)
-        self.assertIn('never overwrites', stderr.getvalue())
+        self.assertIn('never overwrites', stderr.getvalue());self.assertIn('PR #1829', stderr.getvalue())
         out = self.out()
         with patch('importlib.util.find_spec', return_value=None), self.assertRaises(SystemExit) as raised:tool.main(['--d3-root', 'r', '--chunk', '0', '--out', out])
         self.assertIn('device_depthn_pricer', str(raised.exception.code));self.assertFalse(Path(out).exists())
