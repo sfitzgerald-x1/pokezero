@@ -65,6 +65,35 @@ def fake_maps(frame, k_own, k_opp):
 MODULE = SimpleNamespace(DepthNPricer=FakeDepthN, as_depth2_frame=lambda f: f, searched_maps=fake_maps)
 
 
+class FakeDepth2:
+    """The merged Depth2Pricer's contract as the tool reads it (its constructor signature, d5150eac): price() -> frame.timing with
+    world_prepare_seconds, this call's lower/compile seconds (0 once its kernel table holds the capacity) and turn-2 leaf counts.
+    Each call advances CLOCK by .01 s materialization, 2 s compile on an instance's first call and .003 s per request."""
+    built = []
+
+    def __init__(self, executor, model, *, capacity=2048, actor_capacity=33, k_own=9, k_opp=9, k1_own=9, k1_opp=9, child_block=27, digest=False, forward=None,
+            fixed_capacity=False):
+        self.capacity, self.k_own, self.k_opp, self.child_block, self.digest, self.fixed_capacity = capacity, k_own, k_opp, child_block, digest, fixed_capacity
+        self.given = dict(capacity=capacity, actor_capacity=actor_capacity, k_own=k_own, k_opp=k_opp, k1_own=k1_own, k1_opp=k1_opp, digest=digest, fixed_capacity=fixed_capacity)
+        self.kernels, self.log = {}, [];FakeDepth2.built.append(self)
+
+    def price(self, requests, materializer, recipe, params):
+        requests = list(requests)
+        if len(requests) > self.capacity:raise ValueError('one frame exceeds declared root capacity')
+        self.log.append((len(requests), recipe, [r.block for r in requests]));cold = self.capacity not in self.kernels;self.kernels[self.capacity] = True
+        CLOCK.advance(.01 + (2. if cold else 0.) + .003 * len(requests))
+        leaves = 81 * 2 * len(requests) * self.k_own * self.k_opp
+        return SimpleNamespace(timing=dict(world_prepare_seconds=.01, device_seconds=.002 * len(requests), lower_seconds=.5 if cold else 0., compile_seconds=1.5 if cold else 0.,
+            root_capacity=self.capacity, child_block=self.child_block, frame_wall_seconds=.02, turn2_enumerated_leaves=leaves, turn2_evaluated_leaf_lanes=leaves))
+
+
+class OldDepth2:
+    def __init__(self, executor, model, *, capacity=2048, actor_capacity=33, k_own=9, k_opp=9, k1_own=9, k1_opp=9, child_block=27, digest=False, forward=None):pass
+
+
+DEPTH2 = SimpleNamespace(Depth2Pricer=FakeDepth2)
+
+
 class FakeSolver:
     def __init__(self):self.views = []
 
@@ -171,7 +200,7 @@ def chunk_frames(steps=2, rows=3):
 
 class SearchLatencyTests(unittest.TestCase):
     def setUp(self):
-        CLOCK.now, CLOCK.extra = 100., [];FakeDepthN.built = []
+        CLOCK.now, CLOCK.extra = 100., [];FakeDepthN.built = [];FakeDepth2.built = []
 
     def out(self):
         return str(Path(tempfile.gettempdir()) / f'search-latency-never-{uuid.uuid4().hex}')
@@ -278,9 +307,9 @@ class SearchLatencyTests(unittest.TestCase):
         series = tool.measure_config('depth2-fw', (2, 8), args, fake_ctx(), None, solver=FakeSolver(), module=MODULE, memory=memory, timer=CLOCK)
         self.assertEqual([(s['capacity'], s['worlds'], s['mode'], s['pricer_capacity']) for s in series],
             [(1, 2, 'sequential', 1), (1, 8, 'sequential', 1), (1, 8, 'packed', 4), (4, 2, 'sequential', 4), (4, 8, 'sequential', 4), (4, 8, 'packed', 16)])
-        self.assertEqual([p.capacity for p in FakeDepthN.built], [1, 4, 4, 16]);self.assertTrue(series[2]['timing_proxy'])
+        self.assertEqual([p.capacity for p in FakeDepthN.built], [1, 4, 16]);self.assertTrue(series[2]['timing_proxy'])   # C=1's packed pricer is C=4's
         self.assertEqual([s['first_call']['cold_of_config_capacity'] for s in series], [True, False, False, True, False, False])
-        self.assertEqual([s['first_call']['compile_seconds'] for s in series], [2., 0., 2., 2., 0., 2.])
+        self.assertEqual([s['first_call']['compile_seconds'] for s in series], [2., 0., 2., 0., 0., 2.])
 
     def test_compose_is_the_equal_weight_mean_of_blocks(self):
         legal = (True, True) + (False,) * 7;logits = (0.,) * 9
@@ -329,6 +358,10 @@ class SearchLatencyTests(unittest.TestCase):
             ('gpu_engine.device_public_teacher_batch._numpy_worlds', 'gpu_engine.device_public_world_state.materialize_host', 'gpu_engine.device_public_worlds.plan_starts',
              'gpu_engine.device_public_worlds.detach_roots', 'gpu_engine.device_depthn_pricer.DepthNPricer'))
         self.assertFalse(real['uses_phase_d_constructor'])
+        from gpu_engine import device_depth2_pricer as d2
+        merged = tool.constructor_path(FakeProvider(), dn, real_worlds, d2)
+        self.assertEqual((merged['merged_pricer'], merged['merged_world_builder'], merged['merged_same_world_builder']),
+            ('gpu_engine.device_depth2_pricer.Depth2Pricer', 'gpu_engine.device_public_teacher_batch._numpy_worlds', True))
         def phase_d_plan(*a):return None
         phase_d_plan.__module__ = 'gpu_engine.phase_d_live_worlds'
         self.assertTrue(tool.constructor_path(FakeProvider(), fake, SimpleNamespace(detach_roots=fake_detach_roots, plan_starts=phase_d_plan))['uses_phase_d_constructor'])
@@ -413,6 +446,37 @@ class SearchLatencyTests(unittest.TestCase):
             self.assertIs(gate._probe, probe);self.assertIs(Provider._prepare_batched, stub)
             with self.assertRaises(SystemExit), tool.capture_chunk({}):pass   # nothing captured: the gate's builder changed shape
 
+    def test_depth2_merged_is_the_gates_depth2_pricer_with_fixed_capacity(self):
+        args, ctx = self.args(), fake_ctx();ctx.actor_capacity = 3
+        search = tool.Search('depth2-merged', 4, args, ctx, depth2_module=DEPTH2)
+        self.assertEqual(search.pricer.given, dict(capacity=4, actor_capacity=3, k_own=9, k_opp=9, k1_own=9, k1_opp=9, digest=True, fixed_capacity=True))
+        self.assertEqual(search.pricer.child_block, 27)   # never passed: the pricer's own default, as the gate's --pricer-only without --child-block
+        self.assertEqual((search.options['engine'], search.options['child_block'], search.options['digest']), ('tests.test_gpu_engine_search_latency.FakeDepth2', 27, True))
+        self.assertEqual(search.widths(), dict(k_own=(9,), k_opp=(9,), nominal_leaves_per_world=6561))
+        record, _ = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK)
+        s, p = record['stages'], record['parts']
+        self.assertAlmostEqual(sum(s.values()), record['wall_seconds'], places=12);self.assertAlmostEqual(s['compile'], 2.)   # from the pricer's timing
+        self.assertAlmostEqual(s['world_construction'], .01);self.assertAlmostEqual(p['pricer.depth2_merged'], .012);self.assertAlmostEqual(s['pricer'], .012)
+        self.assertEqual(record['pricing'][0]['depthn']['compiles'], [dict(key="('depth2_kernel', 4, 27)", lower_seconds=.5, compile_seconds=1.5)])
+        self.assertIsNone(record['pricing'][0]['depthn']['p1_seconds']);self.assertEqual(record['enumerated_leaves'] / (4 * 2), 6561)
+        record, _ = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK);self.assertEqual(record['stages']['compile'], 0.)
+        # W=8 sequential and packed, one pricer per (config, pricer capacity); the row records the engine and the solve it used.
+        args = self.args('--configs', 'depth2-merged@8', '--capacities', '1,4', '--repeats', '2', '--solver', 'tests.test_gpu_engine_search_latency:pessimistic')
+        plugged = FakeSolver();plugged.spec = args.solver   # a plug-in solver: the merged rows still record depth2_backups learner-max
+        series = tool.measure_config('depth2-merged', (8,), args, fake_ctx(), None, solver=plugged, depth2_module=DEPTH2,
+            memory=lambda: {}, timer=CLOCK)
+        self.assertEqual([(s['capacity'], s['mode'], s['pricer_capacity']) for s in series], [(1, 'sequential', 1), (1, 'packed', 4), (4, 'sequential', 4), (4, 'packed', 16)])
+        self.assertEqual([p.capacity for p in FakeDepth2.built[1:]], [1, 4, 16]);self.assertEqual(FakeDepth2.built[2].log[0], (4, 'recipe0', [0, 1, 2, 3]))
+        self.assertEqual({s['solve'] for s in series}, {tool.MERGED_SOLVE});self.assertEqual(series[0]['leaves']['measured_per_world'], 6561)
+        self.assertEqual([s['first_call']['compile_seconds'] for s in series], [2., 2., 0., 2.])
+        with self.assertRaises(SystemExit) as raised:tool.Search('depth2-merged', 4, self.args(), fake_ctx(), depth2_module=SimpleNamespace(Depth2Pricer=OldDepth2))
+        self.assertIn('fixed_capacity', str(raised.exception.code))
+        # The real solve on a real Depth2Frame: depth2_backups learner-max, even with a plug-in rule (it has no per-node hook).
+        values = ([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]);frame = dn.as_depth2_frame(depth2_frame(values))
+        for solver in (tool.Solver(), tool.Solver.load('tests.test_gpu_engine_search_latency:pessimistic')):
+            results = solver.solve([(frame, 0)], [ROOT, ROOT], tool.Clock(CLOCK))
+            self.assertAlmostEqual(results[0]['completed_q'][0], .2, places=6);self.assertAlmostEqual(results[1]['completed_q'][0], .4, places=6)
+
     def test_isolate_argv(self):
         args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2');calls = []
         def call(argv):
@@ -427,7 +491,8 @@ class SearchLatencyTests(unittest.TestCase):
 
     def test_argument_parsing_and_refusing_to_overwrite_out(self):
         args = self.args()
-        self.assertEqual(args.config_worlds, {'depth2-fw': (2, 8), 'depth3-prior-k3': (2,), 'depth3-searched-k3': (2,)})
+        self.assertEqual(args.config_worlds, {'depth2-fw': (2, 8), 'depth2-merged': (2, 8), 'depth3-prior-k3': (2,), 'depth3-searched-k3': (2,)})
+        self.assertEqual(list(args.config_worlds)[:2], ['depth2-fw', 'depth2-merged'])   # the merged pricer's rows sit next to depth2-fw
         self.assertEqual((args.capacity_values, args.repeats, args.solver, args.solver_target, args.packed), ((1, 4, 16), 10, 'learner_max', None, True))
         args = self.args('--configs', 'depth3-prior-k2,depth2-k4@4/2', '--worlds', '2,8', '--capacities', '8,2,8', '--no-packed',
             '--solver', 'tests.test_gpu_engine_search_latency:pessimistic')

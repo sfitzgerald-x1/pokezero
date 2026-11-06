@@ -3,10 +3,17 @@
 One CALL is one search decision for C roots (C games' moves batched together; --capacities, default 1,4,16), from the D3 bank
 chunk's raw device roots and host frames to each root's move. Roots: the chunk's first C labeled requests, cycled when it has
 fewer (d3_depthn_throughput.prepare: the gate's --d3-root --chunk builder, head override and evaluator header, imported), the
-same C every call. Configs (--configs, d3_depthn_throughput's names, NAME@W/W; default depth2-fw at W=2 and 8, depth3-prior-k3
-and depth3-searched-k3 at W=2) are DepthNPricer(fixed_capacity=True, digest=False) built by d3_depthn_throughput.Caller, one
-instance per (config, pricer capacity); searched = the full-width depth-2 pass, searched_maps on the host, depth N at the maps'
-widths. A call's stages are CONTIGUOUS time.perf_counter() laps (every instant between its start and end is charged to exactly
+same C every call. Configs (--configs NAME@W/W; default depth2-fw and depth2-merged at W=2 and 8, depth3-prior-k3 and
+depth3-searched-k3 at W=2), one pricer instance per (config, pricer capacity):
+- d3_depthn_throughput's names are DepthNPricer(fixed_capacity=True, digest=False) built by its Caller; searched = the full-width
+  depth-2 pass, searched_maps on the host, depth N at the maps' widths; depth2-fw is DepthNPricer at N=2, k=9.
+- depth2-merged is depth-2 full width on the MERGED Depth2Pricer (device_depth2_pricer, d5150eac or later) built as
+  d3_depth2_gate.make_pricer builds it for the gate and --pricer-only (digest=True, k_own=k_opp=9, the pricer's own child_block
+  default as no --child-block leaves it) plus fixed_capacity=True: digest=True adds the leaf digests as kernel outputs (computed
+  and transferred, unused here) and keeps the gate's compiled program (DIGEST_NOTE), and with one actor and a power-of-two C
+  fixed_capacity yields the bucketed gate call's kernel key, so the compile cache is shared. Its one fused program (D3's
+  turn-1 stage and the blocked turn 2) compiles per pricer capacity in its own kernel table, apart from DepthNPricer's.
+A call's stages are CONTIGUOUS time.perf_counter() laps (every instant between its start and end is charged to exactly
 one stage, so the stages sum to the call's wall time; seconds a pricer measures inside its own lap are moved, not added):
 - host_prep: Provider._prepare_batched's per-root core for exactly these C roots (host_prep below): per scan step the device
   slice of the retained RootContext and the host copy of its stream/frame ids, ONE worlds.detach_roots pass over the step's
@@ -23,6 +30,7 @@ one stage, so the stages sum to the call's wall time; seconds a pricer measures 
   searched_maps_host, depthn). The pricer's own device / P1 / ply-loop / host-pack split is kept per call.
 - solve: per root the backup and the root reduction. --solver learner_max: depth2_backups.backup_learner_max on
   as_depth2_frame (depth 2, the spec's reference; part as_depth2_frame) or depthn_backups.backup_learner_max (depth >= 3).
+  depth2-merged always solves with depth2_backups.backup_learner_max on its own Depth2Frame (no per-node hook; recorded per row).
   --solver MODULE:FUNC: depthn_backups.backup(frame, root, rule) at every depth, rule(grid, pi_own, pi_opp) -> value at every
   node (the hedge solve plugs in here; gpu_engine.depthn_backups:learner_max is its like-for-like baseline: at N=2 it equals
   depth2_backups without the conversion). Then v5_gumbel.reduce_completed_q per block of two worlds; W = 2K composes the K
@@ -44,10 +52,11 @@ readout ops, the fence) inside its stages; no first call enters any statistic. O
 linear interpolation) and max of every stage, part and the total; warm calls that compiled anyway are counted. Leaves per
 world: nominal = 81 x the product of the slot widths at plies 2..N (the engine's own widths), measured = enumerated leaves /
 (C x W). Memory: d3_depth2_throughput.memory_stats after each call, baseline before a (config, capacity)'s first call.
-Compiles: every pricer in one process shares one program table (DepthNPricer._program keys: P1 by capacity, block programs
-by (B, G, K), gather/write by pool rows, select by shape), valid because every pricer here has the same executor, params,
-forward (the v5 head in bf16), digest=False and k1 widths: P1 compiles once per pricer capacity and each block program once
-per process (--isolate gives each config its own process and table). --compile-cache DIR enables JAX's persistent cache
+Compiles: every DepthNPricer in one process shares one program table (DepthNPricer._program keys: P1 by capacity, block
+programs by (B, G, K), gather/write by pool rows, select by shape), valid because each has the same executor, params, forward
+(the v5 head in bf16), digest=False and k1 widths: P1 compiles once per pricer capacity and each block program once per
+process; a config's pricer at one capacity serves every W and mode that uses it (a packed K*C pricer is the sequential pricer
+of capacity K*C), so a first call compiles only what nothing before it did (--isolate: one process and table per config). --compile-cache DIR enables JAX's persistent cache
 (owning_worker_runtime.configure_compilation_cache) right after the bank's JAX import, before its first compile.
 The rule: a (config, W, mode) fits at capacity C when the p90 of its warm end-to-end totals is <= 800 ms, leaving 200 ms of
 slack under the 1,000 ms per-move budget. Reported: per config, W and mode the median and p90 per capacity and the largest
@@ -87,7 +96,9 @@ STAGES = ('host_prep', 'world_construction', 'pricer', 'solve', 'return')
 COMPILE = 'compile'
 LANES = 81
 MODES = ('sequential', 'packed')
-DEFAULT_CONFIGS = 'depth2-fw@2/8,depth3-prior-k3@2,depth3-searched-k3@2'
+MERGED = 'depth2-merged'   # depth-2 full width on the merged Depth2Pricer (not a d3_depthn_throughput name)
+MERGED_SOLVE = 'depth2_backups.backup_learner_max on the merged Depth2Frame (no per-node hook: --solver does not apply)'
+DEFAULT_CONFIGS = 'depth2-fw@2/8,depth2-merged@2/8,depth3-prior-k3@2,depth3-searched-k3@2'
 CODE_ROOT = Path(__file__).resolve().parent.parent
 # Phase D constructor files (someone else's work): imported only if the timed path uses them, never edited here.
 PHASE_D_MODULES = ('gpu_engine.phase_d_live_worlds', 'gpu_engine.phase_d_protocol_world', 'gpu_engine.v5_public_world', 'gpu_engine.public_sleep')
@@ -115,7 +126,9 @@ def ints(text):
 
 
 def check_config(name):
-    """A d3_depthn_throughput config name this tool times -> its parse: depth2-fw, depth2-k{k}, depth{N}-prior-k{k}, depth{N}-searched-k{k} (N >= 3)."""
+    """A config name this tool times -> its parse: depth2-merged, or d3_depthn_throughput's depth2-fw, depth2-k{k},
+    depth{N}-prior-k{k}, depth{N}-searched-k{k} (N >= 3)."""
+    if name == MERGED:return dict(kind='merged', depth=2, mode='prior', k=9)
     try:config = tn.parse_config(name)
     except (ValueError, IndexError):raise ValueError(f'unknown config {name!r}') from None
     if config['kind'] == 'depth1':raise ValueError('depth1 has no search to solve (d3_depthn_throughput times it)')
@@ -300,8 +313,11 @@ class Solver:
         """views: one (frame, row offset) per block; requests: the call's block-0 Requests (root prior and legal mask). Laps 'solve'."""
         from pokezero import v5_gumbel as original
         from gpu_engine import depthn_backups
-        depth = int(views[0][0].depth)
-        if self.rule is None and depth == 2:
+        depth = getattr(views[0][0], 'depth', None)
+        if depth is None:   # the merged Depth2Pricer's Depth2Frame: depth2_backups learner-max, whatever the rule (no per-node hook)
+            from gpu_engine import depth2_backups
+            prices = depth2_backups.backup_learner_max
+        elif self.rule is None and int(depth) == 2:
             from gpu_engine import depth2_backups
             from gpu_engine.device_depthn_pricer import as_depth2_frame
             converted = {}
@@ -325,14 +341,36 @@ def move_of(result):
     return None if target is None else max(range(len(target)), key=lambda a: (target[a], -a))
 
 
+def merged_pricer(module, executor, model, *, capacity, actor_capacity, k1_own, k1_opp):
+    """The merged Depth2Pricer as d3_depth2_gate.make_pricer builds it for the gate and --pricer-only (digest=True, k_own=k_opp=9,
+    child_block left to the pricer's default) plus capacity and fixed_capacity=True; returns (pricer, options). Refuses a pricer
+    without fixed_capacity or digest (d5150eac or later required)."""
+    cls = module.Depth2Pricer;parameters = inspect.signature(cls).parameters
+    options = dict(digest=True, actor_capacity=actor_capacity, k_own=9, k_opp=9, k1_own=k1_own, k1_opp=k1_opp, capacity=capacity, fixed_capacity=True)
+    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        missing = sorted(k for k in options if k not in parameters)
+        if missing:raise SystemExit(f'Depth2Pricer does not accept {missing}: pricer d5150eac or later required')
+    return cls(executor, model, **options), options
+
+
 # The search under test --------------------------------------------------------------------------------------------------------------
 class Search:
-    """One config's pricers at one pricer capacity, built by d3_depthn_throughput.Caller (fixed_capacity=True, digest=False);
-    `programs` (the process's compiled-program table) is shared after binding the evaluator, so no bind resets it."""
-    def __init__(self, config, capacity, args, ctx, *, module=None, programs=None):
+    """One config's pricers at one pricer capacity: DepthNPricer configs built by d3_depthn_throughput.Caller (fixed_capacity=True,
+    digest=False), sharing `programs` (the process's DepthNPricer program table) after binding the evaluator, so no bind resets
+    it; depth2-merged one merged Depth2Pricer (merged_pricer) with its own kernel table."""
+    def __init__(self, config, capacity, args, ctx, *, module=None, programs=None, depth2_module=None):
+        self.name, self.capacity, self.ctx, self.seen = config, capacity, ctx, set()
+        if config == MERGED:
+            self.module = depth2_module or importlib.import_module('gpu_engine.device_depth2_pricer');self.config = check_config(config);self.pass_pricer = None
+            self.pricer, self.options = merged_pricer(self.module, ctx.provider.executor, ctx.plan.model, capacity=capacity, actor_capacity=ctx.actor_capacity,
+                k1_own=args.k1_own, k1_opp=args.k1_opp)
+            self.options = dict(self.options, engine=dotted(type(self.pricer)), child_block=getattr(self.pricer, 'child_block', None))
+            return
         caller = tn.Caller(config, SimpleNamespace(capacity=capacity, k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes), ctx, module=module)
-        self.name, self.config, self.capacity, self.ctx, self.module = config, caller.config, capacity, ctx, caller.module
-        self.pricer, self.pass_pricer, self.seen = caller.pricer, getattr(caller, 'pass_pricer', None), set()
+        self.config, self.module = caller.config, caller.module
+        self.pricer, self.pass_pricer = caller.pricer, getattr(caller, 'pass_pricer', None)
+        self.options = dict(engine=dotted(type(self.pricer)), capacity=capacity, fixed_capacity=True, digest=False, block_lanes=args.block_lanes,
+            k1_own=args.k1_own, k1_opp=args.k1_opp, shared_program_table=programs is not None)
         for pricer in self.pricers():
             if programs is not None and callable(getattr(pricer, 'bind', None)):pricer.bind(ctx.params);pricer.programs = programs
 
@@ -341,7 +379,8 @@ class Search:
 
     def widths(self):
         """The searched engine's slot widths at plies 2..N (searched: derived by the engine from its k's) and the pass's, if any."""
-        own, opp = tuple(int(x) for x in self.pricer.k_own), tuple(int(x) for x in self.pricer.k_opp)
+        plies = lambda k: (int(k),) if isinstance(k, (int, np.integer)) else tuple(int(x) for x in k)   # Depth2Pricer holds ints
+        own, opp = plies(self.pricer.k_own), plies(self.pricer.k_opp)
         out = dict(k_own=own, k_opp=opp, nominal_leaves_per_world=nominal_leaves(own, opp))
         if self.pass_pricer is not None:
             p_own, p_opp = tuple(int(x) for x in self.pass_pricer.k_own), tuple(int(x) for x in self.pass_pricer.k_opp)
@@ -352,7 +391,11 @@ class Search:
         frame = pricer.price(requests, self.ctx.provider.materializer, recipe, self.ctx.params, **kw)
         self.ctx.fence();clock.lap('pricer', part)
         timing = frame.timing;materialize = float(timing.get('world_prepare_seconds') or 0.)
-        fresh = [c for c in getattr(pricer, 'compiles', ()) if (id(pricer), repr(c[0])) not in self.seen];self.seen.update((id(pricer), repr(c[0])) for c in fresh)
+        if hasattr(pricer, 'compiles'):compiles = tuple(pricer.compiles)   # DepthNPricer: this call's (key, lower, compile)
+        else:   # Depth2Pricer: this call's lower/compile seconds in its timing (0 when its kernel table already held the key)
+            lower, compile_ = float(timing.get('lower_seconds') or 0.), float(timing.get('compile_seconds') or 0.)
+            compiles = ((('depth2_kernel', timing.get('root_capacity'), timing.get('child_block')), lower, compile_),) if lower or compile_ else ()
+        fresh = [c for c in compiles if (id(pricer), repr(c[0])) not in self.seen];self.seen.update((id(pricer), repr(c[0])) for c in fresh)
         compiled = float(sum(c[1] + c[2] for c in fresh))
         clock.move(materialize, 'pricer', 'world_construction', source_part=part, target_part='materialize')
         clock.move(compiled, 'pricer', COMPILE, source_part=part, target_part=part)
@@ -360,13 +403,15 @@ class Search:
         loop, pack, device = number('ply_loop_seconds'), number('host_pack_seconds'), number('device_seconds')
         return frame, dict(part=part, roots=len(requests), device_seconds=device, frame_wall_seconds=number('frame_wall_seconds'), world_prepare_seconds=materialize,
             compile_seconds=compiled, p1_seconds=None if None in (loop, pack, device) else device - (loop - pack), ply_loop_seconds=loop, host_pack_seconds=pack,
-            enumerated_leaves=timing.get('enumerated_leaves'), evaluated_leaf_lanes=timing.get('evaluated_leaf_lanes'),
+            enumerated_leaves=timing.get('enumerated_leaves', timing.get('turn2_enumerated_leaves')),
+            evaluated_leaf_lanes=timing.get('evaluated_leaf_lanes', timing.get('turn2_evaluated_leaf_lanes')),
             compiles=[dict(key=repr(c[0]), lower_seconds=float(c[1]), compile_seconds=float(c[2])) for c in fresh])
 
     def price(self, requests, recipe, clock):
         """One pricing of `requests` to a host frame: depth N, or (searched) the pass, the host maps and depth N. Returns (frame, infos)."""
-        if self.config['kind'] != 'searched':
-            frame, info = self._price(self.pricer, requests, recipe, clock, 'depthn');return frame, dict(depthn=info)
+        if self.config['kind'] != 'searched':   # depthn and merged: one pricing (infos['depthn'] is always the search's own pricing)
+            part = 'depth2_merged' if self.config['kind'] == 'merged' else 'depthn'
+            frame, info = self._price(self.pricer, requests, recipe, clock, part);return frame, dict(depthn=info)
         raw, first = self._price(self.pass_pricer, requests, recipe, clock, 'depth2_pass');k = self.config['k']
         own, opp, _ = split_searched(self.module.searched_maps(self.module.as_depth2_frame(raw), k, k));raw = None
         clock.lap('pricer', 'searched_maps_host')
@@ -424,13 +469,13 @@ def measure_series(search, ctx, roots, worlds, mode, repeats, *, solver, progres
                 stages_ms={k: 1e3 * v for k, v in record['stages'].items()})
         if i == 0:ctx.check(requests, roots)
         for entry in record['pricing']:
-            for part in ('depth2_pass', 'depthn'):
-                for c in (entry.get(part) or {}).get('compiles', ()):
-                    if progress is not None:progress('COMPILE', config=search.name, pricer_capacity=search.capacity, call=i, part=part, **c)
-    return summarize(calls, search=search, capacity=capacity, worlds=worlds, mode=mode, baseline=baseline)
+            for key in ('depth2_pass', 'depthn'):
+                for c in (entry.get(key) or {}).get('compiles', ()):
+                    if progress is not None:progress('COMPILE', config=search.name, pricer_capacity=search.capacity, call=i, part=entry[key]['part'], **c)
+    return summarize(calls, search=search, capacity=capacity, worlds=worlds, mode=mode, baseline=baseline, solver=solver)
 
 
-def summarize(calls, *, search, capacity, worlds, mode, baseline):
+def summarize(calls, *, search, capacity, worlds, mode, baseline, solver=None):
     """One series: the first call apart (its compile, wall and stages), warm-call statistics, leaves, memory, every call record."""
     first, warm = calls[0], calls[1:]
     parts = sorted({k for c in warm for k in c['parts']})
@@ -445,6 +490,7 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline):
             measured_per_world=None if not pass_leaves or None in pass_leaves else sum(pass_leaves) / (capacity * worlds))
     return dict(config=search.name, capacity=capacity, worlds=worlds, mode=mode, blocks=worlds // 2, pricer_capacity=search.capacity,
         timing_proxy=mode == 'packed', proxy_note=PACKED_NOTE if mode == 'packed' else None, slot_widths=dict(k_own=widths['k_own'], k_opp=widths['k_opp']),
+        engine=search.options, solve=MERGED_SOLVE if search.config['kind'] == 'merged' else getattr(solver, 'spec', None),
         first_call=dict(compile_seconds=first['stages'][COMPILE], wall_seconds=first['wall_seconds'], total_seconds=first['total_seconds'],
             stages=dict(first['stages']), cold_of_config_capacity=None),
         warm={**{s: distribution([c['stages'][s] for c in warm]) for s in STAGES}, 'total': distribution([c['total_seconds'] for c in warm])},
@@ -456,16 +502,18 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline):
         calls=calls)
 
 
-def measure_config(name, worlds, args, ctx, progress, *, solver, module=None, programs=None, memory=t2.memory_stats, timer=time.perf_counter):
-    """Every capacity, W and mode of one config; one Search per (config, pricer capacity). The first series of a capacity holds its cold call."""
-    out = []
+def measure_config(name, worlds, args, ctx, progress, *, solver, module=None, programs=None, depth2_module=None, memory=t2.memory_stats,
+        timer=time.perf_counter):
+    """Every capacity, W and mode of one config; one Search per (config, pricer capacity), so a packed K*C pricer is reused as the
+    sequential pricer of capacity K*C. The first series of each capacity is marked; its first call reports what it compiled."""
+    out, searches = [], {}
     for capacity in args.capacity_values:
-        roots = ctx.roots(capacity);baseline = memory() or {};searches = {};first = True
+        roots = ctx.roots(capacity);baseline = memory() or {};first = True
         for w in worlds:
             blocks = w // 2
             for mode in ('sequential',) + (('packed',) if blocks > 1 and args.packed else ()):
                 size = capacity if mode == 'sequential' else blocks * capacity
-                if size not in searches:searches[size] = Search(name, size, args, ctx, module=module, programs=programs)
+                if size not in searches:searches[size] = Search(name, size, args, ctx, module=module, programs=programs, depth2_module=depth2_module)
                 series = measure_series(searches[size], ctx, roots, w, mode, args.repeats, solver=solver, progress=progress, memory=memory,
                     baseline=baseline, capacity=capacity, timer=timer)
                 series['first_call']['cold_of_config_capacity'] = first;first = False;out.append(series)
@@ -576,15 +624,18 @@ def dotted(x):
     return '.'.join(where(x))
 
 
-def constructor_path(provider, pricer_module, worlds_module):
+def constructor_path(provider, pricer_module, worlds_module, merged_module=None):
     """The world-construction path this run timed: the provider, its materializer and source objects' classes, the planner and
     detacher this tool calls, and the materialization DepthNPricer.price calls (its module's batch._numpy_worlds ->
     mapping.materialize_host), each module.qualname. uses_phase_d_constructor: whether any of them lives in a Phase D module."""
     batch = getattr(pricer_module, 'batch', None);builder = getattr(batch, '_numpy_worlds', None);materialize = getattr(getattr(batch, 'mapping', None), 'materialize_host', None)
     found = dict(provider=provider, materializer=provider.materializer, source=provider.source, root_detach=worlds_module.detach_roots,
         world_planner=worlds_module.plan_starts, world_builder=builder, world_materialize=materialize, pricer=getattr(pricer_module, 'DepthNPricer', None))
+    if merged_module is not None:   # the merged Depth2Pricer materializes through its own module's batch._numpy_worlds
+        found.update(merged_pricer=getattr(merged_module, 'Depth2Pricer', None), merged_world_builder=getattr(getattr(merged_module, 'batch', None), '_numpy_worlds', None))
     path = {k: 'UNRESOLVED' if v is None else dotted(v) for k, v in found.items()}
     modules = sorted({where(v)[0] for v in found.values() if v is not None})
+    if merged_module is not None:path['merged_same_world_builder'] = path['merged_world_builder'] == path['world_builder']
     path.update(modules=modules, uses_phase_d_constructor=any(m in PHASE_D_MODULES for m in modules),
         phase_d_modules_loaded=[m for m in PHASE_D_MODULES if m in sys.modules],
         timed=f'{path["world_planner"]} (blocks >= 1) + {path["world_builder"]} -> {path["world_materialize"]} on {path["materializer"]}',
@@ -660,7 +711,12 @@ def markdown(report):
         f'World construction path timed: {path["timed"]}; materializer object {path["materializer"]}; Phase D constructor on the path: '
         f'{"yes" if path["uses_phase_d_constructor"] else "no"}.',
         f'Source commit: {commit["commit"]} ({commit["origin"]}' + ('' if commit.get('dirty') is None else f', dirty={commit["dirty"]}') + ').',
-        f'Note: {CONSTRUCTOR_NOTE}', '',
+        f'Note: {CONSTRUCTOR_NOTE}', '']
+    if any(s['config'] == MERGED for s in report['series']):
+        merged = next(s['engine'] for s in report['series'] if s['config'] == MERGED)
+        lines[-1:-1] = [f'{MERGED}: {merged.get("engine")} (digest={merged.get("digest")}, child_block={merged.get("child_block")}, fixed_capacity='
+            f'{merged.get("fixed_capacity")}, the gate\'s construction); solve {MERGED_SOLVE}. depth2-fw is DepthNPricer at N=2, k=9.']
+    lines += [
         '| config | W | mode | ' + ' | '.join(f'C={c}' for c in caps) + ' | largest C with p90 <= 800 ms |', '|---|---|---|' + '---|' * len(caps) + '---|']
     for r in sel['rows']:
         cells = [f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p90_ms"])}' if str(c) in r['by_capacity'] else '-' for c in caps]
@@ -728,9 +784,10 @@ def main(argv=None):
         ctx = prepare(args);solver_object = Solver.load(args.solver);solver = solver_object.describe()   # the solver module imports after the memory policy
         import jax
         from gpu_engine import device_depthn_pricer, device_public_worlds
+        merged = importlib.import_module('gpu_engine.device_depth2_pricer') if MERGED in args.config_worlds else None
         context = dict(evaluator=ctx.evaluator, root_values=list(ctx.root_values), roots_available=len(ctx.available), source=ctx.source,
             devices=[d.device_kind for d in jax.devices()], block_seeds=list(ctx.seeds), compile_cache=ctx.compile_cache, solver=solver,
-            world_construction_path=constructor_path(ctx.provider, device_depthn_pricer, device_public_worlds))
+            world_construction_path=constructor_path(ctx.provider, device_depthn_pricer, device_public_worlds, merged))
         gate.log('WORLD_CONSTRUCTION_PATH', **context['world_construction_path'], source_commit=commit['commit'], note=CONSTRUCTOR_NOTE)
         names = [args.only] if args.only else list(args.config_worlds);programs = {}
         gate.log('LATENCY_START', configs={n: args.config_worlds[n] for n in names}, capacities=args.capacity_values, roots_available=context['roots_available'],
