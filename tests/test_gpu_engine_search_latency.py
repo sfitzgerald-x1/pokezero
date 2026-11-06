@@ -309,8 +309,12 @@ class SearchLatencyTests(unittest.TestCase):
     def out(self):
         return str(Path(tempfile.gettempdir()) / f'search-latency-never-{uuid.uuid4().hex}')
 
+    def tmp(self):
+        """A fresh directory removed when the test ends."""
+        directory = tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup);return Path(directory.name)
+
     def hedge_file(self, content):
-        path = Path(tempfile.mkdtemp()) / 'search_hedge.py';path.write_bytes(content);return path
+        path = self.tmp() / 'search_hedge.py';path.write_bytes(content);return path
 
     def args(self, *extra):
         return tool.parse(['--d3-root', 'r', '--chunk', '0', '--out', self.out(), *extra])
@@ -404,10 +408,13 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(tool.nominal_leaves((3, 3), (3, 3)), 6561)          # depth-3 prior k=3
         self.assertEqual(tool.nominal_leaves((4, 3), (5, 3)), 14580)         # depth-3 searched k=3: ply-2 widths (4,5), ply 3 (3,3)
         self.assertEqual(tool.nominal_leaves((9,), (9,)), 6561)              # depth-2 full width
+        self.assertEqual(tool.nominal_leaves((3, 3), (3, 3), 4, 9), 4 * 9 * 81)   # the turn-1 widths count too, never a hard-coded 81
+        narrow = tool.Search('depth3-prior-k3', 4, self.args('--k1-own', '4'), fake_ctx(), module=dn).widths()
+        self.assertEqual((narrow['k1'], narrow['nominal_leaves_per_world']), ((4, 9), 4 * 9 * 81))
         args, ctx = self.args(), fake_ctx()
         widths = {name: tool.Search(name, 4, args, ctx, module=dn).widths() for name in ('depth2-fw', 'depth3-prior-k3', 'depth3-searched-k3')}   # the REAL engine
-        self.assertEqual(widths['depth2-fw'], dict(k_own=(9,), k_opp=(9,), nominal_leaves_per_world=6561))
-        self.assertEqual(widths['depth3-prior-k3'], dict(k_own=(3, 3), k_opp=(3, 3), nominal_leaves_per_world=6561))
+        self.assertEqual(widths['depth2-fw'], dict(k_own=(9,), k_opp=(9,), k1=(9, 9), nominal_leaves_per_world=6561))
+        self.assertEqual(widths['depth3-prior-k3'], dict(k_own=(3, 3), k_opp=(3, 3), k1=(9, 9), nominal_leaves_per_world=6561))
         searched = widths['depth3-searched-k3'];self.assertEqual((searched['k_own'], searched['k_opp'], searched['nominal_leaves_per_world']), ((4, 3), (5, 3), 14580))
         self.assertEqual(searched['depth2_pass']['nominal_leaves_per_world'], 6561)
 
@@ -506,13 +513,13 @@ class SearchLatencyTests(unittest.TestCase):
         phase_d_plan.__module__ = 'gpu_engine.phase_d_live_worlds'
         self.assertTrue(tool.constructor_path(FakeProvider(), fake, SimpleNamespace(detach_roots=fake_detach_roots, plan_starts=phase_d_plan))['uses_phase_d_constructor'])
         # The commit: git rev-parse HEAD when the code directory holds a .git, else --source-commit, else UNKNOWN.
-        root = Path(tempfile.mkdtemp());(root / '.git').write_text('gitdir: elsewhere\n');seen = []
+        root = self.tmp();(root / '.git').write_text('gitdir: elsewhere\n');seen = []
         def run(command, **kw):
             seen.append(command[3:]);return SimpleNamespace(stdout='abc123def\n' if command[3] == 'rev-parse' else ' M x.py\n')
         commit = tool.source_commit(root, 'abc123', run=run)
         self.assertEqual((commit['commit'], commit['origin'], commit['dirty'], commit['matches_given']), ('abc123def', 'git rev-parse HEAD', True, True))
         self.assertEqual(seen, [['rev-parse', 'HEAD'], ['status', '--porcelain', '--untracked-files=no']])
-        bare = Path(tempfile.mkdtemp())
+        bare = self.tmp()
         self.assertEqual(tool.source_commit(bare, 'f00d', run=run)['origin'], '--source-commit');self.assertEqual(tool.source_commit(bare, 'f00d', run=run)['commit'], 'f00d')
         self.assertEqual(tool.source_commit(bare, None, run=run)['commit'], 'UNKNOWN')
         def broken(command, **kw):raise OSError('no git')
@@ -531,6 +538,7 @@ class SearchLatencyTests(unittest.TestCase):
             (path, 'abc123def', tool.CONSTRUCTOR_NOTE))
         self.assertIn('Codex\'s constructor batch 2 (own PP carry, removed items, sleep clocks)', tool.CONSTRUCTOR_NOTE)
         md = report['summary_markdown']
+        self.assertIn("block 0 in host_prep, + tests.test_gpu_engine_search_latency.fake_numpy_worlds; source abc123def)", md)   # the column header
         for text in (path['timed'], 'abc123def', tool.CONSTRUCTOR_NOTE, '<= 800 ms', 'learner_max, hedge', 'fake_numpy_worlds', '| depth3-prior-k3 | 2 | sequential | fake | 0 |',
                 'pool 16: startup 3.5 s (excluded)', hashlib.sha256(b'stub hedge').hexdigest(), 'commit 583555d2', 'seed 2026110500'):
             self.assertIn(text, md)
@@ -608,7 +616,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(search.pricer.given, dict(capacity=4, actor_capacity=3, k_own=9, k_opp=9, k1_own=9, k1_opp=9, digest=True, fixed_capacity=True))
         self.assertEqual(search.pricer.child_block, 27)   # never passed: the pricer's own default, as the gate's --pricer-only without --child-block
         self.assertEqual((search.options['engine'], search.options['child_block'], search.options['digest']), ('tests.test_gpu_engine_search_latency.FakeDepth2', 27, True))
-        self.assertEqual(search.widths(), dict(k_own=(9,), k_opp=(9,), nominal_leaves_per_world=6561))
+        self.assertEqual(search.widths(), dict(k_own=(9,), k_opp=(9,), k1=(9, 9), nominal_leaves_per_world=6561))
         record, _ = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK)
         s, p = record['stages'], record['parts']
         self.assertAlmostEqual(sum(s.values()), record['wall_seconds'], places=12);self.assertAlmostEqual(s['compile'], 2.)   # from the pricer's timing
@@ -797,10 +805,11 @@ class SearchLatencyTests(unittest.TestCase):
             calls.append(argv);out = Path(argv[argv.index('--out') + 1]);out.mkdir(parents=True)
             (out / 'latency.json').write_text(json.dumps(dict(sections={argv[argv.index('--only') + 1]: []}, context=dict(evaluator={}))));return 0
         argv = ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2']
-        with patch('subprocess.call', side_effect=call):sections, contexts = tool.isolated(args, argv, Path(tempfile.mkdtemp()))
+        with patch('subprocess.call', side_effect=call):sections, contexts = tool.isolated(args, argv, self.tmp())
         self.assertEqual(list(sections), ['depth2-fw', 'depth3-prior-k3']);self.assertEqual(len(calls), 2)
         for c in calls:
             self.assertNotIn('--isolate', c);self.assertEqual(c.count('--out'), 1);self.assertIn('gpu_engine.d3_search_latency', c)
+            self.assertEqual(c[c.index('--compile-cache') + 1], args.compile_cache)   # every config process shares the parent's cache
         self.assertEqual(calls[1][calls[1].index('--only') + 1], 'depth3-prior-k3')
 
     def test_argument_parsing_and_refusing_to_overwrite_out(self):
@@ -809,19 +818,21 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(list(args.config_worlds)[:2], ['depth2-fw', 'depth2-merged'])   # the merged pricer's rows sit next to depth2-fw
         self.assertEqual((args.capacity_values, args.repeats, args.solver_specs, args.pool_sizes, args.packed, args.hedge_commit),
             ((1, 4, 16), 10, ('learner_max',), (0,), True, '583555d2'))
+        self.assertEqual(args.compile_cache, str(Path(args.out).resolve().parent / 'jax-compile-cache'))   # the persistent cache is on by default
+        self.assertIsNone(self.args('--no-compile-cache').compile_cache);self.assertEqual(self.args('--compile-cache', '/c').compile_cache, '/c')
         args = self.args('--configs', 'depth3-prior-k2,depth2-k4@4/2', '--worlds', '2,8', '--capacities', '8,2,8', '--no-packed',
             '--solver', 'tests.test_gpu_engine_search_latency:pessimistic')
         self.assertEqual(args.config_worlds, {'depth3-prior-k2': (2, 8), 'depth2-k4': (2, 4)});self.assertEqual(args.capacity_values, (2, 8))
         self.assertEqual(args.solver_specs, ('tests.test_gpu_engine_search_latency:pessimistic',));self.assertFalse(args.packed)
         args = self.args('--solver', 'learner_max,hedge', '--solver-pool', '16,0', '--hedge-module', 'tests.test_gpu_engine_search_latency', '--hedge-commit', 'abc')
         self.assertEqual((args.solver_specs, args.pool_sizes, args.hedge_module, args.hedge_commit), (('learner_max', 'hedge'), (0, 16), 'tests.test_gpu_engine_search_latency', 'abc'))
-        existing = tempfile.mkdtemp()
+        existing = str(self.tmp())
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
             for extra in (['--configs', 'depth1'], ['--configs', 'depth2-searched-k3'], ['--configs', 'depth3-prior-k10'], ['--configs', 'depth2-fw@3'],
                     ['--configs', 'bogus'], ['--configs', 'depth2-fw,depth2-fw'], ['--capacities', '0,4'], ['--repeats', '0'], ['--solver', 'nocolon'],
                     ['--solver', 'no_such_module_xyz:f'], ['--only', 'depth3-prior-k2'], ['--isolate', '--only', 'depth2-fw'], ['--compile-cache', 'relative/dir'],
                     ['--head-archive', 'a'], ['--solver', 'hedge,hedge'], ['--solver', 'learner_max,'], ['--solver-pool', '-1'], ['--solver-pool', 'x'],
-                    ['--solver', 'learner_max,hedge', '--hedge-module', 'gpu_engine.no_such_hedge_module']):
+                    ['--solver', 'learner_max,hedge', '--hedge-module', 'gpu_engine.no_such_hedge_module'], ['--compile-cache', '/c', '--no-compile-cache']):
                 with self.assertRaises(SystemExit) as raised:tool.parse(['--d3-root', 'r', '--chunk', '0', '--out', self.out(), *extra])
                 self.assertEqual(raised.exception.code, 2, extra)
             with self.assertRaises(SystemExit) as raised:tool.parse(['--d3-root', 'r', '--chunk', '0', '--out', existing])

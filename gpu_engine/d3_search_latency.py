@@ -75,14 +75,17 @@ a warm call that still compiled (e.g. a new pool size's gather/write) is flagged
 roots' window, its distinct scan steps (one RootContext slice and detach pass each), expanded nodes, enumerated leaves and
 each variant's refused roots are recorded, with their spread over the warm calls. Every call's Requests are checked against
 the bank's own. Leaves per
-world: nominal = 81 x the product of the slot widths at plies 2..N (the engine's own widths), measured = enumerated leaves /
+world: nominal = k1_own x k1_opp turn-1 cells (81 at full width) x the product of the slot widths at plies 2..N (the engine's own
+widths), measured = enumerated leaves /
 (C x W). Memory: d3_depth2_throughput.memory_stats after each call, baseline before a (config, capacity)'s first call.
 Compiles: every DepthNPricer in one process shares one program table (DepthNPricer._program keys: P1 by capacity, block
 programs by (B, G, K), gather/write by pool rows, select by shape), valid because each has the same executor, params, forward
 (the v5 head in bf16), digest=False and k1 widths: P1 compiles once per pricer capacity and each block program once per
 process; a config's pricer at one capacity serves every W and mode that uses it (a packed K*C pricer is the sequential pricer
-of capacity K*C), so a first call compiles only what nothing before it did (--isolate: one process and table per config). --compile-cache DIR enables JAX's persistent cache
-(owning_worker_runtime.configure_compilation_cache) right after the bank's JAX import, before its first compile.
+of capacity K*C), so a first call compiles only what nothing before it did (--isolate: one process and table per config). JAX's
+persistent compilation cache is ON by default (owning_worker_runtime.configure_compilation_cache, right after the bank's JAX
+import, before its first compile) in --compile-cache DIR, default <--out's parent>/jax-compile-cache, so reruns and every
+--isolate process share it; --no-compile-cache turns it off.
 The rule: a (config, W, mode) fits at capacity C when the p90 of its warm end-to-end totals is <= 800 ms, leaving 200 ms of
 slack under the 1,000 ms per-move budget. Reported: per config, W and mode the median and p90 per capacity and the largest
 fitting C; per config the largest fitting C (with its W) and the largest fitting W (with its C), over sequential rows (packed
@@ -246,7 +249,8 @@ def parse(argv=None):
     parser.add_argument('--k1-own', type=int, default=9, help='turn-1 learner width');parser.add_argument('--k1-opp', type=int, default=9, help='turn-1 opponent width')
     parser.add_argument('--block-lanes', type=int, default=2187, help='DepthNPricer block_lanes')
     parser.add_argument('--max-roots', type=int, help='use only the first N requests of the chunk')
-    parser.add_argument('--compile-cache', help='absolute directory: enable JAX\'s persistent compilation cache before the first compile')
+    parser.add_argument('--compile-cache', help='JAX persistent compilation cache directory (default: <--out parent>/jax-compile-cache)')
+    parser.add_argument('--no-compile-cache', action='store_true', help='do not enable the persistent compilation cache')
     parser.add_argument('--source-commit', help='the source tree\'s commit, recorded when the code directory has no .git')
     parser.add_argument('--isolate', action='store_true', help='measure each config in its own subprocess (each reloads the chunk and compiles its own programs)')
     parser.add_argument('--only', help=argparse.SUPPRESS)   # one config; used by --isolate
@@ -264,6 +268,8 @@ def parse(argv=None):
     if args.only is not None and args.only not in args.config_worlds:parser.error(f'--only one of {list(args.config_worlds)}')
     if args.isolate and args.only:parser.error('--isolate runs --only itself')
     if args.compile_cache is not None and not Path(args.compile_cache).is_absolute():parser.error('--compile-cache must be an absolute directory')
+    if args.no_compile_cache and args.compile_cache is not None:parser.error('--compile-cache and --no-compile-cache conflict')
+    if args.compile_cache is None and not args.no_compile_cache:args.compile_cache = str(Path(args.out).resolve().parent / 'jax-compile-cache')
     if Path(args.out).exists():parser.error(f'--out {args.out} exists: this tool never overwrites an output directory')
     for spec in args.solver_specs:
         target = parse_solver(spec)
@@ -308,9 +314,10 @@ def distribution(seconds):
     return dict(n=int(values.size), median_ms=float(np.median(values)), p90_ms=float(np.percentile(values, 90)), max_ms=float(values.max()))
 
 
-def nominal_leaves(k_own, k_opp):
-    """Nominal leaves per world: 81 turn-1 cells x the product of the slot widths k_own[p] * k_opp[p] at plies 2..N."""
-    return LANES * math.prod(int(a) * int(b) for a, b in zip(k_own, k_opp))
+def nominal_leaves(k_own, k_opp, k1_own=9, k1_opp=9):
+    """Nominal leaves per world: k1_own x k1_opp turn-1 cells (81 at full width) x the product of the slot widths k_own[p] * k_opp[p]
+    at plies 2..N."""
+    return int(k1_own) * int(k1_opp) * math.prod(int(a) * int(b) for a, b in zip(k_own, k_opp))
 
 
 def device_fence():
@@ -572,7 +579,7 @@ class Search:
     digest=False), sharing `programs` (the process's DepthNPricer program table) after binding the evaluator, so no bind resets
     it; depth2-merged one merged Depth2Pricer (merged_pricer) with its own kernel table."""
     def __init__(self, config, capacity, args, ctx, *, module=None, programs=None, depth2_module=None):
-        self.name, self.capacity, self.ctx = config, capacity, ctx
+        self.name, self.capacity, self.ctx, self.k1 = config, capacity, ctx, (args.k1_own, args.k1_opp)
         if config == MERGED:
             self.module = depth2_module or importlib.import_module('gpu_engine.device_depth2_pricer');self.config = check_config(config);self.pass_pricer = None
             self.pricer, self.options = merged_pricer(self.module, ctx.provider.executor, ctx.plan.model, capacity=capacity, actor_capacity=ctx.actor_capacity,
@@ -593,11 +600,12 @@ class Search:
     def widths(self):
         """The searched engine's slot widths at plies 2..N (searched: derived by the engine from its k's) and the pass's, if any."""
         plies = lambda k: (int(k),) if isinstance(k, (int, np.integer)) else tuple(int(x) for x in k)   # Depth2Pricer holds ints
+        turn1 = lambda pricer: (getattr(pricer, 'k1_own', self.k1[0]), getattr(pricer, 'k1_opp', self.k1[1]))   # the pricer's own, else the arguments
         own, opp = plies(self.pricer.k_own), plies(self.pricer.k_opp)
-        out = dict(k_own=own, k_opp=opp, nominal_leaves_per_world=nominal_leaves(own, opp))
+        out = dict(k_own=own, k_opp=opp, k1=turn1(self.pricer), nominal_leaves_per_world=nominal_leaves(own, opp, *turn1(self.pricer)))
         if self.pass_pricer is not None:
             p_own, p_opp = tuple(int(x) for x in self.pass_pricer.k_own), tuple(int(x) for x in self.pass_pricer.k_opp)
-            out['depth2_pass'] = dict(k_own=p_own, k_opp=p_opp, nominal_leaves_per_world=nominal_leaves(p_own, p_opp))
+            out['depth2_pass'] = dict(k_own=p_own, k_opp=p_opp, nominal_leaves_per_world=nominal_leaves(p_own, p_opp, *turn1(self.pass_pricer)))
         return out
 
     def _price(self, pricer, requests, recipe, clock, part, **kw):
@@ -1049,7 +1057,8 @@ def _short(name):
 
 def markdown(report):
     h = report['header'];path = h['world_construction_path'];commit = h['source_commit'];caps = report['capacities'];sel = report['selection']
-    world = f'world_construction: {_short(path["world_planner"])} (blocks >= 1) + {_short(path["world_builder"])} -> {_short(path["world_materialize"])}'
+    world = (f'world_construction: {_short(path["world_planner"])} (blocks >= 1; block 0\'s plan_starts is counted in host_prep) + {_short(path["world_builder"])} '
+        f'-> {_short(path["world_materialize"])} at source {commit["commit"][:12]}')
     pools = '; '.join(f'pool {p["workers"]}: startup {p["startup_seconds"]:.1f} s (excluded)' for p in h['solver_pools']) or 'in process only'
     lines = ['## Search latency: end-to-end ms per call, warm calls (median / p90)', '',
         f'Rule: {RULE} (N = {report["repeats"]}). Solvers: {", ".join(x["spec"] for x in h["solvers"])} (every solver and pool size on the same priced frames); solve pools: {pools}.',
@@ -1079,7 +1088,7 @@ def markdown(report):
         if v['largest_capacity'] else f'{c} [{n}]: none of C={caps} at W={v["measured_worlds"]}' for c, by in sel['configs'].items() for n, v in by.items()) + '.',
         f'Packed rows are a timing proxy ({PACKED_NOTE}).', '',
         f'### Stage medians (ms), warm calls [{world}]', '',
-        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} + {_short(path["world_builder"])}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured |',
+        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} blocks >= 1, block 0 in host_prep, + {_short(path["world_builder"])}; source {commit["commit"][:12]}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured |',
         '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for s in report['series']:
         if s.get('error'):
@@ -1115,7 +1124,10 @@ def isolated(args, argv, out):
         if token == '--isolate':continue
         if token == '--out':skip = True;continue
         if token.startswith('--out='):continue
+        if token == '--compile-cache':skip = True;continue
+        if token.startswith('--compile-cache=') or token == '--no-compile-cache':continue
         clean.append(token)
+    clean += ['--compile-cache', args.compile_cache] if args.compile_cache else ['--no-compile-cache']   # every config process shares the parent's cache
     sections, contexts = {}, {}
     for name in args.config_worlds:
         target = out / name
