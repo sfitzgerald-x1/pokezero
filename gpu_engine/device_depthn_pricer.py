@@ -197,6 +197,9 @@ def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,d
             err=j.where(invalid,1,j.where(done&~terminal_ok,2,j.where(~done&(error!=0),3,j.where(~done&~usable,4,0))))
             terminal=j.where(winner==2,0.,j.where(winner==owner[:,None],1.,-1.))
             enumerated=(live[:,None,None]&(own_map>=0)[:,:,None]&(opp_map>=0)[:,None,:]).reshape(b,K)
+            # Invariant: each lane's value (v = head(learner_actor, inputs)) and its digest (the leaf digest, or digest_own below) are
+            # computed from the SAME `inputs` and leave through this one result dict, so they share one placement. The depth-N gate's
+            # GUARD_DEPTHN_RULE relies on it (an exact digest certifies where the value sits): never produce or place them separately.
             if leaf:
                 result=dict(status=j.where(~enumerated,0,j.where(err!=0,3,j.where(done,1,4))).astype(j.int8),
                     value=j.where(enumerated&(err==0),j.where(done,terminal,v),0.).astype(j.float32),error=j.where(enumerated,err,0).astype(j.int8))

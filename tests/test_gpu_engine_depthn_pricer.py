@@ -664,6 +664,11 @@ class DepthNPricerTests(unittest.TestCase):
             for (p,cid),(own,opp)in o['node_inputs'].items():
                 np.testing.assert_array_equal(nd.digest_own[i,w,cid],np.asarray(depth2_digest.digest(own)));np.testing.assert_array_equal(nd.digest_opp[i,w,cid],np.asarray(depth2_digest.digest(opp)))
             for (pid,a,b),inputs in o['leaf_inputs'].items():np.testing.assert_array_equal(frame.leaf_digest[i,w,pid,a,b],np.asarray(depth2_digest.digest(inputs)))
+        # One placement for a lane's value and digest (the gate's GUARD_DEPTHN_RULE relies on it): check_oracle above holds every value
+        # exactly to the forward on the inputs whose digest is checked at the same position, and sibling values differ (own slots 0/1 of
+        # each parent), so a value placed apart from its digest fails here.
+        s,v=frame.leaf_status,frame.leaf_value;both=(s[...,0,:]==4)&(s[...,1,:]==4);self.assertTrue(both.any()and(v[...,0,:]!=v[...,1,:])[both].all())
+        s,v=nd.status.reshape(2,2,81,2,2),nd.value.reshape(2,2,81,2,2);both=(s[...,0,:]==2)&(s[...,1,:]==2);self.assertTrue(both.any()and(v[...,0,:]!=v[...,1,:])[both].all())
         plain=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),block_lanes=12)[0];self.assertIsNone(plain.leaf_digest);self.assertIsNone(plain.nodes[0].digest_own)
         np.testing.assert_array_equal(plain.leaf_value,frame.leaf_value)
 
