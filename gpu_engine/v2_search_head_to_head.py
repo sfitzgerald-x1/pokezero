@@ -193,12 +193,18 @@ class Search:
             from gpu_engine.device_depth2_pricer import Depth2Pricer
             self.pricer = Depth2Pricer(executor, plan.model, capacity=self.capacities[-1], actor_capacity=1, **depth2_options)
         else:raise ValueError('pricer depth1 or depth2 required')
-        self.params = (params,);self.reduction = reduction;self.blend = blend;self.seed = seed
-        self.recipes = tuple(original.Recipe(s) for s in world_block_seeds(seed, world_blocks))
-        self.timing = collections.Counter();self.calls = [];self.pool = None
-        if pricer == 'depth2' and reduction in ('hedge', 'blend') and workers > 1:
+        self.params = (params,);self.seed = seed;self.workers = workers;self.pool = None
+        self.configure(reduction=reduction, blend=blend, world_blocks=world_blocks)
+
+    def configure(self, *, reduction, blend, world_blocks):
+        """Per-cell settings; the pricer and its compiled kernels are shared across cells of one process."""
+        if reduction not in REDUCTIONS[1:]:raise ValueError('search reduction required')
+        self.reduction = reduction;self.blend = blend;self.world_blocks = world_blocks
+        self.recipes = tuple(self.original.Recipe(s) for s in world_block_seeds(self.seed, world_blocks))
+        self.timing = collections.Counter();self.calls = []
+        if self.kind == 'depth2' and reduction in ('hedge', 'blend') and self.workers > 1 and self.pool is None:
             import concurrent.futures, multiprocessing
-            self.pool = concurrent.futures.ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context('spawn'))
+            self.pool = concurrent.futures.ProcessPoolExecutor(self.workers, mp_context=multiprocessing.get_context('spawn'))
 
     def _price(self, requests, recipe):
         """Price in calls of a fixed capacity (padding with the chunk's first request).
@@ -317,11 +323,13 @@ def main(argv=None):
     parser.add_argument('--block', type=int, default=0, help='declared block index (2,048 games), played twice')
     parser.add_argument('--games', type=int, help='prefix of the block (gates and smoke only)')
     parser.add_argument('--a-run', required=True);parser.add_argument('--a-iteration', type=int, required=True)
-    parser.add_argument('--b-run', required=True);parser.add_argument('--b-iteration', type=int, required=True)
+    parser.add_argument('--b-run');parser.add_argument('--b-iteration', type=int)
     parser.add_argument('--pricer', choices=('depth1', 'depth2'), default='depth1')
-    parser.add_argument('--reduction', choices=REDUCTIONS, required=True)
+    parser.add_argument('--reduction', choices=REDUCTIONS)
     parser.add_argument('--blend', type=float, default=.5, help='reply-prior weight lambda for --reduction blend')
     parser.add_argument('--world-blocks', type=int, default=4, help='W = 2 * blocks')
+    parser.add_argument('--cells', help='JSON list of cells played in order by this process (label, b_run, b_iteration, '
+        'reduction, and optionally blend, world_blocks, never_borrow); replaces the single-cell options')
     parser.add_argument('--search-seed', type=int, default=2026110500)
     parser.add_argument('--capacities', default='64,512', help='fixed pricer root capacities (padded)')
     parser.add_argument('--depth2-child-block', type=int, default=27)
@@ -330,32 +338,44 @@ def main(argv=None):
     parser.add_argument('--never-borrow', action='store_true', help='gate c: re-run every searched decision from a counterfactual true state')
     parser.add_argument('--max-steps', type=int, help='smoke only')
     parser.add_argument('--collector-check', type=int, default=0, help='compare K raw steps with the collector advance, bitwise')
-    parser.add_argument('--out', required=True);parser.add_argument('--label', required=True)
+    parser.add_argument('--out', required=True);parser.add_argument('--label')
     args = parser.parse_args(argv)
+    if args.cells:cells = json.loads(Path(args.cells).read_text())
+    else:
+        if None in (args.b_run, args.b_iteration, args.reduction, args.label):raise SystemExit('--b-run, --b-iteration, --reduction and --label required')
+        cells = [dict(label=args.label, b_run=args.b_run, b_iteration=args.b_iteration, reduction=args.reduction, blend=args.blend,
+            world_blocks=args.world_blocks, never_borrow=args.never_borrow)]
+    for cell in cells:
+        if set(cell) - {'label', 'b_run', 'b_iteration', 'reduction', 'blend', 'world_blocks', 'never_borrow'} or cell['reduction'] not in REDUCTIONS:
+            raise SystemExit('malformed cell: ' + json.dumps(cell))
+    if len({c['label'] for c in cells}) != len(cells):raise SystemExit('cell labels must be unique')
     import jax
     import jax.numpy as j
     from pokezero import v5_gumbel as original
-    from gpu_engine import v5_device_rollout as rollout, v5_model, device_public_worlds as worlds
+    from gpu_engine import v5_device_rollout as rollout, v5_model
     from gpu_engine.v5_device_backend import RuntimeBackend
-    from gpu_engine.v5_device_rollout import RootContext, RUNNING, STATUS
     from gpu_engine.v2_fused import prepare
     begin = time.perf_counter();out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     context = prepare(argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1));plan = context['plan']
-    a = snapshot(args.a_run, args.a_iteration);b = snapshot(args.b_run, args.b_iteration)
-    def load(snap, root):
-        params, config, _ = v5_model.load(Path(root, snap.archive), expected_archive_sha256=snap.archive_sha256,
-            expected_checkpoint_sha256=snap.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
-            expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
-        if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
-        return params
-    params = (load(a, args.a_run), load(b, args.b_run))
+    loaded = {}
+    def actor(run, iteration):
+        if (run, iteration) not in loaded:
+            snap = snapshot(run, iteration)
+            params, config, _ = v5_model.load(Path(run, snap.archive), expected_archive_sha256=snap.archive_sha256,
+                expected_checkpoint_sha256=snap.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
+                expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+            if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
+            loaded[(run, iteration)] = (snap, params)
+        return loaded[(run, iteration)]
+    a, a_params = actor(args.a_run, args.a_iteration)
     backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
     batch = plan.iterations[args.iteration][args.block]
     if args.games:   # a prefix is a valid smaller batch; its initial states need not equal the full block's
         batch = replace(batch, games=batch.games[:args.games], gender_root_ids=batch.gender_root_ids[:args.games])
     swapped = replace(batch, games=tuple(replace(g, stream_id=g.stream_id - SWAP_OFFSET, battle_id=g.battle_id + '-swap') for g in batch.games))
-    carries = [jax.block_until_ready(backend._construct(declared)) for declared in (batch, swapped)]
-    carry = jax.tree.map(lambda x, y: j.concatenate([x, y]), *carries)
+    def fresh():
+        carries = [jax.block_until_ready(backend._construct(declared)) for declared in (batch, swapped)]
+        return jax.tree.map(lambda x, y: j.concatenate([x, y]), *carries)
     n = len(batch.games);a_side_host = np.repeat(np.asarray([0, 1], np.int32), n);a_side = j.asarray(a_side_host)
     pairs = [(g.stream_id, g.stream_id - SWAP_OFFSET) for g in batch.games]
     prepared = context['prepared']
@@ -364,7 +384,9 @@ def main(argv=None):
     collector_check = None
     if args.collector_check:
         # The raw path of this split step against the collector's own advance, from the same carry.
+        b, b_params = actor(cells[0]['b_run'], cells[0]['b_iteration'])
         if a.archive_sha256 == b.archive_sha256:raise ValueError('the collector check needs two distinct archives')
+        carry = fresh();params = (a_params, b_params)
         bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
             (a.archive_sha256,) * 2, (True, True), backend.declaration_sha256)
         assignments = [dict(stream_id=int(s), learner_side=int(side), opponent=dict(archive_sha256=b.archive_sha256))
@@ -380,13 +402,33 @@ def main(argv=None):
         collector_check = dict(steps=args.collector_check, all_equal=all(fields.values()), differing=[k for k, v in fields.items() if not v])
         log('COLLECTOR_CHECK', **collector_check)
     search = None
-    if args.reduction != 'none':
-        search = Search(prepared, plan, params[0], pricer=args.pricer, reduction=args.reduction, blend=args.blend,
-            world_blocks=args.world_blocks, seed=args.search_seed, capacities=tuple(int(x) for x in args.capacities.split(',')),
-            depth2_options=dict(child_block=args.depth2_child_block, **(dict(fixed_capacity=True) if args.depth2_fixed_capacity else {})),
-            workers=args.workers)
-    log('SEARCH_HEAD_TO_HEAD_START', label=args.label, games=2 * n, reduction=args.reduction, pricer=args.pricer,
-        worlds=2 * args.world_blocks if search else 0, max_requests=plan.max_requests, setup_seconds=time.perf_counter() - begin)
+    setup = dict(args=args, plan=plan, batch=batch, n=n, pairs=pairs, a=a, a_side_host=a_side_host, a_side=a_side,
+        decide=decide, apply=apply, collector_check=collector_check)
+    for cell in cells:
+        b, b_params = actor(cell['b_run'], cell['b_iteration'])
+        cell = dict(dict(blend=args.blend, world_blocks=args.world_blocks, never_borrow=False), **cell)
+        if cell['reduction'] != 'none':
+            if search is None:
+                search = Search(prepared, plan, a_params, pricer=args.pricer, reduction=cell['reduction'], blend=cell['blend'],
+                    world_blocks=cell['world_blocks'], seed=args.search_seed, capacities=tuple(int(x) for x in args.capacities.split(',')),
+                    depth2_options=dict(child_block=args.depth2_child_block, **(dict(fixed_capacity=True) if args.depth2_fixed_capacity else {})),
+                    workers=args.workers)
+            else:search.configure(reduction=cell['reduction'], blend=cell['blend'], world_blocks=cell['world_blocks'])
+        play_cell(setup, cell, fresh(), (a_params, b_params), b, search if cell['reduction'] != 'none' else None, out,
+            setup_seconds=time.perf_counter() - begin)
+    return 0
+
+
+def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
+    import jax
+    import jax.numpy as j
+    from pokezero import v5_gumbel as original
+    from gpu_engine import device_public_worlds as worlds
+    from gpu_engine.v5_device_rollout import RootContext, STATUS
+    args = setup['args'];n = setup['n'];a_side_host = setup['a_side_host'];a_side = setup['a_side'];pairs = setup['pairs']
+    decide, apply = setup['decide'], setup['apply'];a = setup['a'];label = cell['label'];begin = time.perf_counter()
+    log('SEARCH_HEAD_TO_HEAD_START', label=label, games=2 * n, reduction=cell['reduction'], pricer=args.pricer, b_run=cell['b_run'],
+        worlds=2 * cell['world_blocks'] if search else 0, max_requests=setup['plan'].max_requests, setup_seconds=setup_seconds)
     decisions = collections.defaultdict(list);probe_stats = collections.Counter();step = 0;timing = collections.Counter()
     perm = np.roll(np.arange(2 * n), 1)
     with patch.object(original.Recipe, 'selected', lambda self, address: True):
@@ -396,7 +438,7 @@ def main(argv=None):
             host = jax.device_get({k: decided[k] for k in ('live', 'requested', 'legal', 'raw_logits', 'actions', 'input_valid', 'turn')})
             timing['decide_seconds'] += time.perf_counter() - clock
             if not host['live'].any() or (args.max_steps is not None and step >= args.max_steps):break
-            streams = np.asarray(carry.streams);frames = np.asarray(carry.frames)
+            frames = np.asarray(carry.frames)
             rows = np.flatnonzero(host['live'] & host['requested'][np.arange(2 * n), a_side_host] & host['input_valid'][np.arange(2 * n), a_side_host])
             actions = host['actions'].copy()
             if len(rows):
@@ -408,7 +450,7 @@ def main(argv=None):
                     inputs = jax.device_get({k: v[j.asarray(rows)] for k, v in decided['own_inputs'].items()})
                     root_context = RootContext(carry.state, carry.public, carry.streams, carry.frames)
                     probe = None
-                    if args.never_borrow:
+                    if cell['never_borrow']:
                         state = counterfactual(carry.state, rows, a_side_host[rows], perm, worlds.OWN_MON_FIELDS + worlds.OWN_SIDE_FIELDS)
                         probe = dict(context=RootContext(state, carry.public, carry.streams, carry.frames), stats=probe_stats)
                     result = search.choose(root_context, [int(r) for r in rows], [int(a_side_host[r]) for r in rows], logits, legal,
@@ -418,15 +460,14 @@ def main(argv=None):
                 actions[rows, a_side_host[rows]] = chosen
                 masked = np.where(legal, logits, -np.inf)
                 for i, r in enumerate(rows):
-                    d = decisions[int(r)]
-                    d.append(dict(frame=int(frames[r]), turn=int(host['turn'][r]), raw=int(raw[i]), argmax=int(np.argmax(masked[i])),
+                    decisions[int(r)].append(dict(frame=int(frames[r]), turn=int(host['turn'][r]), raw=int(raw[i]), argmax=int(np.argmax(masked[i])),
                         chosen=int(chosen[i]), **records[i]))
             clock = time.perf_counter()
             carry = apply(carry, decided, j.asarray(actions))
             timing['apply_seconds'] += time.perf_counter() - clock
             step += 1
             if step % 25 == 0:
-                log('STEP', step=step, live=int(host['live'].sum()), searched_rows=len(rows), probe=dict(probe_stats),
+                log('STEP', label=label, step=step, live=int(host['live'].sum()), searched_rows=len(rows), probe=dict(probe_stats),
                     search_timing={k: round(v, 1) for k, v in (search.timing if search else {}).items()},
                     elapsed=round(time.perf_counter() - begin, 1))
     final = jax.device_get(dict(streams=carry.streams, status=carry.status, winner=carry.winner, terminal_frame=carry.terminal_frame))
@@ -443,8 +484,7 @@ def main(argv=None):
         if x is None or y is None:excluded += 1;pair_scores.append(None);continue
         pair_scores.append((x + y) / 2)
     values = np.asarray([p for p in pair_scores if p is not None], np.float64);count = len(values)
-    mean = float(values.mean());se = float(values.std(ddof=1) / math.sqrt(count))
-    # Decision statistics per turn band.
+    mean = float(values.mean()) if count else None;se = float(values.std(ddof=1) / math.sqrt(count)) if count > 1 else None
     bands = collections.defaultdict(collections.Counter)
     for row, items in decisions.items():
         for d in items:
@@ -455,36 +495,37 @@ def main(argv=None):
             if d['refusal'] and d['refusal'] != 'no-search':c['refusal:' + str(d['refusal'])[:80]] += 1
     total = collections.Counter()
     for c in bands.values():total.update(c)
-    report = dict(schema='v2-search-head-to-head.v1', label=args.label,
+    interval = lambda shift, scale: None if se is None else [scale * (mean - 1.645 * se - shift), scale * (mean + 1.645 * se - shift)]
+    report = dict(schema='v2-search-head-to-head.v1', label=label,
         a=dict(run=args.a_run, iteration=a.iteration, archive_sha256=a.archive_sha256),
-        b=dict(run=args.b_run, iteration=b.iteration, archive_sha256=b.archive_sha256),
-        search=dict(reduction=args.reduction, pricer=args.pricer, blend=args.blend if args.reduction == 'blend' else None,
-            worlds=2 * args.world_blocks if search else 0, search_seed=args.search_seed,
-            block_seeds=list(world_block_seeds(args.search_seed, args.world_blocks)) if search else [],
-            capacities=args.capacities, never_borrow=args.never_borrow),
-        games=dict(config=args.config, iteration=args.iteration, block=args.block, games_per_seat_order=n, sampling_seed=batch.sampling_seed),
-        pairs=count, excluded_pairs=excluded, a_paired_score=mean, standard_error=se, interval_90=[mean - 1.645 * se, mean + 1.645 * se],
-        a_score_minus_50_points=100 * (mean - .5), a_score_minus_50_interval_90_points=[100 * (mean - 1.645 * se - .5), 100 * (mean + 1.645 * se - .5)],
+        b=dict(run=cell['b_run'], iteration=b.iteration, archive_sha256=b.archive_sha256),
+        search=dict(reduction=cell['reduction'], pricer=args.pricer, blend=cell['blend'] if cell['reduction'] == 'blend' else None,
+            worlds=2 * cell['world_blocks'] if search else 0, search_seed=args.search_seed,
+            block_seeds=list(world_block_seeds(args.search_seed, cell['world_blocks'])) if search else [],
+            capacities=args.capacities, never_borrow=cell['never_borrow']),
+        games=dict(config=args.config, iteration=args.iteration, block=args.block, games_per_seat_order=n,
+            sampling_seed=setup['batch'].sampling_seed),
+        pairs=count, excluded_pairs=excluded, a_paired_score=mean, standard_error=se, interval_90=interval(0., 1.),
+        a_score_minus_50_points=None if mean is None else 100 * (mean - .5), a_score_minus_50_interval_90_points=interval(.5, 100.),
         a_score_by_a_seat={str(k): float(np.mean(v)) if v else None for k, v in seat.items()},
         dispositions={name: int((np.asarray(final['status']) == code).sum()) for code, name in enumerate(STATUS)},
         decisions=dict(total=dict(total), by_turn_band={k: dict(v) for k, v in sorted(bands.items())},
             searched_share=total['searched'] / max(total['decisions'], 1),
             searched_change_rate_vs_raw_sample=total['searched_changed_vs_raw_sample'] / max(total['searched'], 1)),
-        never_borrow=dict(probe_stats) if args.never_borrow else None, collector_check=collector_check,
-        timing=dict(steps=step, wall_seconds=time.perf_counter() - begin, **{k: v for k, v in timing.items()},
-            search={k: v for k, v in (search.timing if search else {}).items()}, pricer_calls=len(search.calls) if search else 0,
+        never_borrow=dict(probe_stats) if cell['never_borrow'] else None, collector_check=setup['collector_check'],
+        timing=dict(steps=step, wall_seconds=time.perf_counter() - begin, process_setup_seconds=setup_seconds, **timing,
+            search=dict(search.timing) if search else {}, pricer_calls=len(search.calls) if search else 0,
             search_ms_per_decision=1000 * timing['search_seconds'] / max(total['decisions'], 1) if search else None),
         scope='Paired engine head-to-head, same teams with seats swapped, search in seat A; not a Foul Play result.')
-    (out / f'{args.label}.json').write_text(json.dumps(report, indent=1, default=str) + '\n')
-    with (out / f'{args.label}-pairs.jsonl').open('w') as stream:
+    (out / f'{label}.json').write_text(json.dumps(report, indent=1, default=str) + '\n')
+    with (out / f'{label}-pairs.jsonl').open('w') as stream:
         for (first, second), value in zip(pairs, pair_scores):stream.write(json.dumps(dict(stream=first, swapped=second, score=value)) + '\n')
-    with (out / f'{args.label}-decisions.jsonl').open('w') as stream:
+    with (out / f'{label}-decisions.jsonl').open('w') as stream:
         for row in sorted(decisions):stream.write(json.dumps(dict(stream=int(final['streams'][row]), a_side=int(a_side_host[row]), decisions=decisions[row])) + '\n')
-    np.savez(out / f'{args.label}-games.npz', **final)
+    np.savez(out / f'{label}-games.npz', **final)
     log('SEARCH_HEAD_TO_HEAD', **{k: v for k, v in report.items() if k in ('label', 'pairs', 'excluded_pairs', 'a_paired_score',
         'a_score_minus_50_points', 'a_score_minus_50_interval_90_points', 'dispositions', 'never_borrow')},
         searched_share=report['decisions']['searched_share'], wall_seconds=report['timing']['wall_seconds'])
-    return 0
 
 
 if __name__ == '__main__':
