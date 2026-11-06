@@ -490,16 +490,17 @@ class GateTests(GateFixture, unittest.TestCase):
         for name in ('t1_status', 't2_status', 't2_digest', 't1_digest_peer', 't1_value_terminal', 't2_value_terminal'):
             self.assertGreater(checks['a']['compared'][name], 0, name)
         for name in ('t1_status_vs_d', 't1_depth2_code_status', 't1_error_vs_d', 'pre_vs_d', 'root_peer_legal_vs_d',
-                'd_refused_world_unenumerated', 't1_enumeration_vs_d', 't1_value_vs_d_beyond_tolerance', 'root_peer_logits_vs_d_beyond_tolerance'):
+                'd_refused_world_unenumerated', 't1_enumeration_vs_d'):
             self.assertGreater(checks['b']['compared'][name], 0, name)
         for name in ('t1_value', 'root_peer_logits'):
             self.assertGreater(checks['b']['values'][name]['compared'], 0);self.assertEqual(checks['b']['values'][name]['exact_equal_fraction'], 1.)
         self.assertIn('not bitwise', checks['b']['reference'])
-        self.assertEqual((checks['c']['value_tolerance'], checks['c']['logit_tolerance']), (1e-4, 1e-2));self.assertIn('lead decision', checks['c']['tolerance_source'])
-        self.assertEqual((checks['b']['values']['t1_value']['tolerance'], checks['b']['values']['root_peer_logits']['tolerance']), (1e-4, 1e-2))
+        rule = result['tolerance']
+        self.assertEqual((rule['depth1_noise_floor'], rule['value_bound'], rule['logit_bound']), (0., 0., .1))   # the fake heads are exact
+        self.assertEqual((checks['b']['values']['t1_value']['bound'], checks['b']['values']['root_peer_logits']['bound']), (0., .1))
         floor = checks['c']['quantities']['depth1_noise_floor']
         self.assertGreater(floor['compared'], 0);self.assertEqual(floor['max_abs_difference'], 0.)   # the fake heads are exact
-        self.assertIsNone(checks['c']['t2_value_to_floor_ratio']);self.assertEqual(checks['c']['gated'], list(gate.GATED))
+        self.assertIsNone(checks['c']['t2_value_to_floor_ratio']);self.assertEqual(set(checks['c']['gated']), set(gate.GATED) - {'raw_head_t2_value', 'raw_head_t1_value'})
         self.assertEqual({k: v['gates'] for k, v in checks['c']['quantities'].items()}['depth1_noise_floor'], None)
         self.assertEqual(set(np.unique(data['leaves']['status'])), {1, 3, 4})
         self.assertEqual(set(np.unique(data['children']['status'])), {1, 2, 3})
@@ -529,56 +530,35 @@ class GateTests(GateFixture, unittest.TestCase):
             ('t1_error', setter('t1_error', error, other_error), 'a'), ('pre', setter('pre', (0, 0), 2), 'a'),
             ('root_peer_legal', flip('root_peer_legal', (0, 0, 1)), 'a'),
             ('t1_error_vs_d', setter('t1_error', error, other_error), 'b'), ('pre_vs_d', setter('pre', (0, 0), 2), 'b'),
-            ('t1_value_vs_d_beyond_tolerance', bump('t1_value', expanded, 2e-4), 'b'),
-            ('root_peer_logits_vs_d_beyond_tolerance', bump('root_peer_logits', (0, 0, 3), 2e-2), 'b'),
-            ('t1_value_head', bump('t1_value', expanded, 2e-4), 'c'), ('t1_peer_logits', bump('t1_peer_logits', expanded + (0,), .02), 'c'),
-            ('t1_own_logits', bump('t1_own_logits', expanded + (1,), .02), 'c'),
+            ('t1_value', bump('t1_value', expanded, 2e-4), 'b_values'),   # the fake's floor is 0: the value bound is 0
+            ('root_peer_logits', bump('root_peer_logits', (0, 0, 3), .2), 'b_values'),
+            ('t1_value_head', bump('t1_value', expanded, 2e-4), 'c'), ('t1_peer_logits', bump('t1_peer_logits', expanded + (0,), .2), 'c'),
+            ('t1_own_logits', bump('t1_own_logits', expanded + (1,), .2), 'c'),
             ('t2_value', bump('t2_value', head, .02), 'c'), ('t2_value', setter('t2_value', head, np.nan), 'c'),
             ('t2_extra_in_pricer', setter('t2_status', unexpanded, 4), 'd'), ('t2_missing_from_pricer', setter('t2_status', head, 0), 'd'),
             ('t1_extra_in_pricer', setter('t1_status', (0, 0, 8, 8), 2), 'd'), ('t1_enumeration_vs_d', setter('t1_status', (0, 0, 8, 8), 2), 'b'),
             ('t1_extra_in_pricer', setter('t1_status', (6, 1, 0, 0), 2), 'd'), ('d_refused_world_unenumerated', setter('t1_status', (6, 1, 0, 0), 2), 'b'),
             ('t1_error', setter('t1_error', code5, 6), 'a'), ('t1_error', setter('t1_error', code6, 0), 'a'),
             ('t1_depth2_code_status', setter('t1_status', code5, 2), 'b'), ('t1_status', setter('t1_status', code6, 2), 'a'),
-            ('t1_value_vs_d_beyond_tolerance', bump('t1_value', code6, 2e-4), 'b'), ('t1_value_vs_d_beyond_tolerance', bump('t1_value', code5, 2e-4), 'b'),
+            ('t1_value', bump('t1_value', code6, 2e-4), 'b_values'), ('t1_value', bump('t1_value', code5, 2e-4), 'b_values'),
             ('t1_digest_peer', flip('t1_digest_peer', code5 + (1,)), 'a'),
             ('pre', setter('pre', (6, 1), 0), 'a'), ('pre_vs_d', setter('pre', (6, 1), 0), 'b'),
         )
         for name, change, check in cases:
             with self.subTest(name):
-                result = self.evaluate(self.mutated(change));found = result['checks'][check]
+                result = self.evaluate(self.mutated(change));found = result['checks'][check.removesuffix('_values')]
                 self.assertFalse(result['passed']);self.assertFalse(found['passed'])
-                if check == 'c':self.assertFalse(found['quantities'][name]['within_tolerance'])
+                if check == 'c':self.assertFalse(found['quantities'][name]['within_bound'])
+                elif check == 'b_values':self.assertFalse(found['values'][name]['within_bound']);self.assertTrue(found['values'][name]['first_beyond'])
                 else:
                     self.assertGreater(found['mismatched'][name], 0, found['mismatched'])
                     self.assertIn(name, {m['field'] for m in found['first_mismatches']})
                     self.assertTrue(all(m['block'] == 0 for m in found['first_mismatches']))
 
-    def test_float_differences_within_tolerance_pass_and_are_reported(self):
-        _, _, data, _ = self.priced();leaves, children = data['leaves'], data['children']
-        heads = [tuple(s) for s, x in zip(leaves['specs'], leaves['status']) if x == 4]
-        valued = [tuple(c) for c, x in zip(children['cells'], children['status']) if x == 2]
-        def change(f, _):
-            for at in heads[:3]:f['t2_value'][at] = np.float32(f['t2_value'][at] + 5e-5)   # bf16 cross-geometry noise
-            f['t1_own_logits'][valued[0] + (1,)] = np.float32(f['t1_own_logits'][valued[0] + (1,)] + 5e-3)
-            f['t1_value'][valued[1]] = np.float32(f['t1_value'][valued[1]] + 3e-6)            # within (b)'s 1e-5
-            f['root_peer_logits'][0, 0, 2] = np.nextafter(f['root_peer_logits'][0, 0, 2], np.float32(2))
-        result = self.evaluate(self.mutated(change));checks = result['checks'];c = checks['c']['quantities']
-        self.assertTrue(result['passed'], {k: v.get('first_mismatches') for k, v in checks.items()})
-        self.assertEqual(c['t2_value']['compared'] - c['t2_value']['exact_equal'], 3)
-        self.assertAlmostEqual(c['t2_value']['max_abs_difference'], 5e-5, delta=1e-6);self.assertLess(c['t1_own_logits']['exact_equal_fraction'], 1)
-        values = checks['b']['values']['t1_value']
-        self.assertEqual(values['compared'] - values['exact_equal'], 1);self.assertAlmostEqual(values['max_abs_difference'], 3e-6, delta=1e-7)
-        self.assertEqual(values['first_inexact'][0]['cell'], list(valued[1]));self.assertEqual(values['first_beyond'], [])
-        self.assertEqual(checks['b']['values']['root_peer_logits']['compared'] - checks['b']['values']['root_peer_logits']['exact_equal'], 1)
-        # The floor is depth 1's own distance to the oracle heads: shifting D's view of t1 moves it, and the ratio follows.
-        frame, d_results, clean, _ = self.priced()
-        shifted = copy.deepcopy(d_results);report = shifted[0].world_reports[0];(a, r) = valued[0][2:]
-        report['joint_values'][a][r] = float(np.float32(report['joint_values'][a][r] + 1e-3))
-        noisy = self.mutated(change)
-        noisy_result = gate.summarize([gate.evaluate(noisy, shifted, self.requests, clean)])['checks']
-        self.assertAlmostEqual(noisy_result['c']['depth1_noise_floor'], 1e-3, delta=1e-6)
-        self.assertAlmostEqual(noisy_result['c']['t2_value_to_floor_ratio'], .05, delta=1e-3)
-        self.assertFalse(noisy_result['b']['passed'])   # and that 1e-3 is beyond (b)'s 1e-5 against D
+    def test_root_logit_floor_is_reported_not_gated(self):
+        c = self.evaluate(self.priced()[0])['checks']['c']
+        self.assertEqual(c['root_logit_floor'], 0.);self.assertIsNone(c['quantities']['root_logit_floor']['gates'])
+        self.assertNotIn('root_logit_floor', c['gated']);self.assertNotIn('depth1_noise_floor', c['gated'])
 
     def test_missing_field_or_wrong_geometry_fails_closed(self):
         frame = dict(self.priced()[0]);frame.pop('t2_digest')
@@ -637,31 +617,33 @@ class GateTests(GateFixture, unittest.TestCase):
         head = tuple(leaves['specs'][list(leaves['status']).index(4)])
         same = gate.block_invariance(frame, copy.deepcopy(frame))
         self.assertTrue(same['passed']);self.assertEqual(same['arrays_compared'], len(gate.SHAPES))
+        rule = gate.tolerance_rule(dict(compared=10, nonfinite=0, max_abs_difference=1e-4), None)   # value bound 2e-4
         def changed(change):
             other = copy.deepcopy(frame);change(other);return gate.block_invariance(frame, other, context=dict(block=0, call=0))
+        judge = lambda report: gate.merge_invariance([report], rule=rule)
         def ulp(f):f['t2_value'][head] = np.nextafter(f['t2_value'][head], np.float32(2))
         def payload(f):f['t2_value'][(0, 0, 8, 8, 8, 8)] = np.uint32(0x7fc00001).view(np.float32)   # NaN == NaN numerically
         def dtype(f):f['t1_status'] = f['t1_status'].astype(np.int32)
         def missing(f):f.pop('t2_digest')
-        result = changed(ulp)   # noise within VALUE_TOLERANCE passes, and is reported
+        result = judge(changed(ulp))   # noise within 2 x floor passes, and is reported
         self.assertTrue(result['passed']);self.assertEqual(result['floats']['t2_value']['compared'] - result['floats']['t2_value']['exact_equal'], 1)
-        def far(f):f['t2_value'][head] = np.float32(f['t2_value'][head] + 2e-4)
-        result = changed(far)
-        self.assertFalse(result['passed']);self.assertEqual(result['differing'], {'t2_value': dict(count=1, size=frame['t2_value'].size, tolerance=1e-4)})
-        self.assertEqual(result['first_differences'][0]['cell'], list(head));self.assertEqual(result['first_differences'][0]['block'], 0)
-        self.assertEqual(changed(payload)['differing']['t2_value']['count'], 1)   # a NaN only on one side is never within tolerance
+        def far(f):f['t2_value'][head] = np.float32(f['t2_value'][head] + 3e-4)
+        result = judge(changed(far))
+        self.assertFalse(result['passed']);self.assertTrue(result['discrete_equal']);self.assertEqual(result['floats']['t2_value']['beyond_bound'], 1)
+        self.assertEqual(result['floats']['t2_value']['first_beyond'][0]['cell'], list(head));self.assertEqual(result['floats']['t2_value']['first_beyond'][0]['block'], 0)
+        self.assertEqual(judge(changed(payload))['floats']['t2_value']['beyond_bound'], 1)   # a NaN only on one side is never within a bound
         def logit(delta):
             def change(f):f['t1_own_logits'][head[:4] + (1,)] += np.float32(delta)
             return change
-        self.assertTrue(changed(logit(5e-3))['passed']);self.assertFalse(changed(logit(2e-2))['passed'])
+        self.assertTrue(judge(changed(logit(.05)))['passed']);self.assertFalse(judge(changed(logit(.2)))['passed'])
         def status(f):f['t2_status'][head] = 1
-        self.assertEqual(changed(status)['differing']['t2_status']['count'], 1)   # discrete arrays stay bit-exact
+        self.assertEqual(changed(status)['differing']['t2_status']['count'], 1);self.assertFalse(judge(changed(status))['passed'])   # discrete stays exact
         self.assertIn('dtype/shape', changed(dtype)['differing']['t1_status']['problem'])
         self.assertIn('missing', changed(missing)['differing']['t2_digest']['problem'])
         reports = dict(frame, world_reports=[[dict(seed=1)]]), dict(frame, world_reports=[[dict(seed=2)]])
         result = gate.block_invariance(*reports);self.assertTrue(result['passed']);self.assertEqual(result['nonarray_equal'], dict(world_reports=False))
-        merged = gate.merge_invariance([changed(far), same]);self.assertFalse(merged['passed']);self.assertEqual(merged['differing']['t2_value']['count'], 1)
-        self.assertEqual(merged['floats']['t2_value']['beyond_tolerance'], 1)
+        guarded = gate.merge_invariance([changed(ulp)], rule=gate.tolerance_rule(dict(compared=10, nonfinite=0, max_abs_difference=1e-4), 1e-9))
+        self.assertFalse(guarded['passed']);self.assertFalse(guarded['floats']['t2_value']['within_guard'])   # the guard bounds value fields too
 
     def test_run_call_with_block_invariance_gates_the_frames(self):
         class Nudged(OraclePricer):
@@ -675,7 +657,7 @@ class GateTests(GateFixture, unittest.TestCase):
                     pricer=OraclePricer(self.ex, self.WIDTHS), frame_pricer=frame_pricer, oracle=reference.Oracle(self.ex, object(), chunk=32),
                     widths=self.WIDTHS, sample=2, block=0, context=dict(block=0, call=0), invariance=[other])
             result = gate.summarize([evaluation])
-            self.assertEqual(summary['passed']['block_invariance'], expected);self.assertEqual(result['checks']['block_invariance']['passed'], expected)
+            self.assertTrue(summary['passed']['block_invariance_discrete']);self.assertEqual(result['checks']['block_invariance']['passed'], expected)
             self.assertEqual(result['passed'], expected);self.assertIn('invariance_pricer_0_seconds', summary['timing'])
             self.assertTrue(result['checks']['a']['passed'])   # the checked (second) frame is the clean one
 
@@ -1123,9 +1105,9 @@ class HeadOverrideTests(GateFixture, unittest.TestCase):
             return gate.summarize([evaluation])['checks']['c']
         same, shifted = run(0.), run(1e-3)
         for name in ('raw_head_t2_value', 'raw_head_t1_value'):
-            self.assertTrue(same['quantities'][name]['within_tolerance']);self.assertEqual(same['quantities'][name]['exact_equal_fraction'], 1.)
+            self.assertTrue(same['quantities'][name]['passed']);self.assertEqual(same['quantities'][name]['exact_equal_fraction'], 1.)
             self.assertGreater(same['quantities'][name]['compared'], 0);self.assertEqual(same['quantities'][name]['gates'], 'c')
-            self.assertFalse(shifted['quantities'][name]['within_tolerance'])
+            self.assertFalse(shifted['quantities'][name]['passed'])
         self.assertTrue(same['passed']);self.assertFalse(shifted['passed'])
 
     def test_pricer_only_header_comes_first(self):
@@ -1154,6 +1136,88 @@ def geometry_noise_forward(params, inputs, model=None, **kw):
     """Cross-geometry noise far below LOGIT_TOLERANCE: +1e-3 on lane 2 at odd batch sizes only (lanes 1 and 2 tie otherwise)."""
     x = inputs['numeric_features'][:, 0, 0];n = len(x);bump = (1e-3 if n % 2 else 0.) * (j.arange(9) == 2)
     return Prediction(j.broadcast_to(params['logits'] + bump, (n, 9)).astype(j.float32), x[:, 0] + params['offset'], j.ones(n, bool))
+
+
+class RelativeToleranceTests(GateFixture, unittest.TestCase):
+    """Evaluator-relative bounds: values <= 2 x the run's depth-1 noise floor (1e-4 if unmeasurable), logits <= 0.1, and
+    the misplacement guard (every value max |diff| < 0.25 x the p10 cell_a2_spread)."""
+    def shifted(self, floor):
+        """D3's view of one expanded cell moved by `floor`: the run's measured depth-1 noise floor becomes `floor`."""
+        frame, d_results, data, _ = self.priced();children = data['children']
+        cell = next(tuple(c) for c, x in zip(children['cells'].tolist(), children['status']) if x == 2 and c[1] == 0)
+        shifted = copy.deepcopy(d_results);report = shifted[cell[0]].world_reports[cell[1]]
+        report['joint_values'][cell[2]][cell[3]] = float(np.float32(report['joint_values'][cell[2]][cell[3]] + floor))
+        return frame, shifted, data, cell
+
+    def judged(self, frame, d_results, data, *, spread_p10=None, drop_floor=False):
+        evaluation = gate.evaluate(frame, d_results, self.requests, data, context=dict(block=0, call=0))
+        if drop_floor:evaluation['c'].pop('depth1_noise_floor')
+        return gate.summarize([evaluation], spread_p10=spread_p10)
+
+    def noisy(self, frame, data, delta, *, logit=0.):
+        heads = [tuple(s) for s, x in zip(data['leaves']['specs'].tolist(), data['leaves']['status']) if x == 4][:3]
+        noisy = copy.deepcopy(frame)
+        for at in heads:noisy['t2_value'][at] = np.float32(noisy['t2_value'][at] + delta)
+        if logit:
+            cell = next(tuple(c) for c, x in zip(data['children']['cells'].tolist(), data['children']['status']) if x == 2 and c[0] == 0)
+            noisy['t1_own_logits'][cell + (1,)] = np.float32(noisy['t1_own_logits'][cell + (1,)] + logit)
+        return noisy
+
+    def test_values_pass_within_twice_the_floor_and_fail_beyond(self):
+        frame, d_results, data, cell = self.shifted(1e-3)
+        result = self.judged(self.noisy(frame, data, 1.5e-3), d_results, data);rule = result['tolerance']
+        self.assertAlmostEqual(rule['depth1_noise_floor'], 1e-3, delta=1e-6);self.assertAlmostEqual(rule['value_bound'], 2e-3, delta=2e-6)
+        self.assertEqual(rule['value_bound_source'], '2 x depth1_noise_floor')
+        self.assertTrue(result['passed'], {k: v['passed'] for k, v in result['checks'].items()})
+        t2 = result['checks']['c']['quantities']['t2_value']
+        self.assertAlmostEqual(t2['max_abs_difference'], 1.5e-3, delta=1e-6);self.assertAlmostEqual(t2['ratio_to_bound'], .75, delta=1e-2)
+        b = result['checks']['b']['values']['t1_value'];self.assertAlmostEqual(b['max_abs_difference'], 1e-3, delta=1e-6)   # D's own shift, within 2 x floor
+        self.assertAlmostEqual(result['checks']['c']['t2_value_to_floor_ratio'], 1.5, delta=1e-2)
+        result = self.judged(self.noisy(frame, data, 2.5e-3), d_results, data)
+        self.assertFalse(result['passed']);t2 = result['checks']['c']['quantities']['t2_value']
+        self.assertFalse(t2['within_bound']);self.assertEqual(t2['beyond_bound'], 3);self.assertEqual(len(t2['first_beyond']), 3)
+
+    def test_logits_are_bounded_at_one_tenth(self):
+        frame, d_results, data, _ = self.shifted(1e-3)
+        self.assertTrue(self.judged(self.noisy(frame, data, 0., logit=.05), d_results, data)['passed'])
+        result = self.judged(self.noisy(frame, data, 0., logit=.15), d_results, data)
+        self.assertFalse(result['passed']);self.assertFalse(result['checks']['c']['quantities']['t1_own_logits']['within_bound'])
+        self.assertEqual(result['checks']['c']['quantities']['t1_own_logits']['bound'], .1)
+
+    def test_the_misplacement_guard(self):
+        frame, d_results, data, _ = self.shifted(1e-2)   # a loose value bound (2e-2), so only the guard decides
+        noisy = self.noisy(frame, data, 5e-3)
+        guarded = self.judged(noisy, d_results, data, spread_p10=1e-2)   # guard 2.5e-3 < 5e-3
+        self.assertFalse(guarded['passed']);t2 = guarded['checks']['c']['quantities']['t2_value']
+        self.assertTrue(t2['within_bound']);self.assertFalse(t2['within_guard']);self.assertAlmostEqual(t2['ratio_to_guard'], 2., delta=1e-2)
+        self.assertEqual((guarded['tolerance']['guard_bound'], guarded['tolerance']['guard']), (2.5e-3, 'applied'))
+        self.assertTrue(self.judged(noisy, d_results, data, spread_p10=.1)['passed'])   # guard 2.5e-2
+        skipped = self.judged(noisy, d_results, data, spread_p10=None)
+        self.assertTrue(skipped['passed']);self.assertIn('skipped', skipped['tolerance']['guard']);self.assertNotIn('within_guard', skipped['checks']['c']['quantities']['t2_value'])
+        self.assertNotIn('guard_bound', guarded['checks']['c']['quantities']['t1_own_logits'])   # the guard bounds values, not logits
+        # The live gate takes the guard's spread from the same frames' values section.
+        values = gate.values_section([(gate.value_samples(frame, self.requests, backups=FakeBackups), None)], oracle_checked=True)
+        self.assertGreater(values['totals']['cell_a2_spread']['p10'], 0)
+
+    def test_fallback_when_the_floor_cannot_be_measured(self):
+        frame, d_results, data, _ = self.priced()
+        result = self.judged(self.noisy(frame, data, 5e-5), d_results, data, drop_floor=True);rule = result['tolerance']
+        self.assertIsNone(rule['depth1_noise_floor']);self.assertEqual(rule['value_bound'], 1e-4);self.assertIn('fallback 1e-4', rule['value_bound_source'])
+        self.assertTrue(result['passed'])
+        self.assertFalse(self.judged(self.noisy(frame, data, 2e-4), d_results, data, drop_floor=True)['passed'])
+        for floor in (dict(compared=0, nonfinite=0, max_abs_difference=0.), dict(compared=5, nonfinite=1, max_abs_difference=.1)):
+            self.assertEqual(gate.tolerance_rule(floor, None)['value_bound'], 1e-4)
+        self.assertEqual(gate.tolerance_rule(dict(compared=5, nonfinite=0, max_abs_difference=0.), None)['value_bound'], 0.)   # a measured zero floor is strict
+
+    def test_the_header_gives_the_rule_and_every_ratio(self):
+        frame, d_results, data, _ = self.shifted(1e-3)
+        result = self.judged(self.noisy(frame, data, 1.5e-3), d_results, data, spread_p10=.1)
+        line = gate.tolerance_line(result['tolerance'])
+        for key in ('depth1_noise_floor', 'value_bound', 'logit_bound', 'p10_cell_a2_spread', 'guard_bound'):self.assertIsNotNone(line[key], key)
+        rows = {(r['check'], r['quantity']): r for r in line['checks']}
+        self.assertIn(('b', 't1_value'), rows);self.assertIn(('c', 't2_value'), rows);self.assertIn(('c', 't1_own_logits'), rows)
+        self.assertAlmostEqual(rows[('c', 't2_value')]['ratio_to_bound'], .75, delta=1e-2);self.assertAlmostEqual(rows[('c', 't2_value')]['ratio_to_guard'], .06, delta=1e-3)
+        self.assertIn('2 x depth1_noise_floor', result['tolerance']['rule']);json.dumps(result, allow_nan=False, default=str)
 
 
 class ReviewTests(GateFixture, unittest.TestCase):
@@ -1205,10 +1269,10 @@ class ReviewTests(GateFixture, unittest.TestCase):
         frame, d_results, data, _ = self.price_with(forward_=geometry_noise_forward, widths=widths, chunk=33, pricer_chunk=16)
         result = gate.summarize([gate.evaluate(frame, d_results, self.requests, data, full_turn1=True)])
         self.assertTrue(result['passed'], {k: v.get('first_mismatches') for k, v in result['checks'].items()})
-        self.assertLess(result['checks']['c']['quantities']['t1_own_logits']['max_abs_difference'], gate.LOGIT_TOLERANCE)
+        self.assertLess(result['checks']['c']['quantities']['t1_own_logits']['max_abs_difference'], gate.LOGIT_BOUND)
         topk = gate.merge_topk_boundary([data['topk']])
         self.assertEqual(topk['ranked_by'], ['PRICER_PRIORS']);self.assertGreater(topk['oracle_prior_set_differs']['own'], 0)
-        self.assertGreater(topk['gap_below_logit_tolerance']['own'], 0);self.assertGreater(topk['selections']['own'], 0)
+        self.assertGreater(topk['gap_below_logit_bound']['own'], 0);self.assertGreater(topk['selections']['own'], 0)
         self.assertEqual(topk['selections']['peer'], 0)
         self.assertIsNone(gate.topk_boundary(data['children'], data['roots'], self.WIDTHS, None, None, reference))
 

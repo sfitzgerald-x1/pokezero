@@ -15,13 +15,14 @@ Checks (gate.json; exit code 0 iff all pass):
      also the same own/peer digests, legal masks and request flags; roots the same pre code (-1 for a
      world without a state) and opponent request/legal. The first 20 mismatches are listed.
  (b) D (not bitwise for floats): every discrete field exactly D's (pre and refused worlds, root opponent
-     request/legal, status/error wherever the pricer's code is D's 0-4, the turn-1 pair set);
-     |t1_value - D| <= VALUE_TOLERANCE on every D-priced cell (codes 5/6 included: they keep D's value) and
-     |root prior - D| <= LOGIT_TOLERANCE; the bit-equal fraction, max |diff| and first inexact cells are reported.
- (c) heads, against the oracle's own bf16 heads (a different batch geometry): t2_value and t1 head values
-     within VALUE_TOLERANCE, both seats' child logits and the root peer logits within LOGIT_TOLERANCE
-     (TOLERANCE_SOURCE). Reported per quantity: max |diff| and exact fraction, next to the depth-1 noise
-     floor max |D t1_value - oracle t1 head| and the ratio t2_value max / floor.
+     request/legal, status/error wherever the pricer's code is D's 0-4, the turn-1 pair set); t1_value on every
+     D-priced cell (codes 5/6 included: they keep D's value) and the root prior within the run's bounds.
+ (c) heads, against the oracle's own bf16 heads (a different batch geometry): t2_value, t1 head values and the
+     raw-head values within the value bound, both seats' child logits and the root peer logits within the logit bound.
+ Float bounds are evaluator-relative (TOLERANCE_RULE): values <= 2 x this run's depth-1 noise floor (max |D3 t1_value -
+ oracle t1 head|; 1e-4 if unmeasurable), logits <= 0.1, and every value comparison < 0.25 x the p10 learner-max a2
+ spread of the frame (the misplacement guard, skipped when undefined). gate.json's tolerance section gives the numbers
+ and each check's max |diff| with its ratios to its bound and guard.
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
  (e) decision, when every leaf is checked (no --sample-leaves): depth2_backups.learner_max_root on the
      pricer frame and on a copy carrying the oracle's turn-2 head values and child-prior logits (statuses,
@@ -70,10 +71,21 @@ from unittest.mock import patch
 import numpy as np
 
 SCHEMA = 'pokezero.depth2-gate.v1'
-VALUE_TOLERANCE = 1e-4     # every cross-program / cross-geometry value comparison (absolute)
-LOGIT_TOLERANCE = 1e-2     # every cross-program / cross-geometry logit comparison (absolute)
-TOLERANCE_SOURCE = ('lead decision after the 40-root GPU run at 08d1395b: values within 1e-4 absolute (head values are ~1e-3; '
-    'measured cross-geometry value noise <= 3.7e-5), logits within 1e-2; discrete fields, digests and check (e) stay exact')
+# Evaluator-relative float bounds (lead decision after the B1-i99 40-root run at 60a52442, whose bf16 cross-geometry noise
+# scales with the head's values). Values: max |diff| <= FLOOR_FACTOR x the run's own depth-1 noise floor (max |D3 t1_value -
+# oracle t1 head| over the compared cells), VALUE_FALLBACK when no floor cell exists. Logits: LOGIT_BOUND absolute. Guard
+# against misplacement: every value comparison's max |diff| < GUARD_FACTOR x the p10 learner-max a2 spread of the frame's
+# expanded cells (values.cell_a2_spread), skipped when undefined. Digests, discrete fields and (e) stay exact.
+FLOOR_FACTOR = 2.
+VALUE_FALLBACK = 1e-4
+LOGIT_BOUND = .1
+GUARD_FACTOR = .25
+NEAR_TIE = 1e-4            # values section: top-two root Q within this are near ties (a definition, not a gate)
+SPREAD_THRESHOLD = 1e-4    # sibling spread: share of children whose p10 leaf-pair spread is below this
+TOLERANCE_RULE = ('values: max |diff| <= 2 x depth1_noise_floor (max |D3 t1_value - oracle t1 head| of this run; 1e-4 if unmeasurable); '
+    'logits: max |diff| <= 0.1; guard: every value max |diff| < 0.25 x p10 cell_a2_spread (skipped if undefined); '
+    'digests, discrete fields and (e) exact')
+FLOORS = ('depth1_noise_floor', 'root_logit_floor')   # reported beside the bounds, never gated
 PROGRESS_INTERVAL = 10.    # seconds between oracle chunk progress lines (first and last chunk always logged)
 FIRST = 20
 SAMPLE_SEED = 20261105
@@ -100,8 +112,8 @@ CONVENTIONS = (
     'Digests are compared where the scored view is meaningful: status 2/4, or error 3-6 (own view) and 5/6 (opponent view); terminal and invalid cells compare status, error and value only.',
     'Child masks, request flags and the opponent digest are compared on expanded children and codes 5/6.',
     'Logits are compared on legal lanes of requested seats only.',
-    'Exact: every discrete field and digest, and check (e). Floats, uniformly for every cross-program or cross-geometry comparison (vs D3, vs the oracle, across child blocks): values within VALUE_TOLERANCE, logits within LOGIT_TOLERANCE.',
-    'Top-k: the oracle selects with its own top_k code but ranks by the PRICER\'s child (and k1_opp root) priors, which (c) checks against the oracle\'s within LOGIT_TOLERANCE, so a bf16 near-tie cannot fail (d); topk_boundary reports each selection\'s rank-k vs rank-(k+1) gap and how often the oracle\'s own prior would differ.',
+    'Exact: every discrete field and digest, and check (e). Floats (vs D3, vs the oracle, across child blocks): values within 2 x the run\'s depth-1 noise floor (1e-4 if unmeasurable), logits within 0.1, and every value comparison below 0.25 x the p10 cell_a2_spread (the misplacement guard).',
+    'Top-k: the oracle selects with its own top_k code but ranks by the PRICER\'s child (and k1_opp root) priors, which (c) checks against the oracle\'s within the logit bound, so a bf16 near-tie cannot fail (d); topk_boundary reports each selection\'s rank-k vs rank-(k+1) gap and how often the oracle\'s own prior would differ.',
     'Status: FAIL if any check that ran failed; INCOMPLETE if one is unavailable or vacuous (no turn-2 leaf compared, or (e) compared no root); PASS_SAMPLED with --sample-leaves ((e) SKIPPED_SAMPLED); else PASS. A sample always includes every terminal and error leaf the pricer reports.',
     '(e) swaps in the oracle\'s heads only on the lanes (c) checks (requested seats, legal lanes; the root opponent prior too); a waiting seat\'s unused prior keeps the pricer\'s value.',
     'Each world block is a separate call (Depth2Pricer.price takes one recipe); blocks after 0 bypass Recipe.selected, as U1.',
@@ -286,36 +298,29 @@ def check_d(frame, d_results, requests, findings, *, full_turn1=True):
     for name, items in rows.items():
         keys, equal, got, want = zip(*items)
         findings.record(name, [list(k) for k in keys], np.asarray(equal, bool), _objects(got), _objects(want))
-    findings.values = {}
+    findings.values = {}   # bounded at the run level (finalize_numeric in summarize)
     for name in ('t1_value', 'root_peer_logits'):
         cells, got, want = zip(*numeric[name]) if numeric[name] else ((), (), ())
-        summary, beyond = _numeric(cells, got, want, tolerance_for(name), findings.context, list_inexact=True)
-        findings.values[name] = summary
-        if len(beyond):findings.record(name + '_vs_d_beyond_tolerance', list(cells), ~beyond, np.asarray(got, np.float32), np.asarray(want, np.float32))
+        findings.values[name] = _numeric(cells, got, want, findings.context, list_inexact=True)
     return findings
 
 
-def _numeric(cells, got, want, tolerance, context=None, *, list_inexact=False, shape=None):
-    """Float agreement on matching cells: (summary, beyond-tolerance mask). Bit-equal cells (NaN payloads
-    included) always agree; otherwise both must be finite and within tolerance. cells=None with `shape`
-    names a listed cell by unravelling its flat index (no coordinate array for whole frames)."""
+def _numeric(cells, got, want, context=None, *, list_inexact=False, shape=None):
+    """Float agreement on matching cells, recorded for a run-level bound: compared/exact counts, max |diff|, the FIRST
+    largest differences (with cells) and every non-zero |diff| (_deltas; inf for a one-sided non-finite). Bit-equal cells
+    (NaN payloads included) have |diff| 0. cells=None with `shape` names a listed cell by unravelling its flat index."""
     got, want = np.asarray(got, np.float32).reshape(-1), np.asarray(want, np.float32).reshape(-1)
     if cells is None:cells = _Unravel(shape)
     else:cells = np.asarray(cells, np.int64).reshape(len(got), -1) if len(got) else np.zeros((0, 1), np.int64)
     exact = _bits(got) == _bits(want);finite = np.isfinite(got) & np.isfinite(want)
-    delta = np.where(finite, np.abs(got.astype(np.float64) - want.astype(np.float64)), np.inf)
-    beyond = ~exact & ~(delta <= tolerance)
-    row = lambda i: dict(context or {}, cell=cells[i].tolist(), pricer=_plain(got[i]), reference=_plain(want[i]))
+    delta = np.where(exact, 0., np.where(finite, np.abs(got.astype(np.float64) - want.astype(np.float64)), np.inf))
+    row = lambda i: dict(context or {}, cell=cells[i].tolist(), pricer=_plain(got[i]), reference=_plain(want[i]), abs_difference=float(delta[i]))
+    inexact = np.flatnonzero(delta > 0);largest = inexact[np.argsort(-delta[inexact], kind='stable')[:FIRST]]
     summary = dict(compared=int(len(got)), exact_equal=int(np.count_nonzero(exact)), nonfinite=int(np.count_nonzero(~exact & ~finite)),
-        max_abs_difference=float(delta[~exact & finite].max()) if np.any(~exact & finite) else 0., beyond_tolerance=int(np.count_nonzero(beyond)),
-        tolerance=tolerance, first_beyond=[row(i) for i in np.flatnonzero(beyond)[:FIRST]])
-    if list_inexact:summary['first_inexact'] = [row(i) for i in np.flatnonzero(~exact)[:FIRST]]
-    return summary, beyond
-
-
-def tolerance_for(name):
-    """The uniform float tolerance of a compared quantity or frame field: logits LOGIT_TOLERANCE, values VALUE_TOLERANCE."""
-    return LOGIT_TOLERANCE if 'logits' in name else VALUE_TOLERANCE
+        max_abs_difference=float(delta[~exact & finite].max()) if np.any(~exact & finite) else 0., largest=[row(i) for i in largest],
+        _deltas=delta[inexact].astype(np.float64))
+    if list_inexact:summary['first_inexact'] = [row(i) for i in inexact[:FIRST]]
+    return summary
 
 
 class _Unravel:
@@ -325,19 +330,62 @@ class _Unravel:
 
 
 def merge_numeric(reports):
-    """Merge {quantity: _numeric summary} dicts across calls; adds exact_equal_fraction and within_tolerance."""
+    """Merge {quantity: _numeric summary} dicts across calls (still unbounded: finalize_numeric applies the run's bound)."""
     merged = {}
     for report in reports:
         for name, d in report.items():
-            m = merged.setdefault(name, dict(compared=0, exact_equal=0, nonfinite=0, beyond_tolerance=0, max_abs_difference=0., first_beyond=[]))
-            for key in ('compared', 'exact_equal', 'nonfinite', 'beyond_tolerance'):m[key] += d[key]
+            m = merged.setdefault(name, dict(compared=0, exact_equal=0, nonfinite=0, max_abs_difference=0., largest=[], _deltas=[]))
+            for key in ('compared', 'exact_equal', 'nonfinite'):m[key] += d[key]
             m['max_abs_difference'] = max(m['max_abs_difference'], d['max_abs_difference'])
-            m['first_beyond'] = (m['first_beyond'] + d['first_beyond'])[:FIRST]
+            m['largest'] = sorted(m['largest'] + d['largest'], key=lambda r: -r['abs_difference'])[:FIRST]
+            m['_deltas'].append(np.asarray(d['_deltas'], np.float64))
             if 'first_inexact' in d:m['first_inexact'] = (m.get('first_inexact', []) + d['first_inexact'])[:FIRST]
-    for name, m in merged.items():
+    for m in merged.values():
+        m['_deltas'] = np.concatenate(m['_deltas']) if m['_deltas'] else np.zeros(0)
         m['exact_equal_fraction'] = None if not m['compared'] else m['exact_equal'] / m['compared']
-        m['tolerance'] = tolerance_for(name);m['within_tolerance'] = m['beyond_tolerance'] == 0
     return merged
+
+
+def is_logit(name):
+    return 'logits' in name
+
+
+def finalize_numeric(m, bound, guard=None):
+    """Apply a bound (and, for a value comparison, the misplacement guard) to a merged quantity, in place."""
+    deltas = m.pop('_deltas', np.zeros(0));beyond = deltas > bound;largest = m.pop('largest', [])
+    plain = lambda r: dict(r, abs_difference=_plain(r['abs_difference']))
+    m.update(bound=bound, beyond_bound=int(np.count_nonzero(beyond)), within_bound=not beyond.any(),
+        ratio_to_bound=None if m['nonfinite'] else (m['max_abs_difference'] / bound if bound > 0 else 0. if m['max_abs_difference'] == 0 else None),
+        largest=[plain(r) for r in largest[:5]], first_beyond=[plain(r) for r in largest if r['abs_difference'] > bound][:FIRST])
+    if 'first_inexact' in m:m['first_inexact'] = [plain(r) for r in m['first_inexact']]
+    if guard is not None:
+        m.update(guard_bound=guard, within_guard=m['nonfinite'] == 0 and m['max_abs_difference'] < guard,
+            ratio_to_guard=None if m['nonfinite'] else m['max_abs_difference'] / guard)
+    m['passed'] = m['within_bound'] and m.get('within_guard', True)
+    return m
+
+
+def tolerance_rule(floor, spread_p10):
+    """The run's bounds: 2 x the measured depth-1 noise floor for values (VALUE_FALLBACK when no floor cell exists or a floor
+    cell is non-finite), LOGIT_BOUND for logits, and GUARD_FACTOR x the p10 cell spread (None: guard skipped)."""
+    measured = floor is not None and floor.get('compared', 0) > 0 and not floor.get('nonfinite')
+    value = FLOOR_FACTOR * floor['max_abs_difference'] if measured else VALUE_FALLBACK
+    usable = spread_p10 is not None and np.isfinite(spread_p10)
+    return dict(rule=TOLERANCE_RULE, depth1_noise_floor=floor['max_abs_difference'] if measured else None,
+        floor_cells=None if floor is None else floor.get('compared'), value_bound=value,
+        value_bound_source='2 x depth1_noise_floor' if measured else ('fallback 1e-4: the depth-1 noise floor is not measurable '
+            '(no cell with both a D3 value and an oracle head value' + (', or a non-finite one)' if floor else ')')),
+        logit_bound=LOGIT_BOUND, p10_cell_a2_spread=float(spread_p10) if usable else None,
+        guard_bound=GUARD_FACTOR * float(spread_p10) if usable else None,
+        guard='applied' if usable else 'skipped: no expanded cell with two enumerated a2 (p10 cell_a2_spread undefined)')
+
+
+def bound_for(name, rule):
+    return rule['logit_bound'] if is_logit(name) else rule['value_bound']
+
+
+def guard_for(name, rule):
+    return None if is_logit(name) else rule['guard_bound']
 
 
 def _objects(values):
@@ -390,7 +438,15 @@ def check_heads(frame, data, d_results=None):
         k = np.asarray(keys);lanes = np.asarray([roots[x]['peer_legal'] for x in keys], bool)
         parts['root_peer_logits'] = _masked(k, field(frame, 'root_peer_logits')[k[:, 0], k[:, 1]],
             np.asarray([roots[x]['peer_logits_raw'] for x in keys]), lanes)
-    return {name: _numeric(*part, tolerance_for(name))[0] for name, part in parts.items()}
+        if d_results is not None:   # D3's own root opponent prior vs the oracle's: the logit floor
+            grid = {(q, wi): r for q, result in enumerate(d_results) for wi, r in enumerate(result.world_reports)}
+            rows = [(x, grid.get(x)) for x in keys]
+            rows = [(x, r) for x, r in rows if r is not None and r.get('joint_values') is not None and r.get('opponent_requested')]
+            if rows:
+                k = np.asarray([x for x, _ in rows]);lanes = np.asarray([roots[x]['peer_legal'] for x, _ in rows], bool)
+                parts['root_logit_floor'] = _masked(k, np.asarray([r['reply_logits'] for _, r in rows], np.float32),
+                    np.asarray([roots[x]['peer_logits_raw'] for x, _ in rows]), lanes)
+    return {name: _numeric(*part) for name, part in parts.items()}
 
 
 def check_oracle(data, findings):
@@ -451,33 +507,54 @@ def gate_status(result, *, sampled=False, unavailable=None, skipped=None):
     return ('PASS_SAMPLED' if sampled else 'PASS'), [f'skipped: {k} ({v})' for k, v in sorted((skipped or {}).items())]
 
 
-def summarize(calls):
-    """Merge per-call evaluations into the gate's checks: (b) discrete exact + floats within tolerance against D,
-    (c) GATED head quantities within tolerance against the oracle."""
+def summarize(calls, *, spread_p10=None):
+    """Merge per-call evaluations into the gate's checks under the run's evaluator-relative bounds (tolerance_rule):
+    (b) discrete exact + D3 floats, (c) head quantities against the oracle, block invariance floats; spread_p10 is the
+    p10 cell_a2_spread of the same frames (the misplacement guard; None skips it)."""
     have = lambda key: bool(calls) and all(key in x for x in calls)   # offline rechecks may lack a check's inputs
     checks = {}
     for key, name in (('a', 'a'), ('d', 'd'), ('oracle', 'oracle_consistency')):
         if have(key):checks[name] = merge_findings([c[key] for c in calls])
+    quantities = merge_numeric([x['c'] for x in calls]) if have('c') else {}
+    rule = tolerance_rule(quantities.get('depth1_noise_floor'), spread_p10);table = []
     if have('b'):
         b = merge_findings([c['b'] for c in calls]);values = merge_numeric([x['b'].get('values', {}) for x in calls])
-        b.update(reference='D3_FRAMEPRICER_DISCRETE_EXACT_FLOATS_WITHIN_TOLERANCE (not bitwise)', value_tolerance=VALUE_TOLERANCE,
-            logit_tolerance=LOGIT_TOLERANCE, values=values)
-        b['passed'] = b['passed'] and all(v['within_tolerance'] for v in values.values());checks['b'] = b
-    if have('c'):checks['c'] = _heads_check(calls)
+        for name, m in values.items():finalize_numeric(m, bound_for(name, rule), guard_for(name, rule));table.append(_row('b', name, m))
+        b.update(reference='D3_FRAMEPRICER_DISCRETE_EXACT_FLOATS_WITHIN_RUN_BOUNDS (not bitwise)', values=values)
+        b['passed'] = b['passed'] and all(v['passed'] for v in values.values());checks['b'] = b
+    if have('c'):checks['c'] = _heads_check(quantities, rule, calls, table)
     if any('e' in x for x in calls):checks['e'] = merge_decisions([x['e'] for x in calls if 'e' in x])
-    if any('invariance' in x for x in calls):checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())])
+    if any('invariance' in x for x in calls):
+        checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())], rule=rule)
+        table.extend(_row('block_invariance', name, m) for name, m in checks['block_invariance']['floats'].items())
     order = ('a', 'b', 'c', 'd', 'oracle_consistency', 'e', 'block_invariance')
     checks = {k: checks[k] for k in order if k in checks}
-    return dict(passed=bool(checks) and all(x['passed'] for x in checks.values()), checks=checks)
+    return dict(passed=bool(checks) and all(x['passed'] for x in checks.values()), checks=checks, tolerance=dict(rule, table=table))
 
 
-def _heads_check(calls):
-    quantities = merge_numeric([x['c'] for x in calls])
-    for name, m in quantities.items():m['gates'] = 'c' if name in GATED else None
-    floor = quantities.get('depth1_noise_floor', {}).get('max_abs_difference');t2 = quantities.get('t2_value', {}).get('max_abs_difference')
-    c = dict(passed=all(quantities[n]['within_tolerance'] for n in GATED if n in quantities), value_tolerance=VALUE_TOLERANCE,
-        logit_tolerance=LOGIT_TOLERANCE, tolerance_source=TOLERANCE_SOURCE, reference='ORACLE_BF16_HEADS_DIFFERENT_BATCH_GEOMETRY', gated=list(GATED),
-        depth1_noise_floor=floor, t2_value_to_floor_ratio=None if not floor or t2 is None else t2 / floor, quantities=quantities)
+def tolerance_line(tolerance):
+    """The rule's numbers for one log line: floor, 2 x floor, logit bound, p10 spread, guard and each check's max/bound."""
+    keys = ('depth1_noise_floor', 'value_bound', 'value_bound_source', 'logit_bound', 'p10_cell_a2_spread', 'guard_bound', 'guard')
+    return dict({k: tolerance.get(k) for k in keys}, checks=[{k: r[k] for k in ('check', 'quantity', 'max_abs_difference', 'ratio_to_bound',
+        'ratio_to_guard', 'passed')} for r in tolerance.get('table', ())])
+
+
+def _row(check, name, m):
+    return dict(check=check, quantity=name, compared=m['compared'], max_abs_difference=m['max_abs_difference'], bound=m['bound'],
+        ratio_to_bound=m['ratio_to_bound'], guard_bound=m.get('guard_bound'), ratio_to_guard=m.get('ratio_to_guard'), passed=m['passed'])
+
+
+GATED = ('t2_value', 't1_value_head', 't1_own_logits', 't1_peer_logits', 'root_peer_logits', 'raw_head_t2_value', 'raw_head_t1_value')
+
+
+def _heads_check(quantities, rule, calls, table):
+    for name, m in quantities.items():
+        if name in FLOORS:finalize_numeric(m, bound_for(name, rule));m.update(gates=None, passed=None)   # reported beside the bounds
+        else:finalize_numeric(m, bound_for(name, rule), guard_for(name, rule));m['gates'] = 'c';table.append(_row('c', name, m))
+    floor, t2 = rule['depth1_noise_floor'], quantities.get('t2_value', {}).get('max_abs_difference')
+    c = dict(passed=all(m['passed'] for n, m in quantities.items() if n not in FLOORS), reference='ORACLE_BF16_HEADS_DIFFERENT_BATCH_GEOMETRY',
+        gated=[n for n in quantities if n not in FLOORS], depth1_noise_floor=floor, root_logit_floor=quantities.get('root_logit_floor', {}).get('max_abs_difference'),
+        t2_value_to_floor_ratio=None if not floor or t2 is None else t2 / floor, quantities=quantities)
     if any(x.get('geometry') for x in calls):c['passed'] = False
     return c
 
@@ -659,7 +736,7 @@ def value_samples(frame, requests, *, backups=None, context=None):
 
 def values_section(collected, *, oracle_checked):
     """collected: [(value_samples(...), decision result of the same call or None)]. Percentiles per frame band and in total,
-    and the near-tie share (top-two root Q within VALUE_TOLERANCE) with (e)'s verdict on each near-tie root."""
+    and the near-tie share (top-two root Q within NEAR_TIE) with (e)'s verdict on each near-tie root."""
     pooled = collections.defaultdict(list);roots = [];reasons = set()
     for result, decision in collected:
         for key, parts in result['samples'].items():pooled[key].extend(parts)
@@ -670,7 +747,7 @@ def values_section(collected, *, oracle_checked):
     join = lambda parts: np.concatenate([np.asarray(x, np.float64).reshape(-1) for x in parts]) if parts else np.zeros(0)
     by_band = {b: {name: percentiles(join(pooled.get((name, b), []))) for name in quantities} for b in bands}
     totals = {name: percentiles(join([x for b in bands for x in pooled.get((name, b), [])])) for name in quantities}
-    near = [r for r in roots if r['top_two_gap'] is not None and r['top_two_gap'] <= VALUE_TOLERANCE]
+    near = [r for r in roots if r['top_two_gap'] is not None and r['top_two_gap'] <= NEAR_TIE]
     labeled = len(roots)
     return dict(source='PRICER_FRAME', oracle_checked=oracle_checked,
         scope='the pricer frame\'s own values' + (' (every leaf checked by the oracle: (a)-(e))' if oracle_checked else
@@ -679,7 +756,7 @@ def values_section(collected, *, oracle_checked):
         definitions=dict(abs_t2_value='|t2_value| at head-valued leaves (status 4)', abs_t1_value='|t1_value| at expanded cells (status 2)',
             cell_a2_spread='max - min over enumerated a2 of sum_r2 pi_opp(r2) v(a2, r2), expanded cells with >= 2 enumerated a2',
             root_q_spread='max - min of learner-max completed-Q over legal root actions, labeled roots'),
-        near_ties=dict(threshold=VALUE_TOLERANCE, labeled_roots=labeled, near_tie_roots=len(near), share=None if not labeled else len(near) / labeled,
+        near_ties=dict(threshold=NEAR_TIE, labeled_roots=labeled, near_tie_roots=len(near), share=None if not labeled else len(near) / labeled,
             by_band={b: sum(r['band'] == b for r in near) for b in bands}, e_evaluated=sum(r['e_evaluated'] for r in near),
             e_exact_on_all=all(r['e_differs'] is False for r in near) if near and all(r['e_evaluated'] for r in near) else None,
             e_differs_on=[r for r in near if r['e_differs']], roots=near[:FIRST]),
@@ -706,8 +783,8 @@ def sibling_spread(frame, *, context=None):
 
 def merge_sibling_spread(reports, *, oracle_checked):
     worlds = [w for r in reports for w in r['worlds']];children = np.asarray([c for r in reports for c in r['child_p10']], np.float64)
-    below = int(np.count_nonzero(children < VALUE_TOLERANCE))
-    return dict(source='PRICER_FRAME', oracle_checked=oracle_checked, threshold=VALUE_TOLERANCE, worlds=worlds,
+    below = int(np.count_nonzero(children < SPREAD_THRESHOLD))
+    return dict(source='PRICER_FRAME', oracle_checked=oracle_checked, threshold=SPREAD_THRESHOLD, worlds=worlds,
         children=int(children.size), children_p10_below_threshold=below, share_children_p10_below_threshold=None if not children.size else below / children.size,
         world_median=percentiles([w['median'] for w in worlds]), world_p10=percentiles([w['p10'] for w in worlds]), child_p10=percentiles(children),
         definition='per world: |v(a2,r2) - v(a2\',r2\')| over pairs of head-valued sibling leaves of one expanded child (pricer t2_value)')
@@ -953,18 +1030,18 @@ def recheck(directory, *, backups=None, progress=None):
             for check, keys in missing.items():unavailable.setdefault(check, set()).update(keys)
             collected.append((value_samples(saved['frame'], saved['requests'], backups=backups, context=context), evaluation.get('e')))
             sibling.append(sibling_spread(saved['frame'], context=context));info['checks'] = sorted(k for k in evaluation if k != 'geometry')
-    result = summarize(evaluations)
+    values = values_section(collected, oracle_checked=checked and all('e' in e for e in evaluations))
+    result = summarize(evaluations, spread_p10=values['totals']['cell_a2_spread'].get('p10'))
     refusals = merge_refusals([e['refusals'] for e in evaluations if 'refusals' in e])
     skipped = {key: e[f'skipped_{key}'] for e in evaluations for key in ('e', 'block_invariance') if f'skipped_{key}' in e}
     status, reasons = gate_status(result, sampled=not checked, unavailable=unavailable, skipped=skipped)
     if any(e.get('geometry') for e in evaluations):status = 'FAIL'
-    return dict(evaluator=evaluator, schema=SCHEMA, mode='RECHECK', status=status, passed=status in ('PASS', 'PASS_SAMPLED'), status_reasons=reasons,
-        skipped=skipped, source=str(directory), calls=len(evaluations),
+    return dict(evaluator=evaluator, tolerance=result['tolerance'], schema=SCHEMA, mode='RECHECK', status=status, passed=status in ('PASS', 'PASS_SAMPLED'),
+        status_reasons=reasons, skipped=skipped, source=str(directory), calls=len(evaluations),
         checks=result['checks'], unavailable={k: sorted(v) for k, v in unavailable.items()}, substitutions=sorted(substitutions), notes=sorted(notes),
-        values=values_section(collected, oracle_checked=checked and 'e' in result['checks']),
+        values=values,
         sibling_spread=merge_sibling_spread(sibling, oracle_checked=checked), refusals=refusals,
-        topk_boundary=merge_topk_boundary([e.get('topk') for e in evaluations]),
-        value_tolerance=VALUE_TOLERANCE, logit_tolerance=LOGIT_TOLERANCE, tolerance_source=TOLERANCE_SOURCE, conventions=list(CONVENTIONS))
+        topk_boundary=merge_topk_boundary([e.get('topk') for e in evaluations]), conventions=list(CONVENTIONS))
 
 
 def _roots_by_address(directory):
@@ -1118,9 +1195,9 @@ def merge_topk_boundary(reports):
     reports = [r for r in reports if r is not None]
     if not reports:return None
     seats = ('own', 'peer', 'root_peer');gaps = {s: [g for r in reports for g in r['gaps'][s]] for s in seats}
-    return dict(ranked_by=sorted({r['ranked_by'] for r in reports}), logit_tolerance=LOGIT_TOLERANCE,
+    return dict(ranked_by=sorted({r['ranked_by'] for r in reports}), logit_bound=LOGIT_BOUND,
         selections={s: len(gaps[s]) for s in seats}, gap={s: percentiles(gaps[s]) for s in seats},
-        gap_below_logit_tolerance={s: int(np.count_nonzero(np.asarray(gaps[s], np.float64) < LOGIT_TOLERANCE)) for s in seats},
+        gap_below_logit_bound={s: int(np.count_nonzero(np.asarray(gaps[s], np.float64) < LOGIT_BOUND)) for s in seats},
         oracle_prior_set_differs={s: sum(r['oracle_prior_set_differs'][s] for r in reports) for s in seats},
         definition='gap = rank-k minus rank-(k+1) logit of the prior that ranked the selection (the pricer\'s, checked by (c)); '
             'oracle_prior_set_differs = selections the oracle\'s own bf16 prior would have made differently (a near-tie the tolerance absorbs)')
@@ -1185,7 +1262,7 @@ def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, 
         stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe));info['worlds'] = len(stack.rows)
     with stage(progress, 'oracle_roots', **context) as info:
         roots = oracle.roots(stack, requests, params);info['usable_worlds'] = sum(r['pre'] == 0 for r in roots.values())
-    # Top-k is ranked by the PRICER's priors ((c) checks them against the oracle's within LOGIT_TOLERANCE) with the
+    # Top-k is ranked by the PRICER's priors ((c) checks them against the oracle's within LOGIT_BOUND) with the
     # oracle's own top_k, so a bf16 near-tie between two heads' geometries cannot fail (d); (d) still checks the ranking.
     usable = not frame_geometry(frame, len(requests))
     root_priors = {k: field(frame, 'root_peer_logits')[k] for k in roots} if usable and widths['k1_opp'] < 9 else None
@@ -1228,7 +1305,7 @@ def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, or
     if invariance:
         with stage(progress, 'check_block_invariance', **context) as info:
             evaluation['invariance'] = [block_invariance(other, frame, context=context) for other in data['invariance_frames']]
-            info['passed'] = all(r['passed'] for r in evaluation['invariance'])
+            info['discrete_equal'] = all(r['passed'] for r in evaluation['invariance'])
     pricer_timing = _frame_timing(frame)
     roots = data['roots'];evaluation['topk'] = data['topk']
     with stage(progress, 'refusals', **context):
@@ -1250,7 +1327,7 @@ def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, or
         forced_leaves=data['forced_leaves'], timing=timing,
         costs=data['costs'], pricer_timing=json.loads(json.dumps(pricer_timing, default=str)) if pricer_timing is not None else None,
         passed=dict(a=evaluation['a']['passed'], b=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed'],
-            **({'block_invariance': all(r['passed'] for r in evaluation['invariance'])} if invariance else {}),
+            **({'block_invariance_discrete': all(r['passed'] for r in evaluation['invariance'])} if invariance else {}),
             **({'e': evaluation['e']['passed']} if 'e' in evaluation else {})), saved_arrays=None if save is None else str(save))
     return evaluation, summary
 
@@ -1427,14 +1504,14 @@ def frame_fields(frame):
     return dict(vars(frame))
 
 
-def invariance_tolerance(name):
-    """Float frame fields: logits LOGIT_TOLERANCE, values VALUE_TOLERANCE, any other float exact."""
-    return LOGIT_TOLERANCE if 'logits' in name else VALUE_TOLERANCE if name.endswith('value') else 0.
+def invariance_bound(name, rule):
+    """Float frame fields: logits the logit bound, *value the value bound (and guard), any other float exact."""
+    return rule['logit_bound'] if is_logit(name) else rule['value_bound'] if name.endswith('value') else 0.
 
 
 def block_invariance(a, b, *, context=None):
-    """Two frames of the same requests (timing excluded): discrete arrays bit-equal (dtype, shape, bytes),
-    float arrays within invariance_tolerance (bit-equal NaNs agree; any other non-finite mismatch fails).
+    """Two frames of the same requests (timing excluded): discrete arrays bit-equal (dtype, shape, bytes), decided here;
+    float arrays are recorded and bounded at the run level (merge_invariance with the run's tolerance_rule).
 
     Every float array also reports its exact fraction and max |diff|. Non-array fields (world_reports) are
     compared as canonical JSON and reported, not gated."""
@@ -1449,11 +1526,7 @@ def block_invariance(a, b, *, context=None):
         if x.dtype != y.dtype or x.shape != y.shape:
             differing[name] = dict(problem=f'dtype/shape {x.dtype}{x.shape} != {y.dtype}{y.shape}');continue
         if x.dtype.kind in 'fc':
-            summary, beyond = _numeric(None, x.reshape(-1), y.reshape(-1), invariance_tolerance(name), context, shape=x.shape)
-            floats[name] = summary
-            if summary['beyond_tolerance']:
-                differing[name] = dict(count=summary['beyond_tolerance'], size=int(x.size), tolerance=summary['tolerance'])
-                first.extend(dict(row, field=name, first=row['pricer'], second=row['reference']) for row in summary['first_beyond'][:max(0, FIRST - len(first))])
+            floats[name] = _numeric(None, x.reshape(-1), y.reshape(-1), context, shape=x.shape)
             continue
         size = x.dtype.itemsize;flat = lambda v: np.ascontiguousarray(v).reshape(-1).view(np.uint8).reshape(-1, size)
         bad = np.flatnonzero(np.any(flat(x) != flat(y), axis=1)) if x.size else np.zeros(0, int)
@@ -1465,7 +1538,9 @@ def block_invariance(a, b, *, context=None):
     return dict(passed=not differing, arrays_compared=arrays, differing=differing, first_differences=first, nonarray_equal=other, floats=floats)
 
 
-def merge_invariance(reports, blocks=INVARIANCE_BLOCKS):
+def merge_invariance(reports, blocks=INVARIANCE_BLOCKS, *, rule=None):
+    """Discrete differences as recorded per call; float arrays bounded by `rule` (default: the fallback rule)."""
+    rule = rule or tolerance_rule(None, None)
     differing, first, other = {}, [], {}
     for r in reports:
         for name, d in r['differing'].items():
@@ -1474,10 +1549,13 @@ def merge_invariance(reports, blocks=INVARIANCE_BLOCKS):
             else:m['count'] += d['count'];m['size'] += d['size']
         first.extend(r['first_differences'])
         for name, equal in r['nonarray_equal'].items():other[name] = other.get(name, True) and equal
-    return dict(passed=all(r['passed'] for r in reports), child_blocks=list(blocks), calls=len(reports),
+    floats = merge_numeric([r.get('floats', {}) for r in reports])
+    for name, m in floats.items():finalize_numeric(m, invariance_bound(name, rule), rule['guard_bound'] if name.endswith('value') else None)
+    discrete = all(r['passed'] for r in reports)
+    return dict(passed=discrete and all(m['passed'] for m in floats.values()), discrete_equal=discrete, child_blocks=list(blocks), calls=len(reports),
         arrays_compared=max((r['arrays_compared'] for r in reports), default=0), differing=differing,
-        first_differences=first[:FIRST], nonarray_equal=other, floats=merge_numeric([r.get('floats', {}) for r in reports]),
-        rule='discrete arrays bit-equal; float arrays within tolerance (logits LOGIT_TOLERANCE, *value VALUE_TOLERANCE, other floats exact)')
+        first_differences=first[:FIRST], nonarray_equal=other, floats=floats,
+        rule='discrete arrays bit-equal; float arrays within the run\'s bounds (logits the logit bound, *value the value bound and guard, other floats exact)')
 
 
 def _probe(worker, runtime, jax):
@@ -1683,6 +1761,7 @@ def main(argv=None):
             report = recheck(args.recheck, progress=log)
             if report['evaluator'] is None:report['evaluator'] = dict(unknown='arrays saved before the evaluator header (5ea0552b): the bank snapshot\'s actor')
             (out / 'recheck.json').write_text(json.dumps(report, indent=1, allow_nan=False, default=str) + '\n')
+            log('TOLERANCE', **tolerance_line(report['tolerance']))
             log('RECHECK_COMPLETE', status=report['status'], out=str(out / 'recheck.json'), checks={k: v['passed'] for k, v in report['checks'].items()},
                 unavailable=report['unavailable']);status = 0 if report['passed'] else 1
         if args.topk_errors:
@@ -1710,6 +1789,8 @@ def main(argv=None):
     if importlib.util.find_spec('gpu_engine.device_depth2_pricer') is None:raise SystemExit('gpu_engine.device_depth2_pricer is not on this tree')
     if args.sample_leaves is None and not args.pricer_only and importlib.util.find_spec('gpu_engine.depth2_backups') is None:
         raise SystemExit('check (e) needs gpu_engine.depth2_backups (learner_max_root), which is not on this tree: failing closed')
+    log('TOLERANCE_RULE', rule=TOLERANCE_RULE, floor_factor=FLOOR_FACTOR, value_fallback=VALUE_FALLBACK, logit_bound=LOGIT_BOUND, guard_factor=GUARD_FACTOR,
+        numbers='TOLERANCE (the floor, 2 x floor, the p10 sibling spread, the guard and each check\'s max |diff| / bound) follows the checks')
     log('EVALUATOR', override=bool(args.head_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
         checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference,
         resolved='EVALUATOR_RESOLVED follows once the bank is loaded' + ('' if args.head_archive else ' (the bank snapshot\'s actor)'))
@@ -1753,23 +1834,25 @@ def main(argv=None):
                     context=dict(block=block, call=call), invariance=invariance, progress=log,
                     save=out / f'arrays-block{block}-call{call}.npz' if args.save_arrays else None, evaluator=evaluator)
                 evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
-    result = summarize(evaluations)
+    values = values_section([(e['values'], e.get('e')) for e in evaluations if 'values' in e], oracle_checked=args.sample_leaves is None)
+    result = summarize(evaluations, spread_p10=values['totals']['cell_a2_spread'].get('p10'))
+    log('TOLERANCE', **tolerance_line(result['tolerance']))
     reported = [c for c in calls if c['refusals'] is not None]
     refusals = dict(with_dropped(merge_refusals([c['refusals'] for c in reported]), evaluator.get('dropped_roots', ())),
         calls_reported=len(reported), calls=len(calls),
         by_block={str(b): merge_refusals([c['refusals'] for c in reported if c['block'] == b]) for b in range(len(seeds))},
         rule='reference (D): any world pre != 0 or any status-3 cell at either turn refuses the root; codes 5/6 refuse too')
     leaves = oracle.rows['leaves'];children = oracle.rows['children']
-    values = values_section([(e['values'], e.get('e')) for e in evaluations if 'values' in e], oracle_checked=args.sample_leaves is None)
     status, reasons = gate_status(result, sampled=args.sample_leaves is not None)
     report = dict(evaluator=evaluator, value_scale=value_scale(root_values, values['totals'].get('abs_t1_value'), args.value_reference),
+        tolerance=result['tolerance'],
         schema=SCHEMA, status=status, passed=status in ('PASS', 'PASS_SAMPLED'), status_reasons=reasons, checks=result['checks'],
         raw_head_check=args.raw_head_check, split_capacity=capacity, leaves=leaf_counts(calls, args.sample_leaves),
         decision=result['checks'].get('e', dict(status='SKIPPED_SAMPLED', reason='check (e) needs every leaf checked (no --sample-leaves)')),
         topk_boundary=merge_topk_boundary([e.get('topk') for e in evaluations]),
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
         block_seeds=list(seeds), max_roots=args.max_roots, sample_leaves=args.sample_leaves, sample_seed=SAMPLE_SEED,
-        value_tolerance=VALUE_TOLERANCE, logit_tolerance=LOGIT_TOLERANCE, tolerance_source=TOLERANCE_SOURCE, pricer_options=options, block_invariance=args.block_invariance,
+        pricer_options=options, block_invariance=args.block_invariance,
         invariance_pricer_options=[o for _, o in pricers[:-1]], calls=calls, conventions=list(CONVENTIONS), refusals=refusals,
         values=values, sibling_spread=merge_sibling_spread([e['sibling'] for e in evaluations if 'sibling' in e], oracle_checked=args.sample_leaves is None),
         costs=merge_costs(calls),
