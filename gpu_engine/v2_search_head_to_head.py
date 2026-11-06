@@ -39,7 +39,8 @@ from gpu_engine.v2_bench_collector import log
 from gpu_engine.v2_head_to_head import SWAP_OFFSET, snapshot
 
 BLOCK_DOMAIN = 'v2s.world-block.v1'
-REDUCTIONS = ('none', 'raw', 'average', 'hedge', 'blend')
+REDUCTIONS = ('none', 'argmax', 'raw', 'average', 'hedge', 'blend')
+NO_SEARCH = ('none', 'argmax')   # raw play: the sampled action, or the greedy argmax of the raw policy (a control)
 TURN_BANDS = ((0, 3), (4, 9), (10, 19), (20, 10**9))   # the engine's turn counter; the first band also holds turn 0
 
 
@@ -199,7 +200,7 @@ class Search:
 
     def configure(self, *, reduction, blend, world_blocks):
         """Per-cell settings; the pricer and its compiled kernels are shared across cells of one process."""
-        if reduction not in REDUCTIONS[1:]:raise ValueError('search reduction required')
+        if reduction in NO_SEARCH or reduction not in REDUCTIONS:raise ValueError('search reduction required')
         self.reduction = reduction;self.blend = blend;self.world_blocks = world_blocks
         self.recipes = tuple(self.original.Recipe(s) for s in world_block_seeds(self.seed, world_blocks))
         self.timing = collections.Counter();self.calls = [];self.events = collections.Counter();self.leaf_sample = []
@@ -438,14 +439,14 @@ def main(argv=None):
     for cell in cells:
         b, b_params = actor(cell['b_run'], cell['b_iteration'])
         cell = dict(dict(blend=args.blend, world_blocks=args.world_blocks, never_borrow=False), **cell)
-        if cell['reduction'] != 'none':
+        if cell['reduction'] not in NO_SEARCH:
             if search is None:
                 search = Search(prepared, plan, a_params, pricer=args.pricer, reduction=cell['reduction'], blend=cell['blend'],
                     world_blocks=cell['world_blocks'], seed=args.search_seed, capacities=tuple(int(x) for x in args.capacities.split(',')),
                     depth2_options=dict(child_block=args.depth2_child_block, **(dict(fixed_capacity=True) if args.depth2_fixed_capacity else {})),
                     workers=args.workers)
             else:search.configure(reduction=cell['reduction'], blend=cell['blend'], world_blocks=cell['world_blocks'])
-        play_cell(setup, cell, fresh(), (a_params, b_params), b, search if cell['reduction'] != 'none' else None, out,
+        play_cell(setup, cell, fresh(), (a_params, b_params), b, search if cell['reduction'] not in NO_SEARCH else None, out,
             setup_seconds=time.perf_counter() - begin)
     return 0
 
@@ -484,6 +485,8 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
                 raw = host['actions'][rows, a_side_host[rows]]
                 logits = host['raw_logits'][rows, a_side_host[rows]];legal = host['legal'][rows, a_side_host[rows]]
                 chosen = raw.copy();records = [dict(searched=False, refusal='no-search', strategy=None, value=None)] * len(rows)
+                if cell['reduction'] == 'argmax':   # greedy raw policy, lowest index on ties: the sampling-vs-greedy control
+                    chosen = np.argmax(np.where(legal, logits, -np.inf), axis=-1).astype(np.int32)
                 if search is not None:
                     clock = time.perf_counter()
                     inputs = jax.device_get({k: v[j.asarray(rows)] for k, v in decided['own_inputs'].items()})
