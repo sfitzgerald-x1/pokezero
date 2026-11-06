@@ -2,6 +2,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -64,6 +65,20 @@ class ParseTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as raised:throughput.parse(argv)
                 self.assertEqual(raised.exception.code, 2, argv)
 
+    def test_isolate_runs_one_subprocess_per_config(self):
+        calls = []
+        def fake_call(command):
+            config = command[command.index('--only') + 1];target = Path(command[command.index('--out') + 1]);target.mkdir(parents=True)
+            (target / 'throughput.json').write_text(json.dumps(dict(sections={config: dict(config=config)})));calls.append(command);return 0
+        argv = REQUIRED[:-4] + ['--out', 'parent', '--capacity', '4', '--isolate', '--d1', '--profile-split']
+        with tempfile.TemporaryDirectory() as directory, patch('subprocess.call', side_effect=fake_call):
+            sections, order = throughput.isolated(throughput.parse(argv), argv, Path(directory))
+        self.assertEqual(order, ['depth1', 'depth2', 'constant']);self.assertEqual(sections['constant'], dict(config='constant'))
+        for command in calls:
+            self.assertNotIn('--isolate', command);self.assertNotIn('parent', command);self.assertEqual(command.count('--out'), 1)
+        self.assertIn('lifetime peak', throughput.MEMORY_SCOPE)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):throughput.parse(REQUIRED + ['--isolate', '--only', 'depth2'])
+
     def test_invalid_arguments_exit_2(self):
         bad = (REQUIRED[:-2], REQUIRED + ['--capacity', '0'], REQUIRED + ['--repeats', '0'], REQUIRED + ['--k-opp', '10'],
             REQUIRED + ['--worlds-blocks', '0'], REQUIRED + ['--child-block', '0'], REQUIRED + ['--max-roots', '0'],
@@ -91,7 +106,7 @@ class ArithmeticTests(unittest.TestCase):
         def context(block):
             entered.append(block);yield
         blocks = [(0, 'recipe0', ['r'] * 4, lambda: context(0)), (1, 'recipe1', ['s'] * 4, lambda: context(1))]
-        pricer = FakeDepth2([1.0, .3, .2, .4, .9, .5, .6, .4]);memory = iter([dict(peak_bytes_in_use=p, bytes_in_use=p // 2) for p in range(10, 90, 10)])
+        pricer = FakeDepth2([1.0, .3, .2, .4, .9, .5, .6, .4]);memory = iter([dict(process_peak_bytes_so_far=p, bytes_in_use=p // 2) for p in range(10, 90, 10)])
         lines = []
         result = throughput.measure('depth2', throughput.depth2_call, pricer, blocks, 'materializer', 'params', 3,
             memory=lambda: next(memory), progress=lambda m, **v: lines.append((m, v)))
@@ -101,7 +116,7 @@ class ArithmeticTests(unittest.TestCase):
         self.assertEqual((first['warm_device_seconds_min'], first['warm_device_seconds_median']), (.2, .3))
         self.assertEqual((second['cold_compile_seconds'], second['warm_device_seconds_median']), (0., .5))
         self.assertEqual((first['leaves_enumerated'], first['leaves_evaluated'], first['leaves_constant']), (1000, 2187, True))
-        self.assertEqual((first['peak_bytes_in_use'], first['bytes_in_use_after'], second['peak_bytes_in_use']), (40, 20, 80))
+        self.assertEqual((first['process_peak_bytes_so_far'], first['bytes_in_use_after'], second['process_peak_bytes_so_far']), (40, 20, 80))
         derived = throughput.derive(result, 4)
         self.assertAlmostEqual(derived['device_ms_per_root_median'], 1e3 * (.3 + .5) / 4)
         self.assertAlmostEqual(derived['device_ms_per_root_min'], 1e3 * (.2 + .4) / 4)
@@ -115,9 +130,9 @@ class ArithmeticTests(unittest.TestCase):
     def test_depth1_counts_required_pairs_and_evaluated_lanes(self):
         blocks = [(0, 'recipe', ['r'] * 3, contextlib.nullcontext)]
         result = throughput.measure('depth1', throughput.depth1_call, FakeDepth1([.5, .1, .2]), blocks, None, None, 2,
-            memory=lambda: dict(peak_bytes_in_use=None, bytes_in_use=None), progress=None)[0]
+            memory=lambda: dict(process_peak_bytes_so_far=None, bytes_in_use=None), progress=None)[0]
         self.assertEqual((result['leaves_enumerated'], result['leaves_evaluated'], result['cold_compile_seconds']), (18, 486, 1.))
-        self.assertAlmostEqual(result['warm_device_seconds_median'], .15);self.assertIsNone(result['peak_bytes_in_use'])
+        self.assertAlmostEqual(result['warm_device_seconds_median'], .15);self.assertIsNone(result['process_peak_bytes_so_far'])
         derived = throughput.derive([result], 3)
         self.assertAlmostEqual(derived['device_ms_per_root_median'], 50.);self.assertAlmostEqual(derived['leaves_enumerated_per_second_median'], 120.)
 

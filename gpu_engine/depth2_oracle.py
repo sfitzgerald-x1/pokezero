@@ -343,8 +343,17 @@ def top_k(legal, logits, k):
     return tuple(sorted(ranked[:k]))
 
 
-def turn1_cells(requests, recipe, roots, *, k1_own=9, k1_opp=9):
-    """D's turn-1 grid per usable world: pricing_order prefix x the opponent's legal replies (column 0 if it waits)."""
+def boundary_gap(legal, logits, k):
+    """top_k's selection margin: the rank-k minus rank-(k+1) logit (non-finite ranks last); None when at most k
+    actions are legal (nothing is pruned, so no ranking can flip the set)."""
+    score = lambda i: float(logits[i]) if math.isfinite(float(logits[i])) else -math.inf
+    ranked = sorted((score(i) for i in range(9) if legal[i]), reverse=True)
+    return None if len(ranked) <= k else ranked[k - 1] - ranked[k]
+
+
+def turn1_cells(requests, recipe, roots, *, k1_own=9, k1_opp=9, root_priors=None):
+    """D's turn-1 grid per usable world: pricing_order prefix x the opponent's legal replies (column 0 if it waits).
+    root_priors {(q, world): logits[9]} ranks k1_opp instead of the oracle's own root opponent prior."""
     if type(k1_own) is not int or not 1 <= k1_own <= 9:raise ValueError('turn-1 width k1_own in 1..9 required')
     cells = []
     for q, request in enumerate(requests):
@@ -352,18 +361,22 @@ def turn1_cells(requests, recipe, roots, *, k1_own=9, k1_opp=9):
         for wi in (0, 1):
             root = roots.get((q, wi))
             if root is None or root['pre'] != 0:continue
-            replies = top_k(root['peer_legal'], root['peer_logits'], k1_opp) if root['peer_requested'] else (0,)
+            prior = root['peer_logits'] if root_priors is None else root_priors[(q, wi)]
+            replies = top_k(root['peer_legal'], prior, k1_opp) if root['peer_requested'] else (0,)
             cells.extend((q, wi, a, r) for a in order for r in replies)
     return cells
 
 
-def turn2_leaves(children, *, k_own=9, k_opp=9):
-    """Each expanded child's top-k_own x top-k_opp legal pairs by the oracle's child priors (0 for a waiting seat)."""
+def turn2_leaves(children, *, k_own=9, k_opp=9, priors=None):
+    """Each expanded child's top-k_own x top-k_opp legal pairs (0 for a waiting seat), ranked by the oracle's child
+    priors, or by priors=dict(own=[N,9], peer=[N,9]) aligned with children['cells'] (e.g. the pricer's)."""
+    own_logits = children['own_logits'] if priors is None else priors['own']
+    peer_logits = children['peer_logits'] if priors is None else priors['peer']
     leaves = []
     for i, (q, wi, a1, r1) in enumerate(map(tuple, children['cells'].tolist())):
         if children['status'][i] != STATUS_EXPANDED:continue
-        mine = top_k(children['own_legal'][i], children['own_logits'][i], k_own) if children['own_requested'][i] else (0,)
-        theirs = top_k(children['peer_legal'][i], children['peer_logits'][i], k_opp) if children['peer_requested'][i] else (0,)
+        mine = top_k(children['own_legal'][i], own_logits[i], k_own) if children['own_requested'][i] else (0,)
+        theirs = top_k(children['peer_legal'][i], peer_logits[i], k_opp) if children['peer_requested'][i] else (0,)
         leaves.extend((q, wi, a1, r1, a2, r2) for a2 in mine for r2 in theirs)
     return leaves
 
