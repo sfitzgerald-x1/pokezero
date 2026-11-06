@@ -194,6 +194,7 @@ class Search:
             self.pricer = Depth2Pricer(executor, plan.model, capacity=self.capacities[-1], actor_capacity=1, **depth2_options)
         else:raise ValueError('pricer depth1 or depth2 required')
         self.params = (params,);self.seed = seed;self.workers = workers;self.pool = None
+        self._reduce = original.reduce_completed_q;self.events = collections.Counter()
         self.configure(reduction=reduction, blend=blend, world_blocks=world_blocks)
 
     def configure(self, *, reduction, blend, world_blocks):
@@ -201,10 +202,27 @@ class Search:
         if reduction not in REDUCTIONS[1:]:raise ValueError('search reduction required')
         self.reduction = reduction;self.blend = blend;self.world_blocks = world_blocks
         self.recipes = tuple(self.original.Recipe(s) for s in world_block_seeds(self.seed, world_blocks))
-        self.timing = collections.Counter();self.calls = []
+        self.timing = collections.Counter();self.calls = [];self.events = collections.Counter()
         if self.kind == 'depth2' and reduction in ('hedge', 'blend') and self.workers > 1 and self.pool is None:
             import concurrent.futures, multiprocessing
             self.pool = concurrent.futures.ProcessPoolExecutor(self.workers, mp_context=multiprocessing.get_context('spawn'))
+
+    def _reduce_tolerating_rounding(self, *, root_logits, root_legal, worlds):
+        """D's reduce_completed_q, except its known rounding edge does not abort the pricer call.
+
+        When every reply-weighted value is +-1, the fsum of reply probabilities can exceed one by an ulp and
+        RootImprovement.validate rejects completed-Q of 1 + 2**-52. The world prices are exact and in range;
+        only D's target validation fails. The search seat uses the world prices, not D's target, so such a
+        root counts as priced and the event is counted. Any other failure is re-raised.
+        """
+        from gpu_engine import search_hedge as hedge
+        try:return self._reduce(root_logits=root_logits, root_legal=root_legal, worlds=worlds)
+        except ValueError as error:
+            average = hedge.averaging(worlds, root_legal)
+            if (str(error) != 'finite in-range numerical value required' or average is None
+                    or any(v is not None and abs(v) > 1 + 1e-12 for v in average.q)):raise
+            self.events['d_reduction_rounding_edge'] += 1
+            return self.original.Reduction('LABELED', None, 0, 0, 0., None)
 
     def _price(self, requests, recipe):
         """Price in calls of a fixed capacity (padding with the chunk's first request).
@@ -219,7 +237,8 @@ class Search:
             chunk = requests[offset:offset + top]
             size = next(c for c in self.capacities if c >= len(chunk))
             padded = list(chunk) + [chunk[0]] * (size - len(chunk))
-            output = self.pricer.price(padded, self.materializer, recipe, self.params)
+            with patch.object(self.original, 'reduce_completed_q', self._reduce_tolerating_rounding):
+                output = self.pricer.price(padded, self.materializer, recipe, self.params)
             timing = self.pricer.last_timing
             self.calls.append({k: v for k, v in timing.items() if isinstance(v, (int, float, str))})
             for key in ('world_prepare_seconds', 'device_seconds', 'compile_seconds', 'lower_seconds', 'frame_wall_seconds'):
@@ -524,6 +543,7 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
         never_borrow=dict(probe_stats) if cell['never_borrow'] else None, collector_check=setup['collector_check'],
         timing=dict(steps=step, wall_seconds=time.perf_counter() - begin, process_setup_seconds=setup_seconds, **timing,
             search=dict(search.timing) if search else {}, pricer_calls=len(search.calls) if search else 0,
+            search_events=dict(search.events) if search else {},
             search_ms_per_decision=1000 * timing['search_seconds'] / max(total['decisions'], 1) if search else None),
         scope='Paired engine head-to-head, same teams with seats swapped, search in seat A; not a Foul Play result.')
     (out / f'{label}.json').write_text(json.dumps(report, indent=1, default=str) + '\n')

@@ -55,6 +55,27 @@ class HelperTests(unittest.TestCase):
         with self.assertRaises(TypeError):h2h.leaves_equal({'a': object()}, {'a': object()})
 
 
+class RoundingEdgeTests(unittest.TestCase):
+    def test_d_reduction_rounding_edge_counts_and_other_errors_raise(self):
+        import collections, random
+        from pokezero import v5_gumbel as g
+        search = h2h.Search.__new__(h2h.Search)
+        search.original = g;search._reduce = g.reduce_completed_q;search.events = collections.Counter()
+        rng = random.Random(1);root = (True, True) + (False,) * 7;edges = 0
+        for _ in range(2000):
+            k = rng.randint(2, 9);legal = tuple(i < k for i in range(9))
+            values = [[1. if i < 2 and j < k else None for j in range(9)] for i in range(9)]
+            world = g.WorldPrices(True, legal, tuple(rng.gauss(0, 3) for _ in range(9)), values)
+            try:g.reduce_completed_q(root_logits=(0.,) * 9, root_legal=root, worlds=(world, world))
+            except ValueError:
+                edges += 1
+                result = search._reduce_tolerating_rounding(root_logits=(0.,) * 9, root_legal=root, worlds=(world, world))
+                self.assertEqual(result.status, 'LABELED')
+        self.assertGreater(edges, 0);self.assertEqual(search.events['d_reduction_rounding_edge'], edges)
+        # A genuinely out-of-range or malformed input still raises.
+        with self.assertRaises(ValueError):search._reduce_tolerating_rounding(root_logits=(0.,) * 9, root_legal=root, worlds=(world,))
+
+
 class CompareTests(unittest.TestCase):
     def write(self, root, label, scores, games, decisions):
         prefix = Path(root, label)
