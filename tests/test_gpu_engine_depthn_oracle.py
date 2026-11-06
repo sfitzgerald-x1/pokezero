@@ -13,6 +13,7 @@ import copy
 from dataclasses import replace
 import importlib.util
 import io
+import itertools
 import json
 import math
 import os
@@ -20,6 +21,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import types
 from types import SimpleNamespace
 import unittest
 import uuid
@@ -249,46 +251,79 @@ def fake_searched_maps(frame, k_own, k_opp):
 FAKE_MODULE = SimpleNamespace(DepthNPricer=OracleNPricer, as_depth2_frame=fake_as_depth2, searched_maps=fake_searched_maps)
 
 
-class FakeBackupsN:
-    """depthn_backups' call shapes (the real module lands with the pricer): recursive learner-max over the enumerated slots
-    (masked softmax of each seat's prior over its map), terminals exact, any error refuses; a root action's Q is the mean
-    over usable worlds and enumerated replies; the target is softmax(root logits + Q) over legal actions."""
-    @staticmethod
-    def _node(frame, q, w, ply, node):
-        if ply == 1:
-            a, r = divmod(int(node), 9);at = lambda x: np.asarray(x)[q, w, a, r]
-            return (int(at(frame.t1_status)), float(at(frame.t1_value)), at(frame.t1_own_actions), at(frame.t1_opp_actions), at(frame.t1_peer_logits))
-        level = frame.nodes[ply - 2];at = lambda x: np.asarray(x)[q, w, node]
-        return int(at(level.status)), float(at(level.value)), at(level.own_actions), at(level.opp_actions), at(level.opp_logits)
+# depthn_backups' call shapes while the real module lands with the pricer: its node_value (masked softmax of each seat's prior over its
+# map, fsum rows, strict max, clip, terminals exact, any error refuses, the `rule` hook) with the child-read lines the gate's backup-path
+# mutants patch (gate.BACKUP_PATCH) kept verbatim, so --mutation-test runs on this tree too; a root action's Q is the mean over usable
+# worlds and enumerated replies, the target softmax(root logits + Q) over legal actions.
+FAKE_BACKUPS_SOURCE = '''
+import math
+from types import SimpleNamespace
 
-    @classmethod
-    def node_value(cls, frame, q, w, ply, node, rule=None):
-        status, value, own, opp, opp_logits = cls._node(frame, q, w, ply, node)
-        if status == 1:return value
-        if status != 2:return None
-        k_opp = len(opp);K = len(own) * k_opp;rows = []
-        live = [x for x in range(k_opp) if opp[x] >= 0];logits = np.asarray([float(opp_logits[opp[x]]) for x in live]);pi = np.exp(logits - logits.max());pi /= pi.sum()
-        for i in (i for i in range(len(own)) if own[i] >= 0):
-            values = []
-            for x in live:
-                if ply + 1 == frame.depth:
-                    s = int(frame.leaf_status[q, w, node, i, x]);v = float(frame.leaf_value[q, w, node, i, x]) if s in (1, 4) else None
-                else:v = cls.node_value(frame, q, w, ply + 1, node * K + i * k_opp + x)
-                if v is None:return None
-                values.append(v)
-            rows.append(float(np.dot(pi, values)))
-        return max(rows) if rows else None
+import numpy as np
 
-    @classmethod
-    def learner_max_root(cls, frame, q, logits, legal):
-        if (np.asarray(frame.pre[q]) != 0).any():return SimpleNamespace(status='REFUSED', improvement=None)
-        values = []
-        for a1 in range(9):
-            cells = [cls.node_value(frame, q, w, 1, a1 * 9 + r1) for w in (0, 1) for r1 in range(9) if frame.t1_status[q, w, a1, r1]] if legal[a1] else []
-            if legal[a1] and (not cells or any(c is None for c in cells)):return SimpleNamespace(status='REFUSED', improvement=None)
-            values.append(float(np.mean(cells)) if legal[a1] else None)
-        scores = np.where(legal, np.asarray(logits) + np.asarray([v or 0. for v in values]), -np.inf);target = np.exp(scores - scores.max())
-        return SimpleNamespace(status='LABELED', improvement=SimpleNamespace(completed_q=tuple(values), policy_target=tuple(target / target.sum())))
+
+def _softmax(logits,actions):
+    top=max(float(logits[a])for a in actions)
+    weights=[math.exp(float(logits[a])-top)for a in actions]
+    total=math.fsum(weights)
+    return [w/total for w in weights]
+
+
+def learner_max(grid,pi_own,pi_opp):
+    best=None
+    for row in grid:
+        q=math.fsum(p*v for p,v in zip(pi_opp,row))
+        if best is None or q>best:best=q
+    return best
+
+
+def _node(frame,root,world,ply,node):
+    if ply==1:
+        a,r=divmod(int(node),9);at=lambda x:x[root,world,a,r]
+        return (int(at(frame.t1_status)),at(frame.t1_value),at(frame.t1_own_actions),at(frame.t1_opp_actions),at(frame.t1_own_logits),at(frame.t1_peer_logits))
+    p=frame.nodes[ply-2];at=lambda x:x[root,world,node]
+    return int(at(p.status)),at(p.value),at(p.own_actions),at(p.opp_actions),at(p.own_logits),at(p.opp_logits)
+
+
+def node_value(frame,root,world,ply,node,rule=learner_max):
+    status,value,own_actions,opp_actions,own_logits,opp_logits=_node(frame,root,world,ply,node)
+    if status==1:return float(value)
+    if status!=2:return None
+    k_own,k_opp=frame.k_own[ply-1],frame.k_opp[ply-1];K=k_own*k_opp;leaf=ply+1==frame.depth
+    own_slots=[i for i in range(k_own)if own_actions[i]>=0];opp_slots=[i for i in range(k_opp)if opp_actions[i]>=0]
+    if not own_slots or not opp_slots:return None
+    grid=[]
+    for i in own_slots:
+        row=[]
+        for x in opp_slots:
+            if leaf:
+                s=int(frame.leaf_status[root,world,node,i,x])
+                v=float(frame.leaf_value[root,world,node,i,x])if s in(1,4)else None
+            else:v=node_value(frame,root,world,ply+1,node*K+i*k_opp+x,rule)
+            if v is None:return None
+            row.append(v)
+        grid.append(row)
+    pi_own=_softmax(own_logits,[int(own_actions[i])for i in own_slots]);pi_opp=_softmax(opp_logits,[int(opp_actions[x])for x in opp_slots])
+    return min(1.,max(-1.,rule(grid,pi_own,pi_opp)))
+
+
+def learner_max_root(frame,q,logits,legal):
+    if (np.asarray(frame.pre[q])!=0).any():return SimpleNamespace(status='REFUSED',improvement=None)
+    values=[]
+    for a1 in range(9):
+        cells=[node_value(frame,q,w,1,a1*9+r1)for w in(0,1)for r1 in range(9)if frame.t1_status[q,w,a1,r1]]if legal[a1]else[]
+        if legal[a1]and(not cells or any(c is None for c in cells)):return SimpleNamespace(status='REFUSED',improvement=None)
+        values.append(float(np.mean(cells))if legal[a1]else None)
+    scores=np.where(legal,np.asarray(logits)+np.asarray([v or 0. for v in values]),-np.inf);target=np.exp(scores-scores.max())
+    return SimpleNamespace(status='LABELED',improvement=SimpleNamespace(completed_q=tuple(values),policy_target=tuple(target/target.sum())))
+'''
+
+
+def fake_backups(name='fake_depthn_backups'):
+    module = types.ModuleType(name);exec(compile(FAKE_BACKUPS_SOURCE, f'<{name}>', 'exec'), module.__dict__);return module
+
+
+FakeBackupsN = fake_backups()
 
 
 # ---------------------------------------------------------------- fixture
@@ -797,7 +832,17 @@ def saved_gate(depth=3, ply2_noise=.004, t1_logits=.05, ply2_logits=None, single
         guard_bound=m.get('guard_bound'), passed=m['passed']) for name, m in quantities.items() if name != 'depth1_noise_floor']
     return dict(schema=gate.SCHEMA, mode='SAVED_ROOTS', status='FAIL', passed=False, status_reasons=[], sample_leaves=None, evaluator=dict(override=single_actor),
         pricer_options=dict(depth=depth, actor_capacity=1 if single_actor else 3),
-        tolerance=dict(value_bound=.008, guard_bound=.005, table=table), checks=dict(a=a, c=dict(passed=False, quantities=quantities), e=dict(passed=True, roots_compared=2)))
+        tolerance=dict(value_bound=.008, guard_bound=.005, table=table), checks=dict(a=a, c=dict(passed=False, quantities=quantities), e=dict(passed=True, roots_compared=2),
+            f=saved_choices()))
+
+
+def saved_choices(differing=()):
+    """A saved (f) section as the live run writes it (value bound .008): `differing` flips as (gap_pricer, gap_oracle) pairs."""
+    flips = [dict(block=0, call=0, root=1, world=0, ply=2, node=7 + i, address=[1, 2, 0], kind='learner', own_action=None, actions=[1, 2], gap_pricer=gp, gap_oracle=go)
+        for i, (gp, go) in enumerate(differing)]
+    return dict(passed=True, status='COMPARED', nodes=5, nodes_by_ply={'1': 2, '2': 3}, comparisons=12, learner_comparisons=5, opponent_comparisons=7, not_comparable=0,
+        both_unpriced=0, one_sided=0, one_sided_examples=[], problems=0, problem_examples=[], differing=flips, differing_complete=True, max_abs_delta_row_q=.003,
+        max_abs_delta_child_value=.006, sampled=False, value_bound=.008, near_ties=2, near_tie_flips=0, non_exempt_mismatches=0, rule=gate.CHOICE_RULE)
 
 
 def reverdicted(report, *, name='gate.json'):
@@ -1026,7 +1071,8 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
             node.pop(keys[-1]);return report
         cases = dict(within_guard=drop('checks', 'c', 'quantities', 'leaf_value', 'within_guard'), within_bound=drop('checks', 'c', 'quantities', 'ply2_value_head', 'within_bound'),
             digest_counts=drop('checks', 'a', 'compared'), depth=drop('pricer_options', 'depth'), sample_leaves=drop('sample_leaves'), quantities=drop('checks', 'c', 'quantities'),
-            n2_report=dict(saved_gate(), mode='N2_EQUIVALENCE'), schema=dict(saved_gate(), schema='pokezero.depth2-gate.v1'))
+            n2_report=dict(saved_gate(), mode='N2_EQUIVALENCE'), schema=dict(saved_gate(), schema='pokezero.depth2-gate.v1'), choices=drop('checks', 'f'),
+            choice_flips=drop('checks', 'f', 'differing'), value_bound=drop('tolerance', 'value_bound'))
         for case, report in cases.items():
             with self.subTest(case):
                 directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));path = directory / 'gate.json';path.write_text(json.dumps(report))
@@ -1037,7 +1083,7 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             for argv in (['--reverdict', 'g.json', '--out', 'o'], ['--reverdict', 'g.json', '--d3-root', 'b', '--chunk', '0'], ['--d3-root', 'b', '--chunk', '0'],
                     ['--reverdict', 'g.json', '--depth', '4'], ['--reverdict', 'g.json', '--sample-leaves', '2'], ['--reverdict', 'g.json', '--block-invariance'],
-                    ['--reverdict', 'g.json', '--selection', 'searched'], ['--reverdict', 'g.json', '--head-archive', 'h']):
+                    ['--reverdict', 'g.json', '--selection', 'searched'], ['--reverdict', 'g.json', '--head-archive', 'h'], ['--reverdict', 'g.json', '--mutation-test']):
                 with self.assertRaises(SystemExit) as raised:gate.main(argv)
                 self.assertEqual(raised.exception.code, 2, argv)
 
@@ -1059,13 +1105,17 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
     def test_reverdict_on_saved_reports(self):
         """A synthetic report with a raw-head arm, then each V2E_DEPTHN_SAVED_GATE_REPORTS file (unset: none, never a skip): PASS,
         every other check's verdict as saved, and only what the current rules relax changed (a digest-certified guard on a single
-        evaluator actor, or a deeper prior under 2 x the turn-1 logit floor)."""
+        evaluator actor, or a deeper prior under 2 x the turn-1 logit floor); a report from before (f) is refused as missing checks.f."""
         report = saved_gate();report['checks']['c']['quantities']['raw_head_leaf_value'] = dict(report['checks']['c']['quantities']['leaf_value'])
         code, out, _, _ = reverdicted(report);self.assertEqual((code, out['status']), (0, 'PASS'))
         self.assertEqual([x['quantity'] for x in out['reverdict']['changed_quantities']], ['leaf_value', 'raw_head_leaf_value'])
         for path in SAVED_REPORTS:
             with self.subTest(path.name):
-                source = json.loads(path.read_text());code, out, _, _ = reverdicted(path, name=path.name);c, tolerance = out['checks']['c']['quantities'], out['tolerance']
+                source = json.loads(path.read_text())
+                if 'f' not in (source.get('checks') or {}):
+                    with self.assertRaises(SystemExit) as raised:reverdicted(path, name=path.name)
+                    self.assertIn('checks.f', str(raised.exception.code));continue
+                code, out, _, _ = reverdicted(path, name=path.name);c, tolerance = out['checks']['c']['quantities'], out['tolerance']
                 self.assertEqual((code, out['status'] in ('PASS', 'PASS_SAMPLED')), (0, True), out['reverdict'])
                 self.assertEqual({k: v['passed'] for k, v in out['checks'].items() if k != 'c'}, {k: v['passed'] for k, v in source['checks'].items() if k != 'c'})
                 for change in out['reverdict']['changed_quantities']:
@@ -1075,6 +1125,215 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
                 if measured and not any(m['nonfinite'] for m in measured):self.assertEqual(tolerance['turn1_logit_floor'], max(m['max_abs_difference'] for m in measured))
                 for name in tolerance['deeper_logit_quantities']:self.assertEqual(c[name]['bound'], tolerance['deeper_logit_bound'], name)
                 self.assertEqual([c[n]['bound'] for n in gate.TURN1_LOGITS if n in c], [gate.g2.LOGIT_BOUND] * len([n for n in gate.TURN1_LOGITS if n in c]))
+
+
+# ---------------------------------------------------------------- (f) interior-node choices and the mutation kill test
+
+class ChoicesTests(FixtureN, unittest.TestCase):
+    """(f) on the stand-in surface (the oracle's own values: the value bound is 0 unless a synthetic floor is set), the gate's independent
+    recursion against the backups, rule 1's per-node exemption, one-sided pricing, sampled runs, --reverdict and the header; then the eight
+    mutants on the fake backups' source and the sweep's survivor accounting."""
+    _d = GateNTests._d
+
+    def prior(self):
+        return self.cached('prior', lambda: self.call(self.pricers()))
+
+    def frame_data(self, depth=3):
+        """The stand-in's depth-N frame (k = 2) and the gate's oracle data over it."""
+        def make():
+            with self.engine():
+                frame = OracleNPricer(self.ex, object(), depth=depth, k_own=2, k_opp=2).price(self.requests, self.tables, self.recipe, PARAMS)
+                stack = reference.stack(self.requests, batch._numpy_worlds(self.requests, self.tables, self.recipe))
+                return frame, gate.oracle_levels(oracle=self.oracle, stack=stack, requests=self.requests, recipe=self.recipe, params=PARAMS, frame=frame,
+                    plan=gate.plan_of(depth, 2, 2))
+        return self.cached(('frame_data', depth), make)
+
+    def judge(self, frame, data, *, backups=FakeBackupsN, floor=None):
+        """(result, status, (f)) of every check on (frame, data) through summarize_run; floor: a synthetic depth-1 floor (value bound 2 x floor)
+        with the evaluator actors 1 (GUARD_DEPTHN_RULE certifies past turn 1)."""
+        ev = gate.evaluate_n(frame, self._d(), self.requests, data, context={}, backups=backups, decision=True, choices=True)
+        if floor is not None:ev['c']['depth1_noise_floor'] = gate.g2._numeric([[0]], [floor], [0.]);ev['spreads'] = [SPREAD] * 10;ev['actors'] = 1
+        result, (status, _) = self.judged(ev);return result, status, result['checks']['f']
+
+    def test_choices_pass_on_the_clean_surface(self):
+        evaluation, summary = self.prior();result, (status, reasons) = self.judged(evaluation);f = result['checks']['f']
+        self.assertEqual(status, 'PASS', (failing(result), reasons));self.assertEqual(list(result['checks'])[-2:], ['e', 'f'])
+        self.assertEqual((f['passed'], f['status'], f['non_exempt_mismatches'], f['one_sided'], f['problems'], f['not_comparable']), (True, 'COMPARED', 0, 0, 0, 0))
+        self.assertEqual(set(f['nodes_by_ply']), {'1', '2'});self.assertEqual(f['nodes'], f['learner_comparisons']);self.assertGreater(f['opponent_comparisons'], f['nodes'])
+        self.assertEqual((f['max_abs_delta_row_q'], f['max_abs_delta_child_value'], f['value_bound'], f['row_q_within_bound']), (0., 0., 0., True))
+        self.assertGreater(f['near_ties'], 0);self.assertEqual(f['near_tie_flips'], 0)   # exact ties among the fake's integer values (bound 0), none flips
+        self.assertEqual((result['tolerance']['f_near_ties'], summary['choices']['comparisons']), (f['near_ties'], f['comparisons']))
+        for depth, selection in ((4, 'prior'), (3, 'searched')):
+            with self.subTest(depth=depth, selection=selection):
+                ev, _ = self.call(self.pricers(depth=depth, selection=selection), decision=False);result, (status, _) = self.judged(ev)
+                self.assertEqual(status, 'PASS', failing(result));self.assertEqual(set(result['checks']['f']['nodes_by_ply']), {str(p) for p in range(1, depth)})
+
+    def test_the_oracle_recursion_equals_the_backups_and_reads_no_pricer_value(self):
+        """OracleTree's values equal node_value's on every interior node (depths 3 and 4) and its choices equal pricer_record's; built over a
+        frame whose values and statuses are scrambled (logits kept), it returns the same: it reads only the pricer's priors."""
+        for depth in (3, 4):
+            with self.subTest(depth=depth):
+                frame, data = self.frame_data(depth);tree = gate.OracleTree(frame, data);nodes = gate.interior_nodes(frame, data);priced = 0
+                scrambled = copy.deepcopy(frame);scrambled.leaf_value[...] = 7.;scrambled.leaf_status[...] = 3;scrambled.t1_status[...] = 0
+                for level in scrambled.nodes:level.value[...] = -7.;level.status[...] = 0
+                blind = gate.OracleTree(scrambled, data)
+                for q, w, ply, node in nodes:
+                    mine, (value, record) = FakeBackupsN.node_value(frame, q, w, ply, node), tree.solve(q, w, ply, node)
+                    self.assertEqual(mine, value, (q, w, ply, node));self.assertEqual(blind.solve(q, w, ply, node)[0], value);priced += mine is not None
+                    if record is not None:
+                        pricer = gate.pricer_record(frame, FakeBackupsN, q, w, ply, node)
+                        self.assertEqual([pricer[k] for k in ('own', 'opp', 'learner', 'argmin', 'q', 'gap', 'row_gaps', 'value')],
+                            [record[k] for k in ('own', 'opp', 'learner', 'argmin', 'q', 'gap', 'row_gaps')] + [value])
+                self.assertGreater(priced, 200);self.assertEqual({k[2] for k in nodes}, set(range(1, depth)))
+
+    def plant(self, oracle_rows, pricer_rows):
+        """(frame, data, P): copies with the four leaves of the first fully head-valued two-by-two ply-2 node P set to base + row offset, the
+        oracle's (head values) and the pricer's (leaf_value) separately; digests untouched."""
+        frame, data = self.frame_data();level = frame.nodes[0];status = np.asarray(frame.leaf_status)
+        P = next((q, w, n) for q, w, n in np.argwhere(np.asarray(level.status) == 2).tolist() if (status[q, w, n] == 4).all()
+            and (np.asarray(level.own_actions[q, w, n]) >= 0).all() and (np.asarray(level.opp_actions[q, w, n]) >= 0).all())
+        frame, data = copy.deepcopy(frame), copy.deepcopy(data);base = float(frame.leaf_value[P + (0, 0)]);leaves = data['leaves']
+        for i, key in enumerate(leaves['index'].tolist()):
+            if tuple(key[:3]) == P:leaves['head_value'][i] = leaves['value'][i] = np.float32(base + oracle_rows[key[3]])
+        for own in (0, 1):frame.leaf_value[P + (own,)] = np.float32(base + pricer_rows[own])
+        return frame, data, P
+
+    def test_near_tie_flips_are_exempt_and_reported_and_clear_flips_fail(self):
+        """P's rows tie in the oracle and the pricer's row 1 leads by FLOOR (inside the value bound 2 x FLOOR): the learner flip is a near tie,
+        reported with both gaps, and the run passes. Rows .05 apart the other way on each side: both gaps exceed the bound, (f) fails."""
+        frame, data, P = self.plant((0., 0.), (0., FLOOR));result, status, f = self.judge(frame, data, floor=FLOOR)
+        self.assertEqual(status, 'PASS', failing(result));self.assertEqual((f['passed'], f['non_exempt_mismatches']), (True, 0));self.assertGreaterEqual(f['near_tie_flips'], 1)
+        flip = next(r for r in f['near_tie_flip_examples'] if (r['root'], r['world'], r['node']) == P and r['ply'] == 2);self.assertEqual((flip['kind'], flip['gap_oracle']), ('learner', 0.))
+        self.assertAlmostEqual(flip['gap_pricer'], FLOOR, places=6);self.assertEqual(flip['actions'][::-1], [int(a) for a in frame.nodes[0].own_actions[P][:2]])
+        header = gate.header_block(result['checks'])['near_ties']['f'];self.assertEqual((header['near_ties'], header['near_tie_flips']), (f['near_ties'], f['near_tie_flips']))
+        frame, data, P = self.plant((.05, 0.), (0., .05));result, status, f = self.judge(frame, data, floor=FLOOR)
+        self.assertEqual(status, 'FAIL');self.assertIn('f', failing(result));self.assertFalse(f['passed']);self.assertGreaterEqual(f['non_exempt_mismatches'], 1)
+        first = next(r for r in f['first_mismatches'] if (r['root'], r['world'], r['node']) == P and r['ply'] == 2)
+        self.assertEqual(first['kind'], 'learner');self.assertTrue(min(first['gap_pricer'], first['gap_oracle']) > f['value_bound'])
+        self.assertIn('flip with a gap above the value bound in both frames', f['reasons'][0])
+
+    def test_a_node_priced_on_one_side_only_fails(self):
+        frame, data = self.frame_data()
+        key = next(k for k in gate.interior_nodes(frame, data) if k[2] == 2 and FakeBackupsN.node_value(frame, *k) is not None)
+        def node_value(f, q, w, ply, node, rule=FakeBackupsN.learner_max):
+            return None if (q, w, ply, node) == key else FakeBackupsN.node_value(f, q, w, ply, node, rule)
+        backups = SimpleNamespace(node_value=node_value, learner_max=FakeBackupsN.learner_max, learner_max_root=FakeBackupsN.learner_max_root)
+        result, status, f = self.judge(frame, data, backups=backups)
+        self.assertEqual(status, 'FAIL');self.assertEqual(set(failing(result)), {'f'});self.assertEqual(f['one_sided'], 1)
+        self.assertEqual({k: f['one_sided_examples'][0][k] for k in ('root', 'world', 'ply', 'node', 'priced_by')}, dict(root=key[0], world=key[1], ply=2, node=key[3], priced_by='oracle'))
+        self.assertIn('priced on one side only', ' '.join(f['reasons']))
+        record = gate.pricer_record(frame, FakeBackupsN, *key);self.assertFalse(gate.node_fails(record, gate.OracleTree(frame, data).solve(*key)[1], 0.))
+        self.assertEqual(gate.compare_records(dict(record, finite=False), record)[:2], ([], ['non-finite row q or child value (pricer)']))   # never a NaN gap
+        self.assertTrue(gate.node_fails(dict(record, finite=False), record, 1.) and gate.node_fails(record, None, 1.) and not gate.node_fails(None, None, 0.))
+        self.assertIn('own actions differ', gate.compare_records(dict(record, own=[8] * len(record['own'])), record)[1][0])
+        with patch.dict(sys.modules, {'gpu_engine.depthn_backups': None}):self.assertIn('fail closed', gate.choice_check_n(frame, data, self.requests)['reason'])
+        self.assertEqual(gate.merge_choices([dict(passed=False, reason='x')], value_bound=0.)['status'], 'NOT_RUN')
+
+    def test_sampled_runs_compare_only_fully_checked_nodes(self):
+        full = self.judged(self.prior()[0])[0]['checks']['f']
+        ev, _ = self.call(self.pricers(), sample=1, decision=False);result = gate.summarize_run([ev], (2187,));f = result['checks']['f']
+        self.assertEqual(gate.gate_status_n(result, sampled=True)[0], 'PASS_SAMPLED', failing(result));self.assertTrue(f['sampled']);self.assertGreater(f['not_comparable'], 0)
+        self.assertLess(f['comparisons'], full['comparisons']);self.assertEqual(f['status'], 'COMPARED' if f['comparisons'] else 'SKIPPED_SAMPLED')
+        ev, _ = self.call(self.pricers(), sample=10 ** 6, decision=False);result = gate.summarize_run([ev], (2187,));f = result['checks']['f']   # every leaf drawn
+        self.assertEqual((gate.gate_status_n(result, sampled=True)[0], f['comparisons'], f['not_comparable']), ('PASS_SAMPLED', full['comparisons'], 0))
+        empty = gate.choice_verdict(dict(saved_choices(), comparisons=0, nodes=0, not_comparable=4), .008, sampled=True)
+        self.assertEqual((empty['status'], empty['passed'], gate.gate_status_n(dict(checks=dict(f=empty)), sampled=True)[0]), ('SKIPPED_SAMPLED', True, 'PASS_SAMPLED'))
+        vacuous = gate.choice_verdict(dict(saved_choices(), comparisons=0, nodes=0), .008)
+        self.assertEqual(gate.gate_status_n(dict(checks=dict(f=vacuous))), ('INCOMPLETE', ['vacuous: (f) compared no interior node']))
+        self.assertFalse(gate.choice_verdict(dict(saved_choices(), not_comparable=3), .008)['passed'])   # unsampled: the oracle must value every node
+
+    def test_reverdict_carries_f_through_the_same_verdict(self):
+        code, out, lines, _ = reverdicted(saved_gate());f = out['checks']['f']
+        self.assertEqual((code, out['status'], f['passed'], f['near_ties'], f['non_exempt_mismatches']), (0, 'PASS', True, 2, 0))
+        self.assertEqual(out['header']['near_ties']['f']['near_ties'], 2);self.assertEqual(next(x for x in lines if x['message'] == 'REVERDICT')['header'], out['header'])
+        self.assertEqual(list(out)[:2], ['evaluator', 'header'])
+        report = saved_gate();report['checks']['f'] = saved_choices([(.001, .02)])   # a near-tie flip: reported, not gated
+        code, out, _, _ = reverdicted(report);self.assertEqual((code, out['checks']['f']['near_tie_flips'], out['checks']['f']['passed']), (0, 1, True))
+        report = saved_gate();report['checks']['f'] = saved_choices([(.02, .03)])   # saved as passed: the verdict function fails it
+        code, out, _, _ = reverdicted(report);f = out['checks']['f']
+        self.assertEqual((code, out['status'], f['passed'], f['non_exempt_mismatches']), (1, 'FAIL', False, 1));self.assertIn('f', out['reverdict']['failing_checks'])
+        self.assertIn(dict(quantity='f', passed_before=True, passed=False), out['reverdict']['changed_quantities'])
+        report = saved_gate();report['checks']['f'] = dict(saved_choices([(.02, .03)]), differing_complete=False, non_exempt_mismatches=1, passed=False)
+        code, out, _, _ = reverdicted(report);self.assertEqual((code, out['checks']['f']['non_exempt_mismatches']), (1, 1))   # truncated list: kept under the same bound
+
+    def test_header_block(self):
+        e, f = dict(near_tie_roots=3, near_tie_flips=1, q_noise_bound=.008), dict(near_ties=7, near_tie_flips=2, status='COMPARED', value_bound=.008)
+        block = gate.header_block(dict(e=dict(e, passed=True), f=dict(f, passed=True)));self.assertEqual(block['near_ties'], dict(e=e, f=f))
+        rules = block['rules_changed_after_failure'];self.assertEqual(len(rules), 4)
+        self.assertEqual([r['triggering_run'] for r in rules], ['d2-gate40-b0-r1', None, 'dn-gate40-prior3-r3', 'dn-gate40-searched3-r3'])
+        self.assertTrue(all(set(r) == {'name', 'summary', 'triggering_run', 'trigger', 'approval'} and r['approval'].startswith('confirmed by the lead 2026-11-06') for r in rules))
+        self.assertIn('on conditions (a) kill test, (b) check (f)', rules[2]['approval']);self.assertIn('not a run', rules[1]['trigger'])
+        self.assertTrue(all(s in rules[0]['trigger'] for s in ('60a52442', 'root 15', '2.3e-5')));self.assertIn('GUARD_DEPTHN_RULE', rules[2]['name'])
+        self.assertIn('DEEPER_LOGIT_RULE', rules[3]['name']);self.assertEqual(gate.header_block()['near_ties'], dict(e=None, f=None))
+        self.assertEqual(gate.header_block(configs=dict(top2=dict(e=e)))['near_ties'], dict(top2=dict(e=e)))
+
+    def mutated(self):
+        """The prior k = 3 call with --mutation-test (the fake backups' source), cached: (evaluation, log lines)."""
+        def make():
+            pricers = self.pricers(k_own=3, k_opp=3);lines = []
+            depth2_pricer = gate.depth2_pass_pricer(FAKE_MODULE, self.ex, object(), capacity=32, actor_capacity=3, digest=True)
+            with self.engine():
+                ev, _ = gate.run_call_n(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS, pricers=pricers, depth2_pricer=depth2_pricer,
+                    frame_pricer=self.frame_pricer(), oracle=self.oracle, sample=None, block=0, context=dict(block=0, call=0), backups=FakeBackupsN,
+                    mutation=dict(source=FAKE_BACKUPS_SOURCE), progress=lambda message, **k: lines.append(dict(k, message=message)))
+            return ev, lines
+        return self.cached('mutated', make)
+
+    def test_every_mutant_is_killed_on_the_fakes(self):
+        ev, lines = self.mutated();m = ev['mutation']
+        self.assertTrue(m['passed'], {n: (r.get('caught_by'), r.get('reason')) for n, r in m['mutants'].items()})
+        self.assertEqual((m['clean']['status'], m['clean_unchanged'], m['survivors']), ('PASS', True, []));self.assertEqual(self.judged(ev)[1][0], 'PASS')
+        self.assertEqual(list(m['mutants']), [f'{p}-{k}-{v}' for p, k, v in gate.MUTANTS])
+        for name, r in m['mutants'].items():
+            with self.subTest(name):
+                self.assertEqual((r['exercised'], r['killed'], r['status'], r['guard_only']), (True, True, 'FAIL', []), r)
+                if r['path'] == 'backup':self.assertEqual(r['caught_by'], ['f'])   # the frame is clean: only (f) can see a misread child
+                else:self.assertIn('c', r['caught_by']);self.assertEqual(set(r['guard_modes_past_turn1'].values()), {'digest_certified'})   # guard report-only
+                if r['variant'] == 'single':
+                    pair = r['pair'];self.assertTrue(pair['choice_reversed']);self.assertGreater(pair['abs_value_difference'], 2 * m['value_bound'])
+                    self.assertGreater(min(pair['clean_gap_pricer'], pair['clean_gap_oracle']), m['value_bound']);self.assertGreater(r['caught']['f']['non_exempt_mismatches'], 0)
+                    self.assertEqual(r['pairs'], 1);self.assertIn('reverses', pair['why'])
+                else:self.assertGreater(r['pairs'], 10)
+        for kind, variant in itertools.product(('sibling', 'cousin'), ('single', 'systematic')):   # both paths misplace the same pairs: (f) sees the same
+            b, s = (m['mutants'][f'{path}-{kind}-{variant}']['caught']['f'] for path in ('backup', 'scatter'))
+            self.assertEqual((b['non_exempt_mismatches'], b['max_abs_delta_row_q']), (s['non_exempt_mismatches'], s['max_abs_delta_row_q']))
+        self.assertNotEqual(m['mutants']['backup-cousin-single']['pair']['parent2'], m['mutants']['backup-cousin-single']['pair']['parent'])
+        messages = [x['message'] for x in lines];self.assertEqual(messages.count('MUTATION_TEST_MUTANT'), 8)
+        self.assertTrue({'MUTATION_TEST', 'MUTATION_TEST_SWEEP'} <= set(messages));self.assertGreater(m['seconds'], 0.)
+
+    def test_an_unpatchable_source_leaves_the_backup_mutants_unexercised(self):
+        frame, data = self.frame_data()
+        clean = gate.evaluate_n(frame, self._d(), self.requests, data, context={}, backups=FakeBackupsN, decision=True, choices=True)
+        out = gate.mutation_test_call(frame, data, self.requests, self._d(), clean, backups=FakeBackupsN, source='def node_value():pass\n', sweep=20)
+        self.assertFalse(out['passed']);self.assertEqual(sorted(out['survivors']), sorted(n for n in out['mutants'] if n.startswith('backup')))
+        self.assertIn('occurs 0 times', out['mutants']['backup-sibling-single']['reason']);self.assertTrue(all(r['killed'] for n, r in out['mutants'].items() if n.startswith('scatter')))
+        with self.assertRaises(gate.MutantPatchError):gate.mutant_backups([], source=FAKE_BACKUPS_SOURCE.replace('            if leaf:\n', '            if leaf :\n'))
+
+    def test_sweep_survivor_accounting(self):
+        """Bound 0: survivors are exactly the equal-valued pairs (nothing moves). A bound above some differences: every sibling pair is drawn,
+        and the survivors are exactly the pairs within it (c) and (f) cannot see, none material. The oracle holding a pair swapped (a
+        broken clean state the swap repairs): a material survivor, the claim fails."""
+        frame, data = self.frame_data();tree = gate.OracleTree(frame, data);count = dict(sibling=10 ** 7, cousin=2000)
+        out = gate.swap_sweep(frame, data, FakeBackupsN, tree, 0., count=count);swaps = out['swaps']
+        self.assertEqual((swaps['sibling'], swaps['cousin']), (out['population']['sibling'], 2000))
+        self.assertEqual(sum(out['caught'].values()) + out['survivors'], sum(swaps.values()));self.assertEqual(sum(out['survived'].values()), out['survivors'])
+        self.assertEqual(len(out['survivor_rows']), out['survivors']);self.assertGreater(out['survivors'], 0)
+        self.assertTrue(all(r['abs_value_difference'] == 0. and all(c in (0., None) for c in r['parent_value_change']) for r in out['survivor_rows']))
+        self.assertEqual((out['material_survivors'], out['claim_holds']), (0, True));self.assertEqual(gate.swap_sweep(frame, data, FakeBackupsN, tree, 0., count=count)['caught'], out['caught'])
+        leaves = data['leaves'];index = leaves['index'].tolist();values = np.asarray(frame.leaf_value, np.float64)[tuple(leaves['index'].T)]
+        scored = (np.asarray(leaves['status']) == 4) & (np.asarray(frame.leaf_status)[tuple(leaves['index'].T)] == 4);bound = .01;within = 0
+        groups = collections.defaultdict(list)
+        for i in np.flatnonzero(scored).tolist():groups[tuple(index[i][:3])].append(values[i])
+        within = sum(abs(a - b) <= bound for g in groups.values() for a, b in itertools.combinations(g, 2))
+        wide = gate.swap_sweep(frame, data, FakeBackupsN, tree, bound, count=dict(sibling=10 ** 7))
+        self.assertEqual(wide['survived'].get('sibling', 0), within);self.assertGreater(within, out['survived'].get('sibling', 0))
+        self.assertTrue(all(r['abs_value_difference'] <= bound for r in wide['survivor_rows']));self.assertEqual(wide['material_survivors'], 0)
+        planted = copy.deepcopy(data);head = planted['leaves']['head_value']
+        i, j = next((i, j) for g in [[k for k in np.flatnonzero(scored).tolist() if tuple(index[k][:3]) == key] for key in groups] for i, j in itertools.combinations(g, 2)
+            if head[i] != head[j])
+        head[i], head[j] = head[j], head[i]
+        bad = gate.swap_sweep(frame, planted, FakeBackupsN, gate.OracleTree(frame, planted), 0., count=dict(sibling=10 ** 7))
+        self.assertFalse(bad['claim_holds']);self.assertIn(sorted([index[i], index[j]]), [sorted([r['a'], r['b']]) for r in bad['first_material_survivors']])
 
 
 # ---------------------------------------------------------------- the real depth-N pricer (when on the path)
@@ -1153,6 +1412,28 @@ class RealPricerTests(FixtureN, unittest.TestCase):
         for mode in gate.MODES:   # depthn_backups' own learner_max_root agrees with the gate's turn-2 choices' building blocks
             choices = gate.turn2_choices(frames[(mode, 2)], backups);self.assertTrue(choices)
 
+
+    def test_choices_and_the_mutation_test_on_the_real_pricer(self):
+        """The real pricer at depth 3 (k = 3) with --mutation-test on depthn_backups' own SOURCE: (f) passes clean, all eight mutants are killed
+        (the backup path by (f) alone) and the sweep has no material survivor; the gate's OracleTree equals depthn_backups.node_value on every
+        interior node of the real frame (both read the oracle's own values here: the real frame matches them exactly on this engine)."""
+        backups = importlib.import_module('gpu_engine.depthn_backups');pricers = self.real(k_own=3, k_opp=3);module = self.module()
+        depth2_pricer = gate.depth2_pass_pricer(module, self.ex, object(), capacity=32, actor_capacity=3, digest=True)
+        with self.engine():
+            ev, _ = gate.run_call_n(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS, pricers=pricers, depth2_pricer=depth2_pricer,
+                frame_pricer=self.frame_pricer(), oracle=self.oracle, sample=None, block=0, context=dict(block=0, call=0), mutation={})
+        result, (status, reasons) = self.judged(ev);m = ev['mutation']
+        self.assertEqual(status, 'PASS', (failing(result), reasons));self.assertGreater(result['checks']['f']['comparisons'], 0)
+        self.assertTrue(m['passed'], {n: (r.get('caught_by'), r.get('reason')) for n, r in m['mutants'].items()})
+        self.assertEqual({n: r['caught_by'] for n, r in m['mutants'].items() if r['path'] == 'backup'}, {f'backup-{k}-{v}': ['f'] for k in ('sibling', 'cousin') for v in ('single', 'systematic')})
+        self.assertEqual(m['sweep']['material_survivors'], 0)
+        with self.engine():
+            plan, (pricer,) = pricers.get();frame = pricer.price(self.requests, self.tables, self.recipe, PARAMS)
+            stack = reference.stack(self.requests, batch._numpy_worlds(self.requests, self.tables, self.recipe))
+            data = gate.oracle_levels(oracle=self.oracle, stack=stack, requests=self.requests, recipe=self.recipe, params=PARAMS, frame=frame, plan=plan)
+        tree = gate.OracleTree(frame, data);nodes = gate.interior_nodes(frame, data)
+        for q, w, ply, node in nodes:self.assertEqual(backups.node_value(frame, q, w, ply, node), tree.solve(q, w, ply, node)[0], (q, w, ply, node))
+        self.assertGreater(sum(tree.solve(*k)[0] is not None for k in nodes), 200)
 
     def test_throughput_callers_run_the_real_pricer(self):
         from gpu_engine import d3_depthn_throughput as tool
@@ -1268,14 +1549,16 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         loaded = SimpleNamespace(provider=provider, plan=SimpleNamespace(model=object(), historical_window=2), frame_pricer=self.frame_pricer(), source=dict(fixture=True))
         return SimpleNamespace(loaded=loaded, head=None, params=PARAMS, groups=[list(self.requests)], root_values=[.1, .2], evaluator=dict(override=False), actor_capacity=3)
 
-    def main(self, *argv, real=False, out=None):
+    def main(self, *argv, real=False, out=None, lines=None, source=FAKE_BACKUPS_SOURCE):
+        """main() with the fixture's roots; lines: a list collecting the log lines; source: the backup-path mutants' depthn_backups
+        source (the fake's unless real)."""
         out = out or Path(tempfile.mkdtemp(prefix='depthn-cli-')) / 'out';find = importlib.util.find_spec
         names = ('gpu_engine.device_depthn_pricer', 'gpu_engine.depthn_backups', 'gpu_engine.depth2_backups', 'gpu_engine.device_depth2_pricer')
-        modules = {} if real else {'gpu_engine.depthn_backups': FakeBackupsN}
-        with self.engine(), patch.object(gate, 'load_roots', lambda args: self.roots()), patch.object(gate, 'log', lambda *a, **k: None), \
+        modules = {} if real else {'gpu_engine.depthn_backups': FakeBackupsN};log = (lambda m, **k: lines.append(dict(k, message=m))) if lines is not None else (lambda *a, **k: None)
+        with self.engine(), patch.object(gate, 'load_roots', lambda args: self.roots()), patch.object(gate, 'log', log), \
                 patch.object(gate, 'pricer_module', (lambda: importlib.import_module('gpu_engine.device_depthn_pricer')) if real else (lambda: FAKE_MODULE)), \
                 patch.object(importlib.util, 'find_spec', side_effect=lambda name, *a: object() if name in names and not real else find(name, *a)), \
-                patch.dict(sys.modules, modules):
+                patch.object(gate, 'backups_source', gate.backups_source if real else (lambda: source)), patch.dict(sys.modules, modules):
             code = gate.main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', '--k-own', '2', '--k-opp', '2', '--capacity', '32', *argv])
         return code, out
 
@@ -1314,6 +1597,39 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
                 again = json.loads((out / gate.REVERDICT_FILE).read_text());self.assertEqual((again['status'], again['reverdict']['changed_quantities']), (want, []))
                 verdicts = lambda r: {k: (m.get('passed'), m.get('bound'), m.get('guard_mode'), m.get('beyond_guard')) for k, m in r['checks']['c']['quantities'].items()}
                 self.assertEqual(verdicts(again), verdicts(report))
+                choices = lambda r: {k: r['checks']['f'].get(k) for k in ('passed', 'status', 'comparisons', 'near_ties', 'near_tie_flips', 'non_exempt_mismatches')}
+                self.assertEqual(choices(again), choices(report));self.assertEqual(again['header'], report['header'])
+                self.assertEqual(report['header']['near_ties']['f']['status'], 'COMPARED' if want == 'PASS' else report['checks']['f']['status'])
+
+    def test_live_mutation_test_headers_and_offline_rerun(self):
+        """--mutation-test --save-oracle: gate.json PASS with the header (also on DEPTHN_GATE_COMPLETE), mutation-test.json PASS with all eight
+        killed and the MUTATION_TEST lines, the oracle data saved beside the frames, and --mutation-from on them reproducing every verdict."""
+        lines = [];code, out = self.main('--mutation-test', '--save-oracle', lines=lines)
+        report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE));call = mutation['calls'][0]
+        self.assertEqual((code, report['status'], mutation['status']), (0, 'PASS', 'PASS'), (report.get('status_reasons'), call.get('survivors')))
+        self.assertTrue((out / 'frames-block0-call0-oracle.npz').exists() and (out / 'frames-block0-call0-prior-k2.npz').exists())   # implies --save-arrays
+        self.assertEqual({n: r['killed'] for n, r in call['mutants'].items()}, {f'{p}-{k}-{v}': True for p, k, v in gate.MUTANTS})
+        self.assertGreater(sum(call['sweep']['swaps'].values()), 0);self.assertEqual((call['sweep']['material_survivors'], call['clean_unchanged']), (0, True))
+        messages = [x['message'] for x in lines];self.assertEqual(messages.count('MUTATION_TEST_MUTANT'), 8)
+        self.assertTrue({'MUTATION_TEST', 'MUTATION_TEST_SWEEP', 'MUTATION_TEST_COMPLETE'} <= set(messages))
+        header = report['header'];self.assertEqual(list(report)[:4], ['evaluator', 'value_scale', 'source', 'header'])
+        self.assertEqual(next(x for x in lines if x['message'] == 'DEPTHN_GATE_COMPLETE')['header'], header);self.assertEqual(mutation['header'], header)
+        self.assertEqual((header['near_ties']['f']['near_ties'], header['near_ties']['f']['near_tie_flips']), (report['checks']['f']['near_ties'], report['checks']['f']['near_tie_flips']))
+        self.assertEqual(header['near_ties']['e']['near_tie_roots'], report['checks']['e']['near_tie_roots']);self.assertEqual(len(header['rules_changed_after_failure']), 4)
+        offline = Path(tempfile.mkdtemp(prefix='depthn-cli-')) / 'offline'
+        with patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'backups_source', lambda: FAKE_BACKUPS_SOURCE), patch.dict(sys.modules, {'gpu_engine.depthn_backups': FakeBackupsN}):
+            code = gate.main(['--out', str(offline), '--mutation-from', str(out)])
+        again = json.loads((offline / gate.MUTATION_FILE).read_text());self.assertEqual((code, again['status'], len(again['calls'])), (0, 'PASS', 1))
+        again = again['calls'][0];self.assertEqual({n: (r['killed'], r['caught_by']) for n, r in again['mutants'].items()}, {n: (r['killed'], r['caught_by']) for n, r in call['mutants'].items()})
+        self.assertEqual((again['sweep']['caught'], again['sweep']['survivors'], again['value_bound']), (call['sweep']['caught'], call['sweep']['survivors'], call['value_bound']))
+
+    def test_a_surviving_mutant_fails_the_process(self):
+        """A depthn_backups source the backup-path patch cannot apply to: those four mutants are never exercised, so they survive; the clean gate
+        still passes and the process exits 1."""
+        code, out = self.main('--mutation-test', source='')
+        report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE))
+        self.assertEqual((code, report['status'], mutation['status']), (1, 'PASS', 'FAIL'))
+        self.assertEqual(sorted(mutation['survivors']['block0-call0']), sorted(f'backup-{k}-{v}' for k in ('sibling', 'cousin') for v in ('single', 'systematic')))
 
     def test_live_diagnostics(self):
         code, out = self.main('--depth3-diagnostics', '--diagnostic-ks', '2,3')
@@ -1333,6 +1649,8 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         code, out = self.main('--n2-equivalence', '--n2-k', '2')
         report = json.loads((out / 'n2-equivalence.json').read_text())
         self.assertEqual((code, report['status']), (1, 'FAIL'));self.assertEqual(set(report['configs']), {'full_width', 'top2'})
+        self.assertEqual(set(report['header']['near_ties']), {'full_width', 'top2'});self.assertEqual(len(report['header']['rules_changed_after_failure']), 4)
+        self.assertEqual(report['header']['near_ties']['top2']['e']['near_tie_roots'], report['configs']['top2']['e']['near_tie_roots'])
         for config in report['configs'].values():
             self.assertTrue(config['discrete']['passed'], config['discrete']['mismatched']);self.assertTrue(config['e']['passed'], config['e'].get('reasons'))
             self.assertTrue(all(m['passed'] for m in config['floats'].values()));self.assertFalse(config['world_reports_equal'])
@@ -1358,10 +1676,17 @@ class CommandLineTests(unittest.TestCase):
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--block-invariance', '--n2-equivalence'],
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--raw-head-check'],
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--sample-leaves', '0'],
-                    ['--out', str(out), '--diagnostics-from', 'x', '--d3-root', 'b']):
+                    ['--out', str(out), '--diagnostics-from', 'x', '--d3-root', 'b'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--mutation-test', '--sample-leaves', '2'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--mutation-test', '--depth', '2'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--mutation-test', '--n2-equivalence'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--save-oracle', '--depth3-diagnostics'],
+                    ['--out', str(out), '--mutation-from', 'x', '--d3-root', 'b'], ['--out', str(out), '--mutation-from', 'x', '--diagnostics-from', 'y'],
+                    ['--out', str(out), '--mutation-from', 'x', '--mutation-test']):
                 with self.assertRaises(SystemExit) as raised:gate.main(argv)
                 self.assertEqual(raised.exception.code, 2, argv)
         self.assertEqual(gate.parse(['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--depth', '4', '--k-own', '3,2,1'])[1].k_own_ply, (3, 2, 1))
+        self.assertTrue(gate.parse(['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--save-oracle'])[1].save_arrays)   # the oracle data sits beside the frames
         missing = lambda name: None if name == 'gpu_engine.device_depthn_pricer' else object()
         with patch.object(importlib.util, 'find_spec', side_effect=missing), self.assertRaises(SystemExit) as raised:
             gate.main(['--out', str(out), '--d3-root', 'b', '--chunk', '0'])
