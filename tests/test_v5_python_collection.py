@@ -41,7 +41,7 @@ def teams(final=False):
     for side in range(2):
         rows=[]
         for i,name in enumerate(NAMES):
-            rows.append(dict(name=name,set=dict(species=name,moves=['recover','surf']if side else['surf','recover'],
+            rows.append(dict(set=dict(name=name,species=name,moves=['recover','surf']if side else['surf','recover'],
                 level=80,ability='pressure',item='leftovers'),hp=(0 if side or i==0 else 50)if final else 100,
                 maxhp=100,hpType='Ice'))
         result.append(dict(pokemon=rows[::-1]if final else rows))
@@ -107,6 +107,86 @@ class PythonCollectionTests(unittest.TestCase):
     def collect(self,env,**kwargs):
         with patch('gpu_engine.v5_live_protocol.check_factory'):
             return p.collect_game(env,p.Game(1,'fixed',42,7),factories=factories(),max_requests=2,enable_v5=True,**kwargs)
+
+    def test_raw_serialized_pokemon_identity_is_original_set_name(self):
+        raw=teams();before=json.loads(json.dumps(raw))
+        self.assertTrue(all('name' not in mon for side in raw for mon in side['pokemon']))
+        raw[0]['pokemon'][0]['set'].update(name='Deoxys',species='Deoxys-Attack')
+        before[0]['pokemon'][0]['set'].update(name='Deoxys',species='Deoxys-Attack')
+        projected=p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+        self.assertEqual(projected[0][0]['name'],'Deoxys')
+        self.assertEqual(projected[0][0]['set']['species'],'Deoxys-Attack')
+        self.assertEqual(raw,before);self.assertEqual(projected[0][0]['hp'],100)
+        self.assertEqual(projected[0][0]['hidden_power_type'],'Ice')
+        projected[0][0]['set']['item']='changed-copy'
+        self.assertEqual(raw[0]['pokemon'][0]['set']['item'],'leftovers')
+
+    def test_missing_raw_set_name_refuses_without_species_or_top_level_fallback(self):
+        for value in (None,'',17,False):
+            raw=teams();mon=raw[0]['pokemon'][0];mon['name']='invented-legacy-field'
+            if value is None:mon['set'].pop('name')
+            else:mon['set']['name']=value
+            with self.assertRaisesRegex(ValueError,'literal serialized original Pokemon name required'):
+                p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+
+    def test_actual_pinned_name_truncation_and_ambiguous_identity_refusal(self):
+        raw=teams();raw[0]['pokemon'][0]['set']['name']='a'*19+'\U0001f600'+'suffix'
+        projected=p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+        # JavaScript substr(0,20) counts UTF-16 units, not Unicode codepoints.
+        self.assertEqual(projected[0][0]['name'],'a'*19+'\ud83d')
+        raw=teams();raw[0]['pokemon'][0]['set']['name']='same-prefix-name-1234-A'
+        raw[0]['pokemon'][1]['set']['name']='same-prefix-name-1234-B'
+        with self.assertRaisesRegex(ValueError,'six unambiguous original physical names required'):
+            p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+        raw=teams();raw[0]['pokemon'][1]['set']['name']=raw[0]['pokemon'][0]['set']['name']
+        with self.assertRaisesRegex(ValueError,'six unambiguous'):
+            p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+
+    def test_unjoinable_raw_birth_refuses_before_actor_creation_or_rows(self):
+        class MissingName(Env):
+            def snapshot(self):
+                result=super().snapshot()
+                result.bridge_snapshot['battle']['sides'][0]['pokemon'][0]['set'].pop('name')
+                return result
+        pair=factories()
+        with patch('gpu_engine.v5_live_protocol.check_factory'), \
+                patch.object(pair[0],'create_actor',side_effect=AssertionError('actor created')) as first, \
+                patch.object(pair[1],'create_actor',side_effect=AssertionError('actor created')) as second:
+            result=p.collect_game(MissingName(),p.Game(1,'fixed',42,7),factories=pair,max_requests=2,enable_v5=True)
+        self.assertEqual(result.status,'REFUSED');self.assertEqual(result.frames,0)
+        self.assertEqual(result.decisions,());self.assertNotIn('birth',result.source)
+        self.assertEqual(result.reason,'ValueError: literal serialized original Pokemon name required')
+        first.assert_not_called();second.assert_not_called()
+
+    def test_raw_required_set_and_hp_fields_remain_required(self):
+        for key in ('species','moves','level','ability','item'):
+            raw=teams();raw[0]['pokemon'][0]['set'].pop(key)
+            with self.assertRaisesRegex(ValueError,'original simulator set missing '+key):
+                p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+        for key in ('hp','maxhp','set'):
+            raw=teams();raw[0]['pokemon'][0].pop(key)
+            with self.assertRaises(KeyError):p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+        for value in (True,-1,101):
+            raw=teams();raw[0]['pokemon'][0]['hp']=value
+            with self.assertRaisesRegex(ValueError,'literal named physical Pokemon and exact HP required'):
+                p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+        raw=teams()
+        for side in raw:
+            for mon in side['pokemon']:mon.pop('hpType')
+        projected=p._teams(SimpleNamespace(bridge_snapshot={'battle':{'sides':raw}}))
+        self.assertTrue(all(mon['hidden_power_type'] is None for side in projected for mon in side))
+
+    def test_raw_serialized_terminal_reordering_preserves_birth_identity(self):
+        birth=teams();final=teams(final=True)
+        for raw in (birth,final):
+            for side in raw:
+                for mon in side['pokemon']:
+                    if mon['set']['name']=='blissey':mon['set'].update(name='Deoxys',species='Deoxys-Attack')
+        snapshot=lambda rows:SimpleNamespace(bridge_snapshot={'battle':{'sides':rows}})
+        initial=p._teams(snapshot(birth));terminal=p._ordered_terminal(initial,p._teams(snapshot(final)))
+        self.assertEqual(tuple(x['name'] for x in terminal[0]),tuple(x['name'] for x in initial[0]))
+        self.assertEqual(terminal[0][0]['hp'],0);self.assertEqual(terminal[0][1]['hp'],50)
+        self.assertEqual(terminal[0][0]['set'],initial[0][0]['set'])
 
     def test_same_frame_peer_labels_and_terminal_physical_order(self):
         result=self.collect(Env());self.assertEqual(result.status,'COMPLETE');self.assertEqual(len(result.decisions),3)
@@ -180,7 +260,7 @@ class PythonCollectionTests(unittest.TestCase):
             def snapshot(self):
                 result=super().snapshot()
                 for mon in result.bridge_snapshot['battle']['sides'][1]['pokemon']:
-                    if mon['name']=='blissey':mon['set']['item']='lumberry'
+                    if mon['set']['name']=='blissey':mon['set']['item']='lumberry'
                 return result
         changed=self.collect(Changed());self.assertEqual(changed.status,'COMPLETE')
         for left,right in zip(original.decisions,changed.decisions):

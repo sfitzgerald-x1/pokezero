@@ -93,9 +93,16 @@ def _teams(snapshot):
     for side in sides:
         team=[]
         for mon in side['pokemon']:
-            original=mon['set'];name=mon['name']
+            original=mon['set']
+            # Pinned State.serializePokemon omits top-level name, but retains
+            # the original set AFTER Pokemon canonicalizes set.name. Its actual
+            # display identity is set.name.substr(0,20), in UTF-16 code units.
+            # Species is not a nickname fallback (e.g. Deoxys-Attack/Deoxys).
+            if type(original)is not dict or type(original.get('name'))is not str or not original['name']:
+                raise ValueError('literal serialized original Pokemon name required')
+            name=original['name'].encode('utf-16-le',errors='surrogatepass')[:40].decode('utf-16-le',errors='surrogatepass')
             hp,maximum=mon['hp'],mon['maxhp']
-            if (type(name)is not str or not name or type(original)is not dict
+            if (not name
                     or any(type(v)is not int for v in(hp,maximum))or not 0<=hp<=maximum or maximum<=0):
                 raise ValueError('literal named physical Pokemon and exact HP required')
             for key in('species','moves','level','ability','item'):
