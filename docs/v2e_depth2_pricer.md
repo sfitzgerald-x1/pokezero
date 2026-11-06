@@ -35,11 +35,11 @@ Action axes are action indices 0–8, not ordinals. Values are from the learner'
 
 | Field | Shape | Meaning |
 | --- | --- | --- |
-| `pre` | `[R,2]` int32 | D's pre-refusal code per world; 0 = usable. Materialization refusals are in `world_reports`. |
+| `pre` | `[R,2]` int32 | D's pre-refusal code per world: 0 = usable; −1 = no world state (a materialization refusal or frame padding; the reasons are in `world_reports`) |
 | `root_peer_requested`, `root_peer_legal`, `root_peer_logits` | `[R,2]`, `[R,2,9]`, `[R,2,9]` | The opponent's prior at the root, as in `WorldPrices` |
 | `t1_status` | `[R,2,9,9]` int8 | 0 = not enumerated (illegal or pruned), 1 = terminal, 2 = expanded, 3 = error |
 | `t1_value` | `[R,2,9,9]` f32 | Exact value if terminal; otherwise the learner's head value at the child (equal to D's `joint_values`) |
-| `t1_error` | `[R,2,9,9]` int8 | D's transition error code (1 invalid action, 2 terminal winner missing, 3 encoder error, 4 actor output refused) |
+| `t1_error` | `[R,2,9,9]` int8 | D's transition error code (1 invalid action, 2 terminal winner missing, 3 encoder error, 4 actor output refused), or a depth-2-only code (5: the opponent's child view has an encoder error; 6: the opponent's child prior is unusable while it's requested). Under codes 5 and 6, `t1_value` keeps D's value and the cell is not expanded. |
 | `t1_own_requested`, `t1_own_legal`, `t1_own_logits` | `[R,2,9,9]`, `[…,9]`, `[…,9]` | The learner's prior at each child (from the same forward as `t1_value`) |
 | `t1_peer_requested`, `t1_peer_legal`, `t1_peer_logits` | same | The opponent's prior at each child (its own sampled-party view, as at the root) |
 | `t2_status` | `[R,2,9,9,9,9]` int8 | Indexed `[a1][r1][a2][r2]`: 0 = not enumerated, 1 = terminal, 4 = head-valued leaf, 3 = error |
