@@ -744,6 +744,8 @@ class SearchLatencyTests(unittest.TestCase):
                 progress=None, memory=memory, baseline={}, capacity=2, timer=CLOCK)
         self.assertEqual([(g['solver'], g['pool'], g['variant']) for g in group], [('learner_max', 0, 'learner_max@pool0'), ('learner_max', 4, 'learner_max@pool4'),
             ('hedge', 0, 'hedge@pool0'), ('hedge', 4, 'hedge@pool4')])
+        names = [v.name for v in variants]   # call i solves in an order rotated by i, so no variant always goes first (or last)
+        self.assertEqual([c['variant_order'] for c in group[0]['calls']], [names, names[1:] + names[:1], names[2:] + names[:2]])
         for g in group:
             self.assertEqual(g['warm_calls'], 2)
             for c in g['calls']:self.assertAlmostEqual(c['total_seconds'], sum(c['stages'][k] for k in tool.STAGES), places=12)
