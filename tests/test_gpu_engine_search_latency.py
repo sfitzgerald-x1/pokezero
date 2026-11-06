@@ -373,6 +373,8 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(series['warm_calls'], 3);self.assertEqual(series['warm']['total']['n'], 3)
         self.assertAlmostEqual(series['warm']['total']['median_ms'], 1e3 * np.median(warm), places=6)
         self.assertAlmostEqual(series['warm']['total']['p90_ms'], 1e3 * np.percentile(warm, 90), places=6)
+        self.assertAlmostEqual(series['warm']['total']['p95_ms'], 1e3 * np.percentile(warm, 95), places=6)   # the admission bar's percentile
+        self.assertNotAlmostEqual(series['warm']['total']['p95_ms'], series['warm']['total']['p90_ms'], places=3)
         self.assertAlmostEqual(series['warm']['total']['max_ms'], 1e3 * max(warm), places=6)
         self.assertAlmostEqual(series['first_call']['compile_seconds'], 2.);self.assertAlmostEqual(series['first_call']['total_seconds'], .004 + .003 + .01 + 1.008 + .0004 + .0002)
         self.assertEqual((series['warm_calls_with_compiles'], series['warm_compile_seconds']), (0, 0.))
@@ -932,7 +934,7 @@ class SearchLatencyTests(unittest.TestCase):
 
     def test_headline_is_p95_within_30_s_at_one_root_monotone_in_w(self):
         def series(config, w, p95, *, capacity=1, mode='sequential', variant='hedge@pool0', distinct=20, error=None, p90=None):
-            total = dict(median_ms=p95 / 2, p90_ms=p95 if p90 is None else p90, p95_ms=p95, p99_ms=p95, max_ms=p95, n=20)
+            total = dict(median_ms=p95 / 2, p90_ms=p95 * .5 if p90 is None else p90, p95_ms=p95, p99_ms=p95, max_ms=p95, n=20)   # p90 well under p95
             return dict(config=config, worlds=w, capacity=capacity, mode=mode, solver=variant.split('@')[0], pool=int(variant.split('pool')[1]), variant=variant,
                 warm=dict(total=total), windows=dict(distinct_roots=distinct), **({'error': dict(type=error)} if error else {}))
         rows = [series('d3', 2, 4000.), series('d3', 8, 29000.), series('d3', 16, 30000.), series('d2', 8, 12000.), series('d2', 16, 31000.), series('d2', 32, 20000.),
@@ -940,7 +942,7 @@ class SearchLatencyTests(unittest.TestCase):
             series('e', 8, 1000., error='TimeoutError'), series('e', 16, 1000.), series('f', 8, 1000., distinct=19), series('f', 16, 1000.)]
         head = {r['config']: r for r in tool.headline(rows)['rows']}
         self.assertEqual((head['d3']['largest_worlds'], head['d3']['status']), (16, 'OK'))   # p95 30 s exactly fits
-        self.assertEqual(head['d2']['largest_worlds'], 8)   # W=16 is over 30 s, so W=32 does not count although it fits on its own
+        self.assertEqual(head['d2']['largest_worlds'], 8)   # W=16 is over 30 s at p95 (its p90 fits), so neither W=16 nor W=32 counts
         self.assertEqual((head['d2']['by_worlds']['32']['fits'], head['d2']['by_worlds']['16']['p_s']), (True, 31.))
         self.assertEqual(head['e']['largest_worlds'], None)   # an error row never fits
         self.assertEqual((head['f']['largest_worlds'], head['f']['status']), (16, 'INSUFFICIENT'))   # fewer than 20 distinct roots at W=8
