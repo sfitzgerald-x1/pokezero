@@ -891,6 +891,21 @@ class SearchLatencyTests(unittest.TestCase):
         chunk = [at(5, 9, 1), at(3, 2, 0), at(5, 2, 1), at(1, 9, 0), at(5, 2, 0)]   # _prepare_batched groups by frame in first-seen order
         self.assertEqual([tool.address_key(r) for r in tool.turn_sorted(chunk)], [(3, 2, 0), (5, 2, 0), (5, 2, 1), (1, 9, 0), (5, 9, 1)])
 
+    def test_prepare_turn_sorts_the_chunk_and_maps_each_root_to_its_slot(self):
+        from gpu_engine import v5_device_teacher as teacher
+        at = lambda stream, frame, owner: SimpleNamespace(plans=SimpleNamespace(root=SimpleNamespace(address=contract.DecisionAddress(stream, frame, owner))))
+        frames = SimpleNamespace(streams=np.array([[10, 11, 12]]), frames=np.array([[5, 2, 9]]))   # one scan step, three rows at turns 5, 2, 9
+        @contextlib.contextmanager
+        def capture(captured, **kw):captured.update(roots='device roots', frames=frames, bank='bank');yield captured
+        base = SimpleNamespace(provider=SimpleNamespace(recipe=RECIPES[0], source='source'), available=[at(10, 5, 0), at(11, 2, 1), at(12, 9, 0)],
+            plan=SimpleNamespace(model=None), params=('p',), seeds=(RECIPES[0].seed,))
+        with patch.object(tool, 'capture_chunk', capture), patch.object(tool.tn, 'prepare', lambda view: base), \
+                patch.object(teacher, '_requests', lambda f, b: np.array([[0, 0, 0], [0, 1, 1], [0, 2, 0]])):
+            ctx = tool.prepare(self.args('--configs', 'depth2-fw@2/8'))
+        self.assertEqual([tool.address_key(r) for r in ctx.available], [(11, 2, 1), (10, 5, 0), (12, 9, 0)])   # by turn, not the chunk's order
+        roots = ctx.roots(3, 0, 1);self.assertEqual((roots.slots, roots.keys), ([(0, 1, 1), (0, 0, 0), (0, 2, 0)], [(11, 2, 1), (10, 5, 0), (12, 9, 0)]))
+        self.assertEqual(len(ctx.blocks), 4);self.assertIs(ctx.blocks[0][0], RECIPES[0])   # W=8: four recipe blocks, block 0 the declared recipe
+
     def test_build_pools_passes_the_solver_modules_and_the_deadline(self):
         started = []
         def start(size, **kw):started.append((size, kw));return SimpleNamespace(terminate=lambda: None, join=lambda: None), dict(workers=size)
