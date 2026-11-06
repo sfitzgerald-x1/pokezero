@@ -33,7 +33,7 @@ class ConstructorExtraction(unittest.TestCase):
         return ProtocolConstructor(catalog=catalog,source=object(),metadata={},owning_config=object(),
             count=16,functions=functions,**kwargs)
 
-    def test_reviewed_prepare_body_changes_only_carried_root_return(self):
+    def test_reviewed_prepare_body_changes_only_documented_protocol_transport(self):
         import inspect
         from gpu_engine import phase_d_protocol_constructor as module
         source=inspect.getsource(module);tree=ast.parse(source)
@@ -42,8 +42,9 @@ class ConstructorExtraction(unittest.TestCase):
         body='\n'.join(source.splitlines()[method.lineno:method.end_lineno])
         # Approved transport: expose the exact carried root returned by sample.
         self.assertIn('return made.root,made,',body)
-        self.assertIn('address=public.address,defer_sleep=True)',body)
-        body=body.replace('return made.root,made,','return detached,made,').replace('address=public.address,defer_sleep=True)','address=public.address)')
+        self.assertIn('address=public.address,defer_sleep=True,protocol_facts=facts)',body)
+        body=body.replace('return made.root,made,','return detached,made,').replace('address=public.address,defer_sleep=True,protocol_facts=facts)','address=public.address)')
+        body=body.replace('        facts=protocol.tail.facts(public,packet,lines)\n','')
         # All other reviewed 3975b1fa Search._prepare_protocol body bytes remain.
         self.assertEqual(hashlib.sha256(body.encode()).hexdigest(),
             '93776b7997069c281389bdec10b2c35b0651d3ff291f373caabd0bcb2777cc49')

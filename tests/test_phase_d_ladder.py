@@ -84,7 +84,7 @@ class ProtocolRoute(unittest.TestCase):
     def root(self):
         address=DecisionAddress(1,0,0);lines=('|start','|turn|1');digest=hashlib.sha256(''.join(x+'\n'for x in lines).encode()).hexdigest()
         source=NS(metadata=NS(source_hash='bound'))
-        context=NS(battle_id='same-live-cell',public_materialization_state=NS(belief_engine=NS(set_source=source)))
+        context=NS(battle_id='same-live-cell',public_materialization_state=NS(belief_engine=NS(set_source=source),self_request={}))
         payload=dict(selfActiveRequestState={'trapped':True},sides={},pendingBatonPassSides=[])
         root=PublicRoot(address,digest,context,payload,())
         detached=NS(address=address,source_binding_sha256='fixed')

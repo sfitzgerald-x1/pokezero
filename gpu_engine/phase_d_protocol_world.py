@@ -19,7 +19,7 @@ from pokezero.env import BattleStartOverride
 from pokezero.v5_teacher_public_root import PublicRoot,capture_root
 from pokezero.determinization import _gen3_randbat_belief_start_override_result
 from . import device_public_worlds as public_worlds,device_public_world_state as states
-from . import phase_d_live_worlds as live
+from . import phase_d_live_worlds as live,phase_d_tail as tail
 from .v5_hypothetical_state import map_spec
 from .phase_d_constructor_rules import public_hp_bin,request_ordered_packed,own_pp_carry,sleep_support
 
@@ -263,10 +263,13 @@ def materialize_protocol(root,start,*,inputs,seed):
             raise ValueError('same genuine owning prefix/address required')
         if catalog.source.source_hash!=root.context.public_materialization_state.belief_engine.set_source.metadata.source_hash:
             raise ValueError('same public source namespace required')
+        state=root.context.public_materialization_state
+        tail_facts=tail.facts(root,state.self_request,inputs.lines)
         removed=_removed_items(root.materialization_payload,detached,metadata,inputs.lines)
         diagnostics.extend(preflight_checks(root.materialization_payload,removed))
         _preflight(root.materialization_payload,removed)
         projected,sleepers=_defer_sleep(root.materialization_payload)
+        projected=tail.defer_substitutes(projected,tail_facts['fresh_substitutes'])
         origins=_sleep_origins(inputs.lines)
         revealed={normalize_id(name):candidates for slot,universe,candidates,gender,name in public_worlds._revealed(detached,inputs.source)}
         for mon in unpack_team(start.player_teams[f'p{foe+1}']):
@@ -296,12 +299,13 @@ def materialize_protocol(root,start,*,inputs,seed):
         mapped_names=tuple(normalize_id(x)for x in world.party_species[f'p{owner+1}'])
         if own_names!=mapped_names:raise ValueError('same-own-request-physical-order-required')
         mood[owner]=tuple(map(int,detached.own['happiness']))
-        mapped=map_spec(world.spec,metadata=metadata,dex=catalog.dex,seed=seed,
+        mapping_spec,cursors=tail.mapping_spec(world.spec,tail_facts['replacement'])
+        mapped=map_spec(mapping_spec,metadata=metadata,dex=catalog.dex,seed=seed,
             turn=root.materialization_payload['turn'],active_turns=_chronology(inputs.lines),happiness=tuple(mood))
         if mapped.state is None:
             _downstream_unknowns(diagnostics,'Typed mapper refused: '+repr(mapped.refusals))
             return ProtocolWorld(None,None,mapped.refusals,mapper_diagnostics=tuple(diagnostics))
-        physical=mapped.state
+        physical=tail.restore(mapped.state,world.spec,cursors,tail_facts,metadata=metadata,checks=diagnostics)
         maximum_pp={live._source_move(metadata['vocabulary']['moves'][int(mid)]):int(metadata['moves'][int(mid)]['pp'])*8//5 for row in detached.own['moves'] for mid in row if mid}
         own=dict(detached.own);own['pp']=np.asarray(own_pp_carry(inputs.lines,state.self_request,maximum_pp),np.int32)
         # Exact facts were read from the owning packet by B2's detached root.
@@ -363,7 +367,7 @@ def diagnostic_inputs(public,detached,*,lines,metadata):
     actual world's refusals/mapper_diagnostics, never count nonfatal PP as a
     blocking refusal or infer CLEAR from an absent diagnostic row.
     """
-    checks=[]
+    checks=list(tail.inspect_facts(public.context.public_materialization_state.self_request,public.materialization_payload,lines)[0])
     try:_carried_root(public,detached,lines,metadata)
     except (ValueError,KeyError,IndexError,TypeError) as error:checks.append(dict(kind=str(error),status='TRIGGERED',fatal=True))
     else:checks.append(dict(kind='OWN_PP_EXACT_CARRY',status='CLEAR',fatal=False))

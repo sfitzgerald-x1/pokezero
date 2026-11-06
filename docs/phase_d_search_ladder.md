@@ -69,6 +69,14 @@ Search delegates to the exact same `ProtocolConstructor.prepare` body using
 its existing compiled functions, seen set and public session dictionary; the
 separate saved-root search timing admission still requires the GPU.
 
+The final named constructor tail is documented in
+[final constructor tail](phase_d_constructor_tail.md): publicly resolved faint
+replacement phases, positively fresh Substitute, and public Wish timing under
+the pinned Gen 3 recipient-healing rule. It keeps the original 200 roots and
+16/32 draw prefixes, targets 90%, and ends the constructor program after one
+reviewed measurement regardless. Native/private and acting-latency admission
+remain separate and unavailable. No other tail mechanics are opened.
+
 The rung order is R1 (2 worlds, value), R3 (32 worlds, value), R4 (32 worlds,
 8 sampled chances), R7 (32 worlds, depth 2), and R5 (8 worlds, 8 raw-policy
 rollout leaves). All legal replies are priced by the frozen champion's
