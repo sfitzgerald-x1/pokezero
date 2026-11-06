@@ -472,6 +472,8 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual([p.capacity for p in FakeDepthN.built], [1, 4, 16]);self.assertTrue(series[2]['timing_proxy'])   # C=1's packed pricer is C=4's
         self.assertEqual([s['first_call']['cold_of_config_capacity'] for s in series], [True, False, False, True, False, False])
         self.assertEqual([s['first_call']['compile_seconds'] for s in series], [2., 0., 2., 0., 0., 2.])
+        self.assertEqual([(s['windows']['warm'], s['windows']['distinct_roots']) for s in series[::3]], [([1], 1), ([1], 4)])   # warm call 1 on window 1 of 2
+        self.assertEqual([c['window'] for c in series[3]['calls']], [0, 1]);self.assertEqual(series[3]['calls'][1]['frames'], [1, 5, 9, 13])
 
     def test_compose_is_the_equal_weight_mean_of_blocks(self):
         legal = (True, True) + (False,) * 7;logits = (0.,) * 9
