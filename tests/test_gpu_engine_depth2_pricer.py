@@ -37,7 +37,9 @@ ROOT_LOGITS=(0.,)*9;ROOT_LEGAL=tuple(map(bool,ROOT_OWN))
 # opponent at the root; turn-2 (child step) 20 waiting learner, 21 waiting opponent, 22 terminal for a2==1 or r2==3
 # (draw when r2==3), 23 leaf encoder error for a2==1, 24 invalid (1,2), 25 nonfinite leaf for a2==3, 28 bad winner
 # for a2==0, 27 the learner's child mask depends on its turn-1 action; 29 the opponent's child view has an encoder
-# error and 30 a nonfinite child prior (the learner's view and D3's value are untouched: turn-1 codes 5 and 6).
+# error and 30 a nonfinite child prior (the learner's view and D3's value are untouched: turn-1 codes 5 and 6);
+# 31 = 21 + 29 (a waiting opponent whose view errors: unused, so the cell expands); 32 all nine actions legal for
+# both seats at the root, so all 81 turn-1 lanes are enumerated.
 # Every fake quantity is a small dyadic rational, so jit fusion (FMA contraction) and eager evaluation agree bit for bit.
 PARAMS=({'offset':j.asarray(0.,j.float32),'logits':j.asarray([.25,.125,.375,.125,.5,.875,.25,.625,.5],j.float32),'tilt':j.asarray(.5,j.float32)},
     {'offset':j.asarray(.0625,j.float32),'logits':j.asarray([.25,.75,.125,.625,.375,0.,.5,.875,.125],j.float32),'tilt':j.asarray(-.5,j.float32)},
@@ -52,14 +54,14 @@ def forward(params,inputs,model=None,**kw):
 def executor():
     def legal(state):
         root=(state.turn==0)[:,None];mode=state.mode[:,None];owner=state.owner[0]
-        own=j.where(root,ROOT_OWN,j.where(mode==20,False,j.where((mode==27)&(state.last==1)[:,None],CHILD_OWN&(j.arange(9)!=1),CHILD_OWN)))
-        foe=j.where(root,j.where(mode==6,False,ROOT_FOE),j.where(mode==21,False,CHILD_FOE))
+        own=j.where(root,j.where(mode==32,True,ROOT_OWN),j.where(mode==20,False,j.where((mode==27)&(state.last==1)[:,None],CHILD_OWN&(j.arange(9)!=1),CHILD_OWN)))
+        foe=j.where(root,j.where(mode==6,False,j.where(mode==32,True,ROOT_FOE)),j.where((mode==21)|(mode==31),False,CHILD_FOE))
         mask=j.zeros((1,2,9),bool).at[:,owner].set(own).at[:,1-owner].set(foe)
         return mask&~state.done[:,None,None]
     def observe(state,public,owner,mask):
         if public.clock.ndim!=0:raise ValueError('one-world namespace was flattened')
         foe=(owner!=state.owner)&(state.turn==1)
-        error=j.where(((state.mode==4)&(public.turn>0))|((state.mode==23)&(state.turn==2)&(state.last==1))|((state.mode==29)&foe),1,0)
+        error=j.where(((state.mode==4)&(public.turn>0))|((state.mode==23)&(state.turn==2)&(state.last==1))|(((state.mode==29)|(state.mode==31))&foe),1,0)
         poison=j.where(((state.mode==25)&(state.turn==2)&(state.last==3))|((state.mode==30)&foe),j.nan,0.)
         feature=j.stack((state.value+(owner-state.owner)*(1/128),public.clock+j.zeros(1),poison),axis=-1)
         return Leaf(Observation(mask,error),{'numeric_features':feature[:,None,None,:]},owner)
@@ -78,7 +80,7 @@ def executor():
     return ex,replace(ex,joint=serial._make_joint(ex))
 
 
-PERM=np.array([0,1,3,2,4,5,6,7,8])  # encoder lane i shows engine lane PERM[i] at a child: an own_order swap (an involution)
+PERM=np.array([0,2,1,3,4,5,6,7,8])  # encoder lane i shows engine lane PERM[i] at a child: an own_order swap (an involution) that changes BOTH seats' child masks
 
 
 def permuting_executor():
@@ -211,8 +213,8 @@ class Depth2PricerTests(unittest.TestCase):
             root=replace(self.root,address=v5_contract.DecisionAddress(stream,4+i,owner))
             start=plans.plan_starts(root,self.tables.source,self.recipe)
             state,public=world_data(root,start.starts[0],modes[0])
-            inputs=ex.observe(state,public,j.asarray([owner],j.int32),ex.legal(state)[:,owner]).inputs
-            requests.append(batch.Request(start,ROOT_LOGITS,ROOT_LEGAL,inputs,learner,opponent))
+            masks=ex.legal(state);inputs=ex.observe(state,public,j.asarray([owner],j.int32),masks[:,owner]).inputs
+            requests.append(batch.Request(start,ROOT_LOGITS,tuple(map(bool,np.asarray(masks[0,owner]))),inputs,learner,opponent))
         return tuple(requests)
 
     @staticmethod
@@ -341,7 +343,7 @@ class Depth2PricerTests(unittest.TestCase):
         t=engine.last_timing
         self.assertEqual((t['root_capacity'],t['padding_root_slots'],t['substituted_world_slots']),(4,1,1))
         self.assertEqual(t['turn2_blocks'],-(-81*8//5)+2*-(-81*2//5))  # archives share history_size, present or not
-        self.assertEqual(t['turn2_lanes_per_block'],30);self.assertEqual(t['turn2_lanes_per_block'],30)
+        self.assertEqual(t['turn2_lanes_per_block'],30)
         enumerated=int(np.count_nonzero(frame.t2_status));self.assertEqual(t['turn2_enumerated_leaves'],enumerated)
         self.assertEqual(t['turn2_evaluated_leaf_lanes'],t['turn2_active_blocks']*30);self.assertLess(enumerated,t['turn2_evaluated_leaf_lanes'])
         # Exactly the blocks holding an expanded child ran; the rest were skipped.
@@ -536,7 +538,8 @@ class Depth2PricerTests(unittest.TestCase):
         ex=permuting_executor();specs=(((0,27),0,0,1),((0,0),1,2,0),((20,21),0,1,1))
         frame,requests,engine,_=self.price(specs,ex=ex,child_block=5)
         self.check_oracle(frame,requests,ex,specs)
-        self.assertFalse(np.array_equal(CHILD_OWN,CHILD_OWN[PERM]));self.assertFalse((frame.t2_status==3).any())
+        self.assertFalse(np.array_equal(CHILD_OWN,CHILD_OWN[PERM]));self.assertFalse(np.array_equal(CHILD_FOE,CHILD_FOE[PERM]))
+        self.assertFalse((frame.t2_status==3).any())
         for i,(modes,owner,learner,opponent)in enumerate(specs):
             for wi in range(2):
                 for a,r in zip(*np.nonzero(frame.t1_status[i,wi]==2)):
@@ -549,6 +552,46 @@ class Depth2PricerTests(unittest.TestCase):
                     self.assertTrue((cell[cell!=0]==4).all())
             self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'LABELED')
         self.assertEqual(backups.refusal_summary(frame)['refused_count'],0)
+
+    def test_waiting_opponent_with_a_failing_view_still_expands(self):
+        specs=(((31,29),0,0,1),((29,31),1,1,0))
+        frame,requests,engine,ex=self.price(specs,child_block=5)
+        self.check_oracle(frame,requests,ex,specs)
+        for i,wi in((0,0),(1,1)):  # the opponent waits at the child: its erroring view is unused, so no code 5
+            status=frame.t1_status[i,wi];cells=status!=0;self.assertTrue(cells.any());self.assertTrue((status[cells]==2).all())
+            self.assertFalse(frame.t1_peer_requested[i,wi][cells].any());self.assertFalse(frame.t2_status[i,wi][:,:,:,1:].any())
+            self.assertEqual(int(np.count_nonzero(frame.t2_status[i,wi])),4*int(np.count_nonzero(cells)))
+        for i,wi in((0,1),(1,0)):  # requested and erroring: code 5
+            status=frame.t1_status[i,wi];cells=status!=0;self.assertTrue((status[cells]==3).all());self.assertTrue((frame.t1_error[i,wi][cells]==5).all())
+        self.assertEqual([x['cause']for x in backups.refusal_summary(frame)['roots']],['turn1_depth2_only']*2)
+
+    def test_last_lane_of_the_last_world_is_placed(self):
+        # count == capacity, so world n-1 is a real world; mode 32 enumerates and expands its lane 80, the child a
+        # clamped sentinel slot would alias. Blocks of 5 over 81-child worlds leave sentinel slots in every group.
+        specs=(((0,0),0,0,1),((32,32),1,1,0))
+        frame,requests,engine,ex=self.price(specs,capacity=2,child_block=5)
+        slots,_=engine._blocks(requests,2,PARAMS);self.assertGreater(int(np.count_nonzero(slots>=162*2)),0)
+        self.check_oracle(frame,requests,ex,specs)
+        order=self.recipe.pricing_order(requests[1].plans.root.address,requests[1].root_logits,requests[1].root_legal)
+        self.assertEqual(int(np.count_nonzero(frame.t1_status[1,1]==2)),81)
+        last=frame.t2_status[1,1,order[-1],8];self.assertEqual(int(np.count_nonzero(last)),16);self.assertTrue((last[last!=0]==4).all())
+        self.assertTrue(frame.t2_value[1,1,order[-1],8][last!=0].all())
+
+    def test_fixed_capacity_compiles_once_and_matches_the_bucketed_frame(self):
+        specs=(((0,22),0,0,1),((27,21),1,1,0),((20,0),0,2,1))
+        loose=[self.price(specs[:k],child_block=5)[0]for k in(1,2,3)]
+        ex,_=executor();requests=self.requests(specs,ex)
+        engine=pricer.Depth2Pricer(ex,object(),capacity=8,actor_capacity=3,child_block=5,fixed_capacity=True);fixed=[]
+        with patch.object(mapping,'materialize_host',side_effect=self.materialize(specs)),patch.object(batch.v5_model,'forward',side_effect=forward):
+            for k in(1,2,3):fixed.append(engine.price(requests[:k],self.tables,self.recipe,PARAMS))
+        self.assertEqual(len(engine.kernels),1)
+        for k,(a,b)in enumerate(zip(loose,fixed),1):
+            for name in pricer.Depth2Frame.__dataclass_fields__:
+                if name in('world_reports','timing')or getattr(a,name)is None:continue
+                np.testing.assert_array_equal(getattr(a,name),getattr(b,name),err_msg=f'{name} k={k}')
+            self.assertEqual((b.timing['root_capacity'],b.timing['padding_root_slots'],a.timing['root_capacity']),(8,8-k,max(1,1<<(k-1).bit_length())))
+            self.assertEqual([w['status']for pair in a.world_reports for w in pair],[w['status']for pair in b.world_reports for w in pair])
+        with self.assertRaises(ValueError):pricer.Depth2Pricer(ex,None,actor_capacity=1,fixed_capacity=1)
 
     def test_single_actor_bank_runs_without_stacking(self):
         specs=(((0,22),0,0,0),((27,0),1,0,0))

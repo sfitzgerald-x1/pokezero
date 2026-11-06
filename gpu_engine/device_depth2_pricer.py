@@ -301,12 +301,16 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
 
 
 class Depth2Pricer:
-    def __init__(self,executor,model,*,capacity=2048,actor_capacity=33,k_own=9,k_opp=9,k1_own=9,k1_opp=9,child_block=27,digest=False,forward=None):
+    def __init__(self,executor,model,*,capacity=2048,actor_capacity=33,k_own=9,k_opp=9,k1_own=9,k1_opp=9,child_block=27,digest=False,forward=None,
+            fixed_capacity=False):
+        """`fixed_capacity=True` compiles every frame at exactly `capacity`, with every actor's rows and blocks sized
+        for it, so a shrinking request count (the head-to-head loop) never recompiles; padding rows stay inactive
+        and their turn-2 blocks are skipped. The default buckets to the next power of two, as D3 does."""
         if type(capacity)is not int or capacity<=0 or type(actor_capacity)is not int or actor_capacity<=0:
             raise ValueError('finite explicit root/actor capacities required')
         _widths(k_own,k_opp,k1_own,k1_opp,child_block)
-        if type(digest)is not bool:raise ValueError('explicit digest bool required')
-        self.executor=executor;self.model=model;self.capacity=capacity;self.actor_capacity=actor_capacity
+        if type(digest)is not bool or type(fixed_capacity)is not bool:raise ValueError('explicit digest/fixed-capacity bools required')
+        self.executor=executor;self.model=model;self.capacity=capacity;self.actor_capacity=actor_capacity;self.fixed_capacity=fixed_capacity
         self.k_own=k_own;self.k_opp=k_opp;self.k1_own=k1_own;self.k1_opp=k1_opp;self.child_block=child_block;self.digest=digest;self.forward=forward
         self.kernels={};self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
@@ -319,17 +323,18 @@ class Depth2Pricer:
     def _blocks(self,requests,capacity,params):
         """Child slots per block, grouped by learner archive and padded like D3's actor rows.
 
-        Actor 0 spans 2*capacity worlds and each archive history_size worlds, so
-        the block count depends on the same frame geometry as D3's compile key,
-        not on per-archive permutations. Sentinel slots (== child count) and
-        absent archives' blocks are skipped on device.
+        Actor 0 spans 2*capacity worlds and each archive history_size worlds (or
+        2*capacity under fixed_capacity), so the block count depends on the same
+        frame geometry as D3's compile key, not on per-archive permutations.
+        Sentinel slots (== child count) and absent archives' blocks are skipped
+        on device.
         """
         actors=np.repeat([r.learner_actor for r in requests],2);cb=self.child_block;children=LANES*2*capacity
         counts=[int(np.count_nonzero(actors==actor))for actor in range(len(params))]
         history=max(counts[1:],default=0);history_size=0 if history==0 else 1<<(history-1).bit_length()
         slots=[];block_actor=[]
         for actor in range(len(params)):
-            size=2*capacity if actor==0 else history_size
+            size=2*capacity if actor==0 or self.fixed_capacity else history_size
             if not size:continue
             worlds=np.flatnonzero(actors==actor);blocks=-(-LANES*size//cb)
             s=np.full(blocks*cb,children,np.int32);s[:LANES*len(worlds)]=(worlds[:,None]*LANES+np.arange(LANES)).reshape(-1)
@@ -342,7 +347,7 @@ class Depth2Pricer:
         if type(recipe)is not original.Recipe or type(materializer)is not mapping.Tables:
             raise ValueError('original materializer and random recipe required')
         if len(requests)>self.capacity:raise ValueError('one frame exceeds declared root capacity')
-        capacity=min(self.capacity,1<<(len(requests)-1).bit_length())
+        capacity=self.capacity if self.fixed_capacity else min(self.capacity,1<<(len(requests)-1).bit_length())
         self.bind(params);started=time.perf_counter()
         for request in requests:
             p=request.plans
@@ -389,7 +394,7 @@ class Depth2Pricer:
                 rows=[]
                 for actor in range(len(params)):
                     indices=np.flatnonzero(actors==actor).astype(np.int32)
-                    size=2*capacity if actor==0 else history_size
+                    size=2*capacity if actor==0 or self.fixed_capacity else history_size
                     padded=np.full(size,2*capacity,np.int32);padded[:len(indices)]=indices;rows.append(padded)
                 return tuple(rows)
             data['peer_rows']=actor_rows('opponent_actor');data['leaf_rows']=actor_rows('learner_actor')
@@ -420,7 +425,7 @@ class Depth2Pricer:
         timing=dict(roots=count,world_prepare_seconds=prepared-started,batch_pack_and_device_seconds=finished-prepared,
             device_invocations=int(output is not None),lower_seconds=lower_seconds,compile_seconds=compile_seconds,device_seconds=device_seconds,
             actor_strategy='DEPTH2_D3_TURN1_ARCHIVE_BATCHES_BLOCKED_TURN2',root_capacity=capacity,frame_wall_seconds=finished-started,
-            child_block=self.child_block,k_own=self.k_own,k_opp=self.k_opp,k1_own=self.k1_own,k1_opp=self.k1_opp,**work)
+            child_block=self.child_block,k_own=self.k_own,k_opp=self.k_opp,k1_own=self.k1_own,k1_opp=self.k1_opp,fixed_capacity=self.fixed_capacity,**work)
         self.last_timing=timing
         reports=tuple(self._reports(i,r,pair,frame)for i,(r,pair)in enumerate(zip(requests,worlds)))
         return Depth2Frame(world_reports=reports,timing=timing,**frame)
