@@ -53,6 +53,17 @@ class ParseTests(unittest.TestCase):
         self.assertEqual((args.k_own, args.child_block, args.worlds_blocks, args.repeats, args.max_roots, args.d1, args.profile_split, args.memory_policy),
             (3, 27, 4, 5, 10, True, True, True))
 
+    def test_head_override_flags(self):
+        head = ['--head-archive', '/shared/x/actor-99.npz', '--head-archive-sha256', '1' * 64, '--head-checkpoint-sha256', '2' * 64,
+            '--head-model-sha256', '3' * 64, '--value-reference', 'B1 iter~95']
+        args = throughput.parse(REQUIRED + head)
+        self.assertEqual((args.head_archive, args.head_model_sha256, args.value_reference), ('/shared/x/actor-99.npz', '3' * 64, 'B1 iter~95'))
+        self.assertIn('label only', throughput.WEIGHTS_NOTE)
+        with contextlib.redirect_stderr(io.StringIO()):
+            for argv in (REQUIRED + head[:2], REQUIRED + ['--head-category-sha256', 'c' * 64]):
+                with self.assertRaises(SystemExit) as raised:throughput.parse(argv)
+                self.assertEqual(raised.exception.code, 2, argv)
+
     def test_invalid_arguments_exit_2(self):
         bad = (REQUIRED[:-2], REQUIRED + ['--capacity', '0'], REQUIRED + ['--repeats', '0'], REQUIRED + ['--k-opp', '10'],
             REQUIRED + ['--worlds-blocks', '0'], REQUIRED + ['--child-block', '0'], REQUIRED + ['--max-roots', '0'],

@@ -9,6 +9,7 @@ power of two, so every float is exact and no compile context (fusion, FMA) can m
 from dataclasses import replace
 import collections
 import contextlib
+import dataclasses
 import copy
 import importlib.util
 import io
@@ -1012,6 +1013,123 @@ class AnalysisTests(GateFixture, unittest.TestCase):
             self.assertEqual(gate.recheck(directory, backups=FakeBackups, progress=None)['status'], 'INCOMPLETE')
 
 
+@dataclasses.dataclass(frozen=True)
+class FakeConfig:
+    """Stands in for V5ModelConfig: replace(arm=, replicate=) and metadata() are all load_head uses."""
+    arm: str = 'B'
+    replicate: int = 1
+    width: int = 8
+
+    def metadata(self):return dict(arm=self.arm, replicate=self.replicate, width=self.width)
+
+
+class HeadOverrideTests(GateFixture, unittest.TestCase):
+    """--head-archive: U1's load and arm checks, the head's root logits, one actor, the evaluator header, --raw-head-check."""
+    PLAN = SimpleNamespace(model=FakeConfig(arm='D', replicate=0), historical_window=32)
+    LABELS = SimpleNamespace(sha256='a' * 64)
+    HEAD = dict(head_archive='/shared/x/actor-99.npz', head_archive_sha256='1' * 64, head_checkpoint_sha256='2' * 64,
+        head_category_sha256=None, head_model_sha256=None, value_reference='B1 iter~95: p50 0.57, p90 0.97')
+
+    def load(self, config=FakeConfig(), **flags):
+        args = SimpleNamespace(**dict(self.HEAD, **flags))
+        with patch.object(gate_v5_model(), 'load', return_value=('PARAMS', config, dict(parameter_count=7))) as load:
+            result = gate.load_head(args, plan=self.PLAN, labels=self.LABELS, category_sha256='c' * 64)
+        return result, load
+
+    def test_load_head_binds_the_bank_namespaces_and_the_d_geometry(self):
+        (params, config, meta, model_sha), load = self.load()
+        self.assertEqual((params, config.arm), ('PARAMS', 'B'))
+        self.assertEqual(load.call_args.kwargs, dict(expected_archive_sha256='1' * 64, expected_checkpoint_sha256='2' * 64,
+            expected_category_vocabulary_sha256='c' * 64, expected_label_vocabulary_sha256='a' * 64, enable_v5=True))
+        self.assertEqual(load.call_args.args, ('/shared/x/actor-99.npz',))
+        from pokezero import v5_run as runs
+        self.assertEqual(model_sha, runs._sha(FakeConfig().metadata()))
+        self.load(head_model_sha256=model_sha);self.load(head_category_sha256='c' * 64)   # matching optional checks pass
+
+    def test_load_head_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, 'geometry'):self.load(config=FakeConfig(width=9))
+        with self.assertRaisesRegex(ValueError, 'category'):self.load(head_category_sha256='d' * 64)
+        with self.assertRaisesRegex(ValueError, 'model sha256'):self.load(head_model_sha256='e' * 64)
+        args = SimpleNamespace(**self.HEAD)
+        with patch.object(gate_v5_model(), 'load', side_effect=ValueError('caller-trusted v5 actor archive SHA256 differs')), \
+                self.assertRaisesRegex(ValueError, 'SHA256 differs'):
+            gate.load_head(args, plan=self.PLAN, labels=self.LABELS, category_sha256='c' * 64)
+
+    def test_bind_roots_checks_arms_and_moves_every_request_to_the_head(self):
+        head = {'offset': j.asarray(.05, j.float32), 'logits': j.arange(9, dtype=j.float32) / 4}
+        mixed = [list(self.requests[:4])]
+        self.assertEqual({(r.learner_actor, r.opponent_actor) for r in mixed[0]}, {(0, 1), (1, 0)})
+        with patch.object(batch.v5_model, 'forward', side_effect=forward):
+            groups, values, dropped, checked = gate.bind_roots(mixed, (head,), self.PLAN, head_config=FakeConfig())
+            plain, plain_values, _, plain_checked = gate.bind_roots(mixed, PARAMS, self.PLAN)
+        self.assertTrue(checked);self.assertEqual(dropped, [])
+        self.assertEqual({(r.learner_actor, r.opponent_actor) for r in groups[0]}, {(0, 0)})
+        self.assertEqual(groups[0][0].root_logits, tuple(map(float, np.arange(9, dtype=np.float32) / 4)))   # the head's root prior, as U1
+        self.assertAlmostEqual(values[0], abs(float(np.asarray(mixed[0][0].root_inputs['numeric_features']).reshape(-1)[0]) + .05), places=6)
+        self.assertFalse(plain_checked);self.assertEqual([r for g in plain for r in g], mixed[0])   # no override: requests untouched
+        self.assertAlmostEqual(plain_values[1] - plain_values[0], .07, places=5)   # each learner's own params (offset .07 vs 0)
+        def other_arm(params, inputs, model=None, **kw):
+            out = forward(params, inputs);return out._replace(value=out.value + (1e-3 if isinstance(model, FakeConfig) and model.arm == 'B' else 0.))
+        with patch.object(batch.v5_model, 'forward', side_effect=other_arm), self.assertRaisesRegex(ValueError, 'D-arm and head-arm'):
+            gate.bind_roots(mixed, (head,), self.PLAN, head_config=FakeConfig())
+        bad = {'offset': j.asarray(5., j.float32), 'logits': j.zeros(9, j.float32)}   # |v| > 1: an invalid head output
+        with patch.object(batch.v5_model, 'forward', side_effect=forward):
+            groups, values, dropped, _ = gate.bind_roots(mixed, (bad,), self.PLAN, head_config=FakeConfig())
+        self.assertEqual((groups, len(dropped), values), ([], 4, []))
+
+    def test_evaluator_header(self):
+        loaded = SimpleNamespace(plan=self.PLAN, labels=self.LABELS, category_sha256='c' * 64, snapshot=dict(iteration=-1, checkpoint='untrained-smoke.pt',
+            checkpoint_sha256='3' * 64, archive='run/actor--1.npz', archive_sha256='4' * 64, model_sha256='5' * 64))
+        args = SimpleNamespace(**self.HEAD)
+        own = gate.evaluator_header(args, loaded, None)
+        self.assertEqual((own['override'], own['iteration'], own['checkpoint'], own['head_arm'], own['pricer_arm']), (False, -1, 'untrained-smoke.pt', 'D', 'D'))
+        self.assertIn('UNTRAINED', own['warning'])
+        head = gate.evaluator_header(args, loaded, ('PARAMS', FakeConfig(), dict(parameter_count=7), 'f' * 64))
+        self.assertEqual((head['override'], head['iteration'], head['archive'], head['archive_sha256'], head['checkpoint_sha256']),
+            (True, None, '/shared/x/actor-99.npz', '1' * 64, '2' * 64))
+        self.assertEqual((head['head_arm'], head['pricer_arm'], head['model_sha256'], head['parameter_count']), ('B', 'D', 'f' * 64, 7))
+        self.assertNotIn('warning', head)
+        scale = gate.value_scale([.5, .6, .7], dict(count=3, p50=.4, p90=.9, p1=0.), args.value_reference)
+        self.assertEqual(scale['reference'], 'B1 iter~95: p50 0.57, p90 0.97');self.assertEqual(scale['root_abs_value']['p50'], .6)
+        self.assertEqual(scale['t1_abs_value_expanded'], dict(count=3, p50=.4, p90=.9))
+
+    def test_raw_head_check_gates_the_pricer_against_the_head_arm(self):
+        def run(shift):
+            def arms(params, inputs, model=None, **kw):
+                out = forward(params, inputs);return out._replace(value=out.value + (shift if model == 'HEAD_ARM' else 0.))
+            frame_pricer = batch.FramePricer(self.ex, object(), capacity=16, block_rows=16, actor_capacity=3, vectorized=True, host_prep=True)
+            with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=arms), \
+                    patch.dict(sys.modules, {'gpu_engine.depth2_backups': FakeBackups}):
+                evaluation, _ = gate.run_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS,
+                    pricer=OraclePricer(self.ex, self.WIDTHS), frame_pricer=frame_pricer, widths=self.WIDTHS, sample=None, block=0, context=dict(block=0, call=0),
+                    oracle=reference.Oracle(self.ex, object(), chunk=32, raw_model='HEAD_ARM'))
+            return gate.summarize([evaluation])['checks']['c']
+        same, shifted = run(0.), run(1e-3)
+        for name in ('raw_head_t2_value', 'raw_head_t1_value'):
+            self.assertTrue(same['quantities'][name]['within_tolerance']);self.assertEqual(same['quantities'][name]['exact_equal_fraction'], 1.)
+            self.assertGreater(same['quantities'][name]['compared'], 0);self.assertEqual(same['quantities'][name]['gates'], 'c')
+            self.assertFalse(shifted['quantities'][name]['within_tolerance'])
+        self.assertTrue(same['passed']);self.assertFalse(shifted['passed'])
+
+    def test_pricer_only_header_comes_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(save_arrays=False, worlds_blocks=1, max_roots=None, value_reference='ref')
+            provider = SimpleNamespace(materializer=self.tables, source=self.tables.source, recipe=self.recipe)
+            with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward), \
+                    patch.dict(sys.modules, {'gpu_engine.depth2_backups': FakeBackups}), patch.object(gate, 'log', lambda *a, **k: None):
+                gate.pricer_only(args, provider=provider, params=PARAMS, groups=[list(self.requests)], pricer=OraclePricer(self.ex, self.WIDTHS),
+                    options={}, seeds=(self.recipe.seed,), out=Path(directory), source={}, widths=self.WIDTHS, evaluator=dict(override=True, iteration=None),
+                    root_values=[.25, .5])
+            report = json.loads((Path(directory) / 'gate.json').read_text())
+        self.assertEqual(list(report)[:2], ['evaluator', 'value_scale']);self.assertEqual(report['value_scale']['reference'], 'ref')
+        self.assertEqual(report['value_scale']['root_abs_value']['count'], 2);self.assertGreater(report['value_scale']['t1_abs_value_expanded']['count'], 0)
+
+
+def gate_v5_model():
+    from gpu_engine import v5_model
+    return v5_model
+
+
 class PricerBindingTests(unittest.TestCase):
     """The pricer's constructor is not on this branch: bind it by signature, and fail closed."""
     WIDTHS = dict(k_own=9, k_opp=9, k1_own=9, k1_opp=9)
@@ -1054,7 +1172,11 @@ class PricerBindingTests(unittest.TestCase):
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--block-invariance', '--child-block', '27'],
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--child-block', '0'],
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--pricer-only', '--block-invariance'],
-                    ['--out', str(out), '--recheck', 'arrays', '--d3-root', 'b']):
+                    ['--out', str(out), '--recheck', 'arrays', '--d3-root', 'b'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--head-archive', 'a.npz'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--raw-head-check'],
+                    ['--out', str(out), '--recheck', 'arrays', '--head-archive', 'a', '--head-archive-sha256', 'b', '--head-checkpoint-sha256', 'c'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--head-model-sha256', 'x']):
                 with self.assertRaises(SystemExit) as raised:gate.main(argv)
                 self.assertEqual(raised.exception.code, 2, argv)
         with patch.object(importlib.util, 'find_spec', return_value=None), self.assertRaises(SystemExit) as raised:

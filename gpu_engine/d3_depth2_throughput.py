@@ -17,6 +17,10 @@ forward and (ii)-(iii) the rest of depth 2 beyond D3's turn 1. Turn-2 leaf forwa
 their static batch size at trace time (child_block*k_own*k_opp rows). If that size can coincide with a
 turn-1 forward's, (ii) is skipped and the reason reported; the sizes actually traced are checked too.
 Progress is JSON lines; the result is throughput.json in a new --out directory.
+
+--head-archive/--head-archive-sha256/--head-checkpoint-sha256 price with that v5 head instead of the bank snapshot's
+actor (the gate's override: U1's load, arm checks, the head's root logits, one actor). throughput.json and the first
+JSON line carry the evaluator; device time does not depend on the weight values, so the evaluator is a label only.
 """
 import argparse
 from contextlib import nullcontext
@@ -28,8 +32,11 @@ import statistics
 import time
 from unittest.mock import patch
 
+import numpy as np
+
 SCHEMA = 'pokezero.depth2-throughput.v1'
 LANES = 81   # D3's fixed joint lanes per world
+WEIGHTS_NOTE = 'false (device time independent of the weight values; label only)'
 
 
 def parse(argv=None):
@@ -47,7 +54,10 @@ def parse(argv=None):
     parser.add_argument('--max-roots', type=int, help='use only the first N requests of the chunk')
     parser.add_argument('--d1', action='store_true', help="also time D3's depth-1 FramePricer at the same capacity and blocks")
     parser.add_argument('--profile-split', action='store_true', help='split block 0 device time: normal / constant turn-2 forward / depth 1')
+    from gpu_engine.d3_depth2_gate import add_head_arguments, check_head_arguments   # numpy only: no JAX before the memory policy
+    add_head_arguments(parser)
     args = parser.parse_args(argv)
+    check_head_arguments(parser, args)
     if args.chunk < 0:parser.error('--chunk N >= 0 required')
     if args.capacity < 1 or args.repeats < 1 or args.worlds_blocks < 1:parser.error('positive --capacity, --repeats and --worlds-blocks required')
     if any(not 1 <= v <= 9 for v in (args.k_own, args.k_opp, args.k1_own, args.k1_opp)):parser.error('widths must be 1..9')
@@ -95,10 +105,12 @@ def derive(blocks, capacity):
 
 
 def depth2_call(pricer, requests, materializer, recipe, params, memory):
-    timing = pricer.price(requests, materializer, recipe, params).timing
+    frame = pricer.price(requests, materializer, recipe, params);timing = frame.timing
+    t1, status = getattr(frame, 't1_value', None), getattr(frame, 't1_status', None)
+    abs_t1 = None if t1 is None or status is None else np.abs(np.asarray(t1, np.float64)[np.asarray(status) == 2])
     return dict(compile_seconds=(timing.get('lower_seconds') or 0.) + (timing.get('compile_seconds') or 0.), device_seconds=timing['device_seconds'],
         leaves_enumerated=timing.get('turn2_enumerated_leaves'), leaves_evaluated=timing.get('turn2_evaluated_leaf_lanes'),
-        frame_wall_seconds=timing.get('frame_wall_seconds'), memory=memory())
+        frame_wall_seconds=timing.get('frame_wall_seconds'), memory=memory(), _abs_t1=abs_t1)
 
 
 def depth1_call(pricer, requests, materializer, recipe, params, memory):
@@ -110,15 +122,18 @@ def depth1_call(pricer, requests, materializer, recipe, params, memory):
         memory=memory())
 
 
-def measure(name, call, pricer, blocks, materializer, params, repeats, *, memory, progress):
-    """For each (block, recipe, requests): 1 cold + `repeats` warm calls; returns per-block summaries."""
+def measure(name, call, pricer, blocks, materializer, params, repeats, *, memory, progress, collect=None):
+    """For each (block, recipe, requests): 1 cold + `repeats` warm calls; returns per-block summaries.
+    collect gets each block's cold-call |t1_value| at expanded cells (the depth-2 value scale)."""
     from gpu_engine.d3_depth2_gate import stage
     summaries = []
     for block, recipe, requests, context in blocks:
         calls = []
         for i in range(1 + repeats):
             with stage(progress, f'{name}_call', block=block, call=i, warm=i > 0, roots=len(requests)) as info, context():
-                calls.append(call(pricer, requests, materializer, recipe, params, memory));info.update(calls[-1])
+                record = call(pricer, requests, materializer, recipe, params, memory);abs_t1 = record.pop('_abs_t1', None)
+                if i == 0 and collect is not None and abs_t1 is not None:collect.append(abs_t1)
+                calls.append(record);info.update(record)
         summaries.append(dict(block=block, **summarize_block(calls)))
     return summaries
 
@@ -194,16 +209,26 @@ def main(argv=None):
     import importlib.util   # fail before loading the bank; find_spec does not import JAX
     if importlib.util.find_spec('gpu_engine.device_depth2_pricer') is None:raise SystemExit('gpu_engine.device_depth2_pricer is not on this tree')
     from gpu_engine import d3_depth2_gate as gate
+    gate.log('EVALUATOR', override=bool(args.head_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
+        checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, weights_affect_speed=WEIGHTS_NOTE,
+        resolved='EVALUATOR_RESOLVED follows once the bank is loaded')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     with gate.stage(gate.log, 'load_bank_chunk', chunk=args.chunk):
-        provider, plan, params, groups, _, source = gate.bank_chunk_requests(args)
+        loaded = gate.bank_chunk_requests(args)
+    provider, plan, params, source = loaded.provider, loaded.plan, loaded.params, loaded.source
+    head = gate.load_head(args, plan=plan, labels=loaded.labels, category_sha256=loaded.category_sha256) if args.head_archive else None
+    if head is not None:params = (head[0],)
+    groups, root_values, dropped, arm_checked = gate.bind_roots(loaded.groups, params, plan, head_config=None if head is None else head[1])
+    evaluator = dict(gate.evaluator_header(args, loaded, head), arm_checked=arm_checked, dropped_roots=dropped, weights_affect_speed=WEIGHTS_NOTE)
+    gate.log('EVALUATOR_RESOLVED', evaluator=evaluator, root_value_scale=gate.percentiles(root_values))
     import jax
     from pokezero import v5_gumbel as original
     from gpu_engine import device_public_worlds as worlds, v5_model
     from gpu_engine.device_public_teacher_batch import FramePricer
     available = [r for g in groups for r in g][:args.max_roots]
     roots = cycle_roots(available, args.capacity);widths = dict(k_own=args.k_own, k_opp=args.k_opp, k1_own=args.k1_own, k1_opp=args.k1_opp)
-    seeds = gate.world_block_seeds(provider.recipe.seed, args.worlds_blocks);actor_capacity = plan.historical_window + 1
+    seeds = gate.world_block_seeds(provider.recipe.seed, args.worlds_blocks)
+    actor_capacity = len(params) if head is not None else plan.historical_window + 1
     def blocks():
         for block, seed in enumerate(seeds):
             recipe = provider.recipe if block == 0 else original.Recipe(seed)
@@ -216,8 +241,10 @@ def main(argv=None):
         actor_capacity=actor_capacity)
     gate.log('THROUGHPUT_START', roots_available=len(available), roots_per_call=args.capacity, cycled=len(available) < args.capacity,
         worlds=2 * len(seeds), repeats=args.repeats, pricer_options=options, devices=[d.device_kind for d in jax.devices()])
-    depth2 = measure('depth2', depth2_call, pricer, planned, provider.materializer, params, args.repeats, memory=memory_stats, progress=gate.log)
-    report = dict(schema=SCHEMA, source=source, capacity=args.capacity, widths=widths, child_block=options['child_block'],
+    t1 = []
+    depth2 = measure('depth2', depth2_call, pricer, planned, provider.materializer, params, args.repeats, memory=memory_stats, progress=gate.log, collect=t1)
+    report = dict(evaluator=evaluator, value_scale=gate.value_scale(root_values, gate.percentiles(np.concatenate(t1) if t1 else []), args.value_reference),
+        weights_affect_speed=WEIGHTS_NOTE, schema=SCHEMA, source=source, capacity=args.capacity, widths=widths, child_block=options['child_block'],
         worlds_blocks=args.worlds_blocks, block_seeds=list(seeds), repeats=args.repeats, roots_available=len(available),
         roots_per_call=args.capacity, cycled=len(available) < args.capacity, pricer_options=options,
         devices=[d.device_kind for d in jax.devices()], depth2=dict(blocks=depth2, derived=derive(depth2, args.capacity)),
@@ -248,7 +275,7 @@ def main(argv=None):
             turn2_forward_rows=rows, traced_forward_rows=sorted(set(census)), skipped_constant_variant=reason,
             method='turn-2 leaf forwards recognized by static batch size at trace time; zeros of the real output shapes consume every input',
             caveat='estimates from warm medians of separate programs; XLA may schedule the variants differently')
-    (out / 'throughput.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')
+    (out / 'throughput.json').write_text(json.dumps(report, indent=1, allow_nan=False, default=str) + '\n')   # evaluator first
     gate.log('THROUGHPUT_COMPLETE', out=str(out / 'throughput.json'), depth2=report['depth2']['derived'],
         depth1=report.get('depth1', {}).get('derived'), split=report.get('profile_split'))
     return 0

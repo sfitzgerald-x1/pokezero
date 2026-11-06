@@ -39,8 +39,17 @@ next to D3 FramePricer's on the same requests, turn-1/turn-2 error counts by cod
 learner-max cell and root spreads and the near-tie share, per root-frame band, from the pricer's frame) and the sibling
 spread of head-valued leaves. Offline: --recheck DIR re-evaluates every check its saved arrays allow and names what is
 missing; --pruning-report DIR ranks learner-max's turn-2 action against the top-k child prior on full-width arrays.
---pricer-only runs only Depth2Pricer (status PRICER_ONLY): values, refusals and arrays. All paths are command-line
-arguments; --out must be new.
+--pricer-only runs only Depth2Pricer (status PRICER_ONLY): values, refusals and arrays.
+
+Evaluator: by default the bank snapshot's actor prices (the D3 cost banks' snapshot is iteration -1, UNTRAINED). The
+head override --head-archive/--head-archive-sha256/--head-checkpoint-sha256 (optional --head-category-sha256 and
+--head-model-sha256) loads a v5 head exactly as U1 does: the bank declaration's category vocabulary and the plan's labels
+bind it, its geometry must be the bank D model, and the D-arm and head-arm forwards must agree exactly on the first root.
+Every request then takes the head's own root logits and actors 0/0 (one actor) in every mode, for the pricer,
+FramePricer and the oracle alike. The first JSON line and the top of gate.json carry the evaluator and value_scale (root
+and expanded-cell |v| p50/p90, and --value-reference echoed). --raw-head-check gates, in (c), the pricer's leaf and child
+values against the head's own arm on the oracle's inputs (U1's predict path). All paths are command-line arguments;
+--out must be new.
 """
 import argparse
 import collections
@@ -92,6 +101,7 @@ CONVENTIONS = (
     'Exact: every discrete field and digest, and check (e). Floats, uniformly for every cross-program or cross-geometry comparison (vs D3, vs the oracle, across child blocks): values within VALUE_TOLERANCE, logits within LOGIT_TOLERANCE.',
     'Top-k ranks by the oracle\'s own bf16 child priors (logit descending, lower index on ties, non-finite last); full width needs no priors.',
     'Each world block is a separate call (Depth2Pricer.price takes one recipe); blocks after 0 bypass Recipe.selected, as U1.',
+    'Evaluator: the bank snapshot actor unless --head-archive; with the override every request takes the head\'s root logits and actors 0/0 (U1).',
     'Depth-2 refusal (reference rule): a root refuses if any world has pre != 0, or any enumerated turn-1 or turn-2 cell has status 3 (codes 5/6 included).',
 )
 
@@ -340,7 +350,8 @@ def _masked(keys, got, want, mask):
     return cells, got[mask], want[mask]
 
 
-GATED = ('t2_value', 't1_value_head', 't1_own_logits', 't1_peer_logits', 'root_peer_logits')   # (c); the depth-1 floor is reported
+GATED = ('t2_value', 't1_value_head', 't1_own_logits', 't1_peer_logits', 'root_peer_logits',
+    'raw_head_t2_value', 'raw_head_t1_value')   # (c), each when present; the depth-1 floor is reported
 
 
 def check_heads(frame, data, d_results=None):
@@ -350,12 +361,16 @@ def check_heads(frame, data, d_results=None):
     if len(specs):
         at = tuple(specs.T);scored = (leaves['status'] == 4) & (field(frame, 't2_status')[at] == 4)
         parts['t2_value'] = _masked(specs, field(frame, 't2_value')[at], leaves['head_value'], scored)
+        if 'raw_head_value' in leaves:   # --raw-head-check: the pricer's D-arm value vs the head's own arm on the oracle's leaf inputs
+            parts['raw_head_t2_value'] = _masked(specs, field(frame, 't2_value')[at], leaves['raw_head_value'], scored)
     cells = children['cells']
     if len(cells):
         at = tuple(cells.T);status, error = children['status'], children['error']
         same = (field(frame, 't1_status')[at] == status) & (field(frame, 't1_error')[at] == error)
         expanded = same & (status == 2);valued = same & ((status == 2) | np.isin(error, DEPTH2_CODES))
         parts['t1_value_head'] = _masked(cells, field(frame, 't1_value')[at], children['head_value'], valued)
+        if 'raw_head_value' in children:
+            parts['raw_head_t1_value'] = _masked(cells, field(frame, 't1_value')[at], children['raw_head_value'], valued)
         for seat, scope in (('own', valued), ('peer', expanded)):
             lanes = scope[:, None] & np.asarray(children[seat + '_requested'], bool)[:, None] & np.asarray(children[seat + '_legal'], bool)
             parts[f't1_{seat}_logits'] = _masked(cells, field(frame, f't1_{seat}_logits')[at], children[seat + '_logits'], lanes)
@@ -890,9 +905,9 @@ def _backups():
 def recheck(directory, *, backups=None, progress=None):
     """--recheck: every check, the values section and the sibling spread from saved arrays, without the GPU or the engine."""
     backups = backups or _backups();evaluations, unavailable, substitutions, notes, collected, sibling = [], {}, set(), set(), [], []
-    checked = True
+    checked = True;evaluator = None
     for path, context, saved in saved_calls(directory):
-        checked = checked and not saved['meta'].get('sample_leaves')
+        checked = checked and not saved['meta'].get('sample_leaves');evaluator = evaluator or saved['meta'].get('evaluator')
         with stage(progress, 'recheck_call', file=path.name, **context) as info:
             evaluation, missing, subs = recheck_call(saved, context=context, backups=backups)
             evaluations.append(evaluation);substitutions.update(subs);notes.update(saved['notes'])
@@ -903,7 +918,7 @@ def recheck(directory, *, backups=None, progress=None):
     refusals = merge_refusals([e['refusals'] for e in evaluations if 'refusals' in e])
     failed = any(not check['passed'] for check in result['checks'].values()) or any(e.get('geometry') for e in evaluations)
     status = 'FAIL' if failed else 'INCOMPLETE' if unavailable else 'PASS'
-    return dict(schema=SCHEMA, mode='RECHECK', status=status, passed=status == 'PASS', source=str(directory), calls=len(evaluations),
+    return dict(evaluator=evaluator, schema=SCHEMA, mode='RECHECK', status=status, passed=status == 'PASS', source=str(directory), calls=len(evaluations),
         checks=result['checks'], unavailable={k: sorted(v) for k, v in unavailable.items()}, substitutions=sorted(substitutions), notes=sorted(notes),
         values=values_section(collected, oracle_checked=checked and 'e' in result['checks']),
         sibling_spread=merge_sibling_spread(sibling, oracle_checked=checked), refusals=refusals,
@@ -1052,7 +1067,7 @@ def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, 
 
 
 def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, context, invariance=None,
-             progress=None, decision=None, save=None):
+             progress=None, decision=None, save=None, evaluator=None):
     """Price ONE request list three ways and evaluate it; returns (evaluation, call summary).
 
     decision: run check (e) (default: when every leaf is checked); save: an .npz path for --save-arrays. The
@@ -1080,7 +1095,7 @@ def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, or
     if save is not None:
         with stage(progress, 'save_arrays', **context) as info:
             info['arrays'] = len(save_arrays(save, frame, requests, data=data, d_results=d_results, invariance_frames=data['invariance_frames'],
-                meta=dict(context, widths=widths, sample_leaves=sample, invariance=bool(invariance))));info['path'] = str(save)
+                meta=dict(context, widths=widths, sample_leaves=sample, invariance=bool(invariance), evaluator=evaluator)));info['path'] = str(save)
     summary = dict(context, roots=len(requests), worlds=data['worlds'], usable_worlds=sum(r['pre'] == 0 for r in roots.values()), refusals=refusals,
         turn1_cells=len(data['children']['cells']), turn2_leaves=len(data['enumerated']), checked_leaves=len(data['leaves']['specs']), timing=timing,
         costs=data['costs'], pricer_timing=json.loads(json.dumps(pricer_timing, default=str)) if pricer_timing is not None else None,
@@ -1114,6 +1129,97 @@ def oracle_chunk_progress(log_line, *, interval=PROGRESS_INTERVAL, clock=time.pe
         if record['chunk'] == 0 or record['chunk'] == record['chunks'] - 1 or now - state['last'] >= interval:
             state['last'] = now;log_line('ORACLE_CHUNK', **record)
     return progress
+
+
+def load_head(args, *, plan, labels, category_sha256):
+    """--head-archive: U1's load and arm check. The bank declaration's category vocabulary and the plan's labels bind the
+    archive; its geometry must be the bank's D model up to arm/replicate. Returns (params, head_config, metadata, model_sha256)."""
+    from pokezero import v5_run as runs
+    from gpu_engine import v5_model
+    if args.head_category_sha256 is not None and args.head_category_sha256 != category_sha256:
+        raise ValueError(f'head category vocabulary {args.head_category_sha256} differs from the bank declaration\'s {category_sha256}')
+    params, head_config, meta = v5_model.load(args.head_archive, expected_archive_sha256=args.head_archive_sha256,
+        expected_checkpoint_sha256=args.head_checkpoint_sha256, expected_category_vocabulary_sha256=category_sha256,
+        expected_label_vocabulary_sha256=labels.sha256, enable_v5=True)
+    if replace(head_config, arm='D', replicate=0) != plan.model:raise ValueError('head geometry differs from the bank D model')
+    model_sha256 = runs._sha(head_config.metadata())   # what Snapshot.model_sha256 records for a model
+    if args.head_model_sha256 is not None and model_sha256 != args.head_model_sha256:
+        raise ValueError(f'head model sha256 {model_sha256} differs from --head-model-sha256 {args.head_model_sha256}')
+    return params, head_config, meta, model_sha256
+
+
+def bind_roots(groups, params, plan, *, head_config=None):
+    """Each request's learner value head on its own root inputs (D arm, bf16, batch 1).
+
+    With a head override (head_config, params = (head,)): the arm check on the first request, where the D-arm and head-arm
+    forwards must give exactly equal value and policy logits, as U1. Each request then takes the head's root logits (U1's
+    root prior) and actors 0/0, and a root whose head output is invalid or non-finite is dropped (U1 refuses it).
+    Returns (groups, root |v| list, dropped addresses, arm_checked)."""
+    import jax
+    from gpu_engine import v5_model
+    forward = jax.jit(lambda p, x: v5_model.forward(p, x, plan.model, compute_dtype='bfloat16'))
+    head = None if head_config is None else jax.jit(lambda p, x: v5_model.forward(p, x, head_config, compute_dtype='bfloat16'))
+    out, values, dropped, checked = [], [], [], False
+    for group in groups:
+        kept = []
+        for request in group:
+            p = params[0] if head is not None else params[request.learner_actor]
+            inputs = {k: np.asarray(v) for k, v in request.root_inputs.items()}
+            output = jax.device_get(forward(p, inputs))
+            if head is not None and not checked:
+                other = jax.device_get(head(p, inputs))
+                if not (np.array_equal(np.asarray(other.value), np.asarray(output.value))
+                        and np.array_equal(np.asarray(other.policy_logits), np.asarray(output.policy_logits))):
+                    raise ValueError('D-arm and head-arm forwards differ')
+                checked = True
+            value, logits = float(np.asarray(output.value).reshape(-1)[0]), np.asarray(output.policy_logits, np.float32).reshape(-1)
+            usable = bool(np.asarray(output.valid).reshape(-1)[0]) and np.isfinite(logits).all() and np.isfinite(value) and abs(value) <= 1
+            if usable:values.append(abs(value))
+            if head is not None:
+                if not usable:
+                    a = request.plans.root.address;dropped.append([a.stream, a.frame, a.owner]);continue
+                request = replace(request, root_logits=tuple(map(float, logits)), learner_actor=0, opponent_actor=0)
+            kept.append(request)
+        if kept:out.append(kept)
+    return out, values, dropped, checked
+
+
+def evaluator_header(args, loaded, head):
+    """Who priced: the override head, or the bank snapshot's actor (iteration -1 is the bank's untrained actor)."""
+    plan = loaded.plan
+    if head is not None:
+        _, config, meta, model_sha256 = head
+        return dict(override=True, archive=args.head_archive, archive_sha256=args.head_archive_sha256,
+            checkpoint=meta.get('checkpoint_path') or meta.get('checkpoint'), checkpoint_sha256=args.head_checkpoint_sha256, iteration=None,
+            model_sha256=model_sha256, head_arm=config.arm, pricer_arm=plan.model.arm, parameter_count=meta.get('parameter_count'),
+            category_vocabulary_sha256=loaded.category_sha256, label_vocabulary_sha256=loaded.labels.sha256)
+    s = loaded.snapshot
+    header = dict(override=False, archive=s.get('archive'), archive_sha256=s.get('archive_sha256'), checkpoint=s.get('checkpoint'),
+        checkpoint_sha256=s.get('checkpoint_sha256'), iteration=s.get('iteration'), model_sha256=s.get('model_sha256'), head_arm=plan.model.arm,
+        pricer_arm=plan.model.arm, category_vocabulary_sha256=loaded.category_sha256, label_vocabulary_sha256=loaded.labels.sha256)
+    if s.get('iteration') == -1:header['warning'] = 'iteration -1 is the bank\'s own UNTRAINED actor: values are not a trained head\'s'
+    return header
+
+
+def value_scale(root_values, t1_totals, reference):
+    pick = lambda d: {k: d.get(k) for k in ('count', 'p50', 'p90')}
+    return dict(root_abs_value=pick(percentiles(root_values)), t1_abs_value_expanded=pick(t1_totals or dict(count=0)), reference=reference,
+        root_scope='the learner value head on each request\'s own root inputs (D arm, bf16)', t1_scope='|t1_value| at expanded cells of the priced frames')
+
+
+def add_head_arguments(parser):
+    parser.add_argument('--head-archive', help='price with this v5 actor archive instead of the bank snapshot\'s actor (U1\'s head override)')
+    parser.add_argument('--head-archive-sha256', help='sha256 of --head-archive (required with it)')
+    parser.add_argument('--head-checkpoint-sha256', help='the archive\'s checkpoint sha256 (required with --head-archive)')
+    parser.add_argument('--head-category-sha256', help='optional: must equal the bank declaration\'s category vocabulary sha256')
+    parser.add_argument('--head-model-sha256', help='optional: must equal sha of the head config metadata (Snapshot.model_sha256)')
+    parser.add_argument('--value-reference', default=None, help='free text echoed in value_scale.reference (e.g. a training value-estimate scale)')
+
+
+def check_head_arguments(parser, args):
+    given = [args.head_archive, args.head_archive_sha256, args.head_checkpoint_sha256]
+    if any(given) and not all(given):parser.error('--head-archive, --head-archive-sha256 and --head-checkpoint-sha256 go together')
+    if (args.head_category_sha256 or args.head_model_sha256) and not args.head_archive:parser.error('--head-category/model-sha256 need --head-archive')
 
 
 def make_pricer(executor, model, *, widths, actor_capacity, child_block=None):
@@ -1250,7 +1356,10 @@ def saved_root_requests(args):
     log('SAVED_ROOTS', captured=len(captured), dispositions=reference['summary']['dispositions'])
     frame_pricer = FramePricer(provider.executor, plan.model, actor_capacity=plan.historical_window + 1, capacity=4096,
         vectorized=True, host_prep=True)
-    return provider, plan, actors[0], [requests], frame_pricer, dict(saved_roots=str(root), index_sha256=args.index_sha256)
+    return SimpleNamespace(provider=provider, plan=plan, params=actors[0], groups=[requests], frame_pricer=frame_pricer,
+        source=dict(saved_roots=str(root), index_sha256=args.index_sha256), labels=labels, category_sha256=declaration['category_vocabulary_sha256'],
+        snapshot=dict(iteration=snapshot.iteration, checkpoint=snapshot.checkpoint, checkpoint_sha256=snapshot.checkpoint_sha256,
+            archive=snapshot.archive, archive_sha256=snapshot.archive_sha256, model_sha256=snapshot.model_sha256))
 
 
 def bank_chunk_requests(args):
@@ -1305,14 +1414,17 @@ def bank_chunk_requests(args):
     groups = [[request for _, request in items] for _, items in grouped.items()]
     log('BANK_CHUNK', chunk=args.chunk, records=len(records), selected=sum(r['status'] != 'UNSELECTED' for r in records),
         frames=sorted(grouped), requests=sum(map(len, groups)))
-    return provider, plan, (params,), groups, provider.frame_pricer, dict(d3_root=str(root), chunk=args.chunk, declaration_sha256=declared)
+    return SimpleNamespace(provider=provider, plan=plan, params=(params,), groups=groups, frame_pricer=provider.frame_pricer,
+        source=dict(d3_root=str(root), chunk=args.chunk, declaration_sha256=declared), labels=plan.model.label_vocabulary,
+        category_sha256=plan.model.category_vocabulary_sha256,
+        snapshot={k: snapshot.get(k) for k in ('iteration', 'checkpoint', 'checkpoint_sha256', 'archive', 'archive_sha256', 'model_sha256')})
 
 
 DIGEST_NOTE = ('--pricer-only keeps digest=True: Depth2Pricer passes digest into make_depth2_kernel, which adds the leaf digests '
     'as kernel outputs, so digest=False would compile a different program and miss the gate\'s warm compile cache. The digests are not used.')
 
 
-def pricer_only(args, *, provider, params, groups, pricer, options, seeds, out, source, widths):
+def pricer_only(args, *, provider, params, groups, pricer, options, seeds, out, source, widths, evaluator=None, root_values=()):
     """--pricer-only: the gate's normal Depth2Pricer call on every request group, nothing else; values and refusals from its frame."""
     from pokezero import v5_gumbel as original
     from gpu_engine import device_public_worlds as worlds
@@ -1336,17 +1448,19 @@ def pricer_only(args, *, provider, params, groups, pricer, options, seeds, out, 
                 if args.save_arrays:
                     path = out / f'arrays-block{block}-call{call}.npz'
                     with stage(log, 'save_arrays', path=str(path), **context):
-                        save_arrays(path, frame, requests, meta=dict(context, widths=widths, pricer_only=True));summary['saved_arrays'] = str(path)
+                        save_arrays(path, frame, requests, meta=dict(context, widths=widths, pricer_only=True, evaluator=evaluator));summary['saved_arrays'] = str(path)
                 calls.append(summary);log('PRICER_CALL', **summary)
     rows = [c['costs']['depth2_pricer'] for c in calls]
     total = lambda key: None if all(r.get(key) is None for r in rows) else sum(r.get(key) or 0. for r in rows)
-    report = dict(schema=SCHEMA, status='PRICER_ONLY', passed=False, mode='PRICER_ONLY', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
+    values = values_section(collected, oracle_checked=False)
+    report = dict(evaluator=evaluator, value_scale=value_scale(root_values, values['totals'].get('abs_t1_value'), getattr(args, 'value_reference', None)),
+        schema=SCHEMA, status='PRICER_ONLY', passed=False, mode='PRICER_ONLY', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
         block_seeds=list(seeds), max_roots=args.max_roots, pricer_options=options, digest_note=DIGEST_NOTE, calls=calls,
         geometry_failures=[c for c in calls if c['geometry']],
-        values=values_section(collected, oracle_checked=False), sibling_spread=merge_sibling_spread(sibling, oracle_checked=False),
+        values=values, sibling_spread=merge_sibling_spread(sibling, oracle_checked=False),
         refusals=merge_refusals(refusals), costs=dict(depth2_pricer={k: total(k) for k in ('wall_seconds', 'lower_and_compile_seconds', 'device_seconds')}),
         scope='Depth2Pricer only: no FramePricer, oracle or checks; every value is the pricer\'s own, not oracle-checked')
-    (out / 'gate.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')
+    (out / 'gate.json').write_text(json.dumps(report, indent=1, allow_nan=False, default=str) + '\n')   # evaluator first
     log('PRICER_ONLY_COMPLETE', out=str(out / 'gate.json'), near_ties=report['values']['near_ties']['share'], refused=report['refusals'].get('depth2'))
     return 0
 
@@ -1373,14 +1487,22 @@ def main(argv=None):
     parser.add_argument('--recheck', metavar='DIR', help='offline: re-evaluate every check from DIR\'s saved arrays (no GPU, no engine) into --out/recheck.json')
     parser.add_argument('--pruning-report', metavar='DIR', help='offline: learner-max a2 rank vs top-k from DIR\'s full-width saved arrays into --out/pruning.json')
     parser.add_argument('--pricer-only', action='store_true', help='run only Depth2Pricer (no FramePricer, oracle or checks): values, refusals, arrays')
+    parser.add_argument('--raw-head-check', action='store_true',
+        help='with --head-archive: gate the pricer\'s leaf and child values against the head\'s own arm on the oracle\'s inputs (in (c))')
+    add_head_arguments(parser)
     args = parser.parse_args(argv)
+    check_head_arguments(parser, args)
+    if args.raw_head_check and not args.head_archive:parser.error('--raw-head-check needs --head-archive')
+    if args.raw_head_check and args.pricer_only:parser.error('--raw-head-check needs the oracle: drop --pricer-only')
     offline = bool(args.recheck or args.pruning_report)
     if offline:
-        if args.saved_roots or args.d3_root or args.pricer_only:parser.error('--recheck/--pruning-report run offline: no --saved-roots/--d3-root/--pricer-only')
+        if args.saved_roots or args.d3_root or args.pricer_only or args.head_archive:
+            parser.error('--recheck/--pruning-report run offline: no --saved-roots/--d3-root/--pricer-only/--head-archive')
         out = Path(args.out);out.mkdir(parents=True, exist_ok=False);status = 0
         if args.recheck:
             report = recheck(args.recheck, progress=log)
-            (out / 'recheck.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')
+            if report['evaluator'] is None:report['evaluator'] = dict(unknown='arrays saved before the evaluator header (5ea0552b): the bank snapshot\'s actor')
+            (out / 'recheck.json').write_text(json.dumps(report, indent=1, allow_nan=False, default=str) + '\n')
             log('RECHECK_COMPLETE', status=report['status'], out=str(out / 'recheck.json'), checks={k: v['passed'] for k, v in report['checks'].items()},
                 unavailable=report['unavailable']);status = 0 if report['passed'] else 1
         if args.pruning_report:
@@ -1403,8 +1525,18 @@ def main(argv=None):
     if importlib.util.find_spec('gpu_engine.device_depth2_pricer') is None:raise SystemExit('gpu_engine.device_depth2_pricer is not on this tree')
     if args.sample_leaves is None and not args.pricer_only and importlib.util.find_spec('gpu_engine.depth2_backups') is None:
         raise SystemExit('check (e) needs gpu_engine.depth2_backups (learner_max_root), which is not on this tree: failing closed')
+    log('EVALUATOR', override=bool(args.head_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
+        checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference,
+        resolved='EVALUATOR_RESOLVED follows once the bank is loaded' + ('' if args.head_archive else ' (the bank snapshot\'s actor)'))
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
-    provider, plan, params, groups, frame_pricer, source = (saved_root_requests if args.saved_roots else bank_chunk_requests)(args)
+    loaded = (saved_root_requests if args.saved_roots else bank_chunk_requests)(args)
+    provider, plan, params, frame_pricer, source = loaded.provider, loaded.plan, loaded.params, loaded.frame_pricer, loaded.source
+    head = load_head(args, plan=plan, labels=loaded.labels, category_sha256=loaded.category_sha256) if args.head_archive else None
+    if head is not None:params = (head[0],)
+    groups, root_values, dropped, arm_checked = bind_roots(loaded.groups, params, plan, head_config=None if head is None else head[1])
+    evaluator = dict(evaluator_header(args, loaded, head), arm_checked=arm_checked, dropped_roots=dropped)
+    log('EVALUATOR_RESOLVED', evaluator=evaluator, root_value_scale=percentiles(root_values))
+    actor_capacity = len(params) if head is not None else plan.historical_window + 1
     from pokezero import v5_gumbel as original
     from gpu_engine import device_public_worlds as worlds, depth2_oracle as reference
     if args.max_roots is not None:
@@ -1415,13 +1547,14 @@ def main(argv=None):
     capacity = frame_pricer.capacity
     groups = [g[i:i + capacity] for g in groups for i in range(0, len(g), capacity) if g[i:i + capacity]]
     blocks = INVARIANCE_BLOCKS if args.block_invariance else (args.child_block,)
-    pricers = [make_pricer(provider.executor, plan.model, widths=widths, actor_capacity=plan.historical_window + 1, child_block=b) for b in blocks]
+    pricers = [make_pricer(provider.executor, plan.model, widths=widths, actor_capacity=actor_capacity, child_block=b) for b in blocks]
     (pricer, options), invariance = pricers[-1], [p for p, _ in pricers[:-1]]
     seeds = world_block_seeds(provider.recipe.seed, args.worlds_blocks)
     if args.pricer_only:
         return pricer_only(args, provider=provider, params=params, groups=groups, pricer=pricer, options=options, seeds=seeds, out=out, source=source,
-            widths=widths)
-    oracle = reference.Oracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=oracle_chunk_progress(log))
+            widths=widths, evaluator=evaluator, root_values=root_values)
+    oracle = reference.Oracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=oracle_chunk_progress(log),
+        raw_model=head[1] if args.raw_head_check else None)
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), widths=widths, sample_leaves=args.sample_leaves, seeds=seeds,
         pricer_options=options)
     evaluations, calls = [], []
@@ -1434,7 +1567,7 @@ def main(argv=None):
                 evaluation, summary = run_call(requests=requests, recipe=recipe, materializer=provider.materializer, params=params,
                     pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=args.sample_leaves, block=block,
                     context=dict(block=block, call=call), invariance=invariance, progress=log,
-                    save=out / f'arrays-block{block}-call{call}.npz' if args.save_arrays else None)
+                    save=out / f'arrays-block{block}-call{call}.npz' if args.save_arrays else None, evaluator=evaluator)
                 evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize(evaluations)
     reported = [c for c in calls if c['refusals'] is not None]
@@ -1442,14 +1575,15 @@ def main(argv=None):
         by_block={str(b): merge_refusals([c['refusals'] for c in reported if c['block'] == b]) for b in range(len(seeds))},
         rule='reference (D): any world pre != 0 or any status-3 cell at either turn refuses the root; codes 5/6 refuse too')
     leaves = oracle.rows['leaves'];children = oracle.rows['children']
-    report = dict(schema=SCHEMA, status='PASS' if result['passed'] else 'FAIL', passed=result['passed'], checks=result['checks'],
+    values = values_section([(e['values'], e.get('e')) for e in evaluations if 'values' in e], oracle_checked=args.sample_leaves is None)
+    report = dict(evaluator=evaluator, value_scale=value_scale(root_values, values['totals'].get('abs_t1_value'), args.value_reference),
+        schema=SCHEMA, status='PASS' if result['passed'] else 'FAIL', passed=result['passed'], checks=result['checks'], raw_head_check=args.raw_head_check,
         decision=result['checks'].get('e', dict(skipped='check (e) needs every leaf checked (no --sample-leaves)')),
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
         block_seeds=list(seeds), max_roots=args.max_roots, sample_leaves=args.sample_leaves, sample_seed=SAMPLE_SEED,
         value_tolerance=VALUE_TOLERANCE, logit_tolerance=LOGIT_TOLERANCE, tolerance_source=TOLERANCE_SOURCE, pricer_options=options, block_invariance=args.block_invariance,
         invariance_pricer_options=[o for _, o in pricers[:-1]], calls=calls, conventions=list(CONVENTIONS), refusals=refusals,
-        values=values_section([(e['values'], e.get('e')) for e in evaluations if 'values' in e], oracle_checked=args.sample_leaves is None),
-        sibling_spread=merge_sibling_spread([e['sibling'] for e in evaluations if 'sibling' in e], oracle_checked=args.sample_leaves is None),
+        values=values, sibling_spread=merge_sibling_spread([e['sibling'] for e in evaluations if 'sibling' in e], oracle_checked=args.sample_leaves is None),
         costs=merge_costs(calls),
         oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk, chunks=oracle.chunks,
             first_chunk_seconds={kind: next((c['seconds'] for c in oracle.chunks if c['kind'] == kind), None) for kind in ('roots', 'children', 'leaves')},
@@ -1457,7 +1591,7 @@ def main(argv=None):
                 'the first chunk of a program and world bucket includes its compile',
             seconds_per_leaf=None if not leaves else oracle.seconds['leaves'] / leaves,
             seconds_per_child=None if not children else oracle.seconds['children'] / children))
-    (out / 'gate.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')
+    (out / 'gate.json').write_text(json.dumps(report, indent=1, allow_nan=False, default=str) + '\n')   # evaluator first
     log('DEPTH2_GATE_COMPLETE', status=report['status'], out=str(out / 'gate.json'),
         checks={k: v['passed'] for k, v in result['checks'].items()},
         refused_share=dict(depth2=refusals.get('depth2', {}).get('refused_share'), depth1=refusals.get('depth1', {}).get('refused_share')))

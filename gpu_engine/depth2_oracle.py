@@ -233,14 +233,17 @@ def pre_code(request, root):
 
 class Oracle:
     """Plain-executor two-turn evaluation; make one per executor/model."""
-    def __init__(self, executor, model, *, chunk=512, progress=None):
-        """progress(kind=, chunk=, chunks=, rows_done=, rows=, seconds=, step_seconds=, head_seconds=) after each chunk."""
+    def __init__(self, executor, model, *, chunk=512, progress=None, raw_model=None):
+        """progress(kind=, chunk=, chunks=, rows_done=, rows=, seconds=, step_seconds=, head_seconds=) after each chunk.
+        raw_model: also evaluate the learner's leaf and child views with v5_model.forward(..., raw_model, bf16), the
+        head's own arm (U1's predict path), as raw_head_value."""
         if type(chunk) is not int or chunk <= 0:raise ValueError('positive fixed oracle chunk required')
         self.executor, self.model, self.chunk, self.progress = executor, model, chunk, progress
         self.chunks = []   # per-chunk timing: the first chunk of each program and world bucket includes its compile
         mapped = lambda fn: jax.jit(jax.vmap(lambda s, p, o, spec: fn(executor, s, p, o, spec), in_axes=(None, None, None, 0)))
         self._root, self._child, self._leaf = mapped(_root), mapped(_child), mapped(_leaf)
         self.forward = jax.jit(lambda params, inputs: v5_model.forward(params, inputs, model, compute_dtype='bfloat16'))
+        self.raw_forward = None if raw_model is None else jax.jit(lambda params, inputs: v5_model.forward(params, inputs, raw_model, compute_dtype='bfloat16'))
         self.seconds = dict(roots=0., children=0., leaves=0.);self.rows = dict(roots=0, children=0, leaves=0, padded=0)
 
     def _map(self, kind, fn, stack, specs, params, evaluate, keep=()):
@@ -255,9 +258,9 @@ class Oracle:
             out, inputs = jax.block_until_ready(fn(stack.states, stack.publics, stack.owners, j.asarray(padded)))
             stepped = time.perf_counter()
             actors = dict(learner=stack.learner[padded[:, 0]], opponent=stack.opponent[padded[:, 0]])
-            for name, actor in evaluate:
-                result = heads(self.forward, params, inputs[name], actors[actor])
-                outputs.setdefault(name, []).append(tuple(x[:count] for x in result))
+            for name, actor, *raw in evaluate:
+                result = heads(self.raw_forward if raw else self.forward, params, inputs[name], actors[actor])
+                outputs.setdefault(name + (':raw' if raw else ''), []).append(tuple(x[:count] for x in result))
             headed = time.perf_counter()
             for name in keep:
                 kept.setdefault(name, []).append(jax.tree.map(lambda x: np.asarray(x)[:count], jax.device_get(inputs[name])))
@@ -297,7 +300,8 @@ class Oracle:
         if not len(cells):return dict(cells=cells)
         rows = np.asarray([stack.rows[(int(q), int(w))] for q, w in cells[:, :2]], np.int32)
         specs = np.concatenate([rows[:, None], cells[:, 2:]], axis=1)
-        facts, outputs, _ = self._map('children', self._child, stack, specs, params, (('own', 'learner'), ('peer', 'opponent')))
+        raw = (('own', 'learner', 'raw'),) if self.raw_forward is not None else ()
+        facts, outputs, _ = self._map('children', self._child, stack, specs, params, (('own', 'learner'), ('peer', 'opponent')) + raw)
         own_logits, own_value, own_usable = outputs['own'];peer_logits, _, peer_usable = outputs['peer']
         owner = stack.owner[rows]
         status, error = classify(facts['invalid'], facts['done'], facts['winner'], facts['own_error'], own_usable, owner,
@@ -306,8 +310,9 @@ class Oracle:
         learner_valued = (status == STATUS_EXPANDED) | np.isin(error, (ERROR_PEER_ENCODER, ERROR_PEER_PRIOR))
         value = np.where(status == STATUS_TERMINAL, terminal_value(facts['winner'], owner),
             np.where(learner_valued, own_value, np.nan)).astype(np.float32)
+        extra = {} if not raw else dict(raw_head_value=outputs['own:raw'][1])
         return dict(cells=cells, status=status, error=error, value=value, head_value=own_value, own_usable=own_usable,
-            peer_usable=peer_usable, own_logits=own_logits, peer_logits=peer_logits, **facts)
+            peer_usable=peer_usable, own_logits=own_logits, peer_logits=peer_logits, **extra, **facts)
 
     def leaves(self, stack, specs, params):
         """Turn-2 leaves of specs [(q, world, a1, r1, a2, r2)]: status/error/value, digest and the learner head."""
@@ -315,14 +320,16 @@ class Oracle:
         if not len(specs):return dict(specs=specs)
         rows = np.asarray([stack.rows[(int(q), int(w))] for q, w in specs[:, :2]], np.int32)
         flat = np.concatenate([rows[:, None], specs[:, 2:]], axis=1)
-        facts, outputs, _ = self._map('leaves', self._leaf, stack, flat, params, (('leaf', 'learner'),))
+        raw = (('leaf', 'learner', 'raw'),) if self.raw_forward is not None else ()
+        facts, outputs, _ = self._map('leaves', self._leaf, stack, flat, params, (('leaf', 'learner'),) + raw)
         logits, head_value, usable = outputs['leaf'];owner = stack.owner[rows]
         status, error = classify(facts['invalid'], facts['done'], facts['winner'], facts['view_error'], usable, owner,
             scored=STATUS_HEAD)
         value = np.where(status == STATUS_TERMINAL, terminal_value(facts['winner'], owner),
             np.where(status == STATUS_HEAD, head_value, np.nan)).astype(np.float32)
+        extra = {} if not raw else dict(raw_head_value=outputs['leaf:raw'][1])
         return dict(specs=specs, status=status, error=error, value=value, head_value=head_value, usable=usable,
-            logits=logits, **facts)
+            logits=logits, **extra, **facts)
 
 
 def top_k(legal, logits, k):
