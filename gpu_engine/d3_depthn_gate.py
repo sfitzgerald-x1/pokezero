@@ -33,10 +33,11 @@ full-width depth-2 pass (DepthNPricer(depth=2, k=9) through as_depth2_frame) on 
  (d) the enumerated set at every ply (turn-1 cells, node ids, leaves) equals the oracle's.
  (e) recursive learner-max (gpu_engine.depthn_backups.learner_max_root) on the pricer frame vs the same frame with the
      oracle's leaf head values and priors on the lanes (c) checks; near ties relative to the run (depth 2's rule).
- (f) interior-node choices (CHOICE_RULE): at every turn-1 cell and ply 2..N-1 node, the learner's selected own action and, per
-     own row, the opponent's argmin action, EXACT by action between depthn_backups.node_value on the pricer frame (a recording
-     rule) and this gate's own recursion over the oracle's data (OracleTree), both under the pricer's priors; near ties per
-     node by rule 1 (reported, not gated), max |row q diff| within the value bound.
+ (f) the backup's grid and its choices (CHOICE_RULE): at every turn-1 cell and ply 2..N-1 node, the grid depthn_backups.node_value
+     hands its per-node rule (captured as passed by a recording rule) against this gate's own recursion over the oracle's data
+     (OracleTree), both under the pricer's priors: every grid entry and every row q within the value bound (the per-child grid
+     gate), and the learner's selected own action and per own row the opponent's argmin action EXACT by action except near ties
+     (rule 1 per node: reported, not gated).
  block invariance (--block-invariance): block_lanes 729 and 2187, discrete arrays bit-equal, floats within the rule.
  refusals (reported): depthn_backups.refusal_summary (and the gate's own count) beside D3's depth-1 refusals and the
  full-width depth-2 pass's. topk_boundary (reported): per ply and seat, each pruning prior selection's rank-k vs rank-(k+1)
@@ -53,9 +54,10 @@ pricer) re-applies the current verdict rules to a saved gate.json (each (c) quan
 numbers and guard_mode, (c), (f) through choice_verdict, the status through gate_status_n) and writes gate-reverdict.json
 beside it, never over an existing one; exit 0 iff PASS/PASS_SAMPLED. Every report carries a `header` (header_block): (e)'s
 and (f)'s near-tie counts and flips among near ties, and RULES_CHANGED_AFTER_FAILURE with the run that triggered each.
---mutation-test (MUTATION_RULE): after each call's clean evaluation, eight misplacement mutants ({backup path, scatter path} x
-{sibling, cousin} x {single, systematic}) and a seeded swap sweep on that call's frame and oracle data; mutation-test.json in
---out; exit non-zero if the clean run fails or any mutant survives. --save-oracle writes each call's oracle data and D3 outputs
+--mutation-test (MUTATION_RULE): once every call is priced, at the run's value bound, eight misplacement mutants ({backup path,
+scatter path} x {sibling, cousin} x {single, systematic}) and a seeded swap sweep on both paths, on each call's frame and oracle
+data (held until then); mutation-test.json in --out; exit non-zero if the clean run fails, any mutant survives or either sweep
+has a material survivor. --save-oracle writes each call's oracle data and D3 outputs
 beside its frames (frames-block{B}-call{C}-oracle.npz, implies --save-arrays); --mutation-from DIR... re-runs the mutation
 test offline from them. All paths are command-line arguments; --out must be new.
 """
@@ -502,24 +504,34 @@ def decision_check_n(frame, data, requests, *, context=None, backups=None, q_noi
     return decide_roots(frame, swapped, requests, backups, context=context, q_noise_bound=q_noise_bound, counts=counts)
 
 
-# ---------------------------------------------------------------- (f) interior-node choices
+# ---------------------------------------------------------------- (f) the backup's grid and its choices
 
-CHOICE_RULE = ('(f) interior-node choices: at every turn-1 cell and every ply 2..N-1 node expanded on either side, the learner\'s selected own '
-    'action (argmax over its rows of the opponent-averaged q, strict: the lower slot on ties) and, per own row, the opponent\'s argmin action '
-    '(the lowest child value, lower slot on ties), compared EXACTLY by action between the pricer\'s backup (depthn_backups.node_value on the '
-    'pricer frame through a recording rule) and this gate\'s own recursion over the oracle\'s statuses, terminal values, leaf head values, links '
-    'and maps (OracleTree). Both sides weigh rows by the PRICER\'s priors (gated by (c)\'s logit bounds), so each row q differs between them by at '
-    'most max |child value diff|, which (a) and (c) hold within the value bound at the leaves and max/average/clip carry up the plies: a flip whose '
-    'top-two gap exceeds the bound in BOTH frames cannot be noise (the two gaps sum past 2 x bound, the two q differences to at most 2 x bound); '
-    'per row the same holds for the opponent\'s argmin with the lowest-two child-value gap. Rule 1 per comparison: a near tie (gap <= the value '
-    'bound in either frame) flips reported, not gated; rule 1\'s max |dQ| clause per node: max |row q diff| <= the value bound. FAIL on a '
-    'non-exempt flip, a node priced (not None) on one side only, a node not comparable (rows or columns enumerated on one side only, a non-finite '
-    'q or child value, a grid that does not match the maps), max |row q diff| above the bound, or (unsampled) a node the oracle could not value; '
-    'INCOMPLETE when nothing was compared in an unsampled run. --sample-leaves: only nodes whose every enumerated descendant leaf was checked '
-    '(SKIPPED_SAMPLED when none)')
-CHOICE_SAVED = ('comparisons', 'differing', 'one_sided', 'problems', 'not_comparable', 'max_abs_delta_row_q', 'value_bound', 'sampled')
+CHOICE_RULE = ('(f) the backup\'s grid, entrywise, and its choices: at every turn-1 cell and every ply 2..N-1 node expanded on either side, the '
+    'pricer side is the grid depthn_backups.node_value hands its per-node rule for THAT node, captured as passed by a recording rule (never a copy '
+    'rebuilt in the gate, never a separate gather from the frame) and mapped to actions through the pricer\'s maps there; the oracle side is this '
+    'gate\'s own recursion over the oracle\'s statuses, terminal values, leaf head values, links and maps (OracleTree) under the same per-node rule '
+    '(learner-max by default) and the PRICER\'s priors (gated by (c)\'s logit bounds). Gated per node: (1) the per-child grid gate: every grid '
+    'entry within the value bound of the oracle\'s child at the same (own action, opponent action), noise-safe by induction (each entry is a head '
+    'leaf inside (c)\'s bound, an exact terminal under (a), or a backed-up value inside the bound; max, average and clip are 1-Lipschitz); it '
+    'certifies the grid ANY per-node solver consumes, the hedge\'s matrix game included, so a misread of a non-pivotal entry is material; (2) each '
+    'row\'s opponent-averaged q within the bound (rule 1\'s max |dQ| clause per node); (3) the learner\'s selected own action (strict max, lower '
+    'slot on ties) and per own row the opponent\'s argmin action (lower slot on ties), exact by action except near ties (rule 1 per comparison: '
+    'the top-two, or lowest-two, gap <= the bound in either frame: reported, not gated; with shared priors a flip whose gaps exceed the bound in '
+    'both frames cannot be noise: the gaps sum past 2 x bound, the q differences to at most 2 x bound). Derived quantities (grid entries, row q, '
+    'gaps) are compared with the bound up to REL_EPS relative (float rounding only). FAIL also on a node priced (not None) on one side only, a node '
+    'not comparable (rows or columns on one side only, a non-finite entry, a grid off its maps) or, unsampled, a node the oracle could not value; '
+    'INCOMPLETE when an unsampled run compares nothing. --sample-leaves: only nodes whose every enumerated descendant leaf was checked (an errored '
+    'descendant decides None whatever a sampled-out leaf holds; SKIPPED_SAMPLED when none)')
+CHOICE_SAVED = ('comparisons', 'differing', 'one_sided', 'problems', 'not_comparable', 'max_abs_delta_row_q', 'max_abs_delta_child_value', 'value_bound',
+    'sampled')
 MAX_FLIPS_SAVED = 10000   # gate.json keeps at most this many differing comparisons (differing_complete False beyond)
 MISSING = type('Missing', (), dict(__repr__=lambda self: 'MISSING', __slots__=()))()   # an oracle value a sampled-out leaf hides
+REL_EPS = 1e-12   # derived quantities vs the value bound: absorbs float rounding (fsum of products, clip) only, never a tolerance
+
+
+def _within(x, bound):
+    """x <= bound up to REL_EPS relative (float rounding only): (f)'s grid entries, row q and near-tie gaps."""
+    return x <= bound * (1. + REL_EPS)
 
 
 def _gap(values, lowest=False):
@@ -533,10 +545,10 @@ def _live(m):
 
 
 def _solve(grid, pi_opp, own_slots, opp_slots, own, opp):
-    """One node solved from its grid (rows: enumerated own slots, columns: enumerated opponent slots, slot order), the opponent prior over
-    those slots and the slots' actions: each row's opponent-averaged q (fsum, as depthn_backups.learner_max), the learner's selected row
-    (strict max: the lower slot on ties) with the top-two q gap, and per row the opponent's argmin column (lower slot on ties) with the
-    lowest-two child-value gap."""
+    """One node from its grid as given (rows: enumerated own slots, columns: enumerated opponent slots, slot order; kept as the object passed),
+    the opponent prior over those slots and the slots' actions: each row's opponent-averaged q (fsum, as depthn_backups.learner_max), the
+    learner's selected row (strict max: the lower slot on ties) with the top-two q gap, and per row the opponent's argmin column (lower slot on
+    ties) with the lowest-two child-value gap."""
     q = [math.fsum(p * v for p, v in zip(pi_opp, row)) for row in grid];best = 0
     for i in range(1, len(q)):
         if q[i] > q[best]:best = i
@@ -552,12 +564,14 @@ def _solve(grid, pi_opp, own_slots, opp_slots, own, opp):
 
 
 class _Recorder:
-    """node_value's rule: learner_max's value (the reference rule's), keeping the grid and opponent prior of the LAST call. node_value
-    solves in post-order (every child before its parent), so after node_value(node) the last call is the node's own grid."""
-    def __init__(self, backups):self.solve, self.last = backups.learner_max, None
+    """The per-node rule node_value is called with: it keeps the EXACT grid object node_value hands its rule (and both priors), never a copy
+    and never a re-gather, and returns the wrapped rule's value unchanged (depthn_backups.learner_max by default; any rule(grid, pi_own,
+    pi_opp) passes through, e.g. the hedge's matrix_game). node_value solves in post-order (every child before its parent), so after
+    node_value(node) the last call holds the node's own grid."""
+    def __init__(self, rule):self.rule, self.last = rule, None
 
     def __call__(self, grid, pi_own, pi_opp):
-        self.last = ([[float(v) for v in row] for row in grid], [float(p) for p in pi_opp]);return self.solve(grid, pi_own, pi_opp)
+        self.last = (grid, pi_own, pi_opp);return self.rule(grid, pi_own, pi_opp)
 
 
 def _status(frame, ply, q, w, node):
@@ -565,14 +579,16 @@ def _status(frame, ply, q, w, node):
     return int(frame.nodes[ply - 2].status[q, w, node])
 
 
-def pricer_record(frame, backups, q, w, ply, node):
-    """(f)'s pricer side at one interior node: backups.node_value(frame, q, w, ply, node, rule=_Recorder) on the pricer frame, the grid it
-    built for THIS node solved by _solve over the pricer's maps there, with the backed-up value. None when the pricer does not price it
-    (not expanded, or node_value None: an errored descendant); a `shape` entry when the grid does not match the maps' enumerated slots."""
+def pricer_record(frame, backups, q, w, ply, node, *, rule=None):
+    """(f)'s pricer side at one interior node: backups.node_value(frame, q, w, ply, node, rule=_Recorder(rule)) on the pricer frame (rule:
+    backups.learner_max by default). The record's grid is the recorder's captured grid ALONE, the object node_value passed its rule for THIS
+    node, mapped to actions through the pricer's maps at the node exactly as node_value enumerates its slots (_live); nothing is re-read from
+    the frame. None when the pricer does not price the node (not expanded, or node_value None: an errored descendant); a `shape` entry when
+    the grid does not match the maps' enumerated slots."""
     if _status(frame, ply, q, w, node) != 2:return None
-    recorder = _Recorder(backups);value = backups.node_value(frame, q, w, ply, node, rule=recorder)
+    recorder = _Recorder(rule or backups.learner_max);value = backups.node_value(frame, q, w, ply, node, rule=recorder)
     if value is None or recorder.last is None:return None
-    (grid, pi_opp), (own_map, opp_map) = recorder.last, maps_at(frame, ply, q, w, node);(own_slots, own), (opp_slots, opp) = _live(own_map), _live(opp_map)
+    (grid, _, pi_opp), (own_map, opp_map) = recorder.last, maps_at(frame, ply, q, w, node);(own_slots, own), (opp_slots, opp) = _live(own_map), _live(opp_map)
     if len(grid) != len(own) or len(pi_opp) != len(opp) or any(len(row) != len(opp) for row in grid):
         return dict(shape=f'grid {[len(row) for row in grid]} (prior {len(pi_opp)}) vs maps {len(own)} x {len(opp)}', value=float(value))
     return dict(_solve(grid, pi_opp, own_slots, opp_slots, own, opp), value=float(value))
@@ -583,13 +599,14 @@ class OracleTree:
     statuses. Node statuses and terminal values come from the oracle's records (turn-1 cells: data['children'] over data['cells']; plies
     2..N-1: data['levels'] with ids data['ids']), children through data['links'] (parent, own slot, opponent slot), maps from data['maps'],
     leaf values keyed by the oracle-derived leaf index (expand_arrays' (q, w, parent, own slot, opponent slot)): the head value at status
-    4, the terminal value at status 1, None at an error, MISSING when sampled out. Rows weigh the PRICER's opponent prior (the frame's
-    logits at the ORACLE-derived node id, over the oracle's map; (c) gates the priors): masked softmax over the enumerated slots, fsum rows,
-    strict max, clip to [-1, 1] (the documented backup, written here independently). An errored descendant gives None; MISSING wins over
-    None (the node cannot be compared)."""
-    def __init__(self, frame, data):
-        self.frame, self.maps, self.depth = frame, data['maps'], int(data['plan']['depth']);self.status, self.child, self.leaf, self.memo = {}, {}, {}, {}
-        children = data['children']
+    4, the terminal value at status 1, None at an error, MISSING when sampled out. Priors are the PRICER's (the frame's logits at the
+    ORACLE-derived node id, over the oracle's map; (c) gates them): masked softmax over the enumerated slots. A node's value is clip(rule)
+    to [-1, 1]: rule None = learner-max written here (fsum rows, strict max), else the given rule(grid, pi_own, pi_opp), the same one the
+    pricer side wraps. An errored descendant gives None (it decides the backup whatever a sampled-out leaf holds, as node_value returns
+    None on any error); otherwise a sampled-out leaf gives MISSING (the node cannot be compared)."""
+    def __init__(self, frame, data, *, rule=None):
+        self.frame, self.maps, self.depth, self.rule = frame, data['maps'], int(data['plan']['depth']), rule
+        self.status, self.child, self.leaf, self.memo = {}, {}, {}, {};children = data['children']
         for i, (q, w, a1, r1) in enumerate(np.asarray(data['cells'], np.int64).reshape(-1, 4).tolist()):
             self.status[(q, w, 1, a1 * 9 + r1)] = (int(children['status'][i]), float(children['value'][i]))
         for p in range(2, self.depth):
@@ -625,10 +642,11 @@ class OracleTree:
                 else:child = self.child.get((q, w, ply + 1, node, i, x));v = None if child is None else self.solve(q, w, ply + 1, child)[0]
                 missing |= v is MISSING;errored |= v is None;row.append(v)
             grid.append(row)
-        if missing:return MISSING, None
         if errored:return None, None
-        record = _solve(grid, _softmax(logits_at(self.frame, ply, q, w, node)[1], opp), own_slots, opp_slots, own, opp)
-        return min(1., max(-1., record['q'][record['learner']])), record
+        if missing:return MISSING, None
+        own_logits, opp_logits = logits_at(self.frame, ply, q, w, node);record = _solve(grid, _softmax(opp_logits, opp), own_slots, opp_slots, own, opp)
+        solved = record['q'][record['learner']] if self.rule is None else self.rule(grid, _softmax(own_logits, own), record['pi_opp'])
+        return min(1., max(-1., solved)), record
 
 
 def interior_nodes(frame, data):
@@ -648,7 +666,9 @@ def interior_nodes(frame, data):
 
 def compare_records(mine, theirs):
     """(f) at one node priced on both sides: (comparisons [(kind, own action or None, pricer action, oracle action, gap_pricer, gap_oracle)],
-    problems [str], max |row q diff|, max |child value diff|), matched by ACTION through each side's own map, never by slot."""
+    problems [str], max |row q diff|, max |grid entry diff|), matched by ACTION through each side's own map, never by slot. The grid entry
+    difference reads the pricer record's grid only (the recorder's capture) against the oracle's child at the same (own action, opponent
+    action)."""
     if 'shape' in mine:return [], ['pricer grid does not match its maps: ' + mine['shape']], 0., 0.
     if not (mine['finite'] and theirs['finite']):return [], ['non-finite row q or child value (' + ', '.join(s for s, r in (('pricer', mine), ('oracle', theirs))
         if not r['finite']) + ')'], 0., 0.   # not comparable: no gap or difference to report
@@ -667,33 +687,34 @@ def compare_records(mine, theirs):
 
 
 def _near_tie(bound):
-    return lambda gap_pricer, gap_oracle: any(g is not None and g <= bound for g in (gap_pricer, gap_oracle))
+    return lambda gap_pricer, gap_oracle: any(g is not None and _within(g, bound) for g in (gap_pricer, gap_oracle))
 
 
 def node_fails(mine, theirs, bound):
-    """(f)'s verdict at one node under `bound` (the sweep's local re-evaluation): priced on one side only, not comparable, a non-exempt flip
-    or max |row q diff| above the bound."""
+    """(f)'s verdict at one node under `bound` (the sweeps' local re-evaluation): priced on one side only, not comparable, a grid entry or a
+    row q beyond the bound, or a non-exempt flip."""
     if mine is None and theirs is None:return False
     if (mine is None) != (theirs is None):return True
-    comparisons, problems, dq, _ = compare_records(mine, theirs);tie = _near_tie(bound)
-    return bool(problems) or dq > bound or any(got != want and not tie(gp, go) for _, _, got, want, gp, go in comparisons)
+    comparisons, problems, dq, dv = compare_records(mine, theirs);tie = _near_tie(bound)
+    return bool(problems) or not _within(dv, bound) or not _within(dq, bound) or any(got != want and not tie(gp, go) for _, _, got, want, gp, go in comparisons)
 
 
-def choice_check_n(frame, data, requests, *, context=None, backups=None, sampled=False, tree=None, nodes=None):
+def choice_check_n(frame, data, requests, *, context=None, backups=None, sampled=False, tree=None, nodes=None, rule=None):
     """(f) for ONE call (CHOICE_RULE): every interior node's pricer_record (through `backups`, depthn_backups by default: fail closed when
-    absent) against the OracleTree. Records each comparison's smaller gap (_gaps: the run's near-tie count), every differing comparison with
-    both gaps, nodes priced on one side only, nodes not comparable and nodes the oracle cannot value (a sampled-out leaf);
-    choice_verdict judges under the run's value bound (summarize_n)."""
+    absent; `rule` the per-node rule both sides solve with, learner-max by default) against the OracleTree. Records each node's max |grid
+    entry diff| and max |row q diff| (_node_dv, _node_dq; the largest beside their nodes), each comparison's smaller gap (_gaps: the run's
+    near-tie count), every differing comparison with both gaps, nodes priced on one side only, nodes not comparable and nodes the oracle
+    cannot value (a sampled-out leaf); choice_verdict judges under the run's value bound (summarize_n)."""
     if backups is None:
         try:backups = importlib.import_module('gpu_engine.depthn_backups')
         except ImportError as error:return dict(passed=False, reason='gpu_engine.depthn_backups is not importable (fail closed): ' + str(error), sampled=sampled)
-    tree = tree or OracleTree(frame, data);context = context or {};gaps = []
+    tree = tree or OracleTree(frame, data, rule=rule);context = context or {};gaps, dvs, dqs, largest = [], [], [], []
     result = dict(nodes=0, nodes_by_ply={}, comparisons=0, learner_comparisons=0, opponent_comparisons=0, not_comparable=0, both_unpriced=0, one_sided=0,
         one_sided_examples=[], problems=0, problem_examples=[], differing=[], max_abs_delta_row_q=0., max_abs_delta_child_value=0., sampled=sampled)
     for q, w, ply, node in (interior_nodes(frame, data) if nodes is None else nodes):
         value, theirs = tree.solve(q, w, ply, node)
         if value is MISSING:result['not_comparable'] += 1;continue
-        mine = pricer_record(frame, backups, q, w, ply, node)
+        mine = pricer_record(frame, backups, q, w, ply, node, rule=rule)
         if mine is None and theirs is None:result['both_unpriced'] += 1;continue
         address = requests[q].plans.root.address;where = dict(context, root=q, world=w, ply=ply, node=node, address=[address.stream, address.frame, address.owner])
         if (mine is None) != (theirs is None):
@@ -702,39 +723,45 @@ def choice_check_n(frame, data, requests, *, context=None, backups=None, sampled
                 pricer_value=None if mine is None else mine['value'], oracle_value=None if value is None else value))
             continue
         comparisons, problems, dq, dv = compare_records(mine, theirs)
-        result['nodes'] += 1;result['nodes_by_ply'][str(ply)] = result['nodes_by_ply'].get(str(ply), 0) + 1
+        result['nodes'] += 1;result['nodes_by_ply'][str(ply)] = result['nodes_by_ply'].get(str(ply), 0) + 1;dvs.append(dv);dqs.append(dq)
         result['max_abs_delta_row_q'] = max(result['max_abs_delta_row_q'], dq);result['max_abs_delta_child_value'] = max(result['max_abs_delta_child_value'], dv)
+        if dv > 0:
+            largest.append(dict(where, abs_grid_difference=dv, abs_row_q_difference=dq));largest = sorted(largest, key=lambda r: -r['abs_grid_difference'])[:FIRST]
         if problems:
             result['problems'] += 1
             if len(result['problem_examples']) < FIRST:result['problem_examples'].append(dict(where, problems=problems))
         for kind, row, got, want, gap_pricer, gap_oracle in comparisons:
             result['comparisons'] += 1;result[kind + '_comparisons'] += 1;gaps.append(min(g for g in (gap_pricer, gap_oracle, math.inf) if g is not None))
             if got != want:result['differing'].append(dict(where, kind=kind, own_action=row, actions=[got, want], gap_pricer=gap_pricer, gap_oracle=gap_oracle))
-    result['_gaps'] = np.asarray(gaps, np.float64)
+    result.update(_gaps=np.asarray(gaps, np.float64), _node_dv=np.asarray(dvs, np.float64), _node_dq=np.asarray(dqs, np.float64), largest_grid_differences=largest)
     return result
 
 
 def choice_verdict(f, value_bound, *, sampled=None):
-    """(f)'s verdict under the run's value bound, in place (the live run and --reverdict alike). Rule 1 per comparison: a near tie when its
-    gap in EITHER frame is <= the bound (flips reported, not gated). FAIL on a non-exempt flip, a node priced on one side only, a node not
-    comparable, max |row q diff| above the bound (rule 1's max |dQ| clause), or, unsampled, a node the oracle could not value;
-    SKIPPED_SAMPLED when a sampled run compared nothing. near_ties needs the per-call gaps (live) or the same bound as saved; a saved flip
-    list that was truncated keeps its counts under the same bound and fails closed under another."""
+    """(f)'s verdict under the run's value bound, in place (the live run and --reverdict alike). Gated: every grid entry and every row q
+    within the bound (_within), and no non-exempt flip (rule 1 per comparison: a near tie when its gap in EITHER frame is within the bound:
+    flips reported, not gated); FAIL also on a node priced on one side only, a node not comparable or, unsampled, a node the oracle could not
+    value; SKIPPED_SAMPLED when a sampled run compared nothing. Counts beyond the bound need the per-call arrays (live) or the bound saved; a
+    saved flip list that was truncated keeps its counts under the same bound and fails closed under another."""
     if 'differing' not in f:return dict(f, passed=False, status='NOT_RUN')   # could not run (no depthn_backups): its reason is kept
     bound = float(value_bound);sampled = bool(f.get('sampled')) if sampled is None else sampled;same = f.get('value_bound') == bound;tie = _near_tie(bound)
-    gaps = f.pop('_gaps', None);reasons = []
-    if gaps is not None:f['near_ties'] = int(np.count_nonzero(np.asarray(gaps, np.float64) <= bound))
-    elif not same:f['near_ties'] = None
+    gaps, dvs, dqs = (f.pop(k, None) for k in ('_gaps', '_node_dv', '_node_dq'));reasons = []
+    for key, values in (('near_ties', gaps), ('nodes_grid_beyond_bound', dvs), ('nodes_row_q_beyond_bound', dqs)):
+        if values is not None:f[key] = int(np.count_nonzero([_within(x, bound) == (key == 'near_ties') for x in np.asarray(values, np.float64)]))   # ties within, the others beyond
+        elif not same:f[key] = None
     if f.get('differing_complete', True):
         near, hard = [r for r in f['differing'] if tie(r['gap_pricer'], r['gap_oracle'])], [r for r in f['differing'] if not tie(r['gap_pricer'], r['gap_oracle'])]
         f.update(near_tie_flips=len(near), non_exempt_mismatches=len(hard), near_tie_flip_examples=near[:FIRST], first_mismatches=hard[:FIRST])
     elif not same:f.update(near_tie_flips=None, non_exempt_mismatches=None);reasons.append('the saved flip list is truncated and the value bound changed: not re-judged (fail closed)')
-    f.update(value_bound=bound, sampled=sampled, row_q_within_bound=f['max_abs_delta_row_q'] <= bound, rule=CHOICE_RULE,
+    f.update(value_bound=bound, sampled=sampled, rule=CHOICE_RULE, grid_within_bound=_within(f['max_abs_delta_child_value'], bound),
+        row_q_within_bound=_within(f['max_abs_delta_row_q'], bound), first_grid_mismatches=[r for r in f.get('largest_grid_differences', ()) if not _within(r['abs_grid_difference'], bound)],
         status='SKIPPED_SAMPLED' if sampled and not (f['comparisons'] or f['one_sided'] or f['problems']) else 'COMPARED')
+    if not f['grid_within_bound']:reasons.append(f'max |grid entry diff| {f["max_abs_delta_child_value"]:.3g} exceeds the value bound {bound:.3g}: the backup handed its '
+        f'rule a child value the oracle does not have there (per-child grid gate)')
+    if not f['row_q_within_bound']:reasons.append(f'max |row q diff| {f["max_abs_delta_row_q"]:.3g} exceeds the value bound {bound:.3g}')
     if f.get('non_exempt_mismatches'):reasons.append(f'{f["non_exempt_mismatches"]} choice(s) flip with a gap above the value bound in both frames')
     if f['one_sided']:reasons.append(f'{f["one_sided"]} interior node(s) priced on one side only')
     if f['problems']:reasons.append(f'{f["problems"]} interior node(s) not comparable (rows/columns on one side only, non-finite, or a grid off its maps)')
-    if not f['row_q_within_bound']:reasons.append(f'max |row q diff| {f["max_abs_delta_row_q"]:.3g} exceeds the value bound {bound:.3g}')
     if f['not_comparable'] and not sampled:reasons.append(f'{f["not_comparable"]} node(s) the oracle could not value in an unsampled run (fail closed)')
     f.update(passed=not reasons, reasons=reasons)
     return f
@@ -748,14 +775,16 @@ def merge_choices(reports, *, value_bound):
     keys = ('nodes', 'comparisons', 'learner_comparisons', 'opponent_comparisons', 'not_comparable', 'both_unpriced', 'one_sided', 'problems')
     merged = {k: sum(r[k] for r in reports) for k in keys};by_ply = collections.Counter()
     for r in reports:by_ply.update(r['nodes_by_ply'])
+    joined = lambda key: np.concatenate([np.asarray(r.get(key, ()), np.float64) for r in reports]) if reports else np.zeros(0)
     merged.update(nodes_by_ply=dict(sorted(by_ply.items())), differing=[x for r in reports for x in r['differing']], sampled=any(r['sampled'] for r in reports),
         one_sided_examples=[x for r in reports for x in r['one_sided_examples']][:FIRST], problem_examples=[x for r in reports for x in r['problem_examples']][:FIRST],
         max_abs_delta_row_q=max(r['max_abs_delta_row_q'] for r in reports), max_abs_delta_child_value=max(r['max_abs_delta_child_value'] for r in reports),
-        _gaps=np.concatenate([np.asarray(r.get('_gaps', ()), np.float64) for r in reports]) if reports else np.zeros(0))
+        largest_grid_differences=sorted((x for r in reports for x in r.get('largest_grid_differences', ())), key=lambda x: -x['abs_grid_difference'])[:FIRST],
+        _gaps=joined('_gaps'), _node_dv=joined('_node_dv'), _node_dq=joined('_node_dq'))
     merged = choice_verdict(merged, value_bound);merged['differing_complete'] = len(merged['differing']) <= MAX_FLIPS_SAVED
     merged['differing'] = merged['differing'][:MAX_FLIPS_SAVED]
-    merged['reference'] = ('depthn_backups.node_value on the pricer frame (recording rule) vs OracleTree on the oracle\'s statuses, terminal values, '
-        'leaf head values, links and maps; both under the pricer\'s priors')
+    merged['reference'] = ('the grid depthn_backups.node_value hands its per-node rule on the pricer frame (captured by a recording rule) vs OracleTree on '
+        'the oracle\'s statuses, terminal values, leaf head values, links and maps; both under the pricer\'s priors')
     return merged
 
 
@@ -782,7 +811,8 @@ def backup_checks(evaluation, frame, data, requests, *, context=None, backups=No
         with stage(progress, 'check_f_choices', **context) as info:
             evaluation['f'] = choice_check_n(frame, data, requests, context=context, backups=backups, sampled=sampled, tree=tree)
             info.update({k: evaluation['f'].get(k) for k in ('nodes', 'comparisons', 'one_sided', 'problems', 'not_comparable', 'reason')},
-                differing=len(evaluation['f'].get('differing', ())), max_abs_delta_row_q=evaluation['f'].get('max_abs_delta_row_q'))
+                differing=len(evaluation['f'].get('differing', ())), max_abs_delta_row_q=evaluation['f'].get('max_abs_delta_row_q'),
+                max_abs_delta_child_value=evaluation['f'].get('max_abs_delta_child_value'))
     return evaluation
 
 
@@ -832,8 +862,9 @@ GUARD_DEPTHN_RULE = ('(c) value quantities at plies >= 2 of a depth >= 3 frame (
     'certifies the inputs, not which parameters priced them, and (a) digest-compared every value-compared position of that ply and all matched: '
     'the digest (leaf_digest, ply{p}_digest_own) compared >= the quantity\'s compared with zero mismatches, and zero value-compared positions outside '
     '(a)\'s digest mask (counted per position; for leaves inside by construction). The pricer writes each lane\'s value and digest from the same '
-    'inputs, so an exact digest certifies placement and a misplacement whose value effect exceeds noise still fails the value bound. Otherwise the '
-    'guard stays gated, as '
+    'inputs, so an exact digest certifies placement and a misplacement whose value effect exceeds noise still fails the value bound; a misread in '
+    'the backup (the right value in the frame, the wrong child read) is (f)\'s: its per-child grid gate holds every entry the backup hands its '
+    'per-node rule within the value bound of the oracle\'s child, and replaces the guard there. Otherwise the guard stays gated, as '
     'it does for turn-1 and depth2_pass quantities; the value bound is gated everywhere; --n2-equivalence is unchanged')
 
 
@@ -978,16 +1009,16 @@ def summarize_n(evaluations):
         f = merge_choices(choices, value_bound=result['tolerance']['value_bound']);checks = result['checks']
         result['checks'] = dict([(k, v) for k, v in checks.items() if k != 'block_invariance'] + [('f', f)] + [(k, v) for k, v in checks.items() if k == 'block_invariance'])
         result['tolerance'].update(choice_rule=CHOICE_RULE, f_near_ties=f.get('near_ties'), f_near_tie_flips=f.get('near_tie_flips'),
-            f_max_abs_delta_row_q=f.get('max_abs_delta_row_q'))
+            f_max_abs_delta_row_q=f.get('max_abs_delta_row_q'), f_max_abs_delta_child_value=f.get('max_abs_delta_child_value'))
     result['passed'] = bool(result['checks']) and all(x['passed'] for x in result['checks'].values())
     return result
 
 
 def tolerance_line_n(tolerance):
-    """g2.tolerance_line with the deeper logit bound and its turn-1 floor, (f)'s near ties, flips among them and max |row q diff|,
+    """g2.tolerance_line with the deeper logit bound and its turn-1 floor, (f)'s near ties, flips among them, max |row q diff| and max |grid diff|,
     and each row's bound, guard_mode (rows with a guard outside (c) are gated) and beyond_guard."""
     line = dict(g2.tolerance_line(tolerance), turn1_logit_floor=tolerance.get('turn1_logit_floor'), deeper_logit_bound=tolerance.get('deeper_logit_bound'),
-        **{k: tolerance.get(k) for k in ('f_near_ties', 'f_near_tie_flips', 'f_max_abs_delta_row_q')})
+        **{k: tolerance.get(k) for k in ('f_near_ties', 'f_near_tie_flips', 'f_max_abs_delta_row_q', 'f_max_abs_delta_child_value')})
     for entry, row in zip(line['checks'], tolerance.get('table', ())):
         entry.update(bound=row.get('bound'), guard_mode=row.get('guard_mode', 'gated' if row.get('guard_bound') is not None else None), beyond_guard=row.get('beyond_guard'))
     return line
@@ -1324,8 +1355,9 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
                progress=None, decision=None, save=None, evaluator=None, backups=None, pass_sample=8, choices=True, save_oracle=False, mutation=None):
     """One request list: the full-width depth-2 pass (refusals; `searched` maps), the depth-N pricer (and its block-invariance
     twins), D3, the oracle at every ply and the checks ((e) unsampled unless `decision` says otherwise, (f) unless choices=False).
-    save: (directory, prefix) for --save-arrays (save_oracle: the oracle data too, save_oracle_data); mutation: mutation_test_call's
-    keywords (--mutation-test), its result in evaluation['mutation']. Returns (evaluation, summary)."""
+    save: (directory, prefix) for --save-arrays (save_oracle: the oracle data too, save_oracle_data); mutation: a dict (--mutation-test;
+    may carry `source` and `sweep`) keeping the call's frame, oracle data and D3 results in evaluation[MUTATION_INPUTS] for mutation_tests,
+    which runs once the run's value bound is known. Returns (evaluation, summary)."""
     from gpu_engine import device_public_teacher_batch as batch
     reference = importlib.import_module('gpu_engine.depthn_oracle');module = pricers.module
     requests = tuple(requests);context = dict(context or {});timing, costs = {}, {};depth2_frame = None
@@ -1399,11 +1431,9 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
         if save_oracle:
             path = Path(directory) / f'{prefix}-oracle.npz';save_oracle_data(path, data, d_results, requests, meta=dict(context, sample_leaves=sample, actors=len(params),
                 frame=f'{prefix}-{frame_tag(plan["selection"], pricers.k_own[0])}.npz', full_turn1=plan['k1_own'] == plan['k1_opp'] == 9));saved.append(str(path))
-    if mutation is not None and not evaluation['geometry']:
-        with stage(progress, 'mutation_test', **context) as info:
-            evaluation['mutation'] = mutation_test_call(frame, data, requests, d_results, evaluation, context=context, backups=backups,
-                full_turn1=plan['k1_own'] == plan['k1_opp'] == 9, progress=progress, **mutation)
-            info.update(passed=evaluation['mutation']['passed'], survivors=evaluation['mutation'].get('survivors'))
+    if mutation is not None and not evaluation['geometry']:   # judged later, at the run's value bound (mutation_tests)
+        evaluation[MUTATION_INPUTS] = dict(mutation, frame=frame, data=data, d_results=d_results, requests=requests, context=context,
+            full_turn1=plan['k1_own'] == plan['k1_opp'] == 9)
     summary = dict(context, roots=len(requests), worlds=data['worlds'], plan=plan, refusals=refusals, timing=timing, costs=costs,
         nodes_checked={str(p): len(r.get('specs', r.get('cells', ()))) for p, r in data['levels'].items()},
         leaves_enumerated=len(data['enumerated'].get('leaf', ())), leaves_checked=0 if data['leaves'] is None else len(data['leaves']['specs']),
@@ -1415,7 +1445,7 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
             **({'block_invariance_discrete': all(r['passed'] for r in evaluation['invariance'])} if evaluation.get('invariance') else {}),
             **({'e': evaluation['e']['passed']} if 'e' in evaluation else {})),
         choices=None if 'f' not in evaluation else {k: (len(v) if k == 'differing' else v) for k, v in evaluation['f'].items()
-            if k in ('nodes', 'comparisons', 'differing', 'one_sided', 'problems', 'not_comparable', 'max_abs_delta_row_q', 'reason')})
+            if k in ('nodes', 'comparisons', 'differing', 'one_sided', 'problems', 'not_comparable', 'max_abs_delta_row_q', 'max_abs_delta_child_value', 'reason')})
     return evaluation, summary
 
 
@@ -1521,20 +1551,20 @@ def reverdict(path):
 RULES_CHANGED_AFTER_FAILURE = (
     dict(name='rule 1: (e) near-tie rule', summary='(e): a root whose top-two completed-Q gap is <= the run\'s value bound in either frame is a near '
         'tie; its flips are reported, not gated (max |dQ| <= the bound stays gated); (f) applies it per interior-node comparison',
-        triggering_run='d2-gate40-b0-r1', trigger='the live B0-i99 depth-2 run d2-gate40-b0-r1 (gate 60a52442) failed (e) at root 15, top two 2.3e-5 apart',
-        approval='confirmed by the lead 2026-11-06'),
+        triggering_run='d2-gate40-b0-r1', trigger='the live B0-i99 depth-2 run d2-gate40-b0-r1 (gate 60a52442) failed (e) at root 15: its top two '
+        '1.2e-3 apart in the pricer frame, 2.3e-5 apart in the oracle-heads frame; fixed in 4f88727e', approval='confirmed by the lead 2026-11-06'),
     dict(name='rule 2: searched threat rule revision', summary='(a) under searched: the opponent\'s refutations and lowest-threat fill range over the '
         'learner\'s KEPT moves only (top-k_own by q, then its prior top-1); errored pairs are prepended afterwards and each list truncated to its width '
         '(searched_maps_reference, the pricer\'s 8ade7e21 construction order)', triggering_run=None,
         trigger='an Opus review counterexample, not a run', approval='confirmed by the lead 2026-11-06'),
     dict(name='rule 3: GUARD_DEPTHN_RULE', summary='(c): at plies >= 2 of a depth >= 3 frame the misplacement guard is digest-certified (reported, not '
-        'gated) on a single evaluator actor with every value-compared position digest-matched; the value bound stays gated everywhere',
-        triggering_run='dn-gate40-prior3-r3', trigger='the live 40-root depth-3 prior run dn-gate40-prior3-r3',
-        approval='confirmed by the lead 2026-11-06 on conditions (a) kill test, (b) check (f)'),
+        'gated) on a single evaluator actor with every value-compared position digest-matched; (f) gates the backup\'s child grid entrywise (every '
+        'entry within the value bound of the oracle\'s child), its row q and its choices, and that per-child grid gate replaces the guard there; the '
+        'value bound stays gated everywhere', triggering_run='dn-gate40-prior3-r3', trigger='the live 40-root depth-3 prior run dn-gate40-prior3-r3',
+        approval='per-child grid gate replaces the guard at plies >= 2: signed off by the lead 2026-11-06'),
     dict(name='rule 4: DEEPER_LOGIT_RULE', summary='(c): priors at plies >= 2 of a depth >= 3 frame are bounded by max(0.1, 2 x the run\'s turn-1 '
         'logit max |diff| against the oracle); turn-1, root and depth2_pass priors keep 0.1', triggering_run='dn-gate40-searched3-r3',
-        trigger='the live 40-root depth-3 searched run dn-gate40-searched3-r3',
-        approval='confirmed by the lead 2026-11-06'))
+        trigger='the live 40-root depth-3 searched run dn-gate40-searched3-r3', approval='confirmed by the lead 2026-11-06'))
 FROZEN_NOTE = 'the gate code at the PR #1833 merge is the frozen rule set for every later run; a rule changed after that names its triggering run here'
 
 
@@ -1562,31 +1592,38 @@ def _with_header(report, block):
 MUTATION_SEED = 20261106
 SWEEP_SWAPS = 5000
 MUTANTS = tuple((path, kind, variant) for path in ('backup', 'scatter') for kind in ('sibling', 'cousin') for variant in ('single', 'systematic'))
+SWEEP_PATHS = ('scatter', 'backup')
 MUTATION_FILE = 'mutation-test.json'
-# depthn_backups.node_value's child reads, rerouted through _SWAP at ply >= 2 (each anchor must occur exactly once in the source).
+# depthn_backups.node_value patched in memory (each anchor must occur exactly once in the source): its child reads at ply >= 2 rerouted
+# through _SWAP, and the grid it hands its rule passed through _AT_RULE(grid, root, world, ply, node) (identity unless a test sets it).
 BACKUP_PATCH = (
     ('            if leaf:\n', '            _r,_w,_n,_i,_x=_SWAP.get((root,world,ply,node,i,x),(root,world,node,i,x))if ply>=2 else(root,world,node,i,x)\n'
         '            if leaf:\n'),
     ('frame.leaf_status[root,world,node,i,x]', 'frame.leaf_status[_r,_w,_n,_i,_x]'),
     ('frame.leaf_value[root,world,node,i,x]', 'frame.leaf_value[_r,_w,_n,_i,_x]'),
-    ('node_value(frame,root,world,ply+1,node*K+i*k_opp+x,rule)', 'node_value(frame,_r,_w,ply+1,_n*K+_i*k_opp+_x,rule)'))
-MUTATION_RULE = ('--mutation-test, per call, after the clean evaluation, on that call\'s frame and oracle data (never the pricer\'s files): eight '
-    'misplacements at parents of ply >= 2 (children at ply >= 3), {backup path, scatter path} x {sibling, cousin} x {single, systematic}. Backup '
-    'path: depthn_backups\' SOURCE executed into a separate module with node_value\'s child reads rerouted through a swap map (BACKUP_PATCH), passed '
-    'as the backups of (e) and (f); the frame is untouched, so (a)-(d) see clean values and (f) has to catch it. Scatter path: the pair\'s stored '
-    'VALUES exchanged in a copy of the frame (leaf_value at the last ply, the child ply\'s node value otherwise), digests and statuses untouched, '
-    'then every check. Single: P = the first parent at ply >= 2 in (root, world, ply, node) order whose clean learner choice is outside the near '
-    'ties of both frames; sibling = the pair of P\'s children whose swap most reverses P\'s pricer-side choice (margin = best other row q minus '
-    'the clean choice\'s, after the swap); cousin = P\' the next priced parent under P\'s parent (else the next in order), the (c1 under P, c2 '
-    'under P\') pair that most reverses it; why each pair is material is recorded. Systematic: sibling = own slots 0 and 1 swapped for every '
-    'opponent slot at every parent; cousin = consecutive parents under each grandparent paired, their (0, 0) children swapped. Each mutant is '
-    'judged alone through summarize_run and gate_status_n with the evaluator actors set to 1, so GUARD_DEPTHN_RULE certifies the guard past turn '
-    '1 (report-only) wherever the digests match; KILLED = FAIL with a gated check failing other than through a guard alone. Sweep (seeded): '
-    'up to SWEEP_SWAPS single sibling and SWEEP_SWAPS single cousin (same root and world, different parents) swaps of (c)-scored leaves, drawn '
-    'uniformly without replacement, scatter path; caught by (c) when either swapped leaf moves beyond the value bound from its oracle head, '
-    'by (f) when a parent or ancestor fails node_fails ((e) is not re-run per swap); every survivor\'s |v1 - v2| and its parents\' backed-up '
-    'value change are reported, and a survivor with |v1 - v2| > 2 x the value bound is a material misplacement (the rule\'s withdrawal case). '
-    'PASS iff the clean call passes and stays unchanged, every mutant is exercised and killed, and the sweep has no material survivor')
+    ('node_value(frame,root,world,ply+1,node*K+i*k_opp+x,rule)', 'node_value(frame,_r,_w,ply+1,_n*K+_i*k_opp+_x,rule)'),
+    ('rule(grid,pi_own,pi_opp)', 'rule(_AT_RULE(grid,root,world,ply,node),pi_own,pi_opp)'))
+MUTATION_RULE = ('--mutation-test, after every call is priced and the run\'s value bound is known, on each call\'s frame and oracle data (never the '
+    'pricer\'s files): eight misplacements at parents of ply >= 2 (children at ply >= 3), {backup path, scatter path} x {sibling, cousin} x '
+    '{single, systematic}, and a seeded sweep on both paths. Backup path: depthn_backups\' SOURCE executed into a separate module with node_value\'s '
+    'child reads rerouted through a swap map INSIDE the source (BACKUP_PATCH), passed as the backups of (e) and (f); the frame is untouched, so '
+    '(a)-(d) see clean values and (f)\'s per-child grid gate has to catch it. Scatter path: the pair\'s stored VALUES exchanged in a copy of the '
+    'frame (leaf_value at the last ply, the child ply\'s node value otherwise), digests and statuses untouched, then every check. Single: P = the '
+    'first parent at ply >= 2 in (root, world, ply, node) order whose clean learner choice is outside the near ties of both frames; sibling = the '
+    'pair of P\'s children whose swap most reverses P\'s pricer-side choice (margin = best other row q minus the clean choice\'s, after the swap); '
+    'cousin = P\' a different priced parent at the same ply in the SAME root and world (the same grandparent first; the next root and world only '
+    'when none, recorded as a fallback), the (c1 under P, c2 under P\') pair that most reverses it; why each pair is material is recorded. '
+    'Systematic: sibling = own slots 0 and 1 swapped for every opponent slot at every parent; cousin = consecutive parents under each grandparent '
+    'paired, their (0, 0) children swapped. The clean call and each mutant are judged alone through summarize_run and gate_status_n at the RUN\'s '
+    'value bound (the run\'s depth-1 floor substituted for the call\'s) with the evaluator actors set to 1, so GUARD_DEPTHN_RULE certifies the '
+    'guard past turn 1 (report-only) wherever the digests match; KILLED = FAIL with a gated check failing other than through a guard alone. Sweep '
+    '(seeded): up to SWEEP_SWAPS single sibling and SWEEP_SWAPS single cousin (same root and world, different parents) swaps of (c)-scored leaves, '
+    'drawn uniformly without replacement, each applied on BOTH paths: scatter (caught by (c) when either swapped leaf moves beyond the value bound '
+    'from its oracle head) and backup (the mutant\'s swap map set per swap; (c) cannot see it); either caught by (f) when a parent or ancestor fails '
+    'node_fails; (e) is not re-run per swap. Every survivor\'s |v1 - v2| and its parents\' backed-up value change are reported; a survivor with '
+    '|v1 - v2| > 2 x the value bound and at least one affected parent priced is a MATERIAL misplacement (the rule\'s withdrawal case); survivors '
+    'whose parents are all refused are counted apart (immaterial). PASS iff the clean call passes and stays unchanged, every mutant is exercised '
+    'and killed, and neither sweep has a material survivor')
 
 
 class MutantPatchError(RuntimeError):
@@ -1600,18 +1637,22 @@ def backups_source():
     return Path(origin).read_text()
 
 
+def _swap_map(pairs):
+    swap = {}
+    for a, b in pairs:swap[tuple(a)] = (b[0], b[1], b[3], b[4], b[5]);swap[tuple(b)] = (a[0], a[1], a[3], a[4], a[5])
+    return swap
+
+
 def mutant_backups(pairs, *, source=None, name='depthn_backups_mutant'):
-    """A separate module object executed from depthn_backups' SOURCE (backups_source(), or `source`) with node_value's child reads at ply
-    >= 2 rerouted through a swap map: each pair (a, b) of children (q, w, ply, parent, own slot, opponent slot) at the same ply makes a's
-    parent read b and b's parent read a (a leaf's status and value, or a node's whole subtree). MutantPatchError unless every BACKUP_PATCH
-    anchor occurs exactly once."""
+    """A separate module object executed from depthn_backups' SOURCE (backups_source(), or `source`) patched by BACKUP_PATCH: node_value's
+    child reads at ply >= 2 rerouted through its _SWAP map (each pair (a, b) of children (q, w, ply, parent, own slot, opponent slot) at the
+    same ply makes a's parent read b and b's parent read a: a leaf's status and value, or a node's whole subtree; set module._SWAP to change
+    it), and the grid handed to the rule passed through module._AT_RULE (identity). MutantPatchError unless every anchor occurs exactly once."""
     text = backups_source() if source is None else source
     for anchor, replacement in BACKUP_PATCH:
         if text.count(anchor) != 1:raise MutantPatchError(f'depthn_backups source: anchor {anchor!r} occurs {text.count(anchor)} times, not once')
         text = text.replace(anchor, replacement)
-    swap = {}
-    for a, b in pairs:swap[tuple(a)] = (b[0], b[1], b[3], b[4], b[5]);swap[tuple(b)] = (a[0], a[1], a[3], a[4], a[5])
-    module = types.ModuleType(name);module._SWAP = swap
+    module = types.ModuleType(name);module._SWAP = _swap_map(pairs);module._AT_RULE = lambda grid, *where: grid
     exec(compile(text, f'<{name}: depthn_backups source patched in memory>', 'exec'), module.__dict__)
     return module
 
@@ -1675,7 +1716,7 @@ def single_pairs(frame, backups, tree, bound):
         mine = record(key)
         if not usable(mine):continue
         theirs = tree.solve(*key)[1]
-        if usable(theirs) and all(g is not None and g > bound for g in (mine['gap'], theirs['gap'])):chosen = (key, mine, theirs);break
+        if usable(theirs) and all(g is not None and not _within(g, bound) for g in (mine['gap'], theirs['gap'])):chosen = (key, mine, theirs);break
     if chosen is None:return {}, 'no parent at ply >= 2 whose clean learner choice is outside the near ties of both frames'
     key, mine, theirs = chosen;values = _slot_values(mine);out = {}
     def why(v1, v2, margin, new, gap, **more):
@@ -1692,9 +1733,12 @@ def single_pairs(frame, backups, tree, bound):
     if best is not None:
         margin, s, t, new, gap = best
         out['sibling'] = ((key + s, key + t), why(values[s], values[t], margin, new, gap, c1=list(s), c2=list(t)))
-    up = _up(frame, key);level = [k for k in parents if k != key and k[2] == key[2]]   # P' candidates in preference order, priced lazily
-    order = [k for k in level if k > key and k[:2] == key[:2] and _up(frame, k) == up] + [k for k in level if k > key] + [k for k in level if k < key]
-    other = next((k for k in order if usable(record(k))), None)
+    up = _up(frame, key);level = [k for k in parents if k != key and k[2] == key[2]];here = [k for k in level if k[:2] == key[:2]]
+    same = lambda k: _up(frame, k) == up   # P' candidates in preference order (same root and world, same grandparent first), priced lazily
+    order = [k for k in here if same(k) and k > key] + [k for k in here if same(k) and k < key] + [k for k in here if not same(k) and k > key] \
+        + [k for k in here if not same(k) and k < key]
+    other = next((k for k in order if usable(record(k))), None);fell_back = other is None
+    if fell_back:other = next((k for k in [k for k in level if k[:2] > key[:2]] + [k for k in level if k[:2] < key[:2]] if usable(record(k))), None)
     if other is not None:
         theirs_values = _slot_values(record(other));best = None
         for s in sorted(values):
@@ -1702,8 +1746,8 @@ def single_pairs(frame, backups, tree, bound):
                 margin, new, gap = _reverse(mine, {s: theirs_values[t]})
                 if best is None or margin > best[0]:best = (margin, s, t, new, gap)
         margin, s, t, new, gap = best
-        out['cousin'] = ((key + s, other + t), why(values[s], theirs_values[t], margin, new, gap, parent2=list(other), same_grandparent=_up(frame, other) == up,
-            c1=list(s), c2=list(t)))
+        out['cousin'] = ((key + s, other + t), why(values[s], theirs_values[t], margin, new, gap, parent2=list(other), same_root_world=other[:2] == key[:2],
+            same_grandparent=other[:2] == key[:2] and same(other), fell_back_to_another_root_world=fell_back, c1=list(s), c2=list(t)))
     return out, None if out else 'P has no swappable pair'
 
 
@@ -1725,10 +1769,21 @@ def systematic_pairs(frame, kind):
     return pairs
 
 
-def mutant_verdict(evaluation, *, lanes, sampled=False):
-    """(verdict, summarized result) of ONE call's evaluation judged alone: status, the checks that caught it (a (c) quantity only beyond its
-    value bound; guard-only failures listed apart, never a kill) and KILLED = FAIL with a gated catch."""
-    result = summarize_run([evaluation], lanes);status, reasons = gate_status_n(result, sampled=sampled);caught, guard_only = {}, []
+def at_bound(evaluation, value_bound):
+    """The evaluation with its depth-1 floor replaced so tolerance_rule gives exactly `value_bound` (FLOOR_FACTOR x the floor): a call judged
+    at the RUN's value bound rather than its own floor's; unchanged when value_bound is None."""
+    if value_bound is None:return evaluation
+    half = float(value_bound) / g2.FLOOR_FACTOR
+    floor = dict(compared=1, exact_equal=0, nonfinite=0, max_abs_difference=half, largest=[], _deltas=np.asarray([half], np.float64))
+    return dict(evaluation, c=dict(evaluation.get('c') or {}, depth1_noise_floor=floor))
+
+
+def mutant_verdict(evaluation, *, lanes, sampled=False, value_bound=None):
+    """(verdict, summarized result) of ONE call's evaluation judged alone (at `value_bound`, the run's, when given): status, the checks that
+    caught it (a (c) quantity only beyond its value bound; guard-only failures listed apart, never a kill) and KILLED = FAIL with a gated catch."""
+    result = summarize_run([at_bound(evaluation, value_bound)], lanes);status, reasons = gate_status_n(result, sampled=sampled);caught, guard_only = {}, []
+    if value_bound is not None and result['tolerance']['value_bound'] != float(value_bound):
+        raise ValueError(f'judged at {result["tolerance"]["value_bound"]!r}, not the run\'s value bound {value_bound!r}')
     depth = evaluation.get('depth')
     for name, check in result['checks'].items():
         if check['passed']:continue
@@ -1738,14 +1793,15 @@ def mutant_verdict(evaluation, *, lanes, sampled=False):
                 for q, m in failing.items() if not m['within_bound']}
             guard_only += [q for q, m in failing.items() if m['within_bound']]
             if beyond or not failing:caught['c'] = beyond or dict(reason='frame geometry')
-        elif name == 'f':caught['f'] = {k: check.get(k) for k in ('non_exempt_mismatches', 'near_tie_flips', 'one_sided', 'problems', 'max_abs_delta_row_q', 'row_q_within_bound',
-            'reasons')} | dict(first_mismatches=(check.get('first_mismatches') or [])[:3])
+        elif name == 'f':caught['f'] = {k: check.get(k) for k in ('grid_within_bound', 'max_abs_delta_child_value', 'nodes_grid_beyond_bound', 'row_q_within_bound',
+            'max_abs_delta_row_q', 'non_exempt_mismatches', 'near_tie_flips', 'one_sided', 'problems', 'reasons')} | dict(first_mismatches=(check.get('first_mismatches') or [])[:3],
+            first_grid_mismatches=(check.get('first_grid_mismatches') or [])[:3])
         elif name == 'e':caught['e'] = {k: check.get(k) for k in ('argmax_q_differs_non_tie', 'argmax_target_differs_non_tie', 'status_differs', 'q_noise_within_bound',
             'max_abs_delta_q', 'reasons')}
         else:caught[name] = {k: v for k, v in (check.get('mismatched') or {}).items() if v} or check.get('reason') or 'failed'
     modes = {q: m.get('guard_mode') for q, m in (result['checks'].get('c') or {}).get('quantities', {}).items() if certifying_digest(q, depth)}
     return dict(status=status, status_reasons=reasons, killed=status == 'FAIL' and bool(caught), caught_by=sorted(caught), caught=caught, guard_only=guard_only,
-        guard_modes_past_turn1=modes), result
+        guard_modes_past_turn1=modes, value_bound=result['tolerance']['value_bound']), result
 
 
 def mutant_evaluation(path, pairs, *, frame, data, requests, d_results, clean, backups, source, tree, full_turn1, context):
@@ -1753,7 +1809,7 @@ def mutant_evaluation(path, pairs, *, frame, data, requests, d_results, clean, b
     on scatter_frame(frame, pairs) with the clean backups. Evaluator actors 1 (GUARD_DEPTHN_RULE certifies where digests match)."""
     decision = 'e' in clean
     if path == 'backup':
-        evaluation = {k: v for k, v in clean.items() if k not in ('e', 'f', 'mutation')}
+        evaluation = {k: v for k, v in clean.items() if k not in ('e', 'f', 'mutation', MUTATION_INPUTS)}
         backup_checks(evaluation, frame, data, requests, context=context, backups=mutant_backups(pairs, source=source), decision=decision, tree=tree)
     else:evaluation = evaluate_n(scatter_frame(frame, pairs), d_results, requests, data, context=context, full_turn1=full_turn1, backups=backups,
         decision=decision, choices=True, tree=tree)
@@ -1789,13 +1845,13 @@ def _cousin_pairs(worlds, parent, rng, count):
     return sorted(chosen), total
 
 
-def swap_sweep(frame, data, backups, tree, bound, *, count=SWEEP_SWAPS, seed=MUTATION_SEED, block=0):
-    """MUTATION_RULE's sweep on one call: single sibling and cousin scatter swaps of (c)-scored leaves (count: per kind, or {kind: count}),
-    each judged by (c) at the two swapped positions and (f) (node_fails) at the parents and their ancestors on a working copy (restored after
-    every swap)."""
-    clock = time.perf_counter();leaves = data['leaves'];out = dict(swaps={}, population={}, seed=[seed, block], value_bound=bound, survivors=0, survivor_rows=[],
-        e='not re-run per swap: (e) needs a full learner_max_root per root; (c) and (f) decide each swap')
-    if leaves is None or not len(leaves['specs']):return dict(out, seconds=time.perf_counter() - clock, skipped='no checked leaf')
+def swap_sweep(frame, data, backups, tree, bound, *, count=SWEEP_SWAPS, seed=MUTATION_SEED, block=0, source=None, paths=SWEEP_PATHS):
+    """MUTATION_RULE's sweep on one call: single sibling and cousin swaps of (c)-scored leaves (count: per kind, or {kind: count}), drawn once
+    and applied on each of `paths`: scatter (a working copy of the leaves, restored after every swap; (c) at the two swapped positions) and
+    backup (mutant_backups' swap map set per swap, from `source`); (f) (node_fails) at the parents and their ancestors on both. Returns
+    {'pairs': population and drawn counts, path: its accounting}."""
+    clock = time.perf_counter();leaves = data['leaves'];out = dict(pairs=dict(seed=[seed, block], population={}, drawn={}, value_bound=bound))
+    if leaves is None or not len(leaves['specs']):return dict(out, **{p: dict(skipped='no checked leaf', material_survivors=0) for p in paths})
     index = np.asarray(leaves['index'], np.int64);at = tuple(index.T);values = np.asarray(frame.leaf_value, np.float32)[at].astype(np.float64)
     heads = np.asarray(leaves['head_value'], np.float32).astype(np.float64)
     scored = (np.asarray(leaves['status']) == 4) & (np.asarray(frame.leaf_status)[at] == 4) & np.isfinite(values) & np.isfinite(heads)
@@ -1803,53 +1859,65 @@ def swap_sweep(frame, data, backups, tree, bound, *, count=SWEEP_SWAPS, seed=MUT
     by_parent, by_world = collections.defaultdict(list), collections.defaultdict(list)
     for i in cand:by_parent[parent[i]].append(i);by_world[parent[i][:2]].append(i)
     limit = lambda kind: int(count.get(kind, 0)) if isinstance(count, dict) else int(count)
-    sibling, out['population']['sibling'] = _uniform_pairs([by_parent[k] for k in sorted(by_parent)], rng, limit('sibling'))
-    cousin, out['population']['cousin'] = _cousin_pairs([by_world[k] for k in sorted(by_world)], parent, rng, limit('cousin'))
-    work = np.array(frame.leaf_value, copy=True);mutated = _copy(frame, leaf_value=work);ply = int(frame.depth) - 1;clean = {}
-    counts = collections.Counter();worst = dict(abs_value_difference=0., parent_value_change=0.)
-    for kind, pairs in (('sibling', sibling), ('cousin', cousin)):
-        out['swaps'][kind] = len(pairs)
-        for a, b in pairs:
-            x, y = tuple(index[a].tolist()), tuple(index[b].tolist());v1, v2 = values[a], values[b];d = abs(v1 - v2)
-            by_c = abs(v2 - heads[a]) > bound or abs(v1 - heads[b]) > bound
-            work[x], work[y] = work[y], work[x]
-            tops = [(x[0], x[1], ply, x[2]), (y[0], y[1], ply, y[2])];affected = sorted(set(_ancestors(frame, tops[0])) | set(_ancestors(frame, tops[1])))
-            records = {key: pricer_record(mutated, backups, *key) for key in affected}
-            by_f = any(node_fails(records[key], tree.solve(*key)[1], bound) for key in affected if tree.solve(*key)[0] is not MISSING)
-            work[x], work[y] = work[y], work[x]
-            counts[kind + (':c' if by_c else '') + (':f' if by_f else '')] += 1
-            if by_c or by_f:continue
-            change = []
-            for key in dict.fromkeys(tops):
-                if key not in clean:clean[key] = pricer_record(frame, backups, *key)
-                before, after = clean[key], records[key]
-                change.append(None if before is None or after is None else after['value'] - before['value'])
-            out['survivors'] += 1;worst['abs_value_difference'] = max(worst['abs_value_difference'], d)
-            worst['parent_value_change'] = max([worst['parent_value_change']] + [abs(c) for c in change if c is not None])
-            out['survivor_rows'].append(dict(kind=kind, a=list(x), b=list(y), abs_value_difference=d, parent_value_change=change, material=d > 2 * bound))
-    material = [r for r in out['survivor_rows'] if r['material']]
-    out.update(caught={k: v for k, v in sorted(counts.items()) if ':' in k}, survived={k: v for k, v in sorted(counts.items()) if ':' not in k},
-        survivor_max_abs_value_difference=worst['abs_value_difference'], survivor_max_parent_value_change=worst['parent_value_change'],
-        survivor_ratio_to_2_bound=None if not bound else worst['abs_value_difference'] / (2 * bound), material_survivors=len(material),
-        first_material_survivors=material[:FIRST], claim_holds=not material, seconds=time.perf_counter() - clock,
-        claim='every survivor is within noise: |v1 - v2| <= 2 x value bound and no non-exempt choice change at its parents or ancestors')
+    drawn = dict(zip(('sibling', 'cousin'), (_uniform_pairs([by_parent[k] for k in sorted(by_parent)], rng, limit('sibling')),
+        _cousin_pairs([by_world[k] for k in sorted(by_world)], parent, rng, limit('cousin')))))
+    out['pairs'].update(population={k: v[1] for k, v in drawn.items()}, drawn={k: len(v[0]) for k, v in drawn.items()}, seconds=time.perf_counter() - clock)
+    ply = int(frame.depth) - 1;clean = {}
+    def clean_record(key):
+        if key not in clean:clean[key] = pricer_record(frame, backups, *key)
+        return clean[key]
+    for path in paths:
+        clock = time.perf_counter();counts = collections.Counter();rows = [];worst = dict(abs_value_difference=0., parent_value_change=0.);refused = 0
+        if path == 'scatter':work = np.array(frame.leaf_value, copy=True);judged, reader = _copy(frame, leaf_value=work), backups
+        else:judged, reader = frame, mutant_backups([], source=source)
+        for kind, (pairs, _) in drawn.items():
+            for a, b in pairs:
+                x, y = tuple(index[a].tolist()), tuple(index[b].tolist());v1, v2 = values[a], values[b];d = abs(v1 - v2)
+                by_c = path == 'scatter' and (abs(v2 - heads[a]) > bound or abs(v1 - heads[b]) > bound)   # (c)'s own rule; a backup misread leaves the frame clean
+                if path == 'scatter':work[x], work[y] = work[y], work[x]
+                else:reader._SWAP = _swap_map([((x[0], x[1], ply, x[2], x[3], x[4]), (y[0], y[1], ply, y[2], y[3], y[4]))])
+                tops = list(dict.fromkeys([(x[0], x[1], ply, x[2]), (y[0], y[1], ply, y[2])]))
+                affected = sorted(set(_ancestors(frame, tops[0])) | set(_ancestors(frame, tops[-1])));records = {key: pricer_record(judged, reader, *key) for key in affected}
+                by_f = any(node_fails(records[key], tree.solve(*key)[1], bound) for key in affected if tree.solve(*key)[0] is not MISSING)
+                if path == 'scatter':work[x], work[y] = work[y], work[x]
+                else:reader._SWAP = {}
+                counts[kind + (':c' if by_c else '') + (':f' if by_f else '')] += 1
+                if by_c or by_f:continue
+                change = [None if clean_record(key) is None or records[key] is None else records[key]['value'] - clean_record(key)['value'] for key in tops]
+                priced = any(clean_record(key) is not None for key in tops);refused += not priced
+                if priced:worst['abs_value_difference'] = max(worst['abs_value_difference'], d)
+                worst['parent_value_change'] = max([worst['parent_value_change']] + [abs(c) for c in change if c is not None])
+                rows.append(dict(kind=kind, a=list(x), b=list(y), abs_value_difference=d, parent_value_change=change, parent_priced=priced, material=priced and d > 2 * bound))
+        material = [r for r in rows if r['material']]
+        out[path] = dict(swaps={kind: len(pairs) for kind, (pairs, _) in drawn.items()}, caught={k: v for k, v in sorted(counts.items()) if ':' in k},
+            survived={k: v for k, v in sorted(counts.items()) if ':' not in k}, survivors=len(rows), survivors_parents_refused=refused,
+            survivor_max_abs_value_difference=worst['abs_value_difference'], survivor_max_parent_value_change=worst['parent_value_change'],
+            survivor_ratio_to_2_bound=None if not bound else worst['abs_value_difference'] / (2 * bound), material_survivors=len(material),
+            first_material_survivors=material[:FIRST], claim_holds=not material, survivor_rows=rows, seconds=time.perf_counter() - clock,
+            e='not re-run per swap: (e) needs a full learner_max_root per root; (c) and (f) decide each swap',
+            claim='every survivor with a priced parent is within noise: |v1 - v2| <= 2 x value bound (the survivor_max_abs_value_difference over them) '
+                'and no gated (f) failure at its parents or ancestors; survivors whose parents are all refused are immaterial')
     return out
 
 
+MUTATION_INPUTS = '_mutation_inputs'   # run_call_n keeps a call's frame, oracle data and D3 results here until mutation_tests runs
+
+
 def mutation_test_call(frame, data, requests, d_results, clean, *, context=None, backups=None, source=None, lanes=(2187,), full_turn1=True,
-                       sweep=SWEEP_SWAPS, seed=MUTATION_SEED, progress=None):
-    """MUTATION_RULE on ONE call: the clean call judged alone (evaluator actors 1), the eight mutants and the sweep; `clean` is the call's
-    evaluation (never modified). backups: depthn_backups (default) for the clean side and the scatter path; source: depthn_backups' source
-    text for the backup path (backups_source() by default). Returns the call's mutation report (passed, seconds)."""
+                       sweep=SWEEP_SWAPS, seed=MUTATION_SEED, progress=None, value_bound=None):
+    """MUTATION_RULE on ONE call: the clean call and the eight mutants judged alone at `value_bound` (the RUN's; None: the call's own), then
+    the sweep on both paths; `clean` is the call's evaluation (never modified). backups: depthn_backups (default) for the clean side and the
+    scatter path; source: depthn_backups' source text for the backup path (backups_source() by default). Returns the call's report."""
     clock = time.perf_counter();context = dict(context or {});log_line = progress or (lambda *a, **k: None)
     out = dict(context, rule='MUTATION_RULE (gate.json tolerance and this file\'s rule)', mutants={}, passed=False)
     if backups is None:
         try:backups = importlib.import_module('gpu_engine.depthn_backups')
         except ImportError as error:return dict(out, reason=f'gpu_engine.depthn_backups is not importable: {error}', seconds=time.perf_counter() - clock)
-    base = {k: v for k, v in clean.items() if k != 'mutation'};base['actors'] = 1
-    verdict, result = mutant_verdict(base, lanes=lanes);bound = result['tolerance']['value_bound'];block = int(context.get('block', 0))
+    base = {k: v for k, v in clean.items() if k not in ('mutation', MUTATION_INPUTS)};base['actors'] = 1
+    verdict, result = mutant_verdict(base, lanes=lanes, value_bound=value_bound);bound = result['tolerance']['value_bound'];block = int(context.get('block', 0))
     out.update(clean=dict(status=verdict['status'], status_reasons=verdict['status_reasons'], failing=verdict['caught_by'], guard_only=verdict['guard_only']),
-        value_bound=bound, evaluator_actors_live=clean.get('actors'))
+        value_bound=bound, value_bound_source='the run\'s (its depth-1 floor substituted for the call\'s)' if value_bound is not None else 'the call\'s own depth-1 floor',
+        evaluator_actors_live=clean.get('actors'))
     if int(frame.depth) < 3:return dict(out, reason='depth < 3: no parent at ply >= 2', seconds=time.perf_counter() - clock)
     tree = OracleTree(frame, data);singles, none = single_pairs(frame, backups, tree, bound)
     for path, kind, variant in MUTANTS:
@@ -1860,29 +1928,45 @@ def mutation_test_call(frame, data, requests, d_results, clean, *, context=None,
         try:evaluation = mutant_evaluation(path, pairs, frame=frame, data=data, requests=requests, d_results=d_results, clean=base, backups=backups,
             source=source, tree=tree, full_turn1=full_turn1, context=dict(context, mutant=name))
         except MutantPatchError as error:out['mutants'][name] = dict(entry, exercised=False, killed=False, reason=str(error));continue
-        verdict, _ = mutant_verdict(evaluation, lanes=lanes)
+        verdict, _ = mutant_verdict(evaluation, lanes=lanes, value_bound=bound)
         out['mutants'][name] = dict(entry, exercised=True, **verdict, seconds=time.perf_counter() - started)
         log_line('MUTATION_TEST_MUTANT', **context, mutant=name, status=verdict['status'], killed=verdict['killed'], caught_by=verdict['caught_by'],
-            guard_only=verdict['guard_only'], pairs=len(pairs), seconds=out['mutants'][name]['seconds'])
-    out['sweep'] = swap_sweep(frame, data, backups, tree, bound, count=sweep, seed=seed, block=block)
-    log_line('MUTATION_TEST_SWEEP', **context, **{k: out['sweep'].get(k) for k in ('swaps', 'population', 'caught', 'survived', 'survivors', 'material_survivors',
-        'survivor_max_abs_value_difference', 'survivor_ratio_to_2_bound', 'survivor_max_parent_value_change', 'claim_holds', 'seconds')})
-    again, _ = mutant_verdict(base, lanes=lanes);out['clean_unchanged'] = again['status'] == out['clean']['status'] and again['caught_by'] == out['clean']['failing']
-    survivors = [n for n, m in out['mutants'].items() if not m['killed']]
-    out.update(survivors=survivors, passed=out['clean']['status'] == 'PASS' and out['clean_unchanged'] and not survivors and out['sweep'].get('material_survivors', 1) == 0
-        and 'skipped' not in out['sweep'], seconds=time.perf_counter() - clock)
+            guard_only=verdict['guard_only'], pairs=len(pairs), value_bound=bound, seconds=out['mutants'][name]['seconds'])
+    try:out['sweep'] = swap_sweep(frame, data, backups, tree, bound, count=sweep, seed=seed, block=block, source=source)
+    except MutantPatchError as error:out['sweep'] = dict(skipped=str(error))
+    for path in SWEEP_PATHS:
+        s = out['sweep'].get(path) or {}
+        log_line('MUTATION_TEST_SWEEP', **context, path=path, **{k: s.get(k) for k in ('swaps', 'caught', 'survived', 'survivors', 'survivors_parents_refused',
+            'material_survivors', 'survivor_max_abs_value_difference', 'survivor_ratio_to_2_bound', 'survivor_max_parent_value_change', 'claim_holds', 'seconds', 'skipped')})
+    again, _ = mutant_verdict(base, lanes=lanes, value_bound=value_bound);out['clean_unchanged'] = again['status'] == out['clean']['status'] and again['caught_by'] == out['clean']['failing']
+    survivors = [n for n, m in out['mutants'].items() if not m['killed']];material = {p: (out['sweep'].get(p) or {}).get('material_survivors') for p in SWEEP_PATHS}
+    out.update(survivors=survivors, material_survivors=material, passed=out['clean']['status'] == 'PASS' and out['clean_unchanged'] and not survivors
+        and all(n == 0 for n in material.values()) and not any('skipped' in (out['sweep'].get(p) or {'skipped': 1}) for p in SWEEP_PATHS), seconds=time.perf_counter() - clock)
     log_line('MUTATION_TEST', **context, passed=out['passed'], clean=out['clean']['status'], value_bound=bound, killed={n: m['killed'] for n, m in out['mutants'].items()},
-        caught_by={n: m.get('caught_by') for n, m in out['mutants'].items()}, survivors=survivors, material_survivors=out['sweep'].get('material_survivors'),
-        seconds=out['seconds'])
+        caught_by={n: m.get('caught_by') for n, m in out['mutants'].items()}, survivors=survivors, material_survivors=material, seconds=out['seconds'])
     return out
 
 
-def mutation_report(calls, *, seconds=None, source=None, checks=None):
+def mutation_tests(evaluations, *, value_bound, lanes=(2187,), backups=None, source=None, progress=None, sweep=SWEEP_SWAPS):
+    """--mutation-test once the run's value bound is known: mutation_test_call on every call that kept its inputs (run_call_n with
+    mutation=...), at the RUN's value bound; the inputs are dropped from each evaluation afterwards. Returns the per-call reports."""
+    out = []
+    for evaluation in evaluations:
+        inputs = evaluation.pop(MUTATION_INPUTS, None)
+        if inputs is None:continue
+        out.append(mutation_test_call(inputs['frame'], inputs['data'], inputs['requests'], inputs['d_results'], evaluation, context=inputs['context'],
+            backups=backups, source=inputs.get('source', source), lanes=lanes, full_turn1=inputs['full_turn1'], progress=progress, value_bound=value_bound,
+            sweep=inputs.get('sweep', sweep)))
+    return out
+
+
+def mutation_report(calls, *, seconds=None, source=None, checks=None, value_bound=None):
     """mutation-test.json: per-call reports, PASS iff every call's passes (and at least one ran); header: the gate's (checks: the run's)."""
     passed = bool(calls) and all(c['passed'] for c in calls)
     return dict(schema=SCHEMA, mode='MUTATION_TEST', header=header_block(checks), passed=passed, status='PASS' if passed else 'FAIL', rule=MUTATION_RULE,
-        choice_rule=CHOICE_RULE, mutants=[f'{p}-{k}-{v}' for p, k, v in MUTANTS], sweep_swaps=SWEEP_SWAPS, seed=MUTATION_SEED, source=source,
-        survivors={f'block{c.get("block")}-call{c.get("call")}': c.get('survivors') for c in calls}, seconds=seconds, calls=calls)
+        choice_rule=CHOICE_RULE, mutants=[f'{p}-{k}-{v}' for p, k, v in MUTANTS], sweep_swaps=SWEEP_SWAPS, sweep_paths=list(SWEEP_PATHS), seed=MUTATION_SEED,
+        source=source, value_bound=value_bound, survivors={f'block{c.get("block")}-call{c.get("call")}': c.get('survivors') for c in calls},
+        material_survivors={f'block{c.get("block")}-call{c.get("call")}': c.get('material_survivors') for c in calls}, seconds=seconds, calls=calls)
 
 
 ORACLE_ROOT_FIELDS = g2.ROOT_FIELDS
@@ -1944,10 +2028,11 @@ def load_oracle_data(path):
 ORACLE_FILE = re.compile(r'^(?P<prefix>frames-block(?P<block>\d+)-call(?P<call>\d+))-oracle\.npz$')
 
 
-def offline_mutation(directories, *, backups=None, source=None, progress=None, sweep=SWEEP_SWAPS):
-    """--mutation-from: the clean checks ((a)-(f) through evaluate_n) and mutation_test_call on each saved call (frames-block{B}-call{C}-oracle.npz
-    beside its depth-N frame from --save-arrays --save-oracle)."""
-    calls = []
+def offline_mutation(directories, *, backups=None, source=None, progress=None, sweep=SWEEP_SWAPS, lanes=(2187,)):
+    """--mutation-from: the clean checks ((a)-(f) through evaluate_n) on every saved call (frames-block{B}-call{C}-oracle.npz beside its depth-N
+    frame from --save-arrays --save-oracle), the run's value bound and checks from them all (summarize_run), then mutation_test_call on each
+    at that bound. Returns dict(calls, checks, value_bound)."""
+    evaluations = []
     for directory in directories:
         for path in sorted(Path(directory).glob('frames-block*-call*-oracle.npz')):
             m = ORACLE_FILE.match(path.name)
@@ -1956,10 +2041,13 @@ def offline_mutation(directories, *, backups=None, source=None, progress=None, s
             for request, keys in zip(requests, meta['input_keys']):request.root_inputs = {k: None for k in keys}
             context = dict(block=int(m['block']), call=int(m['call']), source=str(path))
             clean = evaluate_n(frame, d_results, requests, data, context=context, full_turn1=meta.get('full_turn1', True), backups=backups, decision=True, choices=True)
-            clean['actors'] = meta.get('actors')
-            calls.append(mutation_test_call(frame, data, requests, d_results, clean, context=context, backups=backups, source=source,
-                full_turn1=meta.get('full_turn1', True), progress=progress, sweep=sweep))
-    return calls
+            clean.update(actors=meta.get('actors'), **{MUTATION_INPUTS: dict(frame=frame, data=data, d_results=d_results, requests=requests, context=context,
+                full_turn1=meta.get('full_turn1', True))})
+            evaluations.append(clean)
+    if not evaluations:return dict(calls=[], checks={}, value_bound=None)
+    result = summarize_run([{k: v for k, v in e.items() if k != MUTATION_INPUTS} for e in evaluations], lanes);bound = result['tolerance']['value_bound']
+    calls = mutation_tests(evaluations, value_bound=bound, lanes=lanes, backups=backups, source=source, progress=progress, sweep=sweep)
+    return dict(calls=calls, checks=result['checks'], value_bound=bound)
 
 
 # ---------------------------------------------------------------- N=2 equivalence
@@ -2305,8 +2393,9 @@ def parse(argv=None):
     parser.add_argument('--depth3-diagnostics', action='store_true', help='price full-width depth 2 and depth 3 per mode and --diagnostic-ks; no oracle')
     parser.add_argument('--diagnostic-ks', default=','.join(map(str, DIAGNOSTIC_KS)), help='k values of --depth3-diagnostics')
     parser.add_argument('--diagnostics-from', nargs='+', metavar='DIR', help='offline: depth-3 diagnostics from saved frames (one or more directories)')
-    parser.add_argument('--mutation-test', action='store_true', help='after each call\'s clean evaluation, the eight misplacement mutants and the '
-        'swap sweep (MUTATION_RULE); writes mutation-test.json; exit non-zero if the clean run fails or a mutant survives')
+    parser.add_argument('--mutation-test', action='store_true', help='once every call is priced, at the run\'s value bound: the eight misplacement '
+        'mutants and the swap sweep on both paths (MUTATION_RULE; each call\'s frame and oracle data are held until then); writes mutation-test.json; '
+        'exit non-zero if the clean run fails, a mutant survives or a sweep has a material survivor')
     parser.add_argument('--save-oracle', action='store_true', help='also write each call\'s oracle data and D3 outputs beside its frames '
         '(frames-block{B}-call{C}-oracle.npz; implies --save-arrays) for --mutation-from')
     parser.add_argument('--mutation-from', nargs='+', metavar='DIR', help='offline: the mutation test from saved frames and oracle data '
@@ -2360,7 +2449,8 @@ def main(argv=None):
         return 0 if report['calls'] else 1
     if args.mutation_from:
         out = Path(args.out);out.mkdir(parents=True, exist_ok=False);clock = time.perf_counter()
-        report = mutation_report(offline_mutation(args.mutation_from, progress=log), source=dict(offline=[str(d) for d in args.mutation_from]))
+        found = offline_mutation(args.mutation_from, progress=log)
+        report = mutation_report(found['calls'], source=dict(offline=[str(d) for d in args.mutation_from]), checks=found['checks'], value_bound=found['value_bound'])
         report['seconds'] = time.perf_counter() - clock;write(out / MUTATION_FILE, report)
         log('MUTATION_TEST_COMPLETE', status=report['status'], out=str(out / MUTATION_FILE), calls=len(report['calls']), survivors=report['survivors'], seconds=report['seconds'])
         return 0 if report['passed'] else 1
@@ -2396,14 +2486,13 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
         raw_model=roots.head[1] if args.raw_head_check else None)
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), pricer_options=pricers.options(), sample_leaves=args.sample_leaves, seeds=seeds,
         mutation_test=args.mutation_test, save_oracle=args.save_oracle)
-    evaluations, calls, mutations = [], [], []
+    evaluations, calls = [], []
     for block, call, recipe, requests in each_call(provider, groups, seeds):
         evaluation, summary = run_call_n(requests=requests, recipe=recipe, materializer=provider.materializer, params=roots.params, pricers=pricers,
             depth2_pricer=depth2_pricer, frame_pricer=frame_pricer, oracle=oracle, sample=args.sample_leaves, block=block,
             context=dict(block=block, call=call), progress=log, save=(out, f'frames-block{block}-call{call}') if args.save_arrays else None,
             evaluator=roots.evaluator, pass_sample=args.depth2_pass_sample, save_oracle=args.save_oracle,
-            mutation=dict(lanes=lanes) if args.mutation_test else None)
-        if 'mutation' in evaluation:mutations.append(evaluation.pop('mutation'))
+            mutation={} if args.mutation_test else None)
         evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize_run(evaluations, lanes);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
@@ -2430,9 +2519,13 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
     log('DEPTHN_GATE_COMPLETE', status=status, out=str(out / 'gate.json'), status_reasons=reasons, checks={k: v['passed'] for k, v in result['checks'].items()},
         refused_share={k: refusals.get(k, {}).get('refused_share') for k in ('depthn', 'depth2_full_width', 'depth1')}, header=report['header'])
     if not args.mutation_test:return 0 if report['passed'] else 1
-    mutation = mutation_report(mutations, seconds=sum(m.get('seconds', 0.) for m in mutations), source='live', checks=result['checks']);write(out / MUTATION_FILE, mutation)
-    log('MUTATION_TEST_COMPLETE', status=mutation['status'], out=str(out / MUTATION_FILE), gate_status=status, survivors=mutation['survivors'],
-        material_survivors={f'block{c.get("block")}-call{c.get("call")}': (c.get('sweep') or {}).get('material_survivors') for c in mutations}, seconds=mutation['seconds'])
+    bound = result['tolerance']['value_bound']
+    with stage(log, 'mutation_test', calls=len(evaluations), value_bound=bound) as info:
+        mutations = mutation_tests(evaluations, value_bound=bound, lanes=lanes, progress=log);info.update(passed=[m['passed'] for m in mutations])
+    mutation = mutation_report(mutations, seconds=sum(m.get('seconds', 0.) for m in mutations), source='live', checks=result['checks'], value_bound=bound)
+    write(out / MUTATION_FILE, mutation)
+    log('MUTATION_TEST_COMPLETE', status=mutation['status'], out=str(out / MUTATION_FILE), gate_status=status, value_bound=bound, survivors=mutation['survivors'],
+        material_survivors=mutation['material_survivors'], seconds=mutation['seconds'])
     return 0 if report['passed'] and mutation['passed'] else 1
 
 
