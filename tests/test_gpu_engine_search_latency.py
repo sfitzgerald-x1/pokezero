@@ -36,7 +36,7 @@ class FakeTime:
 
 
 CLOCK = FakeTime()
-RECIPES = [original.Recipe(seed) for seed in gate.world_block_seeds(1779000000, 4)]   # the blocks' recipes (block 0 the declared one)
+RECIPES = [original.Recipe(seed) for seed in gate.world_block_seeds(1779000000, 16)]   # up to K = 16 blocks' recipes (block 0 the declared one)
 
 
 def check_starts(requests, recipe):
@@ -419,7 +419,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual((b['largest_capacity'], b['largest_worlds'], b['packed_proxy']), (None, None, None))
         self.assertIsNone(selection['configs']['c']['v']['largest_capacity'])   # the rule is the p90: a 780 ms median with an 820 ms p90 does not fit
         rows = {(r['config'], r['worlds'], r['mode']): r for r in selection['rows']};self.assertEqual({r['variant'] for r in selection['rows']}, {'v'})
-        self.assertEqual(rows['a', 8, 'packed']['largest_capacity'], 4);self.assertEqual(rows['a', 2, 'sequential']['by_capacity']['4'], dict(total(300.), error=None))
+        self.assertEqual(rows['a', 8, 'packed']['largest_capacity'], 4);self.assertEqual(rows['a', 2, 'sequential']['by_capacity']['4'], dict(median_ms=290., p_ms=300., percentile=90, max_ms=305., error=None))
         self.assertEqual(selection['limit_ms'], 800.);self.assertIn('<= 800 ms', selection['rule'])
 
     def test_nominal_leaves_and_the_engines_slot_widths(self):
@@ -464,7 +464,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(record['enumerated_leaves'] / (2 * 8), 6561)
         with self.assertRaises(ValueError):tool.run_call(packed, ctx, ctx.roots(2), 2, 'packed', solver=solver, timer=CLOCK)
         # measure_config: one Search per (config, pricer capacity); packed at K*C; the first series of each capacity holds its cold call.
-        FakeDepthN.built = [];args = self.args('--configs', 'depth2-fw@2/8', '--capacities', '1,4', '--repeats', '1')
+        FakeDepthN.built = [];args = self.args('--configs', 'depth2-fw@2/8', '--capacities', '1,4', '--repeats', '1', '--packed')
         memory = lambda: dict(process_peak_bytes_so_far=10, bytes_in_use=4)
         series = tool.measure_config('depth2-fw', (2, 8), args, fake_ctx(), None, solver=FakeSolver(), module=MODULE, memory=memory, timer=CLOCK)
         self.assertEqual([(s['capacity'], s['worlds'], s['mode'], s['pricer_capacity']) for s in series],
@@ -660,7 +660,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertIsNone(record['pricing'][0]['depthn']['p1_seconds']);self.assertEqual(record['enumerated_leaves'] / (4 * 2), 6561)
         record, _ = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK);self.assertEqual(record['stages']['compile'], 0.)
         # W=8 sequential and packed, one pricer per (config, pricer capacity); the row records the engine and the solve it used.
-        args = self.args('--configs', 'depth2-merged@8', '--capacities', '1,4', '--repeats', '2', '--solver', 'tests.test_gpu_engine_search_latency:pessimistic')
+        args = self.args('--configs', 'depth2-merged@8', '--capacities', '1,4', '--repeats', '2', '--solver', 'tests.test_gpu_engine_search_latency:pessimistic', '--packed')
         plugged = FakeSolver();plugged.spec = args.solver   # a plug-in solver: the merged rows still record depth2_backups learner-max
         series = tool.measure_config('depth2-merged', (8,), args, fake_ctx(), None, solver=plugged, depth2_module=DEPTH2,
             memory=lambda: {}, timer=CLOCK)
@@ -923,12 +923,97 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertIn('ModuleNotFoundError', str(raised.exception.code))   # the worker imports it (naming it is not enough)
 
     def test_expected_series_covers_packed_mode(self):
-        args = self.args('--configs', 'depth2-fw@2/8', '--capacities', '1,4', '--solver', 'learner_max,hedge', '--hedge-module', 'tests.test_gpu_engine_search_latency',
+        args = self.args('--configs', 'depth2-fw@2/8', '--capacities', '1,4', '--packed', '--solver', 'learner_max,hedge', '--hedge-module', 'tests.test_gpu_engine_search_latency',
             '--solver-pool', '0,16')
         rows = [(e['capacity'], e['worlds'], e['mode'], e['variant'], e['pricer_capacity']) for e in tool.expected_series(args, 'depth2-fw')]
         self.assertEqual(len(rows), 2 * 3 * 4)   # capacities x (W=2 seq, W=8 seq, W=8 packed) x (solver, pool) variants
         self.assertIn((4, 8, 'packed', 'hedge@pool16', 16), rows);self.assertIn((1, 8, 'sequential', 'learner_max@pool0', 1), rows)
-        self.assertNotIn('packed', {e['mode'] for e in tool.expected_series(self.args('--configs', 'depth2-fw@2/8', '--no-packed'), 'depth2-fw')})
+        self.assertNotIn('packed', {e['mode'] for e in tool.expected_series(self.args('--configs', 'depth2-fw@2/8'), 'depth2-fw')})   # packed is opt-in
+
+    def test_headline_is_p95_within_30_s_at_one_root_monotone_in_w(self):
+        def series(config, w, p95, *, capacity=1, mode='sequential', variant='hedge@pool0', distinct=20, error=None, p90=None):
+            total = dict(median_ms=p95 / 2, p90_ms=p95 if p90 is None else p90, p95_ms=p95, p99_ms=p95, max_ms=p95, n=20)
+            return dict(config=config, worlds=w, capacity=capacity, mode=mode, solver=variant.split('@')[0], pool=int(variant.split('pool')[1]), variant=variant,
+                warm=dict(total=total), windows=dict(distinct_roots=distinct), **({'error': dict(type=error)} if error else {}))
+        rows = [series('d3', 2, 4000.), series('d3', 8, 29000.), series('d3', 16, 30000.), series('d2', 8, 12000.), series('d2', 16, 31000.), series('d2', 32, 20000.),
+            series('d3', 32, 1., capacity=4), series('d3', 32, 1., mode='packed'),   # other capacities and the packed proxy never enter the headline
+            series('e', 8, 1000., error='TimeoutError'), series('e', 16, 1000.), series('f', 8, 1000., distinct=19), series('f', 16, 1000.)]
+        head = {r['config']: r for r in tool.headline(rows)['rows']}
+        self.assertEqual((head['d3']['largest_worlds'], head['d3']['status']), (16, 'OK'))   # p95 30 s exactly fits
+        self.assertEqual(head['d2']['largest_worlds'], 8)   # W=16 is over 30 s, so W=32 does not count although it fits on its own
+        self.assertEqual((head['d2']['by_worlds']['32']['fits'], head['d2']['by_worlds']['16']['p_s']), (True, 31.))
+        self.assertEqual(head['e']['largest_worlds'], None)   # an error row never fits
+        self.assertEqual((head['f']['largest_worlds'], head['f']['status']), (16, 'INSUFFICIENT'))   # fewer than 20 distinct roots at W=8
+        self.assertEqual(sorted(head['d3']['by_worlds']), ['16', '2', '8']);self.assertEqual(head['d3']['by_worlds']['8']['median_s'], 14.5)
+        # The bar is configurable: percentile, budget and capacity.
+        self.assertEqual({r['config']: r['largest_worlds'] for r in tool.headline(rows, budget_ms=10000.)['rows']}['d3'], 2)
+        strict = tool.headline([series('g', 8, 50000., p90=1000.)], percentile=90);self.assertEqual(strict['rows'][0]['largest_worlds'], 8)
+        self.assertEqual(tool.headline(rows, capacity=4)['rows'][0]['largest_worlds'], 32)
+        skipped = tool.headline(rows, repeats=0);self.assertEqual(skipped['rows'], []);self.assertIn('--repeats 0', skipped['skipped'])
+        self.assertIn('p95 of the end-to-end decision time <= 30 s at capacity 1', tool.headline(rows)['rule'])
+
+    def test_sixteen_world_blocks_a_decision(self):
+        seeds = gate.world_block_seeds(1779000000, 16)
+        self.assertEqual((len(seeds), len(set(seeds)), seeds[0]), (16, 16, 1779000000));self.assertEqual(seeds[:4], gate.world_block_seeds(1779000000, 4))   # prefix-stable
+        args, ctx, solver = self.args('--configs', 'depth2-fw@32'), fake_ctx(16), FakeSolver()
+        search = tool.Search('depth2-fw', 1, args, ctx, module=MODULE)
+        record, _ = tool.run_call(search, ctx, ctx.roots(1), 32, 'sequential', solver=solver, timer=CLOCK)
+        self.assertEqual(search.pricer.log, [(1, b, [b]) for b in range(16)])   # K = 16 sequential passes at capacity 1, each its own recipe
+        self.assertEqual(len(solver.views[0]), 16);self.assertEqual(record['enumerated_leaves'] / 32, 6561)
+        self.assertEqual(tool.parse_configs('depth2-fw@8/16/32', (2,)), {'depth2-fw': (8, 16, 32)})
+
+    def test_repeats_zero_is_the_cold_call_only(self):
+        args, ctx = self.args('--repeats', '0', '--configs', 'depth2-fw@2'), fake_ctx()
+        series = tool.measure_config('depth2-fw', (2,), args, ctx, None, solver=FakeSolver(), module=MODULE, memory=lambda: {}, timer=CLOCK)
+        self.assertEqual([(s['warm_calls'], len(s['calls']), s['warm']['total']['n']) for s in series], [(0, 1, 0)])
+        self.assertEqual((series[0]['first_call']['compile_seconds'], series[0]['first_call']['xla_compile_seconds'], series[0]['first_call']['lower_seconds']), (2., 1.5, .5))
+        report = tool.report_of(args, {'depth2-fw': series}, self.context(), tool.source_commit(self.tmp(), 'f00d'), isolated_run=False)
+        self.assertEqual(report['headline']['rows'], []);self.assertIn('Headline skipped: --repeats 0', report['summary_markdown'])
+        self.assertEqual(report['compile']['configs']['depth2-fw']['cold_seconds'], 2.);json.dumps(report, allow_nan=False, default=str)
+
+    def context(self):
+        return dict(evaluator={}, root_values=[], roots_available=64, source={}, devices=['cpu'], solvers=[], solver_pools=[], hedge=None, variants=['fake@pool0'],
+            world_construction_path=tool.constructor_path(FakeProvider(), dn, real_worlds))
+
+    def test_cache_check_compares_cold_compiles_with_a_previous_run(self):
+        first = lambda lower, xla: dict(compile_seconds=lower + xla, lower_seconds=lower, xla_compile_seconds=xla)
+        row = lambda config, w, f, capacity=1: dict(config=config, capacity=capacity, worlds=w, mode='sequential', first_call=f)
+        previous = dict(series=[row('a', 8, first(2., 40.)), row('a', 16, first(1., 0.)), row('b', 2, first(3., 30.)), row('c', 2, first(1., 9.))],
+            header=dict(source_commit=dict(commit='abc')), compile_cache='/out/jax-compile-cache')
+        current = dict(series=[row('a', 8, first(2., 1.)), row('a', 16, first(1., 0.)), row('b', 2, first(3., 20.)), row('d', 2, first(1., 1.))], compile_cache='/out/jax-compile-cache')
+        check = tool.cache_check(previous, current)
+        self.assertEqual(sorted(check['configs']), ['a', 'b'])   # only series both runs measured
+        a, b = check['configs']['a'], check['configs']['b']
+        self.assertEqual((a['series'], a['previous_xla_compile_seconds'], a['xla_compile_seconds'], a['warm']), (2, 40., 1., True))   # 1/40 <= 10%: the cache served it
+        self.assertEqual((b['xla_compile_seconds'], b['warm']), (20., False));self.assertEqual(check['previous_source_commit'], 'abc')
+        # --cache-check-of DIR puts it in the report, from DIR's latency.json.
+        directory = self.tmp();(directory / 'latency.json').write_text(json.dumps(previous))
+        args = self.args('--repeats', '0', '--configs', 'depth2-fw@2', '--cache-check-of', str(directory))
+        series = tool.measure_config('depth2-fw', (2,), args, fake_ctx(), None, solver=FakeSolver(), module=MODULE, memory=lambda: {}, timer=CLOCK)
+        report = tool.report_of(args, {'depth2-fw': series}, self.context(), tool.source_commit(self.tmp(), 'f00d'), isolated_run=False)
+        self.assertEqual((report['cache_check']['previous_out'], report['cache_check']['configs']), (str(directory), {}))   # no common series with that run
+        self.assertIn('Cache check against', report['summary_markdown'])
+
+    def test_packed_is_opt_in(self):
+        default = tool.measure_config('depth2-fw', (8,), self.args('--configs', 'depth2-fw@8', '--repeats', '1'), fake_ctx(), None, solver=FakeSolver(),
+            module=MODULE, memory=lambda: {}, timer=CLOCK)
+        self.assertEqual([s['mode'] for s in default], ['sequential'])
+        opted = tool.measure_config('depth2-fw', (8,), self.args('--configs', 'depth2-fw@8', '--repeats', '1', '--packed'), fake_ctx(), None, solver=FakeSolver(),
+            module=MODULE, memory=lambda: {}, timer=CLOCK)
+        self.assertEqual([(s['mode'], s['pricer_capacity']) for s in opted], [('sequential', 1), ('packed', 4)])
+
+    def test_headline_markdown_and_compile_totals_in_the_report(self):
+        args = self.args('--configs', 'depth2-fw@2/8', '--repeats', '2')
+        series = tool.measure_config('depth2-fw', (2, 8), args, fake_ctx(), None, solver=FakeSolver(), module=MODULE, memory=lambda: {}, timer=CLOCK)
+        report = tool.report_of(args, {'depth2-fw': series}, self.context(), tool.source_commit(self.tmp(), 'f00d'), isolated_run=False)
+        row = report['headline']['rows'][0];self.assertEqual((row['config'], row['largest_worlds'], row['status']), ('depth2-fw', 8, 'INSUFFICIENT'))   # 2 roots < 20
+        md = report['summary_markdown']
+        self.assertTrue(md.startswith('## Search latency: the admission bar'));self.assertIn('| depth2-fw | fake | 0 |', md)
+        self.assertIn('largest W, every smaller W fitting (p95 <= 30 s)', md);self.assertIn('INSUFFICIENT', md)
+        self.assertIn('### Reference (not the admission bar): p90 <= 800 ms per call, per capacity', md)
+        self.assertLess(md.index('### Stage split per W'), md.index('### Reference (not the admission bar)'))
+        self.assertEqual(report['compile']['configs']['depth2-fw']['cold_seconds'], 2.)   # once per (capacity, W, mode), the pricer compiled once
+        self.assertIn('Compile (cold, at process start, not charged to a decision): process 2.0 s', md)
 
     def test_isolate_argv(self):
         args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2');calls = []
@@ -946,13 +1031,15 @@ class SearchLatencyTests(unittest.TestCase):
 
     def test_argument_parsing_and_refusing_to_overwrite_out(self):
         args = self.args()
-        self.assertEqual(args.config_worlds, {'depth2-fw': (2, 8), 'depth2-merged': (2, 8), 'depth3-prior-k3': (2,), 'depth3-searched-k3': (2,)})
+        self.assertEqual(args.config_worlds, {'depth2-fw': (8, 16, 32), 'depth2-merged': (8, 16, 32), 'depth3-prior-k3': (2, 8, 16), 'depth3-searched-k3': (2, 8, 16)})
         self.assertEqual(list(args.config_worlds)[:2], ['depth2-fw', 'depth2-merged'])   # the merged pricer's rows sit next to depth2-fw
         self.assertEqual((args.capacity_values, args.repeats, args.solver_specs, args.pool_sizes, args.packed, args.hedge_commit),
-            ((1, 4, 16), 10, ('learner_max',), (0,), True, '583555d2'))
+            ((1,), 20, ('learner_max',), (0,), False, '583555d2'))
+        self.assertEqual((args.budget_ms, args.percentile, args.headline_capacity, args.reference_budget_ms, args.reference_percentile, args.solver_timeout),
+            (30000., 95, 1, 800., 90, 1800.))
         self.assertEqual(args.compile_cache, str(Path(args.out).resolve().parent / 'jax-compile-cache'))   # the persistent cache is on by default
         self.assertIsNone(self.args('--no-compile-cache').compile_cache);self.assertEqual(self.args('--compile-cache', '/c').compile_cache, '/c')
-        args = self.args('--configs', 'depth3-prior-k2,depth2-k4@4/2', '--worlds', '2,8', '--capacities', '8,2,8', '--no-packed',
+        args = self.args('--configs', 'depth3-prior-k2,depth2-k4@4/2', '--worlds', '2,8', '--capacities', '8,2,8', '--headline-capacity', '2',
             '--solver', 'tests.test_gpu_engine_search_latency:pessimistic')
         self.assertEqual(args.config_worlds, {'depth3-prior-k2': (2, 8), 'depth2-k4': (2, 4)});self.assertEqual(args.capacity_values, (2, 8))
         self.assertEqual(args.solver_specs, ('tests.test_gpu_engine_search_latency:pessimistic',));self.assertFalse(args.packed)
@@ -961,7 +1048,8 @@ class SearchLatencyTests(unittest.TestCase):
         existing = str(self.tmp())
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
             for extra in (['--configs', 'depth1'], ['--configs', 'depth2-searched-k3'], ['--configs', 'depth3-prior-k10'], ['--configs', 'depth2-fw@3'],
-                    ['--configs', 'bogus'], ['--configs', 'depth2-fw,depth2-fw'], ['--capacities', '0,4'], ['--repeats', '0'], ['--solver', 'nocolon'],
+                    ['--configs', 'bogus'], ['--configs', 'depth2-fw,depth2-fw'], ['--capacities', '0,4'], ['--repeats', '-1'], ['--solver', 'nocolon'],
+                    ['--capacities', '4'], ['--percentile', '97'], ['--budget-ms', '0'], ['--cache-check-of', '/nonexistent-latency-run'],
                     ['--solver', 'no_such_module_xyz:f'], ['--only', 'depth3-prior-k2'], ['--isolate', '--only', 'depth2-fw'], ['--compile-cache', 'relative/dir'],
                     ['--head-archive', 'a'], ['--solver', 'hedge,hedge'], ['--solver', 'learner_max,'], ['--solver-pool', '-1'], ['--solver-pool', 'x'],
                     ['--solver', 'learner_max,hedge', '--hedge-module', 'gpu_engine.no_such_hedge_module'], ['--compile-cache', '/c', '--no-compile-cache']):

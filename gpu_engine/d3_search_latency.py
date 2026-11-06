@@ -1,11 +1,20 @@
-"""End-to-end wall time per search call at small capacity: which search configs can play at 1,000 ms per move (800 ms rule).
+"""End-to-end wall time per search decision: which search configs, at which W, meet the admission bar (p95 <= 30 s at one root).
+
+The admission bar (objective plan section 7): the 95th percentile of decision time on at least 20 saved roots is at most 30 s
+(against the 60 s learner limit). The headline is that bar at ONE root (--headline-capacity 1): per (config, solver, pool),
+W -> median and p95 end-to-end seconds over --repeats distinct move windows, and the largest W such that it and every smaller
+W listed fit (--budget-ms 30000, --percentile 95); a headline whose series cover fewer than 20 distinct roots is INSUFFICIENT.
+Foul Play's 1,000 ms per move is NOT our budget: the old 800 ms / p90 per-capacity rule is kept as a reference line only
+(--reference-budget-ms 800, --reference-percentile 90), labelled "reference (not the admission bar)".
 
 One CALL is one search decision for C roots (C games' moves batched together; --capacities, default 1,4,16), from the D3 bank
 chunk's raw device roots and host frames to each root's move. Roots: the chunk's labeled requests (d3_depthn_throughput.prepare:
 the gate's --d3-root --chunk builder, head override and evaluator header, imported), sorted by decision frame (turn); every
 call of a series prices its own move window of C of them, drawn at evenly spaced quantiles of the frame-sorted chunk so each
-window and each series span early-to-late turns (window_roots). Configs (--configs NAME@W/W; default depth2-fw and depth2-merged at W=2 and 8, depth3-prior-k3 and
-depth3-searched-k3 at W=2), one pricer instance per (config, pricer capacity):
+window and each series span early-to-late turns (window_roots). Configs (--configs NAME@W/W; default depth2-fw and depth2-merged
+at W=8/16/32, depth3-prior-k3 and depth3-searched-k3 at W=2/8/16; W = 2K is K sequential pricer passes per decision, K up to 16
+world blocks), one pricer instance per (config, pricer capacity); --capacities defaults to 1 (each batch point adds P1 and
+merged-kernel compiles: opt-in) and the packed proxy is opt-in (--packed, it needs capacity K*C pricers):
 - d3_depthn_throughput's names are DepthNPricer(fixed_capacity=True, digest=False) built by its Caller; searched = the full-width
   depth-2 pass, searched_maps on the host, depth N at the maps' widths; depth2-fw is DepthNPricer at N=2, k=9.
 - depth2-merged is depth-2 full width on the MERGED Depth2Pricer (device_depth2_pricer, d5150eac or later) built as
@@ -90,10 +99,12 @@ of capacity K*C), so a first call compiles only what nothing before it did (--is
 persistent compilation cache is ON by default (owning_worker_runtime.configure_compilation_cache, right after the bank's JAX
 import, before its first compile) in --compile-cache DIR, default <--out's parent>/jax-compile-cache, so reruns and every
 --isolate process share it; --no-compile-cache turns it off.
-The rule: a (config, W, mode) fits at capacity C when the p90 of its warm end-to-end totals is <= 800 ms, leaving 200 ms of
-slack under the 1,000 ms per-move budget. Reported: per config, W and mode the median and p90 per capacity and the largest
-fitting C; per config the largest fitting C (with its W) and the largest fitting W (with its C), over sequential rows (packed
-apart, as a proxy). Progress is JSON lines; latency.json (evaluator first, then the header) goes to a new --out directory and is
+Reported, the headline first: the admission bar at --headline-capacity (W -> p50 and p95 seconds, the largest W fitting, the
+distinct roots, INSUFFICIENT under 20; skipped with --repeats 0), the stage split per W, the compile seconds (cold, at process
+start, never charged to a decision; per config and for the process, lower vs XLA compile), with --cache-check-of DIR whether
+the persistent cache made this process warm (cache_check: each config's cold-call XLA compile against DIR's run), and below
+them the reference (not the admission bar): per config, W and mode the median and p90 per capacity, the largest C such that
+it and every smaller C have p90 <= 800 ms, over sequential rows (packed apart, as a proxy). Progress is JSON lines; latency.json (evaluator first, then the header) goes to a new --out directory and is
 rewritten atomically after every series (partial: true until the run ends), so a later failure loses nothing measured. A series
 that raises is recorded as an error row per variant (exception type, message, traceback tail) that never fits, and the run
 continues; with --isolate a config whose process dies keeps the series its partial latency.json holds plus an error row. The
@@ -125,9 +136,14 @@ from . import d3_depthn_throughput as tn
 from .d3_depthn_gate import split_searched
 
 SCHEMA = 'pokezero.search-latency.v1'
-BUDGET_MS = 1000.
-LIMIT_MS = 800.
-RULE = ('a (config, W, mode, solver, pool) fits at capacity C when the p90 over its N distinct move windows (warm call i prices C '
+BUDGET_MS = 30000.          # the admission bar: p95 decision time <= 30 s (objective plan section 7; the learner limit is 60 s)
+PERCENTILE = 95
+HEADLINE_CAPACITY = 1
+MIN_DISTINCT_ROOTS = 20     # the bar is over at least 20 saved roots
+LIMIT_MS = 800.             # the reference (not the admission bar): Foul Play's 1,000 ms per move less 200 ms of slack, p90
+REFERENCE_PERCENTILE = 90
+PERCENTILES = (90, 95, 99)
+RULE = ('reference (not the admission bar): a (config, W, mode, solver, pool) fits at capacity C when the p90 over its N distinct move windows (warm call i prices C '
     'roots at evenly spaced quantiles of the frame-sorted chunk, interleaved across windows so each spans early-to-late turns; N = --repeats) '
     'of the end-to-end totals is <= 800 ms (200 ms of slack under the 1,000 ms per-move budget); the median is shown beside it; the cold '
     'call (window 0) is excluded')
@@ -154,7 +170,7 @@ DEPTHN_ROOT_FIELDS = ('pre', 'root_peer_requested', 'root_peer_logits', 't1_stat
     't1_peer_logits', 'leaf_status', 'leaf_value')
 DEPTHN_NODE_FIELDS = ('status', 'value', 'own_actions', 'opp_actions', 'own_logits', 'opp_logits')
 DEPTH2_ROOT_FIELDS = ('pre', 'root_peer_requested', 'root_peer_logits', 't1_status', 't1_value', 't1_own_logits', 't1_peer_logits', 't2_status', 't2_value')
-DEFAULT_CONFIGS = 'depth2-fw@2/8,depth2-merged@2/8,depth3-prior-k3@2,depth3-searched-k3@2'
+DEFAULT_CONFIGS = 'depth2-fw@8/16/32,depth2-merged@8/16/32,depth3-prior-k3@2/8/16,depth3-searched-k3@2/8/16'
 CODE_ROOT = Path(__file__).resolve().parent.parent
 # Phase D constructor files (someone else's work): imported only if the timed path uses them, never edited here.
 PHASE_D_MODULES = ('gpu_engine.phase_d_live_worlds', 'gpu_engine.phase_d_protocol_world', 'gpu_engine.v5_public_world', 'gpu_engine.public_sleep')
@@ -242,17 +258,23 @@ def parse(argv=None):
     parser.add_argument('--out', required=True, help='new output directory (never overwritten)')
     parser.add_argument('--configs', default=DEFAULT_CONFIGS, help='NAME[@W/W...] list (d3_depthn_throughput names); default %(default)s')
     parser.add_argument('--worlds', default='2', help='W for --configs entries without @ (even, comma-separated)')
-    parser.add_argument('--capacities', default='1,4,16', help='roots per call C (each its own fixed_capacity pricers; 2,8 addable)')
-    parser.add_argument('--repeats', type=int, default=10, help='warm calls after the first one, per (config, capacity, W, mode)')
+    parser.add_argument('--capacities', default='1', help='roots per call C (each its own fixed_capacity pricers and P1 compiles; batch points such as 4,16 are opt-in)')
+    parser.add_argument('--repeats', type=int, default=20, help='warm decisions after the cold call, each on its own move window (0: the cold call only, no headline)')
+    parser.add_argument('--budget-ms', type=float, default=BUDGET_MS, help='the admission bar per decision (default %(default)s ms)')
+    parser.add_argument('--percentile', type=int, default=PERCENTILE, choices=PERCENTILES, help='the admission bar percentile (default %(default)s)')
+    parser.add_argument('--headline-capacity', type=int, default=HEADLINE_CAPACITY, help='the capacity the headline judges (default %(default)s: one root)')
+    parser.add_argument('--reference-budget-ms', type=float, default=LIMIT_MS, help='the reference rule per call (not the admission bar; default %(default)s)')
+    parser.add_argument('--reference-percentile', type=int, default=REFERENCE_PERCENTILE, choices=PERCENTILES, help='the reference rule percentile (default %(default)s)')
+    parser.add_argument('--cache-check-of', help='a previous run\'s --out: compare this process\'s cold-call compile seconds per config with it (cache_check)')
     parser.add_argument('--solver', default='learner_max', help='solvers timed on the same priced frames, comma-separated: learner_max, hedge '
         '(search_hedge, PR #1829) or MODULE:FUNC with rule(grid, pi_own, pi_opp) -> value')
     parser.add_argument('--solver-pool', default='0', help='solve pool sizes, comma-separated: 0 = in process, N = a persistent N-process spawn pool '
         '(started before any timed call); every series is solved once per (solver, pool size) on the same frames')
-    parser.add_argument('--solver-timeout', type=float, default=600., help='seconds one pool map may take before the pool is torn down and the series '
+    parser.add_argument('--solver-timeout', type=float, default=1800., help='pools only (in-process solves are never timed out): seconds one pool map may take before the pool is torn down and its series '
         'becomes an error row (default %(default)s)')
     parser.add_argument('--hedge-module', default=HEDGE_MODULE, help='the search_hedge module (default %(default)s)')
     parser.add_argument('--hedge-commit', default=HEDGE_COMMIT, help='the commit search_hedge.py was shipped from, recorded in the header (default %(default)s)')
-    parser.add_argument('--no-packed', dest='packed', action='store_false', help='skip the packed W > 2 mode (one pass at capacity K*C)')
+    parser.add_argument('--packed', action='store_true', help='also time the packed W > 2 proxy (one pass at capacity K*C: extra pricer capacities and compiles)')
     parser.add_argument('--k1-own', type=int, default=9, help='turn-1 learner width');parser.add_argument('--k1-opp', type=int, default=9, help='turn-1 opponent width')
     parser.add_argument('--block-lanes', type=int, default=2187, help='DepthNPricer block_lanes')
     parser.add_argument('--max-roots', type=int, help='use only the first N requests of the chunk')
@@ -270,7 +292,10 @@ def parse(argv=None):
     except ValueError as error:parser.error(str(error))
     if min(args.pool_sizes) < 0:parser.error('--solver-pool sizes are >= 0 (0 = in process)')
     if not args.solver_timeout > 0:parser.error('positive --solver-timeout required')
-    if args.chunk < 0 or args.repeats < 1 or args.block_lanes < 1 or min(args.capacity_values) < 1:parser.error('--chunk >= 0 and positive --capacities/--repeats/--block-lanes')
+    if args.chunk < 0 or args.repeats < 0 or args.block_lanes < 1 or min(args.capacity_values) < 1:parser.error('--chunk >= 0, --repeats >= 0 and positive --capacities/--block-lanes')
+    if args.headline_capacity not in args.capacity_values:parser.error(f'--headline-capacity {args.headline_capacity} must be one of --capacities {list(args.capacity_values)}')
+    if not args.budget_ms > 0 or not args.reference_budget_ms > 0:parser.error('positive --budget-ms and --reference-budget-ms required')
+    if args.cache_check_of is not None and not (Path(args.cache_check_of) / 'latency.json').is_file():parser.error(f'--cache-check-of {args.cache_check_of}: no latency.json there')
     if any(not 1 <= k <= 9 for k in (args.k1_own, args.k1_opp)):parser.error('turn-1 widths must be 1..9')
     if args.max_roots is not None and args.max_roots < 1:parser.error('positive --max-roots required')
     if args.only is not None and args.only not in args.config_worlds:parser.error(f'--only one of {list(args.config_worlds)}')
@@ -316,10 +341,10 @@ class Clock:
 
 
 def distribution(seconds):
-    """Median, p90 (numpy's default linear interpolation) and max in ms over warm-call seconds; None fields when empty."""
+    """Median, p90, p95, p99 (numpy's default linear interpolation) and max in ms over warm-call seconds; None fields when empty."""
     values = np.asarray([s for s in seconds if s is not None], np.float64) * 1e3
-    if not values.size:return dict(n=0, median_ms=None, p90_ms=None, max_ms=None)
-    return dict(n=int(values.size), median_ms=float(np.median(values)), p90_ms=float(np.percentile(values, 90)), max_ms=float(values.max()))
+    if not values.size:return dict(n=0, median_ms=None, max_ms=None, **{f'p{q}_ms': None for q in PERCENTILES})
+    return dict(n=int(values.size), median_ms=float(np.median(values)), max_ms=float(values.max()), **{f'p{q}_ms': float(np.percentile(values, q)) for q in PERCENTILES})
 
 
 def nominal_leaves(k_own, k_opp, k1_own=9, k1_opp=9):
@@ -796,6 +821,13 @@ def variant_view(call, name):
         total_seconds=v['total_seconds'], labeled=v['labeled'], refused=v['refused'], moves=v['moves'], leftover_device_arrays=v['leftover_device_arrays'])
 
 
+def compile_split(call):
+    """A call's compiles as the pricers reported them: lower (trace + lower, never cached) and XLA compile seconds (what JAX's
+    persistent cache serves), and how many programs."""
+    entries = [c for entry in call.get('pricing') or () for key in ('depth2_pass', 'depthn') for c in (entry.get(key) or {}).get('compiles', ())]
+    return dict(lower_seconds=float(sum(c['lower_seconds'] for c in entries)), xla_compile_seconds=float(sum(c['compile_seconds'] for c in entries)), programs=len(entries))
+
+
 def windows_of(warm, capacity):
     """The roots and turns a series' warm calls covered: distinct roots against C x N slots (fewer = wrap-around), the distinct
     decision frames and their span, each call's window."""
@@ -826,7 +858,7 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
         pricer_capacity=search.capacity, timing_proxy=mode == 'packed', proxy_note=PACKED_NOTE if mode == 'packed' else None,
         slot_widths=dict(k_own=widths['k_own'], k_opp=widths['k_opp']), engine=search.options, solve=solve,
         first_call=dict(compile_seconds=first['stages'][COMPILE], call_wall_seconds=first['wall_seconds'], total_seconds=first['total_seconds'],
-            stages=dict(first['stages']), cold_of_config_capacity=None),
+            stages=dict(first['stages']), cold_of_config_capacity=None, **compile_split(first)),
         warm={**{s: distribution([c['stages'][s] for c in warm]) for s in STAGES}, 'total': distribution([c['total_seconds'] for c in warm])},
         warm_parts={k: distribution([c['parts'].get(k, 0.) for c in warm]) for k in parts},
         warm_calls=len(warm), warm_calls_with_compiles=sum(c['stages'][COMPILE] > 0 for c in warm), warm_compile_seconds=sum(c['stages'][COMPILE] for c in warm),
@@ -1098,7 +1130,7 @@ def largest_within(p90_by_capacity, limit_ms=LIMIT_MS):
     return dict(largest_capacity=largest, largest_capacity_any=raw, monotone=raw == largest, verdicts={str(c): fits for c, fits in verdicts.items()})
 
 
-def select(series, limit_ms=LIMIT_MS):
+def select(series, limit_ms=LIMIT_MS, percentile=REFERENCE_PERCENTILE):
     """Rows (config, W, mode, solver variant) -> per-capacity warm total median/p90 (an error row: none, so it never fits) and the largest fitting C; per config and
     variant the largest fitting C (with its W) and the largest fitting W (with its C), over sequential rows, packed apart as a proxy."""
     rows, errors, unplaced = {}, {}, []
@@ -1109,9 +1141,9 @@ def select(series, limit_ms=LIMIT_MS):
     out = []
     for (config, worlds, mode, variant), (one, by) in rows.items():
         out.append(dict(config=config, worlds=worlds, mode=mode, variant=variant, solver=one.get('solver'), pool=one.get('pool'),
-            by_capacity={str(c): dict(median_ms=v['median_ms'], p90_ms=v['p90_ms'], max_ms=v['max_ms'], error=errors.get((config, worlds, mode, variant, c)))
+            by_capacity={str(c): dict(median_ms=v['median_ms'], p_ms=v[f'p{percentile}_ms'], percentile=percentile, max_ms=v['max_ms'], error=errors.get((config, worlds, mode, variant, c)))
                 for c, v in sorted(by.items())},
-            **largest_within({c: v['p90_ms'] for c, v in by.items()}, limit_ms)))
+            **largest_within({c: v[f'p{percentile}_ms'] for c, v in by.items()}, limit_ms)))
     def best(rows_, key):
         fitting = [r for r in rows_ if r['largest_capacity'] is not None]
         if not fitting:return None
@@ -1127,7 +1159,7 @@ def select(series, limit_ms=LIMIT_MS):
     for s in unplaced:   # every config seen has an entry: one that only failed fits nothing and carries its error
         configs.setdefault(s.get('config'), {}).setdefault(s.get('variant'), dict(measured_worlds=[], largest_capacity=None, largest_worlds=None,
             packed_proxy=None, error=s.get('error')))
-    return dict(rule=RULE, limit_ms=limit_ms, rows=out, configs=configs,
+    return dict(rule=RULE, limit_ms=limit_ms, percentile=percentile, rows=out, configs=configs,
         unplaced_errors=[dict(config=s.get('config'), variant=s.get('variant'), **(s.get('error') or {})) for s in unplaced])
 
 
@@ -1145,6 +1177,76 @@ def window_cell(windows):
     return f'{windows["distinct_roots"]} / {windows["root_slots"]}' + (' WRAPPED' if windows.get('wrapped') else '') + span
 
 
+def headline(series, *, budget_ms=BUDGET_MS, percentile=PERCENTILE, capacity=HEADLINE_CAPACITY, min_roots=MIN_DISTINCT_ROOTS, repeats=None):
+    """The admission bar at `capacity` (one root by default), per (config, solver, pool) over its sequential series: W -> median and
+    p`percentile` seconds and distinct roots; W fits when its p`percentile` <= budget_ms (an error row never fits); the largest W
+    such that it and every smaller W listed fit; INSUFFICIENT when a series covered fewer than min_roots distinct roots. With
+    repeats == 0 there are no warm decisions and no headline."""
+    rule = (f'admission bar: p{percentile} of the end-to-end decision time <= {budget_ms / 1e3:g} s at capacity {capacity}, over >= {min_roots} distinct '
+        'roots; the largest W such that it and every smaller W listed fit')
+    if repeats == 0:return dict(rule=rule, skipped='--repeats 0: the cold call only, no warm decisions, no headline', rows=[])
+    groups = {}
+    for s in series:
+        if s.get('capacity') == capacity and s.get('mode') == 'sequential':groups.setdefault((s['config'], s.get('solver'), s.get('pool'), s.get('variant')), []).append(s)
+    rows = []
+    for (config, solver, pool, variant), mine in groups.items():
+        by_w, largest = {}, None
+        for s in sorted(mine, key=lambda x: x['worlds']):
+            total = s['warm']['total'];p = total.get(f'p{percentile}_ms');distinct = (s.get('windows') or {}).get('distinct_roots', 0)
+            fits = not s.get('error') and p is not None and p <= budget_ms
+            by_w[str(s['worlds'])] = dict(median_s=None if total['median_ms'] is None else total['median_ms'] / 1e3, p_s=None if p is None else p / 1e3,
+                fits=fits, distinct_roots=distinct, sufficient=distinct >= min_roots, error=(s.get('error') or {}).get('type'))
+        for w, row in by_w.items():   # sorted by W: the headline stops at the first W that does not fit
+            if not row['fits']:break
+            largest = int(w)
+        status = 'OK' if all(r['sufficient'] for r in by_w.values()) else 'INSUFFICIENT'
+        rows.append(dict(config=config, solver=solver, pool=pool, variant=variant, by_worlds=by_w, largest_worlds=largest, status=status))
+    return dict(rule=rule, budget_ms=budget_ms, percentile=percentile, capacity=capacity, min_roots=min_roots, rows=rows)
+
+
+def compile_totals(series):
+    """Compile seconds as the pricers reported them, cold (each series' first call) and warm, per config and for the process, counted
+    once per (config, capacity, W, mode) (its solver variants share each call's pricing). Untracked: the bank load, root_forward and
+    detach jits."""
+    seen, configs = set(), {}
+    for s in series:
+        key = (s['config'], s.get('capacity'), s.get('worlds'), s.get('mode'))
+        if key in seen or not s.get('first_call'):continue
+        seen.add(key);first = s['first_call'];c = configs.setdefault(s['config'], dict(cold_seconds=0., lower_seconds=0., xla_compile_seconds=0., warm_seconds=0.))
+        c['cold_seconds'] += first['compile_seconds'];c['lower_seconds'] += first.get('lower_seconds', 0.);c['xla_compile_seconds'] += first.get('xla_compile_seconds', 0.)
+        c['warm_seconds'] += s.get('warm_compile_seconds', 0.)
+    return dict(configs=configs, process=dict(cold_seconds=sum(c['cold_seconds'] for c in configs.values()), warm_seconds=sum(c['warm_seconds'] for c in configs.values()),
+        xla_compile_seconds=sum(c['xla_compile_seconds'] for c in configs.values())),
+        scope='cold = the first call of each (config, capacity, W, mode), paid at process start, never charged to a decision; untracked: bank load, root_forward and detach jits')
+
+
+def cache_check(previous, current):
+    """Does the persistent compile cache make a later process warm? Per config, over the (capacity, W, mode) series both runs measured:
+    the previous and this run's cold-call lower and XLA compile seconds; warm when this run's XLA compile is at most 10% of the
+    previous (and the previous compiled something)."""
+    def cold(report):
+        out = {}
+        for s in report.get('series', ()):
+            if s.get('first_call') and s.get('capacity') is not None:out.setdefault((s['config'], s['capacity'], s['worlds'], s['mode']), s['first_call'])
+        return out
+    before, now = cold(previous), cold(current);configs = {}
+    for key in sorted(set(before) & set(now), key=str):
+        c = configs.setdefault(key[0], dict(series=0, previous_lower_seconds=0., previous_xla_compile_seconds=0., lower_seconds=0., xla_compile_seconds=0.))
+        c['series'] += 1
+        for prefix, first in (('previous_', before[key]), ('', now[key])):
+            c[prefix + 'lower_seconds'] += first.get('lower_seconds', 0.);c[prefix + 'xla_compile_seconds'] += first.get('xla_compile_seconds', 0.)
+    for c in configs.values():
+        c['ratio'] = None if not c['previous_xla_compile_seconds'] else c['xla_compile_seconds'] / c['previous_xla_compile_seconds']
+        c['warm'] = c['ratio'] is not None and c['ratio'] <= .1
+    return dict(configs=configs, previous_source_commit=(previous.get('header') or {}).get('source_commit', {}).get('commit'),
+        previous_compile_cache=previous.get('compile_cache'), compile_cache=current.get('compile_cache'),
+        rule='warm when this process\'s cold-call XLA compile seconds are <= 10% of the previous run\'s for the same series; lowering (tracing) is never cached')
+
+
+def _s(x):
+    return '-' if x is None else f'{x:.2f}' if x < 10 else f'{x:.1f}'
+
+
 def _ms(x):
     return '-' if x is None else f'{x:.0f}' if x >= 100 else f'{x:.1f}'
 
@@ -1155,39 +1257,49 @@ def _short(name):
 
 def markdown(report):
     h = report['header'];path = h['world_construction_path'];commit = h['source_commit'];caps = report['capacities'];sel = report['selection']
+    head = report.get('headline') or dict(rows=[]);q = head.get('percentile', PERCENTILE);rq = sel.get('percentile', REFERENCE_PERCENTILE)
     world = (f'world_construction: {_short(path["world_planner"])} (blocks >= 1; block 0\'s plan_starts is counted in host_prep) + {_short(path["world_builder"])} '
         f'-> {_short(path["world_materialize"])} at source {commit["commit"][:12]}')
     pools = '; '.join(f'pool {p["workers"]}: startup {p["startup_seconds"]:.1f} s (excluded)' for p in h['solver_pools']) or 'in process only'
-    lines = ['## Search latency: end-to-end ms per call, warm calls (median / p90)', '',
-        f'Rule: {RULE} (N = {report["repeats"]}). Solvers: {", ".join(x["spec"] for x in h["solvers"])} (every solver and pool size on the same priced frames); solve pools: {pools}.',
+    lines = ['## Search latency: the admission bar (end-to-end seconds per decision)', '', f'{head["rule"].capitalize()}. N = {report["repeats"]} warm decisions per '
+        'series, each on its own move window; the cold call (compile, at process start) is never charged to a decision.']
+    if head.get('skipped'):lines.append(f'Headline skipped: {head["skipped"]}.')
+    else:
+        ws = sorted({int(w) for r in head['rows'] for w in r['by_worlds']})
+        lines += ['', '| config | solver | pool | ' + ' | '.join(f'W={w} p50 / p{q} s' for w in ws) + f' | largest W, every smaller W fitting (p{q} <= {head["budget_ms"] / 1e3:g} s) | distinct roots (min) | status |',
+            '|---|---|---|' + '---|' * len(ws) + '---|---|---|']
+        for r in head['rows']:
+            cells = []
+            for w in ws:
+                x = r['by_worlds'].get(str(w))
+                cells.append('-' if x is None else f'ERROR {x["error"]}' if x['error'] else f'{_s(x["median_s"])} / {_s(x["p_s"])} {"fit" if x["fits"] else "over"}')
+            least = min((x['distinct_roots'] for x in r['by_worlds'].values()), default=0)
+            lines.append(f'| {r["config"]} | {r["solver"]} | {r["pool"]} | ' + ' | '.join(cells) + f' | {"-" if r["largest_worlds"] is None else r["largest_worlds"]} | {least} | {r["status"]} |')
+        if any(r['status'] == 'INSUFFICIENT' for r in head['rows']):lines.append(f'INSUFFICIENT: a series covered fewer than {head["min_roots"]} distinct roots (the bar needs at least {head["min_roots"]}).')
+    lines += ['', f'Solvers: {", ".join(x["spec"] for x in h["solvers"])} (every solver and pool size on the same priced frames); solve pools: {pools}.',
         f'World construction path timed: {path["timed"]}; materializer object {path["materializer"]}; Phase D constructor on the path: '
         f'{"yes" if path["uses_phase_d_constructor"] else "no"}.',
         f'Source commit: {commit["commit"]} ({commit["origin"]}' + ('' if commit.get('dirty') is None else f', dirty={commit["dirty"]}') + ').',
-        f'Note: {CONSTRUCTOR_NOTE}', '']
+        f'Note: {CONSTRUCTOR_NOTE}']
     if h.get('hedge'):
-        x = h['hedge'];lines[-1:-1] = [f'Hedge: {x["module"]} sha256 {x["sha256"]} (commit {x["commit"]}; 583555d2 file: {x["matches_reference"]}), lam={x["lam"]}, '
-            f'seed {x["seed"]}, weights {x["weights"]}: {HEDGE_SOLVE}.']
+        x = h['hedge'];lines.append(f'Hedge: {x["module"]} sha256 {x["sha256"]} (commit {x["commit"]}; 583555d2 file: {x["matches_reference"]}), lam={x["lam"]}, '
+            f'seed {x["seed"]}, weights {x["weights"]}: {HEDGE_SOLVE}.')
     if any(s['config'] == MERGED for s in report['series']):
         merged = next(s['engine'] for s in report['series'] if s['config'] == MERGED)
-        lines[-1:-1] = [f'{MERGED}: {merged.get("engine")} (digest={merged.get("digest")}, child_block={merged.get("child_block")}, fixed_capacity='
+        lines.append(f'{MERGED}: {merged.get("engine")} (digest={merged.get("digest")}, child_block={merged.get("child_block")}, fixed_capacity='
             f'{merged.get("fixed_capacity")}, the gate\'s construction); solves: ' + '; '.join(f'{k}: {v}' for k, v in MERGED_SOLVE.items())
-            + '. depth2-fw is DepthNPricer at N=2, k=9.']
-    lines += [
-        '| config | W | mode | solver | pool | ' + ' | '.join(f'C={c} median / p90' for c in caps) + ' | largest C, every smaller C fitting too (p90 <= 800 ms) |', '|---|---|---|---|---|' + '---|' * len(caps) + '---|']
-    for r in sel['rows']:
-        cells = [('ERROR ' + r['by_capacity'][str(c)]['error'].split(':')[0] if r['by_capacity'][str(c)].get('error') else
-            f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p90_ms"])} {"fit" if r["verdicts"][str(c)] else "over"}')
-            if str(c) in r['by_capacity'] else '-' for c in caps]
-        largest = ('-' if r['largest_capacity'] is None else str(r['largest_capacity'])) + ('' if r['monotone'] else f' (C={r["largest_capacity_any"]} fits alone)')
-        lines.append(f'| {r["config"]} | {r["worlds"]} | {r["mode"]}{" (proxy)" if r["mode"] == "packed" else ""} | {r["solver"]} | {r["pool"]} | '
-            + ' | '.join(cells) + f' | {largest} |')
-    lines += ['', 'Largest fitting, sequential (playable today): ' + '; '.join(
-        f'{c} [{n}]: C={v["largest_capacity"]["capacity"]} at W={v["largest_capacity"]["worlds"]}, W={v["largest_worlds"]["worlds"]} at C={v["largest_worlds"]["capacity"]}'
-        if v['largest_capacity'] else f'{c} [{n}]: none of C={caps} at W={v["measured_worlds"]}' for c, by in sel['configs'].items() for n, v in by.items()) + '.',
-        f'Packed rows are a timing proxy ({PACKED_NOTE}).'] + [f'ERROR without a capacity, {e.get("config")}: {e.get("type")}: {e.get("message")}'
-        for e in sel.get('unplaced_errors', ())] + ['',
-        f'### Stage medians (ms), warm calls [{world}]', '',
-        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} blocks >= 1, block 0 in host_prep, + {_short(path["world_builder"])}; source {commit["commit"][:12]}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured | roots distinct / slots, turns | host_prep steps / detach passes | detach ms per pass |',
+            + '. depth2-fw is DepthNPricer at N=2, k=9.')
+    compiled = report.get('compile') or dict(configs={}, process={})
+    if compiled['configs']:
+        lines.append(f'Compile (cold, at process start, not charged to a decision): process {compiled["process"]["cold_seconds"]:.1f} s (XLA '
+            f'{compiled["process"]["xla_compile_seconds"]:.1f} s; warm calls {compiled["process"]["warm_seconds"]:.1f} s); per config: '
+            + '; '.join(f'{k} {v["cold_seconds"]:.1f} s' for k, v in compiled['configs'].items()) + '.')
+    if report.get('cache_check'):
+        c = report['cache_check'];lines.append(f'Cache check against {c["previous_out"]} ({c["rule"]}): ' + '; '.join(
+            f'{k}: XLA {v["previous_xla_compile_seconds"]:.1f} s -> {v["xla_compile_seconds"]:.1f} s, lower {v["previous_lower_seconds"]:.1f} s -> {v["lower_seconds"]:.1f} s, '
+            f'{"WARM" if v["warm"] else "NOT warm"}' for k, v in c['configs'].items()) + '.')
+    lines += ['', f'### Stage split per W: medians (ms), warm calls [{world}]', '',
+        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} blocks >= 1, block 0 in host_prep, + {_short(path["world_builder"])}; source {commit["commit"][:12]}) | pricer | solve | return | total p50 | total p{q} | first-call compile s | leaves/world nominal / measured | roots distinct / slots, turns | host_prep steps / detach passes | detach ms per pass |',
         '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for s in report['series']:
         if s.get('error'):
@@ -1195,13 +1307,25 @@ def markdown(report):
                 + s['error']['message'][:120].replace('|', '/').replace('\n', ' ') + ' |' + ' - |' * (len(STAGES) + 7));continue
         w = s['warm'];leaves = s['leaves']
         lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ' + ' | '.join(_ms(w[k]['median_ms']) for k in STAGES)
-            + f' | {_ms(w["total"]["median_ms"])} | {_ms(w["total"]["p90_ms"])} | {s["first_call"]["compile_seconds"]:.1f} | {leaves["nominal_per_world"]} / '
+            + f' | {_ms(w["total"]["median_ms"])} | {_ms(w["total"][f"p{q}_ms"])} | {s["first_call"]["compile_seconds"]:.1f} | {leaves["nominal_per_world"]} / '
             + ('-' if leaves['measured_per_world'] is None else f'{leaves["measured_per_world"]:.0f}') + ' | ' + window_cell(s.get('windows')) + ' | '
             + spread_cell((s.get('spread') or {}).get('host_prep_steps')) + ' / ' + spread_cell((s.get('spread') or {}).get('detach_passes')) + ' | '
             + spread_cell((s.get('spread') or {}).get('detach_ms_per_pass'), digits=2) + ' |')
     lines += ['', 'host_prep pays one RootContext slice and one detach pass per distinct scan step among a window\'s roots (steps / passes, median '
         '[min-max]); a lockstep live batch (all C games at one step) pays ONE pass, so its host_prep is about one detach pass plus the per-root '
-        'plan_starts and assembly (see detach ms per pass).']
+        'plan_starts and assembly (see detach ms per pass).', '',
+        f'### Reference (not the admission bar): p{rq} <= {sel["limit_ms"]:g} ms per call, per capacity', '', f'{RULE} (N = {report["repeats"]}).', '',
+        '| config | W | mode | solver | pool | ' + ' | '.join(f'C={c} median / p{rq} ms' for c in caps) + f' | largest C, every smaller C fitting too (p{rq} <= {sel["limit_ms"]:g} ms) |',
+        '|---|---|---|---|---|' + '---|' * len(caps) + '---|']
+    for r in sel['rows']:
+        cells = [('ERROR ' + r['by_capacity'][str(c)]['error'].split(':')[0] if r['by_capacity'][str(c)].get('error') else
+            f'{_ms(r["by_capacity"][str(c)]["median_ms"])} / {_ms(r["by_capacity"][str(c)]["p_ms"])} {"fit" if r["verdicts"][str(c)] else "over"}')
+            if str(c) in r['by_capacity'] else '-' for c in caps]
+        largest = ('-' if r['largest_capacity'] is None else str(r['largest_capacity'])) + ('' if r['monotone'] else f' (C={r["largest_capacity_any"]} fits alone)')
+        lines.append(f'| {r["config"]} | {r["worlds"]} | {r["mode"]}{" (proxy)" if r["mode"] == "packed" else ""} | {r["solver"]} | {r["pool"]} | '
+            + ' | '.join(cells) + f' | {largest} |')
+    lines += [f'Packed rows are a timing proxy ({PACKED_NOTE}).'] + [f'ERROR without a capacity, {e.get("config")}: {e.get("type")}: {e.get("message")}'
+        for e in sel.get('unplaced_errors', ())]
     return '\n'.join(lines) + '\n'
 
 
@@ -1214,8 +1338,11 @@ def report_of(args, sections, context, commit, *, isolated_run, partial=False):
         cycled=context['roots_available'] < max(args.capacity_values), block_seeds=context.get('block_seeds'), compile_cache=context.get('compile_cache'),
         isolated=isolated_run, isolate_failures=context.get('isolate_failures', []), memory_scope=t2.MEMORY_SCOPE + ' The captured chunk RootContext stays alive for host_prep and is in every baseline.'
             + (' (isolated: one process per config)' if isolated_run else ' Configs share one process and one compiled-program table.'),
-        selection=select(series), partial=partial,
+        headline=headline(series, budget_ms=args.budget_ms, percentile=args.percentile, capacity=args.headline_capacity, repeats=args.repeats),
+        selection=select(series, args.reference_budget_ms, args.reference_percentile), compile=compile_totals(series), partial=partial,
         errors=[dict({k: s[k] for k in ('config', 'capacity', 'worlds', 'mode', 'variant')}, **s['error']) for s in series if s.get('error')], series=series)
+    if getattr(args, 'cache_check_of', None):report['cache_check'] = dict(cache_check(json.loads((Path(args.cache_check_of) / 'latency.json').read_text()), report),
+        previous_out=str(args.cache_check_of))
     report['summary_markdown'] = markdown(report)
     return report
 
