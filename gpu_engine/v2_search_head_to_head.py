@@ -376,9 +376,10 @@ def main(argv=None):
     else:
         if None in (args.b_run, args.b_iteration, args.reduction, args.label):raise SystemExit('--b-run, --b-iteration, --reduction and --label required')
         cells = [dict(label=args.label, b_run=args.b_run, b_iteration=args.b_iteration, reduction=args.reduction, blend=args.blend,
-            world_blocks=args.world_blocks, never_borrow=args.never_borrow)]
+            world_blocks=args.world_blocks, never_borrow=args.never_borrow, b_policy='sample')]
     for cell in cells:
-        if set(cell) - {'label', 'b_run', 'b_iteration', 'reduction', 'blend', 'world_blocks', 'never_borrow'} or cell['reduction'] not in REDUCTIONS:
+        if (set(cell) - {'label', 'b_run', 'b_iteration', 'reduction', 'blend', 'world_blocks', 'never_borrow', 'b_policy'}
+                or cell['reduction'] not in REDUCTIONS or cell.get('b_policy', 'sample') not in ('sample', 'argmax')):
             raise SystemExit('malformed cell: ' + json.dumps(cell))
     if len({c['label'] for c in cells}) != len(cells):raise SystemExit('cell labels must be unique')
     import jax
@@ -438,7 +439,7 @@ def main(argv=None):
         decide=decide, apply=apply, collector_check=collector_check)
     for cell in cells:
         b, b_params = actor(cell['b_run'], cell['b_iteration'])
-        cell = dict(dict(blend=args.blend, world_blocks=args.world_blocks, never_borrow=False), **cell)
+        cell = dict(dict(blend=args.blend, world_blocks=args.world_blocks, never_borrow=False, b_policy='sample'), **cell)
         if cell['reduction'] not in NO_SEARCH:
             if search is None:
                 search = Search(prepared, plan, a_params, pricer=args.pricer, reduction=cell['reduction'], blend=cell['blend'],
@@ -481,6 +482,11 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
             frames = np.asarray(carry.frames)
             rows = np.flatnonzero(host['live'] & host['requested'][np.arange(2 * n), a_side_host] & host['input_valid'][np.arange(2 * n), a_side_host])
             actions = host['actions'].copy()
+            if cell['b_policy'] == 'argmax':   # B plays its greedy raw argmax (lowest index on ties) instead of sampling
+                b_side = 1 - a_side_host;everyone = np.arange(2 * n)
+                b_logits = np.where(host['legal'][everyone, b_side], host['raw_logits'][everyone, b_side], -np.inf)
+                b_rows = np.flatnonzero(host['live'] & host['requested'][everyone, b_side] & host['legal'][everyone, b_side].any(axis=-1))
+                actions[b_rows, b_side[b_rows]] = np.argmax(b_logits[b_rows], axis=-1)
             if len(rows):
                 raw = host['actions'][rows, a_side_host[rows]]
                 logits = host['raw_logits'][rows, a_side_host[rows]];legal = host['legal'][rows, a_side_host[rows]]
@@ -547,7 +553,7 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
     interval = lambda shift, scale: None if se is None else [scale * (mean - 1.645 * se - shift), scale * (mean + 1.645 * se - shift)]
     report = dict(schema='v2-search-head-to-head.v1', label=label, evaluator=evaluator(),
         a=dict(run=args.a_run, iteration=a.iteration, archive_sha256=a.archive_sha256),
-        b=dict(run=cell['b_run'], iteration=b.iteration, archive_sha256=b.archive_sha256),
+        b=dict(run=cell['b_run'], iteration=b.iteration, archive_sha256=b.archive_sha256, policy=cell['b_policy']),
         search=dict(reduction=cell['reduction'], pricer=args.pricer, blend=cell['blend'] if cell['reduction'] == 'blend' else None,
             worlds=2 * cell['world_blocks'] if search else 0, search_seed=args.search_seed,
             block_seeds=list(world_block_seeds(args.search_seed, cell['world_blocks'])) if search else [],
