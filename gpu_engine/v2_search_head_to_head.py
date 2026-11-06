@@ -100,7 +100,7 @@ def make_step(engine_tables, observation_tables, model_config, *, sampling_seed,
             token_type_ids=j.stack([o.token_type_ids for o in observations], axis=1)[rows, a_side],
             attention_mask=j.stack([o.attention_mask for o in observations], axis=1)[rows, a_side])
         return dict(state=state, live=live, requested=requested, legal=legal, raw_logits=raw_logits, actions=actions,
-            input_valid=input_valid, observations=observations, turn=state.turn, own_inputs=own)
+            input_valid=input_valid, observations=observations, turn=state.turn, own_inputs=own, values=values)
 
     def apply(c, decided, actions):
         state = decided['state'];b = len(c.streams);live = decided['live'];requested = decided['requested']
@@ -202,7 +202,7 @@ class Search:
         if reduction not in REDUCTIONS[1:]:raise ValueError('search reduction required')
         self.reduction = reduction;self.blend = blend;self.world_blocks = world_blocks
         self.recipes = tuple(self.original.Recipe(s) for s in world_block_seeds(self.seed, world_blocks))
-        self.timing = collections.Counter();self.calls = [];self.events = collections.Counter()
+        self.timing = collections.Counter();self.calls = [];self.events = collections.Counter();self.leaf_sample = []
         if self.kind == 'depth2' and reduction in ('hedge', 'blend') and self.workers > 1 and self.pool is None:
             import concurrent.futures, multiprocessing
             self.pool = concurrent.futures.ProcessPoolExecutor(self.workers, mp_context=multiprocessing.get_context('spawn'))
@@ -245,6 +245,11 @@ class Search:
             for key in ('world_prepare_seconds', 'device_seconds', 'compile_seconds', 'lower_seconds', 'frame_wall_seconds'):
                 self.timing[key] += timing.get(key, 0.) or 0.
             clock = time.perf_counter()
+            if len(self.leaf_sample) < 20000:   # the evaluator's leaf scale, from the first calls
+                if self.kind == 'depth1':
+                    self.leaf_sample.extend(v for result in output[:len(chunk)] for r in result.world_reports if r.get('joint_values')
+                        for row in r['joint_values'] for v in row if v is not None)
+                else:self.leaf_sample.extend(np.asarray(output.t2_value)[np.asarray(output.t2_status) == 4][:20000].tolist())
             if self.kind == 'depth1':
                 for result in output[:len(chunk)]:
                     if result.status != 'LABELED':
@@ -456,12 +461,20 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
     log('SEARCH_HEAD_TO_HEAD_START', label=label, games=2 * n, reduction=cell['reduction'], pricer=args.pricer, b_run=cell['b_run'],
         worlds=2 * cell['world_blocks'] if search else 0, max_requests=setup['plan'].max_requests, setup_seconds=setup_seconds)
     decisions = collections.defaultdict(list);probe_stats = collections.Counter();step = 0;timing = collections.Counter()
-    perm = np.roll(np.arange(2 * n), 1)
+    perm = np.roll(np.arange(2 * n), 1);root_values_seen = [];evaluator_logged = False
+    def evaluator():
+        """Which head prices, and on what scale: root |v| over the first 1,000 and all of A's decisions, leaf |v| samples."""
+        def quantiles(values):
+            x = np.abs(np.asarray(values, np.float64))
+            return None if not len(x) else dict(p50=float(np.quantile(x, .5)), p90=float(np.quantile(x, .9)), count=int(len(x)))
+        return dict(iteration=a.iteration, checkpoint_sha256=a.checkpoint_sha256, archive_sha256=a.archive_sha256,
+            root_abs_value_first_1000=quantiles(root_values_seen[:1000]), root_abs_value_all=quantiles(root_values_seen),
+            leaf_abs_value_sample=quantiles(search.leaf_sample) if search is not None else None)
     with patch.object(original.Recipe, 'selected', lambda self, address: True):
         while True:
             clock = time.perf_counter()
             decided = decide(carry, params, a_side)
-            host = jax.device_get({k: decided[k] for k in ('live', 'requested', 'legal', 'raw_logits', 'actions', 'input_valid', 'turn')})
+            host = jax.device_get({k: decided[k] for k in ('live', 'requested', 'legal', 'raw_logits', 'actions', 'input_valid', 'turn', 'values')})
             timing['decide_seconds'] += time.perf_counter() - clock
             if not host['live'].any() or (args.max_steps is not None and step >= args.max_steps):break
             frames = np.asarray(carry.frames)
@@ -487,7 +500,10 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
                 masked = np.where(legal, logits, -np.inf)
                 for i, r in enumerate(rows):
                     decisions[int(r)].append(dict(frame=int(frames[r]), turn=int(host['turn'][r]), raw=int(raw[i]), argmax=int(np.argmax(masked[i])),
-                        chosen=int(chosen[i]), **records[i]))
+                        chosen=int(chosen[i]), root_value=round(float(host['values'][r, a_side_host[r]]), 6), **records[i]))
+                if search is not None and not evaluator_logged and len(root_values_seen) >= 256:
+                    log('EVALUATOR', label=label, **evaluator());evaluator_logged = True
+                root_values_seen.extend(float(host['values'][r, a_side_host[r]]) for r in rows)
             clock = time.perf_counter()
             carry = apply(carry, decided, j.asarray(actions))
             timing['apply_seconds'] += time.perf_counter() - clock
@@ -526,7 +542,7 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
         for key in ('q_gain', 'q_gain_vs_argmax'):
             c[key + '_mean'] = c[key + '_sum'] / c['searched'] if c['searched'] else None
     interval = lambda shift, scale: None if se is None else [scale * (mean - 1.645 * se - shift), scale * (mean + 1.645 * se - shift)]
-    report = dict(schema='v2-search-head-to-head.v1', label=label,
+    report = dict(schema='v2-search-head-to-head.v1', label=label, evaluator=evaluator(),
         a=dict(run=args.a_run, iteration=a.iteration, archive_sha256=a.archive_sha256),
         b=dict(run=cell['b_run'], iteration=b.iteration, archive_sha256=b.archive_sha256),
         search=dict(reduction=cell['reduction'], pricer=args.pricer, blend=cell['blend'] if cell['reduction'] == 'blend' else None,
