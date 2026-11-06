@@ -544,16 +544,19 @@ def _dedupe(items):
 
 def searched_maps_reference(frame, k_own, k_opp):
     """This gate's own host-only re-derivation of the `searched` ply-2 maps from a FULL-WIDTH depth-2 frame, from the
-    documented rule (never the pricer's code). Per expanded turn-1 cell, valid leaves are status 1 or 4:
-    - learner (requested): the a2 of every errored (status 3) pair in pair order (row-major), then the k_own a2 with the
-      highest q(a2) = fsum over the row's valid r2 of pi_opp(r2) v(a2, r2), pi_opp the masked softmax of the cell's
-      opponent prior renormalized over those r2 (q descending, lower action on ties; a row without a valid leaf has no q),
-      then its prior top-1 (highest child logit over its encoder-legal actions, lower action on ties); deduplicated, at
-      most w_own slots;
-    - opponent (requested): its ranked set is its prior top-1, the refutation of each kept learner move in slot order (argmin
-      over the row's valid r2 of v, lower action on ties), then, while that set has fewer than k_opp + 1 entries, the lowest
-      threat t(r2) = min over the kept a2 with a valid leaf in r2 of v(a2, r2) (ascending, lower action on ties); the r2 of
-      every errored pair in pair order go in FRONT of it (outside the k_opp + 1 count); deduplicated, at most w_opp slots;
+    documented rule (never the pricer's code; the pricer's rule is the specification). Per expanded turn-1 cell, valid
+    leaves are status 1 or 4:
+    - the learner's KEPT set (requested): the k_own a2 with the highest q(a2) = sum over the row's valid r2 of
+      pi_opp(r2) v(a2, r2) / sum over the same r2 of pi_opp(r2), pi_opp the masked softmax of the cell's opponent prior
+      over ALL enumerated replies (q descending, lower action on ties; a row without a valid leaf has no q), then its prior
+      top-1 (highest child logit over its encoder-legal actions, lower action on ties) appended if absent;
+    - the opponent's ranked set (requested): its prior top-1, the refutation of each KEPT learner move in kept order (argmin
+      over the row's valid r2 of v, lower action on ties), then, while it has fewer than k_opp + 1 entries, the lowest
+      threat t(r2) = min over the KEPT a2 with a valid leaf in r2 of v(a2, r2) (ascending, lower action on ties);
+    - errored (status 3) pairs, sorted by (a2, r2), never feed q, refutations or the fill: their rows (first-occurrence
+      order) are PREPENDED to the learner's kept set and their columns (first-occurrence order over the sorted pairs) to
+      the opponent's ranked set, later duplicates dropped; each list is then TRUNCATED from the end to its fixed width, so
+      errored entries occupy slots and displace the tail (the lexicographically first errored pair stays reachable);
     - a waiting seat keeps [0, -1, ...]; a cell that is not expanded keeps all -1.
     Returns int32 [R,2,9,9,w_own], [R,2,9,9,w_opp] with (w_own, w_opp) = searched_widths_reference(k_own, k_opp)."""
     w_own, w_opp = searched_widths_reference(k_own, k_opp);f = frame;R = np.asarray(f.pre).shape[0]
@@ -565,15 +568,16 @@ def searched_maps_reference(frame, k_own, k_opp):
         live = {a: [r for r in cols if valid[a, r]] for a in rows}
         if f.t1_own_requested[cell]:
             peer = np.asarray(f.t1_peer_logits[cell], np.float64);q = {}
+            top = max(peer[r] for r in cols);weights = {r: math.exp(peer[r] - top) for r in cols};total = math.fsum(weights.values())
+            pi = {r: x / total for r, x in weights.items()}   # the opponent's masked softmax over ALL enumerated replies
             for a in rows:
-                if not live[a]:continue
-                top = max(peer[r] for r in live[a]);weights = [math.exp(peer[r] - top) for r in live[a]];total = math.fsum(weights)
-                q[a] = math.fsum(x / total * v[a, r] for x, r in zip(weights, live[a]))
-            learner = _dedupe([a for a, _ in errors] + sorted(q, key=lambda a: (-q[a], a))[:k_own] + [_top1(f.t1_own_legal[cell], f.t1_own_logits[cell])])[:w_own]
-        else:learner = [0]
-        if f.t1_peer_requested[cell]:
-            ranked = _dedupe([_top1(f.t1_peer_legal[cell], f.t1_peer_logits[cell])] + [min(live[a], key=lambda r: (v[a, r], r)) for a in learner if live.get(a)])
-            threat = {r: min(v[a, r] for a in learner if a in live and valid[a, r]) for r in cols if any(a in live and valid[a, r] for a in learner)}
+                if live[a]:q[a] = math.fsum(pi[r] * v[a, r] for r in live[a]) / math.fsum(pi[r] for r in live[a])   # renormalized over valid r2
+            kept = _dedupe(sorted(q, key=lambda a: (-q[a], a))[:k_own] + [_top1(f.t1_own_legal[cell], f.t1_own_logits[cell])])
+            learner = _dedupe([a for a, _ in errors] + kept)[:w_own]
+        else:kept = learner = [0]
+        if f.t1_peer_requested[cell]:   # refutations and the fill are over the value-ranked KEPT moves, errored rows apart
+            ranked = _dedupe([_top1(f.t1_peer_legal[cell], f.t1_peer_logits[cell])] + [min(live[a], key=lambda r: (v[a, r], r)) for a in kept if live.get(a)])
+            threat = {r: min(v[a, r] for a in kept if a in live and valid[a, r]) for r in cols if any(a in live and valid[a, r] for a in kept)}
             for r in sorted(threat, key=lambda r: (threat[r], r)):
                 if len(ranked) >= k_opp + 1:break
                 if r not in ranked:ranked.append(r)

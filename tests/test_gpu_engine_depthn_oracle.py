@@ -221,14 +221,15 @@ def rule_maps(frame, k_own, k_opp, *, top1=True, errors=True, refutations=True, 
         st, v = frame.t2_status[c], np.asarray(frame.t2_value[c], np.float64);ok = (st == 1) | (st == 4)
         bad = [tuple(x) for x in np.argwhere(st == 3).tolist()] if errors else []
         rows = [a for a in range(9) if (st[a] != 0).any() and ok[a].any()];cols = [r for r in range(9) if (st[:, r] != 0).any()]
-        def q(a):   # depth2_backups' arithmetic: math.exp weights over the row's valid replies, fsum
-            live = [r for r in cols if ok[a, r]];top = max(float(frame.t1_peer_logits[c][r]) for r in live)
-            x = [math.exp(float(frame.t1_peer_logits[c][r]) - top) for r in live];total = math.fsum(x)
-            return math.fsum(p / total * v[a, r] for p, r in zip(x, live))
-        learner = unique([a for a, _ in bad] + sorted(rows, key=lambda a: (-q(a), a))[:k_own] + ([first(frame.t1_own_legal[c], frame.t1_own_logits[c])] if top1 else []))[:w_own] \
+        def q(a):   # pi_opp over ALL enumerated replies, renormalized over the row's valid ones (the documented formula)
+            top = max(float(frame.t1_peer_logits[c][r]) for r in cols);x = {r: math.exp(float(frame.t1_peer_logits[c][r]) - top) for r in cols}
+            total = math.fsum(x.values());live = [r for r in cols if ok[a, r]]
+            return math.fsum(x[r] / total * v[a, r] for r in live) / math.fsum(x[r] / total for r in live)
+        kept = unique(sorted(rows, key=lambda a: (-q(a), a))[:k_own] + ([first(frame.t1_own_legal[c], frame.t1_own_logits[c])] if top1 else [])) \
             if frame.t1_own_requested[c] else [0]
+        learner = unique([a for a, _ in bad] + kept)[:w_own]   # errored rows in front, outside the k count; refutations use `kept`
         if frame.t1_peer_requested[c]:
-            kept = [a for a in learner if a in range(9) and ok[a].any()]
+            kept = [a for a in kept if ok[a].any()]
             ranked = unique([first(frame.t1_peer_legal[c], frame.t1_peer_logits[c])] + ([min((r for r in cols if ok[a, r]), key=lambda r: (v[a, r], r)) for a in kept] if refutations else []))
             threat = {r: min(v[a, r] for a in kept if ok[a, r]) for r in cols if any(ok[a, r] for a in kept)}
             for r in sorted(threat, key=lambda r: (threat[r], r)) if fill else ():
@@ -796,6 +797,19 @@ class RealPricerTests(FixtureN, unittest.TestCase):
         self.assertEqual(summary['searched'], dict(searched_k=[2, 2], searched_widths=list(searched_widths)))
         self.assertTrue(summary['searched_maps']['widths']['own'] <= searched_widths[0] and summary['searched_maps']['widths']['opp'] <= searched_widths[1])
 
+    def test_searched_on_permuted_lanes_with_errored_rows(self):
+        """The permuted-lanes fixture: errored turn-2 pairs sit in rows that also have valid leaves, so the rule's ordering of
+        refutations (over the kept moves, before the errored rows) is exercised against the real searched_maps."""
+        class Permuted(FixtureN):
+            make = staticmethod(permuted_n)
+        Permuted.setUpClass();fixture = Permuted()
+        for k in (1, 2, 3):
+            with self.subTest(k=k):
+                evaluation, summary = fixture.call(fixture.pricers(module=self.module(), selection='searched', k_own=k, k_opp=k), backups=None)
+                result, (status, reasons) = self.judged(evaluation)
+                self.assertEqual(status, 'PASS', (failing(result), reasons, [m for m in result['checks']['a']['first_mismatches'] if 'searched' in m['field']][:3]))
+                self.assertGreater(result['checks']['a']['compared']['searched_maps_opp_rule'], 0)
+
     def test_depth4_and_mixed_widths_pass(self):
         for depth, k_own, k_opp, k1 in ((4, 2, 2, (9, 9)), (3, (3, 2), (1, 3), (9, 9)), (3, 2, 2, (3, 2))):
             with self.subTest(depth=depth, k_own=k_own, k_opp=k_opp, k1=k1):
@@ -859,6 +873,82 @@ class RealPricerTests(FixtureN, unittest.TestCase):
         evaluation, _ = fixture.call(fixture.pricers(module=self.module(), executor=permuted_n(engine_mask_at_turn=2)), backups=None, depth2=False)
         result, (status, _) = self.judged(evaluation);mismatched = result['checks']['a']['mismatched']
         self.assertEqual(status, 'FAIL');self.assertGreater(mismatched['ply2_own_legal'], 0);self.assertEqual(mismatched['t1_own_legal'], 0)
+
+
+# ---------------------------------------------------------------- the `searched` rule on random full-width depth-2 frames
+
+def random_depth2_frame(rng, roots=4):
+    """A random FULL-WIDTH depth-2 surface: expanded, terminal and errored turn-1 cells; requested or waiting seats with random
+    encoder-legal sets; every expanded cell enumerates its full legal product with valid (head/terminal) and errored leaves;
+    values and logits from small sets, so ties are common; some worlds without a state."""
+    R = roots;f = dict(pre=np.zeros((R, 2), np.int32), root_peer_requested=np.ones((R, 2), bool), root_peer_legal=np.ones((R, 2, 9), bool),
+        root_peer_logits=np.zeros((R, 2, 9), np.float32), t1_status=np.zeros((R, 2, 9, 9), np.int8), t1_value=np.zeros((R, 2, 9, 9), np.float32),
+        t1_error=np.zeros((R, 2, 9, 9), np.int8), t2_status=np.zeros((R, 2, 9, 9, 9, 9), np.int8), t2_value=np.zeros((R, 2, 9, 9, 9, 9), np.float32),
+        t2_error=np.zeros((R, 2, 9, 9, 9, 9), np.int8), t1_digest_own=None, t1_digest_peer=None, t2_digest=None, world_reports=(), timing={})
+    for seat in ('own', 'peer'):
+        f[f't1_{seat}_requested'] = np.zeros((R, 2, 9, 9), bool);f[f't1_{seat}_legal'] = np.zeros((R, 2, 9, 9, 9), bool)
+        f[f't1_{seat}_logits'] = np.zeros((R, 2, 9, 9, 9), np.float32)
+    values, logits = np.asarray((-.5, 0., .25, .5, 1.), np.float32), np.asarray((0., .5, 1.), np.float32)
+    for q in range(R):
+        for w in (0, 1):
+            if rng.random() < .1:f['pre'][q, w] = -1;continue
+            for a1 in range(9):
+                for r1 in range(9):
+                    if rng.random() < .6:continue
+                    c = (q, w, a1, r1);kind = rng.random()
+                    if kind < .15:f['t1_status'][c] = 1;f['t1_value'][c] = rng.choice((-1., 0., 1.));continue
+                    if kind < .25:f['t1_status'][c] = 3;f['t1_error'][c] = rng.integers(1, 7);continue
+                    f['t1_status'][c] = 2;f['t1_value'][c] = rng.choice(values);errored = rng.random() < .35
+                    for seat in ('own', 'peer'):
+                        if rng.random() < .1:continue   # a waiting seat: enumerated as action 0 only
+                        f[f't1_{seat}_requested'][c] = True;lanes = rng.choice(9, size=rng.integers(1, 10), replace=False)
+                        f[f't1_{seat}_legal'][c][lanes] = True;f[f't1_{seat}_logits'][c] = rng.choice(logits, size=9)
+                    rows = np.flatnonzero(f['t1_own_legal'][c]) if f['t1_own_requested'][c] else [0]
+                    cols = np.flatnonzero(f['t1_peer_legal'][c]) if f['t1_peer_requested'][c] else [0]
+                    for a2 in rows:
+                        for r2 in cols:
+                            leaf = c + (a2, r2);x = rng.random()
+                            if errored and x < .2:f['t2_status'][leaf] = 3;f['t2_error'][leaf] = rng.integers(1, 5)
+                            elif x < .3:f['t2_status'][leaf] = 1;f['t2_value'][leaf] = rng.choice((-1., 0., 1.))
+                            else:f['t2_status'][leaf] = 4;f['t2_value'][leaf] = rng.choice(values)
+    return SimpleNamespace(**f)
+
+
+def rule_mismatches(frame, own, opp, k_own, k_opp, extras=()):
+    found = gate.check_searched_rule(frame, own, opp, k_own, k_opp, gate.Findings({}), extras).report()
+    return {k: v for k, v in found['mismatched'].items() if v}, found['compared'], found['first_mismatches'][:2]
+
+
+class SearchedRuleFuzzTests(unittest.TestCase):
+    """The gate's re-derivation (searched_maps_reference) against a second implementation on random full-width frames, and
+    against the pricer's public searched_maps when it is on the path: EXACT on every enumerated cell, errored cells included."""
+    FRAMES = 40
+
+    def frames(self):
+        rng = np.random.default_rng(20261106)
+        for i in range(self.FRAMES):
+            k_own, k_opp = (int(x) for x in rng.integers(1, 10, size=2))
+            yield i, random_depth2_frame(rng), k_own, k_opp
+
+    def test_reference_equals_the_test_side_rule(self):
+        cells = errored = 0
+        for i, frame, k_own, k_opp in self.frames():
+            own, opp, flag = rule_maps(frame, k_own, k_opp);bad, compared, first = rule_mismatches(frame, own, opp, k_own, k_opp, (flag,))
+            self.assertEqual(bad, {}, (i, k_own, k_opp, first));cells += compared['searched_maps_own_rule']
+            errored += int(((np.asarray(frame.t2_status) == 3).any(axis=(-1, -2)) & (np.asarray(frame.t1_status) == 2)).sum())
+        self.assertGreater(cells, 2000);self.assertGreater(errored, 400)
+
+    @unittest.skipUnless(HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+    def test_reference_equals_the_pricers_searched_maps(self):
+        module = importlib.import_module('gpu_engine.device_depthn_pricer');cells = errored_cells = 0
+        for i, frame, k_own, k_opp in self.frames():
+            own, opp, *extras = module.searched_maps(frame, k_own, k_opp)
+            self.assertEqual((own.shape[-1], opp.shape[-1]), gate.searched_widths_reference(k_own, k_opp))
+            self.assertEqual(module.searched_widths(k_own, k_opp), gate.searched_widths_reference(k_own, k_opp))
+            bad, compared, first = rule_mismatches(frame, own, opp, k_own, k_opp, tuple(extras))
+            self.assertEqual(bad, {}, (i, k_own, k_opp, first));cells += compared['searched_maps_own_rule']
+            errored_cells += int(((np.asarray(frame.t2_status) == 3).any(axis=(-1, -2)) & (np.asarray(frame.t1_status) == 2)).sum())
+        self.assertGreater(cells, 2000);self.assertGreater(errored_cells, 400)
 
 
 # ---------------------------------------------------------------- the command line
