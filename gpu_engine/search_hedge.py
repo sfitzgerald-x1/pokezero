@@ -148,6 +148,12 @@ def matrix_game(values):
     return float((x @ m).min()), x
 
 
+def hedge_rule(grid, pi_own=None, pi_opp=None):
+    """Per-node value rule for depthn_backups.backup(frame, root, rule): the node's zero-sum game value over its
+    enumerated [own slots x opp slots] grid (priors unused). Module-level so a process pool can pickle it."""
+    return matrix_game(np.asarray(grid, np.float64))[0]
+
+
 def _hedged_cell(frame, root, world, a1, r1):
     status = int(frame.t1_status[root, world, a1, r1])
     if status == 1:return float(frame.t1_value[root, world, a1, r1])
