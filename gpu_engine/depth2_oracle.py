@@ -22,7 +22,10 @@ Status and error codes follow D (device_public_teacher_batch.make_kernel):
 error 1 invalid action route, 2 terminal winner outside {0,1,2}, 3 encoder error on the owner's view
 (non-terminal only), 4 actor output refused (non-terminal only); terminal value +1/-1/0 from the owner's
 side (winner 2 is a draw). Child status: 1 terminal, 2 expanded, 3 error. Leaf status: 1 terminal,
-4 head-valued, 3 error. Heads (heads()) are a separate step on the oracle's own views:
+4 head-valued, 3 error. A non-terminal child without a D error then takes the contract's depth-2-only
+codes: 5 the opponent's child view has an encoder error, else 6 the opponent is requested at the child
+and its child prior is unusable; such a child keeps D's learner value and is not expanded. A world with
+no state has pre code -1 (world_pre). Heads (heads()) are a separate step on the oracle's own views:
 v5_model.forward(..., compute_dtype='bfloat16'), learner params for the learner's child and leaf views,
 opponent params for the opponent's root and child views.
 
@@ -43,6 +46,8 @@ from . import depth2_digest, v5_model
 
 STATUS_NONE, STATUS_TERMINAL, STATUS_EXPANDED, STATUS_ERROR, STATUS_HEAD = 0, 1, 2, 3, 4
 ERROR_INVALID, ERROR_WINNER, ERROR_ENCODER, ERROR_ACTOR = 1, 2, 3, 4
+ERROR_PEER_ENCODER, ERROR_PEER_PRIOR = 5, 6   # depth-2-only child codes (contract amendment)
+NO_STATE = -1                                 # pre code of a world without a state
 # D's pre-refusal input order (device_public_teacher_batch.SERIAL_INPUT_ORDER), restated literally.
 INPUT_ORDER = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask', 'history_mask')
 
@@ -183,6 +188,22 @@ def classify(invalid, done, winner, error, usable, owner, *, scored):
     return status.astype(np.int8), code.astype(np.int8)
 
 
+def world_pre(roots, count):
+    """[count, 2] pre codes: each materialized world's D code, NO_STATE where a world has no state."""
+    pre = np.full((count, 2), NO_STATE, np.int32)
+    for (q, wi), root in roots.items():pre[q, wi] = root['pre']
+    return pre
+
+
+def child_codes(status, error, peer_error, peer_requested, peer_usable):
+    """Depth-2-only codes on children D leaves expanded: 5 (opponent view encoder error), else 6 (requested,
+    unusable opponent prior). D's codes 1-4 and terminal children are untouched (they take precedence)."""
+    status, error = np.asarray(status), np.asarray(error);open_ = status == STATUS_EXPANDED
+    error = np.where(open_ & (np.asarray(peer_error) != 0), ERROR_PEER_ENCODER,
+        np.where(open_ & np.asarray(peer_requested, bool) & ~np.asarray(peer_usable, bool), ERROR_PEER_PRIOR, error))
+    return np.where(error != 0, STATUS_ERROR, status).astype(np.int8), error.astype(np.int8)
+
+
 def pre_code(request, root):
     """D's per-world pre-refusal code (make_kernel's pre), from the oracle's own root views."""
     expected = request.root_inputs;inputs = root['own_inputs']
@@ -257,8 +278,10 @@ class Oracle:
         owner = stack.owner[rows]
         status, error = classify(facts['invalid'], facts['done'], facts['winner'], facts['own_error'], own_usable, owner,
             scored=STATUS_EXPANDED)
+        status, error = child_codes(status, error, facts['peer_error'], facts['peer_requested'], peer_usable)
+        learner_valued = (status == STATUS_EXPANDED) | np.isin(error, (ERROR_PEER_ENCODER, ERROR_PEER_PRIOR))
         value = np.where(status == STATUS_TERMINAL, terminal_value(facts['winner'], owner),
-            np.where(status == STATUS_EXPANDED, own_value, np.nan)).astype(np.float32)
+            np.where(learner_valued, own_value, np.nan)).astype(np.float32)
         return dict(cells=cells, status=status, error=error, value=value, head_value=own_value, own_usable=own_usable,
             peer_usable=peer_usable, own_logits=own_logits, peer_logits=peer_logits, **facts)
 

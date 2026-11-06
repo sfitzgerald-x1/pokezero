@@ -11,17 +11,20 @@ quarter selection bypassed as in U1); each block is a separate call to all three
 
 Checks (gate.json; exit code 0 iff all pass):
  (a) exact: every oracle-enumerated turn-1 child and every checked turn-2 leaf has the same status,
-     error code, terminal value and leaf digest; children also the same own/peer digests, legal masks
-     and request flags; roots the same pre code and opponent request/legal. The first 20 mismatches
-     are listed.
- (b) D: t1_value bit-equal to FramePricer's joint values on every D pair, D's error codes and refused
-     worlds, and the root opponent prior bit-equal to D's. FramePricer exposes no child logits, so
-     t1_own_logits is checked against the oracle's heads at the declared tolerance instead.
+     error code (including the depth-2-only child codes 5/6), terminal value and leaf digest; children
+     also the same own/peer digests, legal masks and request flags; roots the same pre code (-1 for a
+     world without a state) and opponent request/legal. The first 20 mismatches are listed.
+ (b) D: t1_value bit-equal to FramePricer's joint values on every D pair (codes 5/6 included: they keep
+     D's value), D's status/error codes wherever the pricer's code is D's (0-4), D's refused worlds, and
+     the root opponent prior bit-equal to D's. FramePricer exposes no child logits, so t1_own_logits is
+     checked against the oracle's heads at the declared tolerance instead.
  (c) heads: turn-2 head values against the oracle's heads: exact-equal fraction and max |diff|, pass at
      <= HEAD_TOLERANCE. Other head outputs are reported as diagnostics.
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
 --sample-leaves N checks all turn-1 children plus N uniformly sampled turn-2 leaves per world (fixed
-SAMPLE_SEED); (d) always covers every leaf. All paths are command-line arguments; --out must be new.
+SAMPLE_SEED); (d) always covers every leaf. Reported, not gated: the depth-2 root refusal share under the
+reference rule (depth2_backups.refusal_summary when importable, else the gate's own count of the frame)
+next to D3 FramePricer's on the same requests, and turn-1/turn-2 error counts by code. All paths are command-line arguments; --out must be new.
 """
 import argparse
 import collections
@@ -43,6 +46,8 @@ HEAD_TOLERANCE = 1e-6
 FIRST = 20
 SAMPLE_SEED = 20261105
 BLOCK_DOMAIN = 'pokezero.d3-u1.world-block.v1'   # U1's (d3_u1_completed_q.world_block_seeds) domain, unchanged
+NO_STATE = -1                  # pre of a world without a state
+DEPTH2_CODES = (5, 6)          # depth-2-only child codes: opponent child view encoder error / unusable requested prior
 INPUT_ORDER = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask', 'history_mask')
 # D's reason strings (device_public_teacher_batch.FramePricer._result) -> codes.
 D_ERRORS = {'hypothetical original action route invalid': 1, 'hypothetical terminal winner unavailable': 2,
@@ -58,13 +63,14 @@ CONVENTIONS = (
     'Root: the opponent is requested iff any(its view legal_action_mask), as D; the owner always acts at turn 1.',
     'Child: a seat is requested iff any(executor.legal(child)[0, seat]); a waiting seat is dispatched -1 and enumerated as action 0 only.',
     'Turn-2 chance is executor.sample(child state); turn-1 chance is executor.sample(root state).',
-    't1_status/t1_error follow D exactly (owner view and learner head only); opponent child-view errors and refused opponent child priors do not change a child status (reported as diagnostics).',
-    'Digests are compared where the scored view is meaningful: status 2/4, or error 3/4; terminal and invalid cells compare status, error and value only.',
-    'Child masks, request flags and the opponent digest are compared on expanded children (t1_status 2).',
+    'Child codes: D\'s 1-4 first (transition, owner view, learner head); then, on a non-terminal child, 5 if the opponent\'s child view has an encoder error, else 6 if the opponent is requested at the child and its prior is unusable. Codes 5/6 keep D\'s learner value and are not expanded.',
+    'pre is -1 for a world without a state (materialization refusal); such a world enumerates nothing.',
+    'Digests are compared where the scored view is meaningful: status 2/4, or error 3-6 (own view) and 5/6 (opponent view); terminal and invalid cells compare status, error and value only.',
+    'Child masks, request flags and the opponent digest are compared on expanded children and codes 5/6.',
     'Logits are compared on legal lanes of requested seats only.',
     'Top-k ranks by the oracle\'s own bf16 child priors (logit descending, lower index on ties, non-finite last); full width needs no priors.',
     'Each world block is a separate call (Depth2Pricer.price takes one recipe); blocks after 0 bypass Recipe.selected, as U1.',
-    'Worlds with pre != 0 and materialization refusals enumerate nothing.',
+    'Depth-2 refusal (reference rule): a root refuses if any world has pre != 0, or any enumerated turn-1 or turn-2 cell has status 3 (codes 5/6 included).',
 )
 
 
@@ -140,9 +146,9 @@ def frame_geometry(frame, requests):
 def check_exact(frame, data, findings):
     """(a) status, error, terminal value and digests of every oracle cell/checked leaf; root pre and opponent request."""
     roots, children, leaves = data['roots'], data['children'], data['leaves']
-    keys = sorted(roots)
+    count = field(frame, 'pre').shape[0];keys = [(q, w) for q in range(count) for w in (0, 1)]
     if keys:
-        k = np.asarray(keys).reshape(-1, 2);want = np.asarray([roots[x]['pre'] for x in keys])
+        k = np.asarray(keys).reshape(-1, 2);want = np.asarray([roots[x]['pre'] if x in roots else NO_STATE for x in keys])
         got = field(frame, 'pre')[k[:, 0], k[:, 1]];findings.record('pre', k, got.astype(np.int64) == want, got, want)
         usable = k[want == 0]
         if len(usable):
@@ -156,10 +162,10 @@ def check_exact(frame, data, findings):
             got = field(frame, name)[at];findings.record(name, cells, got.astype(np.int64) == want, got, want)
         terminal = status == 1;got = field(frame, 't1_value')[at]
         findings.record('t1_value_terminal', cells[terminal], (got == children['value'])[terminal], got[terminal], children['value'][terminal])
-        viewed = (status == 2) | ((status == 3) & np.isin(error, (3, 4)))
+        viewed = (status == 2) | ((status == 3) & np.isin(error, (3, 4) + DEPTH2_CODES))
         got = field(frame, 't1_digest_own')[at].astype(np.uint32)
         findings.record('t1_digest_own', cells[viewed], (got == children['own_digest'])[viewed], got[viewed], children['own_digest'][viewed])
-        expanded = status == 2
+        expanded = (status == 2) | ((status == 3) & np.isin(error, DEPTH2_CODES))
         for name, key, kind in (('t1_digest_peer', 'peer_digest', np.uint32), ('t1_own_legal', 'own_legal', bool),
                 ('t1_peer_legal', 'peer_legal', bool), ('t1_own_requested', 'own_requested', bool), ('t1_peer_requested', 'peer_requested', bool)):
             got = field(frame, name)[at].astype(kind);want = np.asarray(children[key]).astype(kind)
@@ -213,7 +219,9 @@ def check_d(frame, d_results, requests, findings, *, full_turn1=True):
             if grid is None:
                 rows['d_refused_world_unenumerated'].append(((q, wi), not enumerated.any(), int(enumerated.sum()), 0))
                 reason = report.get('reason') or ''
-                if not reason.startswith('physical-materialization'):
+                if reason.startswith('physical-materialization'):
+                    rows['pre_vs_d'].append(((q, wi), int(pre[q, wi]) == NO_STATE, int(pre[q, wi]), NO_STATE))
+                else:
                     codes = _pre_codes(reason, request)
                     rows['pre_vs_d'].append(((q, wi), int(pre[q, wi]) in codes, int(pre[q, wi]), list(codes) or reason))
                 continue
@@ -231,13 +239,15 @@ def check_d(frame, d_results, requests, findings, *, full_turn1=True):
                 rows['t1_enumeration_vs_d'].append(((q, wi), got == pairs, len(got), len(pairs)))
             for a, r in pairs:
                 if not enumerated[a, r]:continue   # pruned by k1 widths; the enumeration itself is check (d)
+                status, code, cell = int(t1s[q, wi, a, r]), int(t1e[q, wi, a, r]), (q, wi, a, r)
+                d_code = code not in DEPTH2_CODES   # status/error are D's only where the pricer's code is D's (0-4)
                 if (a, r) in errors:
-                    rows['t1_error_vs_d'].append(((q, wi, a, r), int(t1s[q, wi, a, r]) == 3 and int(t1e[q, wi, a, r]) == errors[(a, r)],
-                        [int(t1s[q, wi, a, r]), int(t1e[q, wi, a, r])], [3, errors[(a, r)]]))
-                else:
-                    want = np.float32(grid[a][r])
-                    rows['t1_value_vs_d'].append(((q, wi, a, r), int(t1s[q, wi, a, r]) in (1, 2) and _bits(t1v[q, wi, a, r]) == _bits(want),
-                        dict(status=int(t1s[q, wi, a, r]), value=_plain(t1v[q, wi, a, r])), dict(status='1|2', value=_plain(want))))
+                    if d_code:rows['t1_error_vs_d'].append((cell, status == 3 and code == errors[(a, r)], [status, code], [3, errors[(a, r)]]))
+                    continue
+                want = np.float32(grid[a][r])   # D priced it: the value is D's, under codes 5/6 too
+                rows['t1_value_vs_d'].append((cell, bool(_bits(t1v[q, wi, a, r]) == _bits(want)), _plain(t1v[q, wi, a, r]), _plain(want)))
+                if d_code:rows['t1_status_vs_d'].append((cell, status in (1, 2) and code == 0, [status, code], '1|2 with code 0'))
+                else:rows['t1_depth2_code_status'].append((cell, status == 3, [status, code], '3 under code 5/6'))
     for name, items in rows.items():
         keys, equal, got, want = zip(*items)
         findings.record(name, [list(k) for k in keys], np.asarray(equal, bool), _objects(got), _objects(want))
@@ -268,10 +278,12 @@ def check_heads(frame, data):
         result['t2_value'] = _difference(field(frame, 't2_value')[at], leaves['head_value'], scored)
     cells = children['cells']
     if len(cells):
-        at = tuple(cells.T);expanded = (children['status'] == 2) & (field(frame, 't1_status')[at] == 2)
-        result['t1_value_head'] = _difference(field(frame, 't1_value')[at], children['head_value'], expanded)
-        for seat in ('own', 'peer'):
-            lanes = expanded[:, None] & np.asarray(children[seat + '_requested'], bool)[:, None] & np.asarray(children[seat + '_legal'], bool)
+        at = tuple(cells.T);status, error = children['status'], children['error']
+        same = (field(frame, 't1_status')[at] == status) & (field(frame, 't1_error')[at] == error)
+        expanded = same & (status == 2);valued = same & ((status == 2) | np.isin(error, DEPTH2_CODES))
+        result['t1_value_head'] = _difference(field(frame, 't1_value')[at], children['head_value'], valued)
+        for seat, scope in (('own', valued), ('peer', expanded)):
+            lanes = scope[:, None] & np.asarray(children[seat + '_requested'], bool)[:, None] & np.asarray(children[seat + '_legal'], bool)
             result[f't1_{seat}_logits'] = _difference(field(frame, f't1_{seat}_logits')[at], children[seat + '_logits'], lanes)
     keys = [k for k in sorted(roots) if roots[k]['pre'] == 0 and roots[k]['peer_requested']]
     if keys:
@@ -340,6 +352,65 @@ def summarize(calls, *, tolerance=HEAD_TOLERANCE):
     return dict(passed=all(x['passed'] for x in checks.values()), checks=checks)
 
 
+def error_counts(status, error, codes):
+    """{code: cells with status 3 and that code}, every listed code present, any unexpected code added."""
+    status, error = np.asarray(status), np.asarray(error);failed = error[status == 3]
+    return {str(c): int(np.count_nonzero(failed == c)) for c in sorted(set(codes) | set(map(int, np.unique(failed))))}
+
+
+def depth2_refused(frame):
+    """The gate's own reference-rule count: a root refuses if a world has pre != 0 or any cell has status 3."""
+    pre, t1, t2 = (field(frame, n) for n in ('pre', 't1_status', 't2_status'));count = len(pre)
+    return np.any(pre != 0, axis=1) | np.any(t1.reshape(count, -1) == 3, axis=1) | np.any(t2.reshape(count, -1) == 3, axis=1)
+
+
+def depth2_summary(frame):
+    """depth2_backups.refusal_summary(frame) when importable (it lands with the pricer), else (None, reason)."""
+    try:from gpu_engine.depth2_backups import refusal_summary
+    except ImportError as error:return None, 'not importable: ' + str(error)
+    try:return refusal_summary(SimpleNamespace(**frame) if isinstance(frame, dict) else frame), None
+    except (AttributeError, KeyError, TypeError, ValueError, IndexError) as error:return None, f'{type(error).__name__}: {error}'
+
+
+def refusal_report(frame, d_results, data):
+    """One call's root refusals at depth 2 (reference rule) and depth 1 (D3 FramePricer), and error counts by code."""
+    refused = depth2_refused(frame)
+    own = dict(source='gate count of the frame', root_count=len(refused), refused_count=int(refused.sum()), refused_roots=np.flatnonzero(refused).tolist())
+    report = dict(depth2=own, depth1=dict(source='FramePricer(vectorized=True, host_prep=True)', root_count=len(d_results),
+            refused_count=sum(r.status == 'REFUSED' for r in d_results), refused_roots=[i for i, r in enumerate(d_results) if r.status == 'REFUSED']),
+        turn1_errors_by_code=error_counts(field(frame, 't1_status'), field(frame, 't1_error'), range(1, 7)),
+        turn2_errors_by_code=error_counts(field(frame, 't2_status'), field(frame, 't2_error'), range(1, 5)))
+    children, leaves = data['children'], data['leaves']
+    report['oracle_turn1_errors_by_code'] = error_counts(children.get('status', []), children.get('error', []), range(1, 7))
+    report['oracle_turn2_errors_by_code_checked_leaves'] = error_counts(leaves.get('status', []), leaves.get('error', []), range(1, 5))
+    summary, reason = depth2_summary(frame)
+    if summary is None:report['refusal_summary'] = reason
+    else:
+        keys = ('root_count', 'refused_count', 'depth1_refused_count', 'depth2_only_refused_count', 'refused_by_cause',
+            'turn1_errors_by_code', 'turn2_errors_by_code')
+        picked = json.loads(json.dumps({k: summary[k] for k in keys if k in summary}, default=str))
+        report['depth2'] = dict(picked, source='depth2_backups.refusal_summary', refused_roots=[int(x['root']) for x in summary.get('roots', ()) if x.get('refused')])
+        report['depth2_gate_count'] = own;report['depth2_sources_agree'] = picked.get('refused_count') == own['refused_count']
+    return report
+
+
+def merge_refusals(reports):
+    """Sum per-call refusal reports; shares are refused / root requests (each world block counts its own requests)."""
+    def add(total, part):
+        for key, value in part.items():
+            if isinstance(value, dict):add(total.setdefault(key, {}), value)
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):total[key] = total.get(key, 0) + value
+            elif isinstance(value, str):total.setdefault(key, value)
+            elif isinstance(value, bool):total[key] = total.get(key, True) and value
+    merged = {}
+    for report in reports:
+        add(merged, {k: ({kk: vv for kk, vv in v.items() if kk != 'refused_roots'} if isinstance(v, dict) else v) for k, v in report.items()})
+    for depth in ('depth2', 'depth1', 'depth2_gate_count'):
+        if depth in merged:
+            m = merged[depth];m['refused_share'] = None if not m.get('root_count') else m['refused_count'] / m['root_count']
+    return merged
+
+
 def sample_leaves(leaves, count, addresses, *, block):
     """All leaves (count None), or count uniform leaves per world from a fixed per-world seed."""
     if count is None:return list(leaves)
@@ -375,7 +446,8 @@ def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, or
     evaluation = evaluate(frame, d_results, requests, data, context=context, full_turn1=widths['k1_own'] == widths['k1_opp'] == 9)
     pricer_timing = frame['timing'] if isinstance(frame, dict) and 'timing' in frame else getattr(frame, 'timing', None)
     roots = data['roots']
-    summary = dict(context, roots=len(requests), worlds=data['worlds'], usable_worlds=sum(r['pre'] == 0 for r in roots.values()),
+    refusals = None if evaluation['geometry'] else refusal_report(frame, d_results, data)
+    summary = dict(context, roots=len(requests), worlds=data['worlds'], usable_worlds=sum(r['pre'] == 0 for r in roots.values()), refusals=refusals,
         turn1_cells=len(data['children']['cells']), turn2_leaves=len(data['enumerated']), checked_leaves=len(data['leaves']['specs']), timing=timing,
         pricer_timing=json.loads(json.dumps(pricer_timing, default=str)) if pricer_timing is not None else None,
         passed=dict(a=evaluation['a']['passed'], b=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed']))
@@ -558,17 +630,22 @@ def main(argv=None):
                     context=dict(block=block, call=call))
                 evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize(evaluations)
+    reported = [c for c in calls if c['refusals'] is not None]
+    refusals = dict(merge_refusals([c['refusals'] for c in reported]), calls_reported=len(reported), calls=len(calls),
+        by_block={str(b): merge_refusals([c['refusals'] for c in reported if c['block'] == b]) for b in range(len(seeds))},
+        rule='reference (D): any world pre != 0 or any status-3 cell at either turn refuses the root; codes 5/6 refuse too')
     leaves = oracle.rows['leaves'];children = oracle.rows['children']
     report = dict(schema=SCHEMA, status='PASS' if result['passed'] else 'FAIL', passed=result['passed'], checks=result['checks'],
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
         block_seeds=list(seeds), max_roots=args.max_roots, sample_leaves=args.sample_leaves, sample_seed=SAMPLE_SEED,
-        head_tolerance=HEAD_TOLERANCE, pricer_options=options, calls=calls, conventions=list(CONVENTIONS),
+        head_tolerance=HEAD_TOLERANCE, pricer_options=options, calls=calls, conventions=list(CONVENTIONS), refusals=refusals,
         oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk,
             seconds_per_leaf=None if not leaves else oracle.seconds['leaves'] / leaves,
             seconds_per_child=None if not children else oracle.seconds['children'] / children))
     (out / 'gate.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')
     log('DEPTH2_GATE_COMPLETE', status=report['status'], out=str(out / 'gate.json'),
-        checks={k: v['passed'] for k, v in result['checks'].items()})
+        checks={k: v['passed'] for k, v in result['checks'].items()},
+        refused_share=dict(depth2=refusals.get('depth2', {}).get('refused_share'), depth1=refusals.get('depth1', {}).get('refused_share')))
     return 0 if result['passed'] else 1
 
 

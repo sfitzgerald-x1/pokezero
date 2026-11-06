@@ -96,20 +96,23 @@ PARAMS = ({'offset': j.asarray(0., j.float32), 'logits': j.asarray([0, 1, 1, .5,
 def executor():
     """Modes: 1/2/7 child terminal win/draw/bad winner; 3 invalid child (1,1); 4 child encoder error; 5 nonfinite
     child value; 6 opponent always waits; 8 child: opponent waits, owner forced to switch (4,5); 12 child: owner
-    waits, opponent forced; 9 leaf terminal (a2 0 loss, a2 1 draw); 10 invalid leaf a2=2; 11 leaf encoder error."""
+    waits, opponent forced; 9 leaf terminal (a2 0 loss, a2 1 draw); 10 invalid leaf a2=2; 11 leaf encoder error;
+    child, opponent's view only: 13 encoder error, 14 non-finite prior (requested), 15 non-finite prior while it waits,
+    16 both an encoder error and a non-finite prior."""
     def legal(state):
         owner, mode, turn = state.owner[0], state.mode[0], state.turn[0]
         child = turn == 1
         own = j.where((mode == 12) & child, False, j.where((mode == 8) & child, j.asarray(SWITCH), j.asarray(BASE)))
-        foe = j.where((mode == 6) | ((mode == 8) & child), False, j.where((mode == 12) & child, j.asarray(SWITCH), j.asarray(BASE)))
+        foe = j.where((mode == 6) | (((mode == 8) | (mode == 15)) & child), False, j.where((mode == 12) & child, j.asarray(SWITCH), j.asarray(BASE)))
         rows = j.where(owner == 0, j.stack([own, foe]), j.stack([foe, own]))
         return j.where(state.done[0], False, rows)[None]
 
     def observe(state, public, owner, mask):
         if public.clock.ndim != 0:raise ValueError('one-world namespace was flattened')
-        error = j.where(((state.mode == 4) & (public.turn == 1)) | ((state.mode == 11) & (public.turn == 2)), 1, 0)
+        mode, child, peer = state.mode, public.turn == 1, owner != state.owner
+        error = j.where(((mode == 4) & child) | ((mode == 11) & (public.turn == 2)) | (((mode == 13) | (mode == 16)) & child & peer), 1, 0)
         value = (state.value + (owner - state.owner) * 10).astype(j.float32) * (1. / SCALE)
-        value = j.where((state.mode == 5) & (public.turn >= 1), j.nan, value)
+        value = j.where(((mode == 5) & (public.turn >= 1)) | (((mode == 14) | (mode == 15) | (mode == 16)) & child & peer), j.nan, value)
         feature = j.stack((value, public.clock + j.zeros(1), state.own_act.astype(j.float32),
             state.peer_act.astype(j.float32), public.turn.astype(j.float32)), axis=-1)
         return Leaf(Observation(mask, error), {'numeric_features': feature[:, None, None, :]}, owner)
@@ -289,6 +292,28 @@ class OracleTests(unittest.TestCase):
             roots, cells, *_ = reference.enumerate_specs(oracle, stack, requests, self.recipe, PARAMS)
         self.assertEqual({k: v['pre'] for k, v in roots.items()}, {(0, 0): 3, (0, 1): 3, (1, 0): 2, (1, 1): 2, (2, 0): 0})
         self.assertEqual({c[:2] for c in cells}, {(2, 0)})
+        self.assertEqual(reference.world_pre(roots, 3).tolist(), [[3, 3], [2, 2], [0, reference.NO_STATE]])
+
+    def test_opponent_child_view_codes_5_and_6_after_ds_codes(self):
+        # 13: opponent view encoder error -> 5; 14: requested opponent prior non-finite -> 6; 15: same prior, but the
+        # opponent waits -> expanded; 4: both views error -> D's 3 first; 5: both heads non-finite -> D's 4 first;
+        # 16: the opponent's view has both an encoder error and a non-finite prior -> 5 first.
+        modes = ((13, 0), (14, 1), (15, 0), (4, 1), (5, 0), (16, 1))
+        _, _, children, enumerated, leaves = self.run_oracle(tuple((mode, owner, (30 + i, 40 + i)) for i, (mode, owner) in enumerate(modes)))
+        by_request = lambda q, key: {int(x) for x, c in zip(children[key], children['cells']) if c[0] == q}
+        self.assertEqual((by_request(0, 'status'), by_request(0, 'error')), ({3}, {5}))
+        self.assertEqual((by_request(1, 'status'), by_request(1, 'error')), ({3}, {6}))
+        self.assertEqual((by_request(2, 'status'), by_request(2, 'error')), ({2}, {0}))
+        self.assertEqual((by_request(3, 'status'), by_request(3, 'error')), ({3}, {3}))
+        self.assertEqual((by_request(4, 'status'), by_request(4, 'error')), ({3}, {4}))
+        self.assertEqual((by_request(5, 'status'), by_request(5, 'error')), ({3}, {5}))
+        for q in (0, 1, 5):   # codes 5/6 keep D's learner value: the learner head at the child
+            rows = [i for i, c in enumerate(children['cells']) if c[0] == q]
+            np.testing.assert_array_equal(children['value'][rows], children['head_value'][rows])
+            self.assertTrue(np.isfinite(children['value'][rows]).all())
+        rows = [i for i, c in enumerate(children['cells']) if c[0] in (3, 4)]
+        self.assertTrue(np.isnan(children['value'][rows]).all())
+        self.assertEqual({l[0] for l in enumerated}, {2});self.assertEqual({l[5] for l in enumerated}, {0})   # 5/6 never expand
 
 
 class OraclePricer:
@@ -303,7 +328,7 @@ class OraclePricer:
 
 
 def frame_from(count, data):
-    R = count;f = dict(pre=np.zeros((R, 2), np.int32), root_peer_requested=np.zeros((R, 2), bool),
+    R = count;f = dict(pre=np.full((R, 2), reference.NO_STATE, np.int32), root_peer_requested=np.zeros((R, 2), bool),
         root_peer_legal=np.zeros((R, 2, 9), bool), root_peer_logits=np.zeros((R, 2, 9), np.float32),
         t1_status=np.zeros((R, 2, 9, 9), np.int8), t1_value=np.full((R, 2, 9, 9), np.nan, np.float32), t1_error=np.zeros((R, 2, 9, 9), np.int8),
         t2_status=np.zeros((R, 2, 9, 9, 9, 9), np.int8), t2_value=np.full((R, 2, 9, 9, 9, 9), np.nan, np.float32),
@@ -333,7 +358,7 @@ def frame_from(count, data):
 
 class GateTests(unittest.TestCase):
     WIDTHS = dict(k_own=9, k_opp=9, k1_own=9, k1_opp=9)
-    MODES = ((0, 0), (9, 1), (8, 0), (3, 1), (4, 0), (11, 1), (12, 0), (0, 1), (1, 0))
+    MODES = ((0, 0), (9, 1), (8, 0), (3, 1), (4, 0), (11, 1), (12, 0), (0, 1), (1, 0), (13, 1), (14, 0), (15, 1))
     MISSING = {(6, 1)}
     PRE_REFUSED = 7
 
@@ -386,10 +411,11 @@ class GateTests(unittest.TestCase):
         self.assertTrue(result['passed'], {k: v.get('first_mismatches') for k, v in checks.items()})
         self.assertEqual(checks['c']['quantities']['t2_value']['exact_equal_fraction'], 1.)
         statuses = collections.Counter(r.status for r in d_results)
-        self.assertEqual(statuses, {'LABELED': 5, 'REFUSED': 4})   # D refuses invalid/encoder/missing/pre roots
+        self.assertEqual(statuses, {'LABELED': 8, 'REFUSED': 4})   # D refuses invalid/encoder/missing/pre roots
         for name in ('t1_status', 't2_status', 't2_digest', 't1_digest_peer', 't1_value_terminal', 't2_value_terminal'):
             self.assertGreater(checks['a']['compared'][name], 0, name)
-        for name in ('t1_value_vs_d', 't1_error_vs_d', 'root_peer_logits_vs_d', 'pre_vs_d', 'd_refused_world_unenumerated', 't1_enumeration_vs_d'):
+        for name in ('t1_value_vs_d', 't1_status_vs_d', 't1_depth2_code_status', 't1_error_vs_d', 'root_peer_logits_vs_d', 'pre_vs_d',
+                'd_refused_world_unenumerated', 't1_enumeration_vs_d'):
             self.assertGreater(checks['b']['compared'][name], 0, name)
         self.assertEqual(set(np.unique(data['leaves']['status'])), {1, 3, 4})
         self.assertEqual(set(np.unique(data['children']['status'])), {1, 2, 3})
@@ -400,6 +426,7 @@ class GateTests(unittest.TestCase):
         expanded = tuple(children['cells'][list(children['status']).index(2)]);error = tuple(children['cells'][list(children['status']).index(3)])
         unexpanded = expanded + (8, 8)
         other_error = 4 if children['error'][list(children['status']).index(3)] != 4 else 1
+        code5 = tuple(children['cells'][list(children['error']).index(5)]);code6 = tuple(children['cells'][list(children['error']).index(6)])
         def setter(name, at, value):
             def change(f, _):f[name][at] = value
             return change
@@ -424,6 +451,11 @@ class GateTests(unittest.TestCase):
             ('t2_extra_in_pricer', setter('t2_status', unexpanded, 4), 'd'), ('t2_missing_from_pricer', setter('t2_status', head, 0), 'd'),
             ('t1_extra_in_pricer', setter('t1_status', (0, 0, 8, 8), 2), 'd'), ('t1_enumeration_vs_d', setter('t1_status', (0, 0, 8, 8), 2), 'b'),
             ('t1_extra_in_pricer', setter('t1_status', (6, 1, 0, 0), 2), 'd'), ('d_refused_world_unenumerated', setter('t1_status', (6, 1, 0, 0), 2), 'b'),
+            ('t1_error', setter('t1_error', code5, 6), 'a'), ('t1_error', setter('t1_error', code6, 0), 'a'),
+            ('t1_depth2_code_status', setter('t1_status', code5, 2), 'b'), ('t1_status', setter('t1_status', code6, 2), 'a'),
+            ('t1_value_vs_d', bump('t1_value', code6, 0), 'b'), ('t1_value_vs_d', bump('t1_value', code5, 0), 'b'),
+            ('t1_digest_peer', flip('t1_digest_peer', code5 + (1,)), 'a'),
+            ('pre', setter('pre', (6, 1), 0), 'a'), ('pre_vs_d', setter('pre', (6, 1), 0), 'b'),
         )
         for name, change, check in cases:
             with self.subTest(name):
@@ -493,6 +525,41 @@ class GateTests(unittest.TestCase):
         self.assertTrue(all(summary['passed'].values()), summary)
         self.assertEqual((summary['roots'], summary['worlds']), (len(self.MODES), 2 * len(self.MODES) - len(self.MISSING)))
         self.assertEqual(summary['pricer_timing'], dict(fake=True))
+        self.assertEqual(summary['refusals']['depth2']['refused_count'], 7)
+
+    def test_refusal_shares_and_error_counts_by_code(self):
+        frame, d_results, data, _ = self.priced()
+        report = gate.refusal_report(frame, d_results, data)
+        # Depth 2 refuses invalid/encoder (3, 4), a turn-2 encoder error (5), the missing and pre worlds (6, 7)
+        # and codes 5/6 (9, 10); depth 1 only 3, 4, 6, 7. Mode 15's unusable prior is not requested: no refusal.
+        self.assertEqual((report['depth2']['root_count'], report['depth2']['refused_count']), (12, 7))
+        self.assertEqual(report['depth2']['refused_roots'], [3, 4, 5, 6, 7, 9, 10])
+        self.assertEqual((report['depth1']['root_count'], report['depth1']['refused_count'], report['depth1']['refused_roots']), (12, 4, [3, 4, 6, 7]))
+        self.assertEqual(report['turn1_errors_by_code'], {'1': 2, '2': 0, '3': 18, '4': 0, '5': 18, '6': 18})
+        self.assertEqual(report['turn2_errors_by_code'], {'1': 0, '2': 0, '3': 162, '4': 0})
+        self.assertEqual(report['oracle_turn1_errors_by_code'], report['turn1_errors_by_code'])
+        self.assertEqual(report['oracle_turn2_errors_by_code_checked_leaves'], report['turn2_errors_by_code'])
+        self.assertTrue(report['refusal_summary'].startswith('not importable'))
+        merged = gate.merge_refusals([report, report])
+        self.assertEqual((merged['depth2']['root_count'], merged['depth2']['refused_count']), (24, 14))
+        self.assertEqual((merged['depth2']['refused_share'], merged['depth1']['refused_share']), (7 / 12, 4 / 12))
+        self.assertEqual(merged['turn1_errors_by_code']['5'], 36);self.assertNotIn('refused_roots', merged['depth2'])
+
+    def test_refusal_summary_is_preferred_when_importable(self):
+        frame, d_results, data, _ = self.priced();seen = []
+        def refusal_summary(view):
+            seen.append(view.pre.shape)   # the contract's attribute-style frame
+            return dict(roots=tuple(dict(root=r, refused=r in (3, 4, 5, 6, 7, 9, 10)) for r in range(12)), root_count=12, refused_count=7,
+                depth1_refused_count=5, depth2_only_refused_count=2, refused_by_cause=dict(turn1=2, turn1_depth2_only=2),
+                turn1_errors_by_code={5: 18}, turn2_errors_by_code={3: 162})
+        with patch.dict(sys.modules, {'gpu_engine.depth2_backups': SimpleNamespace(refusal_summary=refusal_summary)}):
+            report = gate.refusal_report(frame, d_results, data)
+        self.assertEqual(seen, [(12, 2)]);self.assertEqual(report['depth2']['source'], 'depth2_backups.refusal_summary')
+        self.assertEqual(report['depth2']['turn1_errors_by_code'], {'5': 18});self.assertTrue(report['depth2_sources_agree'])
+        self.assertEqual(report['depth2']['refused_roots'], [3, 4, 5, 6, 7, 9, 10])
+        self.assertEqual(gate.merge_refusals([report])['depth2']['refused_share'], 7 / 12)
+        with patch.dict(sys.modules, {'gpu_engine.depth2_backups': SimpleNamespace(refusal_summary=lambda view: dict(refusal_summary(view), refused_count=6))}):
+            self.assertFalse(gate.refusal_report(frame, d_results, data)['depth2_sources_agree'])
 
 
 class PricerBindingTests(unittest.TestCase):
