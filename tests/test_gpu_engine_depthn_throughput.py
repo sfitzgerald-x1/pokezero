@@ -16,24 +16,27 @@ from gpu_engine import d3_depthn_throughput as tool
 
 
 class FakeDepthN:
-    """Device seconds = 1e-3 x (evaluated lanes of every ply) + 0.01 (P1); wall = device + 0.005 per ply."""
+    """The pricer's contract: under `searched` the ply-2 k's derive the slot widths (here k + 3 / k + 2); compiles are per call.
+    Timing: P1 = 0.01 s, plies = 1e-6 s per evaluated lane, host packing 2 ms inside the ply loop; device = P1 + plies."""
     built = []
 
     def __init__(self, executor, model, *, capacity, depth, k_own, k_opp, selection='prior', **kw):
         widths = lambda k: tuple(k) if isinstance(k, tuple) else (k,) * (depth - 1)
-        self.depth, self.k_own, self.k_opp, self.selection, self.capacity = depth, widths(k_own), widths(k_opp), selection, capacity
-        self.compiles = ();FakeDepthN.built.append(self)
+        self.given = (widths(k_own), widths(k_opp));self.k_own, self.k_opp = self.given;self.searched_k = None
+        if selection == 'searched':self.searched_k = (self.k_own[0], self.k_opp[0]);self.k_own, self.k_opp = (self.k_own[0] + 3,) + self.k_own[1:], (self.k_opp[0] + 2,) + self.k_opp[1:]
+        self.depth, self.selection, self.capacity, self.calls = depth, selection, capacity, 0;FakeDepthN.built.append(self)
 
     def price(self, requests, materializer, recipe, params, *, selection_maps=None):
         if (self.selection == 'searched') != (selection_maps is not None):raise ValueError('maps belong to searched')
-        if selection_maps is not None:assert selection_maps[2][0].shape[-1] == self.k_own[0]
-        if not self.compiles:self.compiles = (('p', .5, 1.5),)
+        if selection_maps is not None:assert selection_maps[2][0].shape[-1] <= self.k_own[0] and selection_maps[2][1].shape[-1] <= self.k_opp[0]
+        self.compiles = (('p', .5, 1.5),) if not self.calls else ();self.calls += 1
         nodes, plies = 81 * 2 * len(requests), []
         for p in range(2, self.depth + 1):
-            K = self.k_own[p - 2] * self.k_opp[p - 2];plies.append(dict(ply=p, lanes=nodes * K, enumerated=nodes * K));nodes *= K
-        device = .01 + 1e-3 * sum(x['lanes'] for x in plies) / 1e3
-        return SimpleNamespace(timing=dict(device_seconds=device, frame_wall_seconds=device + .005 * len(plies), enumerated_leaves=plies[-1]['enumerated'],
-            evaluated_leaf_lanes=plies[-1]['lanes'], plies=tuple(plies)), pre=np.zeros((len(requests), 2)))
+            K = self.k_own[p - 2] * self.k_opp[p - 2];plies.append(dict(ply=p, lanes=nodes * K, evaluated_lanes=nodes * K + 16, enumerated=nodes * K));nodes *= K
+        loop = 1e-6 * sum(x['evaluated_lanes'] for x in plies) + .002
+        return SimpleNamespace(timing=dict(device_seconds=.01 + loop - .002, ply_loop_seconds=loop, host_pack_seconds=.002, frame_wall_seconds=.01 + loop + .001,
+            enumerated_leaves=plies[-1]['enumerated'], evaluated_leaf_lanes=plies[-1]['lanes'], plies=tuple(plies), searched_k=self.searched_k,
+            searched_widths=None if self.searched_k is None else (self.k_own[0], self.k_opp[0])), pre=np.zeros((len(requests), 2)))
 
 
 class FakeFramePricer:
@@ -45,7 +48,7 @@ class FakeFramePricer:
 
 
 def searched_maps(frame, k_own, k_opp):
-    R = frame.pre.shape[0];return np.zeros((R, 2, 9, 9, k_own + 3), np.int32), np.zeros((R, 2, 9, 9, k_opp + 2), np.int32), np.zeros(R, bool)
+    R = frame.pre.shape[0];return np.zeros((R, 2, 9, 9, k_own + 3), np.int32), np.zeros((R, 2, 9, 9, k_opp + 1), np.int32), np.zeros(R, bool)
 
 
 MODULE = SimpleNamespace(DepthNPricer=FakeDepthN, as_depth2_frame=lambda f: f, searched_maps=searched_maps)
@@ -80,12 +83,14 @@ class ThroughputTests(unittest.TestCase):
         FakeDepthN.built = [];args = self.args('--ks', '2', '--worlds', '2', '--modes', 'searched')
         sections = self.run_configs(args);searched = sections['depth3-searched-k2']
         depthn = [p for p in FakeDepthN.built if p.selection == 'searched']
-        self.assertEqual([(p.k_own, p.k_opp) for p in depthn], [((5, 2), (4, 2))])   # k + 3 / k + 2 from the maps: no k + 1 assumption
-        call = searched['blocks'][0]['calls'][1];self.assertEqual(call['maps_widths'], [5, 4])
+        self.assertEqual([(p.given, p.k_own, p.k_opp) for p in depthn], [(((2, 2), (2, 2)), (5, 2), (4, 2))])   # built with k's; widths derived
+        call = searched['blocks'][0]['calls'][1];self.assertEqual((call['maps_widths'], call['slot_widths']), ([5, 3], [5, 4]))
+        self.assertEqual((call['searched_k'], call['searched_widths']), ((2, 2), (5, 4)))
         self.assertAlmostEqual(call['device_seconds'], call['parts']['depth2_full_width_pass']['device_seconds'] + call['parts']['depthn']['device_seconds'])
         derived = searched['derived']['2'];self.assertIn('depth2_full_width_pass', derived['parts_ms_per_root'])
         self.assertEqual(searched['blocks'][0]['cold_compile_seconds'], 4.)   # both pricers' first-call compiles
         self.assertEqual(searched['blocks'][0]['calls'][1]['compile_seconds'], 0.)
+        self.assertAlmostEqual(call['p1_seconds'], .01);self.assertAlmostEqual(call['p1_seconds'] + call['plies_seconds'], call['parts']['depthn']['device_seconds'])
 
     def test_derivation_budget_and_split(self):
         args = self.args('--ks', '2', '--worlds', '2,8');sections = self.run_configs(args)
@@ -98,11 +103,14 @@ class ThroughputTests(unittest.TestCase):
         context = dict(evaluator=dict(override=False), root_values=[], roots_available=2, source={}, devices=['cpu'])
         report = tool.report_of(args, sections, context, isolated_run=False)
         split = report['by_worlds']['2']['ply_split_estimate']['depth3-prior-k2']
-        self.assertTrue(split['estimate']);self.assertAlmostEqual(split['p1_ms_per_root'], 1e3 * .01 / 4)
+        self.assertEqual(split['p1_and_plies'], 'MEASURED');self.assertAlmostEqual(split['p1_ms_per_root'], 1e3 * .01 / 4)   # the pricer's own P1
         total = report['by_worlds']['2']['configs']['depth3-prior-k2']['device_ms_per_root']
         self.assertAlmostEqual(split['p1_ms_per_root'] + split['leaf_ply_ms_per_root'] + split['expand_plies_ms_per_root'], total)
-        self.assertEqual(set(split['expand_by_ply']), {'2'})
+        self.assertEqual(set(split['expand_by_ply']), {'2'});self.assertAlmostEqual(split['host_pack_ms_per_root'], 1e3 * .002 / 4)
+        leaf_lanes = 81 * 2 * 4 * 4 * 4 + 16   # 4 roots x 81 x 2 cells x 4 ply-2 nodes x 4 leaf lanes, plus call padding
+        self.assertAlmostEqual(split['leaf_ply_ms_per_root'], 1e3 * 1e-6 * leaf_lanes / 4)   # depth2-k2's 1 us per evaluated lane
         searched = report['by_worlds']['2']['ply_split_estimate']['depth3-searched-k2'];self.assertIsNotNone(searched['depth2_full_width_pass_ms_per_root'])
+        self.assertAlmostEqual(searched['p1_ms_per_root'] + searched['plies_ms_per_root'], report['by_worlds']['2']['configs']['depth3-searched-k2']['parts_ms_per_root']['depthn'])
 
     def test_isolate_argv_and_argument_checks(self):
         args = self.args('--isolate');calls = []

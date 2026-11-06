@@ -10,14 +10,16 @@ per block 1 cold call (compile) and --repeats warm calls. Configs (each measured
 - depth2-fw: DepthNPricer(depth=2, k=9), the full-width depth-2 pass of `searched`;
 - depth{N}-prior-k{k}: DepthNPricer(depth=N, k at every ply, prior);
 - depth{N}-searched-k{k}: per call the full-width depth-2 pass, the public searched_maps(frame, k, k) on the host, then
-  DepthNPricer(depth=N, selection='searched') at the widths of the maps it returned (never assumed k + 1). Its device
-  seconds are the pass's plus depth N's; the maps' host seconds and every part are reported.
+  DepthNPricer(depth=N, selection='searched', k_own=k, k_opp=k): built with the same k's, the engine derives its ply-2
+  slot widths (searched_widths; both logged in its timing). Its device seconds are the pass's plus depth N's; the maps'
+  host seconds, the maps' and the engine's widths and every part are reported.
 Per config and W: device ms per root (the sum over blocks of each block's warm median device seconds / C, the pricer's
 timing) and wall ms per root (frame_wall_seconds: the host loop over plies and packing included) against the 1,000 ms
 budget, leaves enumerated/evaluated, compile seconds (cold) and memory (process peak and peak over the config's
-baseline; --isolate gives each config its own process). Per-ply device split (an ESTIMATE, labelled): P1 = depth1's
-device seconds; the leaf ply = (depth2-k{k} - depth1) / its evaluated leaf lanes x depth N's evaluated leaf lanes;
-the expand plies = the rest, divided by their evaluated lanes. Progress is JSON lines; the result is throughput.json in
+baseline; --isolate gives each config its own process). Per-stage split: P1 and plies 2..N MEASURED from the pricer's
+timing (device_seconds = synced P1 + sum(ply_loop_seconds - host_pack_seconds)); the leaf ply vs the expand plies an
+ESTIMATE (depth2-k{k}'s plies time per evaluated leaf lane x depth N's evaluated leaf lanes; the expand plies the rest,
+by their evaluated lanes). host_pack and ply_loop ms/root are reported beside it. Progress is JSON lines; the result is throughput.json in
 a new --out directory.
 """
 import argparse
@@ -37,6 +39,7 @@ from .d3_depthn_gate import split_searched
 
 SCHEMA = 'pokezero.depthn-throughput.v1'
 BUDGET_MS = 1000.
+SPLIT_KEYS = ('p1_seconds', 'plies_seconds', 'ply_loop_seconds', 'host_pack_seconds')   # the pricer's timing split (device = P1 + plies)
 MODES = ('prior', 'searched')
 
 
@@ -118,22 +121,25 @@ def prepare(args):
         available=available, seeds=seeds, planned=planned, actor_capacity=len(params) if head is not None else plan.historical_window + 1)
 
 
-def compiled_seconds(pricer):
-    return sum(c[1] + c[2] for c in getattr(pricer, 'compiles', ()))
+def lanes_of(entry):
+    """A ply's device lanes: evaluated_lanes (call padding included) when the pricer reports them, else its lanes."""
+    return float(entry.get('evaluated_lanes', entry.get('lanes')) or 0)
 
 
 class Caller:
-    """One config's call: price C roots, return the record (device/wall/compile seconds, leaves, plies, parts, memory)."""
+    """One config's call: price C roots, return the record (device/wall/compile seconds, the pricer's P1 / ply-loop / host-pack
+    split, leaves, plies, parts, memory). `searched` pricers are built with searched_maps' k's (the engine derives its ply-2
+    slot widths) and get the maps of the same k's."""
     def __init__(self, config, args, ctx, module=None, frame_pricer_class=None):
-        self.config, self.args, self.ctx = parse_config(config), args, ctx;self.name = config;self.cache = {}
+        self.config, self.args, self.ctx = parse_config(config), args, ctx;self.name = config;self.cache = {};self.compiled = set()
         self.module = module or importlib.import_module('gpu_engine.device_depthn_pricer')
-        kind = self.config['kind'];executor, model = ctx.provider.executor, ctx.plan.model
+        kind = self.config['kind'];executor, model = ctx.provider.executor, ctx.plan.model;k = self.config['k']
         if kind == 'depth1':
             if frame_pricer_class is None:from gpu_engine.device_public_teacher_batch import FramePricer as frame_pricer_class
             self.pricer = frame_pricer_class(executor, model, capacity=args.capacity, block_rows=args.capacity, actor_capacity=ctx.actor_capacity,
                 vectorized=True, host_prep=True)
-        elif kind == 'depthn':self.pricer = self.depthn(self.config['depth'], self.config['k'], self.config['k'], 'prior')
-        else:self.pass_pricer = self.depthn(2, 9, 9, 'prior')
+        elif kind == 'depthn':self.pricer = self.depthn(self.config['depth'], k, k, 'prior')
+        else:self.pass_pricer, self.pricer = self.depthn(2, 9, 9, 'prior'), self.depthn(self.config['depth'], k, k, 'searched')
 
     def depthn(self, depth, k_own, k_opp, selection):
         key = (depth, k_own, k_opp, selection)
@@ -143,11 +149,20 @@ class Caller:
                 fixed_capacity=True, digest=False, actor_capacity=self.ctx.actor_capacity)
         return self.cache[key]
 
+    def new_compiles(self, pricer):
+        """Lower + compile seconds of programs this pricer compiled for the first time (pricer.compiles may be per call or cumulative)."""
+        fresh = [c for c in getattr(pricer, 'compiles', ()) if (id(pricer), repr(c[0])) not in self.compiled]
+        self.compiled.update((id(pricer), repr(c[0])) for c in fresh);return sum(c[1] + c[2] for c in fresh)
+
     def _depthn(self, pricer, requests, recipe, **kw):
-        before = compiled_seconds(pricer);frame = pricer.price(requests, self.ctx.provider.materializer, recipe, self.ctx.params, **kw);timing = frame.timing
-        return frame, dict(device_seconds=timing['device_seconds'], wall_seconds=timing.get('frame_wall_seconds'), compile_seconds=compiled_seconds(pricer) - before,
+        frame = pricer.price(requests, self.ctx.provider.materializer, recipe, self.ctx.params, **kw);timing = frame.timing
+        plies = json.loads(json.dumps(timing.get('plies', ()), default=str));number = lambda key: timing.get(key) if isinstance(timing.get(key), (int, float)) else None
+        loop, pack = number('ply_loop_seconds'), number('host_pack_seconds')
+        split = {} if None in (loop, pack) else dict(ply_loop_seconds=loop, host_pack_seconds=pack, plies_seconds=loop - pack, p1_seconds=timing['device_seconds'] - (loop - pack))
+        return frame, dict(device_seconds=timing['device_seconds'], wall_seconds=timing.get('frame_wall_seconds'), compile_seconds=self.new_compiles(pricer),
             leaves_enumerated=timing.get('enumerated_leaves'), leaves_evaluated=timing.get('evaluated_leaf_lanes'),
-            plies=json.loads(json.dumps(timing.get('plies', ()), default=str)), bytes_per_node_state=timing.get('bytes_per_node_state'))
+            leaf_evaluated_lanes=lanes_of(plies[-1]) if plies else None, plies=plies, bytes_per_node_state=timing.get('bytes_per_node_state'),
+            searched_k=timing.get('searched_k'), searched_widths=timing.get('searched_widths'), **split)
 
     def __call__(self, requests, recipe):
         kind = self.config['kind']
@@ -160,13 +175,13 @@ class Caller:
         if kind == 'depthn':return self._depthn(self.pricer, requests, recipe)[1]
         raw, first = self._depthn(self.pass_pricer, requests, recipe)
         clock = time.perf_counter();own, opp, _ = split_searched(self.module.searched_maps(self.module.as_depth2_frame(raw), self.config['k'], self.config['k']))
-        host = time.perf_counter() - clock
-        widths = (int(own.shape[-1]), int(opp.shape[-1]));rest = (self.config['k'],) * (self.config['depth'] - 2)
-        pricer = self.depthn(self.config['depth'], widths[:1] + rest, widths[1:] + rest, 'searched')
-        _, second = self._depthn(pricer, requests, recipe, selection_maps={2: (own, opp)})
+        host = time.perf_counter() - clock;widths = [int(own.shape[-1]), int(opp.shape[-1])]
+        slots = [int(self.pricer.k_own[0]), int(self.pricer.k_opp[0])]
+        if widths[0] > slots[0] or widths[1] > slots[1]:raise ValueError(f'searched_maps widths {widths} exceed the pricer\'s ply-2 slot widths {slots}')
+        _, second = self._depthn(self.pricer, requests, recipe, selection_maps={2: (own, opp)})
         return dict(second, device_seconds=first['device_seconds'] + second['device_seconds'],
             wall_seconds=None if None in (first['wall_seconds'], second['wall_seconds']) else first['wall_seconds'] + host + second['wall_seconds'],
-            compile_seconds=first['compile_seconds'] + second['compile_seconds'], searched_maps_host_seconds=host, maps_widths=list(widths),
+            compile_seconds=first['compile_seconds'] + second['compile_seconds'], searched_maps_host_seconds=host, maps_widths=widths, slot_widths=slots,
             parts=dict(depth2_full_width_pass=first, searched_maps_host_seconds=host, depthn=second))
 
 
@@ -185,7 +200,10 @@ def measure(caller, planned, repeats, *, memory, progress):
         peak = max(peaks) if peaks else None
         blocks.append(dict(block=block, cold_compile_seconds=calls[0]['compile_seconds'], warm_device_seconds=device, warm_device_seconds_median=t2.median(device),
             warm_device_seconds_min=min(device) if device else None, warm_wall_seconds_median=t2.median(wall), leaves_enumerated=calls[0].get('leaves_enumerated'),
-            leaves_evaluated=calls[0].get('leaves_evaluated'), plies=calls[0].get('plies'), maps_widths=calls[0].get('maps_widths'),
+            leaves_evaluated=calls[0].get('leaves_evaluated'), leaf_evaluated_lanes=calls[0].get('leaf_evaluated_lanes'), plies=calls[0].get('plies'),
+            maps_widths=calls[0].get('maps_widths'), slot_widths=calls[0].get('slot_widths'), searched_k=calls[0].get('searched_k'),
+            searched_widths=calls[0].get('searched_widths'),
+            **{f'warm_{k}_median': t2.median([c[k] for c in warm if c.get(k) is not None]) for k in SPLIT_KEYS},
             searched_maps_host_seconds_median=t2.median([c['searched_maps_host_seconds'] for c in warm if 'searched_maps_host_seconds' in c]),
             parts_warm_median=None if 'parts' not in calls[0] else dict(depth2_full_width_pass=t2.median([c['parts']['depth2_full_width_pass']['device_seconds'] for c in warm]),
                 depthn=t2.median([c['parts']['depthn']['device_seconds'] for c in warm])),
@@ -205,6 +223,9 @@ def derive(blocks, capacity, worlds):
         within_budget_device=None if device is None else ms(device) <= BUDGET_MS, within_budget_wall=None if wall is None else ms(wall) <= BUDGET_MS,
         leaves_enumerated=leaves('leaves_enumerated'), leaves_evaluated=leaves('leaves_evaluated'),
         device_ms_per_root_min=ms(total('warm_device_seconds_min')), cold_compile_seconds=used[0]['cold_compile_seconds'] if used else None,
+        leaf_evaluated_lanes=leaves('leaf_evaluated_lanes'),
+        **{f'{k[:-len("_seconds")]}_ms_per_root': ms(None if any(b.get(f'warm_{k}_median') is None for b in used) else sum(b[f'warm_{k}_median'] for b in used))
+            for k in SPLIT_KEYS},
         peak_over_baseline_in_use=max((b['peak_over_baseline_in_use'] for b in used if b['peak_over_baseline_in_use'] is not None), default=None))
     if used and used[0].get('parts_warm_median'):
         parts = [b['parts_warm_median'] for b in used]
@@ -214,21 +235,31 @@ def derive(blocks, capacity, worlds):
 
 
 def ply_split(depthn, depth2, depth1):
-    """ESTIMATE of one W's depth-N device ms/root by stage from derived sections and the depth-N blocks' ply work:
-    P1 = depth1's; leaf ply = (depth2-k - depth1) / depth2-k's evaluated leaf lanes x depth N's evaluated leaf lanes; the
-    expand plies the remainder, apportioned by their evaluated lanes. None where an input is missing."""
-    d, two, one = depthn['derived'], depth2['derived'], depth1['derived']
-    if None in (d['device_ms_per_root'], two['device_ms_per_root'], one['device_ms_per_root']) or not two['leaves_evaluated'] or d['leaves_evaluated'] is None:return None
-    total = d['device_ms_per_root'] - (d.get('parts_ms_per_root') or {}).get('depth2_full_width_pass', 0.)
-    per_lane = (two['device_ms_per_root'] - one['device_ms_per_root']) / two['leaves_evaluated'];leaf = per_lane * d['leaves_evaluated']
-    plies = depthn['blocks'][0].get('plies') or ();expand = [p for p in plies if int(p.get('ply', 0)) < max((int(x.get('ply', 0)) for x in plies), default=0)]
-    rest = total - one['device_ms_per_root'] - leaf;lanes = sum(float(p.get('lanes') or 0) for p in expand)
-    return dict(estimate=True, method=ply_split.__doc__.split('\n')[0].strip() + ' ' + ' '.join(x.strip() for x in ply_split.__doc__.split('\n')[1:3]),
-        p1_ms_per_root=one['device_ms_per_root'], leaf_ply_ms_per_root=leaf, expand_plies_ms_per_root=rest,
-        expand_by_ply={str(p.get('ply')): None if not lanes else rest * float(p.get('lanes') or 0) / lanes for p in expand},
+    """One W's depth-N device ms/root by stage. MEASURED from the pricer's timing (ply_loop_seconds, host_pack_seconds): P1 =
+    device - sum(ply_loop - host_pack) and plies 2..N = sum(ply_loop - host_pack) (depth N's own, the searched pass apart).
+    ESTIMATED: the leaf ply = depth2-k's plies time (its one ply is a leaf ply of the same K) per evaluated leaf lane x depth
+    N's evaluated leaf lanes; the expand plies = the plies time minus that, apportioned by their evaluated lanes. Without the
+    timing split P1 = depth1's device time and the plies time = depth N - P1, both estimates. None where an input is missing."""
+    d, two = depthn['derived'], depth2['derived'];one = (depth1 or {}).get('derived') or {}
+    total = (d.get('parts_ms_per_root') or {}).get('depthn', d['device_ms_per_root'])
+    if d.get('p1_ms_per_root') is not None and d.get('plies_ms_per_root') is not None:p1, plies, source = d['p1_ms_per_root'], d['plies_ms_per_root'], 'MEASURED'
+    elif total is not None and one.get('device_ms_per_root') is not None:p1 = one['device_ms_per_root'];plies, source = total - p1, 'ESTIMATE (depth1 as P1)'
+    else:return None
+    leaf_two = two.get('plies_ms_per_root')
+    if leaf_two is None and None not in (two.get('device_ms_per_root'), one.get('device_ms_per_root')):leaf_two = two['device_ms_per_root'] - one['device_ms_per_root']
+    lanes_two, lanes_n = two.get('leaf_evaluated_lanes') or two.get('leaves_evaluated'), d.get('leaf_evaluated_lanes') or d.get('leaves_evaluated')
+    if leaf_two is None or not lanes_two or lanes_n is None:return dict(p1_ms_per_root=p1, plies_ms_per_root=plies, p1_and_plies=source, leaf_ply_ms_per_root=None)
+    leaf = leaf_two / lanes_two * lanes_n;rest = plies - leaf
+    entries = depthn['blocks'][0].get('plies') or ();last = max((int(x.get('ply', 0)) for x in entries), default=0)
+    expand = [x for x in entries if int(x.get('ply', 0)) < last];lanes = sum(lanes_of(x) for x in expand)
+    return dict(p1_ms_per_root=p1, plies_ms_per_root=plies, p1_and_plies=source, leaf_ply_ms_per_root=leaf, expand_plies_ms_per_root=rest,
+        leaf_and_expand='ESTIMATE (depth2-k plies time per evaluated leaf lane)',
+        expand_by_ply={str(x.get('ply')): None if not lanes else rest * lanes_of(x) / lanes for x in expand},
+        host_pack_ms_per_root=d.get('host_pack_ms_per_root'), ply_loop_ms_per_root=d.get('ply_loop_ms_per_root'),
         depth2_full_width_pass_ms_per_root=(d.get('parts_ms_per_root') or {}).get('depth2_full_width_pass'),
         searched_maps_host_ms_per_root=(d.get('parts_ms_per_root') or {}).get('searched_maps_host'),
-        caveat='separate programs and batch shapes; XLA may schedule them differently; host time (packing, the ply loop) is in wall_ms_per_root, not here')
+        method=' '.join(line.strip() for line in ply_split.__doc__.split('\n')),
+        caveat='separate programs and batch shapes; XLA may schedule them differently; host time outside the ply loop is in wall_ms_per_root')
 
 
 def measure_config(config, args, ctx, progress, *, module=None):
@@ -263,9 +294,9 @@ def report_of(args, sections, context, *, isolated_run):
         splits = {}
         for name, s in sections.items():
             c = s['config']
-            if c['depth'] >= 3 and f'depth2-k{c["k"]}' in sections and 'depth1' in sections:
-                d = dict(blocks=s['blocks'], derived=s['derived'][w])
-                splits[name] = ply_split(d, dict(derived=sections[f'depth2-k{c["k"]}']['derived'][w]), dict(derived=sections['depth1']['derived'][w]))
+            if c['depth'] >= 3 and f'depth2-k{c["k"]}' in sections:
+                d = dict(blocks=s['blocks'], derived=s['derived'][w]);one = dict(derived=sections['depth1']['derived'][w]) if 'depth1' in sections else None
+                splits[name] = ply_split(d, dict(derived=sections[f'depth2-k{c["k"]}']['derived'][w]), one)
         by_w[w] = dict(configs=rows, ply_split_estimate=splits)
     return dict(evaluator=context['evaluator'], value_scale=gate.value_scale(context['root_values'], dict(count=0), args.value_reference),
         weights_affect_speed=t2.WEIGHTS_NOTE, schema=SCHEMA, source=context['source'], capacity=args.capacity, depth=args.depth, ks=list(args.k_values),

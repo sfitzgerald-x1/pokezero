@@ -152,19 +152,30 @@ def frame_from_n(count, data, plan):
     return SimpleNamespace(**f)
 
 
+def fake_searched_widths(k_own, k_opp):
+    return k_own + 2, k_opp + 2
+
+
 class OracleNPricer:
-    """DepthNPricer's constructor and price() over the oracle's own surface; `executor`/`reference` overrides make mutants."""
+    """DepthNPricer's constructor and price() over the oracle's own surface; `executor`/`reference` overrides make mutants.
+    As the pricer, under `searched` the ply-2 k's are searched_maps' and the slot widths are derived (fake_searched_widths)."""
     def __init__(self, executor, model, *, capacity=32, depth, k_own, k_opp, k1_own=9, k1_opp=9, block_lanes=2187, selection='prior',
                  digest=True, actor_capacity=3, fixed_capacity=False, reference_module=None):
         self.oracle = reference.DepthNOracle(executor, model, chunk=64);self.capacity, self.block_lanes, self.selection = capacity, block_lanes, selection
-        self.plan = gate.plan_of(depth, k_own, k_opp, selection, k1_own=k1_own, k1_opp=k1_opp);self.reference = reference_module or reference
+        shape = gate.plan_of(depth, k_own, k_opp);self.k_own, self.k_opp, self.searched_k = shape['k_own'], shape['k_opp'], None
+        if selection == 'searched':
+            self.searched_k = (self.k_own[0], self.k_opp[0]);w_own, w_opp = fake_searched_widths(*self.searched_k)
+            self.k_own, self.k_opp = (w_own,) + self.k_own[1:], (w_opp,) + self.k_opp[1:]
+        self.plan = gate.plan_of(depth, self.k_own, self.k_opp, selection, k1_own=k1_own, k1_opp=k1_opp);self.reference = reference_module or reference
 
     def price(self, requests, materializer, recipe, params, *, selection_maps=None):
         if (self.selection == 'searched') != (selection_maps is not None):raise ValueError('searched selection needs selection_maps')
         stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe))
         data = gate.oracle_levels(oracle=self.oracle, stack=stack, requests=requests, recipe=recipe, params=params, frame=None, plan=self.plan,
             selection_maps=selection_maps, reference=self.reference)
-        return frame_from_n(len(requests), data, self.plan)
+        frame = frame_from_n(len(requests), data, self.plan)
+        frame.timing.update(searched_k=self.searched_k, searched_widths=None if self.searched_k is None else (self.k_own[0], self.k_opp[0]))
+        return frame
 
 
 def fake_as_depth2(frame):
@@ -183,9 +194,10 @@ def fake_as_depth2(frame):
 
 
 def fake_searched_maps(frame, k_own, k_opp):
-    """A stand-in `searched` rule with maps k+2 wide (no k+1 assumption) and a per-root flag: each requested seat keeps its
-    encoder-legal actions in DESCENDING action order, up to k+1 of them; a waiting seat [0, -1, ...]."""
-    R = frame.pre.shape[0];own = np.full((R, 2, 9, 9, k_own + 2), -1, np.int32);opp = np.full((R, 2, 9, 9, k_opp + 2), -1, np.int32)
+    """A stand-in `searched` rule and a per-root flag: each requested seat keeps its encoder-legal actions in DESCENDING action
+    order, up to k+1 of them; a waiting seat [0, -1, ...]. The learner's maps are fake_searched_widths wide (k + 2), the
+    opponent's one slot NARROWER (k + 1): a narrower map pads to the pricer's width."""
+    R = frame.pre.shape[0];own = np.full((R, 2, 9, 9, k_own + 2), -1, np.int32);opp = np.full((R, 2, 9, 9, k_opp + 1), -1, np.int32)
     for q, w, a1, r1 in np.argwhere(np.asarray(frame.t1_status) == 2).tolist():
         for out, k, requested, legal in ((own, k_own, frame.t1_own_requested, frame.t1_own_legal), (opp, k_opp, frame.t1_peer_requested, frame.t1_peer_legal)):
             if not requested[q, w, a1, r1]:out[q, w, a1, r1, 0] = 0;continue
@@ -508,14 +520,20 @@ class GateNTests(FixtureN, unittest.TestCase):
         a, b = self._frame(), self._frame();b.nodes[0].own_actions[0, 0, 0, 0] = 2
         self.assertFalse(gate.g2.block_invariance(gate.frame_arrays(a), gate.frame_arrays(b))['passed'])
 
-    def test_searched_maps_come_from_the_public_rule_at_their_own_width(self):
-        evaluation, summary = self.call(self.pricers(selection='searched'))
+    def test_searched_pricers_take_ks_and_the_maps_pad_to_the_derived_widths(self):
+        pricers = self.pricers(selection='searched');evaluation, summary = self.call(pricers)
         result, (status, _) = self.judged(evaluation)
         self.assertEqual(status, 'PASS', failing(result))
-        self.assertEqual(summary['plan']['k_own'], (4, 2));self.assertEqual(summary['plan']['k_opp'], (4, 2))   # k + 2 from the maps, not k + 1
-        self.assertEqual(summary['searched_maps']['widths'], dict(own=4, opp=4));self.assertEqual(summary['searched_maps']['extras'], [dict(shape=[19], dtype='bool', set=0)])
+        self.assertEqual([(p.searched_k, p.k_own, p.k_opp) for p in pricers.instances], [((2, 2), (4, 2), (4, 2))])   # built with k's
+        self.assertEqual(summary['plan']['k_own'], (4, 2));self.assertEqual(summary['plan']['k_opp'], (4, 2))   # the engine's derived widths
+        self.assertEqual(summary['searched'], dict(searched_k=[2, 2], searched_widths=[4, 4]))
+        self.assertEqual(summary['searched_maps']['widths'], dict(own=4, opp=3));self.assertEqual(summary['searched_maps']['extras'], [dict(shape=[19], dtype='bool', set=0)])
+        self.assertEqual(pricers.options()['searched_k'], [2, 2]);self.assertEqual(pricers.options()['slot_widths'], dict(k_own=[4, 2], k_opp=[4, 2]))
         self.assertGreater(result['checks']['a']['compared']['searched_maps_own'], 0)
         self.assertEqual(summary['timing'].keys() >= {'searched_maps_seconds'}, True)
+        def wider(frame, k_own, k_opp):
+            own, opp, flag = fake_searched_maps(frame, k_own, k_opp);return np.concatenate([own, own[..., :1] * 0 - 1], axis=-1), opp, flag
+        with self.assertRaises(ValueError):self.call(self.pricers(module=SimpleNamespace(DepthNPricer=OracleNPricer, as_depth2_frame=fake_as_depth2, searched_maps=wider), selection='searched'))
         def duplicate(frame, k_own, k_opp):
             own, opp, flag = fake_searched_maps(frame, k_own, k_opp);cell = tuple(np.argwhere(np.asarray(frame.t1_status) == 2)[0]);own[cell][1] = own[cell][0]
             return own, opp, flag
@@ -618,7 +636,10 @@ class RealPricerTests(FixtureN, unittest.TestCase):
         evaluation, summary = self.call(self.real(selection='searched'), backups=None)
         result, (status, reasons) = self.judged(evaluation)
         self.assertEqual(status, 'PASS', (failing(result), reasons, result['checks'].get('a', {}).get('first_mismatches')))
-        self.assertGreater(summary['plan']['k_own'][0], 0);self.assertEqual(summary['searched_maps']['widths']['own'], summary['plan']['k_own'][0])
+        searched_widths = self.module().searched_widths(2, 2)
+        self.assertEqual((summary['plan']['k_own'][0], summary['plan']['k_opp'][0]), searched_widths)
+        self.assertEqual(summary['searched'], dict(searched_k=[2, 2], searched_widths=list(searched_widths)))
+        self.assertTrue(summary['searched_maps']['widths']['own'] <= searched_widths[0] and summary['searched_maps']['widths']['opp'] <= searched_widths[1])
 
     def test_depth4_and_mixed_widths_pass(self):
         for depth, k_own, k_opp, k1 in ((4, 2, 2, (9, 9)), (3, (3, 2), (1, 3), (9, 9)), (3, 2, 2, (3, 2))):
@@ -649,7 +670,7 @@ class RealPricerTests(FixtureN, unittest.TestCase):
                 self.requests, self.tables, self.recipe, PARAMS))
             frames = {}
             for mode in gate.MODES:
-                pricers = self.real(selection=mode);maps, first, _ = pricers.maps(depth2);_, (pricer,) = pricers.get(first)
+                pricers = self.real(selection=mode);maps, first, _ = pricers.maps(depth2);_, (pricer,) = pricers.get()
                 frames[(mode, 2)] = pricer.price(self.requests, self.tables, self.recipe, PARAMS, **({} if maps is None else dict(selection_maps=maps)))
         report = gate.merge_diagnostics([gate.diagnostics_call(depth2, frames, self.requests, backups=backups, backups2=depth2_backups)])
         self.assertEqual(set(report['change_rate']), {'prior-k2', 'searched-k2'});self.assertGreater(report['prior_vs_searched']['k2']['cells'], 0)
@@ -714,7 +735,7 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         self.assertIn('depth2_full_width', report['refusals']);self.assertGreater(report['leaves']['checked'], 0)
         code, searched = self.main('--save-arrays', '--selection', 'searched', '--sample-leaves', '2')
         report = json.loads((searched / 'gate.json').read_text());self.assertEqual((code, report['status']), (0, 'PASS_SAMPLED'))
-        self.assertEqual(report['searched_maps'][0]['widths'], dict(own=4, opp=4))
+        self.assertEqual(report['searched_maps'][0]['widths'], dict(own=4, opp=3))
         out = Path(tempfile.mkdtemp(prefix='depthn-cli-')) / 'diag'
         with patch.object(gate, 'log', lambda *a, **k: None), patch.dict(sys.modules, {'gpu_engine.depthn_backups': FakeBackupsN}):
             code = gate.main(['--out', str(out), '--diagnostics-from', str(prior), str(searched)])

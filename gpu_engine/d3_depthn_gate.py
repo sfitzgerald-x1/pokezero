@@ -158,7 +158,7 @@ def oracle_levels(*, oracle, stack, requests, recipe, params, frame, plan, selec
         for t, (spec, node, i) in enumerate(zip(parent_specs.tolist(), parent_ids.tolist(), parent_rows.tolist())):
             q, w = spec[:2]
             if p == 2 and plan['selection'] == 'searched':
-                a1, r1 = spec[2:4];own, opp = np.asarray(selection_maps[2][0][q, w, a1, r1]), np.asarray(selection_maps[2][1][q, w, a1, r1])
+                a1, r1 = spec[2:4];own, opp = pad_map(selection_maps[2][0][q, w, a1, r1], k_own), pad_map(selection_maps[2][1][q, w, a1, r1], k_opp)
             else:
                 own_logits, opp_logits = logits_at(frame, ply, q, w, node) if usable else (rec['own_logits'][i], rec['peer_logits'][i])
                 own = reference.prior_map(rec['own_legal'][i], own_logits, bool(rec['own_requested'][i]), k_own)
@@ -176,6 +176,13 @@ def oracle_levels(*, oracle, stack, requests, recipe, params, frame, plan, selec
             leaves = oracle.leaves_n(stack, specs[chosen], N, params);leaves['index'] = index[chosen]
     return dict(roots=roots, children=children, cells=cells, levels=level_records, ids=ids, links=links, maps=maps, leaves=leaves,
         enumerated=enumerated, worlds=len(stack.rows), plan=plan, forced_leaves=forced)
+
+
+def pad_map(m, width):
+    """A supplied slot -> action map padded with -1 to the pricer's slot width (a wider map is refused, as the pricer does)."""
+    m = np.asarray(m, np.int64)
+    if len(m) > width:raise ValueError(f'a supplied map has {len(m)} slots, wider than the pricer\'s {width}')
+    return np.concatenate([m, np.full(width - len(m), -1, np.int64)])
 
 
 def _sample(index, sample, requests, block, frame):
@@ -537,40 +544,40 @@ def load_frame(path):
 
 
 class DepthNPricers:
-    """The run's DepthNPricer instances: one per block_lanes value (the last prices the checked frame), cached per ply-2
-    width pair. Under `searched` ply 2's slot widths are the supplied maps' widths, read from the public searched_maps'
-    output (never assumed to be k + 1); k_own[0]/k_opp[0] are then searched_maps' k arguments."""
+    """The run's DepthNPricer instances, one per block_lanes value (the last prices the checked frame). k_own/k_opp are the
+    constructor's per-ply k's: under `searched` the ply-2 entries are searched_maps' k's and the pricer derives its ply-2 slot
+    widths (searched_widths), so the plan's widths are read back from the engine (engine.k_own/k_opp hold widths,
+    engine.searched_k the k's); plies past 2 are prior widths in both modes."""
     def __init__(self, module, executor, model, *, depth, k_own, k_opp, selection, capacity, actor_capacity, lanes=(2187,), k1_own=9,
                  k1_opp=9, digest=True):
         self.module, self.executor, self.model, self.depth, self.selection = module, executor, model, depth, selection
-        self.k_own, self.k_opp = plan_of(depth, k_own, k_opp)['k_own'], plan_of(depth, k_own, k_opp)['k_opp']
+        shape = plan_of(depth, k_own, k_opp);self.k_own, self.k_opp = shape['k_own'], shape['k_opp']
         self.capacity, self.actor_capacity, self.lanes, self.k1_own, self.k1_opp, self.digest = capacity, actor_capacity, tuple(lanes), k1_own, k1_opp, digest
-        self.cache = {}
+        self.instances = None
 
-    def plan(self, first=None):
-        k_own, k_opp = self.k_own, self.k_opp
-        if first is not None:k_own, k_opp = (int(first[0]),) + k_own[1:], (int(first[1]),) + k_opp[1:]
-        return plan_of(self.depth, k_own, k_opp, self.selection, k1_own=self.k1_own, k1_opp=self.k1_opp)
-
-    def get(self, first=None):
-        """(plan, [pricer per block_lanes value]) for these ply-2 widths."""
-        plan = self.plan(first);key = (plan['k_own'], plan['k_opp'])
-        if key not in self.cache:
-            self.cache[key] = [self.module.DepthNPricer(self.executor, self.model, capacity=self.capacity, depth=self.depth, k_own=plan['k_own'],
-                k_opp=plan['k_opp'], k1_own=self.k1_own, k1_opp=self.k1_opp, block_lanes=lanes, selection=self.selection, digest=self.digest,
+    def get(self):
+        """(plan, [pricer per block_lanes value]); the plan carries the engine's slot widths."""
+        if self.instances is None:
+            self.instances = [self.module.DepthNPricer(self.executor, self.model, capacity=self.capacity, depth=self.depth, k_own=self.k_own,
+                k_opp=self.k_opp, k1_own=self.k1_own, k1_opp=self.k1_opp, block_lanes=lanes, selection=self.selection, digest=self.digest,
                 actor_capacity=self.actor_capacity) for lanes in self.lanes]
-        return plan, self.cache[key]
+        engine = self.instances[-1];widths = lambda name, given: tuple(int(x) for x in (getattr(engine, name, None) or given))
+        return plan_of(self.depth, widths('k_own', self.k_own), widths('k_opp', self.k_opp), self.selection, k1_own=self.k1_own, k1_opp=self.k1_opp), self.instances
 
     def maps(self, depth2_frame):
-        """(selection_maps, ply-2 widths, extras) from the public searched_maps under `searched`; (None, None, ()) under prior."""
+        """(selection_maps, the maps' widths, extras) from the public searched_maps(frame, k_own[0], k_opp[0]) under `searched`
+        (the same k's the pricer was built with); (None, None, ()) under prior."""
         if self.selection != 'searched':return None, None, ()
         own, opp, extras = split_searched(self.module.searched_maps(depth2_frame, self.k_own[0], self.k_opp[0]))
         return {2: (own, opp)}, (int(own.shape[-1]), int(opp.shape[-1])), extras
 
     def options(self):
+        plan = self.get()[0] if self.instances is not None else None;engine = (self.instances or [None])[-1]
         return dict(depth=self.depth, k_own=list(self.k_own), k_opp=list(self.k_opp), selection=self.selection, capacity=self.capacity,
             actor_capacity=self.actor_capacity, block_lanes=list(self.lanes), k1_own=self.k1_own, k1_opp=self.k1_opp, digest=self.digest,
-            widths_note='under searched, k_own[0]/k_opp[0] are searched_maps\' k; ply 2\'s pricer widths are the maps\' widths' if self.selection == 'searched' else None)
+            slot_widths=None if plan is None else dict(k_own=list(plan['k_own']), k_opp=list(plan['k_opp'])),
+            searched_k=None if engine is None or getattr(engine, 'searched_k', None) is None else list(engine.searched_k),
+            widths_note='under searched, k_own[0]/k_opp[0] are searched_maps\' k\'s; the engine derives ply 2\'s slot widths' if self.selection == 'searched' else None)
 
 
 def depth2_pass_pricer(module, executor, model, *, capacity, actor_capacity, k1_own=9, k1_opp=9, block_lanes=2187):
@@ -613,7 +620,9 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
         with stage(progress, 'searched_maps', **context) as info:
             clock = time.perf_counter();selection_maps, first, extras = pricers.maps(depth2_frame)
             timing['searched_maps_seconds'] = time.perf_counter() - clock;info.update(widths=first, extras=describe(extras))
-    plan, instances = pricers.get(first);pricer, others = instances[-1], instances[:-1]
+    plan, instances = pricers.get();pricer, others = instances[-1], instances[:-1]
+    if first is not None and (first[0] > plan['k_own'][0] or first[1] > plan['k_opp'][0]):
+        raise ValueError(f'searched_maps returned widths {first}, wider than the pricer\'s ply-2 slot widths {(plan["k_own"][0], plan["k_opp"][0])}')
     kwargs = {} if selection_maps is None else dict(selection_maps=selection_maps);other_frames = []
     for i, other in enumerate(others):
         with stage(progress, f'depthn_pricer_invariance_{i}', block_lanes=other.block_lanes, **context) as info:
@@ -662,6 +671,8 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
         leaves_enumerated=len(data['enumerated'].get('leaf', ())), leaves_checked=0 if data['leaves'] is None else len(data['leaves']['specs']),
         forced_leaves=data['forced_leaves'], plies_work=json.loads(json.dumps((getattr(frame, 'timing', None) or {}).get('plies'), default=str)),
         searched_maps=evaluation.get('searched_maps'), saved_frames=saved,
+        searched={k: json.loads(json.dumps((getattr(frame, 'timing', None) or {}).get(k), default=str)) for k in ('searched_k', 'searched_widths')}
+            if plan['selection'] == 'searched' else None,
         passed=dict(a=evaluation['a']['passed'], b_discrete=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed'],
             **({'block_invariance_discrete': all(r['passed'] for r in evaluation['invariance'])} if evaluation.get('invariance') else {}),
             **({'e': evaluation['e']['passed']} if 'e' in evaluation else {})))
@@ -1151,7 +1162,7 @@ def run_diagnostics(args, *, roots, provider, plan, module, frame_pricer, seeds,
         frames = {}
         for key, pricers in sets.items():
             with stage(log, 'depth3', config=frame_tag(*key), **context) as info:
-                maps, first, extras = pricers.maps(depth2_frame);_, (pricer,) = pricers.get(first)
+                maps, first, extras = pricers.maps(depth2_frame);_, (pricer,) = pricers.get()
                 frames[key] = pricer.price(requests, provider.materializer, recipe, roots.params, **({} if maps is None else dict(selection_maps=maps)))
                 info.update(widths=first, extras=describe(extras), **g2.pricer_costs(frames[key].timing))
             if args.save_arrays:save_frame(out / f'frames-block{block}-call{call}-{frame_tag(*key)}.npz', frames[key], requests, meta=dict(context, evaluator=roots.evaluator))
