@@ -1014,6 +1014,10 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertLess(md.index('### Stage split per W'), md.index('### Reference (not the admission bar)'))
         self.assertEqual(report['compile']['configs']['depth2-fw']['cold_seconds'], 2.)   # once per (capacity, W, mode), the pricer compiled once
         self.assertIn('Compile (cold, at process start, not charged to a decision): process 2.0 s', md)
+        variants = tool.variants_of(FakeSolver()) + [SimpleNamespace(name='fake@pool4', solver=FakeSolver(), pool=None, pool_size=4)]
+        two = tool.measure_config('depth2-fw', (2,), self.args('--configs', 'depth2-fw@2', '--repeats', '1'), fake_ctx(), None, variants=variants, module=MODULE,
+            memory=lambda: {}, timer=CLOCK)
+        self.assertEqual(len(two), 2);self.assertEqual(tool.compile_totals(two)['process']['cold_seconds'], 2.)   # the variants share one call's compile: counted once
 
     def test_isolate_argv(self):
         args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2');calls = []
