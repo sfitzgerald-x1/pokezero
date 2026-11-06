@@ -15,6 +15,12 @@ depth3-searched-k3 at W=2), one pricer instance per (config, pricer capacity):
   turn-1 stage and the blocked turn 2) compiles per pricer capacity in its own kernel table, apart from DepthNPricer's.
 A call's stages are CONTIGUOUS time.perf_counter() laps (every instant between its start and end is charged to exactly
 one stage, so the stages sum to the call's wall time; seconds a pricer measures inside its own lap are moved, not added):
+- root_forward: the learner's root forward a live move pays before searching: the evaluator's params (the head with
+  --head-archive, else the bank actor; one forward per distinct learner actor) on the C roots' encoder inputs batched
+  [C, 1, ...], the D-arm v5 head in bf16 as gate.bind_roots runs it, synced and its logits/value/valid on the host. The
+  Requests keep bind_roots' root prior (computed at load); this stage times the cost. NOT timed, not isolable from the bank:
+  the RootContext build and the observation encoding, both produced inside the bank collector's rollout scan
+  (retain_teacher_roots); a live move pays them too (not estimated here).
 - host_prep: Provider._prepare_batched's per-root core for exactly these C roots (host_prep below): per scan step the device
   slice of the retained RootContext and the host copy of its stream/frame ids, ONE worlds.detach_roots pass over the step's
   (row, owner) pairs (part detach), the address check, the block-0 worlds.plan_starts under the declared recipe (part
@@ -114,7 +120,8 @@ LIMIT_MS = 800.
 RULE = ('a (config, W, mode, solver, pool) fits at capacity C when the p90 over its N distinct move windows (warm call i prices the '
     'chunk\'s roots i*C .. i*C+C-1, cycled; N = --repeats) of the end-to-end totals is <= 800 ms (200 ms of slack under the 1,000 ms '
     'per-move budget); the median is shown beside it; the cold call (window 0) is excluded')
-STAGES = ('host_prep', 'world_construction', 'pricer', 'solve', 'return')
+STAGES = ('root_forward', 'host_prep', 'world_construction', 'pricer', 'solve', 'return')
+SHARED = STAGES[:4]   # every variant of a call shares these; solve and return are each variant's own
 COMPILE = 'compile'
 LANES = 81
 MODES = ('sequential', 'packed')
@@ -146,6 +153,8 @@ PACKED_NOTE = ('TIMING PROXY: one pass at K*C prices K copies of block 0\'s requ
     'materialization refuses a start planned under another); blocks 1..K-1 are still planned and timed as in sequential; same device shapes as K '
     'blocks, values are block 0\'s K times, not U1\'s W composition')
 STAGE_SCOPE = {
+    'root_forward': 'the learner\'s root forward on the C roots\' encoder inputs batched [C, 1, ...] (evaluator params, D-arm v5 head in bf16, synced, '
+        'outputs on the host); NOT timed (inside the bank collector\'s scan, not isolable): the RootContext build and the observation encoding',
     'host_prep': 'Provider._prepare_batched\'s per-root core for exactly C roots: per-step RootContext device slice + stream/frame host copy, one '
         'worlds.detach_roots pass per step (part detach), address check, block-0 worlds.plan_starts (part plan_starts), encoder inputs, prior, actors '
         'and the Request (part assemble); not timed: record binding hashes and the head override\'s root forward (gate.bind_roots at load)',
@@ -160,7 +169,7 @@ STAGE_SCOPE = {
     'return': 'per variant: each root\'s move (argmax of the improved target; hedge: sample(strategy, search_uniform(2026110500, address))) + '
         'block_until_ready on any device array left in the frames (expected none) + fence',
     'compile': 'lower + compile seconds of programs compiled during the call (the pricers\' compiles); excluded from the total',
-    'total': 'per variant: host_prep + world_construction + pricer (shared by the call\'s variants) + its solve + its return; compile excluded'}
+    'total': 'per variant: root_forward + host_prep + world_construction + pricer (shared by the call\'s variants) + its solve + its return; compile excluded'}
 
 
 def ints(text):
@@ -641,12 +650,13 @@ def count_spread(values):
 
 
 def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, rotate=0, timer=time.perf_counter):
-    """One call: host_prep, K - 1 plannings and the pricing (K sequential passes of C roots, or one packed pass at K*C) once, then
+    """One call: root_forward, host_prep, K - 1 plannings and the pricing (K sequential passes of C roots, or one packed pass at K*C) once, then
     for every variant (solver, pool size) its solve and return on the same frames, in an order rotated by `rotate`; all contiguous
     laps. record['stages'] covers the whole call (solve and return summed over variants: sum == wall_seconds); each variant's
-    end-to-end total = host_prep + world_construction + pricer + its solve + its return. Returns (record, block-0 requests)."""
+    end-to-end total = root_forward + host_prep + world_construction + pricer + its solve + its return. Returns (record, block-0 requests)."""
     variants = variants_of(variants if variants is not None else solver)
     blocks = worlds // 2;clock = Clock(timer)
+    ctx.root_forward(roots);ctx.fence();clock.lap('root_forward')
     requests, parts, prep_info = ctx.prep(roots);ctx.fence();clock.lap('host_prep')
     for name, seconds in parts.items():clock.note('host_prep', name, seconds)
     count = len(requests);planned = [list(requests)]
@@ -666,7 +676,7 @@ def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, ro
         with context():frame, info = search.price([r for _ in range(blocks) for r in planned[0]], recipe, clock)
         views = [(frame, block * count) for block in range(blocks)];infos.append(dict(info, block='packed'))
     else:raise ValueError(f'mode in {MODES}')
-    common = sum(clock.stages[s] for s in ('host_prep', 'world_construction', 'pricer'));frames = [frame for frame, _ in views]
+    common = sum(clock.stages[s] for s in SHARED);frames = [frame for frame, _ in views]
     order = variants[rotate % len(variants):] + variants[:rotate % len(variants)];last = clock.last;out = {}
     for v in order:
         sub = Clock(timer, start=last)
@@ -715,7 +725,7 @@ def measure_series(search, ctx, roots_of, worlds, mode, repeats, *, solver=None,
 
 def variant_view(call, name):
     """One call as one variant saw it: the shared stages with its own solve and return, its end-to-end total and parts."""
-    v = call['variants'][name];stages = {k: call['stages'][k] for k in ('host_prep', 'world_construction', 'pricer', COMPILE)}
+    v = call['variants'][name];stages = {k: call['stages'][k] for k in SHARED + (COMPILE,)}
     stages.update(solve=v['solve_seconds'], **{'return': v['return_seconds']})
     return dict({k: x for k, x in call.items() if k not in ('variants', 'stages', 'parts')}, stages=stages, parts={**call['parts'], **v['parts']},
         total_seconds=v['total_seconds'], labeled=v['labeled'], refused=v['refused'], moves=v['moves'], leftover_device_arrays=v['leftover_device_arrays'])
@@ -839,6 +849,19 @@ def host_prep(ctx, roots):
     return requests, dict(detach=detach, plan_starts=plan, assemble=assemble), dict(steps=len(contexts), detach_passes=len(batch))
 
 
+def root_forward(ctx, roots):
+    """root_forward for exactly these C roots (module docstring): per distinct learner actor one batched forward of the evaluator's
+    params on the roots' encoder inputs [C, 1, ...] (ctx.root_program: the D-arm v5 head in bf16, jitted), synced by bringing its
+    policy logits, value and validity to the host. Returns {actor: (logits, value, valid)}."""
+    import jax
+    out = {}
+    for actor in sorted({int(r.learner_actor) for r in roots.bound}):
+        mine = [r for r in roots.bound if int(r.learner_actor) == actor]
+        inputs = {k: np.concatenate([np.asarray(r.root_inputs[k]) for r in mine]) for k in mine[0].root_inputs}
+        result = ctx.root_program(ctx.params[actor], inputs);out[actor] = jax.device_get((result.policy_logits, result.value, result.valid))
+    return out
+
+
 def check_prepared(requests, bound):
     """The timed host_prep must rebuild the bank's own Requests: same address, legal mask, root prior, actors and world plans."""
     if len(requests) != len(bound):raise ValueError('host_prep returned a different root count')
@@ -872,7 +895,11 @@ def prepare(args):
         bound = window_roots(ctx.available, capacity, window)
         return SimpleNamespace(bound=bound, slots=[slot_of[address_key(r)] for r in bound], window=window, keys=[address_key(r) for r in bound])
     ctx.chunk = SimpleNamespace(roots=captured['roots'], frames=frames, bank=bank);ctx.head_override = bool(args.head_archive);ctx.seeds = seeds;ctx.blocks = blocks
-    ctx.roots = roots;ctx.prep = lambda r: host_prep(ctx, r);ctx.fence = device_fence;ctx.check = lambda requests, r: check_prepared(requests, r.bound)
+    import jax
+    from gpu_engine import v5_model
+    ctx.root_program = jax.jit(lambda params, inputs: v5_model.forward(params, inputs, ctx.plan.model, compute_dtype='bfloat16'))   # gate.bind_roots' forward
+    ctx.roots = roots;ctx.prep = lambda r: host_prep(ctx, r);ctx.root_forward = lambda r: root_forward(ctx, r);ctx.fence = device_fence
+    ctx.check = lambda requests, r: check_prepared(requests, r.bound)
     ctx.replan = lambda request, recipe: replace(request, plans=worlds.plan_starts(request.plans.root, provider.source, recipe))
     ctx.compile_cache = captured.get('compile_cache')
     return ctx
@@ -936,7 +963,7 @@ def header(context, commit):
         solvers=context['solvers'], solver_pools=context.get('solver_pools', []), hedge=context.get('hedge'), variants=context.get('variants'),
         rule=RULE, limit_ms=LIMIT_MS, budget_ms=BUDGET_MS, stages=STAGE_SCOPE, packed=PACKED_NOTE,
         variants_scope='every (solver, pool size) solves the SAME priced frames of each call, in an order rotated per call; its end-to-end total = '
-            'host_prep + world_construction + pricer (shared) + its own solve and return')
+            'root_forward + host_prep + world_construction + pricer (shared) + its own solve and return')
 
 
 # Selection and report -----------------------------------------------------------------------------------------------------------------
@@ -1015,8 +1042,8 @@ def markdown(report):
         if v['largest_capacity'] else f'{c} [{n}]: none of C={caps} at W={v["measured_worlds"]}' for c, by in sel['configs'].items() for n, v in by.items()) + '.',
         f'Packed rows are a timing proxy ({PACKED_NOTE}).', '',
         f'### Stage medians (ms), warm calls [{world}]', '',
-        f'| config | W | mode | solver | pool | C | host_prep | world_construction ({_short(path["world_planner"])} + {_short(path["world_builder"])}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured |',
-        '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} + {_short(path["world_builder"])}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured |',
+        '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for s in report['series']:
         w = s['warm'];leaves = s['leaves']
         lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ' + ' | '.join(_ms(w[k]['median_ms']) for k in STAGES)

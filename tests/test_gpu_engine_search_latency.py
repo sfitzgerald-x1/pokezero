@@ -143,7 +143,7 @@ def fake_ctx(blocks=4):
         CLOCK.advance(.003);return [request(i, 0) for i in roots.bound], dict(detach=.002, plan_starts=.0005, assemble=.0005), dict(steps=2, detach_passes=2)
     def replan(r, recipe):
         CLOCK.advance(.001);return request(r.root, RECIPES.index(recipe))
-    ctx.prep, ctx.replan = prep, replan
+    ctx.prep, ctx.replan, ctx.root_forward = prep, replan, lambda roots: CLOCK.advance(.004)
     ctx.check = lambda requests, roots: ctx.checked.append(len(requests))
     ctx.available = list(range(64))
     def roots(capacity, window=0):
@@ -330,7 +330,8 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(s['solve'], .0004);self.assertAlmostEqual(s['return'], 0.)
         self.assertAlmostEqual(p['host_prep.detach'], .002)   # a part measured inside host_prep: noted, never added to the stage
         self.assertEqual((v['labeled'], v['moves'], v['leftover_device_arrays']), (4, [1] * 4, 0))
-        self.assertAlmostEqual(record['common_seconds'], s['host_prep'] + s['world_construction'] + s['pricer'], places=12)
+        self.assertAlmostEqual(record['common_seconds'], s['root_forward'] + s['host_prep'] + s['world_construction'] + s['pricer'], places=12)
+        self.assertAlmostEqual(s['root_forward'], .004)
         self.assertEqual(record['pricing'][0]['maps_widths'], [4, 5]);self.assertEqual(record['pricing'][0]['slot_widths'], [4, 5])
         self.assertAlmostEqual(record['pricing'][0]['depthn']['p1_seconds'], .004 - .0007)
         self.assertEqual(len(requests), 4)
@@ -343,7 +344,7 @@ class SearchLatencyTests(unittest.TestCase):
         with patch.object(tool, 'device_arrays', lambda frames: [sentinel]), patch('jax.block_until_ready', block_until_ready):
             record, _ = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK)
         s, p, v = record['stages'], record['parts'], record['variants']['fake@pool0']
-        self.assertAlmostEqual(s['host_prep'], .003 + FENCE)   # host_prep ends with its fence
+        self.assertAlmostEqual(s['root_forward'], .004 + FENCE);self.assertAlmostEqual(s['host_prep'], .003 + FENCE)   # each ends with its fence
         self.assertAlmostEqual(p['pricer.depth2_pass'], .008 + FENCE);self.assertAlmostEqual(p['pricer.depthn'], .008 + FENCE)   # each price() ends synced
         self.assertAlmostEqual(p['pricer.searched_maps_host'], .005)   # the host maps hold no fence
         self.assertAlmostEqual(s['return'], SYNC + FENCE);self.assertEqual(synced, [[sentinel]])   # the leftover device array is waited on in return
@@ -356,12 +357,12 @@ class SearchLatencyTests(unittest.TestCase):
         memory = lambda: dict(process_peak_bytes_so_far=10, bytes_in_use=4)
         [series] = tool.measure_series(search, ctx, lambda i: ctx.roots(4, i), 2, 'sequential', 3, solver=FakeSolver(), progress=None, memory=memory,
             baseline=dict(bytes_in_use=4), capacity=4, timer=CLOCK)
-        warm = [.003 + .01 + .008 + x + .0004 for x in (.1, .3, .2)]
+        warm = [.004 + .003 + .01 + .008 + x + .0004 for x in (.1, .3, .2)]
         self.assertEqual(series['warm_calls'], 3);self.assertEqual(series['warm']['total']['n'], 3)
         self.assertAlmostEqual(series['warm']['total']['median_ms'], 1e3 * np.median(warm), places=6)
         self.assertAlmostEqual(series['warm']['total']['p90_ms'], 1e3 * np.percentile(warm, 90), places=6)
         self.assertAlmostEqual(series['warm']['total']['max_ms'], 1e3 * max(warm), places=6)
-        self.assertAlmostEqual(series['first_call']['compile_seconds'], 2.);self.assertAlmostEqual(series['first_call']['total_seconds'], .003 + .01 + 1.008 + .0004)
+        self.assertAlmostEqual(series['first_call']['compile_seconds'], 2.);self.assertAlmostEqual(series['first_call']['total_seconds'], .004 + .003 + .01 + 1.008 + .0004)
         self.assertEqual((series['warm_calls_with_compiles'], series['warm_compile_seconds']), (0, 0.))
         self.assertAlmostEqual(series['warm']['pricer']['median_ms'], 1e3 * .208, places=6)
         self.assertEqual(len(series['calls']), 4);self.assertEqual(ctx.checked, [4] * 4)   # every call's requests are checked
@@ -567,6 +568,17 @@ class SearchLatencyTests(unittest.TestCase):
             moved = ctx.chunk.roots.streams;moved[1, 2] += 1   # the device context disagrees with the frames' address
             with self.assertRaises(ValueError):tool.host_prep(ctx, SimpleNamespace(slots=slots, bound=bound))
 
+    def test_root_forward_batches_the_c_roots_per_learner_actor(self):
+        given = []
+        def program(params, inputs):
+            given.append((params, {k: v.shape for k, v in inputs.items()}));C = len(inputs['history_mask'])
+            return SimpleNamespace(policy_logits=np.zeros((C, 1, 9), np.float32), value=np.zeros((C, 1), np.float32), valid=np.ones((C, 1), bool))
+        root = lambda actor: SimpleNamespace(learner_actor=actor, root_inputs=dict(categorical_ids=np.zeros((1, 1, 5), np.int32), history_mask=np.ones((1, 1), bool)))
+        ctx = SimpleNamespace(root_program=program, params=('head', 'other'))
+        out = tool.root_forward(ctx, SimpleNamespace(bound=[root(0), root(0), root(1), root(0)]))
+        self.assertEqual(given, [('head', dict(categorical_ids=(3, 1, 5), history_mask=(3, 1))), ('other', dict(categorical_ids=(1, 1, 5), history_mask=(1, 1)))])
+        self.assertEqual(sorted(out), [0, 1]);self.assertEqual(out[0][0].shape, (3, 1, 9))
+
     def test_check_prepared_and_the_chunk_capture_hook(self):
         start = lambda seed: SimpleNamespace(world=0, seed=seed, refusals=(), revealed_source_indices=((0, 1),))
         make = lambda seed, logits=(0.,) * 9: SimpleNamespace(plans=SimpleNamespace(root=SimpleNamespace(address=SimpleNamespace(stream=1, frame=2, owner=0)),
@@ -671,7 +683,7 @@ class SearchLatencyTests(unittest.TestCase):
             self.assertEqual([v.name for v in variants], ['learner_max@pool0', 'learner_max@pool4', 'hedge@pool0', 'hedge@pool4'])
             search = tool.Search('depth2-fw', 2, args, ctx, module=FRAMES)
             record, _ = tool.run_call(search, ctx, ctx.roots(2), 4, 'sequential', variants=variants, rotate=1, timer=CLOCK)
-        s, v = record['stages'], record['variants'];common = s['host_prep'] + s['world_construction'] + s['pricer']
+        s, v = record['stages'], record['variants'];common = s['root_forward'] + s['host_prep'] + s['world_construction'] + s['pricer']
         self.assertEqual(len(search.pricer.log), 2)   # priced once (two blocks), solved by all four variants
         self.assertEqual(record['variant_order'], ['learner_max@pool4', 'hedge@pool0', 'hedge@pool4', 'learner_max@pool0'])   # rotated per call
         self.assertAlmostEqual(sum(s.values()), record['wall_seconds'], places=12);self.assertAlmostEqual(record['common_seconds'], common, places=12)
