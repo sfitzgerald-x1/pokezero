@@ -282,6 +282,11 @@ class Search:
                     action = hedge.sample(choice.strategy, hedge.search_uniform(self.seed, roots[i].address))
                     if not legal[i][action]:raise ValueError('search chose an illegal action')
                     record.update(strategy=[round(p, 6) for p in choice.strategy], value=choice.value)
+                    # Search minus raw in the evaluator's own terms: completed-Q of the played action minus the raw
+                    # sampled action's, and minus the raw argmax's (0 when the choice equals them).
+                    q = hedge.averaging(prices, root_legal).q
+                    argmax = max((a for a in range(9) if legal[i][a]), key=lambda a: (float(logits[i][a]), -a))
+                    record.update(q_gain=q[action] - q[int(raw_actions[i])], q_gain_vs_argmax=q[action] - q[argmax])
             out.append((action, record))
         self.timing['reduce_seconds'] += time.perf_counter() - clock
         if probe is not None:
@@ -493,8 +498,12 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
             c['searched_changed_vs_raw_sample'] += d['searched'] and d['chosen'] != d['raw']
             c['searched_changed_vs_raw_argmax'] += d['searched'] and d['chosen'] != d['argmax']
             if d['refusal'] and d['refusal'] != 'no-search':c['refusal:' + str(d['refusal'])[:80]] += 1
+            if d.get('q_gain') is not None:c['q_gain_sum'] += d['q_gain'];c['q_gain_vs_argmax_sum'] += d['q_gain_vs_argmax']
     total = collections.Counter()
     for c in bands.values():total.update(c)
+    for c in list(bands.values()) + [total]:
+        for key in ('q_gain', 'q_gain_vs_argmax'):
+            c[key + '_mean'] = c[key + '_sum'] / c['searched'] if c['searched'] else None
     interval = lambda shift, scale: None if se is None else [scale * (mean - 1.645 * se - shift), scale * (mean + 1.645 * se - shift)]
     report = dict(schema='v2-search-head-to-head.v1', label=label,
         a=dict(run=args.a_run, iteration=a.iteration, archive_sha256=a.archive_sha256),
