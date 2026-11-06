@@ -32,15 +32,19 @@ def own_toxic_check(checks,condition,convert):
 
 def payload_checks(request,payload,lines,*,owner,checks=None):
     c=Checks() if checks is None else checks
+    from .phase_d_tail import inspect_facts
+    tail_checks,tail=inspect_facts(request,payload,lines)
+    c.rows.extend(tail_checks)
+    replacement=tail['replacement'] is not None
     party=request.get('side',{}).get('pokemon')
     c.add('OWN_REQUEST_OWNER_MISMATCH',request.get('side',{}).get('id')!='p'+str(owner+1))
-    c.add('OWN_COMPLETE_ORDINARY_REQUEST_REQUIRED',not isinstance(party,list) or len(party)!=6 or len(request.get('active',()))!=1)
-    c.add('SUSPENDED_OR_REPLACEMENT_BOUNDARY',bool(request.get('wait')or request.get('teamPreview')or any(request.get('forceSwitch',()))))
+    c.add('OWN_COMPLETE_ORDINARY_REQUEST_REQUIRED',not isinstance(party,list) or len(party)!=6 or (not replacement and len(request.get('active',()))!=1))
+    c.add('SUSPENDED_OR_REPLACEMENT_BOUNDARY',bool(request.get('wait')or request.get('teamPreview')or any(request.get('forceSwitch',())) and not replacement))
     party=party if isinstance(party,list)else []
     active=[i for i,row in enumerate(party)if isinstance(row,dict)and row.get('active')is True]
     c.add('OWN_ACTIVE_UNAVAILABLE',len(active)!=1)
     current=request.get('active',())
-    c.add('OWN_TRAP_STATE_UNAVAILABLE',bool(current[0].get('maybeTrapped')and 'trapped'not in current[0])if len(current)==1 else None)
+    c.add('OWN_TRAP_STATE_UNAVAILABLE',bool(current[0].get('maybeTrapped')and 'trapped'not in current[0])if len(current)==1 else False if replacement else None)
     for slot,row in enumerate(party or ()):
         if not isinstance(row,dict):c.add('OWN_PARTY_ROW_MALFORMED',True,slot=slot);continue
         # Sleep is now a deferred public posterior, not an unconditional refusal.
@@ -70,6 +74,9 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
     hooks=w.hooks
     c=payload_checks(request,public.materialization_payload,lines,owner=public.address.owner,checks=checks)
     owner=public.address.owner;foe=1-owner;catalog=adapter.catalog;state=adapter.state
+    from .phase_d_tail import inspect_facts,facts
+    _,tail=inspect_facts(request,public.materialization_payload,lines)
+    replacement=tail['replacement'] is not None
     c.add('PUBLIC_SOURCE_BINDING_DIFFERS',catalog.source.source_hash!=source.source_hash)
     try:adapter.encode(request,owner_side=owner);c.add('B2_OWNING_OBSERVATION_REFUSED',False)
     except (ValueError,TypeError,KeyError,IndexError)as error:c.add('B2_OWNING_OBSERVATION_REFUSED',True,error=str(error))
@@ -137,7 +144,7 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
             if mon.get('active')is True:
                 for move in moves:
                     rows=[r for r in current[0].get('moves',())if w._source_move(r.get('id',''))==w._source_move(move)]if len(current)==1 else []
-                    c.add('OWN_ACTIVE_PP_UNAVAILABLE',len(rows)!=1 or type(rows[0].get('pp'))is not int if len(current)==1 else None,slot=slot,move=move,reason='Requires an ordinary active request')
+                    c.add('OWN_ACTIVE_PP_UNAVAILABLE',len(rows)!=1 or type(rows[0].get('pp'))is not int if len(current)==1 else False if replacement else None,slot=slot,move=move,reason='Requires an ordinary active request')
     active=[i for i,m in enumerate(party)if isinstance(m,dict)and m.get('active')is True]
     c.add('OWN_ACTIVE_PUBLIC_IDENTITY_UNAVAILABLE',active[0]not in joined if len(active)==1 else None)
     ctx,_,ok=public_context.observation_boundary_copy(state.context,state.beliefs,state.mons,catalog.source.device,catalog.context,valid=w.j.ones(1,bool))
@@ -149,6 +156,12 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
         c.add('PUBLIC_TRANSFORM_NOT_MATERIALIZED',bool(np.any(w._host(ctx.abilities.transformed))))
         c.add('PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED',bool(np.any(w._host(ctx.types.overridden))))
         slots=w._host(mons.active)
+        for seat,name in tail['fresh_substitutes'].items():
+            side=int(seat[1])-1;at=int(slots[0,side])
+            if not 0<=at<6:c.add('PUBLIC_SUBSTITUTE_B2_PRESENCE_DISAGREEMENT',None,side=side,reason='Public active slot unavailable')
+            else:c.add('PUBLIC_SUBSTITUTE_B2_PRESENCE_DISAGREEMENT',normalize_id(catalog.species.names[int(w._host(mons.species)[0,side,at])])!=name or not bool(w._host(ctx.active.volatiles)[0,side,hooks.VOLATILE_NAMES.index('substitute')]),side=side)
+        if replacement:
+            at=int(slots[0,owner]);c.add('PUBLIC_REPLACEMENT_FAINT_DISAGREEMENT',not bool(w._host(mons.fainted)[0,owner,at]) if 0<=at<6 else None)
         for side in(0,1):
             at=int(slots[0,side]);c.add('PUBLIC_ACTIVE_UNAVAILABLE',not 0<=at<6,side=side)
             for slot in range(6):
@@ -157,7 +170,9 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
         own_public=int(slots[0,owner])
         if 0<=own_public<6:
             vols=[hooks.VOLATILE_NAMES[i]for i in np.flatnonzero(w._host(ctx.active.volatiles)[0,owner])]
-            unsupported=[x for x in vols if x not in ('','leechseed','ingrain','trapped')]
+            allowed={'','leechseed','ingrain','trapped'}
+            if tail['fresh_substitutes'].get('p'+str(owner+1))==normalize_id(public_names[own_public]):allowed.add('substitute')
+            unsupported=[x for x in vols if x not in allowed]
             c.add('OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',bool(unsupported),volatiles=unsupported)
             c.call('PUBLIC_PROTECT_STREAK_INVALID',lambda:w._physical_protect_counter(w._host(ctx.active.stall)[0,owner])<0)
             own_packet=party[active[0]] if len(active)==1 else {}
@@ -171,14 +186,19 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
                 kind=int(w._host(ctx.moves.last_kind)[0,owner]);mid=int(w._host(ctx.moves.last_id)[0,owner])
                 names=[w._source_move(x)for x in own_moves[active[0]]]
                 c.add('OWN_LAST_MOVE_SLOT_UNAVAILABLE',kind==2 and names.count(w._source_move(catalog.moves.names[mid]))!=1)
-        c.add('MIDTURN_DAMAGE_WINDOW_NOT_MATERIALIZED',bool(np.any(w._host(ctx.damage.current_dealt))or np.any(w._host(ctx.damage.current_taken))))
+        c.add('MIDTURN_DAMAGE_WINDOW_NOT_MATERIALIZED',bool(np.any(w._host(ctx.damage.current_dealt))or np.any(w._host(ctx.damage.current_taken))) and not replacement)
         field=ctx.field;wish=w._host(field.wish_set_turn);turn=w._host(field.turn)[:,None]
-        c.add('PUBLIC_WISH_CASTER_AMOUNT_UNAVAILABLE',bool(np.any((wish>=0)&(turn-wish<=1))))
+        pending={'p'+str(side+1):int(start) for side,start in enumerate(wish[0]) if start>=0 and int(turn[0,0])-int(start)<=1}
+        c.add('PUBLIC_WISH_CASTER_AMOUNT_UNAVAILABLE',False if tail['wish_set_turns'] is not None else None,reason='Current protocol supplies positively checked recipient/timing facts; missing prerequisite is unknown')
+        c.add('PUBLIC_WISH_PUBLIC_HISTORY_DISAGREEMENT',pending!=tail['wish_set_turns'] if tail['wish_set_turns'] is not None else None)
+        c.add('PUBLIC_TAIL_TURN_DISAGREEMENT',int(turn[0,0])!=tail['turn'] if type(tail['turn'])is int else None)
         weather=catalog.field.weather_names[int(w._host(field.weather)[0])]
         c.add('PUBLIC_WEATHER_UNAVAILABLE',weather not in('','sunnyday','raindance','sandstorm','hail'))
     else:c.add('PUBLIC_BOUNDARY_DEPENDENT_TAIL_GUARDS',None)
     from . import phase_d_protocol_world as protocol
-    try:detached=w.from_b2(adapter,request,source,metadata,address=public.address,defer_sleep=True)
+    try:
+        qualified=facts(public,request,lines)
+        detached=w.from_b2(adapter,request,source,metadata,address=public.address,defer_sleep=True,protocol_facts=qualified)
     except (ValueError,KeyError,IndexError,TypeError,AttributeError) as error:
         c.add(getattr(error,'kind',None) or str(error).split(':',1)[0],True,original_refusal=str(error))
         c.add('PROTOCOL_INPUTS_DEPENDENT_CHECKS',None,reason='Original from_b2 refused; no detached surrogate made')

@@ -60,7 +60,8 @@ class ProtocolConstructor:
         packet=_packet(request['own_request_line'],request['owner'])
         adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
         if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
-        detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True)
+        facts=protocol.tail.facts(public,packet,lines)
+        detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts)
         made=protocol.sample(public,detached,lines=lines,catalog=self.catalog,source=self.source,metadata=self.metadata,
             config=self.owning_config,battle_id=request['battle_id'],seed=self.seed,count=self.count)
         return made.root,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
