@@ -125,7 +125,7 @@ def _physical_toxic_counter(upcoming_stage):
     return max(0, min(15, stage - 1))
 
 
-def _exact_own(request, state, catalog, source, metadata, owner):
+def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=False):
     """Copy literal request fields, checking static latent IVs against own stats.
 
     The original public set source is used as a static format rule, never as a
@@ -215,8 +215,9 @@ def _exact_own(request, state, catalog, source, metadata, owner):
         own['item'][slot] = _lookup(v['items'], mon['item'])
         status = next((x for x in condition[1:] if x in ('slp','par','brn','frz','psn','tox')), '')
         own['status'][slot] = {'':0,'par':1,'brn':2,'psn':3,'tox':4,'slp':5,'frz':6}[status]
-        if status == 'slp':
-            raise Refusal('OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE', species)
+        if status=='slp' and not defer_sleep:raise Refusal('OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE',species)
+        # Known sleep status is exact; its hidden counter is restored per world
+        # only after the protocol route validates public sleep evidence.
         happiness=_own_happiness(mon,moves,species)
         if happiness is not None:own['happiness'][slot]=happiness
         if hp_move:
@@ -251,7 +252,7 @@ def _exact_own(request, state, catalog, source, metadata, owner):
     return own, joined
 
 
-def from_b2(adapter, request, source, metadata, *, address):
+def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False):
     """One original owning fold plus own request; no engine donor accepted."""
     from pokezero.recorded_encoder_runner import JaxRecordedAdapter
     from . import v4_encoder
@@ -264,7 +265,8 @@ def from_b2(adapter, request, source, metadata, *, address):
     # Authoritative B2 admission happens before any materialization. This parses
     # ONLY request and reads original public fold, never another owner's packet.
     expected_inputs = adapter.encode(request, owner_side=owner)
-    own, joined = _exact_own(request,state,catalog,source,metadata,owner)
+    if type(defer_sleep)is not bool:raise Refusal('EXPLICIT_PROTOCOL_SLEEP_DEFER_REQUIRED')
+    own, joined = _exact_own(request,state,catalog,source,metadata,owner,defer_sleep=defer_sleep)
     from . import public_context
     ctx,beliefs,ok=public_context.observation_boundary_copy(state.context,state.beliefs,state.mons,
         catalog.source.device,catalog.context,valid=j.ones(1,bool))
@@ -426,6 +428,7 @@ class WorldSet:
     worlds: tuple
     seeds: tuple
     requested_worlds: int
+    mapper_diagnostics: tuple = ()
 
     @property
     def fully_constructed(self):

@@ -38,8 +38,10 @@ score. An ongoing or unbound claim cannot make the prefix eligible.
 The constructor's new `ProtocolInputs` route under
 `v5_public_world.materialize` accepts genuine `PublicRoot` data, B2's public
 carry and the exact own request. It calls the original pure
-`world_battle_spec` → `map_spec` mapping. This route does not fabricate a driver
-Session, History, witness or true-opponent donor. Posterior draws are checked
+`battle_spec_from_payload` → `map_spec` mapping with the same original
+public payload. The bounded batch-2 sleep projection and removal arguments are
+described in [constructor batch 2](phase_d_constructor_batch2.md). This route
+does not fabricate a driver Session, History, witness or true-opponent donor. Posterior draws are checked
 against B2's public candidate bits. Unsupported clocks and mapping failures
 remain named refused world slots. The original retained-driver route remains
 unchanged. All requested 16/32-world roots remain in the construction table.
@@ -51,7 +53,7 @@ Return/Frustration request ID can determine it only when inversion of the
 pinned Showdown base-power callback leaves one integer in 0..255. The request
 producer is `sim/pokemon.ts:getSwitchRequestData` and the callbacks are in
 `data/moves.ts` at the pinned f76228a revision. No generator default is used:
-plain or ambiguous powers, unavailable sleep clocks, unsupported replacement
+plain or ambiguous powers, unreconstructable sleep evidence, unsupported replacement
 phases and ambiguous own static facts remain refused. This bounded repair
 shares the declared one-batch/one-remeasurement coverage budget.
 

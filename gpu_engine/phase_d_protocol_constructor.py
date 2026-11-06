@@ -60,10 +60,10 @@ class ProtocolConstructor:
         packet=_packet(request['own_request_line'],request['owner'])
         adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
         if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
-        detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address)
+        detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True)
         made=protocol.sample(public,detached,lines=lines,catalog=self.catalog,source=self.source,metadata=self.metadata,
             config=self.owning_config,battle_id=request['battle_id'],seed=self.seed,count=self.count)
-        return detached,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
+        return made.root,made,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask']))
 
 
     def construct(self,request,index=0):
@@ -76,11 +76,13 @@ class ProtocolConstructor:
             return dict(schema=SCHEMA,request_id=request.get('request_id'),status='COMPLETE',
                 action_index=None,q_values=None,refusal=None,requested_worlds=self.count,
                 constructed_worlds=self.count,decision_seconds=None,constructor_seconds=time.monotonic()-started,
+                mapper_diagnostics=list(getattr(made,'mapper_diagnostics',())),
                 scope='HOST_CONSTRUCTOR_ONLY_NO_MODEL_FORWARD_SEARCH_TIME_OR_GPU_CLAIM')
         except (ValueError,KeyError,TypeError,IndexError,AttributeError)as error:
             return dict(schema=SCHEMA,request_id=request.get('request_id'),status='REFUSED',
                 action_index=None,q_values=None,refusal=str(error),requested_worlds=self.count,
                 constructed_worlds=0 if made is None else sum(w.state is not None for w in made.worlds),decision_seconds=None,
+                mapper_diagnostics=[] if made is None else list(getattr(made,'mapper_diagnostics',())),
                 world_refusals=[]if made is None else[dict(world=w.index,kinds=list(w.refusals))for w in made.worlds if w.refusals],
                 scope='HOST_CONSTRUCTOR_ONLY_NO_MODEL_FORWARD_SEARCH_TIME_OR_GPU_CLAIM')
 
