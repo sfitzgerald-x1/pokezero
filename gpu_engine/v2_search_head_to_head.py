@@ -40,7 +40,7 @@ from gpu_engine.v2_head_to_head import SWAP_OFFSET, snapshot
 
 BLOCK_DOMAIN = 'v2s.world-block.v1'
 REDUCTIONS = ('none', 'raw', 'average', 'hedge', 'blend')
-TURN_BANDS = ((1, 3), (4, 9), (10, 19), (20, 10**9))
+TURN_BANDS = ((0, 3), (4, 9), (10, 19), (20, 10**9))   # the engine's turn counter; the first band also holds turn 0
 
 
 def world_block_seeds(seed, blocks):
@@ -52,8 +52,8 @@ def world_block_seeds(seed, blocks):
 
 def band(turn):
     for low, high in TURN_BANDS:
-        if low <= turn <= high:return f'{low}-{high}' if high < 10**9 else f'{low}+'
-    return 'turn0'
+        if low <= turn <= high:return f'{max(low, 1)}-{high}' if high < 10**9 else f'{low}+'
+    raise ValueError('nonnegative turn required')
 
 
 def make_step(engine_tables, observation_tables, model_config, *, sampling_seed, max_requests):
