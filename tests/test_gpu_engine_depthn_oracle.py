@@ -15,7 +15,9 @@ import importlib.util
 import io
 import json
 import math
+import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -770,6 +772,311 @@ class GateNTests(FixtureN, unittest.TestCase):
         with self.engine():return OracleNPricer(self.ex, object(), depth=2, k_own=9, k_opp=9).price(self.requests, self.tables, self.recipe, PARAMS)
 
 
+# ---------------------------------------------------------------- GUARD_DEPTHN_RULE and --reverdict
+
+FLOOR, SPREAD = .004, .02   # value bound 2 x FLOOR = .008 and guard 0.25 x SPREAD = .005: noise .006 lies between them
+# Optional real gate.json files (os.pathsep-separated), each expected to PASS under the current rules: unset, only the synthetic cases run.
+SAVED_REPORTS = [Path(x) for x in os.environ.get('V2E_DEPTHN_SAVED_GATE_REPORTS', '').split(os.pathsep) if x]
+
+
+def saved_gate(depth=3, ply2_noise=.004, t1_logits=.05, ply2_logits=None, single_actor=True):
+    """A minimal gate.json in the format before GUARD_DEPTHN_RULE and DEEPER_LOGIT_RULE: the leaf values inside the value bound (.008)
+    but beyond the guard (.005), every digest compared and matched, no guard_mode or per-position evidence; ply2_logits: a ply-2 prior
+    max |diff| judged against LOGIT_BOUND, with its first_beyond rows; single_actor: the head override and actor_capacity 1 (else the
+    bank actor with actor_capacity 3, which cannot establish one parameter set)."""
+    def q(compared, noise, guard=True, bound=.008):
+        within = noise < .005
+        return dict(compared=compared, nonfinite=0, max_abs_difference=noise, bound=bound, within_bound=noise <= bound, ratio_to_bound=noise / bound,
+            beyond_bound=int(noise > bound), first_beyond=[dict(cell=[1, 0, 7, 7], abs_difference=noise)] if noise > bound else [],
+            **(dict(guard_bound=.005, within_guard=within, ratio_to_guard=noise / .005) if guard else {}), passed=noise <= bound and (within or not guard), gates='c')
+    quantities = dict(t1_value_head=q(4, .004), t1_own_logits=q(30, t1_logits, guard=False, bound=.1), depth1_noise_floor=dict(compared=4, max_abs_difference=FLOOR, passed=None),
+        ply2_value_head=q(6, ply2_noise), leaf_value=q(10, .006), depth2_pass_t2_value=q(3, .001), depth2_pass_t1_own_logits=q(30, 0., guard=False, bound=.1))
+    if ply2_logits is not None:quantities['ply2_own_logits'] = q(40, ply2_logits, guard=False, bound=.1)
+    a = dict(passed=True, compared=dict(leaf_status=12, leaf_digest=10, ply2_digest_own=6), mismatched=dict(leaf_status=0, leaf_digest=0, ply2_digest_own=0), first_mismatches=[])
+    table = [dict(check='c', quantity=name, max_abs_difference=m['max_abs_difference'], ratio_to_bound=m['ratio_to_bound'], ratio_to_guard=m.get('ratio_to_guard'),
+        guard_bound=m.get('guard_bound'), passed=m['passed']) for name, m in quantities.items() if name != 'depth1_noise_floor']
+    return dict(schema=gate.SCHEMA, mode='SAVED_ROOTS', status='FAIL', passed=False, status_reasons=[], sample_leaves=None, evaluator=dict(override=single_actor),
+        pricer_options=dict(depth=depth, actor_capacity=1 if single_actor else 3),
+        tolerance=dict(value_bound=.008, guard_bound=.005, table=table), checks=dict(a=a, c=dict(passed=False, quantities=quantities), e=dict(passed=True, roots_compared=2)))
+
+
+def reverdicted(report, *, name='gate.json'):
+    """(exit code, gate-reverdict.json, log lines) of --reverdict on `report` written to a new directory (a dict) or copied (a path)."""
+    directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));path = directory / name;lines = []
+    if isinstance(report, dict):path.write_text(json.dumps(report))
+    else:shutil.copyfile(report, path)
+    with patch.object(gate, 'log', lambda message, **values: lines.append(dict(values, message=message))):code = gate.main(['--reverdict', str(path)])
+    return code, json.loads((directory / gate.REVERDICT_FILE).read_text()), lines, path
+
+
+class GuardDepthNTests(FixtureN, unittest.TestCase):
+    """GUARD_DEPTHN_RULE and DEEPER_LOGIT_RULE on the stand-in depth-3 surface with planted noise, judged under a synthetic depth-1
+    floor and spreads (value bound .008, guard .005), the N=2 equivalence path unchanged, and --reverdict on saved reports."""
+    _frame, _d, _data, _n2_frame = GateNTests._frame, GateNTests._d, GateNTests._data, GateNTests._n2_frame
+
+    def evaluation(self, *, leaf=0., node=0., t1=0., ply_logits=0., t1_logits=0., t1_peer_logits=0., change=None, data_change=None, edit=None, floor=FLOOR,
+                   spread=SPREAD, actors=1):
+        """One call's evaluation of the stand-in frame with `leaf` added to head-valued leaves, `node` to expanded ply-2 nodes, `t1` to
+        expanded turn-1 cells, `ply_logits` to every lane of the ply-2 nodes' own prior and `t1_logits` / `t1_peer_logits` to the turn-1
+        cells' own / opponent prior (a constant shift: rankings unchanged), then change(frame) and data_change(oracle data, frame);
+        `actors` stands for run_call_n's len(params) (the fixture's PARAMS has two), then edit(evaluation)."""
+        base = self.cached('frame', self._frame);data = self.cached('data', lambda: self._data(base));frame = copy.deepcopy(base);level = frame.nodes[0]
+        frame.leaf_value[np.asarray(frame.leaf_status) == 4] += np.float32(leaf);level.value[np.asarray(level.status) == 2] += np.float32(node)
+        frame.t1_value[np.asarray(frame.t1_status) == 2] += np.float32(t1)
+        level.own_logits[np.asarray(level.status) != 0] += np.float32(ply_logits);frame.t1_own_logits[np.asarray(frame.t1_status) != 0] += np.float32(t1_logits)
+        frame.t1_peer_logits[np.asarray(frame.t1_status) != 0] += np.float32(t1_peer_logits)
+        if change is not None:change(frame)
+        if data_change is not None:data = copy.deepcopy(data);data_change(data, frame)
+        ev = gate.evaluate_n(frame, self._d(), self.requests, data, context={})
+        ev['c']['depth1_noise_floor'] = gate.g2._numeric([[0]], [floor], [0.]);ev['spreads'] = [spread] * 10;ev['actors'] = actors
+        if edit is not None:edit(ev)
+        return ev
+
+    def judge(self, **kw):
+        """(result, status, (c) quantities) of one evaluation(**kw) through summarize_run."""
+        result, (status, _) = self.judged(self.evaluation(**kw));return result, status, result['checks']['c']['quantities']
+
+    def test_noise_between_guard_and_bound_past_turn1_is_digest_certified(self):
+        result, status, c = self.judge(leaf=.006, node=.006)
+        self.assertEqual(status, 'PASS', failing(result));self.assertEqual(result['tolerance']['value_bound'], 2 * float(np.float32(FLOOR)))
+        for name in ('leaf_value', 'ply2_value_head'):
+            m = c[name];self.assertEqual((m['within_bound'], m['within_guard'], m['passed'], m['guard_mode']), (True, False, True, 'digest_certified'), name)
+            self.assertGreater(m['beyond_guard'], 0);self.assertGreater(m['ratio_to_guard'], 1.);self.assertEqual(m['guard_evidence']['value_positions_outside_digest'], 0)
+            self.assertGreaterEqual(m['guard_evidence']['digest_compared'], m['compared']);self.assertEqual(m['guard_evidence']['digest_mismatched'], 0)
+        self.assertEqual(c['leaf_value']['beyond_guard'], c['leaf_value']['compared']);self.assertEqual(c['leaf_value']['guard_evidence']['digest'], 'leaf_digest')
+        self.assertEqual(c['ply2_value_head']['guard_evidence']['digest'], 'ply2_digest_own')
+        self.assertEqual((c['leaf_value']['guard_evidence']['evaluator_actors'], c['leaf_value']['guard_evidence']['evaluator_actors_source']), (1, gate.ACTORS_LIVE))
+        self.assertEqual(result['tolerance']['evaluator_actors'], dict(count=1, source=gate.ACTORS_LIVE))
+        self.assertEqual((c['t1_value_head']['guard_mode'], c['t1_value_head']['beyond_guard']), ('gated', 0));self.assertNotIn('guard_mode', c['ply2_own_logits'])
+        tolerance = result['tolerance'];self.assertEqual(tolerance['guard_depthn_rule'], gate.GUARD_DEPTHN_RULE)
+        self.assertEqual({k: v for k, v in tolerance['guard_modes'].items() if v == 'digest_certified'}, dict(leaf_value='digest_certified', ply2_value_head='digest_certified'))
+        row = next(r for r in tolerance['table'] if r['quantity'] == 'leaf_value');self.assertEqual((row['passed'], row['guard_mode']), (True, 'digest_certified'))
+        entry = next(r for r in gate.tolerance_line_n(tolerance)['checks'] if r['quantity'] == 'leaf_value')
+        self.assertEqual((entry['passed'], entry['guard_mode'], entry['beyond_guard']), (True, 'digest_certified', c['leaf_value']['compared']))
+
+    def test_a_digest_mismatch_or_incomplete_coverage_keeps_the_guard_gated(self):
+        def flip(frame):
+            at = tuple(np.argwhere(np.asarray(frame.leaf_status) == 4)[0]);frame.leaf_digest[at + (0,)] ^= np.uint32(1)
+        def fewer(ev):ev['a']['compared']['leaf_digest'] = ev['c']['leaf_value']['compared'] - 1
+        cases = dict(leaf_digest_mismatch=(dict(change=flip), 'leaf_value'), fewer_leaf_digests_than_values=(dict(edit=fewer), 'leaf_value'),
+            leaf_value_outside_the_digest_mask=(dict(edit=lambda ev: ev['digest_cover'].__setitem__('leaf_value', 1)), 'leaf_value'),
+            node_value_outside_the_digest_mask=(dict(edit=lambda ev: ev['digest_cover'].__setitem__('ply2_value_head', 1)), 'ply2_value_head'),
+            node_coverage_not_counted=(dict(edit=lambda ev: ev['digest_cover'].pop('ply2_value_head')), 'ply2_value_head'),
+            depth2_frame=(dict(edit=lambda ev: ev.__setitem__('depth', 2)), 'leaf_value'),
+            two_evaluator_actors=(dict(actors=2), 'leaf_value'), evaluator_actors_not_recorded=(dict(edit=lambda ev: ev.pop('actors')), 'ply2_value_head'))
+        for case, (kw, name) in cases.items():
+            with self.subTest(case):
+                result, status, c = self.judge(leaf=.006, node=.006, **kw);m = c[name]
+                self.assertEqual(status, 'FAIL');self.assertEqual((m['guard_mode'], m['within_bound'], m['passed']), ('gated', True, False))
+                if 'actors' in case:self.assertEqual(m['guard_evidence']['evaluator_actors'], 2 if case == 'two_evaluator_actors' else None)
+                self.assertFalse(result['checks']['c']['passed'])
+                if case != 'leaf_digest_mismatch':self.assertEqual(set(failing(result)), {'c'})   # the gated guard alone fails the run
+                else:self.assertEqual(result['checks']['a']['mismatched']['leaf_digest'], 1)
+
+    def test_digest_cover_is_summed_across_calls(self):
+        """Two calls through summarize_run: the per-position counts add up (keeping one call's count would certify (1, 0) or
+        (0, 1)), and a call without a count makes the merged count unknown: gated for nodes, by construction for leaves."""
+        one = self.evaluation(leaf=.006, node=.006)
+        def run(leaf, node):
+            calls = [copy.deepcopy(one), copy.deepcopy(one)]
+            for ev, x, y in zip(calls, leaf, node):
+                for name, n in (('leaf_value', x), ('ply2_value_head', y)):
+                    if n is None:ev['digest_cover'].pop(name)
+                    else:ev['digest_cover'][name] = n
+            result, (status, _) = self.judged(*calls);c = result['checks']['c']['quantities']
+            return status, {name: (c[name]['guard_mode'], c[name]['guard_evidence']['value_positions_outside_digest']) for name in ('leaf_value', 'ply2_value_head')}
+        self.assertEqual(run((0, 0), (0, 0)), ('PASS', dict(leaf_value=('digest_certified', 0), ply2_value_head=('digest_certified', 0))))
+        for leaf, node, want in (((1, 0), (0, 1), (1, 1)), ((0, 1), (1, 2), (1, 3))):
+            with self.subTest(leaf=leaf, node=node):
+                self.assertEqual(run(leaf, node), ('FAIL', dict(leaf_value=('gated', want[0]), ply2_value_head=('gated', want[1]))))
+        self.assertEqual(run((None, 0), (0, None)), ('FAIL', dict(leaf_value=('digest_certified', None), ply2_value_head=('gated', None))))
+        self.assertEqual(gate.digest_cover_merged([dict(c=dict(x={}), digest_cover=dict(x=2)), dict(c=dict(x={}), digest_cover=dict(x=3))]), dict(x=5))
+
+    def test_a_node_valued_outside_the_digest_mask_keeps_the_guard_gated(self):
+        """An oracle ply-2 node record with code 5 on a TERMINAL node (status 1), matched by the pricer: (c) values it (codes 5/6),
+        (a)'s _viewed_own does not digest it (codes 5/6 count only under status 3; under status 2 the node is inside the mask anyway),
+        so its per-position count is 1 and the ply-2 guard stays gated."""
+        def plant(data, frame):
+            records = data['levels'][2];i = int(np.flatnonzero(records['status'] == 1)[0]);q, w = map(int, records['specs'][i][:2]);node = int(data['ids'][2][i])
+            records['error'][i] = 5;frame.nodes[0].error[q, w, node] = 5;records['head_value'][i] = frame.nodes[0].value[q, w, node]
+        result, status, c = self.judge(leaf=.006, node=.006, data_change=plant);m = c['ply2_value_head']
+        self.assertEqual(status, 'FAIL');self.assertEqual(set(failing(result)), {'c'})
+        self.assertEqual((m['guard_mode'], m['guard_evidence']['value_positions_outside_digest'], m['passed']), ('gated', 1, False))
+        self.assertEqual(c['leaf_value']['guard_mode'], 'digest_certified')
+
+    def test_the_turn1_guard_stays_gated(self):
+        result, status, c = self.judge(t1=.006);m = c['t1_value_head']
+        self.assertEqual(status, 'FAIL');self.assertEqual((m['guard_mode'], m['guard_evidence'], m['within_bound'], m['passed']), ('gated', None, True, False))
+        self.assertGreater(m['beyond_guard'], 0);self.assertFalse(result['checks']['c']['passed'])
+
+    def test_a_planted_sibling_misplacement_beyond_the_bound_fails(self):
+        """Two sibling leaves' values swapped (digests intact, as a value written to the wrong own slot): the guard is
+        digest-certified, but the swap moves each by more than the value bound."""
+        frame = self.cached('frame', self._frame);status, value = np.asarray(frame.leaf_status), np.asarray(frame.leaf_value, np.float64)
+        both = (status[..., 0, :] == 4) & (status[..., 1, :] == 4) & np.isfinite(value[..., 0, :]) & np.isfinite(value[..., 1, :])
+        gap = np.where(both, np.abs(value[..., 0, :] - value[..., 1, :]), 0.);q, w, node, x = np.unravel_index(int(np.argmax(gap)), gap.shape);d = float(gap.max())
+        self.assertGreater(d, 0.)
+        def swap(f):f.leaf_value[q, w, node, :, x] = f.leaf_value[q, w, node, ::-1, x].copy()
+        result, status, c = self.judge(change=swap, floor=d / 4, spread=d);m = c['leaf_value']   # value bound d / 2, guard d / 4
+        self.assertEqual(status, 'FAIL');self.assertTrue(result['checks']['a']['passed'])
+        self.assertEqual((m['guard_mode'], m['within_bound'], m['beyond_bound'], m['passed']), ('digest_certified', False, 2, False))
+
+    def test_n2_equivalence_keeps_the_guard_gated(self):
+        frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame);other.t2_value[np.asarray(other.t2_status) == 4] += np.float32(.006)
+        other.t1_own_logits[np.asarray(other.t1_status) != 0] += np.float32(.12)   # beyond 0.1, and no deeper bound at N=2
+        found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        t1_floor = gate.g2._numeric([[0]], [.07], [0.])   # a turn-1 logit floor that would give a depth >= 3 frame's deeper priors .14
+        call = dict(a=found, floats=floats, c=dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.]), t1_own_logits=t1_floor), e=e, spreads=[SPREAD] * 10)
+        report = gate.summarize_n2({'x': [call]})['x'];m = report['floats']['t2_value']
+        self.assertEqual(report['status'], 'FAIL');self.assertEqual((m['within_bound'], m['within_guard'], m['passed']), (True, False, False))
+        self.assertNotIn('guard_mode', m);self.assertNotIn('guard_depthn_rule', report['tolerance'])
+        m = report['floats']['t1_own_logits'];self.assertEqual((m['bound'], m['within_bound']), (gate.g2.LOGIT_BOUND, False));self.assertNotIn('bound_rule', m)
+        self.assertNotIn('deeper_logit_bound', report['tolerance'])
+
+    def test_deeper_logits_take_twice_the_turn1_logit_floor(self):
+        """Turn-1 own priors .07 off (the floor; 0.1 still bounds them): ply-2 priors .12 off pass under max(0.1, .14) and .15 off
+        fail; turn-1, root and depth2_pass priors keep 0.1."""
+        result, status, c = self.judge(ply_logits=.12, t1_logits=.07);tolerance = result['tolerance'];m = c['ply2_own_logits']
+        self.assertEqual(status, 'PASS', failing(result));self.assertAlmostEqual(tolerance['turn1_logit_floor'], .07, places=5)
+        self.assertAlmostEqual(tolerance['deeper_logit_bound'], .14, places=5);self.assertIn('2 x turn1_logit_floor', tolerance['deeper_logit_bound_source'])
+        self.assertEqual(tolerance['deeper_logit_rule'], gate.DEEPER_LOGIT_RULE);self.assertEqual(tolerance['deeper_logit_quantities'], ['ply2_own_logits', 'ply2_opp_logits'])
+        self.assertEqual((m['bound'], m['bound_rule'], m['within_bound'], m['beyond_bound'], m['passed']), (tolerance['deeper_logit_bound'], 'deeper_logit_bound', True, 0, True))
+        self.assertGreater(m['max_abs_difference'], gate.g2.LOGIT_BOUND);self.assertEqual(c['ply2_opp_logits']['bound'], tolerance['deeper_logit_bound'])
+        for name in ('t1_own_logits', 't1_peer_logits', 'root_peer_logits'):self.assertEqual((c[name]['bound'], c[name]['bound_rule']), (gate.g2.LOGIT_BOUND, 'logit_bound'), name)
+        row = next(r for r in tolerance['table'] if r['quantity'] == 'ply2_own_logits');self.assertEqual((row['bound'], row['ratio_to_bound'], row['passed']), (m['bound'], m['ratio_to_bound'], True))
+        line = gate.tolerance_line_n(tolerance);self.assertEqual((line['turn1_logit_floor'], line['deeper_logit_bound']), (tolerance['turn1_logit_floor'], m['bound']))
+        self.assertEqual(next(r for r in line['checks'] if r['quantity'] == 'ply2_own_logits')['bound'], m['bound'])
+        result, status, c = self.judge(ply_logits=.15, t1_logits=.07);m = c['ply2_own_logits']
+        self.assertEqual(status, 'FAIL');self.assertEqual(set(failing(result)), {'c'})
+        self.assertEqual((m['within_bound'], m['beyond_bound'], m['passed']), (False, m['compared'], False));self.assertTrue(m['first_beyond'])
+
+    def test_the_turn1_peer_logits_can_set_the_floor(self):
+        """Own priors .05 off, opponent priors .07 off at turn 1 (the real searched run's shape: the peer max is the larger): the floor is
+        the peer's .07, so ply-2 priors .12 off pass under .14 (an own-only floor would give 0.1 and fail them)."""
+        result, status, c = self.judge(ply_logits=.12, t1_logits=.05, t1_peer_logits=.07);tolerance = result['tolerance']
+        self.assertEqual(status, 'PASS', failing(result));self.assertGreater(c['t1_peer_logits']['max_abs_difference'], c['t1_own_logits']['max_abs_difference'])
+        self.assertEqual(tolerance['turn1_logit_floor'], c['t1_peer_logits']['max_abs_difference']);self.assertIn('t1_peer_logits', tolerance['deeper_logit_bound_source'])
+        self.assertAlmostEqual(tolerance['deeper_logit_bound'], .14, places=5);self.assertEqual((c['ply2_own_logits']['bound'], c['ply2_own_logits']['passed']), (tolerance['deeper_logit_bound'], True))
+
+    def test_a_nonfinite_deeper_logit_fails_under_the_deeper_bound(self):
+        """One pricer ply-2 own-prior lane NaN against a finite oracle lane (every finite difference 0, the bound .14): non-finite, so
+        outside the bound, live and on --reverdict alike."""
+        def nan(frame):
+            level = frame.nodes[0];at = tuple(np.argwhere((np.asarray(level.status) == 2) & np.asarray(level.own_requested, bool))[0])
+            level.own_logits[at + (int(np.flatnonzero(np.asarray(level.own_legal[at], bool))[0]),)] = np.nan
+        result, status, c = self.judge(t1_logits=.07, change=nan);m = c['ply2_own_logits']
+        self.assertAlmostEqual(result['tolerance']['deeper_logit_bound'], .14, places=5);self.assertEqual((m['nonfinite'], m['max_abs_difference'], m['bound']), (1, 0., result['tolerance']['deeper_logit_bound']))
+        self.assertEqual((status, m['within_bound'], m['beyond_bound'], m['ratio_to_bound'], m['passed']), ('FAIL', False, 1, None, False));self.assertEqual(set(failing(result)), {'c'})
+        report = saved_gate(t1_logits=.07, ply2_logits=.05)   # as finalize_numeric saves it: the non-finite difference beyond, as 'inf'
+        report['checks']['c']['quantities']['ply2_own_logits'].update(nonfinite=1, within_bound=False, beyond_bound=1, ratio_to_bound=None, passed=False,
+            first_beyond=[dict(cell=[1, 0, 7, 7], abs_difference='inf')])
+        code, out, _, _ = reverdicted(report);m = out['checks']['c']['quantities']['ply2_own_logits']
+        self.assertEqual((code, out['status'], m['within_bound'], m['beyond_bound'], m['passed']), (1, 'FAIL', False, 1, False));self.assertAlmostEqual(m['bound'], .14)
+
+    def test_turn1_logits_never_raise_their_own_bound(self):
+        result, status, c = self.judge(t1_logits=.12);m = c['t1_own_logits']
+        self.assertEqual(status, 'FAIL');self.assertEqual(set(failing(result)), {'c'})
+        self.assertEqual((m['bound'], m['within_bound'], m['passed']), (gate.g2.LOGIT_BOUND, False, False))
+        self.assertAlmostEqual(result['tolerance']['deeper_logit_bound'], .24, places=5);self.assertTrue(c['ply2_own_logits']['passed'])
+
+    def test_the_deeper_logit_bound_falls_back_to_the_logit_bound(self):
+        """No turn-1 logit compared, or a non-finite turn-1 difference: ply-2 priors .12 off are judged against 0.1."""
+        def unmeasured(ev):
+            for name in gate.TURN1_LOGITS:ev['c'].pop(name)
+        def nonfinite(frame):
+            at = tuple(np.argwhere((np.asarray(frame.t1_status) == 2) & np.asarray(frame.t1_own_requested, bool))[0])
+            frame.t1_own_logits[at + (int(np.flatnonzero(np.asarray(frame.t1_own_legal[at], bool))[0]),)] = np.nan
+        for case, kw, source in (('unmeasured', dict(edit=unmeasured), 'no turn-1 logit'), ('nonfinite', dict(change=nonfinite, t1_logits=.07), 'non-finite')):
+            with self.subTest(case):
+                result, status, c = self.judge(ply_logits=.12, **kw);tolerance = result['tolerance'];m = c['ply2_own_logits']
+                self.assertEqual((tolerance['turn1_logit_floor'], tolerance['deeper_logit_bound']), (None, gate.g2.LOGIT_BOUND));self.assertIn(source, tolerance['deeper_logit_bound_source'])
+                self.assertEqual((m['bound'], m['within_bound'], m['passed'], status), (gate.g2.LOGIT_BOUND, False, False, 'FAIL'))
+
+    def test_reverdict_applies_the_rule_to_a_saved_report(self):
+        code, out, lines, path = reverdicted(saved_gate())
+        self.assertEqual((code, out['status'], out['passed'], out['status_reasons']), (0, 'PASS', True, []))
+        self.assertEqual((out['reverdict']['source_status'], out['reverdict']['source_failing_checks'], out['reverdict']['failing_checks']), ('FAIL', ['c'], []))
+        c = out['checks']['c']['quantities'];self.assertTrue(out['checks']['c']['passed'])
+        self.assertEqual((c['leaf_value']['guard_mode'], c['leaf_value']['passed']), ('digest_certified', True))
+        self.assertEqual(c['leaf_value']['guard_evidence']['subset'].split(':')[0], 'by construction')
+        self.assertEqual(c['leaf_value']['guard_evidence']['evaluator_actors'], 1);self.assertIn('evaluator.override', c['leaf_value']['guard_evidence']['evaluator_actors_source'])
+        self.assertEqual(c['ply2_value_head']['guard_mode'], 'gated')   # nodes need the per-position count, which this report predates
+        self.assertEqual((c['t1_value_head']['guard_mode'], c['depth2_pass_t2_value']['guard_mode']), ('gated', 'gated'))
+        self.assertEqual(out['tolerance']['guard_depthn_rule'], gate.GUARD_DEPTHN_RULE)
+        self.assertEqual(next(r for r in out['tolerance']['table'] if r['quantity'] == 'leaf_value')['guard_mode'], 'digest_certified')
+        line = next(x for x in lines if x['message'] == 'REVERDICT');self.assertEqual((line['old_status'], line['new_status'], line['evaluator_actors']['count']), ('FAIL', 'PASS', 1))
+        self.assertEqual(line['changed_quantities'], [dict(quantity='leaf_value', passed_before=False, passed=True, guard_mode='digest_certified')])
+        leaf = next(x for x in lines if x['message'] == 'REVERDICT_QUANTITY' and x['quantity'] == 'leaf_value')
+        self.assertEqual((leaf['guard_mode'], leaf['within_guard'], leaf['passed_before'], leaf['passed']), ('digest_certified', False, False, True))
+        before = (path.parent / gate.REVERDICT_FILE).read_bytes()
+        with self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(path)])
+        self.assertIn('never overwritten', str(raised.exception.code));self.assertEqual((path.parent / gate.REVERDICT_FILE).read_bytes(), before)
+        for case, report in (('depth2', saved_gate(depth=2)), ('uncounted_node', saved_gate(ply2_noise=.006)), ('bank_actors', saved_gate(single_actor=False))):
+            with self.subTest(case):   # each keeps a guard gated
+                code, out, _, _ = reverdicted(report);self.assertEqual((code, out['status'], out['passed']), (1, 'FAIL', False))
+        m = out['checks']['c']['quantities']['leaf_value'];self.assertEqual((m['guard_mode'], m['guard_evidence']['evaluator_actors']), ('gated', None))
+        self.assertIn('not established', m['guard_evidence']['evaluator_actors_source'])
+        sampled = dict(saved_gate(), sample_leaves=2);sampled['checks'].pop('e');code, out, _, _ = reverdicted(sampled)
+        self.assertEqual((code, out['status']), (0, 'PASS_SAMPLED'))
+
+    def test_reverdict_refuses_incomplete_reports(self):
+        def drop(*keys):
+            report = saved_gate();node = report
+            for key in keys[:-1]:node = node[key]
+            node.pop(keys[-1]);return report
+        cases = dict(within_guard=drop('checks', 'c', 'quantities', 'leaf_value', 'within_guard'), within_bound=drop('checks', 'c', 'quantities', 'ply2_value_head', 'within_bound'),
+            digest_counts=drop('checks', 'a', 'compared'), depth=drop('pricer_options', 'depth'), sample_leaves=drop('sample_leaves'), quantities=drop('checks', 'c', 'quantities'),
+            n2_report=dict(saved_gate(), mode='N2_EQUIVALENCE'), schema=dict(saved_gate(), schema='pokezero.depth2-gate.v1'))
+        for case, report in cases.items():
+            with self.subTest(case):
+                directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));path = directory / 'gate.json';path.write_text(json.dumps(report))
+                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(path)])
+                self.assertIn('lacks what the verdict needs', str(raised.exception.code));self.assertFalse((directory / gate.REVERDICT_FILE).exists())
+        with self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(Path(tempfile.mkdtemp()) / 'absent.json')])
+        self.assertIn('cannot read', str(raised.exception.code))
+        with contextlib.redirect_stderr(io.StringIO()):
+            for argv in (['--reverdict', 'g.json', '--out', 'o'], ['--reverdict', 'g.json', '--d3-root', 'b', '--chunk', '0'], ['--d3-root', 'b', '--chunk', '0'],
+                    ['--reverdict', 'g.json', '--depth', '4'], ['--reverdict', 'g.json', '--sample-leaves', '2'], ['--reverdict', 'g.json', '--block-invariance'],
+                    ['--reverdict', 'g.json', '--selection', 'searched'], ['--reverdict', 'g.json', '--head-archive', 'h']):
+                with self.assertRaises(SystemExit) as raised:gate.main(argv)
+                self.assertEqual(raised.exception.code, 2, argv)
+
+    def test_reverdict_applies_the_deeper_logit_bound(self):
+        code, out, lines, _ = reverdicted(saved_gate(t1_logits=.06, ply2_logits=.11));c = out['checks']['c']['quantities'];m = c['ply2_own_logits']
+        self.assertEqual((code, out['status']), (0, 'PASS'));self.assertAlmostEqual(m['bound'], .12);self.assertAlmostEqual(out['tolerance']['deeper_logit_bound'], .12)
+        self.assertEqual((m['bound_rule'], m['within_bound'], m['beyond_bound'], m['first_beyond'], m['passed']), ('deeper_logit_bound', True, 0, [], True))
+        self.assertEqual({x['quantity'] for x in out['reverdict']['changed_quantities']}, {'leaf_value', 'ply2_own_logits'})
+        self.assertEqual((c['t1_own_logits']['bound'], c['depth2_pass_t1_own_logits']['bound'], c['depth2_pass_t1_own_logits']['bound_rule']), (.1, .1, 'logit_bound'))
+        self.assertEqual(next(r for r in out['tolerance']['table'] if r['quantity'] == 'ply2_own_logits')['bound'], m['bound'])
+        line = next(x for x in lines if x['message'] == 'REVERDICT_QUANTITY' and x['quantity'] == 'ply2_own_logits')
+        self.assertEqual((line['bound_rule'], line['passed_before'], line['passed']), ('deeper_logit_bound', False, True))
+        self.assertAlmostEqual(next(x for x in lines if x['message'] == 'REVERDICT')['deeper_logit_bound'], .12)
+        for t1, ply2, bound in ((.05, .11, .1), (.06, .13, .12)):   # 2 x .05 leaves no headroom over 0.1; .13 exceeds 2 x .06
+            with self.subTest(t1=t1, ply2=ply2):
+                code, out, _, _ = reverdicted(saved_gate(t1_logits=t1, ply2_logits=ply2));m = out['checks']['c']['quantities']['ply2_own_logits']
+                self.assertEqual((code, out['status'], m['within_bound'], m['beyond_bound'], m['passed']), (1, 'FAIL', False, 1, False));self.assertAlmostEqual(m['bound'], bound)
+
+    def test_reverdict_on_saved_reports(self):
+        """A synthetic report with a raw-head arm, then each V2E_DEPTHN_SAVED_GATE_REPORTS file (unset: none, never a skip): PASS,
+        every other check's verdict as saved, and only what the current rules relax changed (a digest-certified guard on a single
+        evaluator actor, or a deeper prior under 2 x the turn-1 logit floor)."""
+        report = saved_gate();report['checks']['c']['quantities']['raw_head_leaf_value'] = dict(report['checks']['c']['quantities']['leaf_value'])
+        code, out, _, _ = reverdicted(report);self.assertEqual((code, out['status']), (0, 'PASS'))
+        self.assertEqual([x['quantity'] for x in out['reverdict']['changed_quantities']], ['leaf_value', 'raw_head_leaf_value'])
+        for path in SAVED_REPORTS:
+            with self.subTest(path.name):
+                source = json.loads(path.read_text());code, out, _, _ = reverdicted(path, name=path.name);c, tolerance = out['checks']['c']['quantities'], out['tolerance']
+                self.assertEqual((code, out['status'] in ('PASS', 'PASS_SAMPLED')), (0, True), out['reverdict'])
+                self.assertEqual({k: v['passed'] for k, v in out['checks'].items() if k != 'c'}, {k: v['passed'] for k, v in source['checks'].items() if k != 'c'})
+                for change in out['reverdict']['changed_quantities']:
+                    m = c[change['quantity']];self.assertTrue(change['passed'] and (m.get('guard_mode') == 'digest_certified' or m.get('bound_rule') == 'deeper_logit_bound'), change)
+                    if m.get('guard_mode') == 'digest_certified':self.assertEqual(m['guard_evidence']['evaluator_actors'], 1)
+                measured = [c[n] for n in gate.TURN1_LOGITS if (c.get(n) or {}).get('compared')]
+                if measured and not any(m['nonfinite'] for m in measured):self.assertEqual(tolerance['turn1_logit_floor'], max(m['max_abs_difference'] for m in measured))
+                for name in tolerance['deeper_logit_quantities']:self.assertEqual(c[name]['bound'], tolerance['deeper_logit_bound'], name)
+                self.assertEqual([c[n]['bound'] for n in gate.TURN1_LOGITS if n in c], [gate.g2.LOGIT_BOUND] * len([n for n in gate.TURN1_LOGITS if n in c]))
+
+
 # ---------------------------------------------------------------- the real depth-N pricer (when on the path)
 
 @unittest.skipUnless(HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
@@ -989,6 +1296,24 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         self.assertEqual((code, diagnostics['calls']), (0, 1));self.assertEqual(set(diagnostics['change_rate']), {'prior-k2', 'searched-k2'})
         self.assertEqual(len(diagnostics['duplicates']), 1)   # both runs saved the depth-2 pass; the first wins
         self.assertGreater(diagnostics['prior_vs_searched']['k2']['cells'], 0)
+
+    def test_live_guard_modes_and_reverdict(self):
+        """The live gate records each (c) quantity's guard_mode with its per-position digest and actor evidence (the fixture prices
+        with two parameter sets, so every guard stays gated); --reverdict reproduces the verdict on a full prior run (PASS) and a
+        sampled searched run (PASS_SAMPLED), both bank-chunk mode."""
+        for argv, want in (((), 'PASS'), (('--selection', 'searched', '--sample-leaves', '2'), 'PASS_SAMPLED')):
+            with self.subTest(argv=argv):
+                code, out = self.main(*argv);report = json.loads((out / 'gate.json').read_text());c = report['checks']['c']['quantities']
+                self.assertEqual((code, report['status'], report['mode']), (0, want, 'BANK_CHUNK'), report.get('status_reasons'))
+                self.assertEqual((c['leaf_value']['guard_mode'], c['ply2_value_head']['guard_mode'], c['t1_value_head']['guard_mode']), ('gated',) * 3)   # two actors
+                self.assertEqual(report['tolerance']['evaluator_actors'], dict(count=len(PARAMS), source=gate.ACTORS_LIVE));self.assertEqual(len(PARAMS), 2)
+                evidence = c['leaf_value']['guard_evidence'];self.assertEqual((evidence['value_positions_outside_digest'], evidence['evaluator_actors']), (0, 2))
+                self.assertEqual(c['leaf_value']['beyond_guard'], 0)
+                self.assertEqual(report['tolerance']['guard_depthn_rule'], gate.GUARD_DEPTHN_RULE)
+                with patch.object(gate, 'log', lambda *a, **k: None):self.assertEqual(gate.main(['--reverdict', str(out / 'gate.json')]), 0)
+                again = json.loads((out / gate.REVERDICT_FILE).read_text());self.assertEqual((again['status'], again['reverdict']['changed_quantities']), (want, []))
+                verdicts = lambda r: {k: (m.get('passed'), m.get('bound'), m.get('guard_mode'), m.get('beyond_guard')) for k, m in r['checks']['c']['quantities'].items()}
+                self.assertEqual(verdicts(again), verdicts(report))
 
     def test_live_diagnostics(self):
         code, out = self.main('--depth3-diagnostics', '--diagnostic-ks', '2,3')

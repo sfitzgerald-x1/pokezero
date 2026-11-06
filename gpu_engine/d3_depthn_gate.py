@@ -17,10 +17,19 @@ full-width depth-2 pass (DepthNPricer(depth=2, k=9) through as_depth2_frame) on 
      leaf plus --depth2-pass-sample uniform leaves per world are re-run by the oracle (PASS_TRUST).
  (b) turn 1 against D3 (depth 2's check: discrete exact, values and the root prior within the rule).
  (c) head values (turn-1 children, every ply's nodes, the leaves) and both seats' priors at every ply against the
-     oracle's own heads: values within 2 x the run's depth-1 noise floor, logits within 0.1, value comparisons below
-     0.25 x the p10 learner-max own-slot spread of the last ply's parents (the misplacement guard). The p10 is over
-     NON-ZERO spreads: this departs from the depth-2 gate (p10 over every cell_a2_spread) and applies to
-     --n2-equivalence too; a run whose spreads are all zero skips the guard and says so.
+     oracle's own heads: values within 2 x the run's depth-1 noise floor (gated everywhere), logits within 0.1 at turn 1
+     and in depth2_pass, and at plies >= 2 of a depth >= 3 frame within DEEPER_LOGIT_RULE's max(0.1, 2 x turn1_logit_floor)
+     (the run's turn-1 logit max |diff| against the same oracle, as the value rule's floor), value comparisons
+     below 0.25 x the p10 learner-max own-slot spread of the last ply's parents (the misplacement guard). The
+     p10 is over NON-ZERO spreads: this departs from the depth-2 gate (p10 over every cell_a2_spread) and applies to
+     --n2-equivalence too; a run whose spreads are all zero skips the guard and says so. GUARD_DEPTHN_RULE: at plies >= 2
+     of a depth >= 3 frame (ply{p}_value_head, raw_head_ply{p}_value, leaf_value, raw_head_leaf_value) the guard is
+     DIGEST-CERTIFIED (reported with guard_mode, beyond_guard and the digest and actor evidence; not gated) when the run's
+     values came from ONE evaluator parameter set (a digest certifies the inputs, not which parameters priced them) and (a)
+     digest-compared every value-compared position of that ply (leaf_digest / ply{p}_digest_own, checked per position) and
+     all matched: the pricer writes a lane's value and digest from the same inputs, so an exact digest certifies placement
+     and any misplacement beyond noise still fails the value bound. Otherwise, and for turn-1 and depth2_pass quantities,
+     the guard stays gated; --n2-equivalence is unchanged.
  (d) the enumerated set at every ply (turn-1 cells, node ids, leaves) equals the oracle's.
  (e) recursive learner-max (gpu_engine.depthn_backups.learner_max_root) on the pricer frame vs the same frame with the
      oracle's leaf head values and priors on the lanes (c) checks; near ties relative to the run (depth 2's rule).
@@ -35,7 +44,10 @@ as_depth2_frame(depth-N) vs the Depth2Frame: discrete arrays exact, world_report
 run's rule ONLY on scored cells (elsewhere both frames hold unspecified padding), the same (e) decision per root up to
 near ties; INCOMPLETE when no turn-2 leaf or no (e) root was compared. --depth3-diagnostics: full-width depth 2 and depth 3 per selection and k (live,
 no oracle); --diagnostics-from DIR... recomputes them from saved frames (--save-arrays writes
-frames-block{B}-call{C}-{depth2|prior-k{k}|searched-k{k}}.npz). All paths are command-line arguments; --out must be new.
+frames-block{B}-call{C}-{depth2|prior-k{k}|searched-k{k}}.npz). --reverdict GATE_JSON (offline: no GPU, oracle or
+pricer) re-applies the current verdict rules to a saved gate.json (each (c) quantity's passed from its saved bound/guard
+numbers and guard_mode, (c), the status through gate_status_n) and writes gate-reverdict.json beside it, never over an
+existing one; exit 0 iff PASS/PASS_SAMPLED. All paths are command-line arguments; --out must be new.
 """
 import argparse
 import collections
@@ -253,6 +265,24 @@ def _views_peer(status, error):
     return (status == 2) | ((status == 3) & np.isin(error, (5, 6)))
 
 
+def _leaf_viewed(status, error):
+    """(a)'s leaf digest mask: head-valued leaves and the learner view's encoder/head errors (codes 3/4)."""
+    return (status == 4) | ((status == 3) & np.isin(error, (3, 4)))
+
+
+def _node_valued(level, records, at):
+    """(c)'s ply-p masks (valued, expanded): pricer and oracle agree on status and error, and the node is expanded or carries
+    code 5/6 (the learner's value survives); expanded alone for the opponent's prior."""
+    status, error = records['status'], records['error']
+    same = (np.asarray(level.status)[at] == status) & (np.asarray(level.error)[at] == error)
+    return same & ((status == 2) | np.isin(error, (5, 6))), same & (status == 2)
+
+
+def _leaf_scored(frame, leaves):
+    """(c)'s leaf mask: head-valued in both the oracle and the pricer."""
+    return (leaves['status'] == 4) & (np.asarray(frame.leaf_status)[tuple(leaves['index'].T)] == 4)
+
+
 def check_exact_n(frame, data, findings):
     """(a) beyond turn 1's depth-2 fields: ply-2 maps at the cells, every ply's nodes and maps, parent links and the leaves."""
     plan = data['plan'];children = data['children']
@@ -293,7 +323,7 @@ def check_exact_n(frame, data, findings):
             got = np.asarray(getattr(frame, name))[at];findings.record(name, keys, got.astype(np.int64) == want, got, want)
         terminal = status == 1;got = np.asarray(frame.leaf_value)[at]
         findings.record('leaf_value_terminal', keys[terminal], (got == leaves['value'])[terminal], got[terminal], leaves['value'][terminal])
-        viewed = (status == 4) | ((status == 3) & np.isin(error, (3, 4)));got = np.asarray(frame.leaf_digest)[at].astype(np.uint32)
+        viewed = _leaf_viewed(status, error);got = np.asarray(frame.leaf_digest)[at].astype(np.uint32)
         findings.record('leaf_digest', keys[viewed], (got == leaves['digest'])[viewed], got[viewed], leaves['digest'][viewed])
     return findings
 
@@ -305,9 +335,7 @@ def check_heads_n(frame, data, d_results=None):
         records = data['levels'][p]
         if not len(records.get('specs', ())):continue
         level = frame.nodes[p - 2];specs = records['specs'];node = np.asarray(data['ids'][p]);at = (specs[:, 0], specs[:, 1], node)
-        keys = np.stack(at, axis=1);status, error = records['status'], records['error']
-        same = (np.asarray(level.status)[at] == status) & (np.asarray(level.error)[at] == error)
-        valued = same & ((status == 2) | np.isin(error, (5, 6)));expanded = same & (status == 2)
+        keys = np.stack(at, axis=1);valued, expanded = _node_valued(level, records, at)
         parts = {f'ply{p}_value_head': g2._masked(keys, np.asarray(level.value)[at], records['head_value'], valued)}
         if 'raw_head_value' in records:parts[f'raw_head_ply{p}_value'] = g2._masked(keys, np.asarray(level.value)[at], records['raw_head_value'], valued)
         for seat, rec, scope in (('own', 'own', valued), ('opp', 'peer', expanded)):
@@ -316,11 +344,32 @@ def check_heads_n(frame, data, d_results=None):
         out.update({name: g2._numeric(*part) for name, part in parts.items()})
     leaves = data['leaves']
     if leaves is not None and len(leaves['specs']):
-        at = tuple(leaves['index'].T);scored = (leaves['status'] == 4) & (np.asarray(frame.leaf_status)[at] == 4)
+        at = tuple(leaves['index'].T);scored = _leaf_scored(frame, leaves)
         out['leaf_value'] = g2._numeric(*g2._masked(leaves['index'], np.asarray(frame.leaf_value)[at], leaves['head_value'], scored))
         if 'raw_head_value' in leaves:
             out['raw_head_leaf_value'] = g2._numeric(*g2._masked(leaves['index'], np.asarray(frame.leaf_value)[at], leaves['raw_head_value'], scored))
     return out
+
+
+def digest_cover_n(frame, data):
+    """{(c) value quantity past turn 1: its value-compared positions OUTSIDE (a)'s digest mask}, over the same records and
+    masks both checks use (GUARD_DEPTHN_RULE's per-position subset check). Nodes: valued (_node_valued) vs _viewed_own; the
+    subset holds only through the oracle's codes (5/6 come with status 3), so it is counted, not assumed. Leaves: scored
+    (_leaf_scored) vs _leaf_viewed; status 4 lies inside the mask by construction (counted all the same)."""
+    cover = {}
+    for p in range(2, data['plan']['depth']):
+        records = data['levels'][p]
+        if not len(records.get('specs', ())):continue
+        specs = records['specs'];at = (specs[:, 0], specs[:, 1], np.asarray(data['ids'][p]))
+        outside = int(np.count_nonzero(_node_valued(frame.nodes[p - 2], records, at)[0] & ~_viewed_own(records['status'], records['error'])))
+        cover[f'ply{p}_value_head'] = outside
+        if 'raw_head_value' in records:cover[f'raw_head_ply{p}_value'] = outside
+    leaves = data['leaves']
+    if leaves is not None and len(leaves['specs']):
+        outside = int(np.count_nonzero(_leaf_scored(frame, leaves) & ~_leaf_viewed(leaves['status'], leaves['error'])))
+        cover['leaf_value'] = outside
+        if 'raw_head_value' in leaves:cover['raw_head_leaf_value'] = outside
+    return cover
 
 
 def check_enumeration_n(frame, data, findings):
@@ -442,19 +491,19 @@ def decision_check_n(frame, data, requests, *, context=None, backups=None, q_noi
 
 def evaluate_n(frame, d_results, requests, data, *, context=None, full_turn1=True, progress=None):
     """All checks for ONE depth-N pricing call (floats are bounded at the run level by g2.summarize)."""
-    context = context or {};geometry = frame_geometry_n(frame, len(requests), data['plan'])
+    context = context or {};geometry = frame_geometry_n(frame, len(requests), data['plan']);depth = data['plan']['depth']
     if geometry:
         bad = dict(passed=False, compared={}, mismatched=dict(frame_geometry=len(geometry)),
             first_mismatches=[dict(context, field='frame_geometry', problems=geometry[:FIRST])])
-        return dict(a=bad, b=dict(bad, values={}), c={}, d=bad, oracle=check_oracle_n(data, Findings(context)).report(), geometry=geometry)
+        return dict(a=bad, b=dict(bad, values={}), c={}, d=bad, oracle=check_oracle_n(data, Findings(context)).report(), geometry=geometry, depth=depth)
     with stage(progress, 'check_a', **context) as info:a = check_exact_n(frame, data, Findings(context)).report();info['passed'] = a['passed']
     with stage(progress, 'check_b', **context) as info:
         found = g2.check_d(frame, d_results, requests, Findings(context), full_turn1=full_turn1);b = dict(found.report(), values=found.values)
         info['passed'] = b['passed']
-    with stage(progress, 'check_c', **context):c = check_heads_n(frame, data, d_results)
+    with stage(progress, 'check_c', **context):c = check_heads_n(frame, data, d_results);cover = digest_cover_n(frame, data)
     with stage(progress, 'check_d', **context) as info:d = check_enumeration_n(frame, data, Findings(context)).report();info['passed'] = d['passed']
     with stage(progress, 'check_oracle_consistency', **context):oracle = check_oracle_n(data, Findings(context)).report()
-    return dict(a=a, b=b, c=c, d=d, oracle=oracle, geometry=[], spreads=node_spreads(frame))
+    return dict(a=a, b=b, c=c, d=d, oracle=oracle, geometry=[], spreads=node_spreads(frame), depth=depth, digest_cover=cover)
 
 
 def guard_spread(spreads):
@@ -480,12 +529,165 @@ def guard_note(rule, spread):
     return rule
 
 
+GUARD_DEPTHN_RULE = ('(c) value quantities at plies >= 2 of a depth >= 3 frame (ply{p}_value_head, raw_head_ply{p}_value, leaf_value, '
+    'raw_head_leaf_value): the misplacement guard is DIGEST-CERTIFIED (guard_bound, within_guard, ratio_to_guard and beyond_guard reported, '
+    'not gated) when the run\'s values came from a single evaluator parameter set (evaluator_actors == 1: the live run counts the parameter sets '
+    'it priced with; a saved report establishes it by that record, the head override or actor_capacity 1, else it stays gated), because a digest '
+    'certifies the inputs, not which parameters priced them, and (a) digest-compared every value-compared position of that ply and all matched: '
+    'the digest (leaf_digest, ply{p}_digest_own) compared >= the quantity\'s compared with zero mismatches, and zero value-compared positions outside '
+    '(a)\'s digest mask (counted per position; for leaves inside by construction). The pricer writes each lane\'s value and digest from the same '
+    'inputs, so an exact digest certifies placement and a misplacement whose value effect exceeds noise still fails the value bound. Otherwise the '
+    'guard stays gated, as '
+    'it does for turn-1 and depth2_pass quantities; the value bound is gated everywhere; --n2-equivalence is unchanged')
+
+
+def certifying_digest(name, depth):
+    """(a)'s digest field that can certify the guard of (c) quantity `name` under GUARD_DEPTHN_RULE (None: always gated)."""
+    if depth is None or int(depth) < 3:return None
+    if name in ('leaf_value', 'raw_head_leaf_value'):return 'leaf_digest'
+    m = re.fullmatch(r'ply(\d+)_value_head|raw_head_ply(\d+)_value', name);p = None if m is None else int(m.group(1) or m.group(2))
+    return f'ply{p}_digest_own' if p is not None and 2 <= p < int(depth) else None
+
+
+def guard_mode(name, m, a, depth, outside, actors):
+    """('digest_certified' | 'gated', evidence or None) for one guarded (c) value quantity `m` against (a)'s merged report.
+    outside: its value-compared positions outside (a)'s digest mask (digest_cover_n); None when not recorded, which certifies
+    leaves (scored lies inside the mask by construction) and leaves a node quantity gated. actors: dict(count, source) of the
+    evaluator parameter sets the values came from; only count 1 certifies."""
+    digest = certifying_digest(name, depth)
+    if digest is None:return 'gated', None
+    compared, mismatched, leaf = a.get('compared', {}).get(digest), a.get('mismatched', {}).get(digest), digest == 'leaf_digest'
+    actors = actors or dict(count=None, source='not established')
+    evidence = dict(digest=digest, digest_compared=compared, digest_mismatched=mismatched, value_compared=m['compared'],
+        value_positions_outside_digest=outside, subset='per position (digest_cover_n)' if outside is not None else
+            'by construction: scored leaves (oracle status 4) lie inside the leaf digest mask' if leaf else 'unknown: no per-position count recorded',
+        evaluator_actors=actors['count'], evaluator_actors_source=actors['source'])
+    certified = actors['count'] == 1 and compared is not None and mismatched == 0 and compared >= m['compared'] and (outside == 0 or (outside is None and leaf))
+    return ('digest_certified' if certified else 'gated'), evidence
+
+
+ACTORS_LIVE = 'len(params): the evaluator parameter sets this run priced with, pricer and oracle alike (the head override: the head alone)'
+
+
+def saved_actors(report):
+    """dict(count, source) of the evaluator parameter sets a saved report's values came from: its tolerance.evaluator_actors
+    (recorded by the live run since the single-actor condition), else count 1 from evaluator.override (the head prices alone,
+    actors 0/0) or pricer_options.actor_capacity == 1; count None (not established: the guard stays gated) otherwise."""
+    recorded = (report.get('tolerance') or {}).get('evaluator_actors')
+    if isinstance(recorded, dict) and 'count' in recorded:return dict(count=recorded['count'], source=recorded.get('source'))
+    found = (['saved evaluator.override (the head override prices with the head alone, actors 0/0)'] if (report.get('evaluator') or {}).get('override') is True else []) \
+        + (['saved pricer_options.actor_capacity == 1'] if (report.get('pricer_options') or {}).get('actor_capacity') == 1 else [])
+    if found:return dict(count=1, source='; '.join(found))
+    return dict(count=None, source='not established: no tolerance.evaluator_actors, evaluator.override not true, pricer_options.actor_capacity '
+        f'{(report.get("pricer_options") or {}).get("actor_capacity")!r}')
+
+
+DEEPER_LOGIT_RULE = ('(c) priors at plies >= 2 of a depth >= 3 frame (ply{p}_own_logits, ply{p}_opp_logits): max |diff| <= deeper_logit_bound = '
+    'max(LOGIT_BOUND, 2 x turn1_logit_floor), turn1_logit_floor = this run\'s max |diff| over t1_own_logits and t1_peer_logits (the same merged run, '
+    'against the same oracle); LOGIT_BOUND when neither is measured or one is non-finite. It mirrors the value rule (2 x a turn-1 floor measured '
+    'against the same oracle): deeper plies\' priors come from other compiled programs than the oracle\'s, as turn 1\'s do, while turn-1 logits stay '
+    'anchored at LOGIT_BOUND by the depth-2 gates and the N=2 equivalence (bitwise at turn 1). Turn-1 (t1_*_logits, root_peer_logits) and '
+    'depth2_pass_* logits keep LOGIT_BOUND; depth 2, --n2-equivalence, every value rule and block invariance are unchanged')
+TURN1_LOGITS = ('t1_own_logits', 't1_peer_logits')
+
+
+def deeper_logit(name, depth):
+    """Whether (c) quantity `name` is a prior at a ply >= 2 of a depth >= 3 frame (DEEPER_LOGIT_RULE's bound)."""
+    m = None if depth is None or int(depth) < 3 else re.fullmatch(r'ply(\d+)_(?:own|opp)_logits', name)
+    return m is not None and 2 <= int(m.group(1)) < int(depth)
+
+
+def turn1_logit_floor(quantities):
+    """(turn1_logit_floor or None, source): the max |diff| over the measured TURN1_LOGITS quantities of (c); None (the
+    LOGIT_BOUND fallback) when neither is measured or a measured one is non-finite."""
+    measured = {n: quantities[n] for n in TURN1_LOGITS if (quantities.get(n) or {}).get('compared')}
+    if not measured:return None, 'fallback LOGIT_BOUND: no turn-1 logit was compared'
+    bad = [n for n, m in measured.items() if m.get('nonfinite')]
+    if bad:return None, 'fallback LOGIT_BOUND: non-finite turn-1 logit differences (' + ', '.join(bad) + ')'
+    name = max(measured, key=lambda n: measured[n]['max_abs_difference']);return float(measured[name]['max_abs_difference']), f'max |diff| of {name}'
+
+
+def rebound(m, bound, deltas=None):
+    """A finalized quantity re-judged against `bound`, in place (finalize_numeric's rule): within_bound from max_abs_difference and
+    nonfinite; beyond_bound exact from `deltas` {|diffs|}, else 0 when within, else counted on the saved first_beyond when that
+    list provably holds every difference above `bound`, else None; first_beyond and ratio_to_bound to match."""
+    if deltas is None and m['bound'] == bound:return m
+    within = m['nonfinite'] == 0 and m['max_abs_difference'] <= bound;saved = m.get('first_beyond') or []
+    rows = [r for r in saved if float(r['abs_difference']) > bound]   # float(): a non-finite difference is saved as 'inf'
+    if deltas is not None:beyond = int(np.count_nonzero(np.asarray(deltas, np.float64) > bound))
+    elif within:beyond = 0
+    else:beyond = len(rows) if bound >= m['bound'] and (len(rows) < len(saved) or m.get('beyond_bound') == len(saved)) else None
+    m.update(bound=bound, beyond_bound=beyond, within_bound=within, first_beyond=rows, ratio_to_bound=None if m['nonfinite'] else m['max_abs_difference'] / bound)
+    return m
+
+
+def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None, geometry=None):
+    """The current (c) verdict on a summarized result or a saved gate report, in place (the live run and --reverdict alike):
+    DEEPER_LOGIT_RULE's bound on the deeper priors (rebound; `bound_rule` on every logit quantity); each non-floor
+    quantity's passed = within_bound and, where it has a guard, (within_guard unless GUARD_DEPTHN_RULE certifies it:
+    guard_mode, guard_evidence, beyond_guard from `deltas` {quantity: |diffs|}, else as saved); then (c)'s passed (a
+    frame-geometry failure keeps it failed; None reads a.mismatched.frame_geometry), the tolerance table's (c) rows and the
+    tolerance section's rules and numbers. actors: dict(count, source) of the evaluator parameter sets (None: not established);
+    outside: {quantity: digest_cover_n count}; a quantity without one reuses its saved guard_evidence count."""
+    checks = result['checks'];c, a = checks.get('c'), checks.get('a') or {};modes = {}
+    if c is None:return result
+    floor, source = turn1_logit_floor(c['quantities']);deeper = g2.LOGIT_BOUND if floor is None else max(g2.LOGIT_BOUND, 2 * floor)
+    source = source if floor is None else (f'2 x turn1_logit_floor ({source})' if 2 * floor > g2.LOGIT_BOUND else f'LOGIT_BOUND (2 x turn1_logit_floor, {source}, is below it)')
+    for name, m in c['quantities'].items():
+        if name in g2.FLOORS:continue
+        if deeper_logit(name, depth):rebound(m, deeper, None if deltas is None else deltas.get(name));m['bound_rule'] = 'deeper_logit_bound'
+        elif g2.is_logit(name):m['bound_rule'] = 'logit_bound'
+        if m.get('guard_bound') is None:m['passed'] = bool(m['within_bound']);continue
+        count = (outside or {}).get(name, (m.get('guard_evidence') or {}).get('value_positions_outside_digest'))
+        mode, evidence = guard_mode(name, m, a, depth, count, actors);modes[name] = mode
+        if deltas is not None and name in deltas:m['beyond_guard'] = int(np.count_nonzero(np.asarray(deltas[name], np.float64) >= m['guard_bound']))
+        m.update(guard_mode=mode, guard_evidence=evidence, beyond_guard=m.get('beyond_guard'))
+        m['passed'] = bool(m['within_bound']) and (mode == 'digest_certified' or bool(m['within_guard']))
+    if geometry is None:geometry = bool(a.get('mismatched', {}).get('frame_geometry'))
+    c['passed'] = all(m['passed'] for n, m in c['quantities'].items() if n not in g2.FLOORS) and not geometry
+    for row in result['tolerance'].get('table', ()):
+        if row.get('check') == 'c' and row.get('quantity') in c['quantities']:
+            m = c['quantities'][row['quantity']]
+            row.update(bound=m['bound'], ratio_to_bound=m['ratio_to_bound'], passed=m['passed'], guard_mode=m.get('guard_mode'), beyond_guard=m.get('beyond_guard'))
+    result['tolerance'].update(guard_depthn_rule=GUARD_DEPTHN_RULE, guard_modes=modes, evaluator_actors=actors or dict(count=None, source='not established'),
+        turn1_logit_floor=floor, deeper_logit_bound=deeper,
+        deeper_logit_bound_source=source, deeper_logit_rule=DEEPER_LOGIT_RULE, deeper_logit_quantities=[n for n in c['quantities'] if deeper_logit(n, depth)])
+    return result
+
+
+def digest_cover_merged(evaluations):
+    """{quantity: summed digest_cover_n count} over calls; None for a quantity some call compared without a count."""
+    out = {}
+    for e in evaluations:
+        cover = e.get('digest_cover') or {}
+        for name in e.get('c') or {}:out[name] = None if name not in cover or out.get(name, 0) is None else out.get(name, 0) + cover[name]
+    return out
+
+
 def summarize_n(evaluations):
-    """g2.summarize with the guard's spread taken from the last ply's learner-max own-slot spreads of the same frames."""
+    """g2.summarize with the guard's spread taken from the last ply's learner-max own-slot spreads of the same frames, then
+    apply_rules_depthn (DEEPER_LOGIT_RULE, GUARD_DEPTHN_RULE) on (c) at the calls' depth (their plan's; mixed or unknown
+    depths keep LOGIT_BOUND and every guard gated)."""
     p10, spread = guard_spread(s for e in evaluations for s in e.get('spreads', ()))
     result = g2.summarize(evaluations, spread_p10=p10)
-    result['tolerance'] = guard_note(result['tolerance'], spread)
+    result['tolerance'] = guard_note(result['tolerance'], spread);depths = {e.get('depth') for e in evaluations};deltas = collections.defaultdict(list)
+    for e in evaluations:
+        for name, m in (e.get('c') or {}).items():deltas[name].append(np.asarray(m['_deltas'], np.float64))
+    counts = {e.get('actors') for e in evaluations};count = next(iter(counts)) if len(counts) == 1 else None
+    actors = dict(count=count, source=ACTORS_LIVE) if type(count) is int else dict(count=None, source=f'not established: the calls recorded {sorted(map(str, counts))}')
+    apply_rules_depthn(result, depths.pop() if len(depths) == 1 else None, actors=actors, deltas={k: np.concatenate(v) for k, v in deltas.items()},
+        outside=digest_cover_merged(evaluations), geometry=any(e.get('geometry') for e in evaluations))
+    result['passed'] = bool(result['checks']) and all(x['passed'] for x in result['checks'].values())
     return result
+
+
+def tolerance_line_n(tolerance):
+    """g2.tolerance_line with the deeper logit bound and its turn-1 floor, and each row's bound, guard_mode (rows with a guard
+    outside (c) are gated) and beyond_guard."""
+    line = dict(g2.tolerance_line(tolerance), turn1_logit_floor=tolerance.get('turn1_logit_floor'), deeper_logit_bound=tolerance.get('deeper_logit_bound'))
+    for entry, row in zip(line['checks'], tolerance.get('table', ())):
+        entry.update(bound=row.get('bound'), guard_mode=row.get('guard_mode', 'gated' if row.get('guard_bound') is not None else None), beyond_guard=row.get('beyond_guard'))
+    return line
 
 
 def split_searched(result):
@@ -856,6 +1058,7 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
             leaves_enumerated=len(data['enumerated'].get('leaf', ())), leaves_checked=0 if data['leaves'] is None else len(data['leaves']['specs']))
     costs['oracle'] = dict(wall_seconds=time.perf_counter() - clock, seconds={k: oracle.seconds[k] - before.get(k, 0.) for k in oracle.seconds})
     evaluation = evaluate_n(frame, d_results, requests, data, context=context, full_turn1=plan['k1_own'] == plan['k1_opp'] == 9, progress=progress)
+    evaluation['actors'] = len(params)   # the evaluator parameter sets every value came from (GUARD_DEPTHN_RULE's single-actor condition)
     found = Findings(context);want = [dict(k_own=list(plan['k_own']), k_opp=list(plan['k_opp']))] * len(instances)   # each engine's self-report
     got = [dict(k_own=e['k_own'], k_opp=e['k_opp']) for e in pricers.engine_widths()]
     found.record('engine_widths', np.arange(len(got))[:, None], np.asarray([g == x for g, x in zip(got, want)]), g2._objects(got), g2._objects(want))
@@ -921,6 +1124,75 @@ def summarize_run(evaluations, lanes):
     inv = result['checks'].get('block_invariance')
     if inv is not None:inv.pop('child_blocks', None);inv['block_lanes'] = list(lanes)
     return result
+
+
+# ---------------------------------------------------------------- offline re-verdict of a saved gate.json
+
+REVERDICT_FILE = 'gate-reverdict.json'
+REVERDICT_SHOWN = ('compared', 'max_abs_difference', 'bound', 'bound_rule', 'ratio_to_bound', 'within_bound', 'beyond_bound', 'guard_bound',
+    'ratio_to_guard', 'within_guard', 'beyond_guard', 'guard_mode')
+
+
+def reverdict_missing(report):
+    """What --reverdict needs that a saved report lacks (or why it is not a depth-N gate report); [] when complete."""
+    if not isinstance(report, dict):return ['a JSON object']
+    missing = [] if report.get('schema') == SCHEMA else [f'schema {SCHEMA} (got {report.get("schema")!r})']
+    if report.get('mode') not in ('SAVED_ROOTS', 'BANK_CHUNK'):missing.append(f'mode SAVED_ROOTS|BANK_CHUNK (got {report.get("mode")!r})')
+    missing += [key for key in ('status', 'checks', 'sample_leaves', 'tolerance', 'pricer_options') if key not in report]
+    if missing:return missing
+    if type((report['pricer_options'] or {}).get('depth')) is not int:missing.append('pricer_options.depth')
+    if not isinstance(report['tolerance'], dict):missing.append('tolerance')
+    checks = report['checks'] if isinstance(report['checks'], dict) else {}
+    missing += [f'checks.{name}.passed' for name in ('a', 'c') if name not in checks]
+    missing += [f'checks.{name}.passed' for name, check in checks.items() if not isinstance(check, dict) or 'passed' not in check]
+    missing += [f'checks.a.{key}' for key in ('compared', 'mismatched') if not isinstance(checks.get('a', {}).get(key), dict)]
+    quantities = (checks.get('c') or {}).get('quantities')
+    if not isinstance(quantities, dict):return missing + ['checks.c.quantities']
+    for name, m in quantities.items():
+        if name in g2.FLOORS:continue
+        need = ('compared', 'within_bound') + (('within_guard',) if isinstance(m, dict) and m.get('guard_bound') is not None else ()) \
+            + (('max_abs_difference', 'nonfinite', 'bound') if g2.is_logit(name) else ())   # DEEPER_LOGIT_RULE re-bounds from these
+        missing += [f'checks.c.quantities.{name}.{key}' for key in need if not isinstance(m, dict) or key not in m]
+    return missing
+
+
+def reverdict(path):
+    """--reverdict: the current verdict rules re-applied offline to a saved gate.json (apply_rules_depthn on (c) at the run's
+    depth, the status through gate_status_n; the other checks keep their saved verdicts: their rules are unchanged), written
+    to gate-reverdict.json beside it with a `reverdict` section (old status and reasons, changed quantities). Never
+    overwrites; refuses (SystemExit, non-zero) a report missing a field the verdict needs. Returns 0 iff PASS/PASS_SAMPLED."""
+    path = Path(path);out = path.with_name(REVERDICT_FILE)
+    if out.exists():raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
+    try:report = json.loads(path.read_text())
+    except (OSError, ValueError) as error:raise SystemExit(f'--reverdict: cannot read {path}: {error}')
+    missing = reverdict_missing(report)
+    if missing:raise SystemExit(f'--reverdict: {path} lacks what the verdict needs: ' + ', '.join(missing[:FIRST]))
+    quantities = report['checks']['c']['quantities'];before = {name: m.get('passed') for name, m in quantities.items()}
+    old = dict(status=report['status'], status_reasons=report.get('status_reasons'), failing=[k for k, v in report['checks'].items() if not v['passed']])
+    apply_rules_depthn(report, report['pricer_options']['depth'], actors=saved_actors(report))
+    status, reasons = gate_status_n(report, sampled=report['sample_leaves'] is not None)
+    changed = [dict(quantity=name, passed_before=before[name], passed=m['passed'], guard_mode=m.get('guard_mode')) for name, m in quantities.items()
+        if name not in g2.FLOORS and m['passed'] != before[name]]
+    failing = [k for k, v in report['checks'].items() if not v['passed']]
+    report.update(status=status, passed=status in ('PASS', 'PASS_SAMPLED'), status_reasons=reasons, reverdict=dict(source=str(path),
+        source_status=old['status'], source_status_reasons=old['status_reasons'], source_failing_checks=old['failing'], failing_checks=failing,
+        changed_quantities=changed, depth=report['pricer_options']['depth'], rule=GUARD_DEPTHN_RULE, deeper_logit_rule=DEEPER_LOGIT_RULE,
+        turn1_logit_floor=report['tolerance']['turn1_logit_floor'], deeper_logit_bound=report['tolerance']['deeper_logit_bound'],
+        note='offline: the saved numbers re-judged by the current verdict rules; nothing was re-priced or re-compared'))
+    text = json.dumps(report, indent=1, allow_nan=False, default=str) + '\n'   # before the file exists: a failure here leaves none behind
+    try:
+        with out.open('x') as handle:handle.write(text)
+    except FileExistsError:raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
+    for name, m in quantities.items():
+        if name not in g2.FLOORS and (m.get('guard_bound') is not None or m.get('bound_rule') == 'deeper_logit_bound'):
+            log('REVERDICT_QUANTITY', quantity=name, **{k: m.get(k) for k in REVERDICT_SHOWN}, guard_evidence=m.get('guard_evidence'),
+                passed_before=before[name], passed=m['passed'])
+    log('REVERDICT', gate=str(path), out=str(out), old_status=old['status'], new_status=status, old_status_reasons=old['status_reasons'],
+        status_reasons=reasons, old_failing_checks=old['failing'], failing_checks=failing, changed_quantities=changed,
+        checks={k: v['passed'] for k, v in report['checks'].items()}, evaluator_actors=report['tolerance']['evaluator_actors'],
+        turn1_logit_floor=report['tolerance']['turn1_logit_floor'],
+        deeper_logit_bound=report['tolerance']['deeper_logit_bound'])
+    return 0 if report['passed'] else 1
 
 
 # ---------------------------------------------------------------- N=2 equivalence
@@ -1241,7 +1513,9 @@ def parse(argv=None):
     parser.add_argument('--d3-root', help='the D3 bank run root (prespec.json, runtime.json, run/)')
     parser.add_argument('--chunk', type=int, help='bank chunk index (with --d3-root); chunks 0..N are collected')
     parser.add_argument('--memory-policy', action='store_true', help="with --d3-root: apply the bank runtime's JAX memory policy")
-    parser.add_argument('--out', required=True, help='new output directory')
+    parser.add_argument('--out', help='new output directory (every mode but --reverdict)')
+    parser.add_argument('--reverdict', metavar='GATE_JSON', help='offline: re-apply the current verdict rules to a saved gate.json; writes '
+        'gate-reverdict.json beside it (never overwritten); exit 0 iff the new status is PASS/PASS_SAMPLED')
     parser.add_argument('--depth', type=int, default=3, help='search depth N >= 2 (default 3)')
     parser.add_argument('--selection', choices=MODES, default='prior', help='ply-2 selection (plies 3..N always prior)')
     parser.add_argument('--k-own', default='3', help='learner width per ply 2..N, "k" or "k2,k3,..." (under searched, ply 2\'s is searched_maps\' k)')
@@ -1266,8 +1540,13 @@ def parse(argv=None):
     parser.add_argument('--diagnostics-from', nargs='+', metavar='DIR', help='offline: depth-3 diagnostics from saved frames (one or more directories)')
     g2.add_head_arguments(parser)
     args = parser.parse_args(argv)
+    if args.reverdict:
+        given = sorted(a.option_strings[0] for a in parser._actions if a.dest not in ('help', 'reverdict') and getattr(args, a.dest) != a.default)
+        if given:parser.error('--reverdict runs offline on a saved gate.json and takes no other option (given: ' + ', '.join(given) + ')')
+        return parser, args
     g2.check_head_arguments(parser, args)
     if args.raw_head_check and not args.head_archive:parser.error('--raw-head-check needs --head-archive')
+    if not args.out:parser.error('--out is required (every mode but --reverdict)')
     if args.diagnostics_from:
         if args.saved_roots or args.d3_root or args.head_archive or args.n2_equivalence or args.depth3_diagnostics:
             parser.error('--diagnostics-from runs offline: no roots, head, --n2-equivalence or --depth3-diagnostics')
@@ -1294,6 +1573,7 @@ def parse(argv=None):
 
 def main(argv=None):
     parser, args = parse(argv)
+    if args.reverdict:return reverdict(args.reverdict)
     if args.diagnostics_from:
         out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
         report = dict(schema=SCHEMA, mode='DIAGNOSTICS_OFFLINE', **offline_diagnostics(args.diagnostics_from, progress=log))
@@ -1304,7 +1584,8 @@ def main(argv=None):
     needed = ['gpu_engine.device_depthn_pricer', 'gpu_engine.depthn_backups', 'gpu_engine.depth2_backups'] + (['gpu_engine.device_depth2_pricer'] if args.n2_equivalence else [])
     missing = [name for name in needed if importlib.util.find_spec(name) is None]
     if missing:raise SystemExit('not on this tree (failing closed): ' + ', '.join(missing))
-    log('TOLERANCE_RULE', rule=g2.TOLERANCE_RULE, logit_bound=g2.LOGIT_BOUND, guard_factor=g2.GUARD_FACTOR, guard_spread='p10 learner-max own-slot spread of the last ply\'s parents')
+    log('TOLERANCE_RULE', rule=g2.TOLERANCE_RULE, logit_bound=g2.LOGIT_BOUND, guard_factor=g2.GUARD_FACTOR, guard_spread='p10 learner-max own-slot spread of the last ply\'s parents',
+        guard_depthn_rule=GUARD_DEPTHN_RULE, deeper_logit_rule=DEEPER_LOGIT_RULE)
     log('EVALUATOR', override=bool(args.head_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
         checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, resolved='EVALUATOR_RESOLVED follows once the roots are loaded')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
@@ -1338,7 +1619,7 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
             context=dict(block=block, call=call), progress=log, save=(out, f'frames-block{block}-call{call}') if args.save_arrays else None,
             evaluator=roots.evaluator, pass_sample=args.depth2_pass_sample)
         evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
-    result = summarize_run(evaluations, lanes);log('TOLERANCE', **g2.tolerance_line(result['tolerance']))
+    result = summarize_run(evaluations, lanes);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
     reported = [c for c in calls if c['refusals'] is not None]
     refusals = dict(g2.with_dropped(merge_refusals_n([c['refusals'] for c in reported]), roots.evaluator.get('dropped_roots', ())), calls_reported=len(reported),
