@@ -297,6 +297,7 @@ def main(argv=None):
     parser.add_argument('--depth2-child-block', type=int, default=27)
     parser.add_argument('--never-borrow', action='store_true', help='gate c: re-run every searched decision from a counterfactual true state')
     parser.add_argument('--max-steps', type=int, help='smoke only')
+    parser.add_argument('--collector-check', type=int, default=0, help='compare K raw steps with the collector advance, bitwise')
     parser.add_argument('--out', required=True);parser.add_argument('--label', required=True)
     args = parser.parse_args(argv)
     import jax
@@ -318,7 +319,8 @@ def main(argv=None):
     params = (load(a, args.a_run), load(b, args.b_run))
     backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
     batch = plan.iterations[args.iteration][args.block]
-    if args.games:batch = replace(batch, games=batch.games[:args.games])
+    if args.games:   # a prefix is a valid smaller batch; its initial states need not equal the full block's
+        batch = replace(batch, games=batch.games[:args.games], gender_root_ids=batch.gender_root_ids[:args.games])
     swapped = replace(batch, games=tuple(replace(g, stream_id=g.stream_id - SWAP_OFFSET, battle_id=g.battle_id + '-swap') for g in batch.games))
     carries = [jax.block_until_ready(backend._construct(declared)) for declared in (batch, swapped)]
     carry = jax.tree.map(lambda x, y: j.concatenate([x, y]), *carries)
@@ -327,6 +329,24 @@ def main(argv=None):
     prepared = context['prepared']
     decide, apply = make_step(prepared.engine_tables, prepared.observation_tables, plan.model, sampling_seed=batch.sampling_seed,
         max_requests=plan.max_requests)
+    collector_check = None
+    if args.collector_check:
+        # The raw path of this split step against the collector's own advance, from the same carry.
+        if a.archive_sha256 == b.archive_sha256:raise ValueError('the collector check needs two distinct archives')
+        bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
+            (a.archive_sha256,) * 2, (True, True), backend.declaration_sha256)
+        assignments = [dict(stream_id=int(s), learner_side=int(side), opponent=dict(archive_sha256=b.archive_sha256))
+            for s, side in zip(np.asarray(carry.streams), a_side_host)]
+        bank = rollout.actor_bank_from_assignments(bindings, (a.archive_sha256, b.archive_sha256), current_archive=a.archive_sha256,
+            assignments=assignments)
+        collect = rollout.make_collector(prepared.engine_tables, prepared.observation_tables, plan.model, backend.labels, bindings,
+            sampling_seed=batch.sampling_seed, chunk_steps=args.collector_check, max_requests=plan.max_requests, actor_bank=bank)
+        reference = jax.device_get(collect(carry, params).carry);ours = carry
+        for _ in range(args.collector_check):ours = apply(ours, decide(ours, params, a_side), decide(ours, params, a_side)['actions'])
+        ours = jax.device_get(ours)
+        fields = {name: leaves_equal(getattr(reference, name), getattr(ours, name)) for name in reference._fields}
+        collector_check = dict(steps=args.collector_check, all_equal=all(fields.values()), differing=[k for k, v in fields.items() if not v])
+        log('COLLECTOR_CHECK', **collector_check)
     search = None
     if args.reduction != 'none':
         search = Search(prepared, plan, params[0], pricer=args.pricer, reduction=args.reduction, blend=args.blend,
@@ -417,7 +437,7 @@ def main(argv=None):
         decisions=dict(total=dict(total), by_turn_band={k: dict(v) for k, v in sorted(bands.items())},
             searched_share=total['searched'] / max(total['decisions'], 1),
             searched_change_rate_vs_raw_sample=total['searched_changed_vs_raw_sample'] / max(total['searched'], 1)),
-        never_borrow=dict(probe_stats) if args.never_borrow else None,
+        never_borrow=dict(probe_stats) if args.never_borrow else None, collector_check=collector_check,
         timing=dict(steps=step, wall_seconds=time.perf_counter() - begin, **{k: v for k, v in timing.items()},
             search={k: v for k, v in (search.timing if search else {}).items()}, pricer_calls=len(search.calls) if search else 0,
             search_ms_per_decision=1000 * timing['search_seconds'] / max(total['decisions'], 1) if search else None),
