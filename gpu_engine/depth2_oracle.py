@@ -58,7 +58,7 @@ INPUT_ORDER = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attenti
 class Stack:
     """Available worlds of one request list, stacked along a flat row axis."""
     rows: dict                 # (request index, world) -> flat row; materialization refusals are absent
-    states: object             # device pytree, leading axis = flat row, each row a one-row BattleState
+    states: object             # device pytree, leading axis = flat row (padded to a bucket), each row a one-row BattleState
     publics: object            # device pytree, leading axis = flat row, each row one world's tracker namespace
     owners: object             # device int32 [rows]
     owner: np.ndarray          # host int32 [rows]
@@ -66,8 +66,16 @@ class Stack:
     opponent: np.ndarray       # host int32 [rows]: opponent actor index into params
 
 
+def bucket(count):
+    """Stacked-world rows: a power of two (at least 8), so calls with different world counts reuse compiled programs."""
+    return max(8, 1 << (count - 1).bit_length())
+
+
 def stack(requests, worlds):
-    """Stack every materialized world (worlds[q] is the request's (world 0, world 1) pair)."""
+    """Stack every materialized world (worlds[q] is the request's (world 0, world 1) pair).
+
+    The row axis is padded to bucket(rows) by repeating row 0; no spec ever indexes a padding row, so it
+    changes no result, only how often the oracle's programs compile."""
     requests, worlds = tuple(requests), tuple(worlds)
     if len(requests) != len(worlds):raise ValueError('one materialized world pair per request required')
     rows, states, publics, owner, learner, opponent = {}, [], [], [], [], []
@@ -81,10 +89,12 @@ def stack(requests, worlds):
             learner.append(int(request.learner_actor));opponent.append(int(request.opponent_actor))
     owner, learner, opponent = (np.asarray(x, np.int32) for x in (owner, learner, opponent))
     if not states:return Stack(rows, None, None, None, owner, learner, opponent)
+    size = bucket(len(states));states = states + [states[0]] * (size - len(states));publics = publics + [publics[0]] * (size - len(publics))
     pack = lambda *leaves: np.stack([np.asarray(x) for x in leaves])
     states = jax.device_put(jax.tree.map(pack, *jax.device_get(states)))
     publics = jax.device_put(jax.tree.map(pack, *jax.device_get(publics)))
-    return Stack(rows, states, publics, j.asarray(owner), owner, learner, opponent)
+    padded = lambda x: np.concatenate([x, np.repeat(x[:1], size - len(x))])
+    return Stack(rows, states, publics, j.asarray(padded(owner)), owner, learner, opponent)
 
 
 def _gather(tree, row):
@@ -223,9 +233,11 @@ def pre_code(request, root):
 
 class Oracle:
     """Plain-executor two-turn evaluation; make one per executor/model."""
-    def __init__(self, executor, model, *, chunk=512):
+    def __init__(self, executor, model, *, chunk=512, progress=None):
+        """progress(kind=, chunk=, chunks=, rows_done=, rows=, seconds=, step_seconds=, head_seconds=) after each chunk."""
         if type(chunk) is not int or chunk <= 0:raise ValueError('positive fixed oracle chunk required')
-        self.executor, self.model, self.chunk = executor, model, chunk
+        self.executor, self.model, self.chunk, self.progress = executor, model, chunk, progress
+        self.chunks = []   # per-chunk timing: the first chunk of each program and world bucket includes its compile
         mapped = lambda fn: jax.jit(jax.vmap(lambda s, p, o, spec: fn(executor, s, p, o, spec), in_axes=(None, None, None, 0)))
         self._root, self._child, self._leaf = mapped(_root), mapped(_child), mapped(_leaf)
         self.forward = jax.jit(lambda params, inputs: v5_model.forward(params, inputs, model, compute_dtype='bfloat16'))
@@ -235,18 +247,26 @@ class Oracle:
         """fn over specs [N, k] (column 0 = flat world row) in fixed chunks; evaluate: ((input, actor kind), ...)."""
         clock = time.perf_counter()
         specs = np.asarray(specs, np.int32).reshape(len(specs), -1);facts, outputs, kept = [], {}, {}
-        for start in range(0, len(specs), self.chunk):
+        total = -(-len(specs) // self.chunk)
+        for index, start in enumerate(range(0, len(specs), self.chunk)):
+            started = time.perf_counter()
             part = specs[start:start + self.chunk];count = len(part)
             padded = np.concatenate([part, np.repeat(part[:1], self.chunk - count, axis=0)])
-            out, inputs = fn(stack.states, stack.publics, stack.owners, j.asarray(padded))
+            out, inputs = jax.block_until_ready(fn(stack.states, stack.publics, stack.owners, j.asarray(padded)))
+            stepped = time.perf_counter()
             actors = dict(learner=stack.learner[padded[:, 0]], opponent=stack.opponent[padded[:, 0]])
             for name, actor in evaluate:
                 result = heads(self.forward, params, inputs[name], actors[actor])
                 outputs.setdefault(name, []).append(tuple(x[:count] for x in result))
+            headed = time.perf_counter()
             for name in keep:
                 kept.setdefault(name, []).append(jax.tree.map(lambda x: np.asarray(x)[:count], jax.device_get(inputs[name])))
             facts.append(jax.tree.map(lambda x: np.asarray(x)[:count], jax.device_get(out)))
             self.rows['padded'] += self.chunk - count
+            record = dict(kind=kind, chunk=index, chunks=total, rows_done=start + count, rows=len(specs), world_rows=len(stack.owner),
+                seconds=time.perf_counter() - started, step_seconds=stepped - started, head_seconds=headed - stepped)
+            self.chunks.append(record)
+            if self.progress is not None:self.progress(**record)
         joined = {name: np.concatenate([f[name] for f in facts]) for name in facts[0]} if facts else {}
         heads_ = {name: tuple(np.concatenate(parts) for parts in zip(*chunks)) for name, chunks in outputs.items()}
         kept = {name: jax.tree.map(lambda *xs: np.concatenate(xs), *chunks) for name, chunks in kept.items()}

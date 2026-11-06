@@ -14,12 +14,15 @@ Checks (gate.json; exit code 0 iff all pass):
      error code (including the depth-2-only child codes 5/6), terminal value and leaf digest; children
      also the same own/peer digests, legal masks and request flags; roots the same pre code (-1 for a
      world without a state) and opponent request/legal. The first 20 mismatches are listed.
- (b) D: t1_value bit-equal to FramePricer's joint values on every D pair (codes 5/6 included: they keep
-     D's value), D's status/error codes wherever the pricer's code is D's (0-4), D's refused worlds, and
-     the root opponent prior bit-equal to D's. FramePricer exposes no child logits, so t1_own_logits is
-     checked against the oracle's heads at the declared tolerance instead.
- (c) heads: turn-2 head values against the oracle's heads: exact-equal fraction and max |diff|, pass at
-     <= HEAD_TOLERANCE. Other head outputs are reported as diagnostics.
+ (b) D (not bitwise for floats): every discrete field exactly D's (pre and refused worlds, root opponent
+     request/legal, status/error wherever the pricer's code is D's 0-4, the turn-1 pair set), and
+     |t1_value - D| and |root prior - D| <= D_VALUE_TOLERANCE on every D-priced cell (codes 5/6 included:
+     they keep D's value); the bit-equal fraction, max |diff| and first inexact cells are reported.
+ (c) heads, against the oracle's own bf16 heads (a different batch geometry): t2_value and t1_own_logits
+     within HEAD_TOLERANCE, D3's declared cross-geometry target tolerance (HEAD_TOLERANCE_SOURCE);
+     t1_own_logits is gated here because FramePricer exposes no child logits. Reported per quantity:
+     max |diff|, exact fraction, the depth-1 noise floor max |D t1_value - oracle t1 head| and the ratio
+     t2_value max / floor.
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
 --sample-leaves N checks all turn-1 children plus N uniformly sampled turn-2 leaves per world (fixed
 SAMPLE_SEED); (d) always covers every leaf. --child-block N is passed to Depth2Pricer. --block-invariance
@@ -30,7 +33,7 @@ next to D3 FramePricer's on the same requests, and turn-1/turn-2 error counts by
 """
 import argparse
 import collections
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import dataclasses
 from dataclasses import replace
 import hashlib
@@ -45,7 +48,11 @@ from unittest.mock import patch
 import numpy as np
 
 SCHEMA = 'pokezero.depth2-gate.v1'
-HEAD_TOLERANCE = 1e-6
+D_VALUE_TOLERANCE = 1e-5   # (b): |t1_value - D| and |root prior - D|; discrete fields and digests stay exact
+HEAD_TOLERANCE = .01       # (c): D3's declared cross-geometry target tolerance
+HEAD_TOLERANCE_SOURCE = ('gpu_engine/device_d_frame_parity.py:94-95 (vectorized_comparison: D3 frame-batched vs serial '
+    'policy/value targets must agree within .01 absolute)')
+PROGRESS_INTERVAL = 10.    # seconds between oracle chunk progress lines (first and last chunk always logged)
 FIRST = 20
 SAMPLE_SEED = 20261105
 BLOCK_DOMAIN = 'pokezero.d3-u1.world-block.v1'   # U1's (d3_u1_completed_q.world_block_seeds) domain, unchanged
@@ -71,6 +78,7 @@ CONVENTIONS = (
     'Digests are compared where the scored view is meaningful: status 2/4, or error 3-6 (own view) and 5/6 (opponent view); terminal and invalid cells compare status, error and value only.',
     'Child masks, request flags and the opponent digest are compared on expanded children and codes 5/6.',
     'Logits are compared on legal lanes of requested seats only.',
+    'Exact: every discrete field and digest. Floats: (b) t1_value and the root prior within D_VALUE_TOLERANCE of D; (c) head outputs within HEAD_TOLERANCE of the oracle\'s bf16 heads, whose batch geometry differs (D3\'s cross-geometry target tolerance).',
     'Top-k ranks by the oracle\'s own bf16 child priors (logit descending, lower index on ties, non-finite last); full width needs no priors.',
     'Each world block is a separate call (Depth2Pricer.price takes one recipe); blocks after 0 bypass Recipe.selected, as U1.',
     'Depth-2 refusal (reference rule): a root refuses if any world has pre != 0, or any enumerated turn-1 or turn-2 cell has status 3 (codes 5/6 included).',
@@ -215,7 +223,7 @@ def check_d(frame, d_results, requests, findings, *, full_turn1=True):
     requested, legal, logits = (field(frame, n) for n in ('root_peer_requested', 'root_peer_legal', 'root_peer_logits'))
     if len(d_results) != len(requests):
         findings.record('d_results', [[len(requests)]], [False], [len(d_results)], [len(requests)]);return findings
-    rows = collections.defaultdict(list)
+    rows, numeric = collections.defaultdict(list), collections.defaultdict(list)
     for q, (request, result) in enumerate(zip(requests, d_results)):
         for wi, report in enumerate(result.world_reports):
             grid = report.get('joint_values');enumerated = t1s[q, wi] != 0
@@ -234,7 +242,7 @@ def check_d(frame, d_results, requests, findings, *, full_turn1=True):
             want = np.asarray(report['reply_legal'], bool)
             rows['root_peer_legal_vs_d'].append(((q, wi), np.array_equal(legal[q, wi].astype(bool), want), legal[q, wi].astype(bool), want))
             want = np.asarray(report['reply_logits'], np.float32)
-            rows['root_peer_logits_vs_d'].append(((q, wi), np.array_equal(_bits(logits[q, wi]), _bits(want)), logits[q, wi], want))
+            numeric['root_peer_logits'].extend(((q, wi, lane), logits[q, wi, lane], want[lane]) for lane in range(9))
             errors = {(a, r): D_ERRORS.get(reason.removeprefix('ValueError: '), -1) for a, r, reason in report.get('errors', ())}
             pairs = sorted(set(errors) | {(a, r) for a in range(9) for r in range(9) if grid[a][r] is not None})
             if full_turn1:
@@ -247,14 +255,51 @@ def check_d(frame, d_results, requests, findings, *, full_turn1=True):
                 if (a, r) in errors:
                     if d_code:rows['t1_error_vs_d'].append((cell, status == 3 and code == errors[(a, r)], [status, code], [3, errors[(a, r)]]))
                     continue
-                want = np.float32(grid[a][r])   # D priced it: the value is D's, under codes 5/6 too
-                rows['t1_value_vs_d'].append((cell, bool(_bits(t1v[q, wi, a, r]) == _bits(want)), _plain(t1v[q, wi, a, r]), _plain(want)))
+                numeric['t1_value'].append((cell, t1v[q, wi, a, r], grid[a][r]))   # D priced it: D's value, under codes 5/6 too
                 if d_code:rows['t1_status_vs_d'].append((cell, status in (1, 2) and code == 0, [status, code], '1|2 with code 0'))
                 else:rows['t1_depth2_code_status'].append((cell, status == 3, [status, code], '3 under code 5/6'))
     for name, items in rows.items():
         keys, equal, got, want = zip(*items)
         findings.record(name, [list(k) for k in keys], np.asarray(equal, bool), _objects(got), _objects(want))
+    findings.values = {}
+    for name in ('t1_value', 'root_peer_logits'):
+        cells, got, want = zip(*numeric[name]) if numeric[name] else ((), (), ())
+        summary, beyond = _numeric(cells, got, want, D_VALUE_TOLERANCE, findings.context, list_inexact=True)
+        findings.values[name] = summary
+        if len(beyond):findings.record(name + '_vs_d_beyond_tolerance', list(cells), ~beyond, np.asarray(got, np.float32), np.asarray(want, np.float32))
     return findings
+
+
+def _numeric(cells, got, want, tolerance, context=None, *, list_inexact=False):
+    """Float agreement on matching cells: (summary, beyond-tolerance mask). Bit-equal cells (NaN payloads
+    included) always agree; otherwise both must be finite and within tolerance."""
+    got, want = np.asarray(got, np.float32).reshape(-1), np.asarray(want, np.float32).reshape(-1)
+    cells = np.asarray(cells, np.int64).reshape(len(got), -1) if len(got) else np.zeros((0, 1), np.int64)
+    exact = _bits(got) == _bits(want);finite = np.isfinite(got) & np.isfinite(want)
+    delta = np.where(finite, np.abs(got.astype(np.float64) - want.astype(np.float64)), np.inf)
+    beyond = ~exact & ~(delta <= tolerance)
+    row = lambda i: dict(context or {}, cell=cells[i].tolist(), pricer=_plain(got[i]), reference=_plain(want[i]))
+    summary = dict(compared=int(len(got)), exact_equal=int(np.count_nonzero(exact)), nonfinite=int(np.count_nonzero(~exact & ~finite)),
+        max_abs_difference=float(delta[~exact & finite].max()) if np.any(~exact & finite) else 0., beyond_tolerance=int(np.count_nonzero(beyond)),
+        tolerance=tolerance, first_beyond=[row(i) for i in np.flatnonzero(beyond)[:FIRST]])
+    if list_inexact:summary['first_inexact'] = [row(i) for i in np.flatnonzero(~exact)[:FIRST]]
+    return summary, beyond
+
+
+def merge_numeric(reports, tolerance):
+    """Merge {quantity: _numeric summary} dicts across calls; adds exact_equal_fraction and within_tolerance."""
+    merged = {}
+    for report in reports:
+        for name, d in report.items():
+            m = merged.setdefault(name, dict(compared=0, exact_equal=0, nonfinite=0, beyond_tolerance=0, max_abs_difference=0., first_beyond=[]))
+            for key in ('compared', 'exact_equal', 'nonfinite', 'beyond_tolerance'):m[key] += d[key]
+            m['max_abs_difference'] = max(m['max_abs_difference'], d['max_abs_difference'])
+            m['first_beyond'] = (m['first_beyond'] + d['first_beyond'])[:FIRST]
+            if 'first_inexact' in d:m['first_inexact'] = (m.get('first_inexact', []) + d['first_inexact'])[:FIRST]
+    for m in merged.values():
+        m['exact_equal_fraction'] = None if not m['compared'] else m['exact_equal'] / m['compared']
+        m['tolerance'] = tolerance;m['within_tolerance'] = m['beyond_tolerance'] == 0
+    return merged
 
 
 def _objects(values):
@@ -263,54 +308,46 @@ def _objects(values):
     return result
 
 
-def _difference(got, want, mask):
-    got, want, mask = np.asarray(got, np.float32), np.asarray(want, np.float32), np.asarray(mask, bool)
-    got, want = got[mask], want[mask]
-    finite = np.isfinite(got) & np.isfinite(want)
-    delta = np.abs(got[finite].astype(np.float64) - want[finite].astype(np.float64))
-    return dict(compared=int(got.size), exact_equal=int(np.count_nonzero(_bits(got) == _bits(want))),
-        nonfinite=int(got.size - np.count_nonzero(finite)), max_abs_difference=float(delta.max()) if delta.size else 0.)
+def _masked(keys, got, want, mask):
+    """(cells, got, want) where mask is set; a mask with one more axis than keys adds the lane to each cell."""
+    keys, got, want, mask = np.asarray(keys), np.asarray(got), np.asarray(want), np.asarray(mask, bool)
+    where = np.argwhere(mask);cells = keys[where[:, 0]]
+    if mask.ndim == 2:cells = np.concatenate([cells, where[:, 1:]], axis=1)
+    return cells, got[mask], want[mask]
 
 
-def check_heads(frame, data):
-    """(c) head outputs against the oracle's heads; returns per-quantity difference summaries."""
-    children, leaves, roots = data['children'], data['leaves'], data['roots'];result = {}
+GATED = ('t2_value', 't1_own_logits')   # (c) quantities gated at HEAD_TOLERANCE; the rest are reported
+
+
+def check_heads(frame, data, d_results=None):
+    """(c) head outputs against the oracle's heads, plus depth 1's own noise floor against the same oracle."""
+    children, leaves, roots = data['children'], data['leaves'], data['roots'];parts = {}
     specs = leaves['specs']
     if len(specs):
         at = tuple(specs.T);scored = (leaves['status'] == 4) & (field(frame, 't2_status')[at] == 4)
-        result['t2_value'] = _difference(field(frame, 't2_value')[at], leaves['head_value'], scored)
+        parts['t2_value'] = _masked(specs, field(frame, 't2_value')[at], leaves['head_value'], scored)
     cells = children['cells']
     if len(cells):
         at = tuple(cells.T);status, error = children['status'], children['error']
         same = (field(frame, 't1_status')[at] == status) & (field(frame, 't1_error')[at] == error)
         expanded = same & (status == 2);valued = same & ((status == 2) | np.isin(error, DEPTH2_CODES))
-        result['t1_value_head'] = _difference(field(frame, 't1_value')[at], children['head_value'], valued)
+        parts['t1_value_head'] = _masked(cells, field(frame, 't1_value')[at], children['head_value'], valued)
         for seat, scope in (('own', valued), ('peer', expanded)):
             lanes = scope[:, None] & np.asarray(children[seat + '_requested'], bool)[:, None] & np.asarray(children[seat + '_legal'], bool)
-            result[f't1_{seat}_logits'] = _difference(field(frame, f't1_{seat}_logits')[at], children[seat + '_logits'], lanes)
+            parts[f't1_{seat}_logits'] = _masked(cells, field(frame, f't1_{seat}_logits')[at], children[seat + '_logits'], lanes)
+        if d_results is not None:
+            # D's own learner value at the child vs the oracle head: the cross-geometry noise of depth 1.
+            grid = {(q, wi): r.get('joint_values') for q, result in enumerate(d_results) for wi, r in enumerate(result.world_reports)}
+            learner = (status == 2) | np.isin(error, DEPTH2_CODES)
+            values = [grid.get((q, w)) for q, w in cells[:, :2].tolist()]
+            d = np.asarray([np.nan if v is None or v[a][r] is None else v[a][r] for v, (a, r) in zip(values, cells[:, 2:].tolist())], np.float32)
+            parts['depth1_noise_floor'] = _masked(cells, d, children['head_value'], learner & ~np.isnan(d))
     keys = [k for k in sorted(roots) if roots[k]['pre'] == 0 and roots[k]['peer_requested']]
     if keys:
         k = np.asarray(keys);lanes = np.asarray([roots[x]['peer_legal'] for x in keys], bool)
-        result['root_peer_logits'] = _difference(field(frame, 'root_peer_logits')[k[:, 0], k[:, 1]],
+        parts['root_peer_logits'] = _masked(k, field(frame, 'root_peer_logits')[k[:, 0], k[:, 1]],
             np.asarray([roots[x]['peer_logits_raw'] for x in keys]), lanes)
-    return result
-
-
-GATES = dict(t2_value='c', t1_own_logits='b')   # head quantities that gate a check; the rest are diagnostics
-
-
-def merge_heads(reports, *, tolerance=HEAD_TOLERANCE):
-    merged = {}
-    for report in reports:
-        for name, d in report.items():
-            m = merged.setdefault(name, dict(compared=0, exact_equal=0, nonfinite=0, max_abs_difference=0.))
-            for key in ('compared', 'exact_equal', 'nonfinite'):m[key] += d[key]
-            m['max_abs_difference'] = max(m['max_abs_difference'], d['max_abs_difference'])
-    for name, m in merged.items():
-        m['exact_equal_fraction'] = None if not m['compared'] else m['exact_equal'] / m['compared']
-        m['within_tolerance'] = m['nonfinite'] == 0 and m['max_abs_difference'] <= tolerance
-        m['gates'] = GATES.get(name)
-    return merged
+    return {name: _numeric(*part, HEAD_TOLERANCE)[0] for name, part in parts.items()}
 
 
 def check_oracle(data, findings):
@@ -328,28 +365,48 @@ def check_oracle(data, findings):
     return findings
 
 
-def evaluate(frame, d_results, requests, data, *, context=None, full_turn1=True):
+@contextmanager
+def stage(progress, name, **context):
+    """STAGE_START / STAGE_END progress lines with elapsed seconds; yields a dict merged into the end line."""
+    info, clock = {}, time.perf_counter()
+    if progress is not None:progress('STAGE_START', stage=name, **context)
+    try:yield info
+    finally:
+        if progress is not None:progress('STAGE_END', stage=name, seconds=time.perf_counter() - clock, **context, **info)
+
+
+def evaluate(frame, d_results, requests, data, *, context=None, full_turn1=True, progress=None):
     """All four checks for ONE pricing call; data: the oracle's roots/children/enumerated/leaves for the same requests."""
-    count = len(requests);geometry = frame_geometry(frame, count)
+    count = len(requests);geometry = frame_geometry(frame, count);context = context or {}
     if geometry:
         bad = dict(passed=False, compared={}, mismatched=dict(frame_geometry=len(geometry)),
-            first_mismatches=[dict(context or {}, field='frame_geometry', problems=geometry[:FIRST])])
-        return dict(a=bad, b=bad, c={}, d=bad, oracle=check_oracle(data, Findings(context)).report(), geometry=geometry)
-    return dict(a=check_exact(frame, data, Findings(context)).report(), b=check_d(frame, d_results, requests, Findings(context),
-        full_turn1=full_turn1).report(), c=check_heads(frame, data), d=check_enumeration(frame, data, Findings(context)).report(),
-        oracle=check_oracle(data, Findings(context)).report(), geometry=[])
+            first_mismatches=[dict(context, field='frame_geometry', problems=geometry[:FIRST])])
+        return dict(a=bad, b=dict(bad, values={}), c={}, d=bad, oracle=check_oracle(data, Findings(context)).report(), geometry=geometry)
+    with stage(progress, 'check_a', **context) as info:a = check_exact(frame, data, Findings(context)).report();info['passed'] = a['passed']
+    with stage(progress, 'check_b', **context) as info:
+        found = check_d(frame, d_results, requests, Findings(context), full_turn1=full_turn1);b = dict(found.report(), values=found.values)
+        info['passed'] = b['passed']
+    with stage(progress, 'check_c', **context) as info:
+        c = check_heads(frame, data, d_results);info['max_abs_difference'] = {k: v['max_abs_difference'] for k, v in c.items()}
+    with stage(progress, 'check_d', **context) as info:d = check_enumeration(frame, data, Findings(context)).report();info['passed'] = d['passed']
+    with stage(progress, 'check_oracle_consistency', **context) as info:
+        oracle = check_oracle(data, Findings(context)).report();info['passed'] = oracle['passed']
+    return dict(a=a, b=b, c=c, d=d, oracle=oracle, geometry=[])
 
 
 def summarize(calls, *, tolerance=HEAD_TOLERANCE):
-    """Merge per-call evaluations into the gate's four checks; t1_own_logits gates (b)'s logit half."""
+    """Merge per-call evaluations into the gate's checks: (b) discrete exact + values within D_VALUE_TOLERANCE,
+    (c) GATED head quantities within HEAD_TOLERANCE."""
     a, b, d, oracle = (merge_findings([c[k] for c in calls]) for k in ('a', 'b', 'd', 'oracle'))
-    quantities = merge_heads([x['c'] for x in calls], tolerance=tolerance)
-    logits = quantities.get('t1_own_logits');values = quantities.get('t2_value')
-    b['t1_own_logits'] = dict(reference='ORACLE_HEADS_WITHIN_TOLERANCE', tolerance=tolerance,
-        reason='FramePricer returns no child logits (make_kernel drops leaf_logits); not observable without editing D.',
-        **(logits or dict(compared=0)))
-    b['passed'] = b['passed'] and (logits is None or logits['within_tolerance'])
-    c = dict(passed=values is None or values['within_tolerance'], tolerance=tolerance, quantities=quantities)
+    values = merge_numeric([x['b'].get('values', {}) for x in calls], D_VALUE_TOLERANCE)
+    b.update(reference='D3_FRAMEPRICER_DISCRETE_EXACT_FLOATS_WITHIN_TOLERANCE (not bitwise)', value_tolerance=D_VALUE_TOLERANCE, values=values)
+    b['passed'] = b['passed'] and all(v['within_tolerance'] for v in values.values())
+    quantities = merge_numeric([x['c'] for x in calls], tolerance)
+    for name, m in quantities.items():m['gates'] = 'c' if name in GATED else None
+    floor = quantities.get('depth1_noise_floor', {}).get('max_abs_difference');t2 = quantities.get('t2_value', {}).get('max_abs_difference')
+    c = dict(passed=all(quantities[n]['within_tolerance'] for n in GATED if n in quantities), tolerance=tolerance,
+        tolerance_source=HEAD_TOLERANCE_SOURCE, reference='ORACLE_BF16_HEADS_DIFFERENT_BATCH_GEOMETRY', gated=list(GATED),
+        depth1_noise_floor=floor, t2_value_to_floor_ratio=None if not floor or t2 is None else t2 / floor, quantities=quantities)
     if any(x.get('geometry') for x in calls):c['passed'] = False
     checks = dict(a=a, b=b, c=c, d=d, oracle_consistency=oracle)
     if any('invariance' in x for x in calls):checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())])
@@ -428,43 +485,114 @@ def sample_leaves(leaves, count, addresses, *, block):
     return chosen
 
 
-def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, invariance=None):
+def pricer_costs(timing):
+    """compile/device seconds from a pricer timing dict: FramePricer.last_timing's names, which Depth2Pricer's
+    `timing` is read by too (None where a pricer does not report one)."""
+    timing = timing if isinstance(timing, dict) else {}
+    number = lambda key: timing.get(key) if isinstance(timing.get(key), (int, float)) and not isinstance(timing.get(key), bool) else None
+    lower, compiled, device = number('lower_seconds'), number('compile_seconds'), number('device_seconds')
+    result = dict(lower_seconds=lower, compile_seconds=compiled, device_seconds=device,
+        lower_and_compile_seconds=None if lower is None and compiled is None else (lower or 0.) + (compiled or 0.))
+    if None in (compiled, device):result['reported_seconds_keys'] = sorted(k for k in timing if 'second' in str(k))
+    return result
+
+
+def _frame_timing(frame):
+    return frame['timing'] if isinstance(frame, dict) and 'timing' in frame else getattr(frame, 'timing', None)
+
+
+def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, invariance=None,
+               progress=None, context=None):
     """Price ONE request list with the pricer, FramePricer and the oracle; returns (frame, D results, oracle data, timing).
 
     invariance: pricers to run first on the same requests (other child blocks); their frames go in
-    data['invariance_frames'], and `pricer` gives the checked frame."""
+    data['invariance_frames'], and `pricer` gives the checked frame. progress(message, **values) gets
+    STAGE_START/STAGE_END lines per stage."""
     from gpu_engine import depth2_oracle as reference, device_public_teacher_batch as batch
-    requests = tuple(requests);timing = {};others = []
+    requests = tuple(requests);timing = {};others = [];context = dict(context or {}, roots=len(requests))
+    costs = dict(invariance_pricers=[])
     for i, other in enumerate(invariance or ()):
-        clock = time.perf_counter();others.append(other.price(requests, materializer, recipe, params))
-        timing[f'invariance_pricer_{i}_seconds'] = time.perf_counter() - clock
-    clock = time.perf_counter();frame = pricer.price(requests, materializer, recipe, params);timing['pricer_seconds'] = time.perf_counter() - clock
-    clock = time.perf_counter();d_results = frame_pricer.price(requests, materializer, recipe, params)
-    timing['frame_pricer_seconds'] = time.perf_counter() - clock
-    clock = time.perf_counter();worlds = batch._numpy_worlds(requests, materializer, recipe);stack = reference.stack(requests, worlds)
-    roots, _, children, enumerated = reference.enumerate_specs(oracle, stack, requests, recipe, params, **widths)
+        with stage(progress, f'depth2_pricer_invariance_{i}', **context) as info:
+            clock = time.perf_counter();others.append(other.price(requests, materializer, recipe, params))
+            timing[f'invariance_pricer_{i}_seconds'] = time.perf_counter() - clock
+            costs['invariance_pricers'].append(dict(wall_seconds=timing[f'invariance_pricer_{i}_seconds'], **pricer_costs(_frame_timing(others[-1]))))
+            info.update(costs['invariance_pricers'][-1])
+    with stage(progress, 'depth2_pricer', **context) as info:
+        clock = time.perf_counter();frame = pricer.price(requests, materializer, recipe, params);timing['pricer_seconds'] = time.perf_counter() - clock
+        costs['depth2_pricer'] = dict(wall_seconds=timing['pricer_seconds'], **pricer_costs(_frame_timing(frame)));info.update(costs['depth2_pricer'])
+    with stage(progress, 'frame_pricer', **context) as info:
+        clock = time.perf_counter();d_results = frame_pricer.price(requests, materializer, recipe, params)
+        timing['frame_pricer_seconds'] = time.perf_counter() - clock
+        costs['frame_pricer'] = dict(wall_seconds=timing['frame_pricer_seconds'], **pricer_costs(getattr(frame_pricer, 'last_timing', None)))
+        info.update(costs['frame_pricer'])
+    clock = time.perf_counter();before = dict(oracle.seconds);chunks = len(oracle.chunks)
+    with stage(progress, 'oracle_worlds', **context) as info:
+        stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe));info['worlds'] = len(stack.rows)
+    with stage(progress, 'oracle_roots', **context) as info:
+        roots = oracle.roots(stack, requests, params);info['usable_worlds'] = sum(r['pre'] == 0 for r in roots.values())
+    with stage(progress, 'oracle_children', **context) as info:
+        cells = reference.turn1_cells(requests, recipe, roots, k1_own=widths['k1_own'], k1_opp=widths['k1_opp'])
+        children = oracle.children(stack, cells, params);info['children'] = len(cells)
+    enumerated = reference.turn2_leaves(children, k_own=widths['k_own'], k_opp=widths['k_opp']) if len(cells) else []
     checked = sample_leaves(enumerated, sample, [r.plans.root.address for r in requests], block=block)
-    leaves = oracle.leaves(stack, checked, params);timing['oracle_seconds'] = time.perf_counter() - clock
+    with stage(progress, 'oracle_leaves', **context) as info:
+        leaves = oracle.leaves(stack, checked, params);info.update(enumerated=len(enumerated), checked=len(checked))
+    timing['oracle_seconds'] = time.perf_counter() - clock
+    costs['oracle'] = dict(wall_seconds=timing['oracle_seconds'], chunks=len(oracle.chunks) - chunks,
+        seconds={k: oracle.seconds[k] - before[k] for k in oracle.seconds},
+        chunk_device_seconds=sum(c['step_seconds'] + c['head_seconds'] for c in oracle.chunks[chunks:]))
     return frame, d_results, dict(roots=roots, children=children, enumerated=enumerated, leaves=leaves, worlds=len(stack.rows),
-        invariance_frames=others), timing
+        invariance_frames=others, costs=costs), timing
 
 
-def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, context, invariance=None):
+def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, context, invariance=None,
+             progress=None):
     """Price ONE request list three ways and evaluate it; returns (evaluation, call summary)."""
     requests = tuple(requests)
     frame, d_results, data, timing = price_call(requests=requests, recipe=recipe, materializer=materializer, params=params,
-        pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=sample, block=block, invariance=invariance)
-    evaluation = evaluate(frame, d_results, requests, data, context=context, full_turn1=widths['k1_own'] == widths['k1_opp'] == 9)
-    if invariance:evaluation['invariance'] = [block_invariance(other, frame, context=context) for other in data['invariance_frames']]
-    pricer_timing = frame['timing'] if isinstance(frame, dict) and 'timing' in frame else getattr(frame, 'timing', None)
+        pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=sample, block=block, invariance=invariance,
+        progress=progress, context=context)
+    evaluation = evaluate(frame, d_results, requests, data, context=context, full_turn1=widths['k1_own'] == widths['k1_opp'] == 9,
+        progress=progress)
+    if invariance:
+        with stage(progress, 'check_block_invariance', **context) as info:
+            evaluation['invariance'] = [block_invariance(other, frame, context=context) for other in data['invariance_frames']]
+            info['passed'] = all(r['passed'] for r in evaluation['invariance'])
+    pricer_timing = _frame_timing(frame)
     roots = data['roots']
-    refusals = None if evaluation['geometry'] else refusal_report(frame, d_results, data)
+    with stage(progress, 'refusals', **context):refusals = None if evaluation['geometry'] else refusal_report(frame, d_results, data)
     summary = dict(context, roots=len(requests), worlds=data['worlds'], usable_worlds=sum(r['pre'] == 0 for r in roots.values()), refusals=refusals,
         turn1_cells=len(data['children']['cells']), turn2_leaves=len(data['enumerated']), checked_leaves=len(data['leaves']['specs']), timing=timing,
-        pricer_timing=json.loads(json.dumps(pricer_timing, default=str)) if pricer_timing is not None else None,
+        costs=data['costs'], pricer_timing=json.loads(json.dumps(pricer_timing, default=str)) if pricer_timing is not None else None,
         passed=dict(a=evaluation['a']['passed'], b=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed'],
             **({'block_invariance': all(r['passed'] for r in evaluation['invariance'])} if invariance else {})))
     return evaluation, summary
+
+
+def merge_costs(calls):
+    """Per-pricer totals over calls: wall, lower+compile and device seconds (None where never reported)."""
+    total = lambda values: None if all(v is None for v in values) else sum(v for v in values if v is not None)
+    result = {}
+    for name in ('depth2_pricer', 'frame_pricer'):
+        rows = [c['costs'][name] for c in calls]
+        result[name] = {key: total([r.get(key) for r in rows]) for key in ('wall_seconds', 'lower_seconds', 'compile_seconds',
+            'lower_and_compile_seconds', 'device_seconds')}
+    rows = [x for c in calls for x in c['costs']['invariance_pricers']]
+    if rows:result['invariance_pricers'] = {key: total([r.get(key) for r in rows]) for key in ('wall_seconds', 'lower_and_compile_seconds', 'device_seconds')}
+    oracle = [c['costs']['oracle'] for c in calls]
+    result['oracle'] = dict(wall_seconds=sum(o['wall_seconds'] for o in oracle), chunks=sum(o['chunks'] for o in oracle),
+        chunk_device_seconds=sum(o['chunk_device_seconds'] for o in oracle))
+    return result
+
+
+def oracle_chunk_progress(log_line, *, interval=PROGRESS_INTERVAL, clock=time.perf_counter):
+    """Oracle progress callback: the first and last chunk of each pass, and otherwise at most one line per interval."""
+    state = dict(last=-math.inf)
+    def progress(**record):
+        now = clock()
+        if record['chunk'] == 0 or record['chunk'] == record['chunks'] - 1 or now - state['last'] >= interval:
+            state['last'] = now;log_line('ORACLE_CHUNK', **record)
+    return progress
 
 
 def make_pricer(executor, model, *, widths, actor_capacity, child_block=None):
@@ -688,7 +816,7 @@ def main(argv=None):
     blocks = INVARIANCE_BLOCKS if args.block_invariance else (args.child_block,)
     pricers = [make_pricer(provider.executor, plan.model, widths=widths, actor_capacity=plan.historical_window + 1, child_block=b) for b in blocks]
     (pricer, options), invariance = pricers[-1], [p for p, _ in pricers[:-1]]
-    oracle = reference.Oracle(provider.executor, plan.model, chunk=args.oracle_chunk)
+    oracle = reference.Oracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=oracle_chunk_progress(log))
     seeds = world_block_seeds(provider.recipe.seed, args.worlds_blocks)
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), widths=widths, sample_leaves=args.sample_leaves, seeds=seeds,
         pricer_options=options)
@@ -701,7 +829,7 @@ def main(argv=None):
                 requests = group if block == 0 else [replace(r, plans=worlds.plan_starts(r.plans.root, provider.source, recipe)) for r in group]
                 evaluation, summary = run_call(requests=requests, recipe=recipe, materializer=provider.materializer, params=params,
                     pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=args.sample_leaves, block=block,
-                    context=dict(block=block, call=call), invariance=invariance)
+                    context=dict(block=block, call=call), invariance=invariance, progress=log)
                 evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize(evaluations)
     reported = [c for c in calls if c['refusals'] is not None]
@@ -712,9 +840,13 @@ def main(argv=None):
     report = dict(schema=SCHEMA, status='PASS' if result['passed'] else 'FAIL', passed=result['passed'], checks=result['checks'],
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
         block_seeds=list(seeds), max_roots=args.max_roots, sample_leaves=args.sample_leaves, sample_seed=SAMPLE_SEED,
-        head_tolerance=HEAD_TOLERANCE, pricer_options=options, block_invariance=args.block_invariance,
+        head_tolerance=HEAD_TOLERANCE, head_tolerance_source=HEAD_TOLERANCE_SOURCE, d_value_tolerance=D_VALUE_TOLERANCE, pricer_options=options, block_invariance=args.block_invariance,
         invariance_pricer_options=[o for _, o in pricers[:-1]], calls=calls, conventions=list(CONVENTIONS), refusals=refusals,
-        oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk,
+        costs=merge_costs(calls),
+        oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk, chunks=oracle.chunks,
+            first_chunk_seconds={kind: next((c['seconds'] for c in oracle.chunks if c['kind'] == kind), None) for kind in ('roots', 'children', 'leaves')},
+            chunk_scope='per chunk: step_seconds = the vmapped executor program to block_until_ready, head_seconds = the bf16 heads; '
+                'the first chunk of a program and world bucket includes its compile',
             seconds_per_leaf=None if not leaves else oracle.seconds['leaves'] / leaves,
             seconds_per_child=None if not children else oracle.seconds['children'] / children))
     (out / 'gate.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')

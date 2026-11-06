@@ -294,6 +294,17 @@ class OracleTests(unittest.TestCase):
         self.assertEqual(leaf(9, 2)[:2], (3, 1));self.assertEqual(leaf(9, 1)[:2], (4, 0))
         self.assertEqual(leaf(10, 1)[:2], (3, 3))
 
+    def test_stacked_worlds_are_bucketed_and_chunks_are_timed(self):
+        ex = executor();requests, worlds = simple_requests(ex, tuple((0, 0, (i, i + 50)) for i in range(5)))
+        stack = reference.stack(requests, worlds)
+        self.assertEqual(len(stack.rows), 10);self.assertEqual(stack.states.value.shape[0], 16);self.assertEqual(len(stack.owner), 10)
+        self.assertEqual([reference.bucket(n) for n in (1, 8, 9, 100)], [8, 8, 16, 128])
+        with patch.object(batch.v5_model, 'forward', side_effect=forward):
+            oracle = reference.Oracle(ex, object(), chunk=64);reference.enumerate_specs(oracle, stack, requests, self.recipe, PARAMS)
+        kinds = [c['kind'] for c in oracle.chunks];self.assertEqual(kinds[0], 'roots');self.assertIn('children', kinds)
+        self.assertTrue(all(c['seconds'] >= c['step_seconds'] + c['head_seconds'] - 1e-9 for c in oracle.chunks))
+        self.assertEqual(oracle.chunks[-1]['rows_done'], oracle.chunks[-1]['rows'])
+
     def test_chunk_size_does_not_change_any_result(self):
         specs = tuple((mode, i % 2, (70 + i, 90 + i)) for i, mode in enumerate((0, 3, 8, 9, 11, 12)))
         results = [self.run_oracle(specs, chunk=chunk) for chunk in (1, 3, 8, 512)]
@@ -471,9 +482,16 @@ class GateTests(unittest.TestCase):
         self.assertEqual(statuses, {'LABELED': 8, 'REFUSED': 4})   # D refuses invalid/encoder/missing/pre roots
         for name in ('t1_status', 't2_status', 't2_digest', 't1_digest_peer', 't1_value_terminal', 't2_value_terminal'):
             self.assertGreater(checks['a']['compared'][name], 0, name)
-        for name in ('t1_value_vs_d', 't1_status_vs_d', 't1_depth2_code_status', 't1_error_vs_d', 'root_peer_logits_vs_d', 'pre_vs_d',
-                'd_refused_world_unenumerated', 't1_enumeration_vs_d'):
+        for name in ('t1_status_vs_d', 't1_depth2_code_status', 't1_error_vs_d', 'pre_vs_d', 'root_peer_legal_vs_d',
+                'd_refused_world_unenumerated', 't1_enumeration_vs_d', 't1_value_vs_d_beyond_tolerance', 'root_peer_logits_vs_d_beyond_tolerance'):
             self.assertGreater(checks['b']['compared'][name], 0, name)
+        for name in ('t1_value', 'root_peer_logits'):
+            self.assertGreater(checks['b']['values'][name]['compared'], 0);self.assertEqual(checks['b']['values'][name]['exact_equal_fraction'], 1.)
+        self.assertIn('not bitwise', checks['b']['reference'])
+        self.assertEqual(checks['c']['tolerance'], .01);self.assertIn('device_d_frame_parity.py:94-95', checks['c']['tolerance_source'])
+        floor = checks['c']['quantities']['depth1_noise_floor']
+        self.assertGreater(floor['compared'], 0);self.assertEqual(floor['max_abs_difference'], 0.)   # the fake heads are exact
+        self.assertIsNone(checks['c']['t2_value_to_floor_ratio']);self.assertEqual(checks['c']['gated'], ['t2_value', 't1_own_logits'])
         self.assertEqual(set(np.unique(data['leaves']['status'])), {1, 3, 4})
         self.assertEqual(set(np.unique(data['children']['status'])), {1, 2, 3})
 
@@ -502,15 +520,16 @@ class GateTests(unittest.TestCase):
             ('t1_error', setter('t1_error', error, other_error), 'a'), ('pre', setter('pre', (0, 0), 2), 'a'),
             ('root_peer_legal', flip('root_peer_legal', (0, 0, 1)), 'a'),
             ('t1_error_vs_d', setter('t1_error', error, other_error), 'b'), ('pre_vs_d', setter('pre', (0, 0), 2), 'b'),
-            ('t1_value_vs_d', bump('t1_value', expanded, 0), 'b'), ('root_peer_logits_vs_d', bump('root_peer_logits', (0, 0, 3), 0), 'b'),
-            ('t1_own_logits', bump('t1_own_logits', expanded + (1,), 1e-3), 'b'),
-            ('t2_value', bump('t2_value', head, 1e-3), 'c'),
+            ('t1_value_vs_d_beyond_tolerance', bump('t1_value', expanded, 2e-5), 'b'),
+            ('root_peer_logits_vs_d_beyond_tolerance', bump('root_peer_logits', (0, 0, 3), 2e-5), 'b'),
+            ('t1_own_logits', bump('t1_own_logits', expanded + (1,), .02), 'c'),
+            ('t2_value', bump('t2_value', head, .02), 'c'), ('t2_value', setter('t2_value', head, np.nan), 'c'),
             ('t2_extra_in_pricer', setter('t2_status', unexpanded, 4), 'd'), ('t2_missing_from_pricer', setter('t2_status', head, 0), 'd'),
             ('t1_extra_in_pricer', setter('t1_status', (0, 0, 8, 8), 2), 'd'), ('t1_enumeration_vs_d', setter('t1_status', (0, 0, 8, 8), 2), 'b'),
             ('t1_extra_in_pricer', setter('t1_status', (6, 1, 0, 0), 2), 'd'), ('d_refused_world_unenumerated', setter('t1_status', (6, 1, 0, 0), 2), 'b'),
             ('t1_error', setter('t1_error', code5, 6), 'a'), ('t1_error', setter('t1_error', code6, 0), 'a'),
             ('t1_depth2_code_status', setter('t1_status', code5, 2), 'b'), ('t1_status', setter('t1_status', code6, 2), 'a'),
-            ('t1_value_vs_d', bump('t1_value', code6, 0), 'b'), ('t1_value_vs_d', bump('t1_value', code5, 0), 'b'),
+            ('t1_value_vs_d_beyond_tolerance', bump('t1_value', code6, 2e-5), 'b'), ('t1_value_vs_d_beyond_tolerance', bump('t1_value', code5, 2e-5), 'b'),
             ('t1_digest_peer', flip('t1_digest_peer', code5 + (1,)), 'a'),
             ('pre', setter('pre', (6, 1), 0), 'a'), ('pre_vs_d', setter('pre', (6, 1), 0), 'b'),
         )
@@ -519,24 +538,37 @@ class GateTests(unittest.TestCase):
                 result = self.evaluate(self.mutated(change));found = result['checks'][check]
                 self.assertFalse(result['passed']);self.assertFalse(found['passed'])
                 if check == 'c':self.assertFalse(found['quantities'][name]['within_tolerance'])
-                elif name == 't1_own_logits':self.assertFalse(found['t1_own_logits']['within_tolerance'])
                 else:
                     self.assertGreater(found['mismatched'][name], 0, found['mismatched'])
                     self.assertIn(name, {m['field'] for m in found['first_mismatches']})
                     self.assertTrue(all(m['block'] == 0 for m in found['first_mismatches']))
 
-    def test_head_differences_within_tolerance_pass_and_are_reported(self):
+    def test_float_differences_within_tolerance_pass_and_are_reported(self):
         _, _, data, _ = self.priced();leaves, children = data['leaves'], data['children']
         heads = [tuple(s) for s, x in zip(leaves['specs'], leaves['status']) if x == 4]
-        expanded = tuple(children['cells'][list(children['status']).index(2)])
+        valued = [tuple(c) for c, x in zip(children['cells'], children['status']) if x == 2]
         def change(f, _):
-            for at in heads[:3]:f['t2_value'][at] = np.nextafter(f['t2_value'][at], np.float32(2))
-            f['t1_own_logits'][expanded + (1,)] = np.nextafter(f['t1_own_logits'][expanded + (1,)], np.float32(2))
-        result = self.evaluate(self.mutated(change));c = result['checks']['c']['quantities']
-        self.assertTrue(result['passed'])
+            for at in heads[:3]:f['t2_value'][at] = np.float32(f['t2_value'][at] + 3e-3)   # bf16 cross-geometry noise
+            f['t1_own_logits'][valued[0] + (1,)] = np.float32(f['t1_own_logits'][valued[0] + (1,)] + 5e-3)
+            f['t1_value'][valued[1]] = np.float32(f['t1_value'][valued[1]] + 3e-6)            # within (b)'s 1e-5
+            f['root_peer_logits'][0, 0, 2] = np.nextafter(f['root_peer_logits'][0, 0, 2], np.float32(2))
+        result = self.evaluate(self.mutated(change));checks = result['checks'];c = checks['c']['quantities']
+        self.assertTrue(result['passed'], {k: v.get('first_mismatches') for k, v in checks.items()})
         self.assertEqual(c['t2_value']['compared'] - c['t2_value']['exact_equal'], 3)
-        self.assertGreater(c['t2_value']['max_abs_difference'], 0);self.assertLessEqual(c['t2_value']['max_abs_difference'], gate.HEAD_TOLERANCE)
-        self.assertLess(result['checks']['b']['t1_own_logits']['exact_equal_fraction'], 1)
+        self.assertAlmostEqual(c['t2_value']['max_abs_difference'], 3e-3, delta=1e-6);self.assertLess(c['t1_own_logits']['exact_equal_fraction'], 1)
+        values = checks['b']['values']['t1_value']
+        self.assertEqual(values['compared'] - values['exact_equal'], 1);self.assertAlmostEqual(values['max_abs_difference'], 3e-6, delta=1e-7)
+        self.assertEqual(values['first_inexact'][0]['cell'], list(valued[1]));self.assertEqual(values['first_beyond'], [])
+        self.assertEqual(checks['b']['values']['root_peer_logits']['compared'] - checks['b']['values']['root_peer_logits']['exact_equal'], 1)
+        # The floor is depth 1's own distance to the oracle heads: shifting D's view of t1 moves it, and the ratio follows.
+        frame, d_results, clean, _ = self.priced()
+        shifted = copy.deepcopy(d_results);report = shifted[0].world_reports[0];(a, r) = valued[0][2:]
+        report['joint_values'][a][r] = float(np.float32(report['joint_values'][a][r] + 1e-3))
+        noisy = self.mutated(change)
+        noisy_result = gate.summarize([gate.evaluate(noisy, shifted, self.requests, clean)])['checks']
+        self.assertAlmostEqual(noisy_result['c']['depth1_noise_floor'], 1e-3, delta=1e-6)
+        self.assertAlmostEqual(noisy_result['c']['t2_value_to_floor_ratio'], 3., delta=1e-2)
+        self.assertFalse(noisy_result['b']['passed'])   # and that 1e-3 is beyond (b)'s 1e-5 against D
 
     def test_missing_field_or_wrong_geometry_fails_closed(self):
         frame = dict(self.priced()[0]);frame.pop('t2_digest')
@@ -580,6 +612,10 @@ class GateTests(unittest.TestCase):
                 pricer=OraclePricer(self.ex, self.WIDTHS), frame_pricer=frame_pricer, oracle=reference.Oracle(self.ex, object(), chunk=32),
                 widths=self.WIDTHS, sample=None, block=0, context=dict(block=0, call=0))
         self.assertTrue(all(summary['passed'].values()), summary)
+        costs = gate.merge_costs([summary])
+        self.assertGreater(costs['frame_pricer']['lower_and_compile_seconds'], 0);self.assertGreaterEqual(costs['frame_pricer']['device_seconds'], 0)
+        self.assertIsNone(costs['depth2_pricer']['device_seconds'])   # the fake pricer's timing reports none
+        self.assertGreater(costs['oracle']['chunks'], 0);self.assertGreater(costs['oracle']['chunk_device_seconds'], 0)
         self.assertEqual((summary['roots'], summary['worlds']), (len(self.MODES), 2 * len(self.MODES) - len(self.MISSING)))
         self.assertEqual(summary['pricer_timing'], dict(fake=True))
         self.assertEqual(summary['refusals']['depth2']['refused_count'], 7)
@@ -620,6 +656,34 @@ class GateTests(unittest.TestCase):
             self.assertEqual(summary['passed']['block_invariance'], expected);self.assertEqual(result['checks']['block_invariance']['passed'], expected)
             self.assertEqual(result['passed'], expected);self.assertIn('invariance_pricer_0_seconds', summary['timing'])
             self.assertTrue(result['checks']['a']['passed'])   # the checked (second) frame is the clean one
+
+    def test_progress_lines_bracket_every_stage_of_a_call(self):
+        lines = [];frame_pricer = batch.FramePricer(self.ex, object(), capacity=16, block_rows=16, actor_capacity=3, vectorized=True, host_prep=True)
+        oracle = reference.Oracle(self.ex, object(), chunk=32, progress=gate.oracle_chunk_progress(lambda m, **v: lines.append((m, v)), interval=1e9))
+        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward):
+            gate.run_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS, pricer=OraclePricer(self.ex, self.WIDTHS),
+                frame_pricer=frame_pricer, oracle=oracle, widths=self.WIDTHS, sample=None, block=0, context=dict(block=0, call=3),
+                invariance=[OraclePricer(self.ex, self.WIDTHS)], progress=lambda m, **v: lines.append((m, v)))
+        stages = [(m, v['stage']) for m, v in lines if m.startswith('STAGE')]
+        expected = ('depth2_pricer_invariance_0', 'depth2_pricer', 'frame_pricer', 'oracle_worlds', 'oracle_roots', 'oracle_children', 'oracle_leaves',
+            'check_a', 'check_b', 'check_c', 'check_d', 'check_oracle_consistency', 'check_block_invariance', 'refusals')
+        self.assertEqual(stages, [(m, name) for name in expected for m in ('STAGE_START', 'STAGE_END')])
+        ends = {v['stage']: v for m, v in lines if m == 'STAGE_END'}
+        self.assertTrue(all(v['seconds'] >= 0 and v['call'] == 3 and v['block'] == 0 for v in ends.values()))
+        self.assertTrue(all(ends[name]['roots'] == len(self.MODES) for name in expected[:7]))
+        self.assertGreater(ends['frame_pricer']['compile_seconds'], 0);self.assertIn('device_seconds', ends['depth2_pricer'])
+        chunks = [v for m, v in lines if m == 'ORACLE_CHUNK']
+        for kind in ('roots', 'children', 'leaves'):   # first and last chunk of every pass, with a running count
+            mine = [c for c in chunks if c['kind'] == kind]
+            self.assertEqual([c['chunk'] for c in mine], sorted({0, mine[0]['chunks'] - 1}))
+            self.assertEqual(mine[-1]['rows_done'], mine[-1]['rows']);self.assertGreater(mine[0]['seconds'], 0)
+        self.assertEqual(len(oracle.chunks), sum(c['chunks'] for c in chunks if c['chunk'] == 0))
+
+    def test_oracle_chunk_progress_is_throttled(self):
+        times = iter([0., 1., 2., 11., 12., 13.]);lines = []
+        progress = gate.oracle_chunk_progress(lambda m, **v: lines.append(v['chunk']), interval=10., clock=lambda: next(times))
+        for chunk in range(6):progress(kind='leaves', chunk=chunk, chunks=6, rows_done=chunk, rows=6)
+        self.assertEqual(lines, [0, 3, 5])
 
     def test_refusal_shares_and_error_counts_by_code(self):
         frame, d_results, data, _ = self.priced()
