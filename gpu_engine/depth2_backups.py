@@ -17,9 +17,9 @@ import numpy as np
 from pokezero import v5_gumbel as original
 
 # Refusal causes in precedence order. The first three are D's own (depth 1 refuses
-# the root too); 'turn1_depth2_only' (codes 5/6: the opponent's child view) and
-# 'turn2' refuse only at depth 2.
-CAUSES=('materialization','pre','turn1','turn1_depth2_only','turn2')
+# the root too); 'turn1_depth2_only' (codes 5/6: the opponent's child view),
+# 'turn2' and 'k1_pruned' (a legal root action cut by k1_own) refuse only at depth 2.
+CAUSES=('materialization','pre','turn1','turn1_depth2_only','turn2','k1_pruned')
 DEPTH1_CAUSES=CAUSES[:3]
 
 
@@ -104,24 +104,31 @@ def average_root(frame,root,root_logits,root_legal):
     return _root(backup_average(frame,root),root_logits,root_legal)
 
 
-def refusal_summary(frame):
+def refusal_summary(frame,root_legal=None):
     """Refused roots and causes under the reference rule, and error counts by code; pure numpy.
 
     Cause precedence per root: a world without a state, a world pre code, a
     turn-1 error with a D code (1-4), a turn-1 error only the depth-2 pricer
-    raises (5/6), a turn-2 error. `depth1_refused_count` is the share D3 would
-    refuse on the same frame; `depth2_only_refused_count` the extra refusals.
-    Pruned turn-1 cells (k1 below 9) are not counted; the root reduction is
-    authoritative for them.
+    raises (5/6), a turn-2 error, a k1_own-pruned legal root action.
+    `depth1_refused_count` is the share D3 would refuse on the same frame;
+    `depth2_only_refused_count` the extra refusals. Pruning is exact when
+    `root_legal` ([R,9] bools) is given (a legal action with no enumerated row
+    in a usable world, which learner_max_root refuses); without it every usable
+    root of a frame priced with k1_own<9 is flagged, so a refused root never
+    reads as not refused. Reply pruning (k1_opp) renormalizes, never refuses.
     """
     pre,t1,t1e,t2=frame.pre,frame.t1_status,frame.t1_error,frame.t2_status
+    narrow=isinstance(frame.timing,dict)and int(frame.timing.get('k1_own',9))<9
     roots=[]
     for r in range(pre.shape[0]):
-        codes=tuple(int(c)for c in pre[r]);failed=t1[r]==3
+        codes=tuple(int(c)for c in pre[r]);failed=t1[r]==3;usable=[w for w in range(2)if codes[w]==0]
         e1=int(np.count_nonzero(failed&(t1e[r]<=4)));only2=int(np.count_nonzero(failed&(t1e[r]>=5)));e2=int(np.count_nonzero(t2[r]==3))
+        if root_legal is not None:pruned=any(root_legal[r][a]and not t1[r,w,a].any()for w in usable for a in range(9))
+        else:pruned=narrow and bool(usable)
         cause=('materialization'if any(c<0 for c in codes)else'pre'if any(c>0 for c in codes)else'turn1'if e1
-            else'turn1_depth2_only'if only2 else'turn2'if e2 else None)
-        roots.append(dict(root=r,refused=cause is not None,cause=cause,pre=codes,turn1_errors=e1,turn1_depth2_only_errors=only2,turn2_errors=e2))
+            else'turn1_depth2_only'if only2 else'turn2'if e2 else'k1_pruned'if pruned else None)
+        roots.append(dict(root=r,refused=cause is not None,cause=cause,pre=codes,turn1_errors=e1,turn1_depth2_only_errors=only2,
+            turn2_errors=e2,k1_pruned=bool(pruned)))
     refused=[x for x in roots if x['refused']]
     by_code=lambda errors,status,codes:{code:int(np.count_nonzero((status==3)&(errors==code)))for code in codes}
     return dict(roots=tuple(roots),root_count=len(roots),refused_count=len(refused),

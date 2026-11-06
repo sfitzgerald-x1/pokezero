@@ -70,10 +70,30 @@ def executor():
         terminal=j.where(root,(mode==1)|(mode==2)|(mode==7),((mode==22)&((a==1)|(r==3)))|((mode==28)&(a==0)))
         winner=j.where(root,j.where(mode==2,2,j.where(mode==7,9,state.owner)),j.where(mode==28,9,j.where(r==3,2,state.owner)))
         invalid=j.where(root,(mode==3)&(a==1)&(r==1),(mode==24)&(a==1)&(r==2))
-        after=state._replace(value=value,done=terminal,winner=winner,seed=state.seed*3+1,turn=state.turn+1,last=a)
+        # Seeds differ per child of one world, so a chance mix-up between children would show.
+        seed=state.seed*3+1+((a+1)*7+(r+1)*13).astype(j.uint32)
+        after=state._replace(value=value,done=terminal,winner=winner,seed=seed,turn=state.turn+1,last=a)
         return After(Step(after,invalid),Public(public.clock,public.turn+1))
     ex=serial.Executor(jax.jit(legal),jax.jit(observe),lambda obs,state,seat,action:action,jax.jit(lambda state:state.seed%17),jax.jit(advance))
     return ex,replace(ex,joint=serial._make_joint(ex))
+
+
+PERM=np.array([0,1,3,2,4,5,6,7,8])  # encoder lane i shows engine lane PERM[i] at a child: an own_order swap (an involution)
+
+
+def permuting_executor():
+    """The same worlds, but the encoder permutes lanes at a child and dispatch maps them back, so engine and encoder masks differ."""
+    base,_=executor()
+    def observe(state,public,owner,mask):
+        leaf=base.observe(state,public,owner,mask)
+        return leaf._replace(observation=leaf.observation._replace(legal_action_mask=j.where((state.turn>=1)[:,None],mask[:,PERM],mask)))
+    def dispatch(obs,state,seat,action):return j.where(state.turn>=1,j.asarray(PERM)[action],action)
+    def advance(state,public,actions,chance):
+        # An engine action illegal in the ENGINE mask is invalid, as the real engine reports it.
+        after=base.advance(state,public,actions,chance);m=base.legal(state)
+        bad=lambda s:(actions[:,s]>=0)&~j.take_along_axis(m[:,s],j.clip(actions[:,s],0,8)[:,None],axis=1)[:,0]
+        return after._replace(step=after.step._replace(invalid_actions=after.step.invalid_actions|bad(0)|bad(1)))
+    return serial.Executor(base.legal,jax.jit(observe),dispatch,base.sample,jax.jit(advance))
 
 
 def world_data(root,start,mode):
@@ -93,7 +113,8 @@ def oracle(ex,params,state,public,owner,order,learner,opponent,k_own,k_opp,k1_op
         t1_own_logits=Z(9,9,9),t1_peer_requested=Z(9,9,d=bool),t1_peer_legal=Z(9,9,9,d=bool),t1_peer_logits=Z(9,9,9),
         t2_status=Z(9,9,9,9,d=np.int8),t2_value=Z(9,9,9,9),t2_error=Z(9,9,9,9,d=np.int8),inputs1={},inputs2={})
     seat=j.asarray([owner],j.int32);masks=ex.legal(state)
-    peer=ex.observe(state,public,1-seat,masks[:,1-owner])
+    own=ex.observe(state,public,seat,masks[:,owner]);peer=ex.observe(state,public,1-seat,masks[:,1-owner])
+    act=lambda view,st,s,action:ex.dispatch(view.observation,st,s,j.asarray([action],j.int32))  # encoder lane -> engine action
     legal=np.asarray(peer.observation.legal_action_mask[0]);requested=bool(legal.any())
     pick=lambda legal,lg,k,req:sorted([i for i in range(9)if legal[i]],key=lambda i:(-float(lg[i]),i))[:k]if req else[0]
     if requested:lg=np.asarray(forward(params[opponent],peer.inputs).policy_logits[0]);replies=sorted(pick(legal,lg,k1_opp,True))
@@ -103,8 +124,8 @@ def oracle(ex,params,state,public,owner,order,learner,opponent,k_own,k_opp,k1_op
     chance=ex.sample(state)
     for a1 in order:
         for r1 in replies:
-            actions=j.full((1,2),-1,j.int32).at[:,owner].set(a1)
-            if requested:actions=actions.at[:,1-owner].set(r1)
+            actions=j.full((1,2),-1,j.int32).at[:,owner].set(act(own,state,seat,a1))
+            if requested:actions=actions.at[:,1-owner].set(act(peer,state,1-seat,r1))
             after=ex.advance(state,public,actions,chance);child=after.step.state;trackers=after.trackers
             invalid=bool(after.step.invalid_actions[0]);done=bool(child.done[0]);winner=int(child.winner[0])
             if invalid:o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=1;continue
@@ -114,14 +135,16 @@ def oracle(ex,params,state,public,owner,order,learner,opponent,k_own,k_opp,k1_op
                 continue
             cm=ex.legal(child);vo=ex.observe(child,trackers,seat,cm[:,owner]);vp=ex.observe(child,trackers,1-seat,cm[:,1-owner])
             po=forward(params[learner],vo.inputs);pp=forward(params[opponent],vp.inputs)
-            own_legal=np.asarray(cm[0,owner]);peer_legal=np.asarray(cm[0,1-owner]);own_req=bool(own_legal.any());peer_req=bool(peer_legal.any())
+            # Request flags from the engine mask; legal masks are each seat's encoder mask (request-order lanes).
+            own_req=bool(np.asarray(cm[0,owner]).any());peer_req=bool(np.asarray(cm[0,1-owner]).any())
+            own_legal=np.asarray(vo.observation.legal_action_mask[0]);peer_legal=np.asarray(vp.observation.legal_action_mask[0])
             if int(vo.observation.error[0]):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=3;continue
             if not usable(po):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=4;continue
             # D3 priced this cell: its value, the learner's prior and both masks stay whatever the opponent's view does.
             o['t1_value'][a1,r1]=float(po.value[0]);own_lg=np.asarray(po.policy_logits[0])if own_req else np.zeros(9,np.float32)
             o['t1_own_requested'][a1,r1]=own_req;o['t1_own_legal'][a1,r1]=own_legal;o['t1_own_logits'][a1,r1]=own_lg
             o['t1_peer_requested'][a1,r1]=peer_req;o['t1_peer_legal'][a1,r1]=peer_legal
-            if int(vp.observation.error[0]):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=5;continue
+            if peer_req and int(vp.observation.error[0]):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=5;continue
             if peer_req and not usable(pp):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=6;continue
             o['t1_status'][a1,r1]=2;o['inputs1'][a1,r1]=(vo.inputs,vp.inputs)
             peer_lg=np.asarray(pp.policy_logits[0])if peer_req else np.zeros(9,np.float32);o['t1_peer_logits'][a1,r1]=peer_lg
@@ -129,8 +152,8 @@ def oracle(ex,params,state,public,owner,order,learner,opponent,k_own,k_opp,k1_op
             for a2 in pick(own_legal,own_lg,k_own,own_req):
                 for r2 in pick(peer_legal,peer_lg,k_opp,peer_req):
                     acts=j.full((1,2),-1,j.int32)
-                    if own_req:acts=acts.at[:,owner].set(a2)
-                    if peer_req:acts=acts.at[:,1-owner].set(r2)
+                    if own_req:acts=acts.at[:,owner].set(act(vo,child,seat,a2))
+                    if peer_req:acts=acts.at[:,1-owner].set(act(vp,child,1-seat,r2))
                     leaf=ex.advance(child,trackers,acts,chance2);ls=leaf.step.state
                     invalid=bool(leaf.step.invalid_actions[0]);done=bool(ls.done[0]);winner=int(ls.winner[0])
                     if invalid:status,value,err=3,0.,1
@@ -200,8 +223,9 @@ class Depth2PricerTests(unittest.TestCase):
             return mapping.World(start.world,None if absent else state,None if absent else public,('inert missing',)if absent else(),start.seed,False)
         return materialize
 
-    def price(self,specs,missing=(),params=PARAMS,**kw):
-        ex,_=executor();requests=self.requests(specs,ex)
+    def price(self,specs,missing=(),params=PARAMS,ex=None,**kw):
+        if ex is None:ex,_=executor()
+        requests=self.requests(specs,ex)
         kw.setdefault('capacity',8);engine=pricer.Depth2Pricer(ex,object(),actor_capacity=3,**kw)
         with patch.object(mapping,'materialize_host',side_effect=self.materialize(specs,missing)),patch.object(batch.v5_model,'forward',side_effect=forward):
             frame=engine.price(requests,self.tables,self.recipe,params)
@@ -268,9 +292,9 @@ class Depth2PricerTests(unittest.TestCase):
         learner=0
         for i,wi,waiting in((0,0,'own'),(0,1,'peer')):
             r=requests[i];state,public=world_data(r.plans.root,r.plans.starts[wi],specs[i][0][wi])
-            seed=r.plans.starts[wi].seed%2**32;chance1=seed%17;chance2=((seed*3+1)%2**32)%17
+            seed=r.plans.starts[wi].seed%2**32;chance1=seed%17
             for a,rr in zip(*np.nonzero(frame.t1_status[i,wi]==2)):
-                child=.25+a/32+rr/64+chance1/1024
+                child=.25+a/32+rr/64+chance1/1024;chance2=((seed*3+1+(a+1)*7+(rr+1)*13)%2**32)%17
                 for a2,r2 in zip(*np.nonzero(frame.t2_status[i,wi,a,rr])):
                     own_step=-1/32 if waiting=='own'else a2/32;foe_step=0. if waiting=='peer'else r2/64
                     self.assertEqual(float(frame.t2_value[i,wi,a,rr,a2,r2]),child+own_step+foe_step+chance2/1024+float(PARAMS[learner]['offset']))
@@ -316,7 +340,8 @@ class Depth2PricerTests(unittest.TestCase):
         self.check_oracle(frame,requests,ex,specs,k_own=2,k_opp=3,missing=missing)
         t=engine.last_timing
         self.assertEqual((t['root_capacity'],t['padding_root_slots'],t['substituted_world_slots']),(4,1,1))
-        self.assertEqual(t['turn2_blocks'],-(-81*8//5)+2*-(-81*2//5))  # archives share history_size, present or not;self.assertEqual(t['turn2_lanes_per_block'],30)
+        self.assertEqual(t['turn2_blocks'],-(-81*8//5)+2*-(-81*2//5))  # archives share history_size, present or not
+        self.assertEqual(t['turn2_lanes_per_block'],30);self.assertEqual(t['turn2_lanes_per_block'],30)
         enumerated=int(np.count_nonzero(frame.t2_status));self.assertEqual(t['turn2_enumerated_leaves'],enumerated)
         self.assertEqual(t['turn2_evaluated_leaf_lanes'],t['turn2_active_blocks']*30);self.assertLess(enumerated,t['turn2_evaluated_leaf_lanes'])
         # Exactly the blocks holding an expanded child ran; the rest were skipped.
@@ -470,7 +495,8 @@ class Depth2PricerTests(unittest.TestCase):
         self.assertEqual([x['cause']for x in summary['roots']],[None,'pre','materialization','turn1','turn2','turn1_depth2_only','turn1'])
         self.assertEqual(summary['roots'][1]['pre'],(0,9));self.assertEqual(summary['refused_count'],6)
         self.assertEqual((summary['depth1_refused_count'],summary['depth2_only_refused_count']),(4,2))
-        self.assertEqual(summary['refused_by_cause'],{'materialization':1,'pre':1,'turn1':2,'turn1_depth2_only':1,'turn2':1})
+        self.assertEqual(summary['refused_by_cause'],{'materialization':1,'pre':1,'turn1':2,'turn1_depth2_only':1,'turn2':1,'k1_pruned':0})
+        self.assertFalse(any(x['k1_pruned']for x in summary['roots']))
         self.assertEqual(summary['turn1_errors_by_code'],{1:1,2:0,3:1,4:0,5:1,6:2});self.assertEqual(summary['turn2_errors_by_code'],{1:1,2:1,3:0,4:1})
         self.assertEqual(summary['refused_turn2_errors'],{1:0,2:0,3:0,4:2,5:1,6:0})
         self.assertEqual((summary['roots'][5]['turn1_errors'],summary['roots'][5]['turn1_depth2_only_errors'],summary['roots'][6]['turn1_errors']),(0,2,1))
@@ -498,6 +524,31 @@ class Depth2PricerTests(unittest.TestCase):
         self.assertEqual(np.count_nonzero(frame.t1_status[0,0]),2);self.assertEqual(np.count_nonzero(frame.t1_status[1,1]),2)
         prices=backups.backup_learner_max(frame,0)
         self.assertEqual(sum(prices[0].opponent_legal),1);self.assertEqual(backups.learner_max_root(frame,0,ROOT_LOGITS,ROOT_LEGAL).status,'REFUSED')
+        # Learner pruning is a refusal: conservative without root_legal, exact with it; the kept prefix alone labels.
+        summary=backups.refusal_summary(frame)
+        self.assertEqual([x['cause']for x in summary['roots']],['k1_pruned']*2);self.assertEqual(summary['depth2_only_refused_count'],2)
+        self.assertEqual([x['cause']for x in backups.refusal_summary(frame,root_legal=[ROOT_LEGAL]*2)['roots']],['k1_pruned']*2)
+        kept=[tuple(a in self.recipe.pricing_order(r.plans.root.address,r.root_logits,r.root_legal)[:2]for a in range(9))for r in requests]
+        self.assertEqual([x['cause']for x in backups.refusal_summary(frame,root_legal=kept)['roots']],[None,None])
+        self.assertEqual(backups.learner_max_root(frame,0,ROOT_LOGITS,kept[0]).status,'LABELED')
+
+    def test_child_masks_are_encoder_lanes_not_engine_lanes(self):
+        ex=permuting_executor();specs=(((0,27),0,0,1),((0,0),1,2,0),((20,21),0,1,1))
+        frame,requests,engine,_=self.price(specs,ex=ex,child_block=5)
+        self.check_oracle(frame,requests,ex,specs)
+        self.assertFalse(np.array_equal(CHILD_OWN,CHILD_OWN[PERM]));self.assertFalse((frame.t2_status==3).any())
+        for i,(modes,owner,learner,opponent)in enumerate(specs):
+            for wi in range(2):
+                for a,r in zip(*np.nonzero(frame.t1_status[i,wi]==2)):
+                    engine_own=CHILD_OWN&~((np.arange(9)==1)&(modes[wi]==27)&(a==1));engine_foe=CHILD_FOE.copy()
+                    if modes[wi]==20:engine_own[:]=False
+                    if modes[wi]==21:engine_foe[:]=False
+                    np.testing.assert_array_equal(frame.t1_own_legal[i,wi,a,r],engine_own[PERM]);np.testing.assert_array_equal(frame.t1_peer_legal[i,wi,a,r],engine_foe[PERM])
+                    cell=frame.t2_status[i,wi,a,r];rows=set(np.nonzero(cell)[0].tolist());cols=set(np.nonzero(cell)[1].tolist())
+                    self.assertEqual(rows,set(np.flatnonzero(engine_own[PERM]).tolist())or{0});self.assertEqual(cols,set(np.flatnonzero(engine_foe[PERM]).tolist())or{0})
+                    self.assertTrue((cell[cell!=0]==4).all())
+            self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'LABELED')
+        self.assertEqual(backups.refusal_summary(frame)['refused_count'],0)
 
     def test_single_actor_bank_runs_without_stacking(self):
         specs=(((0,22),0,0,0),((27,0),1,0,0))

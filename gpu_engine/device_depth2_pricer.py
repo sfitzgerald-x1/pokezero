@@ -70,10 +70,11 @@ class Depth2Frame:
 def _make_child_joint(executor):
     """D3's _make_joint with the same dispatch/advance/observe sequence, keeping the child.
 
-    The extra outputs (child state and trackers, both seats' child masks, the
-    opponent's child view) are independent computations after the same step, so
-    the learner's leaf view is unchanged. The one-row program is still mapped,
-    never flattened, so public tracker namespaces stay per world.
+    The extra outputs (child state and trackers, the engine request masks, both
+    seats' encoder masks, the opponent's child view) are independent
+    computations after the same step, so the learner's leaf view is unchanged.
+    The one-row program is still mapped, never flattened, so public tracker
+    namespaces stay per world.
     """
     def single(state,public,own,peer,owner,requested,pair,chance):
         actions=j.full((1,2),-1,j.int32)
@@ -86,7 +87,7 @@ def _make_child_joint(executor):
         view=executor.observe(after.step.state,after.trackers,owner,masks[:,owner[0]])
         foe=executor.observe(after.step.state,after.trackers,1-owner,masks[:,1-owner[0]])
         return (after.step.invalid_actions,after.step.state.done,after.step.state.winner,view.observation.error,view.inputs,
-            after.step.state,after.trackers,masks,foe.observation.error,foe.inputs)
+            after.step.state,after.trackers,masks,view.observation.legal_action_mask,foe.observation.legal_action_mask,foe.observation.error,foe.inputs)
     return jax.jit(jax.vmap(single,in_axes=(None,None,None,None,None,None,0,None)))
 
 
@@ -194,7 +195,7 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
         pairs=j.stack((j.take_along_axis(order,action_row,axis=1),
             j.take_along_axis(reply_order,reply_row,axis=1)),axis=-1)
         chance=jax.vmap(executor.sample)(states)
-        (invalid,done,winner,error,inputs,child_states,child_publics,masks,peer_error,peer_child_inputs
+        (invalid,done,winner,error,inputs,child_states,child_publics,masks,own_legal2,peer_legal2,peer_error,peer_child_inputs
             )=jax.vmap(child_joint)(states,publics,own,peer,owners[:,None],requested[:,None],pairs,chance)
         invalid,done,winner,error,peer_error=(x[:,:,0]for x in(invalid,done,winner,error,peer_error))
         leaf_logits,values,valid=grouped_forward(inputs,a['leaf_rows'],joint=True)
@@ -209,20 +210,27 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
         # so D3's priced surface survives: such a cell keeps the learner's
         # value and prior, is not expanded, and refuses through the backups.
         priced=errors==0;viewed=priced&~done
+        # Request flags come from the engine mask (robust when a view errors).
+        # Legal masks are each seat's ENCODER mask: the request-order lane
+        # space the policy logits and executor.dispatch use, as D at the root.
+        # The engine mask orders switch lanes by physical bench slot, which
+        # differs once a side has switched, so it is never enumerated.
         masks=masks[:,:,0];seat=owners[:,None,None,None]
-        own_legal2=j.take_along_axis(masks,seat,axis=2)[:,:,0];peer_legal2=j.take_along_axis(masks,1-seat,axis=2)[:,:,0]
-        own_req2=j.any(own_legal2,axis=-1);peer_req2=j.any(peer_legal2,axis=-1)
+        own_req2=j.any(j.take_along_axis(masks,seat,axis=2)[:,:,0],axis=-1);peer_req2=j.any(j.take_along_axis(masks,1-seat,axis=2)[:,:,0],axis=-1)
+        own_legal2=own_legal2[:,:,0];peer_legal2=peer_legal2[:,:,0]
         peer_logits2,peer_pv2,peer_valid2=grouped_forward(peer_child_inputs,a['peer_rows'],joint=True)
         peer_usable2=peer_valid2&j.all(j.isfinite(peer_logits2),axis=-1)&j.isfinite(peer_pv2)&(j.abs(peer_pv2)<=1)
-        errors=j.where(viewed&(peer_error!=0),PEER_VIEW_ERROR,errors)
+        errors=j.where(viewed&peer_req2&(peer_error!=0),PEER_VIEW_ERROR,errors)
         errors=j.where(viewed&(errors==0)&peer_req2&~peer_usable2,PEER_PRIOR_REFUSED,errors)
         pre=j.where(a['available'].reshape(n),pre,UNAVAILABLE)
         enumerated=(ordinal<required[:,None])&(pre==0)[:,None];priced&=enumerated;viewed&=enumerated
-        status1=j.where(~enumerated,0,j.where(errors!=0,3,j.where(done,1,2)));expanded=status1==2
+        status1=j.where(~enumerated,0,j.where(errors!=0,3,j.where(done,1,2))).astype(j.int8);expanded=status1==2
+        errors=j.where(enumerated,errors,0).astype(j.int8)
         own_logits2=j.where(own_req2[...,None],leaf_logits,0.);peer_logits2=j.where(peer_req2[...,None],peer_logits2,0.)
         sel_own,live_own=ranked(own_legal2,own_logits2,k_own,own_req2)
         sel_opp,live_opp=ranked(peer_legal2,peer_logits2,k_opp,peer_req2)
-        # Turn 2 over flattened children, gathered per block so only one
+        # Turn 2 over flattened children. Each block gathers its children
+        # inside the conditional, so a skipped block moves nothing and one
         # block of states, views and leaves is live at a time.
         flat=lambda x:x.reshape((children,)+x.shape[2:])
         child_states=jax.tree.map(flat,child_states);child_publics=jax.tree.map(flat,child_publics)
@@ -233,12 +241,11 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
         actor_params=lambda actor:params[0]if len(params)==1 else jax.tree.map(lambda x:x[actor],stacked)
         def block(args):
             slots,actor=args;idx=j.minimum(slots,children-1);live=expanded_c[idx]&(slots<children)
-            pick=lambda x:x[idx]
-            bs=jax.tree.map(pick,child_states);bp=jax.tree.map(pick,child_publics)
-            owner=owners_child[idx];req=req_seat[idx]
-            pair=j.stack((j.broadcast_to(sel_own_c[idx][:,:,None],(cb,k_own,k_opp)),
-                j.broadcast_to(sel_opp_c[idx][:,None,:],(cb,k_own,k_opp))),axis=-1).reshape(cb,pairs2,2)
             def compute():
+                pick=lambda x:x[idx]
+                bs=jax.tree.map(pick,child_states);bp=jax.tree.map(pick,child_publics);owner=owners_child[idx];req=req_seat[idx]
+                pair=j.stack((j.broadcast_to(sel_own_c[idx][:,:,None],(cb,k_own,k_opp)),
+                    j.broadcast_to(sel_opp_c[idx][:,None,:],(cb,k_own,k_opp))),axis=-1).reshape(cb,pairs2,2)
                 # Re-observing the child gives the same dispatch views the
                 # turn-1 joint saw, without holding [children] encodings.
                 bo,bpe,_,_=jax.vmap(views)(bs,bp,owner)
@@ -249,29 +256,27 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
                 lg=prediction.policy_logits.reshape(cb,pairs2,9);v=prediction.value.reshape(cb,pairs2);ok=prediction.valid.reshape(cb,pairs2)
                 usable=ok&j.all(j.isfinite(lg),axis=-1)&j.isfinite(v)&(j.abs(v)<=1)
                 terminal_ok=(winner>=0)&(winner<=2)
-                err=j.where(invalid,1,j.where(done&~terminal_ok,2,j.where(~done&(error!=0),3,j.where(~done&~usable,4,0))))
+                err=j.where(invalid,1,j.where(done&~terminal_ok,2,j.where(~done&(error!=0),3,j.where(~done&~usable,4,0)))).astype(j.int8)
                 terminal=j.where(winner==2,0.,j.where(winner==owner[:,None],1.,-1.))
-                out=(j.where(done,terminal,v).astype(j.float32),j.where(err!=0,3,j.where(done,1,4)).astype(j.int32),err.astype(j.int32))
+                out=(j.where(err!=0,0.,j.where(done,terminal,v)).astype(j.float32),j.where(err!=0,3,j.where(done,1,4)).astype(j.int8),err)
                 return out+((digests.batched(inputs,axes=2),)if digest else())
             def empty():
-                out=(j.zeros((cb,pairs2),j.float32),j.zeros((cb,pairs2),j.int32),j.zeros((cb,pairs2),j.int32))
+                out=(j.zeros((cb,pairs2),j.float32),j.zeros((cb,pairs2),j.int8),j.zeros((cb,pairs2),j.int8))
                 return out+((j.zeros((cb,pairs2,2),j.uint32),)if digest else())
             return jax.lax.cond(j.any(live),compute,empty)+(j.any(live),)
         out=jax.lax.map(block,(a['child_slots'],a['block_actor']))
-        active_blocks=out[-1];slots=a['child_slots'].reshape(-1)
-        def unblock(x):
-            x=x.reshape((slots.shape[0],)+x.shape[2:])
-            return j.zeros((children,)+x.shape[1:],x.dtype).at[slots].set(x,mode='drop').reshape((n,LANES,k_own,k_opp)+x.shape[2:])
-        v2,s2,e2,*d2=map(unblock,out[:-1])
-        live2=expanded[...,None,None]&live_own[...,:,None]&live_opp[...,None,:]
-        s2=j.where(live2,s2,0);e2=j.where(live2,e2,0);v2=j.where((s2==1)|(s2==4),v2,0.)
-        # Scatter k slots to action indices, then lanes to [a1][r1]; padding
-        # points out of bounds and is dropped, so it can never be read back.
-        a2=j.where(live_own,sel_own,9);r2=j.where(live_opp,sel_opp,9)
+        active_blocks=out[-1]
+        # One scatter from block slots straight into [world][a1][r1][a2][r2]:
+        # sentinel slots, padding lanes, dead k slots and non-expanded
+        # children all index out of bounds and are dropped, never read back.
+        slots=a['child_slots'].reshape(-1);idx=j.minimum(slots,children-1)
         a1=j.where(enumerated,pairs[...,0],9);r1=j.where(enumerated,pairs[...,1],9)
-        def scatter2(x):
-            w=j.arange(n)[:,None,None,None];l=j.arange(LANES)[None,:,None,None]
-            return j.zeros((n,LANES,9,9)+x.shape[4:],x.dtype).at[w,l,a2[...,:,None],r2[...,None,:]].set(x,mode='drop')
+        a2=j.where(live_own&expanded[...,None],sel_own,9);r2=j.where(live_opp,sel_opp,9)
+        world=j.where(slots<children,idx//LANES,n)[:,None,None];A1=flat(a1)[idx][:,None,None];R1=flat(r1)[idx][:,None,None]
+        A2=flat(a2)[idx][:,:,None];R2=flat(r2)[idx][:,None,:]
+        def place(x):
+            x=x.reshape((slots.shape[0],k_own,k_opp)+x.shape[3:])
+            return j.zeros((n,9,9,9,9)+x.shape[3:],x.dtype).at[world,A1,R1,A2,R2].set(x,mode='drop')
         def scatter1(x):
             return j.zeros((n,9,9)+x.shape[2:],x.dtype).at[j.arange(n)[:,None],a1,r1].set(x,mode='drop')
         def rooted(x):return x.reshape((capacity,2)+x.shape[1:])
@@ -282,14 +287,13 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
         keep=lambda mask,x:j.where(mask.reshape(mask.shape+(1,)*(x.ndim-2)),x,j.zeros((),x.dtype))
         result=dict(pre=rooted(pre),active_blocks=active_blocks,
             peer_requested=rooted(requested&usable_world[:,0]),peer_legal=rooted(legal&usable_world),peer_logits=rooted(j.where(usable_world,logits,0.)),
-            t1_status=rooted(scatter1(status1)),t1_value=rooted(scatter1(j.where(priced,values,0.))),
-            t1_error=rooted(scatter1(j.where(enumerated,errors,0))),
+            t1_status=rooted(scatter1(status1)),t1_value=rooted(scatter1(j.where(priced,values,0.))),t1_error=rooted(scatter1(errors)),
             t1_own_requested=rooted(scatter1(keep(viewed,own_req2))),t1_own_legal=rooted(scatter1(keep(viewed,own_legal2))),t1_own_logits=rooted(scatter1(keep(viewed,own_logits2))),
             t1_peer_requested=rooted(scatter1(keep(viewed,peer_req2))),t1_peer_legal=rooted(scatter1(keep(viewed,peer_legal2))),t1_peer_logits=rooted(scatter1(keep(expanded,peer_logits2))),
-            t2_status=rooted(scatter1(scatter2(s2))),t2_value=rooted(scatter1(scatter2(v2))),t2_error=rooted(scatter1(scatter2(e2))))
+            t2_value=rooted(place(out[0])),t2_status=rooted(place(out[1])),t2_error=rooted(place(out[2])))
         if digest:
             lane=lambda x:j.where(enumerated[...,None],x,j.uint32(0))
-            result.update(t2_digest=rooted(scatter1(scatter2(j.where(live2[...,None],d2[0],j.uint32(0))))),
+            result.update(t2_digest=rooted(place(out[3])),
                 t1_digest_own=rooted(scatter1(lane(digests.batched(inputs,axes=2)))),
                 t1_digest_peer=rooted(scatter1(lane(digests.batched(peer_child_inputs,axes=2)))))
         return result
