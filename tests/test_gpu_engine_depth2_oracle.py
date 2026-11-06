@@ -12,6 +12,7 @@ import contextlib
 import copy
 import importlib.util
 import io
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -492,10 +493,12 @@ class GateTests(GateFixture, unittest.TestCase):
         for name in ('t1_value', 'root_peer_logits'):
             self.assertGreater(checks['b']['values'][name]['compared'], 0);self.assertEqual(checks['b']['values'][name]['exact_equal_fraction'], 1.)
         self.assertIn('not bitwise', checks['b']['reference'])
-        self.assertEqual(checks['c']['tolerance'], .01);self.assertIn('device_d_frame_parity.py:94-95', checks['c']['tolerance_source'])
+        self.assertEqual((checks['c']['value_tolerance'], checks['c']['logit_tolerance']), (1e-4, 1e-2));self.assertIn('lead decision', checks['c']['tolerance_source'])
+        self.assertEqual((checks['b']['values']['t1_value']['tolerance'], checks['b']['values']['root_peer_logits']['tolerance']), (1e-4, 1e-2))
         floor = checks['c']['quantities']['depth1_noise_floor']
         self.assertGreater(floor['compared'], 0);self.assertEqual(floor['max_abs_difference'], 0.)   # the fake heads are exact
-        self.assertIsNone(checks['c']['t2_value_to_floor_ratio']);self.assertEqual(checks['c']['gated'], ['t2_value', 't1_own_logits'])
+        self.assertIsNone(checks['c']['t2_value_to_floor_ratio']);self.assertEqual(checks['c']['gated'], list(gate.GATED))
+        self.assertEqual({k: v['gates'] for k, v in checks['c']['quantities'].items()}['depth1_noise_floor'], None)
         self.assertEqual(set(np.unique(data['leaves']['status'])), {1, 3, 4})
         self.assertEqual(set(np.unique(data['children']['status'])), {1, 2, 3})
 
@@ -524,8 +527,9 @@ class GateTests(GateFixture, unittest.TestCase):
             ('t1_error', setter('t1_error', error, other_error), 'a'), ('pre', setter('pre', (0, 0), 2), 'a'),
             ('root_peer_legal', flip('root_peer_legal', (0, 0, 1)), 'a'),
             ('t1_error_vs_d', setter('t1_error', error, other_error), 'b'), ('pre_vs_d', setter('pre', (0, 0), 2), 'b'),
-            ('t1_value_vs_d_beyond_tolerance', bump('t1_value', expanded, 2e-5), 'b'),
-            ('root_peer_logits_vs_d_beyond_tolerance', bump('root_peer_logits', (0, 0, 3), 2e-5), 'b'),
+            ('t1_value_vs_d_beyond_tolerance', bump('t1_value', expanded, 2e-4), 'b'),
+            ('root_peer_logits_vs_d_beyond_tolerance', bump('root_peer_logits', (0, 0, 3), 2e-2), 'b'),
+            ('t1_value_head', bump('t1_value', expanded, 2e-4), 'c'), ('t1_peer_logits', bump('t1_peer_logits', expanded + (0,), .02), 'c'),
             ('t1_own_logits', bump('t1_own_logits', expanded + (1,), .02), 'c'),
             ('t2_value', bump('t2_value', head, .02), 'c'), ('t2_value', setter('t2_value', head, np.nan), 'c'),
             ('t2_extra_in_pricer', setter('t2_status', unexpanded, 4), 'd'), ('t2_missing_from_pricer', setter('t2_status', head, 0), 'd'),
@@ -533,7 +537,7 @@ class GateTests(GateFixture, unittest.TestCase):
             ('t1_extra_in_pricer', setter('t1_status', (6, 1, 0, 0), 2), 'd'), ('d_refused_world_unenumerated', setter('t1_status', (6, 1, 0, 0), 2), 'b'),
             ('t1_error', setter('t1_error', code5, 6), 'a'), ('t1_error', setter('t1_error', code6, 0), 'a'),
             ('t1_depth2_code_status', setter('t1_status', code5, 2), 'b'), ('t1_status', setter('t1_status', code6, 2), 'a'),
-            ('t1_value_vs_d_beyond_tolerance', bump('t1_value', code6, 2e-5), 'b'), ('t1_value_vs_d_beyond_tolerance', bump('t1_value', code5, 2e-5), 'b'),
+            ('t1_value_vs_d_beyond_tolerance', bump('t1_value', code6, 2e-4), 'b'), ('t1_value_vs_d_beyond_tolerance', bump('t1_value', code5, 2e-4), 'b'),
             ('t1_digest_peer', flip('t1_digest_peer', code5 + (1,)), 'a'),
             ('pre', setter('pre', (6, 1), 0), 'a'), ('pre_vs_d', setter('pre', (6, 1), 0), 'b'),
         )
@@ -552,14 +556,14 @@ class GateTests(GateFixture, unittest.TestCase):
         heads = [tuple(s) for s, x in zip(leaves['specs'], leaves['status']) if x == 4]
         valued = [tuple(c) for c, x in zip(children['cells'], children['status']) if x == 2]
         def change(f, _):
-            for at in heads[:3]:f['t2_value'][at] = np.float32(f['t2_value'][at] + 3e-3)   # bf16 cross-geometry noise
+            for at in heads[:3]:f['t2_value'][at] = np.float32(f['t2_value'][at] + 5e-5)   # bf16 cross-geometry noise
             f['t1_own_logits'][valued[0] + (1,)] = np.float32(f['t1_own_logits'][valued[0] + (1,)] + 5e-3)
             f['t1_value'][valued[1]] = np.float32(f['t1_value'][valued[1]] + 3e-6)            # within (b)'s 1e-5
             f['root_peer_logits'][0, 0, 2] = np.nextafter(f['root_peer_logits'][0, 0, 2], np.float32(2))
         result = self.evaluate(self.mutated(change));checks = result['checks'];c = checks['c']['quantities']
         self.assertTrue(result['passed'], {k: v.get('first_mismatches') for k, v in checks.items()})
         self.assertEqual(c['t2_value']['compared'] - c['t2_value']['exact_equal'], 3)
-        self.assertAlmostEqual(c['t2_value']['max_abs_difference'], 3e-3, delta=1e-6);self.assertLess(c['t1_own_logits']['exact_equal_fraction'], 1)
+        self.assertAlmostEqual(c['t2_value']['max_abs_difference'], 5e-5, delta=1e-6);self.assertLess(c['t1_own_logits']['exact_equal_fraction'], 1)
         values = checks['b']['values']['t1_value']
         self.assertEqual(values['compared'] - values['exact_equal'], 1);self.assertAlmostEqual(values['max_abs_difference'], 3e-6, delta=1e-7)
         self.assertEqual(values['first_inexact'][0]['cell'], list(valued[1]));self.assertEqual(values['first_beyond'], [])
@@ -571,7 +575,7 @@ class GateTests(GateFixture, unittest.TestCase):
         noisy = self.mutated(change)
         noisy_result = gate.summarize([gate.evaluate(noisy, shifted, self.requests, clean)])['checks']
         self.assertAlmostEqual(noisy_result['c']['depth1_noise_floor'], 1e-3, delta=1e-6)
-        self.assertAlmostEqual(noisy_result['c']['t2_value_to_floor_ratio'], 3., delta=1e-2)
+        self.assertAlmostEqual(noisy_result['c']['t2_value_to_floor_ratio'], .05, delta=1e-3)
         self.assertFalse(noisy_result['b']['passed'])   # and that 1e-3 is beyond (b)'s 1e-5 against D
 
     def test_missing_field_or_wrong_geometry_fails_closed(self):
@@ -636,21 +640,31 @@ class GateTests(GateFixture, unittest.TestCase):
         def payload(f):f['t2_value'][(0, 0, 8, 8, 8, 8)] = np.uint32(0x7fc00001).view(np.float32)   # NaN == NaN numerically
         def dtype(f):f['t1_status'] = f['t1_status'].astype(np.int32)
         def missing(f):f.pop('t2_digest')
-        result = changed(ulp)
-        self.assertFalse(result['passed']);self.assertEqual(result['differing'], {'t2_value': dict(count=1, size=frame['t2_value'].size)})
+        result = changed(ulp)   # noise within VALUE_TOLERANCE passes, and is reported
+        self.assertTrue(result['passed']);self.assertEqual(result['floats']['t2_value']['compared'] - result['floats']['t2_value']['exact_equal'], 1)
+        def far(f):f['t2_value'][head] = np.float32(f['t2_value'][head] + 2e-4)
+        result = changed(far)
+        self.assertFalse(result['passed']);self.assertEqual(result['differing'], {'t2_value': dict(count=1, size=frame['t2_value'].size, tolerance=1e-4)})
         self.assertEqual(result['first_differences'][0]['cell'], list(head));self.assertEqual(result['first_differences'][0]['block'], 0)
-        self.assertEqual(changed(payload)['differing']['t2_value']['count'], 1)
+        self.assertEqual(changed(payload)['differing']['t2_value']['count'], 1)   # a NaN only on one side is never within tolerance
+        def logit(delta):
+            def change(f):f['t1_own_logits'][head[:4] + (1,)] += np.float32(delta)
+            return change
+        self.assertTrue(changed(logit(5e-3))['passed']);self.assertFalse(changed(logit(2e-2))['passed'])
+        def status(f):f['t2_status'][head] = 1
+        self.assertEqual(changed(status)['differing']['t2_status']['count'], 1)   # discrete arrays stay bit-exact
         self.assertIn('dtype/shape', changed(dtype)['differing']['t1_status']['problem'])
         self.assertIn('missing', changed(missing)['differing']['t2_digest']['problem'])
         reports = dict(frame, world_reports=[[dict(seed=1)]]), dict(frame, world_reports=[[dict(seed=2)]])
         result = gate.block_invariance(*reports);self.assertTrue(result['passed']);self.assertEqual(result['nonarray_equal'], dict(world_reports=False))
-        merged = gate.merge_invariance([changed(ulp), same]);self.assertFalse(merged['passed']);self.assertEqual(merged['differing']['t2_value']['count'], 1)
+        merged = gate.merge_invariance([changed(far), same]);self.assertFalse(merged['passed']);self.assertEqual(merged['differing']['t2_value']['count'], 1)
+        self.assertEqual(merged['floats']['t2_value']['beyond_tolerance'], 1)
 
     def test_run_call_with_block_invariance_gates_the_frames(self):
         class Nudged(OraclePricer):
             def price(self, *args):
                 frame = super().price(*args);at = tuple(np.argwhere(frame['t2_status'] == 4)[0])
-                frame['t2_value'][at] = np.nextafter(frame['t2_value'][at], np.float32(2));return frame
+                frame['t2_value'][at] = np.float32(frame['t2_value'][at] + 1e-3);return frame
         for other, expected in ((OraclePricer(self.ex, self.WIDTHS), True), (Nudged(self.ex, self.WIDTHS), False)):
             frame_pricer = batch.FramePricer(self.ex, object(), capacity=16, block_rows=16, actor_capacity=3, vectorized=True, host_prep=True)
             with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward):
@@ -672,7 +686,7 @@ class GateTests(GateFixture, unittest.TestCase):
                 invariance=[OraclePricer(self.ex, self.WIDTHS)], progress=lambda m, **v: lines.append((m, v)))
         stages = [(m, v['stage']) for m, v in lines if m.startswith('STAGE')]
         expected = ('depth2_pricer_invariance_0', 'depth2_pricer', 'frame_pricer', 'oracle_worlds', 'oracle_roots', 'oracle_children', 'oracle_leaves',
-            'check_a', 'check_b', 'check_c', 'check_d', 'check_oracle_consistency', 'check_block_invariance', 'refusals', 'check_e_decision')
+            'check_a', 'check_b', 'check_c', 'check_d', 'check_oracle_consistency', 'check_block_invariance', 'refusals', 'check_e_decision', 'values')
         self.assertEqual(stages, [(m, name) for name in expected for m in ('STAGE_START', 'STAGE_END')])
         ends = {v['stage']: v for m, v in lines if m == 'STAGE_END'}
         self.assertTrue(all(v['seconds'] >= 0 and v['call'] == 3 and v['block'] == 0 for v in ends.values()))
@@ -737,8 +751,8 @@ class FakeBackups:
         t2 = frame.t2_status[q, w, a1, r1]
         if status != 2 or (t2 == 3).any():return None, -1
         own, opp = (t2 != 0).any(axis=1), (t2 != 0).any(axis=0)
-        logits = np.where(opp, frame.t1_peer_logits[q, w, a1, r1], -np.inf);prior = np.exp(logits - logits.max());prior /= prior.sum()
-        rows = [float(np.sum(prior[opp] * frame.t2_value[q, w, a1, r1, a2][opp])) if own[a2] else None for a2 in range(9)]
+        logits = np.where(opp, np.asarray(frame.t1_peer_logits[q, w, a1, r1], np.float64), -np.inf);prior = np.exp(logits - logits.max());prior /= prior.sum()
+        rows = [float(np.sum(prior[opp] * np.asarray(frame.t2_value[q, w, a1, r1, a2], np.float64)[opp])) if own[a2] else None for a2 in range(9)]
         best = gate._argmax(rows, own);return rows[best], best
 
     @classmethod
@@ -851,6 +865,153 @@ class DecisionTests(GateFixture, unittest.TestCase):
                 self.assertTrue(gate.decision_check(fields, data, self.requests, backups=FakeBackups)['passed'])
 
 
+def blank_frame(count):
+    """A contract-shaped frame with nothing enumerated and every world usable."""
+    frame = frame_from(count, dict(roots={}, children=dict(cells=np.zeros((0, 4), np.int64)), leaves=dict(specs=np.zeros((0, 6), np.int64))))
+    frame['pre'][:] = 0;return frame
+
+
+def plain_request(frame_index, legal, logits=(0.,) * 9):
+    return SimpleNamespace(root_logits=tuple(logits), root_legal=tuple(legal), root_inputs={'numeric_features': None},
+        plans=SimpleNamespace(root=SimpleNamespace(address=SimpleNamespace(stream=7, frame=frame_index, owner=0))))
+
+
+V1_KEYS = ('oracle_leaf_specs', 'oracle_leaf_status', 'oracle_leaf_head_value', 'oracle_child_cells', 'oracle_child_status', 'oracle_child_head_value',
+    'oracle_child_own_logits', 'oracle_child_peer_logits', 'request_root_logits', 'request_root_legal', 'request_address')
+
+
+class AnalysisTests(GateFixture, unittest.TestCase):
+    """The values section, sibling spread, pruning report, saved arrays, --recheck and --pricer-only."""
+    def run_saved(self, directory, *, invariance=True):
+        frame_pricer = batch.FramePricer(self.ex, object(), capacity=16, block_rows=16, actor_capacity=3, vectorized=True, host_prep=True)
+        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward), \
+                patch.dict(sys.modules, {'gpu_engine.depth2_backups': FakeBackups}):
+            return gate.run_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS,
+                pricer=OraclePricer(self.ex, self.WIDTHS), frame_pricer=frame_pricer, oracle=reference.Oracle(self.ex, object(), chunk=32),
+                widths=self.WIDTHS, sample=None, block=0, context=dict(block=0, call=0),
+                invariance=[OraclePricer(self.ex, self.WIDTHS)] if invariance else None, save=Path(directory) / 'arrays-block0-call0.npz')
+
+    def test_values_by_frame_band(self):
+        frame, _, data, _ = self.priced();result = gate.value_samples(frame, self.requests, backups=FakeBackups, context=dict(block=0, call=0))
+        section = gate.values_section([(result, dict(differing_roots=[]))], oracle_checked=True)
+        totals, bands = section['totals'], section['by_band']
+        self.assertEqual(totals['abs_t2_value']['count'], int(np.count_nonzero(frame['t2_status'] == 4)))
+        self.assertEqual(totals['abs_t1_value']['count'], int(np.count_nonzero(frame['t1_status'] == 2)))
+        self.assertEqual(sum(bands[b]['abs_t2_value']['count'] for b in bands), totals['abs_t2_value']['count'])
+        self.assertEqual(bands['0-4']['abs_t1_value']['count'], int(np.count_nonzero(frame['t1_status'][0] == 2)))   # request 0 is frame 4
+        self.assertEqual(bands['40+']['abs_t2_value'], dict(count=0));self.assertEqual(set(bands), {'0-4', '5-9', '10-19', '20-39', '40+'})
+        self.assertLessEqual(totals['abs_t2_value']['p1'], totals['abs_t2_value']['p99'])
+        cells = [c for c in map(tuple, np.argwhere(frame['t1_status'] == 2).tolist())
+            if not (frame['t2_status'][c] == 3).any() and np.count_nonzero((frame['t2_status'][c] != 0).any(axis=1)) >= 2]
+        self.assertEqual(totals['cell_a2_spread']['count'], len(cells))
+        for c in cells[:5]:   # the learner-max value of a cell is the max of its a2 rows, as the reference computes it
+            rows = gate.cell_rows(frame['t2_status'][c], frame['t2_value'][c], frame['t1_peer_logits'][c])
+            self.assertAlmostEqual(np.nanmax(rows), FakeBackups._cell(SimpleNamespace(**frame), *c)[0], places=12)
+        self.assertEqual(totals['root_q_spread']['count'], 5);self.assertEqual(section['near_ties']['labeled_roots'], 5)
+        self.assertTrue(section['oracle_checked']);self.assertEqual(section['source'], 'PRICER_FRAME')
+        roots = [dict(root=0, band='0-4', top_two_gap=5e-5, address=[1, 2, 0]), dict(root=1, band='5-9', top_two_gap=.01, address=[1, 6, 0]),
+            dict(root=2, band='5-9', top_two_gap=1e-4, address=[1, 7, 0])]
+        near = gate.values_section([(dict(samples={}, roots=roots, unavailable=None), dict(differing_roots=[0]))], oracle_checked=True)['near_ties']
+        self.assertEqual((near['near_tie_roots'], near['share'], near['by_band']['0-4'], near['by_band']['5-9']), (2, 2 / 3, 1, 1))
+        self.assertFalse(near['e_exact_on_all']);self.assertEqual([r['root'] for r in near['e_differs_on']], [0])
+        unchecked = gate.values_section([(dict(samples={}, roots=roots, unavailable=None), None)], oracle_checked=False)
+        self.assertIsNone(unchecked['near_ties']['e_exact_on_all']);self.assertIn('NOT oracle-checked', unchecked['scope'])
+        with patch.dict(sys.modules, {'gpu_engine.depth2_backups': None}):
+            missing = gate.value_samples(frame, self.requests)
+        self.assertIn('depth2_backups', missing['unavailable']);self.assertEqual(missing['roots'], [])
+
+    def test_sibling_spread(self):
+        frame = blank_frame(1)
+        for a1, values in ((0, (0., 1e-5, 1e-3)), (1, (0., 1e-6, 2e-6))):
+            frame['t1_status'][0, 0, a1, 0] = 2
+            for a2, v in enumerate(values):frame['t2_status'][0, 0, a1, 0, a2, 0] = 4;frame['t2_value'][0, 0, a1, 0, a2, 0] = v
+        frame['t2_status'][0, 0, 1, 0, 3, 0] = 1;frame['t2_value'][0, 0, 1, 0, 3, 0] = 1.   # a terminal sibling is not head-valued
+        result = gate.merge_sibling_spread([gate.sibling_spread(frame, context=dict(call=0))], oracle_checked=False)
+        pairs = [np.abs(np.subtract.outer(v, v))[np.triu_indices(3, 1)] for v in (np.float32([0., 1e-5, 1e-3]), np.float32([0., 1e-6, 2e-6]))]
+        self.assertEqual(len(result['worlds']), 1);world = result['worlds'][0]
+        self.assertAlmostEqual(world['median'], float(np.median(np.concatenate(pairs))), places=12);self.assertEqual(world['pairs'], 6)
+        self.assertEqual((result['children'], result['children_p10_below_threshold'], result['share_children_p10_below_threshold']), (2, 1, .5))
+
+    def test_pruning_ranks_the_chosen_a2_by_the_child_prior(self):
+        frame = blank_frame(1);legal = (True, True, True) + (False,) * 6
+        for r1, values in ((0, (.5, .1, .2)), (1, (.1, .9, .2))):   # learner-max picks a2 0 (prior rank 2), then a2 1 (rank 0)
+            at = (0, 0, 1, r1);frame['t1_status'][at] = 2;frame['t1_own_requested'][at] = True;frame['t1_own_legal'][at] = legal
+            frame['t1_own_logits'][at][:3] = (0., 2., 1.)
+            for a2, v in enumerate(values):frame['t2_status'][at + (a2, 0)] = 4;frame['t2_value'][at + (a2, 0)] = v
+        request = plain_request(3, (False, True) + (False,) * 7)
+        report = gate.pruning_report([(frame, [request], dict(call=0))], FakeBackups)
+        self.assertTrue(report['full_width']);self.assertEqual(report['chosen_a2_rank_histogram'][:3], [1, 0, 1])
+        self.assertEqual((report['per_cell']['total'], report['per_cell']['outside_top2'], report['per_cell']['outside_top3']), (2, 1, 0))
+        self.assertEqual(report['per_cell']['share_outside_top2'], .5);self.assertEqual(report['under_chosen_root_action']['total'], 2)
+        self.assertEqual((report['roots']['labeled'], report['roots']['any_outside_top2'], report['roots']['any_outside_top3']), (1, 1, 0))
+        frame['t2_status'][0, 0, 1, 1, 2, 0] = 0   # a pruned learner action: not a full-width frame
+        report = gate.pruning_report([(frame, [request], dict(call=0))], FakeBackups)
+        self.assertFalse(report['full_width']);self.assertEqual(report['not_full_width_cells'][0]['cell'], [0, 0, 1, 1])
+
+    def test_saved_arrays_recheck_every_check_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evaluation, summary = self.run_saved(directory)
+            saved = gate.load_arrays(Path(directory) / 'arrays-block0-call0.npz')
+            self.assertEqual(len(saved['invariance']), 1);self.assertIsNotNone(saved['d_results']);self.assertEqual(saved['notes'], [])
+            self.assertEqual(saved['meta']['schema'], gate.ARRAYS_SCHEMA)
+            self.assertEqual(saved['frame']['timing'], dict(fake=True))   # restored for refusal_summary
+            report = gate.recheck(directory, backups=FakeBackups, progress=None)
+            self.assertEqual(report['status'], 'PASS', report['unavailable']);self.assertEqual(report['unavailable'], {})
+            self.assertEqual(set(report['checks']), {'a', 'b', 'c', 'd', 'oracle_consistency', 'e', 'block_invariance'});self.assertEqual(report['substitutions'], [])
+            live = gate.summarize([evaluation])
+            for check in ('a', 'b', 'd', 'oracle_consistency'):self.assertEqual(report['checks'][check]['compared'], live['checks'][check]['compared'], check)
+            self.assertEqual(report['checks']['e']['roots_compared'], live['checks']['e']['roots_compared'])
+            self.assertEqual(report['refusals']['depth1']['refused_count'], 4);self.assertTrue(report['values']['oracle_checked'])
+            # A tampered pricer surface fails the offline recheck.
+            with np.load(Path(directory) / 'arrays-block0-call0.npz') as z:arrays = {k: z[k] for k in z.files}
+        with tempfile.TemporaryDirectory() as tampered:
+            changed = dict(arrays);changed['frame_t2_status'] = arrays['frame_t2_status'].copy()
+            changed['frame_t2_status'][tuple(np.argwhere(arrays['frame_t2_status'] == 4)[0])] = 1
+            np.savez_compressed(Path(tampered) / 'arrays-block0-call0.npz', **changed)
+            report = gate.recheck(tampered, backups=FakeBackups, progress=None)
+            self.assertEqual(report['status'], 'FAIL');self.assertFalse(report['checks']['a']['passed'])
+        with tempfile.TemporaryDirectory() as old:   # the arrays 5ea0552b's --save-arrays wrote
+            v1 = {k: v for k, v in arrays.items() if k.startswith('frame_') or k in V1_KEYS}
+            np.savez_compressed(Path(old) / 'arrays-block0-call0.npz', **v1)
+            report = gate.recheck(old, backups=FakeBackups, progress=None)
+            self.assertEqual(report['status'], 'INCOMPLETE');self.assertEqual(set(report['checks']), {'c', 'd', 'e'})
+            self.assertIn('oracle_root_*', report['unavailable']['a']);self.assertIn('oracle_child_error', report['unavailable']['a'])
+            self.assertEqual(report['unavailable']['b'], ['d_* (FramePricer outputs)']);self.assertIn('oracle_leaf_child_invalid', report['unavailable']['oracle'])
+            self.assertEqual(report['unavailable']['block_invariance'], ['invariance0_frame_* (the other child-block frame)'])
+            self.assertTrue(any('taken from the pricer frame' in x for x in report['substitutions']));self.assertTrue(any('v1 arrays' in x for x in report['notes']))
+            self.assertTrue(report['checks']['e']['passed']);self.assertNotIn('depth1', report['refusals'])
+            with patch.dict(sys.modules, {'gpu_engine.depth2_backups': SimpleNamespace(refusal_summary=lambda f: dict(root_count=len(f.pre), refused_count=7,
+                    k1=f.timing.get('k1_own', 9)))}):   # the real refusal_summary reads frame.timing's k1 widths
+                self.assertEqual(gate.recheck(old, backups=FakeBackups)['refusals']['depth2']['source'], 'depth2_backups.refusal_summary')
+            pruning = gate.offline_pruning(old, backups=FakeBackups);self.assertTrue(pruning['full_width']);self.assertGreater(pruning['per_cell']['total'], 0)
+
+    def test_offline_cli_writes_recheck_and_pruning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.run_saved(directory, invariance=False)
+            with patch.dict(sys.modules, {'gpu_engine.depth2_backups': FakeBackups}), patch.object(gate, 'log', lambda *a, **k: None):
+                status = gate.main(['--out', str(Path(directory) / 'offline'), '--recheck', directory, '--pruning-report', directory])
+            report = json.loads((Path(directory) / 'offline' / 'recheck.json').read_text())
+            self.assertEqual((status, report['status'], report['unavailable']), (1, 'INCOMPLETE', {'block_invariance': ['invariance0_frame_* (the other child-block frame)']}))
+            self.assertTrue(json.loads((Path(directory) / 'offline' / 'pruning.json').read_text())['full_width'])
+
+    def test_pricer_only_writes_values_refusals_and_arrays(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = SimpleNamespace(save_arrays=True, worlds_blocks=1, max_roots=None)
+            provider = SimpleNamespace(materializer=self.tables, source=self.tables.source, recipe=self.recipe)
+            with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward), \
+                    patch.dict(sys.modules, {'gpu_engine.depth2_backups': FakeBackups}), patch.object(gate, 'log', lambda *a, **k: None):
+                status = gate.pricer_only(args, provider=provider, params=PARAMS, groups=[list(self.requests)], pricer=OraclePricer(self.ex, self.WIDTHS),
+                    options={}, seeds=(self.recipe.seed,), out=Path(directory), source={}, widths=self.WIDTHS)
+            report = json.loads((Path(directory) / 'gate.json').read_text())
+            self.assertEqual((status, report['status'], report['passed']), (0, 'PRICER_ONLY', False));self.assertIn('digest=True', report['digest_note'])
+            self.assertFalse(report['values']['oracle_checked']);self.assertEqual(report['values']['near_ties']['labeled_roots'], 5)
+            self.assertEqual(report['refusals']['depth2']['refused_count'], 7);self.assertNotIn('checks', report)
+            with np.load(Path(directory) / 'arrays-block0-call0.npz') as z:
+                self.assertIn('frame_t2_value', z.files);self.assertIn('request_root_logits', z.files)
+                self.assertFalse(any(k.startswith(('oracle_', 'd_')) for k in z.files))
+            self.assertEqual(gate.recheck(directory, backups=FakeBackups, progress=None)['status'], 'INCOMPLETE')
+
+
 class PricerBindingTests(unittest.TestCase):
     """The pricer's constructor is not on this branch: bind it by signature, and fail closed."""
     WIDTHS = dict(k_own=9, k_opp=9, k1_own=9, k1_opp=9)
@@ -891,7 +1052,9 @@ class PricerBindingTests(unittest.TestCase):
                     ['--out', str(out), '--saved-roots', 'a'], ['--out', str(out), '--d3-root', 'b'],
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--k-own', '10'],
                     ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--block-invariance', '--child-block', '27'],
-                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--child-block', '0']):
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--child-block', '0'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--pricer-only', '--block-invariance'],
+                    ['--out', str(out), '--recheck', 'arrays', '--d3-root', 'b']):
                 with self.assertRaises(SystemExit) as raised:gate.main(argv)
                 self.assertEqual(raised.exception.code, 2, argv)
         with patch.object(importlib.util, 'find_spec', return_value=None), self.assertRaises(SystemExit) as raised:

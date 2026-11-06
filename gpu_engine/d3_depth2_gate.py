@@ -15,14 +15,13 @@ Checks (gate.json; exit code 0 iff all pass):
      also the same own/peer digests, legal masks and request flags; roots the same pre code (-1 for a
      world without a state) and opponent request/legal. The first 20 mismatches are listed.
  (b) D (not bitwise for floats): every discrete field exactly D's (pre and refused worlds, root opponent
-     request/legal, status/error wherever the pricer's code is D's 0-4, the turn-1 pair set), and
-     |t1_value - D| and |root prior - D| <= D_VALUE_TOLERANCE on every D-priced cell (codes 5/6 included:
-     they keep D's value); the bit-equal fraction, max |diff| and first inexact cells are reported.
- (c) heads, against the oracle's own bf16 heads (a different batch geometry): t2_value and t1_own_logits
-     within HEAD_TOLERANCE, D3's declared cross-geometry target tolerance (HEAD_TOLERANCE_SOURCE);
-     t1_own_logits is gated here because FramePricer exposes no child logits. Reported per quantity:
-     max |diff|, exact fraction, the depth-1 noise floor max |D t1_value - oracle t1 head| and the ratio
-     t2_value max / floor.
+     request/legal, status/error wherever the pricer's code is D's 0-4, the turn-1 pair set);
+     |t1_value - D| <= VALUE_TOLERANCE on every D-priced cell (codes 5/6 included: they keep D's value) and
+     |root prior - D| <= LOGIT_TOLERANCE; the bit-equal fraction, max |diff| and first inexact cells are reported.
+ (c) heads, against the oracle's own bf16 heads (a different batch geometry): t2_value and t1 head values
+     within VALUE_TOLERANCE, both seats' child logits and the root peer logits within LOGIT_TOLERANCE
+     (TOLERANCE_SOURCE). Reported per quantity: max |diff| and exact fraction, next to the depth-1 noise
+     floor max |D t1_value - oracle t1 head| and the ratio t2_value max / floor.
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
  (e) decision, when every leaf is checked (no --sample-leaves): depth2_backups.learner_max_root on the
      pricer frame and on a copy carrying the oracle's turn-2 head values and child-prior logits (statuses,
@@ -33,9 +32,15 @@ Checks (gate.json; exit code 0 iff all pass):
 --sample-leaves N checks all turn-1 children plus N uniformly sampled turn-2 leaves per world (fixed
 SAMPLE_SEED); (d) always covers every leaf. --child-block N is passed to Depth2Pricer. --block-invariance
 prices every call twice, with child_block 27 and 81 (the 81 frame is the one checked), and requires
-every output array to be bit-equal (on GPU the turn-2 forward batch changes with child_block). Reported, not gated: the depth-2 root refusal share under the
+every discrete output array to be bit-equal and every float array within its tolerance (on GPU the turn-2
+forward batch changes with child_block). Reported, not gated: the depth-2 root refusal share under the
 reference rule (depth2_backups.refusal_summary when importable, else the gate's own count of the frame)
-next to D3 FramePricer's on the same requests, and turn-1/turn-2 error counts by code. All paths are command-line arguments; --out must be new.
+next to D3 FramePricer's on the same requests, turn-1/turn-2 error counts by code, the values section (magnitudes,
+learner-max cell and root spreads and the near-tie share, per root-frame band, from the pricer's frame) and the sibling
+spread of head-valued leaves. Offline: --recheck DIR re-evaluates every check its saved arrays allow and names what is
+missing; --pruning-report DIR ranks learner-max's turn-2 action against the top-k child prior on full-width arrays.
+--pricer-only runs only Depth2Pricer (status PRICER_ONLY): values, refusals and arrays. All paths are command-line
+arguments; --out must be new.
 """
 import argparse
 import collections
@@ -54,10 +59,10 @@ from unittest.mock import patch
 import numpy as np
 
 SCHEMA = 'pokezero.depth2-gate.v1'
-D_VALUE_TOLERANCE = 1e-5   # (b): |t1_value - D| and |root prior - D|; discrete fields and digests stay exact
-HEAD_TOLERANCE = .01       # (c): D3's declared cross-geometry target tolerance
-HEAD_TOLERANCE_SOURCE = ('gpu_engine/device_d_frame_parity.py:94-95 (vectorized_comparison: D3 frame-batched vs serial '
-    'policy/value targets must agree within .01 absolute)')
+VALUE_TOLERANCE = 1e-4     # every cross-program / cross-geometry value comparison (absolute)
+LOGIT_TOLERANCE = 1e-2     # every cross-program / cross-geometry logit comparison (absolute)
+TOLERANCE_SOURCE = ('lead decision after the 40-root GPU run at 08d1395b: values within 1e-4 absolute (head values are ~1e-3; '
+    'measured cross-geometry value noise <= 3.7e-5), logits within 1e-2; discrete fields, digests and check (e) stay exact')
 PROGRESS_INTERVAL = 10.    # seconds between oracle chunk progress lines (first and last chunk always logged)
 FIRST = 20
 SAMPLE_SEED = 20261105
@@ -84,7 +89,7 @@ CONVENTIONS = (
     'Digests are compared where the scored view is meaningful: status 2/4, or error 3-6 (own view) and 5/6 (opponent view); terminal and invalid cells compare status, error and value only.',
     'Child masks, request flags and the opponent digest are compared on expanded children and codes 5/6.',
     'Logits are compared on legal lanes of requested seats only.',
-    'Exact: every discrete field and digest. Floats: (b) t1_value and the root prior within D_VALUE_TOLERANCE of D; (c) head outputs within HEAD_TOLERANCE of the oracle\'s bf16 heads, whose batch geometry differs (D3\'s cross-geometry target tolerance).',
+    'Exact: every discrete field and digest, and check (e). Floats, uniformly for every cross-program or cross-geometry comparison (vs D3, vs the oracle, across child blocks): values within VALUE_TOLERANCE, logits within LOGIT_TOLERANCE.',
     'Top-k ranks by the oracle\'s own bf16 child priors (logit descending, lower index on ties, non-finite last); full width needs no priors.',
     'Each world block is a separate call (Depth2Pricer.price takes one recipe); blocks after 0 bypass Recipe.selected, as U1.',
     'Depth-2 refusal (reference rule): a root refuses if any world has pre != 0, or any enumerated turn-1 or turn-2 cell has status 3 (codes 5/6 included).',
@@ -270,17 +275,19 @@ def check_d(frame, d_results, requests, findings, *, full_turn1=True):
     findings.values = {}
     for name in ('t1_value', 'root_peer_logits'):
         cells, got, want = zip(*numeric[name]) if numeric[name] else ((), (), ())
-        summary, beyond = _numeric(cells, got, want, D_VALUE_TOLERANCE, findings.context, list_inexact=True)
+        summary, beyond = _numeric(cells, got, want, tolerance_for(name), findings.context, list_inexact=True)
         findings.values[name] = summary
         if len(beyond):findings.record(name + '_vs_d_beyond_tolerance', list(cells), ~beyond, np.asarray(got, np.float32), np.asarray(want, np.float32))
     return findings
 
 
-def _numeric(cells, got, want, tolerance, context=None, *, list_inexact=False):
+def _numeric(cells, got, want, tolerance, context=None, *, list_inexact=False, shape=None):
     """Float agreement on matching cells: (summary, beyond-tolerance mask). Bit-equal cells (NaN payloads
-    included) always agree; otherwise both must be finite and within tolerance."""
+    included) always agree; otherwise both must be finite and within tolerance. cells=None with `shape`
+    names a listed cell by unravelling its flat index (no coordinate array for whole frames)."""
     got, want = np.asarray(got, np.float32).reshape(-1), np.asarray(want, np.float32).reshape(-1)
-    cells = np.asarray(cells, np.int64).reshape(len(got), -1) if len(got) else np.zeros((0, 1), np.int64)
+    if cells is None:cells = _Unravel(shape)
+    else:cells = np.asarray(cells, np.int64).reshape(len(got), -1) if len(got) else np.zeros((0, 1), np.int64)
     exact = _bits(got) == _bits(want);finite = np.isfinite(got) & np.isfinite(want)
     delta = np.where(finite, np.abs(got.astype(np.float64) - want.astype(np.float64)), np.inf)
     beyond = ~exact & ~(delta <= tolerance)
@@ -292,7 +299,18 @@ def _numeric(cells, got, want, tolerance, context=None, *, list_inexact=False):
     return summary, beyond
 
 
-def merge_numeric(reports, tolerance):
+def tolerance_for(name):
+    """The uniform float tolerance of a compared quantity or frame field: logits LOGIT_TOLERANCE, values VALUE_TOLERANCE."""
+    return LOGIT_TOLERANCE if 'logits' in name else VALUE_TOLERANCE
+
+
+class _Unravel:
+    def __init__(self, shape):self.shape = shape
+
+    def __getitem__(self, i):return np.asarray(np.unravel_index(int(i), self.shape), np.int64)
+
+
+def merge_numeric(reports):
     """Merge {quantity: _numeric summary} dicts across calls; adds exact_equal_fraction and within_tolerance."""
     merged = {}
     for report in reports:
@@ -302,9 +320,9 @@ def merge_numeric(reports, tolerance):
             m['max_abs_difference'] = max(m['max_abs_difference'], d['max_abs_difference'])
             m['first_beyond'] = (m['first_beyond'] + d['first_beyond'])[:FIRST]
             if 'first_inexact' in d:m['first_inexact'] = (m.get('first_inexact', []) + d['first_inexact'])[:FIRST]
-    for m in merged.values():
+    for name, m in merged.items():
         m['exact_equal_fraction'] = None if not m['compared'] else m['exact_equal'] / m['compared']
-        m['tolerance'] = tolerance;m['within_tolerance'] = m['beyond_tolerance'] == 0
+        m['tolerance'] = tolerance_for(name);m['within_tolerance'] = m['beyond_tolerance'] == 0
     return merged
 
 
@@ -322,7 +340,7 @@ def _masked(keys, got, want, mask):
     return cells, got[mask], want[mask]
 
 
-GATED = ('t2_value', 't1_own_logits')   # (c) quantities gated at HEAD_TOLERANCE; the rest are reported
+GATED = ('t2_value', 't1_value_head', 't1_own_logits', 't1_peer_logits', 'root_peer_logits')   # (c); the depth-1 floor is reported
 
 
 def check_heads(frame, data, d_results=None):
@@ -353,7 +371,7 @@ def check_heads(frame, data, d_results=None):
         k = np.asarray(keys);lanes = np.asarray([roots[x]['peer_legal'] for x in keys], bool)
         parts['root_peer_logits'] = _masked(k, field(frame, 'root_peer_logits')[k[:, 0], k[:, 1]],
             np.asarray([roots[x]['peer_logits_raw'] for x in keys]), lanes)
-    return {name: _numeric(*part, HEAD_TOLERANCE)[0] for name, part in parts.items()}
+    return {name: _numeric(*part, tolerance_for(name))[0] for name, part in parts.items()}
 
 
 def check_oracle(data, findings):
@@ -400,24 +418,35 @@ def evaluate(frame, d_results, requests, data, *, context=None, full_turn1=True,
     return dict(a=a, b=b, c=c, d=d, oracle=oracle, geometry=[])
 
 
-def summarize(calls, *, tolerance=HEAD_TOLERANCE):
-    """Merge per-call evaluations into the gate's checks: (b) discrete exact + values within D_VALUE_TOLERANCE,
-    (c) GATED head quantities within HEAD_TOLERANCE."""
-    a, b, d, oracle = (merge_findings([c[k] for c in calls]) for k in ('a', 'b', 'd', 'oracle'))
-    values = merge_numeric([x['b'].get('values', {}) for x in calls], D_VALUE_TOLERANCE)
-    b.update(reference='D3_FRAMEPRICER_DISCRETE_EXACT_FLOATS_WITHIN_TOLERANCE (not bitwise)', value_tolerance=D_VALUE_TOLERANCE, values=values)
-    b['passed'] = b['passed'] and all(v['within_tolerance'] for v in values.values())
-    quantities = merge_numeric([x['c'] for x in calls], tolerance)
-    for name, m in quantities.items():m['gates'] = 'c' if name in GATED else None
-    floor = quantities.get('depth1_noise_floor', {}).get('max_abs_difference');t2 = quantities.get('t2_value', {}).get('max_abs_difference')
-    c = dict(passed=all(quantities[n]['within_tolerance'] for n in GATED if n in quantities), tolerance=tolerance,
-        tolerance_source=HEAD_TOLERANCE_SOURCE, reference='ORACLE_BF16_HEADS_DIFFERENT_BATCH_GEOMETRY', gated=list(GATED),
-        depth1_noise_floor=floor, t2_value_to_floor_ratio=None if not floor or t2 is None else t2 / floor, quantities=quantities)
-    if any(x.get('geometry') for x in calls):c['passed'] = False
-    checks = dict(a=a, b=b, c=c, d=d, oracle_consistency=oracle)
+def summarize(calls):
+    """Merge per-call evaluations into the gate's checks: (b) discrete exact + floats within tolerance against D,
+    (c) GATED head quantities within tolerance against the oracle."""
+    have = lambda key: bool(calls) and all(key in x for x in calls)   # offline rechecks may lack a check's inputs
+    checks = {}
+    for key, name in (('a', 'a'), ('d', 'd'), ('oracle', 'oracle_consistency')):
+        if have(key):checks[name] = merge_findings([c[key] for c in calls])
+    if have('b'):
+        b = merge_findings([c['b'] for c in calls]);values = merge_numeric([x['b'].get('values', {}) for x in calls])
+        b.update(reference='D3_FRAMEPRICER_DISCRETE_EXACT_FLOATS_WITHIN_TOLERANCE (not bitwise)', value_tolerance=VALUE_TOLERANCE,
+            logit_tolerance=LOGIT_TOLERANCE, values=values)
+        b['passed'] = b['passed'] and all(v['within_tolerance'] for v in values.values());checks['b'] = b
+    if have('c'):checks['c'] = _heads_check(calls)
     if any('e' in x for x in calls):checks['e'] = merge_decisions([x['e'] for x in calls if 'e' in x])
     if any('invariance' in x for x in calls):checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())])
-    return dict(passed=all(x['passed'] for x in checks.values()), checks=checks)
+    order = ('a', 'b', 'c', 'd', 'oracle_consistency', 'e', 'block_invariance')
+    checks = {k: checks[k] for k in order if k in checks}
+    return dict(passed=bool(checks) and all(x['passed'] for x in checks.values()), checks=checks)
+
+
+def _heads_check(calls):
+    quantities = merge_numeric([x['c'] for x in calls])
+    for name, m in quantities.items():m['gates'] = 'c' if name in GATED else None
+    floor = quantities.get('depth1_noise_floor', {}).get('max_abs_difference');t2 = quantities.get('t2_value', {}).get('max_abs_difference')
+    c = dict(passed=all(quantities[n]['within_tolerance'] for n in GATED if n in quantities), value_tolerance=VALUE_TOLERANCE,
+        logit_tolerance=LOGIT_TOLERANCE, tolerance_source=TOLERANCE_SOURCE, reference='ORACLE_BF16_HEADS_DIFFERENT_BATCH_GEOMETRY', gated=list(GATED),
+        depth1_noise_floor=floor, t2_value_to_floor_ratio=None if not floor or t2 is None else t2 / floor, quantities=quantities)
+    if any(x.get('geometry') for x in calls):c['passed'] = False
+    return c
 
 
 DECISION_FIRST = 10
@@ -460,7 +489,8 @@ def decision_check(frame, data, requests, *, context=None, backups=None):
             return dict(passed=False, reason='gpu_engine.depth2_backups is not importable (fail closed): ' + str(error), roots=len(requests))
     original = SimpleNamespace(**frame_fields(frame));swapped, counts = oracle_heads_frame(frame, data)
     result = dict(roots=len(requests), roots_compared=0, both_refused=0, status_differs=0, nonfinite_roots=0, argmax_q_differs=0, argmax_target_differs=0,
-        cells_compared=0, cell_choice_differs=0, max_abs_delta_q=0., max_abs_delta_target=0., replaced=counts, first_differing_roots=[])
+        cells_compared=0, cell_choice_differs=0, max_abs_delta_q=0., max_abs_delta_target=0., replaced=counts, first_differing_roots=[],
+        differing_roots=[])
     for q, request in enumerate(requests):
         logits, legal = tuple(map(float, request.root_logits)), tuple(map(bool, request.root_legal))
         a, b = (backups.learner_max_root(f, q, logits, legal) for f in (original, swapped))
@@ -478,6 +508,7 @@ def decision_check(frame, data, requests, *, context=None, backups=None):
             result['max_abs_delta_q'] = max([result['max_abs_delta_q']] + deltas)
             result['max_abs_delta_target'] = max([result['max_abs_delta_target']] + [abs(x - y) for x, y in zip(ta, tb)])
         result['argmax_q_differs'] += int(q_differs);result['argmax_target_differs'] += int(t_differs)
+        if q_differs or t_differs or not finite or (ia is None) != (ib is None):result['differing_roots'].append(q)
         if (q_differs or t_differs or not finite or (ia is None) != (ib is None)) and len(result['first_differing_roots']) < DECISION_FIRST:
             address = request.plans.root.address
             result['first_differing_roots'].append(dict(context or {}, root=q, address=[address.stream, address.frame, address.owner],
@@ -515,23 +546,375 @@ def merge_decisions(reports):
     return merged
 
 
-def save_arrays(path, frame, data, requests):
-    """The pricer frame's arrays (frame_*) and the oracle's head outputs per leaf/child (oracle_*) for offline decisions."""
+BANDS = ((0, 4), (5, 9), (10, 19), (20, 39), (40, None))   # root address frame bands of the values section
+PERCENTILES = (1, 10, 50, 90, 99)
+PRUNING_KS = (2, 3, 4)
+ARRAYS_SCHEMA = 'pokezero.depth2-gate-arrays.v2'
+
+
+def band_of(frame_index):
+    for low, high in BANDS:
+        if high is None or frame_index <= high:return f'{low}-{high}' if high is not None else f'{low}+'
+
+
+def percentiles(values):
+    values = np.asarray(values, np.float64).reshape(-1);values = values[np.isfinite(values)]
+    if not values.size:return dict(count=0)
+    return dict(count=int(values.size), **{f'p{p}': float(v) for p, v in zip(PERCENTILES, np.percentile(values, PERCENTILES))})
+
+
+def cell_rows(t2_status, t2_value, peer_logits):
+    """One expanded cell's learner-max a2 values sum_r2 pi_opp(r2) v(a2, r2) ([9], NaN where a2 is not enumerated),
+    as the reference backup computes them: pi_opp is the masked softmax of the opponent's child prior over the
+    enumerated replies. None when an enumerated leaf errored (the reference refuses the cell)."""
+    t2_status = np.asarray(t2_status);t2_value = np.asarray(t2_value, np.float64)
+    if (t2_status == 3).any():return None
+    own, opp = (t2_status != 0).any(axis=1), (t2_status != 0).any(axis=0)
+    if not own.any():return None
+    logits = np.asarray(peer_logits, np.float64)[opp];prior = np.exp(logits - logits.max());prior /= prior.sum()
+    rows = np.full(9, np.nan)
+    for a2 in np.flatnonzero(own):rows[a2] = float(np.sum(prior * t2_value[a2, opp]))
+    return rows
+
+
+def value_samples(frame, requests, *, backups=None, context=None):
+    """Raw per-root samples of the values section, from the PRICER's frame: |t2| at head-valued leaves, |t1| at
+    expanded cells, each expanded cell's learner-max a2 spread (>= 2 enumerated a2), and per labeled root the
+    learner-max completed-Q spread and top-two gap (depth2_backups.learner_max_root)."""
+    f = SimpleNamespace(**frame_fields(frame));samples = collections.defaultdict(list);roots = [];reason = None
+    if backups is None:
+        try:from gpu_engine import depth2_backups as backups
+        except ImportError as error:reason = 'root spread and near ties need gpu_engine.depth2_backups: ' + str(error)
+    for q, request in enumerate(requests):
+        address = request.plans.root.address;band = band_of(int(address.frame))
+        samples[('abs_t2_value', band)].append(np.abs(np.asarray(f.t2_value[q], np.float64)[np.asarray(f.t2_status[q]) == 4]))
+        samples[('abs_t1_value', band)].append(np.abs(np.asarray(f.t1_value[q], np.float64)[np.asarray(f.t1_status[q]) == 2]))
+        spreads = []
+        for w, a1, r1 in np.argwhere(np.asarray(f.t1_status[q]) == 2).tolist():
+            rows = cell_rows(f.t2_status[q, w, a1, r1], f.t2_value[q, w, a1, r1], f.t1_peer_logits[q, w, a1, r1])
+            if rows is not None and np.count_nonzero(~np.isnan(rows)) >= 2:spreads.append(np.nanmax(rows) - np.nanmin(rows))
+        samples[('cell_a2_spread', band)].append(np.asarray(spreads))
+        if backups is None:continue
+        legal = tuple(map(bool, request.root_legal));reduction = backups.learner_max_root(f, q, tuple(map(float, request.root_logits)), legal)
+        if reduction.improvement is None:continue
+        values = sorted((float(v) for v, ok in zip(reduction.improvement.completed_q, legal) if ok and v is not None), reverse=True)
+        if not values:continue
+        samples[('root_q_spread', band)].append(np.asarray([values[0] - values[-1]]))
+        roots.append(dict(context or {}, root=q, address=[address.stream, address.frame, address.owner], band=band,
+            top_two_gap=None if len(values) < 2 else values[0] - values[1]))
+    return dict(samples=dict(samples), roots=roots, unavailable=reason)
+
+
+def values_section(collected, *, oracle_checked):
+    """collected: [(value_samples(...), decision result of the same call or None)]. Percentiles per frame band and in total,
+    and the near-tie share (top-two root Q within VALUE_TOLERANCE) with (e)'s verdict on each near-tie root."""
+    pooled = collections.defaultdict(list);roots = [];reasons = set()
+    for result, decision in collected:
+        for key, parts in result['samples'].items():pooled[key].extend(parts)
+        if result['unavailable']:reasons.add(result['unavailable'])
+        differs = None if decision is None or 'differing_roots' not in decision else set(decision['differing_roots'])
+        roots.extend(dict(r, e_evaluated=differs is not None, e_differs=None if differs is None else r['root'] in differs) for r in result['roots'])
+    quantities = ('abs_t2_value', 'abs_t1_value', 'cell_a2_spread', 'root_q_spread');bands = [band_of(low) for low, _ in BANDS]
+    join = lambda parts: np.concatenate([np.asarray(x, np.float64).reshape(-1) for x in parts]) if parts else np.zeros(0)
+    by_band = {b: {name: percentiles(join(pooled.get((name, b), []))) for name in quantities} for b in bands}
+    totals = {name: percentiles(join([x for b in bands for x in pooled.get((name, b), [])])) for name in quantities}
+    near = [r for r in roots if r['top_two_gap'] is not None and r['top_two_gap'] <= VALUE_TOLERANCE]
+    labeled = len(roots)
+    return dict(source='PRICER_FRAME', oracle_checked=oracle_checked,
+        scope='the pricer frame\'s own values' + (' (every leaf checked by the oracle: (a)-(e))' if oracle_checked else
+            ' - NOT oracle-checked (sampled leaves or --pricer-only)'),
+        frame_bands=bands, percentiles=list(PERCENTILES), by_band=by_band, totals=totals,
+        definitions=dict(abs_t2_value='|t2_value| at head-valued leaves (status 4)', abs_t1_value='|t1_value| at expanded cells (status 2)',
+            cell_a2_spread='max - min over enumerated a2 of sum_r2 pi_opp(r2) v(a2, r2), expanded cells with >= 2 enumerated a2',
+            root_q_spread='max - min of learner-max completed-Q over legal root actions, labeled roots'),
+        near_ties=dict(threshold=VALUE_TOLERANCE, labeled_roots=labeled, near_tie_roots=len(near), share=None if not labeled else len(near) / labeled,
+            by_band={b: sum(r['band'] == b for r in near) for b in bands}, e_evaluated=sum(r['e_evaluated'] for r in near),
+            e_exact_on_all=all(r['e_differs'] is False for r in near) if near and all(r['e_evaluated'] for r in near) else None,
+            e_differs_on=[r for r in near if r['e_differs']], roots=near[:FIRST]),
+        unavailable=sorted(reasons))
+
+
+def sibling_spread(frame, *, context=None):
+    """Per usable world: median and 10th percentile of |v(a2,r2) - v(a2',r2')| over pairs of head-valued sibling leaves
+    of the same expanded child (pricer t2_value), and each child's own 10th percentile."""
+    f = SimpleNamespace(**frame_fields(frame));worlds = [];children = []
+    for q, w in np.argwhere(np.asarray(f.pre) == 0).tolist():
+        pooled = []
+        for a1, r1 in np.argwhere(np.asarray(f.t1_status[q, w]) == 2).tolist():
+            values = np.asarray(f.t2_value[q, w, a1, r1], np.float64)[np.asarray(f.t2_status[q, w, a1, r1]) == 4]
+            if len(values) < 2:continue
+            pairs = np.abs(values[:, None] - values[None, :])[np.triu_indices(len(values), 1)]
+            pooled.append(pairs);children.append(float(np.percentile(pairs, 10)))
+        if pooled:
+            pairs = np.concatenate(pooled)
+            worlds.append(dict(context or {}, root=q, world=w, children=len(pooled), pairs=int(pairs.size),
+                median=float(np.median(pairs)), p10=float(np.percentile(pairs, 10))))
+    return dict(worlds=worlds, child_p10=children)
+
+
+def merge_sibling_spread(reports, *, oracle_checked):
+    worlds = [w for r in reports for w in r['worlds']];children = np.asarray([c for r in reports for c in r['child_p10']], np.float64)
+    below = int(np.count_nonzero(children < VALUE_TOLERANCE))
+    return dict(source='PRICER_FRAME', oracle_checked=oracle_checked, threshold=VALUE_TOLERANCE, worlds=worlds,
+        children=int(children.size), children_p10_below_threshold=below, share_children_p10_below_threshold=None if not children.size else below / children.size,
+        world_median=percentiles([w['median'] for w in worlds]), world_p10=percentiles([w['p10'] for w in worlds]), child_p10=percentiles(children),
+        definition='per world: |v(a2,r2) - v(a2\',r2\')| over pairs of head-valued sibling leaves of one expanded child (pricer t2_value)')
+
+
+def pruning_report(items, backups):
+    """For each expanded cell of a usable world: is learner-max's a2 (learner_max_choice) outside the learner's top-k
+    by child prior (logit descending, lower index on ties; non-finite last)? Per cell, and over the cells under each
+    labeled root's chosen turn-1 action (completed-Q argmax, lower index on ties). items: [(frame, requests, context)]
+    of FULL-WIDTH frames: a cell whose enumerated learner actions differ from its legal set refuses the report."""
+    cells = dict(total=0, **{f'outside_top{k}': 0 for k in PRUNING_KS});chosen = dict(cells)
+    roots = dict(labeled=0, refused=0, **{f'any_outside_top{k}': 0 for k in PRUNING_KS});ranks = [0] * 9;narrow = []
+    for frame, requests, context in items:
+        f = SimpleNamespace(**frame_fields(frame))
+        for q, request in enumerate(requests):
+            legal = tuple(map(bool, request.root_legal));reduction = backups.learner_max_root(f, q, tuple(map(float, request.root_logits)), legal)
+            best = None if reduction.improvement is None else _argmax(reduction.improvement.completed_q, legal)
+            roots['labeled' if best is not None else 'refused'] += 1;outside = {k: False for k in PRUNING_KS}
+            for w in (0, 1):
+                if int(f.pre[q, w]) != 0:continue
+                choice = backups.learner_max_choice(f, q, w)
+                for a1, r1 in np.argwhere(np.asarray(choice) >= 0).tolist():
+                    enumerated = np.asarray(f.t2_status[q, w, a1, r1] != 0).any(axis=1)
+                    requested = bool(f.t1_own_requested[q, w, a1, r1])
+                    expected = np.asarray(f.t1_own_legal[q, w, a1, r1], bool) if requested else np.arange(9) == 0
+                    if not np.array_equal(enumerated, expected):narrow.append(dict(context or {}, cell=[q, w, a1, r1]));continue
+                    logits = np.asarray(f.t1_own_logits[q, w, a1, r1], np.float64)
+                    score = lambda i: logits[i] if np.isfinite(logits[i]) else -np.inf
+                    order = sorted(np.flatnonzero(enumerated).tolist(), key=lambda i: (-score(i), i));rank = order.index(int(choice[a1, r1]))
+                    ranks[rank] += 1;cells['total'] += 1
+                    under = best is not None and a1 == best
+                    if under:chosen['total'] += 1
+                    for k in PRUNING_KS:
+                        cells[f'outside_top{k}'] += int(rank >= k)
+                        if under:chosen[f'outside_top{k}'] += int(rank >= k);outside[k] = outside[k] or rank >= k
+            if best is not None:
+                for k in PRUNING_KS:roots[f'any_outside_top{k}'] += int(outside[k])
+    share = lambda part, total: None if not total else part / total
+    return dict(full_width=not narrow, not_full_width_cells=narrow[:FIRST], not_full_width_count=len(narrow),
+        per_cell={**cells, **{f'share_outside_top{k}': share(cells[f'outside_top{k}'], cells['total']) for k in PRUNING_KS}},
+        under_chosen_root_action={**chosen, **{f'share_outside_top{k}': share(chosen[f'outside_top{k}'], chosen['total']) for k in PRUNING_KS}},
+        roots={**roots, **{f'share_any_outside_top{k}': share(roots[f'any_outside_top{k}'], roots['labeled']) for k in PRUNING_KS}},
+        chosen_a2_rank_histogram=ranks,
+        definition='rank of learner_max_choice\'s a2 among the cell\'s enumerated learner actions by t1_own_logits (descending, lower index on ties); '
+            'outside top-k means rank >= k; the chosen root action is the completed-Q argmax of learner_max_root (lower index on ties)')
+
+
+def _d_arrays(d_results):
+    """FramePricer Results as arrays: what check (b) and the depth-1 refusal share read."""
+    count = len(d_results)
+    out = dict(d_status=np.asarray([r.status for r in d_results], '<U16'), d_priced=np.zeros((count, 2), bool),
+        d_reason=np.full((count, 2), '', '<U200'), d_opponent_requested=np.zeros((count, 2), bool), d_reply_legal=np.zeros((count, 2, 9), bool),
+        d_reply_logits=np.zeros((count, 2, 9), np.float32), d_value=np.full((count, 2, 9, 9), np.nan, np.float32),
+        d_known=np.zeros((count, 2, 9, 9), bool), d_error=np.zeros((count, 2, 9, 9), np.int8))
+    for q, result in enumerate(d_results):
+        for wi, report in enumerate(result.world_reports):
+            grid = report.get('joint_values')
+            if grid is None:out['d_reason'][q, wi] = (report.get('reason') or '')[:200];continue
+            out['d_priced'][q, wi] = True;out['d_opponent_requested'][q, wi] = bool(report['opponent_requested'])
+            out['d_reply_legal'][q, wi] = report['reply_legal'];out['d_reply_logits'][q, wi] = report['reply_logits']
+            for a in range(9):
+                for r in range(9):
+                    if grid[a][r] is not None:out['d_value'][q, wi, a, r] = grid[a][r];out['d_known'][q, wi, a, r] = True
+            for a, r, reason in report.get('errors', ()):out['d_error'][q, wi, a, r] = D_ERRORS.get(reason.removeprefix('ValueError: '), -1)
+    return out
+
+
+def _d_results(arrays):
+    """FramePricer-shaped Results rebuilt from _d_arrays (reasons keep D's strings; unknown codes stay unknown)."""
+    names = {code: reason for reason, code in D_ERRORS.items()};results = []
+    for q, status in enumerate(arrays['d_status'].tolist()):
+        reports = []
+        for wi in (0, 1):
+            if not arrays['d_priced'][q, wi]:reports.append(dict(joint_values=None, reason=str(arrays['d_reason'][q, wi])));continue
+            known, value = arrays['d_known'][q, wi], arrays['d_value'][q, wi]
+            grid = [[float(value[a, r]) if known[a, r] else None for r in range(9)] for a in range(9)]
+            errors = tuple((a, r, 'ValueError: ' + names.get(int(arrays['d_error'][q, wi, a, r]), 'unrecognized D reason'))
+                for a, r in np.argwhere(arrays['d_error'][q, wi] != 0).tolist())
+            reports.append(dict(joint_values=grid, opponent_requested=bool(arrays['d_opponent_requested'][q, wi]),
+                reply_legal=tuple(map(bool, arrays['d_reply_legal'][q, wi])), reply_logits=tuple(map(float, arrays['d_reply_logits'][q, wi])), errors=errors))
+        results.append(SimpleNamespace(status=status, world_reports=tuple(reports)))
+    return results
+
+
+ROOT_FIELDS = ('pre', 'own_error', 'peer_error', 'peer_requested', 'peer_usable', 'own_legal', 'peer_legal', 'peer_logits',
+    'peer_logits_raw', 'own_digest', 'peer_digest')
+
+
+def save_arrays(path, frame, requests, *, data=None, d_results=None, invariance_frames=(), meta=None):
+    """Everything --recheck needs, as .npz: the pricer frame (frame_*), any other child-block frame (invariance{i}_frame_*),
+    the requests' root logits/legal/address/input keys, the oracle's roots/children/leaves/enumeration (oracle_*), D3
+    FramePricer's (b) outputs (d_*) and the call's meta (JSON). Returns the saved keys."""
     arrays = {}
-    for name, value in frame_fields(frame).items():
-        value = np.asarray(value) if not isinstance(value, dict) else None
-        if value is not None and value.dtype.kind in 'biufc':arrays['frame_' + name] = value
-    leaves, children = data['leaves'], data['children']
-    arrays.update(oracle_leaf_specs=leaves['specs'], oracle_leaf_status=leaves.get('status', np.zeros(0, np.int8)),
-        oracle_leaf_head_value=leaves.get('head_value', np.zeros(0, np.float32)), oracle_child_cells=children['cells'],
-        oracle_child_status=children.get('status', np.zeros(0, np.int8)), oracle_child_head_value=children.get('head_value', np.zeros(0, np.float32)),
-        oracle_child_own_logits=children.get('own_logits', np.zeros((0, 9), np.float32)),
-        oracle_child_peer_logits=children.get('peer_logits', np.zeros((0, 9), np.float32)),
-        request_root_logits=np.asarray([r.root_logits for r in requests], np.float32).reshape(-1, 9),
+    def put_frame(prefix, value):
+        for name, x in frame_fields(value).items():
+            x = np.asarray(x) if not isinstance(x, dict) else None
+            if x is not None and x.dtype.kind in 'biufc':arrays[prefix + name] = x
+    put_frame('frame_', frame)
+    for i, other in enumerate(invariance_frames):put_frame(f'invariance{i}_frame_', other)
+    arrays.update(request_root_logits=np.asarray([r.root_logits for r in requests], np.float32).reshape(-1, 9),
         request_root_legal=np.asarray([r.root_legal for r in requests], bool).reshape(-1, 9),
-        request_address=np.asarray([[r.plans.root.address.stream, r.plans.root.address.frame, r.plans.root.address.owner] for r in requests], np.int64).reshape(-1, 3))
+        request_address=np.asarray([[r.plans.root.address.stream, r.plans.root.address.frame, r.plans.root.address.owner] for r in requests], np.int64).reshape(-1, 3),
+        request_input_keys=np.asarray([[k in r.root_inputs for k in INPUT_ORDER] for r in requests], bool).reshape(-1, len(INPUT_ORDER)))
+    if data is not None:
+        keys = sorted(data['roots']);arrays['oracle_root_keys'] = np.asarray(keys, np.int64).reshape(-1, 2)
+        for name in ROOT_FIELDS:
+            values = [np.asarray(data['roots'][k][name]) for k in keys]
+            if values:arrays['oracle_root_' + name] = np.stack(values)
+        for name, value in data['children'].items():arrays['oracle_child_' + name] = np.asarray(value)
+        for name, value in data['leaves'].items():
+            if name != 'logits':arrays['oracle_leaf_' + name] = np.asarray(value)
+        arrays['oracle_enumerated'] = np.asarray(data['enumerated'], np.int64).reshape(-1, 6)
+    if d_results is not None:arrays.update(_d_arrays(d_results))
+    timing = _frame_timing(frame)   # refusal_summary reads frame.timing (k1 widths)
+    arrays['meta'] = np.asarray(json.dumps(dict(meta or {}, schema=ARRAYS_SCHEMA, frame_timing=timing if isinstance(timing, dict) else None), default=str))
     np.savez_compressed(path, **arrays)
     return sorted(arrays)
+
+
+def load_arrays(path):
+    """A saved call, rebuilt: frame, invariance frames, request shims, oracle data, D results (None where absent) and notes."""
+    with np.load(path, allow_pickle=False) as saved:arrays = {k: saved[k] for k in saved.files}
+    notes = [];v1 = 'meta' not in arrays
+    meta = dict(schema='v1 (5ea0552b --save-arrays)') if v1 else json.loads(str(arrays.pop('meta')))
+    if v1:notes.append('v1 arrays (no meta): full widths and every leaf checked are assumed')
+    frame = {k[6:]: v for k, v in arrays.items() if k.startswith('frame_')}
+    if isinstance(meta.get('frame_timing'), dict):frame['timing'] = meta['frame_timing']
+    elif v1:frame['timing'] = {}   # refusal_summary reads timing's k1 widths: v1 runs are full width (see the v1 note)
+    invariance = []
+    while any(k.startswith(f'invariance{len(invariance)}_frame_') for k in arrays):
+        prefix = f'invariance{len(invariance)}_frame_';invariance.append({k[len(prefix):]: v for k, v in arrays.items() if k.startswith(prefix)})
+    keys = arrays.get('request_input_keys')
+    if keys is None:notes.append('request input keys not saved: assumed all of ' + ','.join(INPUT_ORDER))
+    requests = []
+    for q, (logits, legal, address) in enumerate(zip(arrays['request_root_logits'], arrays['request_root_legal'], arrays['request_address'])):
+        present = INPUT_ORDER if keys is None else tuple(k for k, use in zip(INPUT_ORDER, keys[q]) if use)
+        requests.append(SimpleNamespace(root_logits=tuple(map(float, logits)), root_legal=tuple(map(bool, legal)), root_inputs={k: None for k in present},
+            plans=SimpleNamespace(root=SimpleNamespace(address=SimpleNamespace(stream=int(address[0]), frame=int(address[1]), owner=int(address[2]))))))
+    children = {k[len('oracle_child_'):]: v for k, v in arrays.items() if k.startswith('oracle_child_')}
+    leaves = {k[len('oracle_leaf_'):]: v for k, v in arrays.items() if k.startswith('oracle_leaf_')}
+    roots = None
+    if 'oracle_root_keys' in arrays:
+        roots = {}
+        for i, (q, w) in enumerate(arrays['oracle_root_keys'].tolist()):
+            root = {name: arrays['oracle_root_' + name][i] for name in ROOT_FIELDS if 'oracle_root_' + name in arrays}
+            for name in ('own_legal', 'peer_legal'):root[name] = tuple(map(bool, root[name]))
+            for name in ('pre', 'own_error', 'peer_error'):root[name] = int(root[name])
+            for name in ('peer_requested', 'peer_usable'):root[name] = bool(root[name])
+            roots[(q, w)] = root
+    enumerated = arrays['oracle_enumerated'].tolist() if 'oracle_enumerated' in arrays else None
+    if enumerated is None and 'specs' in leaves:
+        enumerated = leaves['specs'].tolist();notes.append('oracle enumeration not saved: taken from the checked leaves (every leaf assumed checked)')
+    d_results = _d_results(arrays) if 'd_status' in arrays else None
+    return dict(meta=meta, frame=frame, invariance=invariance, requests=requests, roots=roots, children=children, leaves=leaves,
+        enumerated=[tuple(x) for x in enumerated] if enumerated is not None else None, d_results=d_results, notes=notes, keys=sorted(arrays))
+
+
+RECHECK_NEEDS = dict(
+    a=dict(roots=(), children=('cells', 'status', 'error', 'value', 'own_digest', 'peer_digest', 'own_legal', 'peer_legal', 'own_requested', 'peer_requested'),
+        leaves=('specs', 'status', 'error', 'value', 'digest')),
+    b=dict(d=()), c=dict(children=('cells', 'status', 'head_value', 'own_logits', 'peer_logits'), leaves=('specs', 'status', 'head_value')),
+    d=dict(children=('cells',), enumerated=()), oracle=dict(children=('cells', 'status', 'invalid', 'done', 'own_digest', 'peer_digest'),
+        leaves=('specs', 'child_invalid', 'child_done', 'child_own_digest', 'child_peer_digest')),
+    e=dict(children=('cells', 'status', 'own_logits', 'peer_logits'), leaves=('specs', 'status', 'head_value')))
+
+
+def _missing(saved, check):
+    """The saved array keys check `check` lacks (empty when it can run)."""
+    missing = []
+    for part, fields in RECHECK_NEEDS[check].items():
+        if part == 'roots' and saved['roots'] is None:missing.append('oracle_root_*')
+        elif part == 'd' and saved['d_results'] is None:missing.append('d_* (FramePricer outputs)')
+        elif part == 'enumerated' and saved['enumerated'] is None:missing.append('oracle_enumerated')
+        elif part in ('children', 'leaves'):
+            prefix = 'oracle_child_' if part == 'children' else 'oracle_leaf_'
+            missing.extend(prefix + name for name in fields if name not in saved[part])
+    return missing
+
+
+def recheck_call(saved, *, context, backups=None):
+    """Every check the saved arrays allow, as the live gate computes it; returns (evaluation, unavailable, substitutions)."""
+    frame, requests, d_results = saved['frame'], saved['requests'], saved['d_results'];unavailable = {};substitutions = []
+    children, leaves = dict(saved['children']), dict(saved['leaves'])
+    data = dict(roots=saved['roots'] or {}, children=children, leaves=leaves, enumerated=saved['enumerated'] or [])
+    geometry = frame_geometry(frame, len(requests));evaluation = dict(geometry=geometry)
+    if geometry:return dict(geometry=geometry), dict(all=['frame geometry: ' + '; '.join(geometry)]), substitutions
+    widths = saved['meta'].get('widths', dict(k1_own=9, k1_opp=9));full_turn1 = widths.get('k1_own', 9) == widths.get('k1_opp', 9) == 9
+    for check, run in (('a', lambda: check_exact(frame, data, Findings(context)).report()),
+            ('b', lambda: (lambda found: dict(found.report(), values=found.values))(check_d(frame, d_results, requests, Findings(context), full_turn1=full_turn1))),
+            ('d', lambda: check_enumeration(frame, data, Findings(context)).report()),
+            ('oracle', lambda: check_oracle(data, Findings(context)).report())):
+        missing = _missing(saved, check)
+        if missing:unavailable[check] = missing
+        else:evaluation[check] = run()
+    missing = _missing(saved, 'c')
+    if missing:unavailable['c'] = missing
+    else:
+        if len(children.get('cells', ())):
+            at = tuple(np.asarray(children['cells']).T)
+            for name, source in (('error', 't1_error'), ('own_requested', 't1_own_requested'), ('own_legal', 't1_own_legal'),
+                    ('peer_requested', 't1_peer_requested'), ('peer_legal', 't1_peer_legal')):
+                if name not in children:children[name] = np.asarray(frame[source])[at];substitutions.append(f'(c) oracle child {name} taken from the pricer frame')
+        if saved['roots'] is None:substitutions.append('(c) root_peer_logits not compared: oracle roots not saved')
+        if d_results is None:substitutions.append('(c) depth-1 noise floor not computed: FramePricer outputs not saved')
+        evaluation['c'] = check_heads(frame, data, d_results)
+    if saved['invariance']:evaluation['invariance'] = [block_invariance(other, frame, context=context) for other in saved['invariance']]
+    else:unavailable['block_invariance'] = ['invariance0_frame_* (the other child-block frame)']
+    missing = _missing(saved, 'e')
+    if missing:unavailable['e'] = missing
+    elif backups is None:unavailable['e'] = ['gpu_engine.depth2_backups (not importable)']
+    else:evaluation['e'] = decision_check(frame, data, requests, context=context, backups=backups)
+    if d_results is None:unavailable['refusals_depth1'] = ['d_* (FramePricer outputs)']
+    evaluation['refusals'] = refusal_report(frame, d_results, data)
+    return evaluation, unavailable, substitutions
+
+
+def saved_calls(directory):
+    files = sorted(Path(directory).glob('arrays-block*-call*.npz'))
+    if not files:raise SystemExit(f'no arrays-block*-call*.npz in {directory}')
+    for path in files:
+        block, call = (int(x) for x in path.stem.removeprefix('arrays-block').split('-call'))
+        yield path, dict(block=block, call=call), load_arrays(path)
+
+
+def _backups():
+    try:
+        from gpu_engine import depth2_backups
+        return depth2_backups
+    except ImportError:return None
+
+
+def recheck(directory, *, backups=None, progress=None):
+    """--recheck: every check, the values section and the sibling spread from saved arrays, without the GPU or the engine."""
+    backups = backups or _backups();evaluations, unavailable, substitutions, notes, collected, sibling = [], {}, set(), set(), [], []
+    checked = True
+    for path, context, saved in saved_calls(directory):
+        checked = checked and not saved['meta'].get('sample_leaves')
+        with stage(progress, 'recheck_call', file=path.name, **context) as info:
+            evaluation, missing, subs = recheck_call(saved, context=context, backups=backups)
+            evaluations.append(evaluation);substitutions.update(subs);notes.update(saved['notes'])
+            for check, keys in missing.items():unavailable.setdefault(check, set()).update(keys)
+            collected.append((value_samples(saved['frame'], saved['requests'], backups=backups, context=context), evaluation.get('e')))
+            sibling.append(sibling_spread(saved['frame'], context=context));info['checks'] = sorted(k for k in evaluation if k != 'geometry')
+    result = summarize(evaluations)
+    refusals = merge_refusals([e['refusals'] for e in evaluations if 'refusals' in e])
+    failed = any(not check['passed'] for check in result['checks'].values()) or any(e.get('geometry') for e in evaluations)
+    status = 'FAIL' if failed else 'INCOMPLETE' if unavailable else 'PASS'
+    return dict(schema=SCHEMA, mode='RECHECK', status=status, passed=status == 'PASS', source=str(directory), calls=len(evaluations),
+        checks=result['checks'], unavailable={k: sorted(v) for k, v in unavailable.items()}, substitutions=sorted(substitutions), notes=sorted(notes),
+        values=values_section(collected, oracle_checked=checked and 'e' in result['checks']),
+        sibling_spread=merge_sibling_spread(sibling, oracle_checked=checked), refusals=refusals,
+        value_tolerance=VALUE_TOLERANCE, logit_tolerance=LOGIT_TOLERANCE, tolerance_source=TOLERANCE_SOURCE, conventions=list(CONVENTIONS))
+
+
+def offline_pruning(directory, *, backups=None):
+    backups = backups or _backups()
+    if backups is None:raise SystemExit('--pruning-report needs gpu_engine.depth2_backups (learner_max_root, learner_max_choice): failing closed')
+    items = [(saved['frame'], saved['requests'], context) for _, context, saved in saved_calls(directory)]
+    return dict(schema=SCHEMA, mode='PRUNING_REPORT', source=str(directory), calls=len(items), ks=list(PRUNING_KS), **pruning_report(items, backups))
 
 
 def error_counts(status, error, codes):
@@ -554,17 +937,19 @@ def depth2_summary(frame):
     except (AttributeError, KeyError, TypeError, ValueError, IndexError) as error:return None, f'{type(error).__name__}: {error}'
 
 
-def refusal_report(frame, d_results, data):
-    """One call's root refusals at depth 2 (reference rule) and depth 1 (D3 FramePricer), and error counts by code."""
+def refusal_report(frame, d_results=None, data=None):
+    """One call's root refusals at depth 2 (reference rule) and depth 1 (D3 FramePricer, when it ran), and error counts by code."""
     refused = depth2_refused(frame)
     own = dict(source='gate count of the frame', root_count=len(refused), refused_count=int(refused.sum()), refused_roots=np.flatnonzero(refused).tolist())
-    report = dict(depth2=own, depth1=dict(source='FramePricer(vectorized=True, host_prep=True)', root_count=len(d_results),
-            refused_count=sum(r.status == 'REFUSED' for r in d_results), refused_roots=[i for i, r in enumerate(d_results) if r.status == 'REFUSED']),
-        turn1_errors_by_code=error_counts(field(frame, 't1_status'), field(frame, 't1_error'), range(1, 7)),
+    report = dict(depth2=own, turn1_errors_by_code=error_counts(field(frame, 't1_status'), field(frame, 't1_error'), range(1, 7)),
         turn2_errors_by_code=error_counts(field(frame, 't2_status'), field(frame, 't2_error'), range(1, 5)))
-    children, leaves = data['children'], data['leaves']
-    report['oracle_turn1_errors_by_code'] = error_counts(children.get('status', []), children.get('error', []), range(1, 7))
-    report['oracle_turn2_errors_by_code_checked_leaves'] = error_counts(leaves.get('status', []), leaves.get('error', []), range(1, 5))
+    if d_results is not None:
+        report['depth1'] = dict(source='FramePricer(vectorized=True, host_prep=True)', root_count=len(d_results),
+            refused_count=sum(r.status == 'REFUSED' for r in d_results), refused_roots=[i for i, r in enumerate(d_results) if r.status == 'REFUSED'])
+    if data is not None:
+        children, leaves = data['children'], data['leaves']
+        if 'error' in children:report['oracle_turn1_errors_by_code'] = error_counts(children.get('status', []), children.get('error', []), range(1, 7))
+        if 'error' in leaves:report['oracle_turn2_errors_by_code_checked_leaves'] = error_counts(leaves.get('status', []), leaves.get('error', []), range(1, 5))
     summary, reason = depth2_summary(frame)
     if summary is None:report['refusal_summary'] = reason
     else:
@@ -668,8 +1053,10 @@ def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, 
 
 def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, context, invariance=None,
              progress=None, decision=None, save=None):
-    """decision: run check (e) (default: when every leaf is checked); save: an .npz path for --save-arrays."""
-    """Price ONE request list three ways and evaluate it; returns (evaluation, call summary)."""
+    """Price ONE request list three ways and evaluate it; returns (evaluation, call summary).
+
+    decision: run check (e) (default: when every leaf is checked); save: an .npz path for --save-arrays. The
+    evaluation also carries the call's values samples and sibling spread, from the pricer frame."""
     requests = tuple(requests)
     frame, d_results, data, timing = price_call(requests=requests, recipe=recipe, materializer=materializer, params=params,
         pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=sample, block=block, invariance=invariance,
@@ -687,8 +1074,13 @@ def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, or
         with stage(progress, 'check_e_decision', **context) as info:
             evaluation['e'] = decision_check(frame, data, requests, context=context)
             info.update({k: evaluation['e'].get(k) for k in ('passed', 'roots_compared', 'argmax_q_differs', 'argmax_target_differs', 'cell_choice_differs')})
+    if not evaluation['geometry']:
+        with stage(progress, 'values', **context):
+            evaluation['values'] = value_samples(frame, requests, context=context);evaluation['sibling'] = sibling_spread(frame, context=context)
     if save is not None:
-        with stage(progress, 'save_arrays', **context) as info:info['arrays'] = len(save_arrays(save, frame, data, requests));info['path'] = str(save)
+        with stage(progress, 'save_arrays', **context) as info:
+            info['arrays'] = len(save_arrays(save, frame, requests, data=data, d_results=d_results, invariance_frames=data['invariance_frames'],
+                meta=dict(context, widths=widths, sample_leaves=sample, invariance=bool(invariance))));info['path'] = str(save)
     summary = dict(context, roots=len(requests), worlds=data['worlds'], usable_worlds=sum(r['pre'] == 0 for r in roots.values()), refusals=refusals,
         turn1_cells=len(data['children']['cells']), turn2_leaves=len(data['enumerated']), checked_leaves=len(data['leaves']['specs']), timing=timing,
         costs=data['costs'], pricer_timing=json.loads(json.dumps(pricer_timing, default=str)) if pricer_timing is not None else None,
@@ -752,12 +1144,18 @@ def frame_fields(frame):
     return dict(vars(frame))
 
 
-def block_invariance(a, b, *, context=None):
-    """Bit-equality of every output array of two frames of the same requests (timing excluded).
+def invariance_tolerance(name):
+    """Float frame fields: logits LOGIT_TOLERANCE, values VALUE_TOLERANCE, any other float exact."""
+    return LOGIT_TOLERANCE if 'logits' in name else VALUE_TOLERANCE if name.endswith('value') else 0.
 
-    Arrays must match in dtype, shape and bytes (NaN payloads included). Non-array fields (world_reports)
-    are compared as canonical JSON and reported, not gated."""
-    fa, fb = frame_fields(a), frame_fields(b);arrays, other, differing, first = 0, {}, {}, []
+
+def block_invariance(a, b, *, context=None):
+    """Two frames of the same requests (timing excluded): discrete arrays bit-equal (dtype, shape, bytes),
+    float arrays within invariance_tolerance (bit-equal NaNs agree; any other non-finite mismatch fails).
+
+    Every float array also reports its exact fraction and max |diff|. Non-array fields (world_reports) are
+    compared as canonical JSON and reported, not gated."""
+    fa, fb = frame_fields(a), frame_fields(b);arrays, other, differing, first, floats = 0, {}, {}, [], {}
     for name in sorted((set(fa) | set(fb)) - {'timing'}):
         if name not in fa or name not in fb:differing[name] = dict(problem='missing in ' + ('first' if name not in fa else 'second'));continue
         x, y = np.asarray(fa[name]), np.asarray(fb[name])
@@ -767,6 +1165,13 @@ def block_invariance(a, b, *, context=None):
         arrays += 1
         if x.dtype != y.dtype or x.shape != y.shape:
             differing[name] = dict(problem=f'dtype/shape {x.dtype}{x.shape} != {y.dtype}{y.shape}');continue
+        if x.dtype.kind in 'fc':
+            summary, beyond = _numeric(None, x.reshape(-1), y.reshape(-1), invariance_tolerance(name), context, shape=x.shape)
+            floats[name] = summary
+            if summary['beyond_tolerance']:
+                differing[name] = dict(count=summary['beyond_tolerance'], size=int(x.size), tolerance=summary['tolerance'])
+                first.extend(dict(row, field=name, first=row['pricer'], second=row['reference']) for row in summary['first_beyond'][:max(0, FIRST - len(first))])
+            continue
         size = x.dtype.itemsize;flat = lambda v: np.ascontiguousarray(v).reshape(-1).view(np.uint8).reshape(-1, size)
         bad = np.flatnonzero(np.any(flat(x) != flat(y), axis=1)) if x.size else np.zeros(0, int)
         if len(bad):
@@ -774,7 +1179,7 @@ def block_invariance(a, b, *, context=None):
             for i in bad[:max(0, FIRST - len(first))]:
                 cell = np.unravel_index(i, x.shape)
                 first.append(dict(context or {}, field=name, cell=[int(c) for c in cell], first=_plain(x[cell]), second=_plain(y[cell])))
-    return dict(passed=not differing, arrays_compared=arrays, differing=differing, first_differences=first, nonarray_equal=other)
+    return dict(passed=not differing, arrays_compared=arrays, differing=differing, first_differences=first, nonarray_equal=other, floats=floats)
 
 
 def merge_invariance(reports, blocks=INVARIANCE_BLOCKS):
@@ -788,7 +1193,8 @@ def merge_invariance(reports, blocks=INVARIANCE_BLOCKS):
         for name, equal in r['nonarray_equal'].items():other[name] = other.get(name, True) and equal
     return dict(passed=all(r['passed'] for r in reports), child_blocks=list(blocks), calls=len(reports),
         arrays_compared=max((r['arrays_compared'] for r in reports), default=0), differing=differing,
-        first_differences=first[:FIRST], nonarray_equal=other)
+        first_differences=first[:FIRST], nonarray_equal=other, floats=merge_numeric([r.get('floats', {}) for r in reports]),
+        rule='discrete arrays bit-equal; float arrays within tolerance (logits LOGIT_TOLERANCE, *value VALUE_TOLERANCE, other floats exact)')
 
 
 def _probe(worker, runtime, jax):
@@ -902,6 +1308,49 @@ def bank_chunk_requests(args):
     return provider, plan, (params,), groups, provider.frame_pricer, dict(d3_root=str(root), chunk=args.chunk, declaration_sha256=declared)
 
 
+DIGEST_NOTE = ('--pricer-only keeps digest=True: Depth2Pricer passes digest into make_depth2_kernel, which adds the leaf digests '
+    'as kernel outputs, so digest=False would compile a different program and miss the gate\'s warm compile cache. The digests are not used.')
+
+
+def pricer_only(args, *, provider, params, groups, pricer, options, seeds, out, source, widths):
+    """--pricer-only: the gate's normal Depth2Pricer call on every request group, nothing else; values and refusals from its frame."""
+    from pokezero import v5_gumbel as original
+    from gpu_engine import device_public_worlds as worlds
+    log('PRICER_ONLY_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), widths=widths, pricer_options=options)
+    collected, sibling, refusals, calls = [], [], [], []
+    for block, seed in enumerate(seeds):
+        recipe = provider.recipe if block == 0 else original.Recipe(seed)
+        with patch.object(original.Recipe, 'selected', lambda self, address: True) if block else nullcontext():
+            for call, group in enumerate(groups):
+                context = dict(block=block, call=call)
+                requests = tuple(group if block == 0 else [replace(r, plans=worlds.plan_starts(r.plans.root, provider.source, recipe)) for r in group])
+                with stage(log, 'depth2_pricer', roots=len(requests), **context) as info:
+                    clock = time.perf_counter();frame = pricer.price(requests, provider.materializer, recipe, params)
+                    costs = dict(wall_seconds=time.perf_counter() - clock, **pricer_costs(_frame_timing(frame)));info.update(costs)
+                geometry = frame_geometry(frame, len(requests))
+                summary = dict(context, roots=len(requests), costs=dict(depth2_pricer=costs), geometry=geometry)
+                if not geometry:
+                    with stage(log, 'values', **context):
+                        collected.append((value_samples(frame, requests, context=context), None));sibling.append(sibling_spread(frame, context=context))
+                        refusals.append(refusal_report(frame));summary['refusals'] = refusals[-1]
+                if args.save_arrays:
+                    path = out / f'arrays-block{block}-call{call}.npz'
+                    with stage(log, 'save_arrays', path=str(path), **context):
+                        save_arrays(path, frame, requests, meta=dict(context, widths=widths, pricer_only=True));summary['saved_arrays'] = str(path)
+                calls.append(summary);log('PRICER_CALL', **summary)
+    rows = [c['costs']['depth2_pricer'] for c in calls]
+    total = lambda key: None if all(r.get(key) is None for r in rows) else sum(r.get(key) or 0. for r in rows)
+    report = dict(schema=SCHEMA, status='PRICER_ONLY', passed=False, mode='PRICER_ONLY', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
+        block_seeds=list(seeds), max_roots=args.max_roots, pricer_options=options, digest_note=DIGEST_NOTE, calls=calls,
+        geometry_failures=[c for c in calls if c['geometry']],
+        values=values_section(collected, oracle_checked=False), sibling_spread=merge_sibling_spread(sibling, oracle_checked=False),
+        refusals=merge_refusals(refusals), costs=dict(depth2_pricer={k: total(k) for k in ('wall_seconds', 'lower_and_compile_seconds', 'device_seconds')}),
+        scope='Depth2Pricer only: no FramePricer, oracle or checks; every value is the pricer\'s own, not oracle-checked')
+    (out / 'gate.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')
+    log('PRICER_ONLY_COMPLETE', out=str(out / 'gate.json'), near_ties=report['values']['near_ties']['share'], refused=report['refusals'].get('depth2'))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--saved-roots', help='saved D3 cost bank attempt directory (runtime.json, bank/, cost-snapshot.json, prespec.json)')
@@ -919,8 +1368,27 @@ def main(argv=None):
     parser.add_argument('--child-block', type=int, help='Depth2Pricer child_block (passed through; refused if not accepted)')
     parser.add_argument('--block-invariance', action='store_true',
         help='price every call with child_block 27 and 81 and require bit-equal output arrays (the 81 frame is checked)')
-    parser.add_argument('--save-arrays', action='store_true', help='write each call\'s frame arrays and oracle head outputs to --out as .npz')
+    parser.add_argument('--save-arrays', action='store_true',
+        help='write each call\'s frame, other child-block frame, oracle outputs and FramePricer outputs to --out as .npz (for --recheck)')
+    parser.add_argument('--recheck', metavar='DIR', help='offline: re-evaluate every check from DIR\'s saved arrays (no GPU, no engine) into --out/recheck.json')
+    parser.add_argument('--pruning-report', metavar='DIR', help='offline: learner-max a2 rank vs top-k from DIR\'s full-width saved arrays into --out/pruning.json')
+    parser.add_argument('--pricer-only', action='store_true', help='run only Depth2Pricer (no FramePricer, oracle or checks): values, refusals, arrays')
     args = parser.parse_args(argv)
+    offline = bool(args.recheck or args.pruning_report)
+    if offline:
+        if args.saved_roots or args.d3_root or args.pricer_only:parser.error('--recheck/--pruning-report run offline: no --saved-roots/--d3-root/--pricer-only')
+        out = Path(args.out);out.mkdir(parents=True, exist_ok=False);status = 0
+        if args.recheck:
+            report = recheck(args.recheck, progress=log)
+            (out / 'recheck.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')
+            log('RECHECK_COMPLETE', status=report['status'], out=str(out / 'recheck.json'), checks={k: v['passed'] for k, v in report['checks'].items()},
+                unavailable=report['unavailable']);status = 0 if report['passed'] else 1
+        if args.pruning_report:
+            report = offline_pruning(args.pruning_report)
+            (out / 'pruning.json').write_text(json.dumps(report, indent=1, sort_keys=True, allow_nan=False, default=str) + '\n')
+            log('PRUNING_REPORT_COMPLETE', out=str(out / 'pruning.json'), full_width=report['full_width'], per_cell=report['per_cell'])
+            status = status or (0 if report['full_width'] else 1)
+        return status
     if bool(args.saved_roots) == bool(args.d3_root):parser.error('exactly one of --saved-roots or --d3-root required')
     if args.saved_roots and not args.index_sha256:parser.error('--saved-roots requires --index-sha256')
     if args.d3_root and (args.chunk is None or args.chunk < 0):parser.error('--d3-root requires --chunk N >= 0')
@@ -930,9 +1398,10 @@ def main(argv=None):
     if args.oracle_chunk < 1 or (args.sample_leaves is not None and args.sample_leaves < 0):parser.error('positive --oracle-chunk, non-negative --sample-leaves')
     if args.child_block is not None and args.child_block < 1:parser.error('positive --child-block required')
     if args.block_invariance and args.child_block is not None:parser.error('--block-invariance fixes child_block to 27 and 81; drop --child-block')
+    if args.pricer_only and args.block_invariance:parser.error('--pricer-only runs one pricer: drop --block-invariance')
     import importlib.util   # fail before loading roots; find_spec does not import JAX
     if importlib.util.find_spec('gpu_engine.device_depth2_pricer') is None:raise SystemExit('gpu_engine.device_depth2_pricer is not on this tree')
-    if args.sample_leaves is None and importlib.util.find_spec('gpu_engine.depth2_backups') is None:
+    if args.sample_leaves is None and not args.pricer_only and importlib.util.find_spec('gpu_engine.depth2_backups') is None:
         raise SystemExit('check (e) needs gpu_engine.depth2_backups (learner_max_root), which is not on this tree: failing closed')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     provider, plan, params, groups, frame_pricer, source = (saved_root_requests if args.saved_roots else bank_chunk_requests)(args)
@@ -948,8 +1417,11 @@ def main(argv=None):
     blocks = INVARIANCE_BLOCKS if args.block_invariance else (args.child_block,)
     pricers = [make_pricer(provider.executor, plan.model, widths=widths, actor_capacity=plan.historical_window + 1, child_block=b) for b in blocks]
     (pricer, options), invariance = pricers[-1], [p for p, _ in pricers[:-1]]
-    oracle = reference.Oracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=oracle_chunk_progress(log))
     seeds = world_block_seeds(provider.recipe.seed, args.worlds_blocks)
+    if args.pricer_only:
+        return pricer_only(args, provider=provider, params=params, groups=groups, pricer=pricer, options=options, seeds=seeds, out=out, source=source,
+            widths=widths)
+    oracle = reference.Oracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=oracle_chunk_progress(log))
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), widths=widths, sample_leaves=args.sample_leaves, seeds=seeds,
         pricer_options=options)
     evaluations, calls = [], []
@@ -974,8 +1446,10 @@ def main(argv=None):
         decision=result['checks'].get('e', dict(skipped='check (e) needs every leaf checked (no --sample-leaves)')),
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
         block_seeds=list(seeds), max_roots=args.max_roots, sample_leaves=args.sample_leaves, sample_seed=SAMPLE_SEED,
-        head_tolerance=HEAD_TOLERANCE, head_tolerance_source=HEAD_TOLERANCE_SOURCE, d_value_tolerance=D_VALUE_TOLERANCE, pricer_options=options, block_invariance=args.block_invariance,
+        value_tolerance=VALUE_TOLERANCE, logit_tolerance=LOGIT_TOLERANCE, tolerance_source=TOLERANCE_SOURCE, pricer_options=options, block_invariance=args.block_invariance,
         invariance_pricer_options=[o for _, o in pricers[:-1]], calls=calls, conventions=list(CONVENTIONS), refusals=refusals,
+        values=values_section([(e['values'], e.get('e')) for e in evaluations if 'values' in e], oracle_checked=args.sample_leaves is None),
+        sibling_spread=merge_sibling_spread([e['sibling'] for e in evaluations if 'sibling' in e], oracle_checked=args.sample_leaves is None),
         costs=merge_costs(calls),
         oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk, chunks=oracle.chunks,
             first_chunk_seconds={kind: next((c['seconds'] for c in oracle.chunks if c['kind'] == kind), None) for kind in ('roots', 'children', 'leaves')},
