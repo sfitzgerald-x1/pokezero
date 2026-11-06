@@ -47,6 +47,12 @@ class HelperTests(unittest.TestCase):
         self.assertFalse(h2h.leaves_equal({'a': np.zeros(3, np.float32)}, {'a': np.zeros(3, np.float64)}))
         self.assertFalse(h2h.leaves_equal({'a': np.zeros(3, np.float32)}, {'a': -np.zeros(3, np.float32)}))   # -0.0 differs
         self.assertFalse(h2h.leaves_equal({'a': np.zeros(3)}, {'b': np.zeros(3)}))
+        from types import MappingProxyType
+        frozen = lambda: MappingProxyType({'x': np.arange(3), 'nested': MappingProxyType({'y': np.ones(2, np.int32)})})
+        self.assertTrue(h2h.leaves_equal(frozen(), frozen()))   # nested read-only mappings compare by content
+        changed = MappingProxyType({'x': np.arange(3), 'nested': MappingProxyType({'y': np.zeros(2, np.int32)})})
+        self.assertFalse(h2h.leaves_equal(frozen(), changed))
+        with self.assertRaises(TypeError):h2h.leaves_equal({'a': object()}, {'a': object()})
 
 
 class CompareTests(unittest.TestCase):

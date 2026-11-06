@@ -132,20 +132,38 @@ def counterfactual(state, rows, owners, perm, own_fields):
     return swapped._replace(**{name: getattr(swapped, name).at[r, o].set(getattr(state, name)[r, o]) for name in own_fields})
 
 
+def _flatten(value, path, out):
+    """(path, kind, payload) for every leaf, recursing through mappings (any Mapping, incl. MappingProxyType, in
+    key order), named tuples, tuples and lists; arrays compare by dtype, shape and bytes. Unknown types raise."""
+    from collections.abc import Mapping
+    if isinstance(value, Mapping):
+        out.append((path, 'mapping', tuple(value)))
+        for key, item in value.items():_flatten(item, path + (key,), out)
+    elif isinstance(value, tuple) and hasattr(value, '_fields'):
+        out.append((path, 'namedtuple', (type(value).__name__,) + tuple(value._fields)))
+        for key, item in zip(value._fields, value):_flatten(item, path + (key,), out)
+    elif isinstance(value, (tuple, list)):
+        out.append((path, type(value).__name__, len(value)))
+        for i, item in enumerate(value):_flatten(item, path + (i,), out)
+    elif value is None or isinstance(value, (bool, int, float, str, bytes)):
+        out.append((path, type(value).__name__, value))
+    elif hasattr(value, 'shape') and hasattr(value, 'dtype'):
+        x = np.asarray(value)
+        if x.dtype == object:raise TypeError('object array in a compared tree: ' + str(path))
+        out.append((path, 'array', (x.dtype.str, x.shape, x.tobytes())))
+    else:raise TypeError('uncompared type %s at %s' % (type(value).__name__, path))
+    return out
+
+
 def leaves_equal(a, b):
-    import jax
-    la, lb = jax.tree.leaves(a), jax.tree.leaves(b)
-    if jax.tree.structure(a) != jax.tree.structure(b) or len(la) != len(lb):return False
-    for x, y in zip(la, lb):
-        x, y = np.asarray(x), np.asarray(y)
-        if x.dtype != y.dtype or x.shape != y.shape or x.tobytes() != y.tobytes():return False
-    return True
+    """Exact structural and byte equality of two host/device trees (see _flatten)."""
+    return _flatten(a, (), []) == _flatten(b, (), [])
 
 
 def root_equal(a, b):
     return (a.address == b.address and a.source_binding_sha256 == b.source_binding_sha256
         and a.reply_private_history_available == b.reply_private_history_available
-        and leaves_equal(dict(a.own), dict(b.own)) and leaves_equal(dict(a.view), dict(b.view)) and leaves_equal(a.public, b.public))
+        and leaves_equal(a.own, b.own) and leaves_equal(a.view, b.view) and leaves_equal(a.public, b.public))
 
 
 def world_equal(a, b):
