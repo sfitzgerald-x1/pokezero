@@ -22,13 +22,16 @@ Checks (gate.json; exit code 0 iff all pass):
      <= HEAD_TOLERANCE. Other head outputs are reported as diagnostics.
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
 --sample-leaves N checks all turn-1 children plus N uniformly sampled turn-2 leaves per world (fixed
-SAMPLE_SEED); (d) always covers every leaf. Reported, not gated: the depth-2 root refusal share under the
+SAMPLE_SEED); (d) always covers every leaf. --child-block N is passed to Depth2Pricer. --block-invariance
+prices every call twice, with child_block 27 and 81 (the 81 frame is the one checked), and requires
+every output array to be bit-equal (on GPU the turn-2 forward batch changes with child_block). Reported, not gated: the depth-2 root refusal share under the
 reference rule (depth2_backups.refusal_summary when importable, else the gate's own count of the frame)
 next to D3 FramePricer's on the same requests, and turn-1/turn-2 error counts by code. All paths are command-line arguments; --out must be new.
 """
 import argparse
 import collections
 from contextlib import nullcontext
+import dataclasses
 from dataclasses import replace
 import hashlib
 import inspect
@@ -61,9 +64,9 @@ SHAPES = dict(pre=(2,), root_peer_requested=(2,), root_peer_legal=(2, 9), root_p
     t2_digest=(2, 9, 9, 9, 9, 2), t1_digest_own=(2, 9, 9, 2), t1_digest_peer=(2, 9, 9, 2))
 CONVENTIONS = (
     'Root: the opponent is requested iff any(its view legal_action_mask), as D; the owner always acts at turn 1.',
-    'Child: a seat is requested iff any(executor.legal(child)[0, seat]); a waiting seat is dispatched -1 and enumerated as action 0 only.',
+    'Child: a seat is requested iff any(executor.legal(child)[0, seat]); its legal actions are its encoder mask (observe(...).observation.legal_action_mask, the request-order lanes of logits and dispatch), never the engine mask; a waiting seat is dispatched -1 and enumerated as action 0 only.',
     'Turn-2 chance is executor.sample(child state); turn-1 chance is executor.sample(root state).',
-    'Child codes: D\'s 1-4 first (transition, owner view, learner head); then, on a non-terminal child, 5 if the opponent\'s child view has an encoder error, else 6 if the opponent is requested at the child and its prior is unusable. Codes 5/6 keep D\'s learner value and are not expanded.',
+    'Child codes: D\'s 1-4 first (transition, owner view, learner head); then, on a non-terminal child where the opponent is requested, 5 if its child view has an encoder error, else 6 if its prior is unusable; a waiting opponent never refuses a cell. Codes 5/6 keep D\'s learner value and are not expanded.',
     'pre is -1 for a world without a state (materialization refusal); such a world enumerates nothing.',
     'Digests are compared where the scored view is meaningful: status 2/4, or error 3-6 (own view) and 5/6 (opponent view); terminal and invalid cells compare status, error and value only.',
     'Child masks, request flags and the opponent digest are compared on expanded children and codes 5/6.',
@@ -349,6 +352,7 @@ def summarize(calls, *, tolerance=HEAD_TOLERANCE):
     c = dict(passed=values is None or values['within_tolerance'], tolerance=tolerance, quantities=quantities)
     if any(x.get('geometry') for x in calls):c['passed'] = False
     checks = dict(a=a, b=b, c=c, d=d, oracle_consistency=oracle)
+    if any('invariance' in x for x in calls):checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())])
     return dict(passed=all(x['passed'] for x in checks.values()), checks=checks)
 
 
@@ -424,10 +428,16 @@ def sample_leaves(leaves, count, addresses, *, block):
     return chosen
 
 
-def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block):
-    """Price ONE request list with the pricer, FramePricer and the oracle; returns (frame, D results, oracle data, timing)."""
+def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, invariance=None):
+    """Price ONE request list with the pricer, FramePricer and the oracle; returns (frame, D results, oracle data, timing).
+
+    invariance: pricers to run first on the same requests (other child blocks); their frames go in
+    data['invariance_frames'], and `pricer` gives the checked frame."""
     from gpu_engine import depth2_oracle as reference, device_public_teacher_batch as batch
-    requests = tuple(requests);timing = {}
+    requests = tuple(requests);timing = {};others = []
+    for i, other in enumerate(invariance or ()):
+        clock = time.perf_counter();others.append(other.price(requests, materializer, recipe, params))
+        timing[f'invariance_pricer_{i}_seconds'] = time.perf_counter() - clock
     clock = time.perf_counter();frame = pricer.price(requests, materializer, recipe, params);timing['pricer_seconds'] = time.perf_counter() - clock
     clock = time.perf_counter();d_results = frame_pricer.price(requests, materializer, recipe, params)
     timing['frame_pricer_seconds'] = time.perf_counter() - clock
@@ -435,36 +445,93 @@ def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, 
     roots, _, children, enumerated = reference.enumerate_specs(oracle, stack, requests, recipe, params, **widths)
     checked = sample_leaves(enumerated, sample, [r.plans.root.address for r in requests], block=block)
     leaves = oracle.leaves(stack, checked, params);timing['oracle_seconds'] = time.perf_counter() - clock
-    return frame, d_results, dict(roots=roots, children=children, enumerated=enumerated, leaves=leaves, worlds=len(stack.rows)), timing
+    return frame, d_results, dict(roots=roots, children=children, enumerated=enumerated, leaves=leaves, worlds=len(stack.rows),
+        invariance_frames=others), timing
 
 
-def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, context):
+def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, context, invariance=None):
     """Price ONE request list three ways and evaluate it; returns (evaluation, call summary)."""
     requests = tuple(requests)
     frame, d_results, data, timing = price_call(requests=requests, recipe=recipe, materializer=materializer, params=params,
-        pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=sample, block=block)
+        pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=sample, block=block, invariance=invariance)
     evaluation = evaluate(frame, d_results, requests, data, context=context, full_turn1=widths['k1_own'] == widths['k1_opp'] == 9)
+    if invariance:evaluation['invariance'] = [block_invariance(other, frame, context=context) for other in data['invariance_frames']]
     pricer_timing = frame['timing'] if isinstance(frame, dict) and 'timing' in frame else getattr(frame, 'timing', None)
     roots = data['roots']
     refusals = None if evaluation['geometry'] else refusal_report(frame, d_results, data)
     summary = dict(context, roots=len(requests), worlds=data['worlds'], usable_worlds=sum(r['pre'] == 0 for r in roots.values()), refusals=refusals,
         turn1_cells=len(data['children']['cells']), turn2_leaves=len(data['enumerated']), checked_leaves=len(data['leaves']['specs']), timing=timing,
         pricer_timing=json.loads(json.dumps(pricer_timing, default=str)) if pricer_timing is not None else None,
-        passed=dict(a=evaluation['a']['passed'], b=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed']))
+        passed=dict(a=evaluation['a']['passed'], b=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed'],
+            **({'block_invariance': all(r['passed'] for r in evaluation['invariance'])} if invariance else {})))
     return evaluation, summary
 
 
-def make_pricer(executor, model, *, widths, actor_capacity):
-    """Depth2Pricer(executor, model, digest=True, widths...) - imported lazily: it lands on another branch."""
+def make_pricer(executor, model, *, widths, actor_capacity, child_block=None):
+    """Depth2Pricer(executor, model, digest=True, widths..., child_block) - imported lazily: it lands on another branch.
+
+    Options the constructor does not take are dropped, unless they would change what is priced: a width
+    other than 9, or an explicit child_block, then refuse."""
     from gpu_engine.device_depth2_pricer import Depth2Pricer
     options = dict(digest=True, actor_capacity=actor_capacity, **widths)
+    required = {k for k, v in widths.items() if v != 9}
+    if child_block is not None:options['child_block'] = child_block;required.add('child_block')
     parameters = inspect.signature(Depth2Pricer).parameters
     if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
         if 'digest' not in parameters:raise SystemExit('Depth2Pricer has no digest option')
-        unsupported = [k for k, v in widths.items() if k not in parameters and v != 9]
-        if unsupported:raise SystemExit('Depth2Pricer does not accept width option(s): ' + ','.join(unsupported))
+        unsupported = sorted(k for k in required if k not in parameters)
+        if unsupported:raise SystemExit('Depth2Pricer does not accept option(s): ' + ','.join(unsupported))
         options = {k: v for k, v in options.items() if k in parameters}
     return Depth2Pricer(executor, model, **options), options
+
+
+INVARIANCE_BLOCKS = (27, 81)   # --block-invariance: child_block values priced; the last frame is the checked one
+
+
+def frame_fields(frame):
+    if isinstance(frame, dict):return dict(frame)
+    if dataclasses.is_dataclass(frame):return {f.name: getattr(frame, f.name) for f in dataclasses.fields(frame)}
+    if hasattr(frame, '_asdict'):return dict(frame._asdict())
+    return dict(vars(frame))
+
+
+def block_invariance(a, b, *, context=None):
+    """Bit-equality of every output array of two frames of the same requests (timing excluded).
+
+    Arrays must match in dtype, shape and bytes (NaN payloads included). Non-array fields (world_reports)
+    are compared as canonical JSON and reported, not gated."""
+    fa, fb = frame_fields(a), frame_fields(b);arrays, other, differing, first = 0, {}, {}, []
+    for name in sorted((set(fa) | set(fb)) - {'timing'}):
+        if name not in fa or name not in fb:differing[name] = dict(problem='missing in ' + ('first' if name not in fa else 'second'));continue
+        x, y = np.asarray(fa[name]), np.asarray(fb[name])
+        if x.dtype.kind not in 'biufc' and y.dtype.kind not in 'biufc':
+            canonical = lambda v: json.dumps(v, sort_keys=True, default=str)
+            other[name] = canonical(fa[name]) == canonical(fb[name]);continue
+        arrays += 1
+        if x.dtype != y.dtype or x.shape != y.shape:
+            differing[name] = dict(problem=f'dtype/shape {x.dtype}{x.shape} != {y.dtype}{y.shape}');continue
+        size = x.dtype.itemsize;flat = lambda v: np.ascontiguousarray(v).reshape(-1).view(np.uint8).reshape(-1, size)
+        bad = np.flatnonzero(np.any(flat(x) != flat(y), axis=1)) if x.size else np.zeros(0, int)
+        if len(bad):
+            differing[name] = dict(count=int(len(bad)), size=int(x.size))
+            for i in bad[:max(0, FIRST - len(first))]:
+                cell = np.unravel_index(i, x.shape)
+                first.append(dict(context or {}, field=name, cell=[int(c) for c in cell], first=_plain(x[cell]), second=_plain(y[cell])))
+    return dict(passed=not differing, arrays_compared=arrays, differing=differing, first_differences=first, nonarray_equal=other)
+
+
+def merge_invariance(reports, blocks=INVARIANCE_BLOCKS):
+    differing, first, other = {}, [], {}
+    for r in reports:
+        for name, d in r['differing'].items():
+            m = differing.setdefault(name, dict(count=0, size=0))
+            if 'problem' in d:m.setdefault('problems', []).append(d['problem'])
+            else:m['count'] += d['count'];m['size'] += d['size']
+        first.extend(r['first_differences'])
+        for name, equal in r['nonarray_equal'].items():other[name] = other.get(name, True) and equal
+    return dict(passed=all(r['passed'] for r in reports), child_blocks=list(blocks), calls=len(reports),
+        arrays_compared=max((r['arrays_compared'] for r in reports), default=0), differing=differing,
+        first_differences=first[:FIRST], nonarray_equal=other)
 
 
 def _probe(worker, runtime, jax):
@@ -592,6 +659,9 @@ def main(argv=None):
     parser.add_argument('--max-roots', type=int, help='price only the first N requests')
     parser.add_argument('--sample-leaves', type=int, help='check N sampled turn-2 leaves per world (default: all)')
     parser.add_argument('--oracle-chunk', type=int, default=512, help='oracle specs per vmap invocation')
+    parser.add_argument('--child-block', type=int, help='Depth2Pricer child_block (passed through; refused if not accepted)')
+    parser.add_argument('--block-invariance', action='store_true',
+        help='price every call with child_block 27 and 81 and require bit-equal output arrays (the 81 frame is checked)')
     args = parser.parse_args(argv)
     if bool(args.saved_roots) == bool(args.d3_root):parser.error('exactly one of --saved-roots or --d3-root required')
     if args.saved_roots and not args.index_sha256:parser.error('--saved-roots requires --index-sha256')
@@ -600,6 +670,8 @@ def main(argv=None):
     if any(not 1 <= v <= 9 for v in widths.values()):parser.error('widths must be 1..9')
     if args.worlds_blocks < 1 or (args.max_roots is not None and args.max_roots < 1):parser.error('positive --worlds-blocks/--max-roots required')
     if args.oracle_chunk < 1 or (args.sample_leaves is not None and args.sample_leaves < 0):parser.error('positive --oracle-chunk, non-negative --sample-leaves')
+    if args.child_block is not None and args.child_block < 1:parser.error('positive --child-block required')
+    if args.block_invariance and args.child_block is not None:parser.error('--block-invariance fixes child_block to 27 and 81; drop --child-block')
     import importlib.util   # fail before loading roots; find_spec does not import JAX
     if importlib.util.find_spec('gpu_engine.device_depth2_pricer') is None:raise SystemExit('gpu_engine.device_depth2_pricer is not on this tree')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
@@ -613,7 +685,9 @@ def main(argv=None):
         groups = kept
     capacity = frame_pricer.capacity
     groups = [g[i:i + capacity] for g in groups for i in range(0, len(g), capacity) if g[i:i + capacity]]
-    pricer, options = make_pricer(provider.executor, plan.model, widths=widths, actor_capacity=plan.historical_window + 1)
+    blocks = INVARIANCE_BLOCKS if args.block_invariance else (args.child_block,)
+    pricers = [make_pricer(provider.executor, plan.model, widths=widths, actor_capacity=plan.historical_window + 1, child_block=b) for b in blocks]
+    (pricer, options), invariance = pricers[-1], [p for p, _ in pricers[:-1]]
     oracle = reference.Oracle(provider.executor, plan.model, chunk=args.oracle_chunk)
     seeds = world_block_seeds(provider.recipe.seed, args.worlds_blocks)
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), widths=widths, sample_leaves=args.sample_leaves, seeds=seeds,
@@ -627,7 +701,7 @@ def main(argv=None):
                 requests = group if block == 0 else [replace(r, plans=worlds.plan_starts(r.plans.root, provider.source, recipe)) for r in group]
                 evaluation, summary = run_call(requests=requests, recipe=recipe, materializer=provider.materializer, params=params,
                     pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=args.sample_leaves, block=block,
-                    context=dict(block=block, call=call))
+                    context=dict(block=block, call=call), invariance=invariance)
                 evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize(evaluations)
     reported = [c for c in calls if c['refusals'] is not None]
@@ -638,7 +712,8 @@ def main(argv=None):
     report = dict(schema=SCHEMA, status='PASS' if result['passed'] else 'FAIL', passed=result['passed'], checks=result['checks'],
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
         block_seeds=list(seeds), max_roots=args.max_roots, sample_leaves=args.sample_leaves, sample_seed=SAMPLE_SEED,
-        head_tolerance=HEAD_TOLERANCE, pricer_options=options, calls=calls, conventions=list(CONVENTIONS), refusals=refusals,
+        head_tolerance=HEAD_TOLERANCE, pricer_options=options, block_invariance=args.block_invariance,
+        invariance_pricer_options=[o for _, o in pricers[:-1]], calls=calls, conventions=list(CONVENTIONS), refusals=refusals,
         oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk,
             seconds_per_leaf=None if not leaves else oracle.seconds['leaves'] / leaves,
             seconds_per_child=None if not children else oracle.seconds['children'] / children))

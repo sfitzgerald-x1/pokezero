@@ -98,19 +98,20 @@ def executor():
     child value; 6 opponent always waits; 8 child: opponent waits, owner forced to switch (4,5); 12 child: owner
     waits, opponent forced; 9 leaf terminal (a2 0 loss, a2 1 draw); 10 invalid leaf a2=2; 11 leaf encoder error;
     child, opponent's view only: 13 encoder error, 14 non-finite prior (requested), 15 non-finite prior while it waits,
-    16 both an encoder error and a non-finite prior."""
+    16 both an encoder error and a non-finite prior, 19 an encoder error while the opponent waits;
+    18 re-keys chance from the dispatched actions, so children of one world draw different turn-2 chance."""
     def legal(state):
         owner, mode, turn = state.owner[0], state.mode[0], state.turn[0]
         child = turn == 1
         own = j.where((mode == 12) & child, False, j.where((mode == 8) & child, j.asarray(SWITCH), j.asarray(BASE)))
-        foe = j.where((mode == 6) | (((mode == 8) | (mode == 15)) & child), False, j.where((mode == 12) & child, j.asarray(SWITCH), j.asarray(BASE)))
+        foe = j.where((mode == 6) | (((mode == 8) | (mode == 15) | (mode == 19)) & child), False, j.where((mode == 12) & child, j.asarray(SWITCH), j.asarray(BASE)))
         rows = j.where(owner == 0, j.stack([own, foe]), j.stack([foe, own]))
         return j.where(state.done[0], False, rows)[None]
 
     def observe(state, public, owner, mask):
         if public.clock.ndim != 0:raise ValueError('one-world namespace was flattened')
         mode, child, peer = state.mode, public.turn == 1, owner != state.owner
-        error = j.where(((mode == 4) & child) | ((mode == 11) & (public.turn == 2)) | (((mode == 13) | (mode == 16)) & child & peer), 1, 0)
+        error = j.where(((mode == 4) & child) | ((mode == 11) & (public.turn == 2)) | (((mode == 13) | (mode == 16) | (mode == 19)) & child & peer), 1, 0)
         value = (state.value + (owner - state.owner) * 10).astype(j.float32) * (1. / SCALE)
         value = j.where(((mode == 5) & (public.turn >= 1)) | (((mode == 14) | (mode == 15) | (mode == 16)) & child & peer), j.nan, value)
         feature = j.stack((value, public.clock + j.zeros(1), state.own_act.astype(j.float32),
@@ -126,11 +127,34 @@ def executor():
         winner = j.where(child_end, j.where(mode == 2, 2, j.where(mode == 7, 9, state.owner)),
             j.where(leaf_end, j.where(a == 0, 1 - state.owner, 2), state.winner))
         invalid = (child & (mode == 3) & (a == 1) & (r == 1)) | (leaf & (mode == 10) & (a == 2))
-        seed = state.seed * j.uint32(LCG[0]) + j.uint32(LCG[1])   # re-keyed every step, whatever the actions
+        seed = state.seed * j.uint32(LCG[0]) + j.uint32(LCG[1])   # re-keyed every step, whatever the actions (mode 18 aside)
+        seed = seed + j.where(mode == 18, (a + 1) * 7 + (r + 1) * 13, 0).astype(j.uint32)
         after = state._replace(value=value, done=state.done | child_end | leaf_end, winner=winner, seed=seed, turn=turn, own_act=a, peer_act=r)
         return After(Step(after, invalid), Public(public.clock, public.turn + 1))
 
     ex = serial.Executor(legal, observe, lambda obs, state, seat, action: action, lambda state: (state.seed % 17).astype(j.int32), advance)
+    return replace(ex, joint=serial._make_joint(ex))
+
+
+ENGINE_OF_LANE = (0, 1, 2, 3, 7, 8, 4, 5, 6)   # encoder request lane -> engine lane (switch lanes reordered)
+
+
+def permuted_executor():
+    """The encoder's switch lanes are a permutation of the engine's (as once a side has switched): observe
+    reorders the engine mask into request lanes, dispatch maps a lane back to its engine lane, and advance
+    refuses (invalid) any requested seat's engine action that the engine mask does not allow. Every requested
+    seat also has two live bench slots, engine lanes 4 and 5 = encoder lanes 6 and 7."""
+    base = executor();order = j.asarray(ENGINE_OF_LANE);bench = j.asarray((False,) * 4 + (True, True) + (False,) * 3)
+    def legal(state):
+        mask = base.legal(state)
+        return mask | (j.any(mask, axis=-1, keepdims=True) & bench)
+    def advance(state, public, actions, chance):
+        mask = legal(state)[0];acts = actions[0]
+        wrong = j.any(j.any(mask, axis=-1) & ((acts < 0) | ~mask[j.arange(2), j.clip(acts, 0, 8)]))
+        after = base.advance(state, public, actions, chance)
+        return after._replace(step=after.step._replace(invalid_actions=after.step.invalid_actions | wrong))
+    ex = serial.Executor(legal, lambda state, public, owner, mask: base.observe(state, public, owner, mask[:, order]),
+        lambda observation, state, seat, action: order[action], base.sample, advance)
     return replace(ex, joint=serial._make_joint(ex))
 
 
@@ -144,8 +168,9 @@ def chance(seed):
     return seed % 17
 
 
-def rekey(seed):
-    return (seed * LCG[0] + LCG[1]) % 2**32
+def rekey(seed, actions=None):
+    extra = 0 if actions is None else (actions[0] + 1) * 7 + (actions[1] + 1) * 13
+    return (seed * LCG[0] + LCG[1] + extra) % 2**32
 
 
 def simple_requests(ex, specs):
@@ -153,10 +178,11 @@ def simple_requests(ex, specs):
     requests, worlds = [], []
     for i, (mode, owner, seeds) in enumerate(specs):
         state, public = world(mode, owner, seeds[0])
-        inputs = ex.observe(state, public, j.asarray([owner]), ex.legal(state)[:, owner]).inputs
+        view = ex.observe(state, public, j.asarray([owner]), ex.legal(state)[:, owner])
         address = v5_contract.DecisionAddress(100 + i, 4, owner)
         requests.append(SimpleNamespace(plans=SimpleNamespace(root=SimpleNamespace(address=address)), root_logits=(0.,) * 9,
-            root_legal=BASE, root_inputs=inputs, learner_actor=0, opponent_actor=1))
+            root_legal=tuple(map(bool, np.asarray(view.observation.legal_action_mask)[0])), root_inputs=view.inputs,
+            learner_actor=0, opponent_actor=1))
         worlds.append(tuple(SimpleNamespace(state=s, public=p) for s, p in (world(mode, owner, x) for x in seeds)))
     return requests, worlds
 
@@ -164,8 +190,8 @@ def simple_requests(ex, specs):
 class OracleTests(unittest.TestCase):
     recipe = v5_gumbel.Recipe(7)
 
-    def run_oracle(self, specs, *, chunk=8, **widths):
-        ex = executor();requests, worlds = simple_requests(ex, specs)
+    def run_oracle(self, specs, *, chunk=8, make=executor, **widths):
+        ex = make();requests, worlds = simple_requests(ex, specs)
         with patch.object(batch.v5_model, 'forward', side_effect=forward):
             oracle = reference.Oracle(ex, object(), chunk=chunk);stack = reference.stack(requests, worlds)
             roots, cells, children, leaves = reference.enumerate_specs(oracle, stack, requests, self.recipe, PARAMS, **widths)
@@ -194,6 +220,35 @@ class OracleTests(unittest.TestCase):
         # World 1 uses its own seed.
         row = self.find(leaves, 'specs', (0, 1, 0, 0, 0, 0))
         self.assertEqual(float(leaves['head_value'][row]), units(200 + chance(seed + 1) + chance(rekey(seed + 1))))
+
+    def test_each_child_draws_its_own_turn2_chance(self):
+        seed = 4321;_, _, children, enumerated, leaves = self.run_oracle(((18, 0, (seed, seed + 7)),))
+        drawn = {chance(rekey(seed, c[2:])) for c in children['cells'].tolist() if c[1] == 0}
+        self.assertGreater(len(drawn), 3)   # the children of one world really draw different chance here
+        for row, (q, w, a1, r1, a2, r2) in enumerate(leaves['specs'].tolist()):
+            base = seed + 7 * w
+            expected = 200 + a1 * 30 + r1 * 20 + chance(base) + a2 * 30 + r2 * 20 + chance(rekey(base, (a1, r1)))
+            self.assertEqual(float(leaves['head_value'][row]), units(expected), (w, a1, r1, a2, r2))
+        self.assertEqual(len(leaves['specs']), 2 * 9 * 9)
+
+    def test_child_masks_are_encoder_lanes_and_dispatch_inverts_them(self):
+        encoder = (True, True, True, False, False, False, True, True, False)   # engine lanes 0,1,2,4,5
+        roots, cells, children, enumerated, leaves = self.run_oracle(((0, 0, (5, 6)), (8, 1, (7, 8)), (12, 0, (9, 10))), make=permuted_executor)
+        ex = permuted_executor();state, _ = world(0, 0, 5)
+        self.assertNotEqual(tuple(map(bool, np.asarray(ex.legal(state))[0, 0])), encoder)   # engine and encoder masks differ
+        self.assertEqual(roots[(0, 0)]['peer_legal'], encoder)
+        self.assertEqual({c[2] for c in cells}, {0, 1, 2, 6, 7});self.assertEqual({c[3] for c in cells}, {0, 1, 2, 6, 7})
+        for i, (q, w, a1, r1) in enumerate(children['cells'].tolist()):
+            own, peer = tuple(map(bool, children['own_legal'][i])), tuple(map(bool, children['peer_legal'][i]))
+            switch = tuple(i in (6, 7) for i in range(9))
+            self.assertEqual((own, peer), {0: (encoder, encoder), 1: (switch, (False,) * 9), 2: ((False,) * 9, switch)}[q], (q, a1, r1))
+        self.assertTrue((children['status'] == 2).all(), set(children['error'].tolist()))
+        self.assertTrue((leaves['status'] == 4).all(), set(leaves['error'].tolist()))   # no invalid action anywhere
+        self.assertEqual({l[4:] for l in enumerated if l[0] == 1}, {(6, 0), (7, 0)});self.assertEqual({l[4:] for l in enumerated if l[0] == 2}, {(0, 6), (0, 7)})
+        self.assertEqual({l[4] for l in enumerated if l[0] == 0}, {0, 1, 2, 6, 7})
+        # The leaf really stepped the engine lane the encoder lane maps to (forced switch to lane 7 = engine slot 5).
+        row = self.find(leaves, 'specs', (1, 0, 0, 1, 7, 0))
+        self.assertEqual(float(leaves['head_value'][row]), units(200 + 20 + chance(7) + 5 * 30 - 20 + chance(rekey(7))))
 
     def test_waiting_seat_is_dispatched_minus_one_and_enumerated_as_action_zero(self):
         seed = 1234
@@ -297,8 +352,9 @@ class OracleTests(unittest.TestCase):
     def test_opponent_child_view_codes_5_and_6_after_ds_codes(self):
         # 13: opponent view encoder error -> 5; 14: requested opponent prior non-finite -> 6; 15: same prior, but the
         # opponent waits -> expanded; 4: both views error -> D's 3 first; 5: both heads non-finite -> D's 4 first;
-        # 16: the opponent's view has both an encoder error and a non-finite prior -> 5 first.
-        modes = ((13, 0), (14, 1), (15, 0), (4, 1), (5, 0), (16, 1))
+        # 16: the opponent's view has both an encoder error and a non-finite prior -> 5 first; 19: an encoder
+        # error in a WAITING opponent's view -> expanded (its view is unused).
+        modes = ((13, 0), (14, 1), (15, 0), (4, 1), (5, 0), (16, 1), (19, 0))
         _, _, children, enumerated, leaves = self.run_oracle(tuple((mode, owner, (30 + i, 40 + i)) for i, (mode, owner) in enumerate(modes)))
         by_request = lambda q, key: {int(x) for x, c in zip(children[key], children['cells']) if c[0] == q}
         self.assertEqual((by_request(0, 'status'), by_request(0, 'error')), ({3}, {5}))
@@ -307,13 +363,14 @@ class OracleTests(unittest.TestCase):
         self.assertEqual((by_request(3, 'status'), by_request(3, 'error')), ({3}, {3}))
         self.assertEqual((by_request(4, 'status'), by_request(4, 'error')), ({3}, {4}))
         self.assertEqual((by_request(5, 'status'), by_request(5, 'error')), ({3}, {5}))
+        self.assertEqual((by_request(6, 'status'), by_request(6, 'error')), ({2}, {0}))
         for q in (0, 1, 5):   # codes 5/6 keep D's learner value: the learner head at the child
             rows = [i for i, c in enumerate(children['cells']) if c[0] == q]
             np.testing.assert_array_equal(children['value'][rows], children['head_value'][rows])
             self.assertTrue(np.isfinite(children['value'][rows]).all())
         rows = [i for i, c in enumerate(children['cells']) if c[0] in (3, 4)]
         self.assertTrue(np.isnan(children['value'][rows]).all())
-        self.assertEqual({l[0] for l in enumerated}, {2});self.assertEqual({l[5] for l in enumerated}, {0})   # 5/6 never expand
+        self.assertEqual({l[0] for l in enumerated}, {2, 6});self.assertEqual({l[5] for l in enumerated}, {0})   # 5/6 never expand
 
 
 class OraclePricer:
@@ -527,6 +584,43 @@ class GateTests(unittest.TestCase):
         self.assertEqual(summary['pricer_timing'], dict(fake=True))
         self.assertEqual(summary['refusals']['depth2']['refused_count'], 7)
 
+    def test_block_invariance_requires_bit_equal_arrays(self):
+        frame, _, data, _ = self.priced();leaves = data['leaves']
+        head = tuple(leaves['specs'][list(leaves['status']).index(4)])
+        same = gate.block_invariance(frame, copy.deepcopy(frame))
+        self.assertTrue(same['passed']);self.assertEqual(same['arrays_compared'], len(gate.SHAPES))
+        def changed(change):
+            other = copy.deepcopy(frame);change(other);return gate.block_invariance(frame, other, context=dict(block=0, call=0))
+        def ulp(f):f['t2_value'][head] = np.nextafter(f['t2_value'][head], np.float32(2))
+        def payload(f):f['t2_value'][(0, 0, 8, 8, 8, 8)] = np.uint32(0x7fc00001).view(np.float32)   # NaN == NaN numerically
+        def dtype(f):f['t1_status'] = f['t1_status'].astype(np.int32)
+        def missing(f):f.pop('t2_digest')
+        result = changed(ulp)
+        self.assertFalse(result['passed']);self.assertEqual(result['differing'], {'t2_value': dict(count=1, size=frame['t2_value'].size)})
+        self.assertEqual(result['first_differences'][0]['cell'], list(head));self.assertEqual(result['first_differences'][0]['block'], 0)
+        self.assertEqual(changed(payload)['differing']['t2_value']['count'], 1)
+        self.assertIn('dtype/shape', changed(dtype)['differing']['t1_status']['problem'])
+        self.assertIn('missing', changed(missing)['differing']['t2_digest']['problem'])
+        reports = dict(frame, world_reports=[[dict(seed=1)]]), dict(frame, world_reports=[[dict(seed=2)]])
+        result = gate.block_invariance(*reports);self.assertTrue(result['passed']);self.assertEqual(result['nonarray_equal'], dict(world_reports=False))
+        merged = gate.merge_invariance([changed(ulp), same]);self.assertFalse(merged['passed']);self.assertEqual(merged['differing']['t2_value']['count'], 1)
+
+    def test_run_call_with_block_invariance_gates_the_frames(self):
+        class Nudged(OraclePricer):
+            def price(self, *args):
+                frame = super().price(*args);at = tuple(np.argwhere(frame['t2_status'] == 4)[0])
+                frame['t2_value'][at] = np.nextafter(frame['t2_value'][at], np.float32(2));return frame
+        for other, expected in ((OraclePricer(self.ex, self.WIDTHS), True), (Nudged(self.ex, self.WIDTHS), False)):
+            frame_pricer = batch.FramePricer(self.ex, object(), capacity=16, block_rows=16, actor_capacity=3, vectorized=True, host_prep=True)
+            with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward):
+                evaluation, summary = gate.run_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS,
+                    pricer=OraclePricer(self.ex, self.WIDTHS), frame_pricer=frame_pricer, oracle=reference.Oracle(self.ex, object(), chunk=32),
+                    widths=self.WIDTHS, sample=0, block=0, context=dict(block=0, call=0), invariance=[other])
+            result = gate.summarize([evaluation])
+            self.assertEqual(summary['passed']['block_invariance'], expected);self.assertEqual(result['checks']['block_invariance']['passed'], expected)
+            self.assertEqual(result['passed'], expected);self.assertIn('invariance_pricer_0_seconds', summary['timing'])
+            self.assertTrue(result['checks']['a']['passed'])   # the checked (second) frame is the clean one
+
     def test_refusal_shares_and_error_counts_by_code(self):
         frame, d_results, data, _ = self.priced()
         report = gate.refusal_report(frame, d_results, data)
@@ -566,10 +660,10 @@ class PricerBindingTests(unittest.TestCase):
     """The pricer's constructor is not on this branch: bind it by signature, and fail closed."""
     WIDTHS = dict(k_own=9, k_opp=9, k1_own=9, k1_opp=9)
 
-    def make(self, cls, **widths):
+    def make(self, cls, child_block=None, **widths):
         module = SimpleNamespace(Depth2Pricer=cls)
         with patch.dict(sys.modules, {'gpu_engine.device_depth2_pricer': module}):
-            return gate.make_pricer('executor', 'model', widths=dict(self.WIDTHS, **widths), actor_capacity=33)
+            return gate.make_pricer('executor', 'model', widths=dict(self.WIDTHS, **widths), actor_capacity=33, child_block=child_block)
 
     def test_options_follow_the_constructor_signature(self):
         class Strict:
@@ -588,13 +682,21 @@ class PricerBindingTests(unittest.TestCase):
             def __init__(self, executor, model, *, digest=False, k_own=9, k_opp=9):pass
         with self.assertRaises(SystemExit):self.make(NoDigest)
         with self.assertRaises(SystemExit):self.make(FullTurn1, k1_own=2)
+        with self.assertRaises(SystemExit):self.make(FullTurn1, child_block=27)
+        class Blocked:
+            def __init__(self, executor, model, *, digest=False, child_block=81):self.child_block = child_block
+        pricer, options = self.make(Blocked, child_block=27)
+        self.assertEqual((pricer.child_block, options), (27, dict(digest=True, child_block=27)))
+        self.assertEqual(self.make(Blocked)[0].child_block, 81)
 
     def test_cli_validates_arguments_and_fails_before_loading_without_the_pricer(self):
         out = Path(tempfile.gettempdir()) / f'depth2-gate-never-created-{uuid.uuid4().hex}'
         with contextlib.redirect_stderr(io.StringIO()):
             for argv in (['--out', str(out)], ['--out', str(out), '--saved-roots', 'a', '--d3-root', 'b', '--chunk', '0'],
                     ['--out', str(out), '--saved-roots', 'a'], ['--out', str(out), '--d3-root', 'b'],
-                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--k-own', '10']):
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--k-own', '10'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--block-invariance', '--child-block', '27'],
+                    ['--out', str(out), '--d3-root', 'b', '--chunk', '0', '--child-block', '0']):
                 with self.assertRaises(SystemExit) as raised:gate.main(argv)
                 self.assertEqual(raised.exception.code, 2, argv)
         with patch.object(importlib.util, 'find_spec', return_value=None), self.assertRaises(SystemExit) as raised:

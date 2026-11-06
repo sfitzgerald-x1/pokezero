@@ -13,7 +13,9 @@ One spec, step by step:
   any(opponent view legal_action_mask), exactly as D's joint; else -1. Advance with
   executor.sample(state), the ROOT's own chance;
 - child: masks = executor.legal(child); observe both seats; a seat is requested iff any(masks[0, seat]).
-  Dispatch a2 / r2 for requested seats, -1 for a waiting seat. Advance with executor.sample(child), the
+  Each seat's legal actions are its ENCODER mask (view.observation.legal_action_mask): the request-order
+  lanes that logits and executor.dispatch use. The engine mask orders switch lanes by physical bench
+  slot and is used only for the request flag. Dispatch a2 / r2 for requested seats, -1 for a waiting seat. Advance with executor.sample(child), the
   CHILD's own chance (the engine's own key split decides turn-2 chance; a residual resume uses the draws
   the engine saved, inside advance);
 - leaf: observe the owner at executor.legal(leaf).
@@ -23,8 +25,8 @@ error 1 invalid action route, 2 terminal winner outside {0,1,2}, 3 encoder error
 (non-terminal only), 4 actor output refused (non-terminal only); terminal value +1/-1/0 from the owner's
 side (winner 2 is a draw). Child status: 1 terminal, 2 expanded, 3 error. Leaf status: 1 terminal,
 4 head-valued, 3 error. A non-terminal child without a D error then takes the contract's depth-2-only
-codes: 5 the opponent's child view has an encoder error, else 6 the opponent is requested at the child
-and its child prior is unusable; such a child keeps D's learner value and is not expanded. A world with
+codes, only while the opponent is requested at the child: 5 its child view has an encoder error, else 6
+its child prior is unusable; such a child keeps D's learner value and is not expanded. A world with
 no state has pre code -1 (world_pre). Heads (heads()) are a separate step on the oracle's own views:
 v5_model.forward(..., compute_dtype='bfloat16'), learner params for the learner's child and leaf views,
 opponent params for the opponent's root and child views.
@@ -196,11 +198,13 @@ def world_pre(roots, count):
 
 
 def child_codes(status, error, peer_error, peer_requested, peer_usable):
-    """Depth-2-only codes on children D leaves expanded: 5 (opponent view encoder error), else 6 (requested,
-    unusable opponent prior). D's codes 1-4 and terminal children are untouched (they take precedence)."""
-    status, error = np.asarray(status), np.asarray(error);open_ = status == STATUS_EXPANDED
+    """Depth-2-only codes on children D leaves expanded, while the opponent is requested at the child:
+    5 (its view has an encoder error), else 6 (its prior is unusable). A waiting opponent's view is unused.
+    D's codes 1-4 and terminal children are untouched (they take precedence)."""
+    status, error = np.asarray(status), np.asarray(error)
+    open_ = (status == STATUS_EXPANDED) & np.asarray(peer_requested, bool)
     error = np.where(open_ & (np.asarray(peer_error) != 0), ERROR_PEER_ENCODER,
-        np.where(open_ & np.asarray(peer_requested, bool) & ~np.asarray(peer_usable, bool), ERROR_PEER_PRIOR, error))
+        np.where(open_ & ~np.asarray(peer_usable, bool), ERROR_PEER_PRIOR, error))
     return np.where(error != 0, STATUS_ERROR, status).astype(np.int8), error.astype(np.int8)
 
 
