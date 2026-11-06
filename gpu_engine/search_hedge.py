@@ -175,6 +175,15 @@ def depth2_hedged_worlds(frame, root):
     return tuple(result)
 
 
+DEPTH2_FIELDS = ('pre', 'root_peer_requested', 'root_peer_logits', 't1_status', 't1_value', 't2_status', 't2_value')
+
+
+def depth2_hedged_root(fields):
+    """depth2_hedged_worlds for one root given its per-root arrays (leading world axis): the pool's unit of work."""
+    from types import SimpleNamespace
+    return depth2_hedged_worlds(SimpleNamespace(**{k: np.asarray(fields[k])[None] for k in DEPTH2_FIELDS}), 0)
+
+
 def search_uniform(seed, address):
     """A uniform in [0, 1) from (seed, stream, frame, owner) only: independent of the raw sampling keys."""
     payload = json.dumps([SAMPLE_DOMAIN, int(seed), int(address.stream), int(address.frame), int(address.owner)], separators=(',', ':'))

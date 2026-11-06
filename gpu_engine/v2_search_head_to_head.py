@@ -157,7 +157,7 @@ def world_equal(a, b):
 class Search:
     """Host side of the search seat: detach, plans, priced worlds, reduction, choice."""
 
-    def __init__(self, prepared, plan, params, *, pricer, reduction, blend, world_blocks, seed, capacities, depth2_options):
+    def __init__(self, prepared, plan, params, *, pricer, reduction, blend, world_blocks, seed, capacities, depth2_options, workers=1):
         import jax
         from pokezero import v5_gumbel as original
         from gpu_engine import device_public_worlds as worlds, device_public_world_state as states, device_public_teacher as teacher
@@ -177,11 +177,19 @@ class Search:
         else:raise ValueError('pricer depth1 or depth2 required')
         self.params = (params,);self.reduction = reduction;self.blend = blend;self.seed = seed
         self.recipes = tuple(original.Recipe(s) for s in world_block_seeds(seed, world_blocks))
-        self.timing = collections.Counter();self.calls = []
+        self.timing = collections.Counter();self.calls = [];self.pool = None
+        if pricer == 'depth2' and reduction in ('hedge', 'blend') and workers > 1:
+            import concurrent.futures, multiprocessing
+            self.pool = concurrent.futures.ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context('spawn'))
 
     def _price(self, requests, recipe):
-        """Price in calls of a fixed capacity (padding with the chunk's first request); per-request results."""
-        results = []
+        """Price in calls of a fixed capacity (padding with the chunk's first request).
+
+        Returns one (prices, reason) per request: the worlds' WorldPrices for the reduction, or None and the
+        first refusing world's reason. Depth 2 backs each root up here (hedged turn-2 games in the pool).
+        """
+        from gpu_engine import search_hedge as hedge
+        surfaces = []
         top = self.capacities[-1]
         for offset in range(0, len(requests), top):
             chunk = requests[offset:offset + top]
@@ -192,24 +200,28 @@ class Search:
             self.calls.append({k: v for k, v in timing.items() if isinstance(v, (int, float, str))})
             for key in ('world_prepare_seconds', 'device_seconds', 'compile_seconds', 'lower_seconds', 'frame_wall_seconds'):
                 self.timing[key] += timing.get(key, 0.) or 0.
-            if self.kind == 'depth1':results.extend(output[:len(chunk)])
-            else:results.extend((output, i) for i in range(len(chunk)))
-        return results
-
-    def _world_prices(self, result):
-        """Per-request world surfaces: depth 1 rebuilds D's two WorldPrices (None if refused)."""
-        from gpu_engine import search_hedge as hedge
-        if self.kind == 'depth1':
-            if result.status != 'LABELED':return None, result.reason
-            return tuple(self.original.WorldPrices(r['opponent_requested'], r['reply_legal'], r['reply_logits'], r['joint_values'])
-                for r in result.world_reports), None
-        frame, i = result
-        if self.reduction in ('hedge', 'blend'):prices = hedge.depth2_hedged_worlds(frame, i)
-        else:
-            from gpu_engine import depth2_backups
-            prices = depth2_backups.backup_learner_max(frame, i)
-        if any(p is None for p in prices):return None, 'depth2-world-unavailable'
-        return prices, None
+            clock = time.perf_counter()
+            if self.kind == 'depth1':
+                for result in output[:len(chunk)]:
+                    if result.status != 'LABELED':
+                        surfaces.append((None, next((r['reason'] for r in result.world_reports if r.get('reason')), result.reason)));continue
+                    surfaces.append((tuple(self.original.WorldPrices(r['opponent_requested'], r['reply_legal'], r['reply_logits'], r['joint_values'])
+                        for r in result.world_reports), None))
+            else:
+                reasons = [next((r['reason'] for r in output.world_reports[i] if r['status'] != 'COMPLETE'), None) for i in range(len(chunk))]
+                if self.reduction in ('hedge', 'blend'):
+                    roots = [i for i in range(len(chunk)) if reasons[i] is None]
+                    fields = [{k: getattr(output, k)[i] for k in hedge.DEPTH2_FIELDS} for i in roots]
+                    backed = dict(zip(roots, self.pool.map(hedge.depth2_hedged_root, fields, chunksize=4) if self.pool else map(hedge.depth2_hedged_root, fields)))
+                else:
+                    from gpu_engine import depth2_backups
+                    backed = {i: depth2_backups.backup_learner_max(output, i) for i in range(len(chunk)) if reasons[i] is None}
+                for i in range(len(chunk)):
+                    prices = backed.get(i)
+                    if reasons[i] is None and (prices is None or any(p is None for p in prices)):reasons[i] = 'depth2-world-unavailable'
+                    surfaces.append((None, reasons[i]) if reasons[i] is not None else (prices, None))
+            self.timing['backup_seconds'] += time.perf_counter() - clock
+        return surfaces
 
     def choose(self, context, rows, owners, logits, legal, inputs, raw_actions, *, probe=None):
         """Search choices for the given rows: (action, record) per row; probe=(context, rows) re-runs gate c."""
@@ -230,7 +242,7 @@ class Search:
             per_block.append(self._price(requests, recipe))
         clock = time.perf_counter();out = []
         for i, row in enumerate(rows):
-            surfaces = [self._world_prices(block[i]) for block in per_block]
+            surfaces = [block[i] for block in per_block]
             refusal = next((reason for prices, reason in surfaces if prices is None), None)
             record = dict(searched=refusal is None, refusal=refusal, strategy=None, value=None)
             action = int(raw_actions[i])
@@ -295,6 +307,8 @@ def main(argv=None):
     parser.add_argument('--search-seed', type=int, default=2026110500)
     parser.add_argument('--capacities', default='64,512', help='fixed pricer root capacities (padded)')
     parser.add_argument('--depth2-child-block', type=int, default=27)
+    parser.add_argument('--depth2-fixed-capacity', action='store_true', help="the Depth2Pricer's fixed-capacity compile (inactive padding)")
+    parser.add_argument('--workers', type=int, default=16, help='processes for depth-2 hedged turn-2 solves')
     parser.add_argument('--never-borrow', action='store_true', help='gate c: re-run every searched decision from a counterfactual true state')
     parser.add_argument('--max-steps', type=int, help='smoke only')
     parser.add_argument('--collector-check', type=int, default=0, help='compare K raw steps with the collector advance, bitwise')
@@ -351,7 +365,8 @@ def main(argv=None):
     if args.reduction != 'none':
         search = Search(prepared, plan, params[0], pricer=args.pricer, reduction=args.reduction, blend=args.blend,
             world_blocks=args.world_blocks, seed=args.search_seed, capacities=tuple(int(x) for x in args.capacities.split(',')),
-            depth2_options=dict(child_block=args.depth2_child_block))
+            depth2_options=dict(child_block=args.depth2_child_block, **(dict(fixed_capacity=True) if args.depth2_fixed_capacity else {})),
+            workers=args.workers)
     log('SEARCH_HEAD_TO_HEAD_START', label=args.label, games=2 * n, reduction=args.reduction, pricer=args.pricer,
         worlds=2 * args.world_blocks if search else 0, max_requests=plan.max_requests, setup_seconds=time.perf_counter() - begin)
     decisions = collections.defaultdict(list);probe_stats = collections.Counter();step = 0;timing = collections.Counter()

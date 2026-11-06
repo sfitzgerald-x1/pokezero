@@ -196,6 +196,14 @@ class Depth2HedgeTests(unittest.TestCase):
         self.assertIsNone(worlds[0].joint_values[0][1])
         self.assertIsNone(h.bayes_hedge(worlds, legal(0, 1)))
 
+    def test_per_root_pool_unit_equals_frame_backup(self):
+        f = frame(self.t1_status, self.t1_value, self.t2_status, self.t2_value)
+        fields = {k: getattr(f, k)[0] for k in h.DEPTH2_FIELDS}
+        self.assertEqual(h.depth2_hedged_root(fields), h.depth2_hedged_worlds(f, 0))
+        import concurrent.futures, multiprocessing
+        with concurrent.futures.ProcessPoolExecutor(2, mp_context=multiprocessing.get_context('spawn')) as pool:
+            self.assertEqual(list(pool.map(h.depth2_hedged_root, [fields, fields])), [h.depth2_hedged_worlds(f, 0)] * 2)
+
     def test_unavailable_world_and_waiting_seats(self):
         worlds = h.depth2_hedged_worlds(frame(self.t1_status, self.t1_value, self.t2_status, self.t2_value, pre=(0, -1)), 0)
         self.assertIsNone(worlds[1])
