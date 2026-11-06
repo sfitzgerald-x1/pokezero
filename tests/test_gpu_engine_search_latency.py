@@ -461,11 +461,14 @@ class SearchLatencyTests(unittest.TestCase):
     def test_solver_plug_in_path_through_the_real_backups(self):
         values = ([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]);frame = depth2_frame(values);requests = [ROOT, ROOT]
         solve = lambda solver, views=((frame, 0),): (lambda clock: (solver.solve(list(views), requests, clock), clock))(tool.Clock(CLOCK))
-        reference, clock = solve(tool.Solver.load('learner_max'))   # depth 2: depth2_backups on as_depth2_frame
-        self.assertIn('solve.as_depth2_frame', clock.parts);self.assertEqual({'solve.slice', 'solve.worlds', 'solve.root_reduce'} - set(clock.parts), set())
+        reference, clock = solve(tool.Solver.load('learner_max'))   # depth 2 on DepthNPricer frames: depthn_backups, no conversion
+        self.assertNotIn('solve.as_depth2_frame', clock.parts);self.assertEqual({'solve.slice', 'solve.worlds', 'solve.root_reduce'} - set(clock.parts), set())
+        from gpu_engine import depth2_backups
+        for r, mine in enumerate(reference):   # equals depth2_backups on as_depth2_frame exactly (depthn_backups' N=2 contract)
+            theirs = depth2_backups.learner_max_root(dn.as_depth2_frame(frame), r, ROOT.root_logits, ROOT.root_legal).improvement
+            self.assertEqual((mine['completed_q'], mine['policy_target'], mine['root_value']), (theirs.completed_q, theirs.policy_target, theirs.root_value))
         self.assertAlmostEqual(reference[0]['completed_q'][0], .2, places=6);self.assertAlmostEqual(reference[1]['completed_q'][0], .4, places=6)
         baseline, clock = solve(tool.Solver.load('gpu_engine.depthn_backups:learner_max'))   # the plug-in path's like-for-like baseline
-        self.assertNotIn('solve.as_depth2_frame', clock.parts)
         for a, b in zip(reference, baseline):self.assertEqual(a['completed_q'], b['completed_q'])
         plugged = tool.Solver.load('tests.test_gpu_engine_search_latency:pessimistic');self.assertIs(plugged.rule, pessimistic)
         low, _ = solve(plugged);self.assertAlmostEqual(low[0]['completed_q'][0], .1, places=6);self.assertAlmostEqual(low[1]['completed_q'][0], -.2, places=6)
@@ -608,15 +611,16 @@ class SearchLatencyTests(unittest.TestCase):
             memory=lambda: {}, timer=CLOCK)
         self.assertEqual([(s['capacity'], s['mode'], s['pricer_capacity']) for s in series], [(1, 'sequential', 1), (1, 'packed', 4), (4, 'sequential', 4), (4, 'packed', 16)])
         self.assertEqual([p.capacity for p in FakeDepth2.built[1:]], [1, 4, 16]);self.assertEqual(FakeDepth2.built[2].log[0], (4, 0, [0, 0, 0, 0]))
-        self.assertEqual({s['solve'] for s in series}, {tool.MERGED_SOLVE});self.assertEqual(series[0]['leaves']['measured_per_world'], 6561)
+        self.assertEqual(series[0]['leaves']['measured_per_world'], 6561)
         self.assertEqual([s['first_call']['compile_seconds'] for s in series], [2., 2., 0., 2.])
         with self.assertRaises(SystemExit) as raised:tool.Search('depth2-merged', 4, self.args(), fake_ctx(), depth2_module=SimpleNamespace(Depth2Pricer=OldDepth2))
         self.assertIn('fixed_capacity', str(raised.exception.code))
-        # The real solve on a real Depth2Frame: depth2_backups learner-max, even with a plug-in rule (it has no per-node hook).
+        # The real solve on a real Depth2Frame: depth2_backups learner-max; a plug-in rule through depth2_rule_worlds.
         values = ([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]);frame = dn.as_depth2_frame(depth2_frame(values))
-        for solver in (tool.Solver(), tool.Solver.load('tests.test_gpu_engine_search_latency:pessimistic')):
+        for solver, expected in ((tool.Solver(), (.2, .4)), (tool.Solver.load('tests.test_gpu_engine_search_latency:pessimistic'), (.1, -.2))):
             results = solver.solve([(frame, 0)], [ROOT, ROOT], tool.Clock(CLOCK))
-            self.assertAlmostEqual(results[0]['completed_q'][0], .2, places=6);self.assertAlmostEqual(results[1]['completed_q'][0], .4, places=6)
+            self.assertAlmostEqual(results[0]['completed_q'][0], expected[0], places=6);self.assertAlmostEqual(results[1]['completed_q'][0], expected[1], places=6)
+        self.assertEqual({s['solve'] for s in series}, {tool.MERGED_SOLVE['rule']})
 
     def test_hedge_solve_with_a_stub_search_hedge(self):
         hedge = stub_hedge()
@@ -713,6 +717,21 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual((head['lam'], head['seed'], head['weights'], head['iterations']), (0., 2026110500, '1/W', 0))
         self.assertIsNone(tool.hedge_header(hedge, 'f00dcafe')['matches_reference'])   # another commit: 583555d2's sha256 does not apply
         self.assertIsNone(tool.hedge_header(stub_hedge(), tool.HEDGE_COMMIT)['sha256'])   # no file (the in-memory stub)
+
+    def test_depth2_rule_worlds_with_learner_max_is_depth2_backups_exactly(self):
+        from gpu_engine import depth2_backups, depthn_backups
+        base = depth2_frame(([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]), errored=((1, 1),))
+        base.t1_own_logits[:, :, 0, 0, :2] = [.3, -.7];base.t1_peer_logits[:, :, 0, 0, :2] = [1.1, .2]   # unequal priors: the softmax is exercised
+        base.t1_status[:, :, 0, 1] = 1;base.t1_value[:, :, 0, 1] = -.25   # a terminal cell keeps its exact value
+        frame = dn.as_depth2_frame(base)
+        for r in range(2):
+            mine, theirs = tool.depth2_rule_worlds(frame, r, depthn_backups.learner_max), depth2_backups.backup_learner_max(frame, r)
+            self.assertEqual(mine, theirs)   # every WorldPrices field, every float, bit for bit
+            unit = dict(solver='gpu_engine.depthn_backups:learner_max', hedge=None, kind='depth2', rule=None, fields=tool.root_fields(frame, r, 'depth2'))
+            self.assertEqual(tool.world_prices(pickle.loads(pickle.dumps(unit))), theirs)   # the pool unit resolves the rule by name
+        self.assertIsNone(tool.depth2_rule_worlds(frame, 1, depthn_backups.learner_max)[1].joint_values[0][0])   # the errored world's cell refuses
+        low = tool.depth2_rule_worlds(frame, 0, pessimistic)[0].joint_values[0][0];high = depth2_backups.backup_learner_max(frame, 0)[0].joint_values[0][0]
+        self.assertLess(low, high)
 
     def test_isolate_argv(self):
         args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2');calls = []

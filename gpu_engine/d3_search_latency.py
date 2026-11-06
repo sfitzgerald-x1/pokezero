@@ -33,8 +33,9 @@ one stage, so the stages sum to the call's wall time; seconds a pricer measures 
   included; part root_reduce). --solver takes a list (learner_max,hedge,MODULE:FUNC) and --solver-pool a list of pool sizes
   (0 = in process): every (solver, pool size) solves the SAME priced frames of each call, in an order rotated per call, and
   has its own end-to-end total = the shared host_prep + world_construction + pricer + its solve + its return.
-  learner_max: depth2_backups.backup_learner_max on as_depth2_frame (depth 2, the reference; part as_depth2_frame) or on the
-  merged Depth2Frame, depthn_backups.backup_learner_max (depth >= 3); then v5_gumbel.reduce_completed_q per block of two
+  learner_max: depthn_backups.backup_learner_max on DepthNPricer frames at every depth (at N=2 it equals depth2_backups on
+  as_depth2_frame, pinned by a test, without the conversion), depth2_backups.backup_learner_max on the merged Depth2Frame;
+  then v5_gumbel.reduce_completed_q per block of two
   worlds; W = 2K composes the K blocks by the equal-weight mean of their completed-Q (U1's composition: every world weighted
   1/W) and re-derives the improved target and root value; any refused block refuses the root.
   hedge (gpu_engine.search_hedge of PR #1829, 583555d2, imported lazily; not on this branch): per node
@@ -42,9 +43,9 @@ one stage, so the stages sum to the call's wall time; seconds a pricer measures 
   frames and search_hedge.depth2_hedged_root on the merged Depth2Frame; at the root search_hedge.bayes_hedge(all W worlds,
   lam=0, weights 1/W, no iterations) INSTEAD of reduce_completed_q (root logits unused). The header records the module's
   file sha256 and --hedge-commit.
-  MODULE:FUNC: depthn_backups.backup(frame, root, rule) at every depth, rule(grid, pi_own, pi_opp) -> value at every node
-  (gpu_engine.depthn_backups:learner_max is its like-for-like baseline), then reduce_completed_q as learner_max; the merged
-  Depth2Frame has no per-node hook and solves with depth2_backups learner-max (recorded per row).
+  MODULE:FUNC: depthn_backups.backup(frame, root, rule) at every depth, rule(grid, pi_own, pi_opp) -> value at every node, and
+  on the merged Depth2Frame depth2_rule_worlds (the rule at every expanded turn-1 cell over depth2_backups' grid and priors;
+  with depthn_backups.learner_max it equals depth2_backups exactly, pinned by a test); then reduce_completed_q as learner_max.
 - return: each root's move (learner_max / MODULE:FUNC: argmax of the improved target, lowest action on ties; hedge:
   search_hedge.sample(strategy, search_uniform(2026110500, address))) and a block_until_ready on any device array still held by
   the frames (DepthNPricer.price device_gets every field, so the transfer is inside pricer: expected 0, counted).
@@ -118,7 +119,9 @@ COMPILE = 'compile'
 LANES = 81
 MODES = ('sequential', 'packed')
 MERGED = 'depth2-merged'   # depth-2 full width on the merged Depth2Pricer (not a d3_depthn_throughput name)
-MERGED_SOLVE = 'depth2_backups.backup_learner_max on the merged Depth2Frame (no per-node hook: a MODULE:FUNC --solver does not apply)'
+MERGED_SOLVE = {'learner_max': 'depth2_backups.backup_learner_max on the merged Depth2Frame',
+    'rule': 'depth2_rule_worlds: rule(grid, pi_own, pi_opp) at every expanded turn-1 cell of the merged Depth2Frame (depth2_backups\' grid and priors)',
+    'hedge': 'search_hedge.depth2_hedged_root on the merged Depth2Frame'}
 # The hedge solver (gpu_engine/search_hedge.py of PR #1829, not on this branch: shipped next to the code, imported lazily).
 HEDGE_MODULE = 'gpu_engine.search_hedge'
 HEDGE_COMMIT = '583555d2'
@@ -151,9 +154,9 @@ STAGE_SCOPE = {
     'pricer': 'price() wall to a host frame minus its materialization and compile (pack, P1, ply loop, per-ply device_get, host frame); searched adds '
         'as_depth2_frame + searched_maps on the host; parts depth2_pass, searched_maps_host, depthn',
     'solve': 'per variant (solver, pool size) on the shared frames: per-(root, block) host slices (part slice), world_prices in process (part worlds) '
-        'or pool.map with pickling and IPC (part worlds_pool), the root reduction (part root_reduce). learner_max: depth2_backups (depth 2: on '
-        'as_depth2_frame, part as_depth2_frame) / depthn_backups + reduce_completed_q per block, W > 2 the equal-weight mean of the blocks\' completed-Q; '
-        'hedge: matrix_game per node + bayes_hedge(all W worlds, lam=0); MODULE:FUNC: depthn_backups.backup with the rule + reduce_completed_q',
+        'or pool.map with pickling and IPC (part worlds_pool), the root reduction (part root_reduce). learner_max: depthn_backups (DepthNPricer) / '
+        'depth2_backups (merged) + reduce_completed_q per block, W > 2 the equal-weight mean of the blocks\' completed-Q; hedge: matrix_game per node + '
+        'bayes_hedge(all W worlds, lam=0); MODULE:FUNC: depthn_backups.backup / depth2_rule_worlds with the rule + reduce_completed_q',
     'return': 'per variant: each root\'s move (argmax of the improved target; hedge: sample(strategy, search_uniform(2026110500, address))) + '
         'block_until_ready on any device array left in the frames (expected none) + fence',
     'compile': 'lower + compile seconds of programs compiled during the call (the pricers\' compiles); excluded from the total',
@@ -377,16 +380,47 @@ def unit_rule(unit):
     module, func = parse_solver(unit['solver']);return getattr(importlib.import_module(module), func)
 
 
+def depth2_rule_worlds(frame, root, rule):
+    """depth2_backups' world surface on a Depth2Frame with rule(grid, pi_own, pi_opp) -> value at every expanded turn-1 cell: grid
+    over the cell's enumerated own rows x opponent columns (a row or column is enumerated when any of its turn-2 leaves is), the
+    seats' priors depth2_backups' masked softmax over exactly those, in action order; terminal cells exact; an error leaf (or no
+    enumerated row) leaves the cell None; the value clamped to [-1, 1]. With depthn_backups.learner_max it is depth2_backups'
+    backup_learner_max term for term (a test pins equality)."""
+    from pokezero import v5_gumbel as original
+    from gpu_engine import depth2_backups
+    def cell(world, a1, r1):
+        status = int(frame.t1_status[root, world, a1, r1])
+        if status == 1:return float(frame.t1_value[root, world, a1, r1])
+        if status != 2:return None
+        t2 = frame.t2_status[root, world, a1, r1];own = np.any(t2 != 0, axis=1);opp = np.any(t2 != 0, axis=0)
+        if np.any(t2 == 3) or not own.any():return None
+        pi_own = depth2_backups._softmax(frame.t1_own_logits[root, world, a1, r1], own);pi_opp = depth2_backups._softmax(frame.t1_peer_logits[root, world, a1, r1], opp)
+        rows, cols = np.flatnonzero(own), np.flatnonzero(opp);v = frame.t2_value[root, world, a1, r1]
+        grid = [[float(v[a, b]) for b in cols] for a in rows]
+        return min(1., max(-1., rule(grid, [pi_own[a] for a in rows], [pi_opp[b] for b in cols])))
+    out = []
+    for world in range(2):
+        if int(frame.pre[root, world]) != 0:out.append(None);continue
+        requested = bool(frame.root_peer_requested[root, world]);status = frame.t1_status[root, world]
+        kept = tuple(bool(np.any(status[:, r] != 0)) for r in range(9)) if requested else (False,) * 9
+        out.append(original.WorldPrices(requested, kept, tuple(map(float, frame.root_peer_logits[root, world])),
+            [[cell(world, a, r) if status[a, r] else None for r in range(9)] for a in range(9)]))
+    return tuple(out)
+
+
 def world_prices(unit):
     """One (root, block) solve unit -> its two WorldPrices (picklable both ways: the pool's unit of work, and the in-process path).
-    depth2 (a Depth2Frame's slices): hedge -> search_hedge.depth2_hedged_root, else depth2_backups.backup_learner_max. depthn (a
-    DepthNFrame's slices): depthn_backups.backup(view, 0, unit_rule(unit))."""
+    depth2 (the merged Depth2Frame's slices): hedge -> search_hedge.depth2_hedged_root, learner_max -> depth2_backups.backup_learner_max,
+    MODULE:FUNC -> depth2_rule_worlds with the rule. depthn (a DepthNFrame's slices): depthn_backups.backup(view, 0, unit_rule(unit))."""
     one = lambda x: np.asarray(x)[None];f = unit['fields']
     if unit['kind'] == 'depth2':
         if unit['solver'] == 'hedge':
             hedge = importlib.import_module(unit['hedge']);return tuple(hedge.depth2_hedged_root({k: f[k] for k in hedge.DEPTH2_FIELDS}))
-        from gpu_engine import depth2_backups
-        return depth2_backups.backup_learner_max(SimpleNamespace(**{k: one(v) for k, v in f.items()}), 0)
+        view = SimpleNamespace(**{k: one(v) for k, v in f.items()})
+        if unit['solver'] == 'learner_max':
+            from gpu_engine import depth2_backups
+            return depth2_backups.backup_learner_max(view, 0)
+        return depth2_rule_worlds(view, 0, unit_rule(unit))
     from gpu_engine import depthn_backups
     view = SimpleNamespace(depth=f['depth'], k_own=f['k_own'], k_opp=f['k_opp'], nodes=tuple(SimpleNamespace(**{k: one(v) for k, v in n.items()}) for n in f['nodes']),
         **{k: one(f[k]) for k in DEPTHN_ROOT_FIELDS})
@@ -415,22 +449,15 @@ class Solver:
         if self.spec == 'hedge':
             return dict(spec='hedge', stand_in=False, module=self.hedge_name, path=HEDGE_SOLVE, lam=HEDGE_LAM, seed=HEDGE_SEED, weights='1/W', iterations=0)
         if self.rule is None:
-            return dict(spec='learner_max', stand_in=True, path='depth2_backups.backup_learner_max on as_depth2_frame (depth 2) or the merged Depth2Frame; '
-                'depthn_backups.backup_learner_max (depth >= 3); then reduce_completed_q per block', note='the learner-max reference')
-        return dict(spec=self.spec, stand_in=False, rule=dotted(self.rule), path='depthn_backups.backup(frame, root, rule) at every depth (the merged '
-            'Depth2Frame: depth2_backups learner-max); then reduce_completed_q per block')
+            return dict(spec='learner_max', stand_in=True, path='depthn_backups.backup_learner_max (DepthNPricer frames, every depth); '
+                'depth2_backups.backup_learner_max (the merged Depth2Frame); then reduce_completed_q per block', note='the learner-max reference')
+        return dict(spec=self.spec, stand_in=False, rule=dotted(self.rule), path='depthn_backups.backup(frame, root, rule) at every depth; '
+            'depth2_rule_worlds on the merged Depth2Frame; then reduce_completed_q per block')
 
     def solve(self, views, requests, clock, pool=None):
-        """views: one (frame, row offset) per block; requests: the call's block-0 Requests. Laps 'solve' (parts as_depth2_frame, slice,
-        worlds or worlds_pool, root_reduce); returns one result per root."""
-        depth = getattr(views[0][0], 'depth', None);kind = 'depth2' if depth is None else 'depthn'   # no depth: the merged Depth2Frame
-        if kind == 'depthn' and self.spec == 'learner_max' and int(depth) == 2:   # the depth-2 reference: depth2_backups on as_depth2_frame
-            from gpu_engine.device_depthn_pricer import as_depth2_frame
-            converted = {}
-            for frame, _ in views:
-                if id(frame) not in converted:converted[id(frame)] = as_depth2_frame(frame)
-            views, kind = [(converted[id(frame)], offset) for frame, offset in views], 'depth2'
-            clock.lap('solve', 'as_depth2_frame')
+        """views: one (frame, row offset) per block; requests: the call's block-0 Requests. Laps 'solve' (parts slice, worlds or
+        worlds_pool, root_reduce); returns one result per root."""
+        kind = 'depth2' if getattr(views[0][0], 'depth', None) is None else 'depthn'   # no depth: the merged Depth2Frame
         rule = self.rule if pool is None else None   # a pool worker resolves MODULE:FUNC by name
         units = [dict(solver=self.spec, hedge=self.hedge_name, kind=kind, rule=rule, fields=root_fields(frame, offset + i, kind))
             for i in range(len(requests)) for frame, offset in views]
@@ -708,7 +735,8 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
     if 'depth2_pass' in widths:
         leaves['depth2_pass'] = dict(nominal_per_world=widths['depth2_pass']['nominal_leaves_per_world'],
             measured_per_world=None if not pass_leaves or None in pass_leaves else sum(pass_leaves) / (capacity * worlds))
-    solve = (HEDGE_SOLVE if spec == 'hedge' else MERGED_SOLVE) if search.config['kind'] == 'merged' else (HEDGE_SOLVE if spec == 'hedge' else spec)
+    if search.config['kind'] == 'merged':solve = MERGED_SOLVE['hedge' if spec == 'hedge' else 'learner_max' if spec == 'learner_max' else 'rule']
+    else:solve = HEDGE_SOLVE if spec == 'hedge' else spec
     return dict(config=search.name, capacity=capacity, worlds=worlds, mode=mode, solver=spec, pool=variant.pool_size, variant=variant.name, blocks=worlds // 2,
         pricer_capacity=search.capacity, timing_proxy=mode == 'packed', proxy_note=PACKED_NOTE if mode == 'packed' else None,
         slot_widths=dict(k_own=widths['k_own'], k_opp=widths['k_opp']), engine=search.options, solve=solve,
@@ -972,8 +1000,8 @@ def markdown(report):
     if any(s['config'] == MERGED for s in report['series']):
         merged = next(s['engine'] for s in report['series'] if s['config'] == MERGED)
         lines[-1:-1] = [f'{MERGED}: {merged.get("engine")} (digest={merged.get("digest")}, child_block={merged.get("child_block")}, fixed_capacity='
-            f'{merged.get("fixed_capacity")}, the gate\'s construction); learner_max / MODULE:FUNC solve {MERGED_SOLVE}; hedge solve search_hedge.depth2_hedged_root. '
-            'depth2-fw is DepthNPricer at N=2, k=9.']
+            f'{merged.get("fixed_capacity")}, the gate\'s construction); solves: ' + '; '.join(f'{k}: {v}' for k, v in MERGED_SOLVE.items())
+            + '. depth2-fw is DepthNPricer at N=2, k=9.']
     lines += [
         '| config | W | mode | solver | pool | ' + ' | '.join(f'C={c} median / p90' for c in caps) + ' | largest C, every smaller C fitting too (p90 <= 800 ms) |', '|---|---|---|---|---|' + '---|' * len(caps) + '---|']
     for r in sel['rows']:
