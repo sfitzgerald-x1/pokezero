@@ -301,6 +301,10 @@ class DepthNPricerTests(unittest.TestCase):
         self.assertEqual([k for k in t['programs']if k[0]in('expand','leaf')],[('expand',6,4,2,3),('leaf',6,4,3,2)])
         self.assertEqual([(p['blocks'],p['calls'])for p in t['plies']],[(6,2),(36,9)]);self.assertEqual(t['plies'][0]['evaluated_lanes'],2*4*6*6)
         self.assertEqual(t['device_invocations'],1+2*3+9*2)  # P1; ply 2: gather, program, write per call; ply 3: gather, program
+        self.assertEqual(t['plies'][0]['pool_rows'],2*4*6*6)  # 2 calls round to 2; a ply with 9 calls would round to 16 calls' worth of rows
+        self.assertTrue(0<=t['host_pack_seconds']<=t['ply_loop_seconds']<=t['frame_wall_seconds'])
+        self.assertTrue(t['ply_loop_seconds']-t['host_pack_seconds']<t['device_seconds']<=t['frame_wall_seconds'])  # plus P1's synced time
+        self.assertIn('ply_loop_seconds',t['timing_notes']);self.assertIsNone(t['searched_k'])
         for i in range(3):self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'LABELED')
 
     def test_n3_full_width_and_n4_match_the_oracle(self):
@@ -388,7 +392,18 @@ class DepthNPricerTests(unittest.TestCase):
         self.assertEqual((kept(own),kept(opp)),([0],[1,0]));self.assertTrue(refused[0])  # A alone; Y forced first, then top-1 Y, A's refutation X
         own,opp,refused=dn.searched_maps(cell([0,1],[0.,1.],[0,1],[0.,2.],v,status),1,1)  # prior top-1 B: A (errored row) still first, then B
         self.assertEqual((kept(own),kept(opp)),([0,1],[1,0]))
-        f=cell([0,1],[1.,0.],[0,1],[0.,2.],v);f.t1_own_legal[0,0,0,0]=False  # a requested seat without a legal action is a clear error, not a min() of nothing
+        # (5) The fill measures harm as the MIN over kept moves: X refutes both A and B, and the one fill slot (k_opp=2) goes to Y
+        # (min .1 against A) where the max over kept moves (.9) would send it to Z (.5).
+        v=np.array([[0.,.1,.5,.3],[0.,.9,.5,.3]],np.float32)
+        own,opp,_=dn.searched_maps(cell([0,1],[1.,0.],[0,1,2,3],[0.,0.,0.,1.],v),2,2)
+        self.assertEqual((kept(own),kept(opp)),([1,0],[3,0,1]))  # top-1 W, the shared refutation X, fill Y
+        # (6) A full opponent set (top-1 W, refutations X and Y, fill Z at width 4) still admits the errored column E first; the fill goes.
+        status=np.full((2,5),4,np.int8);status[0,4]=3;v=np.array([[0.,.5,.2,.4,0.],[.5,0.,.2,.4,.9]],np.float32)
+        own,opp,refused=dn.searched_maps(cell([0,1],[1.,0.],[0,1,2,3,4],[0.,0.,0.,1.,0.],v,status),2,3)
+        self.assertEqual((dn.searched_widths(2,3),kept(own),kept(opp)),((3,4),[0,1],[4,3,1,0]));self.assertTrue(refused[0])
+        v[0,4]=.9  # without the error (and a harmless (A, E) leaf) q(A) ties q(B), so A leads: W, X, Y, fill Z; E is never kept
+        self.assertEqual(kept(dn.searched_maps(cell([0,1],[1.,0.],[0,1,2,3,4],[0.,0.,0.,1.,0.],v),2,3)[1]),[3,0,1,2])
+        f=cell([0,1],[1.,0.],[0,1],[0.,2.],np.zeros((2,2),np.float32));f.t1_own_legal[0,0,0,0]=False  # a requested seat with no legal action: a clear error, not a min() of nothing
         with self.assertRaisesRegex(ValueError,'empty encoder mask'):dn.searched_maps(f,2,2)
 
     def test_searched_depth3_refuses_what_depth2_refused(self):
@@ -403,8 +418,8 @@ class DepthNPricerTests(unittest.TestCase):
                 for a1,r1 in zip(*np.nonzero(reference.t1_status[i,w]==2)):
                     for a2,r2 in zip(*np.nonzero(reference.t2_status[i,w,a1,r1]==3)):
                         self.assertIn(a2,own[i,w,a1,r1].tolist());self.assertIn(r2,opp[i,w,a1,r1].tolist())
-        frame,_,_,_=self.price(specs,depth=3,k_own=(w_own,2),k_opp=(w_opp,2),ex=ex,selection='searched',selection_maps={2:(own,opp)},block_lanes=36)
-        self.check_oracle(frame,requests,ex,specs,((w_own,w_opp),(2,2)),maps={2:(own,opp)})
+        frame,_,_,_=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),ex=ex,selection='searched',selection_maps={2:(own,opp)},block_lanes=36)
+        self.assertEqual((frame.k_own[0],frame.k_opp[0]),(w_own,w_opp));self.check_oracle(frame,requests,ex,specs,((w_own,w_opp),(2,2)),maps={2:(own,opp)})
         summary=backups.refusal_summary(frame)
         self.assertEqual([x['cause']for x in summary['roots']],['turn2','turn2','turn2',None])
         self.assertEqual([backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status for i in range(4)],['REFUSED']*3+['LABELED'])
@@ -413,40 +428,49 @@ class DepthNPricerTests(unittest.TestCase):
     def test_searched_mode_expands_the_given_maps_and_prior_mode_its_own(self):
         specs=(((0,27),0,0,1),((22,0),1,1,0),((20,21),0,2,1))
         ex,_=T.executor();requests=self.requests(specs,ex);reference=self.depth2(specs,requests,ex)
-        own,opp,_=dn.searched_maps(reference,2,2);maps={2:(own,opp)};widths=dict(k_own=(3,2),k_opp=(4,2))
-        frame,_,engine,_=self.price(specs,depth=3,ex=ex,selection='searched',selection_maps=maps,block_lanes=36,blocks_per_call=4,**widths)
+        own,opp,_=dn.searched_maps(reference,2,2);maps={2:(own,opp)}
+        # In searched mode the ply-2 entries are the k's of searched_maps; the pricer derives the slot widths (3, 4) itself.
+        searched=dict(k_own=(2,2),k_opp=(2,2),selection='searched');widths=dict(k_own=(3,2),k_opp=(4,2))
+        frame,_,engine,_=self.price(specs,depth=3,ex=ex,selection_maps=maps,block_lanes=36,blocks_per_call=4,**searched)
+        self.assertEqual((engine.k_own,engine.k_opp,engine.searched_k),((3,2),(4,2),(2,2)))
+        self.assertEqual((engine.last_timing['searched_k'],engine.last_timing['searched_widths'],frame.k_own,frame.k_opp),((2,2),(3,4),(3,2),(4,2)))
         self.check_oracle(frame,requests,ex,specs,((3,4),(2,2)),maps=maps)
         expanded=frame.t1_status==2
         np.testing.assert_array_equal(frame.t1_own_actions[expanded],own[expanded]);np.testing.assert_array_equal(frame.t1_opp_actions[expanded],opp[expanded])
         self.assertTrue((frame.t1_own_actions[~expanded]==-1).all())
-        prior,_,_,_=self.price(specs,depth=3,ex=ex,block_lanes=36,blocks_per_call=4,**widths)
-        self.check_oracle(prior,requests,ex,specs,((3,4),(2,2)))
+        prior,_,engine_p,_=self.price(specs,depth=3,ex=ex,block_lanes=36,blocks_per_call=4,**widths)
+        self.check_oracle(prior,requests,ex,specs,((3,4),(2,2)));self.assertIsNone(engine_p.last_timing['searched_k'])
         # Both modes share the block programs; searched kept a different ply-2 set in at least one cell, and ply 3 follows the prior in both.
         self.assertEqual([k for k in engine.last_timing['programs']if k[0]in('expand','leaf')],[('expand',3,4,3,4),('leaf',9,4,2,2)])
         self.assertFalse(np.array_equal(prior.t1_own_actions,frame.t1_own_actions))
         self.assertTrue((frame.nodes[0].own_actions[frame.nodes[0].status==2]>=0).any())
         for i in range(3):self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'LABELED')
-        # A narrower map pads to the configured width and prices the same tree.
-        wide,_,_,_=self.price(specs,depth=3,k_own=(5,2),k_opp=(6,2),ex=ex,selection='searched',selection_maps=maps,block_lanes=60)
-        self.check_oracle(wide,requests,ex,specs,((5,6),(2,2)),maps={2:(pad_maps(own,5),pad_maps(opp,6))})
-        # Fail closed: maps in prior mode, no maps in searched mode, a map wider than the width, an entry past 8, an illegal action,
-        # a hole between two legal actions, a waiting seat with a move, a requested seat with no action.
+        # A narrower map (k=2 maps under a k=(5,6) pricer, slot widths (6,7)) pads to the configured width and prices the same tree.
+        wide,_,_,_=self.price(specs,depth=3,k_own=(5,2),k_opp=(6,2),ex=ex,selection='searched',selection_maps=maps,block_lanes=84)
+        self.check_oracle(wide,requests,ex,specs,((6,7),(2,2)),maps={2:(pad_maps(own,6),pad_maps(opp,7))})
+        # Fail closed: maps in prior mode, no maps in searched mode, a map wider than the derived width (k=1: 2 slots), an entry past 8,
+        # an illegal action, a hole between two legal actions, a waiting seat with a move, a requested seat with no action, k past 9.
         with self.assertRaises(ValueError):self.price(specs,depth=3,ex=ex,selection_maps=maps,**widths)
-        with self.assertRaises(ValueError):self.price(specs,depth=3,ex=ex,selection='searched',**widths)
-        with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(2,2),k_opp=(4,2),ex=ex,selection='searched',selection_maps=maps)
+        with self.assertRaises(ValueError):self.price(specs,depth=3,ex=ex,**searched)
+        with self.assertRaisesRegex(ValueError,'last axis at most 2'):self.price(specs,depth=3,k_own=(1,2),k_opp=(2,2),ex=ex,selection='searched',selection_maps=maps)
         cell=(0,0)+next(zip(*np.nonzero(reference.t1_status[0,0]==2)));legal=np.flatnonzero(reference.t1_own_legal[cell])
         for message,entry in(('actions0..8',[9,-1,-1]),('encoder-legal',[8,-1,-1]),('padding must follow',[legal[0],-1,legal[1]]),('at least one action',[-1,-1,-1])):
             bad=own.copy();bad[cell]=entry
-            with self.assertRaisesRegex(ValueError,message):self.price(specs,depth=3,ex=ex,selection='searched',selection_maps={2:(bad,opp)},**widths)
+            with self.assertRaisesRegex(ValueError,message):self.price(specs,depth=3,ex=ex,selection_maps={2:(bad,opp)},**searched)
         waiting=(2,0)+next(zip(*np.nonzero(reference.t1_status[2,0]==2)));bad=own.copy();bad[waiting]=[1,-1,-1]
-        with self.assertRaisesRegex(ValueError,'waiting seat'):self.price(specs,depth=3,ex=ex,selection='searched',selection_maps={2:(bad,opp)},**widths)
-        with self.assertRaises(ValueError):dn.DepthNPricer(ex,None,capacity=1,depth=3,k_own=(10,2),k_opp=(2,2))
-        dn.DepthNPricer(ex,None,capacity=1,depth=3,k_own=(10,2),k_opp=(2,2),selection='searched')
+        with self.assertRaisesRegex(ValueError,'waiting seat'):self.price(specs,depth=3,ex=ex,selection_maps={2:(bad,opp)},**searched)
+        for mode in('prior','searched'):
+            with self.assertRaises(ValueError):dn.DepthNPricer(ex,None,capacity=1,depth=3,k_own=(10,2),k_opp=(2,2),selection=mode)
+        capped=dn.DepthNPricer(ex,None,capacity=1,depth=3,k_own=(9,2),k_opp=(9,2),selection='searched');self.assertEqual((capped.k_own,capped.k_opp),((9,2),(9,2)))
 
     def test_selection_maps_at_ply_3_are_honored(self):
         # Ply-3 maps that keep each seat's LOWEST-logit legal actions (the prior's complement) must be what the engine expands there.
-        specs=(((0,27),0,0,1),((22,41),1,1,0));ks=((2,2),(2,2))
-        prior,requests,_,ex=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),block_lanes=24)
+        # searched k=(1,1) derives ply-2 slot widths (2,3), the same layout as a prior run at widths (2,3), so the prior's own maps
+        # handed in as searched maps reproduce the prior frame exactly, and a ply-3 override is the only difference.
+        specs=(((0,27),0,0,1),((22,41),1,1,0));ks=((2,3),(2,2));searched=dict(k_own=(1,2),k_opp=(1,2),selection='searched',block_lanes=24)
+        prior,requests,_,ex=self.price(specs,depth=3,k_own=(2,2),k_opp=(3,2),block_lanes=24)
+        maps2={2:(prior.t1_own_actions,prior.t1_opp_actions)}
+        same,_,_,_=self.price(specs,depth=3,ex=ex,selection_maps=maps2,**searched);self.assert_frames_equal(same,prior)
         nd=prior.nodes[0];alt={}
         for name,legal,logits,requested in(('own',nd.own_legal,nd.own_logits,nd.own_requested),('opp',nd.opp_legal,nd.opp_logits,nd.opp_requested)):
             m=np.full(nd.status.shape+(2,),-1,np.int32)
@@ -454,14 +478,14 @@ class DepthNPricerTests(unittest.TestCase):
                 if not requested[i,w,node]:m[i,w,node,0]=0;continue
                 worst=sorted(np.flatnonzero(legal[i,w,node]),key=lambda a:(float(logits[i,w,node,a]),-a))[:2];m[i,w,node,:len(worst)]=worst
             alt[name]=m
-        maps={2:(prior.t1_own_actions,prior.t1_opp_actions),3:(alt['own'],alt['opp'])}
-        frame,_,_,_=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),ex=ex,selection='searched',selection_maps=maps,block_lanes=24)
+        maps={**maps2,3:(alt['own'],alt['opp'])}
+        frame,_,_,_=self.price(specs,depth=3,ex=ex,selection_maps=maps,**searched)
         self.check_oracle(frame,requests,ex,specs,ks,maps=maps)
         expanded=nd.status==2
         np.testing.assert_array_equal(frame.nodes[0].own_actions[expanded],alt['own'][expanded]);np.testing.assert_array_equal(frame.nodes[0].opp_actions[expanded],alt['opp'][expanded])
         self.assertFalse(np.array_equal(frame.nodes[0].own_actions,prior.nodes[0].own_actions));self.assertFalse(np.array_equal(frame.leaf_value,prior.leaf_value))
         for name in T1_NAMES+('t1_own_actions','t1_opp_actions'):np.testing.assert_array_equal(getattr(frame,name),getattr(prior,name),err_msg=name)
-        with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),ex=ex,selection='searched',selection_maps={**maps,4:maps[3]},block_lanes=24)
+        with self.assertRaises(ValueError):self.price(specs,depth=3,ex=ex,selection_maps={**maps,4:maps[3]},**searched)
 
     # (d) edge cases ------------------------------------------------------------------------------------------------
     def test_waiting_terminal_and_error_nodes_at_every_ply(self):
@@ -606,6 +630,11 @@ class DepthNPricerTests(unittest.TestCase):
         keys=engine.last_timing['programs']
         self.assertEqual([k for k in keys if k[0]in('expand','leaf')],[('expand',4,2,2,2),('leaf',4,2,2,2)]);self.assertEqual(sum(k[0]=='P1'for k in keys),3)
         self.assertGreater(len(engine.last_timing['plies']),2);self.assertTrue(all(p['calls']>=1 for p in engine.last_timing['plies']))
+        # Pools are sized for a power-of-two call count, so gather/write keys (pool rows) come from a bounded set: unit = G*B*K = 32 rows.
+        for key in keys:
+            if key[0]=='write':self.assertEqual(key[1]%32,0);self.assertEqual((key[1]//32)&(key[1]//32-1),0)
+            if key[0]=='gather':self.assertTrue(key[1]%32==0 and(key[1]//32)&(key[1]//32-1)==0 or key[1]%162==0)  # a ply pool, or P1's 2*capacity*81
+        for p in engine.last_timing['plies'][:-1]:self.assertEqual(p['pool_rows'],(1<<(p['calls']-1).bit_length())*32)
         self.check_oracle(frames[1],self.requests(specs,ex),ex,specs,((2,2),(2,2),(2,2)))
         # The same engine object prices N=2 frames bit-equal to Depth2Pricer whatever it compiled before, through a sibling at depth 2.
         sibling=dn.DepthNPricer(ex,object(),capacity=8,depth=2,k_own=(2,),k_opp=(2,),block_lanes=16,blocks_per_call=2,actor_capacity=3)

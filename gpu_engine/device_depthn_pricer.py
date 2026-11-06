@@ -304,9 +304,12 @@ def searched_maps(frame,k_own,k_opp):
     -1. Slot order is the order above. Returns int32 maps [R,2,9,9,w_own],
     [R,2,9,9,w_opp] with (w_own, w_opp) = `searched_widths(k_own, k_opp)`, and
     `depth2_refused`; `{2: (own, opp)}` is the `selection_maps` input of
-    `DepthNPricer(selection='searched').price`. Pure: numpy and float64 host
-    arithmetic only. Raises ValueError unless every expanded cell enumerates
-    its full legal product (a top-k depth-2 pass has no complete grid to rank).
+    `DepthNPricer(selection='searched', k_own=(k_own, ...), k_opp=(k_opp, ...))`,
+    whose ply-2 slot widths are these same `searched_widths` (the pricer
+    derives them from the k's it is given, so the two calls must share k).
+    Pure: numpy and float64 host arithmetic only. Raises ValueError unless
+    every expanded cell enumerates its full legal product (a top-k depth-2
+    pass has no complete grid to rank).
     """
     w_own,w_opp=searched_widths(k_own,k_opp)
     R=frame.pre.shape[0];own=np.full((R,2,9,9,w_own),-1,np.int32);opp=np.full((R,2,9,9,w_opp),-1,np.int32)
@@ -373,8 +376,11 @@ def _ply_widths(k,depth,name,limit):
 class DepthNPricer:
     def __init__(self,executor,model,*,capacity,depth,k_own,k_opp,k1_own=9,k1_opp=9,block_lanes=2187,blocks_per_call=16,selection='prior',
             fixed_capacity=False,digest=False,forward=None,actor_capacity=33):
-        """`k_own`/`k_opp`: per-ply widths for plies 2..N (an int repeats). `searched` allows widths up to 10: `searched_widths`
-        gives the ply-2 widths its maps need (k+1 for the learner, up to k_own+2 for the opponent), and a narrower map pads.
+        """`k_own`/`k_opp`: one integer per ply 2..N (an int repeats). In `prior` mode they are the slot widths (top-k by prior).
+        In `searched` mode the ply-2 entries are the search widths k of `searched_maps(frame, k_own, k_opp)`, and the pricer
+        derives the ply-2 SLOT widths from them with `searched_widths` (k_own+1 for the learner, up to k_own+2 for the
+        opponent; `self.k_own`/`self.k_opp` hold the slot widths, `self.searched_k` the k's, both logged in `timing`); a
+        narrower map pads, a wider one is refused. Plies past 2 are prior widths in both modes. No width exceeds 9.
 
         `block_lanes` sizes every block in lanes (B = block_lanes // K per ply);
         `blocks_per_call` maps G blocks per device call (a ply's last call pads
@@ -389,8 +395,10 @@ class DepthNPricer:
             raise ValueError('finite explicit root/actor capacities required')
         if type(depth)is not int or depth<2:raise ValueError('search depth is an integer >=2')
         if selection not in SELECTIONS:raise ValueError(f'selection in {SELECTIONS} required')
-        limit=10 if selection=='searched'else 9
-        self.k_own=_ply_widths(k_own,depth,'k_own',limit);self.k_opp=_ply_widths(k_opp,depth,'k_opp',limit)
+        self.k_own=_ply_widths(k_own,depth,'k_own',9);self.k_opp=_ply_widths(k_opp,depth,'k_opp',9);self.searched_k=None
+        if selection=='searched':
+            self.searched_k=(self.k_own[0],self.k_opp[0]);w_own,w_opp=searched_widths(*self.searched_k)
+            self.k_own=(w_own,)+self.k_own[1:];self.k_opp=(w_opp,)+self.k_opp[1:]
         depth2._widths(9,9,k1_own,k1_opp,1)
         if any(type(x)is not int or x<=0 for x in(block_lanes,blocks_per_call)):raise ValueError('positive block lane budget and blocks per call required')
         if any(type(x)is not bool for x in(fixed_capacity,digest)):raise ValueError('explicit digest/fixed-capacity bools required')
@@ -487,8 +495,8 @@ class DepthNPricer:
             program=self._program(key,lambda:make_p1(self.executor,self.model,params=self.params,capacity=capacity,k1_own=self.k1_own,k1_opp=self.k1_opp,
                 digest=self.digest,forward=self.forward),device_data)
             clock=time.perf_counter();out=jax.block_until_ready(program(device_data));device+=time.perf_counter()-clock;invocations=1
-            pool=(out.pop('states'),out.pop('publics'));host=jax.device_get(out)
-        node_bytes=self._node_bytes(pool)
+            pool=(out.pop('states'),out.pop('publics'));host=jax.device_get(out);device_data=out=None
+        node_bytes=self._node_bytes(pool);ply_loop=host_pack=0.
         # Ply 1 as a node level: cell-indexed [n,81] fields, pool rows through each cell's lane.
         shapes=self._shapes()
         t1={name:(np.ascontiguousarray(host[src]).reshape((n,)+shape).astype(dtype)if host else np.full((n,)+shape,UNAVAILABLE if name=='pre'else 0,dtype))
@@ -499,6 +507,7 @@ class DepthNPricer:
         level=dict(ply=1,status=t1['t1_status'].reshape(n,LANES),own_requested=t1['t1_own_requested'].reshape(n,LANES),opp_requested=t1['t1_peer_requested'].reshape(n,LANES),
             own_legal=t1['t1_own_legal'].reshape(n,LANES,9),opp_legal=t1['t1_peer_legal'].reshape(n,LANES,9),own_logits=t1['t1_own_logits'].reshape(n,LANES,9),
             opp_logits=t1['t1_peer_logits'].reshape(n,LANES,9),pool=pool,row_of=row_of)
+        pool=None  # the level owns the turn-1 children now; the loop drops them once ply 2 has read them
         owners=np.repeat(data['owner']if data is not None else np.zeros(capacity,np.int32),2)
         actors=np.zeros((n,2),np.int32);actors[:2*count]=np.repeat([(r.learner_actor,r.opponent_actor)for r in requests],2,axis=0)
         levels=[level];work=[]
@@ -514,26 +523,30 @@ class DepthNPricer:
                 members=np.flatnonzero(group==g)
                 for start in range(0,len(members),B):
                     blocks.append(members[start:start+B])
-            # Calls of G blocks: one gather from the old pool, one block program, one in-place write into the new pool
-            # (preallocated at the call granularity), no host sync until the ply is done. Block g of call c is global
-            # block c*G+g; its slot s holds pool rows ((c*G+g)*B+s)*K + lane, which is also each small field's row.
+            # Calls of G blocks: one gather from the old pool, one block program, one in-place write into the new pool,
+            # no host sync until the ply is done. Block g of call c is global block c*G+g; its slot s holds pool rows
+            # ((c*G+g)*B+s)*K + lane, which is also each small field's row. The pool is preallocated for the call count
+            # rounded up to a power of two, so the gather/write programs (keyed by pool rows) form a bounded, fixed set.
             key,build=self._block_program(p,B);G=self.blocks_per_call;nblocks=len(blocks);calls=-(-nblocks//G)
-            new_pool=None if leaf or not calls else jax.tree.map(lambda x:j.zeros((calls*G*B*K,)+x.shape[1:],x.dtype),level['pool'])
-            small=[];clock=time.perf_counter()
+            pool_rows=(1<<(calls-1).bit_length())*G*B*K if calls else 0
+            new_pool=None if leaf or not calls else jax.tree.map(lambda x:j.zeros((pool_rows,)+x.shape[1:],x.dtype),level['pool'])
+            small=[];started_ply=time.perf_counter()
             for c in range(calls):
+                clock=time.perf_counter()
                 fill=np.zeros((G,B),np.int64);live=np.zeros((G,B),bool);call_actors=np.zeros((G,2),np.int32)
                 for gi,members in enumerate(blocks[c*G:(c+1)*G]):
                     m=len(members);fill[gi,:m]=members;fill[gi,m:]=members[0];live[gi,:m]=True;call_actors[gi]=actors[pw[members[0]]]
                 fill=fill.reshape(-1);bw,bid=pw[fill],pid[fill]
                 requested=np.zeros((G*B,2),bool);requested[np.arange(G*B),owners[bw]]=level['own_requested'][bw,bid];requested[np.arange(G*B),1-owners[bw]]=level['opp_requested'][bw,bid]
-                states,publics=self._gather(level['pool'],level['row_of'][bw,bid])
-                args=(states,publics,j.asarray(owners[bw],j.int32),j.asarray(requested),j.asarray(own_maps[bw,bid],j.int32),j.asarray(opp_maps[bw,bid],j.int32),
+                rows,own_block,opp_block=level['row_of'][bw,bid],own_maps[bw,bid],opp_maps[bw,bid];host_pack+=time.perf_counter()-clock
+                states,publics=self._gather(level['pool'],rows)
+                args=(states,publics,j.asarray(owners[bw],j.int32),j.asarray(requested),j.asarray(own_block,j.int32),j.asarray(opp_block,j.int32),
                     j.asarray(live.reshape(-1)),j.asarray(call_actors))
                 out=self._program(key,build,*args)(*args);invocations+=2
                 if not leaf:new_pool=self._write(new_pool,out.pop('states'),out.pop('publics'),c*G*B*K);invocations+=1
                 small.append(out);del states,publics,args,out
             level['pool']=None
-            small=jax.device_get(small);device+=time.perf_counter()-clock
+            small=jax.device_get(small);ply_loop+=time.perf_counter()-started_ply
             fields={name:np.concatenate([s[name]for s in small])for name in small[0]}if calls else{}
             M=level['status'].shape[1]*K
             # Dense placement: child id = parent*K + own_slot*k_opp + opp_slot; row = global block slot*K + lane.
@@ -556,13 +569,19 @@ class DepthNPricer:
                 x=np.zeros((n,M)+shape,dtype)
                 if nblocks:x[rw,ids]=fields[name].reshape((calls*G*B*K,)+shape)[src]
                 nxt[name]=x
-            work.append(dict(stats,enumerated=int(np.count_nonzero(nxt['status'])),pool_rows=calls*G*B*K))
+            work.append(dict(stats,enumerated=int(np.count_nonzero(nxt['status'])),pool_rows=pool_rows))
             levels.append(nxt);level=nxt
         finished=time.perf_counter()
+        # Device seconds: P1's synced call plus each ply's loop net of its measured host packing (the loop dispatches
+        # every call and syncs once, so device work overlapping the packing of later calls is counted once, not twice).
         timing=dict(roots=count,world_prepare_seconds=prepared-started,batch_pack_and_device_seconds=finished-prepared,device_invocations=invocations,
-            device_seconds=device,lower_seconds=sum(c[1]for c in self.compiles),compile_seconds=sum(c[2]for c in self.compiles),compiled=tuple(c[0]for c in self.compiles),
+            device_seconds=device+ply_loop-host_pack,ply_loop_seconds=ply_loop,host_pack_seconds=host_pack,
+            timing_notes='device_seconds = synced P1 + sum over plies of (ply_loop_seconds - host_pack_seconds); ply_loop_seconds = host packing, dispatch and the one '
+                'sync per ply; host_pack_seconds = numpy call packing (index, request and map arrays) inside the loops',
+            lower_seconds=sum(c[1]for c in self.compiles),compile_seconds=sum(c[2]for c in self.compiles),compiled=tuple(c[0]for c in self.compiles),
             programs=tuple(self.programs),actor_strategy='DEPTHN_D3_TURN1_ARCHIVE_BATCHES_BLOCKED_PLIES',root_capacity=capacity,frame_wall_seconds=finished-started,
-            depth=N,k_own=self.k_own,k_opp=self.k_opp,k1_own=self.k1_own,k1_opp=self.k1_opp,block_lanes=self.block_lanes,blocks_per_call=self.blocks_per_call,selection=self.selection,
+            depth=N,k_own=self.k_own,k_opp=self.k_opp,searched_k=self.searched_k,searched_widths=None if self.searched_k is None else(self.k_own[0],self.k_opp[0]),
+            k1_own=self.k1_own,k1_opp=self.k1_opp,block_lanes=self.block_lanes,blocks_per_call=self.blocks_per_call,selection=self.selection,
             fixed_capacity=self.fixed_capacity,evaluated_root_slots=0 if data is None else capacity,padding_root_slots=0 if data is None else capacity-count,
             substituted_world_slots=0 if data is None else 2*count-len(available),pre_refused_available_worlds=int(np.count_nonzero(t1['pre'][:2*count]>0)),
             plies=tuple(work),enumerated_leaves=work[-1]['enumerated']if work else 0,evaluated_leaf_lanes=work[-1]['lanes']if work else 0,
