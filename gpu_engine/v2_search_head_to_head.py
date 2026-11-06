@@ -236,7 +236,8 @@ class Search:
         for offset in range(0, len(requests), top):
             chunk = requests[offset:offset + top]
             size = next(c for c in self.capacities if c >= len(chunk))
-            padded = list(chunk) + [chunk[0]] * (size - len(chunk))
+            # The Depth2Pricer's fixed capacity pads with inactive rows itself; otherwise repeat real requests.
+            padded = list(chunk) if getattr(self.pricer, 'fixed_capacity', False) else list(chunk) + [chunk[0]] * (size - len(chunk))
             with patch.object(self.original, 'reduce_completed_q', self._reduce_tolerating_rounding):
                 output = self.pricer.price(padded, self.materializer, recipe, self.params)
             timing = self.pricer.last_timing
@@ -251,14 +252,15 @@ class Search:
                     surfaces.append((tuple(self.original.WorldPrices(r['opponent_requested'], r['reply_legal'], r['reply_logits'], r['joint_values'])
                         for r in result.world_reports), None))
             else:
-                reasons = [next((r['reason'] for r in output.world_reports[i] if r['status'] != 'COMPLETE'), None) for i in range(len(chunk))]
+                from gpu_engine import depth2_backups
+                causes = depth2_backups.refusal_summary(output)['roots']
+                reasons = [None if not causes[i]['refused'] else 'depth2:' + causes[i]['cause'] + ':' + str(next(
+                    (r['reason'] for r in output.world_reports[i] if r['status'] != 'COMPLETE'), None)) for i in range(len(chunk))]
                 if self.reduction in ('hedge', 'blend'):
                     roots = [i for i in range(len(chunk)) if reasons[i] is None]
                     fields = [{k: getattr(output, k)[i] for k in hedge.DEPTH2_FIELDS} for i in roots]
                     backed = dict(zip(roots, self.pool.map(hedge.depth2_hedged_root, fields, chunksize=4) if self.pool else map(hedge.depth2_hedged_root, fields)))
-                else:
-                    from gpu_engine import depth2_backups
-                    backed = {i: depth2_backups.backup_learner_max(output, i) for i in range(len(chunk)) if reasons[i] is None}
+                else:backed = {i: depth2_backups.backup_learner_max(output, i) for i in range(len(chunk)) if reasons[i] is None}
                 for i in range(len(chunk)):
                     prices = backed.get(i)
                     if reasons[i] is None and (prices is None or any(p is None for p in prices)):reasons[i] = 'depth2-world-unavailable'
