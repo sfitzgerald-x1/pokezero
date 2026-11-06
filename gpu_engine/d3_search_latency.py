@@ -304,7 +304,7 @@ class Clock:
         key = f'{stage}.{part}';self.parts[key] = self.parts.get(key, 0.) + seconds
 
     def record(self):
-        return dict(stages=dict(self.stages), parts=dict(self.parts), wall_seconds=self.last - self.start, total_seconds=sum(self.stages[s] for s in STAGES))
+        return dict(stages=dict(self.stages), parts=dict(self.parts), wall_seconds=self.last - self.start)   # end-to-end totals are per variant (run_call)
 
 
 def distribution(seconds):
@@ -707,7 +707,6 @@ def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, ro
         variant_order=[v.name for v in order], pricing=infos, enumerated_leaves=None if any(e is None for e in enumerated) else int(sum(enumerated)),
         window=getattr(roots, 'window', None), root_keys=[list(k) if isinstance(k, tuple) else k for k in getattr(roots, 'keys', [])],
         host_prep_steps=prep_info.get('steps'), detach_passes=prep_info.get('detach_passes'), expanded_nodes=expanded_nodes(frames))
-    del record['total_seconds']   # every variant has its own end-to-end total
     return record, requests
 
 
