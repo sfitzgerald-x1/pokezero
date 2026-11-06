@@ -54,10 +54,11 @@ No stage leaves device work queued: a device fence (a tiny op on the default dev
 price() and every return. A solve pool (--solver-pool N > 0) is N spawn workers with 1 BLAS/OpenMP thread each, created before
 any timed call and warmed (solve modules imported, a 2x2 hedge LP solved); its startup seconds are reported in the header,
 never inside a call. W = 2K worlds per root in K recipe blocks: `sequential` = K price passes of C roots inside one call (the
-per-move latency of one game); `packed` (W > 2, unless --no-packed) = ONE pass at pricer capacity K*C holding each root's K
-blocks as separate rows (block b, root i at row b*C + i). packed is a TIMING PROXY: price() takes one recipe, so rows of
-blocks k > 0 keep their own planned fixtures but take block 0's kernel seeds (materialization keys) and turn-1 pricing order;
-the device work has the same shapes, the values are not U1's.
+per-move latency of one game); `packed` (W > 2, unless --no-packed) = ONE pass at pricer capacity K*C holding K rows per
+root (row b*C + i for root i). packed is a TIMING PROXY: price() takes one recipe and materialization refuses a start planned
+under another recipe (device_public_world_state._materialize checks each start's seed against it), so it plans blocks
+1..K-1 as sequential does (their cost counted) but prices K COPIES of block 0's requests under block 0's recipe; the device
+work has the K-block shapes, the values are block 0's K times, not U1's composition.
 Per (config, capacity, W, mode): 1 first call, then --repeats warm calls. The first call of a (config, capacity) is its cold
 call: its compile seconds are reported apart, and it also pays untracked first-use compiles (detach_roots' program, eager
 readout ops, the fence) inside its stages; no first call enters any statistic. Over the warm calls: median, p90 (numpy's
@@ -132,8 +133,9 @@ CODE_ROOT = Path(__file__).resolve().parent.parent
 PHASE_D_MODULES = ('gpu_engine.phase_d_live_worlds', 'gpu_engine.phase_d_protocol_world', 'gpu_engine.v5_public_world', 'gpu_engine.public_sleep')
 CONSTRUCTOR_NOTE = ("Codex's constructor batch 2 (own PP carry, removed items, sleep clocks) is not in the integration branch. If the "
     'head-to-head or live play uses a newer constructor, this column may understate or overstate construction cost.')
-PACKED_NOTE = ('TIMING PROXY: price() takes one recipe, so rows of blocks k > 0 keep their own planned fixtures but take block 0\'s kernel '
-    'seeds (materialization keys) and turn-1 pricing order; same device shapes as the sequential blocks, values are not U1\'s W composition')
+PACKED_NOTE = ('TIMING PROXY: one pass at K*C prices K copies of block 0\'s requests under block 0\'s recipe (price() takes one recipe and '
+    'materialization refuses a start planned under another); blocks 1..K-1 are still planned and timed as in sequential; same device shapes as K '
+    'blocks, values are block 0\'s K times, not U1\'s W composition')
 STAGE_SCOPE = {
     'host_prep': 'Provider._prepare_batched\'s per-root core for exactly C roots: per-step RootContext device slice + stream/frame host copy, one '
         'worlds.detach_roots pass per step (part detach), address check, block-0 worlds.plan_starts (part plan_starts), encoder inputs, prior, actors '
@@ -609,8 +611,8 @@ def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, ro
             views.append((frame, 0));infos.append(dict(info, block=block))
     elif mode == 'packed':
         if blocks < 2:raise ValueError('packed needs W > 2')
-        recipe, context = ctx.blocks[0]
-        with context():frame, info = search.price([r for block in planned for r in block], recipe, clock)
+        recipe, context = ctx.blocks[0]   # K copies of block 0: every start's seed is this recipe's (materialization checks it)
+        with context():frame, info = search.price([r for _ in range(blocks) for r in planned[0]], recipe, clock)
         views = [(frame, block * count) for block in range(blocks)];infos.append(dict(info, block='packed'))
     else:raise ValueError(f'mode in {MODES}')
     common = sum(clock.stages[s] for s in ('host_prep', 'world_construction', 'pricer'));frames = [frame for frame, _ in views]

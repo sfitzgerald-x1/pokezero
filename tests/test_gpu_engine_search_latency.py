@@ -22,7 +22,7 @@ import numpy as np
 
 from gpu_engine import d3_depth2_gate as gate, d3_search_latency as tool
 from gpu_engine import device_depthn_pricer as dn, device_public_worlds as real_worlds
-from pokezero import v5_gumbel as original
+from pokezero import v5_contract as contract, v5_gumbel as original
 
 
 class FakeTime:
@@ -35,6 +35,13 @@ class FakeTime:
 
 
 CLOCK = FakeTime()
+RECIPES = [original.Recipe(seed) for seed in gate.world_block_seeds(1779000000, 4)]   # the blocks' recipes (block 0 the declared one)
+
+
+def check_starts(requests, recipe):
+    """device_public_world_state._materialize's check: every start's seed is the priced recipe's world seed for its address."""
+    if any(s.seed != recipe.world_seed(r.plans.root.address, s.world) for r in requests for s in r.plans.starts):
+        raise ValueError('same declared source/root/world/recipe required')
 
 
 class FakeDepthN:
@@ -54,7 +61,7 @@ class FakeDepthN:
         requests = list(requests)
         if len(requests) > self.capacity:raise ValueError('one frame exceeds declared root capacity')
         if (self.selection == 'searched') != (selection_maps is not None):raise ValueError('maps belong to searched')
-        self.log.append((len(requests), recipe, [r.block for r in requests]))
+        check_starts(requests, recipe);self.log.append((len(requests), RECIPES.index(recipe), [r.block for r in requests]))
         CLOCK.advance(.01 + (2. if not self.calls else 0.) + .002 * len(requests) + (CLOCK.extra.pop(0) if CLOCK.extra else 0.))
         self.compiles = (('P1', .5, 1.5),) if not self.calls else ();self.calls += 1
         leaves = 81 * 2 * len(requests) * math.prod(a * b for a, b in zip(self.k_own, self.k_opp))
@@ -85,7 +92,8 @@ class FakeDepth2:
     def price(self, requests, materializer, recipe, params):
         requests = list(requests)
         if len(requests) > self.capacity:raise ValueError('one frame exceeds declared root capacity')
-        self.log.append((len(requests), recipe, [r.block for r in requests]));cold = self.capacity not in self.kernels;self.kernels[self.capacity] = True
+        check_starts(requests, recipe);self.log.append((len(requests), RECIPES.index(recipe), [r.block for r in requests]))
+        cold = self.capacity not in self.kernels;self.kernels[self.capacity] = True
         CLOCK.advance(.01 + (2. if cold else 0.) + .003 * len(requests))
         leaves = 81 * 2 * len(requests) * self.k_own * self.k_opp
         return SimpleNamespace(timing=dict(world_prepare_seconds=.01, device_seconds=.002 * len(requests), lower_seconds=.5 if cold else 0., compile_seconds=1.5 if cold else 0.,
@@ -113,11 +121,14 @@ class FakeSolver:
 
 
 def address(i):
-    return SimpleNamespace(stream=100 + i, frame=7, owner=i % 2)
+    return contract.DecisionAddress(100 + i, 7, i % 2)
 
 
 def request(i, block):
-    return SimpleNamespace(root=i, block=block, root_logits=(0.,) * 9, root_legal=(True,) + (False,) * 8, plans=SimpleNamespace(root=SimpleNamespace(address=address(i))))
+    """A request planned under block `block`'s recipe: its two starts carry that recipe's world seeds, as plan_starts writes them."""
+    starts = tuple(SimpleNamespace(world=w, seed=RECIPES[block].world_seed(address(i), w)) for w in (0, 1))
+    return SimpleNamespace(root=i, block=block, root_logits=(0.,) * 9, root_legal=(True,) + (False,) * 8,
+        plans=SimpleNamespace(root=SimpleNamespace(address=address(i)), starts=starts))
 
 
 def fake_ctx(blocks=4):
@@ -127,11 +138,11 @@ def fake_ctx(blocks=4):
         def context():entered.append(b);yield
         return context
     ctx = SimpleNamespace(provider=SimpleNamespace(executor=None, materializer='materializer'), plan=SimpleNamespace(model=None), params=('params',),
-        actor_capacity=1, blocks=[(f'recipe{b}', bypass(b) if b else contextlib.nullcontext) for b in range(blocks)], entered=entered, checked=[], fence=lambda: None)
+        actor_capacity=1, blocks=[(RECIPES[b], bypass(b) if b else contextlib.nullcontext) for b in range(blocks)], entered=entered, checked=[], fence=lambda: None)
     def prep(roots):
         CLOCK.advance(.003);return [request(i, 0) for i in roots.bound], dict(detach=.002, plan_starts=.0005, assemble=.0005)
     def replan(r, recipe):
-        CLOCK.advance(.001);return request(r.root, int(recipe[len('recipe'):]))
+        CLOCK.advance(.001);return request(r.root, RECIPES.index(recipe))
     ctx.prep, ctx.replan = prep, replan
     ctx.check = lambda requests, roots: ctx.checked.append(len(requests))
     ctx.roots = lambda capacity: SimpleNamespace(bound=list(range(capacity)), slots=[(0, i, 0) for i in range(capacity)])
@@ -382,7 +393,7 @@ class SearchLatencyTests(unittest.TestCase):
         args, ctx, solver = self.args(), fake_ctx(), FakeSolver()
         search = tool.Search('depth2-fw', 2, args, ctx, module=MODULE)
         record, _ = tool.run_call(search, ctx, ctx.roots(2), 8, 'sequential', solver=solver, timer=CLOCK)
-        self.assertEqual(search.pricer.log, [(2, f'recipe{b}', [b, b]) for b in range(4)])   # K=4 passes of C roots, each block its own recipe
+        self.assertEqual(search.pricer.log, [(2, b, [b, b]) for b in range(4)])   # K=4 passes of C roots, each block its own recipe
         self.assertEqual(ctx.entered, [1, 2, 3, 1, 2, 3])   # quarter-selection bypass around planning and pricing of blocks 1..3
         self.assertEqual([[o for _, o in views] for views in solver.views], [[0, 0, 0, 0]])
         self.assertAlmostEqual(record['parts']['world_construction.plan_starts'], 3 * 2 * .001)
@@ -390,7 +401,9 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(record['enumerated_leaves'] / (2 * 8), 6561);self.assertEqual([p['block'] for p in record['pricing']], [0, 1, 2, 3])
         packed = tool.Search('depth2-fw', 8, args, ctx, module=MODULE);solver = FakeSolver()
         record, _ = tool.run_call(packed, ctx, ctx.roots(2), 8, 'packed', solver=solver, timer=CLOCK)
-        self.assertEqual(packed.pricer.log, [(8, 'recipe0', [0, 0, 1, 1, 2, 2, 3, 3])])   # one pass at K*C: block b, root i at row b*C + i
+        # One pass at K*C of K copies of block 0 under block 0's recipe (FakeDepthN refuses any start of another recipe, as _materialize does).
+        self.assertEqual(packed.pricer.log, [(8, 0, [0] * 8)]);self.assertAlmostEqual(record['parts']['world_construction.plan_starts'], 3 * 2 * .001)   # still planned
+        with self.assertRaises(ValueError):packed.pricer.price([request(0, 1)], None, RECIPES[0], None)   # the shape the old packed call priced
         self.assertEqual([o for _, o in solver.views[0]], [0, 2, 4, 6]);self.assertEqual(len({id(f) for f, _ in solver.views[0]}), 1)
         self.assertEqual(record['enumerated_leaves'] / (2 * 8), 6561)
         with self.assertRaises(ValueError):tool.run_call(packed, ctx, ctx.roots(2), 2, 'packed', solver=solver, timer=CLOCK)
@@ -563,7 +576,7 @@ class SearchLatencyTests(unittest.TestCase):
         series = tool.measure_config('depth2-merged', (8,), args, fake_ctx(), None, solver=plugged, depth2_module=DEPTH2,
             memory=lambda: {}, timer=CLOCK)
         self.assertEqual([(s['capacity'], s['mode'], s['pricer_capacity']) for s in series], [(1, 'sequential', 1), (1, 'packed', 4), (4, 'sequential', 4), (4, 'packed', 16)])
-        self.assertEqual([p.capacity for p in FakeDepth2.built[1:]], [1, 4, 16]);self.assertEqual(FakeDepth2.built[2].log[0], (4, 'recipe0', [0, 1, 2, 3]))
+        self.assertEqual([p.capacity for p in FakeDepth2.built[1:]], [1, 4, 16]);self.assertEqual(FakeDepth2.built[2].log[0], (4, 0, [0, 0, 0, 0]))
         self.assertEqual({s['solve'] for s in series}, {tool.MERGED_SOLVE});self.assertEqual(series[0]['leaves']['measured_per_world'], 6561)
         self.assertEqual([s['first_call']['compile_seconds'] for s in series], [2., 2., 0., 2.])
         with self.assertRaises(SystemExit) as raised:tool.Search('depth2-merged', 4, self.args(), fake_ctx(), depth2_module=SimpleNamespace(Depth2Pricer=OldDepth2))
