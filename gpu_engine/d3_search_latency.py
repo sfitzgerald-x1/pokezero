@@ -59,10 +59,15 @@ root (row b*C + i for root i). packed is a TIMING PROXY: price() takes one recip
 under another recipe (device_public_world_state._materialize checks each start's seed against it), so it plans blocks
 1..K-1 as sequential does (their cost counted) but prices K COPIES of block 0's requests under block 0's recipe; the device
 work has the K-block shapes, the values are block 0's K times, not U1's composition.
-Per (config, capacity, W, mode): 1 first call, then --repeats warm calls. The first call of a (config, capacity) is its cold
-call: its compile seconds are reported apart, and it also pays untracked first-use compiles (detach_roots' program, eager
-readout ops, the fence) inside its stages; no first call enters any statistic. Over the warm calls: median, p90 (numpy's
-linear interpolation) and max of every stage, part and the total; warm calls that compiled anyway are counted. Leaves per
+Per (config, capacity, W, mode): 1 first (cold) call on move window 0, then --repeats warm calls, warm call i on its own
+window of C roots (the chunk's labeled roots i*C .. i*C+C-1, cycled), so the statistics span N distinct moves, not one move
+re-timed. The first call of a (config, capacity) is its cold call: its compile seconds are reported apart, and it also pays
+untracked first-use compiles (detach_roots' program, eager readout ops, the fence) inside its stages; no first call enters
+any statistic. Over the warm calls: median, p90 (numpy's linear interpolation) and max of every stage, part and the total;
+a warm call that still compiled (e.g. a new pool size's gather/write) is flagged and logged (WARM_COMPILE). Per call the
+roots' window, its distinct scan steps (one RootContext slice and detach pass each), expanded nodes, enumerated leaves and
+each variant's refused roots are recorded, with their spread over the warm calls. Every call's Requests are checked against
+the bank's own. Leaves per
 world: nominal = 81 x the product of the slot widths at plies 2..N (the engine's own widths), measured = enumerated leaves /
 (C x W). Memory: d3_depth2_throughput.memory_stats after each call, baseline before a (config, capacity)'s first call.
 Compiles: every DepthNPricer in one process shares one program table (DepthNPricer._program keys: P1 by capacity, block
@@ -105,8 +110,9 @@ from .d3_depthn_gate import split_searched
 SCHEMA = 'pokezero.search-latency.v1'
 BUDGET_MS = 1000.
 LIMIT_MS = 800.
-RULE = ('a (config, W, mode) fits at capacity C when the p90 of its warm end-to-end totals is <= 800 ms '
-    '(200 ms of slack under the 1,000 ms per-move budget); the first call of every series is excluded')
+RULE = ('a (config, W, mode, solver, pool) fits at capacity C when the p90 over its N distinct move windows (warm call i prices the '
+    'chunk\'s roots i*C .. i*C+C-1, cycled; N = --repeats) of the end-to-end totals is <= 800 ms (200 ms of slack under the 1,000 ms '
+    'per-move budget); the median is shown beside it; the cold call (window 0) is excluded')
 STAGES = ('host_prep', 'world_construction', 'pricer', 'solve', 'return')
 COMPILE = 'compile'
 LANES = 81
@@ -589,6 +595,23 @@ class Search:
         return frame, dict(depth2_pass=first, depthn=second, maps_widths=widths, slot_widths=slots)
 
 
+def expanded_nodes(frames):
+    """Expanded nodes the call priced (turn-1 cells and every intermediate ply's nodes with status 2, once per distinct frame); None for a frame without them."""
+    total, seen = 0, set()
+    for frame in frames:
+        if id(frame) in seen:continue
+        seen.add(id(frame))
+        if getattr(frame, 't1_status', None) is None:return None
+        total += int(np.count_nonzero(np.asarray(frame.t1_status) == 2)) + sum(int(np.count_nonzero(np.asarray(n.status) == 2)) for n in getattr(frame, 'nodes', ()))
+    return total
+
+
+def count_spread(values):
+    """min, median and max of per-call counts (None when any is unknown)."""
+    if not values or any(v is None for v in values):return None
+    return dict(min=float(min(values)), median=float(np.median(values)), max=float(max(values)))
+
+
 def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, rotate=0, timer=time.perf_counter):
     """One call: host_prep, K - 1 plannings and the pricing (K sequential passes of C roots, or one packed pass at K*C) once, then
     for every variant (solver, pool size) its solve and return on the same frames, in an order rotated by `rotate`; all contiguous
@@ -596,7 +619,7 @@ def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, ro
     end-to-end total = host_prep + world_construction + pricer + its solve + its return. Returns (record, block-0 requests)."""
     variants = variants_of(variants if variants is not None else solver)
     blocks = worlds // 2;clock = Clock(timer)
-    requests, parts = ctx.prep(roots);ctx.fence();clock.lap('host_prep')
+    requests, parts, prep_info = ctx.prep(roots);ctx.fence();clock.lap('host_prep')
     for name, seconds in parts.items():clock.note('host_prep', name, seconds)
     count = len(requests);planned = [list(requests)]
     for block in range(1, blocks):
@@ -628,27 +651,33 @@ def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, ro
         for stage in ('solve', 'return'):clock.stages[stage] += sub.stages[stage]
         out[v.name] = dict(solver=getattr(v.solver, 'spec', None), pool=v.pool_size, solve_seconds=sub.stages['solve'], return_seconds=sub.stages['return'],
             parts=dict(sub.parts), total_seconds=common + sub.stages['solve'] + sub.stages['return'], labeled=sum(r['status'] == 'LABELED' for r in results),
-            moves=moves, leftover_device_arrays=len(leftover))
+            refused=sum(r['status'] != 'LABELED' for r in results), moves=moves, leftover_device_arrays=len(leftover))
     clock.last = last;record = clock.record()
     enumerated = [i['depthn'].get('enumerated_leaves') for i in infos]
     record.update(roots=count, worlds=worlds, mode=mode, blocks=blocks, common_seconds=common, variants={v.name: out[v.name] for v in variants},
-        variant_order=[v.name for v in order], pricing=infos, enumerated_leaves=None if any(e is None for e in enumerated) else int(sum(enumerated)))
+        variant_order=[v.name for v in order], pricing=infos, enumerated_leaves=None if any(e is None for e in enumerated) else int(sum(enumerated)),
+        window=getattr(roots, 'window', None), root_keys=[list(k) if isinstance(k, tuple) else k for k in getattr(roots, 'keys', [])],
+        host_prep_steps=prep_info.get('steps'), detach_passes=prep_info.get('detach_passes'), expanded_nodes=expanded_nodes(frames))
     del record['total_seconds']   # every variant has its own end-to-end total
     return record, requests
 
 
-def measure_series(search, ctx, roots, worlds, mode, repeats, *, solver=None, variants=None, progress, memory, baseline, capacity, timer=time.perf_counter):
-    """1 first call + `repeats` warm calls of one (config, capacity, W, mode), every variant solving the same frames (order rotated
-    per call); one series per variant, statistics over the warm calls only."""
+def measure_series(search, ctx, roots_of, worlds, mode, repeats, *, solver=None, variants=None, progress, memory, baseline, capacity, timer=time.perf_counter):
+    """1 first (cold) call on move window 0 + `repeats` warm calls, warm call i on window i (roots_of(i)), of one (config, capacity,
+    W, mode), every variant solving the same frames (order rotated per call); one series per variant, statistics over the warm
+    calls only. Every call's Requests are checked; a warm call that compiled is logged (WARM_COMPILE)."""
     variants = variants_of(variants if variants is not None else solver);calls = []
     for i in range(1 + repeats):
-        with gate.stage(progress, 'latency_call', config=search.name, capacity=capacity, worlds=worlds, mode=mode, call=i, warm=i > 0) as info:
+        roots = roots_of(i)
+        with gate.stage(progress, 'latency_call', config=search.name, capacity=capacity, worlds=worlds, mode=mode, call=i, warm=i > 0, window=i) as info:
             record, requests = run_call(search, ctx, roots, worlds, mode, variants=variants, rotate=i, timer=timer)
             record['memory'] = memory();calls.append(record)
             info.update(compile_seconds=record['stages'][COMPILE], common_ms=1e3 * record['common_seconds'],
                 total_ms={k: 1e3 * v['total_seconds'] for k, v in record['variants'].items()},
                 solve_ms={k: 1e3 * v['solve_seconds'] for k, v in record['variants'].items()}, labeled={k: v['labeled'] for k, v in record['variants'].items()})
-        if i == 0:ctx.check(requests, roots)
+        ctx.check(requests, roots)
+        if i > 0 and record['stages'][COMPILE] > 0 and progress is not None:
+            progress('WARM_COMPILE', config=search.name, capacity=capacity, worlds=worlds, mode=mode, call=i, compile_seconds=record['stages'][COMPILE])
         for entry in record['pricing']:
             for key in ('depth2_pass', 'depthn'):
                 for c in (entry.get(key) or {}).get('compiles', ()):
@@ -661,7 +690,7 @@ def variant_view(call, name):
     v = call['variants'][name];stages = {k: call['stages'][k] for k in ('host_prep', 'world_construction', 'pricer', COMPILE)}
     stages.update(solve=v['solve_seconds'], **{'return': v['return_seconds']})
     return dict({k: x for k, x in call.items() if k not in ('variants', 'stages', 'parts')}, stages=stages, parts={**call['parts'], **v['parts']},
-        total_seconds=v['total_seconds'], labeled=v['labeled'], moves=v['moves'], leftover_device_arrays=v['leftover_device_arrays'])
+        total_seconds=v['total_seconds'], labeled=v['labeled'], refused=v['refused'], moves=v['moves'], leftover_device_arrays=v['leftover_device_arrays'])
 
 
 def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
@@ -688,6 +717,11 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
         warm_parts={k: distribution([c['parts'].get(k, 0.) for c in warm]) for k in parts},
         warm_calls=len(warm), warm_calls_with_compiles=sum(c['stages'][COMPILE] > 0 for c in warm), warm_compile_seconds=sum(c['stages'][COMPILE] for c in warm),
         labeled=first['labeled'], leftover_device_arrays=max(c['leftover_device_arrays'] for c in calls), leaves=leaves,
+        windows=dict(warm=[c.get('window') for c in warm], distinct_roots=len({json.dumps(k) for c in warm for k in c.get('root_keys') or ()}),
+            root_slots=capacity * len(warm), scope='distinct roots over the warm windows; fewer than C x N when the chunk wraps'),
+        spread=dict(leaves_per_world=count_spread([None if c.get('enumerated_leaves') is None else c['enumerated_leaves'] / (capacity * worlds) for c in warm]),
+            expanded_nodes=count_spread([c.get('expanded_nodes') for c in warm]), refused_roots=count_spread([c.get('refused') for c in warm]),
+            host_prep_steps=count_spread([c.get('host_prep_steps') for c in warm]), scope='per warm call (each its own move window)'),
         memory=dict(baseline=baseline, process_peak_bytes_so_far=peak,
             peak_over_baseline_in_use=None if peak is None or (baseline or {}).get('bytes_in_use') is None else peak - baseline['bytes_in_use']),
         calls=calls)
@@ -700,13 +734,13 @@ def measure_config(name, worlds, args, ctx, progress, *, solver=None, variants=N
     call reports what it compiled."""
     out, searches = [], {};variants = variants_of(variants if variants is not None else solver)
     for capacity in args.capacity_values:
-        roots = ctx.roots(capacity);baseline = memory() or {};first = True
+        roots_of = lambda window, capacity=capacity: ctx.roots(capacity, window);baseline = memory() or {};first = True
         for w in worlds:
             blocks = w // 2
             for mode in ('sequential',) + (('packed',) if blocks > 1 and args.packed else ()):
                 size = capacity if mode == 'sequential' else blocks * capacity
                 if size not in searches:searches[size] = Search(name, size, args, ctx, module=module, programs=programs, depth2_module=depth2_module)
-                group = measure_series(searches[size], ctx, roots, w, mode, args.repeats, variants=variants, progress=progress, memory=memory,
+                group = measure_series(searches[size], ctx, roots_of, w, mode, args.repeats, variants=variants, progress=progress, memory=memory,
                     baseline=baseline, capacity=capacity, timer=timer)
                 for series in group:series['first_call']['cold_of_config_capacity'] = first
                 first = False;out.extend(group)
@@ -736,13 +770,21 @@ def capture_chunk(captured, *, compile_cache=None):
     if 'frames' not in captured:raise SystemExit('the bank chunk\'s _prepare_batched inputs were not captured (bank_chunk_requests changed shape)')
 
 
+def window_roots(available, capacity, window):
+    """Move window `window`: the labeled roots window*C .. window*C+C-1 of the chunk, cycled."""
+    available = list(available)
+    if not available:raise ValueError('the chunk has no priced request')
+    return [available[(window * capacity + j) % len(available)] for j in range(capacity)]
+
+
 def address_key(request):
     a = request.plans.root.address;return (int(a.stream), int(a.frame), int(a.owner))
 
 
 def host_prep(ctx, roots):
     """host_prep for exactly these C roots (module docstring): Provider._prepare_batched's per-root core on the captured chunk.
-    Returns (block-0 Requests in root order, {detach, plan_starts, assemble} seconds measured inside)."""
+    Returns (block-0 Requests in root order, {detach, plan_starts, assemble} seconds measured inside, {steps, detach_passes}): a
+    lockstep live batch would pay one RootContext slice and detach pass, a chunk window pays one per distinct scan step."""
     import jax
     from gpu_engine import v5_device_teacher as teacher, device_public_worlds as worlds
     from gpu_engine.device_public_teacher_batch import Request
@@ -765,7 +807,7 @@ def host_prep(ctx, roots):
         middle = time.perf_counter();plans = worlds.plan_starts(detached[(step, row, owner)], source, recipe);after = time.perf_counter()
         requests.append(Request(plans, logits, legal, inputs, learner, opponent))
         plan += after - middle;assemble += (middle - clock) + (time.perf_counter() - after)
-    return requests, dict(detach=detach, plan_starts=plan, assemble=assemble)
+    return requests, dict(detach=detach, plan_starts=plan, assemble=assemble), dict(steps=len(contexts), detach_passes=len(batch))
 
 
 def check_prepared(requests, bound):
@@ -797,8 +839,9 @@ def prepare(args):
     blocks = [(provider.recipe, nullcontext) if b == 0 else (original.Recipe(seed), bypass) for b, seed in enumerate(seeds)]
     ctx = SimpleNamespace(**vars(base));missing = [address_key(r) for r in base.available if address_key(r) not in slot_of]
     if missing:raise SystemExit(f'{len(missing)} labeled roots have no (step, row, owner) in the captured chunk, e.g. {missing[0]}')
-    def roots(capacity):
-        bound = t2.cycle_roots(ctx.available, capacity);return SimpleNamespace(bound=bound, slots=[slot_of[address_key(r)] for r in bound])
+    def roots(capacity, window=0):
+        bound = window_roots(ctx.available, capacity, window)
+        return SimpleNamespace(bound=bound, slots=[slot_of[address_key(r)] for r in bound], window=window, keys=[address_key(r) for r in bound])
     ctx.chunk = SimpleNamespace(roots=captured['roots'], frames=frames, bank=bank);ctx.head_override = bool(args.head_archive);ctx.seeds = seeds;ctx.blocks = blocks
     ctx.roots = roots;ctx.prep = lambda r: host_prep(ctx, r);ctx.fence = device_fence;ctx.check = lambda requests, r: check_prepared(requests, r.bound)
     ctx.replan = lambda request, recipe: replace(request, plans=worlds.plan_starts(request.plans.root, provider.source, recipe))
@@ -914,7 +957,7 @@ def markdown(report):
     world = f'world_construction: {_short(path["world_planner"])} (blocks >= 1) + {_short(path["world_builder"])} -> {_short(path["world_materialize"])}'
     pools = '; '.join(f'pool {p["workers"]}: startup {p["startup_seconds"]:.1f} s (excluded)' for p in h['solver_pools']) or 'in process only'
     lines = ['## Search latency: end-to-end ms per call, warm calls (median / p90)', '',
-        f'Rule: {RULE}. Solvers: {", ".join(x["spec"] for x in h["solvers"])} (every solver and pool size on the same priced frames); solve pools: {pools}.',
+        f'Rule: {RULE} (N = {report["repeats"]}). Solvers: {", ".join(x["spec"] for x in h["solvers"])} (every solver and pool size on the same priced frames); solve pools: {pools}.',
         f'World construction path timed: {path["timed"]}; materializer object {path["materializer"]}; Phase D constructor on the path: '
         f'{"yes" if path["uses_phase_d_constructor"] else "no"}.',
         f'Source commit: {commit["commit"]} ({commit["origin"]}' + ('' if commit.get('dirty') is None else f', dirty={commit["dirty"]}') + ').',

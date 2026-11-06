@@ -140,12 +140,16 @@ def fake_ctx(blocks=4):
     ctx = SimpleNamespace(provider=SimpleNamespace(executor=None, materializer='materializer'), plan=SimpleNamespace(model=None), params=('params',),
         actor_capacity=1, blocks=[(RECIPES[b], bypass(b) if b else contextlib.nullcontext) for b in range(blocks)], entered=entered, checked=[], fence=lambda: None)
     def prep(roots):
-        CLOCK.advance(.003);return [request(i, 0) for i in roots.bound], dict(detach=.002, plan_starts=.0005, assemble=.0005)
+        CLOCK.advance(.003);return [request(i, 0) for i in roots.bound], dict(detach=.002, plan_starts=.0005, assemble=.0005), dict(steps=2, detach_passes=2)
     def replan(r, recipe):
         CLOCK.advance(.001);return request(r.root, RECIPES.index(recipe))
     ctx.prep, ctx.replan = prep, replan
     ctx.check = lambda requests, roots: ctx.checked.append(len(requests))
-    ctx.roots = lambda capacity: SimpleNamespace(bound=list(range(capacity)), slots=[(0, i, 0) for i in range(capacity)])
+    ctx.available = list(range(64))
+    def roots(capacity, window=0):
+        bound = tool.window_roots(ctx.available, capacity, window)
+        return SimpleNamespace(bound=bound, slots=[(0, i, 0) for i in bound], window=window, keys=list(bound))
+    ctx.roots = roots
     return ctx
 
 
@@ -335,7 +339,7 @@ class SearchLatencyTests(unittest.TestCase):
         args, ctx = self.args(), fake_ctx();search = tool.Search('depth3-prior-k3', 4, args, ctx, module=MODULE)
         CLOCK.extra = [1., .1, .3, .2]   # the cold call is slow and compiles; warm calls vary
         memory = lambda: dict(process_peak_bytes_so_far=10, bytes_in_use=4)
-        [series] = tool.measure_series(search, ctx, ctx.roots(4), 2, 'sequential', 3, solver=FakeSolver(), progress=None, memory=memory,
+        [series] = tool.measure_series(search, ctx, lambda i: ctx.roots(4, i), 2, 'sequential', 3, solver=FakeSolver(), progress=None, memory=memory,
             baseline=dict(bytes_in_use=4), capacity=4, timer=CLOCK)
         warm = [.003 + .01 + .008 + x + .0004 for x in (.1, .3, .2)]
         self.assertEqual(series['warm_calls'], 3);self.assertEqual(series['warm']['total']['n'], 3)
@@ -345,7 +349,12 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(series['first_call']['compile_seconds'], 2.);self.assertAlmostEqual(series['first_call']['total_seconds'], .003 + .01 + 1.008 + .0004)
         self.assertEqual((series['warm_calls_with_compiles'], series['warm_compile_seconds']), (0, 0.))
         self.assertAlmostEqual(series['warm']['pricer']['median_ms'], 1e3 * .208, places=6)
-        self.assertEqual(len(series['calls']), 4);self.assertEqual(ctx.checked, [4])   # the first call's requests are checked once
+        self.assertEqual(len(series['calls']), 4);self.assertEqual(ctx.checked, [4] * 4)   # every call's requests are checked
+        # Each warm call is its own move window of C roots: windows 1..3, roots 4..15, so p90 spans distinct moves, not one move re-timed.
+        self.assertEqual([c['window'] for c in series['calls']], [0, 1, 2, 3]);self.assertEqual(series['calls'][2]['root_keys'], [8, 9, 10, 11])
+        self.assertEqual((series['windows']['warm'], series['windows']['distinct_roots'], series['windows']['root_slots']), ([1, 2, 3], 12, 12))
+        self.assertEqual(series['spread']['host_prep_steps'], dict(min=2., median=2., max=2.));self.assertEqual(series['spread']['refused_roots'], dict(min=0., median=0., max=0.))
+        self.assertEqual(tool.window_roots(range(5), 4, 1), [4, 0, 1, 2])   # cycled past the chunk's end
         self.assertEqual(series['memory']['peak_over_baseline_in_use'], 6)
         self.assertEqual(series['leaves']['nominal_per_world'], 6561);self.assertEqual(series['leaves']['measured_per_world'], 6561)
 
@@ -516,7 +525,8 @@ class SearchLatencyTests(unittest.TestCase):
         slots = [(1, 2, 0), (0, 1, 1), (1, 0, 1), (1, 2, 0)]   # cycled: the first root repeats
         bound = [SimpleNamespace(root_logits=(9.,) * 9, learner_actor=0, opponent_actor=0)] * 4
         with patch.object(real_worlds, 'detach_roots', detach_roots), patch.object(real_worlds, 'plan_starts', plan_starts):
-            requests, parts = tool.host_prep(ctx, SimpleNamespace(slots=slots, bound=bound))
+            requests, parts, counts = tool.host_prep(ctx, SimpleNamespace(slots=slots, bound=bound))
+            self.assertEqual(counts, dict(steps=2, detach_passes=2))   # two distinct scan steps: two RootContext slices and detach passes
             # One batched pass per scan step, steps in first-seen order and pairs in root order (as _prepare_batched's `batch` dict).
             self.assertEqual(detached, [(103, (2, 0, 2), (0, 1, 0), 'source', True), (100, (1,), (1,), 'source', True)])
             self.assertEqual(planned, ['declared'] * 4);self.assertEqual(set(parts), {'detach', 'plan_starts', 'assemble'})
@@ -528,7 +538,7 @@ class SearchLatencyTests(unittest.TestCase):
                 ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask'))))
             self.assertEqual(first.root_inputs['categorical_ids'].shape[:2], (1, 1));self.assertTrue(first.root_inputs['history_mask'].all())
             ctx.head_override = True   # the gate's head override: the bound head prior and actors 0/0
-            requests, _ = tool.host_prep(ctx, SimpleNamespace(slots=slots, bound=bound))
+            requests, _, _ = tool.host_prep(ctx, SimpleNamespace(slots=slots, bound=bound))
             self.assertEqual([(r.root_logits, r.learner_actor, r.opponent_actor) for r in requests], [((9.,) * 9, 0, 0)] * 4)
             moved = ctx.chunk.roots.streams;moved[1, 2] += 1   # the device context disagrees with the frames' address
             with self.assertRaises(ValueError):tool.host_prep(ctx, SimpleNamespace(slots=slots, bound=bound))
@@ -647,11 +657,12 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(v['hedge@pool4']['parts']['solve.worlds_pool'], .001 * 2 * 2);self.assertAlmostEqual(v['hedge@pool0']['solve_seconds'], 0.)   # IPC is in solve
         self.assertEqual([(fn, n, chunk) for fn, n, chunk in pool.mapped], [(tool.world_prices, 4, 1)] * 2)   # (root, block) units, both solvers
         self.assertEqual(v['learner_max@pool0']['moves'], v['learner_max@pool4']['moves']);self.assertEqual(v['hedge@pool0']['moves'], v['hedge@pool4']['moves'])
-        self.assertEqual((v['learner_max@pool0']['labeled'], v['hedge@pool4']['labeled']), (2, 2))
+        self.assertEqual((v['learner_max@pool0']['labeled'], v['hedge@pool4']['labeled'], v['hedge@pool0']['refused']), (2, 2, 0))
+        self.assertEqual((record['expanded_nodes'], record['host_prep_steps'], record['window']), (2 * 2 * 2, 2, 0))   # 2 blocks x 2 roots x 2 worlds x 1 cell
         # A series per variant from the same calls; each total is its own, the first call is excluded from every one.
         CLOCK.now = 100.;memory = lambda: {}
         with patch.dict(sys.modules, {tool.HEDGE_MODULE: hedge}):
-            group = tool.measure_series(tool.Search('depth2-fw', 2, args, ctx, module=FRAMES), ctx, ctx.roots(2), 2, 'sequential', 2, variants=variants,
+            group = tool.measure_series(tool.Search('depth2-fw', 2, args, ctx, module=FRAMES), ctx, lambda i: ctx.roots(2, i), 2, 'sequential', 2, variants=variants,
                 progress=None, memory=memory, baseline={}, capacity=2, timer=CLOCK)
         self.assertEqual([(g['solver'], g['pool'], g['variant']) for g in group], [('learner_max', 0, 'learner_max@pool0'), ('learner_max', 4, 'learner_max@pool4'),
             ('hedge', 0, 'hedge@pool0'), ('hedge', 4, 'hedge@pool4')])
