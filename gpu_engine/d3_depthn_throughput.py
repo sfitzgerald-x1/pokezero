@@ -16,10 +16,11 @@ per block 1 cold call (compile) and --repeats warm calls. Configs (each measured
 Per config and W: device ms per root (the sum over blocks of each block's warm median device seconds / C, the pricer's
 timing) and wall ms per root (frame_wall_seconds: the host loop over plies and packing included) against the 1,000 ms
 budget, leaves enumerated/evaluated, compile seconds (cold) and memory (process peak and peak over the config's
-baseline; --isolate gives each config its own process). Per-stage split: P1 and plies 2..N MEASURED from the pricer's
-timing (device_seconds = synced P1 + sum(ply_loop_seconds - host_pack_seconds)); the leaf ply vs the expand plies an
-ESTIMATE (depth2-k{k}'s plies time per evaluated leaf lane x depth N's evaluated leaf lanes; the expand plies the rest,
-by their evaluated lanes). host_pack and ply_loop ms/root are reported beside it. Progress is JSON lines; the result is throughput.json in
+baseline; --isolate gives each config its own process). Per-stage split: P1 MEASURED (synced on its own) and plies 2..N
+from the pricer's timing as sum(ply_loop_seconds - host_pack_seconds), a LOWER bound on their device time (dispatch is
+asynchronous, so host packing overlaps device work; ply_loop is the upper bound); the leaf ply vs the expand plies an
+ESTIMATE (depth2-k{k}'s plies time per lane of active blocks x depth N's active leaf lanes, also per padded evaluated
+lane; the expand plies the rest, by their active lanes). host_pack and ply_loop ms/root are reported beside it. Progress is JSON lines; the result is throughput.json in
 a new --out directory.
 """
 import argparse
@@ -40,6 +41,9 @@ from .d3_depthn_gate import split_searched
 SCHEMA = 'pokezero.depthn-throughput.v1'
 BUDGET_MS = 1000.
 SPLIT_KEYS = ('p1_seconds', 'plies_seconds', 'ply_loop_seconds', 'host_pack_seconds')   # the pricer's timing split (device = P1 + plies)
+PLIES_BOUND = ('plies (ply_loop - host_pack) is a LOWER bound on the plies\' device time: JAX dispatch is asynchronous and the ply loop syncs '
+    'once per ply, so host packing of later calls overlaps device work of earlier ones and subtracting all of it can remove device time; '
+    'ply_loop itself (dispatch, packing and the sync) is the upper bound. P1 is synced on its own: measured.')
 MODES = ('prior', 'searched')
 
 
@@ -121,9 +125,10 @@ def prepare(args):
         available=available, seeds=seeds, planned=planned, actor_capacity=len(params) if head is not None else plan.historical_window + 1)
 
 
-def lanes_of(entry):
-    """A ply's device lanes: evaluated_lanes (call padding included) when the pricer reports them, else its lanes."""
-    return float(entry.get('evaluated_lanes', entry.get('lanes')) or 0)
+def lanes_of(entry, padded=False):
+    """A ply's lanes: `lanes`, those of its active (non-skipped) blocks; padded=True: `evaluated_lanes`, which also count the
+    skipped blocks padding its last call (falls back to `lanes` when the pricer does not report them)."""
+    return float((entry.get('evaluated_lanes', entry.get('lanes')) if padded else entry.get('lanes')) or 0)
 
 
 class Caller:
@@ -161,7 +166,8 @@ class Caller:
         split = {} if None in (loop, pack) else dict(ply_loop_seconds=loop, host_pack_seconds=pack, plies_seconds=loop - pack, p1_seconds=timing['device_seconds'] - (loop - pack))
         return frame, dict(device_seconds=timing['device_seconds'], wall_seconds=timing.get('frame_wall_seconds'), compile_seconds=self.new_compiles(pricer),
             leaves_enumerated=timing.get('enumerated_leaves'), leaves_evaluated=timing.get('evaluated_leaf_lanes'),
-            leaf_evaluated_lanes=lanes_of(plies[-1]) if plies else None, plies=plies, bytes_per_node_state=timing.get('bytes_per_node_state'),
+            leaf_lanes=lanes_of(plies[-1]) if plies else None, leaf_evaluated_lanes=lanes_of(plies[-1], True) if plies else None, plies=plies,
+            bytes_per_node_state=timing.get('bytes_per_node_state'),
             searched_k=timing.get('searched_k'), searched_widths=timing.get('searched_widths'), **split)
 
     def __call__(self, requests, recipe):
@@ -200,7 +206,8 @@ def measure(caller, planned, repeats, *, memory, progress):
         peak = max(peaks) if peaks else None
         blocks.append(dict(block=block, cold_compile_seconds=calls[0]['compile_seconds'], warm_device_seconds=device, warm_device_seconds_median=t2.median(device),
             warm_device_seconds_min=min(device) if device else None, warm_wall_seconds_median=t2.median(wall), leaves_enumerated=calls[0].get('leaves_enumerated'),
-            leaves_evaluated=calls[0].get('leaves_evaluated'), leaf_evaluated_lanes=calls[0].get('leaf_evaluated_lanes'), plies=calls[0].get('plies'),
+            leaves_evaluated=calls[0].get('leaves_evaluated'), leaf_lanes=calls[0].get('leaf_lanes'), leaf_evaluated_lanes=calls[0].get('leaf_evaluated_lanes'),
+            plies=calls[0].get('plies'),
             maps_widths=calls[0].get('maps_widths'), slot_widths=calls[0].get('slot_widths'), searched_k=calls[0].get('searched_k'),
             searched_widths=calls[0].get('searched_widths'),
             **{f'warm_{k}_median': t2.median([c[k] for c in warm if c.get(k) is not None]) for k in SPLIT_KEYS},
@@ -223,7 +230,7 @@ def derive(blocks, capacity, worlds):
         within_budget_device=None if device is None else ms(device) <= BUDGET_MS, within_budget_wall=None if wall is None else ms(wall) <= BUDGET_MS,
         leaves_enumerated=leaves('leaves_enumerated'), leaves_evaluated=leaves('leaves_evaluated'),
         device_ms_per_root_min=ms(total('warm_device_seconds_min')), cold_compile_seconds=used[0]['cold_compile_seconds'] if used else None,
-        leaf_evaluated_lanes=leaves('leaf_evaluated_lanes'),
+        leaf_lanes=leaves('leaf_lanes'), leaf_evaluated_lanes=leaves('leaf_evaluated_lanes'),
         **{f'{k[:-len("_seconds")]}_ms_per_root': ms(None if any(b.get(f'warm_{k}_median') is None for b in used) else sum(b[f'warm_{k}_median'] for b in used))
             for k in SPLIT_KEYS},
         peak_over_baseline_in_use=max((b['peak_over_baseline_in_use'] for b in used if b['peak_over_baseline_in_use'] is not None), default=None))
@@ -235,11 +242,11 @@ def derive(blocks, capacity, worlds):
 
 
 def ply_split(depthn, depth2, depth1):
-    """One W's depth-N device ms/root by stage. MEASURED from the pricer's timing (ply_loop_seconds, host_pack_seconds): P1 =
-    device - sum(ply_loop - host_pack) and plies 2..N = sum(ply_loop - host_pack) (depth N's own, the searched pass apart).
-    ESTIMATED: the leaf ply = depth2-k's plies time (its one ply is a leaf ply of the same K) per evaluated leaf lane x depth
-    N's evaluated leaf lanes; the expand plies = the plies time minus that, apportioned by their evaluated lanes. Without the
-    timing split P1 = depth1's device time and the plies time = depth N - P1, both estimates. None where an input is missing."""
+    """One W's depth-N device ms/root by stage. MEASURED from the pricer's timing: P1 = device - sum(ply_loop - host_pack) (synced
+    on its own) and plies 2..N = sum(ply_loop - host_pack), a LOWER bound (PLIES_BOUND; ply_loop the upper), depth N's own (the
+    searched pass apart). ESTIMATED: the leaf ply = depth2-k's plies time (its one ply is a leaf ply of the same K) per lane of
+    its active blocks x depth N's active leaf lanes (also given per padded evaluated lane); the expand plies = the plies time
+    minus that, apportioned by active lanes. Without the timing split P1 = depth1's device time and the plies = depth N - P1."""
     d, two = depthn['derived'], depth2['derived'];one = (depth1 or {}).get('derived') or {}
     total = (d.get('parts_ms_per_root') or {}).get('depthn', d['device_ms_per_root'])
     if d.get('p1_ms_per_root') is not None and d.get('plies_ms_per_root') is not None:p1, plies, source = d['p1_ms_per_root'], d['plies_ms_per_root'], 'MEASURED'
@@ -247,19 +254,22 @@ def ply_split(depthn, depth2, depth1):
     else:return None
     leaf_two = two.get('plies_ms_per_root')
     if leaf_two is None and None not in (two.get('device_ms_per_root'), one.get('device_ms_per_root')):leaf_two = two['device_ms_per_root'] - one['device_ms_per_root']
-    lanes_two, lanes_n = two.get('leaf_evaluated_lanes') or two.get('leaves_evaluated'), d.get('leaf_evaluated_lanes') or d.get('leaves_evaluated')
-    if leaf_two is None or not lanes_two or lanes_n is None:return dict(p1_ms_per_root=p1, plies_ms_per_root=plies, p1_and_plies=source, leaf_ply_ms_per_root=None)
-    leaf = leaf_two / lanes_two * lanes_n;rest = plies - leaf
+    out = dict(p1_ms_per_root=p1, plies_ms_per_root_lower_bound=plies, plies_ms_per_root_upper_bound=d.get('ply_loop_ms_per_root'), p1_and_plies=source,
+        plies_bound=PLIES_BOUND, host_pack_ms_per_root=d.get('host_pack_ms_per_root'), ply_loop_ms_per_root=d.get('ply_loop_ms_per_root'),
+        depth2_full_width_pass_ms_per_root=(d.get('parts_ms_per_root') or {}).get('depth2_full_width_pass'),
+        searched_maps_host_ms_per_root=(d.get('parts_ms_per_root') or {}).get('searched_maps_host'), leaf_ply_ms_per_root=None)
+    active_two, active_n = two.get('leaf_lanes') or two.get('leaves_evaluated'), d.get('leaf_lanes') or d.get('leaves_evaluated')
+    if leaf_two is None or not active_two or active_n is None:return out
+    leaf = leaf_two / active_two * active_n;rest = plies - leaf
+    padded_two, padded_n = two.get('leaf_evaluated_lanes'), d.get('leaf_evaluated_lanes')
     entries = depthn['blocks'][0].get('plies') or ();last = max((int(x.get('ply', 0)) for x in entries), default=0)
     expand = [x for x in entries if int(x.get('ply', 0)) < last];lanes = sum(lanes_of(x) for x in expand)
-    return dict(p1_ms_per_root=p1, plies_ms_per_root=plies, p1_and_plies=source, leaf_ply_ms_per_root=leaf, expand_plies_ms_per_root=rest,
-        leaf_and_expand='ESTIMATE (depth2-k plies time per evaluated leaf lane)',
+    out.update(leaf_ply_ms_per_root=leaf, expand_plies_ms_per_root=rest, leaf_and_expand='ESTIMATE (depth2-k plies time per active-block lane)',
+        leaf_ply_ms_per_root_per_padded_lane=None if not padded_two or padded_n is None else leaf_two / padded_two * padded_n,
         expand_by_ply={str(x.get('ply')): None if not lanes else rest * lanes_of(x) / lanes for x in expand},
-        host_pack_ms_per_root=d.get('host_pack_ms_per_root'), ply_loop_ms_per_root=d.get('ply_loop_ms_per_root'),
-        depth2_full_width_pass_ms_per_root=(d.get('parts_ms_per_root') or {}).get('depth2_full_width_pass'),
-        searched_maps_host_ms_per_root=(d.get('parts_ms_per_root') or {}).get('searched_maps_host'),
         method=' '.join(line.strip() for line in ply_split.__doc__.split('\n')),
         caveat='separate programs and batch shapes; XLA may schedule them differently; host time outside the ply loop is in wall_ms_per_root')
+    return out
 
 
 def measure_config(config, args, ctx, progress, *, module=None):

@@ -7,24 +7,33 @@ full-width depth-2 pass (DepthNPricer(depth=2, k=9) through as_depth2_frame) on 
  (a) exact: turn 1 as depth 2 (pre, root opponent request/legal, statuses, errors, terminal values, digests, encoder
      masks, request flags) plus the ply-2 maps stored at each turn-1 cell; every intermediate node's status, error,
      terminal value, both digests, encoder masks, request flags, next-ply maps and parent links; every checked leaf's
-     status, error, terminal value and digest. Under `searched`, the supplied ply-2 maps are also checked well formed
-     (distinct encoder-legal actions then -1, a waiting seat [0, -1, ...], a non-expanded cell all -1); their selection
-     rule is the pricer's own (public searched_maps): the oracle takes them as given and expands them.
+     status, error, terminal value and digest; each engine's self-reported widths equal the REQUESTED ones (the plan
+     never takes widths from the engine: prior = the request, searched ply 2 = this gate's searched_widths_reference).
+     Under `searched`, the supplied ply-2 maps are checked well formed and EXACTLY equal to this gate's own host-only
+     re-derivation of the documented rule (searched_maps_reference) from the full-width depth-2 pass, slot order
+     included, with the per-root depth2_refused flag; the oracle then expands the maps as given.
+     The full-width depth-2 pass itself is trusted via --n2-equivalence and the depth-2 gate; in the run its turn 1 is
+     checked against the depth-N frame's, its enumeration against the oracle's full-width set, and every terminal/error
+     leaf plus --depth2-pass-sample uniform leaves per world are re-run by the oracle (PASS_TRUST).
  (b) turn 1 against D3 (depth 2's check: discrete exact, values and the root prior within the rule).
  (c) head values (turn-1 children, every ply's nodes, the leaves) and both seats' priors at every ply against the
      oracle's own heads: values within 2 x the run's depth-1 noise floor, logits within 0.1, value comparisons below
-     0.25 x the p10 learner-max own-slot spread of the last ply's parents (the misplacement guard; zero spreads excluded).
+     0.25 x the p10 learner-max own-slot spread of the last ply's parents (the misplacement guard). The p10 is over
+     NON-ZERO spreads: this departs from the depth-2 gate (p10 over every cell_a2_spread) and applies to
+     --n2-equivalence too; a run whose spreads are all zero skips the guard and says so.
  (d) the enumerated set at every ply (turn-1 cells, node ids, leaves) equals the oracle's.
  (e) recursive learner-max (gpu_engine.depthn_backups.learner_max_root) on the pricer frame vs the same frame with the
      oracle's leaf head values and priors on the lanes (c) checks; near ties relative to the run (depth 2's rule).
  block invariance (--block-invariance): block_lanes 729 and 2187, discrete arrays bit-equal, floats within the rule.
  refusals (reported): depthn_backups.refusal_summary (and the gate's own count) beside D3's depth-1 refusals and the
- full-width depth-2 pass's.
+ full-width depth-2 pass's. topk_boundary (reported): per ply and seat, each pruning prior selection's rank-k vs rank-(k+1)
+ gap and how often the oracle's own prior would select differently.
 The oracle enumerates with its own ranking code (depthn_oracle.prior_map) over the PRICER's priors (checked by (c)).
 
 --n2-equivalence: DepthNPricer at N=2 (full width and top --n2-k) and Depth2Pricer on the same requests;
-as_depth2_frame(depth-N) vs the Depth2Frame: discrete arrays exact, values and priors within the run's rule, the same
-(e) decision per root up to near ties. --depth3-diagnostics: full-width depth 2 and depth 3 per selection and k (live,
+as_depth2_frame(depth-N) vs the Depth2Frame: discrete arrays exact, world_reports equal, values and priors within the
+run's rule ONLY on scored cells (elsewhere both frames hold unspecified padding), the same (e) decision per root up to
+near ties; INCOMPLETE when no turn-2 leaf or no (e) root was compared. --depth3-diagnostics: full-width depth 2 and depth 3 per selection and k (live,
 no oracle); --diagnostics-from DIR... recomputes them from saved frames (--save-arrays writes
 frames-block{B}-call{C}-{depth2|prior-k{k}|searched-k{k}}.npz). All paths are command-line arguments; --out must be new.
 """
@@ -149,7 +158,11 @@ def oracle_levels(*, oracle, stack, requests, recipe, params, frame, plan, selec
     root_priors = {k: frame.root_peer_logits[k] for k in roots} if usable and plan.get('k1_opp', 9) < 9 else None
     cells = reference.turn1_cells(requests, recipe, roots, k1_own=plan.get('k1_own', 9), k1_opp=plan.get('k1_opp', 9), root_priors=root_priors)
     children = oracle.children(stack, cells, params);cells = np.asarray(cells, np.int64).reshape(-1, 4)
-    level_records = {1: children};ids = {1: cells[:, 2] * 9 + cells[:, 3]};links = {};maps, leaves, enumerated = {}, None, {}
+    level_records = {1: children};ids = {1: cells[:, 2] * 9 + cells[:, 3]};links = {};maps, leaves, enumerated, topk = {}, None, {}, {}
+    if usable and plan.get('k1_opp', 9) < 9:   # the root opponent's k1_opp selection, ranked by the pricer's root prior
+        for key, root in sorted(roots.items()):
+            if root['pre'] == 0 and root['peer_requested']:
+                boundary(topk, 'root', 'opp', root['peer_legal'], frame.root_peer_logits[key], root['peer_logits'], plan['k1_opp'], reference)
     expanded = np.flatnonzero(np.asarray(children.get('status', np.zeros(0))) == EXPANDED)
     parent_specs, parent_ids, parent_rows, ply = cells[expanded], ids[1][expanded], expanded, 1
     for p in range(2, N + 1):
@@ -163,6 +176,10 @@ def oracle_levels(*, oracle, stack, requests, recipe, params, frame, plan, selec
                 own_logits, opp_logits = logits_at(frame, ply, q, w, node) if usable else (rec['own_logits'][i], rec['peer_logits'][i])
                 own = reference.prior_map(rec['own_legal'][i], own_logits, bool(rec['own_requested'][i]), k_own)
                 opp = reference.prior_map(rec['peer_legal'][i], opp_logits, bool(rec['peer_requested'][i]), k_opp)
+                if usable:
+                    for seat, legal, used, mine, requested, k in (('own', rec['own_legal'][i], own_logits, rec['own_logits'][i], rec['own_requested'][i], k_own),
+                            ('opp', rec['peer_legal'][i], opp_logits, rec['peer_logits'][i], rec['peer_requested'][i], k_opp)):
+                        if requested:boundary(topk, f'ply{p}', seat, legal, used, mine, k, reference)
             maps[(p, q, w, node)] = (own, opp);own_maps[t], opp_maps[t] = own, opp
         specs, child_ids, parents, own_slot, opp_slot = reference.expand_arrays(parent_specs, parent_ids, own_maps, opp_maps)
         if p < N:
@@ -175,7 +192,34 @@ def oracle_levels(*, oracle, stack, requests, recipe, params, frame, plan, selec
             chosen, forced = _sample(index, sample, requests, block, frame if usable else None)
             leaves = oracle.leaves_n(stack, specs[chosen], N, params);leaves['index'] = index[chosen]
     return dict(roots=roots, children=children, cells=cells, levels=level_records, ids=ids, links=links, maps=maps, leaves=leaves,
-        enumerated=enumerated, worlds=len(stack.rows), plan=plan, forced_leaves=forced)
+        enumerated=enumerated, worlds=len(stack.rows), plan=plan, forced_leaves=forced, topk=topk)
+
+
+def boundary(topk, ply, seat, legal, used, mine, k, reference):
+    """One prior top-k selection that prunes (more legal actions than k): its rank-k minus rank-(k+1) gap under the prior that
+    ranked it (the pricer's, checked by (c)) and whether the oracle's own prior would keep a different set."""
+    order = reference.ranked(legal, used)
+    if len(order) <= k:return
+    score = lambda a: float(used[a]) if math.isfinite(float(used[a])) else -math.inf
+    entry = topk.setdefault(ply, {}).setdefault(seat, dict(gaps=[], oracle_prior_set_differs=0))
+    entry['gaps'].append(score(order[k - 1]) - score(order[k]));entry['oracle_prior_set_differs'] += int(set(order[:k]) != set(reference.ranked(legal, mine)[:k]))
+
+
+def merge_topk_n(reports):
+    """Per ply and seat over calls: pruning selections, their boundary gaps, how many fall below the logit bound and how often
+    the oracle's own prior would select differently (a near tie the logit tolerance absorbs). None without pruning."""
+    merged = {}
+    for report in reports:
+        for ply, seats in (report or {}).items():
+            for seat, entry in seats.items():
+                m = merged.setdefault(ply, {}).setdefault(seat, dict(gaps=[], oracle_prior_set_differs=0))
+                m['gaps'].extend(entry['gaps']);m['oracle_prior_set_differs'] += entry['oracle_prior_set_differs']
+    if not merged:return None
+    out = {ply: {seat: dict(selections=len(m['gaps']), gap=g2.percentiles(m['gaps']), gap_below_logit_bound=int(np.count_nonzero(np.asarray(m['gaps']) < g2.LOGIT_BOUND)),
+        oracle_prior_set_differs=m['oracle_prior_set_differs']) for seat, m in seats.items()} for ply, seats in sorted(merged.items())}
+    return dict(out, definition='per ply (root = the k1_opp root selection) and seat, over prior selections that prune: gap = rank-k minus rank-(k+1) '
+        'logit of the pricer\'s prior (the one ranked; (c) checks it within the logit bound); oracle_prior_set_differs = selections the oracle\'s '
+        'own prior would make differently')
 
 
 def pad_map(m, width):
@@ -423,11 +467,24 @@ def guard_spread(spreads):
             'sum_j pi_opp(j) v(i, j), parents with a zero spread excluded')
 
 
+GUARD_SPREAD_RULE = ('the misplacement guard is 0.25 x the p10 over NON-ZERO last-ply own-slot spreads; this departs from the depth-2 gate '
+    '(p10 over every cell_a2_spread) and applies to --n2-equivalence too')
+
+
+def guard_note(rule, spread):
+    """The rule with the guard's spread section and, when the guard is skipped, the actual reason."""
+    rule = dict(rule, spread=spread, guard_spread_rule=GUARD_SPREAD_RULE)
+    if rule.get('guard_bound') is None:
+        rule['guard'] = (f'skipped: every one of the {spread["parents"]} last-ply parent spreads is zero (identical rows), so the p10 over '
+            'non-zero spreads is undefined') if spread['parents'] else 'skipped: no expanded last-ply parent with two own slots and no errored leaf'
+    return rule
+
+
 def summarize_n(evaluations):
     """g2.summarize with the guard's spread taken from the last ply's learner-max own-slot spreads of the same frames."""
     p10, spread = guard_spread(s for e in evaluations for s in e.get('spreads', ()))
     result = g2.summarize(evaluations, spread_p10=p10)
-    result['tolerance']['spread'] = spread
+    result['tolerance'] = guard_note(result['tolerance'], spread)
     return result
 
 
@@ -462,6 +519,89 @@ def searched_maps_wellformed(depth2_frame, own_maps, opp_maps, findings):
             findings.record(f'searched_maps_{seat}', [list(k) for k in keys], np.asarray(equal), g2._objects(got), g2._objects(want))
     return dict(prior_top1_kept={seat: dict(cells=n, kept=k) for seat, (n, k) in top1.items()},
         widths=dict(own=int(np.asarray(own_maps).shape[-1]), opp=int(np.asarray(opp_maps).shape[-1])))
+
+
+def searched_widths_reference(k_own, k_opp):
+    """The documented `searched` slot widths: the learner's k_own plus its prior top-1; the opponent's prior top-1 plus one
+    refutation per kept learner move, or its k_opp + 1 fill, whichever is wider; nine legal actions bound both at 9."""
+    return min(k_own + 1, 9), min(max(k_opp + 1, k_own + 2), 9)
+
+
+def _top1(legal, logits):
+    """The highest-logit legal action, lower action on ties (None when nothing is legal)."""
+    best = None
+    for a in range(9):
+        if legal[a] and (best is None or float(logits[a]) > float(logits[best])):best = a
+    return best
+
+
+def _dedupe(items):
+    out = []
+    for x in items:
+        if x is not None and int(x) not in out:out.append(int(x))
+    return out
+
+
+def searched_maps_reference(frame, k_own, k_opp):
+    """This gate's own host-only re-derivation of the `searched` ply-2 maps from a FULL-WIDTH depth-2 frame, from the
+    documented rule (never the pricer's code). Per expanded turn-1 cell, valid leaves are status 1 or 4:
+    - learner (requested): the a2 of every errored (status 3) pair in pair order (row-major), then the k_own a2 with the
+      highest q(a2) = fsum over the row's valid r2 of pi_opp(r2) v(a2, r2), pi_opp the masked softmax of the cell's
+      opponent prior renormalized over those r2 (q descending, lower action on ties; a row without a valid leaf has no q),
+      then its prior top-1 (highest child logit over its encoder-legal actions, lower action on ties); deduplicated, at
+      most w_own slots;
+    - opponent (requested): its ranked set is its prior top-1, the refutation of each kept learner move in slot order (argmin
+      over the row's valid r2 of v, lower action on ties), then, while that set has fewer than k_opp + 1 entries, the lowest
+      threat t(r2) = min over the kept a2 with a valid leaf in r2 of v(a2, r2) (ascending, lower action on ties); the r2 of
+      every errored pair in pair order go in FRONT of it (outside the k_opp + 1 count); deduplicated, at most w_opp slots;
+    - a waiting seat keeps [0, -1, ...]; a cell that is not expanded keeps all -1.
+    Returns int32 [R,2,9,9,w_own], [R,2,9,9,w_opp] with (w_own, w_opp) = searched_widths_reference(k_own, k_opp)."""
+    w_own, w_opp = searched_widths_reference(k_own, k_opp);f = frame;R = np.asarray(f.pre).shape[0]
+    own = np.full((R, 2, 9, 9, w_own), -1, np.int32);opp = np.full((R, 2, 9, 9, w_opp), -1, np.int32)
+    t1, t2, value = np.asarray(f.t1_status), np.asarray(f.t2_status), np.asarray(f.t2_value, np.float64)
+    for cell in map(tuple, np.argwhere(t1 == 2).tolist()):
+        s, v = t2[cell], value[cell];valid = (s == 1) | (s == 4);errors = [tuple(x) for x in np.argwhere(s == 3).tolist()]
+        rows = [a for a in range(9) if (s[a] != 0).any()];cols = [r for r in range(9) if (s[:, r] != 0).any()]
+        live = {a: [r for r in cols if valid[a, r]] for a in rows}
+        if f.t1_own_requested[cell]:
+            peer = np.asarray(f.t1_peer_logits[cell], np.float64);q = {}
+            for a in rows:
+                if not live[a]:continue
+                top = max(peer[r] for r in live[a]);weights = [math.exp(peer[r] - top) for r in live[a]];total = math.fsum(weights)
+                q[a] = math.fsum(x / total * v[a, r] for x, r in zip(weights, live[a]))
+            learner = _dedupe([a for a, _ in errors] + sorted(q, key=lambda a: (-q[a], a))[:k_own] + [_top1(f.t1_own_legal[cell], f.t1_own_logits[cell])])[:w_own]
+        else:learner = [0]
+        if f.t1_peer_requested[cell]:
+            ranked = _dedupe([_top1(f.t1_peer_legal[cell], f.t1_peer_logits[cell])] + [min(live[a], key=lambda r: (v[a, r], r)) for a in learner if live.get(a)])
+            threat = {r: min(v[a, r] for a in learner if a in live and valid[a, r]) for r in cols if any(a in live and valid[a, r] for a in learner)}
+            for r in sorted(threat, key=lambda r: (threat[r], r)):
+                if len(ranked) >= k_opp + 1:break
+                if r not in ranked:ranked.append(r)
+            opponent = _dedupe([r for _, r in errors] + ranked)[:w_opp]
+        else:opponent = [0]
+        own[cell][:len(learner)] = learner;opp[cell][:len(opponent)] = opponent
+    return own, opp
+
+
+def check_searched_rule(depth2_frame, own_maps, opp_maps, k_own, k_opp, findings, extras=()):
+    """(a) for `searched`: the supplied ply-2 maps EXACTLY equal searched_maps_reference on every enumerated turn-1 cell of the
+    full-width depth-2 pass (slots in the documented order), at the documented widths; a per-root [R] bool extra (the
+    pricer's depth2_refused) equals the depth-2 reference refusal of the same frame."""
+    mine_own, mine_opp = searched_maps_reference(depth2_frame, k_own, k_opp);cells = np.argwhere(np.asarray(depth2_frame.t1_status) != 0)
+    widths = (int(np.asarray(own_maps).shape[-1]), int(np.asarray(opp_maps).shape[-1]));want = (mine_own.shape[-1], mine_opp.shape[-1])
+    findings.record('searched_maps_widths', [[0]], [widths == want], g2._objects([list(widths)]), g2._objects([list(want)]))
+    for seat, given, mine in (('own', own_maps, mine_own), ('opp', opp_maps, mine_opp)):
+        width = max(np.asarray(given).shape[-1], mine.shape[-1]);at = tuple(cells.T)
+        pad = lambda m: np.concatenate([np.asarray(m)[at], np.full(np.asarray(m)[at].shape[:-1] + (width - np.asarray(m).shape[-1],), -1)], axis=-1)
+        got, expect = pad(given), pad(mine);findings.record(f'searched_maps_{seat}_rule', cells, (got == expect).all(axis=-1), got, expect)
+    R = np.asarray(depth2_frame.pre).shape[0]
+    for x in extras:
+        flag = np.asarray(x)
+        if flag.shape == (R,) and flag.dtype == bool:
+            narrow = isinstance(depth2_frame.timing, dict) and int(depth2_frame.timing.get('k1_own', 9)) < 9
+            expect = g2.depth2_refused(depth2_frame) | (narrow & (np.asarray(depth2_frame.pre) == 0).any(axis=1))
+            findings.record('searched_depth2_refused', np.arange(R)[:, None], flag == expect, flag, expect)
+    return findings
 
 
 # ---------------------------------------------------------------- one gate call, refusals, saved frames
@@ -555,14 +695,26 @@ class DepthNPricers:
         self.capacity, self.actor_capacity, self.lanes, self.k1_own, self.k1_opp, self.digest = capacity, actor_capacity, tuple(lanes), k1_own, k1_opp, digest
         self.instances = None
 
+    def expected_widths(self):
+        """The slot widths the REQUEST implies, never the engine's self-report: under prior the requested k's; under searched
+        ply 2 is this gate's own searched_widths_reference(k_own[0], k_opp[0]) and plies 3..N the requested k's."""
+        if self.selection != 'searched':return self.k_own, self.k_opp
+        w_own, w_opp = searched_widths_reference(self.k_own[0], self.k_opp[0]);return (w_own,) + self.k_own[1:], (w_opp,) + self.k_opp[1:]
+
+    def engine_widths(self):
+        """Each instance's self-reported (k_own, k_opp, searched_k), for the report and the engine_widths check."""
+        return [dict(k_own=list(map(int, getattr(e, 'k_own', ()) or ())), k_opp=list(map(int, getattr(e, 'k_opp', ()) or ())),
+            searched_k=None if getattr(e, 'searched_k', None) is None else list(map(int, e.searched_k))) for e in (self.instances or ())]
+
     def get(self):
-        """(plan, [pricer per block_lanes value]); the plan carries the engine's slot widths."""
+        """(plan, [pricer per block_lanes value]). The plan's widths are the REQUESTED ones (expected_widths): the frame's
+        geometry is checked against them, so an engine that prices narrower than asked fails whatever it reports."""
         if self.instances is None:
             self.instances = [self.module.DepthNPricer(self.executor, self.model, capacity=self.capacity, depth=self.depth, k_own=self.k_own,
                 k_opp=self.k_opp, k1_own=self.k1_own, k1_opp=self.k1_opp, block_lanes=lanes, selection=self.selection, digest=self.digest,
                 actor_capacity=self.actor_capacity) for lanes in self.lanes]
-        engine = self.instances[-1];widths = lambda name, given: tuple(int(x) for x in (getattr(engine, name, None) or given))
-        return plan_of(self.depth, widths('k_own', self.k_own), widths('k_opp', self.k_opp), self.selection, k1_own=self.k1_own, k1_opp=self.k1_opp), self.instances
+        k_own, k_opp = self.expected_widths()
+        return plan_of(self.depth, k_own, k_opp, self.selection, k1_own=self.k1_own, k1_opp=self.k1_opp), self.instances
 
     def maps(self, depth2_frame):
         """(selection_maps, the maps' widths, extras) from the public searched_maps(frame, k_own[0], k_opp[0]) under `searched`
@@ -572,18 +724,20 @@ class DepthNPricers:
         return {2: (own, opp)}, (int(own.shape[-1]), int(opp.shape[-1])), extras
 
     def options(self):
-        plan = self.get()[0] if self.instances is not None else None;engine = (self.instances or [None])[-1]
+        engine = (self.instances or [None])[-1];k_own, k_opp = self.expected_widths()
         return dict(depth=self.depth, k_own=list(self.k_own), k_opp=list(self.k_opp), selection=self.selection, capacity=self.capacity,
             actor_capacity=self.actor_capacity, block_lanes=list(self.lanes), k1_own=self.k1_own, k1_opp=self.k1_opp, digest=self.digest,
-            slot_widths=None if plan is None else dict(k_own=list(plan['k_own']), k_opp=list(plan['k_opp'])),
+            slot_widths=dict(k_own=list(k_own), k_opp=list(k_opp), source='the request (searched ply 2: searched_widths_reference)'),
+            engine_widths=self.engine_widths() or None,
             searched_k=None if engine is None or getattr(engine, 'searched_k', None) is None else list(engine.searched_k),
             widths_note='under searched, k_own[0]/k_opp[0] are searched_maps\' k\'s; the engine derives ply 2\'s slot widths' if self.selection == 'searched' else None)
 
 
-def depth2_pass_pricer(module, executor, model, *, capacity, actor_capacity, k1_own=9, k1_opp=9, block_lanes=2187):
-    """The full-width depth-2 pass (refusal accounting; `searched` maps): DepthNPricer(depth=2, k=9), read through as_depth2_frame."""
+def depth2_pass_pricer(module, executor, model, *, capacity, actor_capacity, k1_own=9, k1_opp=9, block_lanes=2187, digest=False):
+    """The full-width depth-2 pass (refusal accounting; `searched` maps): DepthNPricer(depth=2, k=9), read through as_depth2_frame.
+    The gate prices it with digest=True (its leaves are re-checked against the oracle); diagnostics need no digests."""
     return module.DepthNPricer(executor, model, capacity=capacity, depth=2, k_own=9, k_opp=9, k1_own=k1_own, k1_opp=k1_opp, block_lanes=block_lanes,
-        selection='prior', digest=False, actor_capacity=actor_capacity)
+        selection='prior', digest=digest, actor_capacity=actor_capacity)
 
 
 def describe(extras):
@@ -603,8 +757,62 @@ def abs_t1(frame):
     return np.abs(np.asarray(frame.t1_value, np.float64)[np.asarray(frame.t1_status) == 2])
 
 
+PASS_T1 = dict(pre=2, root_peer_requested=2, root_peer_legal=2, t1_status=4, t1_error=4, t1_own_requested=4, t1_own_legal=4, t1_peer_requested=4,
+    t1_peer_legal=4)
+PASS_TRUST = ('The full-width depth-2 pass (the searched maps\' input and the depth-2 refusals) is DepthNPricer(depth=2, k=9). It is trusted via '
+    '--n2-equivalence (DepthNPricer N=2 equals the Depth2Pricer kernel) and the depth-2 gate (Depth2Pricer equals the depth-2 oracle). In this run '
+    'its turn 1 is checked against the checked depth-N frame\'s (discrete exact, floats within the rule), its enumerated leaves against the '
+    'oracle\'s full-width set, and every terminal/error leaf plus --depth2-pass-sample uniform leaves per world are re-run by the oracle (status, '
+    'error, terminal value and digest exact, head value within the rule). Re-running every leaf would cost a full depth-2 gate, so the rest of '
+    'its leaves rest on the two gates above.')
+
+
+def depth2_pass_check(depth2_frame, frame, data, *, oracle, stack, params, sample, requests, block, context, reference=None):
+    """The full-width depth-2 pass against this gate's oracle where it is cheap (PASS_TRUST). Returns (findings report,
+    {quantity: _numeric} for (c), counts)."""
+    d2ref = importlib.import_module('gpu_engine.depth2_oracle');found = Findings(dict(context, frame='depth2_pass'));floats = {}
+    reference = reference or importlib.import_module('gpu_engine.depthn_oracle');R = len(requests);a, b = depth2_frame, frame
+    problems = [x for x in g2.frame_geometry(a, R) if not (x.split(':')[0] in ('t1_digest_own', 't1_digest_peer', 't2_digest') and getattr(a, x.split(':')[0], None) is None)]   # digests optional
+    if problems:
+        found.fail('depth2_pass_geometry', [[0]], g2._objects([problems[:FIRST]]), g2._objects(['depth-2 surface']));return found.report(), floats, {}
+    for name, axes in PASS_T1.items():
+        x, y = np.asarray(getattr(a, name)), np.asarray(getattr(b, name));keys = np.argwhere(np.ones(x.shape[:axes], bool))
+        found.record(f'depth2_pass_{name}', keys, (x == y).reshape(len(keys), -1).all(axis=1), x.reshape(len(keys), -1), y.reshape(len(keys), -1))
+    t1s, t1e = np.asarray(b.t1_status), np.asarray(b.t1_error);valued = (t1s == 2) | ((t1s == 3) & np.isin(t1e, (5, 6)))
+    floats['depth2_pass_t1_value'] = g2._numeric(np.argwhere(valued), np.asarray(a.t1_value)[valued], np.asarray(b.t1_value)[valued], context)
+    for seat, scope in (('own', valued), ('peer', t1s == 2)):
+        lanes = (scope & np.asarray(getattr(b, f't1_{seat}_requested'), bool))[..., None] & np.asarray(getattr(b, f't1_{seat}_legal'), bool)
+        floats[f'depth2_pass_t1_{seat}_logits'] = g2._numeric(np.argwhere(lanes), np.asarray(getattr(a, f't1_{seat}_logits'))[lanes], np.asarray(getattr(b, f't1_{seat}_logits'))[lanes], context)
+    lanes = ((np.asarray(b.pre) == 0) & np.asarray(b.root_peer_requested, bool))[..., None] & np.asarray(b.root_peer_legal, bool)
+    floats['depth2_pass_root_peer_logits'] = g2._numeric(np.argwhere(lanes), np.asarray(a.root_peer_logits)[lanes], np.asarray(b.root_peer_logits)[lanes], context)
+    children = data['children'];expected = np.asarray(d2ref.turn2_leaves(children, k_own=9, k_opp=9) if len(data['cells']) else [], np.int64).reshape(-1, 6)
+    status = np.asarray(a.t2_status);got, want = np.flatnonzero(status != 0), np.unique(np.ravel_multi_index(expected.T, status.shape)) if len(expected) else np.zeros(0, np.int64)
+    found.compared['depth2_pass_leaf_enumerated'] += len(np.union1d(got, want))
+    for label, flat in (('depth2_pass_leaf_missing', np.setdiff1d(want, got)), ('depth2_pass_leaf_extra', np.setdiff1d(got, want))):
+        keys = np.stack(np.unravel_index(flat, status.shape), axis=1) if len(flat) else np.zeros((0, 6), np.int64)
+        found.fail(label, keys, ['pass'] * len(keys), ['oracle'] * len(keys))
+    counts = dict(enumerated=int(len(expected)), rerun=0, forced=0)
+    if sample and len(expected):
+        st = status[tuple(expected.T)];forced = np.isin(st, (1, 3));chosen = forced.copy();world = expected[:, 0] * 2 + expected[:, 1]
+        for key in np.unique(world).tolist():
+            q, w = divmod(key, 2);address = requests[q].plans.root.address
+            rng = np.random.default_rng([g2.SAMPLE_SEED, block, address.stream, address.frame, address.owner, w, 2])
+            rest = np.flatnonzero((world == key) & ~forced);chosen[rest[rng.choice(len(rest), size=min(sample, len(rest)), replace=False)]] = True
+        specs = expected[chosen];leaves = oracle.leaves_n(stack, specs, 2, params);at = tuple(specs.T);counts.update(rerun=int(len(specs)), forced=int(forced.sum()))
+        for name in ('status', 'error'):
+            x = np.asarray(getattr(a, 't2_' + name))[at];found.record(f'depth2_pass_t2_{name}', specs, x.astype(np.int64) == leaves[name], x, leaves[name])
+        terminal = leaves['status'] == 1;x = np.asarray(a.t2_value)[at]
+        found.record('depth2_pass_t2_value_terminal', specs[terminal], (x == leaves['value'])[terminal], x[terminal], leaves['value'][terminal])
+        if getattr(a, 't2_digest', None) is not None:
+            viewed = (leaves['status'] == 4) | ((leaves['status'] == 3) & np.isin(leaves['error'], (3, 4)));x = np.asarray(a.t2_digest)[at].astype(np.uint32)
+            found.record('depth2_pass_t2_digest', specs[viewed], (x == leaves['digest']).all(axis=-1)[viewed], x[viewed], leaves['digest'][viewed])
+        scored = (leaves['status'] == 4) & (np.asarray(a.t2_status)[at] == 4)
+        floats['depth2_pass_t2_value'] = g2._numeric(*g2._masked(specs, np.asarray(a.t2_value)[at], leaves['head_value'], scored), context)
+    return found.report(), floats, counts
+
+
 def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer, frame_pricer, oracle, sample, block, context,
-               progress=None, decision=None, save=None, evaluator=None, backups=None):
+               progress=None, decision=None, save=None, evaluator=None, backups=None, pass_sample=8):
     """One request list: the full-width depth-2 pass (refusals; `searched` maps), the depth-N pricer (and its block-invariance
     twins), D3, the oracle at every ply and the checks. save: (directory, prefix) for --save-arrays. Returns (evaluation, summary)."""
     from gpu_engine import device_public_teacher_batch as batch
@@ -644,9 +852,21 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
             leaves_enumerated=len(data['enumerated'].get('leaf', ())), leaves_checked=0 if data['leaves'] is None else len(data['leaves']['specs']))
     costs['oracle'] = dict(wall_seconds=time.perf_counter() - clock, seconds={k: oracle.seconds[k] - before.get(k, 0.) for k in oracle.seconds})
     evaluation = evaluate_n(frame, d_results, requests, data, context=context, full_turn1=plan['k1_own'] == plan['k1_opp'] == 9, progress=progress)
+    found = Findings(context);want = [dict(k_own=list(plan['k_own']), k_opp=list(plan['k_opp']))] * len(instances)   # each engine's self-report
+    got = [dict(k_own=e['k_own'], k_opp=e['k_opp']) for e in pricers.engine_widths()]
+    found.record('engine_widths', np.arange(len(got))[:, None], np.asarray([g == x for g, x in zip(got, want)]), g2._objects(got), g2._objects(want))
+    evaluation['a'] = g2.merge_findings([evaluation['a'], found.report()])
     if selection_maps is not None and not evaluation['geometry']:
         found = Findings(context);evaluation['searched_maps'] = dict(searched_maps_wellformed(depth2_frame, *selection_maps[2], found), extras=describe(extras))
+        check_searched_rule(depth2_frame, *selection_maps[2], pricers.k_own[0], pricers.k_opp[0], found, extras)
+        evaluation['searched_maps']['rule_mismatches'] = {k: v for k, v in found.mismatched.items() if k.endswith('_rule') or k.endswith('_widths') or k == 'searched_depth2_refused'}
         evaluation['a'] = g2.merge_findings([evaluation['a'], found.report()])
+    if depth2_frame is not None and not evaluation['geometry']:
+        with stage(progress, 'check_depth2_pass', **context) as info:
+            found, floats, counts = depth2_pass_check(depth2_frame, frame, data, oracle=oracle, stack=stack, params=params, sample=pass_sample,
+                requests=requests, block=block, context=context, reference=reference)
+            evaluation['a'] = g2.merge_findings([evaluation['a'], found]);evaluation['c'].update(floats);evaluation['depth2_pass'] = counts
+            info.update(counts, passed=found['passed'])
     if others and not evaluation['geometry']:
         with stage(progress, 'check_block_invariance', **context) as info:
             evaluation['invariance'] = [g2.block_invariance(frame_arrays(o), frame_arrays(frame), context=context) for o in other_frames]
@@ -670,7 +890,7 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
         nodes_checked={str(p): len(r.get('specs', r.get('cells', ()))) for p, r in data['levels'].items()},
         leaves_enumerated=len(data['enumerated'].get('leaf', ())), leaves_checked=0 if data['leaves'] is None else len(data['leaves']['specs']),
         forced_leaves=data['forced_leaves'], plies_work=json.loads(json.dumps((getattr(frame, 'timing', None) or {}).get('plies'), default=str)),
-        searched_maps=evaluation.get('searched_maps'), saved_frames=saved,
+        searched_maps=evaluation.get('searched_maps'), saved_frames=saved, depth2_pass=evaluation.get('depth2_pass'), topk=data.get('topk'),
         searched={k: json.loads(json.dumps((getattr(frame, 'timing', None) or {}).get(k), default=str)) for k in ('searched_k', 'searched_widths')}
             if plan['selection'] == 'searched' else None,
         passed=dict(a=evaluation['a']['passed'], b_discrete=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed'],
@@ -707,8 +927,10 @@ N2_DISCRETE = dict(pre=2, root_peer_requested=2, root_peer_legal=2, t1_status=4,
 
 def n2_compare(theirs, mine, context=None):
     """The depth-2 kernel's Depth2Frame vs as_depth2_frame(DepthNPricer at N=2): every discrete array exact everywhere;
-    terminal values exact; digests where the view is scored (depth 2's rule); head values and priors on the cells and lanes
-    the gate compares, recorded for the run's bound. Returns (findings report, {quantity: _numeric})."""
+    terminal values exact; digests where the view is scored (depth 2's rule); world_reports as canonical JSON (gated). Floats
+    are compared ONLY on scored cells (t1 values where expanded or codes 5/6, t2 values at status 4, priors on requested
+    seats' legal lanes, the root prior on usable worlds' legal lanes); elsewhere both frames hold unspecified padding.
+    Returns (findings report, {quantity: _numeric})."""
     a, b = g2.frame_fields(theirs), g2.frame_fields(mine);found = Findings(context);floats = {}
     for name, axes in N2_DISCRETE.items():
         x, y = np.asarray(a[name]), np.asarray(b[name])
@@ -735,8 +957,12 @@ def n2_compare(theirs, mine, context=None):
     for seat, scope in (('own', valued), ('peer', t1s == 2)):
         lanes = scope[..., None] & np.asarray(a[f't1_{seat}_requested'], bool)[..., None] & np.asarray(a[f't1_{seat}_legal'], bool)
         floats[f't1_{seat}_logits'] = g2._numeric(np.argwhere(lanes), np.asarray(b[f't1_{seat}_logits'])[lanes], np.asarray(a[f't1_{seat}_logits'])[lanes], context)
-    reports = lambda f: json.dumps(f.get('world_reports'), sort_keys=True, default=str)
-    report = found.report();report['world_reports_equal'] = reports(a) == reports(b)   # reported, not gated
+    canonical = lambda x: json.dumps(x, sort_keys=True, default=str);ra, rb = tuple(a.get('world_reports') or ()), tuple(b.get('world_reports') or ())
+    report = found.report();report['world_reports_equal'] = canonical(ra) == canonical(rb)   # gated by summarize_n2
+    if not report['world_reports_equal']:
+        root = next((q for q in range(max(len(ra), len(rb))) if q >= len(ra) or q >= len(rb) or canonical(ra[q]) != canonical(rb[q])), None)
+        report['world_reports_first_difference'] = dict(context or {}, root=root, depth2=None if root is None or root >= len(ra) else json.loads(canonical(ra[root])),
+            depthn=None if root is None or root >= len(rb) else json.loads(canonical(rb[root])))
     return report, floats
 
 
@@ -773,16 +999,20 @@ def summarize_n2(per_config):
     report = {}
     for name, calls in per_config.items():
         quantities = g2.merge_numeric([x['c'] for x in calls]);p10, spread = guard_spread(s for x in calls for s in x['spreads'])
-        rule = dict(g2.tolerance_rule(quantities.get('depth1_noise_floor'), p10), spread=spread)
+        rule = guard_note(g2.tolerance_rule(quantities.get('depth1_noise_floor'), p10), spread)
         floats = g2.merge_numeric([x['floats'] for x in calls])
         for q, m in floats.items():g2.finalize_numeric(m, g2.bound_for(q, rule), g2.guard_for(q, rule))
         heads = {q: g2.finalize_numeric(m, g2.bound_for(q, rule), None if q in g2.FLOORS else g2.guard_for(q, rule)) for q, m in quantities.items()}
         discrete = g2.merge_findings([x['a'] for x in calls]);e = g2.merge_decisions([x['e'] for x in calls], q_noise_bound=rule['value_bound'])
         e['reference'] = 'depth2_backups.learner_max_root on the Depth2Frame vs on as_depth2_frame(DepthNPricer N=2)'
-        passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed']
-        report[name] = dict(passed=passed, discrete=discrete, floats=floats, e=e, tolerance=dict(rule, q_noise_bound=rule['value_bound']),
-            turn1_heads_vs_oracle=dict(reported_not_gated=True, quantities=heads),
-            world_reports_equal=all(x['a'].get('world_reports_equal', False) for x in calls))
+        reports_equal = all(x['a'].get('world_reports_equal', False) for x in calls)
+        passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed'] and reports_equal
+        vacuous = [reason for reason, empty in (('no turn-2 leaf compared', not discrete['compared'].get('t2_status')),
+            ('(e) compared no root', not e.get('roots_compared'))) if empty]
+        report[name] = dict(status='FAIL' if not passed else 'INCOMPLETE' if vacuous else 'PASS', status_reasons=vacuous, passed=passed and not vacuous,
+            discrete=discrete, floats=floats, e=e, tolerance=dict(rule, q_noise_bound=rule['value_bound']),
+            turn1_heads_vs_oracle=dict(reported_not_gated=True, quantities=heads), world_reports_equal=reports_equal,
+            world_reports_first_difference=next((x['a']['world_reports_first_difference'] for x in calls if x['a'].get('world_reports_first_difference')), None))
     return report
 
 
@@ -814,8 +1044,8 @@ def _softmax(logits, actions):
 
 def turn2_choices(frame, backups):
     """{(q, w, a1, r1): a2}: the depth-3 learner-max turn-2 move of each expanded turn-1 cell: rows are the backed-up ply-2
-    node values averaged under the cell's opponent prior renormalized over its enumerated slots (fsum), a strict max keeps
-    the lower slot; a cell with an unpriced child is omitted."""
+    node values averaged under the cell's opponent prior renormalized over its enumerated slots (fsum); ties go to the lower
+    ACTION (as depth2_backups.learner_max_choice and the root argmax); a cell with an unpriced child is omitted."""
     out = {};k_opp = int(np.asarray(frame.t1_opp_actions).shape[-1]);K = int(np.asarray(frame.t1_own_actions).shape[-1]) * k_opp
     for q, w, a1, r1 in np.argwhere(np.asarray(frame.t1_status) == 2).tolist():
         own, opp = np.asarray(frame.t1_own_actions[q, w, a1, r1]), np.asarray(frame.t1_opp_actions[q, w, a1, r1]);cell = a1 * 9 + r1
@@ -826,7 +1056,7 @@ def turn2_choices(frame, backups):
             values = [backups.node_value(frame, q, w, 2, cell * K + i * k_opp + x) for x in opp_slots]
             if any(v is None for v in values):best = None;break
             row = math.fsum(p * v for p, v in zip(pi, values))
-            if best is None or row > best[0]:best = (row, int(own[i]))
+            if best is None or row > best[0] or (row == best[0] and int(own[i]) < best[1]):best = (row, int(own[i]))
         if best is not None:out[(q, w, a1, r1)] = best[1]
     return out
 
@@ -838,6 +1068,8 @@ def kept_set(frame, cell):
 def prior_vs_searched(prior, searched, depth2_frame, backups, backups2, context=None):
     """(ii) for `prior` against `searched` at the same k, over expanded turn-1 cells both price at depth 3:
     - set_differs: the learner's kept turn-2 set (the cell's ply-2 own map) differs;
+    - prior_set_not_subset_of_searched: prior's kept set is not contained in searched's (searched keeps k + 1, so a superset
+      is the expected case; this counts cells where searched drops a move prior keeps);
     - choice_differs: the depth-3 learner-max turn-2 move differs (the primary measure);
     - searched_choice_outside_prior_set: searched's depth-3 learner-max move is not in prior's kept set;
     - depth2_choice_outside_prior_set: full-width depth 2's learner-max move is not in prior's kept set."""
@@ -845,7 +1077,7 @@ def prior_vs_searched(prior, searched, depth2_frame, backups, backups2, context=
     counts = collections.Counter(cells=len(common));examples = []
     for c in common:
         mine, theirs = kept_set(prior, c), kept_set(searched, c)
-        counts['set_differs'] += int(mine != theirs);counts['choice_differs'] += int(a[c] != b[c])
+        counts['set_differs'] += int(mine != theirs);counts['prior_set_not_subset_of_searched'] += int(not mine <= theirs);counts['choice_differs'] += int(a[c] != b[c])
         counts['searched_choice_outside_prior_set'] += int(b[c] not in mine)
         choice = int(backups2.learner_max_choice(depth2_frame, c[0], c[1])[c[2], c[3]])
         counts['depth2_labeled'] += int(choice >= 0);counts['depth2_choice_outside_prior_set'] += int(choice >= 0 and choice not in mine)
@@ -909,7 +1141,7 @@ def merge_diagnostics(calls):
     for tag in sorted({t for c in calls for t in c['prior_vs_searched']}):
         total, examples = add([c['prior_vs_searched'][tag] for c in calls if tag in c['prior_vs_searched']])
         report['prior_vs_searched'][tag] = dict(total, examples=examples, **{f'{k}_share': share(total[k], total['cells']) for k in
-            ('set_differs', 'choice_differs', 'searched_choice_outside_prior_set')},
+            ('set_differs', 'prior_set_not_subset_of_searched', 'choice_differs', 'searched_choice_outside_prior_set')},
             depth2_choice_outside_prior_set_share=share(total['depth2_choice_outside_prior_set'], total['depth2_labeled']))
     report['definitions'] = dict(change_rate='(i) among roots labeled at both depths: the share whose completed-Q argmax (lower index on ties; '
         'depth2_backups on the full-width depth-2 frame, depthn_backups on the depth-3 frame) differs', prior_vs_searched=prior_vs_searched.__doc__.strip(),
@@ -1019,6 +1251,8 @@ def parse(argv=None):
     parser.add_argument('--max-roots', type=int, help='price only the first N requests')
     parser.add_argument('--sample-leaves', type=int, help='check every node and N sampled leaves per world (plus every pricer terminal/error leaf)')
     parser.add_argument('--oracle-chunk', type=int, default=512, help='oracle specs per vmap invocation')
+    parser.add_argument('--depth2-pass-sample', type=int, default=8, help='uniform full-width depth-2 pass leaves per world the oracle re-runs '
+        '(plus every terminal/error leaf); 0 checks only its turn 1 and enumeration')
     parser.add_argument('--save-arrays', action='store_true', help='write each call\'s depth-N and full-width depth-2 frames (for --diagnostics-from)')
     parser.add_argument('--raw-head-check', action='store_true', help='with --head-archive: gate node and leaf values against the head\'s own arm')
     parser.add_argument('--n2-equivalence', action='store_true', help='DepthNPricer N=2 (full width and top --n2-k) vs Depth2Pricer on the same requests')
@@ -1047,6 +1281,7 @@ def parse(argv=None):
     if args.capacity < 1 or args.block_lanes < 1 or args.worlds_blocks < 1 or args.oracle_chunk < 1:parser.error('positive sizes required')
     if args.max_roots is not None and args.max_roots < 1:parser.error('positive --max-roots required')
     if args.sample_leaves is not None and args.sample_leaves < 1:parser.error('--sample-leaves N >= 1 (omit it to check every leaf)')
+    if args.depth2_pass_sample < 0:parser.error('--depth2-pass-sample N >= 0')
     if args.block_invariance and (args.n2_equivalence or args.depth3_diagnostics):parser.error('--block-invariance belongs to the gate')
     if args.raw_head_check and args.depth3_diagnostics:parser.error('--raw-head-check needs the oracle')
     if args.selection == 'searched' and args.depth < 3:parser.error('searched selection needs --depth >= 3 (it selects ply 2 from a depth-2 pass)')
@@ -1087,7 +1322,7 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
     pricers = DepthNPricers(module, provider.executor, plan.model, depth=args.depth, k_own=args.k_own_ply, k_opp=args.k_opp_ply, selection=args.selection,
         capacity=args.capacity, actor_capacity=roots.actor_capacity, lanes=lanes, k1_own=args.k1_own, k1_opp=args.k1_opp)
     depth2_pricer = depth2_pass_pricer(module, provider.executor, plan.model, capacity=args.capacity, actor_capacity=roots.actor_capacity,
-        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes)
+        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, digest=True)
     capacity = g2.call_capacity(frame_pricer, [depth2_pricer]);groups = g2.split_groups(roots.groups, capacity)
     oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log),
         raw_model=roots.head[1] if args.raw_head_check else None)
@@ -1097,7 +1332,7 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
         evaluation, summary = run_call_n(requests=requests, recipe=recipe, materializer=provider.materializer, params=roots.params, pricers=pricers,
             depth2_pricer=depth2_pricer, frame_pricer=frame_pricer, oracle=oracle, sample=args.sample_leaves, block=block,
             context=dict(block=block, call=call), progress=log, save=(out, f'frames-block{block}-call{call}') if args.save_arrays else None,
-            evaluator=roots.evaluator)
+            evaluator=roots.evaluator, pass_sample=args.depth2_pass_sample)
         evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize_run(evaluations, lanes);log('TOLERANCE', **g2.tolerance_line(result['tolerance']))
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
@@ -1114,6 +1349,11 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
         leaves=dict(enumerated=sum(c['leaves_enumerated'] for c in calls), checked=sum(c['leaves_checked'] for c in calls),
             forced_terminal_or_error=sum(c['forced_leaves'] for c in calls)),
         searched_maps=[dict(block=c['block'], call=c['call'], **c['searched_maps']) for c in calls if c.get('searched_maps')] or None,
+        searched_rule=None if args.selection != 'searched' else ('the supplied maps are gated EXACT in (a) (searched_maps_*_rule, searched_maps_widths, '
+            'searched_depth2_refused) against this gate\'s own re-derivation (searched_maps_reference) from the full-width depth-2 pass; see depth2_pass'),
+        depth2_pass=dict(trust=PASS_TRUST, sample_per_world=args.depth2_pass_sample, **{k: sum((c.get('depth2_pass') or {}).get(k, 0) for c in calls)
+            for k in ('enumerated', 'rerun', 'forced')}),
+        topk_boundary=merge_topk_n([c.get('topk') for c in calls]),
         refusals=refusals, calls=calls, oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk))
     write(out / 'gate.json', report)
     log('DEPTHN_GATE_COMPLETE', status=status, out=str(out / 'gate.json'), status_reasons=reasons, checks={k: v['passed'] for k, v in result['checks'].items()},
@@ -1138,13 +1378,15 @@ def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, ref
             frame_pricer=frame_pricer, oracle=oracle, context=dict(block=block, call=call), progress=log, module=module)
         for name, result in results.items():per_config[name].append(result)
         log('N2_CALL', block=block, call=call, discrete={n: r['a']['passed'] for n, r in results.items()}, e={n: r['e'].get('argmax_q_differs') for n, r in results.items()})
-    report = summarize_n2(per_config);passed = bool(report) and all(r['passed'] for r in report.values())
+    report = summarize_n2(per_config);statuses = [r['status'] for r in report.values()]
+    status = 'FAIL' if 'FAIL' in statuses else 'INCOMPLETE' if 'INCOMPLETE' in statuses or not report else 'PASS'
     write(out / 'n2-equivalence.json', dict(header(args, roots, abs_values, roots.loaded.source), schema=SCHEMA, mode='N2_EQUIVALENCE',
-        status='PASS' if passed else 'FAIL', passed=passed, configs=report, options=options, split_capacity=capacity, block_seeds=list(seeds),
-        rule='per config: every discrete array exact; t1/t2 values within the value bound and guard, priors within the logit bound (the run\'s '
-            'evaluator-relative rule); (e) depth2_backups argmax per root equal except near ties'))
-    log('N2_EQUIVALENCE_COMPLETE', status='PASS' if passed else 'FAIL', out=str(out / 'n2-equivalence.json'), configs={n: r['passed'] for n, r in report.items()})
-    return 0 if passed else 1
+        status=status, passed=status == 'PASS', configs=report, options=options, split_capacity=capacity, block_seeds=list(seeds),
+        rule='per config: every discrete array exact and world_reports equal; floats only on scored cells (see n2_compare): values within the value '
+            'bound and guard, priors within the logit bound (the run\'s evaluator-relative rule); (e) depth2_backups argmax per root equal except near '
+            'ties; INCOMPLETE when no turn-2 leaf or no (e) root was compared'))
+    log('N2_EQUIVALENCE_COMPLETE', status=status, out=str(out / 'n2-equivalence.json'), configs={n: r['status'] for n, r in report.items()})
+    return 0 if status == 'PASS' else 1
 
 
 def run_diagnostics(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference):
@@ -1174,7 +1416,7 @@ def run_diagnostics(args, *, roots, provider, plan, module, frame_pricer, seeds,
         pricer_options={frame_tag(*k): p.options() for k, p in sets.items()})
     write(out / 'diagnostics.json', report)
     log('DIAGNOSTICS_COMPLETE', out=str(out / 'diagnostics.json'), calls=len(calls), change_rate={k: v['rate'] for k, v in report['change_rate'].items()})
-    return 0
+    return 0 if calls else 1
 
 
 if __name__ == '__main__':raise SystemExit(main())

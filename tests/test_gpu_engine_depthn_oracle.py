@@ -14,6 +14,7 @@ from dataclasses import replace
 import importlib.util
 import io
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -33,6 +34,9 @@ from tests.test_gpu_engine_device_public_teacher import facts
 from tests.test_gpu_engine_depth2_oracle import (After, BASE, LCG, Leaf, Observation, PARAMS, Public, State, Step, SWITCH, forward)
 
 SCALE = 4096
+# Mode 22's non-additive (a, r) term (x 100): row 0 has the best q and its minimum at r = 1, row 1 at r = 2, row 2 at r = 1, so
+# the refutations of two kept learner moves are two different replies and the lowest-threat fill is only one of them.
+INTERACTION = j.zeros((9, 9), j.int32).at[:3, :3].set(j.asarray(((9, 5, 8), (3, 4, 1), (2, 1, 4)), j.int32))
 ENGINE_OF_LANE = (0, 1, 2, 3, 7, 8, 4, 5, 6)
 HAVE_PRICER = all(importlib.util.find_spec(m) is not None for m in ('gpu_engine.device_depthn_pricer', 'gpu_engine.depthn_backups'))
 
@@ -42,22 +46,25 @@ def executor_n(*, sample=None):
     1/2/7 node terminal win/draw/bad winner; 3 invalid node step (1,1); 4 node encoder error; 5 non-finite learner value
     from the node on; 6 the opponent always waits; 8 node: opponent waits, owner forced to switch (4,5); 12 node: owner
     waits, opponent forced; 9 leaf-step terminal (a 0 loss, a 1 draw); 10 invalid leaf step a=2; 11 leaf encoder error;
-    node, opponent's view only: 13 encoder error, 14 non-finite prior (requested), 15 non-finite prior while it waits;
-    18 re-keys chance from the dispatched actions at every step. sample: replaces executor.sample (mutations)."""
+    node, opponent's view only: 13 encoder error, 14 non-finite prior (requested), 15 non-finite prior while it waits,
+    19 encoder error while it waits; 20 node terminal win with the learner's view in encoder error; 21 leaf-step terminal win
+    with the learner's view in encoder error; 18 re-keys chance from the dispatched actions at every step; 22 adds a
+    non-additive (a, r) term at every step, so a learner move's refutation is not the reply with the lowest threat over the
+    kept moves. sample: replaces executor.sample (mutations)."""
     def split(mode):return mode % 100, mode // 100
 
     def legal(state):
         owner, (b, shift), turn = state.owner[0], split(state.mode[0]), state.turn[0]
         node = turn == 1 + shift
         own = j.where((b == 12) & node, False, j.where((b == 8) & node, j.asarray(SWITCH), j.asarray(BASE)))
-        foe = j.where((b == 6) | (((b == 8) | (b == 15)) & node), False, j.where((b == 12) & node, j.asarray(SWITCH), j.asarray(BASE)))
+        foe = j.where((b == 6) | (((b == 8) | (b == 15) | (b == 19)) & node), False, j.where((b == 12) & node, j.asarray(SWITCH), j.asarray(BASE)))
         rows = j.where(owner == 0, j.stack([own, foe]), j.stack([foe, own]))
         return j.where(state.done[0], False, rows)[None]
 
     def observe(state, public, owner, mask):
         (b, shift), peer = split(state.mode), owner != state.owner
         node, leaf = public.turn == 1 + shift, public.turn == 2 + shift
-        error = j.where(((b == 4) & node) | ((b == 11) & leaf) | ((b == 13) & node & peer), 1, 0)
+        error = j.where(((b == 4) & node) | ((b == 11) & leaf) | (((b == 13) | (b == 19)) & node & peer) | ((b == 20) & node & ~peer) | ((b == 21) & leaf & ~peer), 1, 0)
         value = (state.value + (owner - state.owner) * 10).astype(j.float32) * (1. / SCALE)
         value = j.where(((b == 5) & (public.turn >= 1 + shift)) | (((b == 14) | (b == 15)) & node & peer), j.nan, value)
         feature = j.stack((value, public.clock + j.zeros(1), state.own_act.astype(j.float32), state.peer_act.astype(j.float32),
@@ -67,9 +74,10 @@ def executor_n(*, sample=None):
     def advance(state, public, actions, chance):
         owner = state.owner[0];a = actions[:, owner];r = actions[:, 1 - owner];(b, shift), turn = split(state.mode), state.turn + 1
         node, leaf = turn == 1 + shift, turn == 2 + shift
-        value = state.value + a * 30 + r * 20 + chance
-        node_end = node & ((b == 1) | (b == 2) | (b == 7));leaf_end = leaf & (b == 9) & (a >= 0) & (a <= 1)
-        winner = j.where(node_end, j.where(b == 2, 2, j.where(b == 7, 9, state.owner)), j.where(leaf_end, j.where(a == 0, 1 - state.owner, 2), state.winner))
+        value = state.value + a * 30 + r * 20 + chance + j.where(b == 22, INTERACTION[j.clip(a, 0, 8), j.clip(r, 0, 8)] * 100, 0)
+        node_end = node & ((b == 1) | (b == 2) | (b == 7) | (b == 20));leaf_end = (leaf & (b == 9) & (a >= 0) & (a <= 1)) | (leaf & (b == 21))
+        winner = j.where(node_end, j.where(b == 2, 2, j.where(b == 7, 9, state.owner)),
+            j.where(leaf_end, j.where(b == 21, state.owner, j.where(a == 0, 1 - state.owner, 2)), state.winner))
         invalid = (node & (b == 3) & (a == 1) & (r == 1)) | (leaf & (b == 10) & (a == 2))
         seed = state.seed * j.uint32(LCG[0]) + j.uint32(LCG[1]) + j.where(b == 18, (a + 1) * 7 + (r + 1) * 13, 0).astype(j.uint32)
         after = state._replace(value=value, done=state.done | node_end | leaf_end, winner=winner, seed=seed, turn=turn, own_act=a, peer_act=r)
@@ -97,6 +105,14 @@ def permuted_n(*, engine_mask_at_turn=None):
         return after._replace(step=after.step._replace(invalid_actions=after.step.invalid_actions | wrong))
     ex = serial.Executor(legal, observe, lambda observation, state, seat, action: order[action], base.sample, advance)
     return replace(ex, joint=serial._make_joint(ex))
+
+
+def forward_n(params, inputs, model=None, **kw):
+    """The depth-2 tests' fake head with NODE-DEPENDENT priors: lane (own_act + 2 * peer_act + turn) mod 9 of the prior gains
+    0.5 (exact in float32), so a prior read from the wrong node, ply or seat shows; ties elsewhere stay ties."""
+    out = forward(params, inputs, model, **kw);x = inputs['numeric_features'][:, 0, 0]
+    lane = j.mod(x[:, 2] + 2. * x[:, 3] + x[:, 4], 9.)
+    return out._replace(policy_logits=out.policy_logits + .5 * (j.arange(9, dtype=j.float32)[None, :] == lane[:, None]))
 
 
 def world(mode, owner, seed, clock=3.):
@@ -152,19 +168,20 @@ def frame_from_n(count, data, plan):
     return SimpleNamespace(**f)
 
 
-def fake_searched_widths(k_own, k_opp):
-    return k_own + 2, k_opp + 2
+def fake_searched_widths(k_own, k_opp, *, extra=0):
+    """The stand-in's ply-2 slot widths under `searched`: the documented searched_widths (extra > 0 makes a mutant)."""
+    w_own, w_opp = gate.searched_widths_reference(k_own, k_opp);return w_own + extra, w_opp + extra
 
 
 class OracleNPricer:
     """DepthNPricer's constructor and price() over the oracle's own surface; `executor`/`reference` overrides make mutants.
     As the pricer, under `searched` the ply-2 k's are searched_maps' and the slot widths are derived (fake_searched_widths)."""
     def __init__(self, executor, model, *, capacity=32, depth, k_own, k_opp, k1_own=9, k1_opp=9, block_lanes=2187, selection='prior',
-                 digest=True, actor_capacity=3, fixed_capacity=False, reference_module=None):
+                 digest=True, actor_capacity=3, fixed_capacity=False, reference_module=None, width_extra=0):
         self.oracle = reference.DepthNOracle(executor, model, chunk=64);self.capacity, self.block_lanes, self.selection = capacity, block_lanes, selection
         shape = gate.plan_of(depth, k_own, k_opp);self.k_own, self.k_opp, self.searched_k = shape['k_own'], shape['k_opp'], None
         if selection == 'searched':
-            self.searched_k = (self.k_own[0], self.k_opp[0]);w_own, w_opp = fake_searched_widths(*self.searched_k)
+            self.searched_k = (self.k_own[0], self.k_opp[0]);w_own, w_opp = fake_searched_widths(*self.searched_k, extra=width_extra)
             self.k_own, self.k_opp = (w_own,) + self.k_own[1:], (w_opp,) + self.k_opp[1:]
         self.plan = gate.plan_of(depth, self.k_own, self.k_opp, selection, k1_own=k1_own, k1_opp=k1_opp);self.reference = reference_module or reference
 
@@ -193,16 +210,37 @@ def fake_as_depth2(frame):
     return SimpleNamespace(**out)
 
 
+def rule_maps(frame, k_own, k_opp, *, top1=True, errors=True, refutations=True, fill=True):
+    """A second, test-side implementation of the documented `searched` rule (the stand-in pricer's), with switches that make
+    the reviewer's mutants: no learner prior top-1, errored pairs not kept reachable, no refutations, no fill."""
+    w_own, w_opp = gate.searched_widths_reference(k_own, k_opp);R = frame.pre.shape[0]
+    own = np.full((R, 2, 9, 9, w_own), -1, np.int32);opp = np.full((R, 2, 9, 9, w_opp), -1, np.int32)
+    first = lambda legal, logits: sorted((a for a in range(9) if legal[a]), key=lambda a: (-float(logits[a]), a))[0]
+    unique = lambda xs: list(dict.fromkeys(int(x) for x in xs))
+    for c in map(tuple, np.argwhere(np.asarray(frame.t1_status) == 2).tolist()):
+        st, v = frame.t2_status[c], np.asarray(frame.t2_value[c], np.float64);ok = (st == 1) | (st == 4)
+        bad = [tuple(x) for x in np.argwhere(st == 3).tolist()] if errors else []
+        rows = [a for a in range(9) if (st[a] != 0).any() and ok[a].any()];cols = [r for r in range(9) if (st[:, r] != 0).any()]
+        def q(a):   # depth2_backups' arithmetic: math.exp weights over the row's valid replies, fsum
+            live = [r for r in cols if ok[a, r]];top = max(float(frame.t1_peer_logits[c][r]) for r in live)
+            x = [math.exp(float(frame.t1_peer_logits[c][r]) - top) for r in live];total = math.fsum(x)
+            return math.fsum(p / total * v[a, r] for p, r in zip(x, live))
+        learner = unique([a for a, _ in bad] + sorted(rows, key=lambda a: (-q(a), a))[:k_own] + ([first(frame.t1_own_legal[c], frame.t1_own_logits[c])] if top1 else []))[:w_own] \
+            if frame.t1_own_requested[c] else [0]
+        if frame.t1_peer_requested[c]:
+            kept = [a for a in learner if a in range(9) and ok[a].any()]
+            ranked = unique([first(frame.t1_peer_legal[c], frame.t1_peer_logits[c])] + ([min((r for r in cols if ok[a, r]), key=lambda r: (v[a, r], r)) for a in kept] if refutations else []))
+            threat = {r: min(v[a, r] for a in kept if ok[a, r]) for r in cols if any(ok[a, r] for a in kept)}
+            for r in sorted(threat, key=lambda r: (threat[r], r)) if fill else ():
+                if len(ranked) < k_opp + 1 and r not in ranked:ranked.append(r)
+            opponent = unique([r for _, r in bad] + ranked)[:w_opp]
+        else:opponent = [0]
+        own[c][:len(learner)] = learner;opp[c][:len(opponent)] = opponent
+    return own, opp, np.asarray([bool((frame.pre[q] != 0).any() or (frame.t1_status[q] == 3).any() or (frame.t2_status[q] == 3).any()) for q in range(R)])
+
+
 def fake_searched_maps(frame, k_own, k_opp):
-    """A stand-in `searched` rule and a per-root flag: each requested seat keeps its encoder-legal actions in DESCENDING action
-    order, up to k+1 of them; a waiting seat [0, -1, ...]. The learner's maps are fake_searched_widths wide (k + 2), the
-    opponent's one slot NARROWER (k + 1): a narrower map pads to the pricer's width."""
-    R = frame.pre.shape[0];own = np.full((R, 2, 9, 9, k_own + 2), -1, np.int32);opp = np.full((R, 2, 9, 9, k_opp + 1), -1, np.int32)
-    for q, w, a1, r1 in np.argwhere(np.asarray(frame.t1_status) == 2).tolist():
-        for out, k, requested, legal in ((own, k_own, frame.t1_own_requested, frame.t1_own_legal), (opp, k_opp, frame.t1_peer_requested, frame.t1_peer_legal)):
-            if not requested[q, w, a1, r1]:out[q, w, a1, r1, 0] = 0;continue
-            kept = sorted(np.flatnonzero(legal[q, w, a1, r1]).tolist(), reverse=True)[:k + 1];out[q, w, a1, r1, :len(kept)] = kept
-    return own, opp, np.zeros(R, bool)
+    return rule_maps(frame, k_own, k_opp)
 
 
 FAKE_MODULE = SimpleNamespace(DepthNPricer=OracleNPricer, as_depth2_frame=fake_as_depth2, searched_maps=fake_searched_maps)
@@ -255,7 +293,8 @@ class FakeBackupsN:
 class FixtureN:
     """Facts-based requests over the fake engine, the real FramePricer and the gate's own oracle, shared per class."""
     MODES = ((0, 0), (18, 1), (101, 0), (102, 1), (103, 0), (104, 1), (105, 0), (0, 1), (108, 0), (109, 1), (110, 0), (111, 1), (112, 0),
-        (113, 1), (114, 0), (115, 1), (9, 0), (6, 1), (13, 0))
+        (113, 1), (114, 0), (115, 1), (9, 0), (6, 1), (13, 0), (12, 1), (19, 0), (119, 1), (20, 0), (120, 1), (121, 0), (22, 1), (122, 0))
+    ROOTS = len(MODES)
     MISSING = {(3, 1)}
     PRE_REFUSED = 7
     make = staticmethod(executor_n)
@@ -288,7 +327,7 @@ class FixtureN:
 
     @contextlib.contextmanager
     def engine(self):
-        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward):
+        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward_n):
             yield
 
     def frame_pricer(self):
@@ -300,7 +339,8 @@ class FixtureN:
 
     def call(self, pricers, *, sample=None, decision=None, backups=FakeBackupsN, save=None, depth2=True, requests=None):
         module = pricers.module
-        depth2_pricer = gate.depth2_pass_pricer(module, self.ex, object(), capacity=32, actor_capacity=3, k1_own=pricers.k1_own, k1_opp=pricers.k1_opp) if depth2 else None
+        depth2_pricer = gate.depth2_pass_pricer(module, self.ex, object(), capacity=32, actor_capacity=3, k1_own=pricers.k1_own, k1_opp=pricers.k1_opp,
+            digest=True) if depth2 else None   # as the gate prices it
         with self.engine():
             return gate.run_call_n(requests=requests or self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS, pricers=pricers,
                 depth2_pricer=depth2_pricer, frame_pricer=self.frame_pricer(), oracle=self.oracle, sample=sample, block=0, context=dict(block=0, call=0),
@@ -425,10 +465,10 @@ class GateNTests(FixtureN, unittest.TestCase):
         evaluation, summary = self.call(self.pricers(k1_own=3, k1_opp=2))
         result, (status, reasons) = self.judged(evaluation)
         self.assertEqual(status, 'PASS', (failing(result), reasons));self.assertNotIn('t1_enumeration_vs_d', result['checks']['b']['compared'])
-        self.assertLess(summary['refusals']['depthn']['refused_count'], 19)
+        self.assertLess(summary['refusals']['depthn']['refused_count'], self.ROOTS)
         evaluation, summary = self.call(self.pricers(k1_own=2, k1_opp=2))
         result, (status, reasons) = self.judged(evaluation)   # k1_own = 2 prunes a legal root action of every root: all refuse
-        self.assertEqual((status, summary['refusals']['depthn']['refused_count']), ('INCOMPLETE', 19));self.assertIn('vacuous', reasons[0])
+        self.assertEqual((status, summary['refusals']['depthn']['refused_count']), ('INCOMPLETE', self.ROOTS));self.assertIn('vacuous', reasons[0])
 
     def mutant(self, **overrides):
         """A run whose pricer is a mutant stand-in (the gate's oracle and D3 stay correct)."""
@@ -520,19 +560,25 @@ class GateNTests(FixtureN, unittest.TestCase):
         a, b = self._frame(), self._frame();b.nodes[0].own_actions[0, 0, 0, 0] = 2
         self.assertFalse(gate.g2.block_invariance(gate.frame_arrays(a), gate.frame_arrays(b))['passed'])
 
-    def test_searched_pricers_take_ks_and_the_maps_pad_to_the_derived_widths(self):
+    def test_searched_pricers_take_ks_and_derive_the_documented_widths(self):
         pricers = self.pricers(selection='searched');evaluation, summary = self.call(pricers)
         result, (status, _) = self.judged(evaluation)
         self.assertEqual(status, 'PASS', failing(result))
-        self.assertEqual([(p.searched_k, p.k_own, p.k_opp) for p in pricers.instances], [((2, 2), (4, 2), (4, 2))])   # built with k's
-        self.assertEqual(summary['plan']['k_own'], (4, 2));self.assertEqual(summary['plan']['k_opp'], (4, 2))   # the engine's derived widths
-        self.assertEqual(summary['searched'], dict(searched_k=[2, 2], searched_widths=[4, 4]))
-        self.assertEqual(summary['searched_maps']['widths'], dict(own=4, opp=3));self.assertEqual(summary['searched_maps']['extras'], [dict(shape=[19], dtype='bool', set=0)])
-        self.assertEqual(pricers.options()['searched_k'], [2, 2]);self.assertEqual(pricers.options()['slot_widths'], dict(k_own=[4, 2], k_opp=[4, 2]))
+        self.assertEqual([(p.searched_k, p.k_own, p.k_opp) for p in pricers.instances], [((2, 2), (3, 2), (4, 2))])   # built with k's
+        self.assertEqual(summary['plan']['k_own'], (3, 2));self.assertEqual(summary['plan']['k_opp'], (4, 2))   # searched_widths_reference(2, 2)
+        self.assertEqual(summary['searched'], dict(searched_k=[2, 2], searched_widths=[3, 4]))
+        flagged = int(evaluation['searched_maps']['extras'][0]['set']);self.assertGreater(flagged, 0)
+        self.assertEqual(summary['searched_maps']['widths'], dict(own=3, opp=4));self.assertEqual(summary['searched_maps']['rule_mismatches'],
+            dict(searched_maps_widths=0, searched_maps_own_rule=0, searched_maps_opp_rule=0, searched_depth2_refused=0))
+        self.assertEqual(pricers.options()['searched_k'], [2, 2]);self.assertEqual(pricers.options()['slot_widths']['k_own'], [3, 2])
+        self.assertEqual(result['checks']['a']['mismatched']['engine_widths'], 0)
+        self.assertEqual(gate.pad_map([4, 1], 4).tolist(), [4, 1, -1, -1])
+        with self.assertRaises(ValueError):gate.pad_map([1, 2, 3], 2)
+        self.assertGreater(result['checks']['a']['compared']['searched_maps_own_rule'], 0)
         self.assertGreater(result['checks']['a']['compared']['searched_maps_own'], 0)
         self.assertEqual(summary['timing'].keys() >= {'searched_maps_seconds'}, True)
         def wider(frame, k_own, k_opp):
-            own, opp, flag = fake_searched_maps(frame, k_own, k_opp);return np.concatenate([own, own[..., :1] * 0 - 1], axis=-1), opp, flag
+            own, opp, flag = fake_searched_maps(frame, k_own, k_opp);return np.concatenate([own, np.full(own.shape[:-1] + (2,), -1, np.int32)], axis=-1), opp, flag
         with self.assertRaises(ValueError):self.call(self.pricers(module=SimpleNamespace(DepthNPricer=OracleNPricer, as_depth2_frame=fake_as_depth2, searched_maps=wider), selection='searched'))
         def duplicate(frame, k_own, k_opp):
             own, opp, flag = fake_searched_maps(frame, k_own, k_opp);cell = tuple(np.argwhere(np.asarray(frame.t1_status) == 2)[0]);own[cell][1] = own[cell][0]
@@ -540,6 +586,99 @@ class GateNTests(FixtureN, unittest.TestCase):
         module = SimpleNamespace(DepthNPricer=OracleNPricer, as_depth2_frame=fake_as_depth2, searched_maps=duplicate)
         evaluation, _ = self.call(self.pricers(module=module, selection='searched'))
         self.assertGreater(evaluation['a']['mismatched']['searched_maps_own'], 0)
+
+    def test_searched_rule_mutants_are_caught(self):
+        """The reviewer's searched_maps mutants (the stand-in pricer's own rule with a part removed) fail (a) EXACT against the
+        gate's re-derivation; the intact rule passes. Mode 22's non-additive values separate refutations from the fill."""
+        for k in (1, 2):
+            with self.subTest(k=k):
+                evaluation, _ = self.call(self.pricers(selection='searched', k_own=k, k_opp=k), decision=False)
+                self.assertTrue(evaluation['a']['passed'], evaluation['a']['first_mismatches'][:3])
+        for name, switch, k in (('no_prior_top1', dict(top1=False), 1), ('errors_not_kept', dict(errors=False), 2), ('no_refutations', dict(refutations=False), 1),
+                ('no_fill', dict(fill=False), 2)):
+            with self.subTest(name):
+                module = SimpleNamespace(DepthNPricer=OracleNPricer, as_depth2_frame=fake_as_depth2, searched_maps=lambda f, ko, kp, sw=switch: rule_maps(f, ko, kp, **sw))
+                evaluation, _ = self.call(self.pricers(module=module, selection='searched', k_own=k, k_opp=k), decision=False)
+                mismatched = evaluation['a']['mismatched'];self.assertGreater(mismatched['searched_maps_own_rule'] + mismatched['searched_maps_opp_rule'], 0, name)
+                self.assertEqual(mismatched.get('ply2_maps', 0), 0)   # the pricer expanded the maps it was given: only the rule check sees it
+
+    def test_width_clamping_engines_fail(self):
+        """Engines that price a k = 3 request at k = 2: honestly reporting 2, reporting the requested 3 over width-2 arrays,
+        padding width-3 arrays with only 2 live slots, and a searched engine deriving the wrong ply-2 widths: every one FAILs."""
+        def clamp(legal, logits, requested, k):
+            m = np.full(k, -1, np.int32);m[:min(k, 2)] = reference.prior_map(legal, logits, requested, min(k, 2));return m
+        padded = SimpleNamespace(**{k: getattr(reference, k) for k in dir(reference) if not k.startswith('__')});padded.prior_map = clamp
+        def factory(kind):
+            def make(executor, model, **kw):
+                if kind == 'padded':return OracleNPricer(executor, model, **dict(kw, reference_module=padded))
+                if kind == 'searched':return OracleNPricer(executor, model, **dict(kw, width_extra=1))
+                engine = OracleNPricer(executor, model, **dict(kw, k_own=2, k_opp=2))
+                if kind == 'lying':engine.k_own, engine.k_opp = gate.plan_of(kw['depth'], kw['k_own'], kw['k_opp'])['k_own'], gate.plan_of(kw['depth'], kw['k_own'], kw['k_opp'])['k_opp']
+                return engine
+            return SimpleNamespace(DepthNPricer=make, as_depth2_frame=fake_as_depth2, searched_maps=fake_searched_maps)
+        for kind, selection in (('honest', 'prior'), ('lying', 'prior'), ('padded', 'prior'), ('searched', 'searched')):
+            with self.subTest(kind):
+                evaluation, summary = self.call(self.pricers(module=factory(kind), k_own=3, k_opp=3, selection=selection), decision=False)
+                result, (status, _) = self.judged(evaluation);self.assertEqual(status, 'FAIL', kind)
+                if kind in ('honest', 'searched'):self.assertGreater(evaluation['a']['mismatched']['engine_widths'], 0)
+                if kind in ('honest', 'lying', 'searched'):self.assertTrue(evaluation['geometry'], kind)
+                if kind == 'padded':self.assertGreater(evaluation['a']['mismatched']['ply2_maps'], 0);self.assertGreater(evaluation['d']['mismatched']['leaf_missing_from_pricer'], 0)
+
+    def test_the_depth2_pass_is_rechecked_where_cheap(self):
+        _, summary = self.prior();counts = summary['depth2_pass']
+        self.assertGreater(counts['rerun'], counts['forced']);self.assertGreater(counts['forced'], 0);self.assertGreater(counts['enumerated'], counts['rerun'])
+        def broken(frame):
+            out = fake_as_depth2(frame);cell = tuple(np.argwhere(np.asarray(out.t2_status) == 1)[0]);out.t2_value[cell] = -out.t2_value[cell] + .5
+            extra = tuple(np.argwhere(np.asarray(out.t2_status) == 0)[0]);out.t2_status[extra] = 4;return out
+        module = SimpleNamespace(DepthNPricer=OracleNPricer, as_depth2_frame=broken, searched_maps=fake_searched_maps)
+        evaluation, _ = self.call(self.pricers(module=module), decision=False);mismatched = evaluation['a']['mismatched']
+        self.assertGreater(mismatched['depth2_pass_t2_value_terminal'], 0);self.assertGreater(mismatched['depth2_pass_leaf_extra'], 0)
+        self.assertEqual(mismatched['depth2_pass_t1_status'], 0)
+
+    def test_fixture_gaps_waiting_view_errors_terminal_errors_and_node_priors(self):
+        _, summary = self.prior()
+        with self.engine():
+            stack = reference.stack(self.requests, batch._numpy_worlds(self.requests, self.tables, self.recipe))
+            data = gate.oracle_levels(oracle=self.oracle, stack=stack, requests=self.requests, recipe=self.recipe, params=PARAMS, frame=None, plan=gate.plan_of(3, 2, 2))
+        root = {mode: i for i, (mode, _) in enumerate(self.MODES)};children = data['children']
+        rows = lambda q: [i for i, c in enumerate(children['cells'].tolist()) if c[0] == q]
+        waiting = rows(root[12]);self.assertTrue(waiting and all(not children['own_requested'][i] for i in waiting if children['status'][i] == 2))   # learner waits at turn 1
+        self.assertTrue(all(data['maps'][(2, c[0], c[1], c[2] * 9 + c[3])][0].tolist() == [0, -1] for c in children['cells'][waiting].tolist() if (2, c[0], c[1], c[2] * 9 + c[3]) in data['maps']))
+        self.assertEqual({int(children['status'][i]) for i in rows(root[19])}, {2})   # the waiting opponent's view error never refuses
+        self.assertEqual({(int(children['status'][i]), int(children['error'][i])) for i in rows(root[20])}, {(1, 0)})   # terminal before encoder error
+        ply2 = data['levels'][2];at = lambda q: [i for i, spec in enumerate(ply2['specs'].tolist()) if spec[0] == q]
+        self.assertEqual({int(ply2['status'][i]) for i in at(root[119])}, {2});self.assertEqual({(int(ply2['status'][i]), int(ply2['error'][i])) for i in at(root[120])}, {(1, 0)})
+        leaves = data['leaves'];self.assertEqual({(int(s), int(e)) for (q, *_), s, e in zip(leaves['index'].tolist(), leaves['status'], leaves['error']) if q == root[121]}, {(1, 0)})
+        # node-dependent priors: siblings' priors differ, so a prior read from the wrong node fails (c)
+        frame = self._frame();level = frame.nodes[0];expanded = np.argwhere(np.asarray(level.status) == 2)
+        lanes = lambda x: np.asarray(level.own_legal[x], bool) & bool(level.own_requested[x])
+        pairs = [(tuple(x), tuple(y)) for x, y in zip(expanded[:-1], expanded[1:]) if tuple(x[:2]) == tuple(y[:2])
+            and not np.array_equal(np.asarray(level.own_logits[tuple(x)])[lanes(tuple(x))], np.asarray(level.own_logits[tuple(y)])[lanes(tuple(x))])]
+        self.assertTrue(pairs);wrong = copy.deepcopy(frame);wrong.nodes[0].own_logits[pairs[0][0]] = level.own_logits[pairs[0][1]]
+        ev = gate.evaluate_n(wrong, self._d(), self.requests, self._data(wrong), context={})
+        self.assertFalse(gate.summarize_n([ev])['checks']['c']['quantities']['ply2_own_logits']['passed'])
+
+    def test_topk_boundary_per_ply(self):
+        _, summary = self.prior();merged = gate.merge_topk_n([summary['topk']])
+        self.assertEqual({k for k in merged if k.startswith('ply')}, {'ply2', 'ply3'})
+        for ply in ('ply2', 'ply3'):
+            self.assertGreater(merged[ply]['own']['selections'], 0);self.assertEqual(merged[ply]['own']['oracle_prior_set_differs'], 0)   # the same fake heads
+            self.assertIsNotNone(merged[ply]['own']['gap']['p50'])
+        self.assertIsNone(gate.merge_topk_n([None, {}]))
+
+    def test_node_spreads_and_guard_spread(self):
+        status, value = np.zeros((1, 2, 81, 2, 2), np.int8), np.zeros((1, 2, 81, 2, 2), np.float32)
+        status[0, 0, 0] = 4;value[0, 0, 0] = ((.5, .1), (.2, .2))           # rows .3 and .2 under a uniform opponent: spread .1
+        status[0, 0, 1] = 4;value[0, 0, 1] = ((.4, .4), (.4, .4))           # identical rows: spread 0
+        status[0, 0, 2, 0] = 4                                              # one own slot: skipped
+        status[0, 1, 3] = 4;status[0, 1, 3, 1, 1] = 3                       # an errored leaf: skipped
+        opp = np.full((1, 2, 9, 9, 2), -1, np.int32);opp[0, :, 0, :3] = (0, 1)
+        frame = SimpleNamespace(depth=2, leaf_status=status, leaf_value=value, t1_opp_actions=opp, t1_peer_logits=np.zeros((1, 2, 9, 9, 9), np.float32))
+        spreads = gate.node_spreads(frame);self.assertEqual(len(spreads), 2);self.assertAlmostEqual(sorted(spreads)[1], .1, places=6);self.assertEqual(sorted(spreads)[0], 0.)
+        p10, info = gate.guard_spread([0., .1, .2, 0.]);self.assertAlmostEqual(p10, .11);self.assertEqual((info['nonzero'], info['zero_share']), (2, .5))
+        p10, info = gate.guard_spread([0., 0.]);self.assertIsNone(p10)
+        rule = gate.guard_note(gate.g2.tolerance_rule(None, p10), info);self.assertIn('every one of the 2', rule['guard']);self.assertIn('NON-ZERO', rule['guard_spread_rule'])
+        self.assertIn('no expanded last-ply parent', gate.guard_note(gate.g2.tolerance_rule(None, None), gate.guard_spread([])[1])['guard'])
 
     def test_refusals_at_depth_n_beside_depth1_and_depth2(self):
         _, summary = self.prior();refusals = summary['refusals']
@@ -582,8 +721,9 @@ class GateNTests(FixtureN, unittest.TestCase):
         report = gate.offline_diagnostics([directory], backups=FakeBackupsN, backups2=depth2_backups)
         self.assertEqual(report['calls'], 1);self.assertEqual(set(report['change_rate']), {'prior-k2', 'prior-k3', 'searched-k2'})
         change = report['change_rate']['prior-k2'];self.assertGreater(change['labeled_both'], 0);self.assertIsNotNone(change['rate'])
-        pvs = report['prior_vs_searched']['k2'];self.assertGreater(pvs['cells'], 0);self.assertGreater(pvs['set_differs'], 0)   # descending vs prior rank
-        pruned = report['pruned_errors']['prior-k2'];self.assertEqual(pruned['roots'], 19);self.assertGreater(pruned['with_depth2_errors'], 0)
+        pvs = report['prior_vs_searched']['k2'];self.assertGreater(pvs['cells'], 0);self.assertIn('prior_set_not_subset_of_searched', pvs)
+        self.assertIn('prior_set_not_subset_of_searched_share', pvs)
+        pruned = report['pruned_errors']['prior-k2'];self.assertEqual(pruned['roots'], self.ROOTS);self.assertGreater(pruned['with_depth2_errors'], 0)
         self.assertEqual(pruned['roots'], sum(pruned.get(k, 0) for k in ('pre_or_materialization', 'no_depth2_errors', 'with_depth2_errors')))
         self.assertEqual(pruned['with_depth2_errors'], pruned.get('errors_kept', 0) + pruned.get('only_pruned_errors', 0))
         self.assertIn('definitions', report)
@@ -609,6 +749,21 @@ class GateNTests(FixtureN, unittest.TestCase):
             with self.subTest(name):self.assertGreater(gate.n2_compare(frame, other)[0]['mismatched'][name], 0)
         other = copy.deepcopy(frame);other.t2_value[cell] += .25
         self.assertEqual(gate.n2_compare(frame, other)[1]['t2_value']['max_abs_difference'], .25)
+
+    def test_n2_status_incomplete_and_world_reports_gated(self):
+        frame = fake_as_depth2(self.cached('n2', lambda: self._n2_frame()));found, floats = gate.n2_compare(frame, frame)
+        result = lambda found, e: dict(a=found, floats=floats, c={}, e=e, spreads=[.1])
+        e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        self.assertEqual(gate.summarize_n2({'x': [result(found, e)]})['x']['status'], 'PASS')
+        empty = dict(e, roots_compared=0, gaps=[]);self.assertEqual(gate.summarize_n2({'x': [result(found, empty)]})['x']['status'], 'INCOMPLETE')
+        other = copy.deepcopy(frame);other.world_reports = ((dict(reason='x'), dict()),);found, _ = gate.n2_compare(frame, other)
+        report = gate.summarize_n2({'x': [result(found, e)]})['x'];self.assertEqual(report['status'], 'FAIL');self.assertEqual(report['world_reports_first_difference']['root'], 0)
+
+    def test_turn2_choices_break_ties_by_the_lower_action(self):
+        frame = SimpleNamespace(t1_status=np.zeros((1, 2, 9, 9), np.int8), t1_own_actions=np.full((1, 2, 9, 9, 2), -1, np.int32),
+            t1_opp_actions=np.full((1, 2, 9, 9, 1), -1, np.int32), t1_peer_logits=np.zeros((1, 2, 9, 9, 9), np.float32))
+        frame.t1_status[0, 0, 0, 0] = 2;frame.t1_own_actions[0, 0, 0, 0] = (2, 1);frame.t1_opp_actions[0, 0, 0, 0] = (0,)
+        self.assertEqual(gate.turn2_choices(frame, SimpleNamespace(node_value=lambda *a: .25)), {(0, 0, 0, 0): 1})   # slot 1 holds the lower action
 
     def _n2_frame(self):
         with self.engine():return OracleNPricer(self.ex, object(), depth=2, k_own=9, k_opp=9).price(self.requests, self.tables, self.recipe, PARAMS)
@@ -735,7 +890,8 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         self.assertIn('depth2_full_width', report['refusals']);self.assertGreater(report['leaves']['checked'], 0)
         code, searched = self.main('--save-arrays', '--selection', 'searched', '--sample-leaves', '2')
         report = json.loads((searched / 'gate.json').read_text());self.assertEqual((code, report['status']), (0, 'PASS_SAMPLED'))
-        self.assertEqual(report['searched_maps'][0]['widths'], dict(own=4, opp=3))
+        self.assertEqual(report['searched_maps'][0]['widths'], dict(own=3, opp=4))
+        self.assertIn('trusted via --n2-equivalence', report['depth2_pass']['trust']);self.assertIn('EXACT', report['searched_rule'])
         out = Path(tempfile.mkdtemp(prefix='depthn-cli-')) / 'diag'
         with patch.object(gate, 'log', lambda *a, **k: None), patch.dict(sys.modules, {'gpu_engine.depthn_backups': FakeBackupsN}):
             code = gate.main(['--out', str(out), '--diagnostics-from', str(prior), str(searched)])
@@ -748,14 +904,23 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         code, out = self.main('--depth3-diagnostics', '--diagnostic-ks', '2,3')
         report = json.loads((out / 'diagnostics.json').read_text())
         self.assertEqual(code, 0);self.assertEqual(set(report['change_rate']), {'prior-k2', 'prior-k3', 'searched-k2', 'searched-k3'})
-        self.assertEqual(set(report['prior_vs_searched']), {'k2', 'k3'});self.assertEqual(report['widths']['searched-k3'], ['{"k_own": [5, 3], "k_opp": [5, 3]}'])
+        self.assertEqual(set(report['prior_vs_searched']), {'k2', 'k3'});self.assertEqual(report['widths']['searched-k3'], ['{"k_own": [4, 3], "k_opp": [5, 3]}'])
+
+    def test_live_diagnostics_exit_1_without_a_call(self):
+        roots = self.roots;self.roots = lambda: dict.__setitem__(vars(r := roots()), 'groups', []) or r
+        try:code, out = self.main('--depth3-diagnostics', '--diagnostic-ks', '2')
+        finally:self.roots = roots
+        self.assertEqual(code, 1);self.assertEqual(json.loads((out / 'diagnostics.json').read_text())['calls'], 0)
 
     def test_n2_equivalence_against_the_depth2_kernel(self):
+        """The stand-in N=2 frame equals the real depth-2 kernel's on every array and decision; it carries no D world_reports, so
+        the gated report comparison alone fails it (the real pricer's run below passes in full)."""
         code, out = self.main('--n2-equivalence', '--n2-k', '2')
         report = json.loads((out / 'n2-equivalence.json').read_text())
-        self.assertEqual((code, report['status']), (0, 'PASS'), {n: (c['discrete']['mismatched'], c['e'].get('reasons')) for n, c in report['configs'].items()})
-        self.assertEqual(set(report['configs']), {'full_width', 'top2'})
+        self.assertEqual((code, report['status']), (1, 'FAIL'));self.assertEqual(set(report['configs']), {'full_width', 'top2'})
         for config in report['configs'].values():
+            self.assertTrue(config['discrete']['passed'], config['discrete']['mismatched']);self.assertTrue(config['e']['passed'], config['e'].get('reasons'))
+            self.assertTrue(all(m['passed'] for m in config['floats'].values()));self.assertFalse(config['world_reports_equal'])
             self.assertGreater(config['discrete']['compared']['t2_status'], 0);self.assertGreater(config['e']['roots_compared'], 0)
 
     @unittest.skipUnless(HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')

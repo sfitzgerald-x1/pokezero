@@ -107,10 +107,12 @@ class ThroughputTests(unittest.TestCase):
         total = report['by_worlds']['2']['configs']['depth3-prior-k2']['device_ms_per_root']
         self.assertAlmostEqual(split['p1_ms_per_root'] + split['leaf_ply_ms_per_root'] + split['expand_plies_ms_per_root'], total)
         self.assertEqual(set(split['expand_by_ply']), {'2'});self.assertAlmostEqual(split['host_pack_ms_per_root'], 1e3 * .002 / 4)
-        leaf_lanes = 81 * 2 * 4 * 4 * 4 + 16   # 4 roots x 81 x 2 cells x 4 ply-2 nodes x 4 leaf lanes, plus call padding
-        self.assertAlmostEqual(split['leaf_ply_ms_per_root'], 1e3 * 1e-6 * leaf_lanes / 4)   # depth2-k2's 1 us per evaluated lane
+        self.assertIn('LOWER bound', split['plies_bound']);self.assertAlmostEqual(split['plies_ms_per_root_upper_bound'], split['plies_ms_per_root_lower_bound'] + 1e3 * .002 / 4)
+        two, three = 81 * 2 * 4 * 4, 81 * 2 * 4 * 4 * 4   # active leaf lanes: 4 roots x 81 x 2 cells (x 4 ply-2 nodes) x 4 leaf lanes
+        self.assertAlmostEqual(split['leaf_ply_ms_per_root'], 1e3 * 1e-6 * (two + 16) / two * three / 4)   # per ACTIVE lane
+        self.assertAlmostEqual(split['leaf_ply_ms_per_root_per_padded_lane'], 1e3 * 1e-6 * (three + 16) / 4)   # per padded evaluated lane
         searched = report['by_worlds']['2']['ply_split_estimate']['depth3-searched-k2'];self.assertIsNotNone(searched['depth2_full_width_pass_ms_per_root'])
-        self.assertAlmostEqual(searched['p1_ms_per_root'] + searched['plies_ms_per_root'], report['by_worlds']['2']['configs']['depth3-searched-k2']['parts_ms_per_root']['depthn'])
+        self.assertAlmostEqual(searched['p1_ms_per_root'] + searched['plies_ms_per_root_lower_bound'], report['by_worlds']['2']['configs']['depth3-searched-k2']['parts_ms_per_root']['depthn'])
 
     def test_isolate_argv_and_argument_checks(self):
         args = self.args('--isolate');calls = []
