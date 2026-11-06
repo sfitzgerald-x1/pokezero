@@ -92,7 +92,8 @@ class ProtocolRoute(unittest.TestCase):
 
     def test_explicit_protocol_route_rejects_driver_evidence_and_native_probe(self):
         root,inputs,source=self.root();start=BattleStartOverride(player_teams={'p1':'own','p2':'sample'})
-        with patch.object(protocol,'world_battle_spec',side_effect=AssertionError('must refuse before Native-probe path')):
+        with patch.object(protocol,'battle_spec_from_payload',side_effect=AssertionError('must refuse before typed bridge')), \
+                patch.object(protocol,'_removed_items',return_value={}):
             result=v5_public_world.materialize(root,start,prepared=inputs,history=None,own_static=None,seed=7)
         self.assertIsNone(result.state);self.assertEqual(result.refusals,('native-probed-hard-trapped-own-request',))
         with self.assertRaisesRegex(ValueError,'retained-driver'):
@@ -100,7 +101,8 @@ class ProtocolRoute(unittest.TestCase):
 
     def test_constructor_budget_prefix_no_redraw_and_refused_draw_slots_retained(self):
         root,inputs,source=self.root();detached=inputs.root
-        with patch.object(protocol,'_gen3_randbat_belief_start_override_result',return_value=(None,'named-original-refusal'))as sampler:
+        with patch.object(protocol,'_gen3_randbat_belief_start_override_result',return_value=(None,'named-original-refusal'))as sampler, \
+                patch.object(protocol,'_carried_root',return_value=detached):
             a=protocol.sample(root,detached,lines=inputs.lines,catalog=inputs.catalog,source=NS(original=source,binding_sha256='fixed'),metadata={},config=None,battle_id='same-live-cell',seed=9,count=16)
             b=protocol.sample(root,detached,lines=inputs.lines,catalog=inputs.catalog,source=NS(original=source,binding_sha256='fixed'),metadata={},config=None,battle_id='same-live-cell',seed=9,count=32)
         self.assertEqual(sampler.call_count,48);self.assertEqual(a.seeds,b.seeds[:16]);self.assertFalse(b.fully_constructed)

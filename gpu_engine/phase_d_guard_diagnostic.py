@@ -1,4 +1,4 @@
-"""Collect independent Phase D guard evidence without constructing a world.
+"""Collect independent Phase D guard evidence, never admit a diagnostic world.
 
 A failed prerequisite never licenses a fabricated root, counter or array.
 Sample/spec-dependent checks are explicitly NOT_EVALUABLE. This diagnostic
@@ -19,6 +19,17 @@ class Checks:
             else:self.add(kind,None,error=type(error).__name__+': '+str(error),**details)
 
 
+def hp_range_invalid(hp,maximum):
+    return None if hp is None else not 0<=hp<=maximum
+
+
+def own_toxic_check(checks,condition,convert):
+    if not condition:checks.add('PUBLIC_TOXIC_STAGE_INVALID',None,reason='literal own status unavailable')
+    elif next((x for x in condition[1:] if x in ('slp','par','brn','frz','psn','tox')),'')=='tox':
+        checks.call('PUBLIC_TOXIC_STAGE_INVALID',lambda:convert()<0)
+    else:checks.add('PUBLIC_TOXIC_STAGE_INVALID',False,applicability='NOT_APPLICABLE_OWN_STATUS_NOT_TOX')
+
+
 def payload_checks(request,payload,lines,*,owner,checks=None):
     c=Checks() if checks is None else checks
     party=request.get('side',{}).get('pokemon')
@@ -32,17 +43,14 @@ def payload_checks(request,payload,lines,*,owner,checks=None):
     c.add('OWN_TRAP_STATE_UNAVAILABLE',bool(current[0].get('maybeTrapped')and 'trapped'not in current[0])if len(current)==1 else None)
     for slot,row in enumerate(party or ()):
         if not isinstance(row,dict):c.add('OWN_PARTY_ROW_MALFORMED',True,slot=slot);continue
-        c.add('OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE','slp'in str(row.get('condition','')).split(),slot=slot)
+        # Sleep is now a deferred public posterior, not an unconditional refusal.
     c.add('native-probed-hard-trapped-own-request',bool(payload.get('selfActiveRequestState',{}).get('trapped')))
     c.add('deferred-baton-phase',bool(payload.get('pendingBatonPassSides')))
     for side,data in payload.get('sides',{}).items():
         vol=set(data.get('volatiles',()))
         c.add('native-probed-or-hidden-volatile-clock',bool(data.get('meanlookTrap')or vol&{'trapped','solarbeam','encore'}),side=side,volatiles=sorted(vol))
-        for slot,row in enumerate(data.get('pokemon',())):
-            c.add('native-probed-sleep-clock','slp'in str(row.get('condition','')).split(),side=side,slot=slot)
-        blockers=data.get('materializationBlockers',())
-        if not blockers:c.add('public-materialization-blocker',False,side=side)
-        for kind in blockers:c.add('public-materialization-blocker',True,side=side,blocker=kind)
+        # Discharge requires positive B2 removal evidence; evaluated below by
+        # the same protocol input predicates production uses.
     since=[None,None];bad_owner=False
     for line in lines:
         p=line.split('|')
@@ -55,13 +63,12 @@ def payload_checks(request,payload,lines,*,owner,checks=None):
     return c
 
 
-def scan(adapter,request,public,source,metadata,*,lines):
+def scan(adapter,request,public,source,metadata,*,lines,checks=None):
     import numpy as np
     from pokezero.dex import normalize_id
-    from pokezero.determinization import _root_self_team_payload
     from . import phase_d_live_worlds as w,public_context
     hooks=w.hooks
-    c=payload_checks(request,public.materialization_payload,lines,owner=public.address.owner)
+    c=payload_checks(request,public.materialization_payload,lines,owner=public.address.owner,checks=checks)
     owner=public.address.owner;foe=1-owner;catalog=adapter.catalog;state=adapter.state
     c.add('PUBLIC_SOURCE_BINDING_DIFFERS',catalog.source.source_hash!=source.source_hash)
     try:adapter.encode(request,owner_side=owner);c.add('B2_OWNING_OBSERVATION_REFUSED',False)
@@ -105,12 +112,15 @@ def scan(adapter,request,public,source,metadata,*,lines):
                     if st!=[stats[k]for k in('atk','def','spa','spd','spe')]or maximum is not None and maximum!=mx:continue
                     move=next((x for x in fixture.moves if normalize_id(x).startswith('hiddenpower')),None)
                     hp_move=w.hidden_power_engine_id(normalize_id(move),fixture.ivs)if move else None
+                    from .phase_d_constructor_rules import literal_hidden_power_agrees
+                    typed_literals=tuple(normalize_id(x) for x in moves if normalize_id(x).startswith('hiddenpower') and normalize_id(x)!='hiddenpower')
+                    if not literal_hidden_power_agrees(typed_literals,hp_move):continue
                     identities.add((mx,tuple(st),tuple(info['types']),hp_move))
                 typed=[normalize_id(x)for x in moves if normalize_id(x).startswith('hiddenpower')and normalize_id(x)!='hiddenpower']
                 c.add('OWN_STATIC_IV_FACTS_UNAVAILABLE_OR_AMBIGUOUS',len(identities)!=1,slot=slot,stat_compatible_identities=len(identities),typed_literals=typed,
                     typed_compatible_identities=sum(any(identity[3]and normalize_id(identity[3]).startswith(literal)for literal in typed)for identity in identities))
                 if len(identities)==1:
-                    mx,_,_,resolved=next(iter(identities));c.add('OWN_EXACT_HP_INVALID',hp is not None and not 0<=hp<=mx,slot=slot)
+                    mx,_,_,resolved=next(iter(identities));c.add('OWN_EXACT_HP_INVALID',hp_range_invalid(hp,mx),slot=slot,reason='literal own exact HP required' if hp is None else 'literal exact HP and checked maximum available')
             except (ValueError,KeyError,TypeError,IndexError)as error:c.add('OWN_STATIC_IV_FACTS_UNAVAILABLE_OR_AMBIGUOUS',None,slot=slot,error=str(error))
         else:c.add('OWN_STATIC_IV_FACTS_UNAVAILABLE_OR_AMBIGUOUS',None,slot=slot,reason='missing original static prerequisites')
         if moves_ok:
@@ -127,14 +137,14 @@ def scan(adapter,request,public,source,metadata,*,lines):
             if mon.get('active')is True:
                 for move in moves:
                     rows=[r for r in current[0].get('moves',())if w._source_move(r.get('id',''))==w._source_move(move)]if len(current)==1 else []
-                    c.add('OWN_ACTIVE_PP_UNAVAILABLE',len(rows)!=1 or type(rows[0].get('pp'))is not int,slot=slot,move=move)
+                    c.add('OWN_ACTIVE_PP_UNAVAILABLE',len(rows)!=1 or type(rows[0].get('pp'))is not int if len(current)==1 else None,slot=slot,move=move,reason='Requires an ordinary active request')
     active=[i for i,m in enumerate(party)if isinstance(m,dict)and m.get('active')is True]
     c.add('OWN_ACTIVE_PUBLIC_IDENTITY_UNAVAILABLE',active[0]not in joined if len(active)==1 else None)
     ctx,_,ok=public_context.observation_boundary_copy(state.context,state.beliefs,state.mons,catalog.source.device,catalog.context,valid=w.j.ones(1,bool))
     boundary_ok=bool(w._host(ok).all());c.add('B2_OBSERVATION_BOUNDARY_COPY_REFUSED',not boundary_ok)
     mons=state.mons;present=w._host(mons.encounter)>0;num,den=w._host(mons.hp_numerator),w._host(mons.hp_denominator)
     for slot in range(6):
-        c.add('OPPONENT_LITERAL_PUBLIC_PERCENT_REQUIRED',bool(present[0,foe,slot]and den[0,foe,slot]!=100),slot=slot,numerator=int(num[0,foe,slot]),denominator=int(den[0,foe,slot]),bare_fainted=bool(num[0,foe,slot]==den[0,foe,slot]==0))
+        c.add('OPPONENT_LITERAL_PUBLIC_PERCENT_REQUIRED',bool(present[0,foe,slot] and ((num[0,foe,slot]!=0 or den[0,foe,slot]!=0) if w._host(mons.fainted)[0,foe,slot] else den[0,foe,slot]!=100)),slot=slot,numerator=int(num[0,foe,slot]),denominator=int(den[0,foe,slot]),bare_fainted=bool(num[0,foe,slot]==den[0,foe,slot]==0))
     if boundary_ok:
         c.add('PUBLIC_TRANSFORM_NOT_MATERIALIZED',bool(np.any(w._host(ctx.abilities.transformed))))
         c.add('PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED',bool(np.any(w._host(ctx.types.overridden))))
@@ -150,7 +160,9 @@ def scan(adapter,request,public,source,metadata,*,lines):
             unsupported=[x for x in vols if x not in ('','leechseed','ingrain','trapped')]
             c.add('OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',bool(unsupported),volatiles=unsupported)
             c.call('PUBLIC_PROTECT_STREAK_INVALID',lambda:w._physical_protect_counter(w._host(ctx.active.stall)[0,owner])<0)
-            c.call('PUBLIC_TOXIC_STAGE_INVALID',lambda:w._physical_toxic_counter(w._host(ctx.toxic.stage)[0,owner])<0)
+            own_packet=party[active[0]] if len(active)==1 else {}
+            own_condition=str(own_packet.get('condition','')).split()
+            own_toxic_check(c,own_condition,lambda:w._physical_toxic_counter(w._host(ctx.toxic.stage)[0,owner]))
             ability=int(w._host(ctx.abilities.running)[0,owner,own_public])
             own_packet=party[active[0]]if len(active)==1 else {}
             ability_name=catalog.abilities.names[ability]if ability else own_packet.get('baseAbility')or own_packet.get('ability','')
@@ -165,13 +177,15 @@ def scan(adapter,request,public,source,metadata,*,lines):
         weather=catalog.field.weather_names[int(w._host(field.weather)[0])]
         c.add('PUBLIC_WEATHER_UNAVAILABLE',weather not in('','sunnyday','raindance','sandstorm','hail'))
     else:c.add('PUBLIC_BOUNDARY_DEPENDENT_TAIL_GUARDS',None)
-    initial=_root_self_team_payload(public.context,team_size=6)or public.context.observation.metadata.get('self_team')
-    initial_names=tuple(normalize_id(m['species'])for m in initial)if initial is not None else ()
-    evaluable=len(initial_names)==len(own_names)==6 and len(set(initial_names))==len(set(own_names))==6 and set(initial_names)==set(own_names)
-    c.add('same-own-request-physical-order-required',initial_names!=tuple(own_names)if evaluable else None,
-        scope='genuine sampled-own-order precursor, not an actual mapper output',initial_order=initial_names,current_order=own_names)
-    c.add('SAMPLED_SPEC_MAPPER_DEPENDENT_GUARDS',None,reason='No sample/spec/partial world fabricated for diagnostic')
-    return dict(checks=c.rows,all_refusals=sorted({r['kind']for r in c.rows if r['status']=='TRIGGERED'}),
+    from . import phase_d_protocol_world as protocol
+    try:detached=w.from_b2(adapter,request,source,metadata,address=public.address,defer_sleep=True)
+    except (ValueError,KeyError,IndexError,TypeError,AttributeError) as error:
+        c.add(getattr(error,'kind',None) or str(error).split(':',1)[0],True,original_refusal=str(error))
+        c.add('PROTOCOL_INPUTS_DEPENDENT_CHECKS',None,reason='Original from_b2 refused; no detached surrogate made')
+    else:
+        for check in protocol.diagnostic_inputs(public,detached,lines=lines,metadata=metadata):
+            c.rows.append({**check,'details':{k:v for k,v in check.items() if k not in ('kind','status','fatal')}})
+    return dict(checks=c.rows,all_refusals=sorted({r['kind']for r in c.rows if r['status']=='TRIGGERED' and r.get('fatal',True)}),
                 not_evaluable=sorted({r['kind']for r in c.rows if r['status']=='NOT_EVALUABLE'}),coverage_claim=False)
 
 
@@ -194,4 +208,4 @@ def summarize(records):
                 roots_by_band=dict(bands),guard_status_roots_by_band={b:{k:dict(v)for k,v in kinds.items()}for b,kinds in statuses.items()},
                 guard_status_accounting='Per kind/status unique roots; statuses may overlap across distinct slots within one root. A missing kind is not CLEAR.',
                 trigger_occurrences=dict(occurrences),not_evaluable_roots=dict(unavailable),coverage_claim=False,
-                scope='Independent raw guard census; sample/spec-dependent checks explicitly unavailable; no constructed-world or fidelity claim')
+                scope='Independent current Phase D guard census; unknown prerequisites retained; no coverage or fidelity claim')
