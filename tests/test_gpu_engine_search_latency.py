@@ -559,6 +559,8 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertIn('Codex\'s constructor batch 2 (own PP carry, removed items, sleep clocks)', tool.CONSTRUCTOR_NOTE)
         md = report['summary_markdown']
         self.assertIn("block 0 in host_prep, + tests.test_gpu_engine_search_latency.fake_numpy_worlds; source abc123def)", md)   # the column header
+        self.assertIn('| host_prep steps / detach passes | detach ms per pass |', md);self.assertIn('| 2 / 2 | 1.00 |', md)   # fake prep: 2 steps, .002 s detach
+        self.assertIn('a lockstep live batch (all C games at one step) pays ONE pass', md)
         for text in (path['timed'], 'abc123def', tool.CONSTRUCTOR_NOTE, '<= 800 ms', 'learner_max, hedge', 'fake_numpy_worlds', '| depth3-prior-k3 | 2 | sequential | fake | 0 |',
                 'pool 16: startup 3.5 s (excluded)', hashlib.sha256(b'stub hedge').hexdigest(), 'commit 583555d2', 'seed 2026110500'):
             self.assertIn(text, md)
@@ -771,18 +773,26 @@ class SearchLatencyTests(unittest.TestCase):
     def test_a_pool_timeout_tears_the_pool_down_and_becomes_an_error_row(self):
         import multiprocessing
         class Stuck:
-            terminated = False
+            terminated = 0
             def map_async(self, fn, units, chunksize=None):return SimpleNamespace(get=lambda timeout: (_ for _ in ()).throw(multiprocessing.TimeoutError()))
-            def terminate(self):Stuck.terminated = True
+            def terminate(self):Stuck.terminated += 1
             def join(self):pass
         pool = tool.SolvePool(Stuck(), 16, 5.)
         with self.assertRaises(TimeoutError) as raised:pool.map(tool.world_prices, [1])
-        self.assertIn('exceeded 5 s', str(raised.exception));self.assertTrue(Stuck.terminated)
+        self.assertIn('exceeded 5 s', str(raised.exception));self.assertEqual(Stuck.terminated, 1)
         with self.assertRaises(RuntimeError):pool.map(tool.world_prices, [1])   # torn down: every later map fails at once
-        args = self.args('--configs', 'depth2-fw@2', '--capacities', '1,2', '--repeats', '1')
-        variants = [SimpleNamespace(name='learner_max@pool16', solver=tool.Solver(), pool=tool.SolvePool(Stuck(), 16, 5.), pool_size=16)]
+        pool.close();self.assertEqual(Stuck.terminated, 1)   # closing again (main's teardown) is a no-op
+        # The dead pool poisons its own variants only: the in-process variant is measured in the same and every later series.
+        args = self.args('--configs', 'depth2-fw@2', '--capacities', '1,2,4', '--repeats', '1')
+        variants = [SimpleNamespace(name='learner_max@pool0', solver=tool.Solver(), pool=None, pool_size=0),
+            SimpleNamespace(name='learner_max@pool16', solver=tool.Solver(), pool=tool.SolvePool(Stuck(), 16, 5.), pool_size=16)]
         series = tool.measure_config('depth2-fw', (2,), args, fake_ctx(), None, variants=variants, module=FRAMES, memory=lambda: {}, timer=CLOCK)
-        self.assertEqual([(s['capacity'], s['error']['type']) for s in series], [(1, 'TimeoutError'), (2, 'RuntimeError')])
+        self.assertEqual([(s['capacity'], s['variant'], (s.get('error') or {}).get('type')) for s in series], [
+            (1, 'learner_max@pool0', None), (1, 'learner_max@pool16', 'TimeoutError'), (2, 'learner_max@pool0', None), (2, 'learner_max@pool16', 'RuntimeError'),
+            (4, 'learner_max@pool0', None), (4, 'learner_max@pool16', 'RuntimeError')])
+        for s in series[::2]:self.assertEqual((s['warm_calls'], s['labeled']), (1, s['capacity']))
+        rows = {r['variant']: r for r in tool.select(series)['rows']}
+        self.assertEqual((rows['learner_max@pool0']['largest_capacity'], rows['learner_max@pool16']['largest_capacity']), (4, None))
 
     def test_hedge_header_records_the_file_sha256_and_commit(self):
         path = self.hedge_file(b'not the 583555d2 file\n');hedge = stub_hedge(path)
@@ -875,6 +885,35 @@ class SearchLatencyTests(unittest.TestCase):
         with patch('subprocess.call', side_effect=call):return tool.isolated(args, ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate'], self.tmp())
         with patch('subprocess.call', return_value=1), self.assertRaises(SystemExit):
             tool.isolated(args, ['--d3-root', 'r', '--chunk', '0', '--out', 'o', '--isolate'], self.tmp())
+
+    def test_turn_sorted_orders_the_chunk_by_decision_frame(self):
+        at = lambda stream, frame, owner: SimpleNamespace(plans=SimpleNamespace(root=SimpleNamespace(address=contract.DecisionAddress(stream, frame, owner))))
+        chunk = [at(5, 9, 1), at(3, 2, 0), at(5, 2, 1), at(1, 9, 0), at(5, 2, 0)]   # _prepare_batched groups by frame in first-seen order
+        self.assertEqual([tool.address_key(r) for r in tool.turn_sorted(chunk)], [(3, 2, 0), (5, 2, 0), (5, 2, 1), (1, 9, 0), (5, 9, 1)])
+
+    def test_build_pools_passes_the_solver_modules_and_the_deadline(self):
+        started = []
+        def start(size, **kw):started.append((size, kw));return SimpleNamespace(terminate=lambda: None, join=lambda: None), dict(workers=size)
+        args = self.args('--solver', 'learner_max,tests.test_gpu_engine_search_latency:pessimistic,hedge', '--solver-pool', '0,4',
+            '--solver-timeout', '9', '--hedge-module', 'tests.test_gpu_engine_search_latency')
+        pools, infos = {}, [];tool.build_pools(args, True, pools, infos, start=start)
+        self.assertEqual(started, [(4, dict(hedge_module='tests.test_gpu_engine_search_latency', modules=['tests.test_gpu_engine_search_latency']))])
+        self.assertIsNone(pools[0]);self.assertIsInstance(pools[4], tool.SolvePool);self.assertEqual((pools[4].size, pools[4].timeout), (4, 9.))
+        self.assertEqual(infos, [dict(workers=4)])
+        started.clear();tool.build_pools(self.args('--solver-pool', '2'), False, {}, [], start=start)
+        self.assertEqual(started, [(2, dict(hedge_module=None, modules=[]))])   # no hedge, no MODULE:FUNC: nothing to warm or import
+
+    def test_a_worker_that_cannot_import_its_solver_module_fails_the_pool(self):
+        with self.assertRaises(SystemExit) as raised:tool.start_pool(1, modules=('gpu_engine.no_such_solver_module_for_this_test',), timeout=120.)
+        self.assertIn('ModuleNotFoundError', str(raised.exception.code))   # the worker imports it (naming it is not enough)
+
+    def test_expected_series_covers_packed_mode(self):
+        args = self.args('--configs', 'depth2-fw@2/8', '--capacities', '1,4', '--solver', 'learner_max,hedge', '--hedge-module', 'tests.test_gpu_engine_search_latency',
+            '--solver-pool', '0,16')
+        rows = [(e['capacity'], e['worlds'], e['mode'], e['variant'], e['pricer_capacity']) for e in tool.expected_series(args, 'depth2-fw')]
+        self.assertEqual(len(rows), 2 * 3 * 4)   # capacities x (W=2 seq, W=8 seq, W=8 packed) x (solver, pool) variants
+        self.assertIn((4, 8, 'packed', 'hedge@pool16', 16), rows);self.assertIn((1, 8, 'sequential', 'learner_max@pool0', 1), rows)
+        self.assertNotIn('packed', {e['mode'] for e in tool.expected_series(self.args('--configs', 'depth2-fw@2/8', '--no-packed'), 'depth2-fw')})
 
     def test_isolate_argv(self):
         args = self.args('--isolate', '--configs', 'depth2-fw@2,depth3-prior-k3@2');calls = []

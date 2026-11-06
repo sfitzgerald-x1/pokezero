@@ -557,7 +557,8 @@ class SolvePool:
             raise TimeoutError(f'the {self.size}-worker solve pool: {self.dead}; pool torn down') from None
 
     def close(self):
-        self.pool.terminate();self.pool.join()
+        if getattr(self, 'closed', False):return   # idempotent: a timeout closes it, and main's teardown closes every pool again
+        self.closed = True;self.pool.terminate();self.pool.join()
 
 
 def start_pool(size, *, hedge_module=None, modules=(), timer=time.perf_counter, context=None, timeout=600.):
@@ -579,6 +580,19 @@ def start_pool(size, *, hedge_module=None, modules=(), timer=time.perf_counter, 
         if time.monotonic() > deadline:pool.terminate();raise SystemExit(f'only {len(seen)} of {size} solve pool workers answered within {timeout:.0f} s')
     return pool, dict(workers=size, answered=len(seen), startup_seconds=timer() - clock, start_method='spawn', threads_per_worker=POOL_THREADS,
         hedge_module=hedge_module, modules=list(modules), worker_states=[states[pid] for pid in sorted(states)], scope='created, imported and warmed before any timed call; per call the solve stage holds slicing, pickling, IPC and the worlds')
+
+
+def build_pools(args, hedge, pools, infos, *, progress=None, start=None):
+    """Every --solver-pool size into `pools` (0 -> None, in process; N -> SolvePool over start_pool(N) with the --solver-timeout
+    deadline), the workers warming the hedge (when it runs) and importing every MODULE:FUNC solver's module; startup infos into `infos`."""
+    start = start or start_pool
+    for size in args.pool_sizes:   # persistent pools, started (and their startup timed) before any call
+        if not size:pools[0] = None;continue
+        pool, info = start(size, hedge_module=args.hedge_module if hedge else None,
+            modules=[parse_solver(spec)[0] for spec in args.solver_specs if parse_solver(spec) is not None])
+        pools[size] = SolvePool(pool, size, args.solver_timeout);infos.append(info)
+        if progress is not None:progress('SOLVER_POOL', **info)
+    return pools
 
 
 def variants_of(solvers):
@@ -722,7 +736,10 @@ def run_call(search, ctx, roots, worlds, mode, *, solver=None, variants=None, ro
     order = variants[rotate % len(variants):] + variants[:rotate % len(variants)];last = clock.last;out = {}
     for v in order:
         sub = Clock(timer, start=last)
-        results = v.solver.solve(views, requests, sub, pool=v.pool)
+        try:results = v.solver.solve(views, requests, sub, pool=v.pool)
+        except Exception as error:   # a timed-out or torn-down pool (or a solver error) fails this variant only; the others still solve these frames
+            sub.lap('solve', 'failed');last = sub.last;clock.stages['solve'] += sub.stages['solve']
+            out[v.name] = dict(solver=getattr(v.solver, 'spec', None), pool=v.pool_size, error=error_info(error));continue
         moves = v.solver.moves(results, requests);leftover = device_arrays(frames)
         if leftover:
             import jax
@@ -753,8 +770,9 @@ def measure_series(search, ctx, roots_of, worlds, mode, repeats, *, solver=None,
             record, requests = run_call(search, ctx, roots, worlds, mode, variants=variants, rotate=i, timer=timer)
             record['memory'] = memory();calls.append(record)
             info.update(compile_seconds=record['stages'][COMPILE], common_ms=1e3 * record['common_seconds'],
-                total_ms={k: 1e3 * v['total_seconds'] for k, v in record['variants'].items()},
-                solve_ms={k: 1e3 * v['solve_seconds'] for k, v in record['variants'].items()}, labeled={k: v['labeled'] for k, v in record['variants'].items()})
+                total_ms={k: 1e3 * v['total_seconds'] for k, v in record['variants'].items() if 'error' not in v},
+                solve_ms={k: 1e3 * v['solve_seconds'] for k, v in record['variants'].items() if 'error' not in v},
+                labeled={k: v['labeled'] for k, v in record['variants'].items() if 'error' not in v}, failed=[k for k, v in record['variants'].items() if 'error' in v])
         ctx.check(requests, roots)
         if i > 0 and record['stages'][COMPILE] > 0 and progress is not None:
             progress('WARM_COMPILE', config=search.name, capacity=capacity, worlds=worlds, mode=mode, call=i, compile_seconds=record['stages'][COMPILE])
@@ -762,7 +780,12 @@ def measure_series(search, ctx, roots_of, worlds, mode, repeats, *, solver=None,
             for key in ('depth2_pass', 'depthn'):
                 for c in (entry.get(key) or {}).get('compiles', ()):
                     if progress is not None:progress('COMPILE', config=search.name, pricer_capacity=search.capacity, call=i, part=entry[key]['part'], **c)
-    return [summarize(calls, search=search, capacity=capacity, worlds=worlds, mode=mode, baseline=baseline, variant=v) for v in variants]
+    out = []
+    for v in variants:   # a variant that failed in any call is an error row (its first failure); the others are measured
+        failed = next((c['variants'][v.name]['error'] for c in calls if c['variants'][v.name].get('error')), None)
+        out.append(error_series(search.name, capacity, worlds, mode, v, search.capacity, failed) if failed else
+            summarize(calls, search=search, capacity=capacity, worlds=worlds, mode=mode, baseline=baseline, variant=v))
+    return out
 
 
 def variant_view(call, name):
@@ -811,7 +834,9 @@ def summarize(calls, *, search, capacity, worlds, mode, baseline, variant):
         windows=windows_of(warm, capacity),
         spread=dict(leaves_per_world=count_spread([None if c.get('enumerated_leaves') is None else c['enumerated_leaves'] / (capacity * worlds) for c in warm]),
             expanded_nodes=count_spread([c.get('expanded_nodes') for c in warm]), refused_roots=count_spread([c.get('refused') for c in warm]),
-            host_prep_steps=count_spread([c.get('host_prep_steps') for c in warm]), scope='per warm call (each its own move window)'),
+            host_prep_steps=count_spread([c.get('host_prep_steps') for c in warm]), detach_passes=count_spread([c.get('detach_passes') for c in warm]),
+            detach_ms_per_pass=count_spread([None if not c.get('detach_passes') or 'host_prep.detach' not in c['parts'] else
+                1e3 * c['parts']['host_prep.detach'] / c['detach_passes'] for c in warm]), scope='per warm call (each its own move window)'),
         memory=dict(baseline=baseline, process_peak_bytes_so_far=peak,
             peak_over_baseline_in_use=None if peak is None or (baseline or {}).get('bytes_in_use') is None else peak - baseline['bytes_in_use']),
         calls=calls)
@@ -833,7 +858,8 @@ def measure_config(name, worlds, args, ctx, progress, *, solver=None, variants=N
                     if size not in searches:searches[size] = Search(name, size, args, ctx, module=module, programs=programs, depth2_module=depth2_module)
                     group = measure_series(searches[size], ctx, roots_of, w, mode, args.repeats, variants=variants, progress=progress, memory=memory,
                         baseline=baseline, capacity=capacity, timer=timer)
-                    for series in group:series['first_call']['cold_of_config_capacity'] = first
+                    for series in group:
+                        if series.get('first_call'):series['first_call']['cold_of_config_capacity'] = first   # a variant's error row has none
                 except Exception as error:   # one failed series never loses the run: an error row per variant, then the next series
                     group = [error_series(name, capacity, w, mode, v, size, error) for v in variants]
                     if progress is not None:progress('SERIES_ERROR', config=name, capacity=capacity, worlds=w, mode=mode,
@@ -843,13 +869,17 @@ def measure_config(name, worlds, args, ctx, progress, *, solver=None, variants=N
     return out
 
 
-def error_series(config, capacity, worlds, mode, variant, pricer_capacity, error):
-    """A series that raised: its identity and the exception (type, message, traceback tail); no statistic, so it never fits."""
+def error_info(error):
+    """An exception as a JSON row field: type, message, traceback tail."""
     import traceback
+    return dict(type=type(error).__name__, message=str(error)[:2000], traceback=[line.rstrip() for line in traceback.format_exception(error)[-8:]])
+
+
+def error_series(config, capacity, worlds, mode, variant, pricer_capacity, error):
+    """A series (or one variant of it) that raised: its identity and the exception (an exception or error_info's dict); no statistic, so it never fits."""
     return dict(config=config, capacity=capacity, worlds=worlds, mode=mode, solver=getattr(variant.solver, 'spec', None), pool=variant.pool_size,
         variant=variant.name, blocks=worlds // 2, pricer_capacity=pricer_capacity, timing_proxy=mode == 'packed',
-        error=dict(type=type(error).__name__, message=str(error)[:2000], traceback=[line.rstrip() for line in traceback.format_exception(error)[-8:]]),
-        warm={k: distribution([]) for k in STAGES + ('total',)}, first_call=None)
+        error=error if isinstance(error, dict) else error_info(error), warm={k: distribution([]) for k in STAGES + ('total',)}, first_call=None)
 
 
 class Recorder:
@@ -898,6 +928,11 @@ def window_roots(available, capacity, window, windows=1):
     if not available:raise ValueError('the chunk has no priced request')
     if not 0 <= window < windows:raise ValueError('window index outside the series')
     return [available[min(n - 1, int((window + j * windows + .5) * n / slots))] for j in range(capacity)]
+
+
+def turn_sorted(requests):
+    """The chunk's requests by decision frame (turn), then stream and owner: the order move windows stride over."""
+    return sorted(requests, key=lambda r: (address_key(r)[1], address_key(r)[0], address_key(r)[2]))
 
 
 def address_key(request):
@@ -974,7 +1009,7 @@ def prepare(args):
     bypass = lambda: patch.object(original.Recipe, 'selected', lambda self, address: True)   # U1's quarter-selection bypass, blocks > 0
     blocks = [(provider.recipe, nullcontext) if b == 0 else (original.Recipe(seed), bypass) for b, seed in enumerate(seeds)]
     ctx = SimpleNamespace(**vars(base));missing = [address_key(r) for r in base.available if address_key(r) not in slot_of]
-    ctx.available = sorted(base.available, key=lambda r: (address_key(r)[1], address_key(r)[0], address_key(r)[2]))   # by decision frame (turn), then game
+    ctx.available = turn_sorted(base.available)
     if missing:raise SystemExit(f'{len(missing)} labeled roots have no (step, row, owner) in the captured chunk, e.g. {missing[0]}')
     def roots(capacity, window=0, windows=1):
         bound = window_roots(ctx.available, capacity, window, windows)
@@ -1096,6 +1131,13 @@ def select(series, limit_ms=LIMIT_MS):
         unplaced_errors=[dict(config=s.get('config'), variant=s.get('variant'), **(s.get('error') or {})) for s in unplaced])
 
 
+def spread_cell(spread, digits=0):
+    """median [min-max] of a count_spread, '-' when unknown."""
+    if not spread:return '-'
+    f = lambda x: f'{x:.{digits}f}'
+    return f(spread['median']) + ('' if spread['min'] == spread['max'] else f' [{f(spread["min"])}-{f(spread["max"])}]')
+
+
 def window_cell(windows):
     """distinct / slots (WRAPPED when the chunk repeated roots), turns min-max."""
     if not windows:return '-'
@@ -1145,16 +1187,21 @@ def markdown(report):
         f'Packed rows are a timing proxy ({PACKED_NOTE}).'] + [f'ERROR without a capacity, {e.get("config")}: {e.get("type")}: {e.get("message")}'
         for e in sel.get('unplaced_errors', ())] + ['',
         f'### Stage medians (ms), warm calls [{world}]', '',
-        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} blocks >= 1, block 0 in host_prep, + {_short(path["world_builder"])}; source {commit["commit"][:12]}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured | roots distinct / slots, turns |',
-        '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+        f'| config | W | mode | solver | pool | C | root_forward | host_prep | world_construction ({_short(path["world_planner"])} blocks >= 1, block 0 in host_prep, + {_short(path["world_builder"])}; source {commit["commit"][:12]}) | pricer | solve | return | total p50 | total p90 | first-call compile s | leaves/world nominal / measured | roots distinct / slots, turns | host_prep steps / detach passes | detach ms per pass |',
+        '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for s in report['series']:
         if s.get('error'):
             lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ERROR {s["error"]["type"]}: '
-                + s['error']['message'][:120].replace('|', '/').replace('\n', ' ') + ' |' + ' - |' * (len(STAGES) + 5));continue
+                + s['error']['message'][:120].replace('|', '/').replace('\n', ' ') + ' |' + ' - |' * (len(STAGES) + 7));continue
         w = s['warm'];leaves = s['leaves']
         lines.append(f'| {s["config"]} | {s["worlds"]} | {s["mode"]} | {s["solver"]} | {s["pool"]} | {s["capacity"]} | ' + ' | '.join(_ms(w[k]['median_ms']) for k in STAGES)
             + f' | {_ms(w["total"]["median_ms"])} | {_ms(w["total"]["p90_ms"])} | {s["first_call"]["compile_seconds"]:.1f} | {leaves["nominal_per_world"]} / '
-            + ('-' if leaves['measured_per_world'] is None else f'{leaves["measured_per_world"]:.0f}') + ' | ' + window_cell(s.get('windows')) + ' |')
+            + ('-' if leaves['measured_per_world'] is None else f'{leaves["measured_per_world"]:.0f}') + ' | ' + window_cell(s.get('windows')) + ' | '
+            + spread_cell((s.get('spread') or {}).get('host_prep_steps')) + ' / ' + spread_cell((s.get('spread') or {}).get('detach_passes')) + ' | '
+            + spread_cell((s.get('spread') or {}).get('detach_ms_per_pass'), digits=2) + ' |')
+    lines += ['', 'host_prep pays one RootContext slice and one detach pass per distinct scan step among a window\'s roots (steps / passes, median '
+        '[min-max]); a lockstep live batch (all C games at one step) pays ONE pass, so its host_prep is about one detach pass plus the per-root '
+        'plan_starts and assembly (see detach ms per pass).']
     return '\n'.join(lines) + '\n'
 
 
@@ -1233,11 +1280,7 @@ def main(argv=None):
         from gpu_engine import device_depthn_pricer, device_public_worlds
         merged = importlib.import_module('gpu_engine.device_depth2_pricer') if MERGED in args.config_worlds else None
         try:
-            for size in args.pool_sizes:   # persistent pools, started (and their startup timed) before any call
-                if not size:pools[0] = None;continue
-                pool, info = start_pool(size, hedge_module=args.hedge_module if hedge is not None else None,
-                    modules=[parse_solver(spec)[0] for spec in args.solver_specs if parse_solver(spec) is not None])
-                pools[size] = SolvePool(pool, size, args.solver_timeout);pool_infos.append(info);gate.log('SOLVER_POOL', **info)
+            build_pools(args, hedge is not None, pools, pool_infos, progress=gate.log)
             variants = make_variants(solvers, pools)
             context = dict(evaluator=ctx.evaluator, root_values=list(ctx.root_values), roots_available=len(ctx.available), source=ctx.source,
                 devices=[d.device_kind for d in jax.devices()], block_seeds=list(ctx.seeds), compile_cache=ctx.compile_cache, solvers=[s.describe() for s in solvers],
