@@ -24,6 +24,12 @@ Checks (gate.json; exit code 0 iff all pass):
      max |diff|, exact fraction, the depth-1 noise floor max |D t1_value - oracle t1 head| and the ratio
      t2_value max / floor.
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
+ (e) decision, when every leaf is checked (no --sample-leaves): depth2_backups.learner_max_root on the
+     pricer frame and on a copy carrying the oracle's turn-2 head values and child-prior logits (statuses,
+     terminal values and enumeration unchanged); passes iff no root's completed-Q argmax or improved-policy
+     target argmax differs (lowest index on ties). Cell-level learner_max_choice differences are reported.
+     depth2_backups must be importable (fail closed). --save-arrays writes each call's frame arrays and the
+     oracle's per-leaf head values and child logits to arrays-block{B}-call{C}.npz for offline re-runs.
 --sample-leaves N checks all turn-1 children plus N uniformly sampled turn-2 leaves per world (fixed
 SAMPLE_SEED); (d) always covers every leaf. --child-block N is passed to Depth2Pricer. --block-invariance
 prices every call twice, with child_block 27 and 81 (the 81 frame is the one checked), and requires
@@ -409,8 +415,123 @@ def summarize(calls, *, tolerance=HEAD_TOLERANCE):
         depth1_noise_floor=floor, t2_value_to_floor_ratio=None if not floor or t2 is None else t2 / floor, quantities=quantities)
     if any(x.get('geometry') for x in calls):c['passed'] = False
     checks = dict(a=a, b=b, c=c, d=d, oracle_consistency=oracle)
+    if any('e' in x for x in calls):checks['e'] = merge_decisions([x['e'] for x in calls if 'e' in x])
     if any('invariance' in x for x in calls):checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())])
     return dict(passed=all(x['passed'] for x in checks.values()), checks=checks)
+
+
+DECISION_FIRST = 10
+
+
+def oracle_heads_frame(frame, data):
+    """A copy of the frame with the oracle's head outputs where the frame has a head output: t2_value at
+    head-valued leaves (status 4 on both), t1_own/t1_peer logits at expanded children (status 2 on both).
+    Statuses, errors, terminal values and enumeration are the pricer's. Returns (copy, counts)."""
+    fields = {k: (np.array(v, copy=True) if isinstance(v, np.ndarray) else v) for k, v in frame_fields(frame).items()}
+    leaves, children = data['leaves'], data['children'];counts = dict(t2_value=0, t1_logits=0, unmatched_head_leaves=0)
+    t2 = np.asarray(fields['t2_status']);done = np.zeros(t2.shape, bool)
+    if len(leaves['specs']):
+        at = tuple(leaves['specs'].T);head = (leaves['status'] == 4) & (t2[at] == 4)
+        value = np.array(fields['t2_value'], np.float32, copy=True);value[tuple(leaves['specs'][head].T)] = leaves['head_value'][head]
+        fields['t2_value'] = value;done[tuple(leaves['specs'][head].T)] = True;counts['t2_value'] = int(head.sum())
+    counts['unmatched_head_leaves'] = int(np.count_nonzero((t2 == 4) & ~done))
+    if len(children['cells']):
+        at = tuple(children['cells'].T);expanded = (children['status'] == 2) & (np.asarray(fields['t1_status'])[at] == 2)
+        cells = tuple(children['cells'][expanded].T)
+        for seat in ('own', 'peer'):
+            logits = np.array(fields[f't1_{seat}_logits'], np.float32, copy=True);logits[cells] = children[seat + '_logits'][expanded]
+            fields[f't1_{seat}_logits'] = logits
+        counts['t1_logits'] = int(expanded.sum())
+    return SimpleNamespace(**fields), counts
+
+
+def _argmax(values, legal):
+    best = None
+    for i, (v, ok) in enumerate(zip(values, legal)):
+        if ok and v is not None and (best is None or v > values[best]):best = i   # strict: ties keep the lower index
+    return best
+
+
+def decision_check(frame, data, requests, *, context=None, backups=None):
+    """(e) for ONE call: learner-max root decisions on the pricer frame vs the oracle-heads copy."""
+    if backups is None:
+        try:from gpu_engine import depth2_backups as backups
+        except ImportError as error:
+            return dict(passed=False, reason='gpu_engine.depth2_backups is not importable (fail closed): ' + str(error), roots=len(requests))
+    original = SimpleNamespace(**frame_fields(frame));swapped, counts = oracle_heads_frame(frame, data)
+    result = dict(roots=len(requests), roots_compared=0, both_refused=0, status_differs=0, nonfinite_roots=0, argmax_q_differs=0, argmax_target_differs=0,
+        cells_compared=0, cell_choice_differs=0, max_abs_delta_q=0., max_abs_delta_target=0., replaced=counts, first_differing_roots=[])
+    for q, request in enumerate(requests):
+        logits, legal = tuple(map(float, request.root_logits)), tuple(map(bool, request.root_legal))
+        a, b = (backups.learner_max_root(f, q, logits, legal) for f in (original, swapped))
+        ia, ib = a.improvement, b.improvement
+        if ia is None and ib is None:result['both_refused'] += 1
+        qa, qb = (None if i is None else i.completed_q for i in (ia, ib));ta, tb = (None if i is None else i.policy_target for i in (ia, ib))
+        pick = lambda v: None if v is None else _argmax(v, legal)
+        q_differs, t_differs = pick(qa) != pick(qb), pick(ta) != pick(tb)
+        if (ia is None) != (ib is None):result['status_differs'] += 1
+        finite = all(v is None or math.isfinite(float(v)) for vector in (qa, qb, ta, tb) if vector is not None for v in vector)
+        result['nonfinite_roots'] += int(not finite)
+        if ia is not None and ib is not None and finite:
+            result['roots_compared'] += 1
+            deltas = [abs(x - y) for x, y, ok in zip(qa, qb, legal) if ok and x is not None and y is not None]
+            result['max_abs_delta_q'] = max([result['max_abs_delta_q']] + deltas)
+            result['max_abs_delta_target'] = max([result['max_abs_delta_target']] + [abs(x - y) for x, y in zip(ta, tb)])
+        result['argmax_q_differs'] += int(q_differs);result['argmax_target_differs'] += int(t_differs)
+        if (q_differs or t_differs or not finite or (ia is None) != (ib is None)) and len(result['first_differing_roots']) < DECISION_FIRST:
+            address = request.plans.root.address
+            result['first_differing_roots'].append(dict(context or {}, root=q, address=[address.stream, address.frame, address.owner],
+                status=[a.status, b.status], completed_q_pricer=_plain_q(qa), completed_q_oracle_heads=_plain_q(qb),
+                target_pricer=_plain_q(ta), target_oracle_heads=_plain_q(tb), argmax_q=[pick(qa), pick(qb)], argmax_target=[pick(ta), pick(tb)]))
+        for world in (0, 1):
+            if int(original.pre[q, world]) != 0:continue
+            ca, cb = backups.learner_max_choice(original, q, world), backups.learner_max_choice(swapped, q, world)
+            both = (ca >= 0) | (cb >= 0);result['cells_compared'] += int(both.sum())
+            result['cell_choice_differs'] += int(np.count_nonzero(both & (ca != cb)))
+    result['passed'] = (result['argmax_q_differs'] == 0 and result['argmax_target_differs'] == 0 and counts['unmatched_head_leaves'] == 0
+        and result['nonfinite_roots'] == 0)
+    if counts['unmatched_head_leaves']:result['reason'] = 'head-valued pricer leaves without an oracle head value: the copy is incomplete (fail closed)'
+    if result['nonfinite_roots']:result['reason'] = 'non-finite completed-Q or target: decisions are not comparable (fail closed)'
+    return result
+
+
+def _plain_q(values):
+    return None if values is None else [None if v is None else float(v) for v in values]
+
+
+def merge_decisions(reports):
+    """Sum per-call decision reports; maxima of deltas; the first DECISION_FIRST differing roots."""
+    keys = ('roots', 'roots_compared', 'both_refused', 'status_differs', 'nonfinite_roots', 'argmax_q_differs', 'argmax_target_differs',
+        'cells_compared', 'cell_choice_differs')
+    merged = {k: sum(r.get(k, 0) for r in reports) for k in keys}
+    merged.update(max_abs_delta_q=max((r.get('max_abs_delta_q', 0.) for r in reports), default=0.),
+        max_abs_delta_target=max((r.get('max_abs_delta_target', 0.) for r in reports), default=0.),
+        first_differing_roots=[x for r in reports for x in r.get('first_differing_roots', ())][:DECISION_FIRST],
+        replaced={k: sum((r.get('replaced') or {}).get(k, 0) for r in reports) for k in ('t2_value', 't1_logits', 'unmatched_head_leaves')},
+        reasons=sorted({r['reason'] for r in reports if r.get('reason')}), passed=bool(reports) and all(r['passed'] for r in reports),
+        gating='passes iff argmax_q_differs == 0 and argmax_target_differs == 0 (a status flip counts in both); fails closed on '
+            'non-finite Q/targets or an incomplete oracle-heads copy; cell_choice_differs is reported, not gated',
+        reference='depth2_backups.learner_max_root: pricer frame vs the same frame with the oracle head values and child-prior logits')
+    return merged
+
+
+def save_arrays(path, frame, data, requests):
+    """The pricer frame's arrays (frame_*) and the oracle's head outputs per leaf/child (oracle_*) for offline decisions."""
+    arrays = {}
+    for name, value in frame_fields(frame).items():
+        value = np.asarray(value) if not isinstance(value, dict) else None
+        if value is not None and value.dtype.kind in 'biufc':arrays['frame_' + name] = value
+    leaves, children = data['leaves'], data['children']
+    arrays.update(oracle_leaf_specs=leaves['specs'], oracle_leaf_status=leaves.get('status', np.zeros(0, np.int8)),
+        oracle_leaf_head_value=leaves.get('head_value', np.zeros(0, np.float32)), oracle_child_cells=children['cells'],
+        oracle_child_status=children.get('status', np.zeros(0, np.int8)), oracle_child_head_value=children.get('head_value', np.zeros(0, np.float32)),
+        oracle_child_own_logits=children.get('own_logits', np.zeros((0, 9), np.float32)),
+        oracle_child_peer_logits=children.get('peer_logits', np.zeros((0, 9), np.float32)),
+        request_root_logits=np.asarray([r.root_logits for r in requests], np.float32).reshape(-1, 9),
+        request_root_legal=np.asarray([r.root_legal for r in requests], bool).reshape(-1, 9),
+        request_address=np.asarray([[r.plans.root.address.stream, r.plans.root.address.frame, r.plans.root.address.owner] for r in requests], np.int64).reshape(-1, 3))
+    np.savez_compressed(path, **arrays)
+    return sorted(arrays)
 
 
 def error_counts(status, error, codes):
@@ -546,7 +667,8 @@ def price_call(*, requests, recipe, materializer, params, pricer, frame_pricer, 
 
 
 def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, oracle, widths, sample, block, context, invariance=None,
-             progress=None):
+             progress=None, decision=None, save=None):
+    """decision: run check (e) (default: when every leaf is checked); save: an .npz path for --save-arrays."""
     """Price ONE request list three ways and evaluate it; returns (evaluation, call summary)."""
     requests = tuple(requests)
     frame, d_results, data, timing = price_call(requests=requests, recipe=recipe, materializer=materializer, params=params,
@@ -561,11 +683,18 @@ def run_call(*, requests, recipe, materializer, params, pricer, frame_pricer, or
     pricer_timing = _frame_timing(frame)
     roots = data['roots']
     with stage(progress, 'refusals', **context):refusals = None if evaluation['geometry'] else refusal_report(frame, d_results, data)
+    if (sample is None if decision is None else decision) and not evaluation['geometry']:
+        with stage(progress, 'check_e_decision', **context) as info:
+            evaluation['e'] = decision_check(frame, data, requests, context=context)
+            info.update({k: evaluation['e'].get(k) for k in ('passed', 'roots_compared', 'argmax_q_differs', 'argmax_target_differs', 'cell_choice_differs')})
+    if save is not None:
+        with stage(progress, 'save_arrays', **context) as info:info['arrays'] = len(save_arrays(save, frame, data, requests));info['path'] = str(save)
     summary = dict(context, roots=len(requests), worlds=data['worlds'], usable_worlds=sum(r['pre'] == 0 for r in roots.values()), refusals=refusals,
         turn1_cells=len(data['children']['cells']), turn2_leaves=len(data['enumerated']), checked_leaves=len(data['leaves']['specs']), timing=timing,
         costs=data['costs'], pricer_timing=json.loads(json.dumps(pricer_timing, default=str)) if pricer_timing is not None else None,
         passed=dict(a=evaluation['a']['passed'], b=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed'],
-            **({'block_invariance': all(r['passed'] for r in evaluation['invariance'])} if invariance else {})))
+            **({'block_invariance': all(r['passed'] for r in evaluation['invariance'])} if invariance else {}),
+            **({'e': evaluation['e']['passed']} if 'e' in evaluation else {})), saved_arrays=None if save is None else str(save))
     return evaluation, summary
 
 
@@ -790,6 +919,7 @@ def main(argv=None):
     parser.add_argument('--child-block', type=int, help='Depth2Pricer child_block (passed through; refused if not accepted)')
     parser.add_argument('--block-invariance', action='store_true',
         help='price every call with child_block 27 and 81 and require bit-equal output arrays (the 81 frame is checked)')
+    parser.add_argument('--save-arrays', action='store_true', help='write each call\'s frame arrays and oracle head outputs to --out as .npz')
     args = parser.parse_args(argv)
     if bool(args.saved_roots) == bool(args.d3_root):parser.error('exactly one of --saved-roots or --d3-root required')
     if args.saved_roots and not args.index_sha256:parser.error('--saved-roots requires --index-sha256')
@@ -802,6 +932,8 @@ def main(argv=None):
     if args.block_invariance and args.child_block is not None:parser.error('--block-invariance fixes child_block to 27 and 81; drop --child-block')
     import importlib.util   # fail before loading roots; find_spec does not import JAX
     if importlib.util.find_spec('gpu_engine.device_depth2_pricer') is None:raise SystemExit('gpu_engine.device_depth2_pricer is not on this tree')
+    if args.sample_leaves is None and importlib.util.find_spec('gpu_engine.depth2_backups') is None:
+        raise SystemExit('check (e) needs gpu_engine.depth2_backups (learner_max_root), which is not on this tree: failing closed')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     provider, plan, params, groups, frame_pricer, source = (saved_root_requests if args.saved_roots else bank_chunk_requests)(args)
     from pokezero import v5_gumbel as original
@@ -829,7 +961,8 @@ def main(argv=None):
                 requests = group if block == 0 else [replace(r, plans=worlds.plan_starts(r.plans.root, provider.source, recipe)) for r in group]
                 evaluation, summary = run_call(requests=requests, recipe=recipe, materializer=provider.materializer, params=params,
                     pricer=pricer, frame_pricer=frame_pricer, oracle=oracle, widths=widths, sample=args.sample_leaves, block=block,
-                    context=dict(block=block, call=call), invariance=invariance, progress=log)
+                    context=dict(block=block, call=call), invariance=invariance, progress=log,
+                    save=out / f'arrays-block{block}-call{call}.npz' if args.save_arrays else None)
                 evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize(evaluations)
     reported = [c for c in calls if c['refusals'] is not None]
@@ -838,6 +971,7 @@ def main(argv=None):
         rule='reference (D): any world pre != 0 or any status-3 cell at either turn refuses the root; codes 5/6 refuse too')
     leaves = oracle.rows['leaves'];children = oracle.rows['children']
     report = dict(schema=SCHEMA, status='PASS' if result['passed'] else 'FAIL', passed=result['passed'], checks=result['checks'],
+        decision=result['checks'].get('e', dict(skipped='check (e) needs every leaf checked (no --sample-leaves)')),
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
         block_seeds=list(seeds), max_roots=args.max_roots, sample_leaves=args.sample_leaves, sample_seed=SAMPLE_SEED,
         head_tolerance=HEAD_TOLERANCE, head_tolerance_source=HEAD_TOLERANCE_SOURCE, d_value_tolerance=D_VALUE_TOLERANCE, pricer_options=options, block_invariance=args.block_invariance,

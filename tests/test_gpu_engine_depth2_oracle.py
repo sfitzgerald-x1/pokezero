@@ -424,7 +424,8 @@ def frame_from(count, data):
     return f
 
 
-class GateTests(unittest.TestCase):
+class GateFixture:
+    """The facts-based requests, fake engine, real FramePricer and the oracle's own surface, priced once per class."""
     WIDTHS = dict(k_own=9, k_opp=9, k1_own=9, k1_opp=9)
     MODES = ((0, 0), (9, 1), (8, 0), (3, 1), (4, 0), (11, 1), (12, 0), (0, 1), (1, 0), (13, 1), (14, 0), (15, 1))
     MISSING = {(6, 1)}
@@ -473,6 +474,9 @@ class GateTests(unittest.TestCase):
     def mutated(self, change):
         frame = copy.deepcopy(self.priced()[0]);change(frame, self.priced()[2]);return frame
 
+
+
+class GateTests(GateFixture, unittest.TestCase):
     def test_the_oracles_own_surface_passes_every_check(self):
         frame, d_results, data, _ = self.priced()
         result = self.evaluate(frame);checks = result['checks']
@@ -607,11 +611,12 @@ class GateTests(unittest.TestCase):
 
     def test_run_call_summarizes_one_call(self):
         frame_pricer = batch.FramePricer(self.ex, object(), capacity=16, block_rows=16, actor_capacity=3, vectorized=True, host_prep=True)
-        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward):
+        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward), \
+                patch.dict(sys.modules, {'gpu_engine.depth2_backups': FakeBackups}):
             evaluation, summary = gate.run_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS,
                 pricer=OraclePricer(self.ex, self.WIDTHS), frame_pricer=frame_pricer, oracle=reference.Oracle(self.ex, object(), chunk=32),
                 widths=self.WIDTHS, sample=None, block=0, context=dict(block=0, call=0))
-        self.assertTrue(all(summary['passed'].values()), summary)
+        self.assertTrue(all(summary['passed'].values()), summary);self.assertIn('e', summary['passed'])
         costs = gate.merge_costs([summary])
         self.assertGreater(costs['frame_pricer']['lower_and_compile_seconds'], 0);self.assertGreaterEqual(costs['frame_pricer']['device_seconds'], 0)
         self.assertIsNone(costs['depth2_pricer']['device_seconds'])   # the fake pricer's timing reports none
@@ -660,13 +665,14 @@ class GateTests(unittest.TestCase):
     def test_progress_lines_bracket_every_stage_of_a_call(self):
         lines = [];frame_pricer = batch.FramePricer(self.ex, object(), capacity=16, block_rows=16, actor_capacity=3, vectorized=True, host_prep=True)
         oracle = reference.Oracle(self.ex, object(), chunk=32, progress=gate.oracle_chunk_progress(lambda m, **v: lines.append((m, v)), interval=1e9))
-        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward):
+        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward), \
+                patch.dict(sys.modules, {'gpu_engine.depth2_backups': FakeBackups}):
             gate.run_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS, pricer=OraclePricer(self.ex, self.WIDTHS),
                 frame_pricer=frame_pricer, oracle=oracle, widths=self.WIDTHS, sample=None, block=0, context=dict(block=0, call=3),
                 invariance=[OraclePricer(self.ex, self.WIDTHS)], progress=lambda m, **v: lines.append((m, v)))
         stages = [(m, v['stage']) for m, v in lines if m.startswith('STAGE')]
         expected = ('depth2_pricer_invariance_0', 'depth2_pricer', 'frame_pricer', 'oracle_worlds', 'oracle_roots', 'oracle_children', 'oracle_leaves',
-            'check_a', 'check_b', 'check_c', 'check_d', 'check_oracle_consistency', 'check_block_invariance', 'refusals')
+            'check_a', 'check_b', 'check_c', 'check_d', 'check_oracle_consistency', 'check_block_invariance', 'refusals', 'check_e_decision')
         self.assertEqual(stages, [(m, name) for name in expected for m in ('STAGE_START', 'STAGE_END')])
         ends = {v['stage']: v for m, v in lines if m == 'STAGE_END'}
         self.assertTrue(all(v['seconds'] >= 0 and v['call'] == 3 and v['block'] == 0 for v in ends.values()))
@@ -720,6 +726,131 @@ class GateTests(unittest.TestCase):
             self.assertFalse(gate.refusal_report(frame, d_results, data)['depth2_sources_agree'])
 
 
+class FakeBackups:
+    """A small learner-max with depth2_backups' call shapes (the real module lands with the pricer): an expanded
+    cell is max over enumerated a2 of the opponent-prior average of t2_value; a root action's Q is the mean over
+    usable worlds and enumerated replies; the target is softmax(root logits + Q) over legal actions."""
+    @staticmethod
+    def _cell(frame, q, w, a1, r1):
+        status = int(frame.t1_status[q, w, a1, r1])
+        if status == 1:return float(frame.t1_value[q, w, a1, r1]), -1
+        t2 = frame.t2_status[q, w, a1, r1]
+        if status != 2 or (t2 == 3).any():return None, -1
+        own, opp = (t2 != 0).any(axis=1), (t2 != 0).any(axis=0)
+        logits = np.where(opp, frame.t1_peer_logits[q, w, a1, r1], -np.inf);prior = np.exp(logits - logits.max());prior /= prior.sum()
+        rows = [float(np.sum(prior[opp] * frame.t2_value[q, w, a1, r1, a2][opp])) if own[a2] else None for a2 in range(9)]
+        best = gate._argmax(rows, own);return rows[best], best
+
+    @classmethod
+    def learner_max_choice(cls, frame, q, w):
+        return np.asarray([[cls._cell(frame, q, w, a1, r1)[1] if frame.t1_status[q, w, a1, r1] == 2 else -1 for r1 in range(9)] for a1 in range(9)])
+
+    @classmethod
+    def learner_max_root(cls, frame, q, logits, legal):
+        if (frame.pre[q] != 0).any():return SimpleNamespace(status='REFUSED', improvement=None)
+        values = []
+        for a1 in range(9):
+            cells = [cls._cell(frame, q, w, a1, r1)[0] for w in (0, 1) for r1 in range(9) if frame.t1_status[q, w, a1, r1]] if legal[a1] else []
+            if legal[a1] and (not cells or any(c is None for c in cells)):return SimpleNamespace(status='REFUSED', improvement=None)
+            values.append(float(np.mean(cells)) if legal[a1] else None)
+        scores = np.where(legal, np.asarray(logits) + np.asarray([v or 0. for v in values]), -np.inf);target = np.exp(scores - scores.max())
+        return SimpleNamespace(status='LABELED', improvement=SimpleNamespace(completed_q=tuple(values), policy_target=tuple(target / target.sum())))
+
+
+class DecisionTests(GateFixture, unittest.TestCase):
+    """Check (e): learner-max decisions on the pricer frame vs the oracle-heads copy."""
+    def test_oracle_heads_frame_replaces_only_head_outputs(self):
+        frame, _, data, _ = self.priced();frame = copy.deepcopy(frame);frame['t2_value'][frame['t2_status'] == 4] += np.float32(.25)
+        frame['t1_own_logits'][frame['t1_status'] == 2] += np.float32(1.);before = copy.deepcopy(frame)
+        swapped, counts = gate.oracle_heads_frame(frame, data)
+        self.assertEqual(counts['unmatched_head_leaves'], 0);self.assertEqual(counts['t2_value'], int(np.count_nonzero(frame['t2_status'] == 4)))
+        leaves = data['leaves'];head = leaves['status'] == 4
+        np.testing.assert_array_equal(swapped.t2_value[tuple(leaves['specs'][head].T)], leaves['head_value'][head])
+        children = data['children'];expanded = children['status'] == 2
+        np.testing.assert_array_equal(swapped.t1_own_logits[tuple(children['cells'][expanded].T)], children['own_logits'][expanded])
+        terminal = frame['t2_status'] == 1;np.testing.assert_array_equal(swapped.t2_value[terminal], frame['t2_value'][terminal])
+        for name in ('t1_status', 't2_status', 't1_value', 't1_error', 'pre'):np.testing.assert_array_equal(getattr(swapped, name), frame[name])
+        for name in before:
+            if isinstance(before[name], np.ndarray):np.testing.assert_array_equal(frame[name], before[name])   # the input is not modified
+        frame['t2_status'][(0, 0, 8, 8, 8, 8)] = 4   # a head-valued leaf the oracle never evaluated
+        self.assertEqual(gate.oracle_heads_frame(frame, data)[1]['unmatched_head_leaves'], 1)
+        self.assertFalse(gate.decision_check(frame, data, self.requests, backups=FakeBackups)['passed'])
+
+    def test_same_heads_give_the_same_decisions(self):
+        frame, _, data, _ = self.priced()
+        result = gate.decision_check(frame, data, self.requests, context=dict(block=0, call=0), backups=FakeBackups)
+        self.assertTrue(result['passed'], result);self.assertEqual(result['roots_compared'], 5);self.assertEqual(result['both_refused'], 7)
+        self.assertEqual((result['argmax_q_differs'], result['argmax_target_differs'], result['cell_choice_differs'], result['status_differs']), (0, 0, 0, 0))
+        self.assertEqual((result['max_abs_delta_q'], result['max_abs_delta_target']), (0., 0.));self.assertGreater(result['cells_compared'], 0)
+        self.assertEqual(result['nonfinite_roots'], 0)
+        class Nan(FakeBackups):
+            @classmethod
+            def learner_max_root(cls, f, q, logits, legal):
+                out = super().learner_max_root(f, q, logits, legal)
+                if q != 0 or out.improvement is None:return out
+                return SimpleNamespace(status=out.status, improvement=SimpleNamespace(completed_q=(np.nan,) + out.improvement.completed_q[1:],
+                    policy_target=out.improvement.policy_target))
+        result = gate.decision_check(frame, data, self.requests, backups=Nan)
+        self.assertFalse(result['passed']);self.assertEqual(result['nonfinite_roots'], 1)
+
+    def test_a_flipped_root_decision_fails_and_lists_the_root(self):
+        frame, _, data, _ = self.priced();clean = FakeBackups.learner_max_root(SimpleNamespace(**frame), 0, self.requests[0].root_logits, BASE)
+        best = gate._argmax(clean.improvement.completed_q, BASE);other = next(a for a in range(3) if a != best)
+        noisy = copy.deepcopy(frame);head = noisy['t2_status'][0, :, other] == 4;noisy['t2_value'][0, :, other][head] = 1.
+        result = gate.merge_decisions([gate.decision_check(noisy, data, self.requests, context=dict(block=0, call=0), backups=FakeBackups)])
+        self.assertFalse(result['passed']);self.assertEqual((result['argmax_q_differs'], result['argmax_target_differs']), (1, 1))
+        self.assertGreater(result['cell_choice_differs'], 0);self.assertGreater(result['max_abs_delta_q'], .1)
+        first = result['first_differing_roots'][0]
+        self.assertEqual((first['root'], first['argmax_q'], first['block']), (0, [other, best], 0));self.assertEqual(len(first['completed_q_pricer']), 9)
+
+    def test_cell_differences_are_reported_not_gated_and_status_flips_gate(self):
+        frame, _, data, _ = self.priced()
+        class Cells(FakeBackups):
+            @classmethod
+            def learner_max_choice(cls, f, q, w):
+                choice = super().learner_max_choice(f, q, w)
+                return np.where(choice >= 0, 8 - choice, choice) if f.t2_value is not frame['t2_value'] else choice
+        result = gate.decision_check(frame, data, self.requests, backups=Cells)
+        self.assertTrue(result['passed']);self.assertGreater(result['cell_choice_differs'], 0)
+        class Refuses(FakeBackups):
+            @classmethod
+            def learner_max_root(cls, f, q, logits, legal):
+                return SimpleNamespace(status='REFUSED', improvement=None) if q == 0 and f.t2_value is not frame['t2_value'] else super().learner_max_root(f, q, logits, legal)
+        result = gate.decision_check(frame, data, self.requests, backups=Refuses)
+        self.assertFalse(result['passed']);self.assertEqual((result['status_differs'], result['argmax_q_differs'], result['roots_compared']), (1, 1, 4))
+
+    def test_missing_backups_fail_closed(self):
+        frame, _, data, _ = self.priced()
+        with patch.dict(sys.modules, {'gpu_engine.depth2_backups': None}):result = gate.decision_check(frame, data, self.requests)
+        self.assertFalse(result['passed']);self.assertIn('fail closed', result['reason'])
+        merged = gate.merge_decisions([result]);self.assertFalse(merged['passed']);self.assertTrue(merged['reasons'])
+
+    def test_run_call_gates_e_and_saves_arrays(self):
+        frame_pricer = batch.FramePricer(self.ex, object(), capacity=16, block_rows=16, actor_capacity=3, vectorized=True, host_prep=True)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'arrays-block0-call0.npz'
+            with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=forward), \
+                    patch.dict(sys.modules, {'gpu_engine.depth2_backups': FakeBackups}):
+                evaluation, summary = gate.run_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS,
+                    pricer=OraclePricer(self.ex, self.WIDTHS), frame_pricer=frame_pricer, oracle=reference.Oracle(self.ex, object(), chunk=32),
+                    widths=self.WIDTHS, sample=None, block=0, context=dict(block=0, call=0), save=path)
+                sampled, _ = gate.run_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=PARAMS,
+                    pricer=OraclePricer(self.ex, self.WIDTHS), frame_pricer=frame_pricer, oracle=reference.Oracle(self.ex, object(), chunk=32),
+                    widths=self.WIDTHS, sample=2, block=0, context=dict(block=0, call=1))
+            self.assertTrue(summary['passed']['e']);self.assertNotIn('e', sampled)   # (e) needs every leaf
+            result = gate.summarize([evaluation, sampled]);self.assertTrue(result['passed']);self.assertEqual(result['checks']['e']['roots'], 12)
+            with np.load(path) as saved:
+                self.assertEqual(saved['frame_t2_value'].shape, (12, 2, 9, 9, 9, 9));self.assertEqual(saved['request_root_logits'].shape, (12, 9))
+                self.assertEqual(len(saved['oracle_leaf_head_value']), len(saved['oracle_leaf_specs']))
+                self.assertNotIn('frame_timing', saved.files);self.assertEqual(summary['saved_arrays'], str(path))
+                # Offline: the saved arrays alone reproduce (e).
+                fields = {name[6:]: saved[name] for name in saved.files if name.startswith('frame_')}
+                data = dict(leaves=dict(specs=saved['oracle_leaf_specs'], status=saved['oracle_leaf_status'], head_value=saved['oracle_leaf_head_value']),
+                    children=dict(cells=saved['oracle_child_cells'], status=saved['oracle_child_status'], own_logits=saved['oracle_child_own_logits'],
+                        peer_logits=saved['oracle_child_peer_logits']))
+                self.assertTrue(gate.decision_check(fields, data, self.requests, backups=FakeBackups)['passed'])
+
+
 class PricerBindingTests(unittest.TestCase):
     """The pricer's constructor is not on this branch: bind it by signature, and fail closed."""
     WIDTHS = dict(k_own=9, k_opp=9, k1_own=9, k1_opp=9)
@@ -766,6 +897,10 @@ class PricerBindingTests(unittest.TestCase):
         with patch.object(importlib.util, 'find_spec', return_value=None), self.assertRaises(SystemExit) as raised:
             gate.main(['--out', str(out), '--d3-root', 'b', '--chunk', '0'])
         self.assertIn('device_depth2_pricer', str(raised.exception.code));self.assertFalse(out.exists())
+        missing = lambda name: None if name == 'gpu_engine.depth2_backups' else object()
+        with patch.object(importlib.util, 'find_spec', side_effect=missing), self.assertRaises(SystemExit) as raised:
+            gate.main(['--out', str(out), '--d3-root', 'b', '--chunk', '0'])
+        self.assertIn('depth2_backups', str(raised.exception.code));self.assertFalse(out.exists())
 
 
 if __name__ == '__main__':unittest.main()
