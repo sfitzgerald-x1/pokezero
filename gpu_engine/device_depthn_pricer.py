@@ -277,39 +277,61 @@ def _dedupe(items):
 def searched_maps(frame,k_own,k_opp):
     """Iterative-deepening selection from a FULL-WIDTH depth-2 frame: the ply-2 maps (per turn-1 cell) for a `searched` run.
 
-    Per expanded turn-1 cell (`t1_status == 2`), with v the turn-2 leaf
-    values, valid leaves those of status 1 or 4, and pi_opp the opponent's
-    child prior (a masked softmax over the enumerated replies, as
-    `depth2_backups`), every ranking reads VALID leaves only:
-    - the learner keeps the k_own a2 with the highest depth-2 learner-max row
-      value q(a2) = sum over the row's valid r2 of pi_opp(r2) v(a2, r2), with
-      pi_opp renormalized over those r2 (q descending, lower action on ties;
-      a row with no valid leaf has no q), plus its prior top-1 (highest child
-      logit over its encoder-legal actions, lower action on ties);
-    - the opponent keeps, in this order: its prior top-1; the REFUTATION of
-      each kept learner move, argmin over the row's valid r2 of v(a2, r2)
-      (lower action on ties); then the fill up to k_opp+1 entries by the lowest
-      threat t(r2) = min over the kept a2 with a valid leaf in r2 of v(a2, r2)
-      (t ascending, lower action on ties). If the top-1 and refutations alone
-      exceed k_opp+1 they are all kept. Ranking replies by harm against the
-      kept moves (and never dropping a kept move's refutation) is what stops a
-      maximin over the kept grid from being optimistic.
-    - Errored pairs stay reachable: every (a2, r2) of status 3 puts a2 and r2
-      at the FRONT of its seat's set (in pair order), so depth 3 re-steps the
-      same state, pair and chance, re-hits the error and the root refuses under
-      D's rule, as depth 2 did. A root that depth 2 refuses is flagged in the
-      returned `depth2_refused` [R] (by `depth2_backups.refusal_summary`); its
-      price is moot, so truncating its ranked entries to the width is harmless.
-    A waiting seat keeps [0, -1, ...]; a cell that is not expanded keeps all
-    -1. Slot order is the order above. Returns int32 maps [R,2,9,9,w_own],
-    [R,2,9,9,w_opp] with (w_own, w_opp) = `searched_widths(k_own, k_opp)`, and
+    Definitions, per expanded turn-1 cell (`t1_status == 2`): v(a2, r2) is the
+    turn-2 leaf value; a leaf is VALID when its status is 1 or 4 and ERRORED
+    when it is 3; pi_opp is the masked softmax of the opponent's child logits
+    over every enumerated reply (the full legal set, as `depth2_backups`); a
+    seat's prior top-1 is its highest child logit over its encoder-legal
+    actions, lower action on ties. Each seat's set is built in this order; a
+    slot's position in the returned map is its position in the final list.
+
+    1. The learner's KEPT set (K_own). Every a2 with at least one valid leaf
+       gets q(a2) = sum over its valid r2 of pi_opp(r2) v(a2, r2), divided by
+       the sum of pi_opp over those same r2 (a softmax over the row's valid
+       replies; a row whose leaves are all errored has no q and is not kept
+       here). K_own = the k_own highest q (descending, lower action on ties),
+       then the learner's prior top-1 appended if not already present. A
+       waiting learner has K_own = [0].
+    2. The opponent's set, computed over K_own from step 1 ONLY (errored rows
+       added in step 3 contribute no refutation and no threat): first its prior
+       top-1; then the REFUTATION of each move of K_own in K_own's order,
+       argmin over that row's valid r2 of v(a2, r2) (lower reply on ties; a
+       row with no valid leaf has none), repeats dropped at their later
+       position; then, while the set has fewer than k_opp+1 entries, the fill:
+       replies not yet present in ascending threat t(r2) = min over the a2 in
+       K_own with a valid leaf at r2 of v(a2, r2) (lower reply on ties; a
+       reply with no valid leaf under K_own has no t). If the top-1 and the
+       refutations alone reach k_opp+1 there is no fill and all of them stay.
+       A waiting opponent has the set [0]. Ranking replies by harm against the
+       kept moves, never dropping a kept move's refutation, is what stops a
+       maximin over the kept grid from being optimistic.
+    3. Errored pairs. The errored (a2, r2) are sorted by (a2, r2); their rows,
+       in first-occurrence order, are PREPENDED to the learner's list and their
+       columns, in first-occurrence order over the sorted pairs, are PREPENDED
+       to the opponent's list; a later duplicate of a prepended entry is
+       dropped. Each list is then TRUNCATED to its fixed width, (w_own, w_opp)
+       = `searched_widths(k_own, k_opp)`, by dropping entries from the END. So
+       errored entries DO occupy slots: the widths reserve no room for them,
+       and what they displace is the tail of steps 1-2 (the learner's prior
+       top-1, then its lowest-q moves; the opponent's fill, then its last
+       refutations, then its top-1). Errored rows beyond w_own, or columns
+       beyond w_opp, are cut too; the lexicographically first errored pair is
+       always reachable (its row and column lead both lists), so depth 3
+       re-steps the same state, pair and chance, re-hits the error and the
+       root refuses under D's rule, as depth 2 did. Such a root is flagged in
+       the returned `depth2_refused` [R] (`depth2_backups.refusal_summary`);
+       its price is moot, which is why the truncation is harmless.
+
+    A cell that is not expanded keeps all -1. Returns int32 maps
+    [R,2,9,9,w_own] and [R,2,9,9,w_opp] (-1 past the live slots) and
     `depth2_refused`; `{2: (own, opp)}` is the `selection_maps` input of
     `DepthNPricer(selection='searched', k_own=(k_own, ...), k_opp=(k_opp, ...))`,
     whose ply-2 slot widths are these same `searched_widths` (the pricer
     derives them from the k's it is given, so the two calls must share k).
     Pure: numpy and float64 host arithmetic only. Raises ValueError unless
     every expanded cell enumerates its full legal product (a top-k depth-2
-    pass has no complete grid to rank).
+    pass has no complete grid to rank) and on a requested seat with no legal
+    action.
     """
     w_own,w_opp=searched_widths(k_own,k_opp)
     R=frame.pre.shape[0];own=np.full((R,2,9,9,w_own),-1,np.int32);opp=np.full((R,2,9,9,w_opp),-1,np.int32)
@@ -380,7 +402,8 @@ class DepthNPricer:
         In `searched` mode the ply-2 entries are the search widths k of `searched_maps(frame, k_own, k_opp)`, and the pricer
         derives the ply-2 SLOT widths from them with `searched_widths` (k_own+1 for the learner, up to k_own+2 for the
         opponent; `self.k_own`/`self.k_opp` hold the slot widths, `self.searched_k` the k's, both logged in `timing`); a
-        narrower map pads, a wider one is refused. Plies past 2 are prior widths in both modes. No width exceeds 9.
+        narrower map pads, a wider one is refused. Plies past 2 are prior widths in both modes. No width exceeds 9. The
+        searched selection rule itself (kept set, refutations and fill, errored pairs) is specified on `searched_maps`.
 
         `block_lanes` sizes every block in lanes (B = block_lanes // K per ply);
         `blocks_per_call` maps G blocks per device call (a ply's last call pads
