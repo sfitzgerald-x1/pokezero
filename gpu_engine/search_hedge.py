@@ -67,10 +67,11 @@ def grid(world, root_legal):
 
 
 def grids(worlds, root_legal):
+    """Every world's Grid; None (refuse) if there is no world, a world is unavailable (None) or a cell is unknown."""
+    worlds = tuple(worlds)
+    if not worlds or any(w is None for w in worlds):return None
     result = tuple(grid(w, root_legal) for w in worlds)
-    if not result or any(g is None for g in result):return None
-    if len({g.actions for g in result}) != 1:raise ValueError('every world prices the same legal root actions')
-    return result
+    return None if any(g is None for g in result) else result
 
 
 def _strategy(actions, x):
