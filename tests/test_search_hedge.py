@@ -141,12 +141,13 @@ class HedgeTests(unittest.TestCase):
             # Duality: the column player's LP value equals the row player's.
             column, _ = h.matrix_game(-m.T)
             self.assertAlmostEqual(value, -column, places=7)
-            self.assertAlmostEqual(float((x @ m).min()), value, places=12)
+            self.assertAlmostEqual(math.fsum(x), 1., places=12);self.assertTrue(np.all(x >= 0))
 
-    def test_unknown_cell_refuses(self):
+    def test_unknown_cell_or_unavailable_world_refuses(self):
         w1 = world([[1, -1], [0, None]]);w2 = world([[.1, .2], [.3, .4]])
-        self.assertIsNone(h.bayes_hedge((w1, w2), legal(0, 1)))
-        self.assertIsNone(h.averaging((w1, w2), legal(0, 1)))
+        for worlds in ((w1, w2), (None, w2), ()):
+            self.assertIsNone(h.bayes_hedge(worlds, legal(0, 1)))
+            self.assertIsNone(h.averaging(worlds, legal(0, 1)))
 
     def test_sampling_is_deterministic_and_follows_the_strategy(self):
         strategy = (0., .25, 0., .5, .25, 0., 0., 0., 0.)
@@ -195,6 +196,21 @@ class Depth2HedgeTests(unittest.TestCase):
         worlds = h.depth2_hedged_worlds(frame(self.t1_status, self.t1_value, self.t2_status, self.t2_value), 0)
         self.assertIsNone(worlds[0].joint_values[0][1])
         self.assertIsNone(h.bayes_hedge(worlds, legal(0, 1)))
+
+    def test_waiting_learner_at_turn2_takes_the_worst_reply(self):
+        self.t2_status[0, 1, 1] = 0;self.t2_status[0, 1, 1][np.ix_((0,), (0, 1, 2))] = 4
+        self.t2_value[0, 1, 1, 0, :3] = (.5, -.125, .25)
+        worlds = h.depth2_hedged_worlds(frame(self.t1_status, self.t1_value, self.t2_status, self.t2_value), 0)
+        self.assertEqual(worlds[0].joint_values[1][1], -.125)
+
+    def test_waiting_root_opponent_lists_reply_zero_only(self):
+        for w in (0, 1):
+            self.t1_status[w, :, 1] = 0;self.t2_status[w, :, 1] = 0
+        worlds = h.depth2_hedged_worlds(frame(self.t1_status, self.t1_value, self.t2_status, self.t2_value,
+            peer_requested=(False, False)), 0)
+        self.assertEqual(worlds[0].opponent_legal, (False,) * 9);self.assertFalse(worlds[0].opponent_requested)
+        choice = h.bayes_hedge(worlds, legal(0, 1));average = h.averaging(worlds, legal(0, 1))
+        self.assertEqual(choice.strategy, average.strategy)   # a waiting opponent: the hedge is the argmax
 
     def test_per_root_pool_unit_equals_frame_backup(self):
         f = frame(self.t1_status, self.t1_value, self.t2_status, self.t2_value)

@@ -54,15 +54,15 @@ def paired(pairs, base, other, *, mode):
         ci90_game_cluster=interval([c[0] for c in clusters.values()], [c[1] for c in clusters.values()]))
 
 
-def rescore(metrics):
-    base_rows = metrics[BASELINE]['top_two']['rows']
+def rescore(metrics, baseline=BASELINE):
+    base_rows = metrics[baseline]['top_two']['rows']
     pairs = [pair_key(r) for r in base_rows]
     if len(set(pairs)) != len(pairs):raise ValueError('duplicate fixed pair')
     base = [int(r['correct']) for r in base_rows]
     frames = sorted({p[1] for p in pairs})
     out = {}
     for name, m in sorted(metrics.items()):
-        if name == BASELINE:continue
+        if name == baseline:continue
         rows = {pair_key(r): int(r['correct']) for r in m['top_two']['rows']}
         if not set(rows) <= set(pairs):raise ValueError(name + ': pair outside the raw-policy fixed pairs')
         other = [rows.get(p) for p in pairs]
@@ -71,7 +71,7 @@ def rescore(metrics):
             [o for p, o in zip(pairs, other) if p[1] == f], mode=mode) for mode in ('fallback', 'conditional')} for f in frames}
         result['resolved_pairs'] = sum(o is not None for o in other)
         out[name] = result
-    return dict(baseline=BASELINE, fixed_pairs=len(pairs), baseline_correct=sum(base),
+    return dict(baseline=baseline, fixed_pairs=len(pairs), baseline_correct=sum(base),
         pairs_by_frame={str(f): sum(p[1] == f for p in pairs) for f in frames}, versus_raw_policy=out)
 
 
@@ -79,16 +79,18 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--metrics', required=True, help="U1's metrics.json")
     parser.add_argument('--out', required=True, help='output json path (must not exist)')
+    parser.add_argument('--baseline', default=BASELINE, help="the fixed-pair predictor (raw_value reproduces U1's own pairing)")
     args = parser.parse_args(argv)
     blob = Path(args.metrics).read_bytes()
     report = dict(schema='v2s-u1-rescore.v1', metrics=dict(path=args.metrics, sha256=hashlib.sha256(blob).hexdigest()),
-        bootstrap=dict(draws=DRAWS, seed=SEED, level=LEVEL, cluster='game (selector stream)'), **rescore(json.loads(blob)))
+        bootstrap=dict(draws=DRAWS, seed=SEED, level=LEVEL, cluster='game (selector stream)'), **rescore(json.loads(blob), args.baseline))
     out = Path(args.out)
     with out.open('x') as stream:stream.write(json.dumps(report, indent=1, sort_keys=True) + '\n')
+    def text(r):
+        if r['difference'] is None:return f"   n/a n={r['pairs']}"
+        low, high = r['ci90_game_cluster'];return f"{100*r['difference']:+6.2f} ({100*low:+.1f}, {100*high:+.1f}) n={r['pairs']}"
     for name, r in report['versus_raw_policy'].items():
-        f, c = r['fallback'], r['conditional']
-        print(f"{name:24s} fallback {100*f['difference']:+6.2f} ({100*f['ci90_game_cluster'][0]:+.1f}, {100*f['ci90_game_cluster'][1]:+.1f}) n={f['pairs']}"
-            f" | conditional {100*c['difference']:+6.2f} ({100*c['ci90_game_cluster'][0]:+.1f}, {100*c['ci90_game_cluster'][1]:+.1f}) n={c['pairs']}")
+        print(f"{name:24s} fallback {text(r['fallback'])} | conditional {text(r['conditional'])}")
     return 0
 
 
