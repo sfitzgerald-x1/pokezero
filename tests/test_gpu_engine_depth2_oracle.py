@@ -1080,10 +1080,19 @@ class HeadOverrideTests(GateFixture, unittest.TestCase):
             out = forward(params, inputs);return out._replace(value=out.value + (1e-3 if isinstance(model, FakeConfig) and model.arm == 'B' else 0.))
         with patch.object(batch.v5_model, 'forward', side_effect=other_arm), self.assertRaisesRegex(ValueError, 'D-arm and head-arm'):
             gate.bind_roots(mixed, (head,), self.PLAN, head_config=FakeConfig())
+        nan = {'offset': j.asarray(np.nan, j.float32), 'logits': j.zeros(9, j.float32)}   # a NaN on the first root: not "arms differ"
+        with patch.object(batch.v5_model, 'forward', side_effect=forward), self.assertRaisesRegex(ValueError, 'invalid or non-finite'):
+            gate.bind_roots(mixed, (nan,), self.PLAN, head_config=FakeConfig())
         bad = {'offset': j.asarray(5., j.float32), 'logits': j.zeros(9, j.float32)}   # |v| > 1: an invalid head output
-        with patch.object(batch.v5_model, 'forward', side_effect=forward):
-            groups, values, dropped, _ = gate.bind_roots(mixed, (bad,), self.PLAN, head_config=FakeConfig())
-        self.assertEqual((groups, len(dropped), values), ([], 4, []))
+        first_ok = [[mixed[0][0]] + list(mixed[0][1:])]
+        def later_bad(params, inputs, model=None, **kw):   # the first root is valid; the others are dropped
+            out = forward(params, inputs);return out._replace(value=out.value + 5. * (inputs['numeric_features'][:, 0, 0, 1] != first_clock))
+        first_clock = float(np.asarray(mixed[0][0].root_inputs['numeric_features']).reshape(-1)[1])
+        with patch.object(batch.v5_model, 'forward', side_effect=later_bad):
+            groups, values, dropped, _ = gate.bind_roots(first_ok, (head,), self.PLAN, head_config=FakeConfig())
+        self.assertEqual((len(groups[0]), len(dropped), len(values)), (1, 3, 1))
+        refusals = gate.with_dropped(dict(depth2=dict(refused_count=0)), dropped)
+        self.assertEqual(refusals['dropped_roots']['count'], 3);self.assertEqual(refusals['depth2'], dict(refused_count=0))
 
     def test_evaluator_header(self):
         loaded = SimpleNamespace(plan=self.PLAN, labels=self.LABELS, category_sha256='c' * 64, snapshot=dict(iteration=-1, checkpoint='untrained-smoke.pt',
@@ -1130,6 +1139,7 @@ class HeadOverrideTests(GateFixture, unittest.TestCase):
                     root_values=[.25, .5])
             report = json.loads((Path(directory) / 'gate.json').read_text())
         self.assertEqual(list(report)[:2], ['evaluator', 'value_scale']);self.assertEqual(report['value_scale']['reference'], 'ref')
+        self.assertEqual(report['refusals']['dropped_roots']['count'], 0)
         self.assertEqual(report['value_scale']['root_abs_value']['count'], 2);self.assertGreater(report['value_scale']['t1_abs_value_expanded']['count'], 0)
 
 
@@ -1201,6 +1211,12 @@ class ReviewTests(GateFixture, unittest.TestCase):
         self.assertGreater(topk['gap_below_logit_tolerance']['own'], 0);self.assertGreater(topk['selections']['own'], 0)
         self.assertEqual(topk['selections']['peer'], 0)
         self.assertIsNone(gate.topk_boundary(data['children'], data['roots'], self.WIDTHS, None, None, reference))
+
+    def test_leaf_counts_report_the_forced_leaves(self):
+        calls = [dict(turn2_leaves=100, forced_leaves=7, checked_leaves=19), dict(turn2_leaves=50, forced_leaves=0, checked_leaves=4)]
+        counts = gate.leaf_counts(calls, 2)
+        self.assertEqual((counts['sample_leaves'], counts['enumerated'], counts['forced_terminal_or_error'], counts['checked']), (2, 150, 7, 23))
+        self.assertIn('every enumerated leaf', gate.leaf_counts(calls, None)['scope'])
 
     def test_samples_carry_every_pricer_terminal_and_error_leaf(self):
         frame, _, data, _ = self.price_with(sample=1)

@@ -72,12 +72,37 @@ class ParseTests(unittest.TestCase):
             (target / 'throughput.json').write_text(json.dumps(dict(sections={config: dict(config=config)})));calls.append(command);return 0
         argv = REQUIRED[:-4] + ['--out', 'parent', '--capacity', '4', '--isolate', '--d1', '--profile-split']
         with tempfile.TemporaryDirectory() as directory, patch('subprocess.call', side_effect=fake_call):
-            sections, order = throughput.isolated(throughput.parse(argv), argv, Path(directory))
+            sections, order, contexts = throughput.isolated(throughput.parse(argv), argv, Path(directory))
+        self.assertEqual(set(contexts), {'depth1', 'depth2', 'constant'})
         self.assertEqual(order, ['depth1', 'depth2', 'constant']);self.assertEqual(sections['constant'], dict(config='constant'))
         for command in calls:
             self.assertNotIn('--isolate', command);self.assertNotIn('parent', command);self.assertEqual(command.count('--out'), 1)
         self.assertIn('lifetime peak', throughput.MEMORY_SCOPE)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):throughput.parse(REQUIRED + ['--isolate', '--only', 'depth2'])
+
+    def test_depth1_times_every_block_only_with_d1(self):
+        blocks = ['b0', 'b1', 'b2']
+        self.assertEqual(throughput.depth1_blocks(throughput.parse(REQUIRED + ['--d1', '--worlds-blocks', '3']), blocks), blocks)
+        self.assertEqual(throughput.depth1_blocks(throughput.parse(REQUIRED + ['--profile-split', '--worlds-blocks', '3']), blocks), ['b0'])
+        self.assertEqual(throughput.depth1_blocks(throughput.parse(REQUIRED + ['--profile-split', '--only', 'depth1']), blocks), ['b0'])   # an isolate child
+
+    def test_isolate_parent_never_loads_the_bank(self):
+        def fake_call(command):
+            config = command[command.index('--only') + 1];target = Path(command[command.index('--out') + 1]);target.mkdir(parents=True)
+            section = dict(blocks=[dict(warm_device_seconds_median=.5)], derived=dict(device_ms_per_root_median=1.), options=dict(child_block=27), abs_t1=[.25, .5])
+            context = dict(evaluator=dict(override=True, archive='a.npz'), root_values=[.5, .75], roots_available=7, source=dict(chunk=0),
+                widths=dict(k_own=9), block_seeds=[11], devices=['fake-gpu'])
+            (target / 'throughput.json').write_text(json.dumps(dict(sections={config: section}, context=context)));return 0
+        with tempfile.TemporaryDirectory() as directory:
+            argv = ['--d3-root', 'bank', '--chunk', '0', '--out', str(Path(directory) / 'out'), '--capacity', '4', '--isolate']
+            with patch.object(throughput, 'prepare', side_effect=AssertionError('the --isolate parent loaded the bank')), \
+                    patch('subprocess.call', side_effect=fake_call), patch.object(importlib.util, 'find_spec', return_value=object()), \
+                    patch('gpu_engine.d3_depth2_gate.log', lambda *a, **k: None):
+                self.assertEqual(throughput.main(argv), 0)
+            report = json.loads((Path(directory) / 'out' / 'throughput.json').read_text())
+        self.assertEqual(list(report)[:2], ['evaluator', 'value_scale']);self.assertEqual(report['evaluator']['archive'], 'a.npz')
+        self.assertEqual((report['roots_available'], report['devices'], report['cycled']), (7, ['fake-gpu'], False))
+        self.assertEqual(report['value_scale']['root_abs_value']['count'], 2);self.assertEqual(report['measured_order'], ['depth2'])
 
     def test_invalid_arguments_exit_2(self):
         bad = (REQUIRED[:-2], REQUIRED + ['--capacity', '0'], REQUIRED + ['--repeats', '0'], REQUIRED + ['--k-opp', '10'],
@@ -106,7 +131,7 @@ class ArithmeticTests(unittest.TestCase):
         def context(block):
             entered.append(block);yield
         blocks = [(0, 'recipe0', ['r'] * 4, lambda: context(0)), (1, 'recipe1', ['s'] * 4, lambda: context(1))]
-        pricer = FakeDepth2([1.0, .3, .2, .4, .9, .5, .6, .4]);memory = iter([dict(process_peak_bytes_so_far=p, bytes_in_use=p // 2) for p in range(10, 90, 10)])
+        pricer = FakeDepth2([1.0, .3, .2, .4, .9, .5, .6, .4]);memory = iter([dict(process_peak_bytes_so_far=50, bytes_in_use=5)] + [dict(process_peak_bytes_so_far=p, bytes_in_use=p // 2) for p in range(10, 90, 10)])
         lines = []
         result = throughput.measure('depth2', throughput.depth2_call, pricer, blocks, 'materializer', 'params', 3,
             memory=lambda: next(memory), progress=lambda m, **v: lines.append((m, v)))
@@ -117,6 +142,9 @@ class ArithmeticTests(unittest.TestCase):
         self.assertEqual((second['cold_compile_seconds'], second['warm_device_seconds_median']), (0., .5))
         self.assertEqual((first['leaves_enumerated'], first['leaves_evaluated'], first['leaves_constant']), (1000, 2187, True))
         self.assertEqual((first['process_peak_bytes_so_far'], first['bytes_in_use_after'], second['process_peak_bytes_so_far']), (40, 20, 80))
+        self.assertEqual(first['memory_baseline'], dict(process_peak_bytes_so_far=50, bytes_in_use=5))   # taken before the first measured call
+        self.assertEqual((first['peak_over_baseline_in_use'], first['peak_masked_by_earlier']), (35, True))   # 40 <= the bank load's 50
+        self.assertEqual((second['peak_over_baseline_in_use'], second['peak_masked_by_earlier']), (75, False))
         derived = throughput.derive(result, 4)
         self.assertAlmostEqual(derived['device_ms_per_root_median'], 1e3 * (.3 + .5) / 4)
         self.assertAlmostEqual(derived['device_ms_per_root_min'], 1e3 * (.2 + .4) / 4)

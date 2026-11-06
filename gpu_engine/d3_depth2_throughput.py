@@ -40,8 +40,10 @@ LANES = 81   # D3's fixed joint lanes per world
 WEIGHTS_NOTE = 'false (device time independent of the weight values; label only)'
 CONFIGS = ('depth1', 'depth2', 'constant')
 MEMORY_SCOPE = ('process_peak_bytes_so_far is jax.local_devices()[0].memory_stats()[\'peak_bytes_in_use\'] after the call: the PROCESS '
-    'lifetime peak so far, so a config measured later in the same process includes earlier configs\' peaks (see measured_order); '
-    'use --isolate for each config\'s own peak')
+    'lifetime peak so far, so it includes the bank load and any config measured earlier in the same process (see measured_order); '
+    'use --isolate for one process per config. memory_baseline is taken just before a config\'s first measured call; '
+    'peak_over_baseline_in_use = peak - baseline bytes_in_use, and peak_masked_by_earlier marks a config whose own peak is hidden '
+    'below an earlier one (its peak did not exceed the baseline peak)')
 
 
 def parse(argv=None):
@@ -135,7 +137,7 @@ def measure(name, call, pricer, blocks, materializer, params, repeats, *, memory
     """For each (block, recipe, requests): 1 cold + `repeats` warm calls; returns per-block summaries.
     collect gets each block's cold-call |t1_value| at expanded cells (the depth-2 value scale)."""
     from gpu_engine.d3_depth2_gate import stage
-    summaries = []
+    summaries = [];baseline = memory() or {}
     for block, recipe, requests, context in blocks:
         calls = []
         for i in range(1 + repeats):
@@ -143,7 +145,11 @@ def measure(name, call, pricer, blocks, materializer, params, repeats, *, memory
                 record = call(pricer, requests, materializer, recipe, params, memory);abs_t1 = record.pop('_abs_t1', None)
                 if i == 0 and collect is not None and abs_t1 is not None:collect.append(abs_t1)
                 calls.append(record);info.update(record)
-        summaries.append(dict(block=block, **summarize_block(calls)))
+        summary = summarize_block(calls);peak = summary['process_peak_bytes_so_far']
+        summary.update(memory_baseline=baseline, peak_over_baseline_in_use=None if peak is None or baseline.get('bytes_in_use') is None
+            else peak - baseline['bytes_in_use'], peak_masked_by_earlier=None if peak is None or baseline.get('process_peak_bytes_so_far') is None
+            else peak <= baseline['process_peak_bytes_so_far'])
+        summaries.append(dict(block=block, **summary))
     return summaries
 
 
@@ -240,6 +246,17 @@ def prepare(args):
         widths=widths, seeds=seeds, planned=list(blocks()), actor_capacity=len(params) if head is not None else plan.historical_window + 1)
 
 
+def depth1_blocks(args, planned):
+    """Depth 1 times every block with --d1; for --profile-split alone only block 0 (the split's baseline), isolated or not."""
+    return list(planned) if args.d1 else list(planned)[:1]
+
+
+def run_context(ctx, devices):
+    """What the report needs from a prepared process: the evaluator, root values and counts (an --isolate child's too)."""
+    return dict(evaluator=ctx.evaluator, root_values=list(ctx.root_values), roots_available=len(ctx.available), source=ctx.source,
+        widths=ctx.widths, block_seeds=list(ctx.seeds), devices=devices)
+
+
 def measure_config(config, args, ctx, progress):
     """One measured config in this process: 'depth1' (FramePricer), 'depth2' (Depth2Pricer, every block) or 'constant'
     (block 0 with the turn-2 forward replaced by zeros). Returns its report section."""
@@ -248,7 +265,7 @@ def measure_config(config, args, ctx, progress):
     if config == 'depth1':
         d1 = FramePricer(ctx.provider.executor, ctx.plan.model, capacity=args.capacity, block_rows=args.capacity, actor_capacity=ctx.actor_capacity,
             vectorized=True, host_prep=True)
-        planned = ctx.planned if args.d1 or args.only == 'depth1' else ctx.planned[:1]
+        planned = depth1_blocks(args, ctx.planned)
         blocks = measure('depth1', depth1_call, d1, planned, ctx.provider.materializer, ctx.params, args.repeats, memory=memory_stats, progress=progress)
         return dict(blocks=blocks, derived=derive(blocks, args.capacity), leaves='enumerated = D required turn-1 pairs; evaluated = FramePricer evaluated_joint_slots')
     pricer, options = make_depth2(ctx.provider.executor, ctx.plan.model, capacity=args.capacity, widths=ctx.widths, child_block=args.child_block,
@@ -280,13 +297,14 @@ def isolated(args, argv, out):
         if token.startswith('--out='):continue
         clean.append(token)
     configs = (['depth1'] if args.d1 or args.profile_split else []) + ['depth2'] + (['constant'] if args.profile_split else [])
-    sections = {}
+    sections, contexts = {}, {}
     for config in configs:
         target = out / config
         code = subprocess.call([sys.executable, '-m', 'gpu_engine.d3_depth2_throughput', *clean, '--only', config, '--out', str(target)])
         if code != 0:raise SystemExit(f'--isolate: the {config} subprocess exited {code}')
-        sections[config] = json.loads((target / 'throughput.json').read_text())['sections'][config]
-    return sections, configs
+        child = json.loads((target / 'throughput.json').read_text());sections[config] = child['sections'][config]
+        contexts[config] = child.get('context')
+    return sections, configs, contexts
 
 
 def main(argv=None):
@@ -298,30 +316,35 @@ def main(argv=None):
         checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, weights_affect_speed=WEIGHTS_NOTE,
         resolved='EVALUATOR_RESOLVED follows once the bank is loaded')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
-    ctx = prepare(args)
-    import jax
-    devices = [d.device_kind for d in jax.devices()]
-    if args.only:   # one config (an --isolate subprocess)
-        section = measure_config(args.only, args, ctx, gate.log)
-        (out / 'throughput.json').write_text(json.dumps(dict(evaluator=ctx.evaluator, only=args.only, sections={args.only: section}, devices=devices),
-            indent=1, allow_nan=False, default=str) + '\n')
-        return 0
-    gate.log('THROUGHPUT_START', roots_available=len(ctx.available), roots_per_call=args.capacity, cycled=len(ctx.available) < args.capacity,
-        worlds=2 * len(ctx.seeds), repeats=args.repeats, devices=devices, isolate=args.isolate)
-    if args.isolate:sections, order = isolated(args, argv, out)
+    if args.isolate:
+        # The parent never loads the bank or touches the device: every child starts with the whole device to itself.
+        gate.log('THROUGHPUT_START', roots_per_call=args.capacity, repeats=args.repeats, isolate=True)
+        sections, order, contexts = isolated(args, argv, out);context = contexts['depth2']
     else:
+        ctx = prepare(args)
+        import jax
+        context = run_context(ctx, [d.device_kind for d in jax.devices()])
+        if args.only:   # one config (an --isolate subprocess)
+            section = measure_config(args.only, args, ctx, gate.log)
+            (out / 'throughput.json').write_text(json.dumps(dict(evaluator=ctx.evaluator, only=args.only, sections={args.only: section}, context=context),
+                indent=1, allow_nan=False, default=str) + '\n')
+            return 0
+        gate.log('THROUGHPUT_START', roots_available=context['roots_available'], roots_per_call=args.capacity,
+            cycled=context['roots_available'] < args.capacity, worlds=2 * len(ctx.seeds), repeats=args.repeats, devices=context['devices'], isolate=False)
         # Depth 1 first: in one process the device peak only grows, so depth 1's number is its own.
         order = (['depth1'] if args.d1 or args.profile_split else []) + ['depth2'] + (['constant'] if args.profile_split else [])
         sections = {config: measure_config(config, args, ctx, gate.log) for config in order}
+    devices = context['devices'];available = context['roots_available']
     depth2 = sections['depth2'];abs_t1 = depth2.pop('abs_t1', [])
-    report = dict(evaluator=ctx.evaluator, value_scale=gate.value_scale(ctx.root_values, gate.percentiles(abs_t1), args.value_reference),
-        weights_affect_speed=WEIGHTS_NOTE, schema=SCHEMA, source=ctx.source, capacity=args.capacity, widths=ctx.widths, child_block=depth2['options']['child_block'],
-        worlds_blocks=args.worlds_blocks, block_seeds=list(ctx.seeds), repeats=args.repeats, roots_available=len(ctx.available),
-        roots_per_call=args.capacity, cycled=len(ctx.available) < args.capacity, pricer_options=depth2['options'], devices=devices,
+    report = dict(evaluator=context['evaluator'], value_scale=gate.value_scale(context['root_values'], gate.percentiles(abs_t1), args.value_reference),
+        weights_affect_speed=WEIGHTS_NOTE, schema=SCHEMA, source=context['source'], capacity=args.capacity, widths=context['widths'],
+        child_block=depth2['options']['child_block'], worlds_blocks=args.worlds_blocks, block_seeds=context['block_seeds'], repeats=args.repeats,
+        roots_available=available, roots_per_call=args.capacity, cycled=available < args.capacity, pricer_options=depth2['options'], devices=devices,
         measured_order=order, isolated=args.isolate, memory_scope=MEMORY_SCOPE + (' (isolated: one process per config)' if args.isolate else ''),
         depth2=dict(blocks=depth2['blocks'], derived=depth2['derived']),
         scope='device_seconds = the pricer timing (one jitted call to block_until_ready plus its device_get); compile = lower + compile of the cold call')
     if args.d1:report['depth1'] = sections['depth1']
+    if args.isolate:report['isolated_contexts'] = {k: {f: v.get(f) for f in ('roots_available', 'devices')} for k, v in contexts.items() if v}
     if args.profile_split:
         constant = sections['constant'];normal = depth2['blocks'][0]['warm_device_seconds_median']
         constant_seconds = None if constant.get('skipped') else constant['blocks'][0]['warm_device_seconds_median']

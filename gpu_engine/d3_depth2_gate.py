@@ -1317,6 +1317,11 @@ def bind_roots(groups, params, plan, *, head_config=None):
             inputs = {k: np.asarray(v) for k, v in request.root_inputs.items()}
             output = jax.device_get(forward(p, inputs))
             if head is not None and not checked:
+                a = request.plans.root.address;first = [a.stream, a.frame, a.owner]
+                if not (bool(np.asarray(output.valid).reshape(-1)[0]) and np.isfinite(np.asarray(output.value)).all()
+                        and np.isfinite(np.asarray(output.policy_logits)).all()):
+                    raise ValueError(f'arm check: the head\'s D-arm output on the first root {first} is invalid or non-finite '
+                        '(the arms cannot be compared; check the head archive and the root inputs)')
                 other = jax.device_get(head(p, inputs))
                 if not (np.array_equal(np.asarray(other.value), np.asarray(output.value))
                         and np.array_equal(np.asarray(other.policy_logits), np.asarray(output.policy_logits))):
@@ -1332,6 +1337,19 @@ def bind_roots(groups, params, plan, *, head_config=None):
             kept.append(request)
         if kept:out.append(kept)
     return out, values, dropped, checked
+
+
+def leaf_counts(calls, sample):
+    """Turn-2 leaves over calls: the oracle's enumeration, the pricer's terminal/error leaves every sample includes, and those checked."""
+    total = lambda key: sum(c.get(key) or 0 for c in calls)
+    return dict(sample_leaves=sample, enumerated=total('turn2_leaves'), forced_terminal_or_error=total('forced_leaves'), checked=total('checked_leaves'),
+        scope='checked = forced + up to sample_leaves uniform others per world' if sample is not None else 'every enumerated leaf is checked')
+
+
+def with_dropped(refusals, dropped):
+    """The refusal section plus the roots the head override dropped before pricing (U1 refuses a root with an invalid head output)."""
+    return dict(refusals, dropped_roots=dict(count=len(dropped), addresses=list(dropped)[:FIRST],
+        reason='head override: the head\'s D-arm output on the root inputs is invalid or non-finite; never priced'))
 
 
 def evaluator_header(args, loaded, head):
@@ -1617,7 +1635,8 @@ def pricer_only(args, *, provider, params, groups, pricer, options, seeds, out, 
         block_seeds=list(seeds), max_roots=args.max_roots, pricer_options=options, digest_note=DIGEST_NOTE, calls=calls,
         geometry_failures=[c for c in calls if c['geometry']],
         values=values, sibling_spread=merge_sibling_spread(sibling, oracle_checked=False),
-        refusals=merge_refusals(refusals), costs=dict(depth2_pricer={k: total(k) for k in ('wall_seconds', 'lower_and_compile_seconds', 'device_seconds')}),
+        refusals=with_dropped(merge_refusals(refusals), (evaluator or {}).get('dropped_roots', ())),
+        costs=dict(depth2_pricer={k: total(k) for k in ('wall_seconds', 'lower_and_compile_seconds', 'device_seconds')}),
         scope='Depth2Pricer only: no FramePricer, oracle or checks; every value is the pricer\'s own, not oracle-checked')
     (out / 'gate.json').write_text(json.dumps(report, indent=1, allow_nan=False, default=str) + '\n')   # evaluator first
     log('PRICER_ONLY_COMPLETE', out=str(out / 'gate.json'), near_ties=report['values']['near_ties']['share'], refused=report['refusals'].get('depth2'))
@@ -1736,7 +1755,8 @@ def main(argv=None):
                 evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize(evaluations)
     reported = [c for c in calls if c['refusals'] is not None]
-    refusals = dict(merge_refusals([c['refusals'] for c in reported]), calls_reported=len(reported), calls=len(calls),
+    refusals = dict(with_dropped(merge_refusals([c['refusals'] for c in reported]), evaluator.get('dropped_roots', ())),
+        calls_reported=len(reported), calls=len(calls),
         by_block={str(b): merge_refusals([c['refusals'] for c in reported if c['block'] == b]) for b in range(len(seeds))},
         rule='reference (D): any world pre != 0 or any status-3 cell at either turn refuses the root; codes 5/6 refuse too')
     leaves = oracle.rows['leaves'];children = oracle.rows['children']
@@ -1744,7 +1764,7 @@ def main(argv=None):
     status, reasons = gate_status(result, sampled=args.sample_leaves is not None)
     report = dict(evaluator=evaluator, value_scale=value_scale(root_values, values['totals'].get('abs_t1_value'), args.value_reference),
         schema=SCHEMA, status=status, passed=status in ('PASS', 'PASS_SAMPLED'), status_reasons=reasons, checks=result['checks'],
-        raw_head_check=args.raw_head_check, split_capacity=capacity,
+        raw_head_check=args.raw_head_check, split_capacity=capacity, leaves=leaf_counts(calls, args.sample_leaves),
         decision=result['checks'].get('e', dict(status='SKIPPED_SAMPLED', reason='check (e) needs every leaf checked (no --sample-leaves)')),
         topk_boundary=merge_topk_boundary([e.get('topk') for e in evaluations]),
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', source=source, widths=widths, worlds_blocks=args.worlds_blocks,
