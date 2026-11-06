@@ -21,10 +21,14 @@ action map ([k], -1 padded; a waiting seat [0, -1, ...] with engine action
 depth-2 rule, `ranked`); `searched` takes the maps from `selection_maps`
 (`searched_maps` builds them from a full-width depth-2 frame).
 The host loop over plies 2..N packs the previous ply's expanded nodes into
-blocks grouped by actor pair, gathers them from the device pool by row,
-calls the block program per block and concatenates the outputs into the next
-pool; node fields come to the host once per ply. Padding (roots, worlds,
-lanes, dead slots, block slots) is computed but never enumerated.
+blocks grouped by actor pair and into calls of `blocks_per_call` blocks; a
+call is one jitted gather from the old pool, one block program and one
+in-place (donated) slice write into the next pool, preallocated at the call
+granularity, so only two plies' pools are ever alive and node fields reach
+the host once per ply. The gather and write programs are keyed by the pool's
+row count, but they are a bare XLA gather and dynamic-update-slice, so a new
+capacity or ply recompiles nothing expensive. Padding (roots, worlds, lanes,
+dead slots, block and call slots) is computed but never enumerated.
 """
 from dataclasses import dataclass,replace
 import math
@@ -155,62 +159,98 @@ def make_p1(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=False,forw
     return jax.jit(run)
 
 
-def make_block_program(executor,*,params,forward,nodes,k_own,k_opp,leaf,digest=False):
-    """P_expand(B, K) (leaf=False) or P_leaf(B, K) (leaf=True) over one host-gathered block of B nodes.
+def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,digest=False):
+    """P_expand(B, G, K) (leaf=False) or P_leaf(B, G, K) (leaf=True): G blocks of B nodes in one device call.
 
-    Inputs: the nodes' states and trackers [B,...], `owner` [B], `requested`
-    [B,2] (seat-indexed), both maps [B,k], `live` [B] (a real node, not block
-    padding) and the actor indices into the bound bank. A dead map slot steps
-    slot 0's action and is never enumerated. Outputs are [B,K(,...)]; at the
-    leaf ply status/value/error only.
+    Inputs are one call's gathered batch, [G*B,...]: the nodes' states and
+    trackers, `owner`, `requested` [G*B,2] (seat-indexed), both maps [G*B,k],
+    `live` [G*B] (a real node, not block or call padding) and the actor
+    indices per block [G,2] into the bound bank. Blocks run under jax.lax.map,
+    so one block's states, views and leaves are live at a time, and a block
+    without a live node is skipped. A dead map slot steps slot 0's action and
+    is never enumerated. Outputs are flattened [G*B*K(,...)] in (block, node,
+    own slot, opponent slot) order; at the leaf ply status/value/error (and
+    the digest) only. The shape key is (B, G, K): nothing here depends on the
+    pool, the capacity or the ply.
     """
-    b=nodes;K=k_own*k_opp
+    b=nodes;g=blocks;K=k_own*k_opp
     joint=(depth2._make_leaf_joint if leaf else _make_expand_joint)(executor);views=depth2._make_views(executor)
     stacked=params[0]if len(params)==1 else jax.tree.map(lambda *xs:j.stack(xs),*params)
     actor_params=lambda actor:params[0]if len(params)==1 else jax.tree.map(lambda x:x[actor],stacked)
     def head(actor,inputs):
         prediction=forward(actor_params(actor),jax.tree.map(lambda x:x.reshape((b*K,)+x.shape[3:]),inputs))
-        lg=prediction.policy_logits.reshape(b,K,9);v=prediction.value.reshape(b,K);ok=prediction.valid.reshape(b,K)
+        lg=prediction.policy_logits.reshape(b,K,9).astype(j.float32);v=prediction.value.reshape(b,K).astype(j.float32);ok=prediction.valid.reshape(b,K)
         return lg,v,ok&j.all(j.isfinite(lg),axis=-1)&j.isfinite(v)&(j.abs(v)<=1)
     keep=lambda mask,x:j.where(mask.reshape(mask.shape+(1,)*(x.ndim-2)),x,j.zeros((),x.dtype))
-    def run(states,publics,owner,requested,own_map,opp_map,live,learner_actor,opp_actor):
-        own_act=j.where(own_map>=0,own_map,own_map[:,:1]);opp_act=j.where(opp_map>=0,opp_map,opp_map[:,:1])
-        pair=j.stack((j.broadcast_to(own_act[:,:,None],(b,k_own,k_opp)),j.broadcast_to(opp_act[:,None,:],(b,k_own,k_opp))),axis=-1).reshape(b,K,2)
-        # Re-observing the node gives the dispatch views its own expansion saw, without holding them in the pool.
-        bo,bpe,_,_=jax.vmap(views)(states,publics,owner)
-        chance=jax.vmap(executor.sample)(states)
-        out=jax.vmap(joint)(states,publics,bo,bpe,owner[:,None],requested,pair,chance)
-        invalid,done,winner,error=(x[:,:,0]for x in out[:4]);inputs=out[4]
-        lg,v,usable=head(learner_actor,inputs)
-        terminal_ok=(winner>=0)&(winner<=2)
-        err=j.where(invalid,1,j.where(done&~terminal_ok,2,j.where(~done&(error!=0),3,j.where(~done&~usable,4,0))))
-        terminal=j.where(winner==2,0.,j.where(winner==owner[:,None],1.,-1.))
-        enumerated=(live[:,None,None]&(own_map>=0)[:,:,None]&(opp_map>=0)[:,None,:]).reshape(b,K)
-        if leaf:
-            result=dict(status=j.where(~enumerated,0,j.where(err!=0,3,j.where(done,1,4))).astype(j.int8),
-                value=j.where(enumerated&(err==0),j.where(done,terminal,v),0.).astype(j.float32),error=j.where(enumerated,err,0).astype(j.int8))
-            if digest:result['digest']=keep(enumerated,digests.batched(inputs,axes=2))
+    def block(args):
+        states,publics,owner,requested,own_map,opp_map,live,learner_actor,opp_actor=args
+        def compute():
+            own_act=j.where(own_map>=0,own_map,own_map[:,:1]);opp_act=j.where(opp_map>=0,opp_map,opp_map[:,:1])
+            pair=j.stack((j.broadcast_to(own_act[:,:,None],(b,k_own,k_opp)),j.broadcast_to(opp_act[:,None,:],(b,k_own,k_opp))),axis=-1).reshape(b,K,2)
+            # Re-observing the node gives the dispatch views its own expansion saw, without holding them in the pool.
+            bo,bpe,_,_=jax.vmap(views)(states,publics,owner)
+            chance=jax.vmap(executor.sample)(states)
+            out=jax.vmap(joint)(states,publics,bo,bpe,owner[:,None],requested,pair,chance)
+            invalid,done,winner,error=(x[:,:,0]for x in out[:4]);inputs=out[4]
+            lg,v,usable=head(learner_actor,inputs)
+            terminal_ok=(winner>=0)&(winner<=2)
+            err=j.where(invalid,1,j.where(done&~terminal_ok,2,j.where(~done&(error!=0),3,j.where(~done&~usable,4,0))))
+            terminal=j.where(winner==2,0.,j.where(winner==owner[:,None],1.,-1.))
+            enumerated=(live[:,None,None]&(own_map>=0)[:,:,None]&(opp_map>=0)[:,None,:]).reshape(b,K)
+            if leaf:
+                result=dict(status=j.where(~enumerated,0,j.where(err!=0,3,j.where(done,1,4))).astype(j.int8),
+                    value=j.where(enumerated&(err==0),j.where(done,terminal,v),0.).astype(j.float32),error=j.where(enumerated,err,0).astype(j.int8))
+                if digest:result['digest']=keep(enumerated,digests.batched(inputs,axes=2))
+                return result
+            new_states,new_publics,masks,own_legal,opp_legal,opp_error,opp_inputs=out[5:]
+            values=j.where(done,terminal,v)
+            priced=err==0;viewed=priced&~done
+            # As at turn 1: request flags from the engine mask, legal masks from each seat's encoder view, the opponent's
+            # view held to the root's rule with codes 5/6 so the learner's value and prior survive under them.
+            masks=masks[:,:,0];seat=owner[:,None,None,None]
+            own_req=j.any(j.take_along_axis(masks,seat,axis=2)[:,:,0],axis=-1);opp_req=j.any(j.take_along_axis(masks,1-seat,axis=2)[:,:,0],axis=-1)
+            own_legal=own_legal[:,:,0];opp_legal=opp_legal[:,:,0];opp_error=opp_error[:,:,0]
+            plg,_,pusable=head(opp_actor,opp_inputs)
+            err=j.where(viewed&opp_req&(opp_error!=0),PEER_VIEW_ERROR,err)
+            err=j.where(viewed&(err==0)&opp_req&~pusable,PEER_PRIOR_REFUSED,err)
+            priced&=enumerated;viewed&=enumerated
+            status=j.where(~enumerated,0,j.where(err!=0,3,j.where(done,1,2))).astype(j.int8);expanded=status==2
+            result=dict(status=status,value=j.where(priced,values,0.).astype(j.float32),error=j.where(enumerated,err,0).astype(j.int8),
+                own_requested=keep(viewed,own_req),opp_requested=keep(viewed,opp_req),own_legal=keep(viewed,own_legal),opp_legal=keep(viewed,opp_legal),
+                own_logits=keep(viewed,j.where(own_req[...,None],lg,0.)),opp_logits=keep(expanded,j.where(opp_req[...,None],plg,0.)),
+                states=new_states,publics=new_publics)
+            if digest:result.update(digest_own=keep(enumerated,digests.batched(inputs,axes=2)),digest_opp=keep(enumerated,digests.batched(opp_inputs,axes=2)))
             return result
-        new_states,new_publics,masks,own_legal,opp_legal,opp_error,opp_inputs=out[5:]
-        values=j.where(done,terminal,v)
-        priced=err==0;viewed=priced&~done
-        # As at turn 1: request flags from the engine mask, legal masks from each seat's encoder view, the opponent's
-        # view held to the root's rule with codes 5/6 so the learner's value and prior survive under them.
-        masks=masks[:,:,0];seat=owner[:,None,None,None]
-        own_req=j.any(j.take_along_axis(masks,seat,axis=2)[:,:,0],axis=-1);opp_req=j.any(j.take_along_axis(masks,1-seat,axis=2)[:,:,0],axis=-1)
-        own_legal=own_legal[:,:,0];opp_legal=opp_legal[:,:,0];opp_error=opp_error[:,:,0]
-        plg,_,pusable=head(opp_actor,opp_inputs)
-        err=j.where(viewed&opp_req&(opp_error!=0),PEER_VIEW_ERROR,err)
-        err=j.where(viewed&(err==0)&opp_req&~pusable,PEER_PRIOR_REFUSED,err)
-        priced&=enumerated;viewed&=enumerated
-        status=j.where(~enumerated,0,j.where(err!=0,3,j.where(done,1,2))).astype(j.int8);expanded=status==2
-        result=dict(status=status,value=j.where(priced,values,0.).astype(j.float32),error=j.where(enumerated,err,0).astype(j.int8),
-            own_requested=keep(viewed,own_req),opp_requested=keep(viewed,opp_req),own_legal=keep(viewed,own_legal),opp_legal=keep(viewed,opp_legal),
-            own_logits=keep(viewed,j.where(own_req[...,None],lg,0.)),opp_logits=keep(expanded,j.where(opp_req[...,None],plg,0.)),
-            states=new_states,publics=new_publics)
-        if digest:result.update(digest_own=keep(enumerated,digests.batched(inputs,axes=2)),digest_opp=keep(enumerated,digests.batched(opp_inputs,axes=2)))
-        return result
+        def empty():
+            z=lambda shape,dtype:j.zeros((b,K)+shape,dtype)
+            result=dict(status=z((),j.int8),value=z((),j.float32),error=z((),j.int8))
+            if leaf:
+                if digest:result['digest']=z((2,),j.uint32)
+                return result
+            result.update(own_requested=z((),bool),opp_requested=z((),bool),own_legal=z((9,),bool),opp_legal=z((9,),bool),own_logits=z((9,),j.float32),opp_logits=z((9,),j.float32),
+                states=jax.tree.map(lambda x:z(x.shape[1:],x.dtype),states),publics=jax.tree.map(lambda x:z(x.shape[1:],x.dtype),publics))
+            if digest:result.update(digest_own=z((2,),j.uint32),digest_opp=z((2,),j.uint32))
+            return result
+        return jax.lax.cond(j.any(live),compute,empty)
+    def run(states,publics,owner,requested,own_map,opp_map,live,actors):
+        per=lambda x:x.reshape((g,b)+x.shape[1:])
+        out=jax.lax.map(block,(jax.tree.map(per,states),jax.tree.map(per,publics),per(owner),per(requested),per(own_map),per(opp_map),per(live),actors[:,0],actors[:,1]))
+        return jax.tree.map(lambda x:x.reshape((g*b*K,)+x.shape[3:]),out)
     return jax.jit(run)
+
+
+def make_gather():
+    """One call's node batch from a pool by row: a plain XLA gather, keyed by the pool's row count (negligible compile)."""
+    return jax.jit(lambda pool,rows:jax.tree.map(lambda x:x[rows],pool))
+
+
+def make_write():
+    """Write one call's flattened new nodes into the next pool at `offset`, in place: the pool buffer is donated, so the
+    update is a dynamic-update-slice on the same memory (keyed by the pool's row count; negligible compile)."""
+    def write(pool,states,publics,offset):
+        update=lambda p,x:jax.lax.dynamic_update_slice_in_dim(p,x,offset,0)
+        return jax.tree.map(update,pool[0],states),jax.tree.map(update,pool[1],publics)
+    return jax.jit(write,donate_argnums=0)
 
 
 def prior_maps(legal,logits,requested,k):
@@ -219,51 +259,90 @@ def prior_maps(legal,logits,requested,k):
     return j.where(live,chosen,-1).astype(j.int32)
 
 
-def searched_maps(frame,k_own,k_opp):
-    """Iterative-deepening selection from a depth-2 frame: the ply-2 maps (per turn-1 cell) for a `searched` run.
-
-    Per expanded turn-1 cell (`t1_status == 2`), with v the turn-2 leaf values
-    and pi_opp the opponent's child prior (a masked softmax over the replies
-    the depth-2 pass enumerated, as `depth2_backups`):
-    - the learner keeps the k_own enumerated a2 with the highest depth-2
-      learner-max row value q(a2) = sum_r2 pi_opp(r2) v(a2, r2) (q descending,
-      lower action on ties), skipping rows with an errored leaf (no value);
-    - the opponent keeps the k_opp enumerated r2 with the LOWEST threat value
-      t(r2) = max_a2 v(a2, r2), the learner's best response to that reply
-      (t ascending, lower action on ties), skipping columns with an errored
-      leaf: a maximin over replies missing the opponent's best answer is
-      optimistic, so replies are kept by harm, not by prior;
-    - each seat then appends its prior's top-1 (highest child logit over its
-      encoder-legal actions, lower action on ties) unless already kept, so a
-      set has at most k+1 entries. Slot order is the ranking order, top-1 last.
-    A waiting seat keeps [0, -1, ...]; a cell that is not expanded keeps all
-    -1. Returns int32 [R,2,9,9,k_own+1] and [R,2,9,9,k_opp+1], the `{2: maps}`
-    input of `DepthNPricer(selection='searched').price(..., selection_maps=)`.
-    Pure: numpy and float64 host arithmetic only.
-    """
+def searched_widths(k_own,k_opp):
+    """The fixed map widths `searched_maps` returns for (k_own, k_opp): the learner's k_own plus its prior top-1; the opponent's prior
+    top-1 plus one refutation per kept learner move, or the k_opp+1 fill, whichever is wider. Configure the depth-N pricer's ply-2
+    widths with these (widths up to 10 are allowed in `searched` mode; nine legal actions bound them at 9)."""
     if any(type(k)is not int or not 1<=k<=9 for k in(k_own,k_opp)):raise ValueError('searched widths are integers in1..9')
-    R=frame.pre.shape[0];own=np.full((R,2,9,9,k_own+1),-1,np.int32);opp=np.full((R,2,9,9,k_opp+1),-1,np.int32)
-    top1=lambda logits,legal:min((a for a in range(9)if legal[a]),key=lambda a:(-float(logits[a]),a))
+    return min(k_own+1,9),min(max(k_opp+1,k_own+2),9)
+
+
+def _dedupe(items):
+    seen=[]
+    for x in items:
+        if int(x)not in seen:seen.append(int(x))
+    return seen
+
+
+def searched_maps(frame,k_own,k_opp):
+    """Iterative-deepening selection from a FULL-WIDTH depth-2 frame: the ply-2 maps (per turn-1 cell) for a `searched` run.
+
+    Per expanded turn-1 cell (`t1_status == 2`), with v the turn-2 leaf
+    values, valid leaves those of status 1 or 4, and pi_opp the opponent's
+    child prior (a masked softmax over the enumerated replies, as
+    `depth2_backups`), every ranking reads VALID leaves only:
+    - the learner keeps the k_own a2 with the highest depth-2 learner-max row
+      value q(a2) = sum over the row's valid r2 of pi_opp(r2) v(a2, r2), with
+      pi_opp renormalized over those r2 (q descending, lower action on ties;
+      a row with no valid leaf has no q), plus its prior top-1 (highest child
+      logit over its encoder-legal actions, lower action on ties);
+    - the opponent keeps, in this order: its prior top-1; the REFUTATION of
+      each kept learner move, argmin over the row's valid r2 of v(a2, r2)
+      (lower action on ties); then the fill up to k_opp+1 entries by the lowest
+      threat t(r2) = min over the kept a2 with a valid leaf in r2 of v(a2, r2)
+      (t ascending, lower action on ties). If the top-1 and refutations alone
+      exceed k_opp+1 they are all kept. Ranking replies by harm against the
+      kept moves (and never dropping a kept move's refutation) is what stops a
+      maximin over the kept grid from being optimistic.
+    - Errored pairs stay reachable: every (a2, r2) of status 3 puts a2 and r2
+      at the FRONT of its seat's set (in pair order), so depth 3 re-steps the
+      same state, pair and chance, re-hits the error and the root refuses under
+      D's rule, as depth 2 did. A root that depth 2 refuses is flagged in the
+      returned `depth2_refused` [R] (by `depth2_backups.refusal_summary`); its
+      price is moot, so truncating its ranked entries to the width is harmless.
+    A waiting seat keeps [0, -1, ...]; a cell that is not expanded keeps all
+    -1. Slot order is the order above. Returns int32 maps [R,2,9,9,w_own],
+    [R,2,9,9,w_opp] with (w_own, w_opp) = `searched_widths(k_own, k_opp)`, and
+    `depth2_refused`; `{2: (own, opp)}` is the `selection_maps` input of
+    `DepthNPricer(selection='searched').price`. Pure: numpy and float64 host
+    arithmetic only. Raises ValueError unless every expanded cell enumerates
+    its full legal product (a top-k depth-2 pass has no complete grid to rank).
+    """
+    w_own,w_opp=searched_widths(k_own,k_opp)
+    R=frame.pre.shape[0];own=np.full((R,2,9,9,w_own),-1,np.int32);opp=np.full((R,2,9,9,w_opp),-1,np.int32)
+    refused=np.asarray([x['refused']for x in depth2_backups.refusal_summary(frame)['roots']],bool)
+    def top1(logits,legal,where):
+        legal=[a for a in range(9)if legal[a]]
+        if not legal:raise ValueError(f'requested seat with an empty encoder mask at {where}')
+        return min(legal,key=lambda a:(-float(logits[a]),a))
     for r in range(R):
         for w in range(2):
             if int(frame.pre[r,w])!=0:continue
             for a1,r1 in zip(*np.nonzero(frame.t1_status[r,w]==2)):
-                st=frame.t2_status[r,w,a1,r1];v=frame.t2_value[r,w,a1,r1]
+                where=f'root{r} world{w} cell({a1},{r1})';st=frame.t2_status[r,w,a1,r1];v=frame.t2_value[r,w,a1,r1];valid=(st==1)|(st==4)
+                own_req=bool(frame.t1_own_requested[r,w,a1,r1]);opp_req=bool(frame.t1_peer_requested[r,w,a1,r1])
                 rows=[a for a in range(9)if st[a].any()];cols=[x for x in range(9)if st[:,x].any()]
-                if frame.t1_own_requested[r,w,a1,r1]:
-                    pi=depth2_backups._softmax(frame.t1_peer_logits[r,w,a1,r1],[x in cols for x in range(9)])
-                    q={a:math.fsum(pi[x]*float(v[a,x])for x in cols)for a in rows if not(st[a]==3).any()}
-                    kept=sorted(q,key=lambda a:(-q[a],a))[:k_own];best=top1(frame.t1_own_logits[r,w,a1,r1],frame.t1_own_legal[r,w,a1,r1])
-                    if best not in kept:kept.append(best)
-                else:kept=[0]
-                own[r,w,a1,r1,:len(kept)]=kept
-                if frame.t1_peer_requested[r,w,a1,r1]:
-                    t={x:max(float(v[a,x])for a in rows)for x in cols if not(st[:,x]==3).any()}
-                    kept=sorted(t,key=lambda x:(t[x],x))[:k_opp];best=top1(frame.t1_peer_logits[r,w,a1,r1],frame.t1_peer_legal[r,w,a1,r1])
-                    if best not in kept:kept.append(best)
-                else:kept=[0]
-                opp[r,w,a1,r1,:len(kept)]=kept
-    return own,opp
+                full_rows=np.flatnonzero(frame.t1_own_legal[r,w,a1,r1])if own_req else[0];full_cols=np.flatnonzero(frame.t1_peer_legal[r,w,a1,r1])if opp_req else[0]
+                if not len(full_rows)or not len(full_cols):raise ValueError(f'requested seat with an empty encoder mask at {where}')
+                if rows!=list(full_rows)or cols!=list(full_cols)or not(st[rows][:,cols]!=0).all():raise ValueError(f'searched maps need a full-width depth-2 frame: {where}')
+                if own_req:
+                    pi=depth2_backups._softmax(frame.t1_peer_logits[r,w,a1,r1],[x in cols for x in range(9)]);q={}
+                    for a in rows:
+                        vc=[x for x in cols if valid[a,x]]
+                        if vc:q[a]=math.fsum(pi[x]*float(v[a,x])for x in vc)/math.fsum(pi[x]for x in vc)
+                    kept_own=_dedupe(sorted(q,key=lambda a:(-q[a],a))[:k_own]+[top1(frame.t1_own_logits[r,w,a1,r1],frame.t1_own_legal[r,w,a1,r1],where)])
+                else:kept_own=[0]
+                if opp_req:
+                    best=top1(frame.t1_peer_logits[r,w,a1,r1],frame.t1_peer_legal[r,w,a1,r1],where)
+                    refutations=[min((x for x in cols if valid[a,x]),key=lambda x:(float(v[a,x]),x))for a in kept_own if any(valid[a,x]for x in cols)]
+                    t={x:min(float(v[a,x])for a in kept_own if valid[a,x])for x in cols if any(valid[a,x]for a in kept_own)}
+                    base=_dedupe([best]+refutations);fill=[x for x in sorted(t,key=lambda x:(t[x],x))if x not in base]
+                    kept_opp=base+fill[:max(0,k_opp+1-len(base))]
+                else:kept_opp=[0]
+                pairs=sorted(zip(*np.nonzero(st==3)))
+                kept_own=_dedupe([a for a,_ in pairs]+kept_own)[:w_own];kept_opp=_dedupe([x for _,x in pairs]+kept_opp)[:w_opp]
+                own[r,w,a1,r1,:len(kept_own)]=kept_own;opp[r,w,a1,r1,:len(kept_opp)]=kept_opp
+    return own,opp,refused
 
 
 def as_depth2_frame(frame):
@@ -292,15 +371,19 @@ def _ply_widths(k,depth,name,limit):
 
 
 class DepthNPricer:
-    def __init__(self,executor,model,*,capacity,depth,k_own,k_opp,k1_own=9,k1_opp=9,block_lanes=2187,selection='prior',fixed_capacity=False,
-            digest=False,forward=None,actor_capacity=33):
-        """`k_own`/`k_opp`: per-ply widths for plies 2..N (an int repeats); `searched` allows 10 (k+1 slots with k=9).
+    def __init__(self,executor,model,*,capacity,depth,k_own,k_opp,k1_own=9,k1_opp=9,block_lanes=2187,blocks_per_call=16,selection='prior',
+            fixed_capacity=False,digest=False,forward=None,actor_capacity=33):
+        """`k_own`/`k_opp`: per-ply widths for plies 2..N (an int repeats). `searched` allows widths up to 10: `searched_widths`
+        gives the ply-2 widths its maps need (k+1 for the learner, up to k_own+2 for the opponent), and a narrower map pads.
 
-        `block_lanes` sizes every block in lanes (B = block_lanes // K per ply).
-        `fixed_capacity` compiles P1 at exactly `capacity` so a shrinking request
-        count never recompiles; the block programs never depend on capacity.
-        `digest` adds bit-exact view digests at every ply; `forward(params,
-        inputs)` is the only actor seam (default: the v5 head in bf16).
+        `block_lanes` sizes every block in lanes (B = block_lanes // K per ply);
+        `blocks_per_call` maps G blocks per device call (a ply's last call pads
+        with skipped blocks), so a ply costs about 3 dispatches per call and one
+        host sync. `fixed_capacity` compiles P1 at exactly `capacity` so a
+        shrinking request count never recompiles; the block programs never
+        depend on capacity. `digest` adds bit-exact view digests at every ply;
+        `forward(params, inputs)` is the only actor seam (default: the v5 head
+        in bf16).
         """
         if type(capacity)is not int or capacity<=0 or type(actor_capacity)is not int or actor_capacity<=0:
             raise ValueError('finite explicit root/actor capacities required')
@@ -309,10 +392,10 @@ class DepthNPricer:
         limit=10 if selection=='searched'else 9
         self.k_own=_ply_widths(k_own,depth,'k_own',limit);self.k_opp=_ply_widths(k_opp,depth,'k_opp',limit)
         depth2._widths(9,9,k1_own,k1_opp,1)
-        if type(block_lanes)is not int or block_lanes<=0:raise ValueError('positive block lane budget required')
+        if any(type(x)is not int or x<=0 for x in(block_lanes,blocks_per_call)):raise ValueError('positive block lane budget and blocks per call required')
         if any(type(x)is not bool for x in(fixed_capacity,digest)):raise ValueError('explicit digest/fixed-capacity bools required')
         self.executor=executor;self.model=model;self.capacity=capacity;self.actor_capacity=actor_capacity;self.depth=depth
-        self.k1_own=k1_own;self.k1_opp=k1_opp;self.block_lanes=block_lanes;self.selection=selection;self.fixed_capacity=fixed_capacity
+        self.k1_own=k1_own;self.k1_opp=k1_opp;self.block_lanes=block_lanes;self.blocks_per_call=blocks_per_call;self.selection=selection;self.fixed_capacity=fixed_capacity
         self.digest=digest;self.forward=forward if forward is not None else depth2.default_forward(model)
         self.programs={};self.compiles=();self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
@@ -330,9 +413,17 @@ class DepthNPricer:
         return self.programs[key]
 
     def _block_program(self,p,b):
-        k_own,k_opp=self.k_own[p-2],self.k_opp[p-2];leaf=p==self.depth
-        return ('leaf'if leaf else'expand',b,k_own,k_opp),lambda:make_block_program(self.executor,params=self.params,forward=self.forward,
-            nodes=b,k_own=k_own,k_opp=k_opp,leaf=leaf,digest=self.digest)
+        k_own,k_opp=self.k_own[p-2],self.k_opp[p-2];leaf=p==self.depth;g=self.blocks_per_call
+        return ('leaf'if leaf else'expand',b,g,k_own,k_opp),lambda:make_block_program(self.executor,params=self.params,forward=self.forward,
+            nodes=b,blocks=g,k_own=k_own,k_opp=k_opp,leaf=leaf,digest=self.digest)
+
+    def _gather(self,pool,rows):
+        rows=j.asarray(rows,j.int32);key=('gather',jax.tree.leaves(pool)[0].shape[0],rows.shape[0])
+        return self._program(key,make_gather,pool,rows)(pool,rows)
+
+    def _write(self,pool,states,publics,offset):
+        offset=j.asarray(offset,j.int32);key=('write',jax.tree.leaves(pool)[0].shape[0],jax.tree.leaves(states)[0].shape[0])
+        return self._program(key,make_write,pool,states,publics,offset)(pool,states,publics,offset)
 
     def _select(self,legal,logits,requested,k):
         key=('select',legal.shape,k);args=(j.asarray(legal),j.asarray(logits),j.asarray(requested))
@@ -345,20 +436,26 @@ class DepthNPricer:
             maps=[]
             for name,k,legal,requested in(('own',k_own,level['own_legal'],level['own_requested']),('opp',k_opp,level['opp_legal'],level['opp_requested'])):
                 source=np.asarray(given[p][0 if name=='own'else 1])
-                shape=(count,2,9,9,k)if p==2 else(count,2,M,k)
-                if source.shape!=shape:raise ValueError(f'selection map for ply{p} {name} must have shape {shape}, got {source.shape}')
+                shape=(count,2,9,9)if p==2 else(count,2,M)
+                # A narrower map (searched_widths below the configured width) pads with -1; a wider one cannot be stepped.
+                if source.ndim!=len(shape)+1 or source.shape[:-1]!=shape or source.shape[-1]>k:
+                    raise ValueError(f'selection map for ply{p} {name} must have shape {shape+(k,)} (last axis at most {k}), got {source.shape}')
+                if source.shape[-1]<k:source=np.concatenate((source,np.full(shape+(k-source.shape[-1],),-1,np.int32)),axis=-1)
                 m=np.full((n,M,k),-1,np.int32);m[:2*count]=source.reshape(2*count,M,k)
-                # Fail closed on a map the engine could not step as enumerated: an illegal or repeated action, a hole
-                # before the padding, an empty requested seat, or anything but [0,-1,...] for a waiting seat.
+                # Fail closed on a map the engine could not step as enumerated: an entry outside -1..8, an illegal or
+                # repeated action, a hole before the padding, an empty requested seat, or anything but [0,-1,...] for a
+                # waiting seat. Non-expanded nodes are not read (their maps are cleared below).
                 for w,node in zip(*np.nonzero(expanded)):
-                    row=m[w,node];live=row>=0;c=int(live.sum())
-                    if live[c:].any():raise ValueError(f'ply{p} {name} map at world{w} node{node}: padding must follow the live slots')
+                    row=m[w,node];where=f'ply{p} {name} map at world{w} node{node}'
+                    if row.min()<-1 or row.max()>8:raise ValueError(f'{where}: entries are actions0..8 or -1 padding')
+                    live=row>=0;c=int(live.sum())
+                    if live[c:].any():raise ValueError(f'{where}: padding must follow the live slots')
                     if not requested[w,node]:
-                        if c!=1 or row[0]!=0:raise ValueError(f'ply{p} {name} map at world{w} node{node}: a waiting seat keeps [0,-1,...]')
+                        if c!=1 or row[0]!=0:raise ValueError(f'{where}: a waiting seat keeps [0,-1,...]')
                         continue
+                    if c==0:raise ValueError(f'{where}: a requested seat keeps at least one action')
                     acts=row[:c]
-                    if c==0 or len(set(acts.tolist()))!=c or not legal[w,node][acts].all():
-                        raise ValueError(f'ply{p} {name} map at world{w} node{node}: distinct encoder-legal actions required')
+                    if len(set(acts.tolist()))!=c or not legal[w,node][acts].all():raise ValueError(f'{where}: distinct encoder-legal actions required')
                 maps.append(m)
             own,opp=maps
         else:
@@ -417,50 +514,55 @@ class DepthNPricer:
                 members=np.flatnonzero(group==g)
                 for start in range(0,len(members),B):
                     blocks.append(members[start:start+B])
-            key,build=self._block_program(p,B);outs=[]
-            for members in blocks:
-                m=len(members);fill=np.concatenate((members,np.repeat(members[:1],B-m)))
-                bw,bid=pw[fill],pid[fill];rows=level['row_of'][bw,bid]
-                requested=np.zeros((B,2),bool);requested[np.arange(B),owners[bw]]=level['own_requested'][bw,bid];requested[np.arange(B),1-owners[bw]]=level['opp_requested'][bw,bid]
-                args=(jax.tree.map(lambda x:x[rows],level['pool'][0]),jax.tree.map(lambda x:x[rows],level['pool'][1]),j.asarray(owners[bw],j.int32),
-                    j.asarray(requested),j.asarray(own_maps[bw,bid],j.int32),j.asarray(opp_maps[bw,bid],j.int32),j.asarray(np.arange(B)<m),
-                    j.asarray(actors[bw[0],0],j.int32),j.asarray(actors[bw[0],1],j.int32))
-                program=self._program(key,build,*args)
-                clock=time.perf_counter();outs.append(jax.block_until_ready(program(*args)));device+=time.perf_counter()-clock;invocations+=1
+            # Calls of G blocks: one gather from the old pool, one block program, one in-place write into the new pool
+            # (preallocated at the call granularity), no host sync until the ply is done. Block g of call c is global
+            # block c*G+g; its slot s holds pool rows ((c*G+g)*B+s)*K + lane, which is also each small field's row.
+            key,build=self._block_program(p,B);G=self.blocks_per_call;nblocks=len(blocks);calls=-(-nblocks//G)
+            new_pool=None if leaf or not calls else jax.tree.map(lambda x:j.zeros((calls*G*B*K,)+x.shape[1:],x.dtype),level['pool'])
+            small=[];clock=time.perf_counter()
+            for c in range(calls):
+                fill=np.zeros((G,B),np.int64);live=np.zeros((G,B),bool);call_actors=np.zeros((G,2),np.int32)
+                for gi,members in enumerate(blocks[c*G:(c+1)*G]):
+                    m=len(members);fill[gi,:m]=members;fill[gi,m:]=members[0];live[gi,:m]=True;call_actors[gi]=actors[pw[members[0]]]
+                fill=fill.reshape(-1);bw,bid=pw[fill],pid[fill]
+                requested=np.zeros((G*B,2),bool);requested[np.arange(G*B),owners[bw]]=level['own_requested'][bw,bid];requested[np.arange(G*B),1-owners[bw]]=level['opp_requested'][bw,bid]
+                states,publics=self._gather(level['pool'],level['row_of'][bw,bid])
+                args=(states,publics,j.asarray(owners[bw],j.int32),j.asarray(requested),j.asarray(own_maps[bw,bid],j.int32),j.asarray(opp_maps[bw,bid],j.int32),
+                    j.asarray(live.reshape(-1)),j.asarray(call_actors))
+                out=self._program(key,build,*args)(*args);invocations+=2
+                if not leaf:new_pool=self._write(new_pool,out.pop('states'),out.pop('publics'),c*G*B*K);invocations+=1
+                small.append(out);del states,publics,args,out
             level['pool']=None
-            M=level['status'].shape[1]*K;G=len(blocks)
-            if G:
-                merged=jax.tree.map(lambda *xs:j.concatenate(xs),*outs)
-                states=merged.pop('states',None);publics=merged.pop('publics',None);fields=jax.device_get(merged)
-                flat=lambda x:x.reshape((G*B*K,)+x.shape[2:])
-                pool=None if leaf else(jax.tree.map(flat,states),jax.tree.map(flat,publics))
-            else:fields={};pool=None
-            # Dense placement: child id = parent*K + own_slot*k_opp + opp_slot; pool row = block slot*K + lane.
-            slot=np.concatenate([np.arange(len(b))+g*B for g,b in enumerate(blocks)])if G else np.zeros(0,np.int64)
-            members=np.concatenate(blocks)if G else np.zeros(0,np.int64);lw,lid=pw[members],pid[members]
+            small=jax.device_get(small);device+=time.perf_counter()-clock
+            fields={name:np.concatenate([s[name]for s in small])for name in small[0]}if calls else{}
+            M=level['status'].shape[1]*K
+            # Dense placement: child id = parent*K + own_slot*k_opp + opp_slot; row = global block slot*K + lane.
+            slot=np.concatenate([np.arange(len(b))+g*B for g,b in enumerate(blocks)])if nblocks else np.zeros(0,np.int64)
+            members=np.concatenate(blocks)if nblocks else np.zeros(0,np.int64);lw,lid=pw[members],pid[members]
+            stats=dict(ply=p,parents=len(pw),blocks=nblocks,calls=calls,blocks_per_call=G,lanes=nblocks*B*K,evaluated_lanes=calls*G*B*K,nodes_per_world=M)
             if leaf:
                 out={name:np.zeros((n,level['status'].shape[1],k_own,k_opp)+shape,dtype)for name,shape,dtype in(('status',(),np.int8),('value',(),np.float32),('error',(),np.int8))}
                 if self.digest:out['digest']=np.zeros((n,level['status'].shape[1],k_own,k_opp,2),np.uint32)
                 for name,x in out.items():
-                    if G:x[lw,lid]=fields[name].reshape((G*B,k_own,k_opp)+x.shape[4:])[slot]
-                leaves=out;work.append(dict(ply=p,parents=len(pw),blocks=G,lanes=G*B*K,enumerated=int(np.count_nonzero(out['status'])),nodes_per_world=M))
+                    if nblocks:x[lw,lid]=fields[name].reshape((calls*G*B,k_own,k_opp)+x.shape[4:])[slot]
+                leaves=out;work.append(dict(stats,enumerated=int(np.count_nonzero(out['status']))))
                 break
             ids=(lid[:,None]*K+np.arange(K)).reshape(-1);rw=np.repeat(lw,K);src=(slot[:,None]*K+np.arange(K)).reshape(-1)
-            nxt=dict(ply=p,pool=pool,row_of=np.full((n,M),-1,np.int32))
+            nxt=dict(ply=p,pool=new_pool,row_of=np.full((n,M),-1,np.int32))
             nxt['row_of'][rw,ids]=src
             specs=self._node_specs()
             if self.digest:specs.update(digest_own=((2,),np.uint32),digest_opp=((2,),np.uint32))
             for name,(shape,dtype)in specs.items():
                 x=np.zeros((n,M)+shape,dtype)
-                if G:x[rw,ids]=fields[name].reshape((G*B*K,)+shape)[src]
+                if nblocks:x[rw,ids]=fields[name].reshape((calls*G*B*K,)+shape)[src]
                 nxt[name]=x
-            work.append(dict(ply=p,parents=len(pw),blocks=G,lanes=G*B*K,enumerated=int(np.count_nonzero(nxt['status'])),nodes_per_world=M))
+            work.append(dict(stats,enumerated=int(np.count_nonzero(nxt['status'])),pool_rows=calls*G*B*K))
             levels.append(nxt);level=nxt
         finished=time.perf_counter()
         timing=dict(roots=count,world_prepare_seconds=prepared-started,batch_pack_and_device_seconds=finished-prepared,device_invocations=invocations,
             device_seconds=device,lower_seconds=sum(c[1]for c in self.compiles),compile_seconds=sum(c[2]for c in self.compiles),compiled=tuple(c[0]for c in self.compiles),
             programs=tuple(self.programs),actor_strategy='DEPTHN_D3_TURN1_ARCHIVE_BATCHES_BLOCKED_PLIES',root_capacity=capacity,frame_wall_seconds=finished-started,
-            depth=N,k_own=self.k_own,k_opp=self.k_opp,k1_own=self.k1_own,k1_opp=self.k1_opp,block_lanes=self.block_lanes,selection=self.selection,
+            depth=N,k_own=self.k_own,k_opp=self.k_opp,k1_own=self.k1_own,k1_opp=self.k1_opp,block_lanes=self.block_lanes,blocks_per_call=self.blocks_per_call,selection=self.selection,
             fixed_capacity=self.fixed_capacity,evaluated_root_slots=0 if data is None else capacity,padding_root_slots=0 if data is None else capacity-count,
             substituted_world_slots=0 if data is None else 2*count-len(available),pre_refused_available_worlds=int(np.count_nonzero(t1['pre'][:2*count]>0)),
             plies=tuple(work),enumerated_leaves=work[-1]['enumerated']if work else 0,evaluated_leaf_lanes=work[-1]['lanes']if work else 0,

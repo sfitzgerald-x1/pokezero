@@ -1,6 +1,7 @@
 """Depth-N pricer on inert worlds: N=2 bit-equality with Depth2Pricer, an N-step pure-Python oracle, both selection modes, backups."""
 from dataclasses import replace
 import math
+from typing import NamedTuple
 import unittest
 from unittest.mock import patch
 
@@ -22,16 +23,17 @@ def deep_executor():
 
     40 the learner waits at ply-2 nodes only; 41 the opponent waits there only; 43 the opponent's view errs at ply-2
     nodes (code 5); 44 its prior there is nonfinite (code 6); 46 the (1,0) pair is invalid at the ply-3 step only;
-    47 the ply-3 step is terminal (a learner win) when the learner plays 1.
+    47 the ply-3 step is terminal (a learner win) when the learner plays 1; 48 = 41 + 43 and 49 = 41 + 44 (a waiting
+    opponent whose view fails: unused, so no code 5/6).
     """
     base,_=T.executor()
     def legal(state):
         m=base.legal(state);t=state.turn[:,None];mode=state.mode[:,None];owner=state.owner[0]
-        return m.at[:,owner].set(m[:,owner]&~((mode==40)&(t==2))).at[:,1-owner].set(m[:,1-owner]&~((mode==41)&(t==2)))
+        return m.at[:,owner].set(m[:,owner]&~((mode==40)&(t==2))).at[:,1-owner].set(m[:,1-owner]&~(((mode==41)|(mode==48)|(mode==49))&(t==2)))
     def observe(state,public,owner,mask):
         leaf=base.observe(state,public,owner,mask);foe=(owner!=state.owner)&(state.turn==2)
-        error=leaf.observation.error|j.where((state.mode==43)&foe,1,0)
-        features=leaf.inputs['numeric_features'].at[:,0,0,2].add(j.where((state.mode==44)&foe,j.nan,0.))
+        error=leaf.observation.error|j.where(((state.mode==43)|(state.mode==48))&foe,1,0)
+        features=leaf.inputs['numeric_features'].at[:,0,0,2].add(j.where(((state.mode==44)|(state.mode==49))&foe,j.nan,0.))
         return leaf._replace(observation=leaf.observation._replace(error=error),inputs={'numeric_features':features})
     def advance(state,public,actions,chance):
         after=base.advance(state,public,actions,chance);a=actions[:,state.owner[0]];r=actions[:,1-state.owner[0]];third=state.turn==2
@@ -40,6 +42,35 @@ def deep_executor():
         s=s._replace(done=s.done|terminal,winner=j.where(terminal,state.owner,s.winner))
         return after._replace(step=after.step._replace(state=s,invalid_actions=invalid))
     return serial.Executor(jax.jit(legal),jax.jit(observe),base.dispatch,base.sample,jax.jit(advance))
+
+
+class LaneObservation(NamedTuple):
+    legal_action_mask:object
+    error:object
+    engine_mask:object
+
+
+def lane_executor():
+    """Request-order lanes, as the real encoder: past the root each seat's encoder mask is its first `count` lanes and
+    dispatch maps lane i to the i-th engine-legal action THROUGH THE OBSERVATION it is given, so a seat dispatched
+    through the other seat's view plays a different engine action (the seats' legal sets differ at lanes 1 and 2)."""
+    base,_=T.executor()
+    def observe(state,public,owner,mask):
+        leaf=base.observe(state,public,owner,mask);child=(state.turn>=1)[:,None]
+        lanes=j.where(child,j.arange(9)[None,:]<j.sum(mask,axis=-1,keepdims=True),mask)
+        return leaf._replace(observation=LaneObservation(lanes,leaf.observation.error,mask))
+    def dispatch(obs,state,seat,action):
+        order=j.argsort(j.where(obs.engine_mask[0],j.arange(9),j.arange(9)+9))
+        return j.where(state.turn>=1,order[action],action)
+    def advance(state,public,actions,chance):
+        after=base.advance(state,public,actions,chance);m=base.legal(state)
+        bad=lambda s:(actions[:,s]>=0)&~j.take_along_axis(m[:,s],j.clip(actions[:,s],0,8)[:,None],axis=1)[:,0]
+        return after._replace(step=after.step._replace(invalid_actions=after.step.invalid_actions|bad(0)|bad(1)))
+    return serial.Executor(base.legal,jax.jit(observe),jax.jit(dispatch),base.sample,jax.jit(advance))
+
+
+def pad_maps(m,k):
+    return np.concatenate((m,np.full(m.shape[:-1]+(k-m.shape[-1],),-1,np.int32)),axis=-1)
 
 
 def oracle(ex,params,state,public,owner,order,learner,opponent,ks,k1_opp,maps=None):
@@ -262,12 +293,14 @@ class DepthNPricerTests(unittest.TestCase):
     # (b) N=3 against the three-step oracle -------------------------------------------------------------------------
     def test_n3_matches_the_three_step_oracle(self):
         specs=(((0,27),0,0,1),((27,0),1,1,0),((0,0),0,2,2))
-        frame,requests,engine,ex=self.price(specs,depth=3,k_own=(2,3),k_opp=(3,2),block_lanes=40)
+        frame,requests,engine,ex=self.price(specs,depth=3,k_own=(2,3),k_opp=(3,2),block_lanes=40,blocks_per_call=4)
         self.check_oracle(frame,requests,ex,specs,((2,3),(3,2)))
         self.assertTrue(all(w['status']=='COMPLETE'for pair in frame.world_reports for w in pair))
         t=engine.last_timing;self.assertEqual((t['root_capacity'],t['depth'],len(t['plies'])),(4,3,2))
         self.assertEqual(t['plies'][0]['nodes_per_world'],81*6);self.assertEqual(t['plies'][1]['nodes_per_world'],81*36)
-        self.assertEqual([k for k in t['programs']if k[0]in('expand','leaf')],[('expand',6,2,3),('leaf',6,3,2)])
+        self.assertEqual([k for k in t['programs']if k[0]in('expand','leaf')],[('expand',6,4,2,3),('leaf',6,4,3,2)])
+        self.assertEqual([(p['blocks'],p['calls'])for p in t['plies']],[(6,2),(36,9)]);self.assertEqual(t['plies'][0]['evaluated_lanes'],2*4*6*6)
+        self.assertEqual(t['device_invocations'],1+2*3+9*2)  # P1; ply 2: gather, program, write per call; ply 3: gather, program
         for i in range(3):self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'LABELED')
 
     def test_n3_full_width_and_n4_match_the_oracle(self):
@@ -277,17 +310,19 @@ class DepthNPricerTests(unittest.TestCase):
         parents=int(np.count_nonzero(frame.nodes[0].status==2));self.assertEqual(engine.last_timing['plies'][1]['blocks'],-(-parents//27))  # B = 2187 // 81 = 27 nodes per block
         self.assertEqual(frame.leaf_status.shape,(1,2,6561,9,9));self.assertEqual(int(np.count_nonzero(frame.leaf_status[0,0])),6*16*16)
         self.assertLess(int(np.count_nonzero(frame.leaf_status[0,1])),6*16*16)  # 27: the own mask loses action 1 after action 1
-        frame,requests,engine,ex=self.price(specs,depth=4,k_own=(2,1,2),k_opp=(1,2,2),block_lanes=12)
+        frame,requests,engine,ex=self.price(specs,depth=4,k_own=(2,1,2),k_opp=(1,2,2),block_lanes=12,blocks_per_call=3)
         self.check_oracle(frame,requests,ex,specs,((2,1),(1,2),(2,2)))
-        self.assertEqual([k for k in engine.last_timing['programs']if k[0]in('expand','leaf')],[('expand',6,2,1),('expand',6,1,2),('leaf',3,2,2)])
+        self.assertEqual([k for k in engine.last_timing['programs']if k[0]in('expand','leaf')],[('expand',6,3,2,1),('expand',6,3,1,2),('leaf',3,3,2,2)])
 
     # (c) selection modes -------------------------------------------------------------------------------------------
-    def test_searched_maps_rank_by_value_and_threat_and_keep_the_prior_top1(self):
+    def test_searched_maps_rank_by_value_keep_refutations_and_the_prior_top1(self):
         specs=(((0,27),0,0,1),((22,0),1,1,0),((20,21),0,2,1))
         ex,_=T.executor();requests=self.requests(specs,ex);reference=self.depth2(specs,requests,ex)
-        own,opp=dn.searched_maps(reference,2,2)
-        self.assertEqual((own.shape,opp.shape,own.dtype),((3,2,9,9,3),(3,2,9,9,3),np.int32))
-        appended=0
+        own,opp,refused=dn.searched_maps(reference,2,2)
+        self.assertEqual((own.shape,opp.shape,own.dtype,dn.searched_widths(2,2)),((3,2,9,9,3),(3,2,9,9,4),np.int32,(3,4)));self.assertFalse(refused.any())
+        self.assertEqual((dn.searched_widths(9,9),dn.searched_widths(1,1),dn.searched_widths(3,1)),((9,9),(2,3),(4,5)))
+        appended=refuted=0
+        def top1(logits,legal):return min((a for a in range(9)if legal[a]),key=lambda a:(-float(logits[a]),a))
         for i in range(3):
             for w in range(2):
                 for a1 in range(9):
@@ -296,50 +331,137 @@ class DepthNPricerTests(unittest.TestCase):
                         st=reference.t2_status[i,w,a1,r1];v=reference.t2_value[i,w,a1,r1].astype(np.float64)
                         rows=[a for a in range(9)if st[a].any()];cols=[x for x in range(9)if st[:,x].any()]
                         lg=reference.t1_peer_logits[i,w,a1,r1];e={x:math.exp(float(lg[x]))for x in cols};pi={x:e[x]/sum(e.values())for x in cols}
-                        q={a:sum(pi[x]*v[a,x]for x in cols)for a in rows};threat={x:max(v[a,x]for a in rows)for x in cols}
-                        def top1(logits,legal):return min((a for a in range(9)if legal[a]),key=lambda a:(-float(logits[a]),a))
-                        for maps,requested,ranking,logits,legal in((own,reference.t1_own_requested,sorted(q,key=lambda a:(-q[a],a)),reference.t1_own_logits,reference.t1_own_legal),
-                                (opp,reference.t1_peer_requested,sorted(threat,key=lambda x:(threat[x],x)),reference.t1_peer_logits,reference.t1_peer_legal)):
-                            kept=[int(x)for x in maps[i,w,a1,r1]if x>=0]
-                            self.assertTrue((maps[i,w,a1,r1][len(kept):]==-1).all())
-                            if not requested[i,w,a1,r1]:self.assertEqual(kept,[0]);continue
-                            best=top1(logits[i,w,a1,r1],legal[i,w,a1,r1]);expected=ranking[:2]
+                        kept_own=[int(x)for x in own[i,w,a1,r1]if x>=0];kept_opp=[int(x)for x in opp[i,w,a1,r1]if x>=0]
+                        self.assertTrue((own[i,w,a1,r1][len(kept_own):]==-1).all());self.assertTrue((opp[i,w,a1,r1][len(kept_opp):]==-1).all())
+                        if reference.t1_own_requested[i,w,a1,r1]:
+                            q={a:sum(pi[x]*v[a,x]for x in cols)for a in rows};expected=sorted(q,key=lambda a:(-q[a],a))[:2]
+                            best=top1(reference.t1_own_logits[i,w,a1,r1],reference.t1_own_legal[i,w,a1,r1])
                             if best not in expected:expected=expected+[best];appended+=1
-                            self.assertEqual(kept,expected);self.assertLessEqual(len(kept),3);self.assertEqual(len(set(kept)),len(kept))
-        self.assertGreater(appended,0)
-        # Terminal leaves (mode 22: r2==3 draws, a2==1 wins) rank by their exact values: a draw column is the most threatening reply.
-        for a1,r1 in zip(*np.nonzero(reference.t1_status[1,0]==2)):self.assertEqual(int(opp[1,0,a1,r1,0]),3);self.assertEqual(int(own[1,0,a1,r1,0]),1)
+                        else:expected=[0]
+                        self.assertEqual(kept_own,expected)
+                        if reference.t1_peer_requested[i,w,a1,r1]:
+                            expected=[top1(reference.t1_peer_logits[i,w,a1,r1],reference.t1_peer_legal[i,w,a1,r1])]
+                            for a in kept_own:  # each kept move's refutation, then the fill by harm against the kept moves
+                                x=min(cols,key=lambda x:(v[a,x],x))
+                                if x not in expected:expected.append(x);refuted+=1
+                            t={x:min(v[a,x]for a in kept_own)for x in cols}
+                            for x in sorted(t,key=lambda x:(t[x],x)):
+                                if len(expected)>=3:break
+                                if x not in expected:expected.append(x)
+                        else:expected=[0]
+                        self.assertEqual(kept_opp,expected);self.assertLessEqual(len(kept_opp),4);self.assertEqual(len(set(kept_opp)),len(kept_opp))
+        self.assertGreater(appended,0);self.assertGreater(refuted,0)
+        # Terminal leaves (mode 22: r2==3 draws, a2==1 wins) rank by their exact values: the winning move leads, and its refutation (the draw) is kept.
+        for a1,r1 in zip(*np.nonzero(reference.t1_status[1,0]==2)):self.assertEqual(int(own[1,0,a1,r1,0]),1);self.assertIn(3,opp[1,0,a1,r1].tolist())
         for k in((0,2),(10,1)):
             with self.assertRaises(ValueError):dn.searched_maps(reference,*k)
+        with self.assertRaises(ValueError):dn.searched_maps(self.depth2(specs,requests,ex,k_own=2,k_opp=3),2,2)  # a top-k depth-2 pass has no full grid
+
+    def test_searched_opponent_set_keeps_each_kept_moves_refutation(self):
+        # Hand-built turn-1 cells (one root, world 0, cell (0,0)); learner rows are actions 0.. (A, B, C), replies 0.. (X, Y, Z, W).
+        def cell(own,own_logits,peer,peer_logits,values,status=None):
+            f=T.synthetic(1);f.t1_status[0,0,0,0]=2;f.t1_own_requested[0,0,0,0]=True;f.t1_peer_requested[0,0,0,0]=True
+            f.t1_own_legal[0,0,0,0,own]=True;f.t1_peer_legal[0,0,0,0,peer]=True;f.t1_own_logits[0,0,0,0,own]=own_logits;f.t1_peer_logits[0,0,0,0,peer]=peer_logits
+            grid=np.ix_(own,peer);f.t2_status[0,0,0,0][grid]=4 if status is None else status;f.t2_value[0,0,0,0][grid]=values;return f
+        kept=lambda m:[int(x)for x in m[0,0,0,0]if x>=0]
+        # (1) Non-separable grid: A's refutation X is the opponent's least likely reply. Ranking replies by max over all a2 keeps {Y, Z}, and
+        # a maximin over that kept grid picks A at .5 where the full grid gives B at 0.
+        v=np.array([[-1.,.5,.5],[1.,0.,0.]],np.float32)
+        own,opp,refused=dn.searched_maps(cell([0,1],[1.,0.],[0,1,2],[0.,2.,1.],v),2,2)
+        self.assertEqual((kept(own),kept(opp)),([0,1],[1,0,2]));self.assertFalse(refused[0])  # top-1 Y, A's refutation X, B's refutation Y, fill Z
+        maximin=lambda rows,cols:max(rows,key=lambda a:min(v[a,x]for x in cols))
+        self.assertEqual(maximin(kept(own),kept(opp)),maximin([0,1],[0,1,2]));self.assertEqual(maximin(kept(own),kept(opp)),1)
+        # (2) The refutation step is load-bearing: with k_opp=1 the fill by harm keeps {W, X} alone, dropping B's refutation Z, and a maximin
+        # over {W, X} would value B at .4 instead of 0. Every kept move's refutation is kept even past k_opp+1.
+        v=np.array([[-1.,-.9,.5,.5],[.5,.5,0.,.4]],np.float32)
+        own,opp,_=dn.searched_maps(cell([0,1],[1.,0.],[0,1,2,3],[0.,0.,0.,1.],v),2,1)
+        self.assertEqual((kept(own),kept(opp)),([1,0],[3,2,0]))  # B leads by q; top-1 W, B's refutation Z, A's refutation X; no room for a fill
+        self.assertEqual(maximin(kept(own),kept(opp)),maximin([0,1],[0,1,2,3]));self.assertEqual(min(v[1,x]for x in kept(opp)),0.)
+        # (3) Threats are measured against the KEPT moves only: C (not kept) loses to W, which must not displace X from A's fill.
+        v=np.array([[.2,.1,.3,.25],[0.,0.,0.,0.],[0.,0.,0.,-1.]],np.float32)
+        own,opp,_=dn.searched_maps(cell([0,1,2],[2.,1.,0.],[0,1,2,3],[0.,0.,1.,0.],v),1,2)
+        self.assertEqual((kept(own),kept(opp)),([0],[2,1,0]))  # top-1 Z, A's refutation Y, fill X (t=.2) before W (t=.25)
+        # (4) Errored leaves: (A, Y) errs. A's q is renormalized over its valid leaves ({X}: .6 > B's .5, where the unnormalized .6*pi_X would
+        # lose), the errored pair's row and column come first so depth 3 re-steps it, and the root is flagged as a depth-2 refusal.
+        status=np.array([[4,3],[4,4]],np.int8);v=np.array([[.6,0.],[.5,.5]],np.float32)
+        own,opp,refused=dn.searched_maps(cell([0,1],[1.,0.],[0,1],[0.,2.],v,status),1,1)
+        self.assertEqual((kept(own),kept(opp)),([0],[1,0]));self.assertTrue(refused[0])  # A alone; Y forced first, then top-1 Y, A's refutation X
+        own,opp,refused=dn.searched_maps(cell([0,1],[0.,1.],[0,1],[0.,2.],v,status),1,1)  # prior top-1 B: A (errored row) still first, then B
+        self.assertEqual((kept(own),kept(opp)),([0,1],[1,0]))
+        f=cell([0,1],[1.,0.],[0,1],[0.,2.],v);f.t1_own_legal[0,0,0,0]=False  # a requested seat without a legal action is a clear error, not a min() of nothing
+        with self.assertRaisesRegex(ValueError,'empty encoder mask'):dn.searched_maps(f,2,2)
+
+    def test_searched_depth3_refuses_what_depth2_refused(self):
+        # Modes 23/24/25 err at turn 2 (a row, one pair, a row). The errored pairs stay reachable, so depth 3 re-hits them; a clean root prices.
+        specs=(((23,0),0,0,1),((24,0),1,1,0),((25,0),0,2,1),((0,27),1,1,0))
+        ex,_=T.executor();requests=self.requests(specs,ex);reference=self.depth2(specs,requests,ex)
+        own,opp,refused=dn.searched_maps(reference,2,2);w_own,w_opp=dn.searched_widths(2,2)
+        np.testing.assert_array_equal(refused,[True,True,True,False])
+        np.testing.assert_array_equal(refused,[depth2_backups.learner_max_root(reference,i,ROOT_LOGITS,ROOT_LEGAL).status=='REFUSED'for i in range(4)])
+        for i in range(4):
+            for w in range(2):
+                for a1,r1 in zip(*np.nonzero(reference.t1_status[i,w]==2)):
+                    for a2,r2 in zip(*np.nonzero(reference.t2_status[i,w,a1,r1]==3)):
+                        self.assertIn(a2,own[i,w,a1,r1].tolist());self.assertIn(r2,opp[i,w,a1,r1].tolist())
+        frame,_,_,_=self.price(specs,depth=3,k_own=(w_own,2),k_opp=(w_opp,2),ex=ex,selection='searched',selection_maps={2:(own,opp)},block_lanes=36)
+        self.check_oracle(frame,requests,ex,specs,((w_own,w_opp),(2,2)),maps={2:(own,opp)})
+        summary=backups.refusal_summary(frame)
+        self.assertEqual([x['cause']for x in summary['roots']],['turn2','turn2','turn2',None])
+        self.assertEqual([backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status for i in range(4)],['REFUSED']*3+['LABELED'])
+        for i in range(3):self.assertGreater(summary['roots'][i]['errors_by_ply'][2],0)
 
     def test_searched_mode_expands_the_given_maps_and_prior_mode_its_own(self):
         specs=(((0,27),0,0,1),((22,0),1,1,0),((20,21),0,2,1))
         ex,_=T.executor();requests=self.requests(specs,ex);reference=self.depth2(specs,requests,ex)
-        maps={2:dn.searched_maps(reference,2,2)}
-        frame,_,engine,_=self.price(specs,depth=3,k_own=(3,2),k_opp=(3,2),ex=ex,selection='searched',selection_maps=maps,block_lanes=30)
-        self.check_oracle(frame,requests,ex,specs,((3,3),(2,2)),maps=maps)
+        own,opp,_=dn.searched_maps(reference,2,2);maps={2:(own,opp)};widths=dict(k_own=(3,2),k_opp=(4,2))
+        frame,_,engine,_=self.price(specs,depth=3,ex=ex,selection='searched',selection_maps=maps,block_lanes=36,blocks_per_call=4,**widths)
+        self.check_oracle(frame,requests,ex,specs,((3,4),(2,2)),maps=maps)
         expanded=frame.t1_status==2
-        np.testing.assert_array_equal(frame.t1_own_actions[expanded],maps[2][0][expanded]);np.testing.assert_array_equal(frame.t1_opp_actions[expanded],maps[2][1][expanded])
+        np.testing.assert_array_equal(frame.t1_own_actions[expanded],own[expanded]);np.testing.assert_array_equal(frame.t1_opp_actions[expanded],opp[expanded])
         self.assertTrue((frame.t1_own_actions[~expanded]==-1).all())
-        prior,_,_,_=self.price(specs,depth=3,k_own=(3,2),k_opp=(3,2),ex=ex,block_lanes=30)
-        self.check_oracle(prior,requests,ex,specs,((3,3),(2,2)))
+        prior,_,_,_=self.price(specs,depth=3,ex=ex,block_lanes=36,blocks_per_call=4,**widths)
+        self.check_oracle(prior,requests,ex,specs,((3,4),(2,2)))
         # Both modes share the block programs; searched kept a different ply-2 set in at least one cell, and ply 3 follows the prior in both.
-        self.assertEqual([k for k in engine.last_timing['programs']if k[0]in('expand','leaf')],[('expand',3,3,3),('leaf',7,2,2)])
+        self.assertEqual([k for k in engine.last_timing['programs']if k[0]in('expand','leaf')],[('expand',3,4,3,4),('leaf',9,4,2,2)])
         self.assertFalse(np.array_equal(prior.t1_own_actions,frame.t1_own_actions))
         self.assertTrue((frame.nodes[0].own_actions[frame.nodes[0].status==2]>=0).any())
         for i in range(3):self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'LABELED')
-        # Fail closed: maps in prior mode, no maps in searched mode, a wrong shape, an illegal action, a hole, a waiting seat with a move.
-        with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(3,2),k_opp=(3,2),ex=ex,selection_maps=maps)
-        with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(3,2),k_opp=(3,2),ex=ex,selection='searched')
-        with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(2,2),k_opp=(3,2),ex=ex,selection='searched',selection_maps=maps)
-        cell=next(zip(*np.nonzero(reference.t1_status[0,0]==2)))
-        for bad in(lambda m:m.__setitem__((0,0)+cell+(0,),8),lambda m:m.__setitem__((0,0)+cell,[m[(0,0)+cell][0],-1,m[(0,0)+cell][0]])):
-            own=maps[2][0].copy();bad(own)
-            with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(3,2),k_opp=(3,2),ex=ex,selection='searched',selection_maps={2:(own,maps[2][1])})
-        waiting=next(zip(*np.nonzero(reference.t1_status[2,0]==2)));own=maps[2][0].copy();own[(2,0)+waiting]=[1,-1,-1]
-        with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(3,2),k_opp=(3,2),ex=ex,selection='searched',selection_maps={2:(own,maps[2][1])})
+        # A narrower map pads to the configured width and prices the same tree.
+        wide,_,_,_=self.price(specs,depth=3,k_own=(5,2),k_opp=(6,2),ex=ex,selection='searched',selection_maps=maps,block_lanes=60)
+        self.check_oracle(wide,requests,ex,specs,((5,6),(2,2)),maps={2:(pad_maps(own,5),pad_maps(opp,6))})
+        # Fail closed: maps in prior mode, no maps in searched mode, a map wider than the width, an entry past 8, an illegal action,
+        # a hole between two legal actions, a waiting seat with a move, a requested seat with no action.
+        with self.assertRaises(ValueError):self.price(specs,depth=3,ex=ex,selection_maps=maps,**widths)
+        with self.assertRaises(ValueError):self.price(specs,depth=3,ex=ex,selection='searched',**widths)
+        with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(2,2),k_opp=(4,2),ex=ex,selection='searched',selection_maps=maps)
+        cell=(0,0)+next(zip(*np.nonzero(reference.t1_status[0,0]==2)));legal=np.flatnonzero(reference.t1_own_legal[cell])
+        for message,entry in(('actions0..8',[9,-1,-1]),('encoder-legal',[8,-1,-1]),('padding must follow',[legal[0],-1,legal[1]]),('at least one action',[-1,-1,-1])):
+            bad=own.copy();bad[cell]=entry
+            with self.assertRaisesRegex(ValueError,message):self.price(specs,depth=3,ex=ex,selection='searched',selection_maps={2:(bad,opp)},**widths)
+        waiting=(2,0)+next(zip(*np.nonzero(reference.t1_status[2,0]==2)));bad=own.copy();bad[waiting]=[1,-1,-1]
+        with self.assertRaisesRegex(ValueError,'waiting seat'):self.price(specs,depth=3,ex=ex,selection='searched',selection_maps={2:(bad,opp)},**widths)
         with self.assertRaises(ValueError):dn.DepthNPricer(ex,None,capacity=1,depth=3,k_own=(10,2),k_opp=(2,2))
         dn.DepthNPricer(ex,None,capacity=1,depth=3,k_own=(10,2),k_opp=(2,2),selection='searched')
+
+    def test_selection_maps_at_ply_3_are_honored(self):
+        # Ply-3 maps that keep each seat's LOWEST-logit legal actions (the prior's complement) must be what the engine expands there.
+        specs=(((0,27),0,0,1),((22,41),1,1,0));ks=((2,2),(2,2))
+        prior,requests,_,ex=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),block_lanes=24)
+        nd=prior.nodes[0];alt={}
+        for name,legal,logits,requested in(('own',nd.own_legal,nd.own_logits,nd.own_requested),('opp',nd.opp_legal,nd.opp_logits,nd.opp_requested)):
+            m=np.full(nd.status.shape+(2,),-1,np.int32)
+            for i,w,node in zip(*np.nonzero(nd.status==2)):
+                if not requested[i,w,node]:m[i,w,node,0]=0;continue
+                worst=sorted(np.flatnonzero(legal[i,w,node]),key=lambda a:(float(logits[i,w,node,a]),-a))[:2];m[i,w,node,:len(worst)]=worst
+            alt[name]=m
+        maps={2:(prior.t1_own_actions,prior.t1_opp_actions),3:(alt['own'],alt['opp'])}
+        frame,_,_,_=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),ex=ex,selection='searched',selection_maps=maps,block_lanes=24)
+        self.check_oracle(frame,requests,ex,specs,ks,maps=maps)
+        expanded=nd.status==2
+        np.testing.assert_array_equal(frame.nodes[0].own_actions[expanded],alt['own'][expanded]);np.testing.assert_array_equal(frame.nodes[0].opp_actions[expanded],alt['opp'][expanded])
+        self.assertFalse(np.array_equal(frame.nodes[0].own_actions,prior.nodes[0].own_actions));self.assertFalse(np.array_equal(frame.leaf_value,prior.leaf_value))
+        for name in T1_NAMES+('t1_own_actions','t1_opp_actions'):np.testing.assert_array_equal(getattr(frame,name),getattr(prior,name),err_msg=name)
+        with self.assertRaises(ValueError):self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),ex=ex,selection='searched',selection_maps={**maps,4:maps[3]},block_lanes=24)
 
     # (d) edge cases ------------------------------------------------------------------------------------------------
     def test_waiting_terminal_and_error_nodes_at_every_ply(self):
@@ -380,11 +502,44 @@ class DepthNPricerTests(unittest.TestCase):
             self.assertEqual(frame.world_reports[i][0]['status']=='COMPLETE'and frame.world_reports[i][1]['status']=='COMPLETE',i<2)
         self.assertEqual(frame.world_reports[6][0]['ply_unknown'][3],int(np.count_nonzero(frame.leaf_status[6,0]==3)))
 
+    def test_codes_5_and_6_need_a_requested_opponent_at_deeper_plies(self):
+        # 48/49: the opponent waits at ply-2 nodes and its view there errs / its prior is nonfinite. The view is unused, so the node expands.
+        specs=(((48,49),0,0,1),((48,49),1,2,0))
+        frame,requests,engine,ex=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),block_lanes=16)
+        self.check_oracle(frame,requests,ex,specs,((2,2),(2,2)))
+        nd=frame.nodes[0]
+        for i in range(2):
+            for w in range(2):
+                nodes=nd.status[i,w]!=0;self.assertTrue(nodes.any())
+                self.assertTrue((nd.status[i,w][nodes]==2).all());self.assertFalse(nd.error[i,w].any());self.assertFalse(nd.opp_requested[i,w][nodes].any())
+                self.assertTrue(all(list(m[m>=0])==[0]for m in nd.opp_actions[i,w][nodes]));self.assertFalse(nd.opp_logits[i,w].any())
+                self.assertTrue((frame.leaf_status[i,w][nodes][:,:,0]!=0).all());self.assertFalse(frame.leaf_status[i,w][:,:,1:].any())
+            self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'LABELED')
+        self.assertEqual(backups.refusal_summary(frame)['refused_count'],0)
+
+    def test_dispatch_views_are_each_seats_own(self):
+        # Request-order lanes: a seat's lane i is its i-th engine-legal action, read from the OBSERVATION dispatch is given. The seats'
+        # legal sets differ at lanes 1 and 2 (own {0,1,3,4} vs foe {0,2,3,4}), so a seat stepped through the other seat's view plays
+        # a different engine action and the oracle (which dispatches each seat through its own view) disagrees.
+        ex=lane_executor();specs=(((0,27),0,0,1),((0,0),1,2,0),((40,21),0,1,1))
+        frame,requests,engine,_=self.price(specs,ex=ex,depth=3,k_own=(3,2),k_opp=(2,3),block_lanes=36)
+        self.check_oracle(frame,requests,ex,specs,((3,2),(2,3)))
+        nd=frame.nodes[0];expanded=nd.status==2
+        self.assertTrue((nd.own_legal[expanded]==(np.arange(9)<nd.own_legal[expanded].sum(-1,keepdims=True))).all())  # prefix lanes
+        self.assertEqual(int(nd.own_legal[0,0][expanded[0,0]].sum(-1)[0]),4);self.assertEqual(int(nd.opp_legal[0,0][expanded[0,0]].sum(-1)[0]),4)
+        self.assertFalse((frame.leaf_status==3).any());self.assertFalse((nd.status==3).any())
+        for i in range(3):self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'LABELED')
+        # The lane mapping is seat-specific: lane 1 is engine action 1 for the learner and 2 for the opponent.
+        state,public=world_data(requests[0].plans.root,requests[0].plans.starts[0],0);child=state._replace(turn=j.asarray([1],j.int32))
+        masks=ex.legal(child);own=ex.observe(child,public,j.asarray([0],j.int32),masks[:,0]);foe=ex.observe(child,public,j.asarray([1],j.int32),masks[:,1])
+        self.assertEqual((int(ex.dispatch(own.observation,child,0,j.asarray([1]))[0]),int(ex.dispatch(foe.observation,child,1,j.asarray([1]))[0])),(1,2))
+
     def test_padding_is_never_enumerated(self):
         specs=(((0,0),0,0,1),((0,27),1,1,0),((32,32),0,0,2));missing=((1,1),)
-        frame,requests,engine,ex=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),missing=missing,block_lanes=20)
+        frame,requests,engine,ex=self.price(specs,depth=3,k_own=(2,2),k_opp=(2,2),missing=missing,block_lanes=20,blocks_per_call=3)
         self.check_oracle(frame,requests,ex,specs,((2,2),(2,2)),missing=missing)
         t=engine.last_timing;self.assertEqual((t['root_capacity'],t['padding_root_slots'],t['substituted_world_slots']),(4,1,1))
+        for p in t['plies']:self.assertEqual(p['calls'],-(-p['blocks']//3));self.assertEqual(p['evaluated_lanes'],p['calls']*3*20);self.assertGreaterEqual(p['evaluated_lanes'],p['lanes'])
         parents2=int(np.count_nonzero(frame.t1_status==2));parents3=int(np.count_nonzero(frame.nodes[0].status==2))
         self.assertEqual((t['plies'][0]['parents'],t['plies'][1]['parents']),(parents2,parents3))
         # Blocks hold 5 nodes (20 lanes / 4); every group (actor pair at ply 2, learner at ply 3) pads its last block alone.
@@ -432,26 +587,28 @@ class DepthNPricerTests(unittest.TestCase):
     # (e) invariance ------------------------------------------------------------------------------------------------
     def test_block_lanes_invariance(self):
         specs=(((0,22),0,0,1),((27,21),1,1,0),((20,0),0,2,1))
-        frames=[self.price(specs,depth=3,k_own=(2,3),k_opp=(3,2),block_lanes=lanes)[0]for lanes in(1,7,40,2187,10000)]
+        frames=[self.price(specs,depth=3,k_own=(2,3),k_opp=(3,2),block_lanes=lanes,blocks_per_call=calls)[0]for lanes,calls in((1,1),(7,5),(40,16),(2187,2),(10000,1))]
         for other in frames[1:]:self.assert_frames_equal(frames[0],other)
         self.assertEqual([w['status']for pair in frames[0].world_reports for w in pair],[w['status']for pair in frames[-1].world_reports for w in pair])
         self.assertEqual(dn.block_nodes(1,2,3),1);self.assertEqual(dn.block_nodes(2187,9,9),27);self.assertEqual(dn.block_nodes(40,2,3),6)
 
     def test_one_block_program_compile_across_capacities_plies_and_depths(self):
         specs=(((0,22),0,0,1),((27,21),1,1,0),((20,0),0,2,1))
-        ex=deep_executor();engine=dn.DepthNPricer(ex,object(),capacity=8,depth=4,k_own=(2,2,2),k_opp=(2,2,2),block_lanes=16,actor_capacity=3)
+        ex=deep_executor();engine=dn.DepthNPricer(ex,object(),capacity=8,depth=4,k_own=(2,2,2),k_opp=(2,2,2),block_lanes=16,blocks_per_call=2,actor_capacity=3)
         frames=[]
         for k in(1,3,2):
             frame,requests,_,_=self.price(specs[:k],ex=ex,engine=engine,depth=4,k_own=None,k_opp=None);frames.append(frame)
             kinds=[key[0]for key in engine.last_timing['compiled']]
             if k==1:self.assertEqual(kinds.count('expand'),1);self.assertEqual(kinds.count('leaf'),1)
-            else:self.assertNotIn('expand',kinds);self.assertNotIn('leaf',kinds)  # plies 2 and 3 and a new capacity reuse the (B=4, K=4) programs
-            self.assertEqual(kinds.count('P1'),1)  # capacities 1, 4 and 2: P1 alone follows the frame size
+            else:self.assertNotIn('expand',kinds);self.assertNotIn('leaf',kinds)  # plies 2 and 3 and a new capacity reuse the (B=4, G=2, K=4) programs
+            self.assertEqual(kinds.count('P1'),1)  # capacities 1, 4 and 2: P1 alone follows the frame size; gather/write follow the pool rows
+            self.assertTrue(all(kind in('P1','select','gather','write')for kind in kinds)or k==1)
         keys=engine.last_timing['programs']
-        self.assertEqual([k for k in keys if k[0]in('expand','leaf')],[('expand',4,2,2),('leaf',4,2,2)]);self.assertEqual(sum(k[0]=='P1'for k in keys),3)
+        self.assertEqual([k for k in keys if k[0]in('expand','leaf')],[('expand',4,2,2,2),('leaf',4,2,2,2)]);self.assertEqual(sum(k[0]=='P1'for k in keys),3)
+        self.assertGreater(len(engine.last_timing['plies']),2);self.assertTrue(all(p['calls']>=1 for p in engine.last_timing['plies']))
         self.check_oracle(frames[1],self.requests(specs,ex),ex,specs,((2,2),(2,2),(2,2)))
         # The same engine object prices N=2 frames bit-equal to Depth2Pricer whatever it compiled before, through a sibling at depth 2.
-        sibling=dn.DepthNPricer(ex,object(),capacity=8,depth=2,k_own=(2,),k_opp=(2,),block_lanes=16,actor_capacity=3)
+        sibling=dn.DepthNPricer(ex,object(),capacity=8,depth=2,k_own=(2,),k_opp=(2,),block_lanes=16,blocks_per_call=2,actor_capacity=3)
         frame,requests,_,_=self.price(specs,ex=ex,engine=sibling,depth=2,k_own=None,k_opp=None)
         reference=self.depth2(specs,requests,ex,k_own=2,k_opp=2,child_block=4);mine=dn.as_depth2_frame(frame)
         for name in('t1_value','t2_status','t2_value','t2_error'):np.testing.assert_array_equal(getattr(reference,name),getattr(mine,name),err_msg=name)
@@ -554,7 +711,7 @@ class DepthNPricerTests(unittest.TestCase):
     def test_empty_and_fail_closed(self):
         ex=deep_executor()
         for kw in(dict(depth=1,k_own=(),k_opp=()),dict(depth=3,k_own=(2,),k_opp=(2,2)),dict(depth=2,k_own=(0,),k_opp=(2,)),dict(depth=2,k_own=(2,),k_opp=(10,)),
-                dict(depth=2,k_own=2,k_opp=2,k1_own=0),dict(depth=2,k_own=2,k_opp=2,block_lanes=0),dict(depth=2,k_own=2,k_opp=2,selection='value'),
+                dict(depth=2,k_own=2,k_opp=2,k1_own=0),dict(depth=2,k_own=2,k_opp=2,block_lanes=0),dict(depth=2,k_own=2,k_opp=2,blocks_per_call=0),dict(depth=2,k_own=2,k_opp=2,selection='value'),
                 dict(depth=2,k_own=2,k_opp=2,digest=1),dict(depth=2,k_own=2,k_opp=2,fixed_capacity=1),dict(depth=2,k_own=2,k_opp=2,capacity=0)):
             kw.setdefault('capacity',1)
             with self.assertRaises(ValueError):dn.DepthNPricer(ex,None,actor_capacity=2,**kw)
