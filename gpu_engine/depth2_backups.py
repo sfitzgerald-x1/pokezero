@@ -16,7 +16,11 @@ import numpy as np
 
 from pokezero import v5_gumbel as original
 
-CAUSES=('materialization','pre','turn1','turn2')
+# Refusal causes in precedence order. The first three are D's own (depth 1 refuses
+# the root too); 'turn1_depth2_only' (codes 5/6: the opponent's child view) and
+# 'turn2' refuse only at depth 2.
+CAUSES=('materialization','pre','turn1','turn1_depth2_only','turn2')
+DEPTH1_CAUSES=CAUSES[:3]
 
 
 def _softmax(logits,mask):
@@ -104,18 +108,25 @@ def refusal_summary(frame):
     """Refused roots and causes under the reference rule, and error counts by code; pure numpy.
 
     Cause precedence per root: a world without a state, a world pre code, a
-    turn-1 error, a turn-2 error. Pruned turn-1 cells (k1 below 9) are not
-    counted here; the root reduction is authoritative for them.
+    turn-1 error with a D code (1-4), a turn-1 error only the depth-2 pricer
+    raises (5/6), a turn-2 error. `depth1_refused_count` is the share D3 would
+    refuse on the same frame; `depth2_only_refused_count` the extra refusals.
+    Pruned turn-1 cells (k1 below 9) are not counted; the root reduction is
+    authoritative for them.
     """
-    pre,t1,t2=frame.pre,frame.t1_status,frame.t2_status
+    pre,t1,t1e,t2=frame.pre,frame.t1_status,frame.t1_error,frame.t2_status
     roots=[]
     for r in range(pre.shape[0]):
-        codes=tuple(int(c)for c in pre[r]);e1=int(np.count_nonzero(t1[r]==3));e2=int(np.count_nonzero(t2[r]==3))
-        cause=('materialization'if any(c<0 for c in codes)else'pre'if any(c>0 for c in codes)else'turn1'if e1 else'turn2'if e2 else None)
-        roots.append(dict(root=r,refused=cause is not None,cause=cause,pre=codes,turn1_errors=e1,turn2_errors=e2))
+        codes=tuple(int(c)for c in pre[r]);failed=t1[r]==3
+        e1=int(np.count_nonzero(failed&(t1e[r]<=4)));only2=int(np.count_nonzero(failed&(t1e[r]>=5)));e2=int(np.count_nonzero(t2[r]==3))
+        cause=('materialization'if any(c<0 for c in codes)else'pre'if any(c>0 for c in codes)else'turn1'if e1
+            else'turn1_depth2_only'if only2 else'turn2'if e2 else None)
+        roots.append(dict(root=r,refused=cause is not None,cause=cause,pre=codes,turn1_errors=e1,turn1_depth2_only_errors=only2,turn2_errors=e2))
     refused=[x for x in roots if x['refused']]
-    by_code=lambda errors,status:{code:int(np.count_nonzero((status==3)&(errors==code)))for code in(1,2,3,4)}
+    by_code=lambda errors,status,codes:{code:int(np.count_nonzero((status==3)&(errors==code)))for code in codes}
     return dict(roots=tuple(roots),root_count=len(roots),refused_count=len(refused),
+        depth1_refused_count=sum(x['cause']in DEPTH1_CAUSES for x in refused),
+        depth2_only_refused_count=sum(x['cause']not in DEPTH1_CAUSES for x in refused),
         refused_by_cause={c:sum(x['cause']==c for x in refused)for c in CAUSES},
-        turn1_errors_by_code=by_code(frame.t1_error,t1),turn2_errors_by_code=by_code(frame.t2_error,t2),
+        turn1_errors_by_code=by_code(t1e,t1,(1,2,3,4,5,6)),turn2_errors_by_code=by_code(frame.t2_error,t2,(1,2,3,4)),
         refused_turn2_errors={x['root']:x['turn2_errors']for x in refused})

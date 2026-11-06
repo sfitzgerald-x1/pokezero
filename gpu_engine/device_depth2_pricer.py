@@ -28,11 +28,17 @@ from . import depth2_digest as digests,v5_model
 
 INPUT_KEYS=batch.SERIAL_INPUT_ORDER
 LANES=serial.JOINT_LANES
-UNAVAILABLE=-1  # `pre` for a world slot with no state: missing materialization or frame padding.
+# Codes beyond D's. `pre` -1: a world slot with no state (materialization refusal
+# or frame padding), never usable. `t1_error` 5/6: the opponent's child view
+# failed (encoder error / prior refused while requested), so the cell is not
+# expanded; D3 still priced it, and `t1_value`/`t1_own_*` keep D3's bits.
+UNAVAILABLE=-1
+PEER_VIEW_ERROR=5;PEER_PRIOR_REFUSED=6
 PRE_REASONS={1:'current direct-encoder input error',2:'same actual root legal-action denominator required',8:'current direct-encoder input error',
     9:'current public actor output refused/nonfinite',10:'actual learner root input fields differ'}
 ERROR_REASONS={1:'hypothetical original action route invalid',2:'hypothetical terminal winner unavailable',
-    3:'current direct-encoder input error',4:'current public actor output refused/nonfinite'}
+    3:'current direct-encoder input error',4:'current public actor output refused/nonfinite',
+    PEER_VIEW_ERROR:'opponent child view direct-encoder input error',PEER_PRIOR_REFUSED:'opponent child prior refused/nonfinite'}
 
 
 @dataclass(frozen=True)
@@ -198,17 +204,20 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
         terminal=j.where(winner==2,0.,j.where(winner==owners[:,None],1.,-1.))
         values=j.where(done,terminal,values)
         # D3 ends here; `values`, `errors` and `leaf_logits` are its bits.
-        # The opponent's child view is held to the root's rule: an encoder
-        # error refuses the cell, a refused prior only while it is requested.
+        # The opponent's child view is held to the root's rule (an encoder
+        # error, or a refused prior while requested) but with its own codes,
+        # so D3's priced surface survives: such a cell keeps the learner's
+        # value and prior, is not expanded, and refuses through the backups.
+        priced=errors==0;viewed=priced&~done
         masks=masks[:,:,0];seat=owners[:,None,None,None]
         own_legal2=j.take_along_axis(masks,seat,axis=2)[:,:,0];peer_legal2=j.take_along_axis(masks,1-seat,axis=2)[:,:,0]
         own_req2=j.any(own_legal2,axis=-1);peer_req2=j.any(peer_legal2,axis=-1)
         peer_logits2,peer_pv2,peer_valid2=grouped_forward(peer_child_inputs,a['peer_rows'],joint=True)
         peer_usable2=peer_valid2&j.all(j.isfinite(peer_logits2),axis=-1)&j.isfinite(peer_pv2)&(j.abs(peer_pv2)<=1)
-        errors=j.where((errors==0)&~done&(peer_error!=0),3,errors)
-        errors=j.where((errors==0)&~done&peer_req2&~peer_usable2,4,errors)
+        errors=j.where(viewed&(peer_error!=0),PEER_VIEW_ERROR,errors)
+        errors=j.where(viewed&(errors==0)&peer_req2&~peer_usable2,PEER_PRIOR_REFUSED,errors)
         pre=j.where(a['available'].reshape(n),pre,UNAVAILABLE)
-        enumerated=(ordinal<required[:,None])&(pre==0)[:,None]
+        enumerated=(ordinal<required[:,None])&(pre==0)[:,None];priced&=enumerated;viewed&=enumerated
         status1=j.where(~enumerated,0,j.where(errors!=0,3,j.where(done,1,2)));expanded=status1==2
         own_logits2=j.where(own_req2[...,None],leaf_logits,0.);peer_logits2=j.where(peer_req2[...,None],peer_logits2,0.)
         sel_own,live_own=ranked(own_legal2,own_logits2,k_own,own_req2)
@@ -267,13 +276,16 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
             return j.zeros((n,9,9)+x.shape[2:],x.dtype).at[j.arange(n)[:,None],a1,r1].set(x,mode='drop')
         def rooted(x):return x.reshape((capacity,2)+x.shape[1:])
         usable_world=(pre==0)[:,None]
-        child=lambda x:j.where(expanded.reshape(expanded.shape+(1,)*(x.ndim-2)),x,j.zeros((),x.dtype))
+        # Child-level fields follow what is known at the child: the learner's
+        # side and both seats' masks wherever its view is D3-valid (`viewed`,
+        # so also under codes 5/6); the opponent's prior only when expanded.
+        keep=lambda mask,x:j.where(mask.reshape(mask.shape+(1,)*(x.ndim-2)),x,j.zeros((),x.dtype))
         result=dict(pre=rooted(pre),active_blocks=active_blocks,
             peer_requested=rooted(requested&usable_world[:,0]),peer_legal=rooted(legal&usable_world),peer_logits=rooted(j.where(usable_world,logits,0.)),
-            t1_status=rooted(scatter1(status1)),t1_value=rooted(scatter1(j.where((status1==1)|(status1==2),values,0.))),
+            t1_status=rooted(scatter1(status1)),t1_value=rooted(scatter1(j.where(priced,values,0.))),
             t1_error=rooted(scatter1(j.where(enumerated,errors,0))),
-            t1_own_requested=rooted(scatter1(child(own_req2))),t1_own_legal=rooted(scatter1(child(own_legal2))),t1_own_logits=rooted(scatter1(child(own_logits2))),
-            t1_peer_requested=rooted(scatter1(child(peer_req2))),t1_peer_legal=rooted(scatter1(child(peer_legal2))),t1_peer_logits=rooted(scatter1(child(peer_logits2))),
+            t1_own_requested=rooted(scatter1(keep(viewed,own_req2))),t1_own_legal=rooted(scatter1(keep(viewed,own_legal2))),t1_own_logits=rooted(scatter1(keep(viewed,own_logits2))),
+            t1_peer_requested=rooted(scatter1(keep(viewed,peer_req2))),t1_peer_legal=rooted(scatter1(keep(viewed,peer_legal2))),t1_peer_logits=rooted(scatter1(keep(expanded,peer_logits2))),
             t2_status=rooted(scatter1(scatter2(s2))),t2_value=rooted(scatter1(scatter2(v2))),t2_error=rooted(scatter1(scatter2(e2))))
         if digest:
             lane=lambda x:j.where(enumerated[...,None],x,j.uint32(0))

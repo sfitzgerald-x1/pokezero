@@ -36,7 +36,8 @@ ROOT_LOGITS=(0.,)*9;ROOT_LEGAL=tuple(map(bool,ROOT_OWN))
 # Modes: turn-1 (root step) 1 win, 2 draw, 7 bad winner, 3 invalid (1,1), 4 encoder error, 5 nonfinite, 6 waiting
 # opponent at the root; turn-2 (child step) 20 waiting learner, 21 waiting opponent, 22 terminal for a2==1 or r2==3
 # (draw when r2==3), 23 leaf encoder error for a2==1, 24 invalid (1,2), 25 nonfinite leaf for a2==3, 28 bad winner
-# for a2==0, 27 the learner's child mask depends on its turn-1 action.
+# for a2==0, 27 the learner's child mask depends on its turn-1 action; 29 the opponent's child view has an encoder
+# error and 30 a nonfinite child prior (the learner's view and D3's value are untouched: turn-1 codes 5 and 6).
 # Every fake quantity is a small dyadic rational, so jit fusion (FMA contraction) and eager evaluation agree bit for bit.
 PARAMS=({'offset':j.asarray(0.,j.float32),'logits':j.asarray([.25,.125,.375,.125,.5,.875,.25,.625,.5],j.float32),'tilt':j.asarray(.5,j.float32)},
     {'offset':j.asarray(.0625,j.float32),'logits':j.asarray([.25,.75,.125,.625,.375,0.,.5,.875,.125],j.float32),'tilt':j.asarray(-.5,j.float32)},
@@ -57,8 +58,9 @@ def executor():
         return mask&~state.done[:,None,None]
     def observe(state,public,owner,mask):
         if public.clock.ndim!=0:raise ValueError('one-world namespace was flattened')
-        error=j.where(((state.mode==4)&(public.turn>0))|((state.mode==23)&(state.turn==2)&(state.last==1)),1,0)
-        poison=j.where((state.mode==25)&(state.turn==2)&(state.last==3),j.nan,0.)
+        foe=(owner!=state.owner)&(state.turn==1)
+        error=j.where(((state.mode==4)&(public.turn>0))|((state.mode==23)&(state.turn==2)&(state.last==1))|((state.mode==29)&foe),1,0)
+        poison=j.where(((state.mode==25)&(state.turn==2)&(state.last==3))|((state.mode==30)&foe),j.nan,0.)
         feature=j.stack((state.value+(owner-state.owner)*(1/128),public.clock+j.zeros(1),poison),axis=-1)
         return Leaf(Observation(mask,error),{'numeric_features':feature[:,None,None,:]},owner)
     def advance(state,public,actions,chance):
@@ -113,13 +115,16 @@ def oracle(ex,params,state,public,owner,order,learner,opponent,k_own,k_opp,k1_op
             cm=ex.legal(child);vo=ex.observe(child,trackers,seat,cm[:,owner]);vp=ex.observe(child,trackers,1-seat,cm[:,1-owner])
             po=forward(params[learner],vo.inputs);pp=forward(params[opponent],vp.inputs)
             own_legal=np.asarray(cm[0,owner]);peer_legal=np.asarray(cm[0,1-owner]);own_req=bool(own_legal.any());peer_req=bool(peer_legal.any())
-            if int(vo.observation.error[0])or int(vp.observation.error[0]):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=3;continue
-            if not usable(po)or(peer_req and not usable(pp)):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=4;continue
-            o['t1_status'][a1,r1]=2;o['t1_value'][a1,r1]=float(po.value[0]);o['inputs1'][a1,r1]=(vo.inputs,vp.inputs)
-            own_lg=np.asarray(po.policy_logits[0])if own_req else np.zeros(9,np.float32)
-            peer_lg=np.asarray(pp.policy_logits[0])if peer_req else np.zeros(9,np.float32)
+            if int(vo.observation.error[0]):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=3;continue
+            if not usable(po):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=4;continue
+            # D3 priced this cell: its value, the learner's prior and both masks stay whatever the opponent's view does.
+            o['t1_value'][a1,r1]=float(po.value[0]);own_lg=np.asarray(po.policy_logits[0])if own_req else np.zeros(9,np.float32)
             o['t1_own_requested'][a1,r1]=own_req;o['t1_own_legal'][a1,r1]=own_legal;o['t1_own_logits'][a1,r1]=own_lg
-            o['t1_peer_requested'][a1,r1]=peer_req;o['t1_peer_legal'][a1,r1]=peer_legal;o['t1_peer_logits'][a1,r1]=peer_lg
+            o['t1_peer_requested'][a1,r1]=peer_req;o['t1_peer_legal'][a1,r1]=peer_legal
+            if int(vp.observation.error[0]):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=5;continue
+            if peer_req and not usable(pp):o['t1_status'][a1,r1]=3;o['t1_error'][a1,r1]=6;continue
+            o['t1_status'][a1,r1]=2;o['inputs1'][a1,r1]=(vo.inputs,vp.inputs)
+            peer_lg=np.asarray(pp.policy_logits[0])if peer_req else np.zeros(9,np.float32);o['t1_peer_logits'][a1,r1]=peer_lg
             chance2=ex.sample(child)
             for a2 in pick(own_legal,own_lg,k_own,own_req):
                 for r2 in pick(peer_legal,peer_lg,k_opp,peer_req):
@@ -344,11 +349,10 @@ class Depth2PricerTests(unittest.TestCase):
         self.assertEqual([w['status']for pair in frames[0].world_reports for w in pair],[w['status']for pair in frames[-1].world_reports for w in pair])
 
     def test_turn1_equals_frame_pricer_vectorized(self):
-        specs=(((0,0),0,0,1),((1,2),1,1,0),((3,4),0,0,2),((5,6),1,2,1),((7,27),0,1,1))
+        specs=(((0,0),0,0,1),((1,2),1,1,0),((3,4),0,0,2),((5,6),1,2,1),((7,27),0,1,1),((29,30),1,0,1))
         frame,requests,engine,ex=self.price(specs)
-        _,mapped=executor();d3=batch.FramePricer(mapped,object(),capacity=8,block_rows=1,actor_capacity=3,vectorized=True,host_prep=True)
-        with patch.object(mapping,'materialize_host',side_effect=self.materialize(specs)),patch.object(batch.v5_model,'forward',side_effect=forward):
-            results=d3.price(requests,self.tables,self.recipe,PARAMS)
+        results=self.d3(specs,requests)
+        depth2_only={'ValueError: '+pricer.ERROR_REASONS[code]for code in(5,6)}
         for i,result in enumerate(results):
             for wi,report in enumerate(result.world_reports):
                 mine=frame.world_reports[i][wi]
@@ -362,12 +366,43 @@ class Depth2PricerTests(unittest.TestCase):
                 for a in range(9):
                     for r in range(9):
                         value=report['joint_values'][a][r]
-                        if value is None:self.assertIn(frame.t1_status[i,wi,a,r],(0,3))
+                        if value is None:self.assertIn(frame.t1_status[i,wi,a,r],(0,3));self.assertLessEqual(frame.t1_error[i,wi,a,r],4)
                         else:
-                            self.assertIn(frame.t1_status[i,wi,a,r],(1,2))
+                            self.assertTrue(frame.t1_status[i,wi,a,r]in(1,2)or frame.t1_error[i,wi,a,r]in(5,6))
                             self.assertEqual(frame.t1_value[i,wi,a,r],np.float32(value))
                 errors={(a,r):reason for a,r,reason in report.get('errors',())}
-                self.assertEqual({(a,r):reason for a,r,reason in mine.get('errors',())},errors)
+                self.assertEqual({(a,r):reason for a,r,reason in mine.get('errors',())if reason not in depth2_only},errors)
+
+    def d3(self,specs,requests):
+        _,mapped=executor();engine=batch.FramePricer(mapped,object(),capacity=8,block_rows=1,actor_capacity=3,vectorized=True,host_prep=True)
+        with patch.object(mapping,'materialize_host',side_effect=self.materialize(specs)),patch.object(batch.v5_model,'forward',side_effect=forward):
+            return engine.price(requests,self.tables,self.recipe,PARAMS)
+
+    def test_opponent_child_view_failures_keep_d3_values(self):
+        specs=(((29,0),0,0,1),((0,30),1,1,0),((29,30),0,2,2))
+        frame,requests,engine,ex=self.price(specs,child_block=5)
+        oracles=self.check_oracle(frame,requests,ex,specs);results=self.d3(specs,requests)
+        for i,wi,code in((0,0,5),(1,1,6),(2,0,5),(2,1,6)):
+            status,error=frame.t1_status[i,wi],frame.t1_error[i,wi];cells=status!=0
+            self.assertTrue(cells.any());self.assertTrue((status[cells]==3).all());self.assertTrue((error[cells]==code).all())
+            self.assertFalse(frame.t2_status[i,wi].any());self.assertFalse(frame.t1_peer_logits[i,wi].any())
+            self.assertTrue(frame.t1_own_legal[i,wi][cells].any(axis=-1).all());self.assertTrue(frame.t1_peer_legal[i,wi][cells].any(axis=-1).all())
+            if i<2:self.assertTrue(frame.t1_own_logits[i,wi][cells].any(axis=-1).all())  # actor 2's fake logits are all zero
+            report=results[i].world_reports[wi];self.assertEqual(report['status'],'COMPLETE')  # D3 prices this world
+            for a in range(9):
+                for r in range(9):
+                    value=report['joint_values'][a][r]
+                    if value is None:self.assertEqual(status[a,r],0)
+                    else:self.assertEqual(frame.t1_value[i,wi,a,r],np.float32(value))
+            self.assertEqual(frame.world_reports[i][wi]['status'],'REFUSED')
+            prices=backups.backup_learner_max(frame,i)[wi]
+            self.assertTrue(all(prices.joint_values[a][r]is None for a,r in zip(*np.nonzero(cells))))
+            self.assertEqual(backups.learner_max_root(frame,i,ROOT_LOGITS,ROOT_LEGAL).status,'REFUSED')
+        summary=backups.refusal_summary(frame)
+        self.assertEqual([x['cause']for x in summary['roots']],['turn1_depth2_only']*3)
+        self.assertEqual((summary['depth1_refused_count'],summary['depth2_only_refused_count']),(0,3))
+        self.assertEqual(summary['turn1_errors_by_code'][5],int(np.count_nonzero(frame.t1_error==5)));self.assertGreater(summary['turn1_errors_by_code'][6],0)
+        self.assertEqual(summary['roots'][2]['turn1_depth2_only_errors'],int(np.count_nonzero(frame.t1_status[2]==3)));self.assertEqual(summary['roots'][2]['turn1_errors'],0)
 
     def test_backups_match_brute_force(self):
         specs=(((0,0),0,0,1),((27,21),1,1,0),((20,0),0,2,1),((0,0),1,0,2))
@@ -424,17 +459,21 @@ class Depth2PricerTests(unittest.TestCase):
         self.assertEqual(backups.refusal_summary(frame)['roots'][0]['cause'],'pre')
 
     def test_refusal_summary_synthetic(self):
-        frame=synthetic(5)
+        frame=synthetic(7)
         frame.pre[1,1]=9;frame.pre[2,0]=pricer.UNAVAILABLE
         frame.t1_status[3,0,0,0]=3;frame.t1_error[3,0,0,0]=3;frame.t1_status[3,0,1,0]=2
         frame.t1_status[4,1,0,0]=2;frame.t2_status[4,1,0,0,0,0]=3;frame.t2_error[4,1,0,0,0,0]=1;frame.t2_status[4,1,0,0,1,0]=3;frame.t2_error[4,1,0,0,1,0]=4
         frame.t2_status[4,1,0,0,2,0]=4;frame.t2_status[0,0,0,0]=4
+        frame.t1_status[5,0,0,0]=3;frame.t1_error[5,0,0,0]=5;frame.t1_status[5,1,0,1]=3;frame.t1_error[5,1,0,1]=6;frame.t1_status[5,1,1,1]=2;frame.t2_status[5,1,1,1,0,0]=3;frame.t2_error[5,1,1,1,0,0]=2
+        frame.t1_status[6,0,0,0]=3;frame.t1_error[6,0,0,0]=6;frame.t1_status[6,1,0,0]=3;frame.t1_error[6,1,0,0]=1  # a D error outranks a depth-2-only one
         summary=backups.refusal_summary(frame)
-        self.assertEqual([x['cause']for x in summary['roots']],[None,'pre','materialization','turn1','turn2'])
-        self.assertEqual(summary['roots'][1]['pre'],(0,9));self.assertEqual(summary['refused_count'],4)
-        self.assertEqual(summary['refused_by_cause'],{'materialization':1,'pre':1,'turn1':1,'turn2':1})
-        self.assertEqual(summary['turn1_errors_by_code'],{1:0,2:0,3:1,4:0});self.assertEqual(summary['turn2_errors_by_code'],{1:1,2:0,3:0,4:1})
-        self.assertEqual(summary['refused_turn2_errors'],{1:0,2:0,3:0,4:2})
+        self.assertEqual([x['cause']for x in summary['roots']],[None,'pre','materialization','turn1','turn2','turn1_depth2_only','turn1'])
+        self.assertEqual(summary['roots'][1]['pre'],(0,9));self.assertEqual(summary['refused_count'],6)
+        self.assertEqual((summary['depth1_refused_count'],summary['depth2_only_refused_count']),(4,2))
+        self.assertEqual(summary['refused_by_cause'],{'materialization':1,'pre':1,'turn1':2,'turn1_depth2_only':1,'turn2':1})
+        self.assertEqual(summary['turn1_errors_by_code'],{1:1,2:0,3:1,4:0,5:1,6:2});self.assertEqual(summary['turn2_errors_by_code'],{1:1,2:1,3:0,4:1})
+        self.assertEqual(summary['refused_turn2_errors'],{1:0,2:0,3:0,4:2,5:1,6:0})
+        self.assertEqual((summary['roots'][5]['turn1_errors'],summary['roots'][5]['turn1_depth2_only_errors'],summary['roots'][6]['turn1_errors']),(0,2,1))
 
     def test_digests_match_the_oracle_leaf_inputs(self):
         specs=(((0,27),0,0,1),((20,22),1,1,0))
