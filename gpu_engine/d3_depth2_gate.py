@@ -384,7 +384,7 @@ def tolerance_rule(floor, spread_p10):
     applicable, GUARD_P10_ZERO: the p10 is reported, guard_bound is None, so the value bound alone judges)."""
     measured = floor is not None and floor.get('compared', 0) > 0 and not floor.get('nonfinite')
     value = FLOOR_FACTOR * floor['max_abs_difference'] if measured else VALUE_FALLBACK
-    usable = spread_p10 is not None and np.isfinite(spread_p10);applies = usable and spread_p10 > 0
+    usable = spread_p10 is not None and np.isfinite(spread_p10);applies = usable and GUARD_FACTOR * float(spread_p10) > 0   # a subnormal p10 whose guard rounds to 0 is not applicable too
     return dict(rule=TOLERANCE_RULE, depth1_noise_floor=floor['max_abs_difference'] if measured else None,
         floor_cells=None if floor is None else floor.get('compared'), value_bound=value,
         value_bound_source='2 x depth1_noise_floor' if measured else ('fallback 1e-4: the depth-1 noise floor is not measurable '
