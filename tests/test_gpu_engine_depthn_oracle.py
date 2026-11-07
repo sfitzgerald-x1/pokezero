@@ -2357,30 +2357,66 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
                 self.assertIn(message, str(raised.exception))
 
     def test_the_declaration_is_a_committed_record(self):
-        """The file must lie under DECLARED_SUBDIR of the checkout; its git blob sha1 (git hash-object) and the commit are recorded; where the
-        local history holds the commit, it must hold exactly this blob there (a later edit or an uncommitted file is refused); a commit the history
-        lacks, or no repository, is recorded as not verifiable here; the source measurement is verified when readable (refused on a mismatch)."""
+        """The file must lie under DECLARED_SUBDIR of the checkout; its git blob sha1 (git hash-object) and the commit are recorded and, in a git
+        work tree, the commit must exist (a made-up one is refused), hold exactly this blob there and be an ancestor of HEAD, with the file tracked
+        and unmodified at HEAD; "not verifiable here" only without git, without a work tree of the checkout, or in a shallow clone lacking the
+        commit. Every case of the re-review's prereg.py, then the refusals beyond it, then the source measurement."""
         record = committed(declaration());d = load(record)
         self.assertEqual((d['repo_path'], d['commit'], d['git_verification']['status']), (gate.DECLARED_SUBDIR + '/champion.json', record.commit, 'verified'))
+        self.assertIn('ancestor of HEAD', d['git_verification']['detail']);self.assertIn('tracked and unmodified at HEAD', d['git_verification']['detail'])
         self.assertEqual(d['git_blob_sha1'], git(record.root, 'hash-object', str(record.path)));self.assertEqual(d['source_measurement_verification']['status'], 'not verifiable here')
-        path, sha = written(declaration());elsewhere = record.root / 'gpu_engine' / 'champion.json';elsewhere.write_bytes(record.path.read_bytes())
-        git(record.root, 'add', '.');git(record.root, 'commit', '-q', '-m', 'the same file outside the directory');inside = git(record.root, 'rev-parse', 'HEAD')
-        for case, (call, message) in dict(outside=(lambda: gate.load_declared(path, sha, record.commit, root=record.root), f'committed under {gate.DECLARED_SUBDIR}/'),
-                in_the_repository_outside_the_directory=(lambda: load(record, path=elsewhere, commit=inside), f'committed under {gate.DECLARED_SUBDIR}/'),
-                short_commit=(lambda: load(record, commit=record.commit[:12]), 'full lowercase hex commit id')).items():
+        raw = json.dumps(declaration(), indent=1).encode();sha = hashlib.sha256(raw).hexdigest();made_up = 'e' * 40
+        edited = json.dumps(declaration(bounds=bounds(value_bound=.5)), indent=1).encode()
+        def repo():
+            root = Path(tempfile.mkdtemp(prefix='depthn-declared-repo-'));git(root, 'init', '-q');(root / gate.DECLARED_SUBDIR).mkdir(parents=True)
+            (root / 'README').write_text('x');git(root, 'add', '.');git(root, 'commit', '-q', '-m', 'base');return root
+        def place(root, data=raw, name='champion.json'):
+            path = root / gate.DECLARED_SUBDIR / name;path.parent.mkdir(parents=True, exist_ok=True);path.write_bytes(data);return path
+        def commit(root, message='declare'):
+            git(root, 'add', '-A');git(root, 'commit', '-q', '-m', message);return git(root, 'rev-parse', 'HEAD')
+        r1 = repo();p1 = place(r1)   # prereg 1, 2, 7: never committed, in a full repository
+        r3 = repo();p3 = place(r3);c3 = commit(r3);p3.write_bytes(edited)   # prereg 3, 3b: committed, then edited in the work tree
+        r4 = repo();git(r4, 'checkout', '-q', '-b', 'after-the-failure');p4 = place(r4);c4 = commit(r4)   # prereg 4: on a side branch, HEAD there
+        r5 = Path(tempfile.mkdtemp(prefix='depthn-nogit-'));(r5 / gate.DECLARED_SUBDIR).mkdir(parents=True);p5 = place(r5)   # prereg 5: no git on PATH
+        r6 = repo();outside = Path(tempfile.mkdtemp(prefix='depthn-outside-')) / 'champion.json';outside.write_bytes(raw)
+        link = r6 / gate.DECLARED_SUBDIR / 'link.json';link.symlink_to(outside)   # prereg 6: a symlink under the directory to outside the checkout
+        outer = repo();inner = outer / 'checkout';(inner / gate.DECLARED_SUBDIR).mkdir(parents=True);p8 = place(inner);c8 = commit(outer)   # prereg 8: nested
+        rm = repo();pm = place(rm);cm = commit(rm);pm.write_bytes(edited);commit(rm, 'revise');pm.write_bytes(raw)   # the commit's bytes, HEAD's another revision
+        ru = repo();pu = place(ru);cu = commit(ru);git(ru, 'rm', '-q', '--cached', str(pu.relative_to(ru)));git(ru, 'commit', '-q', '-m', 'untrack')   # untracked at HEAD, left in the work tree
+        rs = repo();trunk = git(rs, 'rev-parse', '--abbrev-ref', 'HEAD');git(rs, 'checkout', '-q', '-b', 'side');ps = place(rs);cs = commit(rs, 'side')
+        git(rs, 'checkout', '-q', trunk);place(rs);commit(rs, 'trunk')   # the same file on HEAD's line, the given commit off it
+        origin = repo();po = place(origin);co = commit(origin);(origin / 'later').write_text('y');commit(origin, 'later')
+        clone = Path(tempfile.mkdtemp(prefix='depthn-shallow-')) / 'clone';git(origin, 'clone', '-q', '--depth', '1', f'file://{origin}', str(clone))   # lacks co
+        refused = dict(
+            prereg_1_untracked_made_up_commit=(lambda: gate.load_declared(p1, sha, made_up, root=r1), 'absent: commit ' + made_up),
+            prereg_2_untracked_real_head=(lambda: gate.load_declared(p1, sha, git(r1, 'rev-parse', 'HEAD'), root=r1), 'absent: commit'),
+            prereg_3_edited_real_commit=(lambda: gate.load_declared(p3, hashlib.sha256(edited).hexdigest(), c3, root=r3), 'mismatch'),
+            prereg_3b_edited_made_up_commit=(lambda: gate.load_declared(p3, hashlib.sha256(edited).hexdigest(), made_up, root=r3), 'absent: commit ' + made_up),
+            prereg_6_symlink_to_outside=(lambda: gate.load_declared(link, sha, made_up, root=r6), f'committed under {gate.DECLARED_SUBDIR}/'),
+            prereg_7_dotdot_made_up_commit=(lambda: gate.load_declared(r1 / gate.DECLARED_SUBDIR / '..' / 'declared_bounds' / 'champion.json', sha, made_up, root=r1),
+                'absent: commit ' + made_up),
+            made_up_commit_for_a_committed_file=(lambda: load(record, commit=made_up), 'absent: commit ' + made_up),
+            modified_against_head=(lambda: gate.load_declared(pm, sha, cm, root=rm), 'modified'),
+            untracked_at_head=(lambda: gate.load_declared(pu, sha, cu, root=ru), 'untracked'),
+            commit_off_heads_line=(lambda: gate.load_declared(ps, sha, cs, root=rs), 'not an ancestor of HEAD'),
+            short_commit=(lambda: load(record, commit=record.commit[:12]), 'full lowercase hex commit id'),
+            outside=(lambda: gate.load_declared(*written(declaration()), record.commit, root=record.root), f'committed under {gate.DECLARED_SUBDIR}/'))
+        for case, (call, message) in refused.items():
             with self.subTest(case):
                 with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
                 self.assertIn(message, str(raised.exception))
-        edited = committed(declaration());raw = json.dumps(declaration(declared_by='someone else')).encode();edited.path.write_bytes(raw)
-        later = committed(declaration());extra = later.path.with_name('later.json');extra.write_bytes(later.path.read_bytes())
-        for case, (call, message) in dict(edited_after_commit=(lambda: load(edited, sha256=hashlib.sha256(raw).hexdigest()), 'not the file committed'),
-                not_in_the_commit=(lambda: load(later, path=extra), 'has no ' + gate.DECLARED_SUBDIR + '/later.json')).items():
-            with self.subTest(case):
-                with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
-                self.assertIn(message, str(raised.exception))
-        self.assertEqual(load(record, commit='0' * 40)['git_verification']['status'], 'not verifiable here')   # a shallow or exported checkout
-        plain = Path(tempfile.mkdtemp(prefix='depthn-declared-plain-'));target = plain / gate.DECLARED_SUBDIR / 'champion.json';target.parent.mkdir(parents=True)
-        target.write_bytes(record.path.read_bytes());self.assertEqual(gate.load_declared(target, record.sha256, record.commit, root=plain)['git_verification']['status'], 'not verifiable here')
+        with patch.dict(os.environ, {'PATH': '/nonexistent'}):no_git = gate.load_declared(p5, sha, made_up, root=r5)
+        accepted = dict(prereg_4_side_branch_head=(gate.load_declared(p4, sha, c4, root=r4), 'verified', 'ancestor of HEAD'),   # the integration branch is the audit's
+            prereg_5_no_git_on_path=(no_git, 'not verifiable here', 'git is not available'),
+            prereg_8_nested_checkout=(gate.load_declared(p8, sha, c8, root=inner), 'not verifiable here', 'is not the top of a git work tree'),
+            no_repository=(gate.load_declared(p5, sha, made_up, root=r5), 'not verifiable here', 'is not the top of a git work tree'),
+            shallow_clone_lacking_the_commit=(gate.load_declared(clone / gate.DECLARED_SUBDIR / 'champion.json', sha, co, root=clone), 'not verifiable here', 'shallow'))
+        for case, (result, status, detail) in accepted.items():
+            with self.subTest(case):self.assertEqual(result['git_verification']['status'], status);self.assertIn(detail, result['git_verification']['detail'])
+        self.assertTrue(gate.provisional_reasons(no_git['git_verification'], no_git['source_measurement_verification'])[0].startswith('provisional: git_verification not verifiable here'))
+        elsewhere = record.root / 'gpu_engine' / 'champion.json';elsewhere.write_bytes(record.path.read_bytes());inside = commit(record.root, 'the same file outside the directory')
+        with self.assertRaises(gate.DeclaredBoundsError) as raised:load(record, path=elsewhere, commit=inside)
+        self.assertIn(f'committed under {gate.DECLARED_SUBDIR}/', str(raised.exception))
         measurement = Path(tempfile.mkdtemp(prefix='depthn-measure-')) / 'spread.json';measurement.write_bytes(b'{"spread": 0.003}\n')
         good = dict(path=str(measurement), sha256=hashlib.sha256(measurement.read_bytes()).hexdigest())
         self.assertEqual(declared(source_measurement=good)['source_measurement_verification']['status'], 'verified')
@@ -2529,6 +2565,24 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
             gate.main(['--reverdict', str(directory / 'gate.json'), '--declared-bounds-commit', 'b' * 40])
         self.assertIn('records no declaration', str(raised.exception.code))
         code, out, _, _ = reverdicted(saved_gate());self.assertEqual((code, out['status']), (0, 'PASS'));self.assertNotIn('declared_bounds_sha256', out['reverdict'])
+
+    def test_reverdict_refuses_saved_verdicts_that_disagree_with_their_numbers(self):
+        """--reverdict recomputes each (c) quantity's within_bound (no non-finite difference, max |diff| <= bound) and within_guard (max |diff| <
+        guard) from its saved numbers, the live comparison, and refuses any disagreement: a max |diff| raised past the bound, a non-finite count,
+        a verdict flipped either way, a guard verdict flipped. A consistent report re-judges as before."""
+        def edited(name, **values):
+            report = saved_gate();report['checks']['c']['quantities'][name].update(values);return report
+        cases = dict(raised_max=(edited('leaf_value', max_abs_difference=1.), 'leaf_value: within_bound True'),
+            nonfinite=(edited('t1_value_head', nonfinite=1), 't1_value_head: within_bound True'),
+            flipped_false=(edited('ply2_value_head', within_bound=False), 'ply2_value_head: within_bound False'),
+            guard_flipped=(edited('leaf_value', within_guard=True), 'leaf_value: within_guard True'))
+        for case, (report, message) in cases.items():
+            with self.subTest(case):
+                directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));(directory / 'gate.json').write_text(json.dumps(report))
+                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(directory / 'gate.json')])
+                self.assertIn(message, str(raised.exception.code));self.assertIn('disagree with their own numbers', str(raised.exception.code))
+                self.assertFalse((directory / gate.REVERDICT_FILE).exists())
+        self.assertEqual(gate.verdict_inconsistencies(saved_gate()['checks']['c']['quantities']), [])
 
     def test_off_the_champion_path_depth2_and_n2_are_unchanged(self):
         """B1's path (the head override here): a depth-2 full-width gate gates only the depth-N leaf walk's path in oracle consistency and

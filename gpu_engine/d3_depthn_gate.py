@@ -79,9 +79,11 @@ the run's, whose value, turn-1 logit, deeper-ply logit and optional
 near-tie Q bounds replace the tolerance NUMBERS of the B1-calibrated rule for that evaluator; every check and rule is unchanged, the measured
 floors are still reported beside the declared bounds, and every report's header carries a `declared_bounds` section (the file, its sha256,
 the note that it is a pre-registered evaluator-specific bound, not a rule change after a failure). --reverdict re-applies a report's recorded
-declaration after re-verifying its sha256 and git blob sha1 (and the commit and sha256 given with it), refuses a report that keeps traces of a
-declaration without its sections, and re-judges any other report only if its numbers are the frozen rule's. Without the flags nothing is
-built, judged, logged or written differently.
+declaration after re-verifying its sha256 and git blob sha1 (and the commit and sha256 given with it: the audit, which requires git_verification
+"verified"), refuses a report that keeps traces of a declaration without its sections, re-judges any other report only if its numbers are the
+frozen rule's, and refuses any report whose saved (c) within_bound / within_guard disagree with its saved numbers. A live run whose record is
+"not verifiable here" (no git, no work tree, a shallow clone lacking the commit) keeps its status and exit code and lists "provisional: ..." in
+status_reasons until that audit. Without the flags nothing is built, judged, logged or written differently.
 The champion's depth-2 surfaces against the merged depth-2 gate (d3_depth2_gate, which has no champion flags): on the champion path
 (--champion-archive) this gate at --depth 2 and --n2-equivalence stand in for it, with two additions found only there, so a run on the
 bank snapshot's actors or the head override (B1) is built, judged and written exactly as before:
@@ -1852,6 +1854,22 @@ def reverdict_missing(report):
     return missing
 
 
+def verdict_inconsistencies(quantities):
+    """(c) quantities whose saved within_bound or within_guard disagree with their own saved numbers under the live comparison
+    (g2.finalize_numeric, rebound): within_bound = no non-finite difference and max |diff| <= bound, within_guard = none and max |diff| <
+    guard_bound. The live (c) comparison is exact (REL_EPS rounds only (f)'s derived quantities), and JSON keeps every float exactly, so a
+    consistent report never disagrees."""
+    out = []
+    for name, m in quantities.items():
+        if name in g2.FLOORS:continue
+        finite = m['nonfinite'] == 0
+        if m['within_bound'] != (finite and m['max_abs_difference'] <= m['bound']):
+            out.append(f'{name}: within_bound {m["within_bound"]} but max |diff| {m["max_abs_difference"]!r} (non-finite {m["nonfinite"]}) against bound {m["bound"]!r}')
+        if m.get('guard_bound') is not None and m.get('within_guard') != (finite and m['max_abs_difference'] < m['guard_bound']):
+            out.append(f'{name}: within_guard {m.get("within_guard")} but max |diff| {m["max_abs_difference"]!r} against guard {m["guard_bound"]!r}')
+    return out
+
+
 def reverdict(path, *, expected=None):
     """--reverdict: the current verdict rules re-applied offline to a saved gate.json (apply_rules_depthn on (c) at the run's
     depth, the status through gate_status_n; the other checks keep their saved verdicts: their rules are unchanged), written
@@ -1866,12 +1884,15 @@ def reverdict(path, *, expected=None):
     missing = reverdict_missing(report)
     if missing:raise SystemExit(f'--reverdict: {path} lacks what the verdict needs: ' + ', '.join(missing[:FIRST]))
     declared, section = saved_declared(report, expected=expected)
+    inconsistent = verdict_inconsistencies(report['checks']['c']['quantities'])
+    if inconsistent:raise SystemExit('--reverdict: saved (c) verdicts disagree with their own numbers (fail closed): ' + '; '.join(inconsistent[:FIRST]))
     quantities = report['checks']['c']['quantities'];before = {name: m.get('passed') for name, m in quantities.items()}
     old = dict(status=report['status'], status_reasons=report.get('status_reasons'), failing=[k for k, v in report['checks'].items() if not v['passed']])
     apply_rules_depthn(report, report['pricer_options']['depth'], actors=saved_actors(report), declared=declared)
     f_before = report['checks']['f']['passed'];sampled = report['sample_leaves'] is not None
     report['checks']['f'] = choice_verdict(report['checks']['f'], report['tolerance']['value_bound'], sampled=sampled)   # (f) through the live function
     status, reasons = gate_status_n(report, sampled=sampled)
+    if declared is not None:reasons = reasons + provisional_reasons(declared['reverified'].get('git'), declared['reverified'].get('source_measurement'))
     changed = [dict(quantity=name, passed_before=before[name], passed=m['passed'], guard_mode=m.get('guard_mode')) for name, m in quantities.items()
         if name not in g2.FLOORS and m['passed'] != before[name]]
     if report['checks']['f']['passed'] != f_before:changed.append(dict(quantity='f', passed_before=f_before, passed=report['checks']['f']['passed']))
@@ -1978,9 +1999,13 @@ DECLARED_RULE = ('--declared-bounds (opt-in; champion only: with --champion-arch
 DECLARED_NOTE = ('evaluator-specific bounds for the champion identity in `evaluator`, applied in place of the B1-calibrated tolerance numbers for '
     'that evaluator only. What this gate verified: the declaration\'s bytes hash to --declared-bounds-sha256 (sha256) and pass its schema; the file '
     'lies under gpu_engine/declared_bounds/ of the running checkout (repo_path); its git blob sha1 (git_blob_sha1) and --declared-bounds-commit '
-    '(commit) are recorded and, where the local git history holds that commit, the commit holds exactly this blob at repo_path (git_verification; '
-    '"not verifiable here" otherwise); the source measurement\'s sha256 where its file is readable from the run (source_measurement_verification); '
-    'declared_at is no later than the run\'s start. Not verified here: declared_at and run_started_at are self-reported; that the commit went '
+    '(commit) are recorded and, where the running checkout is a git work tree, that the commit exists, holds exactly this blob at repo_path and '
+    'is an ancestor of HEAD, and that the file is tracked and unmodified at HEAD (git_verification; a made-up commit is refused); "not verifiable '
+    'here" only without git, without a work tree or in a shallow clone lacking the commit; the source measurement\'s sha256 where its file is '
+    'readable from the run (source_measurement_verification); declared_at is no later than the run\'s start. A run where either check is "not '
+    'verifiable here" keeps its status and exit code (the checks\' verdict) and lists "provisional: ..." in status_reasons; the audit, '
+    '--reverdict --declared-bounds-commit on a git work tree holding the commit, requires git_verification "verified" and exits non-zero '
+    'otherwise. Not verified here: declared_at and run_started_at are self-reported; that the commit went '
     'through a reviewed PR and was on the integration branch before run_started_at is for an auditor to confirm with git (the commit, holding '
     'git_blob_sha1 at repo_path, an ancestor of the integration branch at a time before run_started_at). It is not a rule change after a failure: '
     'rules_changed_after_failure and the frozen rule set are untouched, and a run without --declared-bounds is judged exactly as before')
@@ -2093,18 +2118,50 @@ def _git(root, *args):
     except (OSError, subprocess.SubprocessError):return None
 
 
-def git_verification(commit, repo_path, blob, *, root=None):
-    """What the local git history at `root` (REPO_ROOT) says of the declaration: dict(status, detail) with status 'verified' (the commit is
-    here and holds exactly this blob at repo_path), 'mismatch' (another object there), 'absent' (nothing there) or 'not verifiable here' (no
-    git, no repository, or the commit is not in the local history, e.g. a shallow or exported checkout). load_declared and saved_declared
-    refuse 'mismatch' and 'absent'."""
-    root = Path(root or REPO_ROOT);found = _git(root, 'rev-parse', '--verify', '--quiet', f'{commit}^{{commit}}')
-    if found is None:return dict(status='not verifiable here', detail='git is not available')
-    if found.returncode != 0:return dict(status='not verifiable here', detail=f'commit {commit} is not in a local repository at {root}')
+GIT_ACCEPTED = ('verified', 'not verifiable here')   # every other git_verification status is refused
+
+
+def git_verification(commit, repo_path, blob, *, root=None, worktree=True):
+    """What git at `root` (REPO_ROOT) says of the declaration: dict(status, detail). 'not verifiable here' ONLY when git is not available,
+    `root` is not the top of a git work tree (an exported checkout, or one nested in another repository), or the clone is shallow and lacks
+    the commit. Otherwise 'verified' needs all of: the commit exists ('absent' otherwise: in a full history an unknown commit is made up),
+    holds exactly this blob at repo_path ('absent' / 'mismatch'), and is an ancestor of HEAD ('not an ancestor of HEAD'); with `worktree`
+    (the live run) the file must also be tracked at HEAD ('untracked') and unmodified against HEAD, staged or not ('modified'). --reverdict
+    passes worktree=False: the auditor's work tree may hold a later revision. Every status but GIT_ACCEPTED is refused."""
+    root = Path(root or REPO_ROOT).resolve();top = _git(root, 'rev-parse', '--show-toplevel')
+    if top is None:return dict(status='not verifiable here', detail='git is not available')
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root:
+        return dict(status='not verifiable here', detail=f'{root} is not the top of a git work tree' + (f' (it lies in {top.stdout.strip()})' if top.returncode == 0 else ''))
+    shallow = (getattr(_git(root, 'rev-parse', '--is-shallow-repository'), 'stdout', '') or '').strip() == 'true'
+    found = _git(root, 'rev-parse', '--verify', '--quiet', f'{commit}^{{commit}}')
+    if found is None or found.returncode != 0:
+        return (dict(status='not verifiable here', detail=f'commit {commit} is not in this shallow clone') if shallow
+            else dict(status='absent', detail=f'commit {commit} is not in the repository at {root} (a full history: no such commit)'))
     at = _git(root, 'rev-parse', '--verify', '--quiet', f'{commit}:{repo_path}')
     if at is None or at.returncode != 0:return dict(status='absent', detail=f'commit {commit} has no {repo_path}')
     held = at.stdout.strip()
-    return dict(status='verified' if held == blob else 'mismatch', detail=f'commit {commit} holds {held} at {repo_path}', blob_at_commit=held)
+    if held != blob:return dict(status='mismatch', detail=f'commit {commit} holds {held} at {repo_path}, not this file\'s {blob}', blob_at_commit=held)
+    ancestor = _git(root, 'merge-base', '--is-ancestor', commit, 'HEAD')
+    if ancestor is None or ancestor.returncode != 0:
+        if shallow and ancestor is not None and ancestor.returncode not in (0, 1):return dict(status='not verifiable here', detail=f'this shallow clone cannot tell whether {commit} is an ancestor of HEAD')
+        return dict(status='not an ancestor of HEAD', detail=f'commit {commit} is not an ancestor of HEAD')
+    if worktree:
+        tracked = _git(root, 'ls-files', '--error-unmatch', '--', repo_path)
+        if tracked is None or tracked.returncode != 0:return dict(status='untracked', detail=f'{repo_path} is not tracked at HEAD')
+        clean = _git(root, 'diff', '--quiet', 'HEAD', '--', repo_path)
+        if clean is None or clean.returncode != 0:return dict(status='modified', detail=f'{repo_path} differs from HEAD (staged or in the work tree)')
+    head = (getattr(_git(root, 'rev-parse', 'HEAD'), 'stdout', '') or '').strip()
+    return dict(status='verified', detail=f'commit {commit} holds {blob} at {repo_path} and is an ancestor of HEAD {head}' + ('; the file is tracked and '
+        'unmodified at HEAD' if worktree else ''), blob_at_commit=held, head=head)
+
+
+def provisional_reasons(git, measurement):
+    """status_reasons entries for a declaration whose record could not be checked where the gate ran: the verdict and exit code stand (the
+    checks' own), but the run is provisional until the audit (--reverdict --declared-bounds-commit on a git work tree holding the commit, which
+    requires 'verified')."""
+    return [f'provisional: {name} not verifiable here ({result.get("detail")}); the audit is --reverdict --declared-bounds-commit on a git work tree '
+        'holding the commit' for name, result in (('git_verification', git), ('source_measurement_verification', measurement))
+        if (result or {}).get('status') == 'not verifiable here']
 
 
 def measurement_verification(measurement):
@@ -2136,7 +2193,7 @@ def load_declared(path, sha256, commit, *, now=None, root=None):
     except OSError as error:raise DeclaredBoundsError(f'cannot read {path}: {error}')
     declared = declared_from_bytes(raw, sha256, path=path, now=now);blob = git_blob_sha1(raw)
     git = git_verification(commit, repo_path, blob, root=root)
-    if git['status'] in ('absent', 'mismatch'):raise DeclaredBoundsError(f'{path}: not the file committed at {commit}: {git["detail"]} (this file is {blob})')
+    if git['status'] not in GIT_ACCEPTED:raise DeclaredBoundsError(f'{path}: not the committed record at {commit}: {git["status"]}: {git["detail"]} (this file is {blob})')
     measurement = measurement_verification(declared['content']['source_measurement'])
     if measurement['status'] == 'mismatch':raise DeclaredBoundsError(f'source_measurement: {measurement["detail"]}, not the declared {declared["content"]["source_measurement"]["sha256"]}')
     return dict(declared, repo_path=repo_path, git_blob_sha1=blob, commit=commit, git_verification=git, source_measurement_verification=measurement)
@@ -2304,8 +2361,12 @@ def saved_declared(report, *, expected=None):
         if not str(section.get('repo_path') or '').startswith(DECLARED_SUBDIR + '/'):problems.append(f'header.declared_bounds.repo_path is not under {DECLARED_SUBDIR}/')
         problems += [f'--declared-bounds-{key.replace("_", "-")} {value} is not the recorded {section.get(key)}' for key, value in expected.items() if section.get(key) != value]
         if not problems:
-            again = dict(git=git_verification(section['commit'], section['repo_path'], section['git_blob_sha1']), source_measurement=measurement_verification(content['source_measurement']))
-            problems += [f'{name}: {result["detail"]}' for name, result in again.items() if result['status'] in ('mismatch', 'absent')]
+            again = dict(git=git_verification(section['commit'], section['repo_path'], section['git_blob_sha1'], worktree=False),
+                source_measurement=measurement_verification(content['source_measurement']))
+            problems += [f'git_verification {again["git"]["status"]}: {again["git"]["detail"]}'] if again['git']['status'] not in GIT_ACCEPTED else []
+            problems += [f'source_measurement: {again["source_measurement"]["detail"]}'] if again['source_measurement']['status'] == 'mismatch' else []
+            if 'commit' in expected and again['git']['status'] != 'verified':   # the audit certifies only what git here confirms
+                problems.append(f'the audit (--declared-bounds-commit) requires git_verification verified, got {again["git"]["status"]}: {again["git"]["detail"]}')
         n, tolerance = declared_numbers(dict(content=content)), report.get('tolerance') or {}
         if not isinstance(recorded, dict) or recorded.get('sha256') != sha:problems.append('tolerance.declared_bounds does not name the same sha256')
         if (tolerance.get('value_bound'), tolerance.get('logit_bound')) != (n['value_bound'], n['turn1_logit_bound']):
@@ -3449,6 +3510,7 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
         evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize_run(evaluations, lanes, declared=declared);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
+    if declared is not None:reasons = reasons + provisional_reasons(declared['git_verification'], declared['source_measurement_verification'])   # verdict and exit code stand
     reported = [c for c in calls if c['refusals'] is not None]
     refusals = dict(g2.with_dropped(merge_refusals_n([c['refusals'] for c in reported]), roots.evaluator.get('dropped_roots', ()), roots.evaluator),
         calls_reported=len(reported),
@@ -3509,6 +3571,7 @@ def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, ref
     status = 'FAIL' if 'FAIL' in statuses else 'INCOMPLETE' if 'INCOMPLETE' in statuses or not report else 'PASS'
     write(out / 'n2-equivalence.json', dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(configs=report, declared=section, parity=parity), schema=SCHEMA, mode='N2_EQUIVALENCE',
         status=status, passed=status == 'PASS', configs=report, options=options, split_capacity=capacity, block_seeds=list(seeds),
+        **({} if declared is None else dict(status_reasons=provisional_reasons(declared['git_verification'], declared['source_measurement_verification']))),
         rule='per config: every discrete array exact and world_reports equal; floats only on scored cells (see n2_compare): values within the value '
             'bound and guard, priors within the logit bound (the run\'s evaluator-relative rule); (e) depth2_backups argmax per root equal except near '
             'ties; INCOMPLETE when no turn-2 leaf or no (e) root was compared'))

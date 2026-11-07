@@ -504,10 +504,12 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         return code, out
 
     def declared(self, *, bounds=None, **evaluator):
-        """(content, flags, sha256) of a declaration for this champion (value bound 1e-6, turn-1 logits .05 unless `bounds`), committed under
-        DECLARED_SUBDIR of a scratch repository that main() and --reverdict take as the checkout (self.repo, self.record)."""
+        """(content, flags, sha256) of a declaration for this champion (value bound 1e-6, turn-1 logits .05 unless `bounds`; its source measurement a
+        readable file), committed under DECLARED_SUBDIR of a scratch repository that main() and --reverdict take as the checkout (self.repo, self.record)."""
+        measurement = Path(tempfile.mkdtemp(prefix='champion-measure-')) / 'spread.json';measurement.write_bytes(b'{"bf16_vs_f32_value_spread": 0.0005}\n')
         content = N.declaration(evaluator=dict(dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=CHECKPOINT), **evaluator),
-            bounds=bounds or N.bounds(value_bound=1e-6, turn1_logit_bound=.05))
+            bounds=bounds or N.bounds(value_bound=1e-6, turn1_logit_bound=.05),
+            source_measurement=dict(path=str(measurement), sha256=hashlib.sha256(measurement.read_bytes()).hexdigest()))
         self.record = record = N.committed(content);self.repo = record.root
         return content, ('--declared-bounds', str(record.path), '--declared-bounds-sha256', record.sha256, '--declared-bounds-commit', record.commit), record.sha256
 
@@ -532,7 +534,7 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         self.assertTrue(all(m['bound_rule'].startswith('declared_') for n, m in c.items() if n not in gate_module().g2.FLOORS))
         code, out = self.main('--n2-equivalence', '--n2-k', '2', *flags);report = json.loads((out / 'n2-equivalence.json').read_text())
         self.assertEqual((code, report['status']), (0, 'PASS'), {n: c.get('status_reasons') for n, c in report['configs'].items()})
-        self.assertEqual((report['header']['declared_bounds']['sha256'], set(report['configs'])), (sha, {'full_width', 'top2'}))
+        self.assertEqual((report['header']['declared_bounds']['sha256'], set(report['configs']), report['status_reasons']), (sha, {'full_width', 'top2'}, []))
         for config in report['configs'].values():
             self.assertEqual((config['tolerance']['value_bound'], config['tolerance']['logit_bound'], config['tolerance']['q_noise_bound']), (1e-6, .05, 1e-6))
             self.assertGreater(config['e']['roots_compared'], 0);self.assertGreater(config['discrete']['compared']['t2_status'], 0)
@@ -638,7 +640,7 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         self.assertEqual(section['evaluator'], dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=CHECKPOINT))
         self.assertEqual((section['repo_path'], section['commit'], section['git_blob_sha1'], section['git_verification']['status']),
             (gate.DECLARED_SUBDIR + '/champion.json', self.record.commit, N.git(self.repo, 'hash-object', flags[1]), 'verified'))
-        self.assertEqual(section['source_measurement_verification']['status'], 'not verifiable here')
+        self.assertEqual((section['source_measurement_verification']['status'], report['status_reasons']), ('verified', []))   # nothing provisional
         tolerance = report['tolerance'];self.assertEqual((tolerance['value_bound'], tolerance['logit_bound'], tolerance['depth1_noise_floor']), (1e-6, .05, 0.))
         self.assertEqual(tolerance['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.);self.assertEqual(tolerance['declared_bounds']['sha256'], sha)
         self.assertEqual((mutation['header'], mutation['value_bound'], mutation['calls'][0]['value_bound']), (header, 1e-6, 1e-6))
@@ -710,6 +712,21 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         self.assertEqual({k: call['clean'][k] for k in recorded}, recorded);self.assertEqual(call['value_bound'], 1e-3)
         for name, verdict in call['mutants'].items():
             self.assertTrue(verdict['killed'], name);self.assertEqual({k: verdict[k] for k in recorded}, recorded, name);self.assertEqual(verdict['value_bound'], 1e-3, name)
+
+    def test_a_run_without_git_is_provisional_and_the_audit_requires_verified(self):
+        """The committed declaration's bytes in a checkout that is not a git work tree (an exported image): the run keeps PASS and exit 0 with
+        'provisional: git_verification ...' in status_reasons; --reverdict alone keeps the reason; the audit, --reverdict --declared-bounds-commit,
+        refuses there (it requires verified) and passes on the work tree that holds the commit, where the reason clears."""
+        gate = gate_module();_, flags, sha = self.declared();repo, commit = self.repo, self.record.commit
+        exported = Path(tempfile.mkdtemp(prefix='champion-exported-'));target = exported / gate.DECLARED_SUBDIR / 'champion.json';target.parent.mkdir(parents=True)
+        target.write_bytes(self.record.path.read_bytes());self.repo = exported
+        code, out = self.main('--depth', '2', '--k-own', '2', '--k-opp', '2', '--declared-bounds', str(target), *flags[2:]);report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status'], report['passed'], report['header']['declared_bounds']['git_verification']['status']), (0, 'PASS', True, 'not verifiable here'))
+        self.assertEqual(len(report['status_reasons']), 1);self.assertTrue(report['status_reasons'][0].startswith('provisional: git_verification not verifiable here'))
+        text, again = self.reverdicted(report, '--declared-bounds-commit', commit);self.assertIsNone(again);self.assertIn('requires git_verification verified', text)
+        code, again = self.reverdicted(report);self.assertEqual((code, again['status']), (0, 'PASS'));self.assertTrue(again['status_reasons'][0].startswith('provisional: git_verification'))
+        self.repo = repo;code, again = self.reverdicted(report, '--declared-bounds-commit', commit, '--declared-bounds-sha256', sha)
+        self.assertEqual((code, again['status'], again['status_reasons'], again['reverdict']['declared_bounds_reverified']['git']['status']), (0, 'PASS', [], 'verified'))
 
     def test_the_resolved_evaluator_is_matched_again(self):
         """The flags name the declared champion but load_roots resolves another identity (a precision the header reports differently): refused
