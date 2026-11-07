@@ -70,8 +70,8 @@ class RoundingEdgeTests(unittest.TestCase):
             except ValueError:
                 edges += 1
                 result = search._reduce_tolerating_rounding(root_logits=(0.,) * 9, root_legal=root, worlds=(world, world))
-                self.assertEqual(result.status, 'LABELED')
-        self.assertGreater(edges, 0);self.assertEqual(search.events['d_reduction_rounding_edge'], edges)
+                self.assertEqual(result.status, 'LABELED');self.assertIsNone(result.improvement)   # counted per real row in _price
+        self.assertGreater(edges, 0)
         # A genuinely out-of-range or malformed input still raises.
         with self.assertRaises(ValueError):search._reduce_tolerating_rounding(root_logits=(0.,) * 9, root_legal=root, worlds=(world,))
 
@@ -91,7 +91,7 @@ class FakeWorlds:
 
 class FakePricer:
     """Depth-1 FramePricer stand-in: row r of the call gets grids[address.stream - 1000] (None refuses)."""
-    def __init__(self, grids):self.grids = grids;self.last_timing = {}
+    def __init__(self, grids, edges=()):self.grids = grids;self.edges = set(edges);self.last_timing = {}
 
     def price(self, requests, materializer, recipe, params):
         from types import SimpleNamespace
@@ -105,18 +105,20 @@ class FakePricer:
                 for b, v in enumerate(row):values[a][b] = v
             report = dict(opponent_requested=True, reply_legal=tuple(b < len(grid[0]) for b in range(9)), reply_logits=(0.,) * 9,
                 joint_values=values, reason=None)
-            out.append(SimpleNamespace(status='LABELED', reason=None, world_reports=[report, report]))
+            edge = request.plans.address.stream - 1000 in self.edges   # D's rounding edge: LABELED with no improvement
+            out.append(SimpleNamespace(status='LABELED', reason=None, reduction=SimpleNamespace(improvement=None if edge else object()),
+                world_reports=[report, report]))
         return tuple(out)
 
 
 class ChooseTests(unittest.TestCase):
     """Search.choose end to end on CPU fakes: surfaces -> reduction -> played action."""
-    def search(self, reduction, grids):
+    def search(self, reduction, grids, edges=()):
         import collections
         from pokezero import v5_gumbel as g
         search = h2h.Search.__new__(h2h.Search)
         search.original, search.worlds, search.source, search.materializer = g, FakeWorlds, None, None
-        search.capacities, search.kind, search.pricer, search.params = (4,), 'depth1', FakePricer(grids), (None,)
+        search.capacities, search.kind, search.pricer, search.params = (4,), 'depth1', FakePricer(grids, edges), (None,)
         search.seed, search.workers, search.pool, search._reduce = 5, 1, None, g.reduce_completed_q
         search.configure(reduction=reduction, blend=.5, world_blocks=1)
         return search
@@ -142,6 +144,16 @@ class ChooseTests(unittest.TestCase):
         self.assertEqual(self.choose(self.search('hedge', grids), [0], [1])[0][0], expected)
         self.assertEqual(self.choose(self.search('average', grids), [0], [1])[0][0], 0)
         self.assertEqual(self.choose(self.search('raw', grids), [0], [1])[0][0], 1)
+
+    def test_unknown_cell_refuses_every_reduction_and_edges_count_real_rows_only(self):
+        holed = [[1., None], [-.5, .5]]
+        for reduction in ('raw', 'average', 'hedge', 'hedgedet', 'blend'):
+            out = self.choose(self.search(reduction, {0: holed}), [0], [1])
+            self.assertEqual(out[0][0], 1);self.assertEqual(out[0][1]['refusal'], 'reduction-unknown-cell')
+        # One real row on a rounding edge, priced in a call padded to capacity 4 with copies of it: counted once.
+        search = self.search('average', {0: [[1., -.5], [-.5, .5]]}, edges=(0,))
+        self.choose(search, [0], [0])
+        self.assertEqual(search.events['d_reduction_rounding_edge'], 1)
 
     def test_top_action_ties_go_to_the_lower_index(self):
         from gpu_engine import search_hedge as hedge
