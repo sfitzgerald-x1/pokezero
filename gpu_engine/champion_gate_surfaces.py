@@ -57,6 +57,8 @@ DRAFT = dict(value_bound=.032, turn1_logit_bound=.63, root_logit_bound=.26, deep
 SENTINEL = dict(value_bound=1., turn1_logit_bound=2., root_logit_bound=3., deeper_logit_bound=4., near_tie_q_bound=5.)   # field discovery only
 GROUPS = ('r1', 'r1-invariance', 'r3', 'r3-d3', 'r2-full', 'r2-top')
 NEEDS = {'r1-invariance': 'r1'}   # a group priced only beside another (its direct site comparison)
+SCOPE_GROUPS = dict(r1=('r1', 'r1-invariance'), r3=('r1', 'r3', 'r3-d3'), r2=('r2-full', 'r2-top'))   # the groups each run's sites read (R3's depth-2 pass is R1's frame)
+SCOPES = tuple(SCOPE_GROUPS)
 R3_ROOTS = 40          # R3's saved roots: one call of 40, D3 bucket 64
 D3_ACTOR_CAPACITY = 33   # D3's FramePricer actor_capacity: the plan's historical_window + 1 (d3_geometry.json's bank provider; saved_root_requests builds it alike)
 SPLIT = 512            # every run's call split: g2.call_capacity(D3's 4096, the pricers' --capacity 512)
@@ -173,7 +175,13 @@ SCOPE_RULE = ('R1 and R2 are measured on this chunk\'s call split, as runs on th
     'run on other roots compiles other buckets (chunk 0: 512, 32 and 8; the 40 saved roots: 64), unmeasured here. R3 runs on the 40 saved roots: '
     'its fixed-shape pricers (and oracle) price any roots with the same programs, measured here on this chunk\'s roots; its D3 (per-call '
     'buckets) is priced at R3\'s bucket in calls of --r3-call-roots on this chunk\'s roots (r3-d3)')
-RULES = dict(scope=SCOPE_RULE, positions=POSITIONS_RULE, topk_whole=TOPK_WHOLE_RULE, q=Q_RULE, guard=GUARD_RULE, direct=DIRECT_RULE, premise=PREMISE_RULE, constructions=CONSTRUCTIONS, sites=SITES_RULE,
+FOLD_SCOPE_RULE = ('--fold-from --scope r1,r3 (or r2, ...): a fold over some runs\' sites, so they can be declared while the other pieces run. It '
+    'takes exactly the groups those sites read (SCOPE_GROUPS: R1 r1 and r1-invariance; R3 r1, r3 and r3-d3, its depth-2 pass being R1\'s frame; '
+    'R2 r2-full and r2-top), each once, and refuses a missing or doubled one and any piece holding a group outside them (a scoped fold never '
+    'drops a group it was given). It proposes over the scope\'s sites only, marked SCOPED <runs> and listing every out-of-scope site by name; '
+    'every site, flag, earlier-report check, the same-selection dQ and R1\'s block-invariance rule are the full fold\'s. Without --scope the fold '
+    'is the full one, unchanged')
+RULES = dict(scope=SCOPE_RULE, fold_scope=FOLD_SCOPE_RULE, positions=POSITIONS_RULE, topk_whole=TOPK_WHOLE_RULE, q=Q_RULE, guard=GUARD_RULE, direct=DIRECT_RULE, premise=PREMISE_RULE, constructions=CONSTRUCTIONS, sites=SITES_RULE,
     fold=FOLD_RULE, proposal=PROPOSAL_RULE, r1_invariance=R1_INVARIANCE_RULE, estimate=ESTIMATE_RULE, adapter=ADAPTER, margin=MARGIN, figures=FIGURES,
     draft=DRAFT, exit=EXIT)
 
@@ -1166,23 +1174,34 @@ def gaps_section(sites, measurements, proposal):
     return out
 
 
-def fold(measured, earlier, *, runs, header=None, source_flags=None):
+def scope_groups(scope):
+    """The groups a scope's sites read (SCOPE_GROUPS), in GROUPS order; every group without a scope."""
+    return GROUPS if not scope else tuple(g for g in GROUPS if any(g in SCOPE_GROUPS[r] for r in scope))
+
+
+def fold(measured, earlier, *, runs, header=None, source_flags=None, scope=None):
     """The table, the proposal, R1's block-invariance decision and the guard and gaps sections from the measurements (this run's and the
     pieces'), the earlier reports (source_flags: each one's mismatches, flagged on every site built on it) and the runs' arguments. The
-    proposal is made only when every group of GROUPS was measured (PROPOSAL_RULE); otherwise its fields are withheld as INCOMPLETE."""
-    measurements, direct = measured.get('geometries') or {}, measured.get('direct') or {}
-    groups = sorted({g.get('group') for g in measurements.values() if g.get('group')});missing = [g for g in GROUPS if g not in groups]
+    proposal is made only when every group of GROUPS was measured (PROPOSAL_RULE); otherwise its fields are withheld as INCOMPLETE. scope:
+    runs ('r1', 'r3', ...; FOLD_SCOPE_RULE): only their sites, their groups required (a group outside them is refused), marked SCOPED."""
+    measurements, direct = measured.get('geometries') or {}, measured.get('direct') or {};scope = tuple(r for r in SCOPES if r in (scope or ()))
+    required = scope_groups(scope);groups = sorted({g.get('group') for g in measurements.values() if g.get('group')});missing = [g for g in required if g not in groups]
+    outside = [g for g in groups if g not in required]
+    if outside:raise ValueError(f'groups {outside} lie outside the scope {scope}: a scoped fold never drops a group it was given')
     r1_whole = sorted((measurements.get('R1.frame') or {}).get('whole') or ()) or None
     r2_whole = sorted(set().union(*[(g.get('whole') or {}).keys() for gid, g in measurements.items() if gid.startswith('R2.')])) or None
-    sites = fold_sites(site_registry(runs, r1_whole=r1_whole, r2_whole=r2_whole), measurements, direct, earlier, source_flags)
+    every = fold_sites(site_registry(runs, r1_whole=r1_whole, r2_whole=r2_whole), measurements, direct, earlier, source_flags)
+    out_of_scope = [s['id'] for s in every if scope and s['run'].lower() not in scope];sites = [s for s in every if s['id'] not in out_of_scope]
     decision = r1_invariance_decision(sites, direct)
+    if scope and 'r1' not in scope:decision.update(block_invariance=None, reasons=['R1 is outside the scope'])
     proposal = decision['proposal_with'] if decision['block_invariance'] else decision['proposal_without']
     if missing:
         proposal = {k: dict(x, proposed=None, incomplete=f'groups not measured: {missing}') for k, x in proposal.items()}
     unmeasured = [dict(site=s['id'], status=s['status'], reasons=s['unmeasured_reasons'] + s['withheld_reasons'], exact_coverage=s['exact_coverage'])
         for s in sites if s['tail'] is None]
     return dict(sites=sites, proposal=dict(fields=proposal, r1_block_invariance=decision['block_invariance'], label='PROPOSAL (informational, not a verdict)',
-        status='INCOMPLETE' if missing else 'COMPLETE', groups=groups, missing_groups=missing, margin=MARGIN, figures=FIGURES, rule=PROPOSAL_RULE), r1_invariance=decision, guard=guard_section(sites, measurements), gaps=gaps_section(sites, measurements, proposal),
+        status='INCOMPLETE' if missing else f'SCOPED {",".join(scope)}' if scope else 'COMPLETE', scope=list(scope) or None, required_groups=list(required), groups=groups,
+        missing_groups=missing, out_of_scope=out_of_scope, margin=MARGIN, figures=FIGURES, rule=PROPOSAL_RULE), r1_invariance=decision, guard=guard_section(sites, measurements), gaps=gaps_section(sites, measurements, proposal),
         unmeasured=unmeasured, reported_only=list(REPORTED_ONLY), turn1_identity=direct.get('R3.turn1_identity'))
 
 
@@ -1251,6 +1270,7 @@ def markdown(report):
         '| field | largest tail | set by | x 1.25, rounded up | draft | draft covers | withheld | unmeasured |', '| --- | --- | --- | --- | --- | --- | --- | --- |']
     lines += [f'| {k} | {_num(x["tail"])} | {x["set_by"]} | {_num(x["proposed"])} | {x["draft"]} | {x["draft_covers"]} | {len(x["withheld"])} | {len(x["unmeasured"])} |' for k, x in p.items()]
     r = f.get('r1_invariance') or {};lines += ['', f'- R1 block invariance: {"with" if r.get("block_invariance") else "without"} ({"; ".join(r.get("reasons") or []) or "clean, raises nothing"})']
+    if pr.get('out_of_scope'):lines.append(f'- Out of scope ({len(pr["out_of_scope"])} sites, not folded): {", ".join(pr["out_of_scope"])}')
     lines += ['', '## Guard (informational)', ''] + [f'- {run}: p10 {_num(x.get("p10_bf16"))}, guard {_num(x.get("guard_bf16"))} (f32 {_num(x.get("guard_f32"))}); clean run passes: '
         f'{x.get("clean_run_passes")}; ' + ', '.join(f'{y["site"]} {_num(y["ratio"], ".3g")}x' for y in x.get('sites') or []) for run, x in (f.get('guard') or {}).items() if x.get('measured')]
     lines += ['', '## (e) top-two gaps (bf16)', ''] + [f'- {k}: roots {x.get("roots")}, p1 {_num(x.get("p1"))}, p5 {_num(x.get("p5"))}, p10 {_num(x.get("p10"))}; within: ' +
@@ -1268,7 +1288,7 @@ def write(out, report):
     (out / 'gate_surfaces.json').write_text(json.dumps(body, indent=1, allow_nan=False) + '\n');(out / 'gate_surfaces.md').write_text(markdown(body))
 
 
-def assemble(measured, *, earlier, runs, run_record, header, pieces=()):
+def assemble(measured, *, earlier, runs, run_record, header, pieces=(), scope=None):
     """The report body: the merged measurements, the fold, every flag, the status and exit. Refuses (SystemExit) pieces that do not share
     this run's source (piece_checks); every pricer's options are checked against PINNED again here, from the recorded options of this run and
     every piece (a piece written by an older tree is judged by the current pins)."""
@@ -1285,7 +1305,7 @@ def assemble(measured, *, earlier, runs, run_record, header, pieces=()):
     calls = (measured or {}).get('calls') or {}
     if calls.get('selected') is not None:departures.append(f'calls subset {calls["selected"]} of {len(calls.get("sizes") or [])}: tails over those calls only')
     departures = list(dict.fromkeys(departures))
-    body = fold(merged, earlier, runs=runs, header=header, source_flags=source_flags)
+    body = fold(merged, earlier, runs=runs, header=header, source_flags=source_flags, scope=scope)
     compared = sum((m.get('count') or 0) for g in merged['geometries'].values() for m in list((g.get('quantities') or {}).values()) + list((g.get('whole') or {}).values()))
     status = 'MEASURED' if compared else 'NOTHING_COMPARED'
     for s in body['sites']:
@@ -1323,6 +1343,7 @@ def parse(argv=None):
     parser.add_argument('--calls', help='only these call indices of the 512 split, e.g. 0,2,4-8 (a departure: tails over those calls only)')
     parser.add_argument('--r3-call-roots', type=int, default=R3_ROOTS, help='r3-d3: D3 call size (R3\'s saved roots: 40, bucket 64)')
     parser.add_argument('--fold-from', nargs='+', metavar='DIR', help='earlier pieces (their gate_surfaces.json) folded with this run, or alone without --d3-root')
+    parser.add_argument('--scope', help=f'with --fold-from: fold only these runs\' sites, comma-separated of {SCOPES} (FOLD_SCOPE_RULE); default the full fold')
     ce.add_arguments(parser);parser.set_defaults(memory_policy=False)
     args = parser.parse_args(argv)
     args.groups = tuple(g.strip() for g in args.measure.split(',') if g.strip())
@@ -1333,6 +1354,12 @@ def parse(argv=None):
     try:args.call_set = parse_calls(args.calls)
     except ValueError:parser.error('--calls: indices and ranges, e.g. 0,2,4-8')
     if args.r3_call_roots < 1:parser.error('positive --r3-call-roots required')
+    args.scope_runs = None
+    if args.scope is not None:
+        runs = [x.strip() for x in args.scope.split(',') if x.strip()];bad = [x for x in runs if x not in SCOPES]
+        if bad or not runs:parser.error(f'--scope: runs of {SCOPES}, comma-separated (got {args.scope!r})')
+        if not args.fold_from:parser.error('--scope applies to a fold: give --fold-from')
+        args.scope_runs = tuple(r for r in SCOPES if r in runs)
     if args.d3_root is None:
         if not args.fold_from:parser.error('--d3-root (live) or --fold-from (offline fold) required')
         given = [n for n in ce.FLAGS + ('champion_precision',) if getattr(args, n)] + (['--calls'] if args.calls else []) + (['--chunk'] if args.chunk is not None else [])
@@ -1363,8 +1390,10 @@ def main(argv=None):
         refusals, _ = piece_checks(pieces[0][1].get('header') or {}, pieces)
         if refusals:raise SystemExit('--fold-from: pieces that must share a source do not (fail closed): ' + '; '.join(refusals))
         listed = [g for _, x in pieces for g in ((x.get('header') or {}).get('groups') or ())] + (list(args.groups) if args.d3_root else [])
-        twice, missing = sorted({g for g in listed if listed.count(g) > 1}), [g for g in GROUPS if g not in listed]
-        if twice or missing:raise SystemExit(f'--fold-from: the fold needs every group of {GROUPS} exactly once (missing {missing}, twice {twice}): refused, no proposal')
+        required = scope_groups(args.scope_runs);outside = sorted({g for g in listed if g not in required})
+        if outside:raise SystemExit(f'--fold-from --scope {",".join(args.scope_runs)}: groups {outside} lie outside the scope (refused: a scoped fold never drops a group it was given)')
+        twice, missing = sorted({g for g in listed if listed.count(g) > 1}), [g for g in required if g not in listed]
+        if twice or missing:raise SystemExit(f'--fold-from: the fold needs every group of {required} exactly once (missing {missing}, twice {twice}): refused, no proposal')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     runs, run_record = run_arguments(overrides=None if args.d3_root is None or args.fixed_shapes else dict(R1=dict(fixed_shapes=False), R1_invariance=dict(fixed_shapes=False),
         R3=dict(fixed_shapes=False)))
@@ -1398,7 +1427,8 @@ def main(argv=None):
             pieces=[p for p, _ in pieces], devices=[str(x) for x in jax.devices()])
         if pieces:header.update(piece_groups={p: (x.get('header') or {}).get('groups') for p, x in pieces}, piece_trees={p: (x.get('header') or {}).get('tree') for p, x in pieces},
             pricer_options=dict({k: o for _, x in pieces for k, o in ((x.get('header') or {}).get('pricer_options') or {}).items()}, **header['pricer_options']))
-    body = assemble(measured, earlier=earlier, runs=runs, run_record=run_record, header=header, pieces=pieces)
+    if args.scope_runs:header['fold_scope'] = dict(runs=list(args.scope_runs), groups=list(scope_groups(args.scope_runs)), rule=FOLD_SCOPE_RULE)
+    body = assemble(measured, earlier=earlier, runs=runs, run_record=run_record, header=header, pieces=pieces, scope=args.scope_runs)
     header['seconds'] = time.perf_counter() - started
     report = dict(schema=SCHEMA, status=body.pop('status'), exit=body.pop('exit'), status_reasons=body.pop('status_reasons'), informational=True,
         header=dict(header, rules=RULES), **body)

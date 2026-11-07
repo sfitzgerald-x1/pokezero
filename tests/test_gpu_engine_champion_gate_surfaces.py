@@ -162,10 +162,10 @@ class MeasureTests(N.FixtureN, unittest.TestCase):
         paths = directory / 'validation.json', directory / 'd3_geometry.json';paths[0].write_text(json.dumps(earlier_report(self.pair)));paths[1].write_text(json.dumps(d3))
         return [str(x) for x in paths]
 
-    def fold_main(self, directory, paths, name='fold'):
+    def fold_main(self, directory, paths, name='fold', extra=()):
         v_path, d_path = self.earlier_files(directory) if not (directory / 'validation.json').exists() else (str(directory / 'validation.json'), str(directory / 'd3_geometry.json'))
         with patch.object(gs, 'log', lambda *a, **k: None):
-            code = gs.main(['--out', str(directory / name), '--validation-json', v_path, '--d3-geometry-json', d_path, '--fold-from', *paths])
+            code = gs.main(['--out', str(directory / name), '--validation-json', v_path, '--d3-geometry-json', d_path, '--fold-from', *paths, *extra])
         return code, json.loads((directory / name / 'gate_surfaces.json').read_text())
 
     def test_three_pieces_fold_as_one_run(self):
@@ -192,6 +192,33 @@ class MeasureTests(N.FixtureN, unittest.TestCase):
         sites = {s['id']: s for s in folded['fold']['sites']}
         self.assertTrue(any('was not measured' in f for f in sites['R2.full_width.n2.e.max_abs_delta_q']['flags']))   # piece b predates the f32 premise
         self.assertFalse(any('was not measured' in f for f in sites['R2.top3.n2.e.max_abs_delta_q']['flags']))
+
+    def test_a_scoped_fold_is_the_full_fold_restricted_to_its_sites(self):
+        """--scope r1,r3 over piece a alone: every R1 and R3 site exactly the full fold's, the proposal over them alone (R1's block-invariance
+        rule included), marked SCOPED r1,r3 with every R2 site listed out of scope; --scope r2 over b and c likewise. A scope missing one of its
+        groups, or given a piece outside it, is refused before anything is written."""
+        directory = Path(tempfile.mkdtemp(prefix='gate-surfaces-scope-'));paths = self.write_pieces(directory)
+        code, full = self.fold_main(directory, paths, name='full');self.assertEqual((code, full['fold']['proposal']['status'], full['fold']['proposal']['out_of_scope']), (0, 'COMPLETE', []))
+        numbers = lambda fields: {k: (x['proposed'], x['tail'], x['set_by']) for k, x in fields.items()}
+        for scope, given, runs in (('r1,r3', paths[:1], ('R1', 'R3')), ('r2', paths[1:], ('R2',))):
+            with self.subTest(scope=scope):
+                code, scoped = self.fold_main(directory, given, name=f'scoped-{scope}', extra=('--scope', scope));p = scoped['fold']['proposal']
+                self.assertEqual((code, p['status'], p['missing_groups'], p['scope']), (0, f'SCOPED {scope}', [], scope.split(',')))
+                inside = [s for s in full['fold']['sites'] if s['run'] in runs];self.assertEqual(scoped['fold']['sites'], inside)
+                self.assertEqual(p['out_of_scope'], [s['id'] for s in full['fold']['sites'] if s['run'] not in runs]);self.assertTrue(p['out_of_scope'])
+                decision = gs.r1_invariance_decision(inside, full['measurements']['direct'])
+                want = decision['proposal_with'] if decision['block_invariance'] and 'R1' in runs else decision['proposal_without']
+                self.assertEqual(numbers(p['fields']), numbers(json.loads(json.dumps(v.plain(want)))))
+                self.assertEqual({k for k, x in p['fields'].items() if x['proposed']}, {k for k, x in p['fields'].items() if x['sites']})   # R2 has no deeper-ply site
+                self.assertTrue(all(x['set_by'].split(': ')[-1].split('.')[0] in runs for x in p['fields'].values() if x['set_by']))
+                self.assertTrue(all(x['site'].split('.')[0] in runs for x in scoped['fold']['unmeasured']))
+                self.assertEqual(scoped['fold']['r1_invariance']['block_invariance'], full['fold']['r1_invariance']['block_invariance'] if 'R1' in runs else None)
+                self.assertEqual(scoped['header']['fold_scope']['groups'], list(gs.scope_groups(tuple(scope.split(',')))))
+        r13 = json.loads(Path(paths[0], 'gate_surfaces.json').read_text());r13['header']['groups'] = [g for g in r13['header']['groups'] if g != 'r3-d3']
+        del r13['measurements']['geometries']['R3.d3'];short = directory / 'short';short.mkdir();(short / 'gate_surfaces.json').write_text(json.dumps(r13))
+        for given, message in (([str(short)], "missing \\['r3-d3'\\]"), ([paths[0], paths[2]], "groups \\['r2-top'\\] lie outside the scope")):
+            with self.subTest(refused=message), self.assertRaisesRegex(SystemExit, message):self.fold_main(directory, given, name='refused', extra=('--scope', 'r1,r3'))
+            self.assertFalse((directory / 'refused').exists())
 
     def test_the_gates_own_call_agrees(self):
         """run_call_n on the same bound requests at R1's shapes (depth 2, k 9, fixed, INVARIANCE_LANES) under the bf16 champion: (c)'s and
@@ -646,6 +673,10 @@ class ParseTests(unittest.TestCase):
         self.refused(base[:6] + CE.CHAMPION, '--validation-json');self.refused(['--out', '/o', '--validation-json', '/v', '--d3-geometry-json', '/d'], '--fold-from')
         fold = gs.parse(['--out', '/o', '--validation-json', '/v', '--d3-geometry-json', '/d', '--fold-from', '/a', '/b']);self.assertEqual(fold.fold_from, ['/a', '/b'])
         self.refused(['--out', '/o', '--validation-json', '/v', '--d3-geometry-json', '/d', '--fold-from', '/a'] + CE.CHAMPION, 'prices nothing')
+        fold = ['--out', '/o', '--validation-json', '/v', '--d3-geometry-json', '/d']
+        self.assertEqual(gs.parse(fold + ['--fold-from', '/a', '--scope', 'r3,r1']).scope_runs, ('r1', 'r3'));self.assertIsNone(gs.parse(fold + ['--fold-from', '/a']).scope_runs)
+        self.refused(fold + ['--fold-from', '/a', '--scope', 'r4'], '--scope: runs of');self.refused(base + CE.CHAMPION + ['--scope', 'r1'], 'give --fold-from')
+        self.assertEqual((gs.scope_groups(('r1', 'r3')), gs.scope_groups(('r2',)), gs.scope_groups(None)), (('r1', 'r1-invariance', 'r3', 'r3-d3'), ('r2-full', 'r2-top'), gs.GROUPS))
 
     def test_the_runs_parse_with_the_gates_parser(self):
         runs, record = gs.run_arguments()
