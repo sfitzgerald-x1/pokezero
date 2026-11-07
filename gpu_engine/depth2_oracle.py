@@ -28,8 +28,10 @@ side (winner 2 is a draw). Child status: 1 terminal, 2 expanded, 3 error. Leaf s
 codes, only while the opponent is requested at the child: 5 its child view has an encoder error, else 6
 its child prior is unusable; such a child keeps D's learner value and is not expanded. A world with
 no state has pre code -1 (world_pre). Heads (heads()) are a separate step on the oracle's own views:
-v5_model.forward(..., compute_dtype='bfloat16'), learner params for the learner's child and leaf views,
-opponent params for the opponent's root and child views.
+the evaluator, v5_model.forward(..., compute_dtype='bfloat16') unless Oracle(forward=) names another (the pricer's own,
+e.g. champion_evaluator.ChampionEvaluator), learner params for the learner's child and leaf views, opponent params for
+the opponent's root and child views. Digests hash each view through that evaluator's digest view
+(champion_evaluator.digest_view: what it reads; the views unchanged for the V2 default).
 
 Enumeration (turn1_cells, turn2_leaves) follows the contract (docs/v2e_depth2_pricer.md): turn 1 is D's
 grid (recipe.pricing_order prefix x the opponent's legal replies, column 0 if it waits); turn 2 crosses
@@ -44,7 +46,7 @@ import jax
 import jax.numpy as j
 import numpy as np
 
-from . import depth2_digest, v5_model
+from . import champion_evaluator as evaluators, depth2_digest, v5_model
 
 STATUS_NONE, STATUS_TERMINAL, STATUS_EXPANDED, STATUS_ERROR, STATUS_HEAD = 0, 1, 2, 3, 4
 ERROR_INVALID, ERROR_WINNER, ERROR_ENCODER, ERROR_ACTOR = 1, 2, 3, 4
@@ -108,6 +110,11 @@ def _gather(tree, row):
     return jax.tree.map(lambda x: x[row], tree)
 
 
+def _digest(inputs, view=None):
+    """depth2_digest.digest of one view's encoder inputs through the evaluator's digest view (None: the inputs unchanged)."""
+    return depth2_digest.digest(inputs if view is None else view(inputs))
+
+
 def _views(executor, state, public, owner):
     masks = executor.legal(state)
     seat = j.reshape(owner, (1,)).astype(j.int32)
@@ -116,16 +123,16 @@ def _views(executor, state, public, owner):
     return masks, seat, own, peer
 
 
-def _root(executor, states, publics, owners, spec):
+def _root(executor, states, publics, owners, spec, view=None):
     row = spec[0];state, public, owner = _gather(states, row), _gather(publics, row), owners[row]
     _, _, own, peer = _views(executor, state, public, owner)
     facts = dict(own_error=own.observation.error[0], own_legal=own.observation.legal_action_mask[0],
         peer_error=peer.observation.error[0], peer_legal=peer.observation.legal_action_mask[0],
-        own_digest=depth2_digest.digest(own.inputs), peer_digest=depth2_digest.digest(peer.inputs))
+        own_digest=_digest(own.inputs, view), peer_digest=_digest(peer.inputs, view))
     return facts, dict(own=own.inputs, peer=peer.inputs)
 
 
-def _child_core(executor, states, publics, owners, row, a1, r1):
+def _child_core(executor, states, publics, owners, row, a1, r1, view=None):
     state, public, owner = _gather(states, row), _gather(publics, row), owners[row]
     _, seat, own, peer = _views(executor, state, public, owner)
     # Turn 1 is D's joint step: the owner always acts; the opponent only if its view has a legal action.
@@ -142,18 +149,19 @@ def _child_core(executor, states, publics, owners, row, a1, r1):
         own_error=own.observation.error[0], peer_error=peer.observation.error[0],
         own_requested=own_requested, peer_requested=peer_requested,
         own_legal=own.observation.legal_action_mask[0], peer_legal=peer.observation.legal_action_mask[0],
-        own_digest=depth2_digest.digest(own.inputs), peer_digest=depth2_digest.digest(peer.inputs))
+        own_digest=_digest(own.inputs, view), peer_digest=_digest(peer.inputs, view))
     return facts, (child, trackers, own, peer, owner, seat, own_requested, peer_requested)
 
 
-def _child(executor, states, publics, owners, spec):
-    facts, (_, _, own, peer, *_) = _child_core(executor, states, publics, owners, spec[0], spec[1], spec[2])
+def _child(executor, states, publics, owners, spec, view=None):
+    facts, (_, _, own, peer, *_) = _child_core(executor, states, publics, owners, spec[0], spec[1], spec[2], view)
     return facts, dict(own=own.inputs, peer=peer.inputs)
 
 
-def _leaf(executor, states, publics, owners, spec):
+def _leaf(executor, states, publics, owners, spec, view=None):
+    seen = view   # `view` below is the leaf's observation
     first, (child, trackers, own, peer, owner, seat, own_requested, peer_requested) = _child_core(
-        executor, states, publics, owners, spec[0], spec[1], spec[2])
+        executor, states, publics, owners, spec[0], spec[1], spec[2], seen)
     actions = j.full((1, 2), -1, j.int32)
     mine = executor.dispatch(own.observation, child, seat, j.reshape(spec[3], (1,)))
     theirs = executor.dispatch(peer.observation, child, 1 - seat, j.reshape(spec[4], (1,)))
@@ -166,12 +174,12 @@ def _leaf(executor, states, publics, owners, spec):
     view = executor.observe(leaf, leaf_trackers, seat, masks[:, owner])
     facts = dict(child_invalid=first['invalid'], child_done=first['done'], child_own_digest=first['own_digest'],
         child_peer_digest=first['peer_digest'], invalid=after.step.invalid_actions[0], done=leaf.done[0],
-        winner=leaf.winner[0], view_error=view.observation.error[0], digest=depth2_digest.digest(view.inputs))
+        winner=leaf.winner[0], view_error=view.observation.error[0], digest=_digest(view.inputs, seen))
     return facts, dict(leaf=view.inputs)
 
 
 def heads(forward, params, inputs, actors):
-    """v5 heads on one chunk of one-row views.
+    """The evaluator's heads (the v5 head by default) on one chunk of one-row views.
 
     inputs: encoder inputs with a leading spec axis over one-row views ([C, 1, ...]); actors: int [C]
     index into params. Each distinct actor runs once on the whole chunk and its rows are kept, so every
@@ -239,17 +247,22 @@ def pre_code(request, root):
 
 
 class Oracle:
-    """Plain-executor two-turn evaluation; make one per executor/model."""
-    def __init__(self, executor, model, *, chunk=512, progress=None, raw_model=None):
+    """Plain-executor two-turn evaluation; make one per executor/model/evaluator."""
+    def __init__(self, executor, model, *, chunk=512, progress=None, raw_model=None, forward=None):
         """progress(kind=, chunk=, chunks=, rows_done=, rows=, seconds=, step_seconds=, head_seconds=) after each chunk.
         raw_model: also evaluate the learner's leaf and child views with v5_model.forward(..., raw_model, bf16), the
-        head's own arm (U1's predict path), as raw_head_value."""
+        head's own arm (U1's predict path), as raw_head_value. forward: the evaluator the pricer under test runs (its
+        forward= argument, e.g. a champion_evaluator.ChampionEvaluator); None is the v5 head in bf16. Its digest view
+        (champion_evaluator.digest_view) is what every digest hashes."""
         if type(chunk) is not int or chunk <= 0:raise ValueError('positive fixed oracle chunk required')
+        if forward is not None and raw_model is not None:raise ValueError('raw_model (the V2 head\'s own arm) belongs to the V2 evaluator')
         self.executor, self.model, self.chunk, self.progress = executor, model, chunk, progress
         self.chunks = []   # per-chunk timing: the first chunk of each program and world bucket includes its compile
-        mapped = lambda fn: jax.jit(jax.vmap(lambda s, p, o, spec: fn(executor, s, p, o, spec), in_axes=(None, None, None, 0)))
+        self.view, self.evaluator = evaluators.digest_view(forward), evaluators.identity(forward)
+        mapped = lambda fn: jax.jit(jax.vmap(lambda s, p, o, spec: fn(executor, s, p, o, spec, view=self.view), in_axes=(None, None, None, 0)))
         self._root, self._child, self._leaf = mapped(_root), mapped(_child), mapped(_leaf)
-        self.forward = jax.jit(lambda params, inputs: v5_model.forward(params, inputs, model, compute_dtype='bfloat16'))
+        self.forward = (jax.jit(lambda params, inputs: v5_model.forward(params, inputs, model, compute_dtype='bfloat16')) if forward is None
+            else jax.jit(lambda params, inputs: forward(params, inputs)))
         self.raw_forward = None if raw_model is None else jax.jit(lambda params, inputs: v5_model.forward(params, inputs, raw_model, compute_dtype='bfloat16'))
         self.seconds = dict(roots=0., children=0., leaves=0.);self.rows = dict(roots=0, children=0, leaves=0, padded=0)
 

@@ -66,6 +66,11 @@ test offline from them. All paths are command-line arguments; --out must be new.
 takes fixed_capacity=True and every oracle stack is padded to a fixed row count (2 x the call-split capacity), so a multi-call run
 compiles each program once per process; recorded as the report's and the start line's `harness` section. Without it, nothing is built,
 stacked, logged or written differently; a report without `harness` ran without it.
+--champion-archive/--champion-archive-sha256/--champion-checkpoint-sha256 [--champion-precision bf16|f32] (exclusive with
+--head-archive): champion 9375 is the run's ONE evaluator (gpu_engine.champion_evaluator through the forward= seam): every
+DepthNPricer, the full-width depth-2 pass, --n2-equivalence's Depth2Pricer, D3's FramePricer (with_forward) and the oracle price
+with it, digests hash its 23-token view, and every request takes its root logits and actors 0/0 (bind_evaluator_roots, after its
+exact adapter-vs-champion.forward check on the first root); the evaluator header records it. Without the flags nothing changes.
 """
 import argparse
 import collections
@@ -86,7 +91,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from . import d3_depth2_gate as g2
+from . import champion_evaluator as ce, d3_depth2_gate as g2
 
 SCHEMA = 'pokezero.depthn-gate.v1'
 FIRST = g2.FIRST
@@ -1489,13 +1494,14 @@ class DepthNPricers:
     constructor's per-ply k's: under `searched` the ply-2 entries are searched_maps' k's and the pricer derives its ply-2 slot
     widths (searched_widths), so the plan's widths are read back from the engine (engine.k_own/k_opp hold widths,
     engine.searched_k the k's); plies past 2 are prior widths in both modes. fixed_capacity (--fixed-shapes): every instance is built
-    with fixed_capacity=True and options() says so; False builds and reports exactly as without the option."""
+    with fixed_capacity=True and options() says so; False builds and reports exactly as without the option. forward: the run's
+    evaluator (--champion-archive), passed to every instance and named in options(); None builds and reports as before."""
     def __init__(self, module, executor, model, *, depth, k_own, k_opp, selection, capacity, actor_capacity, lanes=(2187,), k1_own=9,
-                 k1_opp=9, digest=True, fixed_capacity=False):
+                 k1_opp=9, digest=True, fixed_capacity=False, forward=None):
         self.module, self.executor, self.model, self.depth, self.selection = module, executor, model, depth, selection
         shape = plan_of(depth, k_own, k_opp);self.k_own, self.k_opp = shape['k_own'], shape['k_opp']
         self.capacity, self.actor_capacity, self.lanes, self.k1_own, self.k1_opp, self.digest = capacity, actor_capacity, tuple(lanes), k1_own, k1_opp, digest
-        self.fixed_capacity = fixed_capacity;self.instances = None
+        self.fixed_capacity = fixed_capacity;self.forward = forward;self.instances = None
 
     def expected_widths(self):
         """The slot widths the REQUEST implies, never the engine's self-report: under prior the requested k's; under searched
@@ -1514,7 +1520,7 @@ class DepthNPricers:
         if self.instances is None:
             self.instances = [self.module.DepthNPricer(self.executor, self.model, capacity=self.capacity, depth=self.depth, k_own=self.k_own,
                 k_opp=self.k_opp, k1_own=self.k1_own, k1_opp=self.k1_opp, block_lanes=lanes, selection=self.selection, digest=self.digest,
-                actor_capacity=self.actor_capacity, **fixed_kwargs(self.fixed_capacity)) for lanes in self.lanes]
+                actor_capacity=self.actor_capacity, **fixed_kwargs(self.fixed_capacity), **forward_kwargs(self.forward)) for lanes in self.lanes]
         k_own, k_opp = self.expected_widths()
         return plan_of(self.depth, k_own, k_opp, self.selection, k1_own=self.k1_own, k1_opp=self.k1_opp), self.instances
 
@@ -1533,7 +1539,7 @@ class DepthNPricers:
             engine_widths=self.engine_widths() or None,
             searched_k=None if engine is None or getattr(engine, 'searched_k', None) is None else list(engine.searched_k),
             widths_note='under searched, k_own[0]/k_opp[0] are searched_maps\' k\'s; the engine derives ply 2\'s slot widths' if self.selection == 'searched' else None,
-            **fixed_kwargs(self.fixed_capacity))
+            **fixed_kwargs(self.fixed_capacity), **({} if self.forward is None else dict(evaluator=ce.describe(self.forward))))
 
 
 def fixed_kwargs(fixed_capacity):
@@ -1541,12 +1547,19 @@ def fixed_kwargs(fixed_capacity):
     return dict(fixed_capacity=True) if fixed_capacity else {}
 
 
-def depth2_pass_pricer(module, executor, model, *, capacity, actor_capacity, k1_own=9, k1_opp=9, block_lanes=2187, digest=False, fixed_capacity=False):
+def forward_kwargs(forward):
+    """forward= for a pricer or oracle under the run's evaluator (--champion-archive); nothing for the V2 default, so its build is the
+    unchanged call."""
+    return {} if forward is None else dict(forward=forward)
+
+
+def depth2_pass_pricer(module, executor, model, *, capacity, actor_capacity, k1_own=9, k1_opp=9, block_lanes=2187, digest=False, fixed_capacity=False,
+        forward=None):
     """The full-width depth-2 pass (refusal accounting; `searched` maps): DepthNPricer(depth=2, k=9), read through as_depth2_frame.
     The gate prices it with digest=True (its leaves are re-checked against the oracle); diagnostics need no digests. fixed_capacity:
-    --fixed-shapes (fixed_kwargs)."""
+    --fixed-shapes (fixed_kwargs); forward: the run's evaluator (forward_kwargs)."""
     return module.DepthNPricer(executor, model, capacity=capacity, depth=2, k_own=9, k_opp=9, k1_own=k1_own, k1_opp=k1_opp, block_lanes=block_lanes,
-        selection='prior', digest=digest, actor_capacity=actor_capacity, **fixed_kwargs(fixed_capacity))
+        selection='prior', digest=digest, actor_capacity=actor_capacity, **fixed_kwargs(fixed_capacity), **forward_kwargs(forward))
 
 
 FIXED_SHAPES = ('--fixed-shapes is a harness setting, not a rule: no check, bound, tolerance or verdict reads it. Every DepthNPricer the run '
@@ -2641,20 +2654,23 @@ def per_ply(text, depth, name):
 
 
 def load_roots(args):
-    """Requests (saved roots or a bank chunk), the evaluator (head override or the bank snapshot's actor) and --max-roots."""
+    """Requests (saved roots or a bank chunk), the evaluator (head override, champion 9375 or the bank snapshot's actor) and
+    --max-roots. `forward` is the champion evaluator (None for V2: the pricers' default forward)."""
     loaded = (g2.saved_root_requests if args.saved_roots else g2.bank_chunk_requests)(args)
     head = g2.load_head(args, plan=loaded.plan, labels=loaded.labels, category_sha256=loaded.category_sha256) if args.head_archive else None
-    params = (head[0],) if head is not None else loaded.params
-    groups, root_values, dropped, arm_checked = g2.bind_roots(loaded.groups, params, loaded.plan, head_config=None if head is None else head[1])
-    evaluator = dict(g2.evaluator_header(args, loaded, head), arm_checked=arm_checked, dropped_roots=dropped)
+    champion = g2.load_champion(args, loaded) if getattr(args, 'champion_archive', None) else None
+    params = (head[0],) if head is not None else (champion.params,) if champion is not None else loaded.params
+    groups, root_values, dropped, arm_checked = g2.bind_roots(loaded.groups, params, loaded.plan, head_config=None if head is None else head[1],
+        evaluator=champion)
+    evaluator = dict(g2.evaluator_header(args, loaded, head, champion=champion), arm_checked=arm_checked, dropped_roots=dropped)
     log('EVALUATOR_RESOLVED', evaluator=evaluator, root_value_scale=g2.percentiles(root_values))
     if args.max_roots is not None:
         kept, left = [], args.max_roots
         for group in groups:
             if left > 0:kept.append(group[:left]);left -= len(kept[-1])
         groups = kept
-    return SimpleNamespace(loaded=loaded, head=head, params=params, groups=groups, root_values=root_values, evaluator=evaluator,
-        actor_capacity=len(params) if head is not None else loaded.plan.historical_window + 1)
+    return SimpleNamespace(loaded=loaded, head=head, params=params, groups=groups, root_values=root_values, evaluator=evaluator, forward=champion,
+        actor_capacity=len(params) if head is not None or champion is not None else loaded.plan.historical_window + 1)
 
 
 def each_call(provider, groups, seeds):
@@ -2713,18 +2729,19 @@ def parse(argv=None):
         '(--save-arrays --save-oracle); writes mutation-test.json in --out')
     parser.add_argument('--fixed-shapes', action='store_true', help='compile once per process: every DepthNPricer with fixed_capacity=True and '
         'every oracle stack padded to 2 x the call-split capacity (FIXED_SHAPES; a harness setting, recorded as `harness`; no rule reads it)')
-    g2.add_head_arguments(parser)
+    g2.add_head_arguments(parser);ce.add_arguments(parser)
     args = parser.parse_args(argv)
     if args.reverdict:
         given = sorted(a.option_strings[0] for a in parser._actions if a.dest not in ('help', 'reverdict') and getattr(args, a.dest) != a.default)
         if given:parser.error('--reverdict runs offline on a saved gate.json and takes no other option (given: ' + ', '.join(given) + ')')
         return parser, args
-    g2.check_head_arguments(parser, args)
+    g2.check_head_arguments(parser, args);ce.check_arguments(parser, args)
     if args.raw_head_check and not args.head_archive:parser.error('--raw-head-check needs --head-archive')
     if not args.out:parser.error('--out is required (every mode but --reverdict)')
     if args.diagnostics_from or args.mutation_from:
-        if args.saved_roots or args.d3_root or args.head_archive or args.n2_equivalence or args.depth3_diagnostics or args.mutation_test or args.save_oracle:
-            parser.error('--diagnostics-from / --mutation-from run offline: no roots, head, --n2-equivalence, --depth3-diagnostics, --mutation-test or --save-oracle')
+        if (args.saved_roots or args.d3_root or args.head_archive or args.champion_archive or args.n2_equivalence or args.depth3_diagnostics or args.mutation_test
+                or args.save_oracle):
+            parser.error('--diagnostics-from / --mutation-from run offline: no roots, head, champion, --n2-equivalence, --depth3-diagnostics, --mutation-test or --save-oracle')
         if args.diagnostics_from and args.mutation_from:parser.error('one of --diagnostics-from or --mutation-from')
         if args.fixed_shapes:parser.error('--fixed-shapes shapes the live pricers and oracle; --diagnostics-from / --mutation-from price nothing')
         return parser, args
@@ -2775,11 +2792,12 @@ def main(argv=None):
     if missing:raise SystemExit('not on this tree (failing closed): ' + ', '.join(missing))
     log('TOLERANCE_RULE', rule=g2.TOLERANCE_RULE, logit_bound=g2.LOGIT_BOUND, guard_factor=g2.GUARD_FACTOR, guard_spread='p10 learner-max own-slot spread of the last ply\'s parents',
         guard_depthn_rule=GUARD_DEPTHN_RULE, deeper_logit_rule=DEEPER_LOGIT_RULE)
-    log('EVALUATOR', override=bool(args.head_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
-        checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, resolved='EVALUATOR_RESOLVED follows once the roots are loaded')
+    log('EVALUATOR', override=bool(args.head_archive or args.champion_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
+        checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, **ce.log_fields(args),
+        resolved='EVALUATOR_RESOLVED follows once the roots are loaded')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     roots = load_roots(args);provider, plan = roots.loaded.provider, roots.loaded.plan;module = pricer_module()
-    reference = importlib.import_module('gpu_engine.depthn_oracle');frame_pricer = roots.loaded.frame_pricer
+    reference = importlib.import_module('gpu_engine.depthn_oracle');frame_pricer = g2.with_forward(roots.loaded.frame_pricer, getattr(roots, 'forward', None))
     seeds = g2.world_block_seeds(provider.recipe.seed, args.worlds_blocks)
     common = dict(roots=roots, provider=provider, plan=plan, module=module, frame_pricer=frame_pricer, seeds=seeds, out=out, reference=reference)
     if args.n2_equivalence:return run_n2(args, **common)
@@ -2792,15 +2810,16 @@ def header(args, roots, abs_values, source):
 
 
 def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference):
-    lanes = INVARIANCE_LANES if args.block_invariance else (args.block_lanes,)
+    lanes = INVARIANCE_LANES if args.block_invariance else (args.block_lanes,);forward = getattr(roots, 'forward', None)
     pricers = DepthNPricers(module, provider.executor, plan.model, depth=args.depth, k_own=args.k_own_ply, k_opp=args.k_opp_ply, selection=args.selection,
-        capacity=args.capacity, actor_capacity=roots.actor_capacity, lanes=lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, fixed_capacity=args.fixed_shapes)
+        capacity=args.capacity, actor_capacity=roots.actor_capacity, lanes=lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, fixed_capacity=args.fixed_shapes,
+        forward=forward)
     depth2_pricer = depth2_pass_pricer(module, provider.executor, plan.model, capacity=args.capacity, actor_capacity=roots.actor_capacity,
-        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, digest=True, fixed_capacity=args.fixed_shapes)
+        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, digest=True, fixed_capacity=args.fixed_shapes, forward=forward)
     capacity = g2.call_capacity(frame_pricer, [depth2_pricer]);groups = g2.split_groups(roots.groups, capacity)
     harness = fixed_shapes_harness(capacity) if args.fixed_shapes else None;shaped = {} if harness is None else dict(harness=harness)
     oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log),
-        raw_model=roots.head[1] if args.raw_head_check else None)
+        raw_model=roots.head[1] if args.raw_head_check else None, **forward_kwargs(forward))
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), pricer_options=pricers.options(), sample_leaves=args.sample_leaves, seeds=seeds,
         mutation_test=args.mutation_test, save_oracle=args.save_oracle, **shaped)
     evaluations, calls = [], []
@@ -2814,7 +2833,8 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
     result = summarize_run(evaluations, lanes);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
     reported = [c for c in calls if c['refusals'] is not None]
-    refusals = dict(g2.with_dropped(merge_refusals_n([c['refusals'] for c in reported]), roots.evaluator.get('dropped_roots', ())), calls_reported=len(reported),
+    refusals = dict(g2.with_dropped(merge_refusals_n([c['refusals'] for c in reported]), roots.evaluator.get('dropped_roots', ()), roots.evaluator),
+        calls_reported=len(reported),
         rule='reference (D) at every ply: any world pre != 0 or any status-3 node or leaf refuses the root; depth2_full_width is the full-width depth-2 pass')
     abs_values = np.concatenate([e['abs_t1'] for e in evaluations if 'abs_t1' in e]) if any('abs_t1' in e for e in evaluations) else []
     report = dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(result['checks']), tolerance=result['tolerance'], schema=SCHEMA, status=status,
@@ -2847,15 +2867,15 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
 
 
 def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference):
-    configs, options = [], {}
+    configs, options = [], {};forward = getattr(roots, 'forward', None)
     for name, k in (('full_width', 9), (f'top{args.n2_k}', args.n2_k)):
         depthn = module.DepthNPricer(provider.executor, plan.model, capacity=args.capacity, depth=2, k_own=k, k_opp=k, k1_own=args.k1_own, k1_opp=args.k1_opp,
-            block_lanes=args.block_lanes, selection='prior', digest=True, actor_capacity=roots.actor_capacity)
+            block_lanes=args.block_lanes, selection='prior', digest=True, actor_capacity=roots.actor_capacity, **forward_kwargs(forward))
         depth2, depth2_options = g2.make_pricer(provider.executor, plan.model, widths=dict(k_own=k, k_opp=k, k1_own=args.k1_own, k1_opp=args.k1_opp),
-            actor_capacity=roots.actor_capacity, capacity=args.capacity)
+            actor_capacity=roots.actor_capacity, capacity=args.capacity, **forward_kwargs(forward))
         configs.append((name, depthn, depth2));options[name] = dict(k=k, depth2_options=depth2_options)
     capacity = g2.call_capacity(frame_pricer, [c[1] for c in configs] + [c[2] for c in configs]);groups = g2.split_groups(roots.groups, capacity)
-    oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log))
+    oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log), **forward_kwargs(forward))
     log('N2_EQUIVALENCE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), configs=options)
     per_config = collections.defaultdict(list);abs_values = []
     for block, call, recipe, requests in each_call(provider, groups, seeds):
@@ -2875,11 +2895,12 @@ def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, ref
 
 
 def run_diagnostics(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference):
+    forward = getattr(roots, 'forward', None)
     depth2_pricer = depth2_pass_pricer(module, provider.executor, plan.model, capacity=args.capacity, actor_capacity=roots.actor_capacity,
-        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, fixed_capacity=args.fixed_shapes)
+        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, fixed_capacity=args.fixed_shapes, forward=forward)
     sets = {(mode, k): DepthNPricers(module, provider.executor, plan.model, depth=3, k_own=k, k_opp=k, selection=mode, capacity=args.capacity,
-        actor_capacity=roots.actor_capacity, lanes=(args.block_lanes,), k1_own=args.k1_own, k1_opp=args.k1_opp, digest=False, fixed_capacity=args.fixed_shapes)
-        for mode in MODES for k in args.diagnostic_k_values}
+        actor_capacity=roots.actor_capacity, lanes=(args.block_lanes,), k1_own=args.k1_own, k1_opp=args.k1_opp, digest=False, fixed_capacity=args.fixed_shapes,
+        forward=forward) for mode in MODES for k in args.diagnostic_k_values}
     capacity = g2.call_capacity(frame_pricer, [depth2_pricer]);groups = g2.split_groups(roots.groups, capacity)
     shaped = {} if not args.fixed_shapes else dict(harness=fixed_shapes_harness(capacity, oracle=False))   # no oracle in this mode
     log('DIAGNOSTICS_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), configs=[frame_tag(*k) for k in sets], **shaped)
