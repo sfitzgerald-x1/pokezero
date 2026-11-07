@@ -55,8 +55,9 @@ pricer) re-applies the current verdict rules to a saved gate.json (each (c) quan
 numbers and guard_mode, (c), (f) through choice_verdict, the status through gate_status_n) and writes gate-reverdict.json
 beside it, never over an existing one; exit 0 iff PASS/PASS_SAMPLED. Every report carries a `header` (header_block): (e)'s
 and (f)'s near-tie counts and flips among near ties, and RULES_CHANGED_AFTER_FAILURE with the run that triggered each.
---mutation-test (MUTATION_RULE): once every call is priced, at the run's value bound, eight misplacement mutants ({backup path,
-scatter path} x {sibling, cousin} x {single, systematic}) and a seeded swap sweep on both paths, on each call's frame and oracle
+--mutation-test (MUTATION_RULE): once every call is priced, at the run's value bound, ten mutants (eight misplacements ({backup
+path, scatter path} x {sibling, cousin} x {single, systematic}), a turn-1 misread and wrong priors handed to the rule) and a seeded
+swap sweep on both paths, on each call's frame and oracle
 data (held until then); mutation-test.json in --out; exit non-zero if the clean run fails, any mutant survives or either sweep
 has a material survivor. --save-oracle writes each call's oracle data and D3 outputs
 beside its frames (frames-block{B}-call{C}-oracle.npz, implies --save-arrays); --mutation-from DIR... re-runs the mutation
@@ -547,7 +548,10 @@ def _gap(values, lowest=False):
 
 def prior_softmax(logits, actions):
     """(f)'s expected prior: the masked softmax of action-indexed logits over `actions` in that order, this gate's OWN code (never imported from
-    depthn_backups) in the documented order of operations (max-subtract, exp, fsum, divide), so a correct backup's priors match it bit for bit."""
+    depthn_backups) in the documented order of operations (max-subtract, exp, fsum, divide), so a correct backup's priors match it bit for bit.
+    Intended coupling: the check is exact, so it ties the frozen gate to depthn_backups' softmax order of operations; a mathematically equal
+    refactor that rounds differently (e.g. multiplying by 1/total instead of dividing) fails it, and such a failure is a backups change, not a
+    pricer defect."""
     top = max(float(logits[a]) for a in actions)
     weights = [math.exp(float(logits[a]) - top) for a in actions]
     total = math.fsum(weights)
@@ -1812,11 +1816,12 @@ RULES_CHANGED_AFTER_FAILURE = (
         trigger='an Opus review counterexample, not a run', approval='confirmed by the lead 2026-11-06'),
     dict(name='rule 3: GUARD_DEPTHN_RULE', summary='(c): at plies >= 2 of a depth >= 3 frame the misplacement guard is digest-certified (reported, not '
         'gated) on a single evaluator actor with every value-compared position digest-matched; (f) gates the backup\'s grid: read identity (which '
-        'child every entry reads, exact, any rule) and every learner-max entry within the value bound of the oracle\'s child, beside its row q and '
+        'child every entry reads, exact, any rule), the priors handed to the rule (exact, by action, against the gate\'s own softmax of the '
+        'pricer\'s logits at the oracle\'s node) and every learner-max entry within the value bound of the oracle\'s child, beside its row q and '
         'its choices, and that per-child grid gate replaces the guard there; the value bound stays gated everywhere', triggering_run='dn-gate40-prior3-r3',
         trigger='the live 40-root depth-3 prior run dn-gate40-prior3-r3 (the guard rule); the per-child grid gate and read identity that replace '
-        'the guard were triggered by review findings, not a run: the kill-test sweep on the backup path (review of 7ab91711) and interior entries '
-        'under another rule (review of a730e321)',
+        'the guard, and the exact prior check beside them, were triggered by review findings, not a run: the kill-test sweep on the backup path '
+        '(review of 7ab91711), interior entries under another rule (review of a730e321) and wrong priors handed to the rule (review of 27adf5a7)',
         approval='per-child grid gate replaces the guard at plies >= 2: signed off by the lead 2026-11-06'),
     dict(name='rule 4: DEEPER_LOGIT_RULE', summary='(c): priors at plies >= 2 of a depth >= 3 frame are bounded by max(0.1, 2 x the run\'s turn-1 '
         'logit max |diff| against the oracle); turn-1, root and depth2_pass priors keep 0.1', triggering_run='dn-gate40-searched3-r3',
@@ -2178,7 +2183,7 @@ MUTATION_INPUTS = '_mutation_inputs'   # run_call_n keeps a call's frame, oracle
 
 def mutation_test_call(frame, data, requests, d_results, clean, *, context=None, backups=None, source=None, lanes=(2187,), full_turn1=True,
                        sweep=SWEEP_SWAPS, seed=MUTATION_SEED, progress=None, value_bound=None):
-    """MUTATION_RULE on ONE call: the clean call and the eight mutants judged alone at `value_bound` (the RUN's; None: the call's own), then
+    """MUTATION_RULE on ONE call: the clean call and the ten mutants judged alone at `value_bound` (the RUN's; None: the call's own), then
     the sweep on both paths; `clean` is the call's evaluation (never modified). backups: depthn_backups (default) for the clean side and the
     scatter path; source: depthn_backups' source text for the backup path (backups_source() by default). Returns the call's report."""
     clock = time.perf_counter();context = dict(context or {});log_line = progress or (lambda *a, **k: None)
@@ -2667,9 +2672,9 @@ def parse(argv=None):
     parser.add_argument('--depth3-diagnostics', action='store_true', help='price full-width depth 2 and depth 3 per mode and --diagnostic-ks; no oracle')
     parser.add_argument('--diagnostic-ks', default=','.join(map(str, DIAGNOSTIC_KS)), help='k values of --depth3-diagnostics')
     parser.add_argument('--diagnostics-from', nargs='+', metavar='DIR', help='offline: depth-3 diagnostics from saved frames (one or more directories)')
-    parser.add_argument('--mutation-test', action='store_true', help='once every call is priced, at the run\'s value bound: the eight misplacement '
-        'mutants and the swap sweep on both paths (MUTATION_RULE; each call\'s frame and oracle data are held until then); writes mutation-test.json; '
-        'exit non-zero if the clean run fails, a mutant survives or a sweep has a material survivor')
+    parser.add_argument('--mutation-test', action='store_true', help='once every call is priced, at the run\'s value bound: the ten mutants (eight '
+        'misplacements, a turn-1 misread, wrong priors) and the swap sweep on both paths (MUTATION_RULE; each call\'s frame and oracle data are '
+        'held until then); writes mutation-test.json; exit non-zero if the clean run fails, a mutant survives or a sweep has a material survivor')
     parser.add_argument('--save-oracle', action='store_true', help='also write each call\'s oracle data and D3 outputs beside its frames '
         '(frames-block{B}-call{C}-oracle.npz; implies --save-arrays) for --mutation-from')
     parser.add_argument('--mutation-from', nargs='+', metavar='DIR', help='offline: the mutation test from saved frames and oracle data '

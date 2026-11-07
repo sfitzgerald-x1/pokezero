@@ -1135,7 +1135,7 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
 class ChoicesTests(FixtureN, unittest.TestCase):
     """(f) on the stand-in surface (the oracle's own values: the value bound is 0 unless a synthetic floor is set), the gate's independent
     recursion against the backups, the per-child grid gate (misreads inside the backup, the grid captured as passed, any rule), the row-q
-    clause, rule 1's per-node exemption and the bound's edge, one-sided pricing, sampled runs, --reverdict and the header; then the eight
+    clause, rule 1's per-node exemption and the bound's edge, one-sided pricing, sampled runs, --reverdict and the header; then the ten
     mutants on the fake backups' source at the run's value bound and both sweeps' survivor accounting."""
     _d = GateNTests._d
 
@@ -1779,7 +1779,7 @@ class RealPricerTests(FixtureN, unittest.TestCase):
 
 
     def test_choices_and_the_mutation_test_on_the_real_pricer(self):
-        """The real pricer at depth 3 (k = 3) with --mutation-test on depthn_backups' own SOURCE: (f) passes clean, all eight mutants are killed
+        """The real pricer at depth 3 (k = 3) with --mutation-test on depthn_backups' own SOURCE: (f) passes clean, all ten mutants are killed
         (the backup path by (f) alone, read identity included), neither sweep has a material survivor; read identity passes on the clean real
         frame; a grid permuted only where depthn_backups hands it to the rule fails (f)'s per-child grid gate and read identity; the gate's
         OracleTree equals depthn_backups.node_value on every interior node of the real frame (both
@@ -1975,7 +1975,7 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
                 self.assertEqual(report['header']['near_ties']['f']['status'], 'COMPARED' if want == 'PASS' else report['checks']['f']['status'])
 
     def test_live_mutation_test_headers_and_offline_rerun(self):
-        """--mutation-test --save-oracle: gate.json PASS with the header (also on DEPTHN_GATE_COMPLETE), mutation-test.json PASS with all eight
+        """--mutation-test --save-oracle: gate.json PASS with the header (also on DEPTHN_GATE_COMPLETE), mutation-test.json PASS with all ten
         killed and the MUTATION_TEST lines, the oracle data saved beside the frames, and --mutation-from on them reproducing every verdict."""
         lines = [];code, out = self.main('--mutation-test', '--save-oracle', lines=lines)
         report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE));call = mutation['calls'][0]
