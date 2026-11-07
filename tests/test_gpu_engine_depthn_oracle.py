@@ -1560,6 +1560,49 @@ class ChoicesTests(FixtureN, unittest.TestCase):
         f = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=ulp), 0.);self.assertFalse(f['priors']['passed'])
         self.assertEqual((f['grid_within_bound'], f['read_identity']['passed']), (True, True))
 
+    def test_priors_are_checked_at_turn1_cells_and_at_leaf_parents(self):
+        """A backup handing a uniform pi_own ONLY at the turn-1 cells, or ONLY at the parents of leaves (depthn_backups' _PRIORS hook): learner-max
+        values, the grid and read identity are unchanged, and the exact prior check fails at exactly those plies."""
+        frame, data = self.frame_data(k=3);uniform = lambda pi: [1. / len(pi)] * len(pi)
+        for name, at in (('turn-1 cells', lambda ply: ply == 1), ('leaf parents', lambda ply: ply + 1 == int(frame.depth))):
+            with self.subTest(name):
+                module = gate.mutant_backups([], source=FAKE_BACKUPS_SOURCE);module._PRIORS = lambda pi, root, world, ply, node, at=at: uniform(pi) if at(ply) else pi
+                f = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=module), 0.)
+                self.assertEqual((f['passed'], f['priors']['passed'], f['grid_within_bound'], f['row_q_within_bound'], f['read_identity']['passed']), (False, False, True, True, True))
+                self.assertGreater(f['priors']['mismatched_nodes'], 100);self.assertTrue(f['priors']['first_mismatches'])
+                self.assertTrue(all(at(m['ply']) for m in f['priors']['first_mismatches']), [m['ply'] for m in f['priors']['first_mismatches']])
+
+    def test_the_expected_prior_is_the_gates_own_softmax(self):
+        """A gpu_engine.depthn_backups whose _softmax is wrong (twice the logit scale) installed where the gate imports the backups: the backup
+        built from it hands wrong priors and the exact prior check FAILS, the gate's expectation being its own prior_softmax, never depthn_backups';
+        the correct backup passed beside it still passes."""
+        line = 'weights=[math.exp(float(logits[a])-top)for a in actions]';self.assertEqual(FAKE_BACKUPS_SOURCE.count(line), 1)
+        wrong = types.ModuleType('gpu_engine.depthn_backups')
+        exec(compile(FAKE_BACKUPS_SOURCE.replace(line, 'weights=[math.exp(2.*(float(logits[a])-top))for a in actions]'), '<wrong softmax>', 'exec'), wrong.__dict__)
+        frame, data = self.frame_data(k=3)
+        with patch.dict(sys.modules, {'gpu_engine.depthn_backups': wrong}):
+            bad = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests), 0.)   # backups=None: the installed module
+            good = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=FakeBackupsN), 0.)
+        self.assertEqual((bad['passed'], bad['priors']['passed']), (False, False));self.assertGreater(bad['priors']['mismatched_nodes'], 100)
+        self.assertTrue(good['passed'], good['reasons']);self.assertEqual(good['priors']['mismatched_nodes'], 0)
+        self.assertEqual(gate.prior_softmax([0., .5, 1.], [0, 2, 1]), FakeBackupsN._softmax([0., .5, 1.], [0, 2, 1]))
+        self.assertNotEqual(gate.prior_softmax([0., .5, 1.], [0, 2, 1]), wrong._softmax([0., .5, 1.], [0, 2, 1]))
+
+    def test_a_rule_editing_its_priors_in_place_changes_nothing_recorded(self):
+        """A rule that edits pi_own and pi_opp in place after solving (reversed, zeroed): the recorder copied both before the rule ran and the
+        oracle hands the rule copies, so the correct backup passes the prior check and every gate, and a misread still fails."""
+        def editing(grid, pi_own, pi_opp):
+            value = max(math.fsum(p * v for p, v in zip(pi_opp, row)) for row in grid)   # learner-max on the priors as handed
+            pi_own.reverse();pi_opp[:] = [0.] * len(pi_opp);return value
+        frame, data = self.frame_data(k=3);tree = gate.OracleTree(frame, data, rule=editing)
+        clean = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=FakeBackupsN, rule=editing, tree=tree), 0.)
+        self.assertTrue(clean['passed'], clean['reasons']);self.assertEqual((clean['priors']['passed'], clean['priors']['mismatched_nodes']), (True, 0))
+        self.assertGreater(clean['priors']['nodes'], 1000)
+        _, _, key, record, (row, x, y) = self.find(3, lambda r, row, x, y: r['grid'][row][x] != r['grid'][row][y])
+        bad = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=self.swap_in_row(key, record, row, x, y), rule=editing, tree=tree), 0.)
+        self.assertFalse(bad['passed']);self.assertTrue(bad['priors']['passed'])   # a misread, not a prior: the priors handed stay right
+
+
     def test_read_identity_and_priors_are_gated_on_their_counts_too(self):
         """Defence in depth: a merged read identity ANDs its calls; (f) fails on a missing or null read identity or priors (a saved null fails
         --reverdict), and on mismatched_nodes, interned_collisions or a false injective flag even when `passed` says otherwise."""
