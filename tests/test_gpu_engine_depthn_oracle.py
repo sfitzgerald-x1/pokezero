@@ -2554,6 +2554,105 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         self.assertIsNone(gate.parse(['--out', 'o', '--d3-root', 'b', '--chunk', '0'])[1].declared_bounds)
 
 
+# ---------------------------------------------------------------- the frozen default paths, byte for byte
+
+REFERENCE_DROP = ('costs', 'oracle_cost', 'timing', 'pricer_timing', 'plies_work', 'compiles', 'compiled')   # timing and compile records
+NOISY_VALUE, NOISY_LOGIT = 2. ** -16, 2. ** -12   # the oracle's head offsets: non-zero depth-1, root-logit and turn-1 logit floors
+
+
+def reference_normalized(value, masks):
+    """A report or log line as compared: REFERENCE_DROP keys and keys ending in 'seconds' dropped, each run directory in `masks` masked."""
+    if isinstance(value, dict):return {k: reference_normalized(v, masks) for k, v in value.items() if k not in REFERENCE_DROP and not k.endswith('seconds')}
+    if isinstance(value, list):return [reference_normalized(v, masks) for v in value]
+    if isinstance(value, str):
+        for mask in masks:value = value.replace(mask, '<ROOT>')
+    return value
+
+
+@contextlib.contextmanager
+def noisy_oracle_heads():
+    """depth2_oracle.heads (both gates' oracles evaluate through it, no pricer does) with NOISY_LOGIT added to every logit and NOISY_VALUE to
+    every value: exact dyadic offsets, so the floors and every bound derived from them are non-zero and deterministic."""
+    from gpu_engine import depth2_oracle
+    real = depth2_oracle.heads
+    def heads(forward, params, inputs, actors):
+        logits, values, usable = real(forward, params, inputs, actors);return logits + np.float32(NOISY_LOGIT), values + np.float32(NOISY_VALUE), usable
+    with patch.object(depth2_oracle, 'heads', heads):yield
+
+
+def reference_runs(test, root):
+    """{run: {file: sha256 of its normalized canonical JSON}} of the default paths on test's fixture under noisy_oracle_heads: d3_depthn_gate on
+    the bank actors (the stand-in at depth 3 with --mutation-test, the real pricer at depth 2 full width with --block-invariance and under
+    --n2-equivalence, --reverdict of the first) and d3_depth2_gate (full width with --block-invariance, and top-3). Writes each normalized file
+    under root/normalized for a look at a mismatch."""
+    from gpu_engine import d3_depth2_gate as g2
+    out, digests = {}, {}
+    def record(name, directory, lines, files):
+        masks = [str(directory), str(Path(directory).resolve())];target = root / 'normalized' / name;target.mkdir(parents=True);digests[name] = {}
+        for file, value in [('log.json', lines)] + [(f, json.loads((Path(directory) / f).read_text())) for f in files]:
+            text = json.dumps(reference_normalized(value, masks), indent=1, default=str) + '\n';(target / file).write_text(text)
+            digests[name][file] = hashlib.sha256(text.encode()).hexdigest()
+    def depth2_main(*argv, directory, lines):
+        provider = SimpleNamespace(executor=test.ex, materializer=test.tables, recipe=test.recipe, source=test.tables.source)
+        model = type('Model', (), dict(arm='D'))()   # hashable, as object(), with the arm the evaluator header names
+        # The last 20 requests: the merged gate takes its guard's p10 over EVERY cell_a2_spread, and over all 27 that p10 is 0, where its
+        # finalize_numeric divides by the zero guard (it raises; the depth-N gate's p10 excludes zero spreads). Over these 20 it is not.
+        loaded = SimpleNamespace(provider=provider, plan=SimpleNamespace(model=model, historical_window=2), params=PARAMS, groups=[list(test.requests[-20:])],
+            frame_pricer=FixtureN.frame_pricer(test), source=dict(fixture=True), labels=SimpleNamespace(sha256='l' * 64), category_sha256='k' * 64,
+            snapshot=dict(iteration=-1, archive='run/actor--1.npz', archive_sha256='4' * 64, checkpoint='c.pt', checkpoint_sha256='3' * 64, model_sha256='5' * 64))
+        with test.engine(), patch.object(g2, 'bank_chunk_requests', lambda args: loaded), patch.object(g2, 'log', lambda m, **k: lines.append(dict(k, message=m))):
+            return g2.main(['--out', str(directory), '--d3-root', 'x', '--chunk', '0', '--depth2-capacity', '32', '--oracle-chunk', '64', *argv])
+    with noisy_oracle_heads():
+        for name, argv, real, files in (('depthn_standin_prior3_mutation', ('--mutation-test',), False, ('gate.json', gate.MUTATION_FILE)),
+                ('depthn_real_depth2_full_invariance', ('--depth', '2', '--k-own', '9', '--k-opp', '9', '--block-invariance'), True, ('gate.json',)),
+                ('depthn_real_n2', ('--n2-equivalence', '--n2-k', '2'), True, ('n2-equivalence.json',))):
+            lines = [];directory = root / 'runs' / name;code, _ = CommandLineRunTests.main(test, *argv, real=real, out=directory, lines=lines)
+            lines.append(dict(message='EXIT', code=code));record(name, directory, lines, files)
+        lines = [];directory = root / 'runs' / 'depthn_standin_prior3_mutation'
+        with patch.object(gate, 'log', lambda m, **k: lines.append(dict(k, message=m))):lines.append(dict(message='EXIT', code=gate.main(['--reverdict', str(directory / 'gate.json')])))
+        record('depthn_reverdict', directory, lines, (gate.REVERDICT_FILE,))
+        for name, argv in (('depth2_full_invariance', ('--block-invariance',)), ('depth2_top3', ('--k-own', '3', '--k-opp', '3'))):
+            lines = [];directory = root / 'runs' / name;lines.append(dict(message='EXIT', code=depth2_main(*argv, directory=directory, lines=lines)))
+            record(name, directory, lines, ('gate.json',))
+    return digests
+
+
+class DefaultPathReferenceTests(FixtureN, unittest.TestCase):
+    """The frozen default paths byte for byte: reference_runs' digests (reports, mutation-test.json, gate-reverdict.json and every log line,
+    timing and run directories aside) must equal REFERENCE, recorded by the same harness on 1a3b2dd3, the commit before --declared-bounds, on
+    the gpu_engine of that commit. The oracle's heads are offset so the floors are non-zero (a doubled q_noise default, an extra field or text
+    on the default path changes a digest). A deliberate change to a default path updates REFERENCE in its own reviewed commit."""
+    roots = CommandLineRunTests.roots   # the bank actors (no override): the default path
+    REFERENCE = {   # reference_runs on 1a3b2dd3 (the gpu_engine of that commit, this harness)
+        'depthn_standin_prior3_mutation': {'log.json': '526ce50e796a2085301ea23ca6f81d781f6fff5d535d4079bc8ae8709acaff26',
+            'gate.json': '9b4071a272a1f2a637786551d7b7e232aa606b9f4b188bc9a15f5532a704c52b',
+            'mutation-test.json': 'c69beb3648e6bc8f41c2e7831f4e3805aa7a98dc6376eefc5b26d5a778c350f5'},
+        'depthn_real_depth2_full_invariance': {'log.json': '8f3d68285b062c1e219e018e573347ab556d95d23ffd897ad9799664019f6664',
+            'gate.json': '566c88b1dfb818d39103f2a2cf5138e137b18e7930f91d7e06bb22432b9c44ce'},
+        'depthn_real_n2': {'log.json': '28e426902c025f562907e0c6cd1223c3a2cb1be09a906cde50317004c66a450a',
+            'n2-equivalence.json': '0e6c7c3aa4887cd36a30f54d2ace860389a2063e65f88de76d987ee93e7e7493'},
+        'depthn_reverdict': {'log.json': 'eeafbaf75f8320e18af0a324ba0540d960cb9717a8710fd0eb72e6e9d8351efa',
+            'gate-reverdict.json': 'daaf0ac7f4b689d58a1f2e4827fedc1664bff8cbb44d2b07fde515ca2e5d4e38'},
+        'depth2_full_invariance': {'log.json': '9197a81e17c9537e4c9452ae4a23c799aa64ac45f6429f5ac9934e0e884007c1',
+            'gate.json': '5807bd64727ba7490eae9adcd3e3b468f73bd177d54a928ac1e56721e43e3a19'},
+        'depth2_top3': {'log.json': 'db15ece5fcce98e5decab35a5a4b42972671f7eb0d6ae89e2dacfe125688ed06',
+            'gate.json': '1ff2a5298a1e3809a25d17cd22e85b05e11564c56cabf680a095baf43a03cc2b'},
+    }
+
+    def test_default_paths_match_the_reference(self):
+        root = Path(tempfile.mkdtemp(prefix='gate-default-reference-'));got = reference_runs(self, root)
+        for name in sorted(set(got) | set(self.REFERENCE)):
+            with self.subTest(name):self.assertEqual(got.get(name), self.REFERENCE.get(name), f'normalized outputs under {root / "normalized" / name}')
+        tolerance = lambda run, f='gate.json': json.loads((root / 'normalized' / run / f).read_text())['tolerance']   # the floors it rests on are non-zero
+        self.assertGreater(tolerance('depthn_standin_prior3_mutation')['depth1_noise_floor'], 0.);self.assertGreater(tolerance('depth2_full_invariance')['q_noise_bound'], 0.)
+        self.assertGreater(tolerance('depthn_real_depth2_full_invariance')['turn1_logit_floor'], 0.)
+
+    def test_the_topk_gap_count_is_strict(self):
+        """merge_topk_n counts gaps strictly below the logit bound: a gap of exactly LOGIT_BOUND is not below it."""
+        topk = gate.merge_topk_n([{'ply2': {'own': dict(gaps=[gate.g2.LOGIT_BOUND, .05, .2], oracle_prior_set_differs=0)}}])
+        self.assertEqual(topk['ply2']['own']['gap_below_logit_bound'], 1)
+
+
 class CommandLineTests(unittest.TestCase):
     def test_arguments_are_validated_and_missing_modules_fail_before_loading(self):
         out = Path(tempfile.gettempdir()) / f'depthn-gate-never-created-{uuid.uuid4().hex}'
