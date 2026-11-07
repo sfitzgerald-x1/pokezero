@@ -20,6 +20,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -834,7 +835,7 @@ def saved_gate(depth=3, ply2_noise=.004, t1_logits=.05, ply2_logits=None, single
         guard_bound=m.get('guard_bound'), passed=m['passed']) for name, m in quantities.items() if name != 'depth1_noise_floor']
     return dict(schema=gate.SCHEMA, mode='SAVED_ROOTS', status='FAIL', passed=False, status_reasons=[], sample_leaves=None, evaluator=dict(override=single_actor),
         pricer_options=dict(depth=depth, actor_capacity=1 if single_actor else 3),
-        tolerance=dict(value_bound=.008, guard_bound=.005, table=table), checks=dict(a=a, c=dict(passed=False, quantities=quantities), e=dict(passed=True, roots_compared=2),
+        tolerance=dict(rule=gate.g2.TOLERANCE_RULE, depth1_noise_floor=FLOOR, value_bound=.008, logit_bound=.1, guard_bound=.005, table=table), checks=dict(a=a, c=dict(passed=False, quantities=quantities), e=dict(passed=True, roots_compared=2),
             f=saved_choices()))
 
 
@@ -1077,7 +1078,8 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
             digest_counts=drop('checks', 'a', 'compared'), depth=drop('pricer_options', 'depth'), sample_leaves=drop('sample_leaves'), quantities=drop('checks', 'c', 'quantities'),
             n2_report=dict(saved_gate(), mode='N2_EQUIVALENCE'), schema=dict(saved_gate(), schema='pokezero.depth2-gate.v1'), choices=drop('checks', 'f'),
             choice_flips=drop('checks', 'f', 'differing'), value_bound=drop('tolerance', 'value_bound'), read_identity=drop('checks', 'f', 'read_identity'),
-            priors=drop('checks', 'f', 'priors'))
+            priors=drop('checks', 'f', 'priors'), rule=drop('tolerance', 'rule'), logit_bound=drop('tolerance', 'logit_bound'),
+            depth1_noise_floor=drop('tolerance', 'depth1_noise_floor'), value_bound_of_a_value=drop('checks', 'c', 'quantities', 'leaf_value', 'bound'))
         for case, report in cases.items():
             with self.subTest(case):
                 directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));path = directory / 'gate.json';path.write_text(json.dumps(report))
@@ -2263,13 +2265,33 @@ def bounds(**values):
 
 
 def written(content=None, *, raw=None):
-    """(path, sha256) of `content` as JSON, or `raw` bytes verbatim, in a new file."""
+    """(path, sha256) of `content` as JSON, or `raw` bytes verbatim, in a new file outside any repository."""
     path = Path(tempfile.mkdtemp(prefix='depthn-declared-')) / 'declared.json';raw = raw if raw is not None else json.dumps(content, indent=1).encode()
     path.write_bytes(raw);return path, hashlib.sha256(raw).hexdigest()
 
 
+def git(root, *args):
+    """git in a scratch repository (no hooks, no signing, a fixed author); its stdout."""
+    return subprocess.run(['git', '-C', str(root), '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=declared-bounds-test',
+        '-c', 'user.email=declared-bounds-test@example.com', *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def committed(content=None, *, raw=None, name='champion.json'):
+    """Record(path, sha256, commit, root): `content` as JSON (or `raw` bytes) committed under DECLARED_SUBDIR of a new scratch repository (the
+    reviewed-PR record a declaration must have)."""
+    root = Path(tempfile.mkdtemp(prefix='depthn-declared-repo-'));git(root, 'init', '-q');path = root / gate.DECLARED_SUBDIR / name
+    path.parent.mkdir(parents=True);raw = raw if raw is not None else json.dumps(content, indent=1).encode();path.write_bytes(raw)
+    git(root, 'add', '.');git(root, 'commit', '-q', '-m', 'declare bounds')
+    return SimpleNamespace(path=path, sha256=hashlib.sha256(raw).hexdigest(), commit=git(root, 'rev-parse', 'HEAD'), root=root)
+
+
+def load(record, **changes):
+    """gate.load_declared on a committed record (changes: path, sha256, commit, root overrides)."""
+    r = dict(vars(record), **changes);return gate.load_declared(r['path'], r['sha256'], r['commit'], root=r['root'])
+
+
 def declared(**changes):
-    return gate.load_declared(*written(declaration(**changes)))
+    return load(committed(declaration(**changes)))
 
 
 class DeclaredBoundsTests(FixtureN, unittest.TestCase):
@@ -2321,18 +2343,47 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
             future=(declaration(declared_at='2999-01-01T00:00:00Z'), 'after the run\'s start'), not_an_object=([1], 'a JSON object'))
         for case, (content, message) in refused.items():
             with self.subTest(case):
-                with self.assertRaises(gate.DeclaredBoundsError) as raised:gate.load_declared(*written(content))
+                with self.assertRaises(gate.DeclaredBoundsError) as raised:load(committed(content))
                 self.assertIn(message, str(raised.exception))
-        path, sha = written(declaration());text = json.dumps(declaration())
-        for case, (call, message) in dict(sha_mismatch=(lambda: gate.load_declared(path, '0' * 64), 'differs from --declared-bounds-sha256'),
-                absent=(lambda: gate.load_declared(path.with_name('absent.json'), sha), 'cannot read'),
-                duplicate=(lambda: gate.load_declared(*written(raw=text.replace('{', '{"derivation": "a", ', 1).encode())), 'duplicate'),
-                nan=(lambda: gate.load_declared(*written(raw=text.replace('0.008', 'NaN').encode())), 'NaN is not a JSON number'),
-                not_json=(lambda: gate.load_declared(*written(raw=b'{"schema": ')), 'not a JSON declaration'),
-                not_utf8=(lambda: gate.load_declared(*written(raw=b'\xff\xfe{}')), 'not UTF-8')).items():
+        record = committed(declaration());text = json.dumps(declaration())
+        for case, (call, message) in dict(sha_mismatch=(lambda: load(record, sha256='0' * 64), 'differs from --declared-bounds-sha256'),
+                absent=(lambda: load(record, path=record.path.with_name('absent.json')), 'cannot read'),
+                duplicate=(lambda: load(committed(raw=text.replace('{', '{"derivation": "a", ', 1).encode())), 'duplicate'),
+                nan=(lambda: load(committed(raw=text.replace('0.008', 'NaN').encode())), 'NaN is not a JSON number'),
+                not_json=(lambda: load(committed(raw=b'{"schema": ')), 'not a JSON declaration'),
+                not_utf8=(lambda: load(committed(raw=b'\xff\xfe{}')), 'not UTF-8')).items():
             with self.subTest(case):
                 with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
                 self.assertIn(message, str(raised.exception))
+
+    def test_the_declaration_is_a_committed_record(self):
+        """The file must lie under DECLARED_SUBDIR of the checkout; its git blob sha1 (git hash-object) and the commit are recorded; where the
+        local history holds the commit, it must hold exactly this blob there (a later edit or an uncommitted file is refused); a commit the history
+        lacks, or no repository, is recorded as not verifiable here; the source measurement is verified when readable (refused on a mismatch)."""
+        record = committed(declaration());d = load(record)
+        self.assertEqual((d['repo_path'], d['commit'], d['git_verification']['status']), (gate.DECLARED_SUBDIR + '/champion.json', record.commit, 'verified'))
+        self.assertEqual(d['git_blob_sha1'], git(record.root, 'hash-object', str(record.path)));self.assertEqual(d['source_measurement_verification']['status'], 'not verifiable here')
+        path, sha = written(declaration())
+        for case, (call, message) in dict(outside=(lambda: gate.load_declared(path, sha, record.commit, root=record.root), f'committed under {gate.DECLARED_SUBDIR}/'),
+                short_commit=(lambda: load(record, commit=record.commit[:12]), 'full lowercase hex commit id')).items():
+            with self.subTest(case):
+                with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
+                self.assertIn(message, str(raised.exception))
+        edited = committed(declaration());raw = json.dumps(declaration(declared_by='someone else')).encode();edited.path.write_bytes(raw)
+        later = committed(declaration());extra = later.path.with_name('later.json');extra.write_bytes(later.path.read_bytes())
+        for case, (call, message) in dict(edited_after_commit=(lambda: load(edited, sha256=hashlib.sha256(raw).hexdigest()), 'not the file committed'),
+                not_in_the_commit=(lambda: load(later, path=extra), 'has no ' + gate.DECLARED_SUBDIR + '/later.json')).items():
+            with self.subTest(case):
+                with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
+                self.assertIn(message, str(raised.exception))
+        self.assertEqual(load(record, commit='0' * 40)['git_verification']['status'], 'not verifiable here')   # a shallow or exported checkout
+        plain = Path(tempfile.mkdtemp(prefix='depthn-declared-plain-'));target = plain / gate.DECLARED_SUBDIR / 'champion.json';target.parent.mkdir(parents=True)
+        target.write_bytes(record.path.read_bytes());self.assertEqual(gate.load_declared(target, record.sha256, record.commit, root=plain)['git_verification']['status'], 'not verifiable here')
+        measurement = Path(tempfile.mkdtemp(prefix='depthn-measure-')) / 'spread.json';measurement.write_bytes(b'{"spread": 0.003}\n')
+        good = dict(path=str(measurement), sha256=hashlib.sha256(measurement.read_bytes()).hexdigest())
+        self.assertEqual(declared(source_measurement=good)['source_measurement_verification']['status'], 'verified')
+        with self.assertRaises(gate.DeclaredBoundsError) as raised:declared(source_measurement=dict(good, sha256='9' * 64))
+        self.assertIn('source_measurement', str(raised.exception))
 
     def test_the_declaration_binds_one_evaluator(self):
         run = dict(override=True, kind='champion', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16', checkpoint_sha256=DECLARED_CHECKPOINT)
@@ -2344,20 +2395,23 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         pinned = declaration(evaluator=dict(declaration()['evaluator'], checkpoint_sha256=DECLARED_CHECKPOINT))
         self.assertEqual(gate.evaluator_mismatches(pinned, run), []);self.assertIn('checkpoint_sha256', gate.evaluator_mismatches(pinned, dict(run, checkpoint_sha256='5' * 64))[0])
         self.assertIn('no champion evaluator', gate.evaluator_mismatches(declaration(), dict(run, override=False))[0])
-        base = ['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64]
+        base = ['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64, '--declared-bounds-commit', 'b' * 40]
         self.assertEqual(gate.args_identity(gate.parse(base + list(CHAMPION_FLAGS))[1]), run)
         self.assertEqual(gate.args_identity(gate.parse(base + list(CHAMPION_FLAGS) + ['--champion-precision', 'f32'])[1]), dict(run, precision='float32'))
         for flags in ((), HEAD_FLAGS):self.assertEqual(gate.args_identity(gate.parse(base[:6] + list(flags))[1])['override'], False)   # no champion: never applies
 
     def test_flags_are_refused_off_the_champion_and_in_incompatible_modes(self):
-        out = str(Path(tempfile.gettempdir()) / f'depthn-gate-never-created-{uuid.uuid4().hex}');flags = ['--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64]
+        out = str(Path(tempfile.gettempdir()) / f'depthn-gate-never-created-{uuid.uuid4().hex}')
+        flags = ['--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64, '--declared-bounds-commit', 'b' * 40]
         live = ['--out', out, '--d3-root', 'b', '--chunk', '0']
-        cases = dict(alone=(live + flags[:2] + list(CHAMPION_FLAGS), 'go together'), sha_alone=(live + flags[2:] + list(CHAMPION_FLAGS), 'go together'),
-            bad_sha=(live + flags[:3] + ['A' * 64] + list(CHAMPION_FLAGS), '64-hex'), bank_actors=(live + flags, 'needs --champion-archive'),
+        cases = dict(alone=(live + flags[:2] + list(CHAMPION_FLAGS), 'go together'), sha_alone=(live + flags[2:4] + list(CHAMPION_FLAGS), 'go together'),
+            no_commit=(live + flags[:4] + list(CHAMPION_FLAGS), 'go together'), bad_commit=(live + flags[:5] + ['B' * 40] + list(CHAMPION_FLAGS), 'full lowercase hex'),
+            bad_sha=(live + flags[:3] + ['A' * 64] + flags[4:] + list(CHAMPION_FLAGS), '64-hex'), bank_actors=(live + flags, 'needs --champion-archive'),
             head_override=(live + flags + list(HEAD_FLAGS), 'champion only'),
             diagnostics=(live + flags + list(CHAMPION_FLAGS) + ['--depth3-diagnostics'], '--depth3-diagnostics'),
             diagnostics_from=(['--out', out, '--diagnostics-from', 'x'] + flags + list(CHAMPION_FLAGS), 'live gate run'),
-            mutation_from=(['--out', out, '--mutation-from', 'x'] + flags, 'live gate run'), reverdict=(['--reverdict', 'gate.json'] + flags, 'takes no other option'))
+            mutation_from=(['--out', out, '--mutation-from', 'x'] + flags, 'live gate run'), reverdict=(['--reverdict', 'gate.json'] + flags, 'takes no other option'),
+            reverdict_bad_commit=(['--reverdict', 'gate.json', '--declared-bounds-commit', 'abc'], 'full lowercase hex'))
         for case, (argv, message) in cases.items():
             with self.subTest(case):
                 stderr = io.StringIO()
@@ -2365,11 +2419,12 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
                 self.assertEqual(raised.exception.code, 2);self.assertIn(message, stderr.getvalue())
         for extra in ((), ('--n2-equivalence',), ('--mutation-test',), ('--n2-equivalence', '--block-invariance')):
             self.assertEqual(gate.parse(live + flags + list(CHAMPION_FLAGS) + list(extra))[1].declared_bounds, 'd.json')
-        path, sha = written(declaration())   # main refuses before anything is created or loaded: the file's sha256, then the flags' evaluator
-        for argv, message in (([str(path), '0' * 64], 'differs from --declared-bounds-sha256'), ([str(path), sha], 'evaluator.archive_sha256')):
+        self.assertEqual(gate.parse(['--reverdict', 'gate.json', '--declared-bounds-commit', 'b' * 40, '--declared-bounds-sha256', 'a' * 64])[1].reverdict, 'gate.json')
+        record = committed(declaration())   # main refuses before anything is created or loaded: the file's sha256, its commit, then the flags' evaluator
+        for argv, message in (([record.sha256[:-1] + '0', record.commit], 'differs from --declared-bounds-sha256'), ([record.sha256, record.commit], 'evaluator.archive_sha256')):
             head = list(CHAMPION_FLAGS);head[3] = '6' * 64
-            with patch.object(gate, 'load_roots', side_effect=AssertionError('loaded')), patch.object(gate, 'log', lambda *a, **k: None), \
-                    self.assertRaises(SystemExit) as raised:gate.main(live + ['--declared-bounds', argv[0], '--declared-bounds-sha256', argv[1]] + head)
+            with patch.object(gate, 'load_roots', side_effect=AssertionError('loaded')), patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'REPO_ROOT', record.root), \
+                    self.assertRaises(SystemExit) as raised:gate.main(live + ['--declared-bounds', str(record.path), '--declared-bounds-sha256', argv[0], '--declared-bounds-commit', argv[1]] + head)
             self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse(Path(out).exists())
 
     def test_the_verdict_takes_the_declared_bounds(self):
@@ -2439,6 +2494,38 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         self.assertEqual((report['floats']['t1_own_logits']['bound'], report['floats']['t1_own_logits']['passed']), (.15, True))
         self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['q_noise_bound'], report['e']['q_noise_bound']), (.008, .01, .01))
         self.assertEqual(report['tolerance']['frozen_rule']['logit_bound'], .1);self.assertIn('declared_bounds', report['tolerance'])
+
+    def test_reverdict_refuses_traces_of_a_declaration_and_numbers_off_the_frozen_rule(self):
+        """A report without declared_bounds sections is re-judged only if nothing in it shows a declaration (the declared tolerance texts and
+        sources, a frozen_rule record, a declared bound_rule, a reverdict of one) and its numbers are the frozen rule's: tolerance.rule, logit_bound
+        LOGIT_BOUND, value_bound 2 x depth1_noise_floor (1e-4 without a floor), and every kept (c) and (b) bound its class's; a pre-registration
+        record given for it is refused. The unchanged synthetic report re-judges as before."""
+        def edited(change):
+            report = saved_gate();change(report);return report
+        quantity = lambda name, **values: lambda r: r['checks']['c']['quantities'][name].update(values)
+        cases = dict(
+            declared_rule_text=(edited(lambda r: r['tolerance'].__setitem__('rule', gate.DECLARED_TOLERANCE_RULE)), 'left traces'),
+            frozen_rule_record=(edited(lambda r: r['tolerance'].__setitem__('frozen_rule', dict(value_bound=.008))), 'left traces'),
+            declared_source=(edited(lambda r: r['tolerance'].__setitem__('value_bound_source', 'declared value_bound (--declared-bounds sha256 ...)')), 'left traces'),
+            declared_bound_rule=(edited(quantity('leaf_value', bound_rule='declared_value_bound')), 'left traces'),
+            reverdict_of_one=(edited(lambda r: r.__setitem__('reverdict', dict(declared_bounds_sha256='a' * 64))), 'left traces'),
+            other_rule_text=(edited(lambda r: r['tolerance'].__setitem__('rule', 'values: something else')), 'not the frozen TOLERANCE_RULE'),
+            logit_bound=(edited(lambda r: r['tolerance'].__setitem__('logit_bound', .15)), 'is not LOGIT_BOUND'),
+            value_bound=(edited(lambda r: r['tolerance'].update(value_bound=.05)), "not the frozen rule's"),
+            no_floor=(edited(lambda r: r['tolerance'].__setitem__('depth1_noise_floor', None)), "not the frozen rule's 0.0001"),
+            value_quantity=(edited(quantity('leaf_value', bound=.05)), 'checks.c.leaf_value.bound 0.05'),
+            turn1_prior=(edited(quantity('t1_own_logits', bound=.15)), 'checks.c.t1_own_logits.bound 0.15'),
+            b_value=(edited(lambda r: r['checks'].__setitem__('b', dict(passed=True, values=dict(t1_value=dict(bound=.05))))), 'checks.b.t1_value.bound 0.05'))
+        for case, (report, message) in cases.items():
+            with self.subTest(case):
+                directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));(directory / 'gate.json').write_text(json.dumps(report))
+                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(directory / 'gate.json')])
+                self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse((directory / gate.REVERDICT_FILE).exists())
+        directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));(directory / 'gate.json').write_text(json.dumps(saved_gate()))
+        with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:
+            gate.main(['--reverdict', str(directory / 'gate.json'), '--declared-bounds-commit', 'b' * 40])
+        self.assertIn('records no declaration', str(raised.exception.code))
+        code, out, _, _ = reverdicted(saved_gate());self.assertEqual((code, out['status']), (0, 'PASS'));self.assertNotIn('declared_bounds_sha256', out['reverdict'])
 
     def test_off_the_champion_path_depth2_and_n2_are_unchanged(self):
         """B1's path (the head override here): a depth-2 full-width gate gates only the depth-N leaf walk's path in oracle consistency and

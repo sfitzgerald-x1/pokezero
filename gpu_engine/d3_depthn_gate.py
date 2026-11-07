@@ -71,13 +71,17 @@ stacked, logged or written differently; a report without `harness` ran without i
 DepthNPricer, the full-width depth-2 pass, --n2-equivalence's Depth2Pricer, D3's FramePricer (with_forward) and the oracle price
 with it, digests hash its 23-token view, and every request takes its root logits and actors 0/0 (bind_evaluator_roots, after its
 exact adapter-vs-champion.forward check on the first root); the evaluator header records it. Without the flags nothing changes.
---declared-bounds PATH --declared-bounds-sha256 SHA (DECLARED_RULE; opt-in, champion only: with --champion-archive, refused with --head-archive,
---depth3-diagnostics and the offline modes): a JSON declaration (DECLARED_SCHEMA, written before the run, its bytes pinned by SHA and its
-evaluator identity by kind, archive sha256 and precision, which must be the run's) whose value, turn-1 logit, deeper-ply logit and optional
+--declared-bounds PATH --declared-bounds-sha256 SHA --declared-bounds-commit COMMIT (DECLARED_RULE; opt-in, champion only: with
+--champion-archive, refused with --head-archive, --depth3-diagnostics and the offline modes): a JSON declaration (DECLARED_SCHEMA) committed
+under gpu_engine/declared_bounds/ through a reviewed PR before the run, its bytes pinned by SHA, its git blob sha1 recorded with COMMIT
+(DECLARED_NOTE: what is verified and what is only recorded for an audit) and its evaluator identity (kind, archive sha256 and precision)
+the run's, whose value, turn-1 logit, deeper-ply logit and optional
 near-tie Q bounds replace the tolerance NUMBERS of the B1-calibrated rule for that evaluator; every check and rule is unchanged, the measured
 floors are still reported beside the declared bounds, and every report's header carries a `declared_bounds` section (the file, its sha256,
 the note that it is a pre-registered evaluator-specific bound, not a rule change after a failure). --reverdict re-applies a report's recorded
-declaration after re-verifying its sha256. Without the flags nothing is built, judged, logged or written differently.
+declaration after re-verifying its sha256 and git blob sha1 (and the commit and sha256 given with it), refuses a report that keeps traces of a
+declaration without its sections, and re-judges any other report only if its numbers are the frozen rule's. Without the flags nothing is
+built, judged, logged or written differently.
 The champion's depth-2 surfaces against the merged depth-2 gate (d3_depth2_gate, which has no champion flags): on the champion path
 (--champion-archive) this gate at --depth 2 and --n2-equivalence stand in for it, with two additions found only there, so a run on the
 bank snapshot's actors or the head override (B1) is built, judged and written exactly as before:
@@ -106,6 +110,7 @@ import json
 import math
 from pathlib import Path
 import re
+import subprocess
 import time
 import types
 from types import SimpleNamespace
@@ -1828,6 +1833,8 @@ def reverdict_missing(report):
     if type((report['pricer_options'] or {}).get('depth')) is not int:missing.append('pricer_options.depth')
     if not isinstance(report['tolerance'], dict):missing.append('tolerance')
     elif type(report['tolerance'].get('value_bound')) not in (int, float):missing.append('tolerance.value_bound')   # (f) is re-judged under it
+    if isinstance(report['tolerance'], dict):   # the rule's own record: frozen_problems compares the numbers with it
+        missing += [f'tolerance.{key}' for key in ('rule', 'logit_bound', 'depth1_noise_floor') if key not in report['tolerance']]
     checks = report['checks'] if isinstance(report['checks'], dict) else {}
     missing += [f'checks.{name}.passed' for name in ('a', 'c', 'f') if name not in checks]
     missing += [f'checks.{name}.passed' for name, check in checks.items() if not isinstance(check, dict) or 'passed' not in check]
@@ -1837,13 +1844,13 @@ def reverdict_missing(report):
     if not isinstance(quantities, dict):return missing + ['checks.c.quantities']
     for name, m in quantities.items():
         if name in g2.FLOORS:continue
-        need = ('compared', 'within_bound') + (('within_guard',) if isinstance(m, dict) and m.get('guard_bound') is not None else ()) \
-            + (('max_abs_difference', 'nonfinite', 'bound') if g2.is_logit(name) else ())   # DEEPER_LOGIT_RULE re-bounds from these
+        need = ('compared', 'within_bound', 'max_abs_difference', 'nonfinite', 'bound') \
+            + (('within_guard',) if isinstance(m, dict) and m.get('guard_bound') is not None else ())   # re-bounds (deeper priors, a declaration) read these
         missing += [f'checks.c.quantities.{name}.{key}' for key in need if not isinstance(m, dict) or key not in m]
     return missing
 
 
-def reverdict(path):
+def reverdict(path, *, expected=None):
     """--reverdict: the current verdict rules re-applied offline to a saved gate.json (apply_rules_depthn on (c) at the run's
     depth, the status through gate_status_n; the other checks keep their saved verdicts: their rules are unchanged), written
     to gate-reverdict.json beside it with a `reverdict` section (old status and reasons, changed quantities). Never
@@ -1856,7 +1863,7 @@ def reverdict(path):
     except (OSError, ValueError) as error:raise SystemExit(f'--reverdict: cannot read {path}: {error}')
     missing = reverdict_missing(report)
     if missing:raise SystemExit(f'--reverdict: {path} lacks what the verdict needs: ' + ', '.join(missing[:FIRST]))
-    declared, section = saved_declared(report)
+    declared, section = saved_declared(report, expected=expected)
     quantities = report['checks']['c']['quantities'];before = {name: m.get('passed') for name, m in quantities.items()}
     old = dict(status=report['status'], status_reasons=report.get('status_reasons'), failing=[k for k, v in report['checks'].items() if not v['passed']])
     apply_rules_depthn(report, report['pricer_options']['depth'], actors=saved_actors(report), declared=declared)
@@ -1873,8 +1880,9 @@ def reverdict(path):
         deeper_logit_rule=DEEPER_LOGIT_RULE if declared is None else DECLARED_DEEPER_RULE,
         turn1_logit_floor=report['tolerance']['turn1_logit_floor'], deeper_logit_bound=report['tolerance']['deeper_logit_bound'], choice_rule=CHOICE_RULE,
         note='offline: the saved numbers re-judged by the current verdict rules; nothing was re-priced or re-compared',
-        **({} if declared is None else dict(declared_bounds_sha256=declared['sha256'], declared_bounds='the bounds the report recorded (header.declared_bounds, '
-            'its sha256 re-verified), re-applied'))))
+        **({} if declared is None else dict(declared_bounds_sha256=declared['sha256'], declared_bounds_commit=declared['commit'],
+            declared_bounds_reverified=declared['reverified'], declared_bounds='the bounds the report recorded (header.declared_bounds: its sha256 and '
+            'git blob sha1 re-verified, the local git history and the source measurement re-checked where available), re-applied'))))
     report = _with_header(report, header_block(report['checks'], declared=section, parity=(report['header'] if isinstance(report.get('header'), dict) else {}).get('merged_depth2_parity')))
     text = json.dumps(report, indent=1, allow_nan=False, default=str) + '\n'   # before the file exists: a failure here leaves none behind
     try:
@@ -1949,7 +1957,8 @@ DECLARED_FIELDS = ('schema', 'evaluator', 'bounds', 'derivation', 'declared_at',
 DECLARED_KINDS = ('champion',)   # champion only: a V2 head (B1's, under --head-archive) and the bank snapshot's actors keep the frozen rule
 DECLARED_PRECISIONS = tuple(ce.PRECISIONS.values())   # the evaluator identity's names ('bfloat16', 'float32'), never the flags' aliases
 DECLARED_RULE = ('--declared-bounds (opt-in; champion only: with --champion-archive, refused with --head-archive and the bank snapshot\'s actors): a JSON declaration '
-    '(DECLARED_SCHEMA) written before the run (declared_at no later than the run\'s start, UTC), its bytes pinned by --declared-bounds-sha256 '
+    '(DECLARED_SCHEMA) committed under gpu_engine/declared_bounds/ through a reviewed PR before the run (--declared-bounds-commit; see '
+    'DECLARED_NOTE for what is verified and what is only recorded), its bytes pinned by --declared-bounds-sha256 '
     'and bound to ONE evaluator identity (kind, archive sha256, precision; checkpoint sha256 when declared), which must be the run\'s, replaces '
     'the tolerance NUMBERS for that evaluator; no check, mask, rule or status changes. value_bound replaces 2 x depth1_noise_floor (and its 1e-4 '
     'fallback) wherever the value bound applies: (b) t1_value, every (c) value quantity (turn 1, ply nodes, leaves, depth2_pass, raw head), '
@@ -1964,10 +1973,17 @@ DECLARED_RULE = ('--declared-bounds (opt-in; champion only: with --champion-arch
     'spread) and GUARD_DEPTHN_RULE, (f)\'s read identity and priors, the statuses, and the kill test (run at the declared value bound). The '
     'measured floors (depth1_noise_floor, root_logit_floor, turn1_logit_floor) are still measured and reported beside the declared bounds, '
     'with the numbers the frozen rule would have given (tolerance.declared_bounds.frozen_rule_would_give; not gated)')
-DECLARED_NOTE = ('pre-registered, evaluator-specific bounds: declared in writing before this run for the evaluator identity below (derivation and '
-    'source measurement in the declaration), applied in place of the B1-calibrated tolerance numbers for that evaluator only. This is NOT a rule '
-    'change after a failure: rules_changed_after_failure and the frozen rule set are untouched, and a run without --declared-bounds is judged '
-    'exactly as before')
+DECLARED_NOTE = ('evaluator-specific bounds for the champion identity in `evaluator`, applied in place of the B1-calibrated tolerance numbers for '
+    'that evaluator only. What this gate verified: the declaration\'s bytes hash to --declared-bounds-sha256 (sha256) and pass its schema; the file '
+    'lies under gpu_engine/declared_bounds/ of the running checkout (repo_path); its git blob sha1 (git_blob_sha1) and --declared-bounds-commit '
+    '(commit) are recorded and, where the local git history holds that commit, the commit holds exactly this blob at repo_path (git_verification; '
+    '"not verifiable here" otherwise); the source measurement\'s sha256 where its file is readable from the run (source_measurement_verification); '
+    'declared_at is no later than the run\'s start. Not verified here: declared_at and run_started_at are self-reported; that the commit went '
+    'through a reviewed PR and was on the integration branch before run_started_at is for an auditor to confirm with git (the commit, holding '
+    'git_blob_sha1 at repo_path, an ancestor of the integration branch at a time before run_started_at). It is not a rule change after a failure: '
+    'rules_changed_after_failure and the frozen rule set are untouched, and a run without --declared-bounds is judged exactly as before')
+DECLARED_SUBDIR = 'gpu_engine/declared_bounds'   # where a declaration is committed, relative to the repository root
+REPO_ROOT = Path(__file__).resolve().parents[1]   # the running checkout (tests point it at a scratch repository)
 DECLARED_TOLERANCE_RULE = ('declared bounds (DECLARED_RULE): values max |diff| <= the declared value_bound; turn-1, root and depth2_pass '
     'logits <= the declared turn1_logit_bound; deeper priors as declared; the guard, digests, discrete fields and (e)/(f) rules unchanged')
 DECLARED_DEEPER_RULE = ('(c) priors at plies >= 2 of a depth >= 3 frame under --declared-bounds: the declared deeper_logit_bound, or the declared '
@@ -2061,11 +2077,67 @@ def declared_from_bytes(raw, sha256, *, path, now=None):
     return dict(path=str(path), sha256=got, content=content, content_text=text, run_started_at=now.isoformat())
 
 
-def load_declared(path, sha256, *, now=None):
-    """--declared-bounds PATH --declared-bounds-sha256 SHA: declared_from_bytes on the file's bytes."""
+def git_blob_sha1(raw):
+    """git's object id of a file with these bytes (sha1 of "blob <len>\\0" + bytes; `git hash-object`)."""
+    return hashlib.sha1(b'blob %d\0' % len(raw) + raw).hexdigest()
+
+
+def _commit_id(text):
+    return isinstance(text, str) and re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}', text) is not None
+
+
+def _git(root, *args):
+    try:return subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):return None
+
+
+def git_verification(commit, repo_path, blob, *, root=None):
+    """What the local git history at `root` (REPO_ROOT) says of the declaration: dict(status, detail) with status 'verified' (the commit is
+    here and holds exactly this blob at repo_path), 'mismatch' (another object there), 'absent' (nothing there) or 'not verifiable here' (no
+    git, no repository, or the commit is not in the local history, e.g. a shallow or exported checkout). load_declared and saved_declared
+    refuse 'mismatch' and 'absent'."""
+    root = Path(root or REPO_ROOT);found = _git(root, 'rev-parse', '--verify', '--quiet', f'{commit}^{{commit}}')
+    if found is None:return dict(status='not verifiable here', detail='git is not available')
+    if found.returncode != 0:return dict(status='not verifiable here', detail=f'commit {commit} is not in a local repository at {root}')
+    at = _git(root, 'rev-parse', '--verify', '--quiet', f'{commit}:{repo_path}')
+    if at is None or at.returncode != 0:return dict(status='absent', detail=f'commit {commit} has no {repo_path}')
+    held = at.stdout.strip()
+    return dict(status='verified' if held == blob else 'mismatch', detail=f'commit {commit} holds {held} at {repo_path}', blob_at_commit=held)
+
+
+def measurement_verification(measurement):
+    """The declaration's source measurement: dict(status, ...) 'verified' (its file is readable from here and hashes to the declared sha256),
+    'mismatch' (it hashes to another; refused) or 'not verifiable here' (not readable from this run)."""
+    path = Path(measurement['path'])
+    try:raw = path.read_bytes()
+    except OSError as error:return dict(status='not verifiable here', detail=f'{path} is not readable from this run ({type(error).__name__})')
+    got = hashlib.sha256(raw).hexdigest()
+    return dict(status='verified' if got == measurement['sha256'] else 'mismatch', sha256=got, detail=f'{path} hashes to {got}')
+
+
+def repo_path_of(path, *, root=None):
+    """The declaration's path relative to the repository root, which must lie under DECLARED_SUBDIR (DeclaredBoundsError otherwise)."""
+    root = Path(root or REPO_ROOT).resolve();resolved = Path(path).resolve()
+    if not resolved.is_relative_to(root / DECLARED_SUBDIR):
+        raise DeclaredBoundsError(f'{path}: a declaration is committed under {DECLARED_SUBDIR}/ of the running checkout ({root / DECLARED_SUBDIR}) through a '
+            'reviewed PR before the run')
+    return resolved.relative_to(root).as_posix()
+
+
+def load_declared(path, sha256, commit, *, now=None, root=None):
+    """--declared-bounds PATH --declared-bounds-sha256 SHA --declared-bounds-commit COMMIT: the file under DECLARED_SUBDIR of the checkout at
+    `root` (REPO_ROOT), declared_from_bytes on its bytes, its git blob sha1 and the commit recorded with git_verification (refused on 'mismatch'
+    or 'absent'), and the source measurement's measurement_verification (refused on 'mismatch'). Returns the declaration dict."""
+    if not _commit_id(commit):raise DeclaredBoundsError(f'--declared-bounds-commit {commit!r}: a full lowercase hex commit id')
+    repo_path = repo_path_of(path, root=root)
     try:raw = Path(path).read_bytes()
     except OSError as error:raise DeclaredBoundsError(f'cannot read {path}: {error}')
-    return declared_from_bytes(raw, sha256, path=path, now=now)
+    declared = declared_from_bytes(raw, sha256, path=path, now=now);blob = git_blob_sha1(raw)
+    git = git_verification(commit, repo_path, blob, root=root)
+    if git['status'] in ('absent', 'mismatch'):raise DeclaredBoundsError(f'{path}: not the file committed at {commit}: {git["detail"]} (this file is {blob})')
+    measurement = measurement_verification(declared['content']['source_measurement'])
+    if measurement['status'] == 'mismatch':raise DeclaredBoundsError(f'source_measurement: {measurement["detail"]}, not the declared {declared["content"]["source_measurement"]["sha256"]}')
+    return dict(declared, repo_path=repo_path, git_blob_sha1=blob, commit=commit, git_verification=git, source_measurement_verification=measurement)
 
 
 def evaluator_identity(evaluator):
@@ -2156,20 +2228,61 @@ def declared_tolerance(tolerance, declared, quantities, frozen_deeper):
 def declared_section(declared, evaluator):
     """The header's `declared_bounds` section: the declaration (parsed and as its exact text, whose sha256 --reverdict re-verifies), its
     sha256 and path, the run evaluator it was matched against, the run's start and DECLARED_NOTE."""
-    return dict(sha256=declared['sha256'], path=declared['path'], content=declared['content'], content_text=declared['content_text'],
-        evaluator={k: v for k, v in evaluator_identity(evaluator).items() if k != 'override'}, run_started_at=declared['run_started_at'], note=DECLARED_NOTE,
-        rule=DECLARED_RULE)
+    return dict(sha256=declared['sha256'], path=declared['path'], repo_path=declared['repo_path'], git_blob_sha1=declared['git_blob_sha1'],
+        commit=declared['commit'], git_verification=declared['git_verification'], source_measurement_verification=declared['source_measurement_verification'],
+        content=declared['content'], content_text=declared['content_text'], evaluator={k: v for k, v in evaluator_identity(evaluator).items() if k != 'override'},
+        run_started_at=declared['run_started_at'], note=DECLARED_NOTE, rule=DECLARED_RULE)
 
 
-def saved_declared(report):
-    """(declared, header section) a report recorded under --declared-bounds, re-verified for --reverdict, or (None, None) for a report
-    without one. Fail closed (SystemExit) unless: the header section's content_text hashes to its sha256 and parses (strictly) to its
-    content, a valid declaration; it matches the report's evaluator header; declared_at is no later than the recorded run start; and the
-    tolerance section names the same sha256 and carries the declared value and turn-1 logit bounds."""
+def declared_traces(report):
+    """Where a report still shows a declaration (header or tolerance sections, the declared tolerance texts and sources, a (c) quantity's
+    declared bound_rule, a reverdict of one); [] for a report judged under the frozen rule."""
+    tolerance = report.get('tolerance') if isinstance(report.get('tolerance'), dict) else {};header = report.get('header') if isinstance(report.get('header'), dict) else {}
+    found = [f'{where}.{key}' for where, part, key in (('header', header, 'declared_bounds'), ('tolerance', tolerance, 'declared_bounds'), ('tolerance', tolerance, 'frozen_rule'))
+        if key in part]
+    found += [f'tolerance.{key}' for key, text in (('rule', DECLARED_TOLERANCE_RULE), ('deeper_logit_rule', DECLARED_DEEPER_RULE)) if tolerance.get(key) == text]
+    found += [f'tolerance.{key}' for key in ('value_bound_source', 'deeper_logit_bound_source') if str(tolerance.get(key) or '').startswith('declared')]
+    quantities = ((report.get('checks') or {}).get('c') or {}).get('quantities') if isinstance(report.get('checks'), dict) else None
+    found += [f'checks.c.quantities.{n}.bound_rule' for n, m in (quantities or {}).items() if isinstance(m, dict) and str(m.get('bound_rule') or '').startswith('declared_')]
+    if isinstance(report.get('reverdict'), dict) and 'declared_bounds_sha256' in report['reverdict']:found.append('reverdict.declared_bounds_sha256')
+    return found
+
+
+def frozen_problems(report):
+    """Why a report without a declaration was not judged under the frozen rule's numbers ([] when it was): tolerance.rule is TOLERANCE_RULE,
+    logit_bound LOGIT_BOUND, value_bound 2 x depth1_noise_floor (VALUE_FALLBACK without a floor), and every saved bound of (b)'s values and of
+    the (c) quantities --reverdict keeps is its class's (values the value bound, priors LOGIT_BOUND; the deeper priors are re-bound anyway)."""
+    tolerance = report['tolerance'];floor = tolerance.get('depth1_noise_floor');problems = []
+    value = g2.VALUE_FALLBACK if floor is None else g2.FLOOR_FACTOR * floor if type(floor) in (int, float) else None
+    if tolerance.get('rule') != g2.TOLERANCE_RULE:problems.append('tolerance.rule is not the frozen TOLERANCE_RULE')
+    if tolerance.get('logit_bound') != g2.LOGIT_BOUND:problems.append(f'tolerance.logit_bound {tolerance.get("logit_bound")!r} is not LOGIT_BOUND {g2.LOGIT_BOUND}')
+    if value is None or tolerance.get('value_bound') != value:
+        problems.append(f'tolerance.value_bound {tolerance.get("value_bound")!r} is not the frozen rule\'s {value!r} (2 x depth1_noise_floor {floor!r})')
+    depth = report['pricer_options']['depth'];class_bound = lambda name: g2.LOGIT_BOUND if g2.is_logit(name) else tolerance.get('value_bound')
+    sections = (('c', report['checks']['c'].get('quantities') or {}), ('b', (report['checks'].get('b') or {}).get('values') or {}))
+    problems += [f'checks.{check}.{name}.bound {m.get("bound")!r} is not {class_bound(name)!r}' for check, part in sections for name, m in part.items()
+        if name not in g2.FLOORS and not (check == 'c' and deeper_logit(name, depth)) and isinstance(m, dict) and m.get('bound') != class_bound(name)]
+    return problems
+
+
+def saved_declared(report, *, expected=None):
+    """(declared, header section) a report recorded under --declared-bounds, re-verified for --reverdict, or (None, None) for a report judged
+    under the frozen rule. Fail closed (SystemExit) unless: with a declaration, the header section's content_text hashes to its sha256 and to
+    its git blob sha1, parses (strictly) to its content, a valid declaration, matching the report's evaluator header, declared_at no later than
+    the recorded run start, its repo_path under DECLARED_SUBDIR and its commit a full commit id, git_verification and the source
+    measurement re-run here contradicting nothing ('mismatch' / 'absent'), and the tolerance section naming the same sha256 with the declared
+    value and turn-1 logit bounds; without one, no trace of a declaration (declared_traces) and the frozen numbers (frozen_problems).
+    expected: dict(commit, sha256) given on the command line (the pre-registration record): each given must be the recorded one."""
+    expected = {k: v for k, v in (expected or {}).items() if v is not None}
     header = report.get('header') if isinstance(report.get('header'), dict) else {}
     section, recorded = header.get('declared_bounds'), (report.get('tolerance') or {}).get('declared_bounds')
-    if section is None and recorded is None:return None, None
-    problems, content = [], None
+    if section is None and recorded is None:
+        traces, frozen = declared_traces(report), frozen_problems(report)
+        if traces:raise SystemExit('--reverdict: a declaration left traces but no declared_bounds sections (fail closed): ' + ', '.join(traces[:FIRST]))
+        if frozen:raise SystemExit('--reverdict: the report is not judged under the frozen rule\'s numbers (fail closed): ' + '; '.join(frozen[:FIRST]))
+        if expected:raise SystemExit('--reverdict: --declared-bounds-commit/--declared-bounds-sha256 given, but the report records no declaration (fail closed)')
+        return None, None
+    problems, content, text, sha, again = [], None, None, None, {}
     if not isinstance(section, dict):problems.append('tolerance.declared_bounds without header.declared_bounds')
     else:
         text, sha = section.get('content_text'), section.get('sha256')
@@ -2178,19 +2291,27 @@ def saved_declared(report):
         else:
             try:content = _strict_json(text)
             except ValueError as error:problems.append(f'header.declared_bounds.content_text: {error}')
+            if git_blob_sha1(text.encode('utf-8')) != section.get('git_blob_sha1'):problems.append('header.declared_bounds.content_text does not hash to its git_blob_sha1')
     if content is not None:
         problems += declared_problems(content) + ([] if content == section.get('content') else ['header.declared_bounds.content differs from its content_text'])
     if content is not None and not problems:
         problems += evaluator_mismatches(content, evaluator_identity(report.get('evaluator')))
         started = _utc(section.get('run_started_at'))
         if started is None or _utc(content['declared_at']) > started:problems.append('declared_at is not before the recorded run start')
+        if not _commit_id(section.get('commit')):problems.append('header.declared_bounds.commit is not a full commit id')
+        if not str(section.get('repo_path') or '').startswith(DECLARED_SUBDIR + '/'):problems.append(f'header.declared_bounds.repo_path is not under {DECLARED_SUBDIR}/')
+        problems += [f'--declared-bounds-{key.replace("_", "-")} {value} is not the recorded {section.get(key)}' for key, value in expected.items() if section.get(key) != value]
+        if not problems:
+            again = dict(git=git_verification(section['commit'], section['repo_path'], section['git_blob_sha1']), source_measurement=measurement_verification(content['source_measurement']))
+            problems += [f'{name}: {result["detail"]}' for name, result in again.items() if result['status'] in ('mismatch', 'absent')]
         n, tolerance = declared_numbers(dict(content=content)), report.get('tolerance') or {}
         if not isinstance(recorded, dict) or recorded.get('sha256') != sha:problems.append('tolerance.declared_bounds does not name the same sha256')
         if (tolerance.get('value_bound'), tolerance.get('logit_bound')) != (n['value_bound'], n['turn1_logit_bound']):
             problems.append(f'tolerance value_bound / logit_bound {[tolerance.get("value_bound"), tolerance.get("logit_bound")]} are not the declared '
                 f'{[n["value_bound"], n["turn1_logit_bound"]]}')
     if problems:raise SystemExit('--reverdict: the report\'s declared bounds fail their checks (fail closed): ' + '; '.join(problems[:FIRST]))
-    return dict(path=section.get('path'), sha256=sha, content=content, content_text=text, run_started_at=section.get('run_started_at')), section
+    keep = ('path', 'repo_path', 'git_blob_sha1', 'commit', 'git_verification', 'source_measurement_verification', 'run_started_at')
+    return dict({k: section.get(k) for k in keep}, sha256=sha, content=content, content_text=text, reverified=dict(again, expected=expected)), section
 
 
 # ---------------------------------------------------------------- the champion's depth-2 surfaces against the merged depth-2 gate
@@ -2279,10 +2400,11 @@ def check_declared_arguments(parser, args):
     snapshot's actors, the B1-calibrated default path), and only where a verdict is priced live: refused with
     --depth3-diagnostics (no oracle, no bound) and the offline modes (--diagnostics-from, --mutation-from; --reverdict takes no option and
     re-applies the declaration its report recorded)."""
-    given = [getattr(args, 'declared_bounds', None), getattr(args, 'declared_bounds_sha256', None)]
+    given = [getattr(args, name, None) for name in ('declared_bounds', 'declared_bounds_sha256', 'declared_bounds_commit')]
     if not any(given):return args
-    if not all(given):parser.error('--declared-bounds and --declared-bounds-sha256 go together')
+    if not all(given):parser.error('--declared-bounds, --declared-bounds-sha256 and --declared-bounds-commit go together')
     if not ce._hex64(args.declared_bounds_sha256):parser.error('--declared-bounds-sha256 must be a 64-hex sha256')
+    if not _commit_id(args.declared_bounds_commit):parser.error('--declared-bounds-commit must be a full lowercase hex commit id')
     if args.diagnostics_from or args.mutation_from:parser.error('--declared-bounds applies to a live gate run: --diagnostics-from / --mutation-from judge nothing live')
     if args.head_archive:parser.error('--declared-bounds applies to the champion only (--champion-archive): a V2 head under --head-archive (B1\'s '
         'included) keeps the frozen rule')
@@ -3154,12 +3276,19 @@ def parse(argv=None):
     parser.add_argument('--declared-bounds', metavar='PATH', help='opt-in, champion only (with --champion-archive): a JSON declaration '
         f'({DECLARED_SCHEMA}) of this evaluator\'s value, turn-1 logit and deeper-ply logit bounds, written before the run; it replaces the '
         'tolerance numbers (DECLARED_RULE) and is recorded in every report\'s header (declared_bounds)')
-    parser.add_argument('--declared-bounds-sha256', metavar='SHA256', help='sha256 of --declared-bounds\' bytes (required with it)')
+    parser.add_argument('--declared-bounds-sha256', metavar='SHA256', help='sha256 of --declared-bounds\' bytes (required with it; with --reverdict: must be '
+        'the report\'s recorded one)')
+    parser.add_argument('--declared-bounds-commit', metavar='COMMIT', help=f'the commit that added --declared-bounds under {DECLARED_SUBDIR}/ through a reviewed '
+        'PR (required with it; recorded with the file\'s git blob sha1; with --reverdict: must be the report\'s recorded one)')
     g2.add_head_arguments(parser);ce.add_arguments(parser)
     args = parser.parse_args(argv)
     if args.reverdict:
-        given = sorted(a.option_strings[0] for a in parser._actions if a.dest not in ('help', 'reverdict') and getattr(args, a.dest) != a.default)
-        if given:parser.error('--reverdict runs offline on a saved gate.json and takes no other option (given: ' + ', '.join(given) + ')')
+        record = ('declared_bounds_commit', 'declared_bounds_sha256')   # the pre-registration record a declared report is compared with
+        given = sorted(a.option_strings[0] for a in parser._actions if a.dest not in ('help', 'reverdict') + record and getattr(args, a.dest) != a.default)
+        if given:parser.error('--reverdict runs offline on a saved gate.json and takes no other option but --declared-bounds-commit / '
+            '--declared-bounds-sha256 (given: ' + ', '.join(given) + ')')
+        if args.declared_bounds_sha256 is not None and not ce._hex64(args.declared_bounds_sha256):parser.error('--declared-bounds-sha256 must be a 64-hex sha256')
+        if args.declared_bounds_commit is not None and not _commit_id(args.declared_bounds_commit):parser.error('--declared-bounds-commit must be a full lowercase hex commit id')
         return parser, args
     g2.check_head_arguments(parser, args);ce.check_arguments(parser, args);check_declared_arguments(parser, args)
     if args.raw_head_check and not args.head_archive:parser.error('--raw-head-check needs --head-archive')
@@ -3200,7 +3329,7 @@ def parse(argv=None):
 
 def main(argv=None):
     parser, args = parse(argv)
-    if args.reverdict:return reverdict(args.reverdict)
+    if args.reverdict:return reverdict(args.reverdict, expected=dict(commit=args.declared_bounds_commit, sha256=args.declared_bounds_sha256))
     if args.diagnostics_from:
         out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
         report = dict(header=header_block(), schema=SCHEMA, mode='DIAGNOSTICS_OFFLINE', **offline_diagnostics(args.diagnostics_from, progress=log))
@@ -3216,7 +3345,7 @@ def main(argv=None):
         return 0 if report['passed'] else 1
     declared = None
     if args.declared_bounds:   # before anything is created or loaded: the file, its sha256, its schema and the flags' evaluator identity
-        try:declared = load_declared(args.declared_bounds, args.declared_bounds_sha256)
+        try:declared = load_declared(args.declared_bounds, args.declared_bounds_sha256, args.declared_bounds_commit)
         except DeclaredBoundsError as error:raise SystemExit(f'--declared-bounds (fail closed): {error}')
         mismatched = evaluator_mismatches(declared['content'], args_identity(args))
         if mismatched:raise SystemExit('--declared-bounds (fail closed): the declaration is not for this run\'s evaluator: ' + '; '.join(mismatched))
@@ -3231,7 +3360,8 @@ def main(argv=None):
         resolved='EVALUATOR_RESOLVED follows once the roots are loaded')
     if declared is not None:
         log('DECLARED_BOUNDS', path=declared['path'], sha256=declared['sha256'], **{k: declared['content'][k] for k in DECLARED_FIELDS if k != 'schema'},
-            run_started_at=declared['run_started_at'], rule=DECLARED_RULE, note=DECLARED_NOTE)
+            **{k: declared[k] for k in ('repo_path', 'git_blob_sha1', 'commit', 'git_verification', 'source_measurement_verification', 'run_started_at')},
+            rule=DECLARED_RULE, note=DECLARED_NOTE)
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     roots = load_roots(args);provider, plan = roots.loaded.provider, roots.loaded.plan;module = pricer_module()
     if declared is not None:

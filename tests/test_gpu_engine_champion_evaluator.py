@@ -498,14 +498,27 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
 
     def main(self, *argv, out=None, lines=None):
         out = out or Path(tempfile.mkdtemp(prefix='champion-cli-')) / 'out';log = (lambda m, **k: lines.append(dict(k, message=m))) if lines is not None else (lambda *a, **k: None)
-        with self.engine(), patch.object(gate_module(), 'load_roots', lambda args: self.roots()), patch.object(gate_module(), 'log', log):
+        with self.engine(), patch.object(gate_module(), 'load_roots', lambda args: self.roots()), patch.object(gate_module(), 'log', log), \
+                patch.object(gate_module(), 'REPO_ROOT', getattr(self, 'repo', gate_module().REPO_ROOT)):
             code = gate_module().main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', '--capacity', '32', *self.FLAGS, *argv])
         return code, out
 
-    def declared(self, **evaluator):
+    def declared(self, *, bounds=None, **evaluator):
+        """(content, flags, sha256) of a declaration for this champion (value bound 1e-6, turn-1 logits .05 unless `bounds`), committed under
+        DECLARED_SUBDIR of a scratch repository that main() and --reverdict take as the checkout (self.repo, self.record)."""
         content = N.declaration(evaluator=dict(dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=CHECKPOINT), **evaluator),
-            bounds=N.bounds(value_bound=1e-6, turn1_logit_bound=.05));path, sha = N.written(content)
-        return content, ('--declared-bounds', str(path), '--declared-bounds-sha256', sha), sha
+            bounds=bounds or N.bounds(value_bound=1e-6, turn1_logit_bound=.05))
+        self.record = record = N.committed(content);self.repo = record.root
+        return content, ('--declared-bounds', str(record.path), '--declared-bounds-sha256', record.sha256, '--declared-bounds-commit', record.commit), record.sha256
+
+    def reverdicted(self, report, *extra):
+        """(exit code or the SystemExit text, gate-reverdict.json or None) of --reverdict on `report` written to a new directory, the scratch
+        repository as the checkout."""
+        gate = gate_module();directory = Path(tempfile.mkdtemp(prefix='champion-declared-'));(directory / 'gate.json').write_text(json.dumps(report))
+        with patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'REPO_ROOT', self.repo):
+            try:code = gate.main(['--reverdict', str(directory / 'gate.json'), *extra])
+            except SystemExit as raised:return str(raised.code), None
+        return code, json.loads((directory / gate.REVERDICT_FILE).read_text())
 
     def test_depth2_full_width_and_n2_equivalence_under_a_declaration(self):
         content, flags, sha = self.declared()
@@ -604,6 +617,9 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         self.assertEqual({k: header[k] for k in default}, default)   # the rules changed after a failure, untouched
         self.assertEqual((section['sha256'], section['content'], section['content_text'], section['note']), (sha, content, Path(flags[1]).read_text(), gate.DECLARED_NOTE))
         self.assertEqual(section['evaluator'], dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=CHECKPOINT))
+        self.assertEqual((section['repo_path'], section['commit'], section['git_blob_sha1'], section['git_verification']['status']),
+            (gate.DECLARED_SUBDIR + '/champion.json', self.record.commit, N.git(self.repo, 'hash-object', flags[1]), 'verified'))
+        self.assertEqual(section['source_measurement_verification']['status'], 'not verifiable here')
         tolerance = report['tolerance'];self.assertEqual((tolerance['value_bound'], tolerance['logit_bound'], tolerance['depth1_noise_floor']), (1e-6, .05, 0.))
         self.assertEqual(tolerance['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.);self.assertEqual(tolerance['declared_bounds']['sha256'], sha)
         self.assertEqual((mutation['header'], mutation['value_bound'], mutation['calls'][0]['value_bound']), (header, 1e-6, 1e-6))
@@ -613,30 +629,44 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:
             gate.main(['--out', str(Path(tempfile.mkdtemp()) / 'o'), '--mutation-from', str(out)])
         self.assertIn('--declared-bounds run', str(raised.exception.code))
-        with patch.object(gate, 'log', lambda *a, **k: None):self.assertEqual(gate.main(['--reverdict', str(out / 'gate.json')]), 0)
-        again = json.loads((out / gate.REVERDICT_FILE).read_text())
-        self.assertEqual((again['status'], again['header'], again['reverdict']['declared_bounds_sha256'], again['reverdict']['changed_quantities']), ('PASS', header, sha, []))
+        code, again = self.reverdicted(report, '--declared-bounds-commit', self.record.commit, '--declared-bounds-sha256', sha)
+        self.assertEqual((code, again['status'], again['header'], again['reverdict']['declared_bounds_sha256'], again['reverdict']['changed_quantities']), (0, 'PASS', header, sha, []))
+        self.assertEqual((again['reverdict']['declared_bounds_commit'], again['reverdict']['declared_bounds_reverified']['git']['status']), (self.record.commit, 'verified'))
         verdicts = lambda r: {k: (m.get('passed'), m.get('bound'), m.get('bound_rule')) for k, m in r['checks']['c']['quantities'].items()}
         self.assertEqual(verdicts(again), verdicts(report));self.assertEqual(again['tolerance']['declared_bounds'], tolerance['declared_bounds'])
-        for case, (change, message) in self.tampered().items():
+        for case, (change, extra, message) in self.tampered(report).items():
             with self.subTest(case):
-                r = copy.deepcopy(report);change(r);directory = Path(tempfile.mkdtemp(prefix='champion-declared-'));(directory / 'gate.json').write_text(json.dumps(r))
-                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(directory / 'gate.json')])
-                self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse((directory / gate.REVERDICT_FILE).exists())
+                r = copy.deepcopy(report);change(r);text, out = self.reverdicted(r, *extra)
+                self.assertIsNone(out);self.assertIn(message, text);self.assertIn('fail closed', text)
 
-    @staticmethod
-    def tampered():
-        """{case: (edit of a declared gate.json, the refusal it must meet)}."""
-        h = lambda r: r['header']['declared_bounds']
+    def tampered(self, report):
+        """{case: (edit of the declared gate.json, extra --reverdict arguments, the refusal it must meet)}: the recorded text, sha256, content,
+        blob, repo path and bounds edited; a section or every section removed; another evaluator; a later run start; a consistent forgery (new
+        text, its sha256 and blob, matching tolerance numbers) that the committed record contradicts; a commit or sha256 given that is not the
+        recorded one."""
+        gate = gate_module();h = lambda r: r['header']['declared_bounds']
+        def forged(r):
+            content = copy.deepcopy(h(r)['content']);content['bounds'].update(value_bound=.5, turn1_logit_bound=.9);text = json.dumps(content, indent=1)
+            h(r).update(content=content, content_text=text, sha256=hashlib.sha256(text.encode()).hexdigest(), git_blob_sha1=gate.git_blob_sha1(text.encode()))
+            r['tolerance'].update(value_bound=.5, logit_bound=.9);r['tolerance']['declared_bounds']['sha256'] = h(r)['sha256']
+        def stripped(r):
+            r['header'].pop('declared_bounds');r['tolerance'].pop('declared_bounds')
         return dict(
-            text=(lambda r: h(r).__setitem__('content_text', h(r)['content_text'].replace('1e-06', '0.5')), 'does not hash'),
-            sha=(lambda r: h(r).__setitem__('sha256', '0' * 64), 'does not hash'),
-            content=(lambda r: h(r)['content']['bounds'].__setitem__('value_bound', .5), 'content differs'),
-            bound=(lambda r: r['tolerance'].__setitem__('value_bound', .5), 'not the declared'),
-            tolerance_sha=(lambda r: r['tolerance']['declared_bounds'].__setitem__('sha256', '0' * 64), 'same sha256'),
-            header=(lambda r: r['header'].pop('declared_bounds'), 'without header.declared_bounds'),
-            evaluator=(lambda r: r['evaluator'].__setitem__('archive_sha256', '6' * 64), 'evaluator.archive_sha256'),
-            started=(lambda r: h(r).__setitem__('run_started_at', '2026-10-01T00:00:00+00:00'), 'before the recorded run start'))
+            text=(lambda r: h(r).__setitem__('content_text', h(r)['content_text'].replace('1e-06', '0.5')), (), 'does not hash'),
+            sha=(lambda r: h(r).__setitem__('sha256', '0' * 64), (), 'does not hash'),
+            blob=(lambda r: h(r).__setitem__('git_blob_sha1', '0' * 40), (), 'git_blob_sha1'),
+            content=(lambda r: h(r)['content']['bounds'].__setitem__('value_bound', .5), (), 'content differs'),
+            bound=(lambda r: r['tolerance'].__setitem__('value_bound', .5), (), 'not the declared'),
+            tolerance_sha=(lambda r: r['tolerance']['declared_bounds'].__setitem__('sha256', '0' * 64), (), 'same sha256'),
+            header=(lambda r: r['header'].pop('declared_bounds'), (), 'without header.declared_bounds'),
+            stripped=(stripped, (), 'left traces'),
+            repo_path=(lambda r: h(r).__setitem__('repo_path', gate.DECLARED_SUBDIR + '/other.json'), (), 'has no'),
+            outside=(lambda r: h(r).__setitem__('repo_path', 'gpu_engine/champion.json'), (), 'not under'),
+            evaluator=(lambda r: r['evaluator'].__setitem__('archive_sha256', '6' * 64), (), 'evaluator.archive_sha256'),
+            started=(lambda r: h(r).__setitem__('run_started_at', '2026-10-01T00:00:00+00:00'), (), 'before the recorded run start'),
+            forged=(forged, (), 'holds'),
+            other_commit=(lambda r: None, ('--declared-bounds-commit', 'b' * 40), 'is not the recorded'),
+            other_sha=(lambda r: None, ('--declared-bounds-sha256', '0' * 64), 'is not the recorded'))
 
     def test_the_resolved_evaluator_is_matched_again(self):
         """The flags name the declared champion but load_roots resolves another identity (a precision the header reports differently): refused
@@ -651,7 +681,8 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         for key, value in (('precision', 'float32'), ('archive_sha256', 'e' * 64), ('kind', 'v2'), ('checkpoint_sha256', 'b' * 64)):
             with self.subTest(key):
                 _, flags, _ = self.declared(**{key: value});out = Path(tempfile.mkdtemp(prefix='champion-cli-')) / 'never'
-                with patch.object(gate_module(), 'load_roots', side_effect=AssertionError('loaded')), self.assertRaises(SystemExit) as raised:
+                with patch.object(gate_module(), 'load_roots', side_effect=AssertionError('loaded')), patch.object(gate_module(), 'REPO_ROOT', self.repo), \
+                        self.assertRaises(SystemExit) as raised:
                     gate_module().main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', *self.FLAGS, *flags])
                 self.assertIn(f'evaluator.{key}', str(raised.exception.code));self.assertFalse(out.exists())
 
