@@ -688,6 +688,29 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
             other_commit=(lambda r: None, ('--declared-bounds-commit', 'b' * 40), 'is not the recorded'),
             other_sha=(lambda r: None, ('--declared-bounds-sha256', '0' * 64), 'is not the recorded'))
 
+    def test_far_from_frozen_bounds_reach_every_site(self):
+        """Depth 3, k 2, --block-invariance and --mutation-test under a declaration far from the frozen numbers (the exact champion's floor is 0,
+        so the frozen value bound is 0; here value 1e-3, turn-1 logits .3, near-tie Q 5e-4, deeper .4): (b)'s values and root prior, every (c)
+        quantity, block invariance's values and logits, (e)'s q_noise_bound (distinct from the value bound), (f), topk_boundary's gap count and
+        every mutation verdict take the declared numbers, and the run passes with every mutant killed."""
+        gate = gate_module();numbers = N.bounds(value_bound=1e-3, turn1_logit_bound=.3, near_tie_q_bound=5e-4, deeper_logit_rule=None, deeper_logit_bound=.4)
+        _, flags, sha = self.declared(bounds=numbers)
+        code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2', '--block-invariance', '--mutation-test', *flags)
+        report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE));checks = report['checks']
+        self.assertEqual((code, report['status'], mutation['status']), (0, 'PASS', 'PASS'), (report.get('status_reasons'), mutation.get('survivors')))
+        self.assertEqual(report['tolerance']['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.)
+        self.assertEqual((checks['b']['values']['t1_value']['bound'], checks['b']['values']['root_peer_logits']['bound']), (1e-3, .3))   # (b)
+        for name, m in checks['c']['quantities'].items():   # (c)
+            if name not in gate.g2.FLOORS:self.assertEqual(m['bound'], .4 if gate.deeper_logit(name, 3) else .3 if gate.g2.is_logit(name) else 1e-3, name)
+        floats = checks['block_invariance']['floats'];self.assertEqual((floats['leaf_value']['bound'], floats['t1_own_logits']['bound']), (1e-3, .3))   # block invariance
+        self.assertEqual((checks['e']['q_noise_bound'], report['tolerance']['q_noise_bound'], checks['f']['value_bound']), (5e-4, 5e-4, 1e-3))   # (e), (f)
+        topk = lambda bound: gate.merge_topk_n([c.get('topk') for c in report['calls']], logit_bound=bound)
+        self.assertEqual(report['topk_boundary'], topk(.3));self.assertNotEqual(topk(.3), topk(gate.g2.LOGIT_BOUND))   # the gap count under .3, not 0.1
+        call = mutation['calls'][0];recorded = dict(declared_bounds_sha256=sha, logit_bound=.3, q_noise_bound=5e-4)
+        self.assertEqual({k: call['clean'][k] for k in recorded}, recorded);self.assertEqual(call['value_bound'], 1e-3)
+        for name, verdict in call['mutants'].items():
+            self.assertTrue(verdict['killed'], name);self.assertEqual({k: verdict[k] for k in recorded}, recorded, name);self.assertEqual(verdict['value_bound'], 1e-3, name)
+
     def test_the_resolved_evaluator_is_matched_again(self):
         """The flags name the declared champion but load_roots resolves another identity (a precision the header reports differently): refused
         after loading, before any pricing."""

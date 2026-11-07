@@ -2672,7 +2672,8 @@ def mutant_verdict(evaluation, *, lanes, sampled=False, value_bound=None, declar
         else:caught[name] = {k: v for k, v in (check.get('mismatched') or {}).items() if v} or check.get('reason') or 'failed'
     modes = {q: m.get('guard_mode') for q, m in (result['checks'].get('c') or {}).get('quantities', {}).items() if certifying_digest(q, depth)}
     return dict(status=status, status_reasons=reasons, killed=status == 'FAIL' and bool(caught), caught_by=sorted(caught), caught=caught, guard_only=guard_only,
-        guard_modes_past_turn1=modes, value_bound=result['tolerance']['value_bound']), result
+        guard_modes_past_turn1=modes, value_bound=result['tolerance']['value_bound'], **({} if declared is None else dict(declared_bounds_sha256=declared['sha256'],
+            logit_bound=result['tolerance']['logit_bound'], q_noise_bound=result['tolerance'].get('q_noise_bound')))), result
 
 
 def mutant_evaluation(path, pairs, *, frame, data, requests, d_results, clean, backups, source, tree, full_turn1, context, priors=None):
@@ -2789,7 +2790,8 @@ def mutation_test_call(frame, data, requests, d_results, clean, *, context=None,
         except ImportError as error:return dict(out, reason=f'gpu_engine.depthn_backups is not importable: {error}', seconds=time.perf_counter() - clock)
     base = {k: v for k, v in clean.items() if k not in ('mutation', MUTATION_INPUTS)};base['actors'] = 1
     verdict, result = mutant_verdict(base, lanes=lanes, value_bound=value_bound, declared=declared);bound = result['tolerance']['value_bound'];block = int(context.get('block', 0))
-    out.update(clean=dict(status=verdict['status'], status_reasons=verdict['status_reasons'], failing=verdict['caught_by'], guard_only=verdict['guard_only']),
+    out.update(clean=dict(status=verdict['status'], status_reasons=verdict['status_reasons'], failing=verdict['caught_by'], guard_only=verdict['guard_only'],
+        **{k: verdict[k] for k in ('declared_bounds_sha256', 'logit_bound', 'q_noise_bound') if k in verdict}),
         value_bound=bound, value_bound_source=('the run\'s declared value_bound (--declared-bounds)' if declared is not None else 'the run\'s (its depth-1 floor '
             'substituted for the call\'s)' if value_bound is not None else 'the call\'s own depth-1 floor'),
         evaluator_actors_live=clean.get('actors'))
