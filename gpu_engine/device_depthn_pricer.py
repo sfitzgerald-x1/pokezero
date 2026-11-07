@@ -191,10 +191,13 @@ def validate_world_requests(requests,worlds,binding,recipe,params):
         p=request.plans
         if len(pair)!=2 or any(type(w)is not mapping.World or(w.state is None)!=(w.public is None)or bool(w.refusals)!=(w.state is None)for w in pair):
             raise ValueError('two device_public_world_state.World per request, a world without a state naming its refusals')
-        if (p.selected is not True or len(p.starts)!=2 or tuple(s.world for s in p.starts)!=tuple(w.index for w in pair)
-                or p.source_hash!=binding.source_hash or p.source_rows_sha256!=binding.source_rows_sha256
-                or p.root.source_binding_sha256!=binding.source_binding_sha256):
-            raise ValueError('same selected root/source/world binding required')
+        if pair[0].index==pair[1].index:raise ValueError('two distinct worlds per request: one world twice in a pair')
+        if p.selected is not True:raise ValueError('selected plans required (the quarter selection is not applied)')
+        if len(p.starts)!=2 or tuple(s.world for s in p.starts)!=tuple(w.index for w in pair):
+            raise ValueError('plan starts must name the pair\'s worlds, in order')
+        if p.source_hash!=binding.source_hash or p.source_rows_sha256!=binding.source_rows_sha256:
+            raise ValueError('plan public source differs from the binding\'s')
+        if p.root.source_binding_sha256!=binding.source_binding_sha256:raise ValueError('root source binding differs from the binding\'s')
         original._probabilities(tuple(request.root_logits),original._mask(request.root_legal))
         if not request.root_inputs or set(request.root_inputs)-set(INPUT_KEYS):
             raise ValueError('original encoder input keys required')

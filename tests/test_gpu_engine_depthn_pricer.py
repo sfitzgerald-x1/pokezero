@@ -743,6 +743,18 @@ class DepthNPricerTests(unittest.TestCase):
         leaves[1,1,1]=3;self.assertIsNone(backups.node_value(frame,0,0,2,1));self.assertIsNone(backups.node_value(frame,0,0,1,0))
         self.assertEqual(backups.refusal_summary(frame)['roots'][0]['cause'],'turn3')
 
+    def test_d3_requests_still_go_through_validate_requests(self):
+        """The worlds= seam leaves D3's own branch as it was: its request checks run, and its reports gain no world source."""
+        specs=(((0,27),0,0,1),((27,21),1,1,0));ex=deep_executor();requests=self.requests(specs,ex)
+        engine=dn.DepthNPricer(ex,object(),capacity=4,depth=2,k_own=(2,),k_opp=(2,),block_lanes=16,actor_capacity=3)
+        bad=(replace(requests[0],plans=replace(requests[0].plans,source_hash='other-source')),)+requests[1:]
+        with patch.object(mapping,'materialize_host',side_effect=T.Depth2PricerTests.materialize(specs)),patch.object(batch.v5_model,'forward',side_effect=forward):
+            with self.assertRaisesRegex(ValueError,'same selected root/source/world/recipe required'):engine.price(bad,self.tables,self.recipe,PARAMS)
+            frame=engine.price(requests,self.tables,self.recipe,PARAMS)   # the same call, unchanged, prices
+        self.assertEqual(frame.pre.tolist(),[[0,0],[0,0]])
+        self.assertTrue(all('world_source'not in w for pair in frame.world_reports for w in pair));self.assertNotIn('world_source',frame.timing)
+        self.assertTrue(all(not any(isinstance(x,tuple)and x[:1]==('worlds',)for x in key)for key in engine.programs))
+
     def test_empty_and_fail_closed(self):
         ex=deep_executor()
         for kw in(dict(depth=1,k_own=(),k_opp=()),dict(depth=3,k_own=(2,),k_opp=(2,2)),dict(depth=2,k_own=(0,),k_opp=(2,)),dict(depth=2,k_own=(2,),k_opp=(10,)),

@@ -1,7 +1,7 @@
 """Constructor worlds into DepthNPricer on the fake engine: the worlds= seam, the adapter, refusals, budgets, bindings, searched mode."""
 from dataclasses import replace
 import math
-from types import SimpleNamespace as NS
+from types import MappingProxyType,SimpleNamespace as NS
 from typing import NamedTuple
 import unittest
 from unittest.mock import patch
@@ -15,7 +15,7 @@ from pokezero.live_protocol_actor import MASK_NAMES
 from pokezero.v5_contract import DecisionAddress
 from gpu_engine import device_depthn_pricer as dn,device_public_teacher as serial,device_public_teacher_batch as batch
 from gpu_engine import device_public_world_state as mapping,device_public_worlds as plans,depthn_backups as backups
-from gpu_engine import constructor_worlds as cw
+from gpu_engine import champion_evaluator as evaluators,constructor_worlds as cw
 from gpu_engine.phase_d_live_worlds import Refusal,WorldSet
 from gpu_engine.phase_d_protocol_constructor import ProtocolConstructor
 from tests.test_gpu_engine_device_public_teacher import facts
@@ -61,6 +61,11 @@ class Evaluator:
     def __call__(self,params,inputs):return T.forward(params,inputs)
 
 
+class FakeChampion(evaluators.ChampionEvaluator):
+    """A real ChampionEvaluator (its view, identity and binding checks) whose forward is the fake head."""
+    def __call__(self,params,inputs):return T.forward(params,inputs)
+
+
 class ConstructorWorldsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -76,9 +81,11 @@ class ConstructorWorldsTests(unittest.TestCase):
         return ProtocolConstructor(catalog=cat,source=kw.pop('source',self.source),metadata=kw.pop('metadata',self.metadata),owning_config=object(),
             count=count,functions=NS(catalog=cat),**kw)
 
-    def made(self,i,owner,modes,*,refused=(),carry='ctor',values=None):
-        """One root's prepare() output: W fake worlds (prefix-stable seeds), refused slots without a state, B2's legal mask."""
+    def made(self,i,owner,modes,*,refused=(),carry='ctor',values=None,b2=None):
+        """One root's prepare() output: W fake worlds (prefix-stable seeds), refused slots without a state, B2's legal mask
+        (and `b2` as the root's B2 encoding, view['_b2_root_inputs'], when given)."""
         W=len(modes);detached=replace(self.root,address=DecisionAddress(100+i,4+i,owner))
+        if b2 is not None:detached=replace(detached,view=MappingProxyType(dict(detached.view,_b2_root_inputs=b2)))
         seeds=tuple(1000*(i+1)+17*w+3 for w in range(W));worlds=[]
         for w,mode in enumerate(modes):
             if w in refused:worlds.append(mapping.World(w,None,None,('named-refusal',),seeds[w],False));continue
@@ -138,6 +145,7 @@ class ConstructorWorldsTests(unittest.TestCase):
         d3_keys=set(engine.programs)
         self.assertTrue(d3_keys and all(not any(isinstance(x,tuple)and x[:1]==('worlds',)for x in key)for key in d3_keys))
         self.assertIn(('expand',6,4,2,3),d3_keys);self.assertIn(('leaf',6,4,3,2),d3_keys);self.assertNotIn('world_source',d3.timing)
+        self.assertTrue(all('world_source'not in w for pair in d3.world_reports for w in pair))   # D3's reports are unchanged
         pairs=tuple(tuple(materialize(r.plans.root,s,self.tables,self.recipe)for s in r.plans.starts)for r in requests)
         ctor_pairs=tuple(tuple(replace(w,public=None if w.public is None else ctor_public(w.public))for w in pair)for pair in pairs)
         frames={};sigs={}
@@ -197,7 +205,10 @@ class ConstructorWorldsTests(unittest.TestCase):
             q=[math.fsum(float(z[a])for z in qs)/4 if root['root_legal'][a]else None for a in range(9)]
             self.assertEqual(x['completed_q'],tuple(q));self.assertEqual(x['block_causes'],(None,)*4)
             target=original._probabilities(tuple(l+(q[a]or 0.)for a,l in enumerate(root['root_logits'])),root['root_legal'])
-            self.assertEqual(x['policy_target'],target);self.assertEqual(x['action'],max(range(9),key=lambda a:(target[a],-a)))
+            self.assertEqual(x['policy_target'],target);legal=[a for a in range(9)if root['root_legal'][a]]
+            self.assertEqual(x['action_policy_target'],max(legal,key=lambda a:(target[a],-a)));self.assertEqual(x['action_mean_q'],max(legal,key=lambda a:(q[a],-a)))
+            self.assertIsNone(root['b2_view']);self.assertEqual(root['refused_world_share'],0.)   # the fixture root carries no B2 encoding
+            self.assertTrue(all(math.isnan(b.requests[row].plans.source_fixture_unknown_mass)for row in root['rows']))
 
     # (3) budgets -------------------------------------------------------------------------------------------------------------
     def test_world_budgets_2_8_16_32_are_prefixes_and_compose_by_the_mean(self):
@@ -262,12 +273,17 @@ class ConstructorWorldsTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError,'prepare must return'):self.prepared({'r':(detached,made,legal,'a fourth member')},W)   # never a silent refusal
         constructor,prepared,_=self.prepared({'x':Refusal('MALFORMED_SEARCH_REQUEST'),'y':ValueError('plain')},W)
         deep=self.pricer(ex,depth=3,k_own=(2,2),k_opp=(2,2),selection='searched');full=self.pricer(ex,depth=2,k_own=9,k_opp=9)
-        for pricer,pass_pricer in((engine,None),(deep,full)):
+        digest=self.pricer(ex,depth=3,k_own=(2,2),k_opp=(2,2),digest=True)   # its empty frame would raise KeyError 'digest_own' in DepthN's _frame
+        for pricer,pass_pricer in((engine,None),(deep,full),(digest,None)):
+            before=pricer.last_timing,None if pass_pricer is None else pass_pricer.last_timing
             with self.forward_patch():
                 b=cw.build(constructor,prepared,pricer,PARAMS,binding=self.binding,recipe=self.recipe)
-                frame,_=cw.price(pricer,b,self.binding,self.recipe,PARAMS,pass_pricer=pass_pricer)
-            self.assertEqual((len(b.requests),frame.pre.shape[0]),(0,0))
+                frame,raw=cw.price(pricer,b,self.binding,self.recipe,PARAMS,pass_pricer=pass_pricer)
+            self.assertEqual((len(b.requests),frame,raw),(0,None,None))   # no pricer is called
+            self.assertIs(pricer.last_timing,before[0]);self.assertIs(None if pass_pricer is None else pass_pricer.last_timing,before[1])
             self.assertEqual([x['cause']for x in cw.reduce(frame,b)],['constructor-root:MALFORMED_SEARCH_REQUEST','constructor-root:ValueError:plain'])
+        with self.assertRaises(ValueError):cw.price(deep,b,self.binding,self.recipe,PARAMS)   # the mode's pricers are still checked
+        with self.assertRaises(ValueError):cw.reduce(None,cw.Batch((object(),),b.worlds,(),2,1))
 
     def test_root_inputs_are_world0s_own_view_and_hold_every_world_to_it(self):
         W=8;modes=self.modes(0,W)
@@ -294,35 +310,66 @@ class ConstructorWorldsTests(unittest.TestCase):
         W=2;roots={'r':self.made(0,0,self.modes(0,W))}
         constructor,prepared,_=self.prepared(roots,W)
         ex=carry_executor();engine=self.pricer(ex,depth=2,k_own=(2,),k_opp=(2,),capacity=4,block_lanes=16)
-        with self.forward_patch():b=cw.build(constructor,prepared,engine,PARAMS,binding=self.binding,recipe=self.recipe)
+        with self.forward_patch():
+            b=cw.build(constructor,prepared,engine,PARAMS,binding=self.binding,recipe=self.recipe)
+            control=engine.price(b.requests,self.binding,self.recipe,PARAMS,worlds=b.worlds)   # every case below differs from this priced call by one field
+        self.assertEqual(control.pre.tolist(),[[0,0]])
         metadata=dict(self.metadata,moves=[None,*[dict(pp=11)]*4])
-        others={'metadata_sha256':cw.binding(self.source,metadata,self.catalog),
-            'encoder':cw.binding(self.source,self.metadata,catalog(self.source.source_hash,checkpoint='d'*64)),
-            'source_binding_sha256':cw.binding(replace(self.source,binding_sha256='0'*64),self.metadata,self.catalog)}
-        for field,other in others.items():
-            with self.subTest(field=field):
-                with self.assertRaisesRegex(ValueError,field):cw.build(constructor,prepared,engine,PARAMS,binding=other,recipe=self.recipe)
-                with self.assertRaisesRegex(ValueError,field):engine.price(b.requests,other,self.recipe,PARAMS,worlds=b.worlds)
-                with self.assertRaisesRegex(ValueError,field):engine.price(b.requests,self.binding,self.recipe,PARAMS,worlds=replace(b.worlds,binding=other))
-        # The constructor's own inputs, not the pricer's: a constructor on other metadata refuses to build for this pricer.
+        masks=NS(**dict(vars(self.catalog),masks=NS(**dict(vars(self.catalog.masks),stats_block=False))))
+        vocab=NS(**dict(vars(self.catalog),vocabulary=NS(tokens=('field','pokemon:other'),size=2)))
+        others={('metadata_sha256',None):cw.binding(self.source,metadata,self.catalog),
+            ('encoder','checkpoint_sha256'):cw.binding(self.source,self.metadata,catalog(self.source.source_hash,checkpoint='d'*64)),
+            ('encoder','feature_masks'):cw.binding(self.source,self.metadata,masks),
+            ('encoder','category_vocab_sha256'):cw.binding(self.source,self.metadata,vocab),
+            ('source_binding_sha256',None):cw.binding(replace(self.source,binding_sha256='0'*64),self.metadata,self.catalog)}
+        for (field,part),other in others.items():
+            with self.subTest(field=field,part=part):
+                if part is not None:   # exactly that encoder entry differs
+                    self.assertEqual([k for k,v in dict(other.encoder).items()if dict(self.binding.encoder)[k]!=v],[part])
+                with self.forward_patch():
+                    with self.assertRaisesRegex(ValueError,"built under another binding than the pricer's: "+field+'$'):
+                        cw.build(constructor,prepared,engine,PARAMS,binding=other,recipe=self.recipe)
+                    with self.assertRaisesRegex(ValueError,"built under another binding than the pricer's: "+field+'$'):
+                        engine.price(b.requests,other,self.recipe,PARAMS,worlds=b.worlds)
+                    with self.assertRaisesRegex(ValueError,"built under another binding than the pricer's: "+field+'$'):
+                        engine.price(b.requests,self.binding,self.recipe,PARAMS,worlds=replace(b.worlds,binding=other))
+        # The constructor's own inputs, not the pricer's: a constructor on other metadata refuses to build for this pricer,
+        # and its prepared roots refuse to build under a constructor that does match (they carry their maker's stamp).
         foreign,prepared2,_=self.prepared(roots,W,metadata=metadata)
-        with self.assertRaisesRegex(ValueError,'metadata_sha256'):cw.build(foreign,prepared2,engine,PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual(prepared2[0].binding,cw.constructor_binding(foreign));self.assertEqual(prepared[0].binding,self.binding)
+        with self.forward_patch():
+            with self.assertRaisesRegex(ValueError,"constructor worlds are built under another binding than the pricer's: metadata_sha256$"):
+                cw.build(foreign,prepared2,engine,PARAMS,binding=self.binding,recipe=self.recipe)
+            with self.assertRaisesRegex(ValueError,"a prepared root comes from a constructor with another binding than this one's: metadata_sha256$"):
+                cw.build(constructor,prepared2,engine,PARAMS,binding=self.binding,recipe=self.recipe)
+            refused=cw.prepare_roots(self.constructor(W,metadata=metadata),[dict(request_id='x')])   # a RootRefusal is stamped too
+            with self.assertRaisesRegex(ValueError,"a prepared root comes from a constructor"):
+                cw.build(constructor,prepared+refused,engine,PARAMS,binding=self.binding,recipe=self.recipe)
         req=b.requests[0];pair=b.worlds.pairs[0]
-        bad={'plan source binding':replace(req,plans=replace(req.plans,root=replace(req.plans.root,source_binding_sha256='0'*64))),
-            'plan source hash':replace(req,plans=replace(req.plans,source_hash='other')),
-            'unselected':replace(req,plans=replace(req.plans,selected=False)),
-            'world index':replace(req,plans=replace(req.plans,starts=req.plans.starts[::-1])),
-            'actor':replace(req,learner_actor=3),'input keys':replace(req,root_inputs=dict(req.root_inputs,extra=np.zeros(1)))}
-        for name,r in bad.items():
-            with self.subTest(request=name),self.assertRaises(ValueError):engine.price((r,),self.binding,self.recipe,PARAMS,worlds=b.worlds)
-        for name,pairs in(('count',()),('unnamed refusal',((replace(pair[0],state=None,public=None),pair[1]),)),('three',((pair[0],)+pair,)),
-                ('not a World',((NS(**vars(pair[0])),pair[1]),))):
-            with self.subTest(pairs=name),self.assertRaises(ValueError):engine.price(b.requests,self.binding,self.recipe,PARAMS,worlds=replace(b.worlds,pairs=pairs))
-        for materializer,worlds,recipe in((self.tables,b.worlds,self.recipe),(self.binding,b.worlds,None),(self.binding,b.worlds.pairs,self.recipe)):
-            with self.assertRaises(ValueError):engine.price(b.requests,materializer,recipe,PARAMS,worlds=worlds)
-        with self.assertRaises(ValueError):engine.price(b.requests,self.binding,self.recipe,PARAMS)   # no worlds: D3 needs Tables
-        with self.assertRaises(ValueError):engine.price(b.requests,self.binding,self.recipe,PARAMS,worlds=replace(b.worlds,source=''))
-        with self.forward_patch():empty=engine.price((),self.binding,self.recipe,PARAMS,worlds=replace(b.worlds,pairs=()))
+        bad={'plan source binding':(replace(req,plans=replace(req.plans,root=replace(req.plans.root,source_binding_sha256='0'*64))),'root source binding differs'),
+            'plan source hash':(replace(req,plans=replace(req.plans,source_hash='other')),'plan public source differs'),
+            'unselected':(replace(req,plans=replace(req.plans,selected=False)),'selected plans required'),
+            'world index':(replace(req,plans=replace(req.plans,starts=req.plans.starts[::-1])),'plan starts must name the pair'),
+            'actor':(replace(req,learner_actor=3),'verified original actor index'),
+            'input keys':(replace(req,root_inputs=dict(req.root_inputs,extra=np.zeros(1))),'original encoder input keys')}
+        for name,(r,message)in bad.items():
+            with self.subTest(request=name),self.forward_patch(),self.assertRaisesRegex(ValueError,message):
+                engine.price((r,),self.binding,self.recipe,PARAMS,worlds=b.worlds)
+        twice=replace(req,plans=replace(req.plans,starts=(req.plans.starts[0],)*2))
+        for name,requests,pairs,message in(('count',b.requests,(),'one pre-built world pair per request'),
+                ('unnamed refusal',b.requests,((replace(pair[0],state=None,public=None),pair[1]),),'naming its refusals'),
+                ('three',b.requests,((pair[0],)+pair,),'two device_public_world_state.World per request'),
+                ('not a World',b.requests,((NS(**vars(pair[0])),pair[1]),),'two device_public_world_state.World per request'),
+                ('one world twice',(twice,),((pair[0],pair[0]),),'two distinct worlds per request'),
+                ('one world twice, starts in order',b.requests,((pair[0],pair[0]),),'two distinct worlds per request')):
+            with self.subTest(pairs=name),self.forward_patch(),self.assertRaisesRegex(ValueError,message):
+                engine.price(requests,self.binding,self.recipe,PARAMS,worlds=replace(b.worlds,pairs=pairs))
+        with self.forward_patch():
+            for materializer,worlds,recipe in((self.tables,b.worlds,self.recipe),(self.binding,b.worlds,None),(self.binding,b.worlds.pairs,self.recipe)):
+                with self.assertRaisesRegex(ValueError,'pre-built worlds need the pricer-side WorldBinding'):engine.price(b.requests,materializer,recipe,PARAMS,worlds=worlds)
+            with self.assertRaisesRegex(ValueError,'original materializer and random recipe required'):engine.price(b.requests,self.binding,self.recipe,PARAMS)
+            with self.assertRaisesRegex(ValueError,'a world-source tag required'):engine.price(b.requests,self.binding,self.recipe,PARAMS,worlds=replace(b.worlds,source=''))
+            empty=engine.price((),self.binding,self.recipe,PARAMS,worlds=replace(b.worlds,pairs=()))
         self.assertEqual(empty.pre.shape,(0,2))
 
     # (6) searched mode -------------------------------------------------------------------------------------------------------
@@ -367,6 +414,54 @@ class ConstructorWorldsTests(unittest.TestCase):
             b2=cw.build(constructor,prepared,v2,PARAMS[:1],binding=self.binding,recipe=self.recipe);cw.price(v2,b2,self.binding,self.recipe,PARAMS[:1])
         self.assertTrue(v2.compiles and all(c[0][-1][0]=='worlds'and not any(isinstance(x,tuple)and x[:1]==('evaluator',)for x in c[0])
             for c in v2.compiles))   # V2 compiled its own programs: never a champion program from the shared table
+
+
+    # (8) review follow-ups -----------------------------------------------------------------------------------------------------
+    def test_a_champion_evaluator_must_be_bound_to_the_constructors_catalog(self):
+        W=2;constructor,prepared,_=self.prepared({'r':self.made(0,0,self.modes(0,W))},W);ex=carry_executor()
+        champion=FakeChampion(params=None,config=NS(tokens=23),meta=dict(weights_archive_sha256='ab'*32,checkpoint_sha256='cd'*32))
+        pricer=self.pricer(ex,depth=2,k_own=(2,),k_opp=(2,),capacity=2,block_lanes=16,forward=champion)
+        with self.assertRaisesRegex(ValueError,'9375 champion checkpoint'):   # the real check: not the real checkpoint
+            cw.build(constructor,prepared,pricer,PARAMS[:1],binding=self.binding,recipe=self.recipe)
+        with patch.object(cw.evaluators,'check_binding',side_effect=ValueError('catalog not the champion\'s'))as check:
+            with self.assertRaisesRegex(ValueError,'catalog not the champion'):cw.build(constructor,prepared,pricer,PARAMS[:1],binding=self.binding,recipe=self.recipe)
+        check.assert_called_once_with(champion,constructor.catalog)
+        with patch.object(cw.evaluators,'check_binding',return_value=True)as check:
+            b=cw.build(constructor,prepared,pricer,PARAMS[:1],binding=self.binding,recipe=self.recipe)
+        check.assert_called_once_with(champion,constructor.catalog);self.assertEqual(b.roots[0]['status'],'PRICED')
+        with patch.object(cw.evaluators,'check_binding',side_effect=AssertionError('not for a non-champion forward')):   # V2 and plain evaluators
+            for forward in(None,Evaluator()):
+                with self.forward_patch():cw.build(constructor,prepared,self.pricer(ex,depth=2,k_own=(2,),k_opp=(2,),capacity=2,forward=forward),
+                    PARAMS[:1],binding=self.binding,recipe=self.recipe)
+
+    def test_b2_view_diagnostic_compares_the_evaluator_view_with_b2s_encoding(self):
+        rng=np.random.default_rng(7)
+        v2=dict(numeric_features=rng.standard_normal((1,1,29,132)).astype(np.float32),categorical_ids=rng.integers(0,40,(1,1,29,41)).astype(np.int32),
+            token_type_ids=rng.integers(0,9,(1,1,29)).astype(np.int32),attention_mask=rng.integers(0,2,(1,1,29)).astype(bool),history_mask=np.ones((1,1),bool))
+        b2={k:v2[k][0,0,:23]for k in cw.B2_TOKEN_KEYS};b2['legal_action_mask']=np.ones(9,bool)
+        champion=FakeChampion(params=None,config=NS(tokens=23),meta=dict(weights_archive_sha256='ab'*32,checkpoint_sha256='cd'*32))
+        root=lambda b:NS(view=MappingProxyType(dict(species=0,**({}if b is None else{'_b2_root_inputs':MappingProxyType(b)}))))
+        for forward in(None,Evaluator(),champion):   # the 23-token prefix, or the evaluator's own view
+            self.assertEqual(cw.b2_view_check(forward,v2,root(b2)),dict(equal=True,keys={k:True for k in cw.B2_TOKEN_KEYS},numeric_max_abs_diff=0.))
+            self.assertIsNone(cw.b2_view_check(forward,v2,root(None)))
+        off=dict(b2,numeric_features=b2['numeric_features'].copy());off['numeric_features'][3,5]+=.25
+        out=cw.b2_view_check(champion,v2,root(off))
+        self.assertEqual((out['equal'],out['keys']['numeric_features'],out['keys']['categorical_ids'],out['numeric_max_abs_diff']),(False,False,True,.25))
+        tail=dict(v2,numeric_features=v2['numeric_features'].copy());tail['numeric_features'][0,0,25]+=1   # belief tokens 23..28 are not B2's
+        self.assertTrue(cw.b2_view_check(None,tail,root(b2))['equal'])
+        self.assertEqual(cw.b2_view_check(champion,dict(v2,numeric_features=v2['numeric_features'][...,:5,:]),root(b2))['equal'],None)   # an error, not a gate
+        # Through build: reported per root, never a gate (the fake encoder's inputs cannot be compared: the root still prices).
+        W=2;constructor,prepared,_=self.prepared({'r':self.made(0,0,self.modes(0,W),b2=b2)},W)
+        with self.forward_patch():b=cw.build(constructor,prepared,self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2),
+            PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual(b.roots[0]['status'],'PRICED');self.assertIsNone(b.roots[0]['b2_view']['equal']);self.assertIn('KeyError',b.roots[0]['b2_view']['error'])
+
+    def test_both_root_moves_are_reported_and_can_differ(self):
+        from gpu_engine.d3_search_latency import compose
+        legal=(True,True)+(False,)*7;logits=(3.,0.)+(0.,)*7
+        composed=compose([NS(completed_q=(.1,.6)+(None,)*7)]*2,logits,legal,original)   # the reviewer's P7: logits favour 0, Q favours 1
+        self.assertEqual(cw.root_actions(composed['completed_q'],composed['policy_target'],legal),(1,0))
+        self.assertEqual(cw.root_actions((.5,.5,.9)+(0.,)*6,(.5,.5,.9)+(0.,)*6,legal),(0,0))   # ties: the lower action; illegal never chosen
 
 
 if __name__=='__main__':unittest.main()
