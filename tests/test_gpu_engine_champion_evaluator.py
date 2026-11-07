@@ -767,7 +767,7 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         """The champion's declared depth-2 gate with --block-invariance (one parameter set, every digest matching, the guard applied): every
         guarded quantity has its GUARD_DECLARED_RULE mode, digest_certified except c.depth2_pass_t1_value (gated: no certifying digest), and the
         header's declared_bounds carries the rule. --reverdict re-derives the same modes from the saved digest findings and evidence and refuses
-        a saved mode flipped either way, or a saved digest finding that no longer supports the saved mode."""
+        a saved mode flipped either way, or a saved digest finding or per-position count that no longer supports the saved mode."""
         gate = gate_module();_, flags, sha = self.declared()
         code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9', '--block-invariance', *flags);report = json.loads((out / 'gate.json').read_text())
         self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'));self.assertIsNotNone(report['tolerance']['guard_bound'])
@@ -784,7 +784,8 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         for case, change in dict(b=mode('b', 'values', 't1_value', 'gated'), c=mode('c', 'quantities', 't1_value_head', 'gated'),
                 c_no_digest=mode('c', 'quantities', 'depth2_pass_t1_value', 'digest_certified'), invariance=mode('block_invariance', 'floats', 'leaf_value', 'gated'),
                 digest_finding=lambda r: r['checks']['a']['mismatched'].__setitem__('t1_digest_own', 1),
-                invariance_evidence=lambda r: r['checks']['block_invariance']['floats']['t1_value']['guard_evidence'].__setitem__('digest_mismatched', 1)).items():
+                invariance_evidence=lambda r: r['checks']['block_invariance']['floats']['t1_value']['guard_evidence'].__setitem__('digest_mismatched', 1),
+                inexact_evidence=lambda r: r['checks']['b']['values']['t1_value']['guard_evidence'].__setitem__('value_positions_outside_digest_inexact', 1)).items():
             with self.subTest(case):
                 r = copy.deepcopy(report);change(r);text, again = self.reverdicted(r)
                 self.assertIsNone(again);self.assertIn('saved guard modes differ', text);self.assertIn('fail closed', text)

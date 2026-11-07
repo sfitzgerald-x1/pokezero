@@ -2705,12 +2705,13 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         self.assertEqual({k: quantities['root_peer_logits'][k] for k in ('bound', 'bound_rule', 'within_bound')}, dict(bound=.15, bound_rule='declared_root_logit_bound', within_bound=True))
         for name in ('t1_own_logits', 't1_peer_logits'):self.assertEqual((quantities[name]['bound'], 'bound_rule' in quantities[name]), (.05, False), name)
 
-    def depth2_evaluated(self, *, values=0., terminal=0., twin=False, corrupt_leaf_digest=False, actors=1):
+    def depth2_evaluated(self, *, values=0., terminal=0., twin=False, corrupt_leaf_digest=False, actors=1, twin_terminal=0., twin_outside_digest=False):
         """One call of the stand-in at depth 2 (k 2): `values` added to the head-valued leaves and the expanded turn-1 cells (so (b)'s and (c)'s
         turn-1 values and the leaf values move together), `terminal` to the terminal turn-1 cells (outside every digest mask), the synthetic
         floor FLOOR and spreads SPREAD (value bound .008, guard .005) and `actors` parameter sets. corrupt_leaf_digest: the pricer's digest of one
         scored leaf one bit off. twin: the unshifted frame as the full-width depth-2 pass (its depth2_pass_t1_value, which no digest certifies) and
-        as a block-invariance twin (with its invariance_cover, as run_call_n records it)."""
+        as a block-invariance twin (with its invariance_cover, as run_call_n records it); twin_terminal is added to that twin's terminal turn-1
+        values and twin_outside_digest sets one word of its leaf digest at a leaf no one enumerated (outside the digest mask) one bit off."""
         def priced():
             with self.engine():return OracleNPricer(self.ex, object(), depth=2, k_own=2, k_opp=2).price(self.requests, self.tables, self.recipe, PARAMS)
         def enumerated():
@@ -2727,8 +2728,11 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         if twin:
             valued = (t1s == 2) | ((t1s == 3) & np.isin(np.asarray(frame.t1_error), (5, 6)))   # depth2_pass_check's t1_value cells
             ev['c']['depth2_pass_t1_value'] = gate.g2._numeric(np.argwhere(valued), np.asarray(base.t1_value)[valued], np.asarray(frame.t1_value)[valued])
-            ev['invariance'] = [gate.g2.block_invariance(gate.frame_arrays(base), gate.frame_arrays(frame))]
-            ev['invariance_cover'] = [gate.invariance_cover(gate.frame_arrays(base), gate.frame_arrays(frame))]
+            other = copy.deepcopy(base) if twin_terminal or twin_outside_digest else base
+            if twin_terminal:other.t1_value[np.asarray(other.t1_status) == 1] += np.float32(twin_terminal)
+            if twin_outside_digest:other.leaf_digest[tuple(np.argwhere(np.asarray(other.leaf_status) == 0)[0])][0] ^= np.uint32(1)
+            ev['invariance'] = [gate.g2.block_invariance(gate.frame_arrays(other), gate.frame_arrays(frame))]
+            ev['invariance_cover'] = [gate.invariance_cover(gate.frame_arrays(other), gate.frame_arrays(frame))]
         return ev
 
     def test_the_declared_guard_is_digest_certified_at_depth_2(self):
@@ -2769,6 +2773,36 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         self.assertEqual((status, set(failing(result)), b['guard_mode'], b['within_bound']), ('FAIL', {'a', 'b'}, 'gated', True))   # (a): terminal values exact
         self.assertEqual({k for k, v in result['checks']['a']['mismatched'].items() if v}, {'t1_value_terminal'})
         self.assertEqual(b['guard_evidence']['value_positions_outside_digest_inexact'], b['guard_evidence']['value_positions_outside_digest'])
+        recorded, derived = self.rederived(result, d);self.assertEqual((derived, recorded['b.t1_value']), (recorded, 'gated'))   # --reverdict agrees
+
+    def rederived(self, result, d):
+        """(the guard modes a summarized declared depth-2 result records, those --reverdict re-derives once it is written as gate.json is):
+        reverdict's own steps, declared_guards from the saved evidence and apply_rules_depthn without covers."""
+        saved = json.loads(json.dumps(result, allow_nan=False, default=str));recorded = gate.guard_record(saved['checks'])['modes']
+        actors = saved['tolerance']['evaluator_actors'];gate.declared_guards(saved, None, actors);gate.apply_rules_depthn(saved, 2, actors=actors, declared=d)
+        return recorded, saved['tolerance']['guard_declared']['modes']
+
+    def test_a_twin_terminal_value_that_is_not_exact_gates_block_invariance(self):
+        """Block invariance's t1_value with the other child block's terminal turn-1 values .006 off: terminal cells lie outside t1_digest_own's
+        mask, so they must be bit-equal; they are not, the guard is gated and block invariance FAILs on the guard alone (within the value
+        bound), while leaf_value stays certified; --reverdict's re-derivation from the written report agrees."""
+        d = declared();result, status, _ = self.judge(self.depth2_evaluated(twin=True, twin_terminal=.006), d)
+        inv = result['checks']['block_invariance'];m = inv['floats']['t1_value'];e = m['guard_evidence']
+        self.assertEqual((status, set(failing(result)), inv['discrete_equal']), ('FAIL', {'block_invariance'}, True))
+        self.assertEqual((m['guard_mode'], m['within_bound'], m['within_guard'], m['passed'], e['digest_mismatched']), ('gated', True, False, False, 0))
+        self.assertGreater(e['value_positions_outside_digest_inexact'], 0);self.assertEqual(inv['floats']['leaf_value']['guard_mode'], 'digest_certified')
+        recorded, derived = self.rederived(result, d);self.assertEqual(derived, recorded);self.assertEqual(recorded['block_invariance.t1_value'], 'gated')
+
+    def test_a_digest_differing_only_outside_the_mask_gates_the_guard(self):
+        """Block invariance with the twin's leaf digest one bit off at a leaf no one enumerated (outside the mask) and the leaf values .006 apart:
+        the certifying check, block_invariance's comparison of the whole digest array, has a mismatch, so leaf_value's guard is gated, live and as
+        --reverdict re-derives it from the written report (its differing count); t1_value, whose digests all match, stays certified."""
+        d = declared();result, status, _ = self.judge(self.depth2_evaluated(values=.006, twin=True, twin_outside_digest=True), d)
+        inv = result['checks']['block_invariance'];m = inv['floats']['leaf_value']
+        self.assertEqual((status, inv['passed'], inv['discrete_equal'], inv['differing']['leaf_digest']['count']), ('FAIL', False, False, 1))
+        self.assertEqual((m['guard_mode'], m['guard_evidence']['digest_mismatched'], m['within_bound'], m['passed']), ('gated', 1, True, False))
+        self.assertEqual(inv['floats']['t1_value']['guard_mode'], 'digest_certified')
+        recorded, derived = self.rederived(result, d);self.assertEqual(derived, recorded);self.assertEqual(recorded['block_invariance.leaf_value'], 'gated')
 
     def test_a_corrupted_leaf_digest_gates_the_leaf_guard(self):
         """The same declared depth-2 call with one scored leaf's digest one bit off: (a) fails on it, the leaf values' guard is gated there
@@ -2800,15 +2834,16 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
     def test_n2_equivalence_takes_the_declared_guard(self):
         """summarize_n2 under a declaration: the Depth2Pricer frame's expanded turn-1 values and head-valued leaves .006 off the DepthNPricer's
         (beyond the guard, within the value bound): the floats and child-block invariance are digest-certified by n2_compare's t1_digest_own /
-        t2_digest and the frames' digest arrays (PASS; frozen: FAIL on the guard); one head-valued leaf's t2_digest one bit off gates t2_value."""
+        t2_digest and the frames' digest arrays (PASS; frozen: FAIL on the guard); one head-valued leaf's t2_digest one bit off gates t2_value;
+        two parameter sets gate every guard."""
         frame = fake_as_depth2(self.cached('n2', self._n2_frame))
-        def call(corrupt=False):
+        def call(corrupt=False, actors=1):
             other = copy.deepcopy(frame);t1s, t2s = np.asarray(other.t1_status), np.asarray(other.t2_status)
             other.t1_value[t1s == 2] += np.float32(.006);other.t2_value[t2s == 4] += np.float32(.006)
             if corrupt:other.t2_digest[tuple(np.argwhere(t2s == 4)[0])][0] ^= np.uint32(1)
             found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
             return dict(a=found, floats=floats, c=dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.])), e=e, spreads=[SPREAD] * 10, cover=gate.n2_cover(frame, other),
-                actors=1, invariance=[gate.g2.block_invariance(frame, other)], invariance_cover=[gate.invariance_cover(frame, other)])
+                actors=actors, invariance=[gate.g2.block_invariance(frame, other)], invariance_cover=[gate.invariance_cover(frame, other)])
         frozen = gate.summarize_n2({'x': [call()]})['x']
         self.assertEqual((frozen['status'], frozen['floats']['t1_value']['passed'], frozen['floats']['t2_value']['passed'], frozen['block_invariance']['passed']), ('FAIL', False, False, False))
         self.assertNotIn('guard_declared', frozen['tolerance']);self.assertNotIn('guard_mode', frozen['floats']['t1_value'])
@@ -2821,6 +2856,9 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         self.assertEqual((report['status'], report['discrete']['mismatched']['t2_digest'], report['floats']['t2_value']['guard_mode'], report['floats']['t1_value']['guard_mode']),
             ('FAIL', 1, 'gated', 'digest_certified'))
         self.assertEqual((report['block_invariance']['floats']['t2_value']['guard_mode'], report['block_invariance']['floats']['t2_value']['guard_evidence']['digest_mismatched']), ('gated', 1))
+        report = gate.summarize_n2({'x': [call(actors=2)]}, declared=declared())['x']   # two parameter sets: a digest certifies inputs, not which parameters priced them
+        self.assertEqual((report['status'], set(report['tolerance']['guard_declared']['modes'].values()), report['floats']['t1_value']['guard_evidence']['evaluator_actors']),
+            ('FAIL', {'gated'}, 2))
 
     def test_the_topk_root_gap_count_takes_the_root_logit_bound(self):
         """merge_topk_n: the root selection's gaps are counted below a given root_logit_bound (recorded beside the plies), every other ply's

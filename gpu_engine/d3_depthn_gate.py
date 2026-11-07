@@ -474,10 +474,12 @@ VALUE_DIGESTS = dict(t1_value='t1_digest_own', leaf_value='leaf_digest', t2_valu
 
 def invariance_cover(a, b):
     """GUARD_DECLARED_RULE's evidence for one block_invariance pair (frame fields a, b; frame_arrays names): per guarded value array
-    (g2.invariance_bound: a float array named *value), its digest array (VALUE_DIGESTS; ply{p}.value: ply{p}.digest_own), the digest's mask
-    from b's status and error (discrete arrays, which block_invariance requires bit-equal in both frames; (a)'s masks), digest_compared =
-    positions in it, digest_mismatched = those whose digests differ between the frames (None: a digest, status or error array missing or
-    misshapen), value_compared = the array's size, outside = positions outside the mask, inexact = those of them whose values are not bit-equal."""
+    (g2.invariance_bound: a float array named *value), its digest array (VALUE_DIGESTS; ply{p}.value: ply{p}.digest_own) and the digest's mask
+    from b's status and error (discrete arrays, which block_invariance requires bit-equal in both frames; (a)'s masks). The certifying check is
+    block_invariance's own whole-array comparison of the digest array, so digest_compared / digest_mismatched count its words compared /
+    differing ANYWHERE in the array, inside the mask or outside (block_invariance's differing count): any mismatch gates the guard (None: a
+    digest, status or error array missing or misshapen). value_compared = the value array's size, outside = its positions outside the mask,
+    inexact = those of them whose values are not bit-equal."""
     fa, fb = g2.frame_fields(a), g2.frame_fields(b);out = {}
     for name in sorted(set(fa) & set(fb)):
         x, y = np.asarray(fa[name]), np.asarray(fb[name])
@@ -492,8 +494,8 @@ def invariance_cover(a, b):
         status, error = np.asarray(status), np.asarray(error)
         mask = (status == 4) | ((status == 3) & np.isin(error, (3, 4))) if name in ('leaf_value', 't2_value') else _turn1_viewed(status, error) if name == 't1_value' \
             else _viewed_own(status, error)
-        differs = (np.asarray(da) != np.asarray(db)).any(axis=-1);outside = ~mask
-        out[name] = dict(digest=digest, digest_compared=int(mask.sum()), digest_mismatched=int(np.count_nonzero(differs & mask)), value_compared=int(x.size),
+        da, db, outside = np.asarray(da), np.asarray(db), ~mask
+        out[name] = dict(digest=digest, digest_compared=int(da.size), digest_mismatched=int(np.count_nonzero(da != db)), value_compared=int(x.size),
             outside=int(outside.sum()), inexact=int(np.count_nonzero(outside & _inexact(x, y))))
     return out
 
@@ -2137,7 +2139,8 @@ GUARD_DECLARED_RULE = ('under --declared-bounds only (decided by the lead on 202
     'guard (max |diff| < 0.25 x the p10 non-zero spread) of every guarded value quantity is DIGEST-CERTIFIED on GUARD_DEPTHN_RULE\'s terms, at '
     'depth 2 and at turn 1 of every depth as GUARD_DEPTHN_RULE already does at plies >= 2: reported, not gated (guard_bound, within_guard, '
     'ratio_to_guard and beyond_guard still computed and reported with guard_mode and guard_evidence) where the digest check that certifies '
-    'the quantity\'s placement compared every value-compared position inside its mask with zero mismatches, every value-compared position '
+    'the quantity\'s placement covered every value-compared position inside its mask and found zero mismatches anywhere it compares (block '
+    'invariance: the whole digest array, inside the mask or outside), every value-compared position '
     'outside the mask is bit-equal (counted per position; by construction for scored leaves), and the run\'s values came from one evaluator '
     'parameter set (evaluator_actors == 1); gated wherever any of these fails, and "gated: no certifying digest" where no digest check '
     'certifies the quantity. Why: (a)\'s leaf digests and, at turn 1, the child cells\' learner-view digests already check '
@@ -2150,7 +2153,8 @@ GUARD_DECLARED_RULE = ('under --declared-bounds only (decided by the lead on 202
     '(a)\'s masks (invariance_cover); --n2-equivalence t1_value / t2_value: n2_compare\'s t1_digest_own / t2_digest (exact, on masks that '
     'contain the compared cells), and its child-block invariance t1_value / t2_value: the frames\' t1_digest_own / t2_digest. No certifying '
     'digest, so gated: (c) depth2_pass_t1_value (the depth-2 pass\'s turn-1 digests are not compared with anything). --n2-equivalence\'s '
-    'turn-1 heads against the oracle stay reported, not gated. --reverdict re-derives every mode from the saved digest findings and per-position '
+    'turn-1 heads against the oracle stay reported, not gated. The residual, plainly: under a declaration, a value shift above the guard but '
+    'within the value bound at digest-certified positions PASSes; the value bound is what gates it. --reverdict re-derives every mode from the saved digest findings and per-position '
     'evidence and refuses a report whose saved mode differs. Without --declared-bounds nothing changes')
 
 
