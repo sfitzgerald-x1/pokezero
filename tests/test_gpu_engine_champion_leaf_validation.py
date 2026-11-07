@@ -12,8 +12,10 @@ head. The real DepthNPricer prices; the tool walks, judges and reports:
 - the bf16 evaluator under test is gated on its own: check_pair refuses a mismatched pair, and with that guard bypassed a bf16-only
   mis-slice or sign flip still FAILs (its view, its digests, gross divergence from f32, its owner's view); a bf16 that drifts 0.15 WARNs;
 - f32 against f32 differs by nothing (two calls); an empty run exits 2 and renders;
-- the verdict rules on synthetic numbers (subgroup significance, rollup, seats, near-terminal per seat, precision, pooling); the command
-  line parses and refuses; main writes validation.json and validation.md.
+- the informational geometry section: an exact (precision-blind) stand-in gives 0 at both geometries and a 0 proposal; a stand-in whose
+  bf16 value moves only in batches of the oracle chunk shows that spread at the oracle geometry alone, with every verdict unchanged;
+- the verdict rules on synthetic numbers (subgroup significance, rollup, seats, near-terminal per seat, precision, pooling, the bounds
+  proposal); the command line parses and refuses; main writes validation.json and validation.md.
 """
 import contextlib
 from dataclasses import replace
@@ -105,6 +107,22 @@ class Shrunk(ce.ChampionEvaluator):
         out = super().__call__(params, inputs);return out._replace(value=out.value * .85) if self.precision == 'bfloat16' else out
 
 
+GEOMETRY = 24   # the geometry tests' oracle chunk: no pricer, walk or binding batch has 24 rows
+
+
+class PrecisionBlind(ce.ChampionEvaluator):
+    """An exact stand-in: champion.forward in f32 whatever the declared precision, so bf16 equals f32 at every geometry."""
+    def core(self, params, numeric, categorical, token_types, attention):
+        return champion.forward(params, numeric, categorical, token_types, attention, self.config, compute_dtype='float32')
+
+
+class GeometryDependent(ce.ChampionEvaluator):
+    """bf16 only: the value + 0.02 in batches of exactly GEOMETRY rows (the oracle geometry of the tests), unchanged elsewhere."""
+    def __call__(self, params, inputs):
+        out = super().__call__(params, inputs)
+        return out._replace(value=out.value + .02) if self.precision == 'bfloat16' and inputs['numeric_features'].shape[0] == GEOMETRY else out
+
+
 class DigestRolled:
     """A pricer whose leaf digests are rolled one opponent slot (values untouched): a placement the digests no longer certify."""
     def __init__(self, pricer):self.pricer = pricer
@@ -183,6 +201,43 @@ class ValidationTests(N.FixtureN, unittest.TestCase):
         self.assertEqual(set(c['scale']['levels']), set(v.UNIFORM));self.assertIn('depth2.leaf', c['scale']['frame_population'])
         self.assertEqual(report['calls'][0]['rebound_equal'], {'f32': True, 'bf16': True});self.assertEqual(report['calls'][0]['empty_levels'], [])
         self.assertGreater(report['walk']['rows'], 0);self.assertEqual(report['pricers']['depth3.bf16']['k_own'], [2, 2])
+        geo = report['geometry'];self.assertTrue(geo['informational']);self.assertEqual(geo['evaluator'], 'bf16');self.assertEqual(report['walk']['oracle_chunk'], v.ORACLE_CHUNK)   # 64-row walks padded to 512-row oracle batches
+        self.assertEqual(set(geo['levels']), {'root', 'depth2.turn1', 'depth2.leaf', 'depth3.turn1', 'depth3.ply2', 'depth3.leaf'})
+        for label, e in geo['levels'].items():
+            with self.subTest(geometry=label):
+                self.assertEqual(e['pricer'], {q: a['groups'][label]['bf16'][q] for q in v.GEOMETRY_QUANTITIES})   # the adapter check's own numbers
+                self.assertEqual(e['oracle_geometry']['value']['count'], e['pricer']['value']['count'])   # the same rows
+                self.assertGreater(e['oracle_geometry']['value']['max'], 0.)   # bf16 rounds at the oracle geometry too
+        b = geo['proposal'];self.assertEqual(b['label'], 'PROPOSAL, not a verdict');self.assertEqual(b['flags'], [])
+        self.assertEqual(b['value_bound'], max(x['sum'] for x in b['value_per_level'].values()));self.assertEqual(b['near_tie_q_bound'], b['value_bound'])
+        t1 = [x['max'] for x in b['turn1_logit_inputs']];self.assertEqual(len(t1), 2 * 5)   # 2 geometries x (2 turn-1 levels x 2 seats + the root peer prior)
+        self.assertAlmostEqual(b['turn1_logit_bound'], max(x['max'] for x in b['turn1_logit_inputs'] if x['geometry'] == 'pricer')
+            + max(x['max'] for x in b['turn1_logit_inputs'] if x['geometry'] == 'oracle_geometry'))
+        self.assertEqual({(x['level'], x['quantity']) for x in b['deeper_logit_inputs']}, set(v.PLY2_PRIORS));self.assertGreater(b['deeper_logit_bound'], 0.)
+
+    def test_an_exact_stand_in_gives_zero_at_both_geometries(self):
+        blind = pair(cls=PrecisionBlind);requests = v.bind([list(self.v2_requests)], blind)[0]   # its own root prior: f32 bits at both precisions
+        report = self.validation(blind, requests=requests, oracle_chunk=GEOMETRY);geo = report['geometry']
+        for label, e in geo['levels'].items():
+            for g in ('pricer', 'oracle_geometry'):
+                for q in v.GEOMETRY_QUANTITIES:
+                    m = e[g][q]
+                    if m['count']:
+                        with self.subTest(level=label, geometry=g, quantity=q):self.assertEqual((m['max'], m['nonfinite']), (0., 0))
+        b = geo['proposal'];self.assertEqual((b['value_bound'], b['turn1_logit_bound'], b['deeper_logit_bound'], b['near_tie_q_bound'], b['flags']), (0., 0., 0., 0., []))
+
+    def test_a_geometry_dependent_stand_in_moves_only_the_oracle_geometry(self):
+        """bf16 + 0.02 in 24-row batches only: the oracle geometry (24-row heads() batches, re-chunked from 64-row walks, padded) shows it at
+        every level; the pricer geometry does not; the proposal carries it; every verdict equals the clean run's (informational only)."""
+        report = self.validation(pair(cls=GeometryDependent), oracle_chunk=GEOMETRY);geo = report['geometry'];clean = self.validation(self.clean, key='clean')
+        for label, e in geo['levels'].items():
+            with self.subTest(level=label):
+                self.assertGreater(e['oracle_geometry']['value']['max'], .015);self.assertLess(e['pricer']['value']['max'], .01)
+        b = geo['proposal'];self.assertGreater(b['value_bound'], .015)
+        level = geo['levels'][b['value_bound_level']];self.assertAlmostEqual(b['value_bound'], level['pricer']['value']['max'] + level['oracle_geometry']['value']['max'])
+        statuses = lambda r: (r['status'], r['exit'], {k: r['checks'][k]['status'] for k in ('precision', 'adapter', 'scale')},
+            {k: r['checks']['perspective'][k]['status'] for k in ('v2', 'seats', 'near_terminal')})
+        self.assertEqual(statuses(report), statuses(clean))
 
     def root_rows(self):
         return [(q, w) for q in range(len(self.v2_requests)) for w in (0, 1) if q != 7 and (q, w) not in self.MISSING and (w == 0 or (q, 0) in self.MISSING)]
@@ -300,13 +355,16 @@ class ValidationTests(N.FixtureN, unittest.TestCase):
         self.assertEqual(report['checks']['adapter']['status'], 'PASS');self.assertEqual(report['walk']['stack_rows'], 64)
         self.assertTrue(all(x['fixed_capacity'] for x in report['pricers'].values()))
         self.assertIn(f'# Champion 9375 leaf validation: {report["status"]} (exit 0)', summary);self.assertIn('| 2 adapter vs raw | PASS |', summary)
-        self.assertIn('Observed f32 max |dv|', summary)
+        self.assertIn('Observed f32 max |dv|', summary);self.assertIn('## 5. bf16 at two forward geometries (informational, no verdict)', summary)
+        self.assertIn('## Declared-bounds proposal (a PROPOSAL, not a verdict)', summary);self.assertIn('| turn1_logit | depth2.turn1 | own_logits | oracle_geometry |', summary)
+        self.assertEqual(report['header']['options']['oracle_chunk'], 512);self.assertIsNotNone(report['geometry']['proposal']['value_bound'])
 
     def test_an_empty_run_exits_2_and_renders(self):
         code, report, summary = self.run_main(self.loaded([]))
         self.assertEqual((code, report['status'], report['passed'], report['exit']), (2, 'INCONCLUSIVE', False, 2))
         self.assertEqual(report['status_reasons'], ['no root was validated']);self.assertIn('INCONCLUSIVE (exit 2)', summary)
         empty = v.judge([]);self.assertEqual((empty['status'], empty['passed'], empty['exit']), ('INCONCLUSIVE', False, 2));v.markdown(v.plain(empty))
+        self.assertIsNone(report['geometry']);self.assertNotIn('## 5.', summary)
 
 
 def synthetic(n=60, *, value=None, peer=None, v2=None, seat=None, valued=True, v2_ok=True, label='depth2.leaf', ply=2, call=0):
@@ -412,6 +470,19 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(v.precision_check([call(flips=1, confident=200)])['status'], 'PASS')   # 0.5%: a pathological row or two
         self.assertEqual(v.precision_check([call(shared=0)])['status'], 'INCONCLUSIVE')
 
+    def test_bounds_proposal_pairs_geometries_and_falls_back(self):
+        m = lambda x, n=10: dict(count=n, max=x) if n else dict(count=0)
+        level = lambda pv, ov, pl=.1, ol=.2: dict(pricer=dict(value=m(pv), own_logits=m(pl), opp_logits=m(pl / 2)), oracle_geometry=dict(value=m(ov), own_logits=m(ol), opp_logits=m(ol / 2)))
+        levels = dict(root=level(.01, .02, .5, .7), **{'depth2.turn1': level(.03, .04), 'depth3.turn1': level(.03, .04), 'depth2.leaf': level(.02, .08), 'depth3.ply2': level(.01, .01, .3, .4)})
+        b = v.bounds_proposal(levels)
+        self.assertAlmostEqual(b['value_bound'], .1);self.assertEqual(b['value_bound_level'], 'depth2.leaf');self.assertEqual(b['near_tie_q_bound'], b['value_bound'])
+        self.assertAlmostEqual(b['turn1_logit_bound'], .25 + .35)   # the root PEER priors (.25, .35) join the turn-1 own priors (.1, .2); the root own prior does not
+        self.assertAlmostEqual(b['deeper_logit_bound'], .7);self.assertEqual(b['flags'], [])
+        levels['depth2.leaf']['oracle_geometry']['value'] = m(None, 0);b = v.bounds_proposal(levels)   # one geometry at a level: 2 x its max, flagged
+        self.assertAlmostEqual(b['value_per_level']['depth2.leaf']['sum'], .04);self.assertIn('value at depth2.leaf: one geometry only (pricer)', b['flags'][0])
+        del levels['depth3.ply2'];b = v.bounds_proposal(levels);self.assertIsNone(b['deeper_logit_bound']);self.assertIn('deeper_logit_bound: no measurement', b['flags'][-1])
+        self.assertIsNone(v.geometry_section(synthetic(), dict(groups={})))   # no oracle-geometry reads: no section
+
     def test_agreement_statistics(self):
         rng = np.random.default_rng(0);y = rng.uniform(-1, 1, 400);x = .5 * y + .1
         a = v.agreement(x, y);self.assertAlmostEqual(a['pearson'], 1., 9);self.assertAlmostEqual(a['spearman'], 1., 9);self.assertAlmostEqual(a['slope'], .5, 9)
@@ -439,7 +510,8 @@ class ParseTests(unittest.TestCase):
         self.assertEqual((args.saved_roots, args.champion_archive, args.head_archive, args.depth3_k, args.fixed_shapes, args.max_roots, args.sample),
             ('/bank/attempt', '/shared/x/champion.npz', '/shared/x/actor-99.npz', 0, True, 5, v.SAMPLE))
         chunk = ['--out', '/tmp/o', '--d3-root', '/d3', '--chunk', '0', '--memory-policy'];args = v.parse(chunk + CE.CHAMPION + CE.HEAD)
-        self.assertEqual((args.d3_root, args.chunk, args.memory_policy, args.capacity, args.walk_chunk, args.seed), ('/d3', 0, True, 512, v.CHUNK, v.SEED))
+        self.assertEqual((args.d3_root, args.chunk, args.memory_policy, args.capacity, args.walk_chunk, args.seed, args.oracle_chunk), ('/d3', 0, True, 512, v.CHUNK, v.SEED, 512))
+        self.assertEqual(v.parse(chunk + CE.CHAMPION + CE.HEAD + ['--oracle-chunk', '256']).oracle_chunk, 256);self.refused(chunk + CE.CHAMPION + CE.HEAD + ['--oracle-chunk', '0'], 'positive')
         self.refused(chunk + CE.HEAD, 'are required');self.refused(chunk + CE.CHAMPION[:4] + CE.HEAD, 'are required')
         self.refused(chunk + CE.CHAMPION, '--head-archive (the V2 reference');self.refused(chunk + CE.CHAMPION + CE.HEAD[2:], '--head-archive (the V2 reference')
         self.refused(chunk + CE.CHAMPION + CE.HEAD[:4], 'go together');self.refused(chunk + CE.CHAMPION + CE.HEAD[:5] + ['X' * 64], '64-hex')

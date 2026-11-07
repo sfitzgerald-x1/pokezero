@@ -59,6 +59,7 @@ PRECISION_OF = dict(f32='float32', bf16='bfloat16')
 SEED = 20261107
 SAMPLE = 4096                              # walked rows per sampled level and call (every root is walked)
 CHUNK = 512                                # walk rows per jitted vmap invocation
+ORACLE_CHUNK = 512                         # the gate's default --oracle-chunk: the oracle's heads() batch (the geometry section)
 FRAME_SAMPLE = 1 << 18                     # per call and level: the uniform sample of frame values the scale section reads
 TAILS = (99, 99.9, 99.99)
 RAW_KEYS = ('numeric', 'categorical', 'token_types', 'attention')   # engine_device_observation.champion_inputs, champion.forward's order
@@ -370,8 +371,8 @@ def precision_check(calls):
 def _path(executor, observe, states, publics, owners, spec, plies, view=None):
     """One spec [row, a1, r1, ..., a_plies, r_plies] walked from its root world as depthn_oracle._walk walks it (the oracle's own step:
     D's turn-1 joint rule, each later seat requested iff its engine mask has a legal action, the node's own chance), then observed at the
-    final state twice: the executor's V2 view of the owner (what the pricer's evaluator reads; its digest through `view`) and the
-    champion's own layout of the owner and of the opponent through `observe` (the ladder's legacy_champion leaf)."""
+    final state twice: the executor's V2 views of the owner (what the pricer's evaluator reads; its digest through `view`) and of the
+    opponent (read only at the oracle geometry), and the champion's own layout of both through `observe` (the ladder's legacy_champion leaf)."""
     import jax.numpy as j
     from . import depth2_oracle as o2, depthn_oracle as on
     row = spec[0];state, public, owner = o2._gather(states, row), o2._gather(publics, row), owners[row]
@@ -386,7 +387,7 @@ def _path(executor, observe, states, publics, owners, spec, plies, view=None):
     mine, theirs = observe(state, public, seat, masks[:, owner]), observe(state, public, 1 - seat, masks[:, 1 - owner])
     facts = dict(invalid=invalid, done=state.done[0], winner=state.winner[0], broken=broken, own_error=own.observation.error[0],
         champion_own_error=mine.observation.error[0], champion_peer_error=theirs.observation.error[0], digest=o2._digest(own.inputs, view))
-    return facts, dict(v2=own.inputs, own=mine.inputs, peer=theirs.inputs)
+    return facts, dict(v2=own.inputs, v2_peer=peer.inputs, own=mine.inputs, peer=theirs.inputs)
 
 
 class Walker:
@@ -414,7 +415,7 @@ class Walker:
         for start in range(0, len(flat), self.chunk):
             part = flat[start:start + self.chunk];count = len(part);padded = np.concatenate([part, np.repeat(part[:1], self.chunk - count, axis=0)])
             facts, inputs = fn(stack.states, stack.publics, stack.owners, j.asarray(padded))
-            out = {k: np.asarray(v)[:count] for k, v in jax.device_get(facts).items()};out.update({k: np.asarray(v)[:count] for k, v in heads(inputs).items()})
+            out = {k: np.asarray(v)[:count] for k, v in jax.device_get(facts).items()};out.update({k: np.asarray(v)[:count] for k, v in heads(inputs, count).items()})
             parts.append(out)
         self.seconds += time.perf_counter() - clock;self.rows += len(flat)
         return dict({k: np.concatenate([p[k] for p in parts]) for k in parts[0]}, spec=specs, seat=np.asarray(stack.owner)[rows].astype(np.int64))
@@ -432,16 +433,38 @@ class Heads:
     """A walked chunk's evaluations: champion.forward (f32, its own jit, never through ChampionEvaluator) on the independent layouts of
     the owner and of the opponent; each evaluator's adapter on the V2 owner view (same rows, same batch); the V2 reference head; and
     whether the independent layout is bit-equal to what EACH evaluator reads (its `view`) of the V2 view."""
-    def __init__(self, evaluators, reference=None):
+    def __init__(self, evaluators, reference=None, oracle=None, oracle_chunk=None):
+        """oracle {name: (params, forward)}: the evaluators to read again at the gate oracle's geometry (`forward` the oracle's own jitted
+        evaluator, DepthNOracle(..., forward=...).forward), in heads() batches of oracle_chunk rows padded as the oracle pads."""
         import jax
         from . import champion
         ev = evaluators[REFERENCE];config = ev.config;self.params, self.reference = ev.params, reference;self.views = {name: e.view for name, e in evaluators.items()}
         self.raw = jax.jit(lambda p, *x: champion.forward(p, *x, config, compute_dtype='float32'))
         self.adapters = {name: (e.params, (lambda e: jax.jit(lambda p, x: e(p, x)))(e)) for name, e in evaluators.items()}
+        if oracle and (type(oracle_chunk) is not int or oracle_chunk <= 0):raise ValueError('positive oracle chunk required')
+        self.oracle, self.oracle_chunk = dict(oracle or {}), oracle_chunk
 
-    def __call__(self, inputs):
+    def oracle_geometry(self, forward, params, inputs, count):
+        """(value [C], logits [C,9]) of the first `count` walked rows at the gate oracle's geometry: depth2_oracle.heads (the oracle's
+        evaluation path) over batches of exactly oracle_chunk rows, a short batch padded with its first row repeated
+        (depth2_oracle.Oracle._map's padding); rows past `count` are NaN."""
+        import jax
+        import jax.numpy as j
+        from . import depth2_oracle as o2
+        size = jax.tree.leaves(inputs)[0].shape[0];c = self.oracle_chunk;value, logits = np.full(size, np.nan, np.float32), np.full((size, 9), np.nan, np.float32)
+        for start in range(0, count, c):
+            n = min(c, count - start);part = jax.tree.map(lambda x: x[start:start + n], inputs)
+            padded = jax.tree.map(lambda x: j.concatenate([x, j.repeat(x[:1], c - n, axis=0)]), part)
+            lg, v, _ = o2.heads(forward, (params,), padded, np.zeros(c, np.int64));value[start:start + n], logits[start:start + n] = v[:n], lg[:n]
+        return value, logits
+
+    def __call__(self, inputs, count=None):
         import jax
         v2 = jax.tree.map(lambda x: x.reshape((x.shape[0],) + x.shape[2:]), inputs['v2']);out = {}
+        count = jax.tree.leaves(inputs['v2'])[0].shape[0] if count is None else count
+        for name, (params, forward) in self.oracle.items():
+            for side, key in (('own', 'v2'), ('peer', 'v2_peer')):
+                out[f'oracle_{name}_{side}_value'], out[f'oracle_{name}_{side}_logits'] = self.oracle_geometry(forward, params, inputs[key], count)
         for side, prefix in (('own', 'raw'), ('peer', 'raw_peer')):
             o = jax.device_get(self.raw(self.params, *[inputs[side][k][:, 0] for k in RAW_KEYS]))
             out[prefix + '_value'], out[prefix + '_logits'] = np.asarray(o.value, np.float32), np.asarray(o.policy_logits, np.float32)
@@ -541,6 +564,7 @@ def call_records(call, frames, pf, requests, roots, stack, walker, heads, *, fam
             walk_ok=~w['invalid'] & ~w['done'] & ~w['broken'] & (w['own_error'] == 0) & (w['champion_own_error'] == 0), peer_ok=w['champion_peer_error'] == 0,
             walk_digest=w['digest'].astype(np.uint32), raw_value=w['raw_value'], raw_logits=w['raw_logits'], raw_peer_value=w['raw_peer_value'],
             raw_peer_logits=w['raw_peer_logits'], v2_value=w.get('v2_value', np.full(n, np.nan, np.float32)), v2_ok=w.get('v2_ok', np.zeros(n, bool)))
+        rec.update({k: w[k] for k in w if k.startswith('oracle_')})   # the oracle-geometry reads (informational)
         for name in NAMES:
             rec[f'same_batch_value_{name}'], rec[f'same_batch_logits_{name}'] = w[f'adapter_{name}_value'], w[f'adapter_{name}_logits']
             rec.update({f'{k}_{name}': v for k, v in pricer_fields(family, p, spec, name, pf, roots, frames, requests, depth).items()})
@@ -743,6 +767,65 @@ def scale_check(records, population):
     return dict(status='WARN' if reasons else 'PASS', reasons=reasons, levels=levels, frame_population=frames, rule=THRESHOLDS['scale']['rule'])
 
 
+GEOMETRY_RULE = ('informational, never a verdict, no FAIL path: |bf16 - f32 raw forward| of the evaluator under test at two forward '
+    'geometries on the SAME walked rows and masks: the pricer geometry (the bf16 pricers\' own programs; a root\'s value and learner prior at '
+    'the batch-1 binding) and the gate oracle\'s geometry (depth2_oracle.heads through DepthNOracle(..., forward=bf16).forward, batches of '
+    'exactly --oracle-chunk rows, a short batch padded with its first row repeated, as Oracle._map pads). The champion gate compares the '
+    'pricer\'s bf16 with the oracle\'s bf16, so by the triangle inequality |pricer - oracle| <= max_pricer + max_oracle.')
+PROPOSAL_RULE = ('a PROPOSAL for the champion gate\'s declared bounds, computed mechanically, not a verdict (a later, separately reviewed '
+    'declaration): value_bound = max over levels (root, turn-1, ply-2, leaves) of (max_pricer_value + max_oracle_value) at that level; '
+    'turn1_logit_bound = max_pricer_t1_logit + max_oracle_t1_logit over the turn-1 priors (t1 own and peer logits at depth2.turn1 and '
+    'depth3.turn1, root peer logits: the gate\'s TURN1_LOGITS and root_peer_logits); deeper_logit_bound (ply 2, one fixed number) = '
+    'max_pricer_ply2_logit + max_oracle_ply2_logit over depth3.ply2\'s own and opponent priors; near_tie_q_bound = value_bound. A pair '
+    'measured at one geometry only falls back to 2 x the larger available max and is flagged; `inputs` lists every max used.')
+GEOMETRY_QUANTITIES = ('value', 'own_logits', 'opp_logits')
+
+
+def geometry_section(records, adapter, name=TESTED):
+    """Per walked level: |bf16 - f32 raw| at the pricer geometry (the adapter check's own numbers for `name`) beside the same at the oracle
+    geometry, on the same rows and masks (GEOMETRY_RULE), then the bounds proposal (PROPOSAL_RULE). None without oracle-geometry reads."""
+    levels = {}
+    for label, r in records.items():
+        if f'oracle_{name}_own_value' not in r:continue
+        use = r[f'valued_{name}'] & r['walk_ok'];own = use & r[f'own_requested_{name}'];opp = use & r[f'opp_requested_{name}'] & r['peer_ok']
+        oracle = dict(value=spread(r[f'oracle_{name}_own_value'][use] - r['raw_value'][use]),
+            own_logits=spread((r[f'oracle_{name}_own_logits'][own] - r['raw_logits'][own])[r[f'own_legal_{name}'][own]]),
+            opp_logits=spread((r[f'oracle_{name}_peer_logits'][opp] - r['raw_peer_logits'][opp])[r[f'opp_legal_{name}'][opp]]))
+        pricer = {k: ((adapter.get('groups') or {}).get(label) or {}).get(name, {}).get(k, dict(count=0)) for k in GEOMETRY_QUANTITIES}
+        levels[label] = dict(rows=int(use.sum()), pricer=pricer, oracle_geometry=oracle)
+    if not levels:return None
+    return dict(informational=True, evaluator=name, rule=GEOMETRY_RULE, levels=levels, proposal=bounds_proposal(levels))
+
+
+TURN1_PRIORS = tuple((label, q) for label in ('depth2.turn1', 'depth3.turn1') for q in ('own_logits', 'opp_logits')) + (('root', 'opp_logits'),)
+PLY2_PRIORS = (('depth3.ply2', 'own_logits'), ('depth3.ply2', 'opp_logits'))
+
+
+def _paired(levels, pairs):
+    """(bound, flag, inputs) over (level, quantity) `pairs`: the larger pricer-geometry max plus the larger oracle-geometry max; with one
+    geometry measured, 2 x its max (flagged); None without either. `inputs` lists every max read."""
+    inputs = [dict(level=l, quantity=q, geometry=g, max=levels[l][g][q].get('max') if levels[l][g][q].get('count') else None, count=levels[l][g][q].get('count', 0))
+        for l, q in pairs if l in levels for g in ('pricer', 'oracle_geometry')]
+    top = {g: max((x['max'] for x in inputs if x['geometry'] == g and x['max'] is not None), default=None) for g in ('pricer', 'oracle_geometry')}
+    if None not in top.values():return top['pricer'] + top['oracle_geometry'], None, inputs
+    have = [g for g, m in top.items() if m is not None]
+    if not have:return None, 'no measurement at either geometry', inputs
+    return 2 * top[have[0]], f'one geometry only ({have[0]}): 2 x its max', inputs
+
+
+def bounds_proposal(levels):
+    """PROPOSAL_RULE over geometry_section's levels."""
+    per_level, flags = {}, []
+    for label in levels:
+        bound, flag, inputs = _paired(levels, ((label, 'value'),));per_level[label] = dict(sum=bound, flag=flag, inputs=inputs)
+        if flag:flags.append(f'value at {label}: {flag}')
+    measured = [(x['sum'], label) for label, x in per_level.items() if x['sum'] is not None];value_bound, at = max(measured) if measured else (None, None)
+    t1, t1_flag, t1_inputs = _paired(levels, TURN1_PRIORS);deeper, deeper_flag, deeper_inputs = _paired(levels, PLY2_PRIORS)
+    flags += [f'{name}: {flag}' for name, flag in (('turn1_logit_bound', t1_flag), ('deeper_logit_bound', deeper_flag)) if flag]
+    return dict(label='PROPOSAL, not a verdict', rule=PROPOSAL_RULE, value_bound=value_bound, value_bound_level=at, near_tie_q_bound=value_bound,
+        turn1_logit_bound=t1, deeper_logit_bound=deeper, flags=flags, value_per_level=per_level, turn1_logit_inputs=t1_inputs, deeper_logit_inputs=deeper_inputs)
+
+
 def rollup(checks):
     """(status, reasons) of a run (THRESHOLDS['rollup']): FAIL, INCONCLUSIVE when the sign or the adapter was not established, WARN, PASS."""
     p = checks['perspective'];statuses = {k: checks[k]['status'] for k in ('precision', 'adapter', 'scale')}
@@ -763,7 +846,7 @@ def judge(calls, expected=()):
     if not records:
         empty = lambda: dict(status='INCONCLUSIVE', reasons=['no root was validated'])
         checks = dict(precision=empty(), adapter=empty(), perspective=dict(status='INCONCLUSIVE', v2=empty(), seats=empty(), near_terminal=empty()), scale=empty())
-        return dict(status='INCONCLUSIVE', passed=False, exit=EXIT['INCONCLUSIVE'], status_reasons=['no root was validated'], checks=checks,
+        return dict(status='INCONCLUSIVE', passed=False, exit=EXIT['INCONCLUSIVE'], status_reasons=['no root was validated'], checks=checks, geometry=None,
             calls=[dict(call=c['call'], roots=c['roots']) for c in calls])
     population = {k: np.concatenate([c['population'][k] for c in calls if k in c['population']]) for k in sorted({k for c in calls for k in c['population']})}
     perspective = dict(v2=v2_check(records), seats=seats_check(records), near_terminal=near_terminal_check(terminal))
@@ -772,7 +855,8 @@ def judge(calls, expected=()):
     status, reasons = rollup(checks)
     summary = [dict(call=c['call'], roots=c['roots'], rows={k: len(v['key']) for k, v in c['records'].items()}, empty_levels=c['empty'], rebound_equal=c['rebound_equal'],
         costs=c['costs']) for c in calls]
-    return dict(status=status, passed=status in ('PASS', 'WARN'), exit=EXIT[status], status_reasons=reasons, checks=checks, calls=summary)
+    return dict(status=status, passed=status in ('PASS', 'WARN'), exit=EXIT[status], status_reasons=reasons, checks=checks,
+        geometry=geometry_section(records, checks['adapter']), calls=summary)
 
 
 # Driving one run ------------------------------------------------------------------------------------------------------------------
@@ -850,24 +934,27 @@ def expected_levels(pricers):
 
 
 def validate(requests, *, evaluators, executor, model, materializer, recipe, observe, reference=None, module=None, backups=None, capacity=512,
-        block_lanes=2187, depth3_k=3, sample=SAMPLE, seed=SEED, chunk=CHUNK, fixed_shapes=False, progress=None, tested_precision='bfloat16'):
+        block_lanes=2187, depth3_k=3, sample=SAMPLE, seed=SEED, chunk=CHUNK, fixed_shapes=False, progress=None, tested_precision='bfloat16', oracle_chunk=ORACLE_CHUNK):
     """requests {name: [[Request]]} (bind's paired groups); evaluators {'f32': reference, 'bf16': under test}, one champion at two precisions
     (check_pair; tested_precision='float32' only for the f32-vs-f32 self-test); observe(state, public, seat, mask) the champion-layout leaf
     (champion_observer); reference the V2 head (load_reference) or None. Prices, walks and judges every call (groups split at `capacity`);
-    returns judge's report body."""
+    returns judge's report body. oracle_chunk: the gate oracle's heads() batch for the informational geometry section (the evaluator under
+    test through DepthNOracle(..., forward=...).forward, the gate oracle's own evaluation path)."""
     if set(evaluators) != set(NAMES) or set(requests) != set(NAMES):raise ValueError(f'evaluators and requests named {NAMES} required')
     check_pair(evaluators, tested=tested_precision)
     module = module or gate.pricer_module();backups = backups or importlib.import_module('gpu_engine.depthn_backups')
     pricers = build_pricers(module, executor, model, evaluators, capacity=capacity, block_lanes=block_lanes, depth3_k=depth3_k, fixed_shapes=fixed_shapes)
     split = {name: g2.split_groups(groups, capacity) for name, groups in requests.items()}
-    walker = Walker(executor, observe, chunk=chunk, view=ce.digest_view(evaluators[REFERENCE]));heads = Heads(evaluators, reference)
+    oracle = importlib.import_module('gpu_engine.depthn_oracle').DepthNOracle(executor, model, chunk=oracle_chunk, forward=evaluators[TESTED])
+    walker = Walker(executor, observe, chunk=chunk, view=ce.digest_view(evaluators[REFERENCE]))
+    heads = Heads(evaluators, reference, oracle={TESTED: (evaluators[TESTED].params, oracle.forward)}, oracle_chunk=oracle_chunk)
     stack_rows = importlib.import_module('gpu_engine.depth2_oracle').bucket(2 * capacity) if fixed_shapes else None
     calls = [validate_call(i, {name: tuple(split[name][i]) for name in NAMES}, pricers=pricers, evaluators=evaluators, materializer=materializer, recipe=recipe,
         walker=walker, heads=heads, backups=backups, sample=sample, seed=seed, stack_rows=stack_rows, progress=progress) for i in range(len(split[REFERENCE]))]
     report = judge(calls, expected_levels(pricers))
     report['pricers'] = {f'{family}.{name}': dict(depth=p.depth, k_own=list(p.k_own), k_opp=list(p.k_opp), capacity=p.capacity, block_lanes=p.block_lanes,
         fixed_capacity=p.fixed_capacity, evaluator=ce.describe(p.forward)) for (family, name), p in pricers.items()}
-    report['walk'] = dict(rows=walker.rows, seconds=walker.seconds, chunk=chunk, stack_rows=stack_rows)
+    report['walk'] = dict(rows=walker.rows, seconds=walker.seconds, chunk=chunk, stack_rows=stack_rows, oracle_chunk=oracle_chunk)
     return report
 
 
@@ -907,6 +994,8 @@ def parse(argv=None):
     parser.add_argument('--depth3-k', type=int, default=3, help='depth-3 prior top-k per seat and ply (0: depth 2 only)')
     parser.add_argument('--sample', type=int, default=SAMPLE, help='walked rows per sampled level and call (every root world is walked)')
     parser.add_argument('--walk-chunk', type=int, default=CHUNK, help='walk rows per jitted vmap invocation')
+    parser.add_argument('--oracle-chunk', type=int, default=ORACLE_CHUNK, help='the gate oracle\'s heads() batch for the informational geometry '
+        'section and its bounds proposal (default: d3_depthn_gate\'s --oracle-chunk default)')
     parser.add_argument('--seed', type=int, default=SEED, help='sampling seed')
     parser.add_argument('--max-roots', type=int, help='validate only the first N roots')
     parser.add_argument('--fixed-shapes', action='store_true', help='fixed_capacity pricers and a fixed stack size: compile once per process')
@@ -923,7 +1012,7 @@ def parse(argv=None):
     g2.check_head_arguments(parser, args)
     for name in ('head_archive_sha256', 'head_checkpoint_sha256'):
         if not ce._hex64(getattr(args, name) or ''):parser.error(f'--{name.replace("_", "-")} must be a 64-hex sha256')
-    if any(x < 1 for x in (args.capacity, args.block_lanes, args.sample, args.walk_chunk)):parser.error('positive sizes required')
+    if any(x < 1 for x in (args.capacity, args.block_lanes, args.sample, args.walk_chunk, args.oracle_chunk)):parser.error('positive sizes required')
     if not 0 <= args.depth3_k <= 9:parser.error('--depth3-k in 0..9')
     if args.max_roots is not None and args.max_roots < 1:parser.error('positive --max-roots required')
     return args
@@ -1003,6 +1092,23 @@ def markdown(report):
             m = e.get(name) or {};lines.append(f'| {k} | {name} | {m.get("count")} | {_num(m.get("p50"))} | {_num(m.get("p90"))} | {_num(m.get("p99"))} | {_num(m.get("saturated"))} |')
     for k, m in (sc.get('frame_population') or {}).items():
         lines.append(f'| {k} (frame) | f32 | {m.get("count")} | {_num(m.get("p50"))} | {_num(m.get("p90"))} | {_num(m.get("p99"))} | {_num(m.get("saturated"))} |')
+    geo = report.get('geometry') or {}
+    if geo.get('levels'):
+        lines += ['', f'## 5. {geo.get("evaluator")} at two forward geometries (informational, no verdict)', '', geo.get('rule', ''), '',
+            '| Level | quantity | geometry | n | max | p99 | p99.9 | p99.99 |', '| --- | --- | --- | --- | --- | --- | --- | --- |']
+        for k, e in geo['levels'].items():
+            for q in GEOMETRY_QUANTITIES:
+                for g in ('pricer', 'oracle_geometry'):
+                    m = get(e.get(g), q)
+                    if m.get('count'):lines.append(f'| {k} | {q} | {g} | {m.get("count")} | {_num(m.get("max"))} | {_num(m.get("p99"))} | {_num(m.get("p99.9"))} | {_num(m.get("p99.99"))} |')
+        b = geo.get('proposal') or {}
+        lines += ['', '## Declared-bounds proposal (a PROPOSAL, not a verdict)', '', b.get('rule', ''), '',
+            f'- value_bound = {_num(b.get("value_bound"), ".4g")} (at {b.get("value_bound_level")}); near_tie_q_bound = {_num(b.get("near_tie_q_bound"), ".4g")}',
+            f'- turn1_logit_bound = {_num(b.get("turn1_logit_bound"), ".4g")}; deeper_logit_bound (ply 2) = {_num(b.get("deeper_logit_bound"), ".4g")}',
+            f'- Flags: {"; ".join(b.get("flags") or []) or "none"}', '', '| Bound | level | quantity | geometry | max | n |', '| --- | --- | --- | --- | --- | --- |']
+        for name, inputs in [(f'value ({k})', x.get('inputs') or []) for k, x in (b.get('value_per_level') or {}).items()] + [('turn1_logit', b.get('turn1_logit_inputs') or []),
+                ('deeper_logit', b.get('deeper_logit_inputs') or [])]:
+            lines += [f'| {name} | {x.get("level")} | {x.get("quantity")} | {x.get("geometry")} | {_num(x.get("max"), ".4g")} | {x.get("count")} |' for x in inputs]
     lines += ['', 'Thresholds and rules: `validation.json` header.thresholds (declared in gpu_engine/champion_leaf_validation.py before the run).', '']
     return '\n'.join(lines)
 
@@ -1031,13 +1137,13 @@ def main(argv=None):
     roots = sum(map(len, requests[REFERENCE]));log('ROOTS', roots=roots, dropped={k: len(v) for k, v in dropped.items()})
     report = validate(requests, evaluators=evaluators, executor=loaded.provider.executor, model=loaded.plan.model, materializer=loaded.provider.materializer,
         recipe=loaded.provider.recipe, observe=champion_observer(loaded), reference=reference, capacity=args.capacity, block_lanes=args.block_lanes,
-        depth3_k=args.depth3_k, sample=args.sample, seed=args.seed, chunk=args.walk_chunk, fixed_shapes=args.fixed_shapes, progress=log)
+        depth3_k=args.depth3_k, sample=args.sample, seed=args.seed, chunk=args.walk_chunk, fixed_shapes=args.fixed_shapes, progress=log, oracle_chunk=args.oracle_chunk)
     import jax
     report = dict(schema=SCHEMA, status=report.pop('status'), passed=report.pop('passed'), exit=report.pop('exit'), status_reasons=report.pop('status_reasons'), header=dict(thresholds=THRESHOLDS, source=loaded.source, roots=roots,
         dropped=dropped, root_abs_value={name: g2.percentiles(v) for name, v in root_values.items()},
         evaluators={name: dict(ev.header(), archive=args.champion_archive) for name, ev in evaluators.items()},
         reference=None if reference is None else reference.header, options=dict(capacity=args.capacity, block_lanes=args.block_lanes, depth3_k=args.depth3_k,
-            sample=args.sample, walk_chunk=args.walk_chunk, seed=args.seed, max_roots=args.max_roots, fixed_shapes=args.fixed_shapes),
+            sample=args.sample, walk_chunk=args.walk_chunk, oracle_chunk=args.oracle_chunk, seed=args.seed, max_roots=args.max_roots, fixed_shapes=args.fixed_shapes),
         devices=[str(d) for d in jax.devices()], seconds=time.perf_counter() - started), **report)
     write(out, report)
     log('CHAMPION_LEAF_VALIDATION_COMPLETE', status=report['status'], exit=report['exit'], status_reasons=report['status_reasons'], out=str(out / 'validation.json'),
