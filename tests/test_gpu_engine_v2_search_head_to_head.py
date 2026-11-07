@@ -120,6 +120,7 @@ class ChooseTests(unittest.TestCase):
         search.original, search.worlds, search.source, search.materializer = g, FakeWorlds, None, None
         search.capacities, search.kind, search.pricer, search.params = (4,), 'depth1', FakePricer(grids, edges), (None,)
         search.seed, search.workers, search.pool, search._reduce = 5, 1, None, g.reduce_completed_q
+        search.evaluator, search.evaluator_checked = None, True
         search.configure(reduction=reduction, blend=.5, world_blocks=1)
         return search
 
@@ -160,6 +161,59 @@ class ChooseTests(unittest.TestCase):
         self.assertEqual(hedge.top_action((0., .5, .5) + (0.,) * 6), 1)
         self.assertEqual(hedge.top_action((.2, .3, .5) + (0.,) * 6), 2)
         with self.assertRaises(ValueError):hedge.top_action((0.,) * 9)
+
+
+class ChampionMirrorTests(unittest.TestCase):
+    """The champion mirror's harness seams on CPU fakes: per-seat forwards, greedy fallback, the evaluator check, CLI guards."""
+    def test_grouped_forward_routes_each_seat_to_its_actor(self):
+        from types import SimpleNamespace
+        b = 3;a_side = j.asarray([0, 1, 0], j.int32)
+        # Row r of the flat [2b] inputs is lane r // 2, seat r % 2; its feature encodes (lane, seat).
+        inputs = dict(numeric_features=j.asarray([[10. * (r // 2) + r % 2] for r in range(2 * b)], j.float32))
+        forward = lambda params, x: SimpleNamespace(policy_logits=j.repeat(x['numeric_features'] + params, 9, axis=1),
+            value=x['numeric_features'][:, 0] * 0 + params, valid=j.ones(x['numeric_features'].shape[0], bool))
+        logits, values, ok = h2h.grouped_forward(inputs, (100., 200.), (forward, forward), a_side, lambda o: o.valid)
+        for lane in range(b):
+            for seat in (0, 1):
+                actor = 100. if seat == int(a_side[lane]) else 200.
+                self.assertEqual(float(values[lane, seat]), actor)
+                self.assertEqual(float(logits[lane, seat, 0]), 10. * lane + seat + actor)
+        self.assertTrue(bool(np.all(np.asarray(ok))))
+
+    def test_refused_decision_plays_the_greedy_fallback_and_raw_stays_raw(self):
+        tests = ChooseTests();grids = {0: None, 1: [[1., -.5], [-.5, .5]]}
+        legal = np.zeros((2, 9), bool);legal[:, :2] = True
+        inputs = {'numeric_features': np.zeros((2, 2), np.float32)}
+        out = tests.search('average', grids).choose(None, [0, 1], [0, 0], np.zeros((2, 9), np.float32), legal, inputs,
+            np.asarray([1, 1]), fallback_actions=np.asarray([0, 0]))
+        self.assertEqual(out[0][0], 0);self.assertFalse(out[0][1]['searched'])    # refused: the greedy fallback, not raw 1
+        self.assertEqual(out[1][0], 0)                                              # searched: averaging argmax
+        raw = tests.search('raw', grids).choose(None, [1], [0], np.zeros((1, 9), np.float32), legal[:1], {'numeric_features': np.zeros((1, 2))},
+            np.asarray([1]), fallback_actions=np.asarray([0]))
+        self.assertEqual(raw[0][0], 1)                                              # the plumbing reduction replays the raw sample
+
+    def test_evaluator_is_checked_once_on_the_first_request(self):
+        seen = []
+        class Evaluator:
+            def check(self, params, inputs):seen.append({k: np.shape(v) for k, v in inputs.items()});return True
+        tests = ChooseTests();search = tests.search('average', {0: [[1., -.5], [-.5, .5]]})
+        search.evaluator, search.evaluator_checked = Evaluator(), False
+        legal = np.zeros((1, 9), bool);legal[:, :2] = True
+        for _ in range(2):
+            search.choose(None, [0], [0], np.zeros((1, 9), np.float32), legal, {'numeric_features': np.zeros((1, 29, 132), np.float32)}, np.asarray([0]))
+        self.assertEqual(seen, [{'numeric_features': (1, 1, 29, 132), 'history_mask': (1, 1)}])
+
+    def test_champion_command_line_guards(self):
+        sha = 'a' * 64
+        with tempfile.TemporaryDirectory() as root:
+            base = ['--config', 'unused.json', '--out', root, '--reduction', 'none', '--label', 'x', '--b-run', 'champion', '--b-iteration', '0']
+            for extra in (['--champion-archive', 'c.npz'],                                                   # shas missing
+                    ['--champion-archive', 'c.npz', '--champion-archive-sha256', sha, '--champion-checkpoint-sha256', sha, '--a-run', 'r', '--a-iteration', '1']):
+                with self.assertRaises(SystemExit):h2h.main(base + extra)
+            cells = Path(root, 'cells.json');cells.write_text(json.dumps([dict(label='x', b_run='/some/run', b_iteration=99, reduction='none')]))
+            with self.assertRaises(SystemExit):   # a champion run whose cell names a V2 opponent
+                h2h.main(['--config', 'unused.json', '--out', root, '--cells', str(cells), '--champion-archive', 'c.npz',
+                    '--champion-archive-sha256', sha, '--champion-checkpoint-sha256', sha])
 
 
 class CompareTests(unittest.TestCase):
