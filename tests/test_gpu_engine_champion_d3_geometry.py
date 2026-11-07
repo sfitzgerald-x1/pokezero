@@ -36,6 +36,8 @@ from tests import test_gpu_engine_champion_evaluator as CE, test_gpu_engine_cham
 THIS = sys.modules[__name__]
 P_ROOT_OPP, O_ROOT_OPP, P_T1_VALUE = 0.10378537902832032, 0.09199810028076172, 0.009931856224536895   # the chunk-0 report's numbers
 SOURCE = dict(d3_root='/d3', chunk=0, declaration_sha256='d' * 64)
+VALUE_BOUNDS = {'value_bound_all_geometries', 'value_bound_all_geometries_without_root', 'near_tie_q_bound_all_geometries'}   # literal: not d3g.BOUND_SITES
+ROOT_BOUNDS = {'root_logit_all_geometries'}
 
 
 def gate_pricer(executor='ex', **kw):
@@ -178,9 +180,9 @@ class GeometryTests(N.FixtureN, unittest.TestCase):
         self.assertEqual(pq[d3g.P_ALL_LANES]['nonfinite'], 0);self.assertEqual(body['pricer_anchor']['flags'], [])
         prop = d3g.fold(earlier_report(self.clean), body['d_all'], None, body['p_run'], structural={k: e['count'] for k, e in c['structural']['kinds'].items()},
             pricer_anchor=body['pricer_anchor'])
-        self.assertEqual(set(prop['flagged_bounds']), set(d3g.BOUND_SITES));self.assertTrue(all(any('structural world_refused 2' in r for r in x) for x in prop['flagged_bounds'].values()))
+        self.assertEqual(set(prop['flagged_bounds']), VALUE_BOUNDS | ROOT_BOUNDS);self.assertTrue(all(any('structural world_refused 2' in r for r in x) for x in prop['flagged_bounds'].values()))
         self.assertTrue(all('structural world_refused 2' in prop['sites'][site]['caveats'] for site in d3g.SITES));self.assertIsNotNone(prop['root_logit_all_geometries'])
-        self.assertEqual(set(body['proposal']['flagged_bounds']), set(d3g.BOUND_SITES))   # assemble's own fold, too
+        self.assertEqual(set(body['proposal']['flagged_bounds']), VALUE_BOUNDS | ROOT_BOUNDS)   # assemble's own fold, too
 
     def test_a_mis_sliced_champion_exceeds_the_anchor_bound(self):
         """D3 prices with a champion reading tokens 1..23 (both precisions): its f32 differs from the raw forward on the ladder's own layout, so the
@@ -318,6 +320,28 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(len(pa['flags']), 1);self.assertTrue(pa['flags'][0].startswith('illegal_lanes: EXCEEDED: pass f32 vs D3 f32 max 0.0003 > 0.0002'))
         touched, neutral = d3g.caveats(None, pa);self.assertEqual(({k for k, x in touched.items() if x}, neutral), ({d3g.LANES_SITE}, []))
 
+    def test_a_pass_kind_reaches_the_bounds_through_assemble(self):
+        """A difference only the depth-2 pass shows (a cell the bf16 frame did not enumerate), D3's two runs and the pass premise clean: assemble
+        hands the pass's kinds to the fold, and exactly the value bounds are flagged with it."""
+        g = {(0, 0): .5, (0, 1): -.25, (1, 0): .125, (1, 1): 1.};same = [result('COMPLETE', [dict(grid=g), dict(grid=g)])]
+        comparison = d3g.compare_call(dict(f32=same, bf16=same), [request(0)]);self.assertEqual(comparison['findings'], {})
+        def frame():
+            logits = np.zeros((1, 2, 9), np.float32);logits[..., :2] = (1., 2.);legal = np.zeros((1, 2, 9), bool);legal[..., :2] = True
+            status, value = np.zeros((1, 2, 9, 9), np.int8), np.zeros((1, 2, 9, 9), np.float32)
+            for (a, r), x in g.items():status[0, :, a, r] = 2;value[0, :, a, r] = x
+            return SimpleNamespace(pre=np.zeros((1, 2), np.int32), root_peer_requested=np.ones((1, 2), bool), root_peer_legal=legal, root_peer_logits=logits,
+                t1_status=status, t1_value=value)
+        bf16 = frame();bf16.t1_status[0, 1, 1, 1] = 0
+        pricer = d3g.pricer_call(dict(f32=frame(), bf16=bf16), comparison.pop('arrays'), [request(0)])
+        self.assertEqual({k: e['count'] for k, e in pricer['findings'].items()}, dict(pricer_t1_enumeration=1))
+        call = dict(call=0, roots=1, costs={f'{program}.{n}': {} for program in ('depth2_pass', 'd3') for n in v.NAMES}, comparison=comparison, pricer=pricer,
+            anchor=dict(call=0, cells=dict(spec=np.zeros((0, 4), np.int64)), roots=dict(spec=np.zeros((0, 2), np.int64))))
+        body = d3g.assemble(dict(calls=[call], d3_options=d3g.d3_options({}), pass_options=None, walk=None))
+        self.assertEqual((body['comparison']['structural']['count'], body['pricer_anchor']['flags']), (0, []))
+        self.assertEqual({k: e['count'] for k, e in body['comparison']['pricer']['structural']['kinds'].items()}, dict(pricer_t1_enumeration=1))
+        self.assertEqual(set(body['proposal']['flagged_bounds']), VALUE_BOUNDS)
+        self.assertTrue(all(x == ['b.t1_value: structural pricer_t1_enumeration 1'] for x in body['proposal']['flagged_bounds'].values()))
+
     def test_the_positions_are_check_ds(self):
         """g2.check_d's own numeric positions (the bf16 frame against the bf16 D3), cell for cell and lane for lane, on random Results and frames
         with refused worlds, D3 error cells, unrequested worlds and cells the frame did not enumerate (the reviewer's check)."""
@@ -426,15 +450,17 @@ class DAllAndProposalTests(unittest.TestCase):
 
     def test_structural_differences_and_pass_premises_flag_their_sites_and_bounds(self):
         earlier = earlier_report(self.evaluators);check = self.check(earlier);d, p = self.d(.002, .05), self.p();T1, LEGAL, LANES = d3g.SITES
-        cases = dict(none_pattern=(dict(joint_value_none_pattern=2), {T1}), joint_error=(dict(joint_error=1), {T1}), enumeration=(dict(pricer_t1_enumeration=1), {T1}),
-            refused=(dict(world_refused=3), {T1, LEGAL, LANES}), pre=(dict(pricer_pre=1), {T1, LEGAL, LANES}), requested=(dict(opponent_requested=1), {LEGAL, LANES}),
-            legal=(dict(reply_legal=1), {LEGAL, LANES}), pricer_requested=(dict(pricer_root_peer_requested=2), {LEGAL, LANES}),
-            unrequested=(dict(unrequested_reply_logits_nonzero_bf16=1), {LANES}), unknown=(dict(some_new_kind=4), {T1, LEGAL, LANES}))
-        for name, (structural, sites) in cases.items():
+        every = VALUE_BOUNDS | ROOT_BOUNDS   # each case's sites and bounds are literal (a changed SITE_KINDS or BOUND_SITES must fail here)
+        cases = dict(none_pattern=(dict(joint_value_none_pattern=2), {T1}, VALUE_BOUNDS), joint_error=(dict(joint_error=1), {T1}, VALUE_BOUNDS),
+            enumeration=(dict(pricer_t1_enumeration=1), {T1}, VALUE_BOUNDS), refused=(dict(world_refused=3), {T1, LEGAL, LANES}, every),
+            pre=(dict(pricer_pre=1), {T1, LEGAL, LANES}, every), requested=(dict(opponent_requested=1), {LEGAL, LANES}, ROOT_BOUNDS),
+            legal=(dict(reply_legal=1), {LEGAL, LANES}, ROOT_BOUNDS), pricer_requested=(dict(pricer_root_peer_requested=2), {LEGAL, LANES}, ROOT_BOUNDS),
+            unrequested=(dict(unrequested_reply_logits_nonzero_bf16=1), {LANES}, ROOT_BOUNDS), unknown=(dict(some_new_kind=4), {T1, LEGAL, LANES}, every))
+        for name, (structural, sites, bounds) in cases.items():
             with self.subTest(kind=name):
                 prop = d3g.fold(earlier, d, check, p, structural=structural);(kind, count), = structural.items()
                 self.assertEqual({site for site, x in prop['sites'].items() if x['caveats']}, sites)
-                self.assertEqual(set(prop['flagged_bounds']), {b for b, ss in d3g.BOUND_SITES.items() if set(ss) & sites})
+                self.assertEqual(set(prop['flagged_bounds']), bounds)
                 self.assertTrue(all(any(f'structural {kind} {count}' in r for r in x) for x in prop['flagged_bounds'].values()))
                 self.assertTrue(any(f.startswith(f'{site}: its (b) positions are not clean: structural {kind} {count}') for site in sites for f in prop['flags']))
                 self.assertIsNotNone(prop['value_bound_all_geometries']);self.assertIsNotNone(prop['root_logit_all_geometries'])   # flagged, not withheld
@@ -445,7 +471,7 @@ class DAllAndProposalTests(unittest.TestCase):
         self.assertEqual({k: x['within'] for k, x in pa['quantities'].items()}, dict(t1_value=False, legal_lanes=None, illegal_lanes=True, unrequested_worlds=None))
         self.assertEqual(pa['flags'], ['t1_value: 1 non-finite pass f32 vs D3 f32 differences'])
         prop = d3g.fold(earlier, d, check, p, pricer_anchor=pa)
-        self.assertEqual(set(prop['flagged_bounds']), {'value_bound_all_geometries', 'value_bound_all_geometries_without_root', 'near_tie_q_bound_all_geometries'})
+        self.assertEqual(set(prop['flagged_bounds']), VALUE_BOUNDS)
         self.assertTrue(prop['sites'][T1]['caveats'][0].startswith('pass premise t1_value'))
 
     def test_a_mismatched_or_incomplete_earlier_report_is_flagged(self):
