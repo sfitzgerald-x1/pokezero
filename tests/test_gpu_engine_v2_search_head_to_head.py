@@ -248,6 +248,29 @@ class ChampionMirrorTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):h2h.main(['--config', 'unused.json', '--out', root, '--cells', str(cells)] + extra)
 
 
+class NearTerminalTests(unittest.TestCase):
+    def write(self, root, games, decisions):
+        prefix = Path(root, 'c');np.savez(str(prefix) + '-games.npz', **games)
+        Path(str(prefix) + '-decisions.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in decisions));return prefix
+
+    def test_verdicts_floor_and_exclusions(self):
+        games = dict(streams=np.asarray([1, 2, 3, 4]), status=np.asarray([1, 1, 1, 2]), winner=np.asarray([0, 1, 2, -1]),
+            terminal_frame=np.asarray([10, 10, 10, 1024]))
+        def decisions(n_agree, n_disagree, v=.9):
+            # stream 1: A (seat 0) won; stream 2: A (seat 0) lost; stream 3 a draw; stream 4 capped (excluded).
+            win = [dict(frame=8, searched=True, root_value=v)] * n_agree + [dict(frame=8, searched=True, root_value=-v)] * n_disagree
+            extra = [dict(frame=2, searched=True, root_value=v), dict(frame=9, searched=False, root_value=v), dict(frame=10, searched=True, root_value=v)]
+            return [dict(stream=1, a_side=0, decisions=win + extra), dict(stream=2, a_side=0, decisions=[dict(frame=9, searched=True, root_value=-.2)]),
+                dict(stream=3, a_side=0, decisions=[dict(frame=9, searched=True, root_value=.7)]), dict(stream=4, a_side=0, decisions=[dict(frame=1022, searched=True, root_value=.9)])]
+        with tempfile.TemporaryDirectory() as root:
+            r = compare.near_terminal(self.write(root, games, decisions(45, 5)))
+            self.assertEqual(r['verdict'], 'PASS');self.assertEqual(r['confident']['decisions'], 50)
+            self.assertAlmostEqual(r['confident']['agreement'], .9);self.assertEqual(r['draws'], 1)
+            self.assertEqual(r['unconfident'], dict(decisions=1, agreement=1.0, mean_abs_value=.2))   # the loss, |v| .2, right sign
+            self.assertEqual(compare.near_terminal(self.write(root, games, decisions(35, 15)))['verdict'], 'FAIL')
+            self.assertEqual(compare.near_terminal(self.write(root, games, decisions(40, 0)))['verdict'], 'INCONCLUSIVE')
+
+
 class CompareTests(unittest.TestCase):
     def write(self, root, label, scores, games, decisions):
         prefix = Path(root, label)
