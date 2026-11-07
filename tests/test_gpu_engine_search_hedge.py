@@ -143,6 +143,12 @@ class HedgeTests(unittest.TestCase):
             self.assertAlmostEqual(value, -column, places=7)
             self.assertAlmostEqual(math.fsum(x), 1., places=12);self.assertTrue(np.all(x >= 0))
 
+    def test_hedge_rule_on_degenerate_node_grids(self):
+        self.assertEqual(h.hedge_rule([[.5, -.25, .125]]), -.25)        # learner waiting: worst reply
+        self.assertEqual(h.hedge_rule([[.5], [-.25], [.125]]), .5)      # opponent waiting: best own action
+        self.assertEqual(h.hedge_rule([[.375]]), .375)
+        self.assertAlmostEqual(h.hedge_rule([[1, -.5], [-.5, .5]], (.5, .5), (.5, .5)), .1, places=9)
+
     def test_unknown_cell_or_unavailable_world_refuses(self):
         w1 = world([[1, -1], [0, None]]);w2 = world([[.1, .2], [.3, .4]])
         for worlds in ((w1, w2), (None, w2), ()):
