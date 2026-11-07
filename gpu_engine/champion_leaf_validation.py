@@ -767,23 +767,54 @@ def scale_check(records, population):
     return dict(status='WARN' if reasons else 'PASS', reasons=reasons, levels=levels, frame_population=frames, rule=THRESHOLDS['scale']['rule'])
 
 
+GATE_SHAPES = dict(fixed_shapes=True, capacity=512, block_lanes=2187)   # d3_depthn_gate --fixed-shapes at its defaults: the pricer geometry assumed
 GEOMETRY_RULE = ('informational, never a verdict, no FAIL path: |bf16 - f32 raw forward| of the evaluator under test at two forward '
     'geometries on the SAME walked rows and masks: the pricer geometry (the bf16 pricers\' own programs; a root\'s value and learner prior at '
     'the batch-1 binding) and the gate oracle\'s geometry (depth2_oracle.heads through DepthNOracle(..., forward=bf16).forward, batches of '
-    'exactly --oracle-chunk rows, a short batch padded with its first row repeated, as Oracle._map pads). The champion gate compares the '
-    'pricer\'s bf16 with the oracle\'s bf16, so by the triangle inequality |pricer - oracle| <= max_pricer + max_oracle.')
-PROPOSAL_RULE = ('a PROPOSAL for the champion gate\'s declared bounds, computed mechanically, not a verdict (a later, separately reviewed '
-    'declaration): value_bound = max over levels (root, turn-1, ply-2, leaves) of (max_pricer_value + max_oracle_value) at that level; '
-    'turn1_logit_bound = max_pricer_t1_logit + max_oracle_t1_logit over the turn-1 priors (t1 own and peer logits at depth2.turn1 and '
-    'depth3.turn1, root peer logits: the gate\'s TURN1_LOGITS and root_peer_logits); deeper_logit_bound (ply 2, one fixed number) = '
-    'max_pricer_ply2_logit + max_oracle_ply2_logit over depth3.ply2\'s own and opponent priors; near_tie_q_bound = value_bound. A pair '
-    'measured at one geometry only falls back to 2 x the larger available max and is flagged; `inputs` lists every max used.')
+    'exactly --oracle-chunk rows, a short batch padded with its first row repeated, as Oracle._map pads). Both columns are SAMPLE maxima: '
+    'the walked rows (--sample per level and call, every root), not every position. A third column, pricer_all, bounds the pricer geometry '
+    'over EVERY position both frames price: P_all = the precision section\'s all-positions max |bf16 frame - f32 frame| + the declared f32 '
+    'adapter bound (1e-5 values, 1e-4 logits), as |bf16 - f32 raw| <= |bf16 - f32 frame| + |f32 frame - f32 raw|. The champion gate '
+    'compares the pricer\'s bf16 with the oracle\'s bf16, so by the triangle inequality |pricer - oracle| <= pricer max + oracle max.')
+PROPOSAL_RULE = ('PROPOSALS for the champion gate\'s declared bounds, computed mechanically, not verdicts (a later, separately reviewed '
+    'declaration adds the margin; `margin` is left empty here). Two rows: sample = P_sample + O_sample (both SAMPLE maxima); all_positions = '
+    'max(P_all + O_sample, 2 x P_all). Quantities: value_bound = max over levels of the per-level bound, with the root level (labelled) '
+    'and without it (the gate values turn-1, ply-2 and leaf positions, not the root); turn1_logit_bound over the turn-1 priors (t1 own and '
+    'peer logits at depth2.turn1 and depth3.turn1, root peer logits: the gate\'s TURN1_LOGITS and root_peer_logits); deeper_logit_bound '
+    '(ply 2, one fixed number) over depth3.ply2\'s own and opponent priors; near_tie_q_bound = value_bound. Each bound pairs the larger '
+    'pricer-column max with the larger oracle-column max over its (level, quantity) group. Flags are per (level, quantity): measured at one '
+    'geometry only, or non-finite differences (listed with their counts in `inputs`). A group with any non-finite difference has no bound '
+    '(None). A group whose whole pricer or oracle column is unmeasured falls back to 2 x the other column\'s max, flagged. Shapes: the '
+    'pricer column describes the gate only under its shapes (GATE_SHAPES and the default oracle chunk); `shapes` records the run\'s '
+    '(depth-3 k per ply, oracle chunk included) and flags any difference.')
 GEOMETRY_QUANTITIES = ('value', 'own_logits', 'opp_logits')
+COLUMNS = ('pricer_sample', 'oracle_sample', 'pricer_all')
+TURN1_PRIORS = tuple((label, q) for label in ('depth2.turn1', 'depth3.turn1') for q in ('own_logits', 'opp_logits')) + (('root', 'opp_logits'),)
+PLY2_PRIORS = (('depth3.ply2', 'own_logits'), ('depth3.ply2', 'opp_logits'))
+COMBINE = dict(sample=('pricer_sample', lambda p, o: p + o), all_positions=('pricer_all', lambda p, o: max(p + o, 2 * p)))
 
 
-def geometry_section(records, adapter, name=TESTED):
-    """Per walked level: |bf16 - f32 raw| at the pricer geometry (the adapter check's own numbers for `name`) beside the same at the oracle
-    geometry, on the same rows and masks (GEOMETRY_RULE), then the bounds proposal (PROPOSAL_RULE). None without oracle-geometry reads."""
+def pricer_all(precision, label, quantity):
+    """P_all at one (level, quantity): the precision section's all-positions max |bf16 frame - f32 frame| plus the declared f32 adapter bound."""
+    part, key = ('values', label) if quantity == 'value' else ('logits', f'{label}.{quantity[:3]}')
+    m = ((precision or {}).get(part) or {}).get(key) or {}
+    if not m.get('count'):return dict(count=0, nonfinite=0)
+    bound = ADAPTER_VALUE if quantity == 'value' else ADAPTER_LOGIT
+    return dict(count=m['count'], nonfinite=m.get('nonfinite', 0), precision_max=m.get('max'), f32_adapter_bound=bound, max=None if m.get('max') is None else m['max'] + bound)
+
+
+def shape_check(shapes):
+    """The run's pricer and oracle shapes against the gate's (GATE_SHAPES, the default --oracle-chunk); flags name each difference."""
+    gate_shapes = dict(GATE_SHAPES, oracle_chunk=ORACLE_CHUNK)
+    if shapes is None:return dict(recorded=False, gate=gate_shapes, matches_gate=False, flags=['the run\'s shapes were not recorded'])
+    flags = [f'{k} {shapes.get(k)!r} != the gate\'s {v!r}' for k, v in gate_shapes.items() if shapes.get(k) != v]
+    return dict(shapes, recorded=True, gate=gate_shapes, matches_gate=not flags, flags=flags)
+
+
+def geometry_section(records, adapter, precision=None, shapes=None, name=TESTED):
+    """Per walked level: |bf16 - f32 raw| at the pricer geometry on the sample (the adapter check's own numbers for `name`), at the oracle
+    geometry on the same rows and masks, and P_all over every shared position (GEOMETRY_RULE); the run's shapes; the two proposals
+    (PROPOSAL_RULE). None without oracle-geometry reads."""
     levels = {}
     for label, r in records.items():
         if f'oracle_{name}_own_value' not in r:continue
@@ -791,39 +822,57 @@ def geometry_section(records, adapter, name=TESTED):
         oracle = dict(value=spread(r[f'oracle_{name}_own_value'][use] - r['raw_value'][use]),
             own_logits=spread((r[f'oracle_{name}_own_logits'][own] - r['raw_logits'][own])[r[f'own_legal_{name}'][own]]),
             opp_logits=spread((r[f'oracle_{name}_peer_logits'][opp] - r['raw_peer_logits'][opp])[r[f'opp_legal_{name}'][opp]]))
-        pricer = {k: ((adapter.get('groups') or {}).get(label) or {}).get(name, {}).get(k, dict(count=0)) for k in GEOMETRY_QUANTITIES}
-        levels[label] = dict(rows=int(use.sum()), pricer=pricer, oracle_geometry=oracle)
+        sample = {k: ((adapter.get('groups') or {}).get(label) or {}).get(name, {}).get(k, dict(count=0)) for k in GEOMETRY_QUANTITIES}
+        levels[label] = dict(rows=int(use.sum()), pricer_sample=sample, oracle_sample=oracle, pricer_all={q: pricer_all(precision, label, q) for q in GEOMETRY_QUANTITIES})
     if not levels:return None
-    return dict(informational=True, evaluator=name, rule=GEOMETRY_RULE, levels=levels, proposal=bounds_proposal(levels))
+    shape = shape_check(shapes)
+    proposals = {kind: propose(levels, kind, shape) for kind in COMBINE}
+    return dict(informational=True, evaluator=name, rule=GEOMETRY_RULE, columns=dict(pricer_sample='pricer geometry, SAMPLE max', oracle_sample=
+        'oracle geometry, SAMPLE max', pricer_all='pricer geometry, every shared position: precision max + the f32 adapter bound'), levels=levels, shapes=shape,
+        proposals=proposals)
 
 
-TURN1_PRIORS = tuple((label, q) for label in ('depth2.turn1', 'depth3.turn1') for q in ('own_logits', 'opp_logits')) + (('root', 'opp_logits'),)
-PLY2_PRIORS = (('depth3.ply2', 'own_logits'), ('depth3.ply2', 'opp_logits'))
+def _entry(levels, label, quantity, column):
+    m = levels[label][column].get(quantity) or {}
+    return dict(level=label, quantity=quantity, column=column, max=m.get('max') if m.get('count') else None, count=m.get('count', 0), nonfinite=m.get('nonfinite', 0))
 
 
-def _paired(levels, pairs):
-    """(bound, flag, inputs) over (level, quantity) `pairs`: the larger pricer-geometry max plus the larger oracle-geometry max; with one
-    geometry measured, 2 x its max (flagged); None without either. `inputs` lists every max read."""
-    inputs = [dict(level=l, quantity=q, geometry=g, max=levels[l][g][q].get('max') if levels[l][g][q].get('count') else None, count=levels[l][g][q].get('count', 0))
-        for l, q in pairs if l in levels for g in ('pricer', 'oracle_geometry')]
-    top = {g: max((x['max'] for x in inputs if x['geometry'] == g and x['max'] is not None), default=None) for g in ('pricer', 'oracle_geometry')}
-    if None not in top.values():return top['pricer'] + top['oracle_geometry'], None, inputs
-    have = [g for g, m in top.items() if m is not None]
-    if not have:return None, 'no measurement at either geometry', inputs
-    return 2 * top[have[0]], f'one geometry only ({have[0]}): 2 x its max', inputs
+def _bound(levels, pairs, pricer, combine):
+    """(bound, flags, inputs) over (level, quantity) `pairs` from the `pricer` column and oracle_sample (PROPOSAL_RULE); flags per pair."""
+    pairs = [(l, q) for l, q in pairs if l in levels];inputs = [_entry(levels, l, q, c) for l, q in pairs for c in (pricer, 'oracle_sample')];flags = []
+    for l, q in pairs:
+        got = [e for e in inputs if (e['level'], e['quantity']) == (l, q)]
+        flags += [f'{l} {q} {e["column"]}: {e["nonfinite"]} non-finite differences of {e["count"]}' for e in got if e['nonfinite']]
+        measured = [e['column'] for e in got if e['count']]
+        if len(measured) == 1:flags.append(f'{l} {q}: measured at {measured[0]} only')
+    if any(e['nonfinite'] for e in inputs):return None, flags + ['no bound: non-finite differences'], inputs
+    top = {c: max((e['max'] for e in inputs if e['column'] == c and e['max'] is not None), default=None) for c in (pricer, 'oracle_sample')}
+    p, o = top[pricer], top['oracle_sample']
+    if p is not None and o is not None:return combine(p, o), flags, inputs
+    if p is None and o is None:return None, flags + ['no measurement in either column'], inputs
+    have = pricer if p is not None else 'oracle_sample'
+    return 2 * (p if p is not None else o), flags + [f'one column only ({have}): 2 x its max'], inputs
 
 
-def bounds_proposal(levels):
-    """PROPOSAL_RULE over geometry_section's levels."""
-    per_level, flags = {}, []
+def propose(levels, kind, shape):
+    """One proposal row (PROPOSAL_RULE): kind 'sample' (P_sample + O_sample) or 'all_positions' (max(P_all + O_sample, 2 x P_all))."""
+    pricer, combine = COMBINE[kind];per_level, flags = {}, []
     for label in levels:
-        bound, flag, inputs = _paired(levels, ((label, 'value'),));per_level[label] = dict(sum=bound, flag=flag, inputs=inputs)
-        if flag:flags.append(f'value at {label}: {flag}')
-    measured = [(x['sum'], label) for label, x in per_level.items() if x['sum'] is not None];value_bound, at = max(measured) if measured else (None, None)
-    t1, t1_flag, t1_inputs = _paired(levels, TURN1_PRIORS);deeper, deeper_flag, deeper_inputs = _paired(levels, PLY2_PRIORS)
-    flags += [f'{name}: {flag}' for name, flag in (('turn1_logit_bound', t1_flag), ('deeper_logit_bound', deeper_flag)) if flag]
-    return dict(label='PROPOSAL, not a verdict', rule=PROPOSAL_RULE, value_bound=value_bound, value_bound_level=at, near_tie_q_bound=value_bound,
-        turn1_logit_bound=t1, deeper_logit_bound=deeper, flags=flags, value_per_level=per_level, turn1_logit_inputs=t1_inputs, deeper_logit_inputs=deeper_inputs)
+        bound, f, inputs = _bound(levels, ((label, 'value'),), pricer, combine);per_level[label] = dict(bound=bound, flags=f, inputs=inputs)
+        flags += [f'value: {x}' for x in f]
+    def top(labels):
+        unresolved = [l for l in labels if per_level[l]['bound'] is None]
+        if unresolved:return None, f'no bound at {", ".join(unresolved)}'
+        return max((per_level[l]['bound'], l) for l in labels) if labels else (None, 'no level')
+    value, at = top(list(per_level));gated, gated_at = top([l for l in per_level if l != 'root'])
+    t1, t1_flags, t1_inputs = _bound(levels, TURN1_PRIORS, pricer, combine);deeper, deeper_flags, deeper_inputs = _bound(levels, PLY2_PRIORS, pricer, combine)
+    flags += [f'turn1_logit_bound: {x}' for x in t1_flags] + [f'deeper_logit_bound: {x}' for x in deeper_flags]
+    label = dict(sample='PROPOSAL from SAMPLE maxima (P_sample + O_sample), not a verdict',
+        all_positions='PROPOSAL from P_all (every shared position) and O_sample: max(P_all + O_sample, 2 x P_all), not a verdict')[kind]
+    return dict(label=label, kind=kind, pricer_column=pricer, oracle_column='oracle_sample', value_bound=value, value_bound_level=at, value_bound_scope='root, turn-1, ply-2 and leaf levels',
+        value_bound_without_root=gated, value_bound_without_root_level=gated_at, value_bound_without_root_scope='turn-1, ply-2 and leaf levels (the gate\'s value quantities)',
+        near_tie_q_bound=value, near_tie_q_bound_without_root=gated, turn1_logit_bound=t1, deeper_logit_bound=deeper, margin=None, flags=flags,
+        shape_flags=shape['flags'], matches_gate_shapes=shape['matches_gate'], value_per_level=per_level, turn1_logit_inputs=t1_inputs, deeper_logit_inputs=deeper_inputs)
 
 
 def rollup(checks):
@@ -840,8 +889,9 @@ def rollup(checks):
     return ('WARN', rest) if rest else ('PASS', [])
 
 
-def judge(calls, expected=()):
-    """The four checks over every call, and the run's status, passed and exit code (THRESHOLDS['rollup']); `expected` the priced levels."""
+def judge(calls, expected=(), shapes=None):
+    """The four checks over every call, and the run's status, passed and exit code (THRESHOLDS['rollup']); `expected` the priced levels;
+    `shapes` the run's pricer and oracle shapes (the geometry section's shape check)."""
     records, terminal = merge(calls, 'records'), merge(calls, 'terminal')
     if not records:
         empty = lambda: dict(status='INCONCLUSIVE', reasons=['no root was validated'])
@@ -856,7 +906,7 @@ def judge(calls, expected=()):
     summary = [dict(call=c['call'], roots=c['roots'], rows={k: len(v['key']) for k, v in c['records'].items()}, empty_levels=c['empty'], rebound_equal=c['rebound_equal'],
         costs=c['costs']) for c in calls]
     return dict(status=status, passed=status in ('PASS', 'WARN'), exit=EXIT[status], status_reasons=reasons, checks=checks,
-        geometry=geometry_section(records, checks['adapter']), calls=summary)
+        geometry=geometry_section(records, checks['adapter'], checks['precision'], shapes), calls=summary)
 
 
 # Driving one run ------------------------------------------------------------------------------------------------------------------
@@ -951,7 +1001,9 @@ def validate(requests, *, evaluators, executor, model, materializer, recipe, obs
     stack_rows = importlib.import_module('gpu_engine.depth2_oracle').bucket(2 * capacity) if fixed_shapes else None
     calls = [validate_call(i, {name: tuple(split[name][i]) for name in NAMES}, pricers=pricers, evaluators=evaluators, materializer=materializer, recipe=recipe,
         walker=walker, heads=heads, backups=backups, sample=sample, seed=seed, stack_rows=stack_rows, progress=progress) for i in range(len(split[REFERENCE]))]
-    report = judge(calls, expected_levels(pricers))
+    shapes = dict(fixed_shapes=fixed_shapes, capacity=capacity, block_lanes=block_lanes, depth3_k=depth3_k, oracle_chunk=oracle_chunk,
+        pricers={family: dict(depth=p.depth, k_own=list(p.k_own), k_opp=list(p.k_opp)) for (family, name), p in pricers.items() if name == TESTED})
+    report = judge(calls, expected_levels(pricers), shapes)
     report['pricers'] = {f'{family}.{name}': dict(depth=p.depth, k_own=list(p.k_own), k_opp=list(p.k_opp), capacity=p.capacity, block_lanes=p.block_lanes,
         fixed_capacity=p.fixed_capacity, evaluator=ce.describe(p.forward)) for (family, name), p in pricers.items()}
     report['walk'] = dict(rows=walker.rows, seconds=walker.seconds, chunk=chunk, stack_rows=stack_rows, oracle_chunk=oracle_chunk)
@@ -1095,20 +1147,31 @@ def markdown(report):
     geo = report.get('geometry') or {}
     if geo.get('levels'):
         lines += ['', f'## 5. {geo.get("evaluator")} at two forward geometries (informational, no verdict)', '', geo.get('rule', ''), '',
-            '| Level | quantity | geometry | n | max | p99 | p99.9 | p99.99 |', '| --- | --- | --- | --- | --- | --- | --- | --- |']
+            '| Level | quantity | column | n | non-finite | max | p99 | p99.9 | p99.99 |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |']
+        names = dict(pricer_sample='pricer geometry (SAMPLE)', oracle_sample='oracle geometry (SAMPLE)', pricer_all='P_all (every shared position + f32 bound)')
         for k, e in geo['levels'].items():
             for q in GEOMETRY_QUANTITIES:
-                for g in ('pricer', 'oracle_geometry'):
-                    m = get(e.get(g), q)
-                    if m.get('count'):lines.append(f'| {k} | {q} | {g} | {m.get("count")} | {_num(m.get("max"))} | {_num(m.get("p99"))} | {_num(m.get("p99.9"))} | {_num(m.get("p99.99"))} |')
-        b = geo.get('proposal') or {}
-        lines += ['', '## Declared-bounds proposal (a PROPOSAL, not a verdict)', '', b.get('rule', ''), '',
-            f'- value_bound = {_num(b.get("value_bound"), ".4g")} (at {b.get("value_bound_level")}); near_tie_q_bound = {_num(b.get("near_tie_q_bound"), ".4g")}',
-            f'- turn1_logit_bound = {_num(b.get("turn1_logit_bound"), ".4g")}; deeper_logit_bound (ply 2) = {_num(b.get("deeper_logit_bound"), ".4g")}',
-            f'- Flags: {"; ".join(b.get("flags") or []) or "none"}', '', '| Bound | level | quantity | geometry | max | n |', '| --- | --- | --- | --- | --- | --- |']
-        for name, inputs in [(f'value ({k})', x.get('inputs') or []) for k, x in (b.get('value_per_level') or {}).items()] + [('turn1_logit', b.get('turn1_logit_inputs') or []),
-                ('deeper_logit', b.get('deeper_logit_inputs') or [])]:
-            lines += [f'| {name} | {x.get("level")} | {x.get("quantity")} | {x.get("geometry")} | {_num(x.get("max"), ".4g")} | {x.get("count")} |' for x in inputs]
+                for c in COLUMNS:
+                    m = get(e.get(c), q)
+                    if m.get('count'):lines.append(f'| {k} | {q} | {names[c]} | {m.get("count")} | {m.get("nonfinite", 0)} | {_num(m.get("max"))} | {_num(m.get("p99"))} | '
+                        f'{_num(m.get("p99.9"))} | {_num(m.get("p99.99"))} |')
+        shape = geo.get('shapes') or {};props = geo.get('proposals') or {}
+        lines += ['', '## Declared-bounds proposals (PROPOSALS, not verdicts; the declaration adds the margin)', '', (props.get('sample') or {}).get('rule', PROPOSAL_RULE), '',
+            f'- Shapes: fixed_shapes {shape.get("fixed_shapes")}, capacity {shape.get("capacity")}, block_lanes {shape.get("block_lanes")}, depth3_k {shape.get("depth3_k")}, '
+            f'oracle_chunk {shape.get("oracle_chunk")}, pricers {json.dumps(shape.get("pricers"))}; matches the gate: {shape.get("matches_gate")}'
+            + (f' (FLAGGED: {"; ".join(shape.get("flags") or [])})' if shape.get('flags') else ''), '',
+            '| Bound | sample: P_sample + O_sample | all_positions: max(P_all + O_sample, 2 x P_all) | margin |', '| --- | --- | --- | --- |']
+        for key, title in (('value_bound', 'value_bound (with the root level)'), ('value_bound_without_root', 'value_bound without the root level'),
+                ('turn1_logit_bound', 'turn1_logit_bound'), ('deeper_logit_bound', 'deeper_logit_bound (ply 2)'), ('near_tie_q_bound', 'near_tie_q_bound (= value_bound)'),
+                ('near_tie_q_bound_without_root', 'near_tie_q_bound without the root level')):
+            lines.append(f'| {title} | {_num(get(props, "sample").get(key), ".4g")} | {_num(get(props, "all_positions").get(key), ".4g")} | (declaration) |')
+        for kind, prop in props.items():
+            lines += ['', f'- {kind} flags: {"; ".join(prop.get("flags") or []) or "none"}']
+        lines += ['', '| Proposal | bound | level | quantity | column | max | n | non-finite |', '| --- | --- | --- | --- | --- | --- | --- | --- |']
+        for kind, prop in props.items():
+            for name, inputs in [(f'value ({k})', x.get('inputs') or []) for k, x in (prop.get('value_per_level') or {}).items()] + [('turn1_logit', prop.get('turn1_logit_inputs') or []),
+                    ('deeper_logit', prop.get('deeper_logit_inputs') or [])]:
+                lines += [f'| {kind} | {name} | {x.get("level")} | {x.get("quantity")} | {x.get("column")} | {_num(x.get("max"), ".4g")} | {x.get("count")} | {x.get("nonfinite")} |' for x in inputs]
     lines += ['', 'Thresholds and rules: `validation.json` header.thresholds (declared in gpu_engine/champion_leaf_validation.py before the run).', '']
     return '\n'.join(lines)
 
