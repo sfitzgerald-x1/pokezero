@@ -18,6 +18,12 @@ worlds, lanes, k slots, block slots) is computed but never enumerated.
 The turn-1 stage (`make_turn1_stage`), the top-k rule (`ranked`) and the host
 packing (`validate_requests`, `pack_turn1`) are module-level so the depth-N
 engine (`device_depthn_pricer`) reuses them unchanged as its program P1.
+
+The evaluator is the forward= seam (default: the V2 head in bf16). An evaluator
+object (champion_evaluator.ChampionEvaluator) also names what the digests hash
+(`champion_evaluator.digest_view`: its own slice of the V2 inputs) and its
+identity, which every compiled-kernel key carries (`program_suffix`; nothing for
+the V2 default, whose keys and digests are byte-identical to before).
 """
 from dataclasses import dataclass
 import time
@@ -28,7 +34,7 @@ import numpy as np
 
 from pokezero import v5_gumbel as original
 from . import device_public_teacher as serial,device_public_teacher_batch as batch,device_public_world_state as mapping
-from . import depth2_digest as digests,v5_model
+from . import champion_evaluator as evaluators,depth2_digest as digests,v5_model
 
 INPUT_KEYS=batch.SERIAL_INPUT_ORDER
 LANES=serial.JOINT_LANES
@@ -143,6 +149,12 @@ def default_forward(model):
     return forward
 
 
+def _seen(forward):
+    """What a digest hashes for this forward= argument: its evaluator's digest view, or the inputs unchanged (the V2 default)."""
+    view=evaluators.digest_view(forward)
+    return(lambda inputs:inputs)if view is None else view
+
+
 def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=False,forward=None):
     """D3's turn-1 frame with the child carry: the depth-2 kernel's first stage, traced inside the caller's jit.
 
@@ -152,10 +164,13 @@ def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=F
     trackers, both seats' request flags, encoder masks and priors, the
     enumeration and the pairs. `forward(params, inputs)` is the only actor
     seam; it defaults to the v5 head in bf16 and is returned for the caller's
-    later plies.
+    later plies. The digests hash each view through the forward's digest view
+    (champion_evaluator.digest_view: an evaluator's own input slice; the inputs
+    unchanged for the default).
     """
     _widths(9,9,k1_own,k1_opp,1)
     if type(capacity)is not int or capacity<=0 or type(digest)is not bool:raise ValueError('explicit root capacity and digest bool required')
+    seen=_seen(forward)
     if forward is None:forward=default_forward(model)
     n=capacity*2
     child_joint=_make_child_joint(executor);views=_make_views(executor)
@@ -263,8 +278,8 @@ def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=F
             t1_peer_requested=rooted(scatter1(keep(viewed,peer_req2))),t1_peer_legal=rooted(scatter1(keep(viewed,peer_legal2))),t1_peer_logits=rooted(scatter1(keep(expanded,peer_logits2))))
         if digest:
             lane=lambda x:j.where(enumerated[...,None],x,j.uint32(0))
-            frame.update(t1_digest_own=rooted(scatter1(lane(digests.batched(inputs,axes=2)))),
-                t1_digest_peer=rooted(scatter1(lane(digests.batched(peer_child_inputs,axes=2)))))
+            frame.update(t1_digest_own=rooted(scatter1(lane(digests.batched(seen(inputs),axes=2)))),
+                t1_digest_peer=rooted(scatter1(lane(digests.batched(seen(peer_child_inputs),axes=2)))))
         return dict(frame=frame,pre=pre,pairs=pairs,enumerated=enumerated,expanded=expanded,owners=owners,
             own_req2=own_req2,peer_req2=peer_req2,own_legal2=own_legal2,peer_legal2=peer_legal2,own_logits2=own_logits2,peer_logits2=peer_logits2,
             child_states=child_states,child_publics=child_publics)
@@ -277,9 +292,10 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
     `forward(params, inputs)` is the only actor seam (turn-1 leaves, both child
     priors, turn-2 leaves); it defaults to the v5 head in bf16. Block slots and
     actors come from the host (`Depth2Pricer._blocks`), grouped by the learner's
-    archive so each block runs one parameter tree.
+    archive so each block runs one parameter tree. Digests hash the forward's
+    digest view (make_turn1_stage).
     """
-    _widths(k_own,k_opp,k1_own,k1_opp,child_block)
+    _widths(k_own,k_opp,k1_own,k1_opp,child_block);seen=_seen(forward)
     turn1,forward=make_turn1_stage(executor,model,params=params,capacity=capacity,k1_own=k1_own,k1_opp=k1_opp,digest=digest,forward=forward)
     n=capacity*2;children=n*LANES;pairs2=k_own*k_opp;cb=child_block
     leaf_joint=_make_leaf_joint(executor);views=_make_views(executor)
@@ -318,7 +334,7 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
                 err=j.where(invalid,1,j.where(done&~terminal_ok,2,j.where(~done&(error!=0),3,j.where(~done&~usable,4,0)))).astype(j.int8)
                 terminal=j.where(winner==2,0.,j.where(winner==owner[:,None],1.,-1.))
                 out=(j.where(err!=0,0.,j.where(done,terminal,v)).astype(j.float32),j.where(err!=0,3,j.where(done,1,4)).astype(j.int8),err)
-                return out+((digests.batched(inputs,axes=2),)if digest else())
+                return out+((digests.batched(seen(inputs),axes=2),)if digest else())
             def empty():
                 out=(j.zeros((cb,pairs2),j.float32),j.zeros((cb,pairs2),j.int8),j.zeros((cb,pairs2),j.int8))
                 return out+((j.zeros((cb,pairs2,2),j.uint32),)if digest else())
@@ -414,13 +430,16 @@ class Depth2Pricer:
             fixed_capacity=False):
         """`fixed_capacity=True` compiles every frame at exactly `capacity`, with every actor's rows and blocks sized
         for it, so a shrinking request count (the head-to-head loop) never recompiles; padding rows stay inactive
-        and their turn-2 blocks are skipped. The default buckets to the next power of two, as D3 does."""
+        and their turn-2 blocks are skipped. The default buckets to the next power of two, as D3 does.
+        `forward` is the evaluator seam (default: the V2 head in bf16); every kernel key carries its identity
+        (champion_evaluator.program_suffix: nothing for the default), so a kernel table never mixes evaluators."""
         if type(capacity)is not int or capacity<=0 or type(actor_capacity)is not int or actor_capacity<=0:
             raise ValueError('finite explicit root/actor capacities required')
         _widths(k_own,k_opp,k1_own,k1_opp,child_block)
         if type(digest)is not bool or type(fixed_capacity)is not bool:raise ValueError('explicit digest/fixed-capacity bools required')
         self.executor=executor;self.model=model;self.capacity=capacity;self.actor_capacity=actor_capacity;self.fixed_capacity=fixed_capacity
         self.k_own=k_own;self.k_opp=k_opp;self.k1_own=k1_own;self.k1_opp=k1_opp;self.child_block=child_block;self.digest=digest;self.forward=forward
+        self.evaluator_suffix=evaluators.program_suffix(forward)
         self.kernels={};self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
     def bind(self,params):
@@ -465,7 +484,7 @@ class Depth2Pricer:
         if available:
             data=pack_turn1(requests,worlds,recipe,capacity,params,k1_own=self.k1_own,fixed_capacity=self.fixed_capacity)
             data['child_slots'],data['block_actor']=self._blocks(requests,capacity,params)
-            key=(capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']),data['child_slots'].shape)
+            key=(capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']),data['child_slots'].shape)+self.evaluator_suffix
             device_data=jax.device_put(data)
             if key not in self.kernels:
                 fn=make_depth2_kernel(self.executor,self.model,params=self.params,capacity=capacity,k_own=self.k_own,k_opp=self.k_opp,

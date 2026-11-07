@@ -13,7 +13,7 @@ import jax.numpy as j
 import numpy as np
 
 from pokezero import v5_gumbel as original
-from . import device_public_teacher as serial,device_public_world_state as mapping,v5_model
+from . import champion_evaluator as evaluators,device_public_teacher as serial,device_public_world_state as mapping,v5_model
 
 SERIAL_INPUT_ORDER=('numeric_features','categorical_ids','token_type_ids','attention_mask','history_mask')
 FRAME_WORK_KEYS=('evaluated_root_slots','evaluated_world_slots','evaluated_joint_slots',
@@ -30,7 +30,7 @@ class Request:
     opponent_actor:int
 
 
-def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False,vectorized=False):
+def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False,vectorized=False,forward=None):
     """Preserve original actor programs, inside one frame device invocation.
 
     Transitions map roots/worlds/joint branches together. Actor call geometry
@@ -38,9 +38,12 @@ def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False
     The legacy path retains row-wise BF16 programs. Explicit D3 instead
     evaluates real archive-grouped batches with no sequential root/world map;
     its saved-root gate uses the separately declared target tolerance.
+    `forward(params, inputs)` is the evaluator seam (default: the v5 head in
+    bf16, D3's own; champion_evaluator.ChampionEvaluator for champion 9375).
     """
     if (not vectorized and capacity%block_rows)or executor.joint is None:raise ValueError('bounded mapped joint executor required')
-    def forward(params,inputs):return v5_model.forward(params,inputs,model,compute_dtype='bfloat16')
+    if forward is None:
+        def forward(params,inputs):return v5_model.forward(params,inputs,model,compute_dtype='bfloat16')
     peers=tuple(jax.jit(lambda inputs,p=p:forward(p,inputs))for p in params)
     leaves=tuple(jax.jit(jax.vmap(peer))for peer in peers)
     def views(state,public,owner):
@@ -175,7 +178,9 @@ def _numpy_worlds(requests,materializer,recipe):
 
 
 class FramePricer:
-    def __init__(self,executor,model,*,capacity=2048,block_rows=32,actor_capacity=33,vectorized=False,host_prep=False):
+    def __init__(self,executor,model,*,capacity=2048,block_rows=32,actor_capacity=33,vectorized=False,host_prep=False,forward=None):
+        """`forward` is make_kernel's evaluator seam (default: the v5 head in bf16); every kernel key carries its identity
+        (champion_evaluator.program_suffix: nothing for the default, whose keys are unchanged)."""
         if (type(capacity)is not int or type(block_rows)is not int or capacity<=0 or block_rows<=0
                 or capacity%block_rows or type(actor_capacity)is not int or actor_capacity<=0):
             raise ValueError('finite explicit root/actor capacities required')
@@ -183,6 +188,7 @@ class FramePricer:
         if type(host_prep)is not bool:raise ValueError('explicit host preparation bool required')
         self.vectorized=vectorized;self.host_prep=host_prep
         self.executor=executor;self.model=model;self.capacity=capacity;self.block_rows=block_rows;self.actor_capacity=actor_capacity
+        self.forward=forward;self.evaluator_suffix=evaluators.program_suffix(forward)
         self.kernels={};self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
     def bind(self,params):
@@ -257,9 +263,11 @@ class FramePricer:
                     return tuple(rows)
                 data['peer_rows']=actor_rows('opponent_actor');data['leaf_rows']=actor_rows('learner_actor')
                 key=(capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']))
+            if self.evaluator_suffix:key=(key,)+self.evaluator_suffix
             device_data=jax.device_put(data)
             if key not in self.kernels:
-                fn=make_kernel(self.executor,self.model,params=self.params,capacity=capacity,block_rows=self.block_rows,mixed_learners=mixed,vectorized=self.vectorized)
+                fn=make_kernel(self.executor,self.model,params=self.params,capacity=capacity,block_rows=self.block_rows,mixed_learners=mixed,vectorized=self.vectorized,
+                    **({}if self.forward is None else dict(forward=self.forward)))
                 clock=time.perf_counter();lowered=fn.lower(device_data);lower_seconds=time.perf_counter()-clock
                 clock=time.perf_counter();self.kernels[key]=lowered.compile();compile_seconds=time.perf_counter()-clock
             # Exactly one device invocation for the entire selected frame.
