@@ -2242,11 +2242,12 @@ class FixedShapesTests(FixtureN, unittest.TestCase):
 
 DECLARED_ARCHIVE, DECLARED_CHECKPOINT = '7' * 64, '8' * 64
 HEAD_FLAGS = ('--head-archive', '/shared/x/head.npz', '--head-archive-sha256', DECLARED_ARCHIVE, '--head-checkpoint-sha256', DECLARED_CHECKPOINT)
+CHAMPION_FLAGS = ('--champion-archive', '/shared/x/champion.npz', '--champion-archive-sha256', DECLARED_ARCHIVE, '--champion-checkpoint-sha256', DECLARED_CHECKPOINT)
 
 
 def declaration(**changes):
-    """A valid declaration for the head override (kind v2, DECLARED_ARCHIVE, bfloat16); each change replaces a top-level key (None drops it)."""
-    content = dict(schema=gate.DECLARED_SCHEMA, evaluator=dict(kind='v2', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16'),
+    """A valid declaration for the champion CHAMPION_FLAGS name (DECLARED_ARCHIVE, bfloat16); each change replaces a top-level key (None drops it)."""
+    content = dict(schema=gate.DECLARED_SCHEMA, evaluator=dict(kind='champion', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16'),
         bounds=dict(value_bound=.008, turn1_logit_bound=.1, deeper_logit_rule=dict(factor=2)), derivation='2 x the bf16-vs-f32 spread, as B1 (test)',
         declared_at='2026-11-01T00:00:00Z', source_measurement=dict(path='/shared/measure/spread.json', sha256='9' * 64), declared_by='test')
     for key, value in changes.items():
@@ -2274,8 +2275,8 @@ def declared(**changes):
 class DeclaredBoundsTests(FixtureN, unittest.TestCase):
     """--declared-bounds: the file fails closed; the verdict takes the declared numbers (a run beyond B1's bounds passes looser declared ones
     and one inside them fails tighter ones; declaring the frozen numbers reproduces the frozen verdict); the near-tie Q bound is (e)'s alone;
-    on the command line (the head override on the stand-in) the header section, the mutation test and --reverdict's round trip and refusals;
-    without the flag nothing changes."""
+    the flags are champion only (the command-line round trip runs on the champion: test_gpu_engine_champion_evaluator.ChampionCommandLineTests);
+    without the flag nothing changes (the head override's roots here stand for B1's path)."""
     _frame, _d, _data, _n2_frame = GateNTests._frame, GateNTests._d, GateNTests._data, GateNTests._n2_frame
     main = CommandLineRunTests.main
 
@@ -2310,7 +2311,7 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
             zero=(declaration(bounds=bounds(value_bound=0)), 'finite number > 0'), boolean=(declaration(bounds=bounds(turn1_logit_bound=True)), 'finite number > 0'),
             negative_factor=(declaration(bounds=bounds(deeper_logit_rule=dict(factor=-2))), 'factor: a finite number > 0'),
             text_bound=(declaration(bounds=bounds(near_tie_q_bound='.01')), 'near_tie_q_bound: a finite number > 0'),
-            schema=(declaration(schema='v0'), 'schema'), kind=(declaration(evaluator=dict(declaration()['evaluator'], kind='head')), 'evaluator.kind'),
+            schema=(declaration(schema='v0'), 'schema'), kind=(declaration(evaluator=dict(declaration()['evaluator'], kind='v2')), 'evaluator.kind'),
             alias_precision=(declaration(evaluator=dict(declaration()['evaluator'], precision='bf16')), 'evaluator.precision'),
             archive=(declaration(evaluator=dict(declaration()['evaluator'], archive_sha256='7' * 63)), 'evaluator.archive_sha256'),
             naive_time=(declaration(declared_at='2026-11-01T00:00:00'), 'declared_at'), other_zone=(declaration(declared_at='2026-11-01T00:00:00+01:00'), 'declared_at'),
@@ -2334,40 +2335,39 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
                 self.assertIn(message, str(raised.exception))
 
     def test_the_declaration_binds_one_evaluator(self):
-        run = dict(override=True, kind='v2', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16', checkpoint_sha256=DECLARED_CHECKPOINT)
+        run = dict(override=True, kind='champion', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16', checkpoint_sha256=DECLARED_CHECKPOINT)
         self.assertEqual(gate.evaluator_mismatches(declaration(), run), [])
-        for key, value in (('kind', 'champion'), ('archive_sha256', '6' * 64), ('precision', 'float32')):
+        for key, value in (('kind', 'v2'), ('archive_sha256', '6' * 64), ('precision', 'float32')):
             with self.subTest(key):
                 mismatched = gate.evaluator_mismatches(declaration(), dict(run, **{key: value}))
                 self.assertEqual(len(mismatched), 1);self.assertIn(f'evaluator.{key}', mismatched[0])
         pinned = declaration(evaluator=dict(declaration()['evaluator'], checkpoint_sha256=DECLARED_CHECKPOINT))
         self.assertEqual(gate.evaluator_mismatches(pinned, run), []);self.assertIn('checkpoint_sha256', gate.evaluator_mismatches(pinned, dict(run, checkpoint_sha256='5' * 64))[0])
-        self.assertIn('no evaluator override', gate.evaluator_mismatches(declaration(), dict(run, override=False))[0])
+        self.assertIn('no champion evaluator', gate.evaluator_mismatches(declaration(), dict(run, override=False))[0])
         base = ['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64]
-        champion = ['--champion-archive', 'c.npz', '--champion-archive-sha256', 'e' * 64, '--champion-checkpoint-sha256', 'c' * 64]
-        self.assertEqual(gate.args_identity(gate.parse(base + list(HEAD_FLAGS))[1]), run)
-        self.assertEqual(gate.args_identity(gate.parse(base + champion + ['--champion-precision', 'f32'])[1]), dict(override=True, kind='champion',
-            archive_sha256='e' * 64, precision='float32', checkpoint_sha256='c' * 64))
-        self.assertEqual(gate.args_identity(gate.parse(base[:6])[1])['override'], False)
+        self.assertEqual(gate.args_identity(gate.parse(base + list(CHAMPION_FLAGS))[1]), run)
+        self.assertEqual(gate.args_identity(gate.parse(base + list(CHAMPION_FLAGS) + ['--champion-precision', 'f32'])[1]), dict(run, precision='float32'))
+        for flags in ((), HEAD_FLAGS):self.assertEqual(gate.args_identity(gate.parse(base[:6] + list(flags))[1])['override'], False)   # no champion: never applies
 
-    def test_flags_are_refused_without_an_override_and_in_incompatible_modes(self):
+    def test_flags_are_refused_off_the_champion_and_in_incompatible_modes(self):
         out = str(Path(tempfile.gettempdir()) / f'depthn-gate-never-created-{uuid.uuid4().hex}');flags = ['--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64]
         live = ['--out', out, '--d3-root', 'b', '--chunk', '0']
-        cases = dict(alone=(live + flags[:2] + list(HEAD_FLAGS), 'go together'), sha_alone=(live + flags[2:] + list(HEAD_FLAGS), 'go together'),
-            bad_sha=(live + flags[:3] + ['A' * 64] + list(HEAD_FLAGS), '64-hex'), bank_actors=(live + flags, 'needs an evaluator override'),
-            diagnostics=(live + flags + list(HEAD_FLAGS) + ['--depth3-diagnostics'], '--depth3-diagnostics'),
-            diagnostics_from=(['--out', out, '--diagnostics-from', 'x'] + flags + list(HEAD_FLAGS), 'live gate run'),
+        cases = dict(alone=(live + flags[:2] + list(CHAMPION_FLAGS), 'go together'), sha_alone=(live + flags[2:] + list(CHAMPION_FLAGS), 'go together'),
+            bad_sha=(live + flags[:3] + ['A' * 64] + list(CHAMPION_FLAGS), '64-hex'), bank_actors=(live + flags, 'needs --champion-archive'),
+            head_override=(live + flags + list(HEAD_FLAGS), 'champion only'),
+            diagnostics=(live + flags + list(CHAMPION_FLAGS) + ['--depth3-diagnostics'], '--depth3-diagnostics'),
+            diagnostics_from=(['--out', out, '--diagnostics-from', 'x'] + flags + list(CHAMPION_FLAGS), 'live gate run'),
             mutation_from=(['--out', out, '--mutation-from', 'x'] + flags, 'live gate run'), reverdict=(['--reverdict', 'gate.json'] + flags, 'takes no other option'))
         for case, (argv, message) in cases.items():
             with self.subTest(case):
                 stderr = io.StringIO()
                 with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:gate.main(argv)
                 self.assertEqual(raised.exception.code, 2);self.assertIn(message, stderr.getvalue())
-        for extra in ((), ('--n2-equivalence',), ('--mutation-test',), ('--raw-head-check',)):
-            self.assertEqual(gate.parse(live + flags + list(HEAD_FLAGS) + list(extra))[1].declared_bounds, 'd.json')
+        for extra in ((), ('--n2-equivalence',), ('--mutation-test',), ('--n2-equivalence', '--block-invariance')):
+            self.assertEqual(gate.parse(live + flags + list(CHAMPION_FLAGS) + list(extra))[1].declared_bounds, 'd.json')
         path, sha = written(declaration())   # main refuses before anything is created or loaded: the file's sha256, then the flags' evaluator
         for argv, message in (([str(path), '0' * 64], 'differs from --declared-bounds-sha256'), ([str(path), sha], 'evaluator.archive_sha256')):
-            head = list(HEAD_FLAGS);head[3] = '6' * 64
+            head = list(CHAMPION_FLAGS);head[3] = '6' * 64
             with patch.object(gate, 'load_roots', side_effect=AssertionError('loaded')), patch.object(gate, 'log', lambda *a, **k: None), \
                     self.assertRaises(SystemExit) as raised:gate.main(live + ['--declared-bounds', argv[0], '--declared-bounds-sha256', argv[1]] + head)
             self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse(Path(out).exists())
@@ -2439,60 +2439,6 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         self.assertEqual((report['floats']['t1_own_logits']['bound'], report['floats']['t1_own_logits']['passed']), (.15, True))
         self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['q_noise_bound'], report['e']['q_noise_bound']), (.008, .01, .01))
         self.assertEqual(report['tolerance']['frozen_rule']['logit_bound'], .1);self.assertIn('declared_bounds', report['tolerance'])
-
-    def test_header_mutation_test_and_reverdict_round_trip(self):
-        """The head override on the stand-in with a declaration (value bound 1e-6: the stand-in's own floor is 0): gate.json PASS with the
-        header's declared_bounds section beside the unchanged rules, the declared numbers in the tolerance and the measured floor beside them;
-        mutation-test.json at the declared bound with the same header; --mutation-from refuses the saved calls; --reverdict reproduces the
-        verdict and the header, and refuses a section that fails its checks."""
-        d = declaration(bounds=bounds(value_bound=1e-6, turn1_logit_bound=.05));path, sha = written(d);lines = []
-        code, out = self.main('--mutation-test', '--save-oracle', *HEAD_FLAGS, '--declared-bounds', str(path), '--declared-bounds-sha256', sha, lines=lines)
-        report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE))
-        self.assertEqual((code, report['status'], mutation['status']), (0, 'PASS', 'PASS'), (report.get('status_reasons'), mutation.get('survivors')))
-        header = report['header'];section = header['declared_bounds'];default = gate.header_block(report['checks'])
-        self.assertEqual(list(header), ['near_ties', 'rules_changed_after_failure', 'frozen_rule_set', 'declared_bounds'])
-        self.assertEqual({k: header[k] for k in default}, default)   # the rules changed after a failure, untouched
-        self.assertEqual((section['sha256'], section['content'], section['content_text'], section['note']), (sha, d, path.read_text(), gate.DECLARED_NOTE))
-        self.assertEqual(section['evaluator'], dict(kind='v2', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16', checkpoint_sha256=DECLARED_CHECKPOINT))
-        tolerance = report['tolerance'];self.assertEqual((tolerance['value_bound'], tolerance['logit_bound'], tolerance['depth1_noise_floor']), (1e-6, .05, 0.))
-        self.assertEqual(tolerance['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.);self.assertEqual(tolerance['declared_bounds']['sha256'], sha)
-        self.assertEqual((mutation['header'], mutation['value_bound'], mutation['calls'][0]['value_bound']), (header, 1e-6, 1e-6))
-        self.assertTrue(all(m['killed'] for m in mutation['calls'][0]['mutants'].values()))
-        start = next(x for x in lines if x['message'] == 'GATE_START');self.assertEqual(start['declared_bounds_sha256'], sha)
-        self.assertEqual(next(x for x in lines if x['message'] == 'DECLARED_BOUNDS')['sha256'], sha)
-        with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:
-            gate.main(['--out', str(Path(tempfile.mkdtemp()) / 'o'), '--mutation-from', str(out)])
-        self.assertIn('--declared-bounds run', str(raised.exception.code))
-        with patch.object(gate, 'log', lambda *a, **k: None):self.assertEqual(gate.main(['--reverdict', str(out / 'gate.json')]), 0)
-        again = json.loads((out / gate.REVERDICT_FILE).read_text())
-        self.assertEqual((again['status'], again['header'], again['reverdict']['declared_bounds_sha256'], again['reverdict']['changed_quantities']), ('PASS', header, sha, []))
-        verdicts = lambda r: {k: (m.get('passed'), m.get('bound'), m.get('bound_rule')) for k, m in r['checks']['c']['quantities'].items()}
-        self.assertEqual(verdicts(again), verdicts(report));self.assertEqual(again['tolerance']['declared_bounds'], tolerance['declared_bounds'])
-        def edited(change):
-            r = copy.deepcopy(report);change(r);return r
-        tampered = dict(
-            text=(lambda r: r['header']['declared_bounds'].__setitem__('content_text', r['header']['declared_bounds']['content_text'].replace('1e-06', '0.5')), 'does not hash'),
-            sha=(lambda r: r['header']['declared_bounds'].__setitem__('sha256', '0' * 64), 'does not hash'),
-            content=(lambda r: r['header']['declared_bounds']['content']['bounds'].__setitem__('value_bound', .5), 'content differs'),
-            bound=(lambda r: r['tolerance'].__setitem__('value_bound', .5), 'not the declared'),
-            tolerance_sha=(lambda r: r['tolerance']['declared_bounds'].__setitem__('sha256', '0' * 64), 'same sha256'),
-            header=(lambda r: r['header'].pop('declared_bounds'), 'without header.declared_bounds'),
-            evaluator=(lambda r: r['evaluator'].__setitem__('archive_sha256', '6' * 64), 'evaluator.archive_sha256'),
-            started=(lambda r: r['header']['declared_bounds'].__setitem__('run_started_at', '2026-10-01T00:00:00+00:00'), 'before the recorded run start'))
-        for case, (change, message) in tampered.items():
-            with self.subTest(case):
-                directory = Path(tempfile.mkdtemp(prefix='depthn-declared-'));(directory / 'gate.json').write_text(json.dumps(edited(change)))
-                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(directory / 'gate.json')])
-                self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse((directory / gate.REVERDICT_FILE).exists())
-
-    def test_the_resolved_evaluator_is_matched_again(self):
-        """The flags name the declared evaluator but load_roots resolves another (a precision the header reports differently): refused after
-        loading, before any pricing."""
-        path, sha = written(declaration());roots = self.roots;self.roots = lambda: dict.__setitem__((r := roots()).evaluator, 'precision', 'float32') or r
-        try:
-            with self.assertRaises(SystemExit) as raised:self.main(*HEAD_FLAGS, '--declared-bounds', str(path), '--declared-bounds-sha256', sha)
-        finally:self.roots = roots
-        self.assertIn('not for the resolved evaluator', str(raised.exception.code));self.assertIn('evaluator.precision', str(raised.exception.code))
 
     def test_off_the_champion_path_depth2_and_n2_are_unchanged(self):
         """B1's path (the head override here): a depth-2 full-width gate gates only the depth-N leaf walk's path in oracle consistency and

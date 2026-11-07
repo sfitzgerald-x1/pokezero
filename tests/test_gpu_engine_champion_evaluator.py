@@ -11,6 +11,7 @@
 - The tools' champion flags (parse; exclusive with --head-archive) and the forward microbenchmark at tiny shapes.
 """
 import contextlib
+import copy
 from dataclasses import asdict, replace
 import hashlib
 import io
@@ -495,9 +496,9 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         return SimpleNamespace(loaded=loaded, head=None, params=self.params, groups=[list(self.requests)], root_values=list(self.bound['values']),
             evaluator=dict(override=True, **self.champion.header(), arm_checked=True, dropped_roots=[]), actor_capacity=1, forward=self.champion)
 
-    def main(self, *argv, out=None):
-        out = out or Path(tempfile.mkdtemp(prefix='champion-cli-')) / 'out'
-        with self.engine(), patch.object(gate_module(), 'load_roots', lambda args: self.roots()), patch.object(gate_module(), 'log', lambda *a, **k: None):
+    def main(self, *argv, out=None, lines=None):
+        out = out or Path(tempfile.mkdtemp(prefix='champion-cli-')) / 'out';log = (lambda m, **k: lines.append(dict(k, message=m))) if lines is not None else (lambda *a, **k: None)
+        with self.engine(), patch.object(gate_module(), 'load_roots', lambda args: self.roots()), patch.object(gate_module(), 'log', log):
             code = gate_module().main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', '--capacity', '32', *self.FLAGS, *argv])
         return code, out
 
@@ -588,6 +589,63 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         for name, config in report['configs'].items():
             inv = config['block_invariance'];self.assertEqual((inv['passed'], inv['discrete_equal'], inv['floats']['t2_value']['within_bound']), (False, True, False), name)
             self.assertTrue(config['discrete']['passed'] and config['e']['passed'] and all(m['passed'] for m in config['floats'].values()), name)   # the compared frame is clean
+
+    def test_header_mutation_test_and_reverdict_round_trip(self):
+        """Depth 3 under a declaration (value bound 1e-6: the exact champion's own floor is 0): gate.json PASS with the header's declared_bounds
+        section beside the unchanged rules, the declared numbers in the tolerance and the measured floor beside them; mutation-test.json at the
+        declared bound with the same header, every mutant killed; --mutation-from refuses the saved calls; --reverdict reproduces the verdict
+        and the header, and refuses a section that fails its checks."""
+        gate = gate_module();content, flags, sha = self.declared();lines = []
+        code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2', '--mutation-test', '--save-oracle', *flags, lines=lines)
+        report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE))
+        self.assertEqual((code, report['status'], mutation['status']), (0, 'PASS', 'PASS'), (report.get('status_reasons'), mutation.get('survivors')))
+        header = report['header'];section = header['declared_bounds'];default = gate.header_block(report['checks'])
+        self.assertEqual(list(header), ['near_ties', 'rules_changed_after_failure', 'frozen_rule_set', 'declared_bounds'])
+        self.assertEqual({k: header[k] for k in default}, default)   # the rules changed after a failure, untouched
+        self.assertEqual((section['sha256'], section['content'], section['content_text'], section['note']), (sha, content, Path(flags[1]).read_text(), gate.DECLARED_NOTE))
+        self.assertEqual(section['evaluator'], dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=CHECKPOINT))
+        tolerance = report['tolerance'];self.assertEqual((tolerance['value_bound'], tolerance['logit_bound'], tolerance['depth1_noise_floor']), (1e-6, .05, 0.))
+        self.assertEqual(tolerance['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.);self.assertEqual(tolerance['declared_bounds']['sha256'], sha)
+        self.assertEqual((mutation['header'], mutation['value_bound'], mutation['calls'][0]['value_bound']), (header, 1e-6, 1e-6))
+        self.assertTrue(all(m['killed'] for m in mutation['calls'][0]['mutants'].values()))
+        start = next(x for x in lines if x['message'] == 'GATE_START');self.assertEqual(start['declared_bounds_sha256'], sha)
+        self.assertEqual(next(x for x in lines if x['message'] == 'DECLARED_BOUNDS')['sha256'], sha)
+        with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:
+            gate.main(['--out', str(Path(tempfile.mkdtemp()) / 'o'), '--mutation-from', str(out)])
+        self.assertIn('--declared-bounds run', str(raised.exception.code))
+        with patch.object(gate, 'log', lambda *a, **k: None):self.assertEqual(gate.main(['--reverdict', str(out / 'gate.json')]), 0)
+        again = json.loads((out / gate.REVERDICT_FILE).read_text())
+        self.assertEqual((again['status'], again['header'], again['reverdict']['declared_bounds_sha256'], again['reverdict']['changed_quantities']), ('PASS', header, sha, []))
+        verdicts = lambda r: {k: (m.get('passed'), m.get('bound'), m.get('bound_rule')) for k, m in r['checks']['c']['quantities'].items()}
+        self.assertEqual(verdicts(again), verdicts(report));self.assertEqual(again['tolerance']['declared_bounds'], tolerance['declared_bounds'])
+        for case, (change, message) in self.tampered().items():
+            with self.subTest(case):
+                r = copy.deepcopy(report);change(r);directory = Path(tempfile.mkdtemp(prefix='champion-declared-'));(directory / 'gate.json').write_text(json.dumps(r))
+                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(directory / 'gate.json')])
+                self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse((directory / gate.REVERDICT_FILE).exists())
+
+    @staticmethod
+    def tampered():
+        """{case: (edit of a declared gate.json, the refusal it must meet)}."""
+        h = lambda r: r['header']['declared_bounds']
+        return dict(
+            text=(lambda r: h(r).__setitem__('content_text', h(r)['content_text'].replace('1e-06', '0.5')), 'does not hash'),
+            sha=(lambda r: h(r).__setitem__('sha256', '0' * 64), 'does not hash'),
+            content=(lambda r: h(r)['content']['bounds'].__setitem__('value_bound', .5), 'content differs'),
+            bound=(lambda r: r['tolerance'].__setitem__('value_bound', .5), 'not the declared'),
+            tolerance_sha=(lambda r: r['tolerance']['declared_bounds'].__setitem__('sha256', '0' * 64), 'same sha256'),
+            header=(lambda r: r['header'].pop('declared_bounds'), 'without header.declared_bounds'),
+            evaluator=(lambda r: r['evaluator'].__setitem__('archive_sha256', '6' * 64), 'evaluator.archive_sha256'),
+            started=(lambda r: h(r).__setitem__('run_started_at', '2026-10-01T00:00:00+00:00'), 'before the recorded run start'))
+
+    def test_the_resolved_evaluator_is_matched_again(self):
+        """The flags name the declared champion but load_roots resolves another identity (a precision the header reports differently): refused
+        after loading, before any pricing."""
+        _, flags, _ = self.declared();roots = self.roots;self.roots = lambda: dict.__setitem__((r := roots()).evaluator, 'precision', 'float32') or r
+        try:
+            with self.assertRaises(SystemExit) as raised:self.main(*flags)
+        finally:self.roots = roots
+        self.assertIn('not for the resolved evaluator', str(raised.exception.code));self.assertIn('evaluator.precision', str(raised.exception.code))
 
     def test_a_declaration_for_another_evaluator_is_refused(self):
         for key, value in (('precision', 'float32'), ('archive_sha256', 'e' * 64), ('kind', 'v2'), ('checkpoint_sha256', 'b' * 64)):

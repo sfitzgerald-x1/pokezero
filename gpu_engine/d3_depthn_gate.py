@@ -71,7 +71,7 @@ stacked, logged or written differently; a report without `harness` ran without i
 DepthNPricer, the full-width depth-2 pass, --n2-equivalence's Depth2Pricer, D3's FramePricer (with_forward) and the oracle price
 with it, digests hash its 23-token view, and every request takes its root logits and actors 0/0 (bind_evaluator_roots, after its
 exact adapter-vs-champion.forward check on the first root); the evaluator header records it. Without the flags nothing changes.
---declared-bounds PATH --declared-bounds-sha256 SHA (DECLARED_RULE; opt-in, only with --champion-archive or --head-archive, refused with
+--declared-bounds PATH --declared-bounds-sha256 SHA (DECLARED_RULE; opt-in, champion only: with --champion-archive, refused with --head-archive,
 --depth3-diagnostics and the offline modes): a JSON declaration (DECLARED_SCHEMA, written before the run, its bytes pinned by SHA and its
 evaluator identity by kind, archive sha256 and precision, which must be the run's) whose value, turn-1 logit, deeper-ply logit and optional
 near-tie Q bounds replace the tolerance NUMBERS of the B1-calibrated rule for that evaluator; every check and rule is unchanged, the measured
@@ -1946,9 +1946,9 @@ def _with_header(report, block):
 
 DECLARED_SCHEMA = 'pokezero.depthn-gate.declared-bounds.v1'
 DECLARED_FIELDS = ('schema', 'evaluator', 'bounds', 'derivation', 'declared_at', 'source_measurement', 'declared_by')
-DECLARED_KINDS = ('champion', 'v2')   # the evaluator header's kinds: --champion-archive, --head-archive
+DECLARED_KINDS = ('champion',)   # champion only: a V2 head (B1's, under --head-archive) and the bank snapshot's actors keep the frozen rule
 DECLARED_PRECISIONS = tuple(ce.PRECISIONS.values())   # the evaluator identity's names ('bfloat16', 'float32'), never the flags' aliases
-DECLARED_RULE = ('--declared-bounds (opt-in; only with an evaluator override, --champion-archive or --head-archive): a JSON declaration '
+DECLARED_RULE = ('--declared-bounds (opt-in; champion only: with --champion-archive, refused with --head-archive and the bank snapshot\'s actors): a JSON declaration '
     '(DECLARED_SCHEMA) written before the run (declared_at no later than the run\'s start, UTC), its bytes pinned by --declared-bounds-sha256 '
     'and bound to ONE evaluator identity (kind, archive sha256, precision; checkpoint sha256 when declared), which must be the run\'s, replaces '
     'the tolerance NUMBERS for that evaluator; no check, mask, rule or status changes. value_bound replaces 2 x depth1_noise_floor (and its 1e-4 '
@@ -2076,14 +2076,12 @@ def evaluator_identity(evaluator):
 
 
 def args_identity(args):
-    """The evaluator identity the override flags name, before anything is loaded: the champion's (kind champion, its archive and checkpoint
-    sha256, its precision), the head override's (kind v2, bfloat16) or none (the bank snapshot's actors). load_roots resolves the same
-    identity into the evaluator header, which main checks again."""
+    """The evaluator identity the champion flags name, before anything is loaded (kind champion, its archive and checkpoint sha256, its
+    precision), or none (no --champion-archive: a declaration never applies). load_roots resolves the same identity into the evaluator
+    header, which main checks again."""
     if getattr(args, 'champion_archive', None):
         return dict(override=True, kind='champion', archive_sha256=args.champion_archive_sha256, precision=ce.PRECISIONS[args.champion_precision or 'bf16'],
             checkpoint_sha256=args.champion_checkpoint_sha256)
-    if getattr(args, 'head_archive', None):
-        return dict(override=True, kind='v2', archive_sha256=args.head_archive_sha256, precision='bfloat16', checkpoint_sha256=args.head_checkpoint_sha256)
     return dict(override=False, kind=None, archive_sha256=None, precision=None, checkpoint_sha256=None)
 
 
@@ -2091,7 +2089,7 @@ def evaluator_mismatches(content, identity):
     """Why a valid declaration does not apply to a run's evaluator identity ([] when it does): an override must price (one parameter set
     with one identity), and kind, archive sha256 and precision (and checkpoint sha256, when declared) must be the run's."""
     declared = content['evaluator']
-    out = [] if identity.get('override') else ['the run has no evaluator override (the bank snapshot\'s actors): a declaration binds one evaluator']
+    out = [] if identity.get('override') else ['the run has no champion evaluator: a declaration binds one champion identity']
     for key in ('kind', 'archive_sha256', 'precision') + (('checkpoint_sha256',) if 'checkpoint_sha256' in declared else ()):
         if declared[key] != identity.get(key):out.append(f'evaluator.{key}: declared {declared[key]!r}, the run\'s {identity.get(key)!r}')
     return out
@@ -2276,9 +2274,9 @@ def merged_depth2_parity(mode, *, oracle_consistency=False, child_block_invarian
 
 
 def check_declared_arguments(parser, args):
-    """--declared-bounds PATH and --declared-bounds-sha256 SHA go together (a 64-hex sha256), only with an evaluator override
-    (--champion-archive or --head-archive: one parameter set with one identity for the declaration to bind; the bank snapshot's actors are
-    the B1-calibrated default path, several parameter sets with no single identity), and only where a verdict is priced live: refused with
+    """--declared-bounds PATH and --declared-bounds-sha256 SHA go together (a 64-hex sha256), champion only (--champion-archive: one
+    parameter set with one identity for the declaration to bind; refused with --head-archive, whose V2 heads include B1's, and on the bank
+    snapshot's actors, the B1-calibrated default path), and only where a verdict is priced live: refused with
     --depth3-diagnostics (no oracle, no bound) and the offline modes (--diagnostics-from, --mutation-from; --reverdict takes no option and
     re-applies the declaration its report recorded)."""
     given = [getattr(args, 'declared_bounds', None), getattr(args, 'declared_bounds_sha256', None)]
@@ -2286,8 +2284,10 @@ def check_declared_arguments(parser, args):
     if not all(given):parser.error('--declared-bounds and --declared-bounds-sha256 go together')
     if not ce._hex64(args.declared_bounds_sha256):parser.error('--declared-bounds-sha256 must be a 64-hex sha256')
     if args.diagnostics_from or args.mutation_from:parser.error('--declared-bounds applies to a live gate run: --diagnostics-from / --mutation-from judge nothing live')
-    if not (args.champion_archive or args.head_archive):parser.error('--declared-bounds needs an evaluator override (--champion-archive or --head-archive): '
-        'a declaration binds one evaluator identity, and the bank snapshot\'s actors keep the frozen rule')
+    if args.head_archive:parser.error('--declared-bounds applies to the champion only (--champion-archive): a V2 head under --head-archive (B1\'s '
+        'included) keeps the frozen rule')
+    if not args.champion_archive:parser.error('--declared-bounds needs --champion-archive: a declaration binds one champion identity, and the bank '
+        'snapshot\'s actors keep the frozen rule')
     if args.depth3_diagnostics:parser.error('--declared-bounds does not apply to --depth3-diagnostics (no oracle, no bound)')
     return args
 
@@ -3151,7 +3151,7 @@ def parse(argv=None):
         '(--save-arrays --save-oracle); writes mutation-test.json in --out')
     parser.add_argument('--fixed-shapes', action='store_true', help='compile once per process: every DepthNPricer with fixed_capacity=True and '
         'every oracle stack padded to 2 x the call-split capacity (FIXED_SHAPES; a harness setting, recorded as `harness`; no rule reads it)')
-    parser.add_argument('--declared-bounds', metavar='PATH', help='opt-in, with --champion-archive or --head-archive: a JSON declaration '
+    parser.add_argument('--declared-bounds', metavar='PATH', help='opt-in, champion only (with --champion-archive): a JSON declaration '
         f'({DECLARED_SCHEMA}) of this evaluator\'s value, turn-1 logit and deeper-ply logit bounds, written before the run; it replaces the '
         'tolerance numbers (DECLARED_RULE) and is recorded in every report\'s header (declared_bounds)')
     parser.add_argument('--declared-bounds-sha256', metavar='SHA256', help='sha256 of --declared-bounds\' bytes (required with it)')
