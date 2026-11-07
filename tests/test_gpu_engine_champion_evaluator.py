@@ -6,9 +6,12 @@
 - End to end on the depth-N gate's fake engine with V2-layout encoder inputs: the real DepthNPricer, the full-width depth-2 pass,
   D3's FramePricer and the N-step oracle all price with ONE tiny champion and the gate passes, with the V2 forward patched to
   raise; N=2 equivalence against the merged Depth2Pricer; program keys per evaluator in one shared table, V2's unchanged.
+- The depth-N gate's main() under the champion with --declared-bounds: the full-width depth-2 gate and --n2-equivalence PASS under a
+  declaration for this champion, which every report records; a declaration for another evaluator identity is refused before loading.
 - The tools' champion flags (parse; exclusive with --head-archive) and the forward microbenchmark at tiny shapes.
 """
 import contextlib
+import copy
 from dataclasses import asdict, replace
 import hashlib
 import io
@@ -262,12 +265,10 @@ def exact_champion(precision='bfloat16'):
     return ExactChampion(params, tiny_config(), dict(weights_archive_sha256='f' * 64, checkpoint_sha256=CHECKPOINT, parameter_count=10), precision)
 
 
-@unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
-class ChampionPricerTests(N.FixtureN, unittest.TestCase):
+class ChampionFixture(N.FixtureN):
     """The fixture's requests on V2-layout inputs (request 7's root inputs shifted: pre-refused), bound to one champion evaluator by
     gate.bind_roots (its prior, actors 0/0); every pricer, D3's FramePricer and the oracle take the same evaluator, and the V2
-    forward is patched to raise. The gate runs on the exact stand-in network; the real champion.forward (tiny, f32) is checked
-    against the oracle on the learner's own leaf views."""
+    forward is patched to raise."""
     make = staticmethod(champion_layout(N.executor_n))
     PRE_REFUSED = None
 
@@ -317,6 +318,11 @@ class ChampionPricerTests(N.FixtureN, unittest.TestCase):
             return gate.run_call_n(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=self.params, pricers=pricers,
                 depth2_pricer=depth2_pricer, frame_pricer=self.frame_pricer(), oracle=self.oracle, sample=sample, block=0, context=dict(block=0, call=0), backups=None)
 
+
+@unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+class ChampionPricerTests(ChampionFixture, unittest.TestCase):
+    """ChampionFixture's champion everywhere: the gate runs on the exact stand-in network; the real champion.forward (tiny, f32) is checked
+    against the oracle on the learner's own leaf views."""
     def test_bind_roots_takes_the_champions_prior_and_actors(self):
         self.assertTrue(self.bound['checked']);self.assertEqual(self.bound['dropped'], [])
         self.assertEqual({(r.learner_actor, r.opponent_actor) for r in self.requests}, {(0, 0)})
@@ -471,6 +477,370 @@ class ChampionPricerTests(N.FixtureN, unittest.TestCase):
             (plain,), (keyed,) = kernels[(name, True)], kernels[(name, False)]
             self.assertFalse(any(isinstance(x, tuple) and x[:1] == ('evaluator',) for x in plain))
             self.assertEqual(keyed[-1], suffix[0])
+
+
+@unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
+    """The depth-N gate's main() under the champion (the roots loader replaced by the fixture's bound requests; the real pricers, D3's
+    FramePricer and the oracle on the exact stand-in champion; the V2 forward patched to raise) with --declared-bounds for this champion:
+    the full-width depth-2 gate and --n2-equivalence (DepthNPricer N=2 against the merged Depth2Pricer, both under the champion) PASS
+    under the declared numbers, every report carrying the declaration; a declaration for another evaluator identity is refused before
+    anything is created or loaded."""
+    FLAGS = ('--champion-archive', '/shared/x/champion.npz', '--champion-archive-sha256', 'f' * 64, '--champion-checkpoint-sha256', CHECKPOINT)
+
+    def roots(self):
+        """What load_roots resolves for FLAGS: the bound requests, the champion as the one evaluator and its header."""
+        provider = SimpleNamespace(executor=self.ex, materializer=self.tables, recipe=self.recipe, source=self.tables.source)
+        loaded = SimpleNamespace(provider=provider, plan=SimpleNamespace(model=object(), historical_window=2), frame_pricer=N.FixtureN.frame_pricer(self),
+            source=dict(fixture=True))
+        return SimpleNamespace(loaded=loaded, head=None, params=self.params, groups=[list(self.requests)], root_values=list(self.bound['values']),
+            evaluator=dict(override=True, **self.champion.header(), arm_checked=True, dropped_roots=[]), actor_capacity=1, forward=self.champion)
+
+    def main(self, *argv, out=None, lines=None):
+        out = out or Path(tempfile.mkdtemp(prefix='champion-cli-')) / 'out';log = (lambda m, **k: lines.append(dict(k, message=m))) if lines is not None else (lambda *a, **k: None)
+        with self.engine(), patch.object(gate_module(), 'load_roots', lambda args: self.roots()), patch.object(gate_module(), 'log', log), \
+                patch.object(gate_module(), 'REPO_ROOT', getattr(self, 'repo', gate_module().REPO_ROOT)):
+            code = gate_module().main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', '--capacity', '32', *self.FLAGS, *argv])
+        return code, out
+
+    def declared(self, *, bounds=None, **evaluator):
+        """(content, flags, sha256) of a declaration for this champion (value bound 1e-6, turn-1 logits .05 unless `bounds`; its source measurement a
+        readable file), committed under DECLARED_SUBDIR of a scratch repository that main() and --reverdict take as the checkout (self.repo, self.record)."""
+        measurement = Path(tempfile.mkdtemp(prefix='champion-measure-')) / 'spread.json';measurement.write_bytes(b'{"bf16_vs_f32_value_spread": 0.0005}\n')
+        content = N.declaration(evaluator=dict(dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=CHECKPOINT), **evaluator),
+            bounds=bounds or N.bounds(value_bound=1e-6, turn1_logit_bound=.05),
+            source_measurement=dict(path=str(measurement), sha256=hashlib.sha256(measurement.read_bytes()).hexdigest()))
+        self.record = record = N.committed(content);self.repo = record.root
+        return content, ('--declared-bounds', str(record.path), '--declared-bounds-sha256', record.sha256, '--declared-bounds-commit', record.commit), record.sha256
+
+    def reverdicted(self, report, *extra):
+        """(exit code or the SystemExit text, gate-reverdict.json or None) of --reverdict on `report` written to a new directory, the scratch
+        repository as the checkout."""
+        gate = gate_module();directory = Path(tempfile.mkdtemp(prefix='champion-declared-'));(directory / 'gate.json').write_text(json.dumps(report))
+        with patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'REPO_ROOT', self.repo):
+            try:code = gate.main(['--reverdict', str(directory / 'gate.json'), *extra])
+            except SystemExit as raised:return str(raised.code), None
+        return code, json.loads((directory / gate.REVERDICT_FILE).read_text())
+
+    def test_depth2_full_width_and_n2_equivalence_under_a_declaration(self):
+        content, flags, sha = self.declared()
+        code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9', *flags);report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'));self.assertEqual(report['evaluator']['kind'], 'champion')
+        self.assertEqual((report['header']['declared_bounds']['sha256'], report['header']['declared_bounds']['content']), (sha, content))
+        self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['logit_bound']), (1e-6, .05))
+        self.assertEqual(set(report['checks']), {'a', 'b', 'c', 'd', 'oracle_consistency', 'e', 'f'});self.assertGreater(report['checks']['f']['comparisons'], 0)
+        c = report['checks']['c']['quantities']
+        for name in ('leaf_value', 't1_value_head', 't1_own_logits', 'depth2_pass_t2_value'):self.assertGreater(c[name]['compared'], 0, name)
+        self.assertTrue(all(m['bound_rule'].startswith('declared_') for n, m in c.items() if n not in gate_module().g2.FLOORS))
+        code, out = self.main('--n2-equivalence', '--n2-k', '2', *flags);report = json.loads((out / 'n2-equivalence.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), {n: c.get('status_reasons') for n, c in report['configs'].items()})
+        self.assertEqual((report['header']['declared_bounds']['sha256'], set(report['configs']), report['status_reasons']), (sha, {'full_width', 'top2'}, []))
+        for config in report['configs'].values():
+            self.assertEqual((config['tolerance']['value_bound'], config['tolerance']['logit_bound'], config['tolerance']['q_noise_bound']), (1e-6, .05, 1e-6))
+            self.assertGreater(config['e']['roots_compared'], 0);self.assertGreater(config['discrete']['compared']['t2_status'], 0)
+
+    def d2_call(self):
+        """One depth-2 full-width call on the champion path's oracle consistency (run_call_n d2_consistency=True)."""
+        gate = gate_module();pricers = self.champion_pricers(depth=2, k=9)
+        depth2_pricer = gate.depth2_pass_pricer(pricers.module, self.ex, object(), capacity=32, actor_capacity=3, digest=True, forward=self.champion)
+        with self.engine():
+            evaluation, _ = gate.run_call_n(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=self.params, pricers=pricers,
+                depth2_pricer=depth2_pricer, frame_pricer=self.frame_pricer(), oracle=self.oracle, sample=None, block=0, context=dict(block=0, call=0),
+                d2_consistency=True)
+        return evaluation
+
+    def test_depth2_oracle_consistency_passes_clean_and_catches_corrupted_digests(self):
+        """D2_ORACLE_CONSISTENCY: clean, every leaf_child_* and leaf_walk_* field compared and equal; the depth-2 leaf walk returning one leaf's
+        parent own-view digest and another leaf's own digest one bit off FAILs exactly those two fields, and only the oracle-consistency
+        check (the pricer still equals the depth-N oracle)."""
+        evaluation = self.d2_call();result, (status, _) = self.judged(evaluation);compared = evaluation['oracle']['compared']
+        self.assertEqual(status, 'PASS', N.failing(result));self.assertTrue(evaluation['oracle']['passed'])
+        for name in ('leaf_path', 'leaf_child_known', 'leaf_child_expanded', 'leaf_child_invalid', 'leaf_child_done', 'leaf_child_own_digest', 'leaf_child_peer_digest',
+                'leaf_walk_status', 'leaf_walk_error', 'leaf_walk_digest'):
+            self.assertGreater(compared.get(name, 0), 0, name)
+        self.assertEqual(compared['leaf_child_known'], compared['leaf_path'])   # every checked leaf, re-walked
+        real = self.oracle.leaves
+        def corrupted(stack, specs, params):
+            out = dict(real(stack, specs, params));i = int(np.flatnonzero(np.asarray(out['status']) == 4)[0])
+            out['child_own_digest'] = np.array(out['child_own_digest'], copy=True);out['child_own_digest'][0, 0] ^= np.uint32(1)
+            out['digest'] = np.array(out['digest'], copy=True);out['digest'][i, 1] ^= np.uint32(1);return out
+        with patch.object(self.oracle, 'leaves', corrupted):evaluation = self.d2_call()
+        result, (status, _) = self.judged(evaluation);mismatched = {k: v for k, v in evaluation['oracle']['mismatched'].items() if v}
+        self.assertEqual((status, set(N.failing(result))), ('FAIL', {'oracle_consistency'}));self.assertTrue(evaluation['a']['passed'])
+        self.assertEqual(mismatched, dict(leaf_child_own_digest=1, leaf_walk_digest=1))
+
+    def test_depth2_gate_and_n2_headers_record_the_merged_gate_parity(self):
+        """main(): the champion depth-2 gate gates the oracle consistency and says so in merged_depth2_parity with every remaining
+        difference; --n2-equivalence without --block-invariance says child-block invariance did not run."""
+        code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9');report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'))
+        parity = report['header']['merged_depth2_parity'];oracle = report['checks']['oracle_consistency']['compared']
+        self.assertEqual((parity['mode'], parity['champion_path_additions']['d2_oracle_consistency'][:3]), ('gate', 'ran'))
+        self.assertEqual([d['name'] for d in parity['remaining_differences']], [d['name'] for d in gate_module().MERGED_DEPTH2_DIFFERENCES])
+        self.assertGreater(oracle['leaf_child_own_digest'], 0);self.assertGreater(oracle['leaf_walk_digest'], 0)
+        code, out = self.main('--n2-equivalence', '--n2-k', '2');report = json.loads((out / 'n2-equivalence.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'));parity = report['header']['merged_depth2_parity']
+        self.assertEqual((parity['mode'], parity['champion_path_additions']['child_block_invariance'][:7]), ('n2_equivalence', 'not run'))
+        self.assertEqual(parity['champion_path_additions']['merged_depth2_decision'][:3], 'ran')
+        self.assertFalse(any('block_invariance' in c for c in report['configs'].values()))
+        for name, config in report['configs'].items():   # MERGED_DEPTH2_DECISION: depth2_backups on the merged Depth2Pricer against the oracle heads
+            merged = config['e_merged_depth2'];self.assertEqual((merged['passed'], merged['rule']), (True, gate_module().MERGED_DEPTH2_DECISION), name)
+            self.assertGreater(merged['roots_compared'], 0);self.assertGreater(merged['replaced']['t2_value'], 0);self.assertGreater(merged['cells_compared'], 0)
+            self.assertEqual(merged['replaced']['unmatched_head_leaves'], 0);self.assertEqual(merged['q_noise_bound'], config['tolerance']['q_noise_bound'])
+        code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2');report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual(code, 0);self.assertNotIn('merged_depth2_parity', report['header']);self.assertNotIn('leaf_child_known', report['checks']['oracle_consistency']['compared'])
+
+    def test_the_merged_depth2_decision_catches_oracle_heads_the_merged_pricer_does_not_have(self):
+        """MERGED_DEPTH2_DECISION fails closed on the merged path alone: the depth-2 oracle's leaf heads .25 higher than the merged Depth2Pricer's
+        (the leaves only this check walks) FAIL each config's e_merged_depth2 on max |dQ|, while the pricer-against-pricer checks pass."""
+        from gpu_engine import depth2_oracle
+        real = depth2_oracle.Oracle.leaves
+        def shifted(oracle, stack, specs, params):
+            out = dict(real(oracle, stack, specs, params));out['head_value'] = np.where(np.asarray(out['status']) == 4, np.asarray(out['head_value']) + np.float32(.25), out['head_value'])
+            return out
+        with patch.object(depth2_oracle.Oracle, 'leaves', shifted):code, out = self.main('--n2-equivalence', '--n2-k', '2')
+        report = json.loads((out / 'n2-equivalence.json').read_text());self.assertEqual((code, report['status']), (1, 'FAIL'))
+        for name, config in report['configs'].items():
+            merged = config['e_merged_depth2'];self.assertFalse(merged['passed'], name);self.assertFalse(merged['q_noise_within_bound'], name)
+            self.assertTrue(config['discrete']['passed'] and config['e']['passed'] and all(m['passed'] for m in config['floats'].values()), name)
+
+    def test_n2_child_block_invariance_passes_clean_and_catches_a_child_block_dependent_pricer(self):
+        """--n2-equivalence --block-invariance: each config's Depth2Pricer at child_block 27 and 81, gated per config; a Depth2Pricer stand-in
+        whose child_block-27 frames carry every head-valued t2_value .25 higher FAILs each config on block invariance alone."""
+        g2 = gate_module().g2;code, out = self.main('--n2-equivalence', '--n2-k', '2', '--block-invariance')
+        report = json.loads((out / 'n2-equivalence.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), {n: c.get('block_invariance', {}).get('differing') for n, c in report['configs'].items()})
+        self.assertEqual(report['header']['merged_depth2_parity']['champion_path_additions']['child_block_invariance'][:3], 'ran')
+        for name, config in report['configs'].items():
+            inv = config['block_invariance'];self.assertEqual((inv['passed'], inv['discrete_equal'], inv['child_blocks'], inv['calls']), (True, True, [27, 81], 1), name)
+            self.assertGreater(inv['arrays_compared'], 10);self.assertGreater(inv['floats']['t2_value']['compared'], 0)
+            self.assertEqual(report['options'][name]['child_blocks'], [27, 81]);self.assertEqual(report['options'][name]['depth2_options']['child_block'], 81)
+        real = g2.make_pricer
+        def make(*args, **kw):
+            pricer, options = real(*args, **kw);return ChildBlockDependent(pricer), options
+        with patch.object(g2, 'make_pricer', make):code, out = self.main('--n2-equivalence', '--n2-k', '2', '--block-invariance')
+        report = json.loads((out / 'n2-equivalence.json').read_text());self.assertEqual((code, report['status']), (1, 'FAIL'))
+        for name, config in report['configs'].items():
+            inv = config['block_invariance'];self.assertEqual((inv['passed'], inv['discrete_equal'], inv['floats']['t2_value']['within_bound']), (False, True, False), name)
+            self.assertTrue(config['discrete']['passed'] and config['e']['passed'] and all(m['passed'] for m in config['floats'].values()), name)   # the compared frame is clean
+
+    def test_header_mutation_test_and_reverdict_round_trip(self):
+        """Depth 3 under a declaration (value bound 1e-6: the exact champion's own floor is 0): gate.json PASS with the header's declared_bounds
+        section beside the unchanged rules, the declared numbers in the tolerance and the measured floor beside them; mutation-test.json at the
+        declared bound with the same header, every mutant killed; --mutation-from refuses the saved calls; --reverdict reproduces the verdict
+        and the header, and refuses a section that fails its checks."""
+        gate = gate_module();content, flags, sha = self.declared();lines = []
+        code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2', '--mutation-test', '--save-oracle', *flags, lines=lines)
+        report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE))
+        self.assertEqual((code, report['status'], mutation['status']), (0, 'PASS', 'PASS'), (report.get('status_reasons'), mutation.get('survivors')))
+        header = report['header'];section = header['declared_bounds'];default = gate.header_block(report['checks'])
+        self.assertEqual(list(header), ['near_ties', 'rules_changed_after_failure', 'frozen_rule_set', 'declared_bounds'])
+        self.assertEqual({k: header[k] for k in default}, default)   # the rules changed after a failure, untouched
+        self.assertEqual((section['sha256'], section['content'], section['content_text'], section['note']), (sha, content, Path(flags[1]).read_text(), gate.DECLARED_NOTE))
+        self.assertEqual(section['evaluator'], dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=CHECKPOINT))
+        self.assertEqual((section['repo_path'], section['commit'], section['git_blob_sha1'], section['git_verification']['status']),
+            (gate.DECLARED_SUBDIR + '/champion.json', self.record.commit, N.git(self.repo, 'hash-object', flags[1]), 'verified'))
+        self.assertEqual((section['source_measurement_verification']['status'], report['status_reasons']), ('verified', []))   # nothing provisional
+        tolerance = report['tolerance'];self.assertEqual((tolerance['value_bound'], tolerance['logit_bound'], tolerance['depth1_noise_floor']), (1e-6, .05, 0.))
+        self.assertEqual(tolerance['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.);self.assertEqual(tolerance['declared_bounds']['sha256'], sha)
+        self.assertEqual((mutation['header'], mutation['value_bound'], mutation['calls'][0]['value_bound']), (header, 1e-6, 1e-6))
+        self.assertEqual(mutation['calls'][0]['value_bound_source'], "the run's declared value_bound (--declared-bounds)")
+        self.assertTrue(all(m['killed'] for m in mutation['calls'][0]['mutants'].values()))
+        start = next(x for x in lines if x['message'] == 'GATE_START');self.assertEqual(start['declared_bounds_sha256'], sha)
+        self.assertEqual(next(x for x in lines if x['message'] == 'DECLARED_BOUNDS')['sha256'], sha)
+        with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:
+            gate.main(['--out', str(Path(tempfile.mkdtemp()) / 'o'), '--mutation-from', str(out)])
+        self.assertIn('--declared-bounds run', str(raised.exception.code))
+        code, again = self.reverdicted(report, '--declared-bounds-commit', self.record.commit, '--declared-bounds-sha256', sha)
+        self.assertEqual((code, again['status'], again['header'], again['reverdict']['declared_bounds_sha256'], again['reverdict']['changed_quantities']), (0, 'PASS', header, sha, []))
+        self.assertEqual((again['reverdict']['declared_bounds_commit'], again['reverdict']['declared_bounds_reverified']['git']['status']), (self.record.commit, 'verified'))
+        verdicts = lambda r: {k: (m.get('passed'), m.get('bound'), m.get('bound_rule')) for k, m in r['checks']['c']['quantities'].items()}
+        self.assertEqual(verdicts(again), verdicts(report));self.assertEqual(again['tolerance']['declared_bounds'], tolerance['declared_bounds'])
+        for case, (change, extra, message) in self.tampered(report).items():
+            with self.subTest(case):
+                r = copy.deepcopy(report);change(r);text, out = self.reverdicted(r, *extra)
+                self.assertIsNone(out);self.assertIn(message, text);self.assertIn('fail closed', text)
+
+    def tampered(self, report):
+        """{case: (edit of the declared gate.json, extra --reverdict arguments, the refusal it must meet)}: the recorded text, sha256, content,
+        blob, repo path and bounds edited; a section or every section removed; another evaluator; a later run start; a consistent forgery (new
+        text, its sha256 and blob, matching tolerance numbers) that the committed record contradicts; a commit or sha256 given that is not the
+        recorded one."""
+        gate = gate_module();h = lambda r: r['header']['declared_bounds']
+        def forged(r):
+            content = copy.deepcopy(h(r)['content']);content['bounds'].update(value_bound=.5, turn1_logit_bound=.9);text = json.dumps(content, indent=1)
+            h(r).update(content=content, content_text=text, sha256=hashlib.sha256(text.encode()).hexdigest(), git_blob_sha1=gate.git_blob_sha1(text.encode()))
+            r['tolerance'].update(value_bound=.5, logit_bound=.9);r['tolerance']['declared_bounds']['sha256'] = h(r)['sha256']
+        def stripped(r):
+            r['header'].pop('declared_bounds');r['tolerance'].pop('declared_bounds')
+        return dict(
+            text=(lambda r: h(r).__setitem__('content_text', h(r)['content_text'].replace('1e-06', '0.5')), (), 'does not hash'),
+            sha=(lambda r: h(r).__setitem__('sha256', '0' * 64), (), 'does not hash'),
+            blob=(lambda r: h(r).__setitem__('git_blob_sha1', '0' * 40), (), 'git_blob_sha1'),
+            content=(lambda r: h(r)['content']['bounds'].__setitem__('value_bound', .5), (), 'content differs'),
+            bound=(lambda r: r['tolerance'].__setitem__('value_bound', .5), (), 'not the declared'),
+            tolerance_sha=(lambda r: r['tolerance']['declared_bounds'].__setitem__('sha256', '0' * 64), (), 'same sha256'),
+            header=(lambda r: r['header'].pop('declared_bounds'), (), 'without header.declared_bounds'),
+            stripped=(stripped, (), 'left traces'),
+            repo_path=(lambda r: h(r).__setitem__('repo_path', gate.DECLARED_SUBDIR + '/other.json'), (), 'has no'),
+            outside=(lambda r: h(r).__setitem__('repo_path', 'gpu_engine/champion.json'), (), 'not under'),
+            evaluator=(lambda r: r['evaluator'].__setitem__('archive_sha256', '6' * 64), (), 'evaluator.archive_sha256'),
+            started=(lambda r: h(r).__setitem__('run_started_at', '2026-10-01T00:00:00+00:00'), (), 'before the recorded run start'),
+            forged=(forged, (), 'holds'),
+            other_commit=(lambda r: None, ('--declared-bounds-commit', 'b' * 40), 'is not the recorded'),
+            other_sha=(lambda r: None, ('--declared-bounds-sha256', '0' * 64), 'is not the recorded'))
+
+    def test_far_from_frozen_bounds_reach_every_site(self):
+        """Depth 3, k 2, --block-invariance and --mutation-test under a declaration far from the frozen numbers (the exact champion's floor is 0,
+        so the frozen value bound is 0; here value 1e-3, turn-1 logits .3, near-tie Q 5e-4, deeper .4): (b)'s values and root prior, every (c)
+        quantity, block invariance's values and logits, (e)'s q_noise_bound (distinct from the value bound), (f), topk_boundary's gap count and
+        every mutation verdict take the declared numbers, and the run passes with every mutant killed."""
+        gate = gate_module();numbers = N.bounds(value_bound=1e-3, turn1_logit_bound=.3, near_tie_q_bound=5e-4, deeper_logit_rule=None, deeper_logit_bound=.4)
+        _, flags, sha = self.declared(bounds=numbers)
+        code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2', '--block-invariance', '--mutation-test', *flags)
+        report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE));checks = report['checks']
+        self.assertEqual((code, report['status'], mutation['status']), (0, 'PASS', 'PASS'), (report.get('status_reasons'), mutation.get('survivors')))
+        self.assertEqual(report['tolerance']['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.)
+        self.assertEqual((checks['b']['values']['t1_value']['bound'], checks['b']['values']['root_peer_logits']['bound']), (1e-3, .3))   # (b)
+        for name, m in checks['c']['quantities'].items():   # (c)
+            if name not in gate.g2.FLOORS:self.assertEqual(m['bound'], .4 if gate.deeper_logit(name, 3) else .3 if gate.g2.is_logit(name) else 1e-3, name)
+        floats = checks['block_invariance']['floats'];self.assertEqual((floats['leaf_value']['bound'], floats['t1_own_logits']['bound']), (1e-3, .3))   # block invariance
+        self.assertEqual((checks['e']['q_noise_bound'], report['tolerance']['q_noise_bound'], checks['f']['value_bound']), (5e-4, 5e-4, 1e-3))   # (e), (f)
+        topk = lambda bound: gate.merge_topk_n([c.get('topk') for c in report['calls']], logit_bound=bound)
+        self.assertEqual(report['topk_boundary'], topk(.3));self.assertNotEqual(topk(.3), topk(gate.g2.LOGIT_BOUND))   # the gap count under .3, not 0.1
+        call = mutation['calls'][0];recorded = dict(declared_bounds_sha256=sha, logit_bound=.3, q_noise_bound=5e-4)
+        self.assertEqual({k: call['clean'][k] for k in recorded}, recorded);self.assertEqual(call['value_bound'], 1e-3)
+        for name, verdict in call['mutants'].items():
+            self.assertTrue(verdict['killed'], name);self.assertEqual({k: verdict[k] for k in recorded}, recorded, name);self.assertEqual(verdict['value_bound'], 1e-3, name)
+
+    def test_a_declared_root_logit_bound_reaches_every_root_site(self):
+        """Depth 3, k 2, k1_opp 1 (a root selection that prunes) and --block-invariance under turn1_logit_bound .3 with root_logit_bound .05 (and --mutation-test), then
+        swapped: the root opponent's prior takes root_logit_bound at (b), (c), depth2_pass and block invariance (bound_rule
+        declared_root_logit_bound) and in topk_boundary's root gap count; every turn-1 prior and every other quantity keeps its declared
+        number; the tolerance, its applied section and table, the TOLERANCE and DECLARED_BOUNDS log lines and every mutation verdict record it.
+        --reverdict re-judges the root under it: a saved root difference .1, consistent with a saved turn-1 bound .3, FAILs at .05 while the
+        same on the turn-1 priors passes; a tolerance.root_logit_bound off the declared one (or none) is refused."""
+        gate = gate_module()
+        for turn1, root, mutation in ((.3, .05, True), (.05, .3, False)):
+            with self.subTest(turn1_logit_bound=turn1, root_logit_bound=root):
+                _, flags, sha = self.declared(bounds=N.bounds(value_bound=1e-3, turn1_logit_bound=turn1, root_logit_bound=root, deeper_logit_rule=None, deeper_logit_bound=.4))
+                lines = [];extra = ('--mutation-test',) if mutation else ()
+                code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2', '--k1-opp', '1', '--block-invariance', *extra, *flags, lines=lines)
+                report = json.loads((out / 'gate.json').read_text());tolerance = report['tolerance']
+                self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'))
+                for check, name in N.ROOT_SITES:
+                    m = N.site(report, check, name);self.assertGreater(m['compared'], 0, (check, name))
+                    self.assertEqual((m['bound'], m['bound_rule']), (root, 'declared_root_logit_bound'), (check, name))
+                for check, name in N.TURN1_SITES:self.assertEqual(N.site(report, check, name)['bound'], turn1, (check, name))
+                for name, m in report['checks']['c']['quantities'].items():
+                    if name not in gate.g2.FLOORS:
+                        self.assertEqual(m['bound'], root if name in gate.ROOT_LOGITS else .4 if gate.deeper_logit(name, 3) else turn1 if gate.g2.is_logit(name) else 1e-3, name)
+                rows = {(r['check'], r['quantity']): r['bound'] for r in tolerance['table']};self.assertEqual({k: rows[k] for k in N.ROOT_SITES}, dict.fromkeys(N.ROOT_SITES, root))
+                self.assertEqual((tolerance['logit_bound'], tolerance['root_logit_bound'], tolerance['declared_bounds']['applied']['root_logit_bound']), (turn1, root, root))
+                gaps = [g for c in report['calls'] for g in c['topk']['root']['opp']['gaps']];topk = report['topk_boundary']['root']['opp']
+                self.assertEqual((topk['selections'], topk['gap_below_logit_bound'], report['topk_boundary']['root_logit_bound']), (len(gaps), sum(g < root for g in gaps), root))
+                self.assertEqual(report['topk_boundary'], gate.merge_topk_n([c.get('topk') for c in report['calls']], logit_bound=turn1, root_logit_bound=root))
+                self.assertNotEqual(sum(g < root for g in gaps), sum(g < turn1 for g in gaps))   # the root's count under root_logit_bound, not turn1_logit_bound
+                self.assertEqual(next(x for x in lines if x['message'] == 'TOLERANCE')['root_logit_bound'], root)
+                self.assertEqual(next(x for x in lines if x['message'] == 'DECLARED_BOUNDS')['bounds']['root_logit_bound'], root)
+                if not mutation:continue
+                call = json.loads((out / gate.MUTATION_FILE).read_text())['calls'][0];recorded = dict(declared_bounds_sha256=sha, logit_bound=turn1, root_logit_bound=root, q_noise_bound=1e-3)
+                self.assertEqual({k: call['clean'][k] for k in recorded}, recorded)
+                for name, verdict in call['mutants'].items():self.assertTrue(verdict['killed'], name);self.assertEqual({k: verdict[k] for k in recorded}, recorded, name)
+                code, again = self.reverdicted(report, '--declared-bounds-commit', self.record.commit, '--declared-bounds-sha256', sha)
+                self.assertEqual((code, again['status'], again['reverdict']['changed_quantities']), (0, 'PASS', []))
+                def saved(names):
+                    r = copy.deepcopy(report)
+                    for name in names:r['checks']['c']['quantities'][name].update(bound=turn1, max_abs_difference=.1, ratio_to_bound=.1 / turn1, within_bound=True, passed=True)
+                    return r
+                code, again = self.reverdicted(saved(gate.ROOT_LOGITS));quantities = again['checks']['c']['quantities']
+                self.assertEqual((code, again['status'], {c['quantity'] for c in again['reverdict']['changed_quantities']}), (1, 'FAIL', set(gate.ROOT_LOGITS)))
+                for name in gate.ROOT_LOGITS:self.assertEqual({k: quantities[name][k] for k in ('bound', 'bound_rule', 'within_bound', 'passed')}, dict(bound=root,
+                    bound_rule='declared_root_logit_bound', within_bound=False, passed=False), name)
+                code, again = self.reverdicted(saved(('t1_own_logits', 'depth2_pass_t1_own_logits')))
+                self.assertEqual((code, again['status'], again['checks']['c']['quantities']['t1_own_logits']['bound']), (0, 'PASS', turn1))
+                for change in (lambda r: r['tolerance'].__setitem__('root_logit_bound', turn1), lambda r: r['tolerance'].pop('root_logit_bound')):
+                    r = copy.deepcopy(report);change(r);text, again = self.reverdicted(r)
+                    self.assertIsNone(again);self.assertIn('tolerance.root_logit_bound', text);self.assertIn('fail closed', text)
+
+    def test_the_declared_guard_round_trips_through_reverdict(self):
+        """The champion's declared depth-2 gate with --block-invariance (one parameter set, every digest matching, the guard applied): every
+        guarded quantity has its GUARD_DECLARED_RULE mode, digest_certified except c.depth2_pass_t1_value (gated: no certifying digest), and the
+        header's declared_bounds carries the rule. --reverdict re-derives the same modes from the saved digest findings and evidence and refuses
+        a saved mode flipped either way, or a saved digest finding or per-position count that no longer supports the saved mode."""
+        gate = gate_module();_, flags, sha = self.declared()
+        code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9', '--block-invariance', *flags);report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'));self.assertIsNotNone(report['tolerance']['guard_bound'])
+        record = report['tolerance']['guard_declared']
+        certified = ('b.t1_value', 'c.t1_value_head', 'c.leaf_value', 'c.depth2_pass_t2_value', 'block_invariance.t1_value', 'block_invariance.leaf_value')
+        self.assertEqual(record['modes'], dict(dict.fromkeys(certified, 'digest_certified'), **{'c.depth2_pass_t1_value': 'gated'}))
+        self.assertEqual((record['gated_no_certifying_digest'], record['rule']), (['c.depth2_pass_t1_value'], gate.GUARD_DECLARED_RULE))
+        self.assertEqual(report['header']['declared_bounds']['guard_rule'], gate.GUARD_DECLARED_RULE)
+        code, again = self.reverdicted(report, '--declared-bounds-commit', self.record.commit, '--declared-bounds-sha256', sha)
+        self.assertEqual((code, again['status'], again['tolerance']['guard_declared'], again['reverdict']['changed_quantities'], again['reverdict']['guard_declared_rule']),
+            (0, 'PASS', record, [], gate.GUARD_DECLARED_RULE))
+        for check in ('b', 'c', 'block_invariance'):self.assertEqual(again['checks'][check], report['checks'][check], check)
+        mode = lambda check, key, name, value: lambda r: r['checks'][check][key][name].__setitem__('guard_mode', value)
+        for case, change in dict(b=mode('b', 'values', 't1_value', 'gated'), c=mode('c', 'quantities', 't1_value_head', 'gated'),
+                c_no_digest=mode('c', 'quantities', 'depth2_pass_t1_value', 'digest_certified'), invariance=mode('block_invariance', 'floats', 'leaf_value', 'gated'),
+                digest_finding=lambda r: r['checks']['a']['mismatched'].__setitem__('t1_digest_own', 1),
+                invariance_evidence=lambda r: r['checks']['block_invariance']['floats']['t1_value']['guard_evidence'].__setitem__('digest_mismatched', 1),
+                inexact_evidence=lambda r: r['checks']['b']['values']['t1_value']['guard_evidence'].__setitem__('value_positions_outside_digest_inexact', 1)).items():
+            with self.subTest(case):
+                r = copy.deepcopy(report);change(r);text, again = self.reverdicted(r)
+                self.assertIsNone(again);self.assertIn('saved guard modes differ', text);self.assertIn('fail closed', text)
+
+    def test_a_run_without_git_is_provisional_and_the_audit_requires_verified(self):
+        """The committed declaration's bytes in a checkout that is not a git work tree (an exported image): the run keeps PASS and exit 0 with
+        'provisional: git_verification ...' in status_reasons; --reverdict alone keeps the reason; the audit, --reverdict --declared-bounds-commit,
+        refuses there (it requires verified) and passes on the work tree that holds the commit, where the reason clears."""
+        gate = gate_module();_, flags, sha = self.declared();repo, commit = self.repo, self.record.commit
+        exported = Path(tempfile.mkdtemp(prefix='champion-exported-'));target = exported / gate.DECLARED_SUBDIR / 'champion.json';target.parent.mkdir(parents=True)
+        target.write_bytes(self.record.path.read_bytes());self.repo = exported
+        code, out = self.main('--depth', '2', '--k-own', '2', '--k-opp', '2', '--declared-bounds', str(target), *flags[2:]);report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status'], report['passed'], report['header']['declared_bounds']['git_verification']['status']), (0, 'PASS', True, 'not verifiable here'))
+        self.assertEqual(len(report['status_reasons']), 1);self.assertTrue(report['status_reasons'][0].startswith('provisional: git_verification not verifiable here'))
+        text, again = self.reverdicted(report, '--declared-bounds-commit', commit);self.assertIsNone(again);self.assertIn('requires git_verification verified', text)
+        code, again = self.reverdicted(report);self.assertEqual((code, again['status']), (0, 'PASS'));self.assertTrue(again['status_reasons'][0].startswith('provisional: git_verification'))
+        self.repo = repo;code, again = self.reverdicted(report, '--declared-bounds-commit', commit, '--declared-bounds-sha256', sha)
+        self.assertEqual((code, again['status'], again['status_reasons'], again['reverdict']['declared_bounds_reverified']['git']['status']), (0, 'PASS', [], 'verified'))
+
+    def test_the_resolved_evaluator_is_matched_again(self):
+        """The flags name the declared champion but load_roots resolves another identity (a precision the header reports differently): refused
+        after loading, before any pricing."""
+        _, flags, _ = self.declared();roots = self.roots;self.roots = lambda: dict.__setitem__((r := roots()).evaluator, 'precision', 'float32') or r
+        try:
+            with self.assertRaises(SystemExit) as raised:self.main(*flags)
+        finally:self.roots = roots
+        self.assertIn('not for the resolved evaluator', str(raised.exception.code));self.assertIn('evaluator.precision', str(raised.exception.code))
+
+    def test_a_declaration_for_another_evaluator_is_refused(self):
+        for key, value in (('precision', 'float32'), ('archive_sha256', 'e' * 64), ('kind', 'v2'), ('checkpoint_sha256', 'b' * 64)):
+            with self.subTest(key):
+                _, flags, _ = self.declared(**{key: value});out = Path(tempfile.mkdtemp(prefix='champion-cli-')) / 'never'
+                with patch.object(gate_module(), 'load_roots', side_effect=AssertionError('loaded')), patch.object(gate_module(), 'REPO_ROOT', self.repo), \
+                        self.assertRaises(SystemExit) as raised:
+                    gate_module().main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', *self.FLAGS, *flags])
+                self.assertIn(f'evaluator.{key}', str(raised.exception.code));self.assertFalse(out.exists())
+
+
+def gate_module():
+    from gpu_engine import d3_depthn_gate
+    return d3_depthn_gate
+
+
+class ChildBlockDependent:
+    """A Depth2Pricer stand-in that depends on its child block: the real pricer, except that child_block-27 frames carry every head-valued
+    t2_value .25 higher."""
+    def __init__(self, pricer):self.pricer, self.child_block, self.capacity = pricer, pricer.child_block, pricer.capacity
+
+    def __getattr__(self, name):return getattr(self.pricer, name)   # widths and options, as the real pricer's
+
+    def price(self, *args, **kwargs):
+        frame = self.pricer.price(*args, **kwargs)
+        if self.child_block != 27:return frame
+        value = np.array(frame.t2_value, copy=True);value[np.asarray(frame.t2_status) == 4] += np.float32(.25)
+        return replace(frame, t2_value=value)
 
 
 # ---------------------------------------------------------------- the tools' flags

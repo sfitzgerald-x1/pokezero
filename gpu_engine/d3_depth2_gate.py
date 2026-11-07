@@ -521,16 +521,19 @@ def gate_status(result, *, sampled=False, unavailable=None, skipped=None):
     return ('PASS_SAMPLED' if sampled else 'PASS'), [f'skipped: {k} ({v})' for k, v in sorted((skipped or {}).items())]
 
 
-def summarize(calls, *, spread_p10=None):
+def summarize(calls, *, spread_p10=None, bounds=None):
     """Merge per-call evaluations into the gate's checks under the run's evaluator-relative bounds (tolerance_rule):
     (b) discrete exact + D3 floats, (c) head quantities against the oracle, block invariance floats; spread_p10 is the
-    p10 cell_a2_spread of the same frames (the misplacement guard; None skips it)."""
+    p10 cell_a2_spread of the same frames (the misplacement guard; None skips it). bounds: None (this gate, always) or
+    d3_depthn_gate's --declared-bounds hook, rule -> rule with the declared numbers (and optionally q_noise_bound)."""
     have = lambda key: bool(calls) and all(key in x for x in calls)   # offline rechecks may lack a check's inputs
     checks = {}
     for key, name in (('a', 'a'), ('d', 'd'), ('oracle', 'oracle_consistency')):
         if have(key):checks[name] = merge_findings([c[key] for c in calls])
     quantities = merge_numeric([x['c'] for x in calls]) if have('c') else {}
     rule = tolerance_rule(quantities.get('depth1_noise_floor'), spread_p10);table = []
+    if bounds is not None:rule = bounds(rule)
+    q_noise = rule.get('q_noise_bound', rule['value_bound'])   # tolerance_rule sets none: the value bound, as always
     if have('b'):
         b = merge_findings([c['b'] for c in calls]);values = merge_numeric([x['b'].get('values', {}) for x in calls])
         for name, m in values.items():finalize_numeric(m, bound_for(name, rule), guard_for(name, rule));table.append(_row('b', name, m))
@@ -538,10 +541,11 @@ def summarize(calls, *, spread_p10=None):
         b['passed'] = b['passed'] and all(v['passed'] for v in values.values());checks['b'] = b
     if have('c'):checks['c'] = _heads_check(quantities, rule, calls, table)
     if any('e' in x for x in calls):
-        checks['e'] = e = merge_decisions([x['e'] for x in calls if 'e' in x], q_noise_bound=rule['value_bound'])
-        rule.update(q_noise_bound=rule['value_bound'], max_abs_delta_q=e.get('max_abs_delta_q'), near_tie_roots=e.get('near_tie_roots'),
+        checks['e'] = e = merge_decisions([x['e'] for x in calls if 'e' in x], q_noise_bound=q_noise)
+        rule.update(q_noise_bound=q_noise, max_abs_delta_q=e.get('max_abs_delta_q'), near_tie_roots=e.get('near_tie_roots'),
             near_tie_flips=e.get('near_tie_flips'), q_noise_rule='(e): a root is a numerical near-tie when its top-two completed-Q gap in either frame '
-                'is <= q_noise_bound (= the value bound); its flips are reported, not gated; max |dQ| must stay <= q_noise_bound')
+                f'is <= q_noise_bound ({"= the value bound" if "q_noise_bound" not in rule else "the near_tie_q_bound the hook declared"}); its flips are '
+                'reported, not gated; max |dQ| must stay <= q_noise_bound')
     if any('invariance' in x for x in calls):
         checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())], rule=rule)
         table.extend(_row('block_invariance', name, m) for name, m in checks['block_invariance']['floats'].items())
