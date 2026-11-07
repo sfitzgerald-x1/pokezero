@@ -1376,6 +1376,15 @@ class ChoicesTests(FixtureN, unittest.TestCase):
             return gate.OracleTree(frame, changed)
         self.assertIs(tree([rows[0]], None).solve(*key)[0], gate.MISSING);self.assertIs(tree([rows[0]], rows[1]).solve(*key)[0], None)
         self.assertIs(tree([rows[0]], rows[1]).solve(*gate._up(frame, key))[0], None)
+        layout = gate.tagged_frame(frame)[1];identity = lambda drop, error: gate.IdentityTree(tree(drop, error), layout, gate.Intern())   # read identity: the same order
+        self.assertIs(identity([rows[0]], None).solve(*key)[0], gate.MISSING);self.assertIs(identity([rows[0]], rows[1]).solve(*key)[0], None)
+        self.assertIs(identity([rows[0]], rows[1]).solve(*gate._up(frame, key))[0], None)
+        sampled_out = tree([rows[0]], None)   # a leaf the oracle did not compute: unsampled, read identity fails closed; sampled, it skips the node
+        hidden = gate.read_identity_n(frame, data, self.requests, backups=FakeBackupsN, tree=sampled_out)
+        self.assertEqual((hidden['passed'], hidden['mismatched_nodes']), (False, 0));self.assertGreater(hidden['not_comparable'], 0)
+        self.assertTrue(any('could not name' in r for r in hidden['reasons']))
+        self.assertTrue(gate.read_identity_n(frame, data, self.requests, backups=FakeBackupsN, tree=sampled_out, sampled=True)['passed'])
+        clean = gate.read_identity_n(frame, data, self.requests, backups=FakeBackupsN);self.assertEqual((clean['passed'], clean['not_comparable']), (True, 0))
 
     # ---- read identity (the re-review's C2), rules that edit their grid or use the priors, matching by action
 

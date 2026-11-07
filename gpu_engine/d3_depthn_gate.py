@@ -738,7 +738,7 @@ def choice_check_n(frame, data, requests, *, context=None, backups=None, sampled
             result['comparisons'] += 1;result[kind + '_comparisons'] += 1;gaps.append(min(g for g in (gap_pricer, gap_oracle, math.inf) if g is not None))
             if got != want:result['differing'].append(dict(where, kind=kind, own_action=row, actions=[got, want], gap_pricer=gap_pricer, gap_oracle=gap_oracle))
     result.update(_gaps=np.asarray(gaps, np.float64), _node_dv=np.asarray(dvs, np.float64), _node_dq=np.asarray(dqs, np.float64), largest_grid_differences=largest,
-        read_identity=read_identity_n(frame, data, requests, backups=backups, tree=tree, context=context, nodes=nodes))
+        read_identity=read_identity_n(frame, data, requests, backups=backups, tree=tree, context=context, nodes=nodes, sampled=sampled))
     return result
 
 
@@ -927,9 +927,10 @@ READ_IDENTITY = ('read identity (gated, exact, rule-independent): a host copy of
     'never arithmetic on values). It certifies WHICH child every grid entry reads, at every ply, whatever the per-node rule')
 
 
-def read_identity_n(frame, data, requests, *, backups, tree=None, context=None, nodes=None, capacity=TAG_CAPACITY):
-    """READ_IDENTITY for ONE call: the tagged pricer frame through `backups` against IdentityTree over `tree` (the oracle's data). Returns
-    dict(passed, nodes, entries, mismatched_nodes, one_sided, not_comparable, both_unpriced, first_mismatches (decoded reads), tags)."""
+def read_identity_n(frame, data, requests, *, backups, tree=None, context=None, nodes=None, capacity=TAG_CAPACITY, sampled=False):
+    """READ_IDENTITY for ONE call: the tagged pricer frame through `backups` against IdentityTree over `tree` (the oracle's data). Unsampled, a
+    node the oracle cannot name (a leaf it did not compute) fails closed, as in (f). Returns dict(passed, reasons, nodes, entries,
+    mismatched_nodes, one_sided, not_comparable, both_unpriced, first_mismatches (decoded reads), the guards' counts, tags)."""
     out = dict(nodes=0, entries=0, mismatched_nodes=0, one_sided=0, not_comparable=0, both_unpriced=0, first_mismatches=[], rule=READ_IDENTITY)
     captured, named, owners = set(), set(), collections.defaultdict(set)
     try:
@@ -959,7 +960,8 @@ def read_identity_n(frame, data, requests, *, backups, tree=None, context=None, 
         first_collisions=[dict(tag=tag, nodes=[list(k) for k in keys[:4]]) for tag, keys in list(shared.items())[:FIRST]])
     reasons = ([] if out['injective'] else [f'read identity injectivity: {len(captured)} distinct tags captured for {len(named)} distinct leaves, terminals and '
         'interior nodes read (a cast or clamp collapsed tags, or reads repeat)']) + ([] if not shared else [f'read identity: {len(shared)} interned tag(s) '
-        'shared by distinct interior nodes (the tag -> node map is not one-to-one)'])
+        'shared by distinct interior nodes (the tag -> node map is not one-to-one)']) + ([f'read identity: {out["not_comparable"]} node(s) the oracle '
+        'could not name in an unsampled run (fail closed)'] if out['not_comparable'] and not sampled else [])
     out.update(passed=out['mismatched_nodes'] == 0 and not reasons, reasons=reasons)   # one-sided nodes are counted among the mismatched
     return out
 
