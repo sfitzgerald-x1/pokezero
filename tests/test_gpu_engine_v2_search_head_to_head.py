@@ -211,9 +211,9 @@ class ChampionMirrorTests(unittest.TestCase):
         legal = np.zeros((2, 9), bool);legal[:, :2] = True
         inputs = {'numeric_features': np.zeros((2, 2), np.float32)}
         out = tests.search('average', grids).choose(None, [0, 1], [0, 0], np.zeros((2, 9), np.float32), legal, inputs,
-            np.asarray([1, 1]), fallback_actions=np.asarray([0, 0]))
+            np.asarray([1, 1]), fallback_actions=np.asarray([0, 1]))
         self.assertEqual(out[0][0], 0);self.assertFalse(out[0][1]['searched'])    # refused: the greedy fallback, not raw 1
-        self.assertEqual(out[1][0], 0)                                              # searched: averaging argmax
+        self.assertEqual(out[1][0], 0);self.assertTrue(out[1][1]['searched'])     # searched: averaging argmax, not its fallback 1
         raw = tests.search('raw', grids).choose(None, [1], [0], np.zeros((1, 9), np.float32), legal[:1], {'numeric_features': np.zeros((1, 2))},
             np.asarray([1]), fallback_actions=np.asarray([0]))
         self.assertEqual(raw[0][0], 1)                                              # the plumbing reduction replays the raw sample
@@ -269,6 +269,16 @@ class NearTerminalTests(unittest.TestCase):
             self.assertEqual(r['unconfident'], dict(decisions=1, agreement=1.0, mean_abs_value=.2))   # the loss, |v| .2, right sign
             self.assertEqual(compare.near_terminal(self.write(root, games, decisions(35, 15)))['verdict'], 'FAIL')
             self.assertEqual(compare.near_terminal(self.write(root, games, decisions(40, 0)))['verdict'], 'INCONCLUSIVE')
+
+    def test_seat_one_and_window_edges(self):
+        # A in seat 1 on both streams: stream 5 seat 1 won (A won), stream 6 seat 0 won (A lost). Terminal frame 20, so a
+        # decision at frame 17 (3 frames out) counts and one at frame 16 (4 out) doesn't; the dropped ones carry the wrong sign.
+        games = dict(streams=np.asarray([5, 6]), status=np.asarray([1, 1]), winner=np.asarray([1, 0]), terminal_frame=np.asarray([20, 20]))
+        won = [dict(frame=17, searched=True, root_value=.9)] * 50 + [dict(frame=16, searched=True, root_value=-.9)] * 2
+        lost = [dict(frame=19, searched=True, root_value=-.9), dict(frame=16, searched=True, root_value=.9)]
+        with tempfile.TemporaryDirectory() as root:
+            r = compare.near_terminal(self.write(root, games, [dict(stream=5, a_side=1, decisions=won), dict(stream=6, a_side=1, decisions=lost)]))
+        self.assertEqual(r['verdict'], 'PASS');self.assertEqual(r['confident'], dict(decisions=51, agreement=1.0, mean_abs_value=.9))
 
 
 class CompareTests(unittest.TestCase):
