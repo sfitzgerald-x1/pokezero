@@ -23,6 +23,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+import jax
 import jax.numpy as j
 import numpy as np
 
@@ -189,6 +190,34 @@ def simple_requests(ex, specs):
     return requests, worlds
 
 
+def legacy_stack(requests, worlds):
+    """depth2_oracle.stack before its `size` option (4ca092b3), verbatim but for the name: stack(size=None) must equal it byte for byte."""
+    requests, worlds = tuple(requests), tuple(worlds)
+    if len(requests) != len(worlds):raise ValueError('one materialized world pair per request required')
+    rows, states, publics, owner, learner, opponent = {}, [], [], [], [], []
+    for q, (request, pair) in enumerate(zip(requests, worlds)):
+        if len(pair) != 2:raise ValueError('two materialized worlds per request required')
+        for wi, world in enumerate(pair):
+            if world.state is None:continue
+            rows[(q, wi)] = len(states)
+            states.append(world.state);publics.append(world.public)
+            owner.append(int(request.plans.root.address.owner))
+            learner.append(int(request.learner_actor));opponent.append(int(request.opponent_actor))
+    owner, learner, opponent = (np.asarray(x, np.int32) for x in (owner, learner, opponent))
+    if not states:return reference.Stack(rows, None, None, None, owner, learner, opponent)
+    size = reference.bucket(len(states));states = states + [states[0]] * (size - len(states));publics = publics + [publics[0]] * (size - len(publics))
+    pack = lambda *leaves: np.stack([np.asarray(x) for x in leaves])
+    states = jax.device_put(jax.tree.map(pack, *jax.device_get(states)))
+    publics = jax.device_put(jax.tree.map(pack, *jax.device_get(publics)))
+    padded = lambda x: np.concatenate([x, np.repeat(x[:1], size - len(x))])
+    return reference.Stack(rows, states, publics, j.asarray(padded(owner)), owner, learner, opponent)
+
+
+def stack_leaves(stack):
+    """A Stack's device arrays as host arrays, in a fixed order (states, publics, owners)."""
+    return [np.asarray(x) for x in jax.tree.leaves((stack.states, stack.publics, stack.owners))]
+
+
 class OracleTests(unittest.TestCase):
     recipe = v5_gumbel.Recipe(7)
 
@@ -313,6 +342,54 @@ class OracleTests(unittest.TestCase):
         first = results[0]
         for other in results[1:]:
             self.assertEqual(first[1], other[1]);self.assertEqual(first[3], other[3])
+            for a, b in ((first[2], other[2]), (first[4], other[4])):
+                self.assertEqual(set(a), set(b))
+                for key in a:np.testing.assert_array_equal(a[key], b[key], err_msg=key)
+        self.assertGreater(len(first[3]), 100)
+
+    def test_stack_size_pads_to_exactly_size_with_row_zero(self):
+        """stack(size=): the row axis is exactly `size`, the padding rows repeat row 0, and `rows` and every host array are unchanged;
+        size=None is byte-identical to the stack before the option (legacy_stack); a size that is not a power of two, is under 8 or is
+        below the materialized rows raises (never truncates)."""
+        ex = executor();requests, worlds = simple_requests(ex, tuple((i % 3, i % 2, (i, i + 50)) for i in range(5)))
+        worlds = list(worlds);worlds[2] = (worlds[2][0], SimpleNamespace(state=None, public=None))   # a materialization refusal: 9 rows
+        base, legacy = reference.stack(requests, worlds), legacy_stack(requests, worlds)
+        self.assertEqual(base.rows, legacy.rows);self.assertNotIn((2, 1), base.rows);self.assertEqual(len(base.rows), 9)
+        for x, y in zip(stack_leaves(base) + [base.owner, base.learner, base.opponent], stack_leaves(legacy) + [legacy.owner, legacy.learner, legacy.opponent]):
+            self.assertEqual((x.shape, x.dtype), (y.shape, y.dtype));self.assertEqual(x.tobytes(), y.tobytes())
+        self.assertEqual(base.states.value.shape[0], 16)   # bucket(9)
+        for size in (16, 32, 128):
+            with self.subTest(size=size):
+                fixed = reference.stack(requests, worlds, size=size);self.assertEqual(fixed.rows, base.rows)
+                for name in ('owner', 'learner', 'opponent'):
+                    x, y = getattr(fixed, name), getattr(base, name);self.assertEqual((x.dtype, x.tobytes()), (y.dtype, y.tobytes()))
+                for x, y in zip(stack_leaves(fixed), stack_leaves(base)):
+                    self.assertEqual(x.shape, (size,) + y.shape[1:]);self.assertEqual(x[:9].tobytes(), y[:9].tobytes())
+                    self.assertEqual(x[9:].tobytes(), np.repeat(x[:1], size - 9, axis=0).tobytes())
+        for size in (8, 12, 24, 4, 0, -8, 16., True, '16'):   # 8 < 9 rows; not a power of two; under 8; not an int
+            with self.subTest(size=size), self.assertRaises(ValueError):reference.stack(requests, worlds, size=size)
+        empty = reference.stack([], [], size=8);self.assertEqual((empty.rows, empty.states), ({}, None))
+        with self.assertRaises(ValueError):reference.stack([], [], size=12)
+
+    def test_a_fixed_stack_size_changes_no_result(self):
+        """The oracle over stacks of 12 rows padded to 16 (bucket), 32 and 128: every root, child and leaf result is identical (no spec
+        indexes a padding row)."""
+        specs = tuple((mode, i % 2, (70 + i, 90 + i)) for i, mode in enumerate((0, 3, 8, 9, 11, 12)))
+        ex = executor();requests, worlds = simple_requests(ex, specs);results = []
+        with patch.object(batch.v5_model, 'forward', side_effect=forward):
+            oracle = reference.Oracle(ex, object(), chunk=8)
+            for size in (None, 32, 128):
+                stack = reference.stack(requests, worlds, size=size);self.assertEqual(stack.states.value.shape[0], size or 16)
+                roots, cells, children, leaves = reference.enumerate_specs(oracle, stack, requests, self.recipe, PARAMS)
+                results.append((roots, cells, children, leaves, oracle.leaves(stack, leaves, PARAMS)))
+        first = results[0]
+        for other in results[1:]:
+            self.assertEqual(first[1], other[1]);self.assertEqual(first[3], other[3]);self.assertEqual(set(first[0]), set(other[0]))
+            for key, root in first[0].items():
+                for name, value in root.items():
+                    if isinstance(value, dict):
+                        for k in value:np.testing.assert_array_equal(value[k], other[0][key][name][k], err_msg=(key, name, k))
+                    else:np.testing.assert_array_equal(value, other[0][key][name], err_msg=(key, name))
             for a, b in ((first[2], other[2]), (first[4], other[4])):
                 self.assertEqual(set(a), set(b))
                 for key in a:np.testing.assert_array_equal(a[key], b[key], err_msg=key)
