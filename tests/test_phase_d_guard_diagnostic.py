@@ -9,8 +9,12 @@ class GuardDiagnosticTests(unittest.TestCase):
             volatiles=['encore'],pokemon=[dict(condition='12/100 slp')],materializationBlockers=['toxic-stage-unknown'])))
         c=payload_checks(request,payload,['|switch|p1a: x|X|1/2','|switch|p2a: y|Y|100/100'],owner=0)
         kinds={r['kind']for r in c.rows if r['status']=='TRIGGERED'}
-        self.assertTrue({'OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE','native-probed-hard-trapped-own-request',
-            'deferred-baton-phase','native-probed-or-hidden-volatile-clock','native-probed-sleep-clock','public-materialization-blocker'}<=kinds)
+        self.assertTrue({'native-probed-hard-trapped-own-request','deferred-baton-phase','native-probed-or-hidden-volatile-clock'}<=kinds)
+        self.assertFalse({'OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE','native-probed-sleep-clock'}&kinds)
+        # Item discharge is decided only with positive B2 facts in shared protocol checks.
+        from gpu_engine.phase_d_protocol_world import preflight_checks
+        rows=preflight_checks(payload,{})
+        self.assertTrue(any(r['kind']=='public-materialization-blocker' and r['status']=='TRIGGERED' for r in rows))
 
     def test_missing_prerequisite_is_not_clear(self):
         c=Checks();c.call('x',lambda: {}['missing']);self.assertEqual(c.rows[0]['status'],'NOT_EVALUABLE')
