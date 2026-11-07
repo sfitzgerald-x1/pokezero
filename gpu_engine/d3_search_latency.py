@@ -26,8 +26,9 @@ merged-kernel compiles: opt-in) and the packed proxy is opt-in (--packed, it nee
 A call's stages are CONTIGUOUS time.perf_counter() laps (every instant between its start and end is charged to exactly
 one stage, so the stages sum to the call's wall time; seconds a pricer measures inside its own lap are moved, not added):
 - root_forward: the learner's root forward a live move pays before searching: the evaluator's params (the head with
-  --head-archive, else the bank actor; one forward per distinct learner actor) on the C roots' encoder inputs batched
-  [C, 1, ...], the D-arm v5 head in bf16 as gate.bind_roots runs it, synced and its logits/value/valid on the host. The
+  --head-archive, the champion with --champion-archive, else the bank actor; one forward per distinct learner actor) on the
+  C roots' encoder inputs batched [C, 1, ...], the evaluator's forward as gate.bind_roots runs it (the D-arm v5 head in bf16,
+  or champion_evaluator.ChampionEvaluator on the same V2 inputs), synced and its logits/value/valid on the host. The
   Requests keep bind_roots' root prior (computed at load); this stage times the cost. NOT timed, not isolable from the bank:
   the RootContext build and the observation encoding, both produced inside the bank collector's rollout scan
   (retain_teacher_roots); a live move pays them too (not estimated here).
@@ -92,8 +93,10 @@ world: nominal = k1_own x k1_opp turn-1 cells (81 at full width) x the product o
 widths), measured = enumerated leaves /
 (C x W). Memory: d3_depth2_throughput.memory_stats after each call, baseline before a (config, capacity)'s first call.
 Compiles: every DepthNPricer in one process shares one program table (DepthNPricer._program keys: P1 by capacity, block
-programs by (B, G, K), gather/write by pool rows, select by shape), valid because each has the same executor, params, forward
-(the v5 head in bf16), digest=False and k1 widths: P1 compiles once per pricer capacity and each block program once per
+programs by (B, G, K), gather/write by pool rows, select by shape, each key carrying the evaluator's identity: nothing for the
+V2 default, ('evaluator', 'champion', archive sha256, precision) for the champion, so a table never hands one evaluator's
+program to another), valid because each has the same executor, params, forward (the run's one evaluator), digest=False and
+k1 widths: P1 compiles once per pricer capacity and each block program once per
 process; a config's pricer at one capacity serves every W and mode that uses it (a packed K*C pricer is the sequential pricer
 of capacity K*C), so a first call compiles only what nothing before it did (--isolate: one process and table per config). JAX's
 persistent compilation cache is ON by default (owning_worker_runtime.configure_compilation_cache, right after the bank's JAX
@@ -180,7 +183,7 @@ PACKED_NOTE = ('TIMING PROXY: one pass at K*C prices K copies of block 0\'s requ
     'materialization refuses a start planned under another); blocks 1..K-1 are still planned and timed as in sequential; same device shapes as K '
     'blocks, values are block 0\'s K times, not U1\'s W composition')
 STAGE_SCOPE = {
-    'root_forward': 'the learner\'s root forward on the C roots\' encoder inputs batched [C, 1, ...] (evaluator params, D-arm v5 head in bf16, synced, '
+    'root_forward': 'the learner\'s root forward on the C roots\' encoder inputs batched [C, 1, ...] (evaluator params and forward: the D-arm v5 head in bf16 or the champion, synced, '
         'outputs on the host); NOT timed (inside the bank collector\'s scan, not isolable): the RootContext build and the observation encoding',
     'host_prep': 'Provider._prepare_batched\'s per-root core for exactly C roots: per-step RootContext device slice + stream/frame host copy, one '
         'worlds.detach_roots pass per step (part detach), address check, block-0 worlds.plan_starts (part plan_starts), encoder inputs, prior, actors '
@@ -283,9 +286,10 @@ def parse(argv=None):
     parser.add_argument('--source-commit', help='the source tree\'s commit, recorded when the code directory has no .git')
     parser.add_argument('--isolate', action='store_true', help='measure each config in its own subprocess (each reloads the chunk and compiles its own programs)')
     parser.add_argument('--only', help=argparse.SUPPRESS)   # one config; used by --isolate
-    gate.add_head_arguments(parser)   # numpy only: no JAX before the memory policy
+    from gpu_engine import champion_evaluator as ce
+    gate.add_head_arguments(parser);ce.add_arguments(parser)   # numpy only: no JAX before the memory policy
     args = parser.parse_args(argv)
-    gate.check_head_arguments(parser, args)
+    gate.check_head_arguments(parser, args);ce.check_arguments(parser, args)
     try:
         args.capacity_values = tuple(sorted(set(ints(args.capacities))));args.config_worlds = parse_configs(args.configs, ints(args.worlds))
         args.solver_specs = parse_solvers(args.solver);args.pool_sizes = tuple(sorted(set(ints(args.solver_pool))))
@@ -631,16 +635,22 @@ def make_variants(solvers, pools):
     return [SimpleNamespace(name=f'{s.spec}@pool{n}', solver=s, pool=pool, pool_size=n) for s in solvers for n, pool in pools.items()]
 
 
-def merged_pricer(module, executor, model, *, capacity, actor_capacity, k1_own, k1_opp):
+def merged_pricer(module, executor, model, *, capacity, actor_capacity, k1_own, k1_opp, forward=None):
     """The merged Depth2Pricer as d3_depth2_gate.make_pricer builds it for the gate and --pricer-only (digest=True, k_own=k_opp=9,
-    child_block left to the pricer's default) plus capacity and fixed_capacity=True; returns (pricer, options). Refuses a pricer
-    without fixed_capacity or digest (d5150eac or later required)."""
+    child_block left to the pricer's default) plus capacity and fixed_capacity=True, and the run's evaluator (forward=, only when
+    not the V2 default; options name it by identity); returns (pricer, options). Refuses a pricer without fixed_capacity or digest
+    (d5150eac or later required)."""
     cls = module.Depth2Pricer;parameters = inspect.signature(cls).parameters
     options = dict(digest=True, actor_capacity=actor_capacity, k_own=9, k_opp=9, k1_own=k1_own, k1_opp=k1_opp, capacity=capacity, fixed_capacity=True)
+    if forward is not None:options['forward'] = forward
     if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
         missing = sorted(k for k in options if k not in parameters)
         if missing:raise SystemExit(f'Depth2Pricer does not accept {missing}: pricer d5150eac or later required')
-    return cls(executor, model, **options), options
+    pricer = cls(executor, model, **options)
+    if forward is not None:
+        from gpu_engine import champion_evaluator as ce
+        options = dict({k: v for k, v in options.items() if k != 'forward'}, evaluator=ce.describe(forward))
+    return pricer, options
 
 
 # The search under test --------------------------------------------------------------------------------------------------------------
@@ -653,7 +663,7 @@ class Search:
         if config == MERGED:
             self.module = depth2_module or importlib.import_module('gpu_engine.device_depth2_pricer');self.config = check_config(config);self.pass_pricer = None
             self.pricer, self.options = merged_pricer(self.module, ctx.provider.executor, ctx.plan.model, capacity=capacity, actor_capacity=ctx.actor_capacity,
-                k1_own=args.k1_own, k1_opp=args.k1_opp)
+                k1_own=args.k1_own, k1_opp=args.k1_opp, forward=getattr(ctx, 'forward', None))
             self.options = dict(self.options, engine=dotted(type(self.pricer)), child_block=getattr(self.pricer, 'child_block', None))
             return
         caller = tn.Caller(config, SimpleNamespace(capacity=capacity, k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes), ctx, module=module)
@@ -1002,8 +1012,8 @@ def host_prep(ctx, roots):
 
 def root_forward(ctx, roots):
     """root_forward for exactly these C roots (module docstring): per distinct learner actor one batched forward of the evaluator's
-    params on the roots' encoder inputs [C, 1, ...] (ctx.root_program: the D-arm v5 head in bf16, jitted), synced by bringing its
-    policy logits, value and validity to the host. Returns {actor: (logits, value, valid)}."""
+    params on the roots' encoder inputs [C, 1, ...] (ctx.root_program, jitted: the D-arm v5 head in bf16, or the champion evaluator on
+    the same V2 inputs), synced by bringing its policy logits, value and validity to the host. Returns {actor: (logits, value, valid)}."""
     import jax
     out = {}
     for actor in sorted({int(r.learner_actor) for r in roots.bound}):
@@ -1011,6 +1021,16 @@ def root_forward(ctx, roots):
         inputs = {k: np.concatenate([np.asarray(r.root_inputs[k]) for r in mine]) for k in mine[0].root_inputs}
         result = ctx.root_program(ctx.params[actor], inputs);out[actor] = jax.device_get((result.policy_logits, result.value, result.valid))
     return out
+
+
+def root_program_for(model, forward=None):
+    """root_forward's jitted program: the run's evaluator as the gate binds roots with it. V2 (forward None): the D-arm v5 head in bf16
+    (gate.bind_roots' forward, unchanged); the champion: its evaluator on the same V2 root inputs (gate.bind_evaluator_roots')."""
+    import jax
+    if forward is None:
+        from gpu_engine import v5_model
+        return jax.jit(lambda params, inputs: v5_model.forward(params, inputs, model, compute_dtype='bfloat16'))
+    return jax.jit(lambda params, inputs: forward(params, inputs))
 
 
 def check_prepared(requests, bound):
@@ -1046,10 +1066,10 @@ def prepare(args):
     def roots(capacity, window=0, windows=1):
         bound = window_roots(ctx.available, capacity, window, windows)
         return SimpleNamespace(bound=bound, slots=[slot_of[address_key(r)] for r in bound], window=window, keys=[address_key(r) for r in bound])
-    ctx.chunk = SimpleNamespace(roots=captured['roots'], frames=frames, bank=bank);ctx.head_override = bool(args.head_archive);ctx.seeds = seeds;ctx.blocks = blocks
-    import jax
-    from gpu_engine import v5_model
-    ctx.root_program = jax.jit(lambda params, inputs: v5_model.forward(params, inputs, ctx.plan.model, compute_dtype='bfloat16'))   # gate.bind_roots' forward
+    ctx.forward = getattr(base, 'forward', None)   # the champion evaluator, or None (the V2 default)
+    ctx.chunk = SimpleNamespace(roots=captured['roots'], frames=frames, bank=bank);ctx.seeds = seeds;ctx.blocks = blocks
+    ctx.head_override = bool(args.head_archive) or ctx.forward is not None   # both bind every root's prior and actors 0/0 at load
+    ctx.root_program = root_program_for(ctx.plan.model, ctx.forward)
     ctx.roots = roots;ctx.prep = lambda r: host_prep(ctx, r);ctx.root_forward = lambda r: root_forward(ctx, r);ctx.fence = device_fence
     ctx.check = lambda requests, r: check_prepared(requests, r.bound)
     ctx.replan = lambda request, recipe: replace(request, plans=worlds.plan_starts(request.plans.root, provider.source, recipe))
@@ -1332,7 +1352,7 @@ def markdown(report):
 def report_of(args, sections, context, commit, *, isolated_run, partial=False):
     series = [s for name in args.config_worlds if name in sections for s in sections[name]]
     report = dict(evaluator=context['evaluator'], header=header(context, commit), schema=SCHEMA,
-        value_scale=gate.value_scale(context['root_values'], dict(count=0), args.value_reference), weights_affect_speed=t2.WEIGHTS_NOTE,
+        value_scale=gate.value_scale(context['root_values'], dict(count=0), args.value_reference), weights_affect_speed=t2.weights_note(args),
         source=context['source'], devices=context['devices'], capacities=list(args.capacity_values), configs={k: list(v) for k, v in args.config_worlds.items()},
         repeats=args.repeats, packed=args.packed, block_lanes=args.block_lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, roots_available=context['roots_available'],
         cycled=context['roots_available'] < max(args.capacity_values), block_seeds=context.get('block_seeds'), compile_cache=context.get('compile_cache'),
@@ -1391,8 +1411,9 @@ def main(argv=None):
     args = parse(argv)
     if importlib.util.find_spec('gpu_engine.device_depthn_pricer') is None:raise SystemExit('gpu_engine.device_depthn_pricer is not on this tree')
     commit = source_commit(CODE_ROOT, args.source_commit);gate.log('SOURCE_COMMIT', **commit)
-    gate.log('EVALUATOR', override=bool(args.head_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
-        checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, weights_affect_speed=t2.WEIGHTS_NOTE,
+    from gpu_engine import champion_evaluator as ce
+    gate.log('EVALUATOR', override=bool(args.head_archive or args.champion_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
+        checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, weights_affect_speed=t2.weights_note(args), **ce.log_fields(args),
         resolved='EVALUATOR_RESOLVED follows once the bank is loaded')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     if args.isolate:

@@ -1435,13 +1435,17 @@ def load_head(args, *, plan, labels, category_sha256):
     return params, head_config, meta, model_sha256
 
 
-def bind_roots(groups, params, plan, *, head_config=None):
+def bind_roots(groups, params, plan, *, head_config=None, evaluator=None):
     """Each request's learner value head on its own root inputs (D arm, bf16, batch 1).
 
     With a head override (head_config, params = (head,)): the arm check on the first request, where the D-arm and head-arm
     forwards must give exactly equal value and policy logits, as U1. Each request then takes the head's root logits (U1's
     root prior) and actors 0/0, and a root whose head output is invalid or non-finite is dropped (U1 refuses it).
+    With a non-V2 evaluator (evaluator = a champion_evaluator.ChampionEvaluator, params = (champion,)): bind_evaluator_roots.
     Returns (groups, root |v| list, dropped addresses, arm_checked)."""
+    if evaluator is not None:
+        if head_config is not None:raise ValueError('a head override and a champion evaluator are exclusive')
+        return bind_evaluator_roots(groups, params, evaluator)
     import jax
     from gpu_engine import v5_model
     forward = jax.jit(lambda p, x: v5_model.forward(p, x, plan.model, compute_dtype='bfloat16'))
@@ -1476,6 +1480,50 @@ def bind_roots(groups, params, plan, *, head_config=None):
     return out, values, dropped, checked
 
 
+def bind_evaluator_roots(groups, params, evaluator):
+    """bind_roots under a non-V2 evaluator, params = (its parameters,). The V2 arm check (D-arm vs head-arm geometry) does not
+    apply: the pricers run this evaluator itself, not a V2 geometry substitute. Its own check replaces it on the first request
+    (evaluator.check: for the champion, the adapter on the V2 root inputs must be valid and exactly equal, policy logits and
+    value, sign included, to champion.forward on the independently sliced 23-token layout, both op by op). Then, as the head override,
+    each request takes the evaluator's root logits (the root prior: pricing order and root backup) and actors 0/0, and a root
+    whose output is invalid, non-finite or |v| > 1 is dropped. Returns (groups, root |v| list, dropped addresses, checked)."""
+    import jax
+    if len(params) != 1:raise ValueError('a champion evaluator prices with its own parameters alone: params = (champion,)')
+    forward = jax.jit(lambda p, x: evaluator(p, x));out, values, dropped, checked = [], [], [], False
+    for group in groups:
+        kept = []
+        for request in group:
+            inputs = {k: np.asarray(v) for k, v in request.root_inputs.items()}
+            if not checked:checked = evaluator.check(params[0], inputs)
+            output = jax.device_get(forward(params[0], inputs))
+            value, logits = float(np.asarray(output.value).reshape(-1)[0]), np.asarray(output.policy_logits, np.float32).reshape(-1)
+            usable = bool(np.asarray(output.valid).reshape(-1)[0]) and np.isfinite(logits).all() and np.isfinite(value) and abs(value) <= 1
+            if not usable:
+                a = request.plans.root.address;dropped.append([a.stream, a.frame, a.owner]);continue
+            values.append(abs(value));kept.append(replace(request, root_logits=tuple(map(float, logits)), learner_actor=0, opponent_actor=0))
+        if kept:out.append(kept)
+    return out, values, dropped, checked
+
+
+def load_champion(args, loaded):
+    """--champion-archive: champion_evaluator.load (the archive bytes' and the export's checkpoint sha256, 23 tokens, the
+    precision) and check_binding against the bank's encoder catalog (the real 9375; the catalog compiled for its checkpoint,
+    vocabulary and masks). Returns the ChampionEvaluator."""
+    from gpu_engine import champion_evaluator as ce
+    evaluator = ce.load_from_arguments(args)
+    ce.check_binding(evaluator, loaded.provider.prepared.catalog)
+    return evaluator
+
+
+def with_forward(frame_pricer, forward):
+    """D3's FramePricer under the run's evaluator: the same pricer for the V2 default (forward None), else a FramePricer with
+    the same options and forward= (its depth-1 values are then the evaluator's, as the pricers' turn 1)."""
+    if forward is None:return frame_pricer
+    from gpu_engine.device_public_teacher_batch import FramePricer
+    return FramePricer(frame_pricer.executor, frame_pricer.model, capacity=frame_pricer.capacity, block_rows=frame_pricer.block_rows,
+        actor_capacity=frame_pricer.actor_capacity, vectorized=frame_pricer.vectorized, host_prep=frame_pricer.host_prep, forward=forward)
+
+
 def leaf_counts(calls, sample):
     """Turn-2 leaves over calls: the oracle's enumeration, the pricer's terminal/error leaves every sample includes, and those checked."""
     total = lambda key: sum(c.get(key) or 0 for c in calls)
@@ -1489,17 +1537,24 @@ def with_dropped(refusals, dropped):
         reason='head override: the head\'s D-arm output on the root inputs is invalid or non-finite; never priced'))
 
 
-def evaluator_header(args, loaded, head):
-    """Who priced: the override head, or the bank snapshot's actor (iteration -1 is the bank's untrained actor)."""
+def evaluator_header(args, loaded, head, champion=None):
+    """Who priced: the override head, champion 9375 (--champion-archive), or the bank snapshot's actor (iteration -1 is the bank's
+    untrained actor). Every header names the evaluator's kind, identity and precision."""
     plan = loaded.plan
+    if champion is not None:
+        s = loaded.snapshot
+        return dict(override=True, **champion.header(), archive=args.champion_archive, iteration=None, head_arm=None, pricer_arm=None,
+            executor_model_arm=plan.model.arm, category_vocabulary_sha256=loaded.category_sha256, label_vocabulary_sha256=loaded.labels.sha256,
+            bank_actor=dict(archive=s.get('archive'), archive_sha256=s.get('archive_sha256'), iteration=s.get('iteration'), role='not an evaluator: '
+                'the bank\'s actor only collected the roots; the executor and tables follow its plan'))
     if head is not None:
         _, config, meta, model_sha256 = head
-        return dict(override=True, archive=args.head_archive, archive_sha256=args.head_archive_sha256,
+        return dict(override=True, kind='v2', identity=['v2'], precision='bfloat16', archive=args.head_archive, archive_sha256=args.head_archive_sha256,
             checkpoint=meta.get('checkpoint_path') or meta.get('checkpoint'), checkpoint_sha256=args.head_checkpoint_sha256, iteration=None,
             model_sha256=model_sha256, head_arm=config.arm, pricer_arm=plan.model.arm, parameter_count=meta.get('parameter_count'),
             category_vocabulary_sha256=loaded.category_sha256, label_vocabulary_sha256=loaded.labels.sha256)
     s = loaded.snapshot
-    header = dict(override=False, archive=s.get('archive'), archive_sha256=s.get('archive_sha256'), checkpoint=s.get('checkpoint'),
+    header = dict(override=False, kind='v2', identity=['v2'], precision='bfloat16', archive=s.get('archive'), archive_sha256=s.get('archive_sha256'), checkpoint=s.get('checkpoint'),
         checkpoint_sha256=s.get('checkpoint_sha256'), iteration=s.get('iteration'), model_sha256=s.get('model_sha256'), head_arm=plan.model.arm,
         pricer_arm=plan.model.arm, category_vocabulary_sha256=loaded.category_sha256, label_vocabulary_sha256=loaded.labels.sha256)
     if s.get('iteration') == -1:header['warning'] = 'iteration -1 is the bank\'s own UNTRAINED actor: values are not a trained head\'s'
@@ -1536,23 +1591,29 @@ def split_groups(groups, capacity):
     return [g[i:i + capacity] for g in groups for i in range(0, len(g), capacity) if g[i:i + capacity]]
 
 
-def make_pricer(executor, model, *, widths, actor_capacity, child_block=None, capacity=None):
+def make_pricer(executor, model, *, widths, actor_capacity, child_block=None, capacity=None, forward=None):
     """Depth2Pricer(executor, model, digest=True, widths..., child_block, capacity) - imported lazily: it lands on another branch.
 
     Options the constructor does not take are dropped, unless they would change what is priced or how much one call
-    holds: a width other than 9, an explicit child_block or an explicit capacity, then refuse."""
+    holds: a width other than 9, an explicit child_block, an explicit capacity or an evaluator (forward=), then refuse.
+    The returned options name an evaluator by its identity (champion_evaluator.describe), never the object."""
     from gpu_engine.device_depth2_pricer import Depth2Pricer
     options = dict(digest=True, actor_capacity=actor_capacity, **widths)
     required = {k for k, v in widths.items() if v != 9}
     if child_block is not None:options['child_block'] = child_block;required.add('child_block')
     if capacity is not None:options['capacity'] = capacity;required.add('capacity')
+    if forward is not None:options['forward'] = forward;required.add('forward')
     parameters = inspect.signature(Depth2Pricer).parameters
     if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
         if 'digest' not in parameters:raise SystemExit('Depth2Pricer has no digest option')
         unsupported = sorted(k for k in required if k not in parameters)
         if unsupported:raise SystemExit('Depth2Pricer does not accept option(s): ' + ','.join(unsupported))
         options = {k: v for k, v in options.items() if k in parameters}
-    return Depth2Pricer(executor, model, **options), options
+    pricer = Depth2Pricer(executor, model, **options)
+    if forward is not None:
+        from gpu_engine import champion_evaluator as ce
+        options = dict({k: v for k, v in options.items() if k != 'forward'}, evaluator=ce.describe(forward))
+    return pricer, options
 
 
 INVARIANCE_BLOCKS = (27, 81)   # --block-invariance: child_block values priced; the last frame is the checked one

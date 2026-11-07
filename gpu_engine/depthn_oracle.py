@@ -25,7 +25,6 @@ import jax
 import jax.numpy as j
 import numpy as np
 
-from . import depth2_digest
 from . import depth2_oracle as d2
 from .depth2_oracle import (STATUS_ERROR, STATUS_EXPANDED, STATUS_HEAD, STATUS_TERMINAL, ERROR_PEER_ENCODER,   # noqa: F401
     ERROR_PEER_PRIOR, stack, classify, child_codes, terminal_value, turn1_cells, NO_STATE, world_pre)
@@ -40,8 +39,10 @@ def _step(executor, state, trackers, owner, seat, own, peer, a, r, own_requested
     return executor.advance(state, trackers, actions, executor.sample(state))   # this node's own draw
 
 
-def _walk(executor, states, publics, owners, spec, plies, leaf):
-    """One path of `plies` steps from its root; spec = [row, a1, r1, ..., a_plies, r_plies] (static plies)."""
+def _walk(executor, states, publics, owners, spec, plies, leaf, view=None):
+    """One path of `plies` steps from its root; spec = [row, a1, r1, ..., a_plies, r_plies] (static plies). view: the evaluator's
+    digest view (depth2_oracle._digest)."""
+    seen = view
     row = spec[0];state, public, owner = d2._gather(states, row), d2._gather(publics, row), owners[row]
     _, seat, own, peer = d2._views(executor, state, public, owner)
     own_requested, peer_requested = j.asarray(True), j.any(peer.observation.legal_action_mask[0])   # turn 1: D's joint rule
@@ -56,24 +57,24 @@ def _walk(executor, states, publics, owners, spec, plies, leaf):
     facts = dict(invalid=after.step.invalid_actions[0], done=state.done[0], winner=state.winner[0], broken_path=broken)
     if leaf:
         masks = executor.legal(state);view = executor.observe(state, public, seat, masks[:, owner])
-        facts.update(view_error=view.observation.error[0], digest=depth2_digest.digest(view.inputs))
+        facts.update(view_error=view.observation.error[0], digest=d2._digest(view.inputs, seen))
         return facts, dict(leaf=view.inputs)
     facts.update(own_error=own.observation.error[0], peer_error=peer.observation.error[0], own_requested=own_requested,
         peer_requested=peer_requested, own_legal=own.observation.legal_action_mask[0], peer_legal=peer.observation.legal_action_mask[0],
-        own_digest=depth2_digest.digest(own.inputs), peer_digest=depth2_digest.digest(peer.inputs))
+        own_digest=d2._digest(own.inputs, seen), peer_digest=d2._digest(peer.inputs, seen))
     return facts, dict(own=own.inputs, peer=peer.inputs)
 
 
 class DepthNOracle(d2.Oracle):
     """The depth-2 oracle (roots, turn-1 children) plus N-step nodes and leaves at any ply."""
-    def __init__(self, executor, model, *, chunk=512, progress=None, raw_model=None):
-        super().__init__(executor, model, chunk=chunk, progress=progress, raw_model=raw_model);self._walks = {}
+    def __init__(self, executor, model, *, chunk=512, progress=None, raw_model=None, forward=None):
+        super().__init__(executor, model, chunk=chunk, progress=progress, raw_model=raw_model, forward=forward);self._walks = {}
 
     def _fn(self, plies, leaf):
         key = (plies, leaf)
         if key not in self._walks:
             ex = self.executor
-            self._walks[key] = jax.jit(jax.vmap(lambda s, p, o, spec: _walk(ex, s, p, o, spec, plies, leaf), in_axes=(None, None, None, 0)))
+            self._walks[key] = jax.jit(jax.vmap(lambda s, p, o, spec: _walk(ex, s, p, o, spec, plies, leaf, view=self.view), in_axes=(None, None, None, 0)))
         kind = f'ply{plies}' + ('_leaves' if leaf else '');self.seconds.setdefault(kind, 0.);self.rows.setdefault(kind, 0)
         return self._walks[key], kind
 

@@ -1,0 +1,655 @@
+"""Champion 9375 through the search pricers' forward= seam (gpu_engine.champion_evaluator), on CPU with tiny champion weights.
+
+- The adapter: exactly champion.forward on the independently sliced 23-token layout, value sign included; V2's validity rule on
+  the champion's slice (belief tokens never read); the view, digests and seam identity; the loader's sha checks; the bank binding;
+  the arm check bind_roots runs on the first root.
+- End to end on the depth-N gate's fake engine with V2-layout encoder inputs: the real DepthNPricer, the full-width depth-2 pass,
+  D3's FramePricer and the N-step oracle all price with ONE tiny champion and the gate passes, with the V2 forward patched to
+  raise; N=2 equivalence against the merged Depth2Pricer; program keys per evaluator in one shared table, V2's unchanged.
+- The tools' champion flags (parse; exclusive with --head-archive) and the forward microbenchmark at tiny shapes.
+"""
+import contextlib
+from dataclasses import asdict, replace
+import hashlib
+import io
+import json
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import jax
+import jax.numpy as j
+import numpy as np
+
+from pokezero.v5_model import TOKEN_ROLES
+from gpu_engine import champion, champion_evaluator as ce, depth2_digest, device_public_teacher as serial, device_public_teacher_batch as batch
+from gpu_engine import device_public_world_state as mapping
+from tests import test_gpu_engine_depthn_oracle as N
+
+V2_TOKENS = 29
+F = 8   # the fake engine's numeric width (its five features, zero-padded)
+CATEGORICAL = 3
+SCALES = np.ones(V2_TOKENS, np.float32);SCALES[13:22] = 1 + np.arange(9, dtype=np.float32) / 8;SCALES[23:] = 1000.   # belief tokens: never read
+CHECKPOINT = 'c' * 64
+
+
+def tiny_config(**kw):
+    return champion.Config(**dict(dict(numeric=F, categorical=CATEGORICAL, vocabulary=12, width=16, layers=1, heads=2, feedforward=32), **kw))
+
+
+def tiny_params(c, seed=11, scale=.3):
+    rng = np.random.default_rng(seed)
+    return {k: j.asarray(rng.normal(0, scale, s).astype(np.float32)) for k, s in champion.shapes(c).items()}
+
+
+def tiny_champion(precision='bfloat16', *, config=None, seed=11, archive='a' * 64):
+    c = config or tiny_config();p = tiny_params(c, seed)
+    meta = dict(schema='pokezero.gpu_champion_forward.v1', weights_archive_sha256=archive, checkpoint_sha256=CHECKPOINT,
+        parameter_count=int(sum(np.asarray(x).size for x in p.values())))
+    return ce.ChampionEvaluator(p, c, meta, precision)
+
+
+def v2_inputs(c, n, seed=3):
+    """V2 public29 encoder inputs [n,1,29,...], all valid for the champion; belief tokens 23..28 random (never read)."""
+    rng = np.random.default_rng(seed)
+    attention = rng.random((n, 1, V2_TOKENS)) > .25;attention[..., 0] = True
+    return dict(numeric_features=rng.normal(0, 1, (n, 1, V2_TOKENS, c.numeric)).astype(np.float32),
+        categorical_ids=rng.integers(0, c.vocabulary, (n, 1, V2_TOKENS, c.categorical)).astype(np.int32),
+        token_type_ids=np.broadcast_to(np.asarray(TOKEN_ROLES, np.int32), (n, 1, V2_TOKENS)).copy(), attention_mask=attention,
+        history_mask=np.ones((n, 1), bool))
+
+
+def sliced(inputs):
+    """The champion layout sliced by hand ([:, 0, :23]), independently of ChampionEvaluator.view."""
+    return [np.asarray(inputs[k])[:, 0, :23] for k in ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask')]
+
+
+def write_archive(path, c, params, checkpoint=CHECKPOINT):
+    """champion.export's archive format, written from params (no Torch); returns its sha256."""
+    meta = {'schema': 'pokezero.gpu_champion_forward.v1', 'config': asdict(c), 'checkpoint_sha256': checkpoint,
+        'parameter_count': int(sum(np.asarray(a).size for a in params.values()))}
+    encoded = np.frombuffer(json.dumps(meta, sort_keys=True).encode(), np.uint8)
+    with Path(path).open('xb') as stream:np.savez_compressed(stream, metadata_json=encoded, **{k: np.asarray(v) for k, v in params.items()})
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+# ---------------------------------------------------------------- the adapter
+
+class ChampionEvaluatorTests(unittest.TestCase):
+    def test_adapter_equals_champion_forward_on_the_sliced_inputs_sign_included(self):
+        for precision in ('bfloat16', 'float32'):
+            with self.subTest(precision=precision):
+                ev = tiny_champion(precision);inputs = v2_inputs(ev.config, 11)
+                # Centre the value head's bias on these rows so the values take both signs (tanh is odd: the sign is the raw score's).
+                raw = np.arctanh(np.asarray(jax.jit(ev)(ev.params, inputs).value, np.float64))
+                ev = replace(ev, params=dict(ev.params, **{'value_head.bias': ev.params['value_head.bias'] - np.float32(np.median(raw))}))
+                out = jax.jit(ev)(ev.params, inputs)
+                ref = jax.jit(lambda p, *x: champion.forward(p, *x, ev.config, compute_dtype=precision))(ev.params, *sliced(inputs))
+                self.assertIsNone(out.value_logits);self.assertTrue(np.asarray(out.valid).all())
+                self.assertEqual((out.policy_logits.shape, out.value.shape, out.policy_logits.dtype, out.value.dtype), ((11, 9), (11,), j.float32, j.float32))
+                np.testing.assert_array_equal(np.asarray(out.policy_logits), np.asarray(ref.policy_logits))
+                np.testing.assert_array_equal(np.asarray(out.value), np.asarray(ref.value))   # no sign flip, no rescale
+                value = np.asarray(out.value);self.assertTrue((value > 0).any() and (value < 0).any() and (np.abs(value) < 1).all())
+                np.testing.assert_array_equal(np.sign(value), np.sign(np.asarray(ref.value)))
+                # Negating the value head negates the value: the observer-side tanh passes through linearly in sign.
+                flipped = dict(ev.params, **{'value_head.weight': -ev.params['value_head.weight'], 'value_head.bias': -ev.params['value_head.bias']})
+                np.testing.assert_allclose(np.asarray(jax.jit(ev)(flipped, inputs).value), -value, rtol=0, atol=1e-6)
+
+    def test_belief_tokens_are_never_read(self):
+        ev = tiny_champion('float32');inputs = v2_inputs(ev.config, 5);other = {k: np.array(v) for k, v in inputs.items()}
+        other['numeric_features'][..., 23:, :] = np.nan;other['categorical_ids'][..., 23:, :] = 10 ** 6
+        other['token_type_ids'][..., 23:] = 15;other['attention_mask'][..., 23:] = False
+        a, b = jax.jit(ev)(ev.params, inputs), jax.jit(ev)(ev.params, other)
+        for name in ('policy_logits', 'value', 'valid'):np.testing.assert_array_equal(np.asarray(getattr(a, name)), np.asarray(getattr(b, name)), err_msg=name)
+
+    def test_valid_is_the_v2_rule_on_the_champion_slice(self):
+        ev = tiny_champion('float32');c = ev.config;inputs = {k: np.array(v) for k, v in v2_inputs(c, 9).items()}
+        x = inputs
+        x['numeric_features'][1, 0, 5, 2] = np.nan            # 1 non-finite numeric in a read token
+        x['categorical_ids'][2, 0, 3, 1] = c.vocabulary       # 2 category out of range
+        x['categorical_ids'][3, 0, 22, 0] = -1                # 3 negative category in the last read token
+        x['token_type_ids'][4, 0, 10] = 6                     # 4 wrong token role
+        x['history_mask'][5, 0] = False                       # 5 no real frame
+        x['attention_mask'][6, 0, :23] = False                # 6 no attended token among the 23 (beliefs still attended)
+        x['attention_mask'][7, 0, 23:] = False                # 7 beliefs unattended: V2 would refuse, the champion reads none of them
+        x['numeric_features'][8, 0, 25, :] = np.inf           # 8 a non-finite belief token: never read
+        out = jax.jit(ev)(ev.params, x);valid = np.asarray(out.valid)
+        self.assertEqual(valid.tolist(), [True, False, False, False, False, False, False, True, True])
+        self.assertTrue(np.isnan(np.asarray(out.value)[~valid]).all() and np.isnan(np.asarray(out.policy_logits)[~valid]).all())
+        ref = champion.forward(ev.params, *[a[valid] for a in sliced(x)], c, compute_dtype='float32')   # a different batch: equal to rounding
+        np.testing.assert_allclose(np.asarray(out.value)[valid], np.asarray(ref.value), rtol=0, atol=1e-5)
+
+    def test_view_layout_and_digests(self):
+        ev = tiny_champion();inputs = v2_inputs(ev.config, 2);view = ev.view(inputs)
+        self.assertEqual(set(view), set(ce.INPUT_KEYS));self.assertEqual(ev.input_keys, depth2_digest.INPUT_KEYS)
+        self.assertEqual({k: v.shape for k, v in view.items()}, dict(numeric_features=(2, 1, 23, F), categorical_ids=(2, 1, 23, CATEGORICAL),
+            token_type_ids=(2, 1, 23), attention_mask=(2, 1, 23), history_mask=(2, 1)))
+        for a, b in zip([view[k][:, 0] for k in ('numeric_features', 'categorical_ids', 'token_type_ids', 'attention_mask')], sliced(inputs)):
+            np.testing.assert_array_equal(a, b)
+        with self.assertRaisesRegex(ValueError, '29-token'):ev.view({k: (v[..., :23, :] if v.ndim == 4 else v[..., :23] if v.ndim == 3 else v) for k, v in inputs.items()})
+        with self.assertRaisesRegex(ValueError, 'five V2'):ev.view({k: v for k, v in inputs.items() if k != 'history_mask'})
+        leaf = {k: v[:1] for k, v in inputs.items()};belief = {k: np.array(v) for k, v in leaf.items()};belief['numeric_features'][..., 27, :] += 1
+        read = {k: np.array(v) for k, v in leaf.items()};read['numeric_features'][..., 22, :] += 1
+        champion_digest = lambda x: np.asarray(depth2_digest.digest(ce.digest_view(ev)(x)))
+        np.testing.assert_array_equal(champion_digest(leaf), champion_digest(belief))   # what the champion does not read is not certified
+        self.assertFalse(np.array_equal(champion_digest(leaf), champion_digest(read)))
+        self.assertFalse(np.array_equal(np.asarray(depth2_digest.digest(leaf)), np.asarray(depth2_digest.digest(belief))))   # V2 reads beliefs
+        self.assertFalse(np.array_equal(champion_digest(leaf), np.asarray(depth2_digest.digest(leaf))))
+
+    def test_seam_identity_suffix_and_view(self):
+        bf16, f32 = tiny_champion(), tiny_champion('float32');fn = lambda p, x: None
+        self.assertEqual((ce.identity(None), ce.program_suffix(None), ce.digest_view(None)), (('v2',), (), None))
+        self.assertEqual(ce.identity(bf16), ('champion', 'a' * 64, 'bfloat16'));self.assertEqual(ce.identity(f32)[2], 'float32')
+        self.assertEqual(ce.program_suffix(bf16), (('evaluator', 'champion', 'a' * 64, 'bfloat16'),))
+        self.assertNotEqual(ce.program_suffix(bf16), ce.program_suffix(f32))
+        self.assertEqual(ce.program_suffix(tiny_champion(seed=12)), ce.program_suffix(bf16))   # the archive sha, not the object, is the identity
+        self.assertEqual(ce.program_suffix(fn), (('evaluator', 'forward', fn),));self.assertIsNone(ce.digest_view(fn))
+        self.assertEqual(ce.digest_view(bf16), bf16.view)
+        self.assertEqual(ce.describe(bf16), dict(kind='champion', identity=['champion', 'a' * 64, 'bfloat16']))
+        self.assertEqual(ce.describe(None), dict(kind='v2', identity=['v2']));self.assertEqual(ce.describe(fn)['kind'], 'custom')
+        self.assertNotIn('params', repr(bf16))
+        header = bf16.header()
+        self.assertEqual((header['kind'], header['identity'], header['precision'], header['tokens']), ('champion', ['champion', 'a' * 64, 'bfloat16'], 'bfloat16', 23))
+        with self.assertRaises(ValueError):tiny_champion('float16')
+        with self.assertRaisesRegex(ValueError, '23-token'):ce.ChampionEvaluator({}, tiny_config(tokens=29), bf16.meta)
+        with self.assertRaisesRegex(ValueError, 'sha256'):ce.ChampionEvaluator({}, tiny_config(), dict(bf16.meta, checkpoint_sha256='x'))
+
+    def test_load_checks_the_archive_and_checkpoint_sha256(self):
+        c = tiny_config();params = tiny_params(c)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'champion.npz';digest = write_archive(path, c, params)
+            ev = ce.load(path, expected_archive_sha256=digest, expected_checkpoint_sha256=CHECKPOINT, precision='float32')
+            self.assertEqual((ev.identity, ev.checkpoint_sha256, ev.config), (('champion', digest, 'float32'), CHECKPOINT, c))
+            for name in params:np.testing.assert_array_equal(np.asarray(ev.params[name]), np.asarray(params[name]))
+            with self.assertRaisesRegex(ValueError, 'archive sha256'):ce.load(path, expected_archive_sha256='0' * 64, expected_checkpoint_sha256=CHECKPOINT)
+            with self.assertRaisesRegex(ValueError, 'checkpoint sha256'):ce.load(path, expected_archive_sha256=digest, expected_checkpoint_sha256='d' * 64)
+            with self.assertRaisesRegex(ValueError, '64-hex'):ce.load(path, expected_archive_sha256=digest.upper(), expected_checkpoint_sha256=CHECKPOINT)
+            with self.assertRaisesRegex(ValueError, 'precision'):ce.load(path, expected_archive_sha256=digest, expected_checkpoint_sha256=CHECKPOINT, precision='bf16')
+            wide = tiny_config(tokens=29);other = Path(directory) / 'wide.npz';wide_digest = write_archive(other, wide, tiny_params(wide))
+            with self.assertRaisesRegex(ValueError, '23-token'):ce.load(other, expected_archive_sha256=wide_digest, expected_checkpoint_sha256=CHECKPOINT)
+            args = SimpleNamespace(champion_archive=str(path), champion_archive_sha256=digest, champion_checkpoint_sha256=CHECKPOINT, champion_precision='bf16')
+            self.assertEqual(ce.load_from_arguments(args).identity, ('champion', digest, 'bfloat16'))
+            self.assertIsNone(ce.load_from_arguments(SimpleNamespace(champion_archive=None)))
+
+    def test_check_binding_against_the_bank_catalog(self):
+        from pokezero import live_protocol_actor as actor
+        contract = actor.ActorContract.champion()
+        ev = ce.ChampionEvaluator({}, tiny_config(vocabulary=916), dict(weights_archive_sha256='a' * 64, checkpoint_sha256=contract.checkpoint_sha256))
+        masks = SimpleNamespace(**dict(contract.feature_masks))
+        catalog = lambda **kw: SimpleNamespace(**dict(dict(checkpoint_sha256=contract.checkpoint_sha256, masks=masks,
+            vocabulary=SimpleNamespace(sha=contract.category_vocab_sha256, size=916)), **kw))
+        with patch.object(actor, '_vocab_sha', lambda vocabulary: vocabulary.sha):
+            self.assertTrue(ce.check_binding(ev, catalog()))
+            with self.assertRaisesRegex(ValueError, 'real original 9375'):ce.check_binding(replace(ev, meta=dict(ev.meta, checkpoint_sha256='d' * 64)), catalog())
+            with self.assertRaisesRegex(ValueError, 'compiled for checkpoint'):ce.check_binding(ev, catalog(checkpoint_sha256='d' * 64))
+            with self.assertRaisesRegex(ValueError, 'category vocabulary'):ce.check_binding(ev, catalog(vocabulary=SimpleNamespace(sha='e' * 64, size=916)))
+            with self.assertRaisesRegex(ValueError, 'category vocabulary'):ce.check_binding(ev, catalog(vocabulary=SimpleNamespace(sha=contract.category_vocab_sha256, size=915)))
+            bad = SimpleNamespace(**dict(contract.feature_masks, stats_block=not dict(contract.feature_masks)['stats_block']))
+            with self.assertRaisesRegex(ValueError, 'feature masks'):ce.check_binding(ev, catalog(masks=bad))
+
+    def test_arm_check_on_the_first_root(self):
+        ev = tiny_champion();root = {k: v[:1] for k, v in v2_inputs(ev.config, 1).items()}
+        self.assertTrue(ev.check(ev.params, root))
+        class Shifted(ce.ChampionEvaluator):   # a wrong slice: tokens 1..23
+            def view(self, inputs):
+                v = super().view(inputs);full = inputs
+                return dict(v, numeric_features=full['numeric_features'][..., 1:24, :], categorical_ids=full['categorical_ids'][..., 1:24, :])
+        with self.assertRaisesRegex(ValueError, 'differs from champion.forward'):Shifted(ev.params, ev.config, ev.meta, ev.precision).check(ev.params, root)
+        nan = dict(root, numeric_features=np.full_like(root['numeric_features'], np.nan))
+        with self.assertRaisesRegex(ValueError, 'invalid or non-finite'):ev.check(ev.params, nan)
+
+
+# ---------------------------------------------------------------- end to end on the depth-N gate's fake engine
+
+def champion_layout(make):
+    """The fake engine with V2-layout encoder inputs: its feature vector x (zero-padded to F) is token 0's numeric row, the action
+    tokens 13..21 carry x * (1 + lane / 8), the six belief tokens 1000 x (read by V2, never by the champion); categories 0, the V2
+    roles, every token attended, history True. Everything else is the fake engine's."""
+    def build(**kw):
+        base = make(**kw)
+        def observe(state, public, owner, mask):
+            leaf = base.observe(state, public, owner, mask);x = leaf.inputs['numeric_features'][:, :, 0, :]
+            n = x.shape[0];row = j.pad(x, ((0, 0), (0, 0), (0, F - x.shape[-1])))
+            return leaf._replace(inputs=dict(numeric_features=row[:, :, None, :] * j.asarray(SCALES)[None, None, :, None],
+                categorical_ids=j.zeros((n, 1, V2_TOKENS, CATEGORICAL), j.int32), token_type_ids=j.broadcast_to(j.asarray(TOKEN_ROLES, j.int32), (n, 1, V2_TOKENS)),
+                attention_mask=j.ones((n, 1, V2_TOKENS), bool), history_mask=j.ones((n, 1), bool)))
+        ex = replace(base, observe=observe, joint=None)
+        return replace(ex, joint=serial._make_joint(ex))
+    return build
+
+
+def no_v2(*args, **kwargs):
+    raise AssertionError('the V2 forward ran under the champion evaluator')
+
+
+class ExactChampion(ce.ChampionEvaluator):
+    """The real adapter (view, validity rule, NaN poisoning, digest view, identity, arm check) around an EXACT stand-in network that
+    reads only the champion's 23-token view: value = token 0's first feature (the fake engine's learner-relative value) + offset;
+    logits = the actor's logits + 0.5 on lane (own_act + 2 peer_act + turn) mod 9 (node-dependent priors, as forward_n) + each action
+    token's third feature / 64. Every quantity is dyadic, so every batch geometry computes the same bits and the gate's exact checks
+    and value bound (2 x a zero depth-1 floor) apply unchanged."""
+    def core(self, params, numeric, categorical, token_types, attention):
+        x = numeric[:, 0];lane = j.mod(x[:, 2] + 2. * x[:, 3] + x[:, 4], 9.)
+        logits = params['logits'] + .5 * (j.arange(9, dtype=j.float32)[None, :] == lane[:, None]) + numeric[:, 13:22, 2] / 64
+        return champion.Output(logits.astype(j.float32), (x[:, 0] + params['offset']).astype(j.float32), j.zeros_like(logits))
+
+
+def exact_champion(precision='bfloat16'):
+    params = {'offset': j.asarray(.0625, j.float32), 'logits': j.asarray([.25, 0, .5, .125, .375, 0, .25, .5, .125], j.float32)}
+    return ExactChampion(params, tiny_config(), dict(weights_archive_sha256='f' * 64, checkpoint_sha256=CHECKPOINT, parameter_count=10), precision)
+
+
+@unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+class ChampionPricerTests(N.FixtureN, unittest.TestCase):
+    """The fixture's requests on V2-layout inputs (request 7's root inputs shifted: pre-refused), bound to one champion evaluator by
+    gate.bind_roots (its prior, actors 0/0); every pricer, D3's FramePricer and the oracle take the same evaluator, and the V2
+    forward is patched to raise. The gate runs on the exact stand-in network; the real champion.forward (tiny, f32) is checked
+    against the oracle on the learner's own leaf views."""
+    make = staticmethod(champion_layout(N.executor_n))
+    PRE_REFUSED = None
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        requests = list(cls.requests);r = requests[7];shifted = r.root_inputs['numeric_features'].at[..., 5, :].add(1.)   # token 5: the pre check sees it (code 3), the stand-in's value does not
+        requests[7] = replace(r, root_inputs=dict(r.root_inputs, numeric_features=shifted))
+        cls.v2_requests = tuple(requests);cls.champion, cls.bound = cls.bind(exact_champion())
+        cls.params, cls.requests = (cls.champion.params,), cls.bound['requests']
+        cls.oracle = cls.oracle_for(cls.champion)
+
+    @classmethod
+    def bind(cls, evaluator):
+        from gpu_engine import d3_depth2_gate as g2
+        with patch.object(batch.v5_model, 'forward', side_effect=no_v2):
+            groups, values, dropped, checked = g2.bind_roots([list(cls.v2_requests)], (evaluator.params,), None, evaluator=evaluator)
+        return evaluator, dict(requests=tuple(groups[0]), values=values, dropped=dropped, checked=checked)
+
+    @classmethod
+    def oracle_for(cls, evaluator):
+        from gpu_engine import depthn_oracle
+        return depthn_oracle.DepthNOracle(cls.ex, object(), chunk=64, forward=evaluator)
+
+    @contextlib.contextmanager
+    def engine(self, v2=no_v2):
+        with patch.object(mapping, 'materialize_host', side_effect=self.materialize), patch.object(batch.v5_model, 'forward', side_effect=v2):
+            yield
+
+    def module(self):
+        from gpu_engine import device_depthn_pricer
+        return device_depthn_pricer
+
+    def frame_pricer(self, evaluator=None):
+        from gpu_engine import d3_depth2_gate as g2
+        return g2.with_forward(super().frame_pricer(), evaluator or self.champion)
+
+    def champion_pricers(self, depth=3, k=2, selection='prior', lanes=(2187,), evaluator=None):
+        from gpu_engine import d3_depthn_gate as gate
+        return gate.DepthNPricers(self.module(), self.ex, object(), depth=depth, k_own=k, k_opp=k, selection=selection, capacity=32, actor_capacity=3,
+            lanes=lanes, forward=evaluator or self.champion)
+
+    def call(self, pricers, *, sample=None):
+        from gpu_engine import d3_depthn_gate as gate
+        depth2_pricer = gate.depth2_pass_pricer(pricers.module, self.ex, object(), capacity=32, actor_capacity=3, digest=True, forward=self.champion)
+        with self.engine():
+            return gate.run_call_n(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=self.params, pricers=pricers,
+                depth2_pricer=depth2_pricer, frame_pricer=self.frame_pricer(), oracle=self.oracle, sample=sample, block=0, context=dict(block=0, call=0), backups=None)
+
+    def test_bind_roots_takes_the_champions_prior_and_actors(self):
+        self.assertTrue(self.bound['checked']);self.assertEqual(self.bound['dropped'], [])
+        self.assertEqual({(r.learner_actor, r.opponent_actor) for r in self.requests}, {(0, 0)})
+        for r, before in zip(self.requests, self.v2_requests):
+            out = jax.jit(self.champion)(self.champion.params, {k: np.asarray(v) for k, v in before.root_inputs.items()})
+            self.assertEqual(r.root_logits, tuple(map(float, np.asarray(out.policy_logits, np.float32).reshape(-1))))
+            self.assertEqual(r.root_inputs, before.root_inputs);self.assertNotEqual(r.root_logits, before.root_logits)
+        self.assertEqual(len(self.bound['values']), len(self.requests));self.assertTrue(all(0 <= v < 1 for v in self.bound['values']))
+
+    def test_depth3_gate_passes_with_the_champion_everywhere(self):
+        for selection in ('prior', 'searched'):
+            with self.subTest(selection=selection):
+                pricers = self.champion_pricers(selection=selection, lanes=(8, 2187) if selection == 'prior' else (2187,))
+                evaluation, summary = self.call(pricers)
+                result, (status, reasons) = self.judged(evaluation)
+                self.assertEqual(status, 'PASS', (N.failing(result), reasons, result['checks'].get('a', {}).get('first_mismatches')))
+                a, c = result['checks']['a']['compared'], result['checks']['c']['quantities']
+                for name in ('leaf_digest', 'ply2_digest_own', 'ply2_digest_opp', 't1_digest_own', 'pre'):self.assertGreater(a.get(name, 0), 0, name)
+                for name in ('leaf_value', 'ply2_value_head', 't1_value_head'):self.assertGreater(c[name]['compared'], 0, name)
+                self.assertEqual(evaluation['actors'], 1);self.assertEqual(pricers.options()['evaluator'], ce.describe(self.champion))
+                self.assertGreater(summary['refusals']['depth1']['refused_count'], 0)
+                if selection == 'prior':self.assertTrue(result['checks']['block_invariance']['discrete_equal'])
+
+    def test_a_v2_digest_oracle_fails_the_champion_frame(self):
+        """Negative control: the same oracle with V2 digests (the inputs unchanged, beliefs included) disagrees with every digest the
+        champion pricer wrote, so (a) really compares the champion's own view."""
+        from gpu_engine import d3_depthn_gate as gate
+        oracle = self.oracle_for(self.champion);oracle.view = None   # read when its walks trace (first use): V2's digests, the champion's heads
+        pricers = self.champion_pricers(depth=2, k=2)
+        with self.engine():
+            evaluation, _ = gate.run_call_n(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=self.params, pricers=pricers,
+                depth2_pricer=None, frame_pricer=self.frame_pricer(), oracle=oracle, sample=None, block=0, context=dict(block=0, call=0), backups=None)
+        mismatched = evaluation['a']['mismatched']
+        self.assertGreater(mismatched.get('leaf_digest', 0), 0, mismatched);self.assertGreater(mismatched.get('t1_digest_own', 0), 0, mismatched)
+
+    def test_real_champion_leaf_values_are_its_own_on_the_learners_view(self):
+        """The real (tiny, f32) champion.forward under DepthNPricer: every head-valued leaf is the champion's value of the LEARNER's leaf
+        view, unchanged (the oracle walks the same path and evaluates its learner view with the champion directly); the values take
+        both signs, so a sign flip would show."""
+        c = tiny_config();params = tiny_params(c, seed=13)
+        params['numeric_projection.weight'] = params['numeric_projection.weight'] * .02   # the fake engine's clock feature is up to 78
+        meta = dict(weights_archive_sha256='9' * 64, checkpoint_sha256=CHECKPOINT, parameter_count=0)
+        real = ce.ChampionEvaluator(params, c, meta, 'float32')
+        raw = []
+        for r in self.v2_requests:raw.append(float(np.arctanh(np.asarray(jax.jit(real)(params, {k: np.asarray(v) for k, v in r.root_inputs.items()}).value)[0])))
+        params['value_head.bias'] = params['value_head.bias'] - np.float32(np.median(raw))   # centre: values of both signs
+        real, bound = self.bind(ce.ChampionEvaluator(params, c, meta, 'float32'));requests = bound['requests']
+        pricers = self.champion_pricers(depth=2, k=2, evaluator=real);_, (pricer,) = pricers.get();oracle = self.oracle_for(real)
+        with self.engine():
+            frame = pricer.price(requests, self.tables, self.recipe, (params,))
+            stack = N.reference.stack(requests, batch._numpy_worlds(requests, self.tables, self.recipe))
+        self.assertTrue((frame.pre[7] == 3).all())   # request 7's shifted root inputs differ from the device view: pre code 3 (numeric_features)
+        q, w, cell, i, x = np.nonzero(frame.leaf_status == 4);a1, r1 = cell // 9, cell % 9
+        a2, r2 = frame.t1_own_actions[q, w, a1, r1, i], frame.t1_opp_actions[q, w, a1, r1, x]
+        pick = np.random.default_rng(0).choice(len(q), size=min(64, len(q)), replace=False)
+        specs = np.stack([q, w, a1, r1, a2, r2], axis=1)[pick];self.assertGreater(len(specs), 20)
+        with self.engine():leaves = oracle.leaves_n(stack, specs, 2, (params,))
+        self.assertTrue((leaves['status'] == 4).all())
+        got = frame.leaf_value[q, w, cell, i, x][pick];np.testing.assert_allclose(got, leaves['head_value'], rtol=0, atol=1e-5)
+        self.assertTrue((got > 0).any() and (got < 0).any() and (np.abs(got) < .999).all())
+        np.testing.assert_array_equal(np.sign(got), np.sign(leaves['head_value']))
+        np.testing.assert_array_equal(frame.leaf_digest[q, w, cell, i, x][pick].astype(np.uint32), leaves['digest'])
+
+    def test_n2_equivalence_with_the_merged_depth2_pricer(self):
+        from gpu_engine import d3_depthn_gate as gate
+        from gpu_engine.device_depth2_pricer import Depth2Pricer
+        module = self.module();configs = []
+        for name, k in (('full_width', 9), ('top2', 2)):
+            configs.append((name, module.DepthNPricer(self.ex, object(), capacity=32, depth=2, k_own=k, k_opp=k, digest=True, actor_capacity=3, forward=self.champion),
+                Depth2Pricer(self.ex, object(), capacity=32, k_own=k, k_opp=k, digest=True, actor_capacity=3, forward=self.champion)))
+        with self.engine():
+            results = gate.n2_equivalence_call(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=self.params, configs=configs,
+                frame_pricer=self.frame_pricer(), oracle=self.oracle, context=dict(block=0, call=0), module=module)
+        report = gate.summarize_n2({name: [result] for name, result in results.items()})
+        for name, r in report.items():
+            self.assertTrue(r['passed'], (name, r['discrete']['mismatched'], {k: v['max_abs_difference'] for k, v in r['floats'].items()}, r['e'].get('reasons')))
+            self.assertGreater(r['e']['roots_compared'], 0)
+
+    def test_program_keys_carry_the_evaluator_and_are_reused_within_one(self):
+        """One shared program table (the latency tool's): the V2 default's keys carry no evaluator; a champion's carry its identity; a
+        second pricer of the same evaluator compiles nothing; a second evaluator (f32) never reuses the bf16 programs. Depth2Pricer's
+        and FramePricer's kernel keys follow the same rule."""
+        from gpu_engine.device_depth2_pricer import Depth2Pricer
+        module = self.module();programs = {};suffix = ce.program_suffix(self.champion)
+        def priced(forward, params, requests, v2=no_v2):
+            pricer = module.DepthNPricer(self.ex, object(), capacity=32, depth=3, k_own=2, k_opp=2, digest=False, actor_capacity=3, fixed_capacity=True,
+                **({} if forward is None else dict(forward=forward)))
+            pricer.bind(params);pricer.programs = programs
+            with self.engine(v2):pricer.price(requests, self.tables, self.recipe, params)
+            return pricer
+        priced(None, N.PARAMS, self.v2_requests, v2=N.forward_n);v2_keys = set(programs)
+        self.assertTrue(v2_keys and all(not any(isinstance(x, tuple) and x[:1] == ('evaluator',) for x in key) for key in v2_keys))
+        self.assertIn(('P1', 32, (64, 64), (64, 64)), v2_keys)   # the pre-evaluator key (two actors), unchanged
+        first = priced(self.champion, self.params, self.requests);champion_keys = set(programs) - v2_keys
+        self.assertTrue(champion_keys and all(key[-1] == suffix[0] for key in champion_keys))
+        self.assertIn(('P1', 32, (64,), (64,)) + suffix, champion_keys)
+        self.assertEqual({key[:-1] for key in champion_keys if key[0] in ('expand', 'leaf')}, {key for key in v2_keys if key[0] in ('expand', 'leaf')})
+        self.assertTrue(first.compiles and all(c[0][-1] == suffix[0] for c in first.compiles))
+        again = priced(self.champion, self.params, self.requests);self.assertEqual(again.compiles, ())   # the same evaluator reuses every program
+        f32 = exact_champion('float32');other = priced(f32, (f32.params,), self.bind(f32)[1]['requests'])
+        self.assertTrue(other.compiles and all(c[0][-1] == ce.program_suffix(f32)[0] for c in other.compiles))
+        self.assertEqual(len(programs), len(v2_keys) + 2 * len(champion_keys))
+        kernels = {}
+        for forward, params, requests, patched in ((None, N.PARAMS, self.v2_requests, N.forward_n), (self.champion, self.params, self.requests, no_v2)):
+            for pricer in (Depth2Pricer(self.ex, object(), capacity=32, actor_capacity=3, **({} if forward is None else dict(forward=forward))),
+                    batch.FramePricer(self.ex, object(), capacity=32, block_rows=32, actor_capacity=3, vectorized=True, host_prep=True,
+                        **({} if forward is None else dict(forward=forward)))):
+                with self.engine(patched):pricer.price(requests, self.tables, self.recipe, params)
+                kernels[(type(pricer).__name__, forward is None)] = set(pricer.kernels)
+        self.assertEqual(kernels[('FramePricer', True)], {(32, (64, 32), (64, 32))})   # D3's own key, unchanged
+        for name in ('Depth2Pricer', 'FramePricer'):
+            (plain,), (keyed,) = kernels[(name, True)], kernels[(name, False)]
+            self.assertFalse(any(isinstance(x, tuple) and x[:1] == ('evaluator',) for x in plain))
+            self.assertEqual(keyed[-1], suffix[0])
+
+
+# ---------------------------------------------------------------- the tools' flags
+
+CHAMPION = ['--champion-archive', '/shared/x/champion.npz', '--champion-archive-sha256', 'e' * 64, '--champion-checkpoint-sha256', CHECKPOINT]
+HEAD = ['--head-archive', '/shared/x/actor-99.npz', '--head-archive-sha256', '1' * 64, '--head-checkpoint-sha256', '2' * 64]
+
+
+class ChampionFlagTests(unittest.TestCase):
+    def tools(self, out):
+        from gpu_engine import d3_depthn_gate, d3_depthn_throughput, d3_depth2_throughput, d3_search_latency, champion_forward_bench
+        base = ['--d3-root', '/d3', '--chunk', '0']
+        return dict(
+            d3_depthn_gate=lambda argv: d3_depthn_gate.parse(['--out', str(out)] + base + argv)[1],
+            d3_depthn_throughput=lambda argv: d3_depthn_throughput.parse(['--out', str(out), '--capacity', '1'] + base + argv),
+            d3_depth2_throughput=lambda argv: d3_depth2_throughput.parse(['--out', str(out), '--capacity', '256', '--worlds-blocks', '1', '--profile-split'] + base + argv),
+            d3_search_latency=lambda argv: d3_search_latency.parse(['--out', str(out), '--configs', 'depth2-fw@8/16/32,depth2-merged@8/16/32'] + base + argv),
+            champion_forward_bench=lambda argv: champion_forward_bench.parse(['--out', str(out)] + argv))
+
+    def refused(self, parse, argv, message):
+        stderr = io.StringIO()
+        with patch.object(sys, 'stderr', stderr), self.assertRaises(SystemExit):parse(argv)
+        self.assertIn(message, stderr.getvalue())
+
+    def test_flags_parse_and_are_exclusive_with_the_head_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for name, parse in self.tools(Path(directory) / 'out').items():
+                with self.subTest(tool=name):
+                    args = parse(CHAMPION)
+                    self.assertEqual((args.champion_archive, args.champion_archive_sha256, args.champion_checkpoint_sha256, args.champion_precision),
+                        ('/shared/x/champion.npz', 'e' * 64, CHECKPOINT, 'bf16'))
+                    self.assertEqual(parse(CHAMPION + ['--champion-precision', 'f32']).champion_precision, 'f32')
+                    self.assertEqual(ce.log_fields(args), dict(champion_archive='/shared/x/champion.npz', champion_archive_sha256='e' * 64,
+                        champion_checkpoint_sha256=CHECKPOINT, champion_precision='bf16'))
+                    self.refused(parse, CHAMPION[:4], 'go together')
+                    self.refused(parse, CHAMPION[:2] + CHAMPION[4:], 'go together')
+                    self.refused(parse, ['--champion-precision', 'f32'] + ([] if name != 'champion_forward_bench' else []), '--champion-precision needs')
+                    self.refused(parse, CHAMPION[:3] + ['E' * 64] + CHAMPION[4:], '64-hex')
+                    self.refused(parse, CHAMPION + ['--champion-precision', 'fp16'], 'invalid choice')
+                    if name != 'champion_forward_bench':
+                        self.refused(parse, CHAMPION + HEAD, 'mutually exclusive')
+                        self.refused(parse, CHAMPION + ['--head-category-sha256', '3' * 64], 'need --head-archive')
+                        none = parse([]);self.assertIsNone(none.champion_archive);self.assertIsNone(none.champion_precision);self.assertEqual(ce.log_fields(none), {})
+            from gpu_engine import d3_depthn_gate
+            self.refused(lambda argv: d3_depthn_gate.parse(argv), ['--out', str(Path(directory) / 'o'), '--diagnostics-from', directory] + CHAMPION, 'offline')
+            self.refused(lambda argv: d3_depthn_gate.parse(argv), ['--out', str(Path(directory) / 'o'), '--d3-root', '/d3', '--chunk', '0', '--raw-head-check'] + CHAMPION,
+                '--raw-head-check')
+
+    def test_load_champion_binds_the_bank_catalog(self):
+        from gpu_engine import d3_depth2_gate as g2
+        ev = tiny_champion();loaded = SimpleNamespace(provider=SimpleNamespace(prepared=SimpleNamespace(catalog='CATALOG')))
+        with patch.object(ce, 'load_from_arguments', return_value=ev) as load, patch.object(ce, 'check_binding', return_value=True) as bind:
+            self.assertIs(g2.load_champion(SimpleNamespace(), loaded), ev)
+        self.assertEqual(bind.call_args.args, (ev, 'CATALOG'));self.assertEqual(load.call_count, 1)
+        frame = batch.FramePricer('ex', 'model', capacity=16, block_rows=16, actor_capacity=33, vectorized=True, host_prep=True)
+        self.assertIs(g2.with_forward(frame, None), frame)
+        bound = g2.with_forward(frame, ev)
+        self.assertEqual((bound.capacity, bound.block_rows, bound.actor_capacity, bound.vectorized, bound.host_prep, bound.forward), (16, 16, 33, True, True, ev))
+        self.assertEqual(bound.evaluator_suffix, ce.program_suffix(ev));self.assertEqual(frame.evaluator_suffix, ())
+
+    def test_evaluator_header(self):
+        from gpu_engine import d3_depth2_gate as g2
+        ev = tiny_champion();args = SimpleNamespace(champion_archive='/shared/x/champion.npz', head_archive=None)
+        loaded = SimpleNamespace(plan=SimpleNamespace(model=SimpleNamespace(arm='D')), labels=SimpleNamespace(sha256='l' * 64), category_sha256='k' * 64,
+            snapshot=dict(iteration=-1, archive='run/actor--1.npz', archive_sha256='4' * 64))
+        header = g2.evaluator_header(args, loaded, None, champion=ev)
+        self.assertEqual((header['override'], header['kind'], header['identity'], header['archive'], header['archive_sha256'], header['checkpoint_sha256'],
+            header['precision'], header['pricer_arm']), (True, 'champion', ['champion', 'a' * 64, 'bfloat16'], '/shared/x/champion.npz', 'a' * 64, CHECKPOINT,
+            'bfloat16', None))
+        self.assertEqual(header['bank_actor']['iteration'], -1);self.assertNotIn('warning', header)
+        own = g2.evaluator_header(args, replace_snapshot(loaded), None)
+        self.assertEqual((own['kind'], own['identity'], own['precision'], own['override']), ('v2', ['v2'], 'bfloat16', False))
+        with self.assertRaisesRegex(ValueError, 'exclusive'):g2.bind_roots([], (ev.params,), None, head_config='HEAD', evaluator=ev)
+        with self.assertRaisesRegex(ValueError, 'alone'):g2.bind_roots([[]], ('a', 'b'), None, evaluator=ev)
+
+
+def replace_snapshot(loaded):
+    return SimpleNamespace(**dict(vars(loaded), snapshot=dict(loaded.snapshot, checkpoint='c.pt', checkpoint_sha256='3' * 64, model_sha256='5' * 64)))
+
+
+# ---------------------------------------------------------------- the tools thread the evaluator
+
+class Capture:
+    """A pricer stand-in recording its constructor keywords (every option the tools pass)."""
+    built = []
+
+    def __init__(self, *args, **kwargs):
+        self.args, self.kwargs = args, kwargs;Capture.built.append(self);self.child_block = kwargs.get('child_block', 27)
+
+
+def small_requests(c, count=3):
+    """Requests whose V2 root inputs give the exact stand-in a usable output (actors 1/0: the bank's, before binding)."""
+    rng = np.random.default_rng(9);out = []
+    for i in range(count):
+        inputs = {k: v[:1] for k, v in v2_inputs(c, 1, seed=20 + i).items()};inputs['numeric_features'] = inputs['numeric_features'] * np.float32(.05)
+        out.append(batch.Request(SimpleNamespace(root=SimpleNamespace(address=SimpleNamespace(stream=100 + i, frame=4, owner=i % 2))), (0.,) * 9,
+            (True,) * 9, inputs, 1, 0))
+    return out
+
+
+def fake_loaded(requests):
+    snapshot = dict(iteration=-1, archive='run/actor--1.npz', archive_sha256='4' * 64, checkpoint='c.pt', checkpoint_sha256='3' * 64, model_sha256='5' * 64)
+    return SimpleNamespace(provider=SimpleNamespace(executor='ex', recipe=SimpleNamespace(seed=1779000000), materializer='materializer', source='source'),
+        plan=SimpleNamespace(model=SimpleNamespace(arm='D'), historical_window=32), params=('bank actor',), groups=[list(requests)], source=dict(fixture=True),
+        labels=SimpleNamespace(sha256='l' * 64), category_sha256='k' * 64, snapshot=snapshot, frame_pricer='D3 frame pricer')
+
+
+class ToolThreadingTests(unittest.TestCase):
+    """Each tool binds the champion once (load_champion, bind_roots) and hands the same evaluator to every pricer, FramePricer and
+    oracle it builds; without the flags every call is the unchanged one (no forward= keyword)."""
+    def setUp(self):
+        Capture.built = [];self.champion = exact_champion();self.requests = small_requests(self.champion.config)
+
+    def args(self, **kw):
+        return SimpleNamespace(**dict(dict(head_archive=None, champion_archive='/shared/x/champion.npz', champion_archive_sha256='e' * 64,
+            champion_checkpoint_sha256=CHECKPOINT, champion_precision='bf16', chunk=0, saved_roots=None, max_roots=None, capacity=4, w_values=(2,),
+            worlds_blocks=1, k_own=9, k_opp=9, k1_own=9, k1_opp=9), **kw))
+
+    def loaded(self):
+        """The gate's bank loader and champion loader replaced (a fake chunk of self.requests; the exact stand-in), logs silenced."""
+        from gpu_engine import d3_depth2_gate as g2
+        stack = contextlib.ExitStack();loaded = fake_loaded(self.requests)
+        for p in (patch.object(g2, 'bank_chunk_requests', return_value=loaded), patch.object(g2, 'load_champion', return_value=self.champion),
+                patch.object(g2, 'log', lambda *a, **k: None)):stack.enter_context(p)
+        return stack
+
+    def test_depthn_gate_roots_bind_the_champion(self):
+        from gpu_engine import d3_depthn_gate as gate
+        with self.loaded(), patch.object(gate, 'log', lambda *a, **k: None):roots = gate.load_roots(self.args(d3_root='/d3'))
+        self.assertIs(roots.forward, self.champion);self.assertEqual(roots.params, (self.champion.params,));self.assertEqual(roots.actor_capacity, 1)
+        self.assertEqual({(r.learner_actor, r.opponent_actor) for g in roots.groups for r in g}, {(0, 0)})
+        self.assertEqual((roots.evaluator['kind'], roots.evaluator['arm_checked'], roots.evaluator['dropped_roots']), ('champion', True, []))
+        pricers = gate.DepthNPricers(SimpleNamespace(DepthNPricer=Capture), 'ex', 'model', depth=3, k_own=2, k_opp=2, selection='prior', capacity=4,
+            actor_capacity=1, forward=roots.forward)
+        pricers.get();self.assertIs(Capture.built[-1].kwargs['forward'], self.champion)
+        self.assertEqual(pricers.options()['evaluator'], ce.describe(self.champion))
+        gate.depth2_pass_pricer(SimpleNamespace(DepthNPricer=Capture), 'ex', 'model', capacity=4, actor_capacity=1, forward=roots.forward)
+        self.assertIs(Capture.built[-1].kwargs['forward'], self.champion)
+        plain = gate.DepthNPricers(SimpleNamespace(DepthNPricer=Capture), 'ex', 'model', depth=3, k_own=2, k_opp=2, selection='prior', capacity=4, actor_capacity=3)
+        plain.get();self.assertNotIn('forward', Capture.built[-1].kwargs);self.assertNotIn('evaluator', plain.options())
+        gate.depth2_pass_pricer(SimpleNamespace(DepthNPricer=Capture), 'ex', 'model', capacity=4, actor_capacity=3);self.assertNotIn('forward', Capture.built[-1].kwargs)
+        self.assertEqual(gate.forward_kwargs(None), {});self.assertEqual(gate.forward_kwargs(self.champion), dict(forward=self.champion))
+
+    def test_throughput_tools_hand_the_evaluator_to_every_pricer(self):
+        from gpu_engine import d3_depthn_throughput as tn, d3_depth2_throughput as t2
+        with self.loaded():ctx = tn.prepare(self.args())
+        self.assertIs(ctx.forward, self.champion);self.assertEqual((ctx.params, ctx.actor_capacity), ((self.champion.params,), 1))
+        self.assertEqual(ctx.evaluator['weights_affect_speed'], t2.CHAMPION_SPEED_NOTE);self.assertEqual(ctx.evaluator['kind'], 'champion')
+        args = SimpleNamespace(capacity=4, k1_own=9, k1_opp=9, block_lanes=2187)
+        tn.Caller('depth2-fw', args, ctx, module=SimpleNamespace(DepthNPricer=Capture));self.assertIs(Capture.built[-1].kwargs['forward'], self.champion)
+        tn.Caller('depth1', args, ctx, module=SimpleNamespace(DepthNPricer=Capture), frame_pricer_class=Capture)
+        self.assertIs(Capture.built[-1].kwargs['forward'], self.champion)
+        tn.Caller('depth1', args, SimpleNamespace(**dict(vars(ctx), forward=None)), module=SimpleNamespace(DepthNPricer=Capture), frame_pricer_class=Capture)
+        self.assertNotIn('forward', Capture.built[-1].kwargs)
+        with self.loaded():ctx2 = t2.prepare(self.args(capacity=4))
+        self.assertIs(ctx2.forward, self.champion);self.assertEqual(ctx2.evaluator['identity'], list(self.champion.identity))
+        calls, made = [], []
+        def make(executor, model, *, capacity, widths, child_block, actor_capacity, forward=None):
+            made.append(forward);return Capture(forward=forward), dict(child_block=27)
+        def seen(params, inputs):
+            calls.append(int(jax.tree.leaves(inputs)[0].shape[0]));return self.champion(params, inputs)
+        ctx2.forward = seen
+        with patch.object(t2, 'make_depth2', side_effect=make), patch.object(t2, 'measure', return_value=[]), patch.object(t2, 'derive', return_value={}), \
+                patch('gpu_engine.device_public_teacher_batch.FramePricer', Capture):
+            t2.measure_config('depth2', SimpleNamespace(capacity=256, child_block=None, k_own=9, k_opp=9, repeats=1), ctx2, None)
+            self.assertIs(made[-1], seen)
+            t2.measure_config('depth1', SimpleNamespace(capacity=256, child_block=None, k_own=9, k_opp=9, repeats=1, d1=True), ctx2, None)
+            self.assertIs(Capture.built[-1].kwargs['forward'], seen)
+            t2.measure_config('constant', SimpleNamespace(capacity=256, child_block=None, k_own=9, k_opp=9, repeats=1), ctx2, None)
+        variant = made[-1];self.assertIsNot(variant, seen)
+        inputs = {k: j.asarray(v) for k, v in v2_inputs(self.champion.config, 3).items()}
+        out = variant(self.champion.params, inputs);self.assertEqual(calls[-1], 3)   # a turn-1 batch: the champion itself
+        np.testing.assert_array_equal(np.asarray(out.value), np.asarray(self.champion(self.champion.params, inputs).value))
+
+    def test_latency_tool_roots_and_merged_pricer_take_the_evaluator(self):
+        from gpu_engine import d3_search_latency as tool
+        pricer, options = tool.merged_pricer(SimpleNamespace(Depth2Pricer=FakeMerged), 'ex', 'model', capacity=1, actor_capacity=1, k1_own=9, k1_opp=9,
+            forward=self.champion)
+        self.assertIs(pricer.kwargs['forward'], self.champion);self.assertEqual(options['evaluator'], ce.describe(self.champion));self.assertNotIn('forward', options)
+        plain, plain_options = tool.merged_pricer(SimpleNamespace(Depth2Pricer=FakeMerged), 'ex', 'model', capacity=1, actor_capacity=1, k1_own=9, k1_opp=9)
+        self.assertNotIn('forward', plain.kwargs);self.assertEqual(plain_options, dict(digest=True, actor_capacity=1, k_own=9, k_opp=9, k1_own=9, k1_opp=9,
+            capacity=1, fixed_capacity=True))
+        program = tool.root_program_for('model', self.champion);root = {k: j.asarray(v) for k, v in self.requests[0].root_inputs.items()}
+        np.testing.assert_array_equal(np.asarray(program(self.champion.params, root).policy_logits), np.asarray(self.champion(self.champion.params, root).policy_logits))
+        fake = lambda p, x, model, compute_dtype: dict(model=j.asarray(model == 'MODEL'), bf16=j.asarray(compute_dtype == 'bfloat16'))
+        with patch.object(batch.v5_model, 'forward', side_effect=fake) as v2:out = tool.root_program_for('MODEL', None)({'w': j.zeros(1)}, root)
+        self.assertEqual((bool(out['model']), bool(out['bf16']), v2.call_count), (True, True, 1))   # the V2 default: the D-arm head in bf16, unchanged
+        search = tool.Search('depth2-fw', 1, SimpleNamespace(k1_own=9, k1_opp=9, block_lanes=2187), SimpleNamespace(provider=SimpleNamespace(executor='ex'),
+            plan=SimpleNamespace(model='model'), actor_capacity=1, params=(self.champion.params,), forward=self.champion), module=SimpleNamespace(DepthNPricer=Capture))
+        self.assertIs(search.pricer.kwargs['forward'], self.champion)
+
+
+class FakeMerged:
+    def __init__(self, executor, model, *, capacity=2048, actor_capacity=33, k_own=9, k_opp=9, k1_own=9, k1_opp=9, child_block=27, digest=False, forward=None,
+            fixed_capacity=False):
+        self.kwargs = dict(capacity=capacity, digest=digest, fixed_capacity=fixed_capacity, **({} if forward is None else dict(forward=forward)))
+
+
+# ---------------------------------------------------------------- the forward microbenchmark
+
+class ForwardBenchTests(unittest.TestCase):
+    def test_runs_tiny_on_cpu_with_compile_apart(self):
+        from gpu_engine import champion_forward_bench as bench
+        from gpu_engine.device_depth2_pricer import default_forward
+        from pokezero.v5_model import V5ModelConfig
+        from pokezero.v5_contract import LabelVocabulary
+        from gpu_engine import v5_model
+        ev = tiny_champion(config=tiny_config(numeric=132, categorical=41, vocabulary=16))
+        config = V5ModelConfig(16, 'b' * 64, LabelVocabulary('a' * 64, ('surf', 'rest'), (('blissey', 3), ('swalot', 2))), arm='B', width=8, layers=1,
+            attention_heads=2, expert_width=8, value_hidden=(8, 8), value_bins=5)
+        rng = np.random.default_rng(5);v2 = {k: j.asarray(rng.normal(0, .2, s).astype(np.float32)) for k, s in v5_model.shapes(config).items()}
+        clock = iter(np.arange(0., 1000., .5));records = []
+        report = bench.run([('champion', ev, ev.params, ev.header(), ev.config.vocabulary), ('v2', default_forward(config), v2, dict(kind='v2'), 16)], (3, 5),
+            warmup=1, repeats=3, progress=records.append, timer=lambda: float(next(clock)))
+        self.assertEqual(set(report['results']), {'champion', 'v2'});self.assertEqual(set(report['results']['champion']), {'3', '5'})
+        for name in ('champion', 'v2'):
+            for rows in (3, 5):
+                r = report['results'][name][str(rows)]
+                self.assertEqual((r['rows'], r['repeats'], r['valid_rows'], r['finite'], len(r['samples_ms'])), (rows, 3, rows, True, 3))
+                self.assertEqual((r['median_ms'], r['lower_seconds'], r['compile_seconds']), (500., .5, .5))   # every timer read is .5 s apart
+                self.assertEqual(r['rows_per_second'], rows / .5);self.assertEqual(r['output_shapes'], dict(policy_logits=[rows, 9], value=[rows]))
+        self.assertEqual(report['ratio_champion_over_v2_median'], {'3': 1., '5': 1.});self.assertEqual(len(records), 4)
+        self.assertEqual(report['inputs']['shapes']['5']['numeric_features'], [5, 1, 29, 132])
+        real = bench.run([('champion', ev, ev.params, {}, 16)], (4,), warmup=0, repeats=2)['results']['champion']['4']
+        self.assertGreater(real['median_ms'], 0.);self.assertGreater(real['compile_seconds'], 0.)
+
+    def test_main_writes_bench_json_from_a_bound_archive(self):
+        from gpu_engine import champion_forward_bench as bench
+        c = tiny_config(numeric=132, categorical=41, vocabulary=16)
+        with tempfile.TemporaryDirectory() as directory, patch.object(sys, 'stdout', io.StringIO()):
+            path = Path(directory) / 'champion.npz';digest = write_archive(path, c, tiny_params(c));out = Path(directory) / 'bench'
+            self.assertEqual(bench.main(['--out', str(out), '--rows', '3,4', '--warmup', '0', '--repeats', '2', '--champion-archive', str(path),
+                '--champion-archive-sha256', digest, '--champion-checkpoint-sha256', CHECKPOINT, '--champion-precision', 'f32']), 0)
+            report = json.loads((out / 'bench.json').read_text())
+            self.assertEqual((report['schema'], report['rows'], report['evaluators']['champion']['identity']), (bench.SCHEMA, [3, 4], ['champion', digest, 'float32']))
+            self.assertEqual(set(report['results']['champion']), {'3', '4'});self.assertIsNone(report['ratio_champion_over_v2_median'])
+            stderr = io.StringIO()
+            with patch.object(sys, 'stderr', stderr), self.assertRaises(SystemExit):bench.parse(['--out', str(Path(directory) / 'x')])
+            self.assertIn('at least one of', stderr.getvalue())
+
+
+if __name__ == '__main__':unittest.main()

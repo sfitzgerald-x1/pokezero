@@ -29,6 +29,13 @@ the host once per ply. The gather and write programs are keyed by the pool's
 row count, but they are a bare XLA gather and dynamic-update-slice, so a new
 capacity or ply recompiles nothing expensive. Padding (roots, worlds, lanes,
 dead slots, block and call slots) is computed but never enumerated.
+
+The evaluator is the forward= seam (default: the V2 head in bf16). Every program
+key carries the evaluator's identity (champion_evaluator.program_suffix: nothing
+for the V2 default, so its keys are byte-identical to before), so a program table
+shared between pricers (the latency tool's) never hands one evaluator's compiled
+program to another; digests hash the evaluator's digest view (its own slice of
+the inputs; unchanged for the default).
 """
 from dataclasses import dataclass,replace
 import math
@@ -40,7 +47,7 @@ import numpy as np
 
 from pokezero import v5_gumbel as original
 from . import device_public_teacher as serial,device_public_teacher_batch as batch,device_public_world_state as mapping
-from . import device_depth2_pricer as depth2,depth2_backups,depth2_digest as digests
+from . import champion_evaluator as evaluators,device_depth2_pricer as depth2,depth2_backups,depth2_digest as digests
 
 LANES=depth2.LANES;UNAVAILABLE=depth2.UNAVAILABLE;INPUT_KEYS=depth2.INPUT_KEYS
 PEER_VIEW_ERROR=depth2.PEER_VIEW_ERROR;PEER_PRIOR_REFUSED=depth2.PEER_PRIOR_REFUSED
@@ -171,9 +178,10 @@ def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,d
     is never enumerated. Outputs are flattened [G*B*K(,...)] in (block, node,
     own slot, opponent slot) order; at the leaf ply status/value/error (and
     the digest) only. The shape key is (B, G, K): nothing here depends on the
-    pool, the capacity or the ply.
+    pool, the capacity or the ply. Digests hash the forward's digest view
+    (champion_evaluator.digest_view; the inputs unchanged for the default).
     """
-    b=nodes;g=blocks;K=k_own*k_opp
+    b=nodes;g=blocks;K=k_own*k_opp;seen=depth2._seen(forward)
     joint=(depth2._make_leaf_joint if leaf else _make_expand_joint)(executor);views=depth2._make_views(executor)
     stacked=params[0]if len(params)==1 else jax.tree.map(lambda *xs:j.stack(xs),*params)
     actor_params=lambda actor:params[0]if len(params)==1 else jax.tree.map(lambda x:x[actor],stacked)
@@ -203,7 +211,7 @@ def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,d
             if leaf:
                 result=dict(status=j.where(~enumerated,0,j.where(err!=0,3,j.where(done,1,4))).astype(j.int8),
                     value=j.where(enumerated&(err==0),j.where(done,terminal,v),0.).astype(j.float32),error=j.where(enumerated,err,0).astype(j.int8))
-                if digest:result['digest']=keep(enumerated,digests.batched(inputs,axes=2))
+                if digest:result['digest']=keep(enumerated,digests.batched(seen(inputs),axes=2))
                 return result
             new_states,new_publics,masks,own_legal,opp_legal,opp_error,opp_inputs=out[5:]
             values=j.where(done,terminal,v)
@@ -222,7 +230,7 @@ def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,d
                 own_requested=keep(viewed,own_req),opp_requested=keep(viewed,opp_req),own_legal=keep(viewed,own_legal),opp_legal=keep(viewed,opp_legal),
                 own_logits=keep(viewed,j.where(own_req[...,None],lg,0.)),opp_logits=keep(expanded,j.where(opp_req[...,None],plg,0.)),
                 states=new_states,publics=new_publics)
-            if digest:result.update(digest_own=keep(enumerated,digests.batched(inputs,axes=2)),digest_opp=keep(enumerated,digests.batched(opp_inputs,axes=2)))
+            if digest:result.update(digest_own=keep(enumerated,digests.batched(seen(inputs),axes=2)),digest_opp=keep(enumerated,digests.batched(seen(opp_inputs),axes=2)))
             return result
         def empty():
             z=lambda shape,dtype:j.zeros((b,K)+shape,dtype)
@@ -415,7 +423,10 @@ class DepthNPricer:
         shrinking request count never recompiles; the block programs never
         depend on capacity. `digest` adds bit-exact view digests at every ply;
         `forward(params, inputs)` is the only actor seam (default: the v5 head
-        in bf16).
+        in bf16; a champion_evaluator.ChampionEvaluator for champion 9375).
+        Every program key gains the forward's identity
+        (`evaluator_suffix` = champion_evaluator.program_suffix(forward): () for
+        the default), so one evaluator reuses its programs and two never share.
         """
         if type(capacity)is not int or capacity<=0 or type(actor_capacity)is not int or actor_capacity<=0:
             raise ValueError('finite explicit root/actor capacities required')
@@ -431,6 +442,7 @@ class DepthNPricer:
         self.executor=executor;self.model=model;self.capacity=capacity;self.actor_capacity=actor_capacity;self.depth=depth
         self.k1_own=k1_own;self.k1_opp=k1_opp;self.block_lanes=block_lanes;self.blocks_per_call=blocks_per_call;self.selection=selection;self.fixed_capacity=fixed_capacity
         self.digest=digest;self.forward=forward if forward is not None else depth2.default_forward(model)
+        self.evaluator_suffix=evaluators.program_suffix(forward)
         self.programs={};self.compiles=();self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
     def bind(self,params):
@@ -440,7 +452,9 @@ class DepthNPricer:
             self.params=tuple(params);self.param_key=key;self.programs={};self.source_params=tuple(params)
 
     def _program(self,key,build,*args):
-        """Lower and compile once per shape key; later calls reuse the executable (args must keep their shapes and dtypes)."""
+        """Lower and compile once per shape key and evaluator (the key gains `evaluator_suffix`); later calls reuse the executable
+        (args must keep their shapes and dtypes)."""
+        key=key+self.evaluator_suffix
         if key not in self.programs:
             fn=build();clock=time.perf_counter();lowered=fn.lower(*args);lower=time.perf_counter()-clock
             clock=time.perf_counter();self.programs[key]=lowered.compile();self.compiles+=((key,lower,time.perf_counter()-clock),)
