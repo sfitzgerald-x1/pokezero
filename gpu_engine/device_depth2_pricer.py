@@ -14,6 +14,10 @@ learner-archive-homogeneous blocks under jax.lax.map, so the second ply's
 device memory is bounded by child_block*k_own*k_opp leaf lanes whatever the
 frame size; a block without an expanded child is skipped. Padding (roots,
 worlds, lanes, k slots, block slots) is computed but never enumerated.
+
+The turn-1 stage (`make_turn1_stage`), the top-k rule (`ranked`) and the host
+packing (`validate_requests`, `pack_turn1`) are module-level so the depth-N
+engine (`device_depthn_pricer`) reuses them unchanged as its program P1.
 """
 from dataclasses import dataclass
 import time
@@ -106,30 +110,55 @@ def _make_leaf_joint(executor):
     return jax.vmap(single,in_axes=(None,None,None,None,None,None,0,None))
 
 
-def _widths(k_own,k_opp,k1_own,k1_opp,child_block):
-    if any(type(k)is not int or not 1<=k<=9 for k in(k_own,k_opp,k1_own,k1_opp)):raise ValueError('turn widths are integers in1..9')
-    if type(child_block)is not int or child_block<=0:raise ValueError('positive child block required')
-
-
-def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9,k1_opp=9,child_block=27,digest=False,forward=None):
-    """One device invocation: D3's turn-1 frame, then blocked turn-2 leaves.
-
-    `forward(params, inputs)` is the only actor seam (turn-1 leaves, both child
-    priors, turn-2 leaves); it defaults to the v5 head in bf16. Block slots and
-    actors come from the host (`Depth2Pricer._blocks`), grouped by the learner's
-    archive so each block runs one parameter tree.
-    """
-    _widths(k_own,k_opp,k1_own,k1_opp,child_block)
-    if type(capacity)is not int or capacity<=0 or type(digest)is not bool:raise ValueError('explicit root capacity and digest bool required')
-    if forward is None:
-        def forward(p,inputs):return v5_model.forward(p,inputs,model,compute_dtype='bfloat16')
-    n=capacity*2;children=n*LANES;pairs2=k_own*k_opp;cb=child_block
-    child_joint=_make_child_joint(executor);leaf_joint=_make_leaf_joint(executor)
+def _make_views(executor):
+    """Both seats' observations of one world (dispatch views and encoder inputs), from the engine masks."""
     def views(state,public,owner):
         masks=executor.legal(state);seat=j.asarray([owner],j.int32)
         own=executor.observe(state,public,seat,masks[:,owner])
         peer=executor.observe(state,public,1-seat,masks[:,1-owner])
         return own.observation,peer.observation,own.inputs,peer.inputs
+    return views
+
+
+def ranked(mask,logits,k,requested):
+    """Top-k by prior over the last axis: logit descending, lower action index on ties (a stable sort of -logit).
+
+    Returns the chosen actions [...,k] and the live slots. A waiting seat enumerates column 0 alone; k slots past the
+    legal count repeat the first choice and are never live.
+    """
+    order=j.argsort(j.where(mask&j.isfinite(logits),-logits,j.inf),axis=-1,stable=True)
+    count=j.where(requested,j.minimum(j.sum(mask,axis=-1),k),1)
+    slot=j.arange(k);live=slot<count[...,None]
+    chosen=j.take_along_axis(order,j.where(live,slot,0),axis=-1)
+    return j.where(requested[...,None],chosen,0),live
+
+
+def _widths(k_own,k_opp,k1_own,k1_opp,child_block):
+    if any(type(k)is not int or not 1<=k<=9 for k in(k_own,k_opp,k1_own,k1_opp)):raise ValueError('turn widths are integers in1..9')
+    if type(child_block)is not int or child_block<=0:raise ValueError('positive child block required')
+
+
+def default_forward(model):
+    def forward(p,inputs):return v5_model.forward(p,inputs,model,compute_dtype='bfloat16')
+    return forward
+
+
+def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=False,forward=None):
+    """D3's turn-1 frame with the child carry: the depth-2 kernel's first stage, traced inside the caller's jit.
+
+    `turn1(a)` returns the cell-indexed [capacity,2,9,9,...] turn-1 fields under
+    'frame' (D3's bits for `t1_value` and the learner's child prior) and the
+    lane-indexed [n,81] carry a second stage needs: the children's states and
+    trackers, both seats' request flags, encoder masks and priors, the
+    enumeration and the pairs. `forward(params, inputs)` is the only actor
+    seam; it defaults to the v5 head in bf16 and is returned for the caller's
+    later plies.
+    """
+    _widths(9,9,k1_own,k1_opp,1)
+    if type(capacity)is not int or capacity<=0 or type(digest)is not bool:raise ValueError('explicit root capacity and digest bool required')
+    if forward is None:forward=default_forward(model)
+    n=capacity*2
+    child_joint=_make_child_joint(executor);views=_make_views(executor)
     def grouped_forward(inputs,rows,*,joint=False):
         # D3's archive batches, verbatim: the current actor gets one dense
         # batch, historical archives share one padded geometry under vmap.
@@ -149,16 +178,7 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
             lp,vp,ok=jax.vmap(evaluate)(weights,indices)
             logits=logits.at[indices].set(lp,mode='drop');values=values.at[indices].set(vp,mode='drop');valid=valid.at[indices].set(ok,mode='drop')
         return logits,values,valid
-    def ranked(mask,logits,k,requested):
-        # Top-k by prior: logit descending, lower action index on ties (stable
-        # sort of -logit). A waiting seat enumerates column 0 alone; k slots
-        # past the legal count repeat the first choice and are never live.
-        order=j.argsort(j.where(mask&j.isfinite(logits),-logits,j.inf),axis=-1,stable=True)
-        count=j.where(requested,j.minimum(j.sum(mask,axis=-1),k),1)
-        slot=j.arange(k);live=slot<count[...,None]
-        chosen=j.take_along_axis(order,j.where(live,slot,0),axis=-1)
-        return j.where(requested[...,None],chosen,0),live
-    def run(a):
+    def turn1(a):
         states,publics=a['states'],a['publics']
         flatten=lambda x:x.reshape((n,)+x.shape[2:])
         states=jax.tree.map(flatten,states);publics=jax.tree.map(flatten,publics)
@@ -227,13 +247,52 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
         status1=j.where(~enumerated,0,j.where(errors!=0,3,j.where(done,1,2))).astype(j.int8);expanded=status1==2
         errors=j.where(enumerated,errors,0).astype(j.int8)
         own_logits2=j.where(own_req2[...,None],leaf_logits,0.);peer_logits2=j.where(peer_req2[...,None],peer_logits2,0.)
-        sel_own,live_own=ranked(own_legal2,own_logits2,k_own,own_req2)
-        sel_opp,live_opp=ranked(peer_legal2,peer_logits2,k_opp,peer_req2)
+        a1=j.where(enumerated,pairs[...,0],9);r1=j.where(enumerated,pairs[...,1],9)
+        def scatter1(x):
+            return j.zeros((n,9,9)+x.shape[2:],x.dtype).at[j.arange(n)[:,None],a1,r1].set(x,mode='drop')
+        def rooted(x):return x.reshape((capacity,2)+x.shape[1:])
+        usable_world=(pre==0)[:,None]
+        # Child-level fields follow what is known at the child: the learner's
+        # side and both seats' masks wherever its view is D3-valid (`viewed`,
+        # so also under codes 5/6); the opponent's prior only when expanded.
+        keep=lambda mask,x:j.where(mask.reshape(mask.shape+(1,)*(x.ndim-2)),x,j.zeros((),x.dtype))
+        frame=dict(pre=rooted(pre),
+            peer_requested=rooted(requested&usable_world[:,0]),peer_legal=rooted(legal&usable_world),peer_logits=rooted(j.where(usable_world,logits,0.)),
+            t1_status=rooted(scatter1(status1)),t1_value=rooted(scatter1(j.where(priced,values,0.))),t1_error=rooted(scatter1(errors)),
+            t1_own_requested=rooted(scatter1(keep(viewed,own_req2))),t1_own_legal=rooted(scatter1(keep(viewed,own_legal2))),t1_own_logits=rooted(scatter1(keep(viewed,own_logits2))),
+            t1_peer_requested=rooted(scatter1(keep(viewed,peer_req2))),t1_peer_legal=rooted(scatter1(keep(viewed,peer_legal2))),t1_peer_logits=rooted(scatter1(keep(expanded,peer_logits2))))
+        if digest:
+            lane=lambda x:j.where(enumerated[...,None],x,j.uint32(0))
+            frame.update(t1_digest_own=rooted(scatter1(lane(digests.batched(inputs,axes=2)))),
+                t1_digest_peer=rooted(scatter1(lane(digests.batched(peer_child_inputs,axes=2)))))
+        return dict(frame=frame,pre=pre,pairs=pairs,enumerated=enumerated,expanded=expanded,owners=owners,
+            own_req2=own_req2,peer_req2=peer_req2,own_legal2=own_legal2,peer_legal2=peer_legal2,own_logits2=own_logits2,peer_logits2=peer_logits2,
+            child_states=child_states,child_publics=child_publics)
+    return turn1,forward
+
+
+def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9,k1_opp=9,child_block=27,digest=False,forward=None):
+    """One device invocation: D3's turn-1 frame, then blocked turn-2 leaves.
+
+    `forward(params, inputs)` is the only actor seam (turn-1 leaves, both child
+    priors, turn-2 leaves); it defaults to the v5 head in bf16. Block slots and
+    actors come from the host (`Depth2Pricer._blocks`), grouped by the learner's
+    archive so each block runs one parameter tree.
+    """
+    _widths(k_own,k_opp,k1_own,k1_opp,child_block)
+    turn1,forward=make_turn1_stage(executor,model,params=params,capacity=capacity,k1_own=k1_own,k1_opp=k1_opp,digest=digest,forward=forward)
+    n=capacity*2;children=n*LANES;pairs2=k_own*k_opp;cb=child_block
+    leaf_joint=_make_leaf_joint(executor);views=_make_views(executor)
+    def run(a):
+        t=turn1(a);pre,pairs,enumerated,expanded,owners=t['pre'],t['pairs'],t['enumerated'],t['expanded'],t['owners']
+        own_req2,peer_req2=t['own_req2'],t['peer_req2']
+        sel_own,live_own=ranked(t['own_legal2'],t['own_logits2'],k_own,own_req2)
+        sel_opp,live_opp=ranked(t['peer_legal2'],t['peer_logits2'],k_opp,peer_req2)
         # Turn 2 over flattened children. Each block gathers its children
         # inside the conditional, so a skipped block moves nothing and one
         # block of states, views and leaves is live at a time.
         flat=lambda x:x.reshape((children,)+x.shape[2:])
-        child_states=jax.tree.map(flat,child_states);child_publics=jax.tree.map(flat,child_publics)
+        child_states=jax.tree.map(flat,t['child_states']);child_publics=jax.tree.map(flat,t['child_publics'])
         owners_child=j.repeat(owners,LANES)
         req_seat=flat(j.where(owners[:,None,None]==j.arange(2),own_req2[...,None],peer_req2[...,None]))
         sel_own_c,sel_opp_c,expanded_c=flat(sel_own),flat(sel_opp),flat(expanded)
@@ -277,27 +336,77 @@ def make_depth2_kernel(executor,model,*,params,capacity,k_own=9,k_opp=9,k1_own=9
         def place(x):
             x=x.reshape((slots.shape[0],k_own,k_opp)+x.shape[3:])
             return j.zeros((n,9,9,9,9)+x.shape[3:],x.dtype).at[world,A1,R1,A2,R2].set(x,mode='drop')
-        def scatter1(x):
-            return j.zeros((n,9,9)+x.shape[2:],x.dtype).at[j.arange(n)[:,None],a1,r1].set(x,mode='drop')
         def rooted(x):return x.reshape((capacity,2)+x.shape[1:])
-        usable_world=(pre==0)[:,None]
-        # Child-level fields follow what is known at the child: the learner's
-        # side and both seats' masks wherever its view is D3-valid (`viewed`,
-        # so also under codes 5/6); the opponent's prior only when expanded.
-        keep=lambda mask,x:j.where(mask.reshape(mask.shape+(1,)*(x.ndim-2)),x,j.zeros((),x.dtype))
-        result=dict(pre=rooted(pre),active_blocks=active_blocks,
-            peer_requested=rooted(requested&usable_world[:,0]),peer_legal=rooted(legal&usable_world),peer_logits=rooted(j.where(usable_world,logits,0.)),
-            t1_status=rooted(scatter1(status1)),t1_value=rooted(scatter1(j.where(priced,values,0.))),t1_error=rooted(scatter1(errors)),
-            t1_own_requested=rooted(scatter1(keep(viewed,own_req2))),t1_own_legal=rooted(scatter1(keep(viewed,own_legal2))),t1_own_logits=rooted(scatter1(keep(viewed,own_logits2))),
-            t1_peer_requested=rooted(scatter1(keep(viewed,peer_req2))),t1_peer_legal=rooted(scatter1(keep(viewed,peer_legal2))),t1_peer_logits=rooted(scatter1(keep(expanded,peer_logits2))),
-            t2_value=rooted(place(out[0])),t2_status=rooted(place(out[1])),t2_error=rooted(place(out[2])))
-        if digest:
-            lane=lambda x:j.where(enumerated[...,None],x,j.uint32(0))
-            result.update(t2_digest=rooted(place(out[3])),
-                t1_digest_own=rooted(scatter1(lane(digests.batched(inputs,axes=2)))),
-                t1_digest_peer=rooted(scatter1(lane(digests.batched(peer_child_inputs,axes=2)))))
+        result=dict(t['frame'],active_blocks=active_blocks,t2_value=rooted(place(out[0])),t2_status=rooted(place(out[1])),t2_error=rooted(place(out[2])))
+        if digest:result.update(t2_digest=rooted(place(out[3])))
         return result
     return jax.jit(run)
+
+
+def validate_requests(requests,materializer,recipe,params):
+    """D3's request checks plus the verified actor-index range; raises ValueError."""
+    if type(recipe)is not original.Recipe or type(materializer)is not mapping.Tables:
+        raise ValueError('original materializer and random recipe required')
+    for request in requests:
+        p=request.plans
+        if (not p.selected or p.selected!=recipe.selected(p.root.address)or len(p.starts)!=2
+                or tuple(x.world for x in p.starts)!=(0,1)
+                or p.source_hash!=materializer.source.source_hash
+                or p.source_rows_sha256!=materializer.source.source_rows_sha256
+                or p.root.source_binding_sha256!=materializer.source.binding_sha256):
+            raise ValueError('same selected root/source/world/recipe required')
+        original._probabilities(tuple(request.root_logits),original._mask(request.root_legal))
+        if not request.root_inputs or set(request.root_inputs)-set(INPUT_KEYS):
+            raise ValueError('original encoder input keys required')
+        if any(type(x)is not int or not 0<=x<len(params)for x in(request.learner_actor,request.opponent_actor)):
+            raise ValueError('verified original actor index required')
+
+
+def pack_turn1(requests,worlds,recipe,capacity,params,*,k1_own=9,fixed_capacity=False):
+    """D3's host inputs for one frame at `capacity` root slots, or None when no world has a state.
+
+    States and publics are stacked [capacity,2,...] with a missing world taking
+    the first available state and padding roots repeating it (`available`
+    marks the real ones); `order` is the k1_own prefix of each root's pricing
+    order padded with its first action; `peer_rows`/`leaf_rows` are D3's
+    archive-grouped actor rows (every archive sized 2*capacity under
+    fixed_capacity, so the compile key never moves).
+    """
+    available=[w for pair in worlds for w in pair if w.state is not None]
+    if not available:return None
+    count=len(requests);first=available[0];flat=[w if w.state is not None else first for pair in worlds for w in pair]
+    def stacked(values,world_axis=False):
+        values=jax.device_get(tuple(values))
+        def pack(*leaves):
+            value=np.stack(leaves);length=capacity*(2 if world_axis else 1)
+            padded=np.empty((length,)+value.shape[1:],value.dtype);padded[:len(value)]=value;padded[len(value):]=value[0]
+            return padded.reshape((capacity,2)+value.shape[1:])if world_axis else padded
+        return jax.tree.map(pack,*values)
+    def vector(values,dtype,default=0):
+        result=np.full(capacity,default,dtype);result[:count]=values;return result
+    data=dict(states=stacked([w.state for w in flat],True),publics=stacked([w.public for w in flat],True),
+        expected=stacked([r.root_inputs for r in requests]),
+        legal=np.zeros((capacity,9),bool),order=np.zeros((capacity,9),np.int32),
+        order_size=np.ones(capacity,np.int32),available=np.zeros((capacity,2),bool),
+        owner=vector([r.plans.root.address.owner for r in requests],np.int32))
+    data['legal'][:count]=[r.root_legal for r in requests];data['legal'][count:,0]=True
+    data['available'][:count]=[[w.state is not None for w in pair]for pair in worlds]
+    for i,r in enumerate(requests):
+        order=recipe.pricing_order(r.plans.root.address,r.root_logits,r.root_legal)[:k1_own]
+        data['order'][i]=order+(order[0],)*(9-len(order));data['order_size'][i]=len(order)
+    def actor_rows(field):
+        actors=np.repeat([getattr(r,field)for r in requests],2)
+        counts=[int(np.count_nonzero(actors==actor))for actor in range(len(params))]
+        history=max(counts[1:],default=0)
+        history_size=0 if history==0 else 1<<(history-1).bit_length()
+        rows=[]
+        for actor in range(len(params)):
+            indices=np.flatnonzero(actors==actor).astype(np.int32)
+            size=2*capacity if actor==0 or fixed_capacity else history_size
+            padded=np.full(size,2*capacity,np.int32);padded[:len(indices)]=indices;rows.append(padded)
+        return tuple(rows)
+    data['peer_rows']=actor_rows('opponent_actor');data['leaf_rows']=actor_rows('learner_actor')
+    return data
 
 
 class Depth2Pricer:
@@ -349,55 +458,12 @@ class Depth2Pricer:
         if len(requests)>self.capacity:raise ValueError('one frame exceeds declared root capacity')
         capacity=self.capacity if self.fixed_capacity else min(self.capacity,1<<(len(requests)-1).bit_length())
         self.bind(params);started=time.perf_counter()
-        for request in requests:
-            p=request.plans
-            if (not p.selected or p.selected!=recipe.selected(p.root.address)or len(p.starts)!=2
-                    or tuple(x.world for x in p.starts)!=(0,1)
-                    or p.source_hash!=materializer.source.source_hash
-                    or p.source_rows_sha256!=materializer.source.source_rows_sha256
-                    or p.root.source_binding_sha256!=materializer.source.binding_sha256):
-                raise ValueError('same selected root/source/world/recipe required')
-            original._probabilities(tuple(request.root_logits),original._mask(request.root_legal))
-            if not request.root_inputs or set(request.root_inputs)-set(INPUT_KEYS):
-                raise ValueError('original encoder input keys required')
-            if any(type(x)is not int or not 0<=x<len(params)for x in(request.learner_actor,request.opponent_actor)):
-                raise ValueError('verified original actor index required')
+        validate_requests(requests,materializer,recipe,params)
         worlds=batch._numpy_worlds(requests,materializer,recipe);prepared=time.perf_counter()
         available=[w for pair in worlds for w in pair if w.state is not None]
         count=len(requests);output=None;data=None;lower_seconds=compile_seconds=device_seconds=0.
         if available:
-            first=available[0];flat=[w if w.state is not None else first for pair in worlds for w in pair]
-            def stacked(values,world_axis=False):
-                values=jax.device_get(tuple(values))
-                def pack(*leaves):
-                    value=np.stack(leaves);length=capacity*(2 if world_axis else 1)
-                    padded=np.empty((length,)+value.shape[1:],value.dtype);padded[:len(value)]=value;padded[len(value):]=value[0]
-                    return padded.reshape((capacity,2)+value.shape[1:])if world_axis else padded
-                return jax.tree.map(pack,*values)
-            def vector(values,dtype,default=0):
-                result=np.full(capacity,default,dtype);result[:count]=values;return result
-            data=dict(states=stacked([w.state for w in flat],True),publics=stacked([w.public for w in flat],True),
-                expected=stacked([r.root_inputs for r in requests]),
-                legal=np.zeros((capacity,9),bool),order=np.zeros((capacity,9),np.int32),
-                order_size=np.ones(capacity,np.int32),available=np.zeros((capacity,2),bool),
-                owner=vector([r.plans.root.address.owner for r in requests],np.int32))
-            data['legal'][:count]=[r.root_legal for r in requests];data['legal'][count:,0]=True
-            data['available'][:count]=[[w.state is not None for w in pair]for pair in worlds]
-            for i,r in enumerate(requests):
-                order=recipe.pricing_order(r.plans.root.address,r.root_logits,r.root_legal)[:self.k1_own]
-                data['order'][i]=order+(order[0],)*(9-len(order));data['order_size'][i]=len(order)
-            def actor_rows(field):
-                actors=np.repeat([getattr(r,field)for r in requests],2)
-                counts=[int(np.count_nonzero(actors==actor))for actor in range(len(params))]
-                history=max(counts[1:],default=0)
-                history_size=0 if history==0 else 1<<(history-1).bit_length()
-                rows=[]
-                for actor in range(len(params)):
-                    indices=np.flatnonzero(actors==actor).astype(np.int32)
-                    size=2*capacity if actor==0 or self.fixed_capacity else history_size
-                    padded=np.full(size,2*capacity,np.int32);padded[:len(indices)]=indices;rows.append(padded)
-                return tuple(rows)
-            data['peer_rows']=actor_rows('opponent_actor');data['leaf_rows']=actor_rows('learner_actor')
+            data=pack_turn1(requests,worlds,recipe,capacity,params,k1_own=self.k1_own,fixed_capacity=self.fixed_capacity)
             data['child_slots'],data['block_actor']=self._blocks(requests,capacity,params)
             key=(capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']),data['child_slots'].shape)
             device_data=jax.device_put(data)
