@@ -523,6 +523,72 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
             self.assertEqual((config['tolerance']['value_bound'], config['tolerance']['logit_bound'], config['tolerance']['q_noise_bound']), (1e-6, .05, 1e-6))
             self.assertGreater(config['e']['roots_compared'], 0);self.assertGreater(config['discrete']['compared']['t2_status'], 0)
 
+    def d2_call(self):
+        """One depth-2 full-width call on the champion path's oracle consistency (run_call_n d2_consistency=True)."""
+        gate = gate_module();pricers = self.champion_pricers(depth=2, k=9)
+        depth2_pricer = gate.depth2_pass_pricer(pricers.module, self.ex, object(), capacity=32, actor_capacity=3, digest=True, forward=self.champion)
+        with self.engine():
+            evaluation, _ = gate.run_call_n(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=self.params, pricers=pricers,
+                depth2_pricer=depth2_pricer, frame_pricer=self.frame_pricer(), oracle=self.oracle, sample=None, block=0, context=dict(block=0, call=0),
+                d2_consistency=True)
+        return evaluation
+
+    def test_depth2_oracle_consistency_passes_clean_and_catches_corrupted_digests(self):
+        """D2_ORACLE_CONSISTENCY: clean, every leaf_child_* and leaf_walk_* field compared and equal; the depth-2 leaf walk returning one leaf's
+        parent own-view digest and another leaf's own digest one bit off FAILs exactly those two fields, and only the oracle-consistency
+        check (the pricer still equals the depth-N oracle)."""
+        evaluation = self.d2_call();result, (status, _) = self.judged(evaluation);compared = evaluation['oracle']['compared']
+        self.assertEqual(status, 'PASS', N.failing(result));self.assertTrue(evaluation['oracle']['passed'])
+        for name in ('leaf_path', 'leaf_child_known', 'leaf_child_expanded', 'leaf_child_invalid', 'leaf_child_done', 'leaf_child_own_digest', 'leaf_child_peer_digest',
+                'leaf_walk_status', 'leaf_walk_error', 'leaf_walk_digest'):
+            self.assertGreater(compared.get(name, 0), 0, name)
+        self.assertEqual(compared['leaf_child_known'], compared['leaf_path'])   # every checked leaf, re-walked
+        real = self.oracle.leaves
+        def corrupted(stack, specs, params):
+            out = dict(real(stack, specs, params));i = int(np.flatnonzero(np.asarray(out['status']) == 4)[0])
+            out['child_own_digest'] = np.array(out['child_own_digest'], copy=True);out['child_own_digest'][0, 0] ^= np.uint32(1)
+            out['digest'] = np.array(out['digest'], copy=True);out['digest'][i, 1] ^= np.uint32(1);return out
+        with patch.object(self.oracle, 'leaves', corrupted):evaluation = self.d2_call()
+        result, (status, _) = self.judged(evaluation);mismatched = {k: v for k, v in evaluation['oracle']['mismatched'].items() if v}
+        self.assertEqual((status, set(N.failing(result))), ('FAIL', {'oracle_consistency'}));self.assertTrue(evaluation['a']['passed'])
+        self.assertEqual(mismatched, dict(leaf_child_own_digest=1, leaf_walk_digest=1))
+
+    def test_depth2_gate_and_n2_headers_record_the_merged_gate_parity(self):
+        """main(): the champion depth-2 gate gates the oracle consistency and says so in merged_depth2_parity with every remaining
+        difference; --n2-equivalence without --block-invariance says child-block invariance did not run."""
+        code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9');report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'))
+        parity = report['header']['merged_depth2_parity'];oracle = report['checks']['oracle_consistency']['compared']
+        self.assertEqual((parity['mode'], parity['champion_path_additions']['d2_oracle_consistency'][:3]), ('gate', 'ran'))
+        self.assertEqual([d['name'] for d in parity['remaining_differences']], [d['name'] for d in gate_module().MERGED_DEPTH2_DIFFERENCES])
+        self.assertGreater(oracle['leaf_child_own_digest'], 0);self.assertGreater(oracle['leaf_walk_digest'], 0)
+        code, out = self.main('--n2-equivalence', '--n2-k', '2');report = json.loads((out / 'n2-equivalence.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'));parity = report['header']['merged_depth2_parity']
+        self.assertEqual((parity['mode'], parity['champion_path_additions']['child_block_invariance'][:7]), ('n2_equivalence', 'not run'))
+        self.assertFalse(any('block_invariance' in c for c in report['configs'].values()))
+        code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2');report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual(code, 0);self.assertNotIn('merged_depth2_parity', report['header']);self.assertNotIn('leaf_child_known', report['checks']['oracle_consistency']['compared'])
+
+    def test_n2_child_block_invariance_passes_clean_and_catches_a_child_block_dependent_pricer(self):
+        """--n2-equivalence --block-invariance: each config's Depth2Pricer at child_block 27 and 81, gated per config; a Depth2Pricer stand-in
+        whose child_block-27 frames carry every head-valued t2_value .25 higher FAILs each config on block invariance alone."""
+        g2 = gate_module().g2;code, out = self.main('--n2-equivalence', '--n2-k', '2', '--block-invariance')
+        report = json.loads((out / 'n2-equivalence.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), {n: c.get('block_invariance', {}).get('differing') for n, c in report['configs'].items()})
+        self.assertEqual(report['header']['merged_depth2_parity']['champion_path_additions']['child_block_invariance'][:3], 'ran')
+        for name, config in report['configs'].items():
+            inv = config['block_invariance'];self.assertEqual((inv['passed'], inv['discrete_equal'], inv['child_blocks'], inv['calls']), (True, True, [27, 81], 1), name)
+            self.assertGreater(inv['arrays_compared'], 10);self.assertGreater(inv['floats']['t2_value']['compared'], 0)
+            self.assertEqual(report['options'][name]['child_blocks'], [27, 81]);self.assertEqual(report['options'][name]['depth2_options']['child_block'], 81)
+        real = g2.make_pricer
+        def make(*args, **kw):
+            pricer, options = real(*args, **kw);return ChildBlockDependent(pricer), options
+        with patch.object(g2, 'make_pricer', make):code, out = self.main('--n2-equivalence', '--n2-k', '2', '--block-invariance')
+        report = json.loads((out / 'n2-equivalence.json').read_text());self.assertEqual((code, report['status']), (1, 'FAIL'))
+        for name, config in report['configs'].items():
+            inv = config['block_invariance'];self.assertEqual((inv['passed'], inv['discrete_equal'], inv['floats']['t2_value']['within_bound']), (False, True, False), name)
+            self.assertTrue(config['discrete']['passed'] and config['e']['passed'] and all(m['passed'] for m in config['floats'].values()), name)   # the compared frame is clean
+
     def test_a_declaration_for_another_evaluator_is_refused(self):
         for key, value in (('precision', 'float32'), ('archive_sha256', 'e' * 64), ('kind', 'v2'), ('checkpoint_sha256', 'b' * 64)):
             with self.subTest(key):
@@ -535,6 +601,18 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
 def gate_module():
     from gpu_engine import d3_depthn_gate
     return d3_depthn_gate
+
+
+class ChildBlockDependent:
+    """A Depth2Pricer stand-in that depends on its child block: the real pricer, except that child_block-27 frames carry every head-valued
+    t2_value .25 higher."""
+    def __init__(self, pricer):self.pricer, self.child_block, self.capacity = pricer, pricer.child_block, pricer.capacity
+
+    def price(self, *args, **kwargs):
+        frame = self.pricer.price(*args, **kwargs)
+        if self.child_block != 27:return frame
+        value = np.array(frame.t2_value, copy=True);value[np.asarray(frame.t2_status) == 4] += np.float32(.25)
+        return replace(frame, t2_value=value)
 
 
 # ---------------------------------------------------------------- the tools' flags

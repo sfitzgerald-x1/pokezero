@@ -2494,6 +2494,20 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         finally:self.roots = roots
         self.assertIn('not for the resolved evaluator', str(raised.exception.code));self.assertIn('evaluator.precision', str(raised.exception.code))
 
+    def test_off_the_champion_path_depth2_and_n2_are_unchanged(self):
+        """B1's path (the head override here): a depth-2 full-width gate gates only the depth-N leaf walk's path in oracle consistency and
+        carries no merged_depth2_parity; --n2-equivalence --block-invariance stays refused off the champion path (the champion takes it)."""
+        code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9', *HEAD_FLAGS);report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'))
+        self.assertEqual(set(report['checks']['oracle_consistency']['compared']), {'leaf_path'});self.assertNotIn('merged_depth2_parity', report['header'])
+        live = ['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--n2-equivalence', '--block-invariance']
+        champion = ['--champion-archive', 'c.npz', '--champion-archive-sha256', 'e' * 64, '--champion-checkpoint-sha256', 'c' * 64]
+        for argv in (live, live + list(HEAD_FLAGS), live[:-2] + ['--depth3-diagnostics', '--block-invariance'] + champion):
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:gate.parse(argv)
+            self.assertEqual(raised.exception.code, 2);self.assertIn('--block-invariance belongs to the gate', stderr.getvalue())
+        self.assertTrue(gate.parse(live + champion)[1].block_invariance)
+
     def test_without_the_flag_nothing_changes(self):
         """No declaration: no declared key in any report section, log line or saved frame; header_block keeps its three keys; declared_rule and
         declared_kwargs are the identity and the empty call. (The byte-for-byte check against the pre-change gate is the probe in the report.)"""
