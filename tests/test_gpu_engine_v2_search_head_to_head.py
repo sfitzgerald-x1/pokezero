@@ -166,19 +166,45 @@ class ChooseTests(unittest.TestCase):
 class ChampionMirrorTests(unittest.TestCase):
     """The champion mirror's harness seams on CPU fakes: per-seat forwards, greedy fallback, the evaluator check, CLI guards."""
     def test_grouped_forward_routes_each_seat_to_its_actor(self):
+        import jax
         from types import SimpleNamespace
         b = 3;a_side = j.asarray([0, 1, 0], j.int32)
-        # Row r of the flat [2b] inputs is lane r // 2, seat r % 2; its feature encodes (lane, seat).
-        inputs = dict(numeric_features=j.asarray([[10. * (r // 2) + r % 2] for r in range(2 * b)], j.float32))
-        forward = lambda params, x: SimpleNamespace(policy_logits=j.repeat(x['numeric_features'] + params, 9, axis=1),
-            value=x['numeric_features'][:, 0] * 0 + params, valid=j.ones(x['numeric_features'].shape[0], bool))
-        logits, values, ok = h2h.grouped_forward(inputs, (100., 200.), (forward, forward), a_side, lambda o: o.valid)
+        # Row r of the flat [2b] inputs is lane r // 2, seat r % 2; its feature encodes (lane, seat). Row 5 is NaN (invalid).
+        features = [[10. * (r // 2) + r % 2] for r in range(2 * b)];features[5] = [float('nan')]
+        inputs = dict(numeric_features=j.asarray(features, j.float32))
+        def make(sign):   # two DIFFERENT forwards: A's adds params, B's subtracts it
+            return lambda params, x: SimpleNamespace(policy_logits=j.repeat(x['numeric_features'] + sign * params, 9, axis=1),
+                value=x['numeric_features'][:, 0] * 0 + sign * params, valid=j.isfinite(x['numeric_features'][:, 0]))
+        run = jax.jit(lambda x, a: h2h.grouped_forward(x, (100., 200.), (make(1.), make(-1.)), a, lambda o: o.valid))
+        logits, values, ok = run(inputs, a_side)
         for lane in range(b):
             for seat in (0, 1):
-                actor = 100. if seat == int(a_side[lane]) else 200.
-                self.assertEqual(float(values[lane, seat]), actor)
-                self.assertEqual(float(logits[lane, seat, 0]), 10. * lane + seat + actor)
-        self.assertTrue(bool(np.all(np.asarray(ok))))
+                r = 2 * lane + seat;mine = seat == int(a_side[lane]);shift = 100. if mine else -200.
+                if r == 5:   # the invalid row: refused, NaN outputs (the champion adapter's convention)
+                    self.assertFalse(bool(ok[lane, seat]));self.assertTrue(np.isnan(float(logits[lane, seat, 0])))
+                    self.assertTrue(np.isnan(float(values[lane, seat])))
+                else:
+                    self.assertTrue(bool(ok[lane, seat]));self.assertEqual(float(values[lane, seat]), shift)
+                    self.assertEqual(float(logits[lane, seat, 0]), 10. * lane + seat + shift)
+
+    def test_fallback_actions(self):
+        legal = np.asarray([[True, True, False] + [False] * 6, [False, True, True] + [False] * 6])
+        logits = np.asarray([[1., 1., 9.] + [0.] * 6, [5., 2., 3.] + [0.] * 6], np.float32)
+        np.testing.assert_array_equal(h2h.fallback_actions('argmax', [1, 2], logits, legal), [0, 2])   # legal only; ties low
+        np.testing.assert_array_equal(h2h.fallback_actions('sample', [1, 2], logits, legal), [1, 2])
+        with self.assertRaises(ValueError):h2h.fallback_actions('greedy', [1, 2], logits, legal)
+
+    def test_champion_setup_binds_in_order(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from gpu_engine import champion_evaluator
+        calls = [];evaluator = SimpleNamespace(archive_sha256='a' * 64, checkpoint_sha256='c' * 64, params={'w': 1}, header=lambda: {'kind': 'champion'})
+        with mock.patch.object(champion_evaluator, 'load_from_arguments', lambda args: calls.append('load') or evaluator), \
+                mock.patch.object(champion_evaluator, 'check_binding', lambda e, catalog: calls.append(('bind', e is evaluator, catalog)) or True):
+            got, record, params = h2h.champion_setup(SimpleNamespace(), 'CATALOG')
+        self.assertEqual(calls, ['load', ('bind', True, 'CATALOG')])
+        self.assertIs(got, evaluator);self.assertIs(params, evaluator.params)
+        self.assertEqual((record.iteration, record.checkpoint_sha256, record.evaluator), (9375, 'c' * 64, {'kind': 'champion'}))
 
     def test_refused_decision_plays_the_greedy_fallback_and_raw_stays_raw(self):
         tests = ChooseTests();grids = {0: None, 1: [[1., -.5], [-.5, .5]]}
@@ -210,10 +236,16 @@ class ChampionMirrorTests(unittest.TestCase):
             for extra in (['--champion-archive', 'c.npz'],                                                   # shas missing
                     ['--champion-archive', 'c.npz', '--champion-archive-sha256', sha, '--champion-checkpoint-sha256', sha, '--a-run', 'r', '--a-iteration', '1']):
                 with self.assertRaises(SystemExit):h2h.main(base + extra)
-            cells = Path(root, 'cells.json');cells.write_text(json.dumps([dict(label='x', b_run='/some/run', b_iteration=99, reduction='none')]))
-            with self.assertRaises(SystemExit):   # a champion run whose cell names a V2 opponent
-                h2h.main(['--config', 'unused.json', '--out', root, '--cells', str(cells), '--champion-archive', 'c.npz',
-                    '--champion-archive-sha256', sha, '--champion-checkpoint-sha256', sha])
+            champion = ['--champion-archive', 'c.npz', '--champion-archive-sha256', sha, '--champion-checkpoint-sha256', sha]
+            with self.assertRaises(SystemExit):h2h.main(base + champion + ['--collector-check', '3'])   # no v5 collector check
+            with self.assertRaises(SystemExit):h2h.main(base + champion + ['--a-iteration', '9'])       # A is the champion
+            cells = Path(root, 'cells.json')
+            for cell, extra in ((dict(label='x', b_run='/some/run', b_iteration=99, reduction='none'), champion),   # V2 opponent in champion mode
+                    (dict(label='x', b_run='champion', b_iteration=0, reduction='none'), ['--a-run', 'r', '--a-iteration', '1']),   # champion in V2 mode
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='raw', fallback='argmax'), ['--a-run', 'r', '--a-iteration', '1']),
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='none', fallback='argmax'), ['--a-run', 'r', '--a-iteration', '1'])):
+                cells.write_text(json.dumps([cell]))
+                with self.assertRaises(SystemExit):h2h.main(['--config', 'unused.json', '--out', root, '--cells', str(cells)] + extra)
 
 
 class CompareTests(unittest.TestCase):

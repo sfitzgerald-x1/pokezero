@@ -17,7 +17,10 @@ Search (A's head prices both seats; B's model is never used by search):
   gate), average (D's completed-Q argmax; at depth 2 over learner-max backups), hedge (Bayesian zero-sum LP,
   sampled; at depth 2 over per-world turn-2 zero-sum values), blend (the LP blended with the reply prior at
   --blend, sampled).
-- A refused root plays the raw sampled action, exactly as raw play would.
+- A refused root plays the cell's fallback: the raw sampled action (`fallback=sample`, exactly as raw play would) or the
+  greedy argmax of A's legal logits (`fallback=argmax`). `b_policy=argmax` makes B play its greedy argmax.
+- Champion mode (`--champion-archive` and its shas): both seats and the search evaluator are champion 9375 through
+  `champion_evaluator` (load, check_binding on the runtime catalog, a first-request op-by-op check); cells name b_run 'champion'.
 - `--never-borrow`: at every searched decision, re-run detach, plans, worlds, prices and choice from a context
   whose true-state cells other than A's own are another game's; any byte difference is counted (gate c).
 
@@ -72,6 +75,25 @@ def grouped_forward(inputs, params, forwards, a_side, finite):
         raw_logits = raw_logits.at[at].set(out.policy_logits);values = values.at[at].set(out.value)
         ok = ok.at[at].set(finite(out))
     return raw_logits.reshape(b, 2, 9), values.reshape(b, 2), ok.reshape(b, 2)
+
+
+def fallback_actions(policy, raw, logits, legal):
+    """A refused or unsearched decision's action: the raw sample ('sample') or A's greedy legal argmax, lowest index on ties ('argmax')."""
+    if policy == 'sample':return np.asarray(raw)
+    if policy == 'argmax':return np.argmax(np.where(legal, logits, -np.inf), axis=-1).astype(np.int32)
+    raise ValueError('fallback sample or argmax required')
+
+
+def champion_setup(args, catalog):
+    """Champion mode's binding, as the engine session's tools: load (archive and checkpoint shas), check_binding on the runtime's
+    encoder catalog (fail closed), then one parameter tree for both seats. Returns (evaluator, actor record, params)."""
+    from types import SimpleNamespace
+    from gpu_engine import champion_evaluator
+    evaluator = champion_evaluator.load_from_arguments(args)
+    champion_evaluator.check_binding(evaluator, catalog)
+    record = SimpleNamespace(iteration=9375, archive_sha256=evaluator.archive_sha256, checkpoint_sha256=evaluator.checkpoint_sha256,
+        evaluator=evaluator.header())
+    return evaluator, record, evaluator.params
 
 
 def make_step(engine_tables, observation_tables, model_config, *, sampling_seed, max_requests, forwards=None):
@@ -304,8 +326,9 @@ class Search:
         roots = self.worlds.detach_roots(context, self.source, rows=tuple(rows), owners=tuple(owners), enable_device_worlds=True)
         self.timing['detach_seconds'] += time.perf_counter() - clock
         if not self.evaluator_checked:
+            clock = time.perf_counter()
             self.evaluator.check(self.params[0], {**{k: np.asarray(v[:1])[:, None] for k, v in inputs.items()}, 'history_mask': np.ones((1, 1), bool)})
-            self.evaluator_checked = True
+            self.evaluator_checked = True;self.timing['evaluator_check_seconds'] += time.perf_counter() - clock
         fallback_actions = raw_actions if fallback_actions is None else fallback_actions
         per_block = [];plans_by_block = []
         for recipe in self.recipes:
@@ -391,7 +414,8 @@ def main(argv=None):
     parser.add_argument('--blend', type=float, default=.5, help='reply-prior weight lambda for --reduction blend')
     parser.add_argument('--world-blocks', type=int, default=4, help='W = 2 * blocks')
     parser.add_argument('--cells', help='JSON list of cells played in order by this process (label, b_run, b_iteration, '
-        'reduction, and optionally blend, world_blocks, never_borrow); replaces the single-cell options')
+        'reduction, and optionally blend, world_blocks, never_borrow, b_policy sample|argmax, fallback sample|argmax); '
+        'replaces the single-cell options')
     parser.add_argument('--search-seed', type=int, default=2026110500)
     parser.add_argument('--capacities', default='64,512', help='fixed pricer root capacities (padded)')
     parser.add_argument('--depth2-child-block', type=int, default=27)
@@ -405,7 +429,8 @@ def main(argv=None):
     champion_evaluator.add_arguments(parser)   # champion mode: both seats and the search evaluator are 9375 (b_run 'champion')
     args = parser.parse_args(argv);champion_evaluator.check_arguments(parser, args)
     champion = bool(args.champion_archive)
-    if champion and (args.a_run or args.collector_check):parser.error('champion mode: no --a-run (A is the champion) and no --collector-check (v5 collector)')
+    if champion and (args.a_run or args.a_iteration is not None or args.collector_check):
+        parser.error('champion mode: no --a-run/--a-iteration (A is the champion) and no --collector-check (v5 collector)')
     if not champion and (args.a_run is None or args.a_iteration is None):parser.error('--a-run and --a-iteration required (or the champion flags)')
     if args.cells:cells = json.loads(Path(args.cells).read_text())
     else:
@@ -415,7 +440,8 @@ def main(argv=None):
     for cell in cells:
         if (set(cell) - {'label', 'b_run', 'b_iteration', 'reduction', 'blend', 'world_blocks', 'never_borrow', 'b_policy', 'fallback'}
                 or cell['reduction'] not in REDUCTIONS or cell.get('b_policy', 'sample') not in ('sample', 'argmax')
-                or cell.get('fallback', 'sample') not in ('sample', 'argmax') or (cell['b_run'] == 'champion') != champion):
+                or cell.get('fallback', 'sample') not in ('sample', 'argmax') or (cell['b_run'] == 'champion') != champion
+                or (cell.get('fallback', 'sample') != 'sample' and cell['reduction'] in NO_SEARCH + ('raw',))):   # nothing to fall back from
             raise SystemExit('malformed cell: ' + json.dumps(cell))
     if len({c['label'] for c in cells}) != len(cells):raise SystemExit('cell labels must be unique')
     if any(c.get('never_borrow') for c in cells) and args.games is not None and args.games < 2:
@@ -428,14 +454,11 @@ def main(argv=None):
     from gpu_engine.v2_fused import prepare
     begin = time.perf_counter();out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     context = prepare(argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1));plan = context['plan']
-    loaded = {};evaluator = forward = None
+    loaded = {};evaluator = None
     if champion:
         # The engine session's binding (d3_depth2_gate.load_champion): archive and checkpoint shas, then the runtime catalog.
-        from types import SimpleNamespace
-        evaluator = champion_evaluator.load_from_arguments(args);champion_evaluator.check_binding(evaluator, context['prepared'].catalog)
-        forward = jax.jit(lambda p, x: evaluator(p, x))
-        loaded[('champion', None)] = (SimpleNamespace(iteration=9375, archive_sha256=evaluator.archive_sha256,
-            checkpoint_sha256=evaluator.checkpoint_sha256, evaluator=evaluator.header()), evaluator.params)
+        evaluator, record, champion_params = champion_setup(args, context['prepared'].catalog)
+        loaded[('champion', None)] = (record, champion_params)
     def actor(run, iteration):
         if champion:return loaded[('champion', None)]   # one parameter tree for both seats: (champion,), actors 0/0
         if (run, iteration) not in loaded:
@@ -459,7 +482,7 @@ def main(argv=None):
     pairs = [(g.stream_id, g.stream_id - SWAP_OFFSET) for g in batch.games]
     prepared = context['prepared']
     decide, apply = make_step(prepared.engine_tables, prepared.observation_tables, plan.model, sampling_seed=batch.sampling_seed,
-        max_requests=plan.max_requests, forwards=(forward, forward) if champion else None)
+        max_requests=plan.max_requests, forwards=(evaluator, evaluator) if champion else None)
     collector_check = None
     if args.collector_check:
         # The raw path of this split step against the collector's own advance, from the same carry.
@@ -491,7 +514,7 @@ def main(argv=None):
                 search = Search(prepared, plan, a_params, pricer=args.pricer, reduction=cell['reduction'], blend=cell['blend'],
                     world_blocks=cell['world_blocks'], seed=args.search_seed, capacities=tuple(int(x) for x in args.capacities.split(',')),
                     depth2_options=dict(child_block=args.depth2_child_block, **(dict(fixed_capacity=True) if args.depth2_fixed_capacity else {})),
-                    workers=args.workers, evaluator=evaluator, forward=forward)
+                    workers=args.workers, evaluator=evaluator, forward=evaluator)
             else:search.configure(reduction=cell['reduction'], blend=cell['blend'], world_blocks=cell['world_blocks'])
         play_cell(setup, cell, fresh(), (a_params, b_params), b, search if cell['reduction'] not in NO_SEARCH else None, out,
             setup_seconds=time.perf_counter() - begin)
@@ -537,7 +560,7 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
             if len(rows):
                 raw = host['actions'][rows, a_side_host[rows]]
                 logits = host['raw_logits'][rows, a_side_host[rows]];legal = host['legal'][rows, a_side_host[rows]]
-                greedy = np.argmax(np.where(legal, logits, -np.inf), axis=-1).astype(np.int32)   # lowest index on ties
+                greedy = fallback_actions('argmax', raw, logits, legal)
                 chosen = raw.copy();records = [dict(searched=False, refusal='no-search', strategy=None, value=None)] * len(rows)
                 if cell['reduction'] == 'argmax':   # greedy raw policy, lowest index on ties: the sampling-vs-greedy control
                     chosen = greedy.copy()
@@ -549,13 +572,14 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
                     if cell['never_borrow']:
                         state = counterfactual(carry.state, rows, a_side_host[rows], perm, worlds.OWN_MON_FIELDS + worlds.OWN_SIDE_FIELDS)
                         probe = dict(context=RootContext(state, carry.public, carry.streams, carry.frames), stats=probe_stats)
-                    fallback = raw if cell['fallback'] == 'sample' else greedy
+                    fallback = fallback_actions(cell['fallback'], raw, logits, legal);check_before = search.timing['evaluator_check_seconds']
                     if probe is not None:probe['fallback'] = fallback
                     result = search.choose(root_context, [int(r) for r in rows], [int(a_side_host[r]) for r in rows], logits, legal,
                         inputs, raw, probe=probe, fallback_actions=fallback)
                     chosen = np.asarray([x for x, _ in result], np.int32);records = [r for _, r in result]
                     probe_seconds = probe_stats['probe_seconds'] - probe_before if probe is not None else 0.
-                    timing['search_seconds'] += time.perf_counter() - clock - probe_seconds   # the probe is timed apart
+                    check_seconds = search.timing['evaluator_check_seconds'] - check_before
+                    timing['search_seconds'] += time.perf_counter() - clock - probe_seconds - check_seconds   # probe and check timed apart
                 actions[rows, a_side_host[rows]] = chosen
                 masked = np.where(legal, logits, -np.inf)
                 for i, r in enumerate(rows):
