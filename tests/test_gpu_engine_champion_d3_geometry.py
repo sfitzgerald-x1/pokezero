@@ -26,9 +26,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import jax.numpy as j
 import numpy as np
 
-from gpu_engine import champion_d3_geometry as d3g, champion_leaf_validation as v, d3_depth2_gate as g2, d3_depthn_gate as gate
+from gpu_engine import champion_d3_geometry as d3g, champion_evaluator as ce, champion_leaf_validation as v, d3_depth2_gate as g2, d3_depthn_gate as gate
 from gpu_engine import device_public_teacher_batch as batch, v5_model
 from tests import test_gpu_engine_champion_evaluator as CE, test_gpu_engine_champion_leaf_validation as V, test_gpu_engine_depthn_oracle as N
 
@@ -58,6 +59,18 @@ def earlier_report(evaluators, *, roots=27, chunk=0, capacity=512, levels=True, 
     header = dict(source=dict(d3_root='/d3', chunk=chunk, declaration_sha256='d' * 64), roots=roots, options=dict(max_roots=None, fixed_shapes=True, capacity=capacity),
         evaluators={name: {k: ev.header()[k] for k in ('archive_sha256', 'checkpoint_sha256', 'precision')} for name, ev in evaluators.items()})
     return dict(schema=v.SCHEMA, header=header, geometry=geo)
+
+
+class RootPoisoned(ce.ChampionEvaluator):
+    """bf16 only: NaN (invalid) on every turn-0 view of the root whose clock is `clock`: D3's bf16 refuses its worlds (pre 9: the opponent's
+    prior is unusable); f32, and every other root, are untouched."""
+    clock = None
+
+    def __call__(self, params, inputs):
+        out = super().__call__(params, inputs)
+        if self.precision != 'bfloat16':return out
+        x = inputs['numeric_features'][:, 0, 0];hit = (x[:, 4] == 0) & (x[:, 1] == type(self).clock)
+        return out._replace(policy_logits=j.where(hit[:, None], j.nan, out.policy_logits), value=j.where(hit, j.nan, out.value), valid=out.valid & ~hit)
 
 
 @unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
@@ -118,6 +131,12 @@ class GeometryTests(N.FixtureN, unittest.TestCase):
             with self.subTest(anchor=key):self.assertGreater(aq[key]['f32']['count'], 20);self.assertLessEqual(aq[key]['max'], v.ADAPTER_LOGIT)
         self.assertLessEqual(aq[d3g.VALUE]['bf16']['max'], d[d3g.VALUE]['max'])   # the sample under D_all
         self.assertTrue(all(n == 0 for n in a['findings'].values()), a['findings'])
+        self.assertGreater(aq[d3g.ILLEGAL]['lanes'], 0)   # every sampled world's nine lanes: its legal ones and the rest
+        self.assertEqual(aq[d3g.LOGITS]['lanes'] + aq[d3g.ILLEGAL]['lanes'], 9 * aq[d3g.LOGITS]['compared']);self.assertEqual(aq[d3g.LOGITS]['compared'], aq[d3g.ILLEGAL]['compared'])
+        pa = body['pricer_anchor'];self.assertEqual(pa['flags'], [])   # the pass's f32 against D3's f32 at (b)'s positions, every kind of lane
+        for k, bound in d3g.PRICER_ANCHOR.items():
+            with self.subTest(pass_premise=k):self.assertGreater(pa['quantities'][k]['count'], 0);self.assertIs(pa['quantities'][k]['within'], True);self.assertEqual(pa['quantities'][k]['bound'], bound)
+        self.assertEqual(pa['quantities']['t1_value']['count'], pq[d3g.P_VALUE]['count']);self.assertEqual(body['proposal']['flagged_bounds'], {})
         self.assertTrue(all(x['anchor']['cells'] <= 48 and x['anchor']['worlds'] <= 48 for x in body['calls']))
         opts, popts = body['d3_options'], body['pass_options']
         self.assertEqual(opts['departures'], ['call split 16 != the gate\'s 512']);self.assertEqual({k: opts['pricers']['bf16'][k] for k in d3g.GATE_D3}, d3g.GATE_D3)
@@ -143,6 +162,25 @@ class GeometryTests(N.FixtureN, unittest.TestCase):
         for text in ('| d3.root_peer_logits.all_lanes |', '| pricer.root_peer_logits.all_lanes |', '| b.root_peer_logits_all_lanes |', 'set by ', 'capacity 16 != the gate'):
             self.assertIn(text, summary)
         json.dumps(v.plain(report), allow_nan=False)
+
+    def test_bs_positions_are_the_bf16_d3s(self):
+        """A root only the bf16 D3 refuses (its opponent's bf16 prior is NaN: pre 9): D3 lists both worlds as refused; they leave (b)'s positions,
+        so the pass is compared on the bf16 D3's worlds only (no pricer difference, P_all_lanes over 9 x its worlds), and every site and bound
+        is flagged with the refusal."""
+        clocks = [float(r.plans.root.address.stream % 79) for r in self.groups[0]]
+        q = next(i for i, x in enumerate(clocks) if i not in (3, 7) and self.MODES[i][0] % 100 != 6 and clocks.count(x) == 1)
+        with patch.object(RootPoisoned, 'clock', clocks[q]):measured = self.measured(V.pair(cls=RootPoisoned), capacity=32, sample=16)
+        body = d3g.assemble(measured);c = body['comparison'];pq = c['pricer']['quantities']
+        refused = c['structural']['kinds']['world_refused'];self.assertEqual(refused['count'], 2);self.assertEqual([x['cell'] for x in refused['first']], [[q, 0], [q, 1]])
+        self.assertEqual([x['bf16'] for x in refused['first']], ['ValueError: current public actor output refused/nonfinite'] * 2)
+        self.assertEqual(c['counts']['priced_f32'] - c['counts']['priced_bf16'], 2);self.assertEqual(c['pricer']['counts']['worlds_d3_priced'], c['counts']['priced_bf16'])
+        self.assertEqual(pq[d3g.P_ALL_LANES]['count'], 9 * c['counts']['priced_bf16']);self.assertEqual(c['pricer']['structural']['count'], 0)
+        self.assertEqual(pq[d3g.P_ALL_LANES]['nonfinite'], 0);self.assertEqual(body['pricer_anchor']['flags'], [])
+        prop = d3g.fold(earlier_report(self.clean), body['d_all'], None, body['p_run'], structural={k: e['count'] for k, e in c['structural']['kinds'].items()},
+            pricer_anchor=body['pricer_anchor'])
+        self.assertEqual(set(prop['flagged_bounds']), set(d3g.BOUND_SITES));self.assertTrue(all(any('structural world_refused 2' in r for r in x) for x in prop['flagged_bounds'].values()))
+        self.assertTrue(all('structural world_refused 2' in prop['sites'][site]['caveats'] for site in d3g.SITES));self.assertIsNotNone(prop['root_logit_all_geometries'])
+        self.assertEqual(set(body['proposal']['flagged_bounds']), set(d3g.BOUND_SITES))   # assemble's own fold, too
 
     def test_a_mis_sliced_champion_exceeds_the_anchor_bound(self):
         """D3 prices with a champion reading tokens 1..23 (both precisions): its f32 differs from the raw forward on the ladder's own layout, so the
@@ -246,8 +284,9 @@ class ComparisonTests(unittest.TestCase):
         return [result('COMPLETE', [dict(grid={(0, 0): .5}), dict(grid={(0, 0): .5})])]
 
     def test_the_depth2_pass_at_bs_positions(self):
-        """Two roots. (b)'s positions are the bf16 D3's: root 0's two worlds (one requested, legal lanes 0-1) and root 1's world 0 (unrequested);
-        root 1's world 1 (D3 refused it) is outside, however far its frames differ. Cells: D3-priced and enumerated by both frames."""
+        """Two roots. (b)'s positions are the bf16 D3's: root 0's two worlds (requested, legal lanes 0-1) and root 1's world 0 (unrequested);
+        root 1's world 1 (the bf16 D3 refused it, the f32 D3 did not) is outside, however far its frames differ. Cells: D3-priced and enumerated
+        by both frames. The pass's f32 against D3's f32 at those positions, by kind of lane: an illegal lane 3e-4 apart is over 2e-4, flagged."""
         n = 2;shape = lambda *s: np.zeros((n, 2) + s, np.float32)
         def frame(lane5=0., lane0=0., cell=0., far=0.):
             logits = shape(9);logits[0, 0, 5] = lane5;logits[0, 0, 0] = lane0;logits[1, 1, 0] = far
@@ -256,15 +295,68 @@ class ComparisonTests(unittest.TestCase):
             return SimpleNamespace(pre=np.asarray([[0, 0], [0, 1]], np.int32), root_peer_requested=requested, root_peer_legal=legal, root_peer_logits=logits,
                 t1_status=status, t1_value=value)
         f32, bf16 = frame(), frame(lane5=.5, lane0=.01, cell=.002, far=9.);bf16.t1_status = bf16.t1_status.copy();bf16.t1_status[0, 0, 1, 0] = 0
-        known = np.zeros((n, 2, 9, 9), bool);known[0, 0, :2, :2] = True;known[0, 0, 1, 0] = True   # (2, 2): a D3 error cell, no value
-        gate_d3 = dict(d_priced=np.asarray([[True, True], [True, False]]), d_known=known)
-        out = d3g.pricer_call(dict(f32=f32, bf16=bf16), gate_d3, [request(0), request(1)], call=2)
+        known = np.zeros((n, 2, 9, 9), bool);known[0, 0, :2, :2] = True   # (2, 2): a D3 error cell, no value
+        def d3(priced, logits=None, value=None, known=known):
+            legal = np.zeros((n, 2, 9), bool);legal[:, :, :2] = True
+            return dict(d_priced=np.asarray(priced), d_known=known, d_value=np.where(known, 0. if value is None else value, np.nan).astype(np.float32),
+                d_reply_logits=shape(9) if logits is None else logits, d_reply_legal=legal, d_opponent_requested=np.asarray([[True, True], [False, True]]))
+        logits = shape(9);logits[0, 0, 5] = 3e-4;logits[0, 1, 0] = 1e-4;value = np.zeros((n, 2, 9, 9), np.float32);value[0, 0, 0, 0] = 1e-6
+        lesser = known.copy();lesser[0, 0, 1, 1] = False   # a cell the f32 D3 does not value: outside the pass's anchor (no NaN difference)
+        D3 = dict(bf16=d3([[True, True], [True, False]]), f32=d3([[True, True], [True, True]], logits, value, lesser))
+        out = d3g.pricer_call(dict(f32=f32, bf16=bf16), D3, [request(0), request(1)], call=2)
         self.assertEqual({k: e['count'] for k, e in out['findings'].items()}, dict(pricer_t1_enumeration=1));self.assertEqual(out['findings']['pricer_t1_enumeration']['first'][0]['cell'], [0, 0, 1, 0])
         s = v.spread(out['values']);self.assertEqual((s['count'], s['max']), (3, np.float32(.002)))   # (1, 0) not enumerated by bf16; (2, 2) not D3-priced
         s = v.spread(out['all_lanes']);self.assertEqual((s['count'], s['max']), (3 * 9, .5))   # the illegal lane 5 counts; root 1 world 1 does not
         s = v.spread(out['logits']);self.assertEqual((s['count'], s['max']), (4, np.float32(.01)))   # precision_call's positions: pre 0 and requested, legal lanes
         self.assertEqual(out['counts'], dict(worlds_d3_priced=3, cells_d3_priced=4, cells_compared=3, cells_unenumerated_bf16=1, all_lanes_compared=27, legal_worlds=2,
-            legal_lanes_compared=4))
+            legal_lanes_compared=4, vs_d3_f32_t1_value=2, vs_d3_f32_legal_lanes=4, vs_d3_f32_illegal_lanes=14, vs_d3_f32_unrequested_worlds=9))
+        vs = {k: v.spread(x) for k, x in out['vs_d3_f32'].items()};self.assertEqual(sum(x['nonfinite'] for x in vs.values()), 0)
+        self.assertEqual({k: (x['count'], x.get('max')) for k, x in vs.items()}, dict(t1_value=(2, float(np.float32(1e-6))), legal_lanes=(4, float(np.float32(1e-4))),
+            illegal_lanes=(14, float(np.float32(3e-4))), unrequested_worlds=(9, 0.)))
+        pa = d3g.pricer_anchor_section(vs);self.assertEqual({k: x['within'] for k, x in pa['quantities'].items()}, dict(t1_value=True, legal_lanes=True, illegal_lanes=False,
+            unrequested_worlds=True))
+        self.assertEqual(len(pa['flags']), 1);self.assertTrue(pa['flags'][0].startswith('illegal_lanes: EXCEEDED: pass f32 vs D3 f32 max 0.0003 > 0.0002'))
+        touched, neutral = d3g.caveats(None, pa);self.assertEqual(({k for k, x in touched.items() if x}, neutral), ({d3g.LANES_SITE}, []))
+
+    def test_the_positions_are_check_ds(self):
+        """g2.check_d's own numeric positions (the bf16 frame against the bf16 D3), cell for cell and lane for lane, on random Results and frames
+        with refused worlds, D3 error cells, unrequested worlds and cells the frame did not enumerate (the reviewer's check)."""
+        rng = np.random.default_rng(7);R = 40;worlds = []
+        frame = dict(pre=np.full((R, 2), -1, np.int32), root_peer_requested=np.zeros((R, 2), bool), root_peer_legal=np.zeros((R, 2, 9), bool),
+            root_peer_logits=np.zeros((R, 2, 9), np.float32), t1_status=np.zeros((R, 2, 9, 9), np.int8), t1_error=np.zeros((R, 2, 9, 9), np.int8), t1_value=np.zeros((R, 2, 9, 9), np.float32))
+        for q in range(R):
+            pair = []
+            for w in range(2):
+                if rng.random() < .2:pair.append('physical-materialization:none');continue
+                req = rng.random() < .7;legal = rng.random(9) < .5;legal[0] |= not legal.any();logits = rng.normal(size=9).astype(np.float32) * req
+                acts = rng.choice(9, size=rng.integers(1, 10), replace=False);replies = np.flatnonzero(legal) if req else [0];grid, errors = {}, []
+                for a in acts:
+                    for r in replies:
+                        if rng.random() < .1:errors.append((int(a), int(r), 'ValueError: current public actor output refused/nonfinite'))
+                        else:grid[(int(a), int(r))] = float(rng.normal())
+                pair.append(dict(grid=grid, requested=req, legal=tuple(map(bool, legal)), logits=tuple(map(float, logits)), errors=tuple(errors)))
+                frame['pre'][q, w] = 0;frame['root_peer_requested'][q, w] = req;frame['root_peer_legal'][q, w] = legal;frame['root_peer_logits'][q, w] = logits + 1e-3
+                for (a, r), x in grid.items():
+                    if rng.random() < .9:frame['t1_status'][q, w, a, r] = 2;frame['t1_value'][q, w, a, r] = x + 1e-3   # 10% not enumerated (k1 pruning)
+                for a, r, _ in errors:frame['t1_status'][q, w, a, r] = 3;frame['t1_error'][q, w, a, r] = 4
+            worlds.append(pair)
+        bf16 = [result('COMPLETE', x) for x in worlds]
+        f32 = [result('COMPLETE', [x if isinstance(x, str) else dict(x, grid={k: y + 5e-3 for k, y in x['grid'].items()}, logits=tuple(y + 5e-3 for y in x['logits'])) for x in pair])
+            for pair in worlds]
+        requests = [SimpleNamespace(**vars(request(q)), root_inputs={}) for q in range(R)]
+        seen, numeric = [], g2._numeric
+        def spy(cells, got, want, *a, **k):seen.append(sorted(map(tuple, cells)));return numeric(cells, got, want, *a, **k)
+        with patch.object(g2, '_numeric', spy):found = g2.check_d(SimpleNamespace(**frame), bf16, requests, g2.Findings(), full_turn1=True)
+        c = d3g.compare_call(dict(f32=f32, bf16=bf16), requests)
+        frames = dict(bf16=SimpleNamespace(**frame), f32=SimpleNamespace(**{k: x + np.float32(2e-3) if x.dtype == np.float32 else x for k, x in frame.items()}))
+        out = d3g.pricer_call(frames, c['arrays'], requests)
+        self.assertGreater(found.values['t1_value']['compared'], 500);self.assertGreater(found.values['root_peer_logits']['compared'], 300)
+        self.assertEqual(found.values['t1_value']['compared'], out['counts']['cells_compared'])
+        self.assertEqual(found.values['root_peer_logits']['compared'], out['counts']['all_lanes_compared']);self.assertEqual(out['counts']['all_lanes_compared'], c['counts']['all_lanes_compared'])
+        # the same cells and lanes, not only as many: every position check_d hands its float comparison, against the tool's masks
+        G = c['arrays']['bf16'];cells = G['d_known'] & (frame['t1_status'] != 0)
+        self.assertEqual(len(seen), 2);self.assertEqual(seen[0], sorted(map(tuple, np.argwhere(cells).tolist())))
+        self.assertEqual(seen[1], sorted((q, w, lane) for q, w in np.argwhere(G['d_priced']).tolist() for lane in range(9)))
 
 
 class DAllAndProposalTests(unittest.TestCase):
@@ -318,6 +410,43 @@ class DAllAndProposalTests(unittest.TestCase):
         none = d3g.fold(earlier, self.d(.002, .05), check)   # no pricer measurement: no all-lane tail, no root bound, flagged
         self.assertIsNone(none['root_logit_all_geometries']);self.assertIn('b.root_peer_logits_all_lanes: P unmeasured', none['flags'])
         self.assertIsNotNone(none['value_bound_all_geometries']);self.assertIn('P(t1 value): this run\'s pricer.t1_value unmeasured: the earlier P_all only', none['flags'])
+
+    def test_non_finite_p_t1_withholds_b_t1(self):
+        """This run's pricer.t1_value with non-finite differences withholds b.t1_value, even when its finite max is under the earlier P_all
+        (the reviewer's demo), and when every difference is non-finite."""
+        earlier = earlier_report(self.evaluators);check = self.check(earlier)
+        for label, m in (('some', dict(count=60, nonfinite=3, max=.001)), ('all', dict(count=60, nonfinite=60))):
+            with self.subTest(non_finite=label):
+                p = d3g.p_run({d3g.P_VALUE: m, d3g.P_LOGITS: dict(count=80, nonfinite=0, max=P_ROOT_OPP - v.ADAPTER_LOGIT), d3g.P_ALL_LANES: dict(count=300, nonfinite=0, max=.1)})
+                prop = d3g.fold(earlier, self.d(.002, .05), check, p)
+                self.assertIsNone(prop['sites']['b.t1_value']['tail']);self.assertIsNone(prop['value_bound_all_geometries']);self.assertIsNone(prop['near_tie_q_bound_all_geometries'])
+                self.assertIn(f'P(t1 value): this run\'s pricer.t1_value has {m["nonfinite"]} non-finite differences at (b)\'s cells: no b.t1_value bound', prop['flags'])
+                self.assertIn(f'b.t1_value: P has {m["nonfinite"]} non-finite differences', prop['flags']);self.assertEqual(prop['cross_checks']['t1_value']['used'], 'this run')
+                self.assertIsNotNone(prop['root_logit_all_geometries'])
+
+    def test_structural_differences_and_pass_premises_flag_their_sites_and_bounds(self):
+        earlier = earlier_report(self.evaluators);check = self.check(earlier);d, p = self.d(.002, .05), self.p();T1, LEGAL, LANES = d3g.SITES
+        cases = dict(none_pattern=(dict(joint_value_none_pattern=2), {T1}), joint_error=(dict(joint_error=1), {T1}), enumeration=(dict(pricer_t1_enumeration=1), {T1}),
+            refused=(dict(world_refused=3), {T1, LEGAL, LANES}), pre=(dict(pricer_pre=1), {T1, LEGAL, LANES}), requested=(dict(opponent_requested=1), {LEGAL, LANES}),
+            legal=(dict(reply_legal=1), {LEGAL, LANES}), pricer_requested=(dict(pricer_root_peer_requested=2), {LEGAL, LANES}),
+            unrequested=(dict(unrequested_reply_logits_nonzero_bf16=1), {LANES}), unknown=(dict(some_new_kind=4), {T1, LEGAL, LANES}))
+        for name, (structural, sites) in cases.items():
+            with self.subTest(kind=name):
+                prop = d3g.fold(earlier, d, check, p, structural=structural);(kind, count), = structural.items()
+                self.assertEqual({site for site, x in prop['sites'].items() if x['caveats']}, sites)
+                self.assertEqual(set(prop['flagged_bounds']), {b for b, ss in d3g.BOUND_SITES.items() if set(ss) & sites})
+                self.assertTrue(all(any(f'structural {kind} {count}' in r for r in x) for x in prop['flagged_bounds'].values()))
+                self.assertTrue(any(f.startswith(f'{site}: its (b) positions are not clean: structural {kind} {count}') for site in sites for f in prop['flags']))
+                self.assertIsNotNone(prop['value_bound_all_geometries']);self.assertIsNotNone(prop['root_logit_all_geometries'])   # flagged, not withheld
+        neutral = d3g.fold(earlier, d, check, p, structural=dict(root_status=1, refusal_reason=2, world_refused=0))
+        self.assertEqual((neutral['flagged_bounds'], neutral['neutral_structural']), ({}, ['refusal_reason 2', 'root_status 1']))
+        self.assertIn('structural differences touching no (b) position: refusal_reason 2, root_status 1', neutral['flags'])
+        pa = d3g.pricer_anchor_section(dict(t1_value=v.spread(np.asarray([np.nan, 1e-6])), illegal_lanes=v.spread(np.asarray([1e-4]))))
+        self.assertEqual({k: x['within'] for k, x in pa['quantities'].items()}, dict(t1_value=False, legal_lanes=None, illegal_lanes=True, unrequested_worlds=None))
+        self.assertEqual(pa['flags'], ['t1_value: 1 non-finite pass f32 vs D3 f32 differences'])
+        prop = d3g.fold(earlier, d, check, p, pricer_anchor=pa)
+        self.assertEqual(set(prop['flagged_bounds']), {'value_bound_all_geometries', 'value_bound_all_geometries_without_root', 'near_tie_q_bound_all_geometries'})
+        self.assertTrue(prop['sites'][T1]['caveats'][0].startswith('pass premise t1_value'))
 
     def test_a_mismatched_or_incomplete_earlier_report_is_flagged(self):
         clean = earlier_report(self.evaluators)
@@ -384,6 +513,16 @@ class OptionsTests(unittest.TestCase):
                 self.assertFalse(opts['matches_gate']);self.assertIn(f'f32: {message}', opts['departures']);self.assertIn(f'bf16: {message}', opts['departures'])
         opts = d3g.pass_options({'f32': passes['bf16'], 'bf16': passes['f32']});self.assertEqual(len(opts['departures']), 2)
         self.assertTrue(all('is not the champion at' in x for x in opts['departures']))
+
+    @unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer is not on this tree')
+    def test_the_gates_cli_defaults_are_read_and_a_k1_other_than_9_flagged(self):
+        defaults = d3g.gate_defaults();self.assertEqual(defaults, {k: d3g.GATE_PASS[k] for k in d3g.GATE_CLI})   # d3_depthn_gate's own parser
+        passes = d3g.build_passes(gate.pricer_module(), 'ex', object(), V.pair());opts = d3g.pass_options(passes)
+        self.assertEqual((opts['gate_cli_defaults'], opts['departures']), (defaults, []))
+        for k, x in (('k1_own', 3), ('k1_opp', 5), ('capacity', 256), ('block_lanes', 729)):
+            with self.subTest(**{k: x}):
+                opts = d3g.pass_options(passes, defaults=dict(defaults, **{k: x}))
+                self.assertEqual(opts['departures'], [f'the gate\'s --{k.replace("_", "-")} default {x} != {d3g.GATE_PASS[k]}, the value measured here']);self.assertFalse(opts['matches_gate'])
 
     def test_tree_commit(self):
         with tempfile.TemporaryDirectory() as directory:

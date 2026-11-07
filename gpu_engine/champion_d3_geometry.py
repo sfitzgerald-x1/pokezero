@@ -43,7 +43,7 @@ import numpy as np
 
 from . import champion_evaluator as ce, champion_leaf_validation as clv, d3_depth2_gate as g2, d3_depthn_gate as gate
 
-SCHEMA = 'pokezero.champion-d3-geometry.v2'
+SCHEMA = 'pokezero.champion-d3-geometry.v3'
 REFERENCE, TESTED, NAMES = clv.REFERENCE, clv.TESTED, clv.NAMES
 VALUE, LOGITS, ALL_LANES = 'd3.t1_value', 'd3.root_peer_logits', 'd3.root_peer_logits.all_lanes'
 ILLEGAL = 'd3.root_peer_logits.illegal_lanes'   # the anchor's illegal lanes of requested worlds
@@ -60,6 +60,17 @@ GATE_D3 = dict(capacity=4096, block_rows=32, vectorized=True, host_prep=True)   
 GATE_PASS = dict(depth=2, k_own=[9], k_opp=[9], k1_own=9, k1_opp=9, capacity=GATE_CAPACITY, block_lanes=2187, blocks_per_call=16, selection='prior', digest=True,
     actor_capacity=1, fixed_capacity=True)   # d3_depthn_gate.run_gate's depth2_pass_pricer under --fixed-shapes and a champion (actors: len(params) = 1)
 EXIT = dict(MEASURED=0, NOTHING_COMPARED=2)
+# The pass's f32 against D3's f32 at (b)'s positions (PRICER_ANCHOR_RULE): each side within its adapter bound of the f32 raw forward
+PRICER_ANCHOR = dict(t1_value=2 * clv.ADAPTER_VALUE, legal_lanes=2 * clv.ADAPTER_LOGIT, illegal_lanes=2 * clv.ADAPTER_LOGIT, unrequested_worlds=2 * clv.ADAPTER_LOGIT)
+T1_SITE, LEGAL_SITE, LANES_SITE = 'b.t1_value', 'b.root_peer_logits', 'b.root_peer_logits_all_lanes'
+SITES = (T1_SITE, LEGAL_SITE, LANES_SITE)
+SITE_KINDS = dict(world_refused=SITES, joint_value_none_pattern=(T1_SITE,), joint_error=(T1_SITE,), opponent_requested=(LEGAL_SITE, LANES_SITE),
+    reply_legal=(LEGAL_SITE, LANES_SITE), unrequested_reply_logits_nonzero_f32=(LANES_SITE,), unrequested_reply_logits_nonzero_bf16=(LANES_SITE,), pricer_pre=SITES,
+    pricer_root_peer_requested=(LEGAL_SITE, LANES_SITE), pricer_root_peer_legal=(LEGAL_SITE, LANES_SITE), pricer_t1_enumeration=(T1_SITE,))   # unlisted kinds: every site
+NEUTRAL_KINDS = ('root_status', 'refusal_reason')   # no (b) position is added, removed or changed by these
+PRICER_ANCHOR_SITES = dict(t1_value=(T1_SITE,), legal_lanes=(LEGAL_SITE, LANES_SITE), illegal_lanes=(LANES_SITE,), unrequested_worlds=(LANES_SITE,))
+BOUND_SITES = dict(value_bound_all_geometries=(T1_SITE,), value_bound_all_geometries_without_root=(T1_SITE,), near_tie_q_bound_all_geometries=(T1_SITE,),
+    root_logit_all_geometries=(LEGAL_SITE, LANES_SITE))
 log, stage = g2.log, g2.stage
 
 D3_RULE = ('D3\'s FramePricer as d3_depthn_gate builds it for (b): g2.with_forward(loaded.frame_pricer, champion), loaded.frame_pricer '
@@ -73,7 +84,15 @@ PASS_RULE = ('The full-width depth-2 pass as d3_depthn_gate.run_gate builds it: 
     'capacity=--capacity 512, actor_capacity=len(params) = 1 under the champion, k1_own=k1_opp=9, block_lanes=2187, digest=True, '
     'fixed_capacity=--fixed-shapes, forward=champion): DepthNPricer(depth=2, k_own=k_opp=9, selection prior, blocks_per_call 16). One per '
     'precision. Its turn 1 (root_peer_logits, t1_value) is what the depth-N gate\'s (b) compares with D3; the gate\'s (b) reads the depth-N '
-    'frame\'s turn 1, which the validation tool measured equal to depth 2\'s (depth3.turn1 = depth2.turn1 in validation.json).')
+    'frame\'s turn 1, which the validation tool measured equal to depth 2\'s (depth3.turn1 = depth2.turn1 in validation.json). The turn-1 '
+    'program does not depend on the ply-2 widths k, but the gate\'s --k1-own / --k1-opp prune turn 1: this tool measures k1 9/9, so the '
+    'gate\'s own CLI defaults are read (d3_depthn_gate.parse) and recorded, and a default other than 9 (or another capacity or block lanes) '
+    'is flagged.')
+PRICER_ANCHOR_RULE = ('P (this run\'s pass) assumes |pass f32 - f32 raw| <= the adapter bound at every (b) position, illegal lanes and '
+    'unrequested worlds included, where only legal lanes were anchored to the raw forward. Checked against D3\'s f32 (itself anchored to '
+    'the raw forward on legal and illegal lanes): |pass f32 - D3 f32| at (b)\'s positions both D3 runs priced, reported separately for '
+    'legal lanes and illegal lanes of worlds D3 requested, all nine lanes of worlds it did not, and t1_value at (b)\'s cells; each is flagged '
+    'over twice its adapter bound (each side\'s: 2e-4 logits, 2e-5 values), and the flag reaches every site and bound built on it.')
 POSITIONS_RULE = ('D3: d3.t1_value at every (q, world, a, r) whose joint value is non-None in BOTH runs (g2.check_d reads each such cell); '
     'd3.root_peer_logits on the lanes legal in both runs of worlds both priced with the opponent requested in both; d3.root_peer_logits.all_lanes '
     'on all nine lanes of every world both runs priced (g2.check_d reads all nine lanes of every world D priced, requested or not). The '
@@ -103,11 +122,15 @@ FOLD_RULE = ('PROPOSAL, not a verdict; `margin` empty (the declaration adds it).
     'max(value_bound_without_root, b.t1_value)); near_tie_q_bound_all_geometries = value_bound_all_geometries (the earlier rule); '
     'root_logit_all_geometries = max(the root (c) tail max(P_all(root opp) + O_sample(root opp), 2 x P_all(root opp)), b.root_peer_logits, '
     'b.root_peer_logits_all_lanes). Each bound names the term that sets it. turn1_logit_bound and deeper_logit_bound are the earlier '
-    'report\'s, unchanged. A tail with an unmeasured or non-finite input has no bound (None, flagged), and neither has a bound it enters. '
-    'The earlier report\'s source (d3_root, chunk, declaration), evaluators (archive and checkpoint sha256, precision), roots and shapes are '
-    'checked against this run; every mismatch is flagged.')
-RULES = dict(d3=D3_RULE, depth2_pass=PASS_RULE, positions=POSITIONS_RULE, d_all=D_ALL_RULE, anchor=ANCHOR_RULE, fold=FOLD_RULE,
-    bounds=dict(f32_adapter_value=clv.ADAPTER_VALUE, f32_adapter_logit=clv.ADAPTER_LOGIT, cross_check=CROSS_CHECK), exit=EXIT)
+    'report\'s, unchanged. A tail with an unmeasured or non-finite input has no bound (None, flagged), and neither has a bound it enters; '
+    'non-finite differences in this run\'s pricer.t1_value withhold b.t1_value whatever the earlier P_all. Every site whose (b) positions '
+    'had a structural difference in either program (SITE_KINDS; root_status and refusal_reason touch no position and are flagged on their '
+    'own; an unlisted kind reaches every site), or whose pass premise failed (PRICER_ANCHOR_RULE), is flagged with the kind and count, and so '
+    'is every bound built on it (flagged_bounds; not withheld). The earlier report\'s source (d3_root, chunk, declaration), evaluators '
+    '(archive and checkpoint sha256, precision), roots and shapes are checked against this run; every mismatch is flagged.')
+RULES = dict(d3=D3_RULE, depth2_pass=PASS_RULE, positions=POSITIONS_RULE, d_all=D_ALL_RULE, anchor=ANCHOR_RULE, pricer_anchor=PRICER_ANCHOR_RULE, fold=FOLD_RULE,
+    site_kinds=SITE_KINDS, neutral_kinds=NEUTRAL_KINDS, bounds=dict(f32_adapter_value=clv.ADAPTER_VALUE, f32_adapter_logit=clv.ADAPTER_LOGIT, cross_check=CROSS_CHECK,
+        pricer_anchor=PRICER_ANCHOR), exit=EXIT)
 
 
 # The gate's two programs ---------------------------------------------------------------------------------------------------------------
@@ -150,15 +173,27 @@ def d3_options(pricers, *, actor_capacity=None, split_capacity=GATE_CAPACITY, fi
         fixed_shapes=fixed_shapes, departures=departures, matches_gate=not departures, notes=notes, rule=D3_RULE)
 
 
-def pass_options(passes):
-    """Each depth-2 pass's options against the gate's (GATE_PASS, the champion at the pricer's precision); `departures` names every difference."""
+GATE_CLI = ('capacity', 'block_lanes', 'k1_own', 'k1_opp')
+
+
+def gate_defaults():
+    """d3_depthn_gate's own CLI defaults for the pass's options (its parser, on a minimal bank-chunk command line; nothing is read)."""
+    _, args = gate.parse(['--out', '/nonexistent', '--d3-root', '/nonexistent', '--chunk', '0'])
+    return {k: getattr(args, k) for k in GATE_CLI}
+
+
+def pass_options(passes, defaults=None):
+    """Each depth-2 pass's options against the gate's (GATE_PASS, the champion at the pricer's precision), and the gate's own CLI defaults
+    (gate_defaults) against GATE_PASS: a gate default of k1 other than 9 (a pruned turn 1) or another capacity or block lanes would not be
+    the geometry measured here. `departures` names every difference."""
+    defaults = gate_defaults() if defaults is None else defaults
     record = {name: dict(depth=p.depth, k_own=list(p.k_own), k_opp=list(p.k_opp), k1_own=p.k1_own, k1_opp=p.k1_opp, capacity=p.capacity, block_lanes=p.block_lanes,
         blocks_per_call=p.blocks_per_call, selection=p.selection, digest=p.digest, actor_capacity=p.actor_capacity, fixed_capacity=p.fixed_capacity,
         evaluator=ce.describe(getattr(p, 'forward', None))) for name, p in passes.items()}
-    departures = []
+    departures = [f'the gate\'s --{k.replace("_", "-")} default {defaults.get(k)!r} != {GATE_PASS[k]!r}, the value measured here' for k in GATE_CLI if defaults.get(k) != GATE_PASS[k]]
     for name, r in record.items():
         departures += [f'{name}: {k} {r[k]!r} != the gate\'s {v!r}' for k, v in GATE_PASS.items() if r[k] != v] + _evaluator_departures(name, r['evaluator'])
-    return dict(pricers=record, gate=GATE_PASS, departures=departures, matches_gate=not departures, rule=PASS_RULE)
+    return dict(pricers=record, gate=GATE_PASS, gate_cli_defaults=defaults, departures=departures, matches_gate=not departures, rule=PASS_RULE)
 
 
 # 1. The comparisons -----------------------------------------------------------------------------------------------------------------
@@ -205,13 +240,14 @@ def compare_call(results, requests, *, call=0):
 FRAME_FIELDS = ('pre', 'root_peer_requested', 'root_peer_legal', 'root_peer_logits', 't1_status', 't1_value')
 
 
-def pricer_call(frames, gate_d3, requests, *, call=0):
-    """The depth-2 pass bf16 against f32 on one call at (b)'s positions: frames {name: frame}; gate_d3 the bf16 D3's g2._d_arrays (the gate's
-    (b) reference). Returns the signed differences (values, logits (precision_call's legal-lane positions), all_lanes), findings and counts."""
+def pricer_call(frames, d3, requests, *, call=0):
+    """The depth-2 pass bf16 against f32 on one call at (b)'s positions: frames {name: frame}; d3 {name: g2._d_arrays}, the bf16 D3's defining
+    (b)'s positions (the gate's reference). Returns the signed differences (values, logits (precision_call's legal-lane positions),
+    all_lanes), the pass's f32 against D3's f32 at those positions (vs_d3_f32, PRICER_ANCHOR_RULE), findings and counts."""
     requests = tuple(requests);n = len(requests);addresses = [clv.address(r) for r in requests];findings = {}
     F = {name: {k: np.asarray(getattr(frames[name], k))[:n] for k in FRAME_FIELDS} for name in NAMES};f, b = F[REFERENCE], F[TESTED]
     note = lambda name, cells, x, y: _note(findings, name, cells, x, y, call=call, addresses=addresses)
-    worlds = np.asarray(gate_d3['d_priced'], bool)[:n];known = np.asarray(gate_d3['d_known'], bool)[:n]
+    G, A = ({k: np.asarray(x)[:n] for k, x in d3[name].items()} for name in (TESTED, REFERENCE));worlds = G['d_priced'].astype(bool);known = G['d_known'].astype(bool)
     for k in ('pre', 'root_peer_requested'):
         at = np.argwhere(worlds & (f[k] != b[k]));note(f'pricer_{k}', at, f[k][tuple(at.T)], b[k][tuple(at.T)])
     at = np.argwhere(worlds & np.any(f['root_peer_legal'] != b['root_peer_legal'], axis=-1))
@@ -221,10 +257,14 @@ def pricer_call(frames, gate_d3, requests, *, call=0):
     all_lanes = (b['root_peer_logits'][worlds].astype(np.float64) - f['root_peer_logits'][worlds]).reshape(-1)
     req = (f['pre'] == 0) & (b['pre'] == 0) & f['root_peer_requested'].astype(bool) & b['root_peer_requested'].astype(bool)
     logits = (b['root_peer_logits'].astype(np.float64) - f['root_peer_logits'])[req][f['root_peer_legal'].astype(bool)[req]]
+    both = worlds & A['d_priced'].astype(bool);asked = both & A['d_opponent_requested'].astype(bool);lanes = A['d_reply_legal'].astype(bool)
+    delta = f['root_peer_logits'].astype(np.float64) - A['d_reply_logits']
+    vs = dict(t1_value=(f['t1_value'].astype(np.float64) - A['d_value'])[cells & A['d_known'].astype(bool)], legal_lanes=delta[asked[..., None] & lanes],
+        illegal_lanes=delta[asked[..., None] & ~lanes], unrequested_worlds=delta[both & ~asked].reshape(-1))
     counts = dict(worlds_d3_priced=int(worlds.sum()), cells_d3_priced=int(known.sum()), cells_compared=int(cells.sum()),
         cells_unenumerated_bf16=int(np.count_nonzero(known & (b['t1_status'] == 0))), all_lanes_compared=int(all_lanes.size), legal_worlds=int(req.sum()),
-        legal_lanes_compared=int(logits.size))
-    return dict(values=values, logits=logits, all_lanes=all_lanes, findings=findings, counts=counts)
+        legal_lanes_compared=int(logits.size), **{f'vs_d3_f32_{k}': int(x.size) for k, x in vs.items()})
+    return dict(values=values, logits=logits, all_lanes=all_lanes, vs_d3_f32=vs, findings=findings, counts=counts)
 
 
 def merge_findings(parts):
@@ -247,7 +287,8 @@ def merge_comparison(calls):
     """The run's comparison over every call: D3's three quantities and the depth-2 pass's (at (b)'s positions), each program's structural
     findings and counts."""
     d3 = _merged([c['comparison'] for c in calls], {VALUE: 'values', LOGITS: 'logits', ALL_LANES: 'all_lanes'})
-    pricer = _merged([c['pricer'] for c in calls if c.get('pricer') is not None], {P_VALUE: 'values', P_LOGITS: 'logits', P_ALL_LANES: 'all_lanes'})
+    parts = [c['pricer'] for c in calls if c.get('pricer') is not None];pricer = _merged(parts, {P_VALUE: 'values', P_LOGITS: 'logits', P_ALL_LANES: 'all_lanes'})
+    pricer['vs_d3_f32'] = {k: clv.spread(np.concatenate([p['vs_d3_f32'][k] for p in parts]) if parts else np.zeros(0)) for k in PRICER_ANCHOR}
     d3['structural']['rule'] = pricer['structural']['rule'] = ('every structural difference between the bf16 and f32 runs, by kind (count and first '
         'cells: [q, world(, a, r)] within the call); none is dropped')
     return dict(d3, pricer=pricer, rule=POSITIONS_RULE)
@@ -348,6 +389,17 @@ def anchor_section(records, d=None):
             f32_illegal_logit_max=quantity[ILLEGAL]['max'], f32_logit_bound=clv.ADAPTER_LOGIT))
 
 
+def pricer_anchor_section(vs):
+    """PRICER_ANCHOR_RULE over every call: {quantity: |pass f32 - D3 f32| spread with its bound and `within`} and the flags."""
+    quantities, flags = {}, []
+    for k, bound in PRICER_ANCHOR.items():
+        m = (vs or {}).get(k) or clv.spread(np.zeros(0));within = None if not m.get('count') else bool(not m.get('nonfinite') and m.get('max', 0.) <= bound)
+        quantities[k] = dict(m, bound=bound, within=within)
+        if m.get('nonfinite'):flags.append(f'{k}: {m["nonfinite"]} non-finite pass f32 vs D3 f32 differences')
+        if m.get('count') and m.get('max', 0.) > bound:flags.append(f'{k}: EXCEEDED: pass f32 vs D3 f32 max {m["max"]:.3g} > {bound:g}')
+    return dict(reference='D3 FramePricer f32 at (b)\'s positions both D3 runs priced', quantities=quantities, flags=flags, rule=PRICER_ANCHOR_RULE)
+
+
 # 4. The proposal -----------------------------------------------------------------------------------------------------------------------
 def source_check(earlier, *, source, evaluators, roots, capacity=GATE_CAPACITY, fixed_shapes=True, path=None):
     """The earlier validation report against this run: schema, source (d3_root, chunk, declaration), evaluators (archive and checkpoint sha256,
@@ -394,18 +446,36 @@ def _tail(name, p, d):
         nonfinite=d.get('nonfinite', 0), precision_max=d.get('precision_max'), f32_adapter_bound=d.get('f32_adapter_bound'))), why
 
 
-def fold(earlier, d, check=None, p=None):
+def caveats(structural=None, pricer_anchor=None):
+    """{site: [reason]}: the structural difference kinds (with counts) that touch each site's (b) positions (SITE_KINDS; an unlisted kind
+    touches every site) and the pass premises that failed for it (PRICER_ANCHOR_SITES); plus the neutral kinds, which touch none."""
+    out, neutral = {site: [] for site in SITES}, []
+    for kind, count in sorted((structural or {}).items()):
+        if not count:continue
+        if kind in NEUTRAL_KINDS:neutral.append(f'{kind} {count}');continue
+        for site in SITE_KINDS.get(kind, SITES):out[site].append(f'structural {kind} {count}')
+    for k, q in ((pricer_anchor or {}).get('quantities') or {}).items():
+        if q.get('within') is False:
+            for site in PRICER_ANCHOR_SITES[k]:out[site].append(f'pass premise {k}: |pass f32 - D3 f32| max {_fmt(q.get("max"))}, non-finite {q.get("nonfinite", 0)} (bound {q["bound"]:g})')
+    return out, neutral
+
+
+def fold(earlier, d, check=None, p=None, structural=None, pricer_anchor=None):
     """FOLD_RULE: the (b) site tails and the bounds with them folded in, from the earlier report's geometry section, this run's P (p) and
-    D_all (d). Every bound names the term that sets it (`*_set_by`)."""
+    D_all (d). Every bound names the term that sets it (`*_set_by`); structural {kind: count} (both programs') and the pass anchor
+    (pricer_anchor_section) flag every site and bound they touch (`flagged_bounds`)."""
     geo = (earlier or {}).get('geometry') or {} if isinstance(earlier, dict) else {};levels = geo.get('levels') or {}
     allpos = (geo.get('proposals') or {}).get('all_positions') or {};flags = [f'source: {x}' for x in (check or {}).get('flags', [])]
     flags += [f'earlier all_positions: {x}' for x in allpos.get('flags') or []];cross = {}
-    # P(t1 value): the larger of the earlier P_all(depth2.turn1 value) and this run's frames at (b)'s cells
+    # P(t1 value): the larger of the earlier P_all(depth2.turn1 value) and this run's frames at (b)'s cells; non-finite here withholds it
     earlier_t1, run_t1 = _entry(levels, 'depth2.turn1', 'pricer_all', 'value'), _run_entry(p, P_VALUE)
-    use = run_t1 if run_t1['max'] is not None and (earlier_t1['max'] is None or run_t1['max'] > earlier_t1['max']) else earlier_t1
-    if use is run_t1:flags.append(f'P(t1 value): this run\'s {P_VALUE} {run_t1["max"]:.6g} > the earlier P_all(depth2.turn1 value) {_fmt(earlier_t1["max"])}: '
-        'b.t1_value uses this run\'s')
-    elif run_t1['max'] is None:flags.append(f'P(t1 value): this run\'s {P_VALUE} unmeasured: the earlier P_all only')
+    if run_t1['nonfinite']:
+        use = run_t1;flags.append(f'P(t1 value): this run\'s {P_VALUE} has {run_t1["nonfinite"]} non-finite differences at (b)\'s cells: no b.t1_value bound')
+    else:
+        use = run_t1 if run_t1['max'] is not None and (earlier_t1['max'] is None or run_t1['max'] > earlier_t1['max']) else earlier_t1
+        if use is run_t1:flags.append(f'P(t1 value): this run\'s {P_VALUE} {run_t1["max"]:.6g} > the earlier P_all(depth2.turn1 value) {_fmt(earlier_t1["max"])}: '
+            'b.t1_value uses this run\'s')
+        elif run_t1['max'] is None:flags.append(f'P(t1 value): this run\'s {P_VALUE} unmeasured: the earlier P_all only')
     cross['t1_value'] = dict(earlier=earlier_t1, this_run=run_t1, used=use['source'])
     t3 = _entry(levels, 'depth3.turn1', 'pricer_all', 'value')
     if t3['max'] is not None and use['max'] is not None and t3['max'] > use['max']:
@@ -416,9 +486,18 @@ def fold(earlier, d, check=None, p=None):
     cross['root_peer_logits'] = dict(earlier=earlier_root, this_run=run_root, difference=gap, tolerance=CROSS_CHECK)
     if gap is None:flags.append(f'cross-check root opp_logits: unavailable (earlier {_fmt(a)}, this run {_fmt(b)})')
     elif gap > CROSS_CHECK:flags.append(f'cross-check root opp_logits: this run\'s legal-lane pricer max {b:.6g} differs from the earlier P_all {a:.6g} by {gap:.3g} > {CROSS_CHECK}')
-    t1, f1 = _tail('b.t1_value', use, dict(d.get(VALUE) or {}, quantity=VALUE))
-    root, f2 = _tail('b.root_peer_logits', earlier_root, dict(d.get(LOGITS) or {}, quantity=LOGITS))
-    lanes, f3 = _tail('b.root_peer_logits_all_lanes', _run_entry(p, P_ALL_LANES), dict(d.get(ALL_LANES) or {}, quantity=ALL_LANES));flags += f1 + f2 + f3
+    if run_root['nonfinite']:flags.append(f'cross-check root opp_logits: this run\'s {P_LOGITS} has {run_root["nonfinite"]} non-finite differences')
+    t1, f1 = _tail(T1_SITE, use, dict(d.get(VALUE) or {}, quantity=VALUE))
+    root, f2 = _tail(LEGAL_SITE, earlier_root, dict(d.get(LOGITS) or {}, quantity=LOGITS))
+    lanes, f3 = _tail(LANES_SITE, _run_entry(p, P_ALL_LANES), dict(d.get(ALL_LANES) or {}, quantity=ALL_LANES));flags += f1 + f2 + f3
+    # (b) positions a structural difference touched, or whose pass premise failed: flagged per site and per bound built on it
+    touched, neutral = caveats(structural, pricer_anchor)
+    for site, x in zip(SITES, (t1, root, lanes)):
+        x['caveats'] = touched[site]
+        if touched[site]:flags.append(f'{site}: its (b) positions are not clean: {"; ".join(touched[site])}')
+    if neutral:flags.append(f'structural differences touching no (b) position: {", ".join(neutral)}')
+    flagged = {bound: [f'{site}: {reason}' for site in sites for reason in touched[site]] for bound, sites in BOUND_SITES.items()}
+    flagged = {bound: reasons for bound, reasons in flagged.items() if reasons};flags += [f'{bound}: flagged: {"; ".join(reasons)}' for bound, reasons in flagged.items()]
     if 'root' in levels:
         view = {'root': {c: (levels['root'].get(c) or {}) for c in ('pricer_all', 'oracle_sample')}}
         c_bound, c_flags, c_inputs = clv._bound(view, (('root', 'opp_logits'),), 'pricer_all', clv.COMBINE['all_positions'][1])
@@ -433,8 +512,8 @@ def fold(earlier, d, check=None, p=None):
         ('b.t1_value', t1['tail'])])
     root_all, root_by = top('root_logit_all_geometries', [('root (c) tail', c_bound), ('b.root_peer_logits', root['tail']), ('b.root_peer_logits_all_lanes', lanes['tail'])])
     return dict(label='PROPOSAL (informational, not a verdict): three geometries (the pricers, the gate oracle, D3\'s FramePricer); the declaration '
-        'adds the margin', kind='all_positions_three_geometries', rule=FOLD_RULE, sites={'b.t1_value': t1, 'b.root_peer_logits': root,
-        'b.root_peer_logits_all_lanes': lanes}, root_c=dict(tail=c_bound, flags=c_flags, inputs=c_inputs), cross_checks=cross,
+        'adds the margin', kind='all_positions_three_geometries', rule=FOLD_RULE, sites={T1_SITE: t1, LEGAL_SITE: root, LANES_SITE: lanes},
+        root_c=dict(tail=c_bound, flags=c_flags, inputs=c_inputs), cross_checks=cross, flagged_bounds=flagged, neutral_structural=neutral,
         value_bound_all_geometries=value, value_bound_all_geometries_set_by=value_by, value_bound_all_geometries_without_root=gated,
         value_bound_all_geometries_without_root_set_by=gated_by, near_tie_q_bound_all_geometries=value, root_logit_all_geometries=root_all,
         root_logit_all_geometries_set_by=root_by, turn1_logit_bound=allpos.get('turn1_logit_bound'), deeper_logit_bound=allpos.get('deeper_logit_bound'),
@@ -478,7 +557,7 @@ def measure(groups, *, evaluators, frame_pricer, executor, model, materializer, 
                     root_capacity=timing.get('root_capacity'), expected_root_capacity=want);info.update(costs[f'd3.{name}'])
                 if timing.get('root_capacity', want) != want:options['departures'].append(f'call {call} {name}: compiled at {timing["root_capacity"]} roots, not the gate\'s bucket {want}')
         with stage(progress, 'compare', **context) as info:
-            comparison = compare_call(results, reqs, call=call);pricer = pricer_call(frames, comparison['arrays'][TESTED], reqs, call=call);frames = None
+            comparison = compare_call(results, reqs, call=call);pricer = pricer_call(frames, comparison['arrays'], reqs, call=call);frames = None
             info.update(d3=comparison['counts'], pricer=pricer['counts'], structural={k: e['count'] for k, e in {**comparison['findings'], **pricer['findings']}.items()},
                 max={f'{label}.{k}': float(np.abs(x[k]).max()) if x[k].size else None for label, x in (('d3', comparison), ('pricer', pricer)) for k in ('values', 'logits', 'all_lanes')})
         with stage(progress, 'anchor_walk', **context) as info:
@@ -494,7 +573,9 @@ def measure(groups, *, evaluators, frame_pricer, executor, model, materializer, 
 def assemble(measured, *, earlier=None, check=None):
     """The report body from measure's output: both comparisons, D_all and this run's P, the anchor, the proposal, the calls, costs and the exit."""
     calls = measured['calls'];comparison = merge_comparison(calls);d = d_all(comparison['quantities']);p = p_run(comparison['pricer']['quantities'])
-    anchor = anchor_section([c['anchor'] for c in calls], d);proposal = fold(earlier, d, check, p)
+    anchor = anchor_section([c['anchor'] for c in calls], d);pricer_anchor = pricer_anchor_section(comparison['pricer']['vs_d3_f32'])
+    structural = {k: e['count'] for part in (comparison, comparison['pricer']) for k, e in part['structural']['kinds'].items()}
+    proposal = fold(earlier, d, check, p, structural=structural, pricer_anchor=pricer_anchor)
     compared = sum(comparison['quantities'][k].get('count', 0) for k in QUANTITIES);status = 'MEASURED' if compared else 'NOTHING_COMPARED'
     reasons = [] if compared else ['no D3 value or reply logit was compared (no root, or no world priced by both runs)']
     total = lambda name, key: sum((c['costs'].get(name) or {}).get(key) or 0. for c in calls)
@@ -505,7 +586,7 @@ def assemble(measured, *, earlier=None, check=None):
         {**c['comparison']['findings'], **c['pricer']['findings']}.items()}, anchor=dict(cells=len(c['anchor']['cells']['spec']), worlds=len(c['anchor']['roots']['spec'])),
         costs=c['costs']) for c in calls]
     return dict(status=status, exit=EXIT[status], status_reasons=reasons, comparison=comparison, d_all=dict(d, rule=D_ALL_RULE), p_run=dict(p, rule=D_ALL_RULE),
-        anchor=anchor, source_check=check, proposal=proposal, calls=summary, costs=dict(costs, walk=measured.get('walk')), d3_options=measured['d3_options'],
+        anchor=anchor, pricer_anchor=pricer_anchor, source_check=check, proposal=proposal, calls=summary, costs=dict(costs, walk=measured.get('walk')), d3_options=measured['d3_options'],
         pass_options=measured.get('pass_options'))
 
 
@@ -574,6 +655,10 @@ def markdown(report):
         lines.append(f'| {k} | {q.get("rows")} | {q.get("lanes", q.get("compared"))} | {_num(q.get("max"), ".3g")} | {_num(q.get("bound"), "g")} | {q.get("within")} | '
             f'{_num(get(q, "bf16").get("max"))} |')
     lines += ['', f'- Anchor flags: {"; ".join(a.get("flags") or []) or "none"}']
+    pa = report.get('pricer_anchor') or {}
+    lines += ['', '## The pass\'s f32 against D3\'s f32 at (b)\'s positions (its premise on every lane)', '', '| Quantity | n | non-finite | max | bound | within |',
+        '| --- | --- | --- | --- | --- | --- |'] + [f'| {k} | {q.get("count")} | {q.get("nonfinite")} | {_num(q.get("max"), ".3g")} | {_num(q.get("bound"), "g")} | {q.get("within")} |'
+        for k, q in (pa.get('quantities') or {}).items()] + ['', f'- Pass anchor flags: {"; ".join(pa.get("flags") or []) or "none"}']
     pr, sc = report.get('proposal') or {}, report.get('source_check') or {}
     lines += ['', '## Three-geometry proposal (PROPOSAL, not a verdict; the declaration adds the margin)', '',
         f'- Earlier report `{sc.get("path")}`: matches this run {sc.get("matches")}' + (f' (FLAGGED: {"; ".join(sc.get("flags") or [])})' if sc.get('flags') else ''), '',
@@ -588,6 +673,7 @@ def markdown(report):
         f'| root_logit_all_geometries | {_num(pr.get("root_logit_all_geometries"))} | set by {pr.get("root_logit_all_geometries_set_by")} | (declaration) |',
         f'| turn1_logit_bound | {_num(pr.get("turn1_logit_bound"))} | earlier, unchanged | (declaration) |',
         f'| deeper_logit_bound | {_num(pr.get("deeper_logit_bound"))} | earlier, unchanged | (declaration) |', '',
+        '- Bounds whose (b) positions are not clean: ' + ('; '.join(f'{k} ({len(x)})' for k, x in (pr.get('flagged_bounds') or {}).items()) or 'none'),
         f'- Proposal flags: {"; ".join(pr.get("flags") or []) or "none"}', '', 'Rules: `d3_geometry.json` header.rules (declared in gpu_engine/champion_d3_geometry.py).', '']
     return '\n'.join(lines)
 
@@ -628,8 +714,8 @@ def main(argv=None):
         compared={k: v.get('count') for k, v in {**c['quantities'], **c['pricer']['quantities']}.items()},
         max={k: v.get('max') for k, v in {**c['quantities'], **c['pricer']['quantities']}.items()},
         d_all={k: report['d_all'][k].get('max') for k in QUANTITIES}, p_run={k: report['p_run'][k].get('max') for k in PRICER_QUANTITIES},
-        structural=dict(d3=c['structural']['count'], pricer=c['pricer']['structural']['count']), anchor=a['observed'], anchor_flags=len(a['flags']),
-        departures=h['d3_options']['departures'] + h['pass_options']['departures'], source_flags=len(check['flags']), proposal_flags=len(p['flags']),
+        structural=dict(d3=c['structural']['count'], pricer=c['pricer']['structural']['count']), anchor=a['observed'], anchor_flags=len(a['flags']), pricer_anchor_flags=report['pricer_anchor']['flags'],
+        departures=h['d3_options']['departures'] + h['pass_options']['departures'], source_flags=len(check['flags']), proposal_flags=len(p['flags']), structural_flagged_bounds=p['flagged_bounds'],
         proposal={k: p.get(k) for k in ('value_bound_all_geometries', 'value_bound_all_geometries_set_by', 'root_logit_all_geometries', 'root_logit_all_geometries_set_by',
             'turn1_logit_bound', 'deeper_logit_bound')})
     return report['exit']
