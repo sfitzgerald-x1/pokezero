@@ -21,8 +21,9 @@ Checks (gate.json; exit code 0 iff all pass):
      raw-head values within the value bound, both seats' child logits and the root peer logits within the logit bound.
  Float bounds are evaluator-relative (TOLERANCE_RULE): values <= 2 x this run's depth-1 noise floor (max |D3 t1_value -
  oracle t1 head|; 1e-4 if unmeasurable), logits <= 0.1, and every value comparison < 0.25 x the p10 learner-max a2
- spread of the frame (the misplacement guard, skipped when undefined). gate.json's tolerance section gives the numbers
- and each check's max |diff| with its ratios to its bound and guard.
+ spread of the frame (the misplacement guard, skipped when undefined; not applicable when the p10 is 0, GUARD_P10_ZERO:
+ the value bound alone judges). gate.json's tolerance section gives the numbers and each check's max |diff| with its
+ ratios to its bound and guard.
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
  (e) decision, when every leaf is checked (no --sample-leaves): depth2_backups.learner_max_root on the
      pricer frame and on a copy carrying the oracle's turn-2 head values and child-prior logits (statuses,
@@ -78,7 +79,8 @@ SCHEMA = 'pokezero.depth2-gate.v1'
 # scales with the head's values). Values: max |diff| <= FLOOR_FACTOR x the run's own depth-1 noise floor (max |D3 t1_value -
 # oracle t1 head| over the compared cells), VALUE_FALLBACK when no floor cell exists. Logits: LOGIT_BOUND absolute. Guard
 # against misplacement: every value comparison's max |diff| < GUARD_FACTOR x the p10 learner-max a2 spread of the frame's
-# expanded cells (values.cell_a2_spread), skipped when undefined. Digests, discrete fields and (e) stay exact.
+# expanded cells (values.cell_a2_spread), skipped when undefined, not applicable when 0 (GUARD_P10_ZERO). Digests, discrete
+# fields and (e) stay exact.
 FLOOR_FACTOR = 2.
 VALUE_FALLBACK = 1e-4
 LOGIT_BOUND = .1
@@ -88,6 +90,12 @@ SPREAD_THRESHOLD = 1e-4    # sibling spread: share of children whose p10 leaf-pa
 TOLERANCE_RULE = ('values: max |diff| <= 2 x depth1_noise_floor (max |D3 t1_value - oracle t1 head| of this run; 1e-4 if unmeasurable); '
     'logits: max |diff| <= 0.1; guard: every value max |diff| < 0.25 x p10 cell_a2_spread (skipped if undefined); '
     'digests, discrete fields and (e) exact')
+# p10 cell_a2_spread == 0 (>= 10% of the expanded cells have identical a2 values): the guard's two conditions are no non-finite
+# |diff| and max |diff| < 0.25 x p10; the second, "< 0", holds for no comparison, not even a bit-exact one, so it is not
+# applicable (guard_bound None: no within_guard, the table's ratio_to_guard None) and each value comparison is judged on its
+# value bound, which also covers the first: a non-finite |diff| is inf, beyond any (finite) bound. A p10 > 0 keeps the guard.
+GUARD_P10_ZERO = ('not_applicable_p10_zero: p10 cell_a2_spread is 0, so 0.25 x p10 is 0 and no |diff| can be below it; the guard '
+    'is not applied and every value comparison is judged on its value bound alone (which also fails any non-finite |diff|)')
 FLOORS = ('depth1_noise_floor', 'root_logit_floor')   # reported beside the bounds, never gated
 PROGRESS_INTERVAL = 10.    # seconds between oracle chunk progress lines (first and last chunk always logged)
 FIRST = 20
@@ -372,17 +380,18 @@ def finalize_numeric(m, bound, guard=None):
 
 def tolerance_rule(floor, spread_p10):
     """The run's bounds: 2 x the measured depth-1 noise floor for values (VALUE_FALLBACK when no floor cell exists or a floor
-    cell is non-finite), LOGIT_BOUND for logits, and GUARD_FACTOR x the p10 cell spread (None: guard skipped)."""
+    cell is non-finite), LOGIT_BOUND for logits, and GUARD_FACTOR x the p10 cell spread (None: guard skipped; 0: not
+    applicable, GUARD_P10_ZERO: the p10 is reported, guard_bound is None, so the value bound alone judges)."""
     measured = floor is not None and floor.get('compared', 0) > 0 and not floor.get('nonfinite')
     value = FLOOR_FACTOR * floor['max_abs_difference'] if measured else VALUE_FALLBACK
-    usable = spread_p10 is not None and np.isfinite(spread_p10)
+    usable = spread_p10 is not None and np.isfinite(spread_p10);applies = usable and spread_p10 > 0
     return dict(rule=TOLERANCE_RULE, depth1_noise_floor=floor['max_abs_difference'] if measured else None,
         floor_cells=None if floor is None else floor.get('compared'), value_bound=value,
         value_bound_source='2 x depth1_noise_floor' if measured else ('fallback 1e-4: the depth-1 noise floor is not measurable '
             '(no cell with both a D3 value and an oracle head value' + (', or a non-finite one)' if floor else ')')),
         logit_bound=LOGIT_BOUND, p10_cell_a2_spread=float(spread_p10) if usable else None,
-        guard_bound=GUARD_FACTOR * float(spread_p10) if usable else None,
-        guard='applied' if usable else 'skipped: no expanded cell with two enumerated a2 (p10 cell_a2_spread undefined)')
+        guard_bound=GUARD_FACTOR * float(spread_p10) if applies else None,
+        guard='applied' if applies else GUARD_P10_ZERO if usable else 'skipped: no expanded cell with two enumerated a2 (p10 cell_a2_spread undefined)')
 
 
 def bound_for(name, rule):
