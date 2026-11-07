@@ -71,12 +71,21 @@ stacked, logged or written differently; a report without `harness` ran without i
 DepthNPricer, the full-width depth-2 pass, --n2-equivalence's Depth2Pricer, D3's FramePricer (with_forward) and the oracle price
 with it, digests hash its 23-token view, and every request takes its root logits and actors 0/0 (bind_evaluator_roots, after its
 exact adapter-vs-champion.forward check on the first root); the evaluator header records it. Without the flags nothing changes.
+--declared-bounds PATH --declared-bounds-sha256 SHA (DECLARED_RULE; opt-in, only with --champion-archive or --head-archive, refused with
+--depth3-diagnostics and the offline modes): a JSON declaration (DECLARED_SCHEMA, written before the run, its bytes pinned by SHA and its
+evaluator identity by kind, archive sha256 and precision, which must be the run's) whose value, turn-1 logit, deeper-ply logit and optional
+near-tie Q bounds replace the tolerance NUMBERS of the B1-calibrated rule for that evaluator; every check and rule is unchanged, the measured
+floors are still reported beside the declared bounds, and every report's header carries a `declared_bounds` section (the file, its sha256,
+the note that it is a pre-registered evaluator-specific bound, not a rule change after a failure). --reverdict re-applies a report's recorded
+declaration after re-verifying its sha256. Without the flags nothing is built, judged, logged or written differently.
 """
 import argparse
 import collections
 from contextlib import nullcontext
 import dataclasses
 from dataclasses import replace
+import datetime
+import hashlib
 import importlib
 import importlib.util
 import itertools
@@ -243,9 +252,10 @@ def boundary(topk, ply, seat, legal, used, mine, k, reference):
     entry['gaps'].append(score(order[k - 1]) - score(order[k]));entry['oracle_prior_set_differs'] += int(set(order[:k]) != set(reference.ranked(legal, mine)[:k]))
 
 
-def merge_topk_n(reports):
-    """Per ply and seat over calls: pruning selections, their boundary gaps, how many fall below the logit bound and how often
-    the oracle's own prior would select differently (a near tie the logit tolerance absorbs). None without pruning."""
+def merge_topk_n(reports, *, logit_bound=g2.LOGIT_BOUND):
+    """Per ply and seat over calls: pruning selections, their boundary gaps, how many fall below the logit bound (LOGIT_BOUND; a
+    declared turn1_logit_bound under --declared-bounds) and how often the oracle's own prior would select differently (a near tie
+    the logit tolerance absorbs). None without pruning."""
     merged = {}
     for report in reports:
         for ply, seats in (report or {}).items():
@@ -253,7 +263,7 @@ def merge_topk_n(reports):
                 m = merged.setdefault(ply, {}).setdefault(seat, dict(gaps=[], oracle_prior_set_differs=0))
                 m['gaps'].extend(entry['gaps']);m['oracle_prior_set_differs'] += entry['oracle_prior_set_differs']
     if not merged:return None
-    out = {ply: {seat: dict(selections=len(m['gaps']), gap=g2.percentiles(m['gaps']), gap_below_logit_bound=int(np.count_nonzero(np.asarray(m['gaps']) < g2.LOGIT_BOUND)),
+    out = {ply: {seat: dict(selections=len(m['gaps']), gap=g2.percentiles(m['gaps']), gap_below_logit_bound=int(np.count_nonzero(np.asarray(m['gaps']) < logit_bound)),
         oracle_prior_set_differs=m['oracle_prior_set_differs']) for seat, m in seats.items()} for ply, seats in sorted(merged.items())}
     return dict(out, definition='per ply (root = the k1_opp root selection) and seat, over prior selections that prune: gap = rank-k minus rank-(k+1) '
         'logit of the pricer\'s prior (the one ranked; (c) checks it within the logit bound); oracle_prior_set_differs = selections the oracle\'s '
@@ -1214,21 +1224,28 @@ def rebound(m, bound, deltas=None):
     return m
 
 
-def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None, geometry=None):
+def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None, geometry=None, declared=None):
     """The current (c) verdict on a summarized result or a saved gate report, in place (the live run and --reverdict alike):
     DEEPER_LOGIT_RULE's bound on the deeper priors (rebound; `bound_rule` on every logit quantity); each non-floor
     quantity's passed = within_bound and, where it has a guard, (within_guard unless GUARD_DEPTHN_RULE certifies it:
     guard_mode, guard_evidence, beyond_guard from `deltas` {quantity: |diffs|}, else as saved); then (c)'s passed (a
     frame-geometry failure keeps it failed; None reads a.mismatched.frame_geometry), the tolerance table's (c) rows and the
     tolerance section's rules and numbers. actors: dict(count, source) of the evaluator parameter sets (None: not established);
-    outside: {quantity: digest_cover_n count}; a quantity without one reuses its saved guard_evidence count."""
+    outside: {quantity: digest_cover_n count}; a quantity without one reuses its saved guard_evidence count. declared: a
+    --declared-bounds declaration (DECLARED_RULE): every non-floor quantity is rebound to its declared number (values, turn-1
+    logits, deeper logits by declared_deeper) and tolerance.declared_bounds records them beside the measured floors and the
+    frozen rule's numbers; None: exactly the frozen rule."""
     checks = result['checks'];c, a = checks.get('c'), checks.get('a') or {};modes = {}
     if c is None:return result
-    floor, source = turn1_logit_floor(c['quantities']);deeper = g2.LOGIT_BOUND if floor is None else max(g2.LOGIT_BOUND, 2 * floor)
-    source = source if floor is None else (f'2 x turn1_logit_floor ({source})' if 2 * floor > g2.LOGIT_BOUND else f'LOGIT_BOUND (2 x turn1_logit_floor, {source}, is below it)')
+    floor, floor_source = turn1_logit_floor(c['quantities']);deeper = g2.LOGIT_BOUND if floor is None else max(g2.LOGIT_BOUND, 2 * floor)
+    source = floor_source if floor is None else (f'2 x turn1_logit_floor ({floor_source})' if 2 * floor > g2.LOGIT_BOUND else f'LOGIT_BOUND (2 x turn1_logit_floor, {floor_source}, is below it)')
+    frozen_deeper, numbers = deeper, None if declared is None else declared_numbers(declared)
+    if declared is not None:deeper, source = declared_deeper(declared, floor, floor_source)
     for name, m in c['quantities'].items():
         if name in g2.FLOORS:continue
-        if deeper_logit(name, depth):rebound(m, deeper, None if deltas is None else deltas.get(name));m['bound_rule'] = 'deeper_logit_bound'
+        if declared is not None:
+            bound, label = declared_bound_for(name, depth, numbers, deeper);rebound(m, bound, None if deltas is None else deltas.get(name));m['bound_rule'] = label
+        elif deeper_logit(name, depth):rebound(m, deeper, None if deltas is None else deltas.get(name));m['bound_rule'] = 'deeper_logit_bound'
         elif g2.is_logit(name):m['bound_rule'] = 'logit_bound'
         if m.get('guard_bound') is None:m['passed'] = bool(m['within_bound']);continue
         count = (outside or {}).get(name, (m.get('guard_evidence') or {}).get('value_positions_outside_digest'))
@@ -1244,7 +1261,9 @@ def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None,
             row.update(bound=m['bound'], ratio_to_bound=m['ratio_to_bound'], passed=m['passed'], guard_mode=m.get('guard_mode'), beyond_guard=m.get('beyond_guard'))
     result['tolerance'].update(guard_depthn_rule=GUARD_DEPTHN_RULE, guard_modes=modes, evaluator_actors=actors or dict(count=None, source='not established'),
         turn1_logit_floor=floor, deeper_logit_bound=deeper,
-        deeper_logit_bound_source=source, deeper_logit_rule=DEEPER_LOGIT_RULE, deeper_logit_quantities=[n for n in c['quantities'] if deeper_logit(n, depth)])
+        deeper_logit_bound_source=source, deeper_logit_rule=DEEPER_LOGIT_RULE if declared is None else DECLARED_DEEPER_RULE,
+        deeper_logit_quantities=[n for n in c['quantities'] if deeper_logit(n, depth)])
+    if declared is not None:result['tolerance']['declared_bounds'] = declared_tolerance(result['tolerance'], declared, c['quantities'], frozen_deeper)
     return result
 
 
@@ -1257,19 +1276,20 @@ def digest_cover_merged(evaluations):
     return out
 
 
-def summarize_n(evaluations):
+def summarize_n(evaluations, *, declared=None):
     """g2.summarize with the guard's spread taken from the last ply's learner-max own-slot spreads of the same frames, then
     apply_rules_depthn (DEEPER_LOGIT_RULE, GUARD_DEPTHN_RULE) on (c) at the calls' depth (their plan's; mixed or unknown
-    depths keep LOGIT_BOUND and every guard gated), then (f) (merge_choices) after (e) under the same value bound."""
+    depths keep LOGIT_BOUND and every guard gated), then (f) (merge_choices) after (e) under the same value bound. declared:
+    --declared-bounds (DECLARED_RULE: the declared numbers in g2.summarize's rule and apply_rules_depthn); None: the frozen rule."""
     p10, spread = guard_spread(s for e in evaluations for s in e.get('spreads', ()))
-    result = g2.summarize(evaluations, spread_p10=p10)
+    result = g2.summarize(evaluations, spread_p10=p10, **declared_kwargs(declared))
     result['tolerance'] = guard_note(result['tolerance'], spread);depths = {e.get('depth') for e in evaluations};deltas = collections.defaultdict(list)
     for e in evaluations:
         for name, m in (e.get('c') or {}).items():deltas[name].append(np.asarray(m['_deltas'], np.float64))
     counts = {e.get('actors') for e in evaluations};count = next(iter(counts)) if len(counts) == 1 else None
     actors = dict(count=count, source=ACTORS_LIVE) if type(count) is int else dict(count=None, source=f'not established: the calls recorded {sorted(map(str, counts))}')
     apply_rules_depthn(result, depths.pop() if len(depths) == 1 else None, actors=actors, deltas={k: np.concatenate(v) for k, v in deltas.items()},
-        outside=digest_cover_merged(evaluations), geometry=any(e.get('geometry') for e in evaluations))
+        outside=digest_cover_merged(evaluations), geometry=any(e.get('geometry') for e in evaluations), declared=declared)
     choices = [e['f'] for e in evaluations if 'f' in e]
     if choices:   # (f) after (e), under the same value bound as (e)'s q_noise_bound
         f = merge_choices(choices, value_bound=result['tolerance']['value_bound']);checks = result['checks']
@@ -1284,7 +1304,8 @@ def tolerance_line_n(tolerance):
     """g2.tolerance_line with the deeper logit bound and its turn-1 floor, (f)'s near ties, flips among them, max |row q diff| and max |grid diff|,
     and each row's bound, guard_mode (rows with a guard outside (c) are gated) and beyond_guard."""
     line = dict(g2.tolerance_line(tolerance), turn1_logit_floor=tolerance.get('turn1_logit_floor'), deeper_logit_bound=tolerance.get('deeper_logit_bound'),
-        **{k: tolerance.get(k) for k in ('f_near_ties', 'f_near_tie_flips', 'f_max_abs_delta_row_q', 'f_max_abs_delta_child_value')})
+        **{k: tolerance.get(k) for k in ('f_near_ties', 'f_near_tie_flips', 'f_max_abs_delta_row_q', 'f_max_abs_delta_child_value')},
+        **({} if 'declared_bounds' not in tolerance else dict(declared_bounds_sha256=tolerance['declared_bounds'].get('sha256'))))
     for entry, row in zip(line['checks'], tolerance.get('table', ())):
         entry.update(bound=row.get('bound'), guard_mode=row.get('guard_mode', 'gated' if row.get('guard_bound') is not None else None), beyond_guard=row.get('beyond_guard'))
     return line
@@ -1764,9 +1785,9 @@ def gate_status_n(result, *, sampled=False):
     return ('PASS_SAMPLED' if sampled else 'PASS'), []
 
 
-def summarize_run(evaluations, lanes):
-    """summarize_n plus the block-invariance section labeled by block_lanes."""
-    result = summarize_n(evaluations)
+def summarize_run(evaluations, lanes, *, declared=None):
+    """summarize_n (under `declared`, --declared-bounds, when given) plus the block-invariance section labeled by block_lanes."""
+    result = summarize_n(evaluations, declared=declared)
     inv = result['checks'].get('block_invariance')
     if inv is not None:inv.pop('child_blocks', None);inv['block_lanes'] = list(lanes)
     return result
@@ -1808,16 +1829,19 @@ def reverdict(path):
     """--reverdict: the current verdict rules re-applied offline to a saved gate.json (apply_rules_depthn on (c) at the run's
     depth, the status through gate_status_n; the other checks keep their saved verdicts: their rules are unchanged), written
     to gate-reverdict.json beside it with a `reverdict` section (old status and reasons, changed quantities). Never
-    overwrites; refuses (SystemExit, non-zero) a report missing a field the verdict needs. Returns 0 iff PASS/PASS_SAMPLED."""
+    overwrites; refuses (SystemExit, non-zero) a report missing a field the verdict needs. A report with a declared-bounds
+    section is re-judged under the declaration it recorded, after saved_declared re-verifies it (refused otherwise); a report
+    without one exactly as before. Returns 0 iff PASS/PASS_SAMPLED."""
     path = Path(path);out = path.with_name(REVERDICT_FILE)
     if out.exists():raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
     try:report = json.loads(path.read_text())
     except (OSError, ValueError) as error:raise SystemExit(f'--reverdict: cannot read {path}: {error}')
     missing = reverdict_missing(report)
     if missing:raise SystemExit(f'--reverdict: {path} lacks what the verdict needs: ' + ', '.join(missing[:FIRST]))
+    declared, section = saved_declared(report)
     quantities = report['checks']['c']['quantities'];before = {name: m.get('passed') for name, m in quantities.items()}
     old = dict(status=report['status'], status_reasons=report.get('status_reasons'), failing=[k for k, v in report['checks'].items() if not v['passed']])
-    apply_rules_depthn(report, report['pricer_options']['depth'], actors=saved_actors(report))
+    apply_rules_depthn(report, report['pricer_options']['depth'], actors=saved_actors(report), declared=declared)
     f_before = report['checks']['f']['passed'];sampled = report['sample_leaves'] is not None
     report['checks']['f'] = choice_verdict(report['checks']['f'], report['tolerance']['value_bound'], sampled=sampled)   # (f) through the live function
     status, reasons = gate_status_n(report, sampled=sampled)
@@ -1827,16 +1851,19 @@ def reverdict(path):
     failing = [k for k, v in report['checks'].items() if not v['passed']]
     report.update(status=status, passed=status in ('PASS', 'PASS_SAMPLED'), status_reasons=reasons, reverdict=dict(source=str(path),
         source_status=old['status'], source_status_reasons=old['status_reasons'], source_failing_checks=old['failing'], failing_checks=failing,
-        changed_quantities=changed, depth=report['pricer_options']['depth'], rule=GUARD_DEPTHN_RULE, deeper_logit_rule=DEEPER_LOGIT_RULE,
+        changed_quantities=changed, depth=report['pricer_options']['depth'], rule=GUARD_DEPTHN_RULE,
+        deeper_logit_rule=DEEPER_LOGIT_RULE if declared is None else DECLARED_DEEPER_RULE,
         turn1_logit_floor=report['tolerance']['turn1_logit_floor'], deeper_logit_bound=report['tolerance']['deeper_logit_bound'], choice_rule=CHOICE_RULE,
-        note='offline: the saved numbers re-judged by the current verdict rules; nothing was re-priced or re-compared'))
-    report = _with_header(report, header_block(report['checks']))
+        note='offline: the saved numbers re-judged by the current verdict rules; nothing was re-priced or re-compared',
+        **({} if declared is None else dict(declared_bounds_sha256=declared['sha256'], declared_bounds='the bounds the report recorded (header.declared_bounds, '
+            'its sha256 re-verified), re-applied'))))
+    report = _with_header(report, header_block(report['checks'], declared=section))
     text = json.dumps(report, indent=1, allow_nan=False, default=str) + '\n'   # before the file exists: a failure here leaves none behind
     try:
         with out.open('x') as handle:handle.write(text)
     except FileExistsError:raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
     for name, m in quantities.items():
-        if name not in g2.FLOORS and (m.get('guard_bound') is not None or m.get('bound_rule') == 'deeper_logit_bound'):
+        if name not in g2.FLOORS and (m.get('guard_bound') is not None or m.get('bound_rule') in ('deeper_logit_bound', 'declared_deeper_logit_bound')):
             log('REVERDICT_QUANTITY', quantity=name, **{k: m.get(k) for k in REVERDICT_SHOWN}, guard_evidence=m.get('guard_evidence'),
                 passed_before=before[name], passed=m['passed'])
     log('REVERDICT', gate=str(path), out=str(out), old_status=old['status'], new_status=status, old_status_reasons=old['status_reasons'],
@@ -1873,9 +1900,10 @@ RULES_CHANGED_AFTER_FAILURE = (
 FROZEN_NOTE = 'the gate code at the PR #1833 merge is the frozen rule set for every later run; a rule changed after that names its triggering run here'
 
 
-def header_block(checks=None, *, configs=None):
+def header_block(checks=None, *, configs=None, declared=None):
     """Every report's header: (e)'s and (f)'s near-tie counts and flips among near ties (per config under --n2-equivalence; None where the
-    check did not run) and the rules changed after a failure, each with its triggering run and approval."""
+    check did not run) and the rules changed after a failure, each with its triggering run and approval; under --declared-bounds a
+    separate `declared_bounds` section (declared_section: the declaration, its sha256 and DECLARED_NOTE), never mixed into those rules."""
     def e_ties(e):
         return None if not isinstance(e, dict) else dict(near_tie_roots=e.get('near_tie_roots'), near_tie_flips=e.get('near_tie_flips'), q_noise_bound=e.get('q_noise_bound'))
     def f_ties(f):
@@ -1883,13 +1911,285 @@ def header_block(checks=None, *, configs=None):
             value_bound=f.get('value_bound'))
     checks = checks or {}
     near = {name: dict(e=e_ties(c.get('e'))) for name, c in configs.items()} if configs is not None else dict(e=e_ties(checks.get('e')), f=f_ties(checks.get('f')))
-    return dict(near_ties=near, rules_changed_after_failure=[dict(r) for r in RULES_CHANGED_AFTER_FAILURE], frozen_rule_set=FROZEN_NOTE)
+    block = dict(near_ties=near, rules_changed_after_failure=[dict(r) for r in RULES_CHANGED_AFTER_FAILURE], frozen_rule_set=FROZEN_NOTE)
+    if declared is not None:block['declared_bounds'] = declared
+    return block
 
 
 def _with_header(report, block):
     """report with `header` placed after its evaluator/value_scale/source keys (the first keys of every gate report)."""
     first = [k for k in ('evaluator', 'value_scale', 'source') if k in report]
     return dict([(k, report[k]) for k in first] + [('header', block)] + [(k, v) for k, v in report.items() if k not in first and k != 'header'])
+
+
+# ---------------------------------------------------------------- declared bounds (--declared-bounds; opt-in, one evaluator)
+
+DECLARED_SCHEMA = 'pokezero.depthn-gate.declared-bounds.v1'
+DECLARED_FIELDS = ('schema', 'evaluator', 'bounds', 'derivation', 'declared_at', 'source_measurement', 'declared_by')
+DECLARED_KINDS = ('champion', 'v2')   # the evaluator header's kinds: --champion-archive, --head-archive
+DECLARED_PRECISIONS = tuple(ce.PRECISIONS.values())   # the evaluator identity's names ('bfloat16', 'float32'), never the flags' aliases
+DECLARED_RULE = ('--declared-bounds (opt-in; only with an evaluator override, --champion-archive or --head-archive): a JSON declaration '
+    '(DECLARED_SCHEMA) written before the run (declared_at no later than the run\'s start, UTC), its bytes pinned by --declared-bounds-sha256 '
+    'and bound to ONE evaluator identity (kind, archive sha256, precision; checkpoint sha256 when declared), which must be the run\'s, replaces '
+    'the tolerance NUMBERS for that evaluator; no check, mask, rule or status changes. value_bound replaces 2 x depth1_noise_floor (and its 1e-4 '
+    'fallback) wherever the value bound applies: (b) t1_value, every (c) value quantity (turn 1, ply nodes, leaves, depth2_pass, raw head), '
+    'block-invariance values, (e)\'s q_noise_bound unless near_tie_q_bound is declared, (f)\'s grid entries, row q and near ties, the '
+    '--n2-equivalence values and the mutation test. turn1_logit_bound replaces LOGIT_BOUND wherever it applies: turn-1 and root priors in (b) '
+    'and (c), depth2_pass priors, block-invariance logits, the --n2-equivalence priors and topk_boundary\'s gap count. Priors at plies >= 2 of '
+    'a depth >= 3 frame: deeper_logit_bound as declared, or deeper_logit_rule = max(turn1_logit_bound, factor x turn1_logit_floor) '
+    '(DEEPER_LOGIT_RULE\'s construction with the declared base and factor; turn1_logit_bound when the floor is unmeasured or non-finite). '
+    'near_tie_q_bound (default value_bound) is (e)\'s q_noise_bound, one number in the frozen rule: the root near-tie threshold of rule 1 and '
+    '(e)\'s max |dQ| clause (completed Q mixes the swapped priors too); (f) keeps the value bound (both of its sides solve under the pricer\'s '
+    'priors). Unchanged: every exact check ((a), (d), digests, discrete fields, oracle consistency), the misplacement guard (0.25 x the p10 '
+    'spread) and GUARD_DEPTHN_RULE, (f)\'s read identity and priors, the statuses, and the kill test (run at the declared value bound). The '
+    'measured floors (depth1_noise_floor, root_logit_floor, turn1_logit_floor) are still measured and reported beside the declared bounds, '
+    'with the numbers the frozen rule would have given (tolerance.declared_bounds.frozen_rule_would_give; not gated)')
+DECLARED_NOTE = ('pre-registered, evaluator-specific bounds: declared in writing before this run for the evaluator identity below (derivation and '
+    'source measurement in the declaration), applied in place of the B1-calibrated tolerance numbers for that evaluator only. This is NOT a rule '
+    'change after a failure: rules_changed_after_failure and the frozen rule set are untouched, and a run without --declared-bounds is judged '
+    'exactly as before')
+DECLARED_TOLERANCE_RULE = ('declared bounds (DECLARED_RULE): values max |diff| <= the declared value_bound; turn-1, root and depth2_pass '
+    'logits <= the declared turn1_logit_bound; deeper priors as declared; the guard, digests, discrete fields and (e)/(f) rules unchanged')
+DECLARED_DEEPER_RULE = ('(c) priors at plies >= 2 of a depth >= 3 frame under --declared-bounds: the declared deeper_logit_bound, or the declared '
+    'deeper_logit_rule max(turn1_logit_bound, factor x turn1_logit_floor) (turn1_logit_floor measured as in DEEPER_LOGIT_RULE; turn1_logit_bound '
+    'when it is not); turn-1, root and depth2_pass priors keep the declared turn1_logit_bound')
+
+
+class DeclaredBoundsError(ValueError):
+    """A declared-bounds file, or its use in this run, refused (fail closed)."""
+
+
+def _positive(value):
+    """A finite JSON number > 0 (never a bool)."""
+    return type(value) in (int, float) and math.isfinite(value) and value > 0
+
+
+def _utc(text):
+    """The aware UTC datetime of an ISO 8601 text with an explicit zero offset ('Z' or '+00:00'), else None."""
+    if not isinstance(text, str):return None
+    try:when = datetime.datetime.fromisoformat(text)
+    except ValueError:return None
+    return when if when.tzinfo is not None and when.utcoffset() == datetime.timedelta(0) else None
+
+
+def _object(problems, where, value, required, optional=()):
+    """Whether `value` is a JSON object; its missing required and unknown keys appended to problems (a misspelt key is refused,
+    never ignored)."""
+    if not isinstance(value, dict):problems.append(f'{where}: a JSON object');return False
+    problems += [f'{where}.{k}: missing' for k in required if k not in value] + [f'{where}.{k}: unknown key' for k in value if k not in required + tuple(optional)]
+    return True
+
+
+def declared_problems(content):
+    """Every reason a parsed declaration is refused ([] when valid): exactly DECLARED_FIELDS at the top and no unknown key at any level;
+    schema DECLARED_SCHEMA; evaluator {kind in DECLARED_KINDS, archive_sha256 64-hex, precision in DECLARED_PRECISIONS, optional
+    checkpoint_sha256 64-hex}; bounds {value_bound, turn1_logit_bound, exactly one of deeper_logit_bound or deeper_logit_rule {factor},
+    optional near_tie_q_bound}, each a finite number > 0; derivation and declared_by non-empty text; declared_at ISO 8601 in UTC;
+    source_measurement {path non-empty, sha256 64-hex}."""
+    problems = []
+    if not _object(problems, 'declaration', content, DECLARED_FIELDS):return problems
+    if 'schema' in content and content['schema'] != DECLARED_SCHEMA:problems.append(f'schema: {DECLARED_SCHEMA!r} required (got {content["schema"]!r})')
+    evaluator = content.get('evaluator')
+    if 'evaluator' in content and _object(problems, 'evaluator', evaluator, ('kind', 'archive_sha256', 'precision'), ('checkpoint_sha256',)):
+        if 'kind' in evaluator and evaluator['kind'] not in DECLARED_KINDS:problems.append(f'evaluator.kind: one of {DECLARED_KINDS} (got {evaluator["kind"]!r})')
+        if 'precision' in evaluator and evaluator['precision'] not in DECLARED_PRECISIONS:
+            problems.append(f'evaluator.precision: one of {DECLARED_PRECISIONS}, the identity\'s names (got {evaluator["precision"]!r})')
+        problems += [f'evaluator.{k}: a 64-hex sha256' for k in ('archive_sha256', 'checkpoint_sha256') if k in evaluator and not ce._hex64(evaluator[k])]
+    bounds = content.get('bounds')
+    if 'bounds' in content and _object(problems, 'bounds', bounds, ('value_bound', 'turn1_logit_bound'), ('deeper_logit_bound', 'deeper_logit_rule', 'near_tie_q_bound')):
+        problems += [f'bounds.{k}: a finite number > 0' for k in ('value_bound', 'turn1_logit_bound', 'deeper_logit_bound', 'near_tie_q_bound')
+            if k in bounds and not _positive(bounds[k])]
+        if ('deeper_logit_bound' in bounds) == ('deeper_logit_rule' in bounds):problems.append('bounds: exactly one of deeper_logit_bound or deeper_logit_rule')
+        rule = bounds.get('deeper_logit_rule')
+        if 'deeper_logit_rule' in bounds and _object(problems, 'bounds.deeper_logit_rule', rule, ('factor',)) and 'factor' in rule and not _positive(rule['factor']):
+            problems.append('bounds.deeper_logit_rule.factor: a finite number > 0')
+    problems += [f'{k}: non-empty text' for k in ('derivation', 'declared_by') if k in content and not (isinstance(content[k], str) and content[k].strip())]
+    if 'declared_at' in content and _utc(content['declared_at']) is None:
+        problems.append(f'declared_at: ISO 8601 in UTC with an explicit offset, e.g. 2026-11-07T12:00:00Z (got {content["declared_at"]!r})')
+    measurement = content.get('source_measurement')
+    if 'source_measurement' in content and _object(problems, 'source_measurement', measurement, ('path', 'sha256')):
+        if 'path' in measurement and not (isinstance(measurement['path'], str) and measurement['path'].strip()):problems.append('source_measurement.path: non-empty text')
+        if 'sha256' in measurement and not ce._hex64(measurement['sha256']):problems.append('source_measurement.sha256: a 64-hex sha256')
+    return problems
+
+
+def _strict_json(text):
+    """json.loads refusing duplicate keys and NaN / Infinity (DeclaredBoundsError)."""
+    def pairs(items):
+        keys = [k for k, _ in items];duplicated = sorted({k for k in keys if keys.count(k) > 1})
+        if duplicated:raise DeclaredBoundsError(f'duplicate key(s) {duplicated}')
+        return dict(items)
+    def constant(name):raise DeclaredBoundsError(f'{name} is not a JSON number')
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
+
+
+def declared_from_bytes(raw, sha256, *, path, now=None):
+    """A declaration from its exact bytes: their sha256 must be `sha256`, the text UTF-8, the JSON strict (_strict_json) and valid
+    (declared_problems), and declared_at no later than `now` (the run's start, UTC: the bounds are declared BEFORE the run). Returns
+    dict(path, sha256, content, content_text, run_started_at); DeclaredBoundsError otherwise."""
+    got = hashlib.sha256(raw).hexdigest()
+    if got != sha256:raise DeclaredBoundsError(f'{path}: its sha256 {got} differs from --declared-bounds-sha256 {sha256}')
+    try:text = raw.decode('utf-8')
+    except UnicodeDecodeError as error:raise DeclaredBoundsError(f'{path}: not UTF-8 ({error})')
+    try:content = _strict_json(text)
+    except ValueError as error:raise DeclaredBoundsError(f'{path}: not a JSON declaration ({error})')
+    problems = declared_problems(content)
+    if problems:raise DeclaredBoundsError(f'{path}: ' + '; '.join(problems))
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    if _utc(content['declared_at']) > now:
+        raise DeclaredBoundsError(f'{path}: declared_at {content["declared_at"]} is after the run\'s start {now.isoformat()} (bounds are declared before the run)')
+    return dict(path=str(path), sha256=got, content=content, content_text=text, run_started_at=now.isoformat())
+
+
+def load_declared(path, sha256, *, now=None):
+    """--declared-bounds PATH --declared-bounds-sha256 SHA: declared_from_bytes on the file's bytes."""
+    try:raw = Path(path).read_bytes()
+    except OSError as error:raise DeclaredBoundsError(f'cannot read {path}: {error}')
+    return declared_from_bytes(raw, sha256, path=path, now=now)
+
+
+def evaluator_identity(evaluator):
+    """What a declaration is matched against, from an evaluator header (g2.evaluator_header; a report's `evaluator`)."""
+    e = evaluator if isinstance(evaluator, dict) else {}
+    return dict(override=e.get('override') is True, kind=e.get('kind'), archive_sha256=e.get('archive_sha256'), precision=e.get('precision'),
+        checkpoint_sha256=e.get('checkpoint_sha256'))
+
+
+def args_identity(args):
+    """The evaluator identity the override flags name, before anything is loaded: the champion's (kind champion, its archive and checkpoint
+    sha256, its precision), the head override's (kind v2, bfloat16) or none (the bank snapshot's actors). load_roots resolves the same
+    identity into the evaluator header, which main checks again."""
+    if getattr(args, 'champion_archive', None):
+        return dict(override=True, kind='champion', archive_sha256=args.champion_archive_sha256, precision=ce.PRECISIONS[args.champion_precision or 'bf16'],
+            checkpoint_sha256=args.champion_checkpoint_sha256)
+    if getattr(args, 'head_archive', None):
+        return dict(override=True, kind='v2', archive_sha256=args.head_archive_sha256, precision='bfloat16', checkpoint_sha256=args.head_checkpoint_sha256)
+    return dict(override=False, kind=None, archive_sha256=None, precision=None, checkpoint_sha256=None)
+
+
+def evaluator_mismatches(content, identity):
+    """Why a valid declaration does not apply to a run's evaluator identity ([] when it does): an override must price (one parameter set
+    with one identity), and kind, archive sha256 and precision (and checkpoint sha256, when declared) must be the run's."""
+    declared = content['evaluator']
+    out = [] if identity.get('override') else ['the run has no evaluator override (the bank snapshot\'s actors): a declaration binds one evaluator']
+    for key in ('kind', 'archive_sha256', 'precision') + (('checkpoint_sha256',) if 'checkpoint_sha256' in declared else ()):
+        if declared[key] != identity.get(key):out.append(f'evaluator.{key}: declared {declared[key]!r}, the run\'s {identity.get(key)!r}')
+    return out
+
+
+def declared_numbers(declared):
+    """The declaration's numbers as floats: value_bound, turn1_logit_bound, deeper_logit_bound or deeper_logit_factor (one is None) and
+    near_tie_q_bound (None: the value bound)."""
+    b = declared['content']['bounds'];number = lambda key: None if key not in b else float(b[key])
+    return dict(value_bound=number('value_bound'), turn1_logit_bound=number('turn1_logit_bound'), deeper_logit_bound=number('deeper_logit_bound'),
+        deeper_logit_factor=None if 'deeper_logit_rule' not in b else float(b['deeper_logit_rule']['factor']), near_tie_q_bound=number('near_tie_q_bound'))
+
+
+def declared_rule(rule, declared):
+    """A tolerance rule (g2.tolerance_rule's) under a declaration: value_bound and logit_bound replaced by the declared value and turn-1 logit
+    bounds, q_noise_bound set when near_tie_q_bound is declared, the frozen rule's own entries kept under frozen_rule (reported, not gated);
+    every other entry (the measured depth-1 floor, the guard) unchanged. declared None: the rule itself."""
+    if declared is None:return rule
+    n = declared_numbers(declared)
+    out = dict(rule, rule=DECLARED_TOLERANCE_RULE, value_bound=n['value_bound'], value_bound_source=f'declared value_bound (--declared-bounds sha256 {declared["sha256"]})',
+        logit_bound=n['turn1_logit_bound'], frozen_rule={k: rule.get(k) for k in ('rule', 'value_bound', 'value_bound_source', 'logit_bound')},
+        declared_bounds=dict(sha256=declared['sha256'], rule=DECLARED_RULE))
+    if n['near_tie_q_bound'] is not None:out['q_noise_bound'] = n['near_tie_q_bound']
+    return out
+
+
+def declared_kwargs(declared):
+    """g2.summarize's bounds hook under a declaration; nothing otherwise, so the default call is the unchanged one."""
+    return {} if declared is None else dict(bounds=lambda rule: declared_rule(rule, declared))
+
+
+def declared_deeper(declared, floor, floor_source):
+    """(deeper_logit_bound, source) under a declaration: deeper_logit_bound as declared, or deeper_logit_rule's max(turn1_logit_bound,
+    factor x turn1_logit_floor), turn1_logit_bound when the floor is None (unmeasured or non-finite: turn1_logit_floor's reason)."""
+    n = declared_numbers(declared)
+    if n['deeper_logit_bound'] is not None:return n['deeper_logit_bound'], 'declared deeper_logit_bound'
+    base, factor = n['turn1_logit_bound'], n['deeper_logit_factor']
+    if floor is None:return base, 'declared turn1_logit_bound: turn1_logit_floor ' + floor_source.split(': ', 1)[-1]
+    return max(base, factor * floor), (f'declared deeper_logit_rule: {factor:g} x turn1_logit_floor ({floor_source})' if factor * floor > base
+        else f'declared deeper_logit_rule: turn1_logit_bound ({factor:g} x turn1_logit_floor, {floor_source}, is below it)')
+
+
+def declared_bound_for(name, depth, numbers, deeper):
+    """(bound, bound_rule) of (c) quantity `name` under a declaration: deeper priors the deeper bound, other priors the turn-1 logit bound,
+    values the value bound."""
+    if deeper_logit(name, depth):return deeper, 'declared_deeper_logit_bound'
+    if g2.is_logit(name):return numbers['turn1_logit_bound'], 'declared_turn1_logit_bound'
+    return numbers['value_bound'], 'declared_value_bound'
+
+
+def declared_tolerance(tolerance, declared, quantities, frozen_deeper):
+    """tolerance.declared_bounds: the numbers applied, the floors this run measured and what the frozen rule would have given (not gated)."""
+    n = declared_numbers(declared);frozen = tolerance.get('frozen_rule') or {}
+    return dict(sha256=declared['sha256'], path=declared['path'], rule=DECLARED_RULE,
+        applied=dict(value_bound=n['value_bound'], turn1_logit_bound=n['turn1_logit_bound'], deeper_logit_bound=tolerance['deeper_logit_bound'],
+            deeper_logit_bound_source=tolerance['deeper_logit_bound_source'], q_noise_bound=n['value_bound'] if n['near_tie_q_bound'] is None else n['near_tie_q_bound'],
+            guard_bound=tolerance.get('guard_bound')),
+        measured=dict(depth1_noise_floor=tolerance.get('depth1_noise_floor'), root_logit_floor=(quantities.get('root_logit_floor') or {}).get('max_abs_difference'),
+            turn1_logit_floor=tolerance.get('turn1_logit_floor')),
+        frozen_rule_would_give=dict(value_bound=frozen.get('value_bound'), value_bound_source=frozen.get('value_bound_source'), logit_bound=frozen.get('logit_bound'),
+            deeper_logit_bound=frozen_deeper, note='the B1-calibrated rule\'s numbers on this run\'s floors, reported beside the declared bounds, not gated'))
+
+
+def declared_section(declared, evaluator):
+    """The header's `declared_bounds` section: the declaration (parsed and as its exact text, whose sha256 --reverdict re-verifies), its
+    sha256 and path, the run evaluator it was matched against, the run's start and DECLARED_NOTE."""
+    return dict(sha256=declared['sha256'], path=declared['path'], content=declared['content'], content_text=declared['content_text'],
+        evaluator={k: v for k, v in evaluator_identity(evaluator).items() if k != 'override'}, run_started_at=declared['run_started_at'], note=DECLARED_NOTE,
+        rule=DECLARED_RULE)
+
+
+def saved_declared(report):
+    """(declared, header section) a report recorded under --declared-bounds, re-verified for --reverdict, or (None, None) for a report
+    without one. Fail closed (SystemExit) unless: the header section's content_text hashes to its sha256 and parses (strictly) to its
+    content, a valid declaration; it matches the report's evaluator header; declared_at is no later than the recorded run start; and the
+    tolerance section names the same sha256 and carries the declared value and turn-1 logit bounds."""
+    header = report.get('header') if isinstance(report.get('header'), dict) else {}
+    section, recorded = header.get('declared_bounds'), (report.get('tolerance') or {}).get('declared_bounds')
+    if section is None and recorded is None:return None, None
+    problems, content = [], None
+    if not isinstance(section, dict):problems.append('tolerance.declared_bounds without header.declared_bounds')
+    else:
+        text, sha = section.get('content_text'), section.get('sha256')
+        if not isinstance(text, str) or hashlib.sha256(text.encode('utf-8')).hexdigest() != sha:
+            problems.append('header.declared_bounds.content_text does not hash to its sha256')
+        else:
+            try:content = _strict_json(text)
+            except ValueError as error:problems.append(f'header.declared_bounds.content_text: {error}')
+    if content is not None:
+        problems += declared_problems(content) + ([] if content == section.get('content') else ['header.declared_bounds.content differs from its content_text'])
+    if content is not None and not problems:
+        problems += evaluator_mismatches(content, evaluator_identity(report.get('evaluator')))
+        started = _utc(section.get('run_started_at'))
+        if started is None or _utc(content['declared_at']) > started:problems.append('declared_at is not before the recorded run start')
+        n, tolerance = declared_numbers(dict(content=content)), report.get('tolerance') or {}
+        if not isinstance(recorded, dict) or recorded.get('sha256') != sha:problems.append('tolerance.declared_bounds does not name the same sha256')
+        if (tolerance.get('value_bound'), tolerance.get('logit_bound')) != (n['value_bound'], n['turn1_logit_bound']):
+            problems.append(f'tolerance value_bound / logit_bound {[tolerance.get("value_bound"), tolerance.get("logit_bound")]} are not the declared '
+                f'{[n["value_bound"], n["turn1_logit_bound"]]}')
+    if problems:raise SystemExit('--reverdict: the report\'s declared bounds fail their checks (fail closed): ' + '; '.join(problems[:FIRST]))
+    return dict(path=section.get('path'), sha256=sha, content=content, content_text=text, run_started_at=section.get('run_started_at')), section
+
+
+def check_declared_arguments(parser, args):
+    """--declared-bounds PATH and --declared-bounds-sha256 SHA go together (a 64-hex sha256), only with an evaluator override
+    (--champion-archive or --head-archive: one parameter set with one identity for the declaration to bind; the bank snapshot's actors are
+    the B1-calibrated default path, several parameter sets with no single identity), and only where a verdict is priced live: refused with
+    --depth3-diagnostics (no oracle, no bound) and the offline modes (--diagnostics-from, --mutation-from; --reverdict takes no option and
+    re-applies the declaration its report recorded)."""
+    given = [getattr(args, 'declared_bounds', None), getattr(args, 'declared_bounds_sha256', None)]
+    if not any(given):return args
+    if not all(given):parser.error('--declared-bounds and --declared-bounds-sha256 go together')
+    if not ce._hex64(args.declared_bounds_sha256):parser.error('--declared-bounds-sha256 must be a 64-hex sha256')
+    if args.diagnostics_from or args.mutation_from:parser.error('--declared-bounds applies to a live gate run: --diagnostics-from / --mutation-from judge nothing live')
+    if not (args.champion_archive or args.head_archive):parser.error('--declared-bounds needs an evaluator override (--champion-archive or --head-archive): '
+        'a declaration binds one evaluator identity, and the bank snapshot\'s actors keep the frozen rule')
+    if args.depth3_diagnostics:parser.error('--declared-bounds does not apply to --depth3-diagnostics (no oracle, no bound)')
+    return args
 
 
 # ---------------------------------------------------------------- mutation kill test (--mutation-test, --mutation-from)
@@ -2095,10 +2395,11 @@ def at_bound(evaluation, value_bound):
     return dict(evaluation, c=dict(evaluation.get('c') or {}, depth1_noise_floor=floor))
 
 
-def mutant_verdict(evaluation, *, lanes, sampled=False, value_bound=None):
-    """(verdict, summarized result) of ONE call's evaluation judged alone (at `value_bound`, the run's, when given): status, the checks that
-    caught it (a (c) quantity only beyond its value bound; guard-only failures listed apart, never a kill) and KILLED = FAIL with a gated catch."""
-    result = summarize_run([at_bound(evaluation, value_bound)], lanes);status, reasons = gate_status_n(result, sampled=sampled);caught, guard_only = {}, []
+def mutant_verdict(evaluation, *, lanes, sampled=False, value_bound=None, declared=None):
+    """(verdict, summarized result) of ONE call's evaluation judged alone (at `value_bound`, the run's, when given; under `declared`,
+    --declared-bounds, when given): status, the checks that caught it (a (c) quantity only beyond its value bound; guard-only failures listed
+    apart, never a kill) and KILLED = FAIL with a gated catch."""
+    result = summarize_run([at_bound(evaluation, value_bound)], lanes, declared=declared);status, reasons = gate_status_n(result, sampled=sampled);caught, guard_only = {}, []
     if value_bound is not None and result['tolerance']['value_bound'] != float(value_bound):
         raise ValueError(f'judged at {result["tolerance"]["value_bound"]!r}, not the run\'s value bound {value_bound!r}')
     depth = evaluation.get('depth')
@@ -2226,17 +2527,18 @@ MUTATION_INPUTS = '_mutation_inputs'   # run_call_n keeps a call's frame, oracle
 
 
 def mutation_test_call(frame, data, requests, d_results, clean, *, context=None, backups=None, source=None, lanes=(2187,), full_turn1=True,
-                       sweep=SWEEP_SWAPS, seed=MUTATION_SEED, progress=None, value_bound=None):
+                       sweep=SWEEP_SWAPS, seed=MUTATION_SEED, progress=None, value_bound=None, declared=None):
     """MUTATION_RULE on ONE call: the clean call and the ten mutants judged alone at `value_bound` (the RUN's; None: the call's own), then
     the sweep on both paths; `clean` is the call's evaluation (never modified). backups: depthn_backups (default) for the clean side and the
-    scatter path; source: depthn_backups' source text for the backup path (backups_source() by default). Returns the call's report."""
+    scatter path; source: depthn_backups' source text for the backup path (backups_source() by default); declared: the run's --declared-bounds
+    (every verdict under it; the run's value bound is then the declared one). Returns the call's report."""
     clock = time.perf_counter();context = dict(context or {});log_line = progress or (lambda *a, **k: None)
     out = dict(context, rule='MUTATION_RULE (gate.json tolerance and this file\'s rule)', mutants={}, passed=False)
     if backups is None:
         try:backups = importlib.import_module('gpu_engine.depthn_backups')
         except ImportError as error:return dict(out, reason=f'gpu_engine.depthn_backups is not importable: {error}', seconds=time.perf_counter() - clock)
     base = {k: v for k, v in clean.items() if k not in ('mutation', MUTATION_INPUTS)};base['actors'] = 1
-    verdict, result = mutant_verdict(base, lanes=lanes, value_bound=value_bound);bound = result['tolerance']['value_bound'];block = int(context.get('block', 0))
+    verdict, result = mutant_verdict(base, lanes=lanes, value_bound=value_bound, declared=declared);bound = result['tolerance']['value_bound'];block = int(context.get('block', 0))
     out.update(clean=dict(status=verdict['status'], status_reasons=verdict['status_reasons'], failing=verdict['caught_by'], guard_only=verdict['guard_only']),
         value_bound=bound, value_bound_source='the run\'s (its depth-1 floor substituted for the call\'s)' if value_bound is not None else 'the call\'s own depth-1 floor',
         evaluator_actors_live=clean.get('actors'))
@@ -2251,7 +2553,7 @@ def mutation_test_call(frame, data, requests, d_results, clean, *, context=None,
         try:evaluation = mutant_evaluation(path, pairs, frame=frame, data=data, requests=requests, d_results=d_results, clean=base, backups=backups,
             source=source, tree=tree, full_turn1=full_turn1, context=dict(context, mutant=name), priors=UNIFORM_PI_OWN if kind == 'priors' else None)
         except MutantPatchError as error:out['mutants'][name] = dict(entry, exercised=False, killed=False, reason=str(error));continue
-        verdict, _ = mutant_verdict(evaluation, lanes=lanes, value_bound=bound)
+        verdict, _ = mutant_verdict(evaluation, lanes=lanes, value_bound=bound, declared=declared)
         out['mutants'][name] = dict(entry, exercised=True, **verdict, seconds=time.perf_counter() - started)
         log_line('MUTATION_TEST_MUTANT', **context, mutant=name, status=verdict['status'], killed=verdict['killed'], caught_by=verdict['caught_by'],
             guard_only=verdict['guard_only'], pairs=len(pairs), value_bound=bound, seconds=out['mutants'][name]['seconds'])
@@ -2261,7 +2563,7 @@ def mutation_test_call(frame, data, requests, d_results, clean, *, context=None,
         s = out['sweep'].get(path) or {}
         log_line('MUTATION_TEST_SWEEP', **context, path=path, **{k: s.get(k) for k in ('swaps', 'caught', 'survived', 'survivors', 'survivors_parents_refused',
             'material_survivors', 'survivor_max_abs_value_difference', 'survivor_ratio_to_2_bound', 'survivor_max_parent_value_change', 'claim_holds', 'seconds', 'skipped')})
-    again, _ = mutant_verdict(base, lanes=lanes, value_bound=value_bound);out['clean_unchanged'] = again['status'] == out['clean']['status'] and again['caught_by'] == out['clean']['failing']
+    again, _ = mutant_verdict(base, lanes=lanes, value_bound=value_bound, declared=declared);out['clean_unchanged'] = again['status'] == out['clean']['status'] and again['caught_by'] == out['clean']['failing']
     survivors = [n for n, m in out['mutants'].items() if not m['killed']];material = {p: (out['sweep'].get(p) or {}).get('material_survivors') for p in SWEEP_PATHS}
     out.update(survivors=survivors, material_survivors=material, passed=out['clean']['status'] == 'PASS' and out['clean_unchanged'] and not survivors
         and all(n == 0 for n in material.values()) and not any('skipped' in (out['sweep'].get(p) or {'skipped': 1}) for p in SWEEP_PATHS), seconds=time.perf_counter() - clock)
@@ -2270,23 +2572,25 @@ def mutation_test_call(frame, data, requests, d_results, clean, *, context=None,
     return out
 
 
-def mutation_tests(evaluations, *, value_bound, lanes=(2187,), backups=None, source=None, progress=None, sweep=SWEEP_SWAPS):
+def mutation_tests(evaluations, *, value_bound, lanes=(2187,), backups=None, source=None, progress=None, sweep=SWEEP_SWAPS, declared=None):
     """--mutation-test once the run's value bound is known: mutation_test_call on every call that kept its inputs (run_call_n with
-    mutation=...), at the RUN's value bound; the inputs are dropped from each evaluation afterwards. Returns the per-call reports."""
+    mutation=...), at the RUN's value bound (under the run's --declared-bounds, when given); the inputs are dropped from each evaluation
+    afterwards. Returns the per-call reports."""
     out = []
     for evaluation in evaluations:
         inputs = evaluation.pop(MUTATION_INPUTS, None)
         if inputs is None:continue
         out.append(mutation_test_call(inputs['frame'], inputs['data'], inputs['requests'], inputs['d_results'], evaluation, context=inputs['context'],
             backups=backups, source=inputs.get('source', source), lanes=lanes, full_turn1=inputs['full_turn1'], progress=progress, value_bound=value_bound,
-            sweep=inputs.get('sweep', sweep)))
+            sweep=inputs.get('sweep', sweep), declared=declared))
     return out
 
 
-def mutation_report(calls, *, seconds=None, source=None, checks=None, value_bound=None):
-    """mutation-test.json: per-call reports, PASS iff every call's passes (and at least one ran); header: the gate's (checks: the run's)."""
+def mutation_report(calls, *, seconds=None, source=None, checks=None, value_bound=None, declared=None):
+    """mutation-test.json: per-call reports, PASS iff every call's passes (and at least one ran); header: the gate's (checks: the run's;
+    declared: its declared_bounds section)."""
     passed = bool(calls) and all(c['passed'] for c in calls)
-    return dict(schema=SCHEMA, mode='MUTATION_TEST', header=header_block(checks), passed=passed, status='PASS' if passed else 'FAIL', rule=MUTATION_RULE,
+    return dict(schema=SCHEMA, mode='MUTATION_TEST', header=header_block(checks, declared=declared), passed=passed, status='PASS' if passed else 'FAIL', rule=MUTATION_RULE,
         choice_rule=CHOICE_RULE, mutants=[f'{p}-{k}-{v}' for p, k, v in MUTANTS], sweep_swaps=SWEEP_SWAPS, sweep_paths=list(SWEEP_PATHS), seed=MUTATION_SEED,
         source=source, value_bound=value_bound, survivors={f'block{c.get("block")}-call{c.get("call")}': c.get('survivors') for c in calls},
         material_survivors={f'block{c.get("block")}-call{c.get("call")}': c.get('material_survivors') for c in calls}, seconds=seconds, calls=calls)
@@ -2360,7 +2664,10 @@ def offline_mutation(directories, *, backups=None, source=None, progress=None, s
         for path in sorted(Path(directory).glob('frames-block*-call*-oracle.npz')):
             m = ORACLE_FILE.match(path.name)
             if m is None:continue
-            data, d_results, meta = load_oracle_data(path);frame, requests, _ = load_frame(path.with_name(meta['frame']))
+            data, d_results, meta = load_oracle_data(path);frame, requests, frame_meta = load_frame(path.with_name(meta['frame']))
+            if (frame_meta.get('evaluator') or {}).get('declared_bounds_sha256'):
+                raise SystemExit(f'--mutation-from: {path.name} comes from a --declared-bounds run, judged under its declaration; offline it would be judged '
+                    'under the frozen rule (refused: re-run --mutation-test live with the declaration)')
             for request, keys in zip(requests, meta['input_keys']):request.root_inputs = {k: None for k in keys}
             context = dict(block=int(m['block']), call=int(m['call']), source=str(path))
             clean = evaluate_n(frame, d_results, requests, data, context=context, full_turn1=meta.get('full_turn1', True), backups=backups, decision=True, choices=True)
@@ -2448,24 +2755,25 @@ def n2_equivalence_call(*, requests, recipe, materializer, params, configs, fram
     return out
 
 
-def summarize_n2(per_config):
+def summarize_n2(per_config, *, declared=None):
     """{config: [call results]} -> per config: discrete (exact), floats within the run's rule, (e) under the near-tie rule;
-    the rule from the depth-1 floor (D3 vs the oracle's turn-1 heads) and the p10 spread of the N=2 frames."""
+    the rule from the depth-1 floor (D3 vs the oracle's turn-1 heads) and the p10 spread of the N=2 frames. declared: the run's
+    --declared-bounds (declared_rule: its value and turn-1 logit bounds, and its near-tie Q bound as (e)'s q_noise_bound)."""
     report = {}
     for name, calls in per_config.items():
         quantities = g2.merge_numeric([x['c'] for x in calls]);p10, spread = guard_spread(s for x in calls for s in x['spreads'])
-        rule = guard_note(g2.tolerance_rule(quantities.get('depth1_noise_floor'), p10), spread)
-        floats = g2.merge_numeric([x['floats'] for x in calls])
+        rule = guard_note(declared_rule(g2.tolerance_rule(quantities.get('depth1_noise_floor'), p10), declared), spread)
+        floats = g2.merge_numeric([x['floats'] for x in calls]);q_noise = rule.get('q_noise_bound', rule['value_bound'])   # tolerance_rule sets none
         for q, m in floats.items():g2.finalize_numeric(m, g2.bound_for(q, rule), g2.guard_for(q, rule))
         heads = {q: g2.finalize_numeric(m, g2.bound_for(q, rule), None if q in g2.FLOORS else g2.guard_for(q, rule)) for q, m in quantities.items()}
-        discrete = g2.merge_findings([x['a'] for x in calls]);e = g2.merge_decisions([x['e'] for x in calls], q_noise_bound=rule['value_bound'])
+        discrete = g2.merge_findings([x['a'] for x in calls]);e = g2.merge_decisions([x['e'] for x in calls], q_noise_bound=q_noise)
         e['reference'] = 'depth2_backups.learner_max_root on the Depth2Frame vs on as_depth2_frame(DepthNPricer N=2)'
         reports_equal = all(x['a'].get('world_reports_equal', False) for x in calls)
         passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed'] and reports_equal
         vacuous = [reason for reason, empty in (('no turn-2 leaf compared', not discrete['compared'].get('t2_status')),
             ('(e) compared no root', not e.get('roots_compared'))) if empty]
         report[name] = dict(status='FAIL' if not passed else 'INCOMPLETE' if vacuous else 'PASS', status_reasons=vacuous, passed=passed and not vacuous,
-            discrete=discrete, floats=floats, e=e, tolerance=dict(rule, q_noise_bound=rule['value_bound']),
+            discrete=discrete, floats=floats, e=e, tolerance=dict(rule, q_noise_bound=q_noise),
             turn1_heads_vs_oracle=dict(reported_not_gated=True, quantities=heads), world_reports_equal=reports_equal,
             world_reports_first_difference=next((x['a']['world_reports_first_difference'] for x in calls if x['a'].get('world_reports_first_difference')), None))
     return report
@@ -2729,13 +3037,17 @@ def parse(argv=None):
         '(--save-arrays --save-oracle); writes mutation-test.json in --out')
     parser.add_argument('--fixed-shapes', action='store_true', help='compile once per process: every DepthNPricer with fixed_capacity=True and '
         'every oracle stack padded to 2 x the call-split capacity (FIXED_SHAPES; a harness setting, recorded as `harness`; no rule reads it)')
+    parser.add_argument('--declared-bounds', metavar='PATH', help='opt-in, with --champion-archive or --head-archive: a JSON declaration '
+        f'({DECLARED_SCHEMA}) of this evaluator\'s value, turn-1 logit and deeper-ply logit bounds, written before the run; it replaces the '
+        'tolerance numbers (DECLARED_RULE) and is recorded in every report\'s header (declared_bounds)')
+    parser.add_argument('--declared-bounds-sha256', metavar='SHA256', help='sha256 of --declared-bounds\' bytes (required with it)')
     g2.add_head_arguments(parser);ce.add_arguments(parser)
     args = parser.parse_args(argv)
     if args.reverdict:
         given = sorted(a.option_strings[0] for a in parser._actions if a.dest not in ('help', 'reverdict') and getattr(args, a.dest) != a.default)
         if given:parser.error('--reverdict runs offline on a saved gate.json and takes no other option (given: ' + ', '.join(given) + ')')
         return parser, args
-    g2.check_head_arguments(parser, args);ce.check_arguments(parser, args)
+    g2.check_head_arguments(parser, args);ce.check_arguments(parser, args);check_declared_arguments(parser, args)
     if args.raw_head_check and not args.head_archive:parser.error('--raw-head-check needs --head-archive')
     if not args.out:parser.error('--out is required (every mode but --reverdict)')
     if args.diagnostics_from or args.mutation_from:
@@ -2787,19 +3099,33 @@ def main(argv=None):
         report['seconds'] = time.perf_counter() - clock;write(out / MUTATION_FILE, report)
         log('MUTATION_TEST_COMPLETE', status=report['status'], out=str(out / MUTATION_FILE), calls=len(report['calls']), survivors=report['survivors'], seconds=report['seconds'])
         return 0 if report['passed'] else 1
+    declared = None
+    if args.declared_bounds:   # before anything is created or loaded: the file, its sha256, its schema and the flags' evaluator identity
+        try:declared = load_declared(args.declared_bounds, args.declared_bounds_sha256)
+        except DeclaredBoundsError as error:raise SystemExit(f'--declared-bounds (fail closed): {error}')
+        mismatched = evaluator_mismatches(declared['content'], args_identity(args))
+        if mismatched:raise SystemExit('--declared-bounds (fail closed): the declaration is not for this run\'s evaluator: ' + '; '.join(mismatched))
     needed = ['gpu_engine.device_depthn_pricer', 'gpu_engine.depthn_backups', 'gpu_engine.depth2_backups'] + (['gpu_engine.device_depth2_pricer'] if args.n2_equivalence else [])
     missing = [name for name in needed if importlib.util.find_spec(name) is None]
     if missing:raise SystemExit('not on this tree (failing closed): ' + ', '.join(missing))
     log('TOLERANCE_RULE', rule=g2.TOLERANCE_RULE, logit_bound=g2.LOGIT_BOUND, guard_factor=g2.GUARD_FACTOR, guard_spread='p10 learner-max own-slot spread of the last ply\'s parents',
-        guard_depthn_rule=GUARD_DEPTHN_RULE, deeper_logit_rule=DEEPER_LOGIT_RULE)
+        guard_depthn_rule=GUARD_DEPTHN_RULE, deeper_logit_rule=DEEPER_LOGIT_RULE,
+        **({} if declared is None else dict(numbers_replaced_by=f'DECLARED_BOUNDS (--declared-bounds sha256 {declared["sha256"]})')))
     log('EVALUATOR', override=bool(args.head_archive or args.champion_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
         checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, **ce.log_fields(args),
         resolved='EVALUATOR_RESOLVED follows once the roots are loaded')
+    if declared is not None:
+        log('DECLARED_BOUNDS', path=declared['path'], sha256=declared['sha256'], **{k: declared['content'][k] for k in DECLARED_FIELDS if k != 'schema'},
+            run_started_at=declared['run_started_at'], rule=DECLARED_RULE, note=DECLARED_NOTE)
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     roots = load_roots(args);provider, plan = roots.loaded.provider, roots.loaded.plan;module = pricer_module()
+    if declared is not None:
+        mismatched = evaluator_mismatches(declared['content'], evaluator_identity(roots.evaluator))
+        if mismatched:raise SystemExit('--declared-bounds (fail closed): the declaration is not for the resolved evaluator: ' + '; '.join(mismatched))
     reference = importlib.import_module('gpu_engine.depthn_oracle');frame_pricer = g2.with_forward(roots.loaded.frame_pricer, getattr(roots, 'forward', None))
     seeds = g2.world_block_seeds(provider.recipe.seed, args.worlds_blocks)
-    common = dict(roots=roots, provider=provider, plan=plan, module=module, frame_pricer=frame_pricer, seeds=seeds, out=out, reference=reference)
+    common = dict(roots=roots, provider=provider, plan=plan, module=module, frame_pricer=frame_pricer, seeds=seeds, out=out, reference=reference,
+        **({} if declared is None else dict(declared=declared)))
     if args.n2_equivalence:return run_n2(args, **common)
     if args.depth3_diagnostics:return run_diagnostics(args, **common)
     return run_gate(args, **common)
@@ -2809,8 +3135,11 @@ def header(args, roots, abs_values, source):
     return dict(evaluator=roots.evaluator, value_scale=g2.value_scale(roots.root_values, g2.percentiles(abs_values), args.value_reference), source=source)
 
 
-def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference):
+def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference, declared=None):
     lanes = INVARIANCE_LANES if args.block_invariance else (args.block_lanes,);forward = getattr(roots, 'forward', None)
+    section = None if declared is None else declared_section(declared, roots.evaluator)
+    evaluator = roots.evaluator if declared is None else dict(roots.evaluator, declared_bounds_sha256=declared['sha256'])   # saved frames' meta (--mutation-from refuses them)
+    declared_only = {} if declared is None else dict(declared_bounds_sha256=declared['sha256'])
     pricers = DepthNPricers(module, provider.executor, plan.model, depth=args.depth, k_own=args.k_own_ply, k_opp=args.k_opp_ply, selection=args.selection,
         capacity=args.capacity, actor_capacity=roots.actor_capacity, lanes=lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, fixed_capacity=args.fixed_shapes,
         forward=forward)
@@ -2821,23 +3150,23 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
     oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log),
         raw_model=roots.head[1] if args.raw_head_check else None, **forward_kwargs(forward))
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), pricer_options=pricers.options(), sample_leaves=args.sample_leaves, seeds=seeds,
-        mutation_test=args.mutation_test, save_oracle=args.save_oracle, **shaped)
+        mutation_test=args.mutation_test, save_oracle=args.save_oracle, **shaped, **declared_only)
     evaluations, calls = [], []
     for block, call, recipe, requests in each_call(provider, groups, seeds):
         evaluation, summary = run_call_n(requests=requests, recipe=recipe, materializer=provider.materializer, params=roots.params, pricers=pricers,
             depth2_pricer=depth2_pricer, frame_pricer=frame_pricer, oracle=oracle, sample=args.sample_leaves, block=block,
             context=dict(block=block, call=call), progress=log, save=(out, f'frames-block{block}-call{call}') if args.save_arrays else None,
-            evaluator=roots.evaluator, pass_sample=args.depth2_pass_sample, save_oracle=args.save_oracle,
+            evaluator=evaluator, pass_sample=args.depth2_pass_sample, save_oracle=args.save_oracle,
             mutation={} if args.mutation_test else None, stack_rows=None if harness is None else harness['oracle_stack_rows'])
         evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
-    result = summarize_run(evaluations, lanes);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
+    result = summarize_run(evaluations, lanes, declared=declared);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
     reported = [c for c in calls if c['refusals'] is not None]
     refusals = dict(g2.with_dropped(merge_refusals_n([c['refusals'] for c in reported]), roots.evaluator.get('dropped_roots', ()), roots.evaluator),
         calls_reported=len(reported),
         rule='reference (D) at every ply: any world pre != 0 or any status-3 node or leaf refuses the root; depth2_full_width is the full-width depth-2 pass')
     abs_values = np.concatenate([e['abs_t1'] for e in evaluations if 'abs_t1' in e]) if any('abs_t1' in e for e in evaluations) else []
-    report = dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(result['checks']), tolerance=result['tolerance'], schema=SCHEMA, status=status,
+    report = dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(result['checks'], declared=section), tolerance=result['tolerance'], schema=SCHEMA, status=status,
         passed=status in ('PASS', 'PASS_SAMPLED'), status_reasons=reasons, checks=result['checks'],
         decision=result['checks'].get('e', dict(status='SKIPPED_SAMPLED', reason='check (e) needs every leaf checked (no --sample-leaves)')),
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', pricer_options=pricers.options(), block_invariance=args.block_invariance,
@@ -2850,7 +3179,7 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
             'searched_depth2_refused) against this gate\'s own re-derivation (searched_maps_reference) from the full-width depth-2 pass; see depth2_pass'),
         depth2_pass=dict(trust=PASS_TRUST, sample_per_world=args.depth2_pass_sample, **{k: sum((c.get('depth2_pass') or {}).get(k, 0) for c in calls)
             for k in ('enumerated', 'rerun', 'forced')}),
-        topk_boundary=merge_topk_n([c.get('topk') for c in calls]),
+        topk_boundary=merge_topk_n([c.get('topk') for c in calls], **({} if declared is None else dict(logit_bound=declared_numbers(declared)['turn1_logit_bound']))),
         refusals=refusals, calls=calls, oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk))
     write(out / 'gate.json', report)
     log('DEPTHN_GATE_COMPLETE', status=status, out=str(out / 'gate.json'), status_reasons=reasons, checks={k: v['passed'] for k, v in result['checks'].items()},
@@ -2858,16 +3187,16 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
     if not args.mutation_test:return 0 if report['passed'] else 1
     bound = result['tolerance']['value_bound']
     with stage(log, 'mutation_test', calls=len(evaluations), value_bound=bound) as info:
-        mutations = mutation_tests(evaluations, value_bound=bound, lanes=lanes, progress=log);info.update(passed=[m['passed'] for m in mutations])
-    mutation = mutation_report(mutations, seconds=sum(m.get('seconds', 0.) for m in mutations), source='live', checks=result['checks'], value_bound=bound)
+        mutations = mutation_tests(evaluations, value_bound=bound, lanes=lanes, progress=log, declared=declared);info.update(passed=[m['passed'] for m in mutations])
+    mutation = mutation_report(mutations, seconds=sum(m.get('seconds', 0.) for m in mutations), source='live', checks=result['checks'], value_bound=bound, declared=section)
     write(out / MUTATION_FILE, mutation)
     log('MUTATION_TEST_COMPLETE', status=mutation['status'], out=str(out / MUTATION_FILE), gate_status=status, value_bound=bound, survivors=mutation['survivors'],
         material_survivors=mutation['material_survivors'], seconds=mutation['seconds'])
     return 0 if report['passed'] and mutation['passed'] else 1
 
 
-def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference):
-    configs, options = [], {};forward = getattr(roots, 'forward', None)
+def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference, declared=None):
+    configs, options = [], {};forward = getattr(roots, 'forward', None);section = None if declared is None else declared_section(declared, roots.evaluator)
     for name, k in (('full_width', 9), (f'top{args.n2_k}', args.n2_k)):
         depthn = module.DepthNPricer(provider.executor, plan.model, capacity=args.capacity, depth=2, k_own=k, k_opp=k, k1_own=args.k1_own, k1_opp=args.k1_opp,
             block_lanes=args.block_lanes, selection='prior', digest=True, actor_capacity=roots.actor_capacity, **forward_kwargs(forward))
@@ -2883,9 +3212,9 @@ def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, ref
             frame_pricer=frame_pricer, oracle=oracle, context=dict(block=block, call=call), progress=log, module=module)
         for name, result in results.items():per_config[name].append(result)
         log('N2_CALL', block=block, call=call, discrete={n: r['a']['passed'] for n, r in results.items()}, e={n: r['e'].get('argmax_q_differs') for n, r in results.items()})
-    report = summarize_n2(per_config);statuses = [r['status'] for r in report.values()]
+    report = summarize_n2(per_config, declared=declared);statuses = [r['status'] for r in report.values()]
     status = 'FAIL' if 'FAIL' in statuses else 'INCOMPLETE' if 'INCOMPLETE' in statuses or not report else 'PASS'
-    write(out / 'n2-equivalence.json', dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(configs=report), schema=SCHEMA, mode='N2_EQUIVALENCE',
+    write(out / 'n2-equivalence.json', dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(configs=report, declared=section), schema=SCHEMA, mode='N2_EQUIVALENCE',
         status=status, passed=status == 'PASS', configs=report, options=options, split_capacity=capacity, block_seeds=list(seeds),
         rule='per config: every discrete array exact and world_reports equal; floats only on scored cells (see n2_compare): values within the value '
             'bound and guard, priors within the logit bound (the run\'s evaluator-relative rule); (e) depth2_backups argmax per root equal except near '

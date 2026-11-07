@@ -6,6 +6,8 @@
 - End to end on the depth-N gate's fake engine with V2-layout encoder inputs: the real DepthNPricer, the full-width depth-2 pass,
   D3's FramePricer and the N-step oracle all price with ONE tiny champion and the gate passes, with the V2 forward patched to
   raise; N=2 equivalence against the merged Depth2Pricer; program keys per evaluator in one shared table, V2's unchanged.
+- The depth-N gate's main() under the champion with --declared-bounds: the full-width depth-2 gate and --n2-equivalence PASS under a
+  declaration for this champion, which every report records; a declaration for another evaluator identity is refused before loading.
 - The tools' champion flags (parse; exclusive with --head-archive) and the forward microbenchmark at tiny shapes.
 """
 import contextlib
@@ -262,12 +264,10 @@ def exact_champion(precision='bfloat16'):
     return ExactChampion(params, tiny_config(), dict(weights_archive_sha256='f' * 64, checkpoint_sha256=CHECKPOINT, parameter_count=10), precision)
 
 
-@unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
-class ChampionPricerTests(N.FixtureN, unittest.TestCase):
+class ChampionFixture(N.FixtureN):
     """The fixture's requests on V2-layout inputs (request 7's root inputs shifted: pre-refused), bound to one champion evaluator by
     gate.bind_roots (its prior, actors 0/0); every pricer, D3's FramePricer and the oracle take the same evaluator, and the V2
-    forward is patched to raise. The gate runs on the exact stand-in network; the real champion.forward (tiny, f32) is checked
-    against the oracle on the learner's own leaf views."""
+    forward is patched to raise."""
     make = staticmethod(champion_layout(N.executor_n))
     PRE_REFUSED = None
 
@@ -317,6 +317,11 @@ class ChampionPricerTests(N.FixtureN, unittest.TestCase):
             return gate.run_call_n(requests=self.requests, recipe=self.recipe, materializer=self.tables, params=self.params, pricers=pricers,
                 depth2_pricer=depth2_pricer, frame_pricer=self.frame_pricer(), oracle=self.oracle, sample=sample, block=0, context=dict(block=0, call=0), backups=None)
 
+
+@unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+class ChampionPricerTests(ChampionFixture, unittest.TestCase):
+    """ChampionFixture's champion everywhere: the gate runs on the exact stand-in network; the real champion.forward (tiny, f32) is checked
+    against the oracle on the learner's own leaf views."""
     def test_bind_roots_takes_the_champions_prior_and_actors(self):
         self.assertTrue(self.bound['checked']);self.assertEqual(self.bound['dropped'], [])
         self.assertEqual({(r.learner_actor, r.opponent_actor) for r in self.requests}, {(0, 0)})
@@ -471,6 +476,65 @@ class ChampionPricerTests(N.FixtureN, unittest.TestCase):
             (plain,), (keyed,) = kernels[(name, True)], kernels[(name, False)]
             self.assertFalse(any(isinstance(x, tuple) and x[:1] == ('evaluator',) for x in plain))
             self.assertEqual(keyed[-1], suffix[0])
+
+
+@unittest.skipUnless(N.HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
+    """The depth-N gate's main() under the champion (the roots loader replaced by the fixture's bound requests; the real pricers, D3's
+    FramePricer and the oracle on the exact stand-in champion; the V2 forward patched to raise) with --declared-bounds for this champion:
+    the full-width depth-2 gate and --n2-equivalence (DepthNPricer N=2 against the merged Depth2Pricer, both under the champion) PASS
+    under the declared numbers, every report carrying the declaration; a declaration for another evaluator identity is refused before
+    anything is created or loaded."""
+    FLAGS = ('--champion-archive', '/shared/x/champion.npz', '--champion-archive-sha256', 'f' * 64, '--champion-checkpoint-sha256', CHECKPOINT)
+
+    def roots(self):
+        """What load_roots resolves for FLAGS: the bound requests, the champion as the one evaluator and its header."""
+        provider = SimpleNamespace(executor=self.ex, materializer=self.tables, recipe=self.recipe, source=self.tables.source)
+        loaded = SimpleNamespace(provider=provider, plan=SimpleNamespace(model=object(), historical_window=2), frame_pricer=N.FixtureN.frame_pricer(self),
+            source=dict(fixture=True))
+        return SimpleNamespace(loaded=loaded, head=None, params=self.params, groups=[list(self.requests)], root_values=list(self.bound['values']),
+            evaluator=dict(override=True, **self.champion.header(), arm_checked=True, dropped_roots=[]), actor_capacity=1, forward=self.champion)
+
+    def main(self, *argv, out=None):
+        out = out or Path(tempfile.mkdtemp(prefix='champion-cli-')) / 'out'
+        with self.engine(), patch.object(gate_module(), 'load_roots', lambda args: self.roots()), patch.object(gate_module(), 'log', lambda *a, **k: None):
+            code = gate_module().main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', '--capacity', '32', *self.FLAGS, *argv])
+        return code, out
+
+    def declared(self, **evaluator):
+        content = N.declaration(evaluator=dict(dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=CHECKPOINT), **evaluator),
+            bounds=N.bounds(value_bound=1e-6, turn1_logit_bound=.05));path, sha = N.written(content)
+        return content, ('--declared-bounds', str(path), '--declared-bounds-sha256', sha), sha
+
+    def test_depth2_full_width_and_n2_equivalence_under_a_declaration(self):
+        content, flags, sha = self.declared()
+        code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9', *flags);report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'));self.assertEqual(report['evaluator']['kind'], 'champion')
+        self.assertEqual((report['header']['declared_bounds']['sha256'], report['header']['declared_bounds']['content']), (sha, content))
+        self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['logit_bound']), (1e-6, .05))
+        self.assertEqual(set(report['checks']), {'a', 'b', 'c', 'd', 'oracle_consistency', 'e', 'f'});self.assertGreater(report['checks']['f']['comparisons'], 0)
+        c = report['checks']['c']['quantities']
+        for name in ('leaf_value', 't1_value_head', 't1_own_logits', 'depth2_pass_t2_value'):self.assertGreater(c[name]['compared'], 0, name)
+        self.assertTrue(all(m['bound_rule'].startswith('declared_') for n, m in c.items() if n not in gate_module().g2.FLOORS))
+        code, out = self.main('--n2-equivalence', '--n2-k', '2', *flags);report = json.loads((out / 'n2-equivalence.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), {n: c.get('status_reasons') for n, c in report['configs'].items()})
+        self.assertEqual((report['header']['declared_bounds']['sha256'], set(report['configs'])), (sha, {'full_width', 'top2'}))
+        for config in report['configs'].values():
+            self.assertEqual((config['tolerance']['value_bound'], config['tolerance']['logit_bound'], config['tolerance']['q_noise_bound']), (1e-6, .05, 1e-6))
+            self.assertGreater(config['e']['roots_compared'], 0);self.assertGreater(config['discrete']['compared']['t2_status'], 0)
+
+    def test_a_declaration_for_another_evaluator_is_refused(self):
+        for key, value in (('precision', 'float32'), ('archive_sha256', 'e' * 64), ('kind', 'v2'), ('checkpoint_sha256', 'b' * 64)):
+            with self.subTest(key):
+                _, flags, _ = self.declared(**{key: value});out = Path(tempfile.mkdtemp(prefix='champion-cli-')) / 'never'
+                with patch.object(gate_module(), 'load_roots', side_effect=AssertionError('loaded')), self.assertRaises(SystemExit) as raised:
+                    gate_module().main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', *self.FLAGS, *flags])
+                self.assertIn(f'evaluator.{key}', str(raised.exception.code));self.assertFalse(out.exists())
+
+
+def gate_module():
+    from gpu_engine import d3_depthn_gate
+    return d3_depthn_gate
 
 
 # ---------------------------------------------------------------- the tools' flags

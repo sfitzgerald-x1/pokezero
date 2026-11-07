@@ -11,6 +11,7 @@ import collections
 import contextlib
 import copy
 from dataclasses import replace
+import hashlib
 import importlib.util
 import io
 import itertools
@@ -2235,6 +2236,274 @@ class FixedShapesTests(FixtureN, unittest.TestCase):
                     self.assertEqual([(s['size'], s['shape']) for s in seen], [(None, {32}), (None, {8})])
                     self.assertNotEqual(keys[0], keys[1]);self.assertEqual(([k[1] for k in p1[0]], [k[1] for k in p1[1]]), ([16], [4]))
                     self.assertEqual(sizes, dict.fromkeys(sizes, 2))
+
+
+# ---------------------------------------------------------------- --declared-bounds
+
+DECLARED_ARCHIVE, DECLARED_CHECKPOINT = '7' * 64, '8' * 64
+HEAD_FLAGS = ('--head-archive', '/shared/x/head.npz', '--head-archive-sha256', DECLARED_ARCHIVE, '--head-checkpoint-sha256', DECLARED_CHECKPOINT)
+
+
+def declaration(**changes):
+    """A valid declaration for the head override (kind v2, DECLARED_ARCHIVE, bfloat16); each change replaces a top-level key (None drops it)."""
+    content = dict(schema=gate.DECLARED_SCHEMA, evaluator=dict(kind='v2', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16'),
+        bounds=dict(value_bound=.008, turn1_logit_bound=.1, deeper_logit_rule=dict(factor=2)), derivation='2 x the bf16-vs-f32 spread, as B1 (test)',
+        declared_at='2026-11-01T00:00:00Z', source_measurement=dict(path='/shared/measure/spread.json', sha256='9' * 64), declared_by='test')
+    for key, value in changes.items():
+        if value is None:content.pop(key)
+        else:content[key] = value
+    return content
+
+
+def bounds(**values):
+    """A declaration's bounds: value .008, turn-1 logits .1 and the deeper rule's factor 2 unless given (None drops a key)."""
+    out = dict(dict(value_bound=.008, turn1_logit_bound=.1, deeper_logit_rule=dict(factor=2)), **values)
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def written(content=None, *, raw=None):
+    """(path, sha256) of `content` as JSON, or `raw` bytes verbatim, in a new file."""
+    path = Path(tempfile.mkdtemp(prefix='depthn-declared-')) / 'declared.json';raw = raw if raw is not None else json.dumps(content, indent=1).encode()
+    path.write_bytes(raw);return path, hashlib.sha256(raw).hexdigest()
+
+
+def declared(**changes):
+    return gate.load_declared(*written(declaration(**changes)))
+
+
+class DeclaredBoundsTests(FixtureN, unittest.TestCase):
+    """--declared-bounds: the file fails closed; the verdict takes the declared numbers (a run beyond B1's bounds passes looser declared ones
+    and one inside them fails tighter ones; declaring the frozen numbers reproduces the frozen verdict); the near-tie Q bound is (e)'s alone;
+    on the command line (the head override on the stand-in) the header section, the mutation test and --reverdict's round trip and refusals;
+    without the flag nothing changes."""
+    _frame, _d, _data, _n2_frame = GateNTests._frame, GateNTests._d, GateNTests._data, GateNTests._n2_frame
+    main = CommandLineRunTests.main
+
+    def roots(self):
+        """The CLI fixture's roots under the head override's evaluator header (kind v2, DECLARED_ARCHIVE): what load_roots resolves for HEAD_FLAGS."""
+        roots = CommandLineRunTests.roots(self);roots.evaluator = dict(override=True, kind='v2', identity=['v2'], precision='bfloat16',
+            archive_sha256=DECLARED_ARCHIVE, checkpoint_sha256=DECLARED_CHECKPOINT, arm_checked=True, dropped_roots=[]);return roots
+
+    def evaluated(self, *, leaf=0., t1_logits=0., ply_logits=0.):
+        """One call of the stand-in depth-3 surface with `leaf` added to head-valued leaves, `t1_logits` / `ply_logits` to the turn-1 cells' /
+        ply-2 nodes' own priors, (e) and (f) through the fake backups, a synthetic depth-1 floor FLOOR (frozen value bound .008) and one actor."""
+        base = self.cached('frame', self._frame);data = self.cached('data', lambda: self._data(base));frame = copy.deepcopy(base);level = frame.nodes[0]
+        frame.leaf_value[np.asarray(frame.leaf_status) == 4] += np.float32(leaf);frame.t1_own_logits[np.asarray(frame.t1_status) != 0] += np.float32(t1_logits)
+        level.own_logits[np.asarray(level.status) != 0] += np.float32(ply_logits)
+        ev = gate.evaluate_n(frame, self._d(), self.requests, data, context={}, backups=FakeBackupsN, decision=True, choices=True)
+        ev['c']['depth1_noise_floor'] = gate.g2._numeric([[0]], [FLOOR], [0.]);ev['spreads'] = [SPREAD] * 10;ev['actors'] = 1
+        return ev
+
+    def judge(self, ev, declared=None):
+        result = gate.summarize_run([copy.deepcopy(ev)], (2187,), declared=declared);return result, gate.gate_status_n(result)[0], result['checks']['c']['quantities']
+
+    def test_the_declaration_parses_and_fails_closed(self):
+        d = declared();self.assertEqual((d['content'], d['path']), (declaration(), d['path']));self.assertEqual(len(d['sha256']), 64)
+        self.assertEqual(gate.declared_numbers(d), dict(value_bound=.008, turn1_logit_bound=.1, deeper_logit_bound=None, deeper_logit_factor=2., near_tie_q_bound=None))
+        self.assertEqual(gate.declared_numbers(declared(bounds=bounds(deeper_logit_rule=None, deeper_logit_bound=.3, near_tie_q_bound=.02)))['deeper_logit_bound'], .3)
+        refused = {f'missing {k}': (declaration(**{k: None}), f'declaration.{k}: missing') for k in gate.DECLARED_FIELDS}
+        refused.update(
+            unknown_key=(dict(declaration(), comment='x'), 'declaration.comment: unknown key'), misspelt_bound=(declaration(bounds=dict(bounds(), value_bnd=1)), 'unknown key'),
+            no_value_bound=(declaration(bounds=bounds(value_bound=None)), 'bounds.value_bound: missing'),
+            no_turn1_logit_bound=(declaration(bounds=bounds(turn1_logit_bound=None)), 'bounds.turn1_logit_bound: missing'),
+            no_deeper=(declaration(bounds=bounds(deeper_logit_rule=None)), 'exactly one'), both_deeper=(declaration(bounds=bounds(deeper_logit_bound=.2)), 'exactly one'),
+            zero=(declaration(bounds=bounds(value_bound=0)), 'finite number > 0'), boolean=(declaration(bounds=bounds(turn1_logit_bound=True)), 'finite number > 0'),
+            negative_factor=(declaration(bounds=bounds(deeper_logit_rule=dict(factor=-2))), 'factor: a finite number > 0'),
+            text_bound=(declaration(bounds=bounds(near_tie_q_bound='.01')), 'near_tie_q_bound: a finite number > 0'),
+            schema=(declaration(schema='v0'), 'schema'), kind=(declaration(evaluator=dict(declaration()['evaluator'], kind='head')), 'evaluator.kind'),
+            alias_precision=(declaration(evaluator=dict(declaration()['evaluator'], precision='bf16')), 'evaluator.precision'),
+            archive=(declaration(evaluator=dict(declaration()['evaluator'], archive_sha256='7' * 63)), 'evaluator.archive_sha256'),
+            naive_time=(declaration(declared_at='2026-11-01T00:00:00'), 'declared_at'), other_zone=(declaration(declared_at='2026-11-01T00:00:00+01:00'), 'declared_at'),
+            empty_derivation=(declaration(derivation='  '), 'derivation: non-empty'), empty_author=(declaration(declared_by=''), 'declared_by: non-empty'),
+            measurement=(declaration(source_measurement=dict(path='/shared/m.json')), 'source_measurement.sha256: missing'),
+            measurement_sha=(declaration(source_measurement=dict(path='/shared/m.json', sha256='x')), 'source_measurement.sha256: a 64-hex'),
+            future=(declaration(declared_at='2999-01-01T00:00:00Z'), 'after the run\'s start'), not_an_object=([1], 'a JSON object'))
+        for case, (content, message) in refused.items():
+            with self.subTest(case):
+                with self.assertRaises(gate.DeclaredBoundsError) as raised:gate.load_declared(*written(content))
+                self.assertIn(message, str(raised.exception))
+        path, sha = written(declaration());text = json.dumps(declaration())
+        for case, (call, message) in dict(sha_mismatch=(lambda: gate.load_declared(path, '0' * 64), 'differs from --declared-bounds-sha256'),
+                absent=(lambda: gate.load_declared(path.with_name('absent.json'), sha), 'cannot read'),
+                duplicate=(lambda: gate.load_declared(*written(raw=text.replace('{', '{"derivation": "a", ', 1).encode())), 'duplicate'),
+                nan=(lambda: gate.load_declared(*written(raw=text.replace('0.008', 'NaN').encode())), 'NaN is not a JSON number'),
+                not_json=(lambda: gate.load_declared(*written(raw=b'{"schema": ')), 'not a JSON declaration'),
+                not_utf8=(lambda: gate.load_declared(*written(raw=b'\xff\xfe{}')), 'not UTF-8')).items():
+            with self.subTest(case):
+                with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
+                self.assertIn(message, str(raised.exception))
+
+    def test_the_declaration_binds_one_evaluator(self):
+        run = dict(override=True, kind='v2', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16', checkpoint_sha256=DECLARED_CHECKPOINT)
+        self.assertEqual(gate.evaluator_mismatches(declaration(), run), [])
+        for key, value in (('kind', 'champion'), ('archive_sha256', '6' * 64), ('precision', 'float32')):
+            with self.subTest(key):
+                mismatched = gate.evaluator_mismatches(declaration(), dict(run, **{key: value}))
+                self.assertEqual(len(mismatched), 1);self.assertIn(f'evaluator.{key}', mismatched[0])
+        pinned = declaration(evaluator=dict(declaration()['evaluator'], checkpoint_sha256=DECLARED_CHECKPOINT))
+        self.assertEqual(gate.evaluator_mismatches(pinned, run), []);self.assertIn('checkpoint_sha256', gate.evaluator_mismatches(pinned, dict(run, checkpoint_sha256='5' * 64))[0])
+        self.assertIn('no evaluator override', gate.evaluator_mismatches(declaration(), dict(run, override=False))[0])
+        base = ['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64]
+        champion = ['--champion-archive', 'c.npz', '--champion-archive-sha256', 'e' * 64, '--champion-checkpoint-sha256', 'c' * 64]
+        self.assertEqual(gate.args_identity(gate.parse(base + list(HEAD_FLAGS))[1]), run)
+        self.assertEqual(gate.args_identity(gate.parse(base + champion + ['--champion-precision', 'f32'])[1]), dict(override=True, kind='champion',
+            archive_sha256='e' * 64, precision='float32', checkpoint_sha256='c' * 64))
+        self.assertEqual(gate.args_identity(gate.parse(base[:6])[1])['override'], False)
+
+    def test_flags_are_refused_without_an_override_and_in_incompatible_modes(self):
+        out = str(Path(tempfile.gettempdir()) / f'depthn-gate-never-created-{uuid.uuid4().hex}');flags = ['--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64]
+        live = ['--out', out, '--d3-root', 'b', '--chunk', '0']
+        cases = dict(alone=(live + flags[:2] + list(HEAD_FLAGS), 'go together'), sha_alone=(live + flags[2:] + list(HEAD_FLAGS), 'go together'),
+            bad_sha=(live + flags[:3] + ['A' * 64] + list(HEAD_FLAGS), '64-hex'), bank_actors=(live + flags, 'needs an evaluator override'),
+            diagnostics=(live + flags + list(HEAD_FLAGS) + ['--depth3-diagnostics'], '--depth3-diagnostics'),
+            diagnostics_from=(['--out', out, '--diagnostics-from', 'x'] + flags + list(HEAD_FLAGS), 'live gate run'),
+            mutation_from=(['--out', out, '--mutation-from', 'x'] + flags, 'live gate run'), reverdict=(['--reverdict', 'gate.json'] + flags, 'takes no other option'))
+        for case, (argv, message) in cases.items():
+            with self.subTest(case):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:gate.main(argv)
+                self.assertEqual(raised.exception.code, 2);self.assertIn(message, stderr.getvalue())
+        for extra in ((), ('--n2-equivalence',), ('--mutation-test',), ('--raw-head-check',)):
+            self.assertEqual(gate.parse(live + flags + list(HEAD_FLAGS) + list(extra))[1].declared_bounds, 'd.json')
+        path, sha = written(declaration())   # main refuses before anything is created or loaded: the file's sha256, then the flags' evaluator
+        for argv, message in (([str(path), '0' * 64], 'differs from --declared-bounds-sha256'), ([str(path), sha], 'evaluator.archive_sha256')):
+            head = list(HEAD_FLAGS);head[3] = '6' * 64
+            with patch.object(gate, 'load_roots', side_effect=AssertionError('loaded')), patch.object(gate, 'log', lambda *a, **k: None), \
+                    self.assertRaises(SystemExit) as raised:gate.main(live + ['--declared-bounds', argv[0], '--declared-bounds-sha256', argv[1]] + head)
+            self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse(Path(out).exists())
+
+    def test_the_verdict_takes_the_declared_bounds(self):
+        """Turn-1 priors .12 off fail B1's 0.1 and pass a declared .15; leaves .006 off pass B1's .008 and fail a declared .005; ply-2 priors .12 off
+        (turn 1 .07) pass the frozen deeper .14 and fail a declared .11 or a declared rule of factor 1.5 (.105), and pass factor 2 (.14). The
+        measured floors and the frozen rule's numbers are reported beside the declared ones."""
+        cases = (('turn1_logits', dict(t1_logits=.12), bounds(turn1_logit_bound=.15), ('FAIL', 'PASS'), 't1_own_logits', .15, 'declared_turn1_logit_bound'),
+            ('leaf_values', dict(leaf=.006), bounds(value_bound=.005), ('PASS', 'FAIL'), 'leaf_value', .005, 'declared_value_bound'),
+            ('deeper_bound', dict(t1_logits=.07, ply_logits=.12), bounds(deeper_logit_rule=None, deeper_logit_bound=.11), ('PASS', 'FAIL'), 'ply2_own_logits', .11,
+                'declared_deeper_logit_bound'),
+            ('deeper_rule_tighter', dict(t1_logits=.07, ply_logits=.12), bounds(deeper_logit_rule=dict(factor=1.5)), ('PASS', 'FAIL'), 'ply2_own_logits', None,
+                'declared_deeper_logit_bound'),
+            ('deeper_rule_frozen_factor', dict(t1_logits=.07, ply_logits=.12), bounds(), ('PASS', 'PASS'), 'ply2_own_logits', None, 'declared_deeper_logit_bound'))
+        for case, noise, numbers, (frozen, wanted), name, bound, label in cases:
+            with self.subTest(case):
+                ev = self.evaluated(**noise);d = declared(bounds=numbers);result, status, c = self.judge(ev)
+                self.assertEqual(status, frozen, failing(result))
+                result, status, c = self.judge(ev, d);m = c[name];tolerance = result['tolerance']
+                self.assertEqual(status, wanted, failing(result));self.assertEqual((m['bound_rule'], m['passed']), (label, wanted == 'PASS'))
+                if wanted == 'FAIL':self.assertTrue('c' in failing(result) and set(failing(result)) <= {'c', 'e', 'f'}, failing(result))   # (e)/(f) share the value bound
+                if bound is not None:self.assertAlmostEqual(m['bound'], bound, places=12)
+                self.assertEqual((tolerance['value_bound'], tolerance['logit_bound']), (numbers['value_bound'], numbers['turn1_logit_bound']))
+                section = tolerance['declared_bounds'];self.assertEqual(section['sha256'], d['sha256'])
+                self.assertEqual(section['frozen_rule_would_give']['value_bound'], 2 * float(np.float32(FLOOR)));self.assertEqual(section['frozen_rule_would_give']['logit_bound'], .1)
+                self.assertEqual(section['measured']['depth1_noise_floor'], float(np.float32(FLOOR)));self.assertEqual(section['measured']['turn1_logit_floor'], tolerance['turn1_logit_floor'])
+                self.assertEqual(tolerance['frozen_rule']['rule'], gate.g2.TOLERANCE_RULE);self.assertEqual(tolerance['rule'], gate.DECLARED_TOLERANCE_RULE)
+                if case == 'deeper_rule_tighter':self.assertAlmostEqual(m['bound'], 1.5 * tolerance['turn1_logit_floor']);self.assertIn('1.5 x turn1_logit_floor', tolerance['deeper_logit_bound_source'])
+                for other, q in c.items():
+                    if other not in gate.g2.FLOORS:self.assertTrue(q['bound_rule'].startswith('declared_'), other)
+                self.assertEqual(result['checks']['f']['value_bound'], numbers['value_bound'])
+                self.assertEqual(gate.tolerance_line_n(tolerance)['declared_bounds_sha256'], d['sha256'])
+
+    def test_declaring_the_frozen_numbers_reproduces_the_frozen_verdict(self):
+        """value_bound = 2 x the run's floor, turn1_logit_bound = 0.1, deeper_logit_rule factor 2: every check's verdict, every (c) quantity's
+        bound and counts and (e)'s and (f)'s numbers are the frozen rule's: only the numbers are declared, no rule changes."""
+        d = declared(bounds=bounds(value_bound=2 * float(np.float32(FLOOR))))
+        keep = ('passed', 'bound', 'within_bound', 'beyond_bound', 'ratio_to_bound', 'within_guard', 'guard_mode', 'beyond_guard', 'first_beyond')
+        for noise in (dict(), dict(leaf=.006), dict(leaf=.009), dict(t1_logits=.07, ply_logits=.12), dict(t1_logits=.12), dict(t1_logits=.07, ply_logits=.15)):
+            with self.subTest(**noise):
+                ev = self.evaluated(**noise);(frozen, status, c), (mine, status2, c2) = self.judge(ev), self.judge(ev, d)
+                self.assertEqual(status2, status);self.assertEqual({k: v['passed'] for k, v in mine['checks'].items()}, {k: v['passed'] for k, v in frozen['checks'].items()})
+                self.assertEqual({n: {k: m.get(k) for k in keep} for n, m in c2.items()}, {n: {k: m.get(k) for k in keep} for n, m in c.items()})
+                for key in ('value_bound', 'logit_bound', 'guard_bound', 'q_noise_bound', 'deeper_logit_bound', 'turn1_logit_floor', 'depth1_noise_floor'):
+                    self.assertEqual(mine['tolerance'][key], frozen['tolerance'][key], key)
+                for check, keys in (('e', ('q_noise_bound', 'near_tie_roots', 'near_tie_flips', 'max_abs_delta_q')), ('f', ('value_bound', 'near_ties', 'near_tie_flips',
+                        'nodes_grid_beyond_bound', 'nodes_row_q_beyond_bound'))):
+                    self.assertEqual({k: mine['checks'][check][k] for k in keys}, {k: frozen['checks'][check][k] for k in keys}, check)
+
+    def test_the_near_tie_q_bound_is_e_alone(self):
+        """Leaves .006 off: (e)'s max |dQ| lies above a declared near-tie Q bound .004 (e fails), while (f) keeps the value bound .008 (passes);
+        undeclared, the near-tie Q bound is the value bound."""
+        ev = self.evaluated(leaf=.006)
+        result, status, _ = self.judge(ev, declared(bounds=bounds(near_tie_q_bound=.004)));e, f = result['checks']['e'], result['checks']['f']
+        self.assertEqual((status, set(failing(result))), ('FAIL', {'e'}));self.assertGreater(e['max_abs_delta_q'], .004)
+        self.assertEqual((e['q_noise_bound'], result['tolerance']['q_noise_bound'], f['value_bound'], f['passed']), (.004, .004, .008, True))
+        self.assertEqual(result['tolerance']['declared_bounds']['applied']['q_noise_bound'], .004)
+        result, status, _ = self.judge(ev, declared());self.assertEqual((status, result['checks']['e']['q_noise_bound']), ('PASS', .008))
+        self.assertEqual(result['tolerance']['declared_bounds']['applied']['q_noise_bound'], .008)
+
+    def test_n2_equivalence_takes_the_declared_bounds(self):
+        """summarize_n2 under a declaration: priors .12 off fail 0.1 and pass a declared .15; the near-tie Q bound is (e)'s q_noise_bound."""
+        frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame);other.t1_own_logits[np.asarray(other.t1_status) != 0] += np.float32(.12)
+        found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        call = dict(a=found, floats=floats, c=dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.])), e=e, spreads=[SPREAD] * 10)
+        self.assertEqual(gate.summarize_n2({'x': [call]})['x']['floats']['t1_own_logits']['passed'], False)
+        report = gate.summarize_n2({'x': [copy.deepcopy(call)]}, declared=declared(bounds=bounds(turn1_logit_bound=.15, near_tie_q_bound=.01)))['x']
+        self.assertEqual((report['floats']['t1_own_logits']['bound'], report['floats']['t1_own_logits']['passed']), (.15, True))
+        self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['q_noise_bound'], report['e']['q_noise_bound']), (.008, .01, .01))
+        self.assertEqual(report['tolerance']['frozen_rule']['logit_bound'], .1);self.assertIn('declared_bounds', report['tolerance'])
+
+    def test_header_mutation_test_and_reverdict_round_trip(self):
+        """The head override on the stand-in with a declaration (value bound 1e-6: the stand-in's own floor is 0): gate.json PASS with the
+        header's declared_bounds section beside the unchanged rules, the declared numbers in the tolerance and the measured floor beside them;
+        mutation-test.json at the declared bound with the same header; --mutation-from refuses the saved calls; --reverdict reproduces the
+        verdict and the header, and refuses a section that fails its checks."""
+        d = declaration(bounds=bounds(value_bound=1e-6, turn1_logit_bound=.05));path, sha = written(d);lines = []
+        code, out = self.main('--mutation-test', '--save-oracle', *HEAD_FLAGS, '--declared-bounds', str(path), '--declared-bounds-sha256', sha, lines=lines)
+        report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE))
+        self.assertEqual((code, report['status'], mutation['status']), (0, 'PASS', 'PASS'), (report.get('status_reasons'), mutation.get('survivors')))
+        header = report['header'];section = header['declared_bounds'];default = gate.header_block(report['checks'])
+        self.assertEqual(list(header), ['near_ties', 'rules_changed_after_failure', 'frozen_rule_set', 'declared_bounds'])
+        self.assertEqual({k: header[k] for k in default}, default)   # the rules changed after a failure, untouched
+        self.assertEqual((section['sha256'], section['content'], section['content_text'], section['note']), (sha, d, path.read_text(), gate.DECLARED_NOTE))
+        self.assertEqual(section['evaluator'], dict(kind='v2', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16', checkpoint_sha256=DECLARED_CHECKPOINT))
+        tolerance = report['tolerance'];self.assertEqual((tolerance['value_bound'], tolerance['logit_bound'], tolerance['depth1_noise_floor']), (1e-6, .05, 0.))
+        self.assertEqual(tolerance['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.);self.assertEqual(tolerance['declared_bounds']['sha256'], sha)
+        self.assertEqual((mutation['header'], mutation['value_bound'], mutation['calls'][0]['value_bound']), (header, 1e-6, 1e-6))
+        self.assertTrue(all(m['killed'] for m in mutation['calls'][0]['mutants'].values()))
+        start = next(x for x in lines if x['message'] == 'GATE_START');self.assertEqual(start['declared_bounds_sha256'], sha)
+        self.assertEqual(next(x for x in lines if x['message'] == 'DECLARED_BOUNDS')['sha256'], sha)
+        with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:
+            gate.main(['--out', str(Path(tempfile.mkdtemp()) / 'o'), '--mutation-from', str(out)])
+        self.assertIn('--declared-bounds run', str(raised.exception.code))
+        with patch.object(gate, 'log', lambda *a, **k: None):self.assertEqual(gate.main(['--reverdict', str(out / 'gate.json')]), 0)
+        again = json.loads((out / gate.REVERDICT_FILE).read_text())
+        self.assertEqual((again['status'], again['header'], again['reverdict']['declared_bounds_sha256'], again['reverdict']['changed_quantities']), ('PASS', header, sha, []))
+        verdicts = lambda r: {k: (m.get('passed'), m.get('bound'), m.get('bound_rule')) for k, m in r['checks']['c']['quantities'].items()}
+        self.assertEqual(verdicts(again), verdicts(report));self.assertEqual(again['tolerance']['declared_bounds'], tolerance['declared_bounds'])
+        def edited(change):
+            r = copy.deepcopy(report);change(r);return r
+        tampered = dict(
+            text=(lambda r: r['header']['declared_bounds'].__setitem__('content_text', r['header']['declared_bounds']['content_text'].replace('1e-06', '0.5')), 'does not hash'),
+            sha=(lambda r: r['header']['declared_bounds'].__setitem__('sha256', '0' * 64), 'does not hash'),
+            content=(lambda r: r['header']['declared_bounds']['content']['bounds'].__setitem__('value_bound', .5), 'content differs'),
+            bound=(lambda r: r['tolerance'].__setitem__('value_bound', .5), 'not the declared'),
+            tolerance_sha=(lambda r: r['tolerance']['declared_bounds'].__setitem__('sha256', '0' * 64), 'same sha256'),
+            header=(lambda r: r['header'].pop('declared_bounds'), 'without header.declared_bounds'),
+            evaluator=(lambda r: r['evaluator'].__setitem__('archive_sha256', '6' * 64), 'evaluator.archive_sha256'),
+            started=(lambda r: r['header']['declared_bounds'].__setitem__('run_started_at', '2026-10-01T00:00:00+00:00'), 'before the recorded run start'))
+        for case, (change, message) in tampered.items():
+            with self.subTest(case):
+                directory = Path(tempfile.mkdtemp(prefix='depthn-declared-'));(directory / 'gate.json').write_text(json.dumps(edited(change)))
+                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(directory / 'gate.json')])
+                self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse((directory / gate.REVERDICT_FILE).exists())
+
+    def test_the_resolved_evaluator_is_matched_again(self):
+        """The flags name the declared evaluator but load_roots resolves another (a precision the header reports differently): refused after
+        loading, before any pricing."""
+        path, sha = written(declaration());roots = self.roots;self.roots = lambda: dict.__setitem__((r := roots()).evaluator, 'precision', 'float32') or r
+        try:
+            with self.assertRaises(SystemExit) as raised:self.main(*HEAD_FLAGS, '--declared-bounds', str(path), '--declared-bounds-sha256', sha)
+        finally:self.roots = roots
+        self.assertIn('not for the resolved evaluator', str(raised.exception.code));self.assertIn('evaluator.precision', str(raised.exception.code))
+
+    def test_without_the_flag_nothing_changes(self):
+        """No declaration: no declared key in any report section, log line or saved frame; header_block keeps its three keys; declared_rule and
+        declared_kwargs are the identity and the empty call. (The byte-for-byte check against the pre-change gate is the probe in the report.)"""
+        lines = [];code, out = self.main('--save-arrays', lines=lines);text = (out / 'gate.json').read_text();report = json.loads(text)
+        self.assertEqual((code, report['status']), (0, 'PASS'));self.assertNotIn('declared', text);self.assertNotIn('frozen_rule', report['tolerance'])
+        self.assertEqual(list(report['header']), ['near_ties', 'rules_changed_after_failure', 'frozen_rule_set'])
+        self.assertFalse(any('declared' in json.dumps(x, default=str) for x in lines));self.assertNotIn('DECLARED_BOUNDS', [x['message'] for x in lines])
+        _, _, meta = gate.load_frame(out / 'frames-block0-call0-prior-k2.npz');self.assertNotIn('declared_bounds_sha256', meta['evaluator'])
+        rule = gate.g2.tolerance_rule(None, None);self.assertIs(gate.declared_rule(rule, None), rule);self.assertEqual(gate.declared_kwargs(None), {})
+        self.assertIsNone(gate.parse(['--out', 'o', '--d3-root', 'b', '--chunk', '0'])[1].declared_bounds)
 
 
 class CommandLineTests(unittest.TestCase):
