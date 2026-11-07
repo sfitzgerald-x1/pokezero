@@ -360,6 +360,9 @@ def main(argv=None):
     parser.add_argument('--config', required=True);parser.add_argument('--iteration', type=int, default=1)
     parser.add_argument('--block', type=int, default=0, help='declared block index (2,048 games), played twice')
     parser.add_argument('--games', type=int, help='prefix of the block (gates and smoke only)')
+    parser.add_argument('--skip-games', type=int, default=0, help='play only games K.. of the full block: lanes 0..K-1 of both seat '
+        'orders are marked finished before the first step (never searched or stepped, not scored); the block keeps its batch '
+        'indices, so every played game equals the same game of the full block')
     parser.add_argument('--a-run', required=True);parser.add_argument('--a-iteration', type=int, required=True)
     parser.add_argument('--b-run');parser.add_argument('--b-iteration', type=int)
     parser.add_argument('--pricer', choices=('depth1', 'depth2'), default='depth1')
@@ -414,11 +417,19 @@ def main(argv=None):
     if args.games:   # a prefix is a valid smaller batch; its initial states need not equal the full block's
         batch = replace(batch, games=batch.games[:args.games], gender_root_ids=batch.gender_root_ids[:args.games])
     swapped = replace(batch, games=tuple(replace(g, stream_id=g.stream_id - SWAP_OFFSET, battle_id=g.battle_id + '-swap') for g in batch.games))
+    skip = args.skip_games
+    if skip and (args.games or not 0 < skip < len(batch.games)):raise SystemExit('--skip-games needs the full block and 0 < K < its games')
+    def skipped(carry):
+        """The full block with its first `skip` games of each seat order finished before play (status REFUSED, never live)."""
+        if not skip:return carry
+        from gpu_engine.v5_device_rollout import REFUSED
+        lanes = np.concatenate([np.arange(skip), len(batch.games) + np.arange(skip)])
+        return carry._replace(status=carry.status.at[j.asarray(lanes)].set(REFUSED))
     def fresh():
         carries = [jax.block_until_ready(backend._construct(declared)) for declared in (batch, swapped)]
-        return jax.tree.map(lambda x, y: j.concatenate([x, y]), *carries)
+        return skipped(jax.tree.map(lambda x, y: j.concatenate([x, y]), *carries))
     n = len(batch.games);a_side_host = np.repeat(np.asarray([0, 1], np.int32), n);a_side = j.asarray(a_side_host)
-    pairs = [(g.stream_id, g.stream_id - SWAP_OFFSET) for g in batch.games]
+    pairs = [(g.stream_id, g.stream_id - SWAP_OFFSET) for g in batch.games][skip:]
     prepared = context['prepared']
     decide, apply = make_step(prepared.engine_tables, prepared.observation_tables, plan.model, sampling_seed=batch.sampling_seed,
         max_requests=plan.max_requests)
@@ -443,7 +454,9 @@ def main(argv=None):
         collector_check = dict(steps=args.collector_check, all_equal=all(fields.values()), differing=[k for k, v in fields.items() if not v])
         log('COLLECTOR_CHECK', **collector_check)
     search = None
-    setup = dict(args=args, plan=plan, batch=batch, n=n, pairs=pairs, a=a, a_side_host=a_side_host, a_side=a_side,
+    played = np.ones(2 * n, bool)
+    if skip:played[:skip] = False;played[n:n + skip] = False
+    setup = dict(args=args, plan=plan, batch=batch, n=n, pairs=pairs, a=a, a_side_host=a_side_host, a_side=a_side, played=played, skip=skip,
         decide=decide, apply=apply, collector_check=collector_check)
     for cell in cells:
         b, b_params = actor(cell['b_run'], cell['b_iteration'])
@@ -575,7 +588,8 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
         # Points of score: 100 * (mean - 0.5). v2_head_to_head's a_minus_b_points is 200 * (mean - 0.5) (win share minus loss share).
         a_score_minus_50_points=None if mean is None else 100 * (mean - .5), a_score_minus_50_interval_90_points=interval(.5, 100.),
         a_score_by_a_seat={str(k): float(np.mean(v)) if v else None for k, v in seat.items()},
-        dispositions={name: int((np.asarray(final['status']) == code).sum()) for code, name in enumerate(STATUS)},
+        dispositions={name: int((np.asarray(final['status'])[setup['played']] == code).sum()) for code, name in enumerate(STATUS)},
+        skipped_games_per_seat_order=setup['skip'],
         decisions=dict(total=dict(total), by_turn_band={k: dict(v) for k, v in sorted(bands.items())},
             searched_share=total['searched'] / max(total['decisions'], 1),
             searched_change_rate_vs_raw_sample=total['searched_changed_vs_raw_sample'] / max(total['searched'], 1)),

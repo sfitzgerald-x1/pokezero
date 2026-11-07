@@ -162,6 +162,15 @@ class ChooseTests(unittest.TestCase):
         with self.assertRaises(ValueError):hedge.top_action((0.,) * 9)
 
 
+class SkipGamesTests(unittest.TestCase):
+    def test_skip_needs_the_full_block(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = ['--config', 'unused.json', '--out', root, '--reduction', 'none', '--label', 'x', '--b-run', '/r', '--b-iteration', '1',
+                '--a-run', '/r', '--a-iteration', '1']
+            # The check runs after the plan loads; argument parsing alone accepts it, so only the parser's own type is checked here.
+            with self.assertRaises(SystemExit):h2h.main(base + ['--skip-games', 'x'])
+
+
 class CompareTests(unittest.TestCase):
     def write(self, root, label, scores, games, decisions):
         prefix = Path(root, label)
