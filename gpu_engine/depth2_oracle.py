@@ -58,7 +58,7 @@ INPUT_ORDER = ('numeric_features', 'categorical_ids', 'token_type_ids', 'attenti
 class Stack:
     """Available worlds of one request list, stacked along a flat row axis."""
     rows: dict                 # (request index, world) -> flat row; materialization refusals are absent
-    states: object             # device pytree, leading axis = flat row (padded to a bucket), each row a one-row BattleState
+    states: object             # device pytree, leading axis = flat row (padded to a bucket or stack's size), each row a one-row BattleState
     publics: object            # device pytree, leading axis = flat row, each row one world's tracker namespace
     owners: object             # device int32 [rows]
     owner: np.ndarray          # host int32 [rows]
@@ -71,11 +71,16 @@ def bucket(count):
     return max(8, 1 << (count - 1).bit_length())
 
 
-def stack(requests, worlds):
+def stack(requests, worlds, *, size=None):
     """Stack every materialized world (worlds[q] is the request's (world 0, world 1) pair).
 
     The row axis is padded to bucket(rows) by repeating row 0; no spec ever indexes a padding row, so it
-    changes no result, only how often the oracle's programs compile."""
+    changes no result, only how often the oracle's programs compile. size: pad to exactly `size` rows
+    instead (a power of two, at least 8 and at least the materialized rows; ValueError otherwise, never
+    truncated), so calls with different world counts share one stacked shape and every oracle program
+    compiles once per process. `rows` and every per-row host array are the same either way."""
+    if size is not None and (type(size) is not int or size < 8 or size & (size - 1)):
+        raise ValueError(f'stack size must be a power of two >= 8 (got {size!r})')
     requests, worlds = tuple(requests), tuple(worlds)
     if len(requests) != len(worlds):raise ValueError('one materialized world pair per request required')
     rows, states, publics, owner, learner, opponent = {}, [], [], [], [], []
@@ -89,7 +94,9 @@ def stack(requests, worlds):
             learner.append(int(request.learner_actor));opponent.append(int(request.opponent_actor))
     owner, learner, opponent = (np.asarray(x, np.int32) for x in (owner, learner, opponent))
     if not states:return Stack(rows, None, None, None, owner, learner, opponent)
-    size = bucket(len(states));states = states + [states[0]] * (size - len(states));publics = publics + [publics[0]] * (size - len(publics))
+    if size is None:size = bucket(len(states))
+    elif size < len(states):raise ValueError(f'stack size {size} is below the {len(states)} materialized world rows (never truncated)')
+    states = states + [states[0]] * (size - len(states));publics = publics + [publics[0]] * (size - len(publics))
     pack = lambda *leaves: np.stack([np.asarray(x) for x in leaves])
     states = jax.device_put(jax.tree.map(pack, *jax.device_get(states)))
     publics = jax.device_put(jax.tree.map(pack, *jax.device_get(publics)))
