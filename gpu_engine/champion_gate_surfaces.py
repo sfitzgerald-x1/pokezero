@@ -148,7 +148,11 @@ ESTIMATE_RULE = ('chunk 0 on one GB300: per group the pricers\' measured chunk-0
     'precision (champion_d3_geometry: D3 671 s f32 and 539 s bf16 over buckets 8, 32, 512; chunk 0\'s calls make R2 compile buckets 512, 32 '
     'and 8), and the host backups for (e)\'s Q (about 2 us per leaf: ~1.5 min per full-width frame family and precision); the Depth2Pricer has '
     'no GB300 measurement yet: its device time taken as the DepthNPricer\'s at the same leaf count')
-RULES = dict(positions=POSITIONS_RULE, q=Q_RULE, guard=GUARD_RULE, direct=DIRECT_RULE, premise=PREMISE_RULE, constructions=CONSTRUCTIONS, sites=SITES_RULE,
+SCOPE_RULE = ('R1 and R2 are measured on this chunk\'s call split, as runs on this chunk would price it; R2 prices at per-call buckets, so a '
+    'run on other roots compiles other buckets (chunk 0: 512, 32 and 8; the 40 saved roots: 64), unmeasured here. R3 runs on the 40 saved roots: '
+    'its fixed-shape pricers (and oracle) price any roots with the same programs, measured here on this chunk\'s roots; its D3 (per-call '
+    'buckets) is priced at R3\'s bucket in calls of --r3-call-roots on this chunk\'s roots (r3-d3)')
+RULES = dict(scope=SCOPE_RULE, positions=POSITIONS_RULE, q=Q_RULE, guard=GUARD_RULE, direct=DIRECT_RULE, premise=PREMISE_RULE, constructions=CONSTRUCTIONS, sites=SITES_RULE,
     fold=FOLD_RULE, proposal=PROPOSAL_RULE, r1_invariance=R1_INVARIANCE_RULE, estimate=ESTIMATE_RULE, adapter=ADAPTER, margin=MARGIN, figures=FIGURES,
     draft=DRAFT, exit=EXIT)
 

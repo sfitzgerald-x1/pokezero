@@ -500,7 +500,7 @@ class MainTests(N.FixtureN, unittest.TestCase):
         h = report['header'];self.assertEqual(h['groups'], ['r3-d3']);self.assertIn('commit', h['tree']);self.assertEqual(h['rules']['draft'], gs.DRAFT)
         self.assertEqual(h['estimate']['minutes'], {'r3-d3': gs.ESTIMATE_MINUTES['r3-d3']});self.assertEqual(set(h['gate_cli_defaults']), {'bare', *gs.RUN_ARGV})
         self.assertEqual(set(h['pricer_options']), {'R3.d3'});self.assertEqual(h['pricer_options']['R3.d3']['departures'], [])
-        self.assertTrue(h['runs']['R2']['fixed_shapes_refused']['refused']);self.assertEqual(h['calls']['split'], 512)
+        self.assertTrue(h['runs']['R2']['fixed_shapes_refused']['refused']);self.assertEqual(h['calls']['split'], 512);self.assertIn('40 saved roots', h['rules']['scope'])
         self.assertGreater(report['measurements']['geometries']['R3.d3']['quantities']['d3.t1_value']['count'], 0)
         self.assertTrue(any('schema' in f for f in report['flags']));self.assertIn('# Champion 9375: the gate\'s float surfaces', summary)
         self.assertIn('| R3.b.t1_value |', summary);self.assertTrue(any(x['site'] == 'R1.e.max_abs_delta_q' for x in report['fold']['unmeasured']))
