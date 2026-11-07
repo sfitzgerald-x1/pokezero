@@ -229,15 +229,22 @@ def load(path, *, expected_archive_sha256, expected_checkpoint_sha256, precision
     return ChampionEvaluator(params, config, meta, precision)
 
 
+def check_checkpoint(evaluator):
+    """The archive's recorded checkpoint is the real champion 9375's (ActorContract.champion().checkpoint_sha256); ValueError otherwise."""
+    from pokezero.live_protocol_actor import ActorContract
+    expected = ActorContract.champion().checkpoint_sha256
+    if evaluator.checkpoint_sha256 != expected:
+        raise ValueError(f'the real original 9375 champion checkpoint {expected} required, got {evaluator.checkpoint_sha256}')
+    return True
+
+
 def check_binding(evaluator, catalog):
     """The rest of phase_d_search.Search's binding on a bank run: the archive's checkpoint is the real champion 9375
     (ActorContract.champion()), and the bank's encoder catalog was compiled for it: its checkpoint sha256, its category
     vocabulary (the contract's sha256 and the archive's size) and its feature masks are the champion contract's, the JAX
     encoder contract live_protocol_actor checks for B2. ValueError otherwise."""
     from pokezero.live_protocol_actor import ActorContract, MASK_NAMES, _vocab_sha
-    contract = ActorContract.champion()
-    if evaluator.checkpoint_sha256 != contract.checkpoint_sha256:
-        raise ValueError(f'the real original 9375 champion checkpoint {contract.checkpoint_sha256} required, got {evaluator.checkpoint_sha256}')
+    contract = ActorContract.champion();check_checkpoint(evaluator)
     if catalog.checkpoint_sha256 != evaluator.checkpoint_sha256:
         raise ValueError(f'the bank encoder catalog was compiled for checkpoint {catalog.checkpoint_sha256}, not the champion\'s')
     if _vocab_sha(catalog.vocabulary) != contract.category_vocab_sha256 or catalog.vocabulary.size != evaluator.config.vocabulary:

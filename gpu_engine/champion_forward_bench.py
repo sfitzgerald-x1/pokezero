@@ -12,7 +12,8 @@ TOKEN_ROLES, every token attended, history True, so every row is valid for both 
 control flow, so the time does not depend on the input values, nor on the weight values. Default --rows: 2187 (the pricers'
 turn-2 block: Depth2Pricer child_block 27 x 81, DepthNPricer block_lanes 2187), 4096 (A3's champion shape) and 34992 (16
 blocks of 2187, one DepthNPricer call at blocks_per_call 16). The result is bench.json in a new --out directory (JSON lines
-on stdout as it goes). The champion's archive is bound by champion_evaluator.load (archive and checkpoint sha256); the V2
+on stdout as it goes). The champion's archive is bound by champion_evaluator.load (archive and checkpoint sha256, the checkpoint
+9375's: champion_evaluator.check_checkpoint); the V2
 archive by v5_model.load (archive and checkpoint sha256; its category and label namespaces are the archive's own recorded
 ones, which the archive sha binds, unless --v2-category-sha256 / --v2-label-sha256 pin them).
 """
@@ -115,8 +116,10 @@ def load_v2(args):
 
 
 def load_champion(args):
+    """(forward, params, header, vocabulary) of --champion-archive: champion_evaluator.load's checks, and the checkpoint must be 9375's
+    (champion_evaluator.check_checkpoint), as the tools' check_binding requires; there is no bank catalog to bind here."""
     from gpu_engine import champion_evaluator as ce
-    evaluator = ce.load_from_arguments(args)
+    evaluator = ce.load_from_arguments(args);ce.check_checkpoint(evaluator)
     return evaluator, evaluator.params, dict(evaluator.header(), archive=args.champion_archive, forward='champion_evaluator.ChampionEvaluator'), evaluator.config.vocabulary
 
 

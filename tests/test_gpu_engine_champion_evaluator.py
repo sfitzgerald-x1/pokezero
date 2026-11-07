@@ -193,13 +193,33 @@ class ChampionEvaluatorTests(unittest.TestCase):
     def test_arm_check_on_the_first_root(self):
         ev = tiny_champion();root = {k: v[:1] for k, v in v2_inputs(ev.config, 1).items()}
         self.assertTrue(ev.check(ev.params, root))
-        class Shifted(ce.ChampionEvaluator):   # a wrong slice: tokens 1..23
-            def view(self, inputs):
-                v = super().view(inputs);full = inputs
-                return dict(v, numeric_features=full['numeric_features'][..., 1:24, :], categorical_ids=full['categorical_ids'][..., 1:24, :])
         with self.assertRaisesRegex(ValueError, 'differs from champion.forward'):Shifted(ev.params, ev.config, ev.meta, ev.precision).check(ev.params, root)
         nan = dict(root, numeric_features=np.full_like(root['numeric_features'], np.nan))
         with self.assertRaisesRegex(ValueError, 'invalid or non-finite'):ev.check(ev.params, nan)
+
+    def test_bind_roots_refuses_a_mis_slicing_or_sign_flipped_evaluator(self):
+        """gate.bind_roots runs the evaluator's check on the first root: a wrong slice or a negated value fails the run before any
+        root is bound (a bind that skipped the check would hand every pricer the faulty evaluator)."""
+        from gpu_engine import d3_depth2_gate as g2
+        ev = tiny_champion();requests = small_requests(ev.config)
+        groups, values, dropped, checked = g2.bind_roots([requests], (ev.params,), None, evaluator=ev)
+        self.assertTrue(checked);self.assertEqual((len(groups[0]), dropped), (len(requests), []))
+        for faulty in (Shifted, Negated):
+            with self.subTest(evaluator=faulty.__name__), self.assertRaisesRegex(ValueError, 'differs from champion.forward'):
+                g2.bind_roots([requests], (ev.params,), None, evaluator=faulty(ev.params, ev.config, ev.meta, ev.precision))
+
+
+class Shifted(ce.ChampionEvaluator):
+    """A wrong slice: numeric and categorical tokens 1..23 instead of 0..22."""
+    def view(self, inputs):
+        v = super().view(inputs)
+        return dict(v, numeric_features=inputs['numeric_features'][..., 1:24, :], categorical_ids=inputs['categorical_ids'][..., 1:24, :])
+
+
+class Negated(ce.ChampionEvaluator):
+    """A sign error: the champion's value from the other side."""
+    def __call__(self, params, inputs):
+        out = super().__call__(params, inputs);return out._replace(value=-out.value)
 
 
 # ---------------------------------------------------------------- end to end on the depth-N gate's fake engine
@@ -374,6 +394,46 @@ class ChampionPricerTests(N.FixtureN, unittest.TestCase):
         for name, r in report.items():
             self.assertTrue(r['passed'], (name, r['discrete']['mismatched'], {k: v['max_abs_difference'] for k, v in r['floats'].items()}, r['e'].get('reasons')))
             self.assertGreater(r['e']['roots_compared'], 0)
+
+    def test_v2_defaults_run_bf16_on_all_29_tokens_and_digest_them(self):
+        """The V2 fixtures' blind spot pinned: their fake forward ignores compute_dtype and their engine encodes one token. Here the
+        defaults run on V2-layout inputs under a spy: FramePricer, Depth2Pricer, DepthNPricer and the oracle each call v5_model.forward
+        with compute_dtype='bfloat16' on all 29 tokens, and every digest (both pricers and the oracle) hashes the five V2 inputs whole."""
+        from gpu_engine import depth2_digest as dg
+        from gpu_engine.device_depth2_pricer import Depth2Pricer
+        module = self.module();requests = self.v2_requests[:8];forwards, hashed = [], [];real = dg.digest
+        def spy(params, inputs, model=None, **kw):
+            forwards.append((kw.get('compute_dtype'), {k: tuple(v.shape[2:]) for k, v in inputs.items()}));return N.forward_n(params, inputs)
+        def digest(inputs):
+            hashed.append({k: tuple(v.shape) for k, v in inputs.items()});return real(inputs)
+        def run(price):
+            forwards.clear();hashed.clear()
+            with self.engine(spy), patch.object(dg, 'digest', digest):price()
+            return list(forwards), list(hashed)
+        oracle = N.reference.DepthNOracle(self.ex, object(), chunk=64)
+        def oracle_walks():
+            stack = N.reference.stack(requests, batch._numpy_worlds(requests, self.tables, self.recipe))
+            roots = oracle.roots(stack, requests, N.PARAMS);cells = N.reference.turn1_cells(requests, self.recipe, roots)[:16]
+            oracle.nodes(stack, cells, 1, N.PARAMS);oracle.leaves_n(stack, [tuple(c) + (0, 0) for c in cells], 2, N.PARAMS)
+        runs = dict(
+            frame_pricer=run(lambda: batch.FramePricer(self.ex, object(), capacity=8, block_rows=8, actor_capacity=3, vectorized=True,
+                host_prep=True).price(requests, self.tables, self.recipe, N.PARAMS)),
+            depth2_pricer=run(lambda: Depth2Pricer(self.ex, object(), capacity=8, actor_capacity=3, k_own=2, k_opp=2, digest=True).price(
+                requests, self.tables, self.recipe, N.PARAMS)),
+            depthn_pricer=run(lambda: module.DepthNPricer(self.ex, object(), capacity=8, depth=3, k_own=2, k_opp=2, digest=True, actor_capacity=3).price(
+                requests, self.tables, self.recipe, N.PARAMS)),
+            oracle=run(oracle_walks))
+        whole = dict(numeric_features=(V2_TOKENS, F), categorical_ids=(V2_TOKENS, CATEGORICAL), token_type_ids=(V2_TOKENS,), attention_mask=(V2_TOKENS,),
+            history_mask=())
+        for name, (calls, digests) in runs.items():
+            with self.subTest(path=name):
+                self.assertTrue(calls);self.assertEqual({dtype for dtype, _ in calls}, {'bfloat16'})
+                for _, shapes in calls:self.assertEqual({k: v[-len(whole[k]):] if whole[k] else () for k, v in shapes.items()}, whole)
+                if name == 'frame_pricer':self.assertEqual(digests, []);continue   # D3's frame has no digest
+                self.assertTrue(digests)
+                for shapes in digests:
+                    self.assertEqual(set(shapes), set(whole))
+                    for key, tail in whole.items():self.assertEqual(shapes[key][len(shapes[key]) - len(tail):], tail, (key, shapes[key]))
 
     def test_program_keys_carry_the_evaluator_and_are_reused_within_one(self):
         """One shared program table (the latency tool's): the V2 default's keys carry no evaluator; a champion's carry its identity; a
@@ -603,10 +663,89 @@ class ToolThreadingTests(unittest.TestCase):
         self.assertIs(search.pricer.kwargs['forward'], self.champion)
 
 
+class N2Stop(Exception):
+    pass
+
+
+class N2Oracle:
+    """The oracle run_n2 builds last: records its keywords, then stops the run (nothing past the pricers' construction is needed)."""
+    built = []
+
+    def __init__(self, *args, **kwargs):
+        N2Oracle.built.append(kwargs);raise N2Stop
+
+
+class LatencyThreadingTests(unittest.TestCase):
+    """--n2-equivalence builds both compared pricers and its oracle with the evaluator; the latency tool's prepare marks a champion
+    run as bound (head_override: every Request keeps bind_roots' champion prior and actors 0/0) and roots it with the champion."""
+    def test_n2_equivalence_builds_both_pricers_and_the_oracle_with_the_evaluator(self):
+        from gpu_engine import d3_depthn_gate as gate, d3_depth2_gate as g2
+        champion = exact_champion();made = []
+        def make_pricer(executor, model, **kw):
+            made.append(kw);return SimpleNamespace(capacity=4), {}
+        args = SimpleNamespace(capacity=4, k1_own=9, k1_opp=9, block_lanes=2187, n2_k=3, oracle_chunk=8)
+        for forward in (champion, None):
+            with self.subTest(evaluator='champion' if forward else 'v2'):
+                Capture.built, N2Oracle.built, made[:] = [], [], []
+                roots = SimpleNamespace(forward=forward, actor_capacity=1, groups=[])
+                with patch.object(g2, 'make_pricer', side_effect=make_pricer), self.assertRaises(N2Stop):
+                    gate.run_n2(args, roots=roots, provider=SimpleNamespace(executor='ex'), plan=SimpleNamespace(model='model'), module=SimpleNamespace(DepthNPricer=Capture),
+                        frame_pricer=SimpleNamespace(capacity=4), seeds=(), out=None, reference=SimpleNamespace(DepthNOracle=N2Oracle))
+                self.assertEqual((len(Capture.built), len(made), len(N2Oracle.built)), (2, 2, 1))
+                given = [c.kwargs for c in Capture.built] + made + N2Oracle.built
+                if forward is None:self.assertTrue(all('forward' not in kw for kw in given), given)
+                else:self.assertTrue(all(kw.get('forward') is champion for kw in given), given)
+
+    def test_latency_prepare_binds_and_roots_a_champion_run(self):
+        from gpu_engine import d3_search_latency as tool, v5_device_teacher as teacher
+        from pokezero import v5_contract as contract
+        champion = exact_champion();at = lambda stream, frame, owner: SimpleNamespace(plans=SimpleNamespace(root=SimpleNamespace(
+            address=contract.DecisionAddress(stream, frame, owner))))
+        frames = SimpleNamespace(streams=np.array([[10, 11]]), frames=np.array([[5, 2]]))
+        @contextlib.contextmanager
+        def capture(captured, **kw):
+            captured.update(roots='device roots', frames=frames, bank='bank');yield captured
+        root = {k: j.asarray(v) for k, v in small_requests(champion.config, 1)[0].root_inputs.items()}
+        with tempfile.TemporaryDirectory() as directory:
+            for name, argv, forward, override in (('champion', CHAMPION, champion, True), ('v2', [], None, False), ('head', HEAD, None, True)):
+                with self.subTest(run=name):
+                    args = tool.parse(['--d3-root', 'r', '--chunk', '0', '--out', str(Path(directory) / name), '--configs', 'depth2-fw@2'] + argv)
+                    base = SimpleNamespace(provider=SimpleNamespace(recipe=SimpleNamespace(seed=1779000000), source='source'), available=[at(10, 5, 0), at(11, 2, 1)],
+                        plan=SimpleNamespace(model=None), params=(champion.params,), seeds=(1779000000,), forward=forward)
+                    with patch.object(tool, 'capture_chunk', capture), patch.object(tool.tn, 'prepare', lambda view, base=base: base), \
+                            patch.object(teacher, '_requests', lambda f, b: np.array([[0, 0, 0], [0, 1, 1]])):
+                        ctx = tool.prepare(args)
+                    self.assertEqual((ctx.head_override, ctx.forward), (override, forward))
+                    if forward is not None:
+                        np.testing.assert_array_equal(np.asarray(ctx.root_program(champion.params, root).policy_logits),
+                            np.asarray(champion(champion.params, root).policy_logits))
+
+
 class FakeMerged:
     def __init__(self, executor, model, *, capacity=2048, actor_capacity=33, k_own=9, k_opp=9, k1_own=9, k1_opp=9, child_block=27, digest=False, forward=None,
             fixed_capacity=False):
         self.kwargs = dict(capacity=capacity, digest=digest, fixed_capacity=fixed_capacity, **({} if forward is None else dict(forward=forward)))
+
+
+class ReportTextTests(unittest.TestCase):
+    def test_dropped_root_reason_names_the_evaluator_and_keeps_the_v2_wording(self):
+        from gpu_engine import d3_depth2_gate as g2
+        v2 = 'head override: the head\'s D-arm output on the root inputs is invalid or non-finite; never priced'
+        reason = lambda *evaluator: g2.with_dropped(dict(depth2=dict(refused_count=0)), [[1, 2, 0]], *evaluator)['dropped_roots']['reason']
+        self.assertEqual((reason(), reason(None), reason(dict(kind='v2', override=True))), (v2, v2, v2))
+        self.assertIn('champion evaluator', reason(dict(kind='champion')));self.assertNotIn('head', reason(dict(kind='champion')))
+        self.assertEqual(g2.with_dropped({}, [[1, 2, 0]], dict(kind='champion'))['dropped_roots']['count'], 1)
+
+    def test_latency_stage_scope_keeps_the_v2_wording(self):
+        from gpu_engine import d3_search_latency as tool
+        self.assertIs(tool.stage_scope(dict(kind='v2')), tool.STAGE_SCOPE);self.assertIs(tool.stage_scope(None), tool.STAGE_SCOPE)
+        self.assertIn('D-arm v5 head in bf16', tool.STAGE_SCOPE['root_forward'])
+        scope = tool.stage_scope(dict(kind='champion'))
+        self.assertEqual(scope['root_forward'], tool.CHAMPION_ROOT_FORWARD);self.assertEqual({k: v for k, v in scope.items() if k != 'root_forward'},
+            {k: v for k, v in tool.STAGE_SCOPE.items() if k != 'root_forward'})
+        context = dict(world_construction_path={}, solvers=[], evaluator=dict(kind='champion'))
+        self.assertEqual(tool.header(context, 'c')['stages']['root_forward'], tool.CHAMPION_ROOT_FORWARD)
+        self.assertIs(tool.header(dict(context, evaluator=dict(kind='v2')), 'c')['stages'], tool.STAGE_SCOPE)
 
 
 # ---------------------------------------------------------------- the forward microbenchmark
@@ -639,11 +778,17 @@ class ForwardBenchTests(unittest.TestCase):
 
     def test_main_writes_bench_json_from_a_bound_archive(self):
         from gpu_engine import champion_forward_bench as bench
-        c = tiny_config(numeric=132, categorical=41, vocabulary=16)
+        from pokezero.live_protocol_actor import ActorContract
+        c = tiny_config(numeric=132, categorical=41, vocabulary=16);real = ActorContract.champion().checkpoint_sha256
+        self.assertEqual(real, '0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be')
         with tempfile.TemporaryDirectory() as directory, patch.object(sys, 'stdout', io.StringIO()):
-            path = Path(directory) / 'champion.npz';digest = write_archive(path, c, tiny_params(c));out = Path(directory) / 'bench'
+            other = Path(directory) / 'other.npz';other_digest = write_archive(other, c, tiny_params(c))   # a checkpoint that is not 9375's
+            with self.assertRaisesRegex(ValueError, 'real original 9375'):
+                bench.main(['--out', str(Path(directory) / 'refused'), '--rows', '3', '--champion-archive', str(other), '--champion-archive-sha256', other_digest,
+                    '--champion-checkpoint-sha256', CHECKPOINT])
+            path = Path(directory) / 'champion.npz';digest = write_archive(path, c, tiny_params(c), checkpoint=real);out = Path(directory) / 'bench'
             self.assertEqual(bench.main(['--out', str(out), '--rows', '3,4', '--warmup', '0', '--repeats', '2', '--champion-archive', str(path),
-                '--champion-archive-sha256', digest, '--champion-checkpoint-sha256', CHECKPOINT, '--champion-precision', 'f32']), 0)
+                '--champion-archive-sha256', digest, '--champion-checkpoint-sha256', real, '--champion-precision', 'f32']), 0)
             report = json.loads((out / 'bench.json').read_text())
             self.assertEqual((report['schema'], report['rows'], report['evaluators']['champion']['identity']), (bench.SCHEMA, [3, 4], ['champion', digest, 'float32']))
             self.assertEqual(set(report['results']['champion']), {'3', '4'});self.assertIsNone(report['ratio_champion_over_v2_median'])

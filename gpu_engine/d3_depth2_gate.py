@@ -1531,10 +1531,16 @@ def leaf_counts(calls, sample):
         scope='checked = forced + up to sample_leaves uniform others per world' if sample is not None else 'every enumerated leaf is checked')
 
 
-def with_dropped(refusals, dropped):
-    """The refusal section plus the roots the head override dropped before pricing (U1 refuses a root with an invalid head output)."""
-    return dict(refusals, dropped_roots=dict(count=len(dropped), addresses=list(dropped)[:FIRST],
-        reason='head override: the head\'s D-arm output on the root inputs is invalid or non-finite; never priced'))
+DROPPED_REASONS = dict(v2='head override: the head\'s D-arm output on the root inputs is invalid or non-finite; never priced',
+    champion='champion evaluator: its output on the root inputs is invalid, non-finite or |v| > 1; never priced')
+
+
+def with_dropped(refusals, dropped, evaluator=None):
+    """The refusal section plus the roots the evaluator override dropped before pricing (U1 refuses a root with an invalid head
+    output; bind_evaluator_roots likewise for the champion). evaluator: the report's evaluator header, whose kind names the reason
+    (the head override's wording otherwise, unchanged)."""
+    kind = (evaluator or {}).get('kind') or 'v2'
+    return dict(refusals, dropped_roots=dict(count=len(dropped), addresses=list(dropped)[:FIRST], reason=DROPPED_REASONS.get(kind, DROPPED_REASONS['v2'])))
 
 
 def evaluator_header(args, loaded, head, champion=None):

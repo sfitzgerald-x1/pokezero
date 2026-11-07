@@ -2833,7 +2833,8 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
     result = summarize_run(evaluations, lanes);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
     reported = [c for c in calls if c['refusals'] is not None]
-    refusals = dict(g2.with_dropped(merge_refusals_n([c['refusals'] for c in reported]), roots.evaluator.get('dropped_roots', ())), calls_reported=len(reported),
+    refusals = dict(g2.with_dropped(merge_refusals_n([c['refusals'] for c in reported]), roots.evaluator.get('dropped_roots', ()), roots.evaluator),
+        calls_reported=len(reported),
         rule='reference (D) at every ply: any world pre != 0 or any status-3 node or leaf refuses the root; depth2_full_width is the full-width depth-2 pass')
     abs_values = np.concatenate([e['abs_t1'] for e in evaluations if 'abs_t1' in e]) if any('abs_t1' in e for e in evaluations) else []
     report = dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(result['checks']), tolerance=result['tolerance'], schema=SCHEMA, status=status,

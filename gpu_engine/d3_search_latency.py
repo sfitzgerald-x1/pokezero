@@ -183,7 +183,7 @@ PACKED_NOTE = ('TIMING PROXY: one pass at K*C prices K copies of block 0\'s requ
     'materialization refuses a start planned under another); blocks 1..K-1 are still planned and timed as in sequential; same device shapes as K '
     'blocks, values are block 0\'s K times, not U1\'s W composition')
 STAGE_SCOPE = {
-    'root_forward': 'the learner\'s root forward on the C roots\' encoder inputs batched [C, 1, ...] (evaluator params and forward: the D-arm v5 head in bf16 or the champion, synced, '
+    'root_forward': 'the learner\'s root forward on the C roots\' encoder inputs batched [C, 1, ...] (evaluator params, D-arm v5 head in bf16, synced, '
         'outputs on the host); NOT timed (inside the bank collector\'s scan, not isolable): the RootContext build and the observation encoding',
     'host_prep': 'Provider._prepare_batched\'s per-root core for exactly C roots: per-step RootContext device slice + stream/frame host copy, one '
         'worlds.detach_roots pass per step (part detach), address check, block-0 worlds.plan_starts (part plan_starts), encoder inputs, prior, actors '
@@ -1130,10 +1130,20 @@ def hedge_header(module, commit=HEDGE_COMMIT, name=HEDGE_MODULE):
         weights='1/W', iterations=0, solve=HEDGE_SOLVE)
 
 
+CHAMPION_ROOT_FORWARD = ('the learner\'s root forward on the C roots\' encoder inputs batched [C, 1, ...] (the champion\'s params and '
+    'champion_evaluator.ChampionEvaluator on the same V2 inputs, its 23-token slice, at its precision, synced, outputs on the host); NOT timed (inside '
+    'the bank collector\'s scan, not isolable): the RootContext build and the observation encoding')
+
+
+def stage_scope(evaluator):
+    """STAGE_SCOPE for the run's evaluator header: the V2 wording unchanged, root_forward's restated for a champion run."""
+    return dict(STAGE_SCOPE, root_forward=CHAMPION_ROOT_FORWARD) if (evaluator or {}).get('kind') == 'champion' else STAGE_SCOPE
+
+
 def header(context, commit):
     return dict(world_construction_path=context['world_construction_path'], source_commit=commit, constructor_note=CONSTRUCTOR_NOTE,
         solvers=context['solvers'], solver_pools=context.get('solver_pools', []), hedge=context.get('hedge'), variants=context.get('variants'),
-        rule=RULE, limit_ms=LIMIT_MS, budget_ms=BUDGET_MS, stages=STAGE_SCOPE, packed=PACKED_NOTE,
+        rule=RULE, limit_ms=LIMIT_MS, budget_ms=BUDGET_MS, stages=stage_scope(context.get('evaluator')), packed=PACKED_NOTE,
         variants_scope='every (solver, pool size) solves the SAME priced frames of each call, in an order rotated per call; its end-to-end total = '
             'root_forward + host_prep + world_construction + pricer (shared) + its own solve and return')
 
