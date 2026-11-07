@@ -191,6 +191,12 @@ def depth2_hedged_root(fields):
     return depth2_hedged_worlds(SimpleNamespace(**{k: np.asarray(fields[k])[None] for k in DEPTH2_FIELDS}), 0)
 
 
+def top_action(strategy):
+    """The highest-probability action of a mixed strategy; ties go to the lower action index (deterministic play)."""
+    if not any(p > 0. for p in strategy):raise ValueError('empty mixed strategy')
+    return max(range(len(strategy)), key=lambda a: (strategy[a], -a))
+
+
 def search_uniform(seed, address):
     """A uniform in [0, 1) from (seed, stream, frame, owner) only: independent of the raw sampling keys."""
     payload = json.dumps([SAMPLE_DOMAIN, int(seed), int(address.stream), int(address.frame), int(address.owner)], separators=(',', ':'))

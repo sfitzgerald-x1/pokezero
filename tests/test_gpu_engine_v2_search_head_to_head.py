@@ -76,6 +76,80 @@ class RoundingEdgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):search._reduce_tolerating_rounding(root_logits=(0.,) * 9, root_legal=root, worlds=(world,))
 
 
+class FakeWorlds:
+    """detach_roots/plan_starts stand-ins: roots carry only an address; plans carry it through."""
+    @staticmethod
+    def detach_roots(context, source, *, rows, owners, enable_device_worlds):
+        from types import SimpleNamespace
+        from pokezero import v5_contract as c
+        return tuple(SimpleNamespace(address=c.DecisionAddress(1000 + r, 7, o)) for r, o in zip(rows, owners))
+
+    @staticmethod
+    def plan_starts(root, source, recipe):
+        return root
+
+
+class FakePricer:
+    """Depth-1 FramePricer stand-in: row r of the call gets grids[address.stream - 1000] (None refuses)."""
+    def __init__(self, grids):self.grids = grids;self.last_timing = {}
+
+    def price(self, requests, materializer, recipe, params):
+        from types import SimpleNamespace
+        out = []
+        for request in requests:
+            grid = self.grids[request.plans.address.stream - 1000]
+            if grid is None:
+                out.append(SimpleNamespace(status='REFUSED', reason='unknown', world_reports=[dict(reason='physical-materialization:x')]));continue
+            values = [[None] * 9 for _ in range(9)]
+            for a, row in enumerate(grid):
+                for b, v in enumerate(row):values[a][b] = v
+            report = dict(opponent_requested=True, reply_legal=tuple(b < len(grid[0]) for b in range(9)), reply_logits=(0.,) * 9,
+                joint_values=values, reason=None)
+            out.append(SimpleNamespace(status='LABELED', reason=None, world_reports=[report, report]))
+        return tuple(out)
+
+
+class ChooseTests(unittest.TestCase):
+    """Search.choose end to end on CPU fakes: surfaces -> reduction -> played action."""
+    def search(self, reduction, grids):
+        import collections
+        from pokezero import v5_gumbel as g
+        search = h2h.Search.__new__(h2h.Search)
+        search.original, search.worlds, search.source, search.materializer = g, FakeWorlds, None, None
+        search.capacities, search.kind, search.pricer, search.params = (4,), 'depth1', FakePricer(grids), (None,)
+        search.seed, search.workers, search.pool, search._reduce = 5, 1, None, g.reduce_completed_q
+        search.configure(reduction=reduction, blend=.5, world_blocks=1)
+        return search
+
+    def choose(self, search, rows, raw):
+        legal = np.zeros((len(rows), 9), bool);legal[:, :2] = True
+        inputs = {'numeric_features': np.zeros((len(rows), 2), np.float32)}
+        return search.choose(None, rows, [0] * len(rows), np.zeros((len(rows), 9), np.float32), legal, inputs, np.asarray(raw))
+
+    def test_reductions_play_the_expected_action(self):
+        from gpu_engine import search_hedge as hedge
+        pennies = [[1., -.5], [-.5, .5]]      # hedge x = (.4, .6): top action 1; averaging Q = (.25, 0): argmax 0
+        grids = {0: pennies, 1: None}
+        # Deterministic hedge plays the top action of the maximin strategy, whatever the uniform would sample.
+        out = self.choose(self.search('hedgedet', grids), [0, 1], [0, 1])
+        self.assertEqual(out[0][0], 1);self.assertTrue(out[0][1]['searched'])
+        self.assertAlmostEqual(out[0][1]['strategy'][1], .6, places=5)
+        self.assertEqual(out[1], (1, out[1][1]));self.assertFalse(out[1][1]['searched'])     # refused: the raw action
+        self.assertEqual(out[1][1]['refusal'], 'physical-materialization:x')
+        # The sampled hedge follows search_uniform; averaging plays argmax Q; raw replays the sampled raw action.
+        address = FakeWorlds.detach_roots(None, None, rows=[0], owners=[0], enable_device_worlds=True)[0].address
+        expected = hedge.sample((.4, .6) + (0.,) * 7, hedge.search_uniform(5, address))
+        self.assertEqual(self.choose(self.search('hedge', grids), [0], [1])[0][0], expected)
+        self.assertEqual(self.choose(self.search('average', grids), [0], [1])[0][0], 0)
+        self.assertEqual(self.choose(self.search('raw', grids), [0], [1])[0][0], 1)
+
+    def test_top_action_ties_go_to_the_lower_index(self):
+        from gpu_engine import search_hedge as hedge
+        self.assertEqual(hedge.top_action((0., .5, .5) + (0.,) * 6), 1)
+        self.assertEqual(hedge.top_action((.2, .3, .5) + (0.,) * 6), 2)
+        with self.assertRaises(ValueError):hedge.top_action((0.,) * 9)
+
+
 class CompareTests(unittest.TestCase):
     def write(self, root, label, scores, games, decisions):
         prefix = Path(root, label)

@@ -39,7 +39,7 @@ from gpu_engine.v2_bench_collector import log
 from gpu_engine.v2_head_to_head import SWAP_OFFSET, snapshot
 
 BLOCK_DOMAIN = 'v2s.world-block.v1'
-REDUCTIONS = ('none', 'argmax', 'raw', 'average', 'hedge', 'blend')
+REDUCTIONS = ('none', 'argmax', 'raw', 'average', 'hedge', 'hedgedet', 'blend')
 NO_SEARCH = ('none', 'argmax')   # raw play: the sampled action, or the greedy argmax of the raw policy (a control)
 TURN_BANDS = ((0, 3), (4, 9), (10, 19), (20, 10**9))   # the engine's turn counter; the first band also holds turn 0
 
@@ -204,7 +204,7 @@ class Search:
         self.reduction = reduction;self.blend = blend;self.world_blocks = world_blocks
         self.recipes = tuple(self.original.Recipe(s) for s in world_block_seeds(self.seed, world_blocks))
         self.timing = collections.Counter();self.calls = [];self.events = collections.Counter();self.leaf_sample = []
-        if self.kind == 'depth2' and reduction in ('hedge', 'blend') and self.workers > 1 and self.pool is None:
+        if self.kind == 'depth2' and reduction in ('hedge', 'hedgedet', 'blend') and self.workers > 1 and self.pool is None:
             import concurrent.futures, multiprocessing
             self.pool = concurrent.futures.ProcessPoolExecutor(self.workers, mp_context=multiprocessing.get_context('spawn'))
 
@@ -262,7 +262,7 @@ class Search:
                 causes = depth2_backups.refusal_summary(output)['roots']
                 reasons = [None if not causes[i]['refused'] else 'depth2:' + causes[i]['cause'] + ':' + str(next(
                     (r['reason'] for r in output.world_reports[i] if r['status'] != 'COMPLETE'), None)) for i in range(len(chunk))]
-                if self.reduction in ('hedge', 'blend'):
+                if self.reduction in ('hedge', 'hedgedet', 'blend'):
                     roots = [i for i in range(len(chunk)) if reasons[i] is None]
                     fields = [{k: getattr(output, k)[i] for k in hedge.DEPTH2_FIELDS} for i in roots]
                     backed = dict(zip(roots, self.pool.map(hedge.depth2_hedged_root, fields, chunksize=4) if self.pool else map(hedge.depth2_hedged_root, fields)))
@@ -301,12 +301,13 @@ class Search:
                 prices = tuple(w for p, _ in surfaces for w in p);root_legal = tuple(map(bool, legal[i]))
                 if self.reduction == 'raw':choice = hedge.Choice(tuple(1. if a == action else 0. for a in range(9)), 0.)
                 elif self.reduction == 'average':choice = hedge.averaging(prices, root_legal)
-                elif self.reduction == 'hedge':choice = hedge.bayes_hedge(prices, root_legal, lam=0.)
+                elif self.reduction in ('hedge', 'hedgedet'):choice = hedge.bayes_hedge(prices, root_legal, lam=0.)
                 elif self.reduction == 'blend':choice = hedge.bayes_hedge(prices, root_legal, lam=self.blend)
                 else:raise ValueError('search reduction required')
                 if choice is None:record.update(searched=False, refusal='reduction-unknown-cell')
                 else:
-                    action = hedge.sample(choice.strategy, hedge.search_uniform(self.seed, roots[i].address))
+                    action = (hedge.top_action(choice.strategy) if self.reduction == 'hedgedet'   # deterministic hedge
+                        else hedge.sample(choice.strategy, hedge.search_uniform(self.seed, roots[i].address)))
                     if not legal[i][action]:raise ValueError('search chose an illegal action')
                     record.update(strategy=[round(p, 6) for p in choice.strategy], value=choice.value)
                     # Search minus raw in the evaluator's own terms: completed-Q of the played action minus the raw
