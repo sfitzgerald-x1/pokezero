@@ -1519,6 +1519,8 @@ class ChoicesTests(FixtureN, unittest.TestCase):
         theirs = gate._solve([row[::-1] for row in mine['grid']], mine['pi_opp'][::-1], mine['own_slots'], mine['opp_slots'][::-1], mine['own'], mine['opp'][::-1])
         comparisons, problems, dq, dv = gate.compare_records(mine, theirs)
         self.assertEqual((problems, dq, dv), ([], 0., 0.));self.assertTrue(all(got == want for _, _, got, want, _, _ in comparisons))
+        theirs['pi_own'] = mine['pi_own'];self.assertEqual(gate.compare_priors(mine, theirs), [])   # priors by action too (the opponent's reversed)
+        self.assertNotEqual(gate.compare_priors(mine, dict(theirs, pi_opp=mine['pi_opp'])), [])
 
     # ---- the exact prior check (the re-review of 27adf5a7), merged gating and diagnostics
 
@@ -1549,6 +1551,14 @@ class ChoicesTests(FixtureN, unittest.TestCase):
         mine = next(r for r in records if r and 'shape' not in r and len(r['own']) > 1)
         self.assertEqual(gate.compare_priors(dict(mine, pi_own=None), mine)[0]['pricer'], None)   # a missing prior is a mismatch
         self.assertEqual(gate.compare_priors(mine, dict(mine)), [])
+        line = 'pi_opp=_softmax(opp_logits,[int(opp_actions[x])for x in opp_slots])'   # the opponent's seat is checked as exactly (the value gates aside)
+        self.assertEqual(FAKE_BACKUPS_SOURCE.count(line), 1);module = types.ModuleType('wrong_opp')
+        exec(compile(FAKE_BACKUPS_SOURCE.replace(line, 'pi_opp=[1./len(opp_slots)]*len(opp_slots)'), '<wrong pi_opp>', 'exec'), module.__dict__)
+        f = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=module), 0.)
+        self.assertFalse(f['priors']['passed']);self.assertEqual({x['seat'] for m in f['priors']['first_mismatches'] for x in m['seats']}, {'opp'})
+        ulp = self.wrong_priors('pi_own=[math.nextafter(p,2.)for p in _softmax(own_logits,[int(own_actions[i])for i in own_slots])]')   # one ulp: exact, no tolerance
+        f = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=ulp), 0.);self.assertFalse(f['priors']['passed'])
+        self.assertEqual((f['grid_within_bound'], f['read_identity']['passed']), (True, True))
 
     def test_read_identity_and_priors_are_gated_on_their_counts_too(self):
         """Defence in depth: a merged read identity ANDs its calls; (f) fails on a missing or null read identity or priors (a saved null fails
@@ -1563,6 +1573,7 @@ class ChoicesTests(FixtureN, unittest.TestCase):
                 ('not injective', dict(read_identity=dict(ok, injective=False))), ('injective unrecorded', dict(read_identity={k: v for k, v in ok.items() if k != 'injective'})),
                 ('prior mismatches', dict(priors=dict(saved_choices()['priors'], mismatched_nodes=2))), ('prior one-sided', dict(priors=dict(saved_choices()['priors'], one_sided=1)))):
             with self.subTest(name):self.assertFalse(gate.choice_verdict(dict(saved_choices(), **change), .008)['passed'])
+        self.assertIn('no read identity recorded', gate.choice_verdict(dict(saved_choices(), read_identity=None), .008)['reasons'])   # named, not only failed
         for key in ('read_identity', 'priors'):
             with self.subTest(saved_null=key):
                 report = saved_gate();report['checks']['f'][key] = None;code, out, _, _ = reverdicted(report)
