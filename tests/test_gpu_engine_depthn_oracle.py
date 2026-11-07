@@ -2363,8 +2363,10 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         record = committed(declaration());d = load(record)
         self.assertEqual((d['repo_path'], d['commit'], d['git_verification']['status']), (gate.DECLARED_SUBDIR + '/champion.json', record.commit, 'verified'))
         self.assertEqual(d['git_blob_sha1'], git(record.root, 'hash-object', str(record.path)));self.assertEqual(d['source_measurement_verification']['status'], 'not verifiable here')
-        path, sha = written(declaration())
+        path, sha = written(declaration());elsewhere = record.root / 'gpu_engine' / 'champion.json';elsewhere.write_bytes(record.path.read_bytes())
+        git(record.root, 'add', '.');git(record.root, 'commit', '-q', '-m', 'the same file outside the directory');inside = git(record.root, 'rev-parse', 'HEAD')
         for case, (call, message) in dict(outside=(lambda: gate.load_declared(path, sha, record.commit, root=record.root), f'committed under {gate.DECLARED_SUBDIR}/'),
+                in_the_repository_outside_the_directory=(lambda: load(record, path=elsewhere, commit=inside), f'committed under {gate.DECLARED_SUBDIR}/'),
                 short_commit=(lambda: load(record, commit=record.commit[:12]), 'full lowercase hex commit id')).items():
             with self.subTest(case):
                 with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
