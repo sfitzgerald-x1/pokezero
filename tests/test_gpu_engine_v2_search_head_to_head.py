@@ -1,0 +1,191 @@
+"""Pure helpers of the search-seat head-to-head and the cell comparison; no engine, model or device run."""
+import json
+from pathlib import Path
+import tempfile
+from typing import NamedTuple
+import unittest
+
+import jax.numpy as j
+import numpy as np
+
+from gpu_engine import v2_search_head_to_head as h2h, v2s_compare_cells as compare
+
+
+class Toy(NamedTuple):
+    own: object      # [B, 2, 3]: an own-boundary field
+    other: object    # [B, 2]: a field the boundary never reads
+    turn: object     # [B]: a global field
+
+
+class HelperTests(unittest.TestCase):
+    def test_world_block_seeds_prefix_and_determinism(self):
+        seeds = h2h.world_block_seeds(17, 4)
+        self.assertEqual(seeds[0], 17);self.assertEqual(len(set(seeds)), 4)
+        self.assertEqual(h2h.world_block_seeds(17, 2), seeds[:2])
+        with self.assertRaises(ValueError):h2h.world_block_seeds(17, 0)
+
+    def test_turn_bands(self):
+        self.assertEqual([h2h.band(t) for t in (0, 1, 3, 4, 9, 10, 19, 20, 500)],
+            ['1-3', '1-3', '1-3', '4-9', '4-9', '10-19', '10-19', '20+', '20+'])
+        with self.assertRaises(ValueError):h2h.band(-1)
+
+    def test_counterfactual_keeps_only_own_cells(self):
+        b = 4;state = Toy(j.arange(b * 2 * 3).reshape(b, 2, 3), j.arange(b * 2).reshape(b, 2) + 100, j.arange(b) + 1000)
+        rows, owners, perm = [0, 2], [1, 0], np.roll(np.arange(b), 1)
+        cf = h2h.counterfactual(state, rows, owners, perm, ('own',))
+        own, swapped = np.asarray(state.own), np.asarray(state.own)[perm]
+        for r, o in zip(rows, owners):
+            np.testing.assert_array_equal(np.asarray(cf.own)[r, o], own[r, o])            # A's own cells kept
+            np.testing.assert_array_equal(np.asarray(cf.own)[r, 1 - o], swapped[r, 1 - o])  # the foe's from another game
+        np.testing.assert_array_equal(np.asarray(cf.other), np.asarray(state.other)[perm])
+        np.testing.assert_array_equal(np.asarray(cf.turn), np.asarray(state.turn)[perm])
+        self.assertFalse(h2h.leaves_equal(cf, state))
+        self.assertTrue(h2h.leaves_equal(state, Toy(*state)))
+
+    def test_leaves_equal_is_byte_and_dtype_exact(self):
+        self.assertTrue(h2h.leaves_equal({'a': np.zeros(3, np.float32)}, {'a': np.zeros(3, np.float32)}))
+        self.assertFalse(h2h.leaves_equal({'a': np.zeros(3, np.float32)}, {'a': np.zeros(3, np.float64)}))
+        self.assertFalse(h2h.leaves_equal({'a': np.zeros(3, np.float32)}, {'a': -np.zeros(3, np.float32)}))   # -0.0 differs
+        self.assertFalse(h2h.leaves_equal({'a': np.zeros(3)}, {'b': np.zeros(3)}))
+        from types import MappingProxyType
+        frozen = lambda: MappingProxyType({'x': np.arange(3), 'nested': MappingProxyType({'y': np.ones(2, np.int32)})})
+        self.assertTrue(h2h.leaves_equal(frozen(), frozen()))   # nested read-only mappings compare by content
+        changed = MappingProxyType({'x': np.arange(3), 'nested': MappingProxyType({'y': np.zeros(2, np.int32)})})
+        self.assertFalse(h2h.leaves_equal(frozen(), changed))
+        with self.assertRaises(TypeError):h2h.leaves_equal({'a': object()}, {'a': object()})
+
+
+class RoundingEdgeTests(unittest.TestCase):
+    def test_d_reduction_rounding_edge_counts_and_other_errors_raise(self):
+        import collections, random
+        from pokezero import v5_gumbel as g
+        search = h2h.Search.__new__(h2h.Search)
+        search.original = g;search._reduce = g.reduce_completed_q;search.events = collections.Counter()
+        rng = random.Random(1);root = (True, True) + (False,) * 7;edges = 0
+        for _ in range(2000):
+            k = rng.randint(2, 9);legal = tuple(i < k for i in range(9))
+            values = [[1. if i < 2 and j < k else None for j in range(9)] for i in range(9)]
+            world = g.WorldPrices(True, legal, tuple(rng.gauss(0, 3) for _ in range(9)), values)
+            try:g.reduce_completed_q(root_logits=(0.,) * 9, root_legal=root, worlds=(world, world))
+            except ValueError:
+                edges += 1
+                result = search._reduce_tolerating_rounding(root_logits=(0.,) * 9, root_legal=root, worlds=(world, world))
+                self.assertEqual(result.status, 'LABELED');self.assertIsNone(result.improvement)   # counted per real row in _price
+        self.assertGreater(edges, 0)
+        # A genuinely out-of-range or malformed input still raises.
+        with self.assertRaises(ValueError):search._reduce_tolerating_rounding(root_logits=(0.,) * 9, root_legal=root, worlds=(world,))
+
+
+class FakeWorlds:
+    """detach_roots/plan_starts stand-ins: roots carry only an address; plans carry it through."""
+    @staticmethod
+    def detach_roots(context, source, *, rows, owners, enable_device_worlds):
+        from types import SimpleNamespace
+        from pokezero import v5_contract as c
+        return tuple(SimpleNamespace(address=c.DecisionAddress(1000 + r, 7, o)) for r, o in zip(rows, owners))
+
+    @staticmethod
+    def plan_starts(root, source, recipe):
+        return root
+
+
+class FakePricer:
+    """Depth-1 FramePricer stand-in: row r of the call gets grids[address.stream - 1000] (None refuses)."""
+    def __init__(self, grids, edges=()):self.grids = grids;self.edges = set(edges);self.last_timing = {}
+
+    def price(self, requests, materializer, recipe, params):
+        from types import SimpleNamespace
+        out = []
+        for request in requests:
+            grid = self.grids[request.plans.address.stream - 1000]
+            if grid is None:
+                out.append(SimpleNamespace(status='REFUSED', reason='unknown', world_reports=[dict(reason='physical-materialization:x')]));continue
+            values = [[None] * 9 for _ in range(9)]
+            for a, row in enumerate(grid):
+                for b, v in enumerate(row):values[a][b] = v
+            report = dict(opponent_requested=True, reply_legal=tuple(b < len(grid[0]) for b in range(9)), reply_logits=(0.,) * 9,
+                joint_values=values, reason=None)
+            edge = request.plans.address.stream - 1000 in self.edges   # D's rounding edge: LABELED with no improvement
+            out.append(SimpleNamespace(status='LABELED', reason=None, reduction=SimpleNamespace(improvement=None if edge else object()),
+                world_reports=[report, report]))
+        return tuple(out)
+
+
+class ChooseTests(unittest.TestCase):
+    """Search.choose end to end on CPU fakes: surfaces -> reduction -> played action."""
+    def search(self, reduction, grids, edges=()):
+        import collections
+        from pokezero import v5_gumbel as g
+        search = h2h.Search.__new__(h2h.Search)
+        search.original, search.worlds, search.source, search.materializer = g, FakeWorlds, None, None
+        search.capacities, search.kind, search.pricer, search.params = (4,), 'depth1', FakePricer(grids, edges), (None,)
+        search.seed, search.workers, search.pool, search._reduce = 5, 1, None, g.reduce_completed_q
+        search.configure(reduction=reduction, blend=.5, world_blocks=1)
+        return search
+
+    def choose(self, search, rows, raw):
+        legal = np.zeros((len(rows), 9), bool);legal[:, :2] = True
+        inputs = {'numeric_features': np.zeros((len(rows), 2), np.float32)}
+        return search.choose(None, rows, [0] * len(rows), np.zeros((len(rows), 9), np.float32), legal, inputs, np.asarray(raw))
+
+    def test_reductions_play_the_expected_action(self):
+        from gpu_engine import search_hedge as hedge
+        pennies = [[1., -.5], [-.5, .5]]      # hedge x = (.4, .6): top action 1; averaging Q = (.25, 0): argmax 0
+        grids = {0: pennies, 1: None}
+        # Deterministic hedge plays the top action of the maximin strategy, whatever the uniform would sample.
+        out = self.choose(self.search('hedgedet', grids), [0, 1], [0, 1])
+        self.assertEqual(out[0][0], 1);self.assertTrue(out[0][1]['searched'])
+        self.assertAlmostEqual(out[0][1]['strategy'][1], .6, places=5)
+        self.assertEqual(out[1], (1, out[1][1]));self.assertFalse(out[1][1]['searched'])     # refused: the raw action
+        self.assertEqual(out[1][1]['refusal'], 'physical-materialization:x')
+        # The sampled hedge follows search_uniform; averaging plays argmax Q; raw replays the sampled raw action.
+        address = FakeWorlds.detach_roots(None, None, rows=[0], owners=[0], enable_device_worlds=True)[0].address
+        expected = hedge.sample((.4, .6) + (0.,) * 7, hedge.search_uniform(5, address))
+        self.assertEqual(self.choose(self.search('hedge', grids), [0], [1])[0][0], expected)
+        self.assertEqual(self.choose(self.search('average', grids), [0], [1])[0][0], 0)
+        self.assertEqual(self.choose(self.search('raw', grids), [0], [1])[0][0], 1)
+
+    def test_unknown_cell_refuses_every_reduction_and_edges_count_real_rows_only(self):
+        holed = [[1., None], [-.5, .5]]
+        for reduction in ('raw', 'average', 'hedge', 'hedgedet', 'blend'):
+            out = self.choose(self.search(reduction, {0: holed}), [0], [1])
+            self.assertEqual(out[0][0], 1);self.assertEqual(out[0][1]['refusal'], 'reduction-unknown-cell')
+        # One real row on a rounding edge, priced in a call padded to capacity 4 with copies of it: counted once.
+        search = self.search('average', {0: [[1., -.5], [-.5, .5]]}, edges=(0,))
+        self.choose(search, [0], [0])
+        self.assertEqual(search.events['d_reduction_rounding_edge'], 1)
+
+    def test_top_action_ties_go_to_the_lower_index(self):
+        from gpu_engine import search_hedge as hedge
+        self.assertEqual(hedge.top_action((0., .5, .5) + (0.,) * 6), 1)
+        self.assertEqual(hedge.top_action((.2, .3, .5) + (0.,) * 6), 2)
+        with self.assertRaises(ValueError):hedge.top_action((0.,) * 9)
+
+
+class CompareTests(unittest.TestCase):
+    def write(self, root, label, scores, games, decisions):
+        prefix = Path(root, label)
+        Path(str(prefix) + '-pairs.jsonl').write_text(''.join(json.dumps(dict(stream=s, swapped=s - 10, score=v)) + '\n' for s, v in scores.items()))
+        np.savez(str(prefix) + '-games.npz', **games)
+        Path(str(prefix) + '-decisions.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in decisions))
+        return prefix
+
+    def test_paired_difference_and_identity(self):
+        games = dict(streams=np.arange(4), status=np.ones(4, np.int32), winner=np.zeros(4, np.int32), terminal_frame=np.full(4, 7))
+        decisions = [dict(stream=1, a_side=0, decisions=[dict(frame=0, raw=2, chosen=2), dict(frame=1, raw=0, chosen=3)])]
+        with tempfile.TemporaryDirectory() as root:
+            x = self.write(root, 'x', {1: 1., 2: .5, 3: None, 4: 0.}, games, decisions)
+            y = self.write(root, 'y', {1: .5, 2: .5, 3: 1., 4: 0.}, games, decisions)
+            result = compare.paired_difference(compare.pairs(x), compare.pairs(y))
+            self.assertEqual(result['pairs'], 3);self.assertEqual(result['excluded'], 1)
+            self.assertAlmostEqual(result['difference_points'], 100 * .5 / 3)
+            self.assertEqual((result['pairs_x_better'], result['pairs_y_better']), (1, 0))
+            self.assertTrue(compare.identical(x, y)['all_identical'])
+            z = self.write(root, 'z', {1: 1., 2: .5, 3: None, 4: 0.}, games,
+                [dict(stream=1, a_side=0, decisions=[dict(frame=0, raw=2, chosen=2), dict(frame=1, raw=0, chosen=0)])])
+            self.assertEqual(compare.identical(x, z)['differing_decisions'], 1)
+            self.assertFalse(compare.identical(x, z)['all_identical'])
+
+
+if __name__ == '__main__':
+    unittest.main()
