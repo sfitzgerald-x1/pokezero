@@ -88,11 +88,13 @@ bank snapshot's actors or the head override (B1) is built, judged and written ex
  - gate --depth 2 (any widths): D2_ORACLE_CONSISTENCY, the merged gate's leaf_child_* oracle consistency on the inherited depth-2 leaf walk,
    plus that walk equal to the depth-N leaf walk (leaf_walk_*), merged into checks.oracle_consistency;
  - --n2-equivalence --block-invariance (refused off the champion path, as before): CHILD_BLOCK_INVARIANCE, the merged Depth2Pricer at
-   child_block 27 and 81 judged as the merged gate does, gated per config (configs.*.block_invariance).
+   child_block 27 and 81 judged as the merged gate does, gated per config (configs.*.block_invariance);
+ - --n2-equivalence: MERGED_DEPTH2_DECISION, the merged gate's (e) with depth2_backups on the merged Depth2Pricer's frame against the oracle
+   heads (the oracle walks every turn-2 leaf it enumerates), gated per config (configs.*.e_merged_depth2).
 Every such report's header carries `merged_depth2_parity` (merged_depth2_parity): the merged gate's checks and where they are made, whether
 each addition ran, and the remaining differences (MERGED_DEPTH2_DIFFERENCES): the merged gate's reported-only oracle error counts, by-block
 refusal breakdown, values section and sibling spread are absent; its reported-only (e) cell_choice_differs is replaced by (f)'s gated choices
-(stricter); the guard's p10 is over non-zero spreads, not every spread (looser or equal); the raw-head check does not apply to the champion
+(stricter) in gate mode and reported under --n2-equivalence; the guard's p10 is over non-zero spreads, not every spread (looser or equal); the raw-head check does not apply to the champion
 (nothing is substituted; the first-root exact check and the digests over its view stand in); gate --block-invariance varies the DepthNPricer's
 block_lanes, not a Depth2Pricer child block; (e)'s backups, sampling seeds and offline modes differ; (a), (f) and leaf_walk_* are extra.
 """
@@ -2326,10 +2328,16 @@ CHILD_BLOCK_INVARIANCE = ('--n2-equivalence --block-invariance on the champion p
     'child_block 27 and 81 (d3_depth2_gate.INVARIANCE_BLOCKS; the 81 frame is the one compared with DepthNPricer N=2, as the merged gate\'s '
     'checked frame), and d3_depth2_gate.block_invariance / merge_invariance judge them as the merged gate does: discrete arrays bit-equal, '
     'floats within the run\'s rule (logits the logit bound, *value the value bound and guard, other floats exact)')
+MERGED_DEPTH2_DECISION = ('--n2-equivalence on the champion path (gated): the merged gate\'s (e) on each config\'s merged Depth2Pricer frame. The '
+    'oracle data are built as d3_depth2_gate.price_call builds them (turn-1 cells at the pricer\'s k1 widths, ranked by its root prior; the children; '
+    'every turn-2 leaf it enumerates, ranked by its own top-k priors; depth2_oracle.Oracle.leaves on each), and d3_depth2_gate.decision_check judges '
+    'depth2_backups.learner_max_root on the frame against its oracle-heads copy under the run\'s q_noise_bound, as the merged gate\'s (e) '
+    '(learner_max_choice cell_choice_differs reported, not gated). The cost is the oracle\'s walk over every enumerated turn-2 leaf of both configs')
 MERGED_DEPTH2_MATCHED = ('the merged depth-2 gate\'s checks and where this gate makes them on the champion path: (a) check_exact (turn 1 by the '
     'same function, leaves on the same digest mask), (b) check_d (the same function), (c) check_heads (the same function; leaf_value is t2_value, '
     'raw heads aside), (d) the enumeration, oracle consistency (D2_ORACLE_CONSISTENCY, gate --depth 2), (e) the decision rule (decision_verdict, '
-    'the same near-tie rule), block invariance of the Depth2Pricer (CHILD_BLOCK_INVARIANCE, --n2-equivalence --block-invariance), the '
+    'the same near-tie rule) in gate mode with depthn_backups on the DepthNPricer and, under --n2-equivalence, with depth2_backups on the merged '
+    'Depth2Pricer (MERGED_DEPTH2_DECISION), block invariance of the Depth2Pricer (CHILD_BLOCK_INVARIANCE, --n2-equivalence --block-invariance), the '
     'misplacement guard (gated, its p10 as below) and the refusal accounting (the reference rule and depth1, as below)')
 MERGED_DEPTH2_DIFFERENCES = (
     dict(name='reported-only sections absent', effect='none on the verdict', detail='reported, not gated, by the merged gate and absent here: '
@@ -2337,8 +2345,8 @@ MERGED_DEPTH2_DIFFERENCES = (
         'full-width depth-2 pass\'s frame-level turn1/turn2 errors_by_code, depth2_gate_count and depth2_sources_agree (only its depth2 section is '
         'kept); the values section (|v| per frame band, cell_a2_spread, root_q_spread, the near-tie share); the sibling spread'),
     dict(name='(e) cell_choice_differs', effect='stricter here', detail='the merged gate counts learner_max_choice per-cell differences under (e), '
-        'reported, not gated; absent here, where (f) gates every turn-1 cell\'s learner choice and each own row\'s opponent choice exactly except '
-        'near ties'),
+        'reported, not gated; in gate mode it is absent, and (f) gates every turn-1 cell\'s learner choice and each own row\'s opponent choice exactly '
+        'except near ties; under --n2-equivalence MERGED_DEPTH2_DECISION reports it as the merged gate does'),
     dict(name='misplacement guard p10', effect='looser or equal here', detail='the p10 is over NON-ZERO last-ply own-slot spreads (GUARD_SPREAD_RULE) '
         'where the merged gate takes it over every cell_a2_spread, so the guard is at least as wide; a run whose spreads are all zero skips the '
         'guard here, where the merged gate\'s guard would be 0 and fail every value comparison; gated in both'),
@@ -2349,8 +2357,9 @@ MERGED_DEPTH2_DIFFERENCES = (
     dict(name='block invariance in gate mode', effect='a different pricer', detail='gate --block-invariance varies the DepthNPricer\'s block_lanes '
         '(729 vs 2187); the merged Depth2Pricer\'s child-block invariance is gated only under --n2-equivalence --block-invariance, whose compared '
         'Depth2Pricer is then child_block 81 (the default is 27)'),
-    dict(name='backups', effect='none on the rule', detail='(e) runs depthn_backups.learner_max_root in gate mode and depth2_backups on both N=2 '
-        'surfaces under --n2-equivalence; the merged gate runs depth2_backups'),
+    dict(name='backups', effect='none on the rule', detail='(e) runs depthn_backups.learner_max_root on the DepthNPricer in gate mode; under '
+        '--n2-equivalence depth2_backups runs on both N=2 surfaces (pricer against pricer) and, on the merged Depth2Pricer against the oracle heads, '
+        'as the merged gate\'s (e) (MERGED_DEPTH2_DECISION)'),
     dict(name='sampling and offline modes', effect='none on the rule', detail='--sample-leaves keeps the same forced terminal/error leaves with other '
         'per-world seeds (other sampled leaves); the merged gate\'s offline --recheck has no counterpart (--reverdict re-judges the verdict only)'),
     dict(name='extra here', effect='stricter here', detail='(a) also gates the ply-2 maps, the engines\' widths and the full-width depth-2 pass; (f) '
@@ -2378,6 +2387,22 @@ def d2_oracle_consistency(data, *, oracle, stack, params, context=None):
     return found.report()
 
 
+def merged_depth2_decision(frame, pricer, *, requests, recipe, oracle, stack, params, roots, children, backups, context=None):
+    """MERGED_DEPTH2_DECISION on one config's merged Depth2Pricer frame (pricer: the Depth2Pricer that priced it, read for its widths): the
+    merged gate's oracle data for that frame, then g2.decision_check with `backups` (depth2_backups). Returns the per-call (e) report."""
+    d2ref = importlib.import_module('gpu_engine.depth2_oracle')
+    widths = {k: int(getattr(pricer, k)) for k in ('k_own', 'k_opp', 'k1_own', 'k1_opp')};usable = not g2.frame_geometry(frame, len(requests))
+    if widths['k1_own'] < 9 or widths['k1_opp'] < 9:   # the merged gate's cells: k1 widths, the k1_opp selection ranked by the pricer's root prior
+        root_priors = {k: g2.field(frame, 'root_peer_logits')[k] for k in roots} if usable and widths['k1_opp'] < 9 else None
+        children = oracle.children(stack, d2ref.turn1_cells(requests, recipe, roots, k1_own=widths['k1_own'], k1_opp=widths['k1_opp'], root_priors=root_priors), params)
+    priors = None
+    if usable and len(children['cells']) and (widths['k_own'] < 9 or widths['k_opp'] < 9):
+        at = tuple(np.asarray(children['cells']).T);priors = dict(own=g2.field(frame, 't1_own_logits')[at], peer=g2.field(frame, 't1_peer_logits')[at])
+    specs = d2ref.turn2_leaves(children, k_own=widths['k_own'], k_opp=widths['k_opp'], priors=priors) if len(children['cells']) else []
+    data = dict(roots=roots, children=children, leaves=oracle.leaves(stack, specs, params), enumerated=specs)
+    return g2.decision_check(frame, data, requests, context=context, backups=backups)
+
+
 def merged_depth2_parity(mode, *, oracle_consistency=False, child_block_invariance=False):
     """The header's merged_depth2_parity section (champion path, depth-2 surfaces: gate --depth 2 or --n2-equivalence): what this run
     gates of the merged depth-2 gate's checks, whether the two champion-path additions ran here, and every remaining difference, so the
@@ -2387,8 +2412,11 @@ def merged_depth2_parity(mode, *, oracle_consistency=False, child_block_invarian
     blocks = dict(gate='not in this mode: --n2-equivalence --block-invariance checks the merged Depth2Pricer across child blocks',
         n2_equivalence=('ran (CHILD_BLOCK_INVARIANCE, child_block 27 vs 81), gated per config in configs.*.block_invariance' if child_block_invariance
             else 'not run: pass --block-invariance with --n2-equivalence'))
+    decision = dict(gate='not in this mode: --n2-equivalence runs it on the merged Depth2Pricer',
+        n2_equivalence='ran (MERGED_DEPTH2_DECISION), gated per config in configs.*.e_merged_depth2')
     return dict(mode=mode, matched=MERGED_DEPTH2_MATCHED, champion_path_additions=dict(d2_oracle_consistency=ran[mode], child_block_invariance=blocks[mode],
-        rules=dict(d2_oracle_consistency=D2_ORACLE_CONSISTENCY, child_block_invariance=CHILD_BLOCK_INVARIANCE)),
+        merged_depth2_decision=decision[mode], rules=dict(d2_oracle_consistency=D2_ORACLE_CONSISTENCY, child_block_invariance=CHILD_BLOCK_INVARIANCE,
+            merged_depth2_decision=MERGED_DEPTH2_DECISION)),
         remaining_differences=[dict(d) for d in MERGED_DEPTH2_DIFFERENCES],
         note='the merged depth-2 gate (d3_depth2_gate) has no champion flags; on the champion path this gate\'s depth-2 surfaces stand in for it, '
             'with these additions and differences')
@@ -2951,12 +2979,13 @@ def n2_compare(theirs, mine, context=None):
 
 
 def n2_equivalence_call(*, requests, recipe, materializer, params, configs, frame_pricer, oracle, context, progress=None, backups2=None, module=None,
-                        stack_rows=None):
+                        stack_rows=None, merged_decision=False):
     """One request list under --n2-equivalence: configs [(name, DepthNPricer N=2, Depth2Pricer)], the same requests to both,
     D3 and the oracle's roots and turn-1 children once (the run's depth-1 noise floor and turn-1 heads). Per config:
     n2_compare, (e) on both surfaces (depth2_backups.learner_max_root) and the guard's spreads. stack_rows: as run_call_n's. A config
     (name, DepthNPricer, Depth2Pricer, [other Depth2Pricers]) also prices the others first on the same requests (CHILD_BLOCK_INVARIANCE:
-    other child blocks) and records g2.block_invariance of each against the compared Depth2Pricer's frame."""
+    other child blocks) and records g2.block_invariance of each against the compared Depth2Pricer's frame. merged_decision (run_n2: the
+    champion path): MERGED_DEPTH2_DECISION per config (merged_depth2_decision) as e_merged; False changes nothing."""
     from gpu_engine import device_public_teacher_batch as batch
     reference = importlib.import_module('gpu_engine.depthn_oracle');module = module or pricer_module()
     backups2 = backups2 or importlib.import_module('gpu_engine.depth2_backups');requests = tuple(requests);out = {}
@@ -2981,6 +3010,11 @@ def n2_equivalence_call(*, requests, recipe, materializer, params, configs, fram
         c = g2.check_heads(mine, turn1, d_results)   # depth-N turn 1 against the oracle, and the run's depth-1 floor
         e = decide_roots(theirs, mine, requests, backups2, context=where)
         out[name] = dict(a=found, floats=floats, c=c, e=e, spreads=node_spreads(raw))
+        if merged_decision:
+            with stage(progress, 'check_e_merged_depth2', **where) as info:
+                out[name]['e_merged'] = merged_depth2_decision(theirs, depth2, requests=requests, recipe=recipe, oracle=oracle, stack=stack, params=params, roots=roots,
+                    children=children, backups=backups2, context=where)
+                info.update({k: out[name]['e_merged'].get(k) for k in ('passed', 'roots_compared', 'argmax_q_differs', 'cell_choice_differs')})
         if others:
             with stage(progress, 'check_child_block_invariance', **where) as info:
                 out[name]['invariance'] = [g2.block_invariance(o, theirs, context=where) for o in other_frames]
@@ -2992,7 +3026,8 @@ def summarize_n2(per_config, *, declared=None):
     """{config: [call results]} -> per config: discrete (exact), floats within the run's rule, (e) under the near-tie rule;
     the rule from the depth-1 floor (D3 vs the oracle's turn-1 heads) and the p10 spread of the N=2 frames. declared: the run's
     --declared-bounds (declared_rule: its value and turn-1 logit bounds, and its near-tie Q bound as (e)'s q_noise_bound). Calls that
-    carry child-block invariance (CHILD_BLOCK_INVARIANCE) add a gated block_invariance section (g2.merge_invariance under the same rule)."""
+    carry child-block invariance (CHILD_BLOCK_INVARIANCE) add a gated block_invariance section (g2.merge_invariance under the same rule), and
+    calls that carry MERGED_DEPTH2_DECISION a gated e_merged_depth2 section (g2.merge_decisions under the same q_noise_bound)."""
     report = {}
     for name, calls in per_config.items():
         quantities = g2.merge_numeric([x['c'] for x in calls]);p10, spread = guard_spread(s for x in calls for s in x['spreads'])
@@ -3004,14 +3039,17 @@ def summarize_n2(per_config, *, declared=None):
         e['reference'] = 'depth2_backups.learner_max_root on the Depth2Frame vs on as_depth2_frame(DepthNPricer N=2)'
         reports_equal = all(x['a'].get('world_reports_equal', False) for x in calls)
         invariance = None if not any('invariance' in x for x in calls) else g2.merge_invariance([r for x in calls for r in x.get('invariance', ())], rule=rule)
-        passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed'] and reports_equal and (invariance is None or invariance['passed'])
+        merged = None if not any('e_merged' in x for x in calls) else dict(g2.merge_decisions([x['e_merged'] for x in calls], q_noise_bound=q_noise), rule=MERGED_DEPTH2_DECISION)
+        passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed'] and reports_equal and (invariance is None or invariance['passed']) \
+            and (merged is None or merged['passed'])
         vacuous = [reason for reason, empty in (('no turn-2 leaf compared', not discrete['compared'].get('t2_status')),
-            ('(e) compared no root', not e.get('roots_compared'))) if empty]
+            ('(e) compared no root', not e.get('roots_compared')), ('(e) on the merged Depth2Pricer compared no root', merged is not None and not merged.get('roots_compared')))
+            if empty]
         report[name] = dict(status='FAIL' if not passed else 'INCOMPLETE' if vacuous else 'PASS', status_reasons=vacuous, passed=passed and not vacuous,
             discrete=discrete, floats=floats, e=e, tolerance=dict(rule, q_noise_bound=q_noise),
             turn1_heads_vs_oracle=dict(reported_not_gated=True, quantities=heads), world_reports_equal=reports_equal,
             world_reports_first_difference=next((x['a']['world_reports_first_difference'] for x in calls if x['a'].get('world_reports_first_difference')), None),
-            **({} if invariance is None else dict(block_invariance=invariance)))
+            **({} if invariance is None else dict(block_invariance=invariance)), **({} if merged is None else dict(e_merged_depth2=merged)))
     return report
 
 
@@ -3462,7 +3500,7 @@ def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, ref
     per_config = collections.defaultdict(list);abs_values = []
     for block, call, recipe, requests in each_call(provider, groups, seeds):
         results = n2_equivalence_call(requests=requests, recipe=recipe, materializer=provider.materializer, params=roots.params, configs=configs,
-            frame_pricer=frame_pricer, oracle=oracle, context=dict(block=block, call=call), progress=log, module=module)
+            frame_pricer=frame_pricer, oracle=oracle, context=dict(block=block, call=call), progress=log, module=module, merged_decision=forward is not None)
         for name, result in results.items():per_config[name].append(result)
         log('N2_CALL', block=block, call=call, discrete={n: r['a']['passed'] for n, r in results.items()}, e={n: r['e'].get('argmax_q_differs') for n, r in results.items()})
     report = summarize_n2(per_config, declared=declared);statuses = [r['status'] for r in report.values()]

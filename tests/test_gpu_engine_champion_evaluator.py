@@ -579,9 +579,28 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         code, out = self.main('--n2-equivalence', '--n2-k', '2');report = json.loads((out / 'n2-equivalence.json').read_text())
         self.assertEqual((code, report['status']), (0, 'PASS'));parity = report['header']['merged_depth2_parity']
         self.assertEqual((parity['mode'], parity['champion_path_additions']['child_block_invariance'][:7]), ('n2_equivalence', 'not run'))
+        self.assertEqual(parity['champion_path_additions']['merged_depth2_decision'][:3], 'ran')
         self.assertFalse(any('block_invariance' in c for c in report['configs'].values()))
+        for name, config in report['configs'].items():   # MERGED_DEPTH2_DECISION: depth2_backups on the merged Depth2Pricer against the oracle heads
+            merged = config['e_merged_depth2'];self.assertEqual((merged['passed'], merged['rule']), (True, gate_module().MERGED_DEPTH2_DECISION), name)
+            self.assertGreater(merged['roots_compared'], 0);self.assertGreater(merged['replaced']['t2_value'], 0);self.assertGreater(merged['cells_compared'], 0)
+            self.assertEqual(merged['replaced']['unmatched_head_leaves'], 0);self.assertEqual(merged['q_noise_bound'], config['tolerance']['q_noise_bound'])
         code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2');report = json.loads((out / 'gate.json').read_text())
         self.assertEqual(code, 0);self.assertNotIn('merged_depth2_parity', report['header']);self.assertNotIn('leaf_child_known', report['checks']['oracle_consistency']['compared'])
+
+    def test_the_merged_depth2_decision_catches_oracle_heads_the_merged_pricer_does_not_have(self):
+        """MERGED_DEPTH2_DECISION fails closed on the merged path alone: the depth-2 oracle's leaf heads .25 higher than the merged Depth2Pricer's
+        (the leaves only this check walks) FAIL each config's e_merged_depth2 on max |dQ|, while the pricer-against-pricer checks pass."""
+        from gpu_engine import depth2_oracle
+        real = depth2_oracle.Oracle.leaves
+        def shifted(oracle, stack, specs, params):
+            out = dict(real(oracle, stack, specs, params));out['head_value'] = np.where(np.asarray(out['status']) == 4, np.asarray(out['head_value']) + np.float32(.25), out['head_value'])
+            return out
+        with patch.object(depth2_oracle.Oracle, 'leaves', shifted):code, out = self.main('--n2-equivalence', '--n2-k', '2')
+        report = json.loads((out / 'n2-equivalence.json').read_text());self.assertEqual((code, report['status']), (1, 'FAIL'))
+        for name, config in report['configs'].items():
+            merged = config['e_merged_depth2'];self.assertFalse(merged['passed'], name);self.assertFalse(merged['q_noise_within_bound'], name)
+            self.assertTrue(config['discrete']['passed'] and config['e']['passed'] and all(m['passed'] for m in config['floats'].values()), name)
 
     def test_n2_child_block_invariance_passes_clean_and_catches_a_child_block_dependent_pricer(self):
         """--n2-equivalence --block-invariance: each config's Depth2Pricer at child_block 27 and 81, gated per config; a Depth2Pricer stand-in
@@ -697,6 +716,8 @@ class ChildBlockDependent:
     """A Depth2Pricer stand-in that depends on its child block: the real pricer, except that child_block-27 frames carry every head-valued
     t2_value .25 higher."""
     def __init__(self, pricer):self.pricer, self.child_block, self.capacity = pricer, pricer.child_block, pricer.capacity
+
+    def __getattr__(self, name):return getattr(self.pricer, name)   # widths and options, as the real pricer's
 
     def price(self, *args, **kwargs):
         frame = self.pricer.price(*args, **kwargs)
