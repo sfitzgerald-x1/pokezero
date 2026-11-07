@@ -62,6 +62,10 @@ data (held until then); mutation-test.json in --out; exit non-zero if the clean 
 has a material survivor. --save-oracle writes each call's oracle data and D3 outputs
 beside its frames (frames-block{B}-call{C}-oracle.npz, implies --save-arrays); --mutation-from DIR... re-runs the mutation
 test offline from them. All paths are command-line arguments; --out must be new.
+--fixed-shapes (FIXED_SHAPES; opt-in, a harness setting, not a rule): every DepthNPricer the run builds takes fixed_capacity=True and
+every oracle stack is padded to a fixed row count (2 x the call-split capacity), so a multi-call run compiles each program once per
+process; recorded as the report's and the start line's `harness` section. Without it, nothing is built, stacked, logged or written
+differently; a report without `harness` ran without it.
 """
 import argparse
 import collections
@@ -1484,13 +1488,14 @@ class DepthNPricers:
     """The run's DepthNPricer instances, one per block_lanes value (the last prices the checked frame). k_own/k_opp are the
     constructor's per-ply k's: under `searched` the ply-2 entries are searched_maps' k's and the pricer derives its ply-2 slot
     widths (searched_widths), so the plan's widths are read back from the engine (engine.k_own/k_opp hold widths,
-    engine.searched_k the k's); plies past 2 are prior widths in both modes."""
+    engine.searched_k the k's); plies past 2 are prior widths in both modes. fixed_capacity (--fixed-shapes): every instance is built
+    with fixed_capacity=True and options() says so; False builds and reports exactly as without the option."""
     def __init__(self, module, executor, model, *, depth, k_own, k_opp, selection, capacity, actor_capacity, lanes=(2187,), k1_own=9,
-                 k1_opp=9, digest=True):
+                 k1_opp=9, digest=True, fixed_capacity=False):
         self.module, self.executor, self.model, self.depth, self.selection = module, executor, model, depth, selection
         shape = plan_of(depth, k_own, k_opp);self.k_own, self.k_opp = shape['k_own'], shape['k_opp']
         self.capacity, self.actor_capacity, self.lanes, self.k1_own, self.k1_opp, self.digest = capacity, actor_capacity, tuple(lanes), k1_own, k1_opp, digest
-        self.instances = None
+        self.fixed_capacity = fixed_capacity;self.instances = None
 
     def expected_widths(self):
         """The slot widths the REQUEST implies, never the engine's self-report: under prior the requested k's; under searched
@@ -1509,7 +1514,7 @@ class DepthNPricers:
         if self.instances is None:
             self.instances = [self.module.DepthNPricer(self.executor, self.model, capacity=self.capacity, depth=self.depth, k_own=self.k_own,
                 k_opp=self.k_opp, k1_own=self.k1_own, k1_opp=self.k1_opp, block_lanes=lanes, selection=self.selection, digest=self.digest,
-                actor_capacity=self.actor_capacity) for lanes in self.lanes]
+                actor_capacity=self.actor_capacity, **fixed_kwargs(self.fixed_capacity)) for lanes in self.lanes]
         k_own, k_opp = self.expected_widths()
         return plan_of(self.depth, k_own, k_opp, self.selection, k1_own=self.k1_own, k1_opp=self.k1_opp), self.instances
 
@@ -1527,14 +1532,35 @@ class DepthNPricers:
             slot_widths=dict(k_own=list(k_own), k_opp=list(k_opp), source='the request (searched ply 2: searched_widths_reference)'),
             engine_widths=self.engine_widths() or None,
             searched_k=None if engine is None or getattr(engine, 'searched_k', None) is None else list(engine.searched_k),
-            widths_note='under searched, k_own[0]/k_opp[0] are searched_maps\' k\'s; the engine derives ply 2\'s slot widths' if self.selection == 'searched' else None)
+            widths_note='under searched, k_own[0]/k_opp[0] are searched_maps\' k\'s; the engine derives ply 2\'s slot widths' if self.selection == 'searched' else None,
+            **fixed_kwargs(self.fixed_capacity))
 
 
-def depth2_pass_pricer(module, executor, model, *, capacity, actor_capacity, k1_own=9, k1_opp=9, block_lanes=2187, digest=False):
+def fixed_kwargs(fixed_capacity):
+    """DepthNPricer's fixed_capacity=True under --fixed-shapes; nothing otherwise, so the default build is the unchanged call."""
+    return dict(fixed_capacity=True) if fixed_capacity else {}
+
+
+def depth2_pass_pricer(module, executor, model, *, capacity, actor_capacity, k1_own=9, k1_opp=9, block_lanes=2187, digest=False, fixed_capacity=False):
     """The full-width depth-2 pass (refusal accounting; `searched` maps): DepthNPricer(depth=2, k=9), read through as_depth2_frame.
-    The gate prices it with digest=True (its leaves are re-checked against the oracle); diagnostics need no digests."""
+    The gate prices it with digest=True (its leaves are re-checked against the oracle); diagnostics need no digests. fixed_capacity:
+    --fixed-shapes (fixed_kwargs)."""
     return module.DepthNPricer(executor, model, capacity=capacity, depth=2, k_own=9, k_opp=9, k1_own=k1_own, k1_opp=k1_opp, block_lanes=block_lanes,
-        selection='prior', digest=digest, actor_capacity=actor_capacity)
+        selection='prior', digest=digest, actor_capacity=actor_capacity, **fixed_kwargs(fixed_capacity))
+
+
+FIXED_SHAPES = ('--fixed-shapes is a harness setting, not a rule: no check, bound, tolerance or verdict reads it. Every DepthNPricer the run '
+    'builds takes fixed_capacity=True (turn 1 compiled at exactly --capacity root slots, whatever a call holds) and every oracle stack is '
+    'padded to oracle_stack_rows = 2 x the call-split capacity (split_groups puts at most that many requests, two worlds each, in one call), '
+    'rounded up to a power of two, so a multi-call run compiles each pricer and oracle program once per process. Padding rows and root '
+    'slots are never read. D3\'s FramePricer and --n2-equivalence\'s Depth2Pricer keep their per-call buckets.')
+
+
+def fixed_shapes_harness(capacity, *, oracle=True):
+    """--fixed-shapes' `harness` section (report and start line): the oracle stack's row count is depth2_oracle.bucket(2 x the call-split
+    `capacity`), exactly 2 x capacity at a power-of-two capacity >= 4 (None where the mode runs no oracle)."""
+    rows = importlib.import_module('gpu_engine.depth2_oracle').bucket(2 * capacity) if oracle else None
+    return dict(fixed_shapes=True, pricer_fixed_capacity=True, oracle_stack_rows=rows, split_capacity=capacity, rule=FIXED_SHAPES)
 
 
 def describe(extras):
@@ -1609,12 +1635,14 @@ def depth2_pass_check(depth2_frame, frame, data, *, oracle, stack, params, sampl
 
 
 def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer, frame_pricer, oracle, sample, block, context,
-               progress=None, decision=None, save=None, evaluator=None, backups=None, pass_sample=8, choices=True, save_oracle=False, mutation=None):
+               progress=None, decision=None, save=None, evaluator=None, backups=None, pass_sample=8, choices=True, save_oracle=False, mutation=None,
+               stack_rows=None):
     """One request list: the full-width depth-2 pass (refusals; `searched` maps), the depth-N pricer (and its block-invariance
     twins), D3, the oracle at every ply and the checks ((e) unsampled unless `decision` says otherwise, (f) unless choices=False).
     save: (directory, prefix) for --save-arrays (save_oracle: the oracle data too, save_oracle_data); mutation: a dict (--mutation-test;
     may carry `source` and `sweep`) keeping the call's frame, oracle data and D3 results in evaluation[MUTATION_INPUTS] for mutation_tests,
-    which runs once the run's value bound is known. Returns (evaluation, summary)."""
+    which runs once the run's value bound is known. stack_rows: --fixed-shapes' oracle stack size (depth2_oracle.stack(size=); it refuses
+    a call with more world rows), None for the per-call bucket. Returns (evaluation, summary)."""
     from gpu_engine import device_public_teacher_batch as batch
     reference = importlib.import_module('gpu_engine.depthn_oracle');module = pricers.module
     requests = tuple(requests);context = dict(context or {});timing, costs = {}, {};depth2_frame = None
@@ -1645,7 +1673,7 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
         info.update(costs['frame_pricer'])
     clock = time.perf_counter();before = dict(oracle.seconds)
     with stage(progress, 'oracle', **context) as info:
-        stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe))
+        stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe), size=stack_rows)
         data = oracle_levels(oracle=oracle, stack=stack, requests=requests, recipe=recipe, params=params, frame=frame, plan=plan,
             selection_maps=selection_maps, sample=sample, block=block, reference=reference)
         info.update(nodes={str(p): len(r.get('specs', r.get('cells', ()))) for p, r in data['levels'].items()},
@@ -2376,16 +2404,17 @@ def n2_compare(theirs, mine, context=None):
     return report, floats
 
 
-def n2_equivalence_call(*, requests, recipe, materializer, params, configs, frame_pricer, oracle, context, progress=None, backups2=None, module=None):
+def n2_equivalence_call(*, requests, recipe, materializer, params, configs, frame_pricer, oracle, context, progress=None, backups2=None, module=None,
+                        stack_rows=None):
     """One request list under --n2-equivalence: configs [(name, DepthNPricer N=2, Depth2Pricer)], the same requests to both,
     D3 and the oracle's roots and turn-1 children once (the run's depth-1 noise floor and turn-1 heads). Per config:
-    n2_compare, (e) on both surfaces (depth2_backups.learner_max_root) and the guard's spreads."""
+    n2_compare, (e) on both surfaces (depth2_backups.learner_max_root) and the guard's spreads. stack_rows: as run_call_n's."""
     from gpu_engine import device_public_teacher_batch as batch
     reference = importlib.import_module('gpu_engine.depthn_oracle');module = module or pricer_module()
     backups2 = backups2 or importlib.import_module('gpu_engine.depth2_backups');requests = tuple(requests);out = {}
     with stage(progress, 'frame_pricer', **context):d_results = frame_pricer.price(requests, materializer, recipe, params)
     with stage(progress, 'oracle_turn1', **context):
-        stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe));roots = oracle.roots(stack, requests, params)
+        stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe), size=stack_rows);roots = oracle.roots(stack, requests, params)
         children = oracle.children(stack, reference.turn1_cells(requests, recipe, roots), params)
     turn1 = dict(roots=roots, children=children, leaves=dict(specs=np.zeros((0, 6), np.int64)))
     for name, depthn, depth2 in configs:
@@ -2679,6 +2708,8 @@ def parse(argv=None):
         '(frames-block{B}-call{C}-oracle.npz; implies --save-arrays) for --mutation-from')
     parser.add_argument('--mutation-from', nargs='+', metavar='DIR', help='offline: the mutation test from saved frames and oracle data '
         '(--save-arrays --save-oracle); writes mutation-test.json in --out')
+    parser.add_argument('--fixed-shapes', action='store_true', help='compile once per process: every DepthNPricer with fixed_capacity=True and '
+        'every oracle stack padded to 2 x the call-split capacity (FIXED_SHAPES; a harness setting, recorded as `harness`; no rule reads it)')
     g2.add_head_arguments(parser)
     args = parser.parse_args(argv)
     if args.reverdict:
@@ -2692,6 +2723,7 @@ def parse(argv=None):
         if args.saved_roots or args.d3_root or args.head_archive or args.n2_equivalence or args.depth3_diagnostics or args.mutation_test or args.save_oracle:
             parser.error('--diagnostics-from / --mutation-from run offline: no roots, head, --n2-equivalence, --depth3-diagnostics, --mutation-test or --save-oracle')
         if args.diagnostics_from and args.mutation_from:parser.error('one of --diagnostics-from or --mutation-from')
+        if args.fixed_shapes:parser.error('--fixed-shapes shapes the live pricers and oracle; --diagnostics-from / --mutation-from price nothing')
         return parser, args
     if (args.mutation_test or args.save_oracle) and (args.n2_equivalence or args.depth3_diagnostics):parser.error('--mutation-test and --save-oracle belong to the gate')
     if args.mutation_test and args.sample_leaves is not None:parser.error('--mutation-test needs every leaf checked (no --sample-leaves)')
@@ -2757,21 +2789,22 @@ def header(args, roots, abs_values, source):
 def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference):
     lanes = INVARIANCE_LANES if args.block_invariance else (args.block_lanes,)
     pricers = DepthNPricers(module, provider.executor, plan.model, depth=args.depth, k_own=args.k_own_ply, k_opp=args.k_opp_ply, selection=args.selection,
-        capacity=args.capacity, actor_capacity=roots.actor_capacity, lanes=lanes, k1_own=args.k1_own, k1_opp=args.k1_opp)
+        capacity=args.capacity, actor_capacity=roots.actor_capacity, lanes=lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, fixed_capacity=args.fixed_shapes)
     depth2_pricer = depth2_pass_pricer(module, provider.executor, plan.model, capacity=args.capacity, actor_capacity=roots.actor_capacity,
-        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, digest=True)
+        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, digest=True, fixed_capacity=args.fixed_shapes)
     capacity = g2.call_capacity(frame_pricer, [depth2_pricer]);groups = g2.split_groups(roots.groups, capacity)
+    harness = fixed_shapes_harness(capacity) if args.fixed_shapes else None;shaped = {} if harness is None else dict(harness=harness)
     oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log),
         raw_model=roots.head[1] if args.raw_head_check else None)
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), pricer_options=pricers.options(), sample_leaves=args.sample_leaves, seeds=seeds,
-        mutation_test=args.mutation_test, save_oracle=args.save_oracle)
+        mutation_test=args.mutation_test, save_oracle=args.save_oracle, **shaped)
     evaluations, calls = [], []
     for block, call, recipe, requests in each_call(provider, groups, seeds):
         evaluation, summary = run_call_n(requests=requests, recipe=recipe, materializer=provider.materializer, params=roots.params, pricers=pricers,
             depth2_pricer=depth2_pricer, frame_pricer=frame_pricer, oracle=oracle, sample=args.sample_leaves, block=block,
             context=dict(block=block, call=call), progress=log, save=(out, f'frames-block{block}-call{call}') if args.save_arrays else None,
             evaluator=roots.evaluator, pass_sample=args.depth2_pass_sample, save_oracle=args.save_oracle,
-            mutation={} if args.mutation_test else None)
+            mutation={} if args.mutation_test else None, stack_rows=None if harness is None else harness['oracle_stack_rows'])
         evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize_run(evaluations, lanes);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
@@ -2783,7 +2816,7 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
         passed=status in ('PASS', 'PASS_SAMPLED'), status_reasons=reasons, checks=result['checks'],
         decision=result['checks'].get('e', dict(status='SKIPPED_SAMPLED', reason='check (e) needs every leaf checked (no --sample-leaves)')),
         mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', pricer_options=pricers.options(), block_invariance=args.block_invariance,
-        raw_head_check=args.raw_head_check, split_capacity=capacity, worlds_blocks=args.worlds_blocks, block_seeds=list(seeds), max_roots=args.max_roots,
+        raw_head_check=args.raw_head_check, split_capacity=capacity, **shaped, worlds_blocks=args.worlds_blocks, block_seeds=list(seeds), max_roots=args.max_roots,
         sample_leaves=args.sample_leaves, sample_seed=g2.SAMPLE_SEED,
         leaves=dict(enumerated=sum(c['leaves_enumerated'] for c in calls), checked=sum(c['leaves_checked'] for c in calls),
             forced_terminal_or_error=sum(c['forced_leaves'] for c in calls)),
@@ -2812,23 +2845,25 @@ def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, ref
     configs, options = [], {}
     for name, k in (('full_width', 9), (f'top{args.n2_k}', args.n2_k)):
         depthn = module.DepthNPricer(provider.executor, plan.model, capacity=args.capacity, depth=2, k_own=k, k_opp=k, k1_own=args.k1_own, k1_opp=args.k1_opp,
-            block_lanes=args.block_lanes, selection='prior', digest=True, actor_capacity=roots.actor_capacity)
+            block_lanes=args.block_lanes, selection='prior', digest=True, actor_capacity=roots.actor_capacity, **fixed_kwargs(args.fixed_shapes))
         depth2, depth2_options = g2.make_pricer(provider.executor, plan.model, widths=dict(k_own=k, k_opp=k, k1_own=args.k1_own, k1_opp=args.k1_opp),
             actor_capacity=roots.actor_capacity, capacity=args.capacity)
         configs.append((name, depthn, depth2));options[name] = dict(k=k, depth2_options=depth2_options)
     capacity = g2.call_capacity(frame_pricer, [c[1] for c in configs] + [c[2] for c in configs]);groups = g2.split_groups(roots.groups, capacity)
+    harness = fixed_shapes_harness(capacity) if args.fixed_shapes else None;shaped = {} if harness is None else dict(harness=harness)
     oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log))
-    log('N2_EQUIVALENCE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), configs=options)
+    log('N2_EQUIVALENCE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), configs=options, **shaped)
     per_config = collections.defaultdict(list);abs_values = []
     for block, call, recipe, requests in each_call(provider, groups, seeds):
         results = n2_equivalence_call(requests=requests, recipe=recipe, materializer=provider.materializer, params=roots.params, configs=configs,
-            frame_pricer=frame_pricer, oracle=oracle, context=dict(block=block, call=call), progress=log, module=module)
+            frame_pricer=frame_pricer, oracle=oracle, context=dict(block=block, call=call), progress=log, module=module,
+            stack_rows=None if harness is None else harness['oracle_stack_rows'])
         for name, result in results.items():per_config[name].append(result)
         log('N2_CALL', block=block, call=call, discrete={n: r['a']['passed'] for n, r in results.items()}, e={n: r['e'].get('argmax_q_differs') for n, r in results.items()})
     report = summarize_n2(per_config);statuses = [r['status'] for r in report.values()]
     status = 'FAIL' if 'FAIL' in statuses else 'INCOMPLETE' if 'INCOMPLETE' in statuses or not report else 'PASS'
     write(out / 'n2-equivalence.json', dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(configs=report), schema=SCHEMA, mode='N2_EQUIVALENCE',
-        status=status, passed=status == 'PASS', configs=report, options=options, split_capacity=capacity, block_seeds=list(seeds),
+        status=status, passed=status == 'PASS', configs=report, options=options, split_capacity=capacity, **shaped, block_seeds=list(seeds),
         rule='per config: every discrete array exact and world_reports equal; floats only on scored cells (see n2_compare): values within the value '
             'bound and guard, priors within the logit bound (the run\'s evaluator-relative rule); (e) depth2_backups argmax per root equal except near '
             'ties; INCOMPLETE when no turn-2 leaf or no (e) root was compared'))
@@ -2838,12 +2873,13 @@ def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, ref
 
 def run_diagnostics(args, *, roots, provider, plan, module, frame_pricer, seeds, out, reference):
     depth2_pricer = depth2_pass_pricer(module, provider.executor, plan.model, capacity=args.capacity, actor_capacity=roots.actor_capacity,
-        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes)
+        k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, fixed_capacity=args.fixed_shapes)
     sets = {(mode, k): DepthNPricers(module, provider.executor, plan.model, depth=3, k_own=k, k_opp=k, selection=mode, capacity=args.capacity,
-        actor_capacity=roots.actor_capacity, lanes=(args.block_lanes,), k1_own=args.k1_own, k1_opp=args.k1_opp, digest=False)
+        actor_capacity=roots.actor_capacity, lanes=(args.block_lanes,), k1_own=args.k1_own, k1_opp=args.k1_opp, digest=False, fixed_capacity=args.fixed_shapes)
         for mode in MODES for k in args.diagnostic_k_values}
-    groups = g2.split_groups(roots.groups, g2.call_capacity(frame_pricer, [depth2_pricer]))
-    log('DIAGNOSTICS_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), configs=[frame_tag(*k) for k in sets])
+    capacity = g2.call_capacity(frame_pricer, [depth2_pricer]);groups = g2.split_groups(roots.groups, capacity)
+    shaped = {} if not args.fixed_shapes else dict(harness=fixed_shapes_harness(capacity, oracle=False))   # no oracle in this mode
+    log('DIAGNOSTICS_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), configs=[frame_tag(*k) for k in sets], **shaped)
     calls, abs_values = [], []
     for block, call, recipe, requests in each_call(provider, groups, seeds):
         context = dict(block=block, call=call);requests = tuple(requests)
@@ -2860,7 +2896,7 @@ def run_diagnostics(args, *, roots, provider, plan, module, frame_pricer, seeds,
         with stage(log, 'diagnostics_call', **context):calls.append(diagnostics_call(depth2_frame, frames, requests, context=context))
     report = dict(header(args, roots, np.concatenate(abs_values) if abs_values else [], roots.loaded.source), header=header_block(), schema=SCHEMA, mode='DIAGNOSTICS_LIVE',
         **merge_diagnostics(calls), calls=len(calls), block_seeds=list(seeds), ks=list(args.diagnostic_k_values), saved_arrays=args.save_arrays,
-        pricer_options={frame_tag(*k): p.options() for k, p in sets.items()})
+        pricer_options={frame_tag(*k): p.options() for k, p in sets.items()}, **shaped)
     write(out / 'diagnostics.json', report)
     log('DIAGNOSTICS_COMPLETE', out=str(out / 'diagnostics.json'), calls=len(calls), change_rate={k: v['rate'] for k, v in report['change_rate'].items()})
     return 0 if calls else 1

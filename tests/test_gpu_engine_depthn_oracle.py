@@ -27,6 +27,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+import jax
 import jax.numpy as j
 import numpy as np
 
@@ -1965,14 +1966,15 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         loaded = SimpleNamespace(provider=provider, plan=SimpleNamespace(model=object(), historical_window=2), frame_pricer=self.frame_pricer(), source=dict(fixture=True))
         return SimpleNamespace(loaded=loaded, head=None, params=PARAMS, groups=[list(self.requests)], root_values=[.1, .2], evaluator=dict(override=False), actor_capacity=3)
 
-    def main(self, *argv, real=False, out=None, lines=None, source=FAKE_BACKUPS_SOURCE):
+    def main(self, *argv, real=False, out=None, lines=None, source=FAKE_BACKUPS_SOURCE, module=None):
         """main() with the fixture's roots; lines: a list collecting the log lines; source: the backup-path mutants' depthn_backups
-        source (the fake's unless real)."""
+        source (the fake's unless real); module: the pricer module main() gets (default: the real one if real, else the stand-in)."""
         out = out or Path(tempfile.mkdtemp(prefix='depthn-cli-')) / 'out';find = importlib.util.find_spec
         names = ('gpu_engine.device_depthn_pricer', 'gpu_engine.depthn_backups', 'gpu_engine.depth2_backups', 'gpu_engine.device_depth2_pricer')
         modules = {} if real else {'gpu_engine.depthn_backups': FakeBackupsN};log = (lambda m, **k: lines.append(dict(k, message=m))) if lines is not None else (lambda *a, **k: None)
+        chosen = (lambda: module) if module is not None else (lambda: importlib.import_module('gpu_engine.device_depthn_pricer')) if real else (lambda: FAKE_MODULE)
         with self.engine(), patch.object(gate, 'load_roots', lambda args: self.roots()), patch.object(gate, 'log', log), \
-                patch.object(gate, 'pricer_module', (lambda: importlib.import_module('gpu_engine.device_depthn_pricer')) if real else (lambda: FAKE_MODULE)), \
+                patch.object(gate, 'pricer_module', chosen), \
                 patch.object(importlib.util, 'find_spec', side_effect=lambda name, *a: object() if name in names and not real else find(name, *a)), \
                 patch.object(gate, 'backups_source', gate.backups_source if real else (lambda: source)), patch.dict(sys.modules, modules):
             code = gate.main(['--out', str(out), '--d3-root', 'x', '--chunk', '0', '--k-own', '2', '--k-opp', '2', '--capacity', '32', *argv])
@@ -2081,6 +2083,160 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         self.assertTrue(report['checks']['block_invariance']['passed']);self.assertEqual(report['checks']['block_invariance']['block_lanes'], [729, 2187])
         code, out = self.main('--n2-equivalence', '--n2-k', '2', real=True)
         self.assertEqual(code, 0, json.loads((out / 'n2-equivalence.json').read_text())['configs'])
+
+
+# ---------------------------------------------------------------- --fixed-shapes
+
+def recording(base):
+    """(module, built): base's pricer surface with DepthNPricer wrapped to record every constructor's keyword arguments."""
+    built = []
+    def make(executor, model, **kw):
+        built.append(dict(kw));return base.DepthNPricer(executor, model, **kw)
+    return SimpleNamespace(DepthNPricer=make, as_depth2_frame=base.as_depth2_frame, searched_maps=base.searched_maps), built
+
+
+def saved_arrays(path):
+    """A saved .npz's arrays without its meta (timing and compile records differ between runs)."""
+    with np.load(path, allow_pickle=False) as saved:return {k: saved[k] for k in saved.files if k != 'meta'}
+
+
+class FixedShapesTests(FixtureN, unittest.TestCase):
+    """--fixed-shapes on the fixture split into two calls: --capacity 16 over the first 19 roots is 16 requests (31 world rows) then 3 (6).
+    With the flag every DepthNPricer is built with fixed_capacity=True and both oracle stacks have 2 x 16 = 32 rows; without it the stacks
+    bucket to 32 and 8 rows and nothing is built, logged or written differently. The verdict and every exact field are the same."""
+    USED = 19
+    main = CommandLineRunTests.main
+
+    def roots(self):
+        roots = CommandLineRunTests.roots(self);roots.groups = [list(self.requests[:self.USED])];return roots
+
+    @contextlib.contextmanager
+    def stacks(self):
+        """Every oracle stack the gate builds (run_call_n, n2_equivalence_call; not the stand-in pricer's own): its size argument, world
+        rows and the leading dimension of every stacked array."""
+        original, seen = reference.stack, []
+        def stack(requests, worlds, **kw):
+            s = original(requests, worlds, **kw)
+            if sys._getframe(1).f_code.co_name in ('run_call_n', 'n2_equivalence_call'):
+                seen.append(dict(size=kw.get('size'), rows=len(s.rows), shape={int(x.shape[0]) for x in jax.tree.leaves((s.states, s.publics, s.owners))}))
+            return s
+        with patch.object(reference, 'stack', stack):yield seen
+
+    def test_the_flag_reaches_every_pricer_and_every_oracle_stack(self):
+        for flag in (True, False):
+            with self.subTest(fixed_shapes=flag):
+                module, built = recording(FAKE_MODULE);lines = []
+                with self.stacks() as seen:code, out = self.main('--capacity', '16', *(('--fixed-shapes',) if flag else ()), lines=lines, module=module)
+                report = json.loads((out / 'gate.json').read_text());start = next(x for x in lines if x['message'] == 'GATE_START')
+                self.assertEqual((code, report['status'], report['split_capacity'], len(report['calls'])), (0, 'PASS', 16, 2), report.get('status_reasons'))
+                self.assertEqual([(s['rows'], s['shape']) for s in seen], [(31, {32}), (6, {32 if flag else 8})])
+                self.assertEqual(len(built), 2)   # the depth-N pricer and the full-width depth-2 pass
+                if flag:
+                    self.assertTrue(all(kw.get('fixed_capacity') is True for kw in built), built);self.assertEqual([s['size'] for s in seen], [32, 32])
+                    want = dict(fixed_shapes=True, pricer_fixed_capacity=True, oracle_stack_rows=32, split_capacity=16, rule=gate.FIXED_SHAPES)
+                    self.assertEqual((report['harness'], start['harness']), (want, want));self.assertIs(report['pricer_options']['fixed_capacity'], True)
+                else:
+                    self.assertFalse(any('fixed_capacity' in kw for kw in built), built);self.assertEqual([s['size'] for s in seen], [None, None])
+                    self.assertNotIn('harness', report);self.assertNotIn('harness', start);self.assertNotIn('fixed_capacity', report['pricer_options'])
+
+    def test_n2_equivalence_and_diagnostics_take_the_flag(self):
+        """--n2-equivalence: both DepthNPricer configs fixed and the oracle's stack at 2 x 32 rows (the stand-in fails the gated report
+        comparison, as in CommandLineRunTests); --depth3-diagnostics: every DepthNPricer fixed, no oracle (oracle_stack_rows None)."""
+        module, built = recording(FAKE_MODULE);lines = []
+        with self.stacks() as seen:code, out = self.main('--n2-equivalence', '--n2-k', '2', '--fixed-shapes', lines=lines, module=module)
+        report = json.loads((out / 'n2-equivalence.json').read_text());start = next(x for x in lines if x['message'] == 'N2_EQUIVALENCE_START')
+        self.assertEqual((code, report['status'], len(built)), (1, 'FAIL', 2));self.assertTrue(all(kw.get('fixed_capacity') is True for kw in built), built)
+        self.assertEqual(seen, [dict(size=64, rows=37, shape={64})]);self.assertEqual(report['harness'], start['harness'])
+        self.assertEqual((report['harness']['oracle_stack_rows'], report['harness']['split_capacity']), (64, 32))
+        module, built = recording(FAKE_MODULE);lines = []
+        code, out = self.main('--depth3-diagnostics', '--diagnostic-ks', '2', '--fixed-shapes', lines=lines, module=module)
+        report = json.loads((out / 'diagnostics.json').read_text());start = next(x for x in lines if x['message'] == 'DIAGNOSTICS_START')
+        self.assertEqual((code, len(built)), (0, 3));self.assertTrue(all(kw.get('fixed_capacity') is True for kw in built), built)
+        self.assertEqual((report['harness']['oracle_stack_rows'], start['harness']), (None, report['harness']))
+        self.assertTrue(all(o['fixed_capacity'] for o in report['pricer_options'].values()))
+
+    def test_offline_modes_refuse_the_flag(self):
+        out = str(Path(tempfile.gettempdir()) / f'depthn-gate-never-created-{uuid.uuid4().hex}')
+        with contextlib.redirect_stderr(io.StringIO()):
+            for argv in (['--reverdict', 'gate.json', '--fixed-shapes'], ['--out', out, '--mutation-from', 'x', '--fixed-shapes'],
+                    ['--out', out, '--diagnostics-from', 'x', '--fixed-shapes']):
+                with self.assertRaises(SystemExit) as raised:gate.main(argv)
+                self.assertEqual(raised.exception.code, 2, argv)
+        self.assertFalse(Path(out).exists());self.assertFalse(gate.parse(['--out', 'o', '--d3-root', 'b', '--chunk', '0'])[1].fixed_shapes)
+
+    def test_the_verdict_and_every_exact_field_are_unchanged(self):
+        """The same two-call run with and without the flag (the stand-in, and the real pricer when it is on the tree): the same status and
+        checks ((a)-(f), (f)'s read identity and priors included), tolerance, header, refusals and per-call results; every saved frame and
+        oracle array (digests, statuses, maps, values) bit-equal; --reverdict and --mutation-from reproduce on both, a report without
+        `harness` (the no-flag run's) read as before."""
+        for real in (False, True) if HAVE_PRICER else (False,):
+            with self.subTest(real=real):
+                runs = {flag: self.main('--capacity', '16', '--save-oracle', *(('--fixed-shapes',) if flag else ()), real=real) for flag in (False, True)}
+                self.assertEqual([code for code, _ in runs.values()], [0, 0])
+                plain, fixed = (json.loads((runs[flag][1] / 'gate.json').read_text()) for flag in (False, True))
+                self.assertEqual((plain['status'], set(fixed) - set(plain), set(plain) - set(fixed)), ('PASS', {'harness'}, set()))
+                for key in ('status', 'passed', 'status_reasons', 'checks', 'decision', 'tolerance', 'header', 'leaves', 'refusals', 'topk_boundary',
+                        'depth2_pass', 'split_capacity', 'searched_maps'):
+                    self.assertEqual(fixed[key], plain[key], key)
+                self.assertEqual({k: v for k, v in fixed['pricer_options'].items() if k != 'fixed_capacity'}, plain['pricer_options'])
+                for a, b in zip(fixed['calls'], plain['calls']):
+                    for key in ('roots', 'worlds', 'plan', 'refusals', 'nodes_checked', 'leaves_enumerated', 'leaves_checked', 'forced_leaves', 'passed',
+                            'choices', 'topk', 'depth2_pass'):
+                        self.assertEqual(a[key], b[key], key)
+                f = fixed['checks']['f'];self.assertGreater(f['comparisons'], 0);self.assertTrue(f['read_identity']['passed'] and f['priors']['passed'])
+                names = sorted(p.name for p in runs[False][1].glob('*.npz'));self.assertEqual(names, sorted(p.name for p in runs[True][1].glob('*.npz')))
+                self.assertEqual(len(names), 6)   # per call: the depth-N frame, the depth-2 pass and the oracle data
+                for name in names:
+                    a, b = saved_arrays(runs[True][1] / name), saved_arrays(runs[False][1] / name);self.assertEqual(set(a), set(b), name)
+                    for key in a:self.assertEqual((a[key].dtype, a[key].shape, a[key].tobytes()), (b[key].dtype, b[key].shape, b[key].tobytes()), (name, key))
+                again = {}
+                for flag, (_, out) in runs.items():
+                    with patch.object(gate, 'log', lambda *a, **k: None):self.assertEqual(gate.main(['--reverdict', str(out / 'gate.json')]), 0)
+                    again[flag] = json.loads((out / gate.REVERDICT_FILE).read_text())
+                self.assertEqual((again[True]['harness'], 'harness' in again[False]), (fixed['harness'], False))
+                self.assertEqual({k: v for k, v in again[True]['reverdict'].items() if k != 'source'}, {k: v for k, v in again[False]['reverdict'].items() if k != 'source'})
+                if real:continue   # the offline mutation test is the same code on either frame; once on the stand-in
+                mutation = {}
+                for flag, (_, out) in runs.items():
+                    offline = Path(tempfile.mkdtemp(prefix='depthn-fixed-')) / 'offline'
+                    with patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'backups_source', lambda: FAKE_BACKUPS_SOURCE), \
+                            patch.dict(sys.modules, {'gpu_engine.depthn_backups': FakeBackupsN}):
+                        self.assertEqual(gate.main(['--out', str(offline), '--mutation-from', str(out)]), 0)
+                    mutation[flag] = json.loads((offline / gate.MUTATION_FILE).read_text())
+                verdicts = lambda m: [(c['passed'], {n: (r['killed'], r['caught_by']) for n, r in c['mutants'].items()}, c['material_survivors']) for c in m['calls']]
+                self.assertEqual(verdicts(mutation[True]), verdicts(mutation[False]));self.assertEqual(len(mutation[True]['calls']), 2)
+
+    @unittest.skipUnless(HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+    def test_two_calls_compile_each_program_once(self):
+        """run_call_n on 16 requests then 3 with the real pricer. Fixed shapes: both oracle stacks are 32 rows, the second call compiles
+        no pricer program (the depth-N pricer's and the depth-2 pass's program keys are the same after each call; turn 1 at capacity 16)
+        and every oracle program holds one compiled shape. The control (no flag): stacks of 32 and 8 rows, turn 1 recompiled at
+        capacity 4 and the oracle's programs compiled for both shapes."""
+        module = importlib.import_module('gpu_engine.device_depthn_pricer')
+        for fixed in (True, False):
+            with self.subTest(fixed_shapes=fixed):
+                pricers = gate.DepthNPricers(module, self.ex, object(), depth=3, k_own=2, k_opp=2, selection='prior', capacity=16, actor_capacity=3,
+                    fixed_capacity=fixed)
+                depth2_pricer = gate.depth2_pass_pricer(module, self.ex, object(), capacity=16, actor_capacity=3, digest=True, fixed_capacity=fixed)
+                oracle = reference.DepthNOracle(self.ex, object(), chunk=64);keys, compiled = [], []
+                with self.stacks() as seen, self.engine():
+                    for call, requests in enumerate((self.requests[:16], self.requests[16:19])):
+                        evaluation, _ = gate.run_call_n(requests=requests, recipe=self.recipe, materializer=self.tables, params=PARAMS, pricers=pricers,
+                            depth2_pricer=depth2_pricer, frame_pricer=self.frame_pricer(), oracle=oracle, sample=None, block=0, context=dict(block=0, call=call),
+                            stack_rows=gate.fixed_shapes_harness(16)['oracle_stack_rows'] if fixed else None)
+                        self.assertEqual(self.judged(evaluation)[1][0], 'PASS', failing(self.judged(evaluation)[0]))
+                        engines = (pricers.instances[-1], depth2_pricer)
+                        keys.append([sorted(map(repr, e.programs)) for e in engines]);compiled.append([e.last_timing['compiled'] for e in engines])
+                sizes = {name: f._cache_size() for name, f in [('roots', oracle._root), ('children', oracle._child)] + [(str(k), f) for k, f in oracle._walks.items()]}
+                p1 = [[k for k in c[0] if k[0] == 'P1'] for c in compiled]
+                if fixed:
+                    self.assertEqual([(s['size'], s['shape']) for s in seen], [(32, {32}), (32, {32})])
+                    self.assertEqual(keys[0], keys[1]);self.assertEqual(compiled[1], [(), ()]);self.assertEqual([k[1] for k in p1[0]], [16])
+                    self.assertEqual(sizes, dict.fromkeys(sizes, 1));self.assertGreaterEqual(len(sizes), 4)
+                else:
+                    self.assertEqual([(s['size'], s['shape']) for s in seen], [(None, {32}), (None, {8})])
+                    self.assertNotEqual(keys[0], keys[1]);self.assertEqual(([k[1] for k in p1[0]], [k[1] for k in p1[1]]), ([16], [4]))
+                    self.assertEqual(sizes, dict.fromkeys(sizes, 2))
 
 
 class CommandLineTests(unittest.TestCase):
