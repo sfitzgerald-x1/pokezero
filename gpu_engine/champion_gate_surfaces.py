@@ -19,11 +19,14 @@ Measurement groups (--measure; GROUPS): r1 (R1's frame, which is also R1's and R
 r3 (the depth-3 frame), r3-d3 (D3 at R3's bucket), r2-full and r2-top (each R2 config's DepthNPricer N=2 and Depth2Pricer at 27 and 81). Each
 geometry is priced at both precisions per call and measured at the gate's own masks (POSITIONS_RULE), whole arrays where block invariance reads
 them, completed Q through the gate's own (e) (Q_RULE) and the guard's spreads (GUARD_RULE); the bf16 site itself is measured directly where both
-of its geometries are priced here (DIRECT_RULE), and the f32 premises of the triangle checked (PREMISE_RULE). Separate runs (pieces) fold
-together offline: --fold-from DIR... (FOLD_RULE). The fold (SITES_RULE, CONSTRUCTIONS) builds one row per float site the three runs gate,
+of its geometries are priced here (DIRECT_RULE), and the f32 premises of the triangle checked (PREMISE_RULE). A top-k R2 config compares its
+whole arrays only where both precisions selected the same turn-2 children (TOPK_WHOLE_RULE). Separate runs (pieces) fold together offline:
+--fold-from DIR... (FOLD_RULE: the pieces must share one source and cover every group exactly once, else the fold is refused; they may come
+from different tree commits, each recorded). The fold (SITES_RULE, CONSTRUCTIONS) builds one row per float site the three runs gate,
 enumerated from the gate's code (site_registry; each row's bound field from the gate's own functions: gate_bound) with each side's tail and
 its source (validation.json, d3_geometry.json or this run), and the proposal (PROPOSAL_RULE): each field 1.25 x its largest site tail, rounded
-up to two significant figures. gate_surfaces.json and gate_surfaces.md in --out. Exit 0 when anything was measured, 2 when nothing was.
+up to two significant figures, made only when every group is measured (a single piece withholds it as INCOMPLETE). gate_surfaces.json and
+gate_surfaces.md in --out. Exit 0 when anything was measured, 2 when nothing was; a refused fold or a FAIL validation.json exits non-zero.
 """
 import argparse
 import collections
@@ -36,6 +39,7 @@ import io
 import json
 import math
 from pathlib import Path
+import re
 import time
 
 import numpy as np
@@ -54,6 +58,7 @@ SENTINEL = dict(value_bound=1., turn1_logit_bound=2., root_logit_bound=3., deepe
 GROUPS = ('r1', 'r1-invariance', 'r3', 'r3-d3', 'r2-full', 'r2-top')
 NEEDS = {'r1-invariance': 'r1'}   # a group priced only beside another (its direct site comparison)
 R3_ROOTS = 40          # R3's saved roots: one call of 40, D3 bucket 64
+D3_ACTOR_CAPACITY = 33   # D3's FramePricer actor_capacity: the plan's historical_window + 1 (d3_geometry.json's bank provider; saved_root_requests builds it alike)
 SPLIT = 512            # every run's call split: g2.call_capacity(D3's 4096, the pricers' --capacity 512)
 ADAPTER = dict(value=clv.ADAPTER_VALUE, logit=clv.ADAPTER_LOGIT)
 # Minutes on one GB300 for chunk 0 (4,073 roots, 11 calls), both precisions, compiles included (ESTIMATE_RULE)
@@ -98,13 +103,16 @@ POSITIONS_RULE = ('Each geometry is priced at bf16 and f32 on the same requests 
     'status 4 (head-valued). (c) compares where the ORACLE agrees on status, which (a) makes the pricer\'s own: these masks are the gate\'s positions '
     'when (a) passes, a superset otherwise. Whole arrays (block invariance): every float array g2.block_invariance compares (gate.frame_arrays for '
     'the depth-N frame, the Depth2Frame\'s fields), every element; a position non-finite in both precisions is padding (counted, excluded from the '
-    'tail; the gate\'s own bf16 comparison, DIRECT_RULE, decides whether its bits match there). |diff| follows g2._numeric: bit-equal 0, both finite '
+    'tail; the gate\'s own bf16 comparison, DIRECT_RULE, decides whether its bits match there); a top-k config\'s Depth2Frame compares its whole '
+    'arrays only where both precisions hold the same turn-2 selection (TOPK_WHOLE_RULE). |diff| follows g2._numeric: bit-equal 0, both finite '
     '|x - y|, else non-finite')
 Q_RULE = ('(e)\'s completed Q: gate.decide_roots(bf16 frame, f32 frame, requests, backups) with the backups the site uses (depthn_backups for R1 '
     'and R3, depth2_backups on the Depth2Frame / as_depth2_frame for R2), its learner_max_root calls recorded: |Q_bf16 - Q_f32| over the legal '
     'actions of every root labeled in both and finite (decide_roots\' own max |dQ| cross-checked); the bf16 top-two gaps are decide_roots\' '
     'gap_pricer. Every root counts, including roots a structural difference touches (a top-k selection that differs between the precisions '
-    'changes the children backed up: conservative, and the site is flagged); q.same_selection repeats the tail over the other roots. '
+    'changes the children backed up), and q.same_selection repeats the tail over the roots no structural difference touches. The fold folds '
+    'q.same_selection (in the gate both sides are bf16 on identical requests, so their selections match: a bf16-vs-f32 selection difference '
+    'is an artifact of this measurement) and reports the all-roots tail beside it, flagged, informational. '
     'The Q adapter bound (|Q_f32 - Q_f32 raw|) is Q_ADAPTER(depth) = 1e-5 + depth x (exp(2e-4) - 1): every backup is 1-Lipschitz '
     'in the values (max, convex averages, clip) and each of the depth prior layers (the root reply prior, then each ply\'s opponent prior; '
     'learner-max reads no learner prior) is a softmax of logits within 1e-4, which moves a weighted average of values in [-1, 1] by at most '
@@ -113,9 +121,16 @@ GUARD_RULE = ('The misplacement guard as the gate computes it: gate.guard_spread
     'p10 over NON-ZERO last-ply own-slot spreads; R2 per config over its N=2 frames, as summarize_n2), guard = g2.tolerance_rule(None, p10) '
     'guard_bound = 0.25 x p10. Informational (the lead\'s decision: under --declared-bounds the guard is digest-certified where every certifying '
     'digest matches, gated where any does not): the guard, each guarded site\'s tail and its ratio to the guard')
-DIRECT_RULE = ('Where both geometries of a site are priced here (R1 block invariance, R2\'s n2 floats, (e) and child-block invariance, R3\'s turn 1 '
-    'against the depth-2 frame) the site itself is measured on chunk 0 with the gate\'s own function on the two bf16 frames (g2.block_invariance, '
-    'gate.n2_compare, gate.decide_roots): reported beside the construction, and a site tail below it is raised to it (flagged)')
+DIRECT_RULE = ('Where both geometries of a site are priced here (R1 block invariance, R2\'s n2 floats, (e) and child-block invariance) the site '
+    'itself is measured on chunk 0 with the gate\'s own function on the two bf16 frames (g2.block_invariance, gate.n2_compare, gate.decide_roots): '
+    'reported beside the construction, and a site tail below it is raised to it (flagged). R3\'s turn 1 against the depth-2 frame '
+    '(R3.turn1_identity) compares whole arrays, wider than its depth2_pass sites\' masks: it is reported and flagged where unequal (field, count, '
+    'first cells), never raising or withholding a tail')
+TOPK_WHOLE_RULE = ('A top-k R2 config (k < 9) selects each turn-1 cell\'s turn-2 children by prior, and bf16 and f32 can select differently '
+    '(in the gate both sides are bf16 on identical requests, so they cannot): one side then holds a value where the other holds the pricer\'s '
+    'zero fill. Its Depth2Frames\' whole arrays are compared only where the turn-2 status is equal in both precisions; positions enumerated '
+    'in one only (whole_selection_differs) or with another status (whole_status_differs) are excluded, counted per array (unaligned) and '
+    'flagged; positions zero-filled in both stay. Full width enumerates every legal child in both precisions: nothing is excluded there')
 PREMISE_RULE = ('The triangle |A_bf16 - B_bf16| <= (|A_bf16 - A_f32| + adapter) + (|B_bf16 - B_f32| + adapter) assumes each f32 is within the '
     'adapter bound of the f32 raw forward at every compared position; where both f32 frames are priced here their own comparison (the same '
     'function on the two f32 frames) must be within 2 x the adapter bound, else every site built on it is flagged')
@@ -136,9 +151,15 @@ SITES_RULE = ('One row per float site the three runs gate, enumerated from the g
     'functions under a sentinel declaration. Reported-only sites (R2\'s turn-1 heads, the floors, topk_boundary) are listed apart')
 FOLD_RULE = ('Each side\'s tail is the largest of its sources (this run: max |bf16 - f32| + the adapter bound; validation.json: P_all, already '
     'with it, or O_sample; d3_geometry.json: P or D_all, with it), the source that sets it named. A source with non-finite differences WITHHOLDS '
-    'the side, the site and every field it covers (flagged); a structural difference or a failed premise FLAGS the sites it touches. Pieces '
-    '(--fold-from) must share the source, roots, champion and split; a geometry measured in two pieces is refused')
-PROPOSAL_RULE = ('PROPOSAL, not a verdict: each field = 1.25 x the largest site tail it covers, rounded UP to two significant figures, the '
+    'the side, the site and every field it covers (flagged); a structural difference, a failed or unmeasured premise, or an earlier report '
+    'that does not match this run (its source, roots, champion, shapes or status: validation.json FAIL is refused, anything but PASS or WARN '
+    'flagged) FLAGS every site built on it. Which sites a selection difference touches is read from its kind (first_affected: the plies below '
+    'it and Q), never from the record, so pieces written by an older tree are judged alike. Pieces (--fold-from) must share the schema, the bank '
+    'source, roots, champion, split and call sizes (refused otherwise) and together cover every group of GROUPS exactly once (refused '
+    'otherwise, before anything is loaded); they may come from different tree commits, each recorded (header.piece_trees, notes). Every '
+    'pricer\'s recorded options are checked against PINNED again at the fold')
+PROPOSAL_RULE = ('PROPOSAL, not a verdict, made only when every group of GROUPS is measured (a single piece reports its sites and withholds '
+    'every field as INCOMPLETE): each field = 1.25 x the largest site tail it covers, rounded UP to two significant figures, the '
     'setting site named; near_tie_q_bound = 1.25 x max(the value tail, the (e) dQ tail). Reported-only and unmeasured sites set nothing (they '
     'become report-only in the declaration). R1\'s block invariance sites enter only when R1_INVARIANCE_RULE keeps --block-invariance')
 R1_INVARIANCE_RULE = ('R1 runs with --block-invariance iff, measured here, its discrete arrays are bit-equal between 729 and 2187 lanes at bf16, '
@@ -152,7 +173,7 @@ SCOPE_RULE = ('R1 and R2 are measured on this chunk\'s call split, as runs on th
     'run on other roots compiles other buckets (chunk 0: 512, 32 and 8; the 40 saved roots: 64), unmeasured here. R3 runs on the 40 saved roots: '
     'its fixed-shape pricers (and oracle) price any roots with the same programs, measured here on this chunk\'s roots; its D3 (per-call '
     'buckets) is priced at R3\'s bucket in calls of --r3-call-roots on this chunk\'s roots (r3-d3)')
-RULES = dict(scope=SCOPE_RULE, positions=POSITIONS_RULE, q=Q_RULE, guard=GUARD_RULE, direct=DIRECT_RULE, premise=PREMISE_RULE, constructions=CONSTRUCTIONS, sites=SITES_RULE,
+RULES = dict(scope=SCOPE_RULE, positions=POSITIONS_RULE, topk_whole=TOPK_WHOLE_RULE, q=Q_RULE, guard=GUARD_RULE, direct=DIRECT_RULE, premise=PREMISE_RULE, constructions=CONSTRUCTIONS, sites=SITES_RULE,
     fold=FOLD_RULE, proposal=PROPOSAL_RULE, r1_invariance=R1_INVARIANCE_RULE, estimate=ESTIMATE_RULE, adapter=ADAPTER, margin=MARGIN, figures=FIGURES,
     draft=DRAFT, exit=EXIT)
 
@@ -377,7 +398,8 @@ class Geometry:
 
     def add_whole(self, fa, ba, call, context=None, found=None):
         """bf16 against f32 over every array g2.block_invariance compares (fa, ba: frame_arrays dicts or frames; found: {array: mask} of the
-        aligned positions, the rest counted in `unaligned` and never compared)."""
+        positions compared: aligned (align) or holding the same selection in both precisions (top-k Depth2 frames); the rest are counted in
+        `unaligned` and never compared)."""
         inv = g2.block_invariance(fa, ba, context=context);x, y = g2.frame_fields(fa), g2.frame_fields(ba)
         for name in inv['floats']:
             d, keep, padding = whole_deltas(y[name], x[name]);shape = np.asarray(x[name]).shape;self.padding[name] += padding
@@ -461,8 +483,8 @@ class Directs:
         e['discrete']['mismatched'].update({k: v for k, v in found['mismatched'].items() if v});e['discrete'].setdefault('world_reports_equal', True)
         e['discrete']['world_reports_equal'] = e['discrete']['world_reports_equal'] and found.get('world_reports_equal', True)
 
-    def decision(self, key, result):
-        e = self.items.setdefault(key, {}).setdefault(TESTED, dict(decide=collections.Counter(), max_abs_delta_q=0., gaps=[]))
+    def decision(self, key, result, precision=TESTED):
+        e = self.items.setdefault(key, {}).setdefault(precision, dict(decide=collections.Counter(), max_abs_delta_q=0., gaps=[]))
         for k in ('roots', 'roots_compared', 'status_differs', 'nonfinite_roots', 'argmax_q_differs', 'argmax_target_differs'):e['decide'][k] += int(result[k])
         e['max_abs_delta_q'] = max(e['max_abs_delta_q'], float(result['max_abs_delta_q']));e['gaps'] += [min(x for x in (g['gap_pricer'], g['gap_oracle']) if x is not None)
             for g in result['gaps'] if g['gap_pricer'] is not None or g['gap_oracle'] is not None]
@@ -476,9 +498,11 @@ class Directs:
             if x is None or y is None or np.asarray(x).shape != np.asarray(y).shape:r['shape_differs'] = True;continue
             x, y = np.asarray(x), np.asarray(y);r['compared'] += int(x.size)
             if x.dtype.kind == 'f':
-                d = deltas(x, y);r['unequal'] += int(np.count_nonzero(d));r['nonfinite'] += int(np.count_nonzero(~np.isfinite(d)))
+                d = deltas(x, y);unequal = d.reshape(x.shape) != 0;r['nonfinite'] += int(np.count_nonzero(~np.isfinite(d)))
                 if np.isfinite(d).any():r['max_abs_difference'] = max(r['max_abs_difference'], float(d[np.isfinite(d)].max()))
-            else:r['unequal'] += int(np.count_nonzero(x != y))
+            else:unequal = x != y
+            r['unequal'] += int(np.count_nonzero(unequal));first = r.setdefault('first', [])
+            first += [dict(call=e['calls'] - 1, cell=[int(c) for c in cell]) for cell in np.argwhere(unequal)[:max(0, FIRST - len(first))]]
 
     def report(self):
         return clv.plain(self.items)
@@ -595,7 +619,7 @@ def expected_options(gid, runs):
             selection='prior', fixed_capacity=True)
     if gid == 'R3.frame':
         return dict(base, depth=3, k_own=[3, 3], k_opp=[3, 3], k1_own=9, k1_opp=9, capacity=r3['capacity'], block_lanes=r3['block_lanes'], selection='prior', fixed_capacity=True)
-    if gid == 'R3.d3':return dict(capacity=4096, block_rows=32, vectorized=True, host_prep=True)
+    if gid == 'R3.d3':return dict(capacity=4096, block_rows=32, vectorized=True, host_prep=True, actor_capacity=D3_ACTOR_CAPACITY)
     config, kind = gid.split('.')[1:];k = 9 if config == 'full_width' else r2['n2_k']
     if kind == 'depthn':return dict(base, depth=2, k_own=[k], k_opp=[k], k1_own=9, k1_opp=9, capacity=r2['capacity'], block_lanes=r2['block_lanes'], selection='prior', fixed_capacity=False)
     return dict(base, k_own=k, k_opp=k, k1_own=9, k1_opp=9, capacity=r2['capacity'], child_block=int(kind.removeprefix('depth2_cb')), fixed_capacity=False)
@@ -668,8 +692,8 @@ def measure(groups, *, evaluators, executor, model, materializer, recipe, frame_
                     for name in NAMES:direct.identity('R3.turn1_identity', name, d3[name], frames['R1'][name], TURN1_FIELDS)
                 d3 = None
             frames = None
-            for group, (config, _) in zip(('r2-full', 'r2-top'), r2_configs(runs['R2'])):
-                if group in selected:_r2_call(records, pricers, direct, config, reqs, materializer, recipe, evaluators, module, backups2, call, context, progress)
+            for group, (config, k) in zip(('r2-full', 'r2-top'), r2_configs(runs['R2'])):
+                if group in selected:_r2_call(records, pricers, direct, config, reqs, materializer, recipe, evaluators, module, backups2, call, context, progress, k=k)
             info.update(groups=list(selected))
     if 'r3-d3' in selected:_d3_calls(records['R3.d3'], pricers['R3.d3'], groups, r3_call_roots, materializer, recipe, evaluators, progress)
     departures = option_departures(options, runs) + ([] if split == SPLIT else [f'call split {split} != every run\'s {SPLIT}'])
@@ -694,8 +718,29 @@ def _depthn_parts(record, frames, requests, backups, call, context, *, whole=Fal
     if spreads:record.add_spreads(frames, call)
 
 
-def _r2_call(records, pricers, direct, config, reqs, materializer, recipe, evaluators, module, backups2, call, context, progress):
-    """One R2 config on one call: N=2 (as_depth2_frame), the Depth2Pricer at each child block, their measurements and the direct sites."""
+def selection_found(f, b):
+    """A top-k Depth2Frame pair's whole-array positions to compare (TOPK_WHOLE_RULE): {t2 array: the turn-2 status equal in both precisions},
+    and the excluded positions by kind (enumerated in one precision only: a different top-k selection; enumerated in both with another status)."""
+    sb, sf = _get(b, 't2_status'), _get(f, 't2_status');same = sb == sf
+    return {name: same for name in ('t2_value',)}, dict(whole_selection_differs=((sb != 0) != (sf != 0), ('whole', 'q')),
+        whole_status_differs=((sb != 0) & (sf != 0) & ~same, ('whole', 'q')))
+
+
+def depth2_parts(record, frames, k, call, context=None):
+    """One Depth2Pricer frame pair (f32, bf16): its masked quantities and its whole arrays, a top-k config's (k < 9) only where both precisions
+    hold the same turn-2 selection (TOPK_WHOLE_RULE: the rest excluded, counted and flagged); returns the roots a structural difference touches."""
+    f, b = frames[REFERENCE], frames[TESTED];masks, structural = turn1_masks(f, b);t2, s2 = t2_masks(f, b)
+    differs = record.add_masked(f, b, {**masks, **t2}, {**structural, **s2}, call);found = None
+    if k < 9:
+        found, excluded = selection_found(f, b)
+        for kind, (mask, affects) in excluded.items():record.note(kind, mask, affects, call)
+    record.add_whole(f, b, call, context, found=found)
+    return differs
+
+
+def _r2_call(records, pricers, direct, config, reqs, materializer, recipe, evaluators, module, backups2, call, context, progress, k=9):
+    """One R2 config on one call: N=2 (as_depth2_frame), the Depth2Pricer at each child block, their measurements and the direct sites; a
+    top-k config (k < 9) compares its whole arrays only where both precisions hold the same turn-2 selection (TOPK_WHOLE_RULE)."""
     where = dict(context, config=config);gid = f'R2.{config}.depthn';r = records[gid]
     raw = price_both(r, pricers[gid], reqs, materializer, recipe, evaluators, progress, where);n2 = {name: module.as_depth2_frame(raw[name]) for name in NAMES}
     masks, structural = turn1_masks(n2[REFERENCE], n2[TESTED]);t2, s2 = t2_masks(n2[REFERENCE], n2[TESTED])
@@ -704,14 +749,14 @@ def _r2_call(records, pricers, direct, config, reqs, materializer, recipe, evalu
     raw = None;d2 = {}
     for b in g2.INVARIANCE_BLOCKS:   # as n2_equivalence_call: the other child block first, then the compared one
         gid = f'R2.{config}.depth2_cb{b}';r = records[gid];d2[b] = frames = price_both(r, pricers[gid], reqs, materializer, recipe, evaluators, progress, where)
-        masks, structural = turn1_masks(frames[REFERENCE], frames[TESTED]);t2, s2 = t2_masks(frames[REFERENCE], frames[TESTED])
-        differs = r.add_masked(frames[REFERENCE], frames[TESTED], {**masks, **t2}, {**structural, **s2}, call);r.add_whole(frames[REFERENCE], frames[TESTED], call, where)
+        differs = depth2_parts(r, frames, k, call, where)
         if b == g2.INVARIANCE_BLOCKS[-1]:r.add_q(frames[TESTED], frames[REFERENCE], reqs, backups2, call, where, differs=differs)
     compared, other = d2[g2.INVARIANCE_BLOCKS[-1]], d2[g2.INVARIANCE_BLOCKS[0]]
     for name in NAMES:
         found, floats = gate.n2_compare(compared[name], n2[name], where);direct.n2(f'R2.{config}.n2', name, found, floats)
         direct.invariance(f'R2.{config}.child_block_invariance', name, g2.block_invariance(other[name], compared[name], context=where))
     direct.decision(f'R2.{config}.e', gate.decide_roots(compared[TESTED], n2[TESTED], reqs, backups2, context=where))
+    direct.decision(f'R2.{config}.e', gate.decide_roots(compared[REFERENCE], n2[REFERENCE], reqs, backups2, context=where), precision=REFERENCE)   # the premise
 
 
 def _d3_calls(record, pricers, groups, size, materializer, recipe, evaluators, progress):
@@ -764,6 +809,7 @@ def check_earlier(earlier, header):
         want = dict(fixed_shapes=True, capacity=512, block_lanes=2187, depth3_k=3, oracle_chunk=512, matches_gate=True)
         flags += [f'shapes {k} {shapes.get(k)!r} != {x!r}' for k, x in want.items() if shapes.get(k) != x]
         if (h.get('options') or {}).get('max_roots') is not None:flags.append('the earlier run priced only --max-roots')
+        if v.get('status') not in ('PASS', 'WARN'):flags.append(f'status {v.get("status")!r} (PASS or WARN expected; FAIL is refused)')
         out['validation'] = flags
     d = (earlier or {}).get('d3_geometry')
     if d is None:out['d3_geometry'] = ['no d3_geometry.json']
@@ -887,7 +933,8 @@ def site_registry(runs, *, r1_whole=None, r2_whole=None):
             add('R2', 'n2.floats', q, f'{where} (n2_compare, scored cells of the Depth2Pricer frame)', [side('merged Depth2Pricer (child_block 81)', d81, q), side('DepthNPricer N=2', n, q)],
                 config=config, direct=(f'R2.{config}.n2', q), premise=(f'R2.{config}.n2', q))
         add('R2', 'n2.e', 'max_abs_delta_q', 'completed Q, every root labeled on both surfaces (decide_roots, depth2_backups); also the near-tie threshold',
-            [side('merged Depth2Pricer (child_block 81)', d81, 'q'), side('DepthNPricer N=2 (as_depth2_frame)', n, 'q')], config=config, direct=(f'R2.{config}.e', 'max_abs_delta_q'))
+            [side('merged Depth2Pricer (child_block 81)', d81, 'q'), side('DepthNPricer N=2 (as_depth2_frame)', n, 'q')], config=config, direct=(f'R2.{config}.e', 'max_abs_delta_q'),
+            premise=(f'R2.{config}.e', 'max_abs_delta_q'))
         for name in r2_whole or DEPTH2_FLOATS:
             add('R2', 'n2.block_invariance', name, 'the whole Depth2Frame array (every element), child_block 27 against 81', [side('Depth2Pricer child_block 27', d27, f'whole.{name}'),
                 side('Depth2Pricer child_block 81', d81, f'whole.{name}')], config=config, direct=(f'R2.{config}.child_block_invariance', name), premise=(f'R2.{config}.child_block_invariance', name))
@@ -916,42 +963,86 @@ REPORTED_ONLY = (dict(id='R1|R2|R3.c.floors', what='depth1_noise_floor and root_
 # ---------------------------------------------------------------------------------------------------------------- the fold
 def resolve_side(spec, measurements, earlier):
     """One side's tail: the largest of its sources (this run's max + the adapter bound; the earlier reports' entries), withheld on any
-    non-finite difference, unmeasured without a source."""
-    candidates = [];gid, q = spec.get('geometry'), spec.get('quantity')
-    g = (measurements or {}).get(gid) if gid else None
+    non-finite difference, unmeasured without a source. A Q side takes q.same_selection (the roots no structural difference touches: Q_RULE),
+    the all-roots tail kept beside it (all_roots, informational); its non-finite roots (decide_roots') withhold it."""
+    candidates = [];gid, q = spec.get('geometry'), spec.get('quantity');g = (measurements or {}).get(gid) if gid else None;all_roots = None
     if g is not None:
-        m = g.get('q') if q == 'q' else (g.get('whole') or {}).get(q[len('whole.'):]) if q.startswith('whole.') else (g.get('quantities') or {}).get(q)
-        if m and m.get('count'):
-            a = m.get('adapter') if q == 'q' else adapter_for(q.removeprefix('whole.'))
-            candidates.append(dict(source='this run', key=f'{gid}.{q}', max=None if m.get('max') is None else m['max'] + a, raw_max=m.get('max'), adapter=a,
-                count=m['count'], nonfinite=m.get('nonfinite', 0)))
+        if q == 'q':
+            full = g.get('q') or {};m = full.get('same_selection') or {};a = full.get('adapter', q_adapter(spec.get('depth', 2)))
+            all_roots = None if not full.get('count') else dict(max=full.get('max'), count=full.get('count'), nonfinite=full.get('nonfinite', 0),
+                roots_structural=(full.get('decide_roots') or {}).get('roots_structural', 0), same_selection_max=m.get('max'), same_selection_count=m.get('count', 0))
+            if m.get('count'):candidates.append(dict(source='this run', key=f'{gid}.q.same_selection', max=None if m.get('max') is None else m['max'] + a, raw_max=m.get('max'),
+                adapter=a, count=m['count'], nonfinite=full.get('nonfinite', 0)))
+        else:
+            m = (g.get('whole') or {}).get(q[len('whole.'):]) if q.startswith('whole.') else (g.get('quantities') or {}).get(q)
+            if m and m.get('count'):
+                a = adapter_for(q.removeprefix('whole.'));candidates.append(dict(source='this run', key=f'{gid}.{q}', max=None if m.get('max') is None else m['max'] + a,
+                    raw_max=m.get('max'), adapter=a, count=m['count'], nonfinite=m.get('nonfinite', 0)))
     for e in spec.get('earlier') or ():
         x = earlier_entry(earlier, e)
         if x['count']:candidates.append(x)
-    out = dict(spec, candidates=candidates, geometry_measured=g is not None)
-    if not candidates:return dict(out, status='unmeasured', tail=None, reason=f'no measurement: {gid or "an earlier report"} {q or ""} not in this run or its sources'.strip())
+    out = dict(spec, candidates=candidates, geometry_measured=g is not None, all_roots=all_roots)
+    if not candidates:
+        why = 'no root holds the same selection in both precisions' if all_roots else f'no measurement: {gid or "an earlier report"} {q or ""} not in this run or its sources'
+        return dict(out, status='unmeasured', tail=None, reason=why.strip())
     bad = [c for c in candidates if c['nonfinite'] or c['max'] is None]
     if bad:return dict(out, status='withheld', tail=None, reason='; '.join(f'{c["source"]} {c["key"]}: {c["nonfinite"]} non-finite of {c["count"]}' for c in bad))
     top = max(candidates, key=lambda c: c['max']);return dict(out, status='measured', tail=top['max'], source=top['source'], key=top['key'])
 
 
-def site_flags(row, measurements, direct):
-    """Structural differences of the side geometries touching the site's quantities, failed premises and the direct comparison's own flags."""
+def _level(quantity):
+    """The ply a quantity sits at (1: turn 1 and the root; leaves past every node ply), or 'q'."""
+    q = quantity.removeprefix('whole.')
+    if q == 'q':return 'q'
+    if q.startswith(('leaf_', 't2_')):return 99
+    m = re.match(r'ply(\d+)[._]', q);return int(m.group(1)) if m else 1
+
+
+def first_affected(kind):
+    """The shallowest ply a selection kind touches (its positions hold other children below it), or None for any other kind. The fold reads
+    the kind's name, never the stored `affects`, so a piece recorded with a coarser one is judged by the same rule (FOLD_RULE)."""
+    if kind in ('t1_selection_differs', 't1_own_actions', 't1_opp_actions', 't1_selection_maps'):return 2
+    m = re.fullmatch(r'ply(\d+)_(selection_differs|selection_maps|own_actions|opp_actions)', kind)
+    return None if m is None else int(m.group(1)) + (m.group(2) != 'selection_differs')
+
+
+def touches(kind, affects, quantity):
+    """Whether a structural kind touches a side's quantity."""
+    level = first_affected(kind)
+    if level is not None:return _level(quantity) == 'q' or _level(quantity) >= level
+    base = quantity.removeprefix('whole.').split('.')[0]
+    return affects == 'all' or (isinstance(affects, (list, tuple)) and (quantity in affects or base in affects or ('whole' in affects and quantity.startswith('whole.'))))
+
+
+def site_flags(row, measurements, direct, source_flags=None):
+    """Structural differences of the side geometries touching the site's quantities, failed or unmeasured premises, and every earlier report
+    the site is built on that does not match this run (source_flags {source file: flags})."""
     flags = []
     for s in row['sides']:
         g = (measurements or {}).get(s.get('geometry')) or {};q = s.get('quantity') or ''
         for kind, e in (g.get('structural') or {}).items():
-            affects = e.get('affects');base = q.removeprefix('whole.').split('.')[0]
-            hit = affects == 'all' or (isinstance(affects, (list, tuple)) and (q in affects or base in affects or ('whole' in affects and q.startswith('whole.'))))
-            if hit and e.get('count'):flags.append(f'structural {s["geometry"]} {kind} {e["count"]}')
+            if e.get('count') and touches(kind, e.get('affects'), q):flags.append(f'structural {s["geometry"]} {kind} {e["count"]}')
         if q.startswith('whole.') and (g.get('whole') or {}).get(q[6:], {}).get('padding_nonfinite'):
             flags.append(f'{s["geometry"]} {q}: {g["whole"][q[6:]]["padding_nonfinite"]} positions non-finite in both precisions with unequal bits (padding; excluded)')
+        if q.startswith('whole.') and (g.get('whole') or {}).get(q[6:], {}).get('unaligned'):
+            flags.append(f'{s["geometry"]} {q}: {g["whole"][q[6:]]["unaligned"]} positions not compared (another slot order or selection in f32: excluded)')
+        for source in sorted({c['source'] for c in s.get('candidates') or ()} & set(source_flags or {})):
+            if source_flags[source]:flags.append(f'built on {source}, which does not match this run: {"; ".join(source_flags[source][:3])}' + (f' (+{len(source_flags[source]) - 3})' if len(source_flags[source]) > 3 else ''))
     if row.get('premise'):
-        key, name = row['premise'];e = ((direct or {}).get(key) or {}).get(REFERENCE) or {};m = (e.get('floats') or {}).get(name)
-        bound = 2 * adapter_for(name)
-        if m is not None and (m['nonfinite'] or m['max_abs_difference'] > bound):
-            flags.append(f'premise {key} {name}: |A_f32 - B_f32| max {m["max_abs_difference"]:.3g} (non-finite {m["nonfinite"]}) > 2 x the adapter bound {bound:g}')
+        key, name = row['premise'];entry = (direct or {}).get(key) or {};e = entry.get(REFERENCE)
+        if e is None:
+            if entry:flags.append(f'premise {key}: the f32 comparison was not measured (a piece without it)')
+        elif 'max_abs_delta_q' in e:
+            bound = 2 * q_adapter(row.get('depth', 2));bad = e['decide'].get('nonfinite_roots', 0)
+            if bad or e['max_abs_delta_q'] > bound:flags.append(f'premise {key}: |Q_A_f32 - Q_B_f32| max {e["max_abs_delta_q"]:.3g} (non-finite roots {bad}) > 2 x the Q adapter bound {bound:.3g}')
+        else:
+            m = (e.get('floats') or {}).get(name);bound = 2 * adapter_for(name)
+            if m is not None and (m['nonfinite'] or m['max_abs_difference'] > bound):
+                flags.append(f'premise {key} {name}: |A_f32 - B_f32| max {m["max_abs_difference"]:.3g} (non-finite {m["nonfinite"]}) > 2 x the adapter bound {bound:g}')
     return flags
+
+
+FLAG_ONLY = ('R3.turn1_identity',)   # a direct comparison over whole arrays, wider than its sites' masks: reported and flagged, never raises or withholds
 
 
 def direct_value(row, direct):
@@ -962,17 +1053,18 @@ def direct_value(row, direct):
     if 'max_abs_delta_q' in e:return dict(key=key, max=e['max_abs_delta_q'], nonfinite=e['decide']['nonfinite_roots'], status_differs=e['decide']['status_differs'],
         argmax_q_differs=e['decide']['argmax_q_differs'])
     if 'fields' in e:
-        m = e['fields'].get(name) or {};return dict(key=key, max=m.get('max_abs_difference'), nonfinite=m.get('nonfinite'), unequal=m.get('unequal'), compared=m.get('compared'))
+        m = e['fields'].get(name) or {};return dict(key=key, max=m.get('max_abs_difference'), nonfinite=m.get('nonfinite'), unequal=m.get('unequal'), compared=m.get('compared'),
+            shape_differs=m.get('shape_differs'), first=m.get('first'))
     m = (e.get('floats') or {}).get(name)
     if m is None:return None
     return dict(key=key, max=m['max_abs_difference'], nonfinite=m['nonfinite'], compared=m['compared'], discrete_equal=e['discrete']['passed'], discrete_mismatched=dict(e['discrete']['mismatched']))
 
 
-def fold_sites(rows, measurements, direct, earlier):
+def fold_sites(rows, measurements, direct, earlier, source_flags=None):
     """Every site's tail (CONSTRUCTIONS), its status (measured, constructed, derived, withheld, unmeasured), flags and draft coverage."""
     out, by_id = [], {}
     for row in sorted(rows, key=lambda r: r['construction'] == 'derived'):
-        sides = [resolve_side(s, measurements, earlier) for s in row['sides']];flags = site_flags(row, measurements, direct);tail, status = None, 'measured'
+        sides = [resolve_side(s, measurements, earlier) for s in row['sides']];flags = site_flags(dict(row, sides=sides), measurements, direct, source_flags);tail, status = None, 'measured'
         c = row['construction'];tails = [s['tail'] for s in sides]
         if c == 'derived':
             src = by_id.get(row['derived']) or {};tail, status = src.get('tail'), 'derived' if src.get('tail') is not None else src.get('status', 'unmeasured')
@@ -987,8 +1079,18 @@ def fold_sites(rows, measurements, direct, earlier):
             else:tail, status = max(p + o, 2 * p), 'constructed'
         elif c == 'mirror':
             tail, status = (None, 'unmeasured') if tails[0] is None else (2 * tails[0], 'constructed')
+        for x in sides:
+            r = x.get('all_roots')
+            if r and (r.get('roots_structural') or r.get('max') != r.get('same_selection_max')):
+                flags.append(f'informational: {x["geometry"]} q over all roots max {_num(r.get("max"), ".6g")} ({r.get("roots_structural")} roots a structural difference '
+                    f'touches) beside q.same_selection {_num(r.get("same_selection_max"), ".6g")}, which the tail uses')
         d = direct_value(row, direct)
-        if d is not None and tail is not None:
+        if d is not None and d['key'] in FLAG_ONLY:
+            if d.get('unequal') or d.get('nonfinite') or d.get('shape_differs'):
+                flags.append(f'{d["key"]}: R3\'s turn 1 differs from the depth-2 frame\'s in {row["direct"][1]}: {d.get("unequal")} of {d.get("compared")} elements over the '
+                    f'whole array (max |diff| {_num(d.get("max"), ".6g")}, non-finite {d.get("nonfinite")}, shape differs {d.get("shape_differs")}; first {(d.get("first") or [])[:3] or "not recorded"}): '
+                    'informational, the tail is not raised')
+        elif d is not None and tail is not None:
             if d.get('nonfinite'):status, tail = 'withheld', None;flags.append(f'direct {d["key"]}: {d["nonfinite"]} non-finite')
             elif d.get('max') is not None and d['max'] > tail:flags.append(f'direct {d["key"]} max {d["max"]:.6g} above the construction {tail:.6g}: raised to it');tail = d['max']
         if row['run'] == 'R3' and row['check'] == 'b' and not ((measurements or {}).get('R3.d3')):flags.append('D3 side not at R3\'s bucket (r3-d3 not measured)')
@@ -1064,19 +1166,23 @@ def gaps_section(sites, measurements, proposal):
     return out
 
 
-def fold(measured, earlier, *, runs, header=None):
+def fold(measured, earlier, *, runs, header=None, source_flags=None):
     """The table, the proposal, R1's block-invariance decision and the guard and gaps sections from the measurements (this run's and the
-    pieces'), the earlier reports and the runs' arguments."""
+    pieces'), the earlier reports (source_flags: each one's mismatches, flagged on every site built on it) and the runs' arguments. The
+    proposal is made only when every group of GROUPS was measured (PROPOSAL_RULE); otherwise its fields are withheld as INCOMPLETE."""
     measurements, direct = measured.get('geometries') or {}, measured.get('direct') or {}
+    groups = sorted({g.get('group') for g in measurements.values() if g.get('group')});missing = [g for g in GROUPS if g not in groups]
     r1_whole = sorted((measurements.get('R1.frame') or {}).get('whole') or ()) or None
     r2_whole = sorted(set().union(*[(g.get('whole') or {}).keys() for gid, g in measurements.items() if gid.startswith('R2.')])) or None
-    sites = fold_sites(site_registry(runs, r1_whole=r1_whole, r2_whole=r2_whole), measurements, direct, earlier)
+    sites = fold_sites(site_registry(runs, r1_whole=r1_whole, r2_whole=r2_whole), measurements, direct, earlier, source_flags)
     decision = r1_invariance_decision(sites, direct)
     proposal = decision['proposal_with'] if decision['block_invariance'] else decision['proposal_without']
+    if missing:
+        proposal = {k: dict(x, proposed=None, incomplete=f'groups not measured: {missing}') for k, x in proposal.items()}
     unmeasured = [dict(site=s['id'], status=s['status'], reasons=s['unmeasured_reasons'] + s['withheld_reasons'], exact_coverage=s['exact_coverage'])
         for s in sites if s['tail'] is None]
     return dict(sites=sites, proposal=dict(fields=proposal, r1_block_invariance=decision['block_invariance'], label='PROPOSAL (informational, not a verdict)',
-        margin=MARGIN, figures=FIGURES, rule=PROPOSAL_RULE), r1_invariance=decision, guard=guard_section(sites, measurements), gaps=gaps_section(sites, measurements, proposal),
+        status='INCOMPLETE' if missing else 'COMPLETE', groups=groups, missing_groups=missing, margin=MARGIN, figures=FIGURES, rule=PROPOSAL_RULE), r1_invariance=decision, guard=guard_section(sites, measurements), gaps=gaps_section(sites, measurements, proposal),
         unmeasured=unmeasured, reported_only=list(REPORTED_ONLY), turn1_identity=direct.get('R3.turn1_identity'))
 
 
@@ -1092,16 +1198,26 @@ def merge_pieces(measured, pieces):
     return merged, flags
 
 
+SHARED = ('source', 'roots', 'champion', 'split')   # what every piece of one fold must share (FOLD_RULE)
+
+
 def piece_checks(header, pieces):
-    """Every piece against the run's header: source, roots, champion, split and calls; flags."""
-    flags = []
+    """Every piece against the run's header: (refusals, notes). Refused: another schema, or another bank source, roots, champion, split or call
+    sizes (the pieces must price the same requests in the same calls). Noted, accepted: another tree commit (each piece's is recorded)."""
+    refusals, notes = [], []
     for path, piece in pieces:
         h = piece.get('header') or {}
-        for key in ('source', 'roots', 'champion', 'split'):
-            if h.get(key) != header.get(key):flags.append(f'piece {path}: {key} {h.get(key)!r} != {header.get(key)!r}')
-        if (h.get('tree') or {}).get('commit') != (header.get('tree') or {}).get('commit'):flags.append(f'piece {path}: tree {(h.get("tree") or {}).get("commit")} != {(header.get("tree") or {}).get("commit")}')
-        if piece.get('schema') != SCHEMA:flags.append(f'piece {path}: schema {piece.get("schema")!r}')
-    return flags
+        if piece.get('schema') != SCHEMA:refusals.append(f'piece {path}: schema {piece.get("schema")!r} != {SCHEMA!r}')
+        refusals += [f'piece {path}: {key} {h.get(key)!r} != {header.get(key)!r}' for key in SHARED if h.get(key) != header.get(key)]
+        sizes, mine = (h.get('calls') or {}).get('sizes'), (header.get('calls') or {}).get('sizes')
+        if sizes is not None and mine is not None and sizes != mine:refusals.append(f'piece {path}: call sizes {sizes} != {mine}')
+        if (h.get('tree') or {}).get('commit') != (header.get('tree') or {}).get('commit'):
+            notes.append(f'piece {path}: measured on tree {(h.get("tree") or {}).get("commit")}, folded on {(header.get("tree") or {}).get("commit")}')
+    return refusals, notes
+
+
+def piece_groups(pieces):
+    return sorted({g for _, x in pieces for g in ((x.get('header') or {}).get('groups') or ())})
 
 
 def estimate(selected):
@@ -1129,7 +1245,9 @@ def markdown(report):
         sides = '; '.join(f'{x["label"]}: {_num(x.get("tail"))} (' + ' '.join(str(y) for y in (x.get('source', x.get('status')), x.get('key')) if y) + ')' for x in s['sides']) or f'= {s.get("derived")}'
         lines.append(f'| {s["id"]} | {s["field"]} | {s["positions"]} | {sides} | {s["construction"]} | {_num(s["tail"])} ({s["status"]}) | '
             f'{_num((s.get("direct_measured") or {}).get("max"))} | {s.get("draft")} | {s.get("covered_by_draft")} | {"; ".join(s["flags"]) or "-"} |')
-    p = (f.get('proposal') or {}).get('fields') or {};lines += ['', f'## Proposal (PROPOSAL, not a verdict; R1 --block-invariance: {(f.get("proposal") or {}).get("r1_block_invariance")})', '',
+    p = (f.get('proposal') or {}).get('fields') or {};pr = f.get('proposal') or {}
+    lines += ['', f'## Proposal (PROPOSAL, not a verdict; {pr.get("status")}{"" if not pr.get("missing_groups") else ": groups not measured " + str(pr["missing_groups"])}; '
+        f'R1 --block-invariance: {pr.get("r1_block_invariance")})', '',
         '| field | largest tail | set by | x 1.25, rounded up | draft | draft covers | withheld | unmeasured |', '| --- | --- | --- | --- | --- | --- | --- | --- |']
     lines += [f'| {k} | {_num(x["tail"])} | {x["set_by"]} | {_num(x["proposed"])} | {x["draft"]} | {x["draft_covers"]} | {len(x["withheld"])} | {len(x["unmeasured"])} |' for k, x in p.items()]
     r = f.get('r1_invariance') or {};lines += ['', f'- R1 block invariance: {"with" if r.get("block_invariance") else "without"} ({"; ".join(r.get("reasons") or []) or "clean, raises nothing"})']
@@ -1140,7 +1258,8 @@ def markdown(report):
     t = f.get('turn1_identity') or {};lines += ['', '## R3 turn 1 against the depth-2 frame', ''] + [f'- {name}: ' + ', '.join(f'{k} max {_num(v.get("max_abs_difference"))} unequal {v.get("unequal")}'
         for k, v in (x.get('fields') or {}).items()) for name, x in t.items()]
     lines += ['', '## Unmeasured or withheld sites', ''] + [f'- {x["site"]} ({x["status"]}): {"; ".join(x["reasons"]) or "-"}; exact: {x["exact_coverage"]}' for x in f.get('unmeasured') or []]
-    lines += ['', f'- Flags: {"; ".join(report.get("flags") or []) or "none"}', '', 'Rules: gate_surfaces.json header.rules.', '']
+    lines += ['', f'- Notes: {"; ".join(report.get("notes") or []) or "none"}', f'- Flags: {"; ".join(report.get("flags") or []) or "none"}', '',
+        'Rules: gate_surfaces.json header.rules.', '']
     return '\n'.join(lines)
 
 
@@ -1150,16 +1269,23 @@ def write(out, report):
 
 
 def assemble(measured, *, earlier, runs, run_record, header, pieces=()):
-    """The report body: the merged measurements, the fold, every flag, the status and exit."""
+    """The report body: the merged measurements, the fold, every flag, the status and exit. Refuses (SystemExit) pieces that do not share
+    this run's source (piece_checks); every pricer's options are checked against PINNED again here, from the recorded options of this run and
+    every piece (a piece written by an older tree is judged by the current pins)."""
+    refusals, notes = piece_checks(header, pieces)
+    if refusals:raise SystemExit('--fold-from: pieces that must share a source do not (fail closed): ' + '; '.join(refusals))
     merged, _ = merge_pieces(measured, pieces);checks = check_earlier(earlier, header)
-    flags = [f'{k}: {x}' for k, v in checks.items() for x in v] + piece_checks(header, pieces)
+    source_flags = {f'{name}.json': [x for x in v if not x.startswith('no ')] for name, v in checks.items()}
+    flags = [f'{k}: {x}' for k, v in checks.items() for x in v]
     runs_only = {name: run_record[name] for name in RUN_ARGV if name in run_record}
     departures = list((measured or {}).get('departures') or []) + [x for r in runs_only.values() for x in r.get('departures') or []]
     departures += [f'{name}: refused by the gate\'s parser: {r["refused"]}' for name, r in runs_only.items() if r.get('refused')]
     for path, piece in pieces:departures += [f'piece {path}: {x}' for x in piece.get('departures') or []]
+    departures += option_departures(header.get('pricer_options') or {}, runs)
     calls = (measured or {}).get('calls') or {}
     if calls.get('selected') is not None:departures.append(f'calls subset {calls["selected"]} of {len(calls.get("sizes") or [])}: tails over those calls only')
-    body = fold(merged, earlier, runs=runs, header=header)
+    departures = list(dict.fromkeys(departures))
+    body = fold(merged, earlier, runs=runs, header=header, source_flags=source_flags)
     compared = sum((m.get('count') or 0) for g in merged['geometries'].values() for m in list((g.get('quantities') or {}).values()) + list((g.get('whole') or {}).values()))
     status = 'MEASURED' if compared else 'NOTHING_COMPARED'
     for s in body['sites']:
@@ -1167,7 +1293,7 @@ def assemble(measured, *, earlier, runs, run_record, header, pieces=()):
     for gid, g in merged['geometries'].items():
         if (g.get('q') or {}).get('crosscheck_mismatches'):flags.append(f'{gid}: recorded Q differs from decide_roots\' max |dQ|: {g["q"]["crosscheck_mismatches"]}')
     return dict(status=status, exit=EXIT[status], status_reasons=[] if compared else ['nothing was compared (no geometry priced, or no position in either precision)'],
-        departures=departures, flags=flags, earlier_checks=checks, measurements=merged, fold=body)
+        departures=departures, flags=flags, notes=notes, earlier_checks=checks, measurements=merged, fold=body)
 
 
 def tree_commit():
@@ -1231,7 +1357,15 @@ def main(argv=None):
     args = parse(argv);started = time.perf_counter()
     earlier, hashes = {}, {}
     for name, path in (('validation', args.validation_json), ('d3_geometry', args.d3_geometry_json)):earlier[name], hashes[name] = read_json(path)   # fail before loading
-    pieces = _pieces(args.fold_from);out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
+    if (earlier['validation'] or {}).get('status') == 'FAIL':raise SystemExit(f'{args.validation_json}: status FAIL: its P_all and O_sample are refused (fail closed)')
+    pieces = _pieces(args.fold_from)
+    if pieces:   # before anything is created or loaded: the pieces share one source and, with this run, cover every group exactly once
+        refusals, _ = piece_checks(pieces[0][1].get('header') or {}, pieces)
+        if refusals:raise SystemExit('--fold-from: pieces that must share a source do not (fail closed): ' + '; '.join(refusals))
+        listed = [g for _, x in pieces for g in ((x.get('header') or {}).get('groups') or ())] + (list(args.groups) if args.d3_root else [])
+        twice, missing = sorted({g for g in listed if listed.count(g) > 1}), [g for g in GROUPS if g not in listed]
+        if twice or missing:raise SystemExit(f'--fold-from: the fold needs every group of {GROUPS} exactly once (missing {missing}, twice {twice}): refused, no proposal')
+    out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     runs, run_record = run_arguments(overrides=None if args.d3_root is None or args.fixed_shapes else dict(R1=dict(fixed_shapes=False), R1_invariance=dict(fixed_shapes=False),
         R3=dict(fixed_shapes=False)))
     log('GATE_SURFACES_RULES', rules=RULES, runs=run_record, groups=list(args.groups) if args.d3_root else [], calls=args.calls, estimate=estimate(args.groups) if args.d3_root else None,
@@ -1241,7 +1375,8 @@ def main(argv=None):
         header = dict((pieces[0][1].get('header') or {}), pieces=[p for p, _ in pieces], earlier=earlier_record, mode='FOLD_ONLY', tree=tree_commit(), runs=run_record,
             groups=[g for g in GROUPS if any(g in ((x.get('header') or {}).get('groups') or ()) for _, x in pieces)],
             pricer_options={k: o for _, x in pieces for k, o in ((x.get('header') or {}).get('pricer_options') or {}).items()},
-            piece_trees={p: (x.get('header') or {}).get('tree') for p, x in pieces}, piece_calls={p: (x.get('header') or {}).get('calls') for p, x in pieces})
+            piece_trees={p: (x.get('header') or {}).get('tree') for p, x in pieces}, piece_calls={p: (x.get('header') or {}).get('calls') for p, x in pieces},
+            piece_groups={p: (x.get('header') or {}).get('groups') for p, x in pieces})
         measured = dict(geometries={}, direct={}, departures=[], calls={})
     else:
         with stage(log, 'load_chunk', d3_root=args.d3_root, chunk=args.chunk):loaded = g2.bank_chunk_requests(args)
@@ -1261,7 +1396,7 @@ def main(argv=None):
             pricer_options=measured['options'], groups=list(measured['groups']),
             calls=measured['calls'], fixed_shapes=args.fixed_shapes, r3_call_roots=args.r3_call_roots, estimate=estimate(measured['groups']), earlier=earlier_record,
             pieces=[p for p, _ in pieces], devices=[str(x) for x in jax.devices()])
-        if pieces:header.update(piece_groups={p: (x.get('header') or {}).get('groups') for p, x in pieces},
+        if pieces:header.update(piece_groups={p: (x.get('header') or {}).get('groups') for p, x in pieces}, piece_trees={p: (x.get('header') or {}).get('tree') for p, x in pieces},
             pricer_options=dict({k: o for _, x in pieces for k, o in ((x.get('header') or {}).get('pricer_options') or {}).items()}, **header['pricer_options']))
     body = assemble(measured, earlier=earlier, runs=runs, run_record=run_record, header=header, pieces=pieces)
     header['seconds'] = time.perf_counter() - started

@@ -35,6 +35,12 @@ from tests import test_gpu_engine_depthn_oracle as N
 THIS = sys.modules[__name__]
 SMALL = {name: dict(capacity=32) for name in gs.RUN_ARGV}   # the fixture's capacity (27 roots): a departure from the pinned 512
 SENTINEL = dict(content=dict(bounds=dict(gs.SENTINEL)), sha256='sentinel', path='sentinel')
+PIECES = (('a', ('r1', 'r1-invariance', 'r3', 'r3-d3')), ('b', ('r2-full',)), ('c', ('r2-top',)))   # the GPU run's three pieces
+
+
+def earlier_report(*args, **kw):
+    """The d3 geometry tests' synthetic validation.json, with the status the chunk-0 report has (WARN: near-terminal INCONCLUSIVE)."""
+    return dict(D.earlier_report(*args, **kw), status='WARN')
 
 
 def small_runs():
@@ -55,9 +61,14 @@ class MeasureTests(N.FixtureN, unittest.TestCase):
         cls.v2_requests = tuple(requests);cls.pair = V.pair()
         cls.groups, _, cls.dropped, _ = g2.bind_roots([list(cls.v2_requests)], (cls.pair['bf16'].params,), None, evaluator=cls.pair['bf16'])
         cls.requests_bf16 = tuple(cls.groups[0]);cls.runs, cls.run_record = small_runs()
-        with cls.patched():
-            cls.measured = gs.measure(cls.groups, evaluators=cls.pair, executor=cls.ex, model=object(), materializer=cls.tables, recipe=cls.recipe,
-                frame_pricer=D.gate_pricer(cls.ex), runs=cls.runs, split=32, r3_call_roots=8)
+        with cls.patched():   # the three GPU pieces, each measured on its own, then merged
+            cls.pieces = {name: gs.measure(cls.groups, evaluators=cls.pair, executor=cls.ex, model=object(), materializer=cls.tables, recipe=cls.recipe,
+                frame_pricer=D.gate_pricer(cls.ex), runs=cls.runs, split=32, r3_call_roots=8, selected=groups) for name, groups in PIECES}
+        each = list(cls.pieces.values())
+        cls.measured = dict(geometries={k: x for m in each for k, x in m['geometries'].items()}, direct={k: x for m in each for k, x in m['direct'].items()},
+            departures=list(dict.fromkeys(x for m in each for x in m['departures'])), calls=cls.pieces['a']['calls'], groups=list(gs.GROUPS),
+            options={k: x for m in each for k, x in m['options'].items()})
+        cls.champion = dict(archive_sha256=cls.pair['bf16'].archive_sha256, checkpoint_sha256=cls.pair['bf16'].checkpoint_sha256)
 
     @classmethod
     @contextlib.contextmanager
@@ -105,21 +116,82 @@ class MeasureTests(N.FixtureN, unittest.TestCase):
             self.assertTrue(d[f'R2.{config}.child_block_invariance']['bf16']['discrete']['passed'])
 
     def test_the_fold_on_the_fixture(self):
-        earlier = dict(validation=D.earlier_report(self.pair), d3_geometry=None)
-        body = gs.assemble(self.measured, earlier=earlier, runs=self.runs, run_record=self.run_record, header=dict(source=D.SOURCE, roots=27, champion={}))
+        earlier = dict(validation=earlier_report(self.pair), d3_geometry=None)
+        body = gs.assemble(self.measured, earlier=earlier, runs=self.runs, run_record=self.run_record, header=dict(source=D.SOURCE, roots=27, champion=self.champion,
+            pricer_options=self.measured['options']))
+        self.assertEqual(body['fold']['proposal']['status'], 'COMPLETE');self.assertTrue(all(x['proposed'] for x in body['fold']['proposal']['fields'].values()))
+        self.assertIn('R3.d3 bf16: actor_capacity 3 != pinned 33', body['departures'])   # the fixture's D3 against the pinned capacity, re-checked at the fold
         self.assertEqual((body['status'], body['exit']), ('MEASURED', 0));sites = {s['id']: s for s in body['fold']['sites']}
         for sid in ('R1.e.max_abs_delta_q', 'R3.e.max_abs_delta_q', 'R2.top3.n2.e.max_abs_delta_q', 'R2.full_width.n2.e_merged_depth2.max_abs_delta_q',
                 'R1.block_invariance.leaf_value', 'R2.top3.n2.floats.t2_value', 'R2.full_width.n2.block_invariance.root_peer_logits', 'R3.b.t1_value'):
             with self.subTest(site=sid):self.assertIsNotNone(sites[sid]['tail'], sites[sid]);self.assertEqual(sites[sid]['flags'], [])
         e = sites['R1.e.max_abs_delta_q'];q = self.measured['geometries']['R1.frame']['q']
-        self.assertAlmostEqual(e['tail'], 2 * (q['max'] + gs.q_adapter(2)));self.assertEqual(e['construction'], 'mirror')
+        self.assertAlmostEqual(e['tail'], 2 * (q['same_selection']['max'] + gs.q_adapter(2)));self.assertEqual(e['construction'], 'mirror')
+        self.assertEqual(q['same_selection']['max'], q['max'])   # no structural difference on the fixture: every root is a same-selection root
         n2e = sites['R2.top3.n2.e.max_abs_delta_q'];g = self.measured['geometries']
-        self.assertAlmostEqual(n2e['tail'], max(g['R2.top3.depth2_cb81']['q']['max'] + gs.q_adapter(2) + g['R2.top3.depthn']['q']['max'] + gs.q_adapter(2),
-            n2e['direct_measured']['max']))
+        self.assertAlmostEqual(n2e['tail'], max(g['R2.top3.depth2_cb81']['q']['same_selection']['max'] + gs.q_adapter(2) + g['R2.top3.depthn']['q']['same_selection']['max']
+            + gs.q_adapter(2), n2e['direct_measured']['max']))
+        self.assertIn('R2.top3.e', self.measured['direct']);self.assertEqual(set(self.measured['direct']['R2.top3.e']), set(v.NAMES))   # n2.e's f32 premise measured
         self.assertTrue(body['fold']['r1_invariance']['discrete_equal']['bf16'])
         gaps = body['fold']['gaps']['R1.e.max_abs_delta_q'];self.assertEqual(gaps['roots'], q['decide_roots']['roots_compared'])
         guard = body['fold']['guard']['R1'];self.assertTrue(guard['measured']);self.assertEqual({r['site'] for r in guard['sites']},
             {s['id'] for s in body['fold']['sites'] if s['run'] == 'R1' and s['guarded']})
+
+    def write_pieces(self, directory, *, old=(), trees=None, roots=None):
+        """The three pieces as main writes them (header, measurements, departures), after a JSON round trip; `old`: pieces stripped to
+        6767fe6c's format (no turn-1 identity cells, no f32 (e) premise, no top-k whole-array exclusion kinds)."""
+        paths = []
+        for name, groups in PIECES:
+            m = json.loads(json.dumps(v.plain(self.pieces[name])));measurements = dict(geometries=m['geometries'], direct=m['direct'])
+            if name in old:
+                for e in (measurements['direct'].get('R3.turn1_identity') or {}).values():
+                    for field in e['fields'].values():field.pop('first', None)
+                for key in [k for k in measurements['direct'] if k.startswith('R2.') and k.endswith('.e')]:measurements['direct'][key].pop('f32', None)
+                for g in measurements['geometries'].values():[g['structural'].pop(k, None) for k in ('whole_selection_differs', 'whole_status_differs')]
+            header = dict(source=dict(D.SOURCE), roots=(roots or {}).get(name, 27), champion=self.champion, split=32, calls=m['calls'], groups=m['groups'],
+                tree=dict(commit=(trees or {}).get(name, '6767fe6c' if name in old else 'new')), pricer_options=m['options'])
+            path = directory / name;path.mkdir();paths.append(str(path))
+            (path / 'gate_surfaces.json').write_text(json.dumps(dict(schema=gs.SCHEMA, header=header, measurements=measurements, departures=m['departures'])))
+        return paths
+
+    def earlier_files(self, directory):
+        entry = lambda x: dict(count=10, nonfinite=0, max=x)
+        d3 = dict(schema=gs.d3g.SCHEMA, status='MEASURED', header=dict(source=dict(D.SOURCE), roots=27, champion=self.champion, d3_options=dict(matches_gate=True),
+            pass_options=dict(matches_gate=True), options=dict(fixed_shapes=True)), p_run={'pricer.t1_value': entry(D.P_T1_VALUE), 'pricer.root_peer_logits.all_lanes': entry(D.P_ROOT_OPP)},
+            d_all={'d3.t1_value': entry(D.P_T1_VALUE), 'd3.root_peer_logits.all_lanes': entry(D.P_ROOT_OPP)})
+        paths = directory / 'validation.json', directory / 'd3_geometry.json';paths[0].write_text(json.dumps(earlier_report(self.pair)));paths[1].write_text(json.dumps(d3))
+        return [str(x) for x in paths]
+
+    def fold_main(self, directory, paths, name='fold'):
+        v_path, d_path = self.earlier_files(directory) if not (directory / 'validation.json').exists() else (str(directory / 'validation.json'), str(directory / 'd3_geometry.json'))
+        with patch.object(gs, 'log', lambda *a, **k: None):
+            code = gs.main(['--out', str(directory / name), '--validation-json', v_path, '--d3-geometry-json', d_path, '--fold-from', *paths])
+        return code, json.loads((directory / name / 'gate_surfaces.json').read_text())
+
+    def test_three_pieces_fold_as_one_run(self):
+        """main --fold-from of the three pieces (from two tree commits) equals the fold of the merged measurements; two pieces, a piece twice or a
+        piece from other roots is refused; pieces a and b in 6767fe6c's format fold with the new piece c to the same tails."""
+        directory = Path(tempfile.mkdtemp(prefix='gate-surfaces-fold-'));paths = self.write_pieces(directory, trees=dict(c='later'))
+        code, report = self.fold_main(directory, paths);self.assertEqual((code, report['status'], report['header']['mode']), (0, 'MEASURED', 'FOLD_ONLY'))
+        p = report['fold']['proposal'];self.assertEqual((p['status'], p['missing_groups']), ('COMPLETE', []));self.assertTrue(all(x['proposed'] for x in p['fields'].values()))
+        self.assertEqual({str(Path(k).parent): x['commit'] for k, x in report['header']['piece_trees'].items()}, dict(zip(paths, ('new', 'new', 'later'))))
+        self.assertTrue(any('measured on tree later' in x for x in report['notes']))
+        merged = json.loads(json.dumps(v.plain(dict(geometries=self.measured['geometries'], direct=self.measured['direct']))))
+        earlier = dict(validation=earlier_report(self.pair), d3_geometry=json.loads(Path(directory / 'd3_geometry.json').read_text()))
+        want = gs.fold(merged, earlier, runs=gs.run_arguments()[0], source_flags={'validation.json': [], 'd3_geometry.json': []})
+        self.assertEqual([(s['id'], s['tail'], s['status']) for s in report['fold']['sites']], [(s['id'], s['tail'], s['status']) for s in json.loads(json.dumps(v.plain(want['sites'])))])
+        self.assertEqual(p['fields'], json.loads(json.dumps(v.plain(want['proposal']['fields']))))
+        for argv, message in ((paths[:2], 'missing [\'r2-top\']'), (paths + paths[2:], 'twice [\'r2-top\']')):
+            with self.subTest(refused=message), self.assertRaisesRegex(SystemExit, message.replace('[', '\\[')):self.fold_main(directory, argv, name=f'refused-{len(argv)}')
+        other = Path(tempfile.mkdtemp(prefix='gate-surfaces-fold-'));moved = self.write_pieces(other, roots=dict(b=30))
+        with self.assertRaisesRegex(SystemExit, 'must share a source'):self.fold_main(other, moved)
+        old = Path(tempfile.mkdtemp(prefix='gate-surfaces-fold-'));code, folded = self.fold_main(old, self.write_pieces(old, old=('a', 'b')))
+        self.assertEqual(code, 0);self.assertEqual([(s['id'], s['tail']) for s in folded['fold']['sites']], [(s['id'], s['tail']) for s in report['fold']['sites']])
+        numbers = lambda fields: {k: (x['proposed'], x['tail'], x['set_by']) for k, x in fields.items()}
+        self.assertEqual(numbers(folded['fold']['proposal']['fields']), numbers(p['fields']));self.assertEqual(folded['fold']['proposal']['status'], 'COMPLETE')
+        sites = {s['id']: s for s in folded['fold']['sites']}
+        self.assertTrue(any('was not measured' in f for f in sites['R2.full_width.n2.e.max_abs_delta_q']['flags']))   # piece b predates the f32 premise
+        self.assertFalse(any('was not measured' in f for f in sites['R2.top3.n2.e.max_abs_delta_q']['flags']))
 
     def test_the_gates_own_call_agrees(self):
         """run_call_n on the same bound requests at R1's shapes (depth 2, k 9, fixed, INVARIANCE_LANES) under the bf16 champion: (c)'s and
@@ -247,6 +319,55 @@ class PositionTests(N.FixtureN, unittest.TestCase):
         tail = record.q.summary();self.assertEqual(tail['count'], len(want));self.assertEqual(tail['max'], max(want));self.assertEqual(result['max_abs_delta_q'], max(want))
         self.assertGreater(max(want), 0.);self.assertEqual(len(record.gaps['bf16']), result['roots_compared'])
 
+    def test_q_reads_each_frames_own_root_prior(self):
+        """A backups stand-in whose completed Q weighs turn-1 values by each frame's root_peer_logits: two frames differing only in their root
+        priors give a non-zero |dQ|, exactly the stand-in's own on the unmodified frames (a recorder that read other priors would differ)."""
+        class RootPrior:
+            @staticmethod
+            def learner_max_root(frame, q, logits, legal):
+                if (np.asarray(frame.pre[q]) != 0).any():return SimpleNamespace(status='REFUSED', improvement=None)
+                z = np.asarray(frame.root_peer_logits[q, 0], np.float64);w = np.exp(z - z.max());w /= w.sum();v1 = np.asarray(frame.t1_value[q, 0], np.float64)
+                completed = tuple(float(np.sum(w * np.nan_to_num(v1[a]))) if ok else None for a, ok in enumerate(legal))
+                target = np.exp(np.asarray(logits) - max(logits));target = target / target.sum()
+                return SimpleNamespace(status='LABELED', improvement=SimpleNamespace(completed_q=completed, policy_target=tuple(map(float, target))))
+        a = self.frame(2, 9);b = copy.deepcopy(a);b.root_peer_logits = np.asarray(b.root_peer_logits, np.float32) + np.asarray([.25] + [0.] * 8, np.float32)
+        record = gs.Geometry('x', group='r1', kind='depthn', depth=2, label='x');record.add_q(b, a, self.requests, RootPrior, 0)
+        want = []
+        for q, request in enumerate(self.requests):
+            x, y = (RootPrior.learner_max_root(f, q, request.root_logits, request.root_legal).improvement for f in (b, a))
+            if x is not None and y is not None:want += [abs(p - r) for p, r, ok in zip(x.completed_q, y.completed_q, request.root_legal) if ok]
+        self.assertGreater(max(want), 1e-3);self.assertEqual(record.q.summary()['max'], max(want));self.assertEqual(record.q_same.summary()['max'], max(want))
+
+    def test_unaligned_whole_positions_are_excluded(self):
+        """A turn-1 map whose slot holds an action the bf16 frame did not select: its subtree is unfound, every whole leaf/ply array position
+        under it is excluded and counted (whatever it holds), the rest compared."""
+        b = self.frame(3, 2);g = copy.deepcopy(b);cell = tuple(np.argwhere((np.asarray(b.t1_status) == 2) & (np.asarray(b.t1_own_actions)[..., 1] >= 0))[0])
+        held = set(np.asarray(b.t1_own_actions[cell]).tolist());g.t1_own_actions[cell + (0,)] = next(a for a in range(9) if a not in held)
+        aligned, found = gs.align(g, b);fa = gate.frame_arrays(aligned);marks = gs.found_arrays(found, fa)
+        fa['leaf_value'] = np.where(marks['leaf_value'], fa['leaf_value'], np.float32(7.))   # garbage where the f32 frame holds another child
+        record = gs.Geometry('x', group='r1', kind='depthn', depth=3, label='x');record.add_whole(fa, gate.frame_arrays(b), 0, found=marks)
+        leaf = record.whole['leaf_value'];size = np.asarray(b.leaf_value).size
+        self.assertEqual(record.unaligned['leaf_value'], int(np.count_nonzero(~found['leaf'])));self.assertGreater(record.unaligned['leaf_value'], 0)
+        self.assertEqual(leaf.count + record.unaligned['leaf_value'] + record.padding['leaf_value'], size);self.assertLess(leaf.summary()['max'], 7.)
+        self.assertGreater(record.unaligned['ply2.value'], 0)
+
+    def test_a_topk_selection_flip_is_excluded_from_whole_arrays(self):
+        """depth2_parts on a top-k Depth2Frame pair whose f32 side selected another turn-2 child at one cell: at k < 9 the two positions
+        enumerated in one precision only leave the whole arrays (counted, flagged as whole_selection_differs), the zero-filled rest stays; at
+        full width nothing is excluded and the flip enters the tail (the 6767fe6c semantics, unchanged for r2-full)."""
+        b = N.fake_as_depth2(self.frame(2, 3));f = copy.deepcopy(b);cells = np.argwhere(np.asarray(b.t2_status) == 4)
+        on = tuple(cells[0]);off = next(tuple(c) for c in np.argwhere(np.asarray(b.t2_status) == 0) if tuple(c[:4]) == on[:4])
+        f.t2_status = np.array(f.t2_status, copy=True);f.t2_value = np.array(f.t2_value, copy=True);f.t2_status[on], f.t2_status[off] = 0, 4
+        f.t2_value[on], f.t2_value[off] = 0., .7
+        for k, excluded in ((3, 2), (9, 0)):
+            record = gs.Geometry('x', group='r2-top', kind='depth2', depth=2, label='x');gs.depth2_parts(record, dict(f32=f, bf16=b), k, 0);r = record.report()
+            with self.subTest(k=k):
+                self.assertEqual(r['whole']['t2_value']['unaligned'], excluded)
+                self.assertEqual(r['whole']['t2_value']['count'] + excluded + r['whole']['t2_value']['padding_nonfinite'], np.asarray(b.t2_value).size)
+                if excluded:
+                    self.assertEqual(r['whole']['t2_value']['max'], 0.);self.assertEqual(r['structural']['whole_selection_differs']['count'], 2)
+                else:self.assertGreaterEqual(r['whole']['t2_value']['max'], .7 - 1e-6);self.assertNotIn('whole_selection_differs', r['structural'])
+
     def test_the_guard_is_the_gates(self):
         """summarize_run's guard (p10 over the checked frames' non-zero spreads) equals the tool's on the same frame, saved by run_call_n."""
         with tempfile.TemporaryDirectory() as directory:
@@ -294,9 +415,10 @@ def tail(maximum, count=100, nonfinite=0):
     return dict(count=count, nonfinite=nonfinite, max=maximum)
 
 
-def geometry(quantities=(), whole=(), q=None, structural=None, depth=2, spreads=None, gaps=None):
-    return dict(quantities=dict(quantities), whole={k: dict(x, padding_nonfinite=0) for k, x in dict(whole).items()}, q=None if q is None else dict(q, adapter=gs.q_adapter(depth)),
-        structural=structural or {}, depth=depth, spreads=spreads, gaps=gaps)
+def geometry(quantities=(), whole=(), q=None, structural=None, depth=2, spreads=None, gaps=None, group=None):
+    return dict(quantities=dict(quantities), whole={k: dict(x, padding_nonfinite=0, unaligned=0) for k, x in dict(whole).items()}, group=group,
+        q=None if q is None else dict(q, adapter=gs.q_adapter(depth), same_selection=dict(q), decide_roots=dict(roots_structural=0)), structural=structural or {}, depth=depth,
+        spreads=spreads, gaps=gaps)
 
 
 def full_measurements(value=.002, logit=.03, q=.004, deeper=.06):
@@ -313,6 +435,7 @@ def full_measurements(value=.002, logit=.03, q=.004, deeper=.06):
         g[f'R2.{config}.depthn'] = geometry(d2, (), tail(q), spreads=spread(), gaps=dict(bf16=[.3], f32=[.3]))
         for b in (27, 81):g[f'R2.{config}.depth2_cb{b}'] = geometry(d2, {k: tail(logit if 'logits' in k else value) for k in gs.DEPTH2_FLOATS}, tail(q) if b == 81 else None,
             gaps=dict(bf16=[.3], f32=[.3]) if b == 81 else None)
+    for gid, x in g.items():x['group'] = gs._group(gid)
     return g
 
 
@@ -323,7 +446,8 @@ def clean_direct(n=100):
     for config in ('full_width', 'top3'):
         out[f'R2.{config}.n2'] = item(('t1_value', 't2_value', 'root_peer_logits', 't1_own_logits', 't1_peer_logits'))
         out[f'R2.{config}.child_block_invariance'] = item(gs.DEPTH2_FLOATS)
-        out[f'R2.{config}.e'] = {'bf16': dict(decide=dict(roots=10, roots_compared=10, status_differs=0, nonfinite_roots=0, argmax_q_differs=0, argmax_target_differs=0), max_abs_delta_q=0., gaps=[.3])}
+        out[f'R2.{config}.e'] = {p: dict(decide=dict(roots=10, roots_compared=10, status_differs=0, nonfinite_roots=0, argmax_q_differs=0, argmax_target_differs=0), max_abs_delta_q=0., gaps=[.3])
+            for p in v.NAMES}
     return out
 
 
@@ -331,11 +455,12 @@ class FoldTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.runs, cls.record = gs.run_arguments();entry = lambda x: dict(count=10, nonfinite=0, max=x)
-        cls.earlier = dict(validation=D.earlier_report(V.pair()), d3_geometry=dict(p_run={'pricer.t1_value': entry(D.P_T1_VALUE), 'pricer.root_peer_logits.all_lanes': entry(D.P_ROOT_OPP)},
+        cls.earlier = dict(validation=earlier_report(V.pair()), d3_geometry=dict(p_run={'pricer.t1_value': entry(D.P_T1_VALUE), 'pricer.root_peer_logits.all_lanes': entry(D.P_ROOT_OPP)},
             d_all={'d3.t1_value': entry(D.P_T1_VALUE), 'd3.root_peer_logits.all_lanes': entry(D.P_ROOT_OPP)}))
 
-    def fold(self, geometries, direct=None, earlier=None):
-        return gs.fold(dict(geometries=geometries, direct=clean_direct() if direct is None else direct), self.earlier if earlier is None else earlier, runs=self.runs)
+    def fold(self, geometries, direct=None, earlier=None, source_flags=None):
+        return gs.fold(dict(geometries=geometries, direct=clean_direct() if direct is None else direct), self.earlier if earlier is None else earlier, runs=self.runs,
+            source_flags=source_flags)
 
     def sites(self, body):
         return {s['id']: s for s in body['sites']}
@@ -403,30 +528,85 @@ class FoldTests(unittest.TestCase):
         body = self.fold(g, direct);s = self.sites(body);missing = {x['site'] for x in body['unmeasured']}
         self.assertTrue({'R2.top3.n2.floats.t1_value', 'R2.top3.n2.e.max_abs_delta_q', 'R2.top3.n2.block_invariance.t2_value', 'R2.top3.n2.e_merged_depth2.max_abs_delta_q'} <= missing)
         self.assertTrue(all(x['exact_coverage'] for x in body['unmeasured']));self.assertIn('R2.top3.n2.floats.t1_value', body['proposal']['fields']['value_bound']['unmeasured'])
-        self.assertIsNotNone(body['proposal']['fields']['value_bound']['proposed'])   # unmeasured sites set nothing (report-only in the declaration)
+        p = body['proposal'];self.assertEqual((p['status'], p['missing_groups']), ('INCOMPLETE', ['r3-d3', 'r2-top']))   # a fold missing a piece proposes nothing
+        self.assertTrue(all(x['proposed'] is None and x['tail'] is not None for x in p['fields'].values()))
         self.assertIsNotNone(s['R3.b.t1_value']['tail']);self.assertIn('D3 side not at R3\'s bucket (r3-d3 not measured)', s['R3.b.t1_value']['flags'])
 
     def test_pieces_and_earlier_checks(self):
         piece = dict(schema=gs.SCHEMA, header=dict(source=D.SOURCE, roots=27, champion={}, split=512, tree=dict(commit='a')), measurements=dict(geometries={'R1.frame': {}}, direct={}))
         merged, _ = gs.merge_pieces(dict(geometries={'R3.frame': {}}, direct={}), [('p', piece)]);self.assertEqual(set(merged['geometries']), {'R1.frame', 'R3.frame'})
         with self.assertRaisesRegex(SystemExit, 'measured twice'):gs.merge_pieces(dict(geometries={'R1.frame': {}}, direct={}), [('p', piece)])
-        flags = gs.piece_checks(dict(source=D.SOURCE, roots=30, champion={}, split=512, tree=dict(commit='b')), [('p', piece)])
-        self.assertTrue(any('roots 27 != 30' in f for f in flags));self.assertTrue(any('tree a != b' in f for f in flags))
+        refusals, notes = gs.piece_checks(dict(source=D.SOURCE, roots=30, champion={}, split=512, tree=dict(commit='b')), [('p', piece)])
+        self.assertEqual(refusals, ['piece p: roots 27 != 30']);self.assertEqual(notes, ['piece p: measured on tree a, folded on b'])   # another tree: accepted, recorded
+        with self.assertRaisesRegex(SystemExit, 'must share a source'):gs.assemble(dict(geometries={}, direct={}), earlier={}, runs=self.runs, run_record=self.record,
+            header=dict(source=D.SOURCE, roots=30, champion={}, split=512), pieces=[('p', piece)])
         pair = V.pair();header = dict(source=D.SOURCE, roots=27, champion={k: pair['bf16'].header()[k] for k in ('archive_sha256', 'checkpoint_sha256')})
-        self.assertEqual(gs.check_earlier(dict(validation=D.earlier_report(pair), d3_geometry=None), header)['validation'], [])
-        self.assertTrue(any('roots 27' in f for f in gs.check_earlier(dict(validation=D.earlier_report(pair), d3_geometry=None), dict(header, roots=30))['validation']))
-        self.assertTrue(any('capacity 256' in f for f in gs.check_earlier(dict(validation=D.earlier_report(pair, capacity=256)), header)['validation']))
+        self.assertEqual(gs.check_earlier(dict(validation=earlier_report(pair), d3_geometry=None), header)['validation'], [])
+        self.assertTrue(any('roots 27' in f for f in gs.check_earlier(dict(validation=earlier_report(pair), d3_geometry=None), dict(header, roots=30))['validation']))
+        self.assertTrue(any('capacity 256' in f for f in gs.check_earlier(dict(validation=earlier_report(pair, capacity=256)), header)['validation']))
         self.assertEqual(gs.check_earlier({}, header)['d3_geometry'], ['no d3_geometry.json'])
+        inconclusive = dict(earlier_report(pair), status='INCONCLUSIVE');self.assertEqual(gs.check_earlier(dict(validation=inconclusive), header)['validation'],
+            ['status \'INCONCLUSIVE\' (PASS or WARN expected; FAIL is refused)'])
+        self.assertEqual(gs.check_earlier(dict(validation=dict(earlier_report(pair), status='WARN')), header)['validation'], [])
+        directory = Path(tempfile.mkdtemp(prefix='gate-surfaces-fail-'));(directory / 'v.json').write_text(json.dumps(dict(earlier_report(pair), status='FAIL')))
+        (directory / 'd.json').write_text('{}')
+        with patch.object(gs, 'log', lambda *a, **k: None), self.assertRaisesRegex(SystemExit, 'status FAIL'):
+            gs.main(['--out', str(directory / 'o'), '--validation-json', str(directory / 'v.json'), '--d3-geometry-json', str(directory / 'd.json'), '--fold-from', str(directory)])
+        self.assertFalse((directory / 'o').exists())
+
+    def test_a_mismatched_source_flags_every_site_built_on_it(self):
+        body = self.fold(full_measurements(), source_flags={'validation.json': ['roots 27 != this run\'s 30'], 'd3_geometry.json': []});s = self.sites(body)
+        built = {x['id'] for x in body['sites'] if any(c['source'] == 'validation.json' for side in x['sides'] for c in side.get('candidates') or ())}
+        self.assertIn('R1.c.t1_value_head', built);self.assertIn('R3.b.t1_value', built);self.assertNotIn('R2.top3.n2.floats.t1_value', built)
+        for sid, x in s.items():
+            with self.subTest(site=sid):self.assertEqual(any(f.startswith('built on validation.json') for f in x['flags']), sid in built)
+
+    def test_q_folds_the_same_selection_roots(self):
+        """(e)'s sides take q.same_selection; the all-roots tail is reported beside it, flagged as informational; no same-selection root leaves
+        the side unmeasured."""
+        g = full_measurements();q = g['R1.frame']['q'];q.update(max=.5, decide_roots=dict(roots_structural=2), same_selection=tail(.004))
+        s = self.sites(self.fold(g))['R1.e.max_abs_delta_q'];self.assertAlmostEqual(s['tail'], 2 * (.004 + gs.q_adapter(2)))
+        self.assertEqual(s['sides'][0]['all_roots']['max'], .5);self.assertTrue(any(f.startswith('informational: R1.frame q over all roots max 0.5 (2 roots') for f in s['flags']))
+        q['same_selection'] = dict(count=0, nonfinite=0);s = self.sites(self.fold(g))['R1.e.max_abs_delta_q']
+        self.assertEqual((s['status'], s['tail']), ('unmeasured', None));self.assertIn('no root holds the same selection', s['unmeasured_reasons'][0])
+        q.update(same_selection=tail(.004), nonfinite=1);s = self.sites(self.fold(g))['R1.e.max_abs_delta_q'];self.assertEqual(s['status'], 'withheld')
+
+    def test_the_turn1_identity_only_flags(self):
+        """R3.turn1_identity compares whole arrays: an unequal unrequested lane (5.0 off) flags R3's depth2_pass site and leaves its tail."""
+        a = SimpleNamespace(t1_own_logits=np.zeros((1, 2, 9, 9, 9), np.float32));b = copy.deepcopy(a);b.t1_own_logits[0, 0, 0, 0, 8] = 5.
+        d = gs.Directs();d.identity('R3.turn1_identity', 'bf16', a, b, ('t1_own_logits',));direct = dict(clean_direct(), **d.report())
+        clean, s = (self.sites(self.fold(full_measurements(), x))['R3.c.depth2_pass_t1_own_logits'] for x in (clean_direct(), direct))
+        self.assertEqual(s['tail'], clean['tail']);self.assertLess(s['tail'], 1.)
+        self.assertTrue(any('R3.turn1_identity' in f and '1 of 1458' in f and 'not raised' in f and '[0, 0, 0, 0, 8]' in f for f in s['flags']), s['flags'])
+
+    def test_selection_kinds_touch_only_their_plies(self):
+        """t1_selection_differs (recorded with affects 'all', as 6767fe6c wrote it) flags R3's ply-2, leaf and Q sites, never its turn-1 ones."""
+        g = full_measurements();g['R3.frame']['structural'] = dict(t1_selection_differs=dict(count=3, affects='all', first=[]))
+        s = self.sites(self.fold(g));hit = lambda sid: any('t1_selection_differs' in f for f in s[sid]['flags'])
+        for sid in ('R3.c.ply2_value_head', 'R3.c.ply2_opp_logits', 'R3.c.leaf_value', 'R3.e.max_abs_delta_q'):self.assertTrue(hit(sid), sid)
+        for sid in ('R3.c.t1_value_head', 'R3.c.root_peer_logits', 'R3.b.t1_value', 'R3.c.depth2_pass_t1_value', 'R3.b.root_peer_logits'):self.assertFalse(hit(sid), sid)
+        self.assertEqual((gs.first_affected('ply2_selection_differs'), gs.first_affected('ply2_own_actions'), gs.first_affected('t2_status_or_error')), (2, 3, None))
+
+    def test_the_n2_e_premise(self):
+        direct = clean_direct();direct['R2.top3.e']['f32']['max_abs_delta_q'] = .01
+        s = self.sites(self.fold(full_measurements(), direct));self.assertTrue(any(f.startswith('premise R2.top3.e: |Q_A_f32 - Q_B_f32| max 0.01') for f in s['R2.top3.n2.e.max_abs_delta_q']['flags']))
+        self.assertEqual(s['R2.full_width.n2.e.max_abs_delta_q']['flags'], [])
+        direct['R2.full_width.e'].pop('f32');s = self.sites(self.fold(full_measurements(), direct))
+        self.assertIn('premise R2.full_width.e: the f32 comparison was not measured (a piece without it)', s['R2.full_width.n2.e.max_abs_delta_q']['flags'])
+
+    def test_q_adapter_is_pinned(self):
+        self.assertEqual((gs.q_adapter(2), gs.q_adapter(3)), (0.0004100400026668001, 0.0006100600040002001))   # 1e-5 + depth x (exp(2e-4) - 1)
 
     def test_the_earlier_reports_alone_reproduce_the_draft(self):
         """Folded with no measurement, the earlier reports' all-positions numbers give the draft's five values, each set by the expected site."""
-        earlier = dict(validation=D.earlier_report(V.pair(), root_opp=.10378537902832032, oracle_root_opp=.09199810028076172), d3_geometry=None)
+        earlier = dict(validation=earlier_report(V.pair(), root_opp=.10378537902832032, oracle_root_opp=.09199810028076172), d3_geometry=None)
         earlier['validation']['geometry']['levels'].update({'depth2.leaf': dict(pricer_all=dict(value=dict(count=9, nonfinite=0, max=.0102745605802536)),
             oracle_sample=dict(value=dict(count=9, nonfinite=0, max=.0046))), 'depth3.leaf': dict(pricer_all=dict(value=dict(count=9, nonfinite=0, max=.01269056035041809)),
             oracle_sample=dict(value=dict(count=9, nonfinite=0, max=.0044)))})
-        p = gs.fold(dict(geometries={}, direct={}), earlier, runs=self.runs)['proposal']['fields']
-        self.assertEqual((p['value_bound']['proposed'], p['value_bound']['set_by']), (.032, 'R3.c.leaf_value'))
-        self.assertEqual(p['root_logit_bound']['proposed'], .26);self.assertEqual(p['near_tie_q_bound']['proposed'], .032)
+        proposal = gs.fold(dict(geometries={}, direct={}), earlier, runs=self.runs)['proposal'];p = proposal['fields']
+        self.assertEqual(proposal['status'], 'INCOMPLETE');rounded = lambda k: gs.round_up(1.25 * p[k]['tail'])   # no group measured: nothing proposed
+        self.assertEqual((rounded('value_bound'), p['value_bound']['set_by']), (.032, 'R3.c.leaf_value'))
+        self.assertEqual(rounded('root_logit_bound'), .26);self.assertEqual(rounded('near_tie_q_bound'), .032)
 
 
 class TailTests(unittest.TestCase):
@@ -484,7 +664,7 @@ class MainTests(N.FixtureN, unittest.TestCase):
         pair = V.pair();loaded = SimpleNamespace(provider=SimpleNamespace(executor=self.ex, materializer=self.tables, recipe=self.recipe), plan=SimpleNamespace(model=object(),
             historical_window=2), groups=groups, source=dict(D.SOURCE), frame_pricer=D.gate_pricer(self.ex))
         directory = Path(tempfile.mkdtemp(prefix='gate-surfaces-'));v_path, d_path = directory / 'validation.json', directory / 'd3_geometry.json'
-        v_path.write_text(json.dumps(D.earlier_report(pair)));d_path.write_text(json.dumps(dict(schema='x')))
+        v_path.write_text(json.dumps(earlier_report(pair)));d_path.write_text(json.dumps(dict(schema='x')))
         real = gs.run_arguments
         with self.engine(), patch.object(v5_model, 'forward', side_effect=CE.no_v2), patch.object(g2, 'bank_chunk_requests', return_value=loaded), \
                 patch.object(g2, 'load_champion', return_value=pair['bf16']), patch.object(gs, 'log', lambda *a, **k: None), \
@@ -494,23 +674,24 @@ class MainTests(N.FixtureN, unittest.TestCase):
                 '--measure', ','.join(argv), '--r3-call-roots', '8'] + CE.CHAMPION)
             return code, json.loads((out / 'gate_surfaces.json').read_text()), (out / 'gate_surfaces.md').read_text(), directory
 
-    def test_main_writes_a_piece_and_folds_it_offline(self):
+    def test_main_writes_a_piece_and_a_lone_piece_does_not_fold(self):
         code, report, summary, directory = self.run_main([list(self.requests)], ('r3-d3',))
         self.assertEqual((code, report['exit'], report['status'], report['schema']), (0, 0, 'MEASURED', gs.SCHEMA))
         h = report['header'];self.assertEqual(h['groups'], ['r3-d3']);self.assertIn('commit', h['tree']);self.assertEqual(h['rules']['draft'], gs.DRAFT)
         self.assertEqual(h['estimate']['minutes'], {'r3-d3': gs.ESTIMATE_MINUTES['r3-d3']});self.assertEqual(set(h['gate_cli_defaults']), {'bare', *gs.RUN_ARGV})
         self.assertEqual(set(h['pricer_options']), {'R3.d3'});self.assertEqual(h['pricer_options']['R3.d3']['departures'], [])
+        self.assertIn('R3.d3 f32: actor_capacity 3 != pinned 33', report['departures'])
+        self.assertEqual((report['fold']['proposal']['status'], report['fold']['proposal']['missing_groups']), ('INCOMPLETE', [g for g in gs.GROUPS if g != 'r3-d3']))
+        self.assertTrue(all(x['proposed'] is None for x in report['fold']['proposal']['fields'].values()))
         self.assertTrue(h['runs']['R2']['fixed_shapes_refused']['refused']);self.assertEqual(h['calls']['split'], 512);self.assertIn('40 saved roots', h['rules']['scope'])
         self.assertGreater(report['measurements']['geometries']['R3.d3']['quantities']['d3.t1_value']['count'], 0)
         self.assertTrue(any('schema' in f for f in report['flags']));self.assertIn('# Champion 9375: the gate\'s float surfaces', summary)
         self.assertIn('| R3.b.t1_value |', summary);self.assertTrue(any(x['site'] == 'R1.e.max_abs_delta_q' for x in report['fold']['unmeasured']))
         out = directory / 'fold'
-        with patch.object(gs, 'log', lambda *a, **k: None):
-            code = gs.main(['--out', str(out), '--validation-json', str(directory / 'validation.json'), '--d3-geometry-json', str(directory / 'd3_geometry.json'),
+        with patch.object(gs, 'log', lambda *a, **k: None), self.assertRaisesRegex(SystemExit, 'missing \\[\'r1\''):
+            gs.main(['--out', str(out), '--validation-json', str(directory / 'validation.json'), '--d3-geometry-json', str(directory / 'd3_geometry.json'),
                 '--fold-from', str(directory / 'out')])
-        folded = json.loads((out / 'gate_surfaces.json').read_text());self.assertEqual((code, folded['header']['mode']), (0, 'FOLD_ONLY'))
-        self.assertEqual(folded['measurements']['geometries']['R3.d3'], report['measurements']['geometries']['R3.d3'])
-        self.assertEqual(folded['fold']['proposal'], report['fold']['proposal'])
+        self.assertFalse(out.exists())   # refused before anything is written
 
     def test_an_empty_run_exits_2(self):
         code, report, summary, _ = self.run_main([], ('r3-d3',))
