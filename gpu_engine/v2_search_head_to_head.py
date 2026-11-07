@@ -222,8 +222,7 @@ class Search:
             average = hedge.averaging(worlds, root_legal)
             if (str(error) != 'finite in-range numerical value required' or average is None
                     or any(v is not None and abs(v) > 1 + 1e-12 for v in average.q)):raise
-            self.events['d_reduction_rounding_edge'] += 1
-            return self.original.Reduction('LABELED', None, 0, 0, 0., None)
+            return self.original.Reduction('LABELED', None, 0, 0, 0., None)   # counted per real row in _price
 
     def _price(self, requests, recipe):
         """Price in calls of a fixed capacity (padding with the chunk's first request).
@@ -246,12 +245,12 @@ class Search:
             for key in ('world_prepare_seconds', 'device_seconds', 'compile_seconds', 'lower_seconds', 'frame_wall_seconds'):
                 self.timing[key] += timing.get(key, 0.) or 0.
             clock = time.perf_counter()
-            if len(self.leaf_sample) < 20000:   # the evaluator's leaf scale, from the first calls
-                if self.kind == 'depth1':
+            if self.kind == 'depth1':
+                # D's rounding edge, tolerated above, labels a root with no improvement; padding copies are not counted.
+                self.events['d_reduction_rounding_edge'] += sum(r.status == 'LABELED' and r.reduction.improvement is None for r in output[:len(chunk)])
+                if len(self.leaf_sample) < 20000:   # the evaluator's leaf scale, from the first calls' real rows
                     self.leaf_sample.extend(v for result in output[:len(chunk)] for r in result.world_reports if r.get('joint_values')
                         for row in r['joint_values'] for v in row if v is not None)
-                else:self.leaf_sample.extend(np.asarray(output.t2_value)[np.asarray(output.t2_status) == 4][:20000].tolist())
-            if self.kind == 'depth1':
                 for result in output[:len(chunk)]:
                     if result.status != 'LABELED':
                         surfaces.append((None, next((r['reason'] for r in result.world_reports if r.get('reason')), result.reason)));continue
@@ -260,6 +259,9 @@ class Search:
             else:
                 from gpu_engine import depth2_backups
                 causes = depth2_backups.refusal_summary(output)['roots']
+                if len(self.leaf_sample) < 20000:   # real, priced rows only
+                    live = [i for i in range(len(chunk)) if not causes[i]['refused']]
+                    self.leaf_sample.extend(np.asarray(output.t2_value)[live][np.asarray(output.t2_status)[live] == 4][:20000].tolist())
                 reasons = [None if not causes[i]['refused'] else 'depth2:' + causes[i]['cause'] + ':' + str(next(
                     (r['reason'] for r in output.world_reports[i] if r['status'] != 'COMPLETE'), None)) for i in range(len(chunk))]
                 if self.reduction in ('hedge', 'hedgedet', 'blend'):
@@ -299,8 +301,10 @@ class Search:
             action = int(raw_actions[i])
             if refusal is None:
                 prices = tuple(w for p, _ in surfaces for w in p);root_legal = tuple(map(bool, legal[i]))
-                if self.reduction == 'raw':choice = hedge.Choice(tuple(1. if a == action else 0. for a in range(9)), 0.)
-                elif self.reduction == 'average':choice = hedge.averaging(prices, root_legal)
+                average = hedge.averaging(prices, root_legal)   # None on an unknown cell: every reduction then refuses
+                if average is None:choice = None
+                elif self.reduction == 'raw':choice = hedge.Choice(tuple(1. if a == action else 0. for a in range(9)), 0.)
+                elif self.reduction == 'average':choice = average
                 elif self.reduction in ('hedge', 'hedgedet'):choice = hedge.bayes_hedge(prices, root_legal, lam=0.)
                 elif self.reduction == 'blend':choice = hedge.bayes_hedge(prices, root_legal, lam=self.blend)
                 else:raise ValueError('search reduction required')
@@ -311,8 +315,9 @@ class Search:
                     if not legal[i][action]:raise ValueError('search chose an illegal action')
                     record.update(strategy=[round(p, 6) for p in choice.strategy], value=choice.value)
                     # Search minus raw in the evaluator's own terms: completed-Q of the played action minus the raw
-                    # sampled action's, and minus the raw argmax's (0 when the choice equals them).
-                    q = hedge.averaging(prices, root_legal).q
+                    # sampled action's, and minus the raw argmax's (0 when the choice equals them). Its basis is the
+                    # reduction's own world surface (Search.q_basis): learner-max backups or hedged turn-2 values at depth 2.
+                    q = average.q
                     argmax = max((a for a in range(9) if legal[i][a]), key=lambda a: (float(logits[i][a]), -a))
                     record.update(q_gain=q[action] - q[int(raw_actions[i])], q_gain_vs_argmax=q[action] - q[argmax])
             out.append((action, record))
@@ -341,9 +346,9 @@ class Search:
                     stats['worlds_compared'] += 1
                     if not world_equal(wa, wb):stats['world_differs'] += 1
         # The full choice from the counterfactual context must be identical.
-        saved = self.timing.copy();calls = len(self.calls)
+        saved = self.timing.copy(), self.events.copy(), len(self.calls), len(self.leaf_sample)
         again = self.choose(context, rows, owners, logits, legal, inputs, raw_actions)
-        self.timing = saved;del self.calls[calls:]
+        self.timing, self.events = saved[0], saved[1];del self.calls[saved[2]:];del self.leaf_sample[saved[3]:]
         for (x, rx), (y, ry) in zip(out, again):
             stats['decisions_compared'] += 1
             if x != y or rx != ry:stats['choice_differs'] += 1
@@ -383,6 +388,8 @@ def main(argv=None):
                 or cell['reduction'] not in REDUCTIONS or cell.get('b_policy', 'sample') not in ('sample', 'argmax')):
             raise SystemExit('malformed cell: ' + json.dumps(cell))
     if len({c['label'] for c in cells}) != len(cells):raise SystemExit('cell labels must be unique')
+    if any(c.get('never_borrow') for c in cells) and args.games is not None and args.games < 2:
+        raise SystemExit('the never-borrow probe swaps in another game: two or more games required')
     import jax
     import jax.numpy as j
     from pokezero import v5_gumbel as original
@@ -498,14 +505,15 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
                     clock = time.perf_counter()
                     inputs = jax.device_get({k: v[j.asarray(rows)] for k, v in decided['own_inputs'].items()})
                     root_context = RootContext(carry.state, carry.public, carry.streams, carry.frames)
-                    probe = None
+                    probe = None;probe_before = probe_stats['probe_seconds']
                     if cell['never_borrow']:
                         state = counterfactual(carry.state, rows, a_side_host[rows], perm, worlds.OWN_MON_FIELDS + worlds.OWN_SIDE_FIELDS)
                         probe = dict(context=RootContext(state, carry.public, carry.streams, carry.frames), stats=probe_stats)
                     result = search.choose(root_context, [int(r) for r in rows], [int(a_side_host[r]) for r in rows], logits, legal,
                         inputs, raw, probe=probe)
                     chosen = np.asarray([x for x, _ in result], np.int32);records = [r for _, r in result]
-                    timing['search_seconds'] += time.perf_counter() - clock
+                    probe_seconds = probe_stats['probe_seconds'] - probe_before if probe is not None else 0.
+                    timing['search_seconds'] += time.perf_counter() - clock - probe_seconds   # the probe is timed apart
                 actions[rows, a_side_host[rows]] = chosen
                 masked = np.where(legal, logits, -np.inf)
                 for i, r in enumerate(rows):
@@ -556,19 +564,23 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
         a=dict(run=args.a_run, iteration=a.iteration, archive_sha256=a.archive_sha256),
         b=dict(run=cell['b_run'], iteration=b.iteration, archive_sha256=b.archive_sha256, policy=cell['b_policy']),
         search=dict(reduction=cell['reduction'], pricer=args.pricer, blend=cell['blend'] if cell['reduction'] == 'blend' else None,
+            q_gain_basis=None if search is None else ('completed-Q over D depth-1 worlds' if args.pricer == 'depth1' else
+                'completed-Q over hedged turn-2 values' if cell['reduction'] in ('hedge', 'hedgedet', 'blend') else 'completed-Q over learner-max backups'),
             worlds=2 * cell['world_blocks'] if search else 0, search_seed=args.search_seed,
             block_seeds=list(world_block_seeds(args.search_seed, cell['world_blocks'])) if search else [],
             capacities=args.capacities, never_borrow=cell['never_borrow']),
         games=dict(config=args.config, iteration=args.iteration, block=args.block, games_per_seat_order=n,
             sampling_seed=setup['batch'].sampling_seed),
         pairs=count, excluded_pairs=excluded, a_paired_score=mean, standard_error=se, interval_90=interval(0., 1.),
+        # Points of score: 100 * (mean - 0.5). v2_head_to_head's a_minus_b_points is 200 * (mean - 0.5) (win share minus loss share).
         a_score_minus_50_points=None if mean is None else 100 * (mean - .5), a_score_minus_50_interval_90_points=interval(.5, 100.),
         a_score_by_a_seat={str(k): float(np.mean(v)) if v else None for k, v in seat.items()},
         dispositions={name: int((np.asarray(final['status']) == code).sum()) for code, name in enumerate(STATUS)},
         decisions=dict(total=dict(total), by_turn_band={k: dict(v) for k, v in sorted(bands.items())},
             searched_share=total['searched'] / max(total['decisions'], 1),
             searched_change_rate_vs_raw_sample=total['searched_changed_vs_raw_sample'] / max(total['searched'], 1)),
-        never_borrow=dict(probe_stats) if cell['never_borrow'] else None, collector_check=setup['collector_check'],
+        never_borrow=dict(probe_stats) if cell['never_borrow'] and probe_stats['decisions_compared'] else None,
+        collector_check=setup['collector_check'],
         timing=dict(steps=step, wall_seconds=time.perf_counter() - begin, process_setup_seconds=setup_seconds, **timing,
             search=dict(search.timing) if search else {}, pricer_calls=len(search.calls) if search else 0,
             search_events=dict(search.events) if search else {},
