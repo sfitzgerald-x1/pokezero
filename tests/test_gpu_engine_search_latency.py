@@ -26,6 +26,8 @@ from gpu_engine import device_depthn_pricer as dn, device_public_worlds as real_
 from pokezero import v5_contract as contract, v5_gumbel as original
 
 
+THIS = __name__   # this module's import name: tests.test_... locally, test_... under the CI shard runner
+
 class FakeTime:
     """A deterministic perf_counter: callables advance it; `extra` adds seconds to successive price() calls."""
     def __init__(self):self.now, self.extra = 100., []
@@ -500,24 +502,24 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(reference[0]['completed_q'][0], .2, places=6);self.assertAlmostEqual(reference[1]['completed_q'][0], .4, places=6)
         baseline, clock = solve(tool.Solver.load('gpu_engine.depthn_backups:learner_max'))   # the plug-in path's like-for-like baseline
         for a, b in zip(reference, baseline):self.assertEqual(a['completed_q'], b['completed_q'])
-        plugged = tool.Solver.load('tests.test_gpu_engine_search_latency:pessimistic');self.assertIs(plugged.rule, pessimistic)
+        plugged = tool.Solver.load(f'{THIS}:pessimistic');self.assertIs(plugged.rule, pessimistic)
         low, _ = solve(plugged);self.assertAlmostEqual(low[0]['completed_q'][0], .1, places=6);self.assertAlmostEqual(low[1]['completed_q'][0], -.2, places=6)
         calls = []
         spy = tool.Solver('spy', lambda grid, pi_own, pi_opp: calls.append((len(grid), len(grid[0]), tuple(pi_opp))) or 0.)
         solve(spy);self.assertEqual(calls, [(2, 2, (.5, .5))] * 4)   # 2 roots x 2 worlds x the one expanded cell
-        self.assertEqual(plugged.describe()['rule'], 'tests.test_gpu_engine_search_latency.pessimistic');self.assertTrue(tool.Solver().describe()['stand_in'])
+        self.assertEqual(plugged.describe()['rule'], f'{THIS}.pessimistic');self.assertTrue(tool.Solver().describe()['stand_in'])
         # W = 4 from two blocks (frames): the equal-weight mean of their completed-Q; an errored leaf in any block refuses the root.
         other = depth2_frame(([[0., 0.], [.4, .4]], [[.1, .1], [.1, .1]]), errored=((1, 1),))
         mixed, _ = solve(tool.Solver(), ((frame, 0), (other, 0)))
         self.assertAlmostEqual(mixed[0]['completed_q'][0], (.2 + .4) / 2, places=6);self.assertEqual(mixed[1]['status'], 'REFUSED')
         self.assertIsNone(tool.move_of(mixed[1]));self.assertEqual(tool.move_of(mixed[0]), 0)
-        for spec, error in (('tests.test_gpu_engine_search_latency:two_args', 'rule(grid, pi_own, pi_opp)'), ('tests.test_gpu_engine_search_latency:NOT_CALLABLE', 'not a callable')):
+        for spec, error in ((f'{THIS}:two_args', 'rule(grid, pi_own, pi_opp)'), (f'{THIS}:NOT_CALLABLE', 'not a callable')):
             with self.assertRaises(ValueError) as raised:tool.Solver.load(spec)
             self.assertIn(error, str(raised.exception))
 
     def test_header_carries_constructor_path_commit_and_note(self):
         fake = SimpleNamespace(batch=SimpleNamespace(_numpy_worlds=fake_numpy_worlds, mapping=SimpleNamespace(materialize_host=fake_materialize_host)), DepthNPricer=FakeDepthN)
-        here = 'tests.test_gpu_engine_search_latency.'
+        here = f'{THIS}.'
         path = tool.constructor_path(FakeProvider(), fake, SimpleNamespace(detach_roots=fake_detach_roots, plan_starts=fake_plan_starts))
         self.assertEqual((path['materializer'], path['source'], path['world_builder'], path['world_materialize'], path['world_planner']),
             (here + 'FakeTables', here + 'FakeSource', here + 'fake_numpy_worlds', here + 'fake_materialize_host', here + 'fake_plan_starts'))
@@ -560,7 +562,7 @@ class SearchLatencyTests(unittest.TestCase):
             (path, 'abc123def', tool.CONSTRUCTOR_NOTE))
         self.assertIn('Codex\'s constructor batch 2 (own PP carry, removed items, sleep clocks)', tool.CONSTRUCTOR_NOTE)
         md = report['summary_markdown']
-        self.assertIn("block 0 in host_prep, + tests.test_gpu_engine_search_latency.fake_numpy_worlds; source abc123def)", md)   # the column header
+        self.assertIn(f"block 0 in host_prep, + {THIS}.fake_numpy_worlds; source abc123def)", md)   # the column header
         self.assertIn('| host_prep steps / detach passes | detach ms per pass |', md);self.assertIn('| 2 / 2 | 1.00 |', md)   # fake prep: 2 steps, .002 s detach
         self.assertIn('a lockstep live batch (all C games at one step) pays ONE pass', md)
         for text in (path['timed'], 'abc123def', tool.CONSTRUCTOR_NOTE, '<= 800 ms', 'learner_max, hedge', 'fake_numpy_worlds', '| depth3-prior-k3 | 2 | sequential | fake | 0 |',
@@ -652,7 +654,7 @@ class SearchLatencyTests(unittest.TestCase):
         search = tool.Search('depth2-merged', 4, args, ctx, depth2_module=DEPTH2)
         self.assertEqual(search.pricer.given, dict(capacity=4, actor_capacity=3, k_own=9, k_opp=9, k1_own=9, k1_opp=9, digest=True, fixed_capacity=True))
         self.assertEqual(search.pricer.child_block, 27)   # never passed: the pricer's own default, as the gate's --pricer-only without --child-block
-        self.assertEqual((search.options['engine'], search.options['child_block'], search.options['digest']), ('tests.test_gpu_engine_search_latency.FakeDepth2', 27, True))
+        self.assertEqual((search.options['engine'], search.options['child_block'], search.options['digest']), (f'{THIS}.FakeDepth2', 27, True))
         self.assertEqual(search.widths(), dict(k_own=(9,), k_opp=(9,), k1=(9, 9), nominal_leaves_per_world=6561))
         record, _ = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK)
         s, p = record['stages'], record['parts']
@@ -662,7 +664,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertIsNone(record['pricing'][0]['depthn']['p1_seconds']);self.assertEqual(record['enumerated_leaves'] / (4 * 2), 6561)
         record, _ = tool.run_call(search, ctx, ctx.roots(4), 2, 'sequential', solver=FakeSolver(), timer=CLOCK);self.assertEqual(record['stages']['compile'], 0.)
         # W=8 sequential and packed, one pricer per (config, pricer capacity); the row records the engine and the solve it used.
-        args = self.args('--configs', 'depth2-merged@8', '--capacities', '1,4', '--repeats', '2', '--solver', 'tests.test_gpu_engine_search_latency:pessimistic', '--packed')
+        args = self.args('--configs', 'depth2-merged@8', '--capacities', '1,4', '--repeats', '2', '--solver', f'{THIS}:pessimistic', '--packed')
         plugged = FakeSolver();plugged.spec = args.solver   # a plug-in solver: the merged rows still record depth2_backups learner-max
         series = tool.measure_config('depth2-merged', (8,), args, fake_ctx(), None, solver=plugged, depth2_module=DEPTH2,
             memory=lambda: {}, timer=CLOCK)
@@ -674,7 +676,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertIn('fixed_capacity', str(raised.exception.code))
         # The real solve on a real Depth2Frame: depth2_backups learner-max; a plug-in rule through depth2_rule_worlds.
         values = ([[.6, -.2], [.1, .1]], [[-.4, 0.], [.3, .5]]);frame = dn.as_depth2_frame(depth2_frame(values))
-        for solver, expected in ((tool.Solver(), (.2, .4)), (tool.Solver.load('tests.test_gpu_engine_search_latency:pessimistic'), (.1, -.2))):
+        for solver, expected in ((tool.Solver(), (.2, .4)), (tool.Solver.load(f'{THIS}:pessimistic'), (.1, -.2))):
             results = solver.solve([(frame, 0)], [ROOT, ROOT], tool.Clock(CLOCK))
             self.assertAlmostEqual(results[0]['completed_q'][0], expected[0], places=6);self.assertAlmostEqual(results[1]['completed_q'][0], expected[1], places=6)
         self.assertEqual({s['solve'] for s in series}, {tool.MERGED_SOLVE['rule']})
@@ -758,7 +760,7 @@ class SearchLatencyTests(unittest.TestCase):
         rows = tool.select(group)['rows'];self.assertEqual(len(rows), 4);self.assertEqual({r['variant'] for r in rows}, {v.name for v in variants})
 
     def test_real_spawn_pool_matches_in_process(self):
-        here = 'tests.test_gpu_engine_search_latency'   # this module stands in for search_hedge in the workers (its matrix_game: the pure maximin)
+        here = f'{THIS}'   # this module stands in for search_hedge in the workers (its matrix_game: the pure maximin)
         with patch.dict(os.environ, {k: '7' for k in tool.POOL_THREADS}):pool, info = tool.start_pool(2, hedge_module=here, modules=('gpu_engine.depthn_backups',))
         try:
             self.assertEqual((info['workers'], info['answered'], info['start_method']), (2, 2, 'spawn'));self.assertGreater(info['startup_seconds'], 0.)
@@ -911,10 +913,10 @@ class SearchLatencyTests(unittest.TestCase):
     def test_build_pools_passes_the_solver_modules_and_the_deadline(self):
         started = []
         def start(size, **kw):started.append((size, kw));return SimpleNamespace(terminate=lambda: None, join=lambda: None), dict(workers=size)
-        args = self.args('--solver', 'learner_max,tests.test_gpu_engine_search_latency:pessimistic,hedge', '--solver-pool', '0,4',
-            '--solver-timeout', '9', '--hedge-module', 'tests.test_gpu_engine_search_latency')
+        args = self.args('--solver', f'learner_max,{THIS}:pessimistic,hedge', '--solver-pool', '0,4',
+            '--solver-timeout', '9', '--hedge-module', f'{THIS}')
         pools, infos = {}, [];tool.build_pools(args, True, pools, infos, start=start)
-        self.assertEqual(started, [(4, dict(hedge_module='tests.test_gpu_engine_search_latency', modules=['tests.test_gpu_engine_search_latency']))])
+        self.assertEqual(started, [(4, dict(hedge_module=f'{THIS}', modules=[f'{THIS}']))])
         self.assertIsNone(pools[0]);self.assertIsInstance(pools[4], tool.SolvePool);self.assertEqual((pools[4].size, pools[4].timeout), (4, 9.))
         self.assertEqual(infos, [dict(workers=4)])
         started.clear();tool.build_pools(self.args('--solver-pool', '2'), False, {}, [], start=start)
@@ -925,7 +927,7 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertIn('ModuleNotFoundError', str(raised.exception.code))   # the worker imports it (naming it is not enough)
 
     def test_expected_series_covers_packed_mode(self):
-        args = self.args('--configs', 'depth2-fw@2/8', '--capacities', '1,4', '--packed', '--solver', 'learner_max,hedge', '--hedge-module', 'tests.test_gpu_engine_search_latency',
+        args = self.args('--configs', 'depth2-fw@2/8', '--capacities', '1,4', '--packed', '--solver', 'learner_max,hedge', '--hedge-module', f'{THIS}',
             '--solver-pool', '0,16')
         rows = [(e['capacity'], e['worlds'], e['mode'], e['variant'], e['pricer_capacity']) for e in tool.expected_series(args, 'depth2-fw')]
         self.assertEqual(len(rows), 2 * 3 * 4)   # capacities x (W=2 seq, W=8 seq, W=8 packed) x (solver, pool) variants
@@ -1046,11 +1048,11 @@ class SearchLatencyTests(unittest.TestCase):
         self.assertEqual(args.compile_cache, str(Path(args.out).resolve().parent / 'jax-compile-cache'))   # the persistent cache is on by default
         self.assertIsNone(self.args('--no-compile-cache').compile_cache);self.assertEqual(self.args('--compile-cache', '/c').compile_cache, '/c')
         args = self.args('--configs', 'depth3-prior-k2,depth2-k4@4/2', '--worlds', '2,8', '--capacities', '8,2,8', '--headline-capacity', '2',
-            '--solver', 'tests.test_gpu_engine_search_latency:pessimistic')
+            '--solver', f'{THIS}:pessimistic')
         self.assertEqual(args.config_worlds, {'depth3-prior-k2': (2, 8), 'depth2-k4': (2, 4)});self.assertEqual(args.capacity_values, (2, 8))
-        self.assertEqual(args.solver_specs, ('tests.test_gpu_engine_search_latency:pessimistic',));self.assertFalse(args.packed)
-        args = self.args('--solver', 'learner_max,hedge', '--solver-pool', '16,0', '--hedge-module', 'tests.test_gpu_engine_search_latency', '--hedge-commit', 'abc')
-        self.assertEqual((args.solver_specs, args.pool_sizes, args.hedge_module, args.hedge_commit), (('learner_max', 'hedge'), (0, 16), 'tests.test_gpu_engine_search_latency', 'abc'))
+        self.assertEqual(args.solver_specs, (f'{THIS}:pessimistic',));self.assertFalse(args.packed)
+        args = self.args('--solver', 'learner_max,hedge', '--solver-pool', '16,0', '--hedge-module', f'{THIS}', '--hedge-commit', 'abc')
+        self.assertEqual((args.solver_specs, args.pool_sizes, args.hedge_module, args.hedge_commit), (('learner_max', 'hedge'), (0, 16), f'{THIS}', 'abc'))
         existing = str(self.tmp())
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
             for extra in (['--configs', 'depth1'], ['--configs', 'depth2-searched-k3'], ['--configs', 'depth3-prior-k10'], ['--configs', 'depth2-fw@3'],
