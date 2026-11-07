@@ -1052,6 +1052,28 @@ class AnalysisTests(GateFixture, unittest.TestCase):
                 self.assertEqual(gate.recheck(old, backups=FakeBackups)['refusals']['depth2']['source'], 'depth2_backups.refusal_summary')
             pruning = gate.offline_pruning(old, backups=FakeBackups);self.assertTrue(pruning['full_width']);self.assertGreater(pruning['per_cell']['total'], 0)
 
+    def test_recheck_with_every_cell_a2_spread_zero(self):
+        """The reviewer's case: every expanded cell's a2 rows identical, so the recheck's p10 cell_a2_spread is 0 (it raised
+        ZeroDivisionError in finalize_numeric); now the guard is not applicable and the value bound alone judges."""
+        cell_rows = gate.cell_rows   # every enumerated a2 row the same value: each cell_a2_spread is 0
+        flat = lambda *a: (lambda rows: None if rows is None else np.where(np.isnan(rows), np.nan, .5))(cell_rows(*a))
+        with tempfile.TemporaryDirectory() as directory:
+            self.run_saved(directory)
+            with patch.object(gate, 'cell_rows', flat):report = gate.recheck(directory, backups=FakeBackups, progress=None)
+            spread = report['values']['totals']['cell_a2_spread'];self.assertGreater(spread['count'], 0);self.assertEqual(spread['p10'], 0.)
+            self.assertEqual(report['status'], 'PASS');self.assertTrue(report['tolerance']['guard'].startswith('not_applicable_p10_zero'))
+            self.assertEqual((report['tolerance']['p10_cell_a2_spread'], report['tolerance']['guard_bound']), (0., None))
+            for row in report['tolerance']['table']:self.assertIsNone(row['ratio_to_guard'], row)
+            json.dumps(report, allow_nan=False, default=str)
+            with np.load(Path(directory) / 'arrays-block0-call0.npz') as z:arrays = {k: z[k] for k in z.files}
+        with tempfile.TemporaryDirectory() as tampered:   # a value beyond the value bound still fails under a zero p10
+            changed = dict(arrays);changed['frame_t2_value'] = arrays['frame_t2_value'].copy()
+            at = tuple(np.argwhere(arrays['frame_t2_status'] == 4)[0]);changed['frame_t2_value'][at] += np.float32(1e-3)
+            np.savez_compressed(Path(tampered) / 'arrays-block0-call0.npz', **changed)
+            with patch.object(gate, 'cell_rows', flat):report = gate.recheck(tampered, backups=FakeBackups, progress=None)
+            self.assertEqual(report['values']['totals']['cell_a2_spread']['p10'], 0.);self.assertEqual(report['status'], 'FAIL')
+            self.assertFalse(report['checks']['c']['quantities']['t2_value']['within_bound'])
+
     def test_offline_cli_writes_recheck_and_pruning(self):
         with tempfile.TemporaryDirectory() as directory:
             self.run_saved(directory, invariance=False)
@@ -1275,6 +1297,39 @@ class RelativeToleranceTests(GateFixture, unittest.TestCase):
         # The live gate takes the guard's spread from the same frames' values section.
         values = gate.values_section([(gate.value_samples(frame, self.requests, backups=FakeBackups), None)], oracle_checked=True)
         self.assertGreater(values['totals']['cell_a2_spread']['p10'], 0)
+
+    def test_a_zero_p10_makes_the_guard_not_applicable(self):
+        """p10 cell_a2_spread == 0: no ZeroDivisionError, the guard reported not applicable, the value bound still gated."""
+        frame, d_results, data, _ = self.shifted(1e-3)   # value bound 2e-3
+        for p10 in (0., np.float64(0.)):
+            result = self.judged(self.noisy(frame, data, 1.5e-3), d_results, data, spread_p10=p10);rule = result['tolerance']
+            self.assertTrue(result['passed']);self.assertTrue(rule['guard'].startswith('not_applicable_p10_zero'))
+            self.assertEqual((rule['p10_cell_a2_spread'], rule['guard_bound']), (0., None))
+            t2 = result['checks']['c']['quantities']['t2_value'];self.assertTrue(t2['within_bound'])
+            for key in ('guard_bound', 'within_guard', 'ratio_to_guard'):self.assertNotIn(key, t2)
+            rows = {(r['check'], r['quantity']): r for r in gate.tolerance_line(rule)['checks']}
+            self.assertEqual((rows[('c', 't2_value')]['ratio_to_guard'], rows[('b', 't1_value')]['ratio_to_guard']), (None, None))
+            json.dumps(result, allow_nan=False, default=str)
+        beyond = self.judged(self.noisy(frame, data, 2.5e-3), d_results, data, spread_p10=0.)   # the value bound stays gated
+        self.assertFalse(beyond['passed']);self.assertFalse(beyond['checks']['c']['quantities']['t2_value']['within_bound'])
+        nan = self.judged(self.noisy(frame, data, np.nan), d_results, data, spread_p10=0.)   # and fails a non-finite |diff| (the guard's other condition)
+        t2 = nan['checks']['c']['quantities']['t2_value'];self.assertFalse(nan['passed']);self.assertEqual((t2['nonfinite'], t2['within_bound']), (3, False))
+        floor = dict(compared=10, nonfinite=0, max_abs_difference=1e-4)   # block invariance takes the same rule
+        head = tuple(data['leaves']['specs'][list(data['leaves']['status']).index(4)])
+        def moved(delta):
+            other = copy.deepcopy(frame);other['t2_value'][head] = np.float32(other['t2_value'][head] + delta)
+            return gate.merge_invariance([gate.block_invariance(frame, other)], rule=gate.tolerance_rule(floor, 0.))
+        self.assertTrue(moved(1e-4)['passed']);self.assertNotIn('within_guard', moved(1e-4)['floats']['t2_value']);self.assertFalse(moved(3e-4)['passed'])
+
+    def test_a_positive_p10_keeps_the_guard(self):
+        """Any p10 > 0, however small, applies and gates the guard exactly as before the zero case was handled."""
+        frame, d_results, data, _ = self.shifted(1e-2);noisy = self.noisy(frame, data, 5e-3)   # value bound 2e-2
+        for p10, passed in ((1e-2, False), (1e-300, False), (.1, True)):
+            result = self.judged(noisy, d_results, data, spread_p10=p10);rule = result['tolerance'];t2 = result['checks']['c']['quantities']['t2_value']
+            self.assertEqual((rule['p10_cell_a2_spread'], rule['guard_bound'], rule['guard']), (p10, gate.GUARD_FACTOR * p10, 'applied'))
+            self.assertEqual((result['passed'], t2['within_guard'], t2['guard_bound']), (passed, passed, gate.GUARD_FACTOR * p10))
+            self.assertEqual(t2['ratio_to_guard'], t2['max_abs_difference'] / (gate.GUARD_FACTOR * p10))
+        self.assertEqual(gate.tolerance_rule(None, 1e-2)['guard_bound'], 2.5e-3);self.assertIsNone(gate.tolerance_rule(None, float('nan'))['guard_bound'])
 
     def test_fallback_when_the_floor_cannot_be_measured(self):
         frame, d_results, data, _ = self.priced()
