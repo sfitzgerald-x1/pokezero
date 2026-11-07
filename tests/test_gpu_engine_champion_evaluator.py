@@ -763,6 +763,32 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
                     r = copy.deepcopy(report);change(r);text, again = self.reverdicted(r)
                     self.assertIsNone(again);self.assertIn('tolerance.root_logit_bound', text);self.assertIn('fail closed', text)
 
+    def test_the_declared_guard_round_trips_through_reverdict(self):
+        """The champion's declared depth-2 gate with --block-invariance (one parameter set, every digest matching, the guard applied): every
+        guarded quantity has its GUARD_DECLARED_RULE mode, digest_certified except c.depth2_pass_t1_value (gated: no certifying digest), and the
+        header's declared_bounds carries the rule. --reverdict re-derives the same modes from the saved digest findings and evidence and refuses
+        a saved mode flipped either way, or a saved digest finding that no longer supports the saved mode."""
+        gate = gate_module();_, flags, sha = self.declared()
+        code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9', '--block-invariance', *flags);report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'));self.assertIsNotNone(report['tolerance']['guard_bound'])
+        record = report['tolerance']['guard_declared']
+        certified = ('b.t1_value', 'c.t1_value_head', 'c.leaf_value', 'c.depth2_pass_t2_value', 'block_invariance.t1_value', 'block_invariance.leaf_value')
+        self.assertEqual(record['modes'], dict(dict.fromkeys(certified, 'digest_certified'), **{'c.depth2_pass_t1_value': 'gated'}))
+        self.assertEqual((record['gated_no_certifying_digest'], record['rule']), (['c.depth2_pass_t1_value'], gate.GUARD_DECLARED_RULE))
+        self.assertEqual(report['header']['declared_bounds']['guard_rule'], gate.GUARD_DECLARED_RULE)
+        code, again = self.reverdicted(report, '--declared-bounds-commit', self.record.commit, '--declared-bounds-sha256', sha)
+        self.assertEqual((code, again['status'], again['tolerance']['guard_declared'], again['reverdict']['changed_quantities'], again['reverdict']['guard_declared_rule']),
+            (0, 'PASS', record, [], gate.GUARD_DECLARED_RULE))
+        for check in ('b', 'c', 'block_invariance'):self.assertEqual(again['checks'][check], report['checks'][check], check)
+        mode = lambda check, key, name, value: lambda r: r['checks'][check][key][name].__setitem__('guard_mode', value)
+        for case, change in dict(b=mode('b', 'values', 't1_value', 'gated'), c=mode('c', 'quantities', 't1_value_head', 'gated'),
+                c_no_digest=mode('c', 'quantities', 'depth2_pass_t1_value', 'digest_certified'), invariance=mode('block_invariance', 'floats', 'leaf_value', 'gated'),
+                digest_finding=lambda r: r['checks']['a']['mismatched'].__setitem__('t1_digest_own', 1),
+                invariance_evidence=lambda r: r['checks']['block_invariance']['floats']['t1_value']['guard_evidence'].__setitem__('digest_mismatched', 1)).items():
+            with self.subTest(case):
+                r = copy.deepcopy(report);change(r);text, again = self.reverdicted(r)
+                self.assertIsNone(again);self.assertIn('saved guard modes differ', text);self.assertIn('fail closed', text)
+
     def test_a_run_without_git_is_provisional_and_the_audit_requires_verified(self):
         """The committed declaration's bytes in a checkout that is not a git work tree (an exported image): the run keeps PASS and exit 0 with
         'provisional: git_verification ...' in status_reasons; --reverdict alone keeps the reason; the audit, --reverdict --declared-bounds-commit,

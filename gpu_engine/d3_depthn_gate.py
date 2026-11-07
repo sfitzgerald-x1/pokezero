@@ -76,7 +76,8 @@ exact adapter-vs-champion.forward check on the first root); the evaluator header
 under gpu_engine/declared_bounds/ through a reviewed PR before the run, its bytes pinned by SHA, its git blob sha1 recorded with COMMIT
 (DECLARED_NOTE: what is verified and what is only recorded for an audit) and its evaluator identity (kind, archive sha256 and precision)
 the run's, whose value, turn-1 logit, deeper-ply logit and optional near-tie Q and root logit
-bounds replace the tolerance NUMBERS of the B1-calibrated rule for that evaluator; every check and rule is unchanged, the measured
+bounds replace the tolerance NUMBERS of the B1-calibrated rule for that evaluator; every check is unchanged, the misplacement guard's mode
+follows GUARD_DECLARED_RULE (digest-certified where a digest check certifies placement, fixed before any champion result), the measured
 floors are still reported beside the declared bounds, and every report's header carries a `declared_bounds` section (the file, its sha256,
 the note that it is a pre-registered evaluator-specific bound, not a rule change after a failure). --reverdict re-applies a report's recorded
 declaration after re-verifying its sha256 and git blob sha1 (and the commit and sha256 given with it: the audit, which requires git_verification
@@ -429,6 +430,86 @@ def digest_cover_n(frame, data):
         cover['leaf_value'] = outside
         if 'raw_head_value' in leaves:cover['raw_head_leaf_value'] = outside
     return cover
+
+
+def _inexact(got, want):
+    """Positions whose float32 bits differ (_numeric's exact test: a non-zero |diff| or a one-sided non-finite)."""
+    return g2._bits(got) != g2._bits(want)
+
+
+def _turn1_viewed(status, error):
+    """(a)'s t1_digest_own mask (g2.check_exact): expanded cells and the learner view's encoder/head errors and codes 5/6."""
+    return (status == 2) | ((status == 3) & np.isin(error, (3, 4) + g2.DEPTH2_CODES))
+
+
+def declared_cover_n(frame, data, d_results):
+    """GUARD_DECLARED_RULE's per-position counts for the turn-1 values, over the records and masks the checks use: {check: {quantity:
+    dict(outside, inexact)}}, outside = value-compared positions outside (a)'s t1_digest_own mask (_turn1_viewed over the oracle's cells),
+    inexact = those whose values are not bit-equal. (c) t1_value_head / raw_head_t1_value: g2.check_heads' valued cells (status and error as
+    the oracle's, expanded or code 5/6). (b) t1_value: g2.check_d's compared cells (enumerated, priced by D without a D error), terminal cells
+    included (they lie outside every digest mask). Recorded in every evaluation, read only under --declared-bounds."""
+    children = data['children'];cells = np.asarray(children['cells'], np.int64).reshape(-1, 4);out = dict(b={}, c={})
+    if len(cells):
+        at = tuple(cells.T);status, error = np.asarray(children['status']), np.asarray(children['error'])
+        same = (np.asarray(frame.t1_status)[at] == status) & (np.asarray(frame.t1_error)[at] == error)
+        outside = same & ((status == 2) | np.isin(error, g2.DEPTH2_CODES)) & ~_turn1_viewed(status, error);value = np.asarray(frame.t1_value)[at]
+        for name, key in (('t1_value_head', 'head_value'), ('raw_head_t1_value', 'raw_head_value')):
+            if key in children:out['c'][name] = dict(outside=int(outside.sum()), inexact=int(np.count_nonzero(outside & _inexact(value, children[key]))))
+    viewed = set(map(tuple, cells[_turn1_viewed(np.asarray(children['status']), np.asarray(children['error']))].tolist())) if len(cells) else set()
+    t1s, t1v = np.asarray(frame.t1_status), np.asarray(frame.t1_value);outside = inexact = 0
+    if len(d_results) != len(t1s):return out   # (b) compares no value
+    for q, result in enumerate(d_results):
+        for wi, report in enumerate(result.world_reports):
+            grid = report.get('joint_values')
+            if grid is None:continue
+            errors = {(a, r) for a, r, _ in report.get('errors', ())}
+            for a, r in ((a, r) for a in range(9) for r in range(9) if grid[a][r] is not None and (a, r) not in errors and t1s[q, wi, a, r] != 0):
+                if (q, wi, a, r) not in viewed:outside += 1;inexact += int(np.any(_inexact(t1v[q, wi, a, r], grid[a][r])))
+    out['b']['t1_value'] = dict(outside=outside, inexact=inexact)
+    return out
+
+
+VALUE_DIGESTS = dict(t1_value='t1_digest_own', leaf_value='leaf_digest', t2_value='t2_digest')   # block invariance: a value array's digest array
+
+
+def invariance_cover(a, b):
+    """GUARD_DECLARED_RULE's evidence for one block_invariance pair (frame fields a, b; frame_arrays names): per guarded value array
+    (g2.invariance_bound: a float array named *value), its digest array (VALUE_DIGESTS; ply{p}.value: ply{p}.digest_own), the digest's mask
+    from b's status and error (discrete arrays, which block_invariance requires bit-equal in both frames; (a)'s masks), digest_compared =
+    positions in it, digest_mismatched = those whose digests differ between the frames (None: a digest, status or error array missing or
+    misshapen), value_compared = the array's size, outside = positions outside the mask, inexact = those of them whose values are not bit-equal."""
+    fa, fb = g2.frame_fields(a), g2.frame_fields(b);out = {}
+    for name in sorted(set(fa) & set(fb)):
+        x, y = np.asarray(fa[name]), np.asarray(fb[name])
+        if not name.endswith('value') or x.dtype.kind not in 'fc' or x.shape != y.shape:continue
+        m = re.fullmatch(r'(ply\d+\.)value', name);prefix = m.group(1) if m else ''
+        digest = prefix + 'digest_own' if m else VALUE_DIGESTS.get(name)
+        status, error = (fb.get(prefix + 'status'), fb.get(prefix + 'error')) if m else (fb.get(name.replace('value', 'status')), fb.get(name.replace('value', 'error')))
+        da, db = (None, None) if digest is None else (fa.get(digest), fb.get(digest))
+        usable = all(v is not None and np.asarray(v).dtype.kind in 'biu' for v in (da, db, status, error)) and np.asarray(da).shape == np.asarray(db).shape == x.shape + (2,) \
+            and np.asarray(status).shape == np.asarray(error).shape == x.shape
+        if not usable:out[name] = dict(digest=digest, digest_compared=None, digest_mismatched=None, value_compared=int(x.size), outside=None, inexact=None);continue
+        status, error = np.asarray(status), np.asarray(error)
+        mask = (status == 4) | ((status == 3) & np.isin(error, (3, 4))) if name in ('leaf_value', 't2_value') else _turn1_viewed(status, error) if name == 't1_value' \
+            else _viewed_own(status, error)
+        differs = (np.asarray(da) != np.asarray(db)).any(axis=-1);outside = ~mask
+        out[name] = dict(digest=digest, digest_compared=int(mask.sum()), digest_mismatched=int(np.count_nonzero(differs & mask)), value_compared=int(x.size),
+            outside=int(outside.sum()), inexact=int(np.count_nonzero(outside & _inexact(x, y))))
+    return out
+
+
+def n2_cover(theirs, mine):
+    """GUARD_DECLARED_RULE's per-position counts for n2_compare's values (its masks, from the Depth2Pricer frame): t1_value's valued cells
+    outside the t1_digest_own mask and t2_value's head-valued leaves outside the t2_digest mask (both empty by construction; counted), with
+    the inexact ones among them."""
+    a, b = g2.frame_fields(theirs), g2.frame_fields(mine)
+    t1s, t1e, t2s, t2e = (np.asarray(a[n]) for n in ('t1_status', 't1_error', 't2_status', 't2_error'))
+    if t1s.shape != np.asarray(b['t1_status']).shape or t2s.shape != np.asarray(b['t2_status']).shape:return {}
+    out = {}
+    for name, valued, mask in (('t1_value', (t1s == 2) | ((t1s == 3) & np.isin(t1e, (5, 6))), (t1s == 2) | ((t1s == 3) & np.isin(t1e, (3, 4, 5, 6)))),
+            ('t2_value', t2s == 4, (t2s == 4) | ((t2s == 3) & np.isin(t2e, (3, 4))))):
+        outside = valued & ~mask;out[name] = dict(outside=int(outside.sum()), inexact=int(np.count_nonzero(outside & _inexact(np.asarray(a[name]), np.asarray(b[name])))))
+    return out
 
 
 def check_enumeration_n(frame, data, findings):
@@ -1125,7 +1206,8 @@ def _evaluate_n(frame, d_results, requests, data, *, context=None, full_turn1=Tr
     with stage(progress, 'check_c', **context):c = check_heads_n(frame, data, d_results);cover = digest_cover_n(frame, data)
     with stage(progress, 'check_d', **context) as info:d = check_enumeration_n(frame, data, Findings(context)).report();info['passed'] = d['passed']
     with stage(progress, 'check_oracle_consistency', **context):oracle = check_oracle_n(data, Findings(context)).report()
-    return dict(a=a, b=b, c=c, d=d, oracle=oracle, geometry=[], spreads=node_spreads(frame), depth=depth, digest_cover=cover)
+    return dict(a=a, b=b, c=c, d=d, oracle=oracle, geometry=[], spreads=node_spreads(frame), depth=depth, digest_cover=cover,
+        declared_cover=declared_cover_n(frame, data, d_results))
 
 
 def guard_spread(spreads):
@@ -1247,7 +1329,7 @@ def rebound(m, bound, deltas=None):
     return m
 
 
-def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None, geometry=None, declared=None):
+def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None, geometry=None, declared=None, declared_cover=None):
     """The current (c) verdict on a summarized result or a saved gate report, in place (the live run and --reverdict alike):
     DEEPER_LOGIT_RULE's bound on the deeper priors (rebound; `bound_rule` on every logit quantity); each non-floor
     quantity's passed = within_bound and, where it has a guard, (within_guard unless GUARD_DEPTHN_RULE certifies it:
@@ -1257,7 +1339,10 @@ def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None,
     outside: {quantity: digest_cover_n count}; a quantity without one reuses its saved guard_evidence count. declared: a
     --declared-bounds declaration (DECLARED_RULE): every non-floor quantity is rebound to its declared number (declared_bound_for: values,
     turn-1 logits, root priors when root_logit_bound is declared, deeper logits by declared_deeper) and tolerance.declared_bounds records
-    them beside the measured floors and the frozen rule's numbers; None: exactly the frozen rule."""
+    them beside the measured floors and the frozen rule's numbers, and every guarded (c) quantity GUARD_DEPTHN_RULE does not cover takes
+    GUARD_DECLARED_RULE (declared_guard_mode; declared_cover: {quantity: merged per-position counts}, None: the saved evidence's), with
+    tolerance.guard_declared recording every guarded quantity's mode ((b) and block invariance: declared_guards, first); None: exactly the
+    frozen rule."""
     checks = result['checks'];c, a = checks.get('c'), checks.get('a') or {};modes = {}
     if c is None:return result
     floor, floor_source = turn1_logit_floor(c['quantities']);deeper = g2.LOGIT_BOUND if floor is None else max(g2.LOGIT_BOUND, 2 * floor)
@@ -1272,7 +1357,10 @@ def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None,
         elif g2.is_logit(name):m['bound_rule'] = 'logit_bound'
         if m.get('guard_bound') is None:m['passed'] = bool(m['within_bound']);continue
         count = (outside or {}).get(name, (m.get('guard_evidence') or {}).get('value_positions_outside_digest'))
-        mode, evidence = guard_mode(name, m, a, depth, count, actors);modes[name] = mode
+        if declared is not None and certifying_digest(name, depth) is None:   # GUARD_DECLARED_RULE where GUARD_DEPTHN_RULE does not reach
+            mode, evidence = declared_guard_mode('c', name, m, a, saved_cover(m) if declared_cover is None else declared_cover.get(name), actors)
+        else:mode, evidence = guard_mode(name, m, a, depth, count, actors)
+        modes[name] = mode
         if deltas is not None and name in deltas:m['beyond_guard'] = int(np.count_nonzero(np.asarray(deltas[name], np.float64) >= m['guard_bound']))
         m.update(guard_mode=mode, guard_evidence=evidence, beyond_guard=m.get('beyond_guard'))
         m['passed'] = bool(m['within_bound']) and (mode == 'digest_certified' or bool(m['within_guard']))
@@ -1286,7 +1374,9 @@ def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None,
         turn1_logit_floor=floor, deeper_logit_bound=deeper,
         deeper_logit_bound_source=source, deeper_logit_rule=DEEPER_LOGIT_RULE if declared is None else DECLARED_DEEPER_RULE,
         deeper_logit_quantities=[n for n in c['quantities'] if deeper_logit(n, depth)])
-    if declared is not None:result['tolerance']['declared_bounds'] = declared_tolerance(result['tolerance'], declared, c['quantities'], frozen_deeper)
+    if declared is not None:
+        result['tolerance']['declared_bounds'] = declared_tolerance(result['tolerance'], declared, c['quantities'], frozen_deeper)
+        result['tolerance']['guard_declared'] = guard_record(checks)
     return result
 
 
@@ -1313,8 +1403,13 @@ def summarize_n(evaluations, *, declared=None):
         for name, m in (e.get('c') or {}).items():deltas[name].append(np.asarray(m['_deltas'], np.float64))
     counts = {e.get('actors') for e in evaluations};count = next(iter(counts)) if len(counts) == 1 else None
     actors = dict(count=count, source=ACTORS_LIVE) if type(count) is int else dict(count=None, source=f'not established: the calls recorded {sorted(map(str, counts))}')
+    covers = None
+    if declared is not None:   # GUARD_DECLARED_RULE: (b) and block invariance here, (c) in apply_rules_depthn
+        declared_guards(result, evaluations, actors)
+        covers = {name: merge_cover([(name in (e.get('c') or {}), ((e.get('declared_cover') or {}).get('c') or {}).get(name)) for e in evaluations])
+            for name in (result['checks'].get('c') or {}).get('quantities', {})}
     apply_rules_depthn(result, depths.pop() if len(depths) == 1 else None, actors=actors, deltas={k: np.concatenate(v) for k, v in deltas.items()},
-        outside=digest_cover_merged(evaluations), geometry=any(e.get('geometry') for e in evaluations), declared=declared)
+        outside=digest_cover_merged(evaluations), geometry=any(e.get('geometry') for e in evaluations), declared=declared, declared_cover=covers)
     choices = [e['f'] for e in evaluations if 'f' in e]
     if choices:   # (f) after (e), under the same value bound as (e)'s q_noise_bound
         f = merge_choices(choices, value_bound=result['tolerance']['value_bound']);checks = result['checks']
@@ -1767,6 +1862,7 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
     if others and not evaluation['geometry']:
         with stage(progress, 'check_block_invariance', **context) as info:
             evaluation['invariance'] = [g2.block_invariance(frame_arrays(o), frame_arrays(frame), context=context) for o in other_frames]
+            evaluation['invariance_cover'] = [invariance_cover(frame_arrays(o), frame_arrays(frame)) for o in other_frames]   # GUARD_DECLARED_RULE
             info['discrete_equal'] = all(r['passed'] for r in evaluation['invariance'])
     root_legal = [r.root_legal for r in requests]
     with stage(progress, 'refusals', **context):
@@ -1889,10 +1985,19 @@ def reverdict(path, *, expected=None):
     if missing:raise SystemExit(f'--reverdict: {path} lacks what the verdict needs: ' + ', '.join(missing[:FIRST]))
     declared, section = saved_declared(report, expected=expected)
     inconsistent = verdict_inconsistencies(report['checks']['c']['quantities'])
+    if declared is not None:   # GUARD_DECLARED_RULE re-judges (b)'s values and block invariance's floats too
+        inconsistent += [f'{check}.{x}' for check, key in (('b', 'values'), ('block_invariance', 'floats'))
+            for x in verdict_inconsistencies((report['checks'].get(check) or {}).get(key) or {})]
     if inconsistent:raise SystemExit('--reverdict: saved (c) verdicts disagree with their own numbers (fail closed): ' + '; '.join(inconsistent[:FIRST]))
     quantities = report['checks']['c']['quantities'];before = {name: m.get('passed') for name, m in quantities.items()}
     old = dict(status=report['status'], status_reasons=report.get('status_reasons'), failing=[k for k, v in report['checks'].items() if not v['passed']])
-    apply_rules_depthn(report, report['pricer_options']['depth'], actors=saved_actors(report), declared=declared)
+    actors, saved_modes = saved_actors(report), None if declared is None else guard_record(report['checks'])['modes']
+    if declared is not None:declared_guards(report, None, actors)
+    apply_rules_depthn(report, report['pricer_options']['depth'], actors=actors, declared=declared)
+    if declared is not None and saved_modes != report['tolerance']['guard_declared']['modes']:   # GUARD_DECLARED_RULE: the saved modes are its own
+        derived = report['tolerance']['guard_declared']['modes']
+        raise SystemExit('--reverdict: saved guard modes differ from those re-derived from the saved digest findings (fail closed): ' + '; '.join(
+            f'{k}: saved {saved_modes.get(k)!r}, re-derived {derived.get(k)!r}' for k in sorted(set(saved_modes) | set(derived)) if saved_modes.get(k) != derived.get(k))[:2000])
     f_before = report['checks']['f']['passed'];sampled = report['sample_leaves'] is not None
     report['checks']['f'] = choice_verdict(report['checks']['f'], report['tolerance']['value_bound'], sampled=sampled)   # (f) through the live function
     status, reasons = gate_status_n(report, sampled=sampled)
@@ -1908,7 +2013,7 @@ def reverdict(path, *, expected=None):
         turn1_logit_floor=report['tolerance']['turn1_logit_floor'], deeper_logit_bound=report['tolerance']['deeper_logit_bound'], choice_rule=CHOICE_RULE,
         note='offline: the saved numbers re-judged by the current verdict rules; nothing was re-priced or re-compared',
         **({} if declared is None else dict(declared_bounds_sha256=declared['sha256'], declared_bounds_commit=declared['commit'],
-            declared_bounds_reverified=declared['reverified'], declared_bounds='the bounds the report recorded (header.declared_bounds: its sha256 and '
+            declared_bounds_reverified=declared['reverified'], guard_declared_rule=GUARD_DECLARED_RULE, declared_bounds='the bounds the report recorded (header.declared_bounds: its sha256 and '
             'git blob sha1 re-verified, the local git history and the source measurement re-checked where available), re-applied'))))
     report = _with_header(report, header_block(report['checks'], declared=section, parity=(report['header'] if isinstance(report.get('header'), dict) else {}).get('merged_depth2_parity')))
     text = json.dumps(report, indent=1, allow_nan=False, default=str) + '\n'   # before the file exists: a failure here leaves none behind
@@ -1999,8 +2104,10 @@ DECLARED_RULE = ('--declared-bounds (opt-in; champion only: with --champion-arch
     '(DEEPER_LOGIT_RULE\'s construction with the declared base and factor; turn1_logit_bound when the floor is unmeasured or non-finite). '
     'near_tie_q_bound (default value_bound) is (e)\'s q_noise_bound, one number in the frozen rule: the root near-tie threshold of rule 1 and '
     '(e)\'s max |dQ| clause (completed Q mixes the swapped priors too); (f) keeps the value bound (both of its sides solve under the pricer\'s '
-    'priors). Unchanged: every exact check ((a), (d), digests, discrete fields, oracle consistency), the misplacement guard (0.25 x the p10 '
-    'spread) and GUARD_DEPTHN_RULE, (f)\'s read identity and priors, the statuses, and the kill test (run at the declared value bound). The '
+    'priors). The misplacement guard keeps its number (0.25 x the p10 spread) and takes GUARD_DECLARED_RULE (decided before any champion '
+    'result): digest-certified, reported and not gated, wherever a digest check certifies the guarded quantity\'s placement, gated elsewhere '
+    '(GUARD_DEPTHN_RULE unchanged within it). Unchanged: every exact check ((a), (d), digests, discrete fields, oracle consistency), (f)\'s read '
+    'identity and priors, the statuses, and the kill test (run at the declared value bound, its verdicts under the same rule). The '
     'measured floors (depth1_noise_floor, root_logit_floor, turn1_logit_floor) are still measured and reported beside the declared bounds, '
     'with the numbers the frozen rule would have given (tolerance.declared_bounds.frozen_rule_would_give; not gated)')
 DECLARED_NOTE = ('evaluator-specific bounds for the champion identity in `evaluator`, applied in place of the B1-calibrated tolerance numbers for '
@@ -2020,11 +2127,31 @@ DECLARED_SUBDIR = 'gpu_engine/declared_bounds'   # where a declaration is commit
 REPO_ROOT = Path(__file__).resolve().parents[1]   # the running checkout (tests point it at a scratch repository)
 DECLARED_TOLERANCE_RULE = ('declared bounds (DECLARED_RULE): values max |diff| <= the declared value_bound; turn-1, root and depth2_pass '
     'logits <= the declared turn1_logit_bound (the root opponent\'s prior <= root_logit_bound when declared); deeper priors as declared; the '
-    'guard, digests, discrete fields and (e)/(f) rules unchanged')
+    'guard digest-certified where a digest check certifies placement, gated elsewhere (GUARD_DECLARED_RULE); digests, discrete fields and (e)/(f) '
+    'rules unchanged')
 DECLARED_DEEPER_RULE = ('(c) priors at plies >= 2 of a depth >= 3 frame under --declared-bounds: the declared deeper_logit_bound, or the declared '
     'deeper_logit_rule max(turn1_logit_bound, factor x turn1_logit_floor) (turn1_logit_floor measured as in DEEPER_LOGIT_RULE; turn1_logit_bound '
     'when it is not); turn-1, root and depth2_pass priors keep the declared turn1_logit_bound (root priors a declared root_logit_bound)')
 ROOT_LOGITS = ('root_peer_logits', 'depth2_pass_root_peer_logits')   # the root opponent's prior wherever a check compares it (root_logit_bound)
+GUARD_DECLARED_RULE = ('under --declared-bounds only (decided by the lead on 2026-11-07, before any champion result existed): the misplacement '
+    'guard (max |diff| < 0.25 x the p10 non-zero spread) of every guarded value quantity is DIGEST-CERTIFIED on GUARD_DEPTHN_RULE\'s terms, at '
+    'depth 2 and at turn 1 of every depth as GUARD_DEPTHN_RULE already does at plies >= 2: reported, not gated (guard_bound, within_guard, '
+    'ratio_to_guard and beyond_guard still computed and reported with guard_mode and guard_evidence) where the digest check that certifies '
+    'the quantity\'s placement compared every value-compared position inside its mask with zero mismatches, every value-compared position '
+    'outside the mask is bit-equal (counted per position; by construction for scored leaves), and the run\'s values came from one evaluator '
+    'parameter set (evaluator_actors == 1); gated wherever any of these fails, and "gated: no certifying digest" where no digest check '
+    'certifies the quantity. Why: (a)\'s leaf digests and, at turn 1, the child cells\' learner-view digests already check '
+    'depth-2 placement exactly, and the pricer writes each lane\'s value and digest from the same inputs, so a misplacement whose value effect '
+    'exceeds noise still fails the value bound, which stays gated everywhere. Certifying digests: (b) t1_value and (c) t1_value_head / '
+    'raw_head_t1_value: (a) t1_digest_own (each turn-1 child cell\'s learner view against the oracle\'s; (b)\'s terminal cells lie outside '
+    'it and must be bit-equal); (c) leaf_value / raw_head_leaf_value at depth 2: (a) leaf_digest (at depth >= 3, and ply{p}_value_head / '
+    'raw_head_ply{p}_value: GUARD_DEPTHN_RULE, unchanged); (c) depth2_pass_t2_value: (a) depth2_pass_t2_digest (the re-run leaves against the '
+    'oracle); block invariance t1_value, leaf_value and ply{p}.value: the two frames\' t1_digest_own, leaf_digest and ply{p}.digest_own on '
+    '(a)\'s masks (invariance_cover); --n2-equivalence t1_value / t2_value: n2_compare\'s t1_digest_own / t2_digest (exact, on masks that '
+    'contain the compared cells), and its child-block invariance t1_value / t2_value: the frames\' t1_digest_own / t2_digest. No certifying '
+    'digest, so gated: (c) depth2_pass_t1_value (the depth-2 pass\'s turn-1 digests are not compared with anything). --n2-equivalence\'s '
+    'turn-1 heads against the oracle stay reported, not gated. --reverdict re-derives every mode from the saved digest findings and per-position '
+    'evidence and refuses a report whose saved mode differs. Without --declared-bounds nothing changes')
 
 
 class DeclaredBoundsError(ValueError):
@@ -2332,6 +2459,120 @@ def declared_root_sites(result, evaluations):
     return result
 
 
+GUARD_NO_DIGEST = 'gated: no certifying digest'
+LEAF_CONSTRUCTION = 'by construction: scored leaves (oracle status 4) lie inside the leaf digest mask'
+
+
+def declared_digest(check, name):
+    """(certifying digest, by-construction note or None) of guarded value quantity `name` of `check` under GUARD_DECLARED_RULE: 'b' (t1_value),
+    'c' (beyond GUARD_DEPTHN_RULE's certifying_digest), 'n2' (n2_compare's floats) or 'block_invariance' (the gate's or --n2-equivalence's: a
+    digest array, invariance_cover); (None, None): no certifying digest (GUARD_NO_DIGEST)."""
+    if check == 'b':return ('t1_digest_own', None) if name == 't1_value' else (None, None)
+    if check == 'c':
+        return dict(t1_value_head=('t1_digest_own', None), raw_head_t1_value=('t1_digest_own', None), leaf_value=('leaf_digest', LEAF_CONSTRUCTION),
+            raw_head_leaf_value=('leaf_digest', LEAF_CONSTRUCTION), depth2_pass_t2_value=('depth2_pass_t2_digest', 'by construction: scored re-run leaves '
+            '(oracle status 4) lie inside the depth2_pass_t2_digest mask')).get(name, (None, None))
+    if check == 'n2':return dict(t1_value=('t1_digest_own', None), t2_value=('t2_digest', None)).get(name, (None, None))
+    m = re.fullmatch(r'(ply\d+\.)value', name)
+    return (m.group(1) + 'digest_own', None) if m else (VALUE_DIGESTS.get(name), None)
+
+
+def declared_guard_mode(check, name, m, findings, cover, actors):
+    """('digest_certified' | 'gated', evidence) for one guarded value quantity `m` under GUARD_DECLARED_RULE (guard_mode's terms): its
+    certifying digest (declared_digest) compared with zero mismatches in `findings` (dict(compared, mismatched): (a)'s merged report,
+    n2_compare's, or a block-invariance cover's sums) at no fewer positions than the quantity's inside its mask, the run's values from one
+    evaluator parameter set (actors as guard_mode's), and every value-compared position outside the mask bit-equal (cover: dict(outside,
+    inexact); None: not counted, which certifies only where declared_digest says the positions lie inside by construction)."""
+    digest, construction = declared_digest(check, name);actors = actors or dict(count=None, source='not established')
+    if digest is None:return 'gated', dict(digest=None, reason=GUARD_NO_DIGEST, evaluator_actors=actors['count'], evaluator_actors_source=actors['source'])
+    compared, mismatched = (findings.get('compared') or {}).get(digest), (findings.get('mismatched') or {}).get(digest)
+    outside, inexact = (None, None) if cover is None else (cover.get('outside'), cover.get('inexact'))
+    evidence = dict(digest=digest, digest_compared=compared, digest_mismatched=mismatched, value_compared=m['compared'], value_positions_outside_digest=outside,
+        value_positions_outside_digest_inexact=inexact, subset='per position: value-compared positions outside the digest mask must be bit-equal'
+            if outside is not None else construction or 'unknown: no per-position count recorded', evaluator_actors=actors['count'], evaluator_actors_source=actors['source'])
+    certified = actors['count'] == 1 and compared is not None and mismatched == 0 and compared >= m['compared'] - (outside or 0) \
+        and (inexact == 0 if outside is not None else construction is not None)
+    return ('digest_certified' if certified else 'gated'), evidence
+
+
+def merge_cover(pairs):
+    """A quantity's per-position counts summed over the calls that compared it: pairs (compared in that call, its cover or None); None when one
+    of those calls recorded none."""
+    covers = [c for compared, c in pairs if compared]
+    if not covers or any(c is None for c in covers):return None
+    out = dict(covers[0])
+    for key in ('digest_compared', 'digest_mismatched', 'value_compared', 'outside', 'inexact'):
+        if key in out:out[key] = None if any(c.get(key) is None for c in covers) else sum(c[key] for c in covers)
+    return out
+
+
+def saved_cover(m):
+    """The per-position counts a saved guard_evidence recorded (--reverdict), or None."""
+    e = m.get('guard_evidence') or {}
+    if e.get('value_positions_outside_digest') is None:return None
+    return dict(outside=e['value_positions_outside_digest'], inexact=e.get('value_positions_outside_digest_inexact'))
+
+
+def judge_guard(m, mode, evidence):
+    """A guarded quantity's mode and evidence recorded and its passed re-judged: within_bound and (digest-certified or within_guard)."""
+    m.update(guard_mode=mode, guard_evidence=evidence);m['passed'] = bool(m['within_bound']) and (mode == 'digest_certified' or bool(m['within_guard']))
+
+
+def invariance_guards(inv, pairs, actors):
+    """GUARD_DECLARED_RULE on a block_invariance section's guarded floats (the gate's or one --n2-equivalence config's), in place, and its passed:
+    pairs = [(the call's block_invariance report, its invariance_cover)] live; None re-derives from the saved evidence (--reverdict), its digest
+    mismatches never fewer than the section's own record of the digest array differing. Returns {quantity: mode}."""
+    modes = {}
+    for name, m in inv['floats'].items():
+        if m.get('guard_bound') is None:continue
+        digest = declared_digest('block_invariance', name)[0]
+        if pairs is not None:cover = merge_cover([(name in (r.get('floats') or {}), None if c is None else c.get(name)) for r, c in pairs])
+        else:
+            e = m.get('guard_evidence') or {};differing = (inv.get('differing') or {}).get(digest)
+            mismatched = e.get('digest_mismatched') if not differing else None if 'problems' in differing or e.get('digest_mismatched') is None else max(e['digest_mismatched'], differing.get('count', 0))
+            cover = None if e.get('value_positions_outside_digest') is None else dict(digest_compared=e.get('digest_compared'), digest_mismatched=mismatched,
+                outside=e['value_positions_outside_digest'], inexact=e.get('value_positions_outside_digest_inexact'))
+        findings = dict(compared={digest: None if cover is None else cover.get('digest_compared')}, mismatched={digest: None if cover is None else cover.get('digest_mismatched')})
+        mode, evidence = declared_guard_mode('block_invariance', name, m, findings, cover, actors);judge_guard(m, mode, evidence);modes[name] = mode
+    inv['passed'] = inv['discrete_equal'] and all(m['passed'] for m in inv['floats'].values())
+    return modes
+
+
+def declared_guards(result, evaluations, actors):
+    """GUARD_DECLARED_RULE on (b)'s values and the gate's block-invariance floats of a summarized result (evaluations: the calls, for their
+    covers) or a saved report (evaluations None: re-derived from the saved digest findings and per-position evidence), in place: each guarded
+    quantity's guard_mode, guard_evidence and passed, (b)'s and block invariance's passed and their table rows. (c) takes it in
+    apply_rules_depthn."""
+    checks, table = result['checks'], result['tolerance'].get('table', ())
+    b = checks.get('b')
+    if b is not None:
+        for name, m in b['values'].items():
+            if m.get('guard_bound') is None:continue
+            cover = saved_cover(m) if evaluations is None else merge_cover([(name in (e['b'].get('values') or {}), ((e.get('declared_cover') or {}).get('b') or {}).get(name))
+                for e in evaluations if 'b' in e])
+            judge_guard(m, *declared_guard_mode('b', name, m, checks.get('a') or {}, cover, actors))
+        b['passed'] = sum(b['mismatched'].values()) == 0 and all(m['passed'] for m in b['values'].values())
+    inv = checks.get('block_invariance')
+    if inv is not None:invariance_guards(inv, None if evaluations is None else [(r, c) for e in evaluations
+        for r, c in zip(e.get('invariance', ()), list(e.get('invariance_cover', ())) + [None] * len(e.get('invariance', ())))], actors)
+    for row in table:
+        part = {'b': (b or {}).get('values'), 'block_invariance': (inv or {}).get('floats')}.get(row.get('check')) or {};m = part.get(row.get('quantity'))
+        if m is not None and 'guard_mode' in m:row.update(passed=m['passed'], guard_mode=m['guard_mode'])
+    return result
+
+
+def guard_record(checks):
+    """tolerance.guard_declared: GUARD_DECLARED_RULE, every guarded quantity's mode ('check.quantity': (b), (c), block invariance) and those
+    gated for want of a certifying digest."""
+    modes, none = {}, []
+    for check, key in (('b', 'values'), ('c', 'quantities'), ('block_invariance', 'floats')):
+        for name, m in ((checks.get(check) or {}).get(key) or {}).items():
+            if name in g2.FLOORS or not isinstance(m, dict) or m.get('guard_bound') is None:continue
+            modes[f'{check}.{name}'] = m.get('guard_mode')
+            if (m.get('guard_evidence') or {}).get('reason') == GUARD_NO_DIGEST:none.append(f'{check}.{name}')
+    return dict(rule=GUARD_DECLARED_RULE, modes=modes, gated_no_certifying_digest=none)
+
+
 def declared_tolerance(tolerance, declared, quantities, frozen_deeper):
     """tolerance.declared_bounds: the numbers applied, the floors this run measured and what the frozen rule would have given (not gated)."""
     n = declared_numbers(declared);frozen = tolerance.get('frozen_rule') or {}
@@ -2349,19 +2590,19 @@ def declared_tolerance(tolerance, declared, quantities, frozen_deeper):
 
 def declared_section(declared, evaluator):
     """The header's `declared_bounds` section: the declaration (parsed and as its exact text, whose sha256 --reverdict re-verifies), its
-    sha256 and path, the run evaluator it was matched against, the run's start and DECLARED_NOTE."""
+    sha256 and path, the run evaluator it was matched against, the run's start, DECLARED_NOTE, DECLARED_RULE and GUARD_DECLARED_RULE."""
     return dict(sha256=declared['sha256'], path=declared['path'], repo_path=declared['repo_path'], git_blob_sha1=declared['git_blob_sha1'],
         commit=declared['commit'], git_verification=declared['git_verification'], source_measurement_verification=declared['source_measurement_verification'],
         content=declared['content'], content_text=declared['content_text'], evaluator={k: v for k, v in evaluator_identity(evaluator).items() if k != 'override'},
-        run_started_at=declared['run_started_at'], note=DECLARED_NOTE, rule=DECLARED_RULE)
+        run_started_at=declared['run_started_at'], note=DECLARED_NOTE, rule=DECLARED_RULE, guard_rule=GUARD_DECLARED_RULE)
 
 
 def declared_traces(report):
-    """Where a report still shows a declaration (header or tolerance sections, a declared root_logit_bound, the declared tolerance texts and
+    """Where a report still shows a declaration (header or tolerance sections, a declared root_logit_bound or guard record, the declared tolerance texts and
     sources, a (c) quantity's declared bound_rule, a reverdict of one); [] for a report judged under the frozen rule."""
     tolerance = report.get('tolerance') if isinstance(report.get('tolerance'), dict) else {};header = report.get('header') if isinstance(report.get('header'), dict) else {}
     found = [f'{where}.{key}' for where, part, key in (('header', header, 'declared_bounds'), ('tolerance', tolerance, 'declared_bounds'), ('tolerance', tolerance, 'frozen_rule'),
-        ('tolerance', tolerance, 'root_logit_bound')) if key in part]
+        ('tolerance', tolerance, 'root_logit_bound'), ('tolerance', tolerance, 'guard_declared')) if key in part]
     found += [f'tolerance.{key}' for key, text in (('rule', DECLARED_TOLERANCE_RULE), ('deeper_logit_rule', DECLARED_DEEPER_RULE)) if tolerance.get(key) == text]
     found += [f'tolerance.{key}' for key in ('value_bound_source', 'deeper_logit_bound_source') if str(tolerance.get(key) or '').startswith('declared')]
     quantities = ((report.get('checks') or {}).get('c') or {}).get('quantities') if isinstance(report.get('checks'), dict) else None
@@ -3139,7 +3380,7 @@ def n2_equivalence_call(*, requests, recipe, materializer, params, configs, fram
         found, floats = n2_compare(theirs, mine, where)
         c = g2.check_heads(mine, turn1, d_results)   # depth-N turn 1 against the oracle, and the run's depth-1 floor
         e = decide_roots(theirs, mine, requests, backups2, context=where)
-        out[name] = dict(a=found, floats=floats, c=c, e=e, spreads=node_spreads(raw))
+        out[name] = dict(a=found, floats=floats, c=c, e=e, spreads=node_spreads(raw), cover=n2_cover(theirs, mine), actors=len(params))   # cover, actors: GUARD_DECLARED_RULE
         if merged_decision:
             with stage(progress, 'check_e_merged_depth2', **where) as info:
                 out[name]['e_merged'] = merged_depth2_decision(theirs, depth2, requests=requests, recipe=recipe, oracle=oracle, stack=stack, params=params, roots=roots,
@@ -3148,6 +3389,7 @@ def n2_equivalence_call(*, requests, recipe, materializer, params, configs, fram
         if others:
             with stage(progress, 'check_child_block_invariance', **where) as info:
                 out[name]['invariance'] = [g2.block_invariance(o, theirs, context=where) for o in other_frames]
+                out[name]['invariance_cover'] = [invariance_cover(o, theirs) for o in other_frames]
                 info['discrete_equal'] = all(r['passed'] for r in out[name]['invariance'])
     return out
 
@@ -3156,7 +3398,9 @@ def summarize_n2(per_config, *, declared=None):
     """{config: [call results]} -> per config: discrete (exact), floats within the run's rule, (e) under the near-tie rule;
     the rule from the depth-1 floor (D3 vs the oracle's turn-1 heads) and the p10 spread of the N=2 frames. declared: the run's
     --declared-bounds (declared_rule: its value and turn-1 logit bounds, its root_logit_bound when declared on root_peer_logits (finalize_n,
-    refinalize_root: the floats, the turn-1 heads and block invariance), and its near-tie Q bound as (e)'s q_noise_bound). Calls that
+    refinalize_root: the floats, the turn-1 heads and block invariance), its near-tie Q bound as (e)'s q_noise_bound, and GUARD_DECLARED_RULE
+    on the guarded floats and block-invariance values (n2_compare's digests, the calls' n2_cover / invariance_cover; the modes in
+    tolerance.guard_declared; the turn-1 heads stay reported, not gated)). Calls that
     carry child-block invariance (CHILD_BLOCK_INVARIANCE) add a gated block_invariance section (g2.merge_invariance under the same rule), and
     calls that carry MERGED_DEPTH2_DECISION a gated e_merged_depth2 section (g2.merge_decisions under the same q_noise_bound)."""
     report = {}
@@ -3173,6 +3417,18 @@ def summarize_n2(per_config, *, declared=None):
         if invariance is not None and rule.get('root_logit_bound') is not None and refinalize_root(invariance['floats'],
                 [r.get('floats', {}) for x in calls for r in x.get('invariance', ())], rule['root_logit_bound']):
             invariance['passed'] = invariance['discrete_equal'] and all(m['passed'] for m in invariance['floats'].values())
+        if declared is not None:   # GUARD_DECLARED_RULE
+            counts = {x.get('actors') for x in calls};count = next(iter(counts)) if len(counts) == 1 else None
+            actors = dict(count=count, source=ACTORS_LIVE) if type(count) is int else dict(count=None, source=f'not established: the calls recorded {sorted(map(str, counts))}')
+            for q, m in floats.items():
+                if m.get('guard_bound') is not None:
+                    judge_guard(m, *declared_guard_mode('n2', q, m, discrete, merge_cover([(q in x['floats'], (x.get('cover') or {}).get(q)) for x in calls]), actors))
+            if invariance is not None:
+                invariance_guards(invariance, [(r, c) for x in calls for r, c in zip(x.get('invariance', ()), list(x.get('invariance_cover', ())) + [None] * len(x.get('invariance', ())))], actors)
+            guarded = [(f'{part}.{q}', m) for part, section in (('floats', floats), ('block_invariance', (invariance or {}).get('floats') or {})) for q, m in section.items()
+                if m.get('guard_bound') is not None]
+            rule = dict(rule, guard_declared=dict(rule=GUARD_DECLARED_RULE, modes={k: m['guard_mode'] for k, m in guarded},
+                gated_no_certifying_digest=[k for k, m in guarded if m['guard_evidence'].get('reason') == GUARD_NO_DIGEST]))
         merged = None if not any('e_merged' in x for x in calls) else dict(g2.merge_decisions([x['e_merged'] for x in calls], q_noise_bound=q_noise), rule=MERGED_DEPTH2_DECISION)
         passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed'] and reports_equal and (invariance is None or invariance['passed']) \
             and (merged is None or merged['passed'])
