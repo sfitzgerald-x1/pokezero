@@ -2139,15 +2139,13 @@ class FixedShapesTests(FixtureN, unittest.TestCase):
                     self.assertFalse(any('fixed_capacity' in kw for kw in built), built);self.assertEqual([s['size'] for s in seen], [None, None])
                     self.assertNotIn('harness', report);self.assertNotIn('harness', start);self.assertNotIn('fixed_capacity', report['pricer_options'])
 
-    def test_n2_equivalence_and_diagnostics_take_the_flag(self):
-        """--n2-equivalence: both DepthNPricer configs fixed and the oracle's stack at 2 x 32 rows (the stand-in fails the gated report
-        comparison, as in CommandLineRunTests); --depth3-diagnostics: every DepthNPricer fixed, no oracle (oracle_stack_rows None)."""
-        module, built = recording(FAKE_MODULE);lines = []
-        with self.stacks() as seen:code, out = self.main('--n2-equivalence', '--n2-k', '2', '--fixed-shapes', lines=lines, module=module)
-        report = json.loads((out / 'n2-equivalence.json').read_text());start = next(x for x in lines if x['message'] == 'N2_EQUIVALENCE_START')
-        self.assertEqual((code, report['status'], len(built)), (1, 'FAIL', 2));self.assertTrue(all(kw.get('fixed_capacity') is True for kw in built), built)
-        self.assertEqual(seen, [dict(size=64, rows=37, shape={64})]);self.assertEqual(report['harness'], start['harness'])
-        self.assertEqual((report['harness']['oracle_stack_rows'], report['harness']['split_capacity']), (64, 32))
+    def test_n2_equivalence_refuses_and_diagnostics_take_the_flag(self):
+        """--n2-equivalence refuses the flag (exit 2, nothing created: its Depth2Pricer keeps per-call buckets, so the compared pricers would
+        price turn 1 at different batch sizes); --depth3-diagnostics: every DepthNPricer fixed, no oracle (oracle_stack_rows None)."""
+        out = str(Path(tempfile.gettempdir()) / f'depthn-gate-never-created-{uuid.uuid4().hex}')
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            gate.main(['--out', out, '--d3-root', 'b', '--chunk', '0', '--n2-equivalence', '--fixed-shapes'])
+        self.assertEqual(raised.exception.code, 2);self.assertFalse(Path(out).exists())
         module, built = recording(FAKE_MODULE);lines = []
         code, out = self.main('--depth3-diagnostics', '--diagnostic-ks', '2', '--fixed-shapes', lines=lines, module=module)
         report = json.loads((out / 'diagnostics.json').read_text());start = next(x for x in lines if x['message'] == 'DIAGNOSTICS_START')
