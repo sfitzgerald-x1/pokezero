@@ -75,8 +75,8 @@ exact adapter-vs-champion.forward check on the first root); the evaluator header
 --champion-archive, refused with --head-archive, --depth3-diagnostics and the offline modes): a JSON declaration (DECLARED_SCHEMA) committed
 under gpu_engine/declared_bounds/ through a reviewed PR before the run, its bytes pinned by SHA, its git blob sha1 recorded with COMMIT
 (DECLARED_NOTE: what is verified and what is only recorded for an audit) and its evaluator identity (kind, archive sha256 and precision)
-the run's, whose value, turn-1 logit, deeper-ply logit and optional
-near-tie Q bounds replace the tolerance NUMBERS of the B1-calibrated rule for that evaluator; every check and rule is unchanged, the measured
+the run's, whose value, turn-1 logit, deeper-ply logit and optional near-tie Q and root logit
+bounds replace the tolerance NUMBERS of the B1-calibrated rule for that evaluator; every check and rule is unchanged, the measured
 floors are still reported beside the declared bounds, and every report's header carries a `declared_bounds` section (the file, its sha256,
 the note that it is a pre-registered evaluator-specific bound, not a rule change after a failure). --reverdict re-applies a report's recorded
 declaration after re-verifying its sha256 and git blob sha1 (and the commit and sha256 given with it: the audit, which requires git_verification
@@ -274,10 +274,10 @@ def boundary(topk, ply, seat, legal, used, mine, k, reference):
     entry['gaps'].append(score(order[k - 1]) - score(order[k]));entry['oracle_prior_set_differs'] += int(set(order[:k]) != set(reference.ranked(legal, mine)[:k]))
 
 
-def merge_topk_n(reports, *, logit_bound=g2.LOGIT_BOUND):
+def merge_topk_n(reports, *, logit_bound=g2.LOGIT_BOUND, root_logit_bound=None):
     """Per ply and seat over calls: pruning selections, their boundary gaps, how many fall below the logit bound (LOGIT_BOUND; a
-    declared turn1_logit_bound under --declared-bounds) and how often the oracle's own prior would select differently (a near tie
-    the logit tolerance absorbs). None without pruning."""
+    declared turn1_logit_bound under --declared-bounds, and at the root a declared root_logit_bound, recorded beside the plies when
+    given) and how often the oracle's own prior would select differently (a near tie the logit tolerance absorbs). None without pruning."""
     merged = {}
     for report in reports:
         for ply, seats in (report or {}).items():
@@ -285,11 +285,12 @@ def merge_topk_n(reports, *, logit_bound=g2.LOGIT_BOUND):
                 m = merged.setdefault(ply, {}).setdefault(seat, dict(gaps=[], oracle_prior_set_differs=0))
                 m['gaps'].extend(entry['gaps']);m['oracle_prior_set_differs'] += entry['oracle_prior_set_differs']
     if not merged:return None
-    out = {ply: {seat: dict(selections=len(m['gaps']), gap=g2.percentiles(m['gaps']), gap_below_logit_bound=int(np.count_nonzero(np.asarray(m['gaps']) < logit_bound)),
+    bound = lambda ply: root_logit_bound if ply == 'root' and root_logit_bound is not None else logit_bound
+    out = {ply: {seat: dict(selections=len(m['gaps']), gap=g2.percentiles(m['gaps']), gap_below_logit_bound=int(np.count_nonzero(np.asarray(m['gaps']) < bound(ply))),
         oracle_prior_set_differs=m['oracle_prior_set_differs']) for seat, m in seats.items()} for ply, seats in sorted(merged.items())}
     return dict(out, definition='per ply (root = the k1_opp root selection) and seat, over prior selections that prune: gap = rank-k minus rank-(k+1) '
         'logit of the pricer\'s prior (the one ranked; (c) checks it within the logit bound); oracle_prior_set_differs = selections the oracle\'s '
-        'own prior would make differently')
+        'own prior would make differently', **({} if root_logit_bound is None else dict(root_logit_bound=root_logit_bound)))
 
 
 def pad_map(m, width):
@@ -1254,9 +1255,9 @@ def apply_rules_depthn(result, depth, *, actors=None, deltas=None, outside=None,
     frame-geometry failure keeps it failed; None reads a.mismatched.frame_geometry), the tolerance table's (c) rows and the
     tolerance section's rules and numbers. actors: dict(count, source) of the evaluator parameter sets (None: not established);
     outside: {quantity: digest_cover_n count}; a quantity without one reuses its saved guard_evidence count. declared: a
-    --declared-bounds declaration (DECLARED_RULE): every non-floor quantity is rebound to its declared number (values, turn-1
-    logits, deeper logits by declared_deeper) and tolerance.declared_bounds records them beside the measured floors and the
-    frozen rule's numbers; None: exactly the frozen rule."""
+    --declared-bounds declaration (DECLARED_RULE): every non-floor quantity is rebound to its declared number (declared_bound_for: values,
+    turn-1 logits, root priors when root_logit_bound is declared, deeper logits by declared_deeper) and tolerance.declared_bounds records
+    them beside the measured floors and the frozen rule's numbers; None: exactly the frozen rule."""
     checks = result['checks'];c, a = checks.get('c'), checks.get('a') or {};modes = {}
     if c is None:return result
     floor, floor_source = turn1_logit_floor(c['quantities']);deeper = g2.LOGIT_BOUND if floor is None else max(g2.LOGIT_BOUND, 2 * floor)
@@ -1302,10 +1303,12 @@ def summarize_n(evaluations, *, declared=None):
     """g2.summarize with the guard's spread taken from the last ply's learner-max own-slot spreads of the same frames, then
     apply_rules_depthn (DEEPER_LOGIT_RULE, GUARD_DEPTHN_RULE) on (c) at the calls' depth (their plan's; mixed or unknown
     depths keep LOGIT_BOUND and every guard gated), then (f) (merge_choices) after (e) under the same value bound. declared:
-    --declared-bounds (DECLARED_RULE: the declared numbers in g2.summarize's rule and apply_rules_depthn); None: the frozen rule."""
+    --declared-bounds (DECLARED_RULE: the declared numbers in g2.summarize's rule, declared_root_sites and apply_rules_depthn); None: the
+    frozen rule."""
     p10, spread = guard_spread(s for e in evaluations for s in e.get('spreads', ()))
     result = g2.summarize(evaluations, spread_p10=p10, **declared_kwargs(declared))
     result['tolerance'] = guard_note(result['tolerance'], spread);depths = {e.get('depth') for e in evaluations};deltas = collections.defaultdict(list)
+    if declared is not None:declared_root_sites(result, evaluations)
     for e in evaluations:
         for name, m in (e.get('c') or {}).items():deltas[name].append(np.asarray(m['_deltas'], np.float64))
     counts = {e.get('actors') for e in evaluations};count = next(iter(counts)) if len(counts) == 1 else None
@@ -1323,9 +1326,10 @@ def summarize_n(evaluations, *, declared=None):
 
 
 def tolerance_line_n(tolerance):
-    """g2.tolerance_line with the deeper logit bound and its turn-1 floor, (f)'s near ties, flips among them, max |row q diff| and max |grid diff|,
-    and each row's bound, guard_mode (rows with a guard outside (c) are gated) and beyond_guard."""
+    """g2.tolerance_line with the deeper logit bound and its turn-1 floor, a declared root_logit_bound (when declared), (f)'s near ties,
+    flips among them, max |row q diff| and max |grid diff|, and each row's bound, guard_mode (rows with a guard outside (c) are gated) and beyond_guard."""
     line = dict(g2.tolerance_line(tolerance), turn1_logit_floor=tolerance.get('turn1_logit_floor'), deeper_logit_bound=tolerance.get('deeper_logit_bound'),
+        **({} if 'root_logit_bound' not in tolerance else dict(root_logit_bound=tolerance['root_logit_bound'])),   # declared only (declared_rule)
         **{k: tolerance.get(k) for k in ('f_near_ties', 'f_near_tie_flips', 'f_max_abs_delta_row_q', 'f_max_abs_delta_child_value')},
         **({} if 'declared_bounds' not in tolerance else dict(declared_bounds_sha256=tolerance['declared_bounds'].get('sha256'))))
     for entry, row in zip(line['checks'], tolerance.get('table', ())):
@@ -1912,7 +1916,7 @@ def reverdict(path, *, expected=None):
         with out.open('x') as handle:handle.write(text)
     except FileExistsError:raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
     for name, m in quantities.items():
-        if name not in g2.FLOORS and (m.get('guard_bound') is not None or m.get('bound_rule') in ('deeper_logit_bound', 'declared_deeper_logit_bound')):
+        if name not in g2.FLOORS and (m.get('guard_bound') is not None or m.get('bound_rule') in ('deeper_logit_bound', 'declared_deeper_logit_bound', 'declared_root_logit_bound')):
             log('REVERDICT_QUANTITY', quantity=name, **{k: m.get(k) for k in REVERDICT_SHOWN}, guard_evidence=m.get('guard_evidence'),
                 passed_before=before[name], passed=m['passed'])
     log('REVERDICT', gate=str(path), out=str(out), old_status=old['status'], new_status=status, old_status_reasons=old['status_reasons'],
@@ -1987,7 +1991,10 @@ DECLARED_RULE = ('--declared-bounds (opt-in; champion only: with --champion-arch
     'fallback) wherever the value bound applies: (b) t1_value, every (c) value quantity (turn 1, ply nodes, leaves, depth2_pass, raw head), '
     'block-invariance values, (e)\'s q_noise_bound unless near_tie_q_bound is declared, (f)\'s grid entries, row q and near ties, the '
     '--n2-equivalence values and the mutation test. turn1_logit_bound replaces LOGIT_BOUND wherever it applies: turn-1 and root priors in (b) '
-    'and (c), depth2_pass priors, block-invariance logits, the --n2-equivalence priors and topk_boundary\'s gap count. Priors at plies >= 2 of '
+    'and (c), depth2_pass priors, block-invariance logits, the --n2-equivalence priors and topk_boundary\'s gap count. root_logit_bound '
+    '(optional; turn1_logit_bound when not declared) replaces it for the root opponent\'s prior (ROOT_LOGITS) wherever that is compared: (b) '
+    'root_peer_logits against D3\'s reply_logits, (c) root_peer_logits against the oracle and depth2_pass_root_peer_logits, block invariance\'s '
+    'and the --n2-equivalence\'s root_peer_logits, and topk_boundary\'s root gap count; turn-1 priors keep turn1_logit_bound. Priors at plies >= 2 of '
     'a depth >= 3 frame: deeper_logit_bound as declared, or deeper_logit_rule = max(turn1_logit_bound, factor x turn1_logit_floor) '
     '(DEEPER_LOGIT_RULE\'s construction with the declared base and factor; turn1_logit_bound when the floor is unmeasured or non-finite). '
     'near_tie_q_bound (default value_bound) is (e)\'s q_noise_bound, one number in the frozen rule: the root near-tie threshold of rule 1 and '
@@ -2012,10 +2019,12 @@ DECLARED_NOTE = ('evaluator-specific bounds for the champion identity in `evalua
 DECLARED_SUBDIR = 'gpu_engine/declared_bounds'   # where a declaration is committed, relative to the repository root
 REPO_ROOT = Path(__file__).resolve().parents[1]   # the running checkout (tests point it at a scratch repository)
 DECLARED_TOLERANCE_RULE = ('declared bounds (DECLARED_RULE): values max |diff| <= the declared value_bound; turn-1, root and depth2_pass '
-    'logits <= the declared turn1_logit_bound; deeper priors as declared; the guard, digests, discrete fields and (e)/(f) rules unchanged')
+    'logits <= the declared turn1_logit_bound (the root opponent\'s prior <= root_logit_bound when declared); deeper priors as declared; the '
+    'guard, digests, discrete fields and (e)/(f) rules unchanged')
 DECLARED_DEEPER_RULE = ('(c) priors at plies >= 2 of a depth >= 3 frame under --declared-bounds: the declared deeper_logit_bound, or the declared '
     'deeper_logit_rule max(turn1_logit_bound, factor x turn1_logit_floor) (turn1_logit_floor measured as in DEEPER_LOGIT_RULE; turn1_logit_bound '
-    'when it is not); turn-1, root and depth2_pass priors keep the declared turn1_logit_bound')
+    'when it is not); turn-1, root and depth2_pass priors keep the declared turn1_logit_bound (root priors a declared root_logit_bound)')
+ROOT_LOGITS = ('root_peer_logits', 'depth2_pass_root_peer_logits')   # the root opponent's prior wherever a check compares it (root_logit_bound)
 
 
 class DeclaredBoundsError(ValueError):
@@ -2047,8 +2056,9 @@ def declared_problems(content):
     """Every reason a parsed declaration is refused ([] when valid): exactly DECLARED_FIELDS at the top and no unknown key at any level;
     schema DECLARED_SCHEMA; evaluator {kind in DECLARED_KINDS, archive_sha256 64-hex, precision in DECLARED_PRECISIONS, optional
     checkpoint_sha256 64-hex}; bounds {value_bound, turn1_logit_bound, exactly one of deeper_logit_bound or deeper_logit_rule {factor},
-    optional near_tie_q_bound}, each a finite number > 0; derivation and declared_by non-empty text; declared_at ISO 8601 in UTC;
-    source_measurement {path non-empty, sha256 64-hex}."""
+    optional near_tie_q_bound, optional root_logit_bound (the root opponent's prior, ROOT_LOGITS; turn1_logit_bound when absent)}, each a
+    finite number > 0; derivation and declared_by non-empty text; declared_at ISO 8601 in UTC; source_measurement {path non-empty, sha256
+    64-hex}."""
     problems = []
     if not _object(problems, 'declaration', content, DECLARED_FIELDS):return problems
     if 'schema' in content and content['schema'] != DECLARED_SCHEMA:problems.append(f'schema: {DECLARED_SCHEMA!r} required (got {content["schema"]!r})')
@@ -2059,8 +2069,9 @@ def declared_problems(content):
             problems.append(f'evaluator.precision: one of {DECLARED_PRECISIONS}, the identity\'s names (got {evaluator["precision"]!r})')
         problems += [f'evaluator.{k}: a 64-hex sha256' for k in ('archive_sha256', 'checkpoint_sha256') if k in evaluator and not ce._hex64(evaluator[k])]
     bounds = content.get('bounds')
-    if 'bounds' in content and _object(problems, 'bounds', bounds, ('value_bound', 'turn1_logit_bound'), ('deeper_logit_bound', 'deeper_logit_rule', 'near_tie_q_bound')):
-        problems += [f'bounds.{k}: a finite number > 0' for k in ('value_bound', 'turn1_logit_bound', 'deeper_logit_bound', 'near_tie_q_bound')
+    if 'bounds' in content and _object(problems, 'bounds', bounds, ('value_bound', 'turn1_logit_bound'),
+            ('deeper_logit_bound', 'deeper_logit_rule', 'near_tie_q_bound', 'root_logit_bound')):
+        problems += [f'bounds.{k}: a finite number > 0' for k in ('value_bound', 'turn1_logit_bound', 'deeper_logit_bound', 'near_tie_q_bound', 'root_logit_bound')
             if k in bounds and not _positive(bounds[k])]
         if ('deeper_logit_bound' in bounds) == ('deeper_logit_rule' in bounds):problems.append('bounds: exactly one of deeper_logit_bound or deeper_logit_rule')
         rule = bounds.get('deeper_logit_rule')
@@ -2227,23 +2238,26 @@ def evaluator_mismatches(content, identity):
 
 
 def declared_numbers(declared):
-    """The declaration's numbers as floats: value_bound, turn1_logit_bound, deeper_logit_bound or deeper_logit_factor (one is None) and
-    near_tie_q_bound (None: the value bound)."""
+    """The declaration's numbers as floats: value_bound, turn1_logit_bound, deeper_logit_bound or deeper_logit_factor (one is None),
+    near_tie_q_bound (None: the value bound) and root_logit_bound only when declared (absent: the root priors keep turn1_logit_bound)."""
     b = declared['content']['bounds'];number = lambda key: None if key not in b else float(b[key])
     return dict(value_bound=number('value_bound'), turn1_logit_bound=number('turn1_logit_bound'), deeper_logit_bound=number('deeper_logit_bound'),
-        deeper_logit_factor=None if 'deeper_logit_rule' not in b else float(b['deeper_logit_rule']['factor']), near_tie_q_bound=number('near_tie_q_bound'))
+        deeper_logit_factor=None if 'deeper_logit_rule' not in b else float(b['deeper_logit_rule']['factor']), near_tie_q_bound=number('near_tie_q_bound'),
+        **({} if 'root_logit_bound' not in b else dict(root_logit_bound=number('root_logit_bound'))))
 
 
 def declared_rule(rule, declared):
     """A tolerance rule (g2.tolerance_rule's) under a declaration: value_bound and logit_bound replaced by the declared value and turn-1 logit
-    bounds, q_noise_bound set when near_tie_q_bound is declared, the frozen rule's own entries kept under frozen_rule (reported, not gated);
-    every other entry (the measured depth-1 floor, the guard) unchanged. declared None: the rule itself."""
+    bounds, q_noise_bound set when near_tie_q_bound is declared, root_logit_bound set when declared (the root priors' bound: finalize_n,
+    declared_root_sites), the frozen rule's own entries kept under frozen_rule (reported, not gated); every other entry (the measured depth-1
+    floor, the guard) unchanged. declared None: the rule itself."""
     if declared is None:return rule
     n = declared_numbers(declared)
     out = dict(rule, rule=DECLARED_TOLERANCE_RULE, value_bound=n['value_bound'], value_bound_source=f'declared value_bound (--declared-bounds sha256 {declared["sha256"]})',
         logit_bound=n['turn1_logit_bound'], frozen_rule={k: rule.get(k) for k in ('rule', 'value_bound', 'value_bound_source', 'logit_bound')},
         declared_bounds=dict(sha256=declared['sha256'], rule=DECLARED_RULE))
     if n['near_tie_q_bound'] is not None:out['q_noise_bound'] = n['near_tie_q_bound']
+    if n.get('root_logit_bound') is not None:out['root_logit_bound'] = n['root_logit_bound']
     return out
 
 
@@ -2264,18 +2278,67 @@ def declared_deeper(declared, floor, floor_source):
 
 
 def declared_bound_for(name, depth, numbers, deeper):
-    """(bound, bound_rule) of (c) quantity `name` under a declaration: deeper priors the deeper bound, other priors the turn-1 logit bound,
-    values the value bound."""
+    """(bound, bound_rule) of (c) quantity `name` under a declaration: deeper priors the deeper bound, the root opponent's prior (ROOT_LOGITS)
+    a declared root_logit_bound, other priors the turn-1 logit bound, values the value bound."""
     if deeper_logit(name, depth):return deeper, 'declared_deeper_logit_bound'
+    if name in ROOT_LOGITS and numbers.get('root_logit_bound') is not None:return numbers['root_logit_bound'], 'declared_root_logit_bound'
     if g2.is_logit(name):return numbers['turn1_logit_bound'], 'declared_turn1_logit_bound'
     return numbers['value_bound'], 'declared_value_bound'
+
+
+def root_bound(name, rule):
+    """The declared root_logit_bound (declared_rule records it in the run's rule) when `name` is the root opponent's prior (ROOT_LOGITS); None
+    otherwise, and always under the frozen rule or a declaration without one (g2's bound applies)."""
+    return rule.get('root_logit_bound') if name in ROOT_LOGITS else None
+
+
+def finalize_n(m, name, rule, guard=None):
+    """g2.finalize_numeric at g2.bound_for's bound, or at a declared root_logit_bound for the root opponent's prior (root_bound; bound_rule
+    declared_root_logit_bound records it). Without one exactly g2.finalize_numeric(m, g2.bound_for(name, rule), guard)."""
+    bound = root_bound(name, rule)
+    if bound is None:return g2.finalize_numeric(m, g2.bound_for(name, rule), guard)
+    g2.finalize_numeric(m, bound, guard);m['bound_rule'] = 'declared_root_logit_bound';return m
+
+
+def refinalize_root(merged, parts, bound):
+    """Each ROOT_LOGITS quantity of `merged` (a g2.merge_numeric over the per-call {quantity: _numeric} `parts`, already finalized at the turn-1
+    logit bound) finalized again at `bound` from the calls' own comparisons, in place: what g2.finalize_numeric gives at that bound (beyond_bound,
+    first_beyond and largest included), bound_rule declared_root_logit_bound. Returns the names re-finalized."""
+    names = [n for n in ROOT_LOGITS if n in (merged or {})]
+    for name in names:
+        merged[name].update(g2.finalize_numeric(g2.merge_numeric([{name: p[name]} for p in parts if name in p])[name], bound), bound_rule='declared_root_logit_bound')
+    return names
+
+
+def declared_root_sites(result, evaluations):
+    """g2.summarize bounds every prior at the run's logit bound (the declared turn1_logit_bound); under a declared root_logit_bound (the
+    tolerance's, from declared_rule) the root opponent's prior is finalized again at it (refinalize_root) wherever g2.summarize compared it:
+    (b) root_peer_logits (against D3's reply_logits), (c) root_peer_logits and depth2_pass_root_peer_logits, block invariance's
+    root_peer_logits; (b)'s and block invariance's passed and the tolerance table's rows follow ((c)'s passed and rows: apply_rules_depthn,
+    whose declared_bound_for gives the same bound). In place; nothing without a declared root_logit_bound."""
+    bound, checks, table = result['tolerance'].get('root_logit_bound'), result['checks'], result['tolerance'].get('table', ())
+    if bound is None:return result
+    sites = dict(b=('values', [e['b'].get('values', {}) for e in evaluations if 'b' in e]), c=('quantities', [e['c'] for e in evaluations if 'c' in e]),
+        block_invariance=('floats', [r.get('floats', {}) for e in evaluations for r in e.get('invariance', ())]))
+    for check, (key, parts) in sites.items():
+        if check not in checks:continue
+        merged = checks[check][key];names = refinalize_root(merged, parts, bound)
+        for row in table:
+            if row.get('check') == check and row.get('quantity') in names:
+                m = merged[row['quantity']];row.update(bound=m['bound'], ratio_to_bound=m['ratio_to_bound'], passed=m['passed'])
+    if 'b' in checks:b = checks['b'];b['passed'] = sum(b['mismatched'].values()) == 0 and all(m['passed'] for m in b['values'].values())
+    if 'block_invariance' in checks:
+        inv = checks['block_invariance'];inv['passed'] = inv['discrete_equal'] and all(m['passed'] for m in inv['floats'].values())
+    return result
 
 
 def declared_tolerance(tolerance, declared, quantities, frozen_deeper):
     """tolerance.declared_bounds: the numbers applied, the floors this run measured and what the frozen rule would have given (not gated)."""
     n = declared_numbers(declared);frozen = tolerance.get('frozen_rule') or {}
     return dict(sha256=declared['sha256'], path=declared['path'], rule=DECLARED_RULE,
-        applied=dict(value_bound=n['value_bound'], turn1_logit_bound=n['turn1_logit_bound'], deeper_logit_bound=tolerance['deeper_logit_bound'],
+        applied=dict(value_bound=n['value_bound'], turn1_logit_bound=n['turn1_logit_bound'],
+            **({} if n.get('root_logit_bound') is None else dict(root_logit_bound=n['root_logit_bound'])),
+            deeper_logit_bound=tolerance['deeper_logit_bound'],
             deeper_logit_bound_source=tolerance['deeper_logit_bound_source'], q_noise_bound=n['value_bound'] if n['near_tie_q_bound'] is None else n['near_tie_q_bound'],
             guard_bound=tolerance.get('guard_bound')),
         measured=dict(depth1_noise_floor=tolerance.get('depth1_noise_floor'), root_logit_floor=(quantities.get('root_logit_floor') or {}).get('max_abs_difference'),
@@ -2294,11 +2357,11 @@ def declared_section(declared, evaluator):
 
 
 def declared_traces(report):
-    """Where a report still shows a declaration (header or tolerance sections, the declared tolerance texts and sources, a (c) quantity's
-    declared bound_rule, a reverdict of one); [] for a report judged under the frozen rule."""
+    """Where a report still shows a declaration (header or tolerance sections, a declared root_logit_bound, the declared tolerance texts and
+    sources, a (c) quantity's declared bound_rule, a reverdict of one); [] for a report judged under the frozen rule."""
     tolerance = report.get('tolerance') if isinstance(report.get('tolerance'), dict) else {};header = report.get('header') if isinstance(report.get('header'), dict) else {}
-    found = [f'{where}.{key}' for where, part, key in (('header', header, 'declared_bounds'), ('tolerance', tolerance, 'declared_bounds'), ('tolerance', tolerance, 'frozen_rule'))
-        if key in part]
+    found = [f'{where}.{key}' for where, part, key in (('header', header, 'declared_bounds'), ('tolerance', tolerance, 'declared_bounds'), ('tolerance', tolerance, 'frozen_rule'),
+        ('tolerance', tolerance, 'root_logit_bound')) if key in part]
     found += [f'tolerance.{key}' for key, text in (('rule', DECLARED_TOLERANCE_RULE), ('deeper_logit_rule', DECLARED_DEEPER_RULE)) if tolerance.get(key) == text]
     found += [f'tolerance.{key}' for key in ('value_bound_source', 'deeper_logit_bound_source') if str(tolerance.get(key) or '').startswith('declared')]
     quantities = ((report.get('checks') or {}).get('c') or {}).get('quantities') if isinstance(report.get('checks'), dict) else None
@@ -2330,7 +2393,8 @@ def saved_declared(report, *, expected=None):
     its git blob sha1, parses (strictly) to its content, a valid declaration, matching the report's evaluator header, declared_at no later than
     the recorded run start, its repo_path under DECLARED_SUBDIR and its commit a full commit id, git_verification and the source
     measurement re-run here contradicting nothing ('mismatch' / 'absent'), and the tolerance section naming the same sha256 with the declared
-    value and turn-1 logit bounds; without one, no trace of a declaration (declared_traces) and the frozen numbers (frozen_problems).
+    value and turn-1 logit bounds and root_logit_bound (absent when not declared); without one, no trace of a declaration (declared_traces)
+    and the frozen numbers (frozen_problems).
     expected: dict(commit, sha256) given on the command line (the pre-registration record): each given must be the recorded one."""
     expected = {k: v for k, v in (expected or {}).items() if v is not None}
     header = report.get('header') if isinstance(report.get('header'), dict) else {}
@@ -2372,6 +2436,8 @@ def saved_declared(report, *, expected=None):
         if (tolerance.get('value_bound'), tolerance.get('logit_bound')) != (n['value_bound'], n['turn1_logit_bound']):
             problems.append(f'tolerance value_bound / logit_bound {[tolerance.get("value_bound"), tolerance.get("logit_bound")]} are not the declared '
                 f'{[n["value_bound"], n["turn1_logit_bound"]]}')
+        if tolerance.get('root_logit_bound') != n.get('root_logit_bound'):   # both absent without a declared root_logit_bound
+            problems.append(f'tolerance.root_logit_bound {tolerance.get("root_logit_bound")!r} is not the declared {n.get("root_logit_bound")!r}')
     if problems:raise SystemExit('--reverdict: the report\'s declared bounds fail their checks (fail closed): ' + '; '.join(problems[:FIRST]))
     keep = ('path', 'repo_path', 'git_blob_sha1', 'commit', 'git_verification', 'source_measurement_verification', 'run_started_at')
     return dict({k: section.get(k) for k in keep}, sha256=sha, content=content, content_text=text, reverified=dict(again, expected=expected)), section
@@ -2734,7 +2800,8 @@ def mutant_verdict(evaluation, *, lanes, sampled=False, value_bound=None, declar
     modes = {q: m.get('guard_mode') for q, m in (result['checks'].get('c') or {}).get('quantities', {}).items() if certifying_digest(q, depth)}
     return dict(status=status, status_reasons=reasons, killed=status == 'FAIL' and bool(caught), caught_by=sorted(caught), caught=caught, guard_only=guard_only,
         guard_modes_past_turn1=modes, value_bound=result['tolerance']['value_bound'], **({} if declared is None else dict(declared_bounds_sha256=declared['sha256'],
-            logit_bound=result['tolerance']['logit_bound'], q_noise_bound=result['tolerance'].get('q_noise_bound')))), result
+            logit_bound=result['tolerance']['logit_bound'], **{k: result['tolerance'][k] for k in ('root_logit_bound',) if k in result['tolerance']},
+            q_noise_bound=result['tolerance'].get('q_noise_bound')))), result
 
 
 def mutant_evaluation(path, pairs, *, frame, data, requests, d_results, clean, backups, source, tree, full_turn1, context, priors=None):
@@ -2852,7 +2919,7 @@ def mutation_test_call(frame, data, requests, d_results, clean, *, context=None,
     base = {k: v for k, v in clean.items() if k not in ('mutation', MUTATION_INPUTS)};base['actors'] = 1
     verdict, result = mutant_verdict(base, lanes=lanes, value_bound=value_bound, declared=declared);bound = result['tolerance']['value_bound'];block = int(context.get('block', 0))
     out.update(clean=dict(status=verdict['status'], status_reasons=verdict['status_reasons'], failing=verdict['caught_by'], guard_only=verdict['guard_only'],
-        **{k: verdict[k] for k in ('declared_bounds_sha256', 'logit_bound', 'q_noise_bound') if k in verdict}),
+        **{k: verdict[k] for k in ('declared_bounds_sha256', 'logit_bound', 'root_logit_bound', 'q_noise_bound') if k in verdict}),
         value_bound=bound, value_bound_source=('the run\'s declared value_bound (--declared-bounds)' if declared is not None else 'the run\'s (its depth-1 floor '
             'substituted for the call\'s)' if value_bound is not None else 'the call\'s own depth-1 floor'),
         evaluator_actors_live=clean.get('actors'))
@@ -3088,7 +3155,8 @@ def n2_equivalence_call(*, requests, recipe, materializer, params, configs, fram
 def summarize_n2(per_config, *, declared=None):
     """{config: [call results]} -> per config: discrete (exact), floats within the run's rule, (e) under the near-tie rule;
     the rule from the depth-1 floor (D3 vs the oracle's turn-1 heads) and the p10 spread of the N=2 frames. declared: the run's
-    --declared-bounds (declared_rule: its value and turn-1 logit bounds, and its near-tie Q bound as (e)'s q_noise_bound). Calls that
+    --declared-bounds (declared_rule: its value and turn-1 logit bounds, its root_logit_bound when declared on root_peer_logits (finalize_n,
+    refinalize_root: the floats, the turn-1 heads and block invariance), and its near-tie Q bound as (e)'s q_noise_bound). Calls that
     carry child-block invariance (CHILD_BLOCK_INVARIANCE) add a gated block_invariance section (g2.merge_invariance under the same rule), and
     calls that carry MERGED_DEPTH2_DECISION a gated e_merged_depth2 section (g2.merge_decisions under the same q_noise_bound)."""
     report = {}
@@ -3096,12 +3164,15 @@ def summarize_n2(per_config, *, declared=None):
         quantities = g2.merge_numeric([x['c'] for x in calls]);p10, spread = guard_spread(s for x in calls for s in x['spreads'])
         rule = guard_note(declared_rule(g2.tolerance_rule(quantities.get('depth1_noise_floor'), p10), declared), spread)
         floats = g2.merge_numeric([x['floats'] for x in calls]);q_noise = rule.get('q_noise_bound', rule['value_bound'])   # tolerance_rule sets none
-        for q, m in floats.items():g2.finalize_numeric(m, g2.bound_for(q, rule), g2.guard_for(q, rule))
-        heads = {q: g2.finalize_numeric(m, g2.bound_for(q, rule), None if q in g2.FLOORS else g2.guard_for(q, rule)) for q, m in quantities.items()}
+        for q, m in floats.items():finalize_n(m, q, rule, g2.guard_for(q, rule))
+        heads = {q: finalize_n(m, q, rule, None if q in g2.FLOORS else g2.guard_for(q, rule)) for q, m in quantities.items()}
         discrete = g2.merge_findings([x['a'] for x in calls]);e = g2.merge_decisions([x['e'] for x in calls], q_noise_bound=q_noise)
         e['reference'] = 'depth2_backups.learner_max_root on the Depth2Frame vs on as_depth2_frame(DepthNPricer N=2)'
         reports_equal = all(x['a'].get('world_reports_equal', False) for x in calls)
         invariance = None if not any('invariance' in x for x in calls) else g2.merge_invariance([r for x in calls for r in x.get('invariance', ())], rule=rule)
+        if invariance is not None and rule.get('root_logit_bound') is not None and refinalize_root(invariance['floats'],
+                [r.get('floats', {}) for x in calls for r in x.get('invariance', ())], rule['root_logit_bound']):
+            invariance['passed'] = invariance['discrete_equal'] and all(m['passed'] for m in invariance['floats'].values())
         merged = None if not any('e_merged' in x for x in calls) else dict(g2.merge_decisions([x['e_merged'] for x in calls], q_noise_bound=q_noise), rule=MERGED_DEPTH2_DECISION)
         passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed'] and reports_equal and (invariance is None or invariance['passed']) \
             and (merged is None or merged['passed'])
@@ -3529,7 +3600,8 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
             'searched_depth2_refused) against this gate\'s own re-derivation (searched_maps_reference) from the full-width depth-2 pass; see depth2_pass'),
         depth2_pass=dict(trust=PASS_TRUST, sample_per_world=args.depth2_pass_sample, **{k: sum((c.get('depth2_pass') or {}).get(k, 0) for c in calls)
             for k in ('enumerated', 'rerun', 'forced')}),
-        topk_boundary=merge_topk_n([c.get('topk') for c in calls], **({} if declared is None else dict(logit_bound=declared_numbers(declared)['turn1_logit_bound']))),
+        topk_boundary=merge_topk_n([c.get('topk') for c in calls], **({} if declared is None else dict(logit_bound=declared_numbers(declared)['turn1_logit_bound'],
+            root_logit_bound=declared_numbers(declared).get('root_logit_bound')))),
         refusals=refusals, calls=calls, oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk))
     write(out / 'gate.json', report)
     log('DEPTHN_GATE_COMPLETE', status=status, out=str(out / 'gate.json'), status_reasons=reasons, checks={k: v['passed'] for k, v in result['checks'].items()},

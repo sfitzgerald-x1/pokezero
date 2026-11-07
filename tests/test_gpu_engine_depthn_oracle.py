@@ -2264,6 +2264,29 @@ def bounds(**values):
     return {k: v for k, v in out.items() if v is not None}
 
 
+def depth2_pass_priors(a, b):
+    """depth2_pass_check's prior quantities with frame `a` standing in for the full-width depth-2 pass and `b` the depth-N frame: each
+    requested seat's legal lanes at the valued (own) / expanded (peer) turn-1 cells and the root opponent's legal lanes at usable worlds."""
+    t1s, t1e = np.asarray(b.t1_status), np.asarray(b.t1_error);valued = (t1s == 2) | ((t1s == 3) & np.isin(t1e, (5, 6)));out = {}
+    for seat, scope in (('own', valued), ('peer', t1s == 2)):
+        lanes = (scope & np.asarray(getattr(b, f't1_{seat}_requested'), bool))[..., None] & np.asarray(getattr(b, f't1_{seat}_legal'), bool)
+        out[f'depth2_pass_t1_{seat}_logits'] = gate.g2._numeric(np.argwhere(lanes), np.asarray(getattr(a, f't1_{seat}_logits'))[lanes], np.asarray(getattr(b, f't1_{seat}_logits'))[lanes])
+    lanes = ((np.asarray(b.pre) == 0) & np.asarray(b.root_peer_requested, bool))[..., None] & np.asarray(b.root_peer_legal, bool)
+    out['depth2_pass_root_peer_logits'] = gate.g2._numeric(np.argwhere(lanes), np.asarray(a.root_peer_logits)[lanes], np.asarray(b.root_peer_logits)[lanes])
+    return out
+
+
+ROOT_SITES = (('b', 'root_peer_logits'), ('c', 'root_peer_logits'), ('c', 'depth2_pass_root_peer_logits'), ('block_invariance', 'root_peer_logits'))
+TURN1_SITES = (('c', 't1_own_logits'), ('c', 't1_peer_logits'), ('c', 'depth2_pass_t1_own_logits'), ('c', 'depth2_pass_t1_peer_logits'),
+    ('block_invariance', 't1_own_logits'), ('block_invariance', 't1_peer_logits'))
+SITE_KEYS = dict(b='values', c='quantities', block_invariance='floats')
+
+
+def site(result, check, name):
+    """A prior site's record in a summarized result or report: (b) values, (c) quantities, block invariance floats."""
+    return result['checks'][check][SITE_KEYS[check]][name]
+
+
 def written(content=None, *, raw=None):
     """(path, sha256) of `content` as JSON, or `raw` bytes verbatim, in a new file outside any repository."""
     path = Path(tempfile.mkdtemp(prefix='depthn-declared-')) / 'declared.json';raw = raw if raw is not None else json.dumps(content, indent=1).encode()
@@ -2307,14 +2330,18 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         roots = CommandLineRunTests.roots(self);roots.evaluator = dict(override=True, kind='v2', identity=['v2'], precision='bfloat16',
             archive_sha256=DECLARED_ARCHIVE, checkpoint_sha256=DECLARED_CHECKPOINT, arm_checked=True, dropped_roots=[]);return roots
 
-    def evaluated(self, *, leaf=0., t1_logits=0., ply_logits=0.):
+    def evaluated(self, *, leaf=0., t1_logits=0., ply_logits=0., root_logits=0., twin=False):
         """One call of the stand-in depth-3 surface with `leaf` added to head-valued leaves, `t1_logits` / `ply_logits` to the turn-1 cells' /
-        ply-2 nodes' own priors, (e) and (f) through the fake backups, a synthetic depth-1 floor FLOOR (frozen value bound .008) and one actor."""
+        ply-2 nodes' own priors, `root_logits` to every lane of the root opponent's prior, (e) and (f) through the fake backups, a synthetic
+        depth-1 floor FLOOR (frozen value bound .008) and one actor. twin: the unshifted frame stands in for the full-width depth-2 pass
+        (depth2_pass_priors) and for a block-invariance twin, so every prior site compares the shifts."""
         base = self.cached('frame', self._frame);data = self.cached('data', lambda: self._data(base));frame = copy.deepcopy(base);level = frame.nodes[0]
         frame.leaf_value[np.asarray(frame.leaf_status) == 4] += np.float32(leaf);frame.t1_own_logits[np.asarray(frame.t1_status) != 0] += np.float32(t1_logits)
         level.own_logits[np.asarray(level.status) != 0] += np.float32(ply_logits)
+        if root_logits:frame.root_peer_logits[...] += np.float32(root_logits)
         ev = gate.evaluate_n(frame, self._d(), self.requests, data, context={}, backups=FakeBackupsN, decision=True, choices=True)
         ev['c']['depth1_noise_floor'] = gate.g2._numeric([[0]], [FLOOR], [0.]);ev['spreads'] = [SPREAD] * 10;ev['actors'] = 1
+        if twin:ev['c'].update(depth2_pass_priors(base, frame));ev['invariance'] = [gate.g2.block_invariance(gate.frame_arrays(base), gate.frame_arrays(frame))]
         return ev
 
     def judge(self, ev, declared=None):
@@ -2533,6 +2560,119 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         self.assertEqual((report['floats']['t1_own_logits']['bound'], report['floats']['t1_own_logits']['passed']), (.15, True))
         self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['q_noise_bound'], report['e']['q_noise_bound']), (.008, .01, .01))
         self.assertEqual(report['tolerance']['frozen_rule']['logit_bound'], .1);self.assertIn('declared_bounds', report['tolerance'])
+
+    def test_the_root_logit_bound_parses_and_fails_closed(self):
+        """bounds.root_logit_bound is optional: declared, declared_numbers carries it; absent, declared_numbers has no such key (the root keeps
+        turn1_logit_bound). 0, a negative, NaN, inf, a bool and a text are refused as every bound is; NaN / Infinity in the file are not JSON
+        numbers; an unknown key is still refused."""
+        self.assertEqual(gate.declared_numbers(declared(bounds=bounds(root_logit_bound=.05)))['root_logit_bound'], .05)
+        self.assertNotIn('root_logit_bound', gate.declared_numbers(declared()))
+        for value in (.05, 1, 1e-9):self.assertEqual(gate.declared_problems(declaration(bounds=bounds(root_logit_bound=value))), [], value)
+        for case, value in dict(zero=0, zero_float=0., negative=-.05, nan=float('nan'), inf=float('inf'), boolean=True, false=False, text='.05').items():
+            with self.subTest(case):
+                self.assertEqual(gate.declared_problems(declaration(bounds=bounds(root_logit_bound=value))), ['bounds.root_logit_bound: a finite number > 0'])
+                if case not in ('nan', 'inf'):   # json.dumps would write them as NaN / Infinity: the file case below
+                    with self.assertRaises(gate.DeclaredBoundsError) as raised:load(committed(declaration(bounds=bounds(root_logit_bound=value))))
+                    self.assertIn('bounds.root_logit_bound: a finite number > 0', str(raised.exception))
+        for literal in ('NaN', 'Infinity', '-Infinity'):
+            raw = json.dumps(declaration(bounds=bounds(root_logit_bound=.05))).replace('0.05', literal).encode()
+            with self.subTest(literal), self.assertRaises(gate.DeclaredBoundsError) as raised:load(committed(raw=raw))
+            self.assertIn(f'{literal} is not a JSON number', str(raised.exception))
+        self.assertIn('bounds.root_bound: unknown key', gate.declared_problems(declaration(bounds=bounds(root_bound=.05))))
+
+    def test_the_root_logit_bound_reaches_every_root_site_and_no_turn1_site(self):
+        """Turn-1 own priors and the root opponent's prior .1 off at every prior site ((b) against D3, (c) against the oracle, depth2_pass and
+        block invariance): turn1_logit_bound .15 passes them all, .05 fails them all. A declared root_logit_bound .05 beside turn1_logit_bound
+        .15 fails every root site and nothing else: each root record is the one turn1_logit_bound .05 gives (bound_rule
+        declared_root_logit_bound aside), every other record, (e) and (f) are the ones without it. Swapped (turn1_logit_bound .05,
+        root_logit_bound .15): every turn-1 site fails as under .05 and every root site passes as under .15. The tolerance, its applied
+        section, its log line and the table record root_logit_bound; without one nothing names it."""
+        ev = self.evaluated(t1_logits=.1, root_logits=.1, twin=True)
+        judged = lambda **numbers: self.judge(ev, declared(bounds=bounds(**numbers)))[:2]
+        (loose, _), (tight, _) = judged(turn1_logit_bound=.15), judged(turn1_logit_bound=.05)
+        (root_tight, root_tight_status), (root_loose, root_loose_status) = judged(turn1_logit_bound=.15, root_logit_bound=.05), judged(turn1_logit_bound=.05, root_logit_bound=.15)
+        plain = lambda m: {k: v for k, v in m.items() if k != 'bound_rule'};shifted = ROOT_SITES + tuple(s for s in TURN1_SITES if 'own' in s[1])
+        for check, name in ROOT_SITES + TURN1_SITES:   # the shifted sites compare the shift and fail .05; the turn-1 peer prior is not shifted
+            m = site(loose, check, name);self.assertGreater(m['compared'], 0, (check, name))
+            if (check, name) in shifted:self.assertAlmostEqual(m['max_abs_difference'], .1, delta=1e-3, msg=(check, name))
+            self.assertEqual((m['passed'], site(tight, check, name)['passed']), (True, (check, name) not in shifted), (check, name))
+        self.assertEqual(failing(loose), {});self.assertEqual(set(failing(tight)), {'b', 'c', 'block_invariance'})
+        for result, wanted, other, status in ((root_tight, .05, loose, root_tight_status), (root_loose, .15, tight, root_loose_status)):
+            for check, name in ROOT_SITES:   # the root at root_logit_bound, exactly as the turn-1 bound of that number gives it
+                m = site(result, check, name);self.assertEqual((m['bound'], m['bound_rule'], m['passed']), (wanted, 'declared_root_logit_bound', wanted > .1), (check, name))
+                self.assertEqual(plain(m), plain(site(tight if wanted == .05 else loose, check, name)), (check, name))
+            for check, name in TURN1_SITES:   # every turn-1 prior as without root_logit_bound
+                self.assertEqual(site(result, check, name), site(other, check, name), (check, name))
+            for check in ('b', 'c', 'block_invariance'):   # every other quantity untouched
+                self.assertEqual({n: m for n, m in result['checks'][check][SITE_KEYS[check]].items() if (check, n) not in ROOT_SITES},
+                    {n: m for n, m in other['checks'][check][SITE_KEYS[check]].items() if (check, n) not in ROOT_SITES}, check)
+            self.assertEqual((result['checks']['e'], result['checks']['f']), (other['checks']['e'], other['checks']['f']))
+            tolerance = result['tolerance'];self.assertEqual((tolerance['root_logit_bound'], tolerance['declared_bounds']['applied']['root_logit_bound']), (wanted, wanted))
+            self.assertEqual(gate.tolerance_line_n(tolerance)['root_logit_bound'], wanted);self.assertEqual(tolerance['logit_bound'], .15 if wanted == .05 else .05)
+            rows = {(r['check'], r['quantity']): r for r in tolerance['table']}
+            for key in ROOT_SITES:self.assertEqual((rows[key]['bound'], rows[key]['passed']), (wanted, wanted > .1), key)
+        self.assertEqual((root_tight_status, set(failing(root_tight))), ('FAIL', {'b', 'c', 'block_invariance'}))   # the root sites alone fail
+        self.assertEqual((root_loose_status, set(failing(root_loose))), ('FAIL', {'c', 'block_invariance'}))   # (b) compares no turn-1 prior
+        for result in (loose, tight):
+            self.assertNotIn('root_logit_bound', result['tolerance']);self.assertNotIn('root_logit_bound', result['tolerance']['declared_bounds']['applied'])
+            self.assertNotIn('root_logit_bound', gate.tolerance_line_n(result['tolerance']));self.assertNotIn('declared_root_logit_bound', json.dumps(result, default=str))
+            for check, name in ROOT_SITES:self.assertEqual(site(result, check, name)['bound'], result['tolerance']['logit_bound'], (check, name))
+
+    def test_a_root_logit_bound_equal_to_turn1_logit_bound_is_the_declaration_without_it(self):
+        """root_logit_bound declared equal to turn1_logit_bound: the summarized result is the one without it (every check, record, row and
+        number) once its own records are removed: tolerance.root_logit_bound and applied.root_logit_bound, and the declared_root_logit_bound
+        label (declared_turn1_logit_bound on (c), absent on (b) and block invariance)."""
+        def unrooted(value, where=()):
+            if isinstance(value, dict):
+                out = {k: unrooted(v, where + (k,)) for k, v in value.items() if k != 'root_logit_bound'}
+                if out.get('bound_rule') == 'declared_root_logit_bound':
+                    if 'c' in where:out['bound_rule'] = 'declared_turn1_logit_bound'
+                    else:out.pop('bound_rule')
+                return out
+            return [unrooted(v, where) for v in value] if isinstance(value, list) else value
+        for noise in (dict(t1_logits=.1, root_logits=.1, twin=True), dict(root_logits=.12, twin=True), dict(leaf=.006, root_logits=.05, twin=True)):
+            with self.subTest(**noise):
+                ev = self.evaluated(**noise);(without, status, _), (rooted, status2, _) = self.judge(ev, declared(bounds=bounds(turn1_logit_bound=.1))), \
+                    self.judge(ev, declared(bounds=bounds(turn1_logit_bound=.1, root_logit_bound=.1)))
+                self.assertEqual(status2, status);self.assertEqual(rooted['tolerance']['root_logit_bound'], .1)
+                self.assertNotEqual(rooted['tolerance']['declared_bounds']['sha256'], without['tolerance']['declared_bounds']['sha256'])
+                for result in (without, rooted):[result['tolerance']['declared_bounds'].pop(k) for k in ('sha256', 'path')];result['tolerance'].pop('value_bound_source')   # the files differ
+                self.assertEqual(unrooted(rooted), without);self.assertEqual(unrooted(gate.tolerance_line_n(rooted['tolerance'])), gate.tolerance_line_n(without['tolerance']))
+
+    def test_n2_equivalence_takes_the_declared_root_logit_bound(self):
+        """summarize_n2: turn-1 own priors and the root prior .1 off (floats and child-block invariance). root_logit_bound .05 beside
+        turn1_logit_bound .15 fails the root alone; swapped, the turn-1 prior alone fails; each record as the turn-1 bound of its number gives it."""
+        frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame)
+        other.t1_own_logits[np.asarray(other.t1_status) != 0] += np.float32(.1);other.root_peer_logits[...] += np.float32(.1)
+        found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        call = dict(a=found, floats=floats, c=dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.])), e=e, spreads=[SPREAD] * 10,
+            invariance=[gate.g2.block_invariance(frame, other)])
+        judged = lambda **numbers: gate.summarize_n2({'x': [copy.deepcopy(call)]}, declared=declared(bounds=bounds(**numbers)))['x']
+        loose, tight = judged(turn1_logit_bound=.15), judged(turn1_logit_bound=.05)
+        self.assertEqual((loose['floats']['root_peer_logits']['passed'], loose['floats']['t1_own_logits']['passed'], loose['block_invariance']['passed']), (True, True, True))
+        self.assertGreater(loose['floats']['root_peer_logits']['compared'], 0);self.assertNotIn('declared_root_logit_bound', json.dumps(loose, default=str))
+        plain = lambda m: {k: v for k, v in m.items() if k != 'bound_rule'}
+        for numbers, wanted, other_report in ((dict(turn1_logit_bound=.15, root_logit_bound=.05), .05, loose), (dict(turn1_logit_bound=.05, root_logit_bound=.15), .15, tight)):
+            report = judged(**numbers)
+            for section in ('floats', 'block_invariance'):
+                part = report[section] if section == 'floats' else report[section]['floats'];was = other_report[section] if section == 'floats' else other_report[section]['floats']
+                m = part['root_peer_logits'];self.assertEqual((m['bound'], m['bound_rule'], m['passed']), (wanted, 'declared_root_logit_bound', wanted > .1), section)
+                self.assertEqual(plain(m), plain((tight if wanted == .05 else loose)[section]['root_peer_logits'] if section == 'floats' else
+                    (tight if wanted == .05 else loose)[section]['floats']['root_peer_logits']), section)
+                self.assertEqual({n: x for n, x in part.items() if n != 'root_peer_logits'}, {n: x for n, x in was.items() if n != 'root_peer_logits'}, section)
+            self.assertEqual((report['status'], report['passed'], report['block_invariance']['passed']), ('FAIL', False, False))
+            self.assertEqual((report['tolerance']['root_logit_bound'], report['tolerance']['logit_bound']), (wanted, numbers['turn1_logit_bound']))
+
+    def test_the_topk_root_gap_count_takes_the_root_logit_bound(self):
+        """merge_topk_n: the root selection's gaps are counted below a given root_logit_bound (recorded beside the plies), every other ply's
+        below logit_bound; root_logit_bound None is the call without it."""
+        reports = [{'root': {'opp': dict(gaps=[.05, .12, .3], oracle_prior_set_differs=1)}, 'ply2': {'own': dict(gaps=[.05, .12, .3], oracle_prior_set_differs=0)}}]
+        plain = gate.merge_topk_n(reports, logit_bound=.15)
+        self.assertEqual((plain['root']['opp']['gap_below_logit_bound'], plain['ply2']['own']['gap_below_logit_bound']), (2, 2));self.assertNotIn('root_logit_bound', plain)
+        self.assertEqual(gate.merge_topk_n(reports, logit_bound=.15, root_logit_bound=None), plain)
+        rooted = gate.merge_topk_n(reports, logit_bound=.15, root_logit_bound=.1)
+        self.assertEqual((rooted['root']['opp']['gap_below_logit_bound'], rooted['ply2'], rooted['root_logit_bound']), (1, plain['ply2'], .1))
+        self.assertEqual({k: v for k, v in rooted.items() if k not in ('root', 'root_logit_bound')}, {k: v for k, v in plain.items() if k != 'root'})
 
     def test_reverdict_refuses_traces_of_a_declaration_and_numbers_off_the_frozen_rule(self):
         """A report without declared_bounds sections is re-judged only if nothing in it shows a declaration (the declared tolerance texts and

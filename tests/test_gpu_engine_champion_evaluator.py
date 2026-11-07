@@ -713,6 +713,56 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         for name, verdict in call['mutants'].items():
             self.assertTrue(verdict['killed'], name);self.assertEqual({k: verdict[k] for k in recorded}, recorded, name);self.assertEqual(verdict['value_bound'], 1e-3, name)
 
+    def test_a_declared_root_logit_bound_reaches_every_root_site(self):
+        """Depth 3, k 2, k1_opp 1 (a root selection that prunes) and --block-invariance under turn1_logit_bound .3 with root_logit_bound .05 (and --mutation-test), then
+        swapped: the root opponent's prior takes root_logit_bound at (b), (c), depth2_pass and block invariance (bound_rule
+        declared_root_logit_bound) and in topk_boundary's root gap count; every turn-1 prior and every other quantity keeps its declared
+        number; the tolerance, its applied section and table, the TOLERANCE and DECLARED_BOUNDS log lines and every mutation verdict record it.
+        --reverdict re-judges the root under it: a saved root difference .1, consistent with a saved turn-1 bound .3, FAILs at .05 while the
+        same on the turn-1 priors passes; a tolerance.root_logit_bound off the declared one (or none) is refused."""
+        gate = gate_module()
+        for turn1, root, mutation in ((.3, .05, True), (.05, .3, False)):
+            with self.subTest(turn1_logit_bound=turn1, root_logit_bound=root):
+                _, flags, sha = self.declared(bounds=N.bounds(value_bound=1e-3, turn1_logit_bound=turn1, root_logit_bound=root, deeper_logit_rule=None, deeper_logit_bound=.4))
+                lines = [];extra = ('--mutation-test',) if mutation else ()
+                code, out = self.main('--depth', '3', '--k-own', '2', '--k-opp', '2', '--k1-opp', '1', '--block-invariance', *extra, *flags, lines=lines)
+                report = json.loads((out / 'gate.json').read_text());tolerance = report['tolerance']
+                self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'))
+                for check, name in N.ROOT_SITES:
+                    m = N.site(report, check, name);self.assertGreater(m['compared'], 0, (check, name))
+                    self.assertEqual((m['bound'], m['bound_rule']), (root, 'declared_root_logit_bound'), (check, name))
+                for check, name in N.TURN1_SITES:self.assertEqual(N.site(report, check, name)['bound'], turn1, (check, name))
+                for name, m in report['checks']['c']['quantities'].items():
+                    if name not in gate.g2.FLOORS:
+                        self.assertEqual(m['bound'], root if name in gate.ROOT_LOGITS else .4 if gate.deeper_logit(name, 3) else turn1 if gate.g2.is_logit(name) else 1e-3, name)
+                rows = {(r['check'], r['quantity']): r['bound'] for r in tolerance['table']};self.assertEqual({k: rows[k] for k in N.ROOT_SITES}, dict.fromkeys(N.ROOT_SITES, root))
+                self.assertEqual((tolerance['logit_bound'], tolerance['root_logit_bound'], tolerance['declared_bounds']['applied']['root_logit_bound']), (turn1, root, root))
+                gaps = [g for c in report['calls'] for g in c['topk']['root']['opp']['gaps']];topk = report['topk_boundary']['root']['opp']
+                self.assertEqual((topk['selections'], topk['gap_below_logit_bound'], report['topk_boundary']['root_logit_bound']), (len(gaps), sum(g < root for g in gaps), root))
+                self.assertEqual(report['topk_boundary'], gate.merge_topk_n([c.get('topk') for c in report['calls']], logit_bound=turn1, root_logit_bound=root))
+                self.assertNotEqual(sum(g < root for g in gaps), sum(g < turn1 for g in gaps))   # the root's count under root_logit_bound, not turn1_logit_bound
+                self.assertEqual(next(x for x in lines if x['message'] == 'TOLERANCE')['root_logit_bound'], root)
+                self.assertEqual(next(x for x in lines if x['message'] == 'DECLARED_BOUNDS')['bounds']['root_logit_bound'], root)
+                if not mutation:continue
+                call = json.loads((out / gate.MUTATION_FILE).read_text())['calls'][0];recorded = dict(declared_bounds_sha256=sha, logit_bound=turn1, root_logit_bound=root, q_noise_bound=1e-3)
+                self.assertEqual({k: call['clean'][k] for k in recorded}, recorded)
+                for name, verdict in call['mutants'].items():self.assertTrue(verdict['killed'], name);self.assertEqual({k: verdict[k] for k in recorded}, recorded, name)
+                code, again = self.reverdicted(report, '--declared-bounds-commit', self.record.commit, '--declared-bounds-sha256', sha)
+                self.assertEqual((code, again['status'], again['reverdict']['changed_quantities']), (0, 'PASS', []))
+                def saved(names):
+                    r = copy.deepcopy(report)
+                    for name in names:r['checks']['c']['quantities'][name].update(bound=turn1, max_abs_difference=.1, ratio_to_bound=.1 / turn1, within_bound=True, passed=True)
+                    return r
+                code, again = self.reverdicted(saved(gate.ROOT_LOGITS));quantities = again['checks']['c']['quantities']
+                self.assertEqual((code, again['status'], {c['quantity'] for c in again['reverdict']['changed_quantities']}), (1, 'FAIL', set(gate.ROOT_LOGITS)))
+                for name in gate.ROOT_LOGITS:self.assertEqual({k: quantities[name][k] for k in ('bound', 'bound_rule', 'within_bound', 'passed')}, dict(bound=root,
+                    bound_rule='declared_root_logit_bound', within_bound=False, passed=False), name)
+                code, again = self.reverdicted(saved(('t1_own_logits', 'depth2_pass_t1_own_logits')))
+                self.assertEqual((code, again['status'], again['checks']['c']['quantities']['t1_own_logits']['bound']), (0, 'PASS', turn1))
+                for change in (lambda r: r['tolerance'].__setitem__('root_logit_bound', turn1), lambda r: r['tolerance'].pop('root_logit_bound')):
+                    r = copy.deepcopy(report);change(r);text, again = self.reverdicted(r)
+                    self.assertIsNone(again);self.assertIn('tolerance.root_logit_bound', text);self.assertIn('fail closed', text)
+
     def test_a_run_without_git_is_provisional_and_the_audit_requires_verified(self):
         """The committed declaration's bytes in a checkout that is not a git work tree (an exported image): the run keeps PASS and exit 0 with
         'provisional: git_verification ...' in status_reasons; --reverdict alone keeps the reason; the audit, --reverdict --declared-bounds-commit,
