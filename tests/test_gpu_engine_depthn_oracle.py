@@ -2663,6 +2663,44 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
             self.assertEqual((report['status'], report['passed'], report['block_invariance']['passed']), ('FAIL', False, False))
             self.assertEqual((report['tolerance']['root_logit_bound'], report['tolerance']['logit_bound']), (wanted, numbers['turn1_logit_bound']))
 
+    def test_a_root_only_shift_passes_under_its_root_logit_bound(self):
+        """Only the root opponent's prior .1 off. turn1_logit_bound .05 alone fails every root site and nothing else (gate: (b), (c),
+        depth2_pass, block invariance; --n2-equivalence: the floats and child-block invariance). root_logit_bound .15 beside it passes: (b)'s
+        and block invariance's passed are recomputed from their records, not kept from the turn-1 verdict g2.summarize / merge_invariance gave
+        them, in the gate's verdict, in mutant_verdict and in summarize_n2. n2's turn-1 heads against the oracle (reported, not gated) bound
+        the root at root_logit_bound and the turn-1 priors at turn1_logit_bound."""
+        tight, rooted = declared(bounds=bounds(turn1_logit_bound=.05)), declared(bounds=bounds(turn1_logit_bound=.05, root_logit_bound=.15))
+        ev = self.evaluated(root_logits=.1, twin=True)
+        result, status, _ = self.judge(ev, tight)
+        self.assertEqual((status, set(failing(result))), ('FAIL', {'b', 'c', 'block_invariance'}))
+        for check, name in ROOT_SITES:self.assertEqual((site(result, check, name)['bound'], site(result, check, name)['passed']), (.05, False), (check, name))
+        self.assertEqual({(check, n) for check in SITE_KEYS for n, m in result['checks'][check][SITE_KEYS[check]].items() if m.get('passed') is False}, set(ROOT_SITES))
+        result, status, _ = self.judge(ev, rooted)
+        self.assertEqual((status, failing(result), result['passed']), ('PASS', {}, True))
+        self.assertEqual((result['checks']['b']['passed'], result['checks']['block_invariance']['passed']), (True, True))
+        for check, name in ROOT_SITES:self.assertEqual((site(result, check, name)['bound'], site(result, check, name)['passed']), (.15, True), (check, name))
+        verdict, judged = gate.mutant_verdict(copy.deepcopy(ev), lanes=(2187,), declared=rooted)
+        self.assertEqual((verdict['status'], verdict['killed'], verdict['caught_by'], verdict['root_logit_bound']), ('PASS', False, [], .15))
+        self.assertEqual((judged['checks']['b']['passed'], judged['checks']['block_invariance']['passed']), (True, True))
+        verdict, _ = gate.mutant_verdict(copy.deepcopy(ev), lanes=(2187,), declared=tight)
+        self.assertEqual((verdict['status'], verdict['caught_by']), ('FAIL', ['b', 'block_invariance', 'c']));self.assertNotIn('root_logit_bound', verdict)
+        frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame);other.root_peer_logits[...] += np.float32(.1)
+        found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        heads = dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.]), **copy.deepcopy({k: floats[k] for k in ('root_peer_logits', 't1_own_logits', 't1_peer_logits')}))
+        call = dict(a=found, floats=floats, c=heads, e=e, spreads=[SPREAD] * 10, invariance=[gate.g2.block_invariance(frame, other)])   # heads: check_heads' stand-ins
+        self.assertGreater(floats['root_peer_logits']['compared'], 0);self.assertAlmostEqual(floats['root_peer_logits']['max_abs_difference'], .1, delta=1e-3)
+        report = gate.summarize_n2({'x': [copy.deepcopy(call)]}, declared=tight)['x']
+        self.assertEqual((report['passed'], report['floats']['root_peer_logits']['passed'], report['block_invariance']['passed']), (False, False, False))
+        self.assertEqual([n for n, m in report['floats'].items() if not m['passed']] + [n for n, m in report['block_invariance']['floats'].items() if not m['passed']],
+            ['root_peer_logits', 'root_peer_logits'])
+        self.assertEqual(report['turn1_heads_vs_oracle']['quantities']['root_peer_logits']['bound'], .05)
+        report = gate.summarize_n2({'x': [copy.deepcopy(call)]}, declared=rooted)['x']
+        self.assertEqual((report['status'], report['passed'], report['block_invariance']['passed'], report['block_invariance']['discrete_equal']), ('PASS', True, True, True))
+        self.assertEqual({k: report['floats']['root_peer_logits'][k] for k in ('bound', 'bound_rule', 'passed')}, dict(bound=.15, bound_rule='declared_root_logit_bound', passed=True))
+        quantities = report['turn1_heads_vs_oracle']['quantities']
+        self.assertEqual({k: quantities['root_peer_logits'][k] for k in ('bound', 'bound_rule', 'within_bound')}, dict(bound=.15, bound_rule='declared_root_logit_bound', within_bound=True))
+        for name in ('t1_own_logits', 't1_peer_logits'):self.assertEqual((quantities[name]['bound'], 'bound_rule' in quantities[name]), (.05, False), name)
+
     def test_the_topk_root_gap_count_takes_the_root_logit_bound(self):
         """merge_topk_n: the root selection's gaps are counted below a given root_logit_bound (recorded beside the plies), every other ply's
         below logit_bound; root_logit_bound None is the call without it."""
