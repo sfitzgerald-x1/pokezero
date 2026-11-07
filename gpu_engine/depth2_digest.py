@@ -6,6 +6,11 @@ for byte equality without moving every leaf to the host. A digest is two
 uint32 words: a position-mixed sum and a position-mixed xor of every input
 word, keyed by input name. Any differing bit changes both words unless two
 independent 32-bit mixes collide at once.
+
+What is hashed is the evaluator's own read of the inputs: the pricers and oracles pass each view
+through champion_evaluator.digest_view(forward) first (the champion's 23-token slice under the same
+five key names; the V2 default hashes the inputs unchanged), so the key set and token slice are a
+property of the evaluator, not of this module.
 """
 import jax
 import jax.numpy as j
