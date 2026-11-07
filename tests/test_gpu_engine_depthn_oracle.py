@@ -11,6 +11,7 @@ import collections
 import contextlib
 import copy
 from dataclasses import replace
+import hashlib
 import importlib.util
 import io
 import itertools
@@ -19,6 +20,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -833,7 +835,7 @@ def saved_gate(depth=3, ply2_noise=.004, t1_logits=.05, ply2_logits=None, single
         guard_bound=m.get('guard_bound'), passed=m['passed']) for name, m in quantities.items() if name != 'depth1_noise_floor']
     return dict(schema=gate.SCHEMA, mode='SAVED_ROOTS', status='FAIL', passed=False, status_reasons=[], sample_leaves=None, evaluator=dict(override=single_actor),
         pricer_options=dict(depth=depth, actor_capacity=1 if single_actor else 3),
-        tolerance=dict(value_bound=.008, guard_bound=.005, table=table), checks=dict(a=a, c=dict(passed=False, quantities=quantities), e=dict(passed=True, roots_compared=2),
+        tolerance=dict(rule=gate.g2.TOLERANCE_RULE, depth1_noise_floor=FLOOR, value_bound=.008, logit_bound=.1, guard_bound=.005, table=table), checks=dict(a=a, c=dict(passed=False, quantities=quantities), e=dict(passed=True, roots_compared=2),
             f=saved_choices()))
 
 
@@ -1076,7 +1078,8 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
             digest_counts=drop('checks', 'a', 'compared'), depth=drop('pricer_options', 'depth'), sample_leaves=drop('sample_leaves'), quantities=drop('checks', 'c', 'quantities'),
             n2_report=dict(saved_gate(), mode='N2_EQUIVALENCE'), schema=dict(saved_gate(), schema='pokezero.depth2-gate.v1'), choices=drop('checks', 'f'),
             choice_flips=drop('checks', 'f', 'differing'), value_bound=drop('tolerance', 'value_bound'), read_identity=drop('checks', 'f', 'read_identity'),
-            priors=drop('checks', 'f', 'priors'))
+            priors=drop('checks', 'f', 'priors'), rule=drop('tolerance', 'rule'), logit_bound=drop('tolerance', 'logit_bound'),
+            depth1_noise_floor=drop('tolerance', 'depth1_noise_floor'), value_bound_of_a_value=drop('checks', 'c', 'quantities', 'leaf_value', 'bound'))
         for case, report in cases.items():
             with self.subTest(case):
                 directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));path = directory / 'gate.json';path.write_text(json.dumps(report))
@@ -2235,6 +2238,653 @@ class FixedShapesTests(FixtureN, unittest.TestCase):
                     self.assertEqual([(s['size'], s['shape']) for s in seen], [(None, {32}), (None, {8})])
                     self.assertNotEqual(keys[0], keys[1]);self.assertEqual(([k[1] for k in p1[0]], [k[1] for k in p1[1]]), ([16], [4]))
                     self.assertEqual(sizes, dict.fromkeys(sizes, 2))
+
+
+# ---------------------------------------------------------------- --declared-bounds
+
+DECLARED_ARCHIVE, DECLARED_CHECKPOINT = '7' * 64, '8' * 64
+HEAD_FLAGS = ('--head-archive', '/shared/x/head.npz', '--head-archive-sha256', DECLARED_ARCHIVE, '--head-checkpoint-sha256', DECLARED_CHECKPOINT)
+CHAMPION_FLAGS = ('--champion-archive', '/shared/x/champion.npz', '--champion-archive-sha256', DECLARED_ARCHIVE, '--champion-checkpoint-sha256', DECLARED_CHECKPOINT)
+
+
+def declaration(**changes):
+    """A valid declaration for the champion CHAMPION_FLAGS name (DECLARED_ARCHIVE, bfloat16); each change replaces a top-level key (None drops it)."""
+    content = dict(schema=gate.DECLARED_SCHEMA, evaluator=dict(kind='champion', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16'),
+        bounds=dict(value_bound=.008, turn1_logit_bound=.1, deeper_logit_rule=dict(factor=2)), derivation='2 x the bf16-vs-f32 spread, as B1 (test)',
+        declared_at='2026-11-01T00:00:00Z', source_measurement=dict(path='/shared/measure/spread.json', sha256='9' * 64), declared_by='test')
+    for key, value in changes.items():
+        if value is None:content.pop(key)
+        else:content[key] = value
+    return content
+
+
+def bounds(**values):
+    """A declaration's bounds: value .008, turn-1 logits .1 and the deeper rule's factor 2 unless given (None drops a key)."""
+    out = dict(dict(value_bound=.008, turn1_logit_bound=.1, deeper_logit_rule=dict(factor=2)), **values)
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def depth2_pass_priors(a, b):
+    """depth2_pass_check's prior quantities with frame `a` standing in for the full-width depth-2 pass and `b` the depth-N frame: each
+    requested seat's legal lanes at the valued (own) / expanded (peer) turn-1 cells and the root opponent's legal lanes at usable worlds."""
+    t1s, t1e = np.asarray(b.t1_status), np.asarray(b.t1_error);valued = (t1s == 2) | ((t1s == 3) & np.isin(t1e, (5, 6)));out = {}
+    for seat, scope in (('own', valued), ('peer', t1s == 2)):
+        lanes = (scope & np.asarray(getattr(b, f't1_{seat}_requested'), bool))[..., None] & np.asarray(getattr(b, f't1_{seat}_legal'), bool)
+        out[f'depth2_pass_t1_{seat}_logits'] = gate.g2._numeric(np.argwhere(lanes), np.asarray(getattr(a, f't1_{seat}_logits'))[lanes], np.asarray(getattr(b, f't1_{seat}_logits'))[lanes])
+    lanes = ((np.asarray(b.pre) == 0) & np.asarray(b.root_peer_requested, bool))[..., None] & np.asarray(b.root_peer_legal, bool)
+    out['depth2_pass_root_peer_logits'] = gate.g2._numeric(np.argwhere(lanes), np.asarray(a.root_peer_logits)[lanes], np.asarray(b.root_peer_logits)[lanes])
+    return out
+
+
+ROOT_SITES = (('b', 'root_peer_logits'), ('c', 'root_peer_logits'), ('c', 'depth2_pass_root_peer_logits'), ('block_invariance', 'root_peer_logits'))
+TURN1_SITES = (('c', 't1_own_logits'), ('c', 't1_peer_logits'), ('c', 'depth2_pass_t1_own_logits'), ('c', 'depth2_pass_t1_peer_logits'),
+    ('block_invariance', 't1_own_logits'), ('block_invariance', 't1_peer_logits'))
+SITE_KEYS = dict(b='values', c='quantities', block_invariance='floats')
+
+
+def site(result, check, name):
+    """A prior site's record in a summarized result or report: (b) values, (c) quantities, block invariance floats."""
+    return result['checks'][check][SITE_KEYS[check]][name]
+
+
+def written(content=None, *, raw=None):
+    """(path, sha256) of `content` as JSON, or `raw` bytes verbatim, in a new file outside any repository."""
+    path = Path(tempfile.mkdtemp(prefix='depthn-declared-')) / 'declared.json';raw = raw if raw is not None else json.dumps(content, indent=1).encode()
+    path.write_bytes(raw);return path, hashlib.sha256(raw).hexdigest()
+
+
+def git(root, *args):
+    """git in a scratch repository (no hooks, no signing, a fixed author); its stdout."""
+    return subprocess.run(['git', '-C', str(root), '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'user.name=declared-bounds-test',
+        '-c', 'user.email=declared-bounds-test@example.com', *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def committed(content=None, *, raw=None, name='champion.json'):
+    """Record(path, sha256, commit, root): `content` as JSON (or `raw` bytes) committed under DECLARED_SUBDIR of a new scratch repository (the
+    reviewed-PR record a declaration must have)."""
+    root = Path(tempfile.mkdtemp(prefix='depthn-declared-repo-'));git(root, 'init', '-q');path = root / gate.DECLARED_SUBDIR / name
+    path.parent.mkdir(parents=True);raw = raw if raw is not None else json.dumps(content, indent=1).encode();path.write_bytes(raw)
+    git(root, 'add', '.');git(root, 'commit', '-q', '-m', 'declare bounds')
+    return SimpleNamespace(path=path, sha256=hashlib.sha256(raw).hexdigest(), commit=git(root, 'rev-parse', 'HEAD'), root=root)
+
+
+def load(record, **changes):
+    """gate.load_declared on a committed record (changes: path, sha256, commit, root overrides)."""
+    r = dict(vars(record), **changes);return gate.load_declared(r['path'], r['sha256'], r['commit'], root=r['root'])
+
+
+def declared(**changes):
+    return load(committed(declaration(**changes)))
+
+
+class DeclaredBoundsTests(FixtureN, unittest.TestCase):
+    """--declared-bounds: the file fails closed; the verdict takes the declared numbers (a run beyond B1's bounds passes looser declared ones
+    and one inside them fails tighter ones; declaring the frozen numbers reproduces the frozen verdict); the near-tie Q bound is (e)'s alone;
+    the flags are champion only (the command-line round trip runs on the champion: test_gpu_engine_champion_evaluator.ChampionCommandLineTests);
+    without the flag nothing changes (the head override's roots here stand for B1's path)."""
+    _frame, _d, _data, _n2_frame = GateNTests._frame, GateNTests._d, GateNTests._data, GateNTests._n2_frame
+    main = CommandLineRunTests.main
+
+    def roots(self):
+        """The CLI fixture's roots under the head override's evaluator header (kind v2, DECLARED_ARCHIVE): what load_roots resolves for HEAD_FLAGS."""
+        roots = CommandLineRunTests.roots(self);roots.evaluator = dict(override=True, kind='v2', identity=['v2'], precision='bfloat16',
+            archive_sha256=DECLARED_ARCHIVE, checkpoint_sha256=DECLARED_CHECKPOINT, arm_checked=True, dropped_roots=[]);return roots
+
+    def evaluated(self, *, leaf=0., t1_logits=0., ply_logits=0., root_logits=0., twin=False):
+        """One call of the stand-in depth-3 surface with `leaf` added to head-valued leaves, `t1_logits` / `ply_logits` to the turn-1 cells' /
+        ply-2 nodes' own priors, `root_logits` to every lane of the root opponent's prior, (e) and (f) through the fake backups, a synthetic
+        depth-1 floor FLOOR (frozen value bound .008) and one actor. twin: the unshifted frame stands in for the full-width depth-2 pass
+        (depth2_pass_priors) and for a block-invariance twin, so every prior site compares the shifts."""
+        base = self.cached('frame', self._frame);data = self.cached('data', lambda: self._data(base));frame = copy.deepcopy(base);level = frame.nodes[0]
+        frame.leaf_value[np.asarray(frame.leaf_status) == 4] += np.float32(leaf);frame.t1_own_logits[np.asarray(frame.t1_status) != 0] += np.float32(t1_logits)
+        level.own_logits[np.asarray(level.status) != 0] += np.float32(ply_logits)
+        if root_logits:frame.root_peer_logits[...] += np.float32(root_logits)
+        ev = gate.evaluate_n(frame, self._d(), self.requests, data, context={}, backups=FakeBackupsN, decision=True, choices=True)
+        ev['c']['depth1_noise_floor'] = gate.g2._numeric([[0]], [FLOOR], [0.]);ev['spreads'] = [SPREAD] * 10;ev['actors'] = 1
+        if twin:ev['c'].update(depth2_pass_priors(base, frame));ev['invariance'] = [gate.g2.block_invariance(gate.frame_arrays(base), gate.frame_arrays(frame))]
+        return ev
+
+    def judge(self, ev, declared=None):
+        result = gate.summarize_run([copy.deepcopy(ev)], (2187,), declared=declared);return result, gate.gate_status_n(result)[0], result['checks']['c']['quantities']
+
+    def test_the_declaration_parses_and_fails_closed(self):
+        d = declared();self.assertEqual((d['content'], d['path']), (declaration(), d['path']));self.assertEqual(len(d['sha256']), 64)
+        self.assertEqual(gate.declared_numbers(d), dict(value_bound=.008, turn1_logit_bound=.1, deeper_logit_bound=None, deeper_logit_factor=2., near_tie_q_bound=None))
+        self.assertEqual(gate.declared_numbers(declared(bounds=bounds(deeper_logit_rule=None, deeper_logit_bound=.3, near_tie_q_bound=.02)))['deeper_logit_bound'], .3)
+        refused = {f'missing {k}': (declaration(**{k: None}), f'declaration.{k}: missing') for k in gate.DECLARED_FIELDS}
+        refused.update(
+            unknown_key=(dict(declaration(), comment='x'), 'declaration.comment: unknown key'), misspelt_bound=(declaration(bounds=dict(bounds(), value_bnd=1)), 'unknown key'),
+            no_value_bound=(declaration(bounds=bounds(value_bound=None)), 'bounds.value_bound: missing'),
+            no_turn1_logit_bound=(declaration(bounds=bounds(turn1_logit_bound=None)), 'bounds.turn1_logit_bound: missing'),
+            no_deeper=(declaration(bounds=bounds(deeper_logit_rule=None)), 'exactly one'), both_deeper=(declaration(bounds=bounds(deeper_logit_bound=.2)), 'exactly one'),
+            zero=(declaration(bounds=bounds(value_bound=0)), 'finite number > 0'), boolean=(declaration(bounds=bounds(turn1_logit_bound=True)), 'finite number > 0'),
+            negative_factor=(declaration(bounds=bounds(deeper_logit_rule=dict(factor=-2))), 'factor: a finite number > 0'),
+            text_bound=(declaration(bounds=bounds(near_tie_q_bound='.01')), 'near_tie_q_bound: a finite number > 0'),
+            schema=(declaration(schema='v0'), 'schema'), kind=(declaration(evaluator=dict(declaration()['evaluator'], kind='v2')), 'evaluator.kind'),
+            alias_precision=(declaration(evaluator=dict(declaration()['evaluator'], precision='bf16')), 'evaluator.precision'),
+            archive=(declaration(evaluator=dict(declaration()['evaluator'], archive_sha256='7' * 63)), 'evaluator.archive_sha256'),
+            naive_time=(declaration(declared_at='2026-11-01T00:00:00'), 'declared_at'), other_zone=(declaration(declared_at='2026-11-01T00:00:00+01:00'), 'declared_at'),
+            empty_derivation=(declaration(derivation='  '), 'derivation: non-empty'), empty_author=(declaration(declared_by=''), 'declared_by: non-empty'),
+            measurement=(declaration(source_measurement=dict(path='/shared/m.json')), 'source_measurement.sha256: missing'),
+            measurement_sha=(declaration(source_measurement=dict(path='/shared/m.json', sha256='x')), 'source_measurement.sha256: a 64-hex'),
+            future=(declaration(declared_at='2999-01-01T00:00:00Z'), 'after the run\'s start'), not_an_object=([1], 'a JSON object'))
+        for case, (content, message) in refused.items():
+            with self.subTest(case):
+                with self.assertRaises(gate.DeclaredBoundsError) as raised:load(committed(content))
+                self.assertIn(message, str(raised.exception))
+        record = committed(declaration());text = json.dumps(declaration())
+        for case, (call, message) in dict(sha_mismatch=(lambda: load(record, sha256='0' * 64), 'differs from --declared-bounds-sha256'),
+                absent=(lambda: load(record, path=record.path.with_name('absent.json')), 'cannot read'),
+                duplicate=(lambda: load(committed(raw=text.replace('{', '{"derivation": "a", ', 1).encode())), 'duplicate'),
+                nan=(lambda: load(committed(raw=text.replace('0.008', 'NaN').encode())), 'NaN is not a JSON number'),
+                not_json=(lambda: load(committed(raw=b'{"schema": ')), 'not a JSON declaration'),
+                not_utf8=(lambda: load(committed(raw=b'\xff\xfe{}')), 'not UTF-8')).items():
+            with self.subTest(case):
+                with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
+                self.assertIn(message, str(raised.exception))
+
+    def test_the_declaration_is_a_committed_record(self):
+        """The file must lie under DECLARED_SUBDIR of the checkout; its git blob sha1 (git hash-object) and the commit are recorded and, in a git
+        work tree, the commit must exist (a made-up one is refused), hold exactly this blob there and be an ancestor of HEAD, with the file tracked
+        and unmodified at HEAD; "not verifiable here" only without git, without a work tree of the checkout, or in a shallow clone lacking the
+        commit. Every case of the re-review's prereg.py, then the refusals beyond it, then the source measurement."""
+        record = committed(declaration());d = load(record)
+        self.assertEqual((d['repo_path'], d['commit'], d['git_verification']['status']), (gate.DECLARED_SUBDIR + '/champion.json', record.commit, 'verified'))
+        self.assertIn('ancestor of HEAD', d['git_verification']['detail']);self.assertIn('tracked and unmodified at HEAD', d['git_verification']['detail'])
+        self.assertEqual(d['git_blob_sha1'], git(record.root, 'hash-object', str(record.path)));self.assertEqual(d['source_measurement_verification']['status'], 'not verifiable here')
+        raw = json.dumps(declaration(), indent=1).encode();sha = hashlib.sha256(raw).hexdigest();made_up = 'e' * 40
+        edited = json.dumps(declaration(bounds=bounds(value_bound=.5)), indent=1).encode()
+        def repo():
+            root = Path(tempfile.mkdtemp(prefix='depthn-declared-repo-'));git(root, 'init', '-q');(root / gate.DECLARED_SUBDIR).mkdir(parents=True)
+            (root / 'README').write_text('x');git(root, 'add', '.');git(root, 'commit', '-q', '-m', 'base');return root
+        def place(root, data=raw, name='champion.json'):
+            path = root / gate.DECLARED_SUBDIR / name;path.parent.mkdir(parents=True, exist_ok=True);path.write_bytes(data);return path
+        def commit(root, message='declare'):
+            git(root, 'add', '-A');git(root, 'commit', '-q', '-m', message);return git(root, 'rev-parse', 'HEAD')
+        r1 = repo();p1 = place(r1)   # prereg 1, 2, 7: never committed, in a full repository
+        r3 = repo();p3 = place(r3);c3 = commit(r3);p3.write_bytes(edited)   # prereg 3, 3b: committed, then edited in the work tree
+        r4 = repo();git(r4, 'checkout', '-q', '-b', 'after-the-failure');p4 = place(r4);c4 = commit(r4)   # prereg 4: on a side branch, HEAD there
+        r5 = Path(tempfile.mkdtemp(prefix='depthn-nogit-'));(r5 / gate.DECLARED_SUBDIR).mkdir(parents=True);p5 = place(r5)   # prereg 5: no git on PATH
+        r6 = repo();outside = Path(tempfile.mkdtemp(prefix='depthn-outside-')) / 'champion.json';outside.write_bytes(raw)
+        link = r6 / gate.DECLARED_SUBDIR / 'link.json';link.symlink_to(outside)   # prereg 6: a symlink under the directory to outside the checkout
+        outer = repo();inner = outer / 'checkout';(inner / gate.DECLARED_SUBDIR).mkdir(parents=True);p8 = place(inner);c8 = commit(outer)   # prereg 8: nested
+        rm = repo();pm = place(rm);cm = commit(rm);pm.write_bytes(edited);commit(rm, 'revise');pm.write_bytes(raw)   # the commit's bytes, HEAD's another revision
+        ru = repo();pu = place(ru);cu = commit(ru);git(ru, 'rm', '-q', '--cached', str(pu.relative_to(ru)));git(ru, 'commit', '-q', '-m', 'untrack')   # untracked at HEAD, left in the work tree
+        rs = repo();trunk = git(rs, 'rev-parse', '--abbrev-ref', 'HEAD');git(rs, 'checkout', '-q', '-b', 'side');ps = place(rs);cs = commit(rs, 'side')
+        git(rs, 'checkout', '-q', trunk);place(rs);commit(rs, 'trunk')   # the same file on HEAD's line, the given commit off it
+        origin = repo();po = place(origin);co = commit(origin);(origin / 'later').write_text('y');commit(origin, 'later')
+        clone = Path(tempfile.mkdtemp(prefix='depthn-shallow-')) / 'clone';git(origin, 'clone', '-q', '--depth', '1', f'file://{origin}', str(clone))   # lacks co
+        refused = dict(
+            prereg_1_untracked_made_up_commit=(lambda: gate.load_declared(p1, sha, made_up, root=r1), 'absent: commit ' + made_up),
+            prereg_2_untracked_real_head=(lambda: gate.load_declared(p1, sha, git(r1, 'rev-parse', 'HEAD'), root=r1), 'absent: commit'),
+            prereg_3_edited_real_commit=(lambda: gate.load_declared(p3, hashlib.sha256(edited).hexdigest(), c3, root=r3), 'mismatch'),
+            prereg_3b_edited_made_up_commit=(lambda: gate.load_declared(p3, hashlib.sha256(edited).hexdigest(), made_up, root=r3), 'absent: commit ' + made_up),
+            prereg_6_symlink_to_outside=(lambda: gate.load_declared(link, sha, made_up, root=r6), f'committed under {gate.DECLARED_SUBDIR}/'),
+            prereg_7_dotdot_made_up_commit=(lambda: gate.load_declared(r1 / gate.DECLARED_SUBDIR / '..' / 'declared_bounds' / 'champion.json', sha, made_up, root=r1),
+                'absent: commit ' + made_up),
+            made_up_commit_for_a_committed_file=(lambda: load(record, commit=made_up), 'absent: commit ' + made_up),
+            modified_against_head=(lambda: gate.load_declared(pm, sha, cm, root=rm), 'modified'),
+            untracked_at_head=(lambda: gate.load_declared(pu, sha, cu, root=ru), 'untracked'),
+            commit_off_heads_line=(lambda: gate.load_declared(ps, sha, cs, root=rs), 'not an ancestor of HEAD'),
+            short_commit=(lambda: load(record, commit=record.commit[:12]), 'full lowercase hex commit id'),
+            outside=(lambda: gate.load_declared(*written(declaration()), record.commit, root=record.root), f'committed under {gate.DECLARED_SUBDIR}/'))
+        for case, (call, message) in refused.items():
+            with self.subTest(case):
+                with self.assertRaises(gate.DeclaredBoundsError) as raised:call()
+                self.assertIn(message, str(raised.exception))
+        with patch.dict(os.environ, {'PATH': '/nonexistent'}):no_git = gate.load_declared(p5, sha, made_up, root=r5)
+        accepted = dict(prereg_4_side_branch_head=(gate.load_declared(p4, sha, c4, root=r4), 'verified', 'ancestor of HEAD'),   # the integration branch is the audit's
+            prereg_5_no_git_on_path=(no_git, 'not verifiable here', 'git is not available'),
+            prereg_8_nested_checkout=(gate.load_declared(p8, sha, c8, root=inner), 'not verifiable here', 'is not the top of a git work tree'),
+            no_repository=(gate.load_declared(p5, sha, made_up, root=r5), 'not verifiable here', 'is not the top of a git work tree'),
+            shallow_clone_lacking_the_commit=(gate.load_declared(clone / gate.DECLARED_SUBDIR / 'champion.json', sha, co, root=clone), 'not verifiable here', 'shallow'))
+        for case, (result, status, detail) in accepted.items():
+            with self.subTest(case):self.assertEqual(result['git_verification']['status'], status);self.assertIn(detail, result['git_verification']['detail'])
+        self.assertTrue(gate.provisional_reasons(no_git['git_verification'], no_git['source_measurement_verification'])[0].startswith('provisional: git_verification not verifiable here'))
+        elsewhere = record.root / 'gpu_engine' / 'champion.json';elsewhere.write_bytes(record.path.read_bytes());inside = commit(record.root, 'the same file outside the directory')
+        with self.assertRaises(gate.DeclaredBoundsError) as raised:load(record, path=elsewhere, commit=inside)
+        self.assertIn(f'committed under {gate.DECLARED_SUBDIR}/', str(raised.exception))
+        measurement = Path(tempfile.mkdtemp(prefix='depthn-measure-')) / 'spread.json';measurement.write_bytes(b'{"spread": 0.003}\n')
+        good = dict(path=str(measurement), sha256=hashlib.sha256(measurement.read_bytes()).hexdigest())
+        self.assertEqual(declared(source_measurement=good)['source_measurement_verification']['status'], 'verified')
+        with self.assertRaises(gate.DeclaredBoundsError) as raised:declared(source_measurement=dict(good, sha256='9' * 64))
+        self.assertIn('source_measurement', str(raised.exception))
+
+    def test_the_declaration_binds_one_evaluator(self):
+        run = dict(override=True, kind='champion', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16', checkpoint_sha256=DECLARED_CHECKPOINT)
+        self.assertEqual(gate.evaluator_mismatches(declaration(), run), [])
+        for key, value in (('kind', 'v2'), ('archive_sha256', '6' * 64), ('precision', 'float32')):
+            with self.subTest(key):
+                mismatched = gate.evaluator_mismatches(declaration(), dict(run, **{key: value}))
+                self.assertEqual(len(mismatched), 1);self.assertIn(f'evaluator.{key}', mismatched[0])
+        pinned = declaration(evaluator=dict(declaration()['evaluator'], checkpoint_sha256=DECLARED_CHECKPOINT))
+        self.assertEqual(gate.evaluator_mismatches(pinned, run), []);self.assertIn('checkpoint_sha256', gate.evaluator_mismatches(pinned, dict(run, checkpoint_sha256='5' * 64))[0])
+        self.assertIn('no champion evaluator', gate.evaluator_mismatches(declaration(), dict(run, override=False))[0])
+        base = ['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64, '--declared-bounds-commit', 'b' * 40]
+        self.assertEqual(gate.args_identity(gate.parse(base + list(CHAMPION_FLAGS))[1]), run)
+        self.assertEqual(gate.args_identity(gate.parse(base + list(CHAMPION_FLAGS) + ['--champion-precision', 'f32'])[1]), dict(run, precision='float32'))
+        for flags in ((), HEAD_FLAGS):self.assertEqual(gate.args_identity(gate.parse(base[:6] + list(flags))[1])['override'], False)   # no champion: never applies
+
+    def test_flags_are_refused_off_the_champion_and_in_incompatible_modes(self):
+        out = str(Path(tempfile.gettempdir()) / f'depthn-gate-never-created-{uuid.uuid4().hex}')
+        flags = ['--declared-bounds', 'd.json', '--declared-bounds-sha256', 'a' * 64, '--declared-bounds-commit', 'b' * 40]
+        live = ['--out', out, '--d3-root', 'b', '--chunk', '0']
+        cases = dict(alone=(live + flags[:2] + list(CHAMPION_FLAGS), 'go together'), sha_alone=(live + flags[2:4] + list(CHAMPION_FLAGS), 'go together'),
+            no_commit=(live + flags[:4] + list(CHAMPION_FLAGS), 'go together'), bad_commit=(live + flags[:5] + ['B' * 40] + list(CHAMPION_FLAGS), 'full lowercase hex'),
+            bad_sha=(live + flags[:3] + ['A' * 64] + flags[4:] + list(CHAMPION_FLAGS), '64-hex'), bank_actors=(live + flags, 'needs --champion-archive'),
+            head_override=(live + flags + list(HEAD_FLAGS), 'champion only'),
+            diagnostics=(live + flags + list(CHAMPION_FLAGS) + ['--depth3-diagnostics'], '--depth3-diagnostics'),
+            diagnostics_from=(['--out', out, '--diagnostics-from', 'x'] + flags + list(CHAMPION_FLAGS), 'live gate run'),
+            mutation_from=(['--out', out, '--mutation-from', 'x'] + flags, 'live gate run'), reverdict=(['--reverdict', 'gate.json'] + flags, 'takes no other option'),
+            reverdict_bad_commit=(['--reverdict', 'gate.json', '--declared-bounds-commit', 'abc'], 'full lowercase hex'))
+        for case, (argv, message) in cases.items():
+            with self.subTest(case):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:gate.main(argv)
+                self.assertEqual(raised.exception.code, 2);self.assertIn(message, stderr.getvalue())
+        for extra in ((), ('--n2-equivalence',), ('--mutation-test',), ('--n2-equivalence', '--block-invariance')):
+            self.assertEqual(gate.parse(live + flags + list(CHAMPION_FLAGS) + list(extra))[1].declared_bounds, 'd.json')
+        self.assertEqual(gate.parse(['--reverdict', 'gate.json', '--declared-bounds-commit', 'b' * 40, '--declared-bounds-sha256', 'a' * 64])[1].reverdict, 'gate.json')
+        record = committed(declaration())   # main refuses before anything is created or loaded: the file's sha256, its commit, then the flags' evaluator
+        for argv, message in (([record.sha256[:-1] + '0', record.commit], 'differs from --declared-bounds-sha256'), ([record.sha256, record.commit], 'evaluator.archive_sha256')):
+            head = list(CHAMPION_FLAGS);head[3] = '6' * 64
+            with patch.object(gate, 'load_roots', side_effect=AssertionError('loaded')), patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'REPO_ROOT', record.root), \
+                    self.assertRaises(SystemExit) as raised:gate.main(live + ['--declared-bounds', str(record.path), '--declared-bounds-sha256', argv[0], '--declared-bounds-commit', argv[1]] + head)
+            self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse(Path(out).exists())
+
+    def test_the_verdict_takes_the_declared_bounds(self):
+        """Turn-1 priors .12 off fail B1's 0.1 and pass a declared .15; leaves .006 off pass B1's .008 and fail a declared .005; ply-2 priors .12 off
+        (turn 1 .07) pass the frozen deeper .14 and fail a declared .11 or a declared rule of factor 1.5 (.105), and pass factor 2 (.14). The
+        measured floors and the frozen rule's numbers are reported beside the declared ones."""
+        cases = (('turn1_logits', dict(t1_logits=.12), bounds(turn1_logit_bound=.15), ('FAIL', 'PASS'), 't1_own_logits', .15, 'declared_turn1_logit_bound'),
+            ('leaf_values', dict(leaf=.006), bounds(value_bound=.005), ('PASS', 'FAIL'), 'leaf_value', .005, 'declared_value_bound'),
+            ('deeper_bound', dict(t1_logits=.07, ply_logits=.12), bounds(deeper_logit_rule=None, deeper_logit_bound=.11), ('PASS', 'FAIL'), 'ply2_own_logits', .11,
+                'declared_deeper_logit_bound'),
+            ('deeper_rule_tighter', dict(t1_logits=.07, ply_logits=.12), bounds(deeper_logit_rule=dict(factor=1.5)), ('PASS', 'FAIL'), 'ply2_own_logits', None,
+                'declared_deeper_logit_bound'),
+            ('deeper_rule_frozen_factor', dict(t1_logits=.07, ply_logits=.12), bounds(), ('PASS', 'PASS'), 'ply2_own_logits', None, 'declared_deeper_logit_bound'))
+        for case, noise, numbers, (frozen, wanted), name, bound, label in cases:
+            with self.subTest(case):
+                ev = self.evaluated(**noise);d = declared(bounds=numbers);result, status, c = self.judge(ev)
+                self.assertEqual(status, frozen, failing(result))
+                result, status, c = self.judge(ev, d);m = c[name];tolerance = result['tolerance']
+                self.assertEqual(status, wanted, failing(result));self.assertEqual((m['bound_rule'], m['passed']), (label, wanted == 'PASS'))
+                if wanted == 'FAIL':self.assertTrue('c' in failing(result) and set(failing(result)) <= {'c', 'e', 'f'}, failing(result))   # (e)/(f) share the value bound
+                if bound is not None:self.assertAlmostEqual(m['bound'], bound, places=12)
+                self.assertEqual((tolerance['value_bound'], tolerance['logit_bound']), (numbers['value_bound'], numbers['turn1_logit_bound']))
+                section = tolerance['declared_bounds'];self.assertEqual(section['sha256'], d['sha256'])
+                self.assertEqual(section['frozen_rule_would_give']['value_bound'], 2 * float(np.float32(FLOOR)));self.assertEqual(section['frozen_rule_would_give']['logit_bound'], .1)
+                self.assertEqual(section['measured']['depth1_noise_floor'], float(np.float32(FLOOR)));self.assertEqual(section['measured']['turn1_logit_floor'], tolerance['turn1_logit_floor'])
+                self.assertEqual(tolerance['frozen_rule']['rule'], gate.g2.TOLERANCE_RULE);self.assertEqual(tolerance['rule'], gate.DECLARED_TOLERANCE_RULE)
+                if case == 'deeper_rule_tighter':self.assertAlmostEqual(m['bound'], 1.5 * tolerance['turn1_logit_floor']);self.assertIn('1.5 x turn1_logit_floor', tolerance['deeper_logit_bound_source'])
+                for other, q in c.items():
+                    if other not in gate.g2.FLOORS:self.assertTrue(q['bound_rule'].startswith('declared_'), other)
+                self.assertEqual(result['checks']['f']['value_bound'], numbers['value_bound'])
+                self.assertEqual(gate.tolerance_line_n(tolerance)['declared_bounds_sha256'], d['sha256'])
+
+    def test_declaring_the_frozen_numbers_reproduces_the_frozen_verdict(self):
+        """value_bound = 2 x the run's floor, turn1_logit_bound = 0.1, deeper_logit_rule factor 2: every check's verdict, every (c) quantity's
+        bound and counts and (e)'s and (f)'s numbers are the frozen rule's: only the numbers are declared, no rule changes."""
+        d = declared(bounds=bounds(value_bound=2 * float(np.float32(FLOOR))))
+        keep = ('passed', 'bound', 'within_bound', 'beyond_bound', 'ratio_to_bound', 'within_guard', 'guard_mode', 'beyond_guard', 'first_beyond')
+        for noise in (dict(), dict(leaf=.006), dict(leaf=.009), dict(t1_logits=.07, ply_logits=.12), dict(t1_logits=.12), dict(t1_logits=.07, ply_logits=.15)):
+            with self.subTest(**noise):
+                ev = self.evaluated(**noise);(frozen, status, c), (mine, status2, c2) = self.judge(ev), self.judge(ev, d)
+                self.assertEqual(status2, status);self.assertEqual({k: v['passed'] for k, v in mine['checks'].items()}, {k: v['passed'] for k, v in frozen['checks'].items()})
+                self.assertEqual({n: {k: m.get(k) for k in keep} for n, m in c2.items()}, {n: {k: m.get(k) for k in keep} for n, m in c.items()})
+                for key in ('value_bound', 'logit_bound', 'guard_bound', 'q_noise_bound', 'deeper_logit_bound', 'turn1_logit_floor', 'depth1_noise_floor'):
+                    self.assertEqual(mine['tolerance'][key], frozen['tolerance'][key], key)
+                for check, keys in (('e', ('q_noise_bound', 'near_tie_roots', 'near_tie_flips', 'max_abs_delta_q')), ('f', ('value_bound', 'near_ties', 'near_tie_flips',
+                        'nodes_grid_beyond_bound', 'nodes_row_q_beyond_bound'))):
+                    self.assertEqual({k: mine['checks'][check][k] for k in keys}, {k: frozen['checks'][check][k] for k in keys}, check)
+
+    def test_the_near_tie_q_bound_is_e_alone(self):
+        """Leaves .006 off: (e)'s max |dQ| lies above a declared near-tie Q bound .004 (e fails), while (f) keeps the value bound .008 (passes);
+        undeclared, the near-tie Q bound is the value bound."""
+        ev = self.evaluated(leaf=.006)
+        result, status, _ = self.judge(ev, declared(bounds=bounds(near_tie_q_bound=.004)));e, f = result['checks']['e'], result['checks']['f']
+        self.assertEqual((status, set(failing(result))), ('FAIL', {'e'}));self.assertGreater(e['max_abs_delta_q'], .004)
+        self.assertEqual((e['q_noise_bound'], result['tolerance']['q_noise_bound'], f['value_bound'], f['passed']), (.004, .004, .008, True))
+        self.assertEqual(result['tolerance']['declared_bounds']['applied']['q_noise_bound'], .004);self.assertIn('near_tie_q_bound', result['tolerance']['q_noise_rule'])
+        result, status, _ = self.judge(ev, declared());self.assertEqual((status, result['checks']['e']['q_noise_bound']), ('PASS', .008))
+        self.assertIn('(= the value bound)', result['tolerance']['q_noise_rule'])
+        self.assertEqual(result['tolerance']['declared_bounds']['applied']['q_noise_bound'], .008)
+
+    def test_n2_equivalence_takes_the_declared_bounds(self):
+        """summarize_n2 under a declaration: priors .12 off fail 0.1 and pass a declared .15; the near-tie Q bound is (e)'s q_noise_bound."""
+        frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame);other.t1_own_logits[np.asarray(other.t1_status) != 0] += np.float32(.12)
+        found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        call = dict(a=found, floats=floats, c=dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.])), e=e, spreads=[SPREAD] * 10)
+        self.assertEqual(gate.summarize_n2({'x': [call]})['x']['floats']['t1_own_logits']['passed'], False)
+        report = gate.summarize_n2({'x': [copy.deepcopy(call)]}, declared=declared(bounds=bounds(turn1_logit_bound=.15, near_tie_q_bound=.01)))['x']
+        self.assertEqual((report['floats']['t1_own_logits']['bound'], report['floats']['t1_own_logits']['passed']), (.15, True))
+        self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['q_noise_bound'], report['e']['q_noise_bound']), (.008, .01, .01))
+        self.assertEqual(report['tolerance']['frozen_rule']['logit_bound'], .1);self.assertIn('declared_bounds', report['tolerance'])
+
+    def test_the_root_logit_bound_parses_and_fails_closed(self):
+        """bounds.root_logit_bound is optional: declared, declared_numbers carries it; absent, declared_numbers has no such key (the root keeps
+        turn1_logit_bound). 0, a negative, NaN, inf, a bool and a text are refused as every bound is; NaN / Infinity in the file are not JSON
+        numbers; an unknown key is still refused."""
+        self.assertEqual(gate.declared_numbers(declared(bounds=bounds(root_logit_bound=.05)))['root_logit_bound'], .05)
+        self.assertNotIn('root_logit_bound', gate.declared_numbers(declared()))
+        for value in (.05, 1, 1e-9):self.assertEqual(gate.declared_problems(declaration(bounds=bounds(root_logit_bound=value))), [], value)
+        for case, value in dict(zero=0, zero_float=0., negative=-.05, nan=float('nan'), inf=float('inf'), boolean=True, false=False, text='.05').items():
+            with self.subTest(case):
+                self.assertEqual(gate.declared_problems(declaration(bounds=bounds(root_logit_bound=value))), ['bounds.root_logit_bound: a finite number > 0'])
+                if case not in ('nan', 'inf'):   # json.dumps would write them as NaN / Infinity: the file case below
+                    with self.assertRaises(gate.DeclaredBoundsError) as raised:load(committed(declaration(bounds=bounds(root_logit_bound=value))))
+                    self.assertIn('bounds.root_logit_bound: a finite number > 0', str(raised.exception))
+        for literal in ('NaN', 'Infinity', '-Infinity'):
+            raw = json.dumps(declaration(bounds=bounds(root_logit_bound=.05))).replace('0.05', literal).encode()
+            with self.subTest(literal), self.assertRaises(gate.DeclaredBoundsError) as raised:load(committed(raw=raw))
+            self.assertIn(f'{literal} is not a JSON number', str(raised.exception))
+        self.assertIn('bounds.root_bound: unknown key', gate.declared_problems(declaration(bounds=bounds(root_bound=.05))))
+
+    def test_the_root_logit_bound_reaches_every_root_site_and_no_turn1_site(self):
+        """Turn-1 own priors and the root opponent's prior .1 off at every prior site ((b) against D3, (c) against the oracle, depth2_pass and
+        block invariance): turn1_logit_bound .15 passes them all, .05 fails them all. A declared root_logit_bound .05 beside turn1_logit_bound
+        .15 fails every root site and nothing else: each root record is the one turn1_logit_bound .05 gives (bound_rule
+        declared_root_logit_bound aside), every other record, (e) and (f) are the ones without it. Swapped (turn1_logit_bound .05,
+        root_logit_bound .15): every turn-1 site fails as under .05 and every root site passes as under .15. The tolerance, its applied
+        section, its log line and the table record root_logit_bound; without one nothing names it."""
+        ev = self.evaluated(t1_logits=.1, root_logits=.1, twin=True)
+        judged = lambda **numbers: self.judge(ev, declared(bounds=bounds(**numbers)))[:2]
+        (loose, _), (tight, _) = judged(turn1_logit_bound=.15), judged(turn1_logit_bound=.05)
+        (root_tight, root_tight_status), (root_loose, root_loose_status) = judged(turn1_logit_bound=.15, root_logit_bound=.05), judged(turn1_logit_bound=.05, root_logit_bound=.15)
+        plain = lambda m: {k: v for k, v in m.items() if k != 'bound_rule'};shifted = ROOT_SITES + tuple(s for s in TURN1_SITES if 'own' in s[1])
+        for check, name in ROOT_SITES + TURN1_SITES:   # the shifted sites compare the shift and fail .05; the turn-1 peer prior is not shifted
+            m = site(loose, check, name);self.assertGreater(m['compared'], 0, (check, name))
+            if (check, name) in shifted:self.assertAlmostEqual(m['max_abs_difference'], .1, delta=1e-3, msg=(check, name))
+            self.assertEqual((m['passed'], site(tight, check, name)['passed']), (True, (check, name) not in shifted), (check, name))
+        self.assertEqual(failing(loose), {});self.assertEqual(set(failing(tight)), {'b', 'c', 'block_invariance'})
+        for result, wanted, other, status in ((root_tight, .05, loose, root_tight_status), (root_loose, .15, tight, root_loose_status)):
+            for check, name in ROOT_SITES:   # the root at root_logit_bound, exactly as the turn-1 bound of that number gives it
+                m = site(result, check, name);self.assertEqual((m['bound'], m['bound_rule'], m['passed']), (wanted, 'declared_root_logit_bound', wanted > .1), (check, name))
+                self.assertEqual(plain(m), plain(site(tight if wanted == .05 else loose, check, name)), (check, name))
+            for check, name in TURN1_SITES:   # every turn-1 prior as without root_logit_bound
+                self.assertEqual(site(result, check, name), site(other, check, name), (check, name))
+            for check in ('b', 'c', 'block_invariance'):   # every other quantity untouched
+                self.assertEqual({n: m for n, m in result['checks'][check][SITE_KEYS[check]].items() if (check, n) not in ROOT_SITES},
+                    {n: m for n, m in other['checks'][check][SITE_KEYS[check]].items() if (check, n) not in ROOT_SITES}, check)
+            self.assertEqual((result['checks']['e'], result['checks']['f']), (other['checks']['e'], other['checks']['f']))
+            tolerance = result['tolerance'];self.assertEqual((tolerance['root_logit_bound'], tolerance['declared_bounds']['applied']['root_logit_bound']), (wanted, wanted))
+            self.assertEqual(gate.tolerance_line_n(tolerance)['root_logit_bound'], wanted);self.assertEqual(tolerance['logit_bound'], .15 if wanted == .05 else .05)
+            rows = {(r['check'], r['quantity']): r for r in tolerance['table']}
+            for key in ROOT_SITES:self.assertEqual((rows[key]['bound'], rows[key]['passed']), (wanted, wanted > .1), key)
+        self.assertEqual((root_tight_status, set(failing(root_tight))), ('FAIL', {'b', 'c', 'block_invariance'}))   # the root sites alone fail
+        self.assertEqual((root_loose_status, set(failing(root_loose))), ('FAIL', {'c', 'block_invariance'}))   # (b) compares no turn-1 prior
+        for result in (loose, tight):
+            self.assertNotIn('root_logit_bound', result['tolerance']);self.assertNotIn('root_logit_bound', result['tolerance']['declared_bounds']['applied'])
+            self.assertNotIn('root_logit_bound', gate.tolerance_line_n(result['tolerance']));self.assertNotIn('declared_root_logit_bound', json.dumps(result, default=str))
+            for check, name in ROOT_SITES:self.assertEqual(site(result, check, name)['bound'], result['tolerance']['logit_bound'], (check, name))
+
+    def test_a_root_logit_bound_equal_to_turn1_logit_bound_is_the_declaration_without_it(self):
+        """root_logit_bound declared equal to turn1_logit_bound: the summarized result is the one without it (every check, record, row and
+        number) once its own records are removed: tolerance.root_logit_bound and applied.root_logit_bound, and the declared_root_logit_bound
+        label (declared_turn1_logit_bound on (c), absent on (b) and block invariance)."""
+        def unrooted(value, where=()):
+            if isinstance(value, dict):
+                out = {k: unrooted(v, where + (k,)) for k, v in value.items() if k != 'root_logit_bound'}
+                if out.get('bound_rule') == 'declared_root_logit_bound':
+                    if 'c' in where:out['bound_rule'] = 'declared_turn1_logit_bound'
+                    else:out.pop('bound_rule')
+                return out
+            return [unrooted(v, where) for v in value] if isinstance(value, list) else value
+        for noise in (dict(t1_logits=.1, root_logits=.1, twin=True), dict(root_logits=.12, twin=True), dict(leaf=.006, root_logits=.05, twin=True)):
+            with self.subTest(**noise):
+                ev = self.evaluated(**noise);(without, status, _), (rooted, status2, _) = self.judge(ev, declared(bounds=bounds(turn1_logit_bound=.1))), \
+                    self.judge(ev, declared(bounds=bounds(turn1_logit_bound=.1, root_logit_bound=.1)))
+                self.assertEqual(status2, status);self.assertEqual(rooted['tolerance']['root_logit_bound'], .1)
+                self.assertNotEqual(rooted['tolerance']['declared_bounds']['sha256'], without['tolerance']['declared_bounds']['sha256'])
+                for result in (without, rooted):[result['tolerance']['declared_bounds'].pop(k) for k in ('sha256', 'path')];result['tolerance'].pop('value_bound_source')   # the files differ
+                self.assertEqual(unrooted(rooted), without);self.assertEqual(unrooted(gate.tolerance_line_n(rooted['tolerance'])), gate.tolerance_line_n(without['tolerance']))
+
+    def test_n2_equivalence_takes_the_declared_root_logit_bound(self):
+        """summarize_n2: turn-1 own priors and the root prior .1 off (floats and child-block invariance). root_logit_bound .05 beside
+        turn1_logit_bound .15 fails the root alone; swapped, the turn-1 prior alone fails; each record as the turn-1 bound of its number gives it."""
+        frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame)
+        other.t1_own_logits[np.asarray(other.t1_status) != 0] += np.float32(.1);other.root_peer_logits[...] += np.float32(.1)
+        found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        call = dict(a=found, floats=floats, c=dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.])), e=e, spreads=[SPREAD] * 10,
+            invariance=[gate.g2.block_invariance(frame, other)])
+        judged = lambda **numbers: gate.summarize_n2({'x': [copy.deepcopy(call)]}, declared=declared(bounds=bounds(**numbers)))['x']
+        loose, tight = judged(turn1_logit_bound=.15), judged(turn1_logit_bound=.05)
+        self.assertEqual((loose['floats']['root_peer_logits']['passed'], loose['floats']['t1_own_logits']['passed'], loose['block_invariance']['passed']), (True, True, True))
+        self.assertGreater(loose['floats']['root_peer_logits']['compared'], 0);self.assertNotIn('declared_root_logit_bound', json.dumps(loose, default=str))
+        plain = lambda m: {k: v for k, v in m.items() if k != 'bound_rule'}
+        for numbers, wanted, other_report in ((dict(turn1_logit_bound=.15, root_logit_bound=.05), .05, loose), (dict(turn1_logit_bound=.05, root_logit_bound=.15), .15, tight)):
+            report = judged(**numbers)
+            for section in ('floats', 'block_invariance'):
+                part = report[section] if section == 'floats' else report[section]['floats'];was = other_report[section] if section == 'floats' else other_report[section]['floats']
+                m = part['root_peer_logits'];self.assertEqual((m['bound'], m['bound_rule'], m['passed']), (wanted, 'declared_root_logit_bound', wanted > .1), section)
+                self.assertEqual(plain(m), plain((tight if wanted == .05 else loose)[section]['root_peer_logits'] if section == 'floats' else
+                    (tight if wanted == .05 else loose)[section]['floats']['root_peer_logits']), section)
+                self.assertEqual({n: x for n, x in part.items() if n != 'root_peer_logits'}, {n: x for n, x in was.items() if n != 'root_peer_logits'}, section)
+            self.assertEqual((report['status'], report['passed'], report['block_invariance']['passed']), ('FAIL', False, False))
+            self.assertEqual((report['tolerance']['root_logit_bound'], report['tolerance']['logit_bound']), (wanted, numbers['turn1_logit_bound']))
+
+    def test_a_root_only_shift_passes_under_its_root_logit_bound(self):
+        """Only the root opponent's prior .1 off. turn1_logit_bound .05 alone fails every root site and nothing else (gate: (b), (c),
+        depth2_pass, block invariance; --n2-equivalence: the floats and child-block invariance). root_logit_bound .15 beside it passes: (b)'s
+        and block invariance's passed are recomputed from their records, not kept from the turn-1 verdict g2.summarize / merge_invariance gave
+        them, in the gate's verdict, in mutant_verdict and in summarize_n2. n2's turn-1 heads against the oracle (reported, not gated) bound
+        the root at root_logit_bound and the turn-1 priors at turn1_logit_bound."""
+        tight, rooted = declared(bounds=bounds(turn1_logit_bound=.05)), declared(bounds=bounds(turn1_logit_bound=.05, root_logit_bound=.15))
+        ev = self.evaluated(root_logits=.1, twin=True)
+        result, status, _ = self.judge(ev, tight)
+        self.assertEqual((status, set(failing(result))), ('FAIL', {'b', 'c', 'block_invariance'}))
+        for check, name in ROOT_SITES:self.assertEqual((site(result, check, name)['bound'], site(result, check, name)['passed']), (.05, False), (check, name))
+        self.assertEqual({(check, n) for check in SITE_KEYS for n, m in result['checks'][check][SITE_KEYS[check]].items() if m.get('passed') is False}, set(ROOT_SITES))
+        result, status, _ = self.judge(ev, rooted)
+        self.assertEqual((status, failing(result), result['passed']), ('PASS', {}, True))
+        self.assertEqual((result['checks']['b']['passed'], result['checks']['block_invariance']['passed']), (True, True))
+        for check, name in ROOT_SITES:self.assertEqual((site(result, check, name)['bound'], site(result, check, name)['passed']), (.15, True), (check, name))
+        verdict, judged = gate.mutant_verdict(copy.deepcopy(ev), lanes=(2187,), declared=rooted)
+        self.assertEqual((verdict['status'], verdict['killed'], verdict['caught_by'], verdict['root_logit_bound']), ('PASS', False, [], .15))
+        self.assertEqual((judged['checks']['b']['passed'], judged['checks']['block_invariance']['passed']), (True, True))
+        verdict, _ = gate.mutant_verdict(copy.deepcopy(ev), lanes=(2187,), declared=tight)
+        self.assertEqual((verdict['status'], verdict['caught_by']), ('FAIL', ['b', 'block_invariance', 'c']));self.assertNotIn('root_logit_bound', verdict)
+        frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame);other.root_peer_logits[...] += np.float32(.1)
+        found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        heads = dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.]), **copy.deepcopy({k: floats[k] for k in ('root_peer_logits', 't1_own_logits', 't1_peer_logits')}))
+        call = dict(a=found, floats=floats, c=heads, e=e, spreads=[SPREAD] * 10, invariance=[gate.g2.block_invariance(frame, other)])   # heads: check_heads' stand-ins
+        self.assertGreater(floats['root_peer_logits']['compared'], 0);self.assertAlmostEqual(floats['root_peer_logits']['max_abs_difference'], .1, delta=1e-3)
+        report = gate.summarize_n2({'x': [copy.deepcopy(call)]}, declared=tight)['x']
+        self.assertEqual((report['passed'], report['floats']['root_peer_logits']['passed'], report['block_invariance']['passed']), (False, False, False))
+        self.assertEqual([n for n, m in report['floats'].items() if not m['passed']] + [n for n, m in report['block_invariance']['floats'].items() if not m['passed']],
+            ['root_peer_logits', 'root_peer_logits'])
+        self.assertEqual(report['turn1_heads_vs_oracle']['quantities']['root_peer_logits']['bound'], .05)
+        report = gate.summarize_n2({'x': [copy.deepcopy(call)]}, declared=rooted)['x']
+        self.assertEqual((report['status'], report['passed'], report['block_invariance']['passed'], report['block_invariance']['discrete_equal']), ('PASS', True, True, True))
+        self.assertEqual({k: report['floats']['root_peer_logits'][k] for k in ('bound', 'bound_rule', 'passed')}, dict(bound=.15, bound_rule='declared_root_logit_bound', passed=True))
+        quantities = report['turn1_heads_vs_oracle']['quantities']
+        self.assertEqual({k: quantities['root_peer_logits'][k] for k in ('bound', 'bound_rule', 'within_bound')}, dict(bound=.15, bound_rule='declared_root_logit_bound', within_bound=True))
+        for name in ('t1_own_logits', 't1_peer_logits'):self.assertEqual((quantities[name]['bound'], 'bound_rule' in quantities[name]), (.05, False), name)
+
+    def test_the_topk_root_gap_count_takes_the_root_logit_bound(self):
+        """merge_topk_n: the root selection's gaps are counted below a given root_logit_bound (recorded beside the plies), every other ply's
+        below logit_bound; root_logit_bound None is the call without it."""
+        reports = [{'root': {'opp': dict(gaps=[.05, .12, .3], oracle_prior_set_differs=1)}, 'ply2': {'own': dict(gaps=[.05, .12, .3], oracle_prior_set_differs=0)}}]
+        plain = gate.merge_topk_n(reports, logit_bound=.15)
+        self.assertEqual((plain['root']['opp']['gap_below_logit_bound'], plain['ply2']['own']['gap_below_logit_bound']), (2, 2));self.assertNotIn('root_logit_bound', plain)
+        self.assertEqual(gate.merge_topk_n(reports, logit_bound=.15, root_logit_bound=None), plain)
+        rooted = gate.merge_topk_n(reports, logit_bound=.15, root_logit_bound=.1)
+        self.assertEqual((rooted['root']['opp']['gap_below_logit_bound'], rooted['ply2'], rooted['root_logit_bound']), (1, plain['ply2'], .1))
+        self.assertEqual({k: v for k, v in rooted.items() if k not in ('root', 'root_logit_bound')}, {k: v for k, v in plain.items() if k != 'root'})
+
+    def test_reverdict_refuses_traces_of_a_declaration_and_numbers_off_the_frozen_rule(self):
+        """A report without declared_bounds sections is re-judged only if nothing in it shows a declaration (the declared tolerance texts and
+        sources, a frozen_rule record, a declared bound_rule, a reverdict of one) and its numbers are the frozen rule's: tolerance.rule, logit_bound
+        LOGIT_BOUND, value_bound 2 x depth1_noise_floor (1e-4 without a floor), and every kept (c) and (b) bound its class's; a pre-registration
+        record given for it is refused. The unchanged synthetic report re-judges as before."""
+        def edited(change):
+            report = saved_gate();change(report);return report
+        quantity = lambda name, **values: lambda r: r['checks']['c']['quantities'][name].update(values)
+        cases = dict(
+            declared_rule_text=(edited(lambda r: r['tolerance'].__setitem__('rule', gate.DECLARED_TOLERANCE_RULE)), 'left traces'),
+            frozen_rule_record=(edited(lambda r: r['tolerance'].__setitem__('frozen_rule', dict(value_bound=.008))), 'left traces'),
+            declared_source=(edited(lambda r: r['tolerance'].__setitem__('value_bound_source', 'declared value_bound (--declared-bounds sha256 ...)')), 'left traces'),
+            declared_bound_rule=(edited(quantity('leaf_value', bound_rule='declared_value_bound')), 'left traces'),
+            reverdict_of_one=(edited(lambda r: r.__setitem__('reverdict', dict(declared_bounds_sha256='a' * 64))), 'left traces'),
+            other_rule_text=(edited(lambda r: r['tolerance'].__setitem__('rule', 'values: something else')), 'not the frozen TOLERANCE_RULE'),
+            logit_bound=(edited(lambda r: r['tolerance'].__setitem__('logit_bound', .15)), 'is not LOGIT_BOUND'),
+            value_bound=(edited(lambda r: r['tolerance'].update(value_bound=.05)), "not the frozen rule's"),
+            no_floor=(edited(lambda r: r['tolerance'].__setitem__('depth1_noise_floor', None)), "not the frozen rule's 0.0001"),
+            value_quantity=(edited(quantity('leaf_value', bound=.05)), 'checks.c.leaf_value.bound 0.05'),
+            turn1_prior=(edited(quantity('t1_own_logits', bound=.15)), 'checks.c.t1_own_logits.bound 0.15'),
+            b_value=(edited(lambda r: r['checks'].__setitem__('b', dict(passed=True, values=dict(t1_value=dict(bound=.05))))), 'checks.b.t1_value.bound 0.05'))
+        for case, (report, message) in cases.items():
+            with self.subTest(case):
+                directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));(directory / 'gate.json').write_text(json.dumps(report))
+                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(directory / 'gate.json')])
+                self.assertIn(message, str(raised.exception.code));self.assertIn('fail closed', str(raised.exception.code));self.assertFalse((directory / gate.REVERDICT_FILE).exists())
+        directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));(directory / 'gate.json').write_text(json.dumps(saved_gate()))
+        with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:
+            gate.main(['--reverdict', str(directory / 'gate.json'), '--declared-bounds-commit', 'b' * 40])
+        self.assertIn('records no declaration', str(raised.exception.code))
+        code, out, _, _ = reverdicted(saved_gate());self.assertEqual((code, out['status']), (0, 'PASS'));self.assertNotIn('declared_bounds_sha256', out['reverdict'])
+
+    def test_reverdict_refuses_saved_verdicts_that_disagree_with_their_numbers(self):
+        """--reverdict recomputes each (c) quantity's within_bound (no non-finite difference, max |diff| <= bound) and within_guard (max |diff| <
+        guard) from its saved numbers, the live comparison, and refuses any disagreement: a max |diff| raised past the bound, a non-finite count,
+        a verdict flipped either way, a guard verdict flipped. A consistent report re-judges as before."""
+        def edited(name, **values):
+            report = saved_gate();report['checks']['c']['quantities'][name].update(values);return report
+        cases = dict(raised_max=(edited('leaf_value', max_abs_difference=1.), 'leaf_value: within_bound True'),
+            nonfinite=(edited('t1_value_head', nonfinite=1), 't1_value_head: within_bound True'),
+            flipped_false=(edited('ply2_value_head', within_bound=False), 'ply2_value_head: within_bound False'),
+            guard_flipped=(edited('leaf_value', within_guard=True), 'leaf_value: within_guard True'))
+        for case, (report, message) in cases.items():
+            with self.subTest(case):
+                directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));(directory / 'gate.json').write_text(json.dumps(report))
+                with patch.object(gate, 'log', lambda *a, **k: None), self.assertRaises(SystemExit) as raised:gate.main(['--reverdict', str(directory / 'gate.json')])
+                self.assertIn(message, str(raised.exception.code));self.assertIn('disagree with their own numbers', str(raised.exception.code))
+                self.assertFalse((directory / gate.REVERDICT_FILE).exists())
+        self.assertEqual(gate.verdict_inconsistencies(saved_gate()['checks']['c']['quantities']), [])
+
+    def test_off_the_champion_path_depth2_and_n2_are_unchanged(self):
+        """B1's path (the head override here): a depth-2 full-width gate gates only the depth-N leaf walk's path in oracle consistency and
+        carries no merged_depth2_parity; --n2-equivalence --block-invariance stays refused off the champion path (the champion takes it)."""
+        code, out = self.main('--depth', '2', '--k-own', '9', '--k-opp', '9', *HEAD_FLAGS);report = json.loads((out / 'gate.json').read_text())
+        self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'))
+        self.assertEqual(set(report['checks']['oracle_consistency']['compared']), {'leaf_path'});self.assertNotIn('merged_depth2_parity', report['header'])
+        live = ['--out', 'o', '--d3-root', 'b', '--chunk', '0', '--n2-equivalence', '--block-invariance']
+        champion = ['--champion-archive', 'c.npz', '--champion-archive-sha256', 'e' * 64, '--champion-checkpoint-sha256', 'c' * 64]
+        for argv in (live, live + list(HEAD_FLAGS), live[:-2] + ['--depth3-diagnostics', '--block-invariance'] + champion):
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:gate.parse(argv)
+            self.assertEqual(raised.exception.code, 2);self.assertIn('--block-invariance belongs to the gate', stderr.getvalue())
+        self.assertTrue(gate.parse(live + champion)[1].block_invariance)
+
+    def test_without_the_flag_nothing_changes(self):
+        """No declaration: no declared key in any report section, log line or saved frame; header_block keeps its three keys; declared_rule and
+        declared_kwargs are the identity and the empty call. (The byte-for-byte check against the pre-change gate is the probe in the report.)"""
+        lines = [];code, out = self.main('--save-arrays', lines=lines);text = (out / 'gate.json').read_text();report = json.loads(text)
+        self.assertEqual((code, report['status']), (0, 'PASS'));self.assertNotIn('declared', text);self.assertNotIn('frozen_rule', report['tolerance'])
+        self.assertEqual(list(report['header']), ['near_ties', 'rules_changed_after_failure', 'frozen_rule_set'])
+        self.assertFalse(any('declared' in json.dumps(x, default=str) for x in lines));self.assertNotIn('DECLARED_BOUNDS', [x['message'] for x in lines])
+        _, _, meta = gate.load_frame(out / 'frames-block0-call0-prior-k2.npz');self.assertNotIn('declared_bounds_sha256', meta['evaluator'])
+        rule = gate.g2.tolerance_rule(None, None);self.assertIs(gate.declared_rule(rule, None), rule);self.assertEqual(gate.declared_kwargs(None), {})
+        self.assertIsNone(gate.parse(['--out', 'o', '--d3-root', 'b', '--chunk', '0'])[1].declared_bounds)
+
+
+# ---------------------------------------------------------------- the frozen default paths, byte for byte
+
+REFERENCE_DROP = ('costs', 'oracle_cost', 'timing', 'pricer_timing', 'plies_work', 'compiles', 'compiled')   # timing and compile records
+NOISY_VALUE, NOISY_LOGIT = 2. ** -16, 2. ** -12   # the oracle's head offsets: non-zero depth-1, root-logit and turn-1 logit floors
+
+
+def reference_normalized(value, masks):
+    """A report or log line as compared: REFERENCE_DROP keys and keys ending in 'seconds' dropped, each run directory in `masks` masked."""
+    if isinstance(value, dict):return {k: reference_normalized(v, masks) for k, v in value.items() if k not in REFERENCE_DROP and not k.endswith('seconds')}
+    if isinstance(value, list):return [reference_normalized(v, masks) for v in value]
+    if isinstance(value, str):
+        for mask in masks:value = value.replace(mask, '<ROOT>')
+    return value
+
+
+@contextlib.contextmanager
+def noisy_oracle_heads():
+    """depth2_oracle.heads (both gates' oracles evaluate through it, no pricer does) with NOISY_LOGIT added to every logit and NOISY_VALUE to
+    every value: exact dyadic offsets, so the floors and every bound derived from them are non-zero and deterministic."""
+    from gpu_engine import depth2_oracle
+    real = depth2_oracle.heads
+    def heads(forward, params, inputs, actors):
+        logits, values, usable = real(forward, params, inputs, actors);return logits + np.float32(NOISY_LOGIT), values + np.float32(NOISY_VALUE), usable
+    with patch.object(depth2_oracle, 'heads', heads):yield
+
+
+def reference_runs(test, root):
+    """{run: {file: sha256 of its normalized canonical JSON}} of the default paths on test's fixture under noisy_oracle_heads: d3_depthn_gate on
+    the bank actors (the stand-in at depth 3 with --mutation-test, the real pricer at depth 2 full width with --block-invariance and under
+    --n2-equivalence, --reverdict of the first) and d3_depth2_gate (full width with --block-invariance, and top-3). Writes each normalized file
+    under root/normalized for a look at a mismatch."""
+    from gpu_engine import d3_depth2_gate as g2
+    out, digests = {}, {}
+    def record(name, directory, lines, files):
+        masks = [str(directory), str(Path(directory).resolve())];target = root / 'normalized' / name;target.mkdir(parents=True);digests[name] = {}
+        for file, value in [('log.json', lines)] + [(f, json.loads((Path(directory) / f).read_text())) for f in files]:
+            text = json.dumps(reference_normalized(value, masks), indent=1, default=str) + '\n';(target / file).write_text(text)
+            digests[name][file] = hashlib.sha256(text.encode()).hexdigest()
+    def depth2_main(*argv, directory, lines):
+        provider = SimpleNamespace(executor=test.ex, materializer=test.tables, recipe=test.recipe, source=test.tables.source)
+        model = type('Model', (), dict(arm='D'))()   # hashable, as object(), with the arm the evaluator header names
+        # The last 20 requests: the merged gate takes its guard's p10 over EVERY cell_a2_spread, and over all 27 that p10 is 0, where its
+        # finalize_numeric divides by the zero guard (it raises; the depth-N gate's p10 excludes zero spreads). Over these 20 it is not.
+        loaded = SimpleNamespace(provider=provider, plan=SimpleNamespace(model=model, historical_window=2), params=PARAMS, groups=[list(test.requests[-20:])],
+            frame_pricer=FixtureN.frame_pricer(test), source=dict(fixture=True), labels=SimpleNamespace(sha256='l' * 64), category_sha256='k' * 64,
+            snapshot=dict(iteration=-1, archive='run/actor--1.npz', archive_sha256='4' * 64, checkpoint='c.pt', checkpoint_sha256='3' * 64, model_sha256='5' * 64))
+        with test.engine(), patch.object(g2, 'bank_chunk_requests', lambda args: loaded), patch.object(g2, 'log', lambda m, **k: lines.append(dict(k, message=m))):
+            return g2.main(['--out', str(directory), '--d3-root', 'x', '--chunk', '0', '--depth2-capacity', '32', '--oracle-chunk', '64', *argv])
+    with noisy_oracle_heads():
+        for name, argv, real, files in (('depthn_standin_prior3_mutation', ('--mutation-test',), False, ('gate.json', gate.MUTATION_FILE)),
+                ('depthn_real_depth2_full_invariance', ('--depth', '2', '--k-own', '9', '--k-opp', '9', '--block-invariance'), True, ('gate.json',)),
+                ('depthn_real_n2', ('--n2-equivalence', '--n2-k', '2'), True, ('n2-equivalence.json',))):
+            lines = [];directory = root / 'runs' / name;code, _ = CommandLineRunTests.main(test, *argv, real=real, out=directory, lines=lines)
+            lines.append(dict(message='EXIT', code=code));record(name, directory, lines, files)
+        lines = [];directory = root / 'runs' / 'depthn_standin_prior3_mutation'
+        with patch.object(gate, 'log', lambda m, **k: lines.append(dict(k, message=m))):lines.append(dict(message='EXIT', code=gate.main(['--reverdict', str(directory / 'gate.json')])))
+        record('depthn_reverdict', directory, lines, (gate.REVERDICT_FILE,))
+        for name, argv in (('depth2_full_invariance', ('--block-invariance',)), ('depth2_top3', ('--k-own', '3', '--k-opp', '3'))):
+            lines = [];directory = root / 'runs' / name;lines.append(dict(message='EXIT', code=depth2_main(*argv, directory=directory, lines=lines)))
+            record(name, directory, lines, ('gate.json',))
+    return digests
+
+
+class DefaultPathReferenceTests(FixtureN, unittest.TestCase):
+    """The frozen default paths byte for byte: reference_runs' digests (reports, mutation-test.json, gate-reverdict.json and every log line,
+    timing and run directories aside) must equal REFERENCE, recorded by the same harness on 1a3b2dd3, the commit before --declared-bounds, on
+    the gpu_engine of that commit. The oracle's heads are offset so the floors are non-zero (a doubled q_noise default, an extra field or text
+    on the default path changes a digest). A deliberate change to a default path updates REFERENCE in its own reviewed commit."""
+    roots = CommandLineRunTests.roots   # the bank actors (no override): the default path
+    REFERENCE = {   # reference_runs on 1a3b2dd3 (the gpu_engine of that commit, this harness)
+        'depthn_standin_prior3_mutation': {'log.json': '526ce50e796a2085301ea23ca6f81d781f6fff5d535d4079bc8ae8709acaff26',
+            'gate.json': '9b4071a272a1f2a637786551d7b7e232aa606b9f4b188bc9a15f5532a704c52b',
+            'mutation-test.json': 'c69beb3648e6bc8f41c2e7831f4e3805aa7a98dc6376eefc5b26d5a778c350f5'},
+        'depthn_real_depth2_full_invariance': {'log.json': '8f3d68285b062c1e219e018e573347ab556d95d23ffd897ad9799664019f6664',
+            'gate.json': '566c88b1dfb818d39103f2a2cf5138e137b18e7930f91d7e06bb22432b9c44ce'},
+        'depthn_real_n2': {'log.json': '28e426902c025f562907e0c6cd1223c3a2cb1be09a906cde50317004c66a450a',
+            'n2-equivalence.json': '0e6c7c3aa4887cd36a30f54d2ace860389a2063e65f88de76d987ee93e7e7493'},
+        'depthn_reverdict': {'log.json': 'eeafbaf75f8320e18af0a324ba0540d960cb9717a8710fd0eb72e6e9d8351efa',
+            'gate-reverdict.json': 'daaf0ac7f4b689d58a1f2e4827fedc1664bff8cbb44d2b07fde515ca2e5d4e38'},
+        'depth2_full_invariance': {'log.json': '9197a81e17c9537e4c9452ae4a23c799aa64ac45f6429f5ac9934e0e884007c1',
+            'gate.json': '5807bd64727ba7490eae9adcd3e3b468f73bd177d54a928ac1e56721e43e3a19'},
+        'depth2_top3': {'log.json': 'db15ece5fcce98e5decab35a5a4b42972671f7eb0d6ae89e2dacfe125688ed06',
+            'gate.json': '1ff2a5298a1e3809a25d17cd22e85b05e11564c56cabf680a095baf43a03cc2b'},
+    }
+
+    def test_default_paths_match_the_reference(self):
+        root = Path(tempfile.mkdtemp(prefix='gate-default-reference-'));got = reference_runs(self, root)
+        for name in sorted(set(got) | set(self.REFERENCE)):
+            with self.subTest(name):self.assertEqual(got.get(name), self.REFERENCE.get(name), f'normalized outputs under {root / "normalized" / name}')
+        tolerance = lambda run, f='gate.json': json.loads((root / 'normalized' / run / f).read_text())['tolerance']   # the floors it rests on are non-zero
+        self.assertGreater(tolerance('depthn_standin_prior3_mutation')['depth1_noise_floor'], 0.);self.assertGreater(tolerance('depth2_full_invariance')['q_noise_bound'], 0.)
+        self.assertGreater(tolerance('depthn_real_depth2_full_invariance')['turn1_logit_floor'], 0.)
+
+    def test_the_topk_gap_count_is_strict(self):
+        """merge_topk_n counts gaps strictly below the logit bound: a gap of exactly LOGIT_BOUND is not below it."""
+        topk = gate.merge_topk_n([{'ply2': {'own': dict(gaps=[gate.g2.LOGIT_BOUND, .05, .2], oracle_prior_set_differs=0)}}])
+        self.assertEqual(topk['ply2']['own']['gap_below_logit_bound'], 1)
 
 
 class CommandLineTests(unittest.TestCase):
