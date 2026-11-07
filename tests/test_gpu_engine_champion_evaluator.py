@@ -623,6 +623,7 @@ class ChampionCommandLineTests(ChampionFixture, unittest.TestCase):
         tolerance = report['tolerance'];self.assertEqual((tolerance['value_bound'], tolerance['logit_bound'], tolerance['depth1_noise_floor']), (1e-6, .05, 0.))
         self.assertEqual(tolerance['declared_bounds']['frozen_rule_would_give']['value_bound'], 0.);self.assertEqual(tolerance['declared_bounds']['sha256'], sha)
         self.assertEqual((mutation['header'], mutation['value_bound'], mutation['calls'][0]['value_bound']), (header, 1e-6, 1e-6))
+        self.assertEqual(mutation['calls'][0]['value_bound_source'], "the run's declared value_bound (--declared-bounds)")
         self.assertTrue(all(m['killed'] for m in mutation['calls'][0]['mutants'].values()))
         start = next(x for x in lines if x['message'] == 'GATE_START');self.assertEqual(start['declared_bounds_sha256'], sha)
         self.assertEqual(next(x for x in lines if x['message'] == 'DECLARED_BOUNDS')['sha256'], sha)

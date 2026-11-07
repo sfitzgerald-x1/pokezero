@@ -535,7 +535,8 @@ def summarize(calls, *, spread_p10=None, bounds=None):
         checks['e'] = e = merge_decisions([x['e'] for x in calls if 'e' in x], q_noise_bound=q_noise)
         rule.update(q_noise_bound=q_noise, max_abs_delta_q=e.get('max_abs_delta_q'), near_tie_roots=e.get('near_tie_roots'),
             near_tie_flips=e.get('near_tie_flips'), q_noise_rule='(e): a root is a numerical near-tie when its top-two completed-Q gap in either frame '
-                'is <= q_noise_bound (= the value bound); its flips are reported, not gated; max |dQ| must stay <= q_noise_bound')
+                f'is <= q_noise_bound ({"= the value bound" if "q_noise_bound" not in rule else "the near_tie_q_bound the hook declared"}); its flips are '
+                'reported, not gated; max |dQ| must stay <= q_noise_bound')
     if any('invariance' in x for x in calls):
         checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())], rule=rule)
         table.extend(_row('block_invariance', name, m) for name, m in checks['block_invariance']['floats'].items())

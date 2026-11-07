@@ -2480,8 +2480,9 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         result, status, _ = self.judge(ev, declared(bounds=bounds(near_tie_q_bound=.004)));e, f = result['checks']['e'], result['checks']['f']
         self.assertEqual((status, set(failing(result))), ('FAIL', {'e'}));self.assertGreater(e['max_abs_delta_q'], .004)
         self.assertEqual((e['q_noise_bound'], result['tolerance']['q_noise_bound'], f['value_bound'], f['passed']), (.004, .004, .008, True))
-        self.assertEqual(result['tolerance']['declared_bounds']['applied']['q_noise_bound'], .004)
+        self.assertEqual(result['tolerance']['declared_bounds']['applied']['q_noise_bound'], .004);self.assertIn('near_tie_q_bound', result['tolerance']['q_noise_rule'])
         result, status, _ = self.judge(ev, declared());self.assertEqual((status, result['checks']['e']['q_noise_bound']), ('PASS', .008))
+        self.assertIn('(= the value bound)', result['tolerance']['q_noise_rule'])
         self.assertEqual(result['tolerance']['declared_bounds']['applied']['q_noise_bound'], .008)
 
     def test_n2_equivalence_takes_the_declared_bounds(self):

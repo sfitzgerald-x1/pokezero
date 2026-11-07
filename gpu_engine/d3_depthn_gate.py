@@ -2762,7 +2762,8 @@ def mutation_test_call(frame, data, requests, d_results, clean, *, context=None,
     base = {k: v for k, v in clean.items() if k not in ('mutation', MUTATION_INPUTS)};base['actors'] = 1
     verdict, result = mutant_verdict(base, lanes=lanes, value_bound=value_bound, declared=declared);bound = result['tolerance']['value_bound'];block = int(context.get('block', 0))
     out.update(clean=dict(status=verdict['status'], status_reasons=verdict['status_reasons'], failing=verdict['caught_by'], guard_only=verdict['guard_only']),
-        value_bound=bound, value_bound_source='the run\'s (its depth-1 floor substituted for the call\'s)' if value_bound is not None else 'the call\'s own depth-1 floor',
+        value_bound=bound, value_bound_source=('the run\'s declared value_bound (--declared-bounds)' if declared is not None else 'the run\'s (its depth-1 floor '
+            'substituted for the call\'s)' if value_bound is not None else 'the call\'s own depth-1 floor'),
         evaluator_actors_live=clean.get('actors'))
     if int(frame.depth) < 3:return dict(out, reason='depth < 3: no parent at ply >= 2', seconds=time.perf_counter() - clock)
     tree = OracleTree(frame, data);singles, none = single_pairs(frame, backups, tree, bound)
