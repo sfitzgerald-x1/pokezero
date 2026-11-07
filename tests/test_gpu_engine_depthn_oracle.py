@@ -844,7 +844,7 @@ def saved_choices(differing=()):
         both_unpriced=0, one_sided=0, one_sided_examples=[], problems=0, problem_examples=[], differing=flips, differing_complete=True, max_abs_delta_row_q=.003,
         max_abs_delta_child_value=.006, sampled=False, value_bound=.008, near_ties=2, near_tie_flips=0, non_exempt_mismatches=0, rule=gate.CHOICE_RULE,
         read_identity=dict(passed=True, nodes=5, entries=20, mismatched_nodes=0, one_sided=0, not_comparable=0, both_unpriced=0, interned_collisions=0, injective=True,
-            first_mismatches=[], reasons=[]))
+            first_mismatches=[], reasons=[]), priors=dict(passed=True, nodes=5, mismatched_nodes=0, one_sided=0, first_mismatches=[]))
 
 
 def reverdicted(report, *, name='gate.json'):
@@ -1074,7 +1074,8 @@ class GuardDepthNTests(FixtureN, unittest.TestCase):
         cases = dict(within_guard=drop('checks', 'c', 'quantities', 'leaf_value', 'within_guard'), within_bound=drop('checks', 'c', 'quantities', 'ply2_value_head', 'within_bound'),
             digest_counts=drop('checks', 'a', 'compared'), depth=drop('pricer_options', 'depth'), sample_leaves=drop('sample_leaves'), quantities=drop('checks', 'c', 'quantities'),
             n2_report=dict(saved_gate(), mode='N2_EQUIVALENCE'), schema=dict(saved_gate(), schema='pokezero.depth2-gate.v1'), choices=drop('checks', 'f'),
-            choice_flips=drop('checks', 'f', 'differing'), value_bound=drop('tolerance', 'value_bound'), read_identity=drop('checks', 'f', 'read_identity'))
+            choice_flips=drop('checks', 'f', 'differing'), value_bound=drop('tolerance', 'value_bound'), read_identity=drop('checks', 'f', 'read_identity'),
+            priors=drop('checks', 'f', 'priors'))
         for case, report in cases.items():
             with self.subTest(case):
                 directory = Path(tempfile.mkdtemp(prefix='depthn-reverdict-'));path = directory / 'gate.json';path.write_text(json.dumps(report))
@@ -1428,7 +1429,8 @@ class ChoicesTests(FixtureN, unittest.TestCase):
         first = f['read_identity']['first_mismatches'][0];self.assertEqual((first['root'], first['world'], first['ply'], first['node']), key)
         reads = {tuple(e['actions']): (e['read'], e['expected']) for e in first['entries']};self.assertEqual(len(reads), 2)
         (r1, e1), (r2, e2) = reads.values();self.assertEqual((r1, r2), (e2, e1))   # each entry read the other child's subtree
-        self.assertTrue(all(r[0][0] == 'grid' and r[1][0] == 'grid' for r in reads.values()));self.assertTrue(any('read identity' in r for r in f['reasons']))
+        self.assertTrue(all(r[0][:2] == ['node', key[0]] and r[0][3] == 3 and r[1][0] == 'node' for r in reads.values()))   # interned tags named as oracle nodes
+        self.assertTrue(first['origin']);self.assertTrue(any('read identity' in r for r in f['reasons']))
         self.assertEqual((f['read_identity']['injective'], f['read_identity']['interned_collisions']), (True, 0))   # a swap repeats no read
 
     def test_read_identity_catches_a_turn1_misread_under_min_max(self):
@@ -1518,6 +1520,68 @@ class ChoicesTests(FixtureN, unittest.TestCase):
         comparisons, problems, dq, dv = gate.compare_records(mine, theirs)
         self.assertEqual((problems, dq, dv), ([], 0., 0.));self.assertTrue(all(got == want for _, _, got, want, _, _ in comparisons))
 
+    # ---- the exact prior check (the re-review of 27adf5a7), merged gating and diagnostics
+
+    def wrong_priors(self, new):
+        """The fake backups' source with node_value's pi_own replaced by `new` (the re-review's probes)."""
+        line = 'pi_own=_softmax(own_logits,[int(own_actions[i])for i in own_slots])';self.assertEqual(FAKE_BACKUPS_SOURCE.count(line), 1)
+        module = types.ModuleType('wrong_priors');exec(compile(FAKE_BACKUPS_SOURCE.replace(line, new), '<wrong priors>', 'exec'), module.__dict__);return module
+
+    def test_the_priors_handed_to_the_rule_are_exact(self):
+        """Clean frames pass the exact prior check at depths 2 to 4 (k 1 to 3: single-slot maps; the fixture's waiting seats); a backup handing its
+        rule a uniform pi_own, or one built from the opponent's logits, fails it alone (grid, row q and read identity pass: learner-max ignores
+        pi_own), and under depthn_backups' diagnostic average rule it moves values."""
+        for depth, k in ((2, 3), (3, 1), (3, 3), (4, 2)):
+            with self.subTest(depth=depth, k=k):
+                ev, _ = self.call(self.pricers(depth=depth, k_own=k, k_opp=k), decision=False);result = self.judged(ev)[0];f = result['checks']['f']
+                self.assertEqual(self.judged(ev)[1][0], 'PASS', failing(result));self.assertEqual((f['priors']['passed'], f['priors']['mismatched_nodes']), (True, 0))
+                self.assertGreater(f['priors']['nodes'], 100)
+        frame, data = self.frame_data(k=3);records = [gate.pricer_record(frame, FakeBackupsN, *key) for key in gate.interior_nodes(frame, data)]
+        self.assertTrue(any(r and 'shape' not in r and len(r['own']) == 1 for r in records));self.assertTrue(any(r and 'shape' not in r and len(r['opp']) == 1 for r in records))
+        average = lambda grid, pi_own, pi_opp: math.fsum(p * math.fsum(q * v for q, v in zip(pi_opp, row)) for p, row in zip(pi_own, grid))
+        for name, new in (('uniform', 'pi_own=[1./len(own_slots)]*len(own_slots)'), ('opponent logits', 'pi_own=_softmax(opp_logits,[int(own_actions[i])for i in own_slots])')):
+            with self.subTest(name):
+                module = self.wrong_priors(new);f = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=module), 0.)
+                self.assertEqual((f['passed'], f['priors']['passed'], f['grid_within_bound'], f['row_q_within_bound'], f['read_identity']['passed']), (False, False, True, True, True))
+                self.assertGreater(f['priors']['mismatched_nodes'], 100);self.assertEqual(f['priors']['first_mismatches'][0]['seats'][0]['seat'], 'own')
+                avg = gate.choice_verdict(gate.choice_check_n(frame, data, self.requests, backups=module, rule=average, tree=gate.OracleTree(frame, data, rule=average)), 0.)
+                self.assertFalse(avg['grid_within_bound']);self.assertFalse(avg['priors']['passed'])
+        mine = next(r for r in records if r and 'shape' not in r and len(r['own']) > 1)
+        self.assertEqual(gate.compare_priors(dict(mine, pi_own=None), mine)[0]['pricer'], None)   # a missing prior is a mismatch
+        self.assertEqual(gate.compare_priors(mine, dict(mine)), [])
+
+    def test_read_identity_and_priors_are_gated_on_their_counts_too(self):
+        """Defence in depth: a merged read identity ANDs its calls; (f) fails on a missing or null read identity or priors (a saved null fails
+        --reverdict), and on mismatched_nodes, interned_collisions or a false injective flag even when `passed` says otherwise."""
+        ok, bad = dict(saved_choices()['read_identity']), dict(saved_choices()['read_identity'], passed=False, mismatched_nodes=1)
+        self.assertFalse(gate.merge_read_identity([ok, bad])['passed']);self.assertTrue(gate.merge_read_identity([ok, ok])['passed'])
+        two = [dict(saved_choices(), read_identity=ok, _gaps=np.zeros(0)), dict(saved_choices(), read_identity=bad, _gaps=np.zeros(0))]
+        self.assertFalse(gate.merge_choices(two, value_bound=.008)['passed'])
+        self.assertFalse(gate.merge_choices([dict(two[0], priors=dict(two[0]['priors'], passed=False)), two[0]], value_bound=.008)['passed'])
+        for name, change in (('missing read identity', dict(read_identity=None)), ('read identity a list', dict(read_identity=[])), ('missing priors', dict(priors=None)),
+                ('mismatched nodes', dict(read_identity=dict(ok, mismatched_nodes=3))), ('collisions', dict(read_identity=dict(ok, interned_collisions=1))),
+                ('not injective', dict(read_identity=dict(ok, injective=False))), ('injective unrecorded', dict(read_identity={k: v for k, v in ok.items() if k != 'injective'})),
+                ('prior mismatches', dict(priors=dict(saved_choices()['priors'], mismatched_nodes=2))), ('prior one-sided', dict(priors=dict(saved_choices()['priors'], one_sided=1)))):
+            with self.subTest(name):self.assertFalse(gate.choice_verdict(dict(saved_choices(), **change), .008)['passed'])
+        for key in ('read_identity', 'priors'):
+            with self.subTest(saved_null=key):
+                report = saved_gate();report['checks']['f'][key] = None;code, out, _, _ = reverdicted(report)
+                self.assertEqual((code, out['status'], out['checks']['f']['passed']), (1, 'FAIL', False))
+
+    def test_read_identity_names_nodes_and_marks_the_origin(self):
+        """A ply-2 parent under a priced cell reads two leaves swapped: the parent is the origin (its leaves named), the cell above it is not (its
+        entry read a grid no oracle node has, where the parent was expected)."""
+        frame, data = self.frame_data();tree = gate.OracleTree(frame, data)
+        key = next(k for k in gate._parents(frame) if gate.pricer_record(frame, FakeBackupsN, *k) is not None and tree.solve(*gate._up(frame, k))[0] is not None
+            and len(set(map(tuple, np.asarray(frame.leaf_value)[k[:2] + k[3:]].tolist()))) > 1)
+        module = gate.mutant_backups([(key + (0, 0), key + (1, 0))], source=FAKE_BACKUPS_SOURCE)
+        ri = gate.read_identity_n(frame, data, self.requests, backups=module);first = ri['first_mismatches']
+        self.assertEqual((ri['mismatched_nodes'], ri['origins']), (2, 1))
+        self.assertEqual([(m['origin'], (m['root'], m['world'], m['ply'], m['node'])) for m in first], [(True, key), (False, gate._up(frame, key))])
+        self.assertTrue(all(e['read'][0] == 'leaf' and e['expected'][0] == 'leaf' for e in first[0]['entries']))
+        (cell,) = first[1]['entries'];self.assertEqual((cell['read'][0], cell['read'][-1], cell['expected']), ('grid', 'no oracle node', ['node'] + list(key)))
+
+
     # ---- the mutation kill test
 
     def mutated(self, value_bound=None):
@@ -1540,12 +1604,16 @@ class ChoicesTests(FixtureN, unittest.TestCase):
         self.assertTrue(m['passed'], {n: (r.get('caught_by'), r.get('reason')) for n, r in m['mutants'].items()});self.assertNotIn(gate.MUTATION_INPUTS, ev)
         self.assertEqual((m['clean']['status'], m['clean_unchanged'], m['survivors'], m['material_survivors']), ('PASS', True, [], dict(scatter=0, backup=0)))
         self.assertEqual(self.judged(ev)[1][0], 'PASS');self.assertEqual(list(m['mutants']), [f'{p}-{k}-{v}' for p, k, v in gate.MUTANTS])
-        self.assertEqual(len(m['mutants']), 9);self.assertEqual(m['mutants']['backup-turn1-systematic']['caught']['f']['read_identity']['passed'], False)
+        self.assertEqual(len(m['mutants']), 10);self.assertEqual(m['mutants']['backup-turn1-systematic']['caught']['f']['read_identity']['passed'], False)
+        priors = m['mutants']['backup-priors-systematic']['caught']['f']   # under learner-max no value moves: the exact prior check alone
+        self.assertEqual((priors['priors']['passed'], priors['grid_within_bound'], priors['row_q_within_bound'], priors['read_identity']['passed']), (False, True, True, True))
+        self.assertGreater(priors['priors']['mismatched_nodes'], 100)
         for name, r in m['mutants'].items():
             with self.subTest(name):
                 self.assertEqual((r['exercised'], r['killed'], r['status'], r['guard_only'], r['value_bound']), (True, True, 'FAIL', [], m['value_bound']), r)
-                if r['path'] == 'backup':   # the frame is clean: only (f) sees a misread, by read identity and the grid gate
+                if r['path'] == 'backup' and r['kind'] != 'priors':   # the frame is clean: only (f) sees a misread, by read identity and the grid gate
                     self.assertEqual(r['caught_by'], ['f']);self.assertFalse(r['caught']['f']['grid_within_bound']);self.assertFalse(r['caught']['f']['read_identity']['passed'])
+                elif r['path'] == 'backup':self.assertEqual(r['caught_by'], ['f'])
                 else:   # the reads are right (read identity passes); the values moved: (c), the guard report-only
                     self.assertIn('c', r['caught_by']);self.assertEqual(set(r['guard_modes_past_turn1'].values()), {'digest_certified'})
                     self.assertTrue((r['caught'].get('f') or {}).get('read_identity', dict(passed=True))['passed'])
@@ -1554,7 +1622,7 @@ class ChoicesTests(FixtureN, unittest.TestCase):
                     pair = r['pair'];self.assertTrue(pair['choice_reversed']);self.assertGreater(pair['abs_value_difference'], 2 * m['value_bound'])
                     self.assertGreater(min(pair['clean_gap_pricer'], pair['clean_gap_oracle']), m['value_bound']);self.assertGreater(r['caught']['f']['non_exempt_mismatches'], 0)
                     self.assertEqual(r['pairs'], 1);self.assertIn('reverses', pair['why'])
-                else:self.assertGreater(r['pairs'], 10)
+                else:self.assertGreater(r['pairs'], 10) if r['kind'] != 'priors' else self.assertEqual((r['pairs'], r['exercised']), (0, True))
         cousin = m['mutants']['backup-cousin-single']['pair'];self.assertEqual((cousin['same_root_world'], cousin['fell_back_to_another_root_world']), (True, False))
         self.assertEqual(cousin['parent2'][:2], cousin['parent'][:2]);self.assertNotEqual(cousin['parent2'], cousin['parent'])
         for kind, variant in itertools.product(('sibling', 'cousin'), ('single', 'systematic')):   # both paths misplace the same pairs: (f) sees the same
@@ -1564,7 +1632,7 @@ class ChoicesTests(FixtureN, unittest.TestCase):
             sweep = m['sweep'][path];self.assertEqual((sweep['material_survivors'], sweep['claim_holds']), (0, True), sweep['first_material_survivors'][:2])
             self.assertEqual(sum(sweep['swaps'].values()), sum(m['sweep']['pairs']['drawn'].values()));self.assertGreater(sum(sweep['swaps'].values()), 5000)
         self.assertEqual(m['sweep']['scatter']['swaps'], m['sweep']['backup']['swaps'])
-        messages = [x['message'] for x in lines];self.assertEqual(messages.count('MUTATION_TEST_MUTANT'), 9);self.assertEqual(messages.count('MUTATION_TEST_SWEEP'), 2)
+        messages = [x['message'] for x in lines];self.assertEqual(messages.count('MUTATION_TEST_MUTANT'), 10);self.assertEqual(messages.count('MUTATION_TEST_SWEEP'), 2)
         self.assertIn('MUTATION_TEST', messages);self.assertGreater(m['seconds'], 0.)
 
     def test_mutants_are_judged_at_the_runs_value_bound(self):
@@ -1715,7 +1783,9 @@ class RealPricerTests(FixtureN, unittest.TestCase):
         self.assertEqual(status, 'PASS', (failing(result), reasons));self.assertGreater(result['checks']['f']['comparisons'], 0)
         self.assertTrue(m['passed'], {n: (r.get('caught_by'), r.get('reason')) for n, r in m['mutants'].items()})
         self.assertEqual({n: r['caught_by'] for n, r in m['mutants'].items() if r['path'] == 'backup'}, {f'{p}-{k}-{v}': ['f'] for p, k, v in gate.MUTANTS if p == 'backup'})
-        self.assertTrue(all(not r['caught']['f']['read_identity']['passed'] for r in m['mutants'].values() if r['path'] == 'backup'))
+        self.assertTrue(all(not r['caught']['f']['read_identity']['passed'] for r in m['mutants'].values() if r['path'] == 'backup' and r['kind'] != 'priors'))
+        self.assertFalse(m['mutants']['backup-priors-systematic']['caught']['f']['priors']['passed'])
+        self.assertEqual(result['checks']['f']['priors']['passed'], True);self.assertGreater(result['checks']['f']['priors']['nodes'], 200)
         self.assertEqual(m['material_survivors'], dict(scatter=0, backup=0));identity = result['checks']['f']['read_identity']
         self.assertEqual((identity['passed'], identity['injective'], identity['interned_collisions']), (True, True, 0));self.assertGreater(identity['nodes'], 200)
         frame, data = inputs['frame'], inputs['data'];key = next(k for k in gate._parents(frame) if gate.pricer_record(frame, backups, *k) is not None)
@@ -1900,10 +1970,10 @@ class CommandLineRunTests(FixtureN, unittest.TestCase):
         report, mutation = (json.loads((out / name).read_text()) for name in ('gate.json', gate.MUTATION_FILE));call = mutation['calls'][0]
         self.assertEqual((code, report['status'], mutation['status']), (0, 'PASS', 'PASS'), (report.get('status_reasons'), call.get('survivors')))
         self.assertTrue((out / 'frames-block0-call0-oracle.npz').exists() and (out / 'frames-block0-call0-prior-k2.npz').exists())   # implies --save-arrays
-        self.assertEqual({n: r['killed'] for n, r in call['mutants'].items()}, {f'{p}-{k}-{v}': True for p, k, v in gate.MUTANTS});self.assertEqual(len(call['mutants']), 9)
+        self.assertEqual({n: r['killed'] for n, r in call['mutants'].items()}, {f'{p}-{k}-{v}': True for p, k, v in gate.MUTANTS});self.assertEqual(len(call['mutants']), 10)
         self.assertGreater(sum(call['sweep']['pairs']['drawn'].values()), 0);self.assertEqual((call['material_survivors'], call['clean_unchanged']), (dict(scatter=0, backup=0), True))
         self.assertEqual((mutation['value_bound'], call['value_bound']), (report['tolerance']['value_bound'],) * 2)   # the run's bound
-        messages = [x['message'] for x in lines];self.assertEqual((messages.count('MUTATION_TEST_MUTANT'), messages.count('MUTATION_TEST_SWEEP')), (9, 2))
+        messages = [x['message'] for x in lines];self.assertEqual((messages.count('MUTATION_TEST_MUTANT'), messages.count('MUTATION_TEST_SWEEP')), (10, 2))
         self.assertTrue({'MUTATION_TEST', 'MUTATION_TEST_COMPLETE'} <= set(messages))
         header = report['header'];self.assertEqual(list(report)[:4], ['evaluator', 'value_scale', 'source', 'header'])
         self.assertEqual(next(x for x in lines if x['message'] == 'DEPTHN_GATE_COMPLETE')['header'], header);self.assertEqual(mutation['header'], header)
