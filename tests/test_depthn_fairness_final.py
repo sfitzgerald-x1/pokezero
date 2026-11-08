@@ -63,6 +63,11 @@ class FinalGateTests(unittest.TestCase):
         self.assertTrue(value['within']); self.assertEqual(value['finer']['moves'], dict(RAW=400, search=400))
         self.assertFalse(F.final_gate(self.root, 'DN2W16', 2000)['within'])   # at 2,000 they count: a 50% deficit on 3 of 13 search games
 
+    def test_no_rated_moves_is_not_within(self):   # fail-closed: a run whose Foul Play rates cannot be read is not certified
+        write_game(self.root, 0, 'RAW', 0, ours_left=4, theirs_left=4)
+        value = F.final_gate(self.root, 'DN2W16', 500)
+        self.assertIsNone(value['finer']['difference']); self.assertFalse(value['within'])
+
     def test_alive_counts_and_age_buckets(self):
         write_game(self.root, 0, 'RAW', 0, ours_left=3, theirs_left=5)
         per_round = F.rounds(self.root/'owning-wire'/'0.jsonl')

@@ -92,6 +92,8 @@ class AmendedVerdictTests(unittest.TestCase):
         self.fresh(); raw, search = scores(2000, rng, mean=.3), scores(2000, rng, mean=.8)   # at the bar too: no BAR_MET
         write_run(self.root, raw, search); value = official(self.root, 2000, decision='BAR_MET')
         self.assertEqual((self.run_verdict(value, final_fairness=unfair)['decision'], self.run_verdict(value)['decision']), ('VOID_FAIRNESS', 'BAR_MET'))
+        for kept in ('FLAG_ARM_FAIRNESS', 'VOID_LATENCY'):   # the gate comes before the kept decisions too
+            self.assertEqual(self.run_verdict(dict(value, decision=kept), final_fairness=unfair)['decision'], 'VOID_FAIRNESS')
         with self.assertRaisesRegex(ValueError, "final fairness gate's result"): self.run_verdict(value, final_fairness=dict(finer={}))
         with self.assertRaisesRegex(ValueError, 'final-fairness addendum'):
             self.run_verdict(value, final=dict(self.final, addendum_to=self.final['addendum_to'][1:]))
