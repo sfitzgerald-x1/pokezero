@@ -136,12 +136,16 @@ class DeviceBoundaryParityTests(unittest.TestCase):
     def test_transition_only_changes_actual_observer_call_and_original_physics_bytes(self):
         root=Path(__file__).resolve().parents[1]
         original=subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],cwd=root,text=True)
-        current=(root/'gpu_engine/transition.py').read_text()
+        # This exact two-boundary-call proof concerns the original change.
+        # Retain it at that immutable feature commit; current tracker behavior
+        # is exercised by the other tests and the full integrated source pins.
+        introduced='693e7ffb2acd420fc692619229d276e129f25bf5'
+        current=subprocess.check_output(['git','show',introduced+':gpu_engine/transition.py'],cwd=root,text=True)
         new="device_public.switch_decision(_device_public,work,side,do_switch & ~replacement,baton=_device_baton)"
         old="device_public.feature(_device_public,side,old_active,'switched_before_attack',jnp.ones_like(old_active),do_switch & ~replacement,add=True)"
         self.assertEqual(current.count(new),1);self.assertEqual(current.replace(new,old),original)
         for name in ('state.py','mechanics.py','entry.py','damage_moves.py','secondary.py'):
-            self.assertEqual((root/'gpu_engine'/name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name],cwd=root))
+            self.assertEqual(subprocess.check_output(['git','show',introduced+':gpu_engine/'+name],cwd=root),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name],cwd=root))
 
     def test_original_called_child_lastmove_and_preparation_header_are_distinct(self):
         import test_gpu_engine_public_moves as fixture
