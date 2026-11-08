@@ -42,14 +42,25 @@ class ActualExecutionSitesTests(unittest.TestCase):
         traced=self.fast(state,table,self.tape())
         legacy=transition.step_with_chance(state,j.zeros((2,2),j.int32),table,self.f.chance())
         self.f.same(traced.step.state,legacy.state)
+        # Every opened ordinary frame now owns the separately registered
+        # turnLoop prefix, before the selected mutation site. Require its
+        # exact emitted receipt; do not mistake it for an extra mutation or
+        # silently filter an unexpected ledger entry.
+        ledger=traced.callbacks.execution.ledger
+        for row in range(2):
+            self.assertEqual(int(ledger.site[row,0]),int(accounting.Site.TURNLOOP_PREFIX))
+            self.assertEqual(int(ledger.stage[row,0]),2)
+            self.assertEqual(int(traced.callbacks.words[row,0,0]),life.TURNLOOP_PREFIX)
         return traced.callbacks
 
     def sites(self,tape,row):
         ledger=tape.execution.ledger
         return np.array(ledger.site[row,:int(ledger.count[row])]).tolist()
 
-    def assert_unknown(self,tape,row,sites):
-        self.assertCountEqual(self.sites(tape,row),[int(s) for s in sites])
+    def assert_unknown(self,tape,row,sites,*,turnloop=False):
+        expected=[int(s) for s in sites]
+        if turnloop:expected.insert(0,int(accounting.Site.TURNLOOP_PREFIX))
+        self.assertCountEqual(self.sites(tape,row),expected)
         self.assertNotEqual(int(tape.refusal[row])&accounting.UNKNOWN_EXECUTION,0)
         self.assertNotEqual(int(tape.execution.ledger.refusal[row]),0)
         self.assertFalse(bool(accounting.report(tape.execution.ledger,
@@ -58,8 +69,8 @@ class ActualExecutionSitesTests(unittest.TestCase):
     def test_wish_pending_no_output_is_an_attempt_and_other_row_is_empty(self):
         state=self.state()._replace(wish_counter=self.state().wish_counter.at[0,0].set(2))
         tape=self.run_step(state)
-        self.assert_unknown(tape,0,[accounting.Site.WISH])
-        self.assertEqual(self.sites(tape,1),[])
+        self.assert_unknown(tape,0,[accounting.Site.WISH],turnloop=True)
+        self.assertEqual(self.sites(tape,1),[int(accounting.Site.TURNLOOP_PREFIX)])
         self.assertEqual(int(tape.execution.ledger.refusal[1]),0)
 
     def test_speed_boost_and_pinch_at_cap_still_enter_exactly_once(self):
@@ -68,21 +79,21 @@ class ActualExecutionSitesTests(unittest.TestCase):
             speed_boost=self.f.table.entry.speed_boost.at[ability].set(True)))
         state=state._replace(boosts=state.boosts.at[:,:,:,4].set(6))
         tape=self.run_step(state,table)
-        for row in range(2):self.assert_unknown(tape,row,[accounting.Site.SPEED_BOOST]*2)
+        for row in range(2):self.assert_unknown(tape,row,[accounting.Site.SPEED_BOOST]*2,turnloop=True)
         # Synthetic selected held-item id tests the actual consumption guard;
         # a capped statistic still consumes, so zero boost delta is not proof.
         table=self.f.table._replace(items=self.f.table.items._replace(
             pinch_stat=self.f.table.items.pinch_stat.at[0].set(4)))
         state=state._replace(hp=state.hp.at[:,:,:].set(1))
         tape=self.run_step(state,table)
-        for row in range(2):self.assert_unknown(tape,row,[accounting.Site.PINCH_ITEM]*2)
+        for row in range(2):self.assert_unknown(tape,row,[accounting.Site.PINCH_ITEM]*2,turnloop=True)
 
     def test_status_residual_and_leech_drain_heal_are_distinct_actual_sites(self):
         state=self.state()._replace(status=self.state().status.at[0,0,0].set(m.BRN),
             volatile=self.state().volatile.at[1,0,0].set(LEECH_SEED))
         tape=self.run_step(state)
-        self.assert_unknown(tape,0,[accounting.Site.STATUS_RESIDUAL])
-        self.assert_unknown(tape,1,[accounting.Site.LEECH_DRAIN,accounting.Site.LEECH_HEAL])
+        self.assert_unknown(tape,0,[accounting.Site.STATUS_RESIDUAL],turnloop=True)
+        self.assert_unknown(tape,1,[accounting.Site.LEECH_DRAIN,accounting.Site.LEECH_HEAL],turnloop=True)
 
     def test_sleep_paralysis_and_frozen_are_not_status_damage_attempts(self):
         for status in (m.SLP,m.PAR,m.FRZ):
@@ -98,7 +109,7 @@ class ActualExecutionSitesTests(unittest.TestCase):
         for hurt in (False,True):
             current=state._replace(hp=state.hp.at[:,0,0].add(-10)) if hurt else state
             tape=self.run_step(current,table)
-            for row in range(2):self.assert_unknown(tape,row,[accounting.Site.LEFTOVERS]*2)
+            for row in range(2):self.assert_unknown(tape,row,[accounting.Site.LEFTOVERS]*2,turnloop=True)
 
     def test_blocked_spikes_and_intimidate_attempts_survive_zero_numeric_change(self):
         state=self.state();ability=int(state.ability[0,0,0])
