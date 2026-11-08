@@ -16,8 +16,8 @@ is measurable only when the bridge's iterations_observable header is true (decla
   pooled (both-arm) move counts (the weighted ratio, difference = ratio - 1); the unstratified ratio beside it; each arm's
   iteration coverage (moves with a rate over Foul Play moves, telemetry failures included).
 - Flag: |difference| > ratio_tolerance, or the coverages more than coverage_difference_max apart. After a benign
-  acknowledgement of a flag with difference d0: |d| > |d0| + rearm_margin, or a sign flip with |d| > ratio_tolerance; the
-  coverage gap re-flags above max(coverage_difference_max, the acknowledged gap + rearm_margin).
+  acknowledgement of a flag with difference d0: |d| > max(ratio_tolerance, |d0| + rearm_margin), or a sign flip with
+  |d| > ratio_tolerance; the coverage gap re-flags above max(coverage_difference_max, the acknowledged gap + rearm_margin).
 """
 import json
 import math
@@ -126,7 +126,7 @@ def flag(value, rule=RULE, acknowledged=None):
         return 'ratio' if abs(d) > rule['ratio_tolerance'] else None
     prior, prior_gap = acknowledged['difference'] or 0., acknowledged.get('coverage_difference') or 0.
     if gap is not None and gap > max(rule['coverage_difference_max'], prior_gap + rule['rearm_margin']):return 'coverage'
-    if abs(d) > abs(prior) + rule['rearm_margin']:return 'drift'
+    if abs(d) > max(rule['ratio_tolerance'], abs(prior) + rule['rearm_margin']):return 'drift'
     if d * prior < 0 and abs(d) > rule['ratio_tolerance']:return 'sign'
     return None
 

@@ -38,9 +38,12 @@ CALIBRATION_BAND = dict(battle_seed_start=50000, foulplay_seed_start=60000, coun
 RATIOS = {'8x500ms': .95, '2x1000ms': .97}
 
 
-def calibration_fixture(ladder_sha256, *, observable=True, ratios=RATIOS, lanes=4):
+def calibration_fixture(ladder_sha256, *, observable=True, ratios=RATIOS, lanes=4, moves=300):
+    """A valid calibration.json: per-stratum rates whose concurrent/solo quotient is exactly the ratio (solo rate 1.0)."""
+    strata = {s: dict(solo=dict(moves=moves, rate=1.), concurrent=dict(moves=moves, rate=float(r)), ratio=float(r)) for s, r in ratios.items()}
     return dict(schema=panel.CALIBRATION_SCHEMA, status='MEASURED' if observable else 'UNMEASURABLE', iterations_observable=observable,
-                ratios=dict(ratios) if observable else None, seed_band=dict(CALIBRATION_BAND), lanes=lanes, ladder_declaration_sha256=ladder_sha256)
+                ratios=dict(ratios) if observable else None, strata=strata, min_moves=300, seed_band=dict(CALIBRATION_BAND), lanes=lanes,
+                ladder_declaration_sha256=ladder_sha256, base_config_sha256=panel.sha({}), checkpoint_sha256=ActorContract.champion().checkpoint_sha256)
 
 
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64):
@@ -1045,6 +1048,10 @@ class FairnessReadingTests(unittest.TestCase):
         value = fairness.reading(raw, search)
         self.assertEqual(value['coverage'], dict(RAW=.95, search=.89)); self.assertAlmostEqual(value['coverage_difference'], .06)
         self.assertEqual(fairness.flag(value), 'coverage')
+        for rated, reason in ((50, None), (49, 'coverage')):   # coverages .10 and .05 (.049): a gap of exactly five points does not flag
+            gap = fairness.reading(fairness.moves(cell(100, 900)), fairness.moves(cell(rated, 1000-rated)))
+            with self.subTest(rated=rated): self.assertEqual(fairness.flag(gap), reason)
+        self.assertEqual(fairness.reading(fairness.moves(cell(100, 900)), fairness.moves(cell(50, 950)))['coverage_difference'], .05)
         failures = fairness.moves(dict(source_game=dict(opponent_think=think(9, 100), opponent_think_failures=1)))
         self.assertEqual((failures['moves'], len(failures['rated'])), (10, 9))
 
@@ -1057,12 +1064,23 @@ class FairnessReadingTests(unittest.TestCase):
             capture_path = make_capture(Path(directory), turns=3)
             self.assertEqual(fairness.round_turns(capture_path), [1, 2, 3]); self.assertIsNone(fairness.round_turns(Path(directory)/'none.jsonl'))
 
+    def test_a_cells_bands_come_from_its_capture_when_it_exists(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory); (root/'owning-wire').mkdir()
+            (root/'owning-wire'/'7.jsonl').write_text(json.dumps(dict(event='WIRE', lines=['|turn|12', '|request|{}', '|request|{}']))+'\n')
+            result = dict(source_game=dict(opponent_think=think(2, 100)))
+            captured = panel.cell_moves(root, 7, result); fallback = panel.cell_moves(root, 8, result)
+        self.assertEqual(([b for _, b, _ in captured['rated']], captured['band_from_round']), ([2, 2], 0))   # turn 12: band 10-19
+        self.assertEqual(([b for _, b, _ in fallback['rated']], fallback['band_from_round']), ([0, 0], 2))   # rounds 0, 1: turns 1, 2
+
     def test_the_baseline_flag_and_the_benign_re_arm_rule(self):
         def at(ratio, gap=0.): return dict(weighted_ratio=ratio, difference=ratio-1, coverage_difference=gap)
         self.assertIsNone(fairness.flag(at(1.049))); self.assertEqual(fairness.flag(at(1.051)), 'ratio'); self.assertEqual(fairness.flag(at(.94)), 'ratio')
         acknowledged = dict(difference=.06, coverage_difference=.01)
         for ratio, reason in ((1.084, None), (1.086, 'drift'), (.951, None), (.949, 'sign'), (.96, None), (1.0, None)):
             with self.subTest(ratio=ratio): self.assertEqual(fairness.flag(at(ratio), acknowledged=acknowledged), reason)
+        small = dict(difference=.01, coverage_difference=0.)   # a small acknowledged difference keeps the baseline bar
+        self.assertIsNone(fairness.flag(at(1.036), acknowledged=small)); self.assertEqual(fairness.flag(at(1.051), acknowledged=small), 'drift')
         self.assertIsNone(fairness.flag(at(1.07, .06), acknowledged=dict(difference=.06, coverage_difference=.04)))
         self.assertEqual(fairness.flag(at(1.07, .066), acknowledged=dict(difference=.06, coverage_difference=.04)), 'coverage')
         self.assertIsNone(fairness.flag(dict(weighted_ratio=None, difference=None, coverage_difference=None)))
@@ -1152,8 +1170,12 @@ class FairnessMonitorTests(unittest.TestCase):
         populate(self.root, self.run, self.lad)
         self.assertNotIn('fairness_observability', panel.readout(self.root, arm='DN2W8', limit=500)['breakage'])
         cell = self.searches[3]
+        write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, i) for i in range(2)], observable=None)
+        value = panel.readout(self.root, arm='DN2W8', limit=500)   # the bridge's probe failed: not a reading
+        self.assertNotIn('fairness_observability', value['breakage']); self.assertEqual(value['arm_fairness']['observability'], dict(contradictions=0, unknown=1))
         write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, i) for i in range(2)], observable=False)
-        self.assertIn('fairness_observability', panel.readout(self.root, arm='DN2W8', limit=500)['breakage'])
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertIn('fairness_observability', value['breakage']); self.assertEqual(value['arm_fairness']['observability'], dict(contradictions=1, unknown=0))
 
     def test_an_extension_flag_never_changes_the_pinned_screen_readout(self):
         populate(self.root, self.run, self.lad)
@@ -1225,6 +1247,17 @@ class CalibrationTests(unittest.TestCase):
         value = asyncio.run(panel.calibrate(self.root, pairs=[(0, 1), (2, 3)], dispatch_function=run))
         self.assertEqual((value['status'], value['iterations_observable'], value['ratios'], value['games']), ('UNMEASURABLE', False, None, dict(solo=1, concurrent=0)))
 
+    def test_calibration_is_unmeasurable_only_when_no_game_reports_true(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
+        rates = dict(solo={'8x500ms': 100., '2x1000ms': 200.}, concurrent={'8x500ms': 100., '2x1000ms': 200.})
+        run, _ = self.fake_dispatch(rates, observable=None)
+        asyncio.run(run(panel.calibration_packets(self.root, setting='solo')[:1], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: 'stop'))
+        self.assertEqual(panel.calibration_summary(self.root)['iterations_observable'], None)
+        self.assertEqual(panel.calibration_summary(self.root)['status'], 'UNMEASURABLE')
+        run, _ = self.fake_dispatch(rates, observable=True)
+        asyncio.run(run(panel.calibration_packets(self.root, setting='solo')[:1], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: 'stop'))
+        self.assertEqual(panel.calibration_summary(self.root)['iterations_observable'], True)
+
     def test_a_calibration_game_stays_in_its_own_directory(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
         packet = panel.calibration_packets(self.root, setting='solo')[0]; config = NS(checkpoint=Path('/inert/champion.pt'))
@@ -1263,6 +1296,26 @@ class CalibrationTests(unittest.TestCase):
                 panel.init(Path(directory)/'other', declaration=inputs/'d3.json', declaration_sha256=panel.sha(d3), ladder_declaration=inputs/'ladder.json',
                     ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json', base_config_sha256=panel.sha({}),
                     calibration=inputs/'wrong.json')
+
+    def test_init_refuses_a_calibration_that_is_not_valid_evidence(self):
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory); inputs = Path(directory).resolve()/'inputs'
+            good = calibration_fixture(panel.sha(lad))
+            def bad(name, change, message):
+                name = 'evidence-'+name; value = copy.deepcopy(good); change(value); panel.write_new(inputs/f'{name}.json', value)
+                declared = dict(d, calibration=dict(d['calibration'], sha256=panel.sha(value)))
+                panel.write_new(inputs/f'{name}-declaration.json', declared)
+                with self.subTest(name), self.assertRaisesRegex(ValueError, message):
+                    panel.init(Path(directory)/name, declaration=inputs/f'{name}-declaration.json', declaration_sha256=panel.sha(declared),
+                        ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json',
+                        base_config_sha256=panel.sha({}), calibration=inputs/f'{name}.json')
+            bad('floor', lambda v: v.update(min_moves=299), 'not valid evidence')
+            bad('solo-moves', lambda v: v['strata']['8x500ms']['solo'].update(moves=299), 'not valid evidence')
+            bad('concurrent-moves', lambda v: v['strata']['2x1000ms']['concurrent'].update(moves=10), 'not valid evidence')
+            bad('ratio', lambda v: v['strata']['8x500ms']['concurrent'].update(rate=.96), 'not valid evidence')
+            bad('stratum', lambda v: v['strata'].pop('2x1000ms'), 'not valid evidence')
+            bad('base', lambda v: v.update(base_config_sha256='0'*64), 'base config')
+            bad('checkpoint', lambda v: v.update(checkpoint_sha256='0'*64), 'base config')
         with TemporaryDirectory() as directory:
             root, run, d, lad = make_run(directory, observable=False)
             with self.assertRaisesRegex(ValueError, 'accept-uncalibrated'): panel.require_calibration(root, d, pairs=[(0, 1)])
@@ -1303,6 +1356,22 @@ class ScriptTests(unittest.TestCase):
             self.assertFalse((root/'claims').exists())
             with patch.object(panel, 'dispatch', side_effect=AssertionError('must not dispatch')), self.assertRaisesRegex(ValueError, 'no closed RAW'):
                 script.main(argv[:-2])
+
+    def test_cli_dispatch_never_skips_the_calibration_gate(self):
+        script = self.script()
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory, ratios={'8x500ms': .89, '2x1000ms': .95})
+            argv = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cpu-pair', '0', '1', '--cache-directory', directory,
+                    '--search-arm', 'DN2W8', '--server', '127.0.0.1:9', '--probe-capture', '/never/read']
+            with patch.object(panel, 'probe', side_effect=AssertionError('the gate comes first')), self.assertRaisesRegex(ValueError, 'below 0.9'):
+                script.main(argv)
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory)
+            lanes = [x for k in range(5) for x in ('--cpu-pair', str(2*k), str(2*k+1))]
+            argv = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cache-directory', directory, '--search-arm', 'DN2W8',
+                    '--server', '127.0.0.1:9', '--probe-capture', '/never/read']+lanes
+            with patch.object(panel, 'probe', side_effect=AssertionError('the gate comes first')), self.assertRaisesRegex(ValueError, 'more worker lanes'):
+                script.main(argv)
 
 
 if __name__ == '__main__': unittest.main()

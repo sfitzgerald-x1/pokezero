@@ -252,8 +252,19 @@ def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladde
     if (type(measured)is not dict or measured.get('schema')!=CALIBRATION_SCHEMA or measured.get('status')!=cal['status']
             or measured.get('ratios')!=cal['ratios']or measured.get('seed_band')!=cal['seed_band']
             or measured.get('lanes')!=d['worker_lanes']or measured.get('iterations_observable')is not d['fairness_observable']['value']
-            or measured.get('ladder_declaration_sha256')!=ladder_declaration_sha256):
-        raise ValueError('calibration.json must match the declared status, ratios, seed band, lanes, observability and ladder')
+            or measured.get('ladder_declaration_sha256')!=ladder_declaration_sha256
+            or measured.get('base_config_sha256')!=base_config_sha256 or measured.get('checkpoint_sha256')!=d['checkpoint_sha256']):
+        raise ValueError('calibration.json must match the declared status, ratios, seed band, lanes, observability, ladder, '
+                         'base config (Foul Play budget included) and champion checkpoint')
+    if cal['status']=='MEASURED':   # valid evidence: the move floor held, and the ratios are the recorded rates' own
+        strata=measured.get('strata')
+        if (type(measured.get('min_moves'))is not int or measured['min_moves']<CALIBRATION_MIN_MOVES or type(strata)is not dict
+                or set(strata)!=set(fairness.CALIBRATION_STRATA)
+                or any(type(strata[s].get(k))is not dict or type(strata[s][k].get('moves'))is not int or strata[s][k]['moves']<CALIBRATION_MIN_MOVES
+                       or type(strata[s][k].get('rate'))is not float or strata[s][k]['rate']<=0 for s in strata for k in ('solo','concurrent'))
+                or any(strata[s]['concurrent']['rate']/strata[s]['solo']['rate']!=cal['ratios'][s]for s in strata)):
+            raise ValueError(f'calibration.json is not valid evidence: >= {CALIBRATION_MIN_MOVES} rated moves per stratum and setting, '
+                             'and ratios recomputed from its rates, required')
     base=read_bound(base_config,base_config_sha256)
     if type(base)is not dict:raise ValueError('literal base configuration required')
     root=Path(run_directory).resolve()
@@ -542,7 +553,8 @@ def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
     root,run,lad,band=calibration_load(directory);results=[read_result(root,c['ordinal'])for c in band]
     results=[r for r in results if r.get('status')=='COMPLETE']
     headers={((r.get('benchmark')or {}).get('foulplay_think')or {}).get('iterations_observable')for r in results}
-    observable=True if headers=={True}else False if False in headers or None in headers else None
+    # UNMEASURABLE only when no game reports True; None is the bridge's failed probe, not a reading.
+    observable=True if True in headers else False if False in headers else None
     rates={s:{c:[]for c in fairness.CALIBRATION_STRATA}for s in ('solo','concurrent')}
     for r in results:
         for stratum,_,rate in fairness.moves(r)['rated']:   # per budget stratum only: no turn bands needed
@@ -557,6 +569,7 @@ def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
     return dict(schema=CALIBRATION_SCHEMA,status=status,iterations_observable=observable,strata=strata,
         ratios={c:v['ratio']for c,v in strata.items()}if status=='MEASURED'else None,ratio_min=CALIBRATION_RATIO_MIN,min_moves=min_moves,
         lanes=run['lanes'],seed_band=run['seed_band'],ladder_declaration_sha256=run['ladder_declaration_sha256'],
+        base_config_sha256=run['base_config_sha256'],checkpoint_sha256=run['checkpoint_sha256'],
         games={s:sum(r['setting']==s for r in results)for s in ('solo','concurrent')},
         hosts=sorted({encoded(r['worker']).decode()for r in results if isinstance(r.get('worker'),dict)}),
         core_pairs=[list(pair)for pair in sorted({tuple(r['cpu_pair'])for r in results if r.get('cpu_pair')})],tree=run['tree'])
@@ -739,10 +752,11 @@ def completed_pairs(entries,search_arm):
     return sum(found>={'RAW',search_arm}for found in arms.values())
 
 
-def observability_contradictions(results,declared):
-    """Cells whose bridge header says iterations are (not) observable against the declaration."""
-    return sum(((r.get('benchmark')or {}).get('foulplay_think')or {}).get('iterations_observable')is not declared
-               for r in results if r.get('status')=='COMPLETE')
+def observability(results,declared):
+    """Cells whose bridge header reports a bool iterations_observable other than the declaration (contradictions: breakage),
+    and cells reporting None (the bridge's probe failed: counted apart, never breakage)."""
+    seen=[((r.get('benchmark')or {}).get('foulplay_think')or {}).get('iterations_observable')for r in results if r.get('status')=='COMPLETE']
+    return dict(contradictions=sum(type(v)is bool and v is not declared for v in seen),unknown=sum(v is None for v in seen))
 
 
 class Monitor:
@@ -1022,7 +1036,8 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
     if search['transport_failure_share']is not None and search['transport_failure_share']>rules['transport_failure_share_max']:
         breakage.append('transport_failures')
     if search['searched_share']is not None and search['searched_share']<rules['searched_share_min']:breakage.append('searched_share')
-    if observability_contradictions(rows['RAW']+rows[arm],observable):breakage.append('fairness_observability')
+    fair['observability']=observability(rows['RAW']+rows[arm],observable)
+    if fair['observability']['contradictions']:breakage.append('fairness_observability')
     attempted=all(a['not_attempted']==0 for a in arms.values());harm=interval is not None and interval[1]<0;bar=None
     if fault:decision='VOID_FAIRNESS'
     elif void:decision='VOID_LATENCY'
