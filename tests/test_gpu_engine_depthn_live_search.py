@@ -170,7 +170,8 @@ class LiveSearchTests(unittest.TestCase):
     def test_a_rung_this_server_does_not_serve_is_a_bad_request(self):
         s=self.search();outcomes={('b0',0):self.outcome(0)}
         rows,codex=self.run_batch(s,[request('b0',0,rung='DN2W16')],outcomes)
-        self.assertEqual((rows[0]['cause'],rows[0]['rung']),('bad_request','DN2W8'));self.assertTrue(rows[0]['refusal'].startswith("RUNG_NOT_SERVED: 'DN2W16'"))
+        self.assertEqual((rows[0]['cause'],rows[0]['rung']),('bad_request','DN2W16'));self.assertTrue(rows[0]['refusal'].startswith("RUNG_NOT_SERVED: 'DN2W16'"))   # the client's rung, echoed
+        rows,_=self.run_batch(s,[dict(request('b0',0),rung=8)],outcomes);self.assertEqual((rows[0]['cause'],rows[0]['rung']),('bad_request','DN2W8'))   # not a string: ours
         self.assertEqual((codex.captures,s.constructor.seen),([],set()))
         rows,_=self.run_batch(s,[request('b0',0)],outcomes);self.assertEqual(rows[0]['status'],'COMPLETE')   # never attempted, so not ALREADY_ATTEMPTED
 
@@ -226,6 +227,11 @@ class LiveSearchTests(unittest.TestCase):
         for name,(target,attr,fake,reason)in cases.items():
             with self.subTest(name),patch.object(target,attr,side_effect=fake):rows,_=self.run_batch(self.search(),[request('ok',0)],outcomes)
             self.assertEqual((rows[0]['status'],rows[0]['cause'],rows[0]['refusal'],rows[0]['action_index']),('REFUSED','depthn_refused',reason,None))
+        # Any failure of the reporting reduction only blanks the report; MemoryError still propagates.
+        for error in(RuntimeError('report broke'),TypeError('report broke'),KeyError('report broke')):
+            with self.subTest(type(error).__name__),patch.object(latency,'compose',side_effect=error):rows,_=self.run_batch(self.search(),[request('ok',0)],outcomes)
+            self.assertEqual((rows[0]['status'],rows[0]['reduction_note'],rows[0]['action_mean_q']),('COMPLETE',f'REDUCTION_ERROR: {type(error).__name__}: {error}',None))
+        with patch.object(latency,'compose',side_effect=MemoryError()),self.assertRaises(MemoryError):self.run_batch(self.search(),[request('ok',0)],outcomes)
         with self.assertRaisesRegex(ValueError,'outside'):backups.original.WorldPrices(False,(False,)*9,(0.,)*9,((1.5,)+(None,)*8,)+((None,)*9,)*8)
         with self.assertRaisesRegex(ValueError,'finite'):backups.original.WorldPrices(False,(False,)*9,(0.,)*9,((math.nan,)+(None,)*8,)+((None,)*9,)*8)
 
@@ -279,12 +285,21 @@ class LiveSearchTests(unittest.TestCase):
         self.assertEqual(report['buckets'][4]['causes'],['constructor_refused'])
         self.assertEqual(report['programs'],len(pricers[1].programs));self.assertEqual({k[1]for k in pricers[1].programs if k[0]=='P1'},{4,8,16})
         self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}));self.assertIs(s.warm,report)
+        self.assertEqual([s.missing_programs(b)for b in(1,2,4)],[[]]*3)   # P1, selection, gather and the leaf program, per bucket
         for n,b in((1,1),(2,2),(3,4)):
             rows,_=self.run_batch(s,[dict(request(f'l{i}',0),request_id=f'l{i}:{n}')for i in range(n)],outcomes)
             self.assertEqual({(r['status'],r['bucket'])for r in rows},{('COMPLETE',b)});self.assertEqual(pricers[b].compiles,())
             s._reset_sessions()
         with Codex({('r',0):Refusal('WORLD_CONSTRUCTOR_REFUSED','all')}),self.assertRaisesRegex(RuntimeError,'no saved request priced at bucket 1'):
             self.search().warmup([request('r',0)])
+        # A bucket priced without reaching the leaf program (here: its compiled leaf programs dropped) is not warm: warmup raises.
+        bare=self.make_pricers(8,(1,));price=cw.price
+        def leafless(pricer,*a,**kw):
+            out=price(pricer,*a,**kw)
+            for k in[k for k in pricer.programs if k[0]=='leaf']:del pricer.programs[k]
+            return out
+        with Codex(outcomes),patch.object(live.cw,'price',side_effect=leafless),self.assertRaisesRegex(RuntimeError,r'bucket 1 with every program compiled \(missing: leaf\)'):
+            self.search(pricers=bare).warmup([request('w0',0)])
         with self.assertRaisesRegex(ValueError,'saved requests with'):self.search().warmup([{'battle_id':'x'}])
         with self.assertRaisesRegex(ValueError,'at least one'):self.search().warmup([])
 
