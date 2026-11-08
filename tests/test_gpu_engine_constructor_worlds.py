@@ -472,6 +472,17 @@ class ConstructorWorldsTests(unittest.TestCase):
         self.assertEqual([x['reduction_error']for x in results],['ValueError: finite in-range numerical value required',None])
         self.assertEqual((results[0]['block_causes'],results[0]['completed_q'],results[0]['action_mean_q']),((None,None),None,None))
         self.assertEqual(results[1]['action_mean_q'],1);self.assertAlmostEqual(results[1]['completed_q'][1],.2,places=15)
+        # A block that refused (turn2) keeps the root's cause even when another block's reduction raises; the error is still kept.
+        blocks[0]=(None,plain);causes=[dict(cause='turn2')]+[dict(cause=None)]*3;blocks[1]=(wins,wins)
+        with patch.object(cw.backups,'backup',side_effect=lambda frame,row,rule:blocks[row]),patch.object(cw.backups,'refusal_summary',return_value=dict(roots=causes)):
+            results=cw.reduce(object(),cw.Batch((object(),)*4,None,roots,4,2))
+        self.assertEqual([(x['status'],x['cause'],x['block_causes'])for x in results],[('REFUSED','turn2',('turn2',None)),('LABELED',None,(None,None))])
+        self.assertEqual(results[0]['reduction_error'],'ValueError: finite in-range numerical value required')
+        # Any other ValueError from the reduction is malformed input, not the rounding edge: it raises.
+        from gpu_engine import d3_search_latency as latency
+        with patch.object(cw.backups,'backup',side_effect=lambda frame,row,rule:blocks[row]),patch.object(cw.backups,'refusal_summary',return_value=dict(roots=causes)),\
+                patch.object(latency,'reduce_block',side_effect=ValueError('both declared posterior worlds required')),self.assertRaisesRegex(ValueError,'both declared'):
+            cw.reduce(object(),cw.Batch((object(),)*4,None,roots,4,2))
 
     def test_both_root_moves_are_reported_and_can_differ(self):
         from gpu_engine.d3_search_latency import compose
