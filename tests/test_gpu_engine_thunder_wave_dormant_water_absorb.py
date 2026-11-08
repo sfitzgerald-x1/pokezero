@@ -73,7 +73,8 @@ console.log(JSON.stringify({sha:require('crypto').createHash('sha256').update(St
    # complete integrated source, including later device tracker hooks.
    self.assertEqual(subprocess.check_output(['git','show','856c49f8:gpu_engine/'+file]),subprocess.check_output(['git','show',BASE+':gpu_engine/'+file]))
    self.assertEqual(Path('gpu_engine',file).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file]))
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_thunder_wave_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text());functions=lambda tree:{n.name:ast.dump(n,include_attributes=False)for n in tree.body if isinstance(n,ast.FunctionDef)and n.name!='compile_thunder_wave'};self.assertEqual(functions(old),functions(new))
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_thunder_wave_callbacks.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','856c49f8:gpu_engine/engine_thunder_wave_callbacks.py'],text=True));functions=lambda tree:{n.name:ast.dump(n,include_attributes=False)for n in tree.body if isinstance(n,ast.FunctionDef)and n.name!='compile_thunder_wave'};self.assertEqual(functions(old),functions(new))
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_thunder_wave_callbacks.py'],text=True));self.assertEqual(ast.dump(ast.parse(Path(cb.__file__).read_text())),ast.dump(integrated))
 
  # One existing BOTH-owner original word component, with the new mixed target
  # abilities supplied by literal() above. No engine turn or FULL matrix.
