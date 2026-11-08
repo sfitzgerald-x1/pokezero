@@ -1737,6 +1737,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual((value['arms']['RAW']['first_within_warm_p99'], value['arms']['DN2W8']['first_within_warm_p99']), (False, True))
         self.assertEqual((value['arms']['RAW']['first_actor_within_warm_p99'], value['arms']['RAW']['first_actor']), (True, [.54]))   # encode .04 + greedy .5
         self.assertEqual(value['arms']['DN2W8']['warm_actor']['p99'], .54)
+        self.assertIn('descriptive', value['arms']['DN2W8']['first_end_to_end_note'])
         self.assertEqual(value['arms']['DN2W8']['search_wall']['p95'], 2.0); self.assertTrue(value['search_wall_within'])
         self.assertEqual(value['arms']['RAW']['warm_greedy']['p95'], .5)
         self.assertEqual((value['arm'], value['deadline_seconds'], value['reserve_seconds']), ('DN2W8', 3., .15))
