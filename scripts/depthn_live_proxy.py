@@ -59,8 +59,8 @@ def address(text):
 
 def backend_spec(text):
     """HOST:PORT or HOST:PORT@GPU: the backend and its GPU label (None: its own)."""
-    where, sep, gpu = text.partition('@')
-    if sep and not gpu.strip():raise argparse.ArgumentTypeError(f'HOST:PORT@GPU needs a GPU label, got {text!r}')
+    where, sep, gpu = text.partition('@');gpu = gpu.strip()
+    if sep and not gpu:raise argparse.ArgumentTypeError(f'HOST:PORT@GPU needs a GPU label, got {text!r}')
     return address(where), gpu if sep else None
 
 
@@ -79,6 +79,9 @@ class Pool:
         if not backends or len(set(backends)) != len(backends):raise ValueError('one or more distinct backends required')
         gpus = {} if gpus is None else dict(gpus)
         if set(gpus) - set(backends):raise ValueError('a GPU label for an unknown backend')
+        if gpus and (set(gpus) != set(backends) or len(set(Counter(gpus.values()).values())) != 1):
+            # GPU-first ranking spreads battles evenly only over equal GPUs: an unlabelled backend would compete as a whole GPU
+            raise ValueError('label every backend with its GPU, the same number of backends on each GPU')
         self.gpu = {b: gpus.get(b) or f'{b[0]}:{b[1]}' for b in backends}   # unlabelled: its own group
         self.backends = list(backends);self.active = {b: 0 for b in backends};self.served = {b: 0 for b in backends}
         self.refused = {b: 0 for b in backends};self.failed_at = {b: None for b in backends};self.unserved = 0;self.no_request = 0;self.cooldown = cooldown
@@ -94,8 +97,7 @@ class Pool:
         if battle is None:   # no battle to keep together: least busy, ties round-robin
             start = next(self._turn);ring = self.backends[start:] + self.backends[:start]
             return sorted(ring, key=lambda b: (self.cooling(b, now), self.active[b]))
-        live = self.live(now);per_gpu = Counter()
-        for b, n in live.items():per_gpu[self.gpu[b]] += n
+        live = self.live(now);per_gpu = self.per_gpu(live)
         rank = sorted(self.backends, key=lambda b: (self.cooling(b, now), per_gpu[self.gpu[b]], live[b], self.active[b], self.backends.index(b)))
         home = self.homes.get(battle)
         if home is not None and not self.cooling(home[0], now):rank.remove(home[0]);rank.insert(0, home[0])
@@ -116,7 +118,13 @@ class Pool:
         return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)],
             cooling=self.cooling((h, p)), live_battles=live[(h, p)], gpu=self.gpu[(h, p)]) for h, p in self.backends], unserved=self.unserved,
             no_request=self.no_request,
-            battles=len(self.homes), live_battles_per_gpu=dict(sorted(Counter({self.gpu[b]: n for b, n in live.items()}).items())))
+            battles=len(self.homes), live_battles_per_gpu=dict(sorted(self.per_gpu(live).items())))
+
+    def per_gpu(self, live):
+        """Live battles summed over each GPU's backends."""
+        out = Counter()
+        for b, n in live.items():out[self.gpu[b]] += n
+        return out
 
 
 async def pipe(reader, writer, counter):

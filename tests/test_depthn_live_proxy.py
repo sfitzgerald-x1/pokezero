@@ -1,4 +1,5 @@
 import asyncio
+from collections import Counter
 import hashlib
 import json
 import socket
@@ -269,10 +270,33 @@ class StickyTests(unittest.TestCase):
         self.assertEqual(pool.order(now=100., battle='v')[0], h(1))   # all idle past 60 s: nothing counts
         self.assertEqual(pool.snapshot()['backends'][0]['gpu'], 'g0')
         with self.assertRaisesRegex(ValueError, 'unknown backend'):P.Pool([h(1)], gpus={h(9): 'g0'})
+        for bad in ({h(1): 'g0', h(2): 'g0', h(3): 'g1'}, {h(1): 'g0', h(2): 'g1'}):   # 2+1 per GPU; a 4th backend unlabelled
+            with self.subTest(bad), self.assertRaisesRegex(ValueError, 'same number of backends'):P.Pool([h(1), h(2), h(3), h(4)], gpus=bad)
+        self.assertEqual(P.backend_spec('127.0.0.1:7001@ 3 '), (('127.0.0.1', 7001), '3'))
+        pool = P.Pool([h(1), h(2), h(3), h(4)], gpus=gpus)   # the GPU first, then the backend (the review's discriminating case)
+        for k, (battle, home) in enumerate((('a', 1), ('b', 1), ('c', 1), ('d', 3), ('e', 4))):pool.bind(battle, h(home), now=float(k))
+        self.assertEqual(pool.order(now=5., battle='new')[0], h(3))   # g0 holds 3 (h2 empty), g1 holds 2: g1, then h3 by order
+        self.assertEqual(pool.snapshot()['live_battles_per_gpu'], {})   # all idle by the wall clock: snapshot reads time.monotonic()
+        live = Counter({h(1): 2, h(2): 3});self.assertEqual(pool.per_gpu(live), {'g0': 5})
         self.assertEqual(P.backend_spec('127.0.0.1:7001@3'), (('127.0.0.1', 7001), '3'))
         self.assertEqual(P.backend_spec('127.0.0.1:7001'), (('127.0.0.1', 7001), None))
         for bad in ('127.0.0.1:7001@', 'nohost@1'):
             with self.subTest(bad), self.assertRaises(Exception):P.backend_spec(bad)
+
+    def test_the_first_frame_has_one_deadline_and_survives_deep_json(self):
+        async def main():
+            frame = lambda body: struct.pack('!I', len(body)) + body
+            deep = b'['*100000 + b']'*100000
+            r = asyncio.StreamReader();r.feed_data(frame(deep));r.feed_eof()
+            first, battle = await P.first_frame(r, 1.)   # RecursionError in json: no battle, bytes intact
+            assert (first, battle) == (frame(deep), None)
+            r = asyncio.StreamReader();body = json.dumps(dict(battle_id='x', owner='p1')).encode();head = frame(body)[:4]
+            loop = asyncio.get_running_loop()
+            loop.call_later(.15, r.feed_data, head);loop.call_later(.3, r.feed_data, body)   # each part within .2, the whole not
+            try:await P.first_frame(r, .2)
+            except asyncio.TimeoutError:return 'timeout'
+            return 'read'
+        self.assertEqual(asyncio.run(main()), 'timeout')
 
     def test_live_battles_expire_and_homes_are_bounded(self):
         pool = P.Pool([('h', 1), ('h', 2)], sticky_idle=10., sticky_cap=2)
@@ -281,10 +305,11 @@ class StickyTests(unittest.TestCase):
         self.assertEqual(pool.order(now=20., battle='y')[0], ('h', 1))   # x idle: both empty, backend order
         pool.bind('y', ('h', 2), now=21.);pool.bind('z', ('h', 1), now=22.)
         self.assertEqual(list(pool.homes), ['y', 'z'])   # LRU: x evicted
-        pool.bind('y', ('h', 2), now=22.5);pool.bind('w', ('h', 1), now=22.6)
-        self.assertEqual(list(pool.homes), ['y', 'w'])   # a rebind refreshes: z (older) goes, not y
-        self.assertEqual(pool.order(now=23., battle='z')[0], ('h', 1))
+        self.assertEqual(pool.order(now=23., battle='z')[0], ('h', 1))   # z's home, though h:2 holds as many
         pool.failed_at[('h', 1)] = 23.;self.assertEqual(pool.order(now=24., battle='z')[0], ('h', 2))   # a cooling home is skipped
+        pool.failed_at[('h', 1)] = None
+        pool.bind('y', ('h', 2), now=24.5);pool.bind('w', ('h', 1), now=24.6)
+        self.assertEqual(list(pool.homes), ['y', 'w'])   # a rebind refreshes: z (older) goes, not y
 
 
 async def codex_like_backend(name, delay, served, *, answer=True):
