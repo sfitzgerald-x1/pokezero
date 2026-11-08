@@ -204,6 +204,35 @@ class StickyTests(unittest.TestCase):
         self.assertEqual([(r['battle_id'], r['home']) for r in rows][:6], [('x', False), ('y', False), ('x', True), ('z', False), ('y', True), ('x', True)])
         self.assertTrue(all(r['gpu'] == r['backend'] for r in rows))   # unlabelled backends: each its own group
 
+    def test_seat_twins_are_two_battles_with_their_own_homes(self):
+        # the review's case: the two seats of one seed share a battle_id; the server keeps one session per (battle, owner)
+        async def scenario(port, pool, servers, rows):
+            rounds = []
+            for k in range(3):
+                outs = await asyncio.gather(request(port, dict(battle_id='s7', owner='p1', k=k)), request(port, dict(battle_id='s7', owner='p2', k=k)))
+                rounds.append(tuple(o['backend'] for o in outs))
+            return rounds, rows
+        rounds, rows = self.run_sticky(scenario, ['a', 'b', 'c'])
+        self.assertEqual(len(set(rounds)), 1); self.assertEqual(len(set(rounds[0])), 2)   # each seat keeps one backend, the two differ
+        self.assertEqual(sorted({(r['battle_id'], r['owner']) for r in rows}), [('s7', 'p1'), ('s7', 'p2')])
+
+    def test_concurrent_new_battles_spread_and_an_unbounded_length_is_forwarded(self):
+        async def scenario(port, pool, servers, rows):
+            outs = await asyncio.gather(request(port, dict(battle_id='x')), request(port, dict(battle_id='y')))
+            return sorted(o['backend'] for o in outs)
+        self.assertEqual(self.run_sticky(scenario, ['a', 'b']), ['a', 'b'])   # in-flight counts separate two new battles
+        got = []
+        async def main():
+            async def handle(r, w): got.append(await r.read(8)); w.close()
+            s = await asyncio.start_server(handle, '127.0.0.1', 0); box = {}
+            task = asyncio.create_task(P.run(('127.0.0.1', 0), [('127.0.0.1', s.sockets[0].getsockname()[1])], log=lambda line: None, report_seconds=0,
+                started=lambda server, pool: box.update(port=server.sockets[0].getsockname()[1])))
+            while 'port' not in box: await asyncio.sleep(.01)
+            r, w = await asyncio.open_connection('127.0.0.1', box['port']); w.write(struct.pack('!I', P.MAX_PACKET + 1)); await w.drain()
+            await asyncio.wait_for(r.read(), 5); w.close(); task.cancel(); s.close()
+        asyncio.run(main())
+        self.assertEqual(got, [struct.pack('!I', P.MAX_PACKET + 1)])   # the header goes on, for the server to refuse
+
     def test_a_dead_home_rehomes_its_battle(self):
         async def scenario(port, pool, servers, rows):
             first = (await request(port, dict(battle_id='x')))['backend']
@@ -220,9 +249,9 @@ class StickyTests(unittest.TestCase):
             for _ in range(100):
                 if rows:break
                 await asyncio.sleep(.01)
-            return closed, pool.unserved, rows, sum(pool.served.values())
-        closed, unserved, rows, served = self.run_sticky(scenario, ['a'], first_frame_timeout=.2)
-        self.assertEqual((closed, unserved, served, rows[0]['reason']), (b'', 1, 0, 'no request'))
+            return closed, (pool.no_request, pool.unserved), rows, sum(pool.served.values())
+        closed, counts, rows, served = self.run_sticky(scenario, ['a'], first_frame_timeout=.2)
+        self.assertEqual((closed, counts, served, rows[0]['reason']), (b'', (1, 0), 0, 'no request'))   # apart from unserved
 
     def test_a_request_without_a_battle_id_is_still_forwarded_byte_for_byte(self):
         async def scenario(port, pool, servers, rows):
@@ -252,6 +281,8 @@ class StickyTests(unittest.TestCase):
         self.assertEqual(pool.order(now=20., battle='y')[0], ('h', 1))   # x idle: both empty, backend order
         pool.bind('y', ('h', 2), now=21.);pool.bind('z', ('h', 1), now=22.)
         self.assertEqual(list(pool.homes), ['y', 'z'])   # LRU: x evicted
+        pool.bind('y', ('h', 2), now=22.5);pool.bind('w', ('h', 1), now=22.6)
+        self.assertEqual(list(pool.homes), ['y', 'w'])   # a rebind refreshes: z (older) goes, not y
         self.assertEqual(pool.order(now=23., battle='z')[0], ('h', 1))
         pool.failed_at[('h', 1)] = 23.;self.assertEqual(pool.order(now=24., battle='z')[0], ('h', 2))   # a cooling home is skipped
 

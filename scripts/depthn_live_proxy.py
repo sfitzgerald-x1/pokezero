@@ -13,14 +13,16 @@ is forwarded); when no backend accepts, the client's connection is closed, which
 - Battle affinity (sticky): a server keeps one constructor session per battle, so a battle whose decisions scatter over the pool
   folds from a stale or empty session on every switch (pre-flight r3: battles touched 8-12 of 12 servers, prepare p95 2.04 s against
   1.20 s on the same server, 28% timeouts). The proxy therefore reads each connection's first frame (the request: a 4-byte length
-  and its JSON, within --first-frame-timeout) for its battle_id, sends those bytes on verbatim, and routes: a battle seen before goes
+  and its JSON, within --first-frame-timeout) for its battle key (battle_id, owner: the two seats of one seed share a battle_id and
+  are separate sessions on the server), sends those bytes on verbatim, and routes: a battle seen before goes
   to its home backend unless that backend is cooling down; a new battle (or a re-homed one) goes, the lead's rule, to the GPU with
   the fewest live battles, then to that GPU's backend with the fewest (--backend HOST:PORT@GPU names each backend's GPU; live: a
   decision within --sticky-idle seconds, default 60, so finished battles stop counting), ties by in-flight connections, then by
   --backend order. Concurrent pricing on one GPU costs real time (r3: price p95 1.07 s against the bench's 0.67 s), so battles spread
   across GPUs first. The home map is an LRU of at most --sticky-cap battles. A request without a string battle_id keeps the
-  least-busy order below. Each connection's log row records its battle_id, backend, GPU and whether it went home (home false with a
-  battle_id: an assignment).
+  least-busy order below. Each connection's log row records its battle_id, owner, backend, GPU and whether it went home (home false
+  with a battle_id: an assignment). Connections that send no request (a health check, a client that gave up) are counted apart
+  (no_request), not as unserved.
 - Startup identity (the lead's rule: a pool must not hide a wrong backend): --probe-requests PATH (JSONL, one request per line in the
   servers' wire format, e.g. built from a closed RAW cell's owning-wire capture as the panel's probe builds them) is sent to EVERY backend
   directly, each request under a fresh request_id and battle id, before the proxy listens. Per backend, requests are tried in order: a
@@ -79,8 +81,8 @@ class Pool:
         if set(gpus) - set(backends):raise ValueError('a GPU label for an unknown backend')
         self.gpu = {b: gpus.get(b) or f'{b[0]}:{b[1]}' for b in backends}   # unlabelled: its own group
         self.backends = list(backends);self.active = {b: 0 for b in backends};self.served = {b: 0 for b in backends}
-        self.refused = {b: 0 for b in backends};self.failed_at = {b: None for b in backends};self.unserved = 0;self.cooldown = cooldown
-        self.homes = OrderedDict();self.sticky_idle = sticky_idle;self.sticky_cap = sticky_cap   # battle_id -> [backend, last seen]
+        self.refused = {b: 0 for b in backends};self.failed_at = {b: None for b in backends};self.unserved = 0;self.no_request = 0;self.cooldown = cooldown
+        self.homes = OrderedDict();self.sticky_idle = sticky_idle;self.sticky_cap = sticky_cap   # (battle_id, owner) -> [backend, last seen]
         self._turn = itertools.cycle(range(len(backends)))
 
     def live(self, now):
@@ -113,6 +115,7 @@ class Pool:
         live = self.live(time.monotonic())
         return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)],
             cooling=self.cooling((h, p)), live_battles=live[(h, p)], gpu=self.gpu[(h, p)]) for h, p in self.backends], unserved=self.unserved,
+            no_request=self.no_request,
             battles=len(self.homes), live_battles_per_gpu=dict(sorted(Counter({self.gpu[b]: n for b, n in live.items()}).items())))
 
 
@@ -135,22 +138,24 @@ async def _close(writer):
 
 
 async def first_frame(reader, timeout):
-    """The connection's first frame as read (its bytes, sent on verbatim) and its battle_id (None if absent or not JSON)."""
+    """The connection's first frame as read (its bytes, sent on verbatim, within one `timeout` in all) and its battle key
+    (battle_id, owner), None if the request is not JSON or carries no string battle_id."""
+    deadline = time.monotonic() + timeout
     head = await asyncio.wait_for(reader.readexactly(4), timeout);n = struct.unpack('!I', head)[0]
     if not 0 < n <= MAX_PACKET:return head, None   # an unbounded length: forwarded as is, for the server to refuse
-    body = await asyncio.wait_for(reader.readexactly(n), timeout)
+    body = await asyncio.wait_for(reader.readexactly(n), max(0., deadline - time.monotonic()))
     try:value = json.loads(body)
-    except (ValueError, UnicodeDecodeError):return head + body, None
-    battle = value.get('battle_id') if isinstance(value, dict) else None
-    return head + body, battle if isinstance(battle, str) and battle else None
+    except Exception:return head + body, None   # not JSON, or too deep to parse: least busy
+    battle = value.get('battle_id') if isinstance(value, dict) else None;owner = value.get('owner') if isinstance(value, dict) else None
+    return head + body, (battle, owner if isinstance(owner, str) else None) if isinstance(battle, str) and battle else None
 
 
 async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, first_frame_timeout=2., log_row=None):
     opened, chosen, upstream = time.time(), None, None
     try:first, battle = await first_frame(client_reader, first_frame_timeout)
     except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError):   # no request to route: nothing forwarded
-        pool.unserved += 1
-        if log_row is not None:log_row(dict(backend='unserved', reason='no request', opened=opened, closed=time.time(), seconds=time.time() - opened))
+        pool.no_request += 1
+        if log_row is not None:log_row(dict(backend=None, reason='no request', opened=opened, closed=time.time(), seconds=time.time() - opened))
         await _close(client_writer);return
     now = time.monotonic()
     for backend in pool.order(now, battle=battle):
@@ -163,7 +168,8 @@ async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, fir
             pool.active[backend] -= 1;raise
     if upstream is None:
         pool.unserved += 1
-        if log_row is not None:log_row(dict(backend='unserved', battle_id=battle, opened=opened, closed=time.time(), seconds=time.time() - opened))
+        if log_row is not None:log_row(dict(backend='unserved', battle_id=None if battle is None else battle[0], owner=None if battle is None else battle[1],
+            opened=opened, closed=time.time(), seconds=time.time() - opened))
         await _close(client_writer);return
     up_reader, up_writer = upstream;pool.served[chosen] += 1;sent, received = [len(first)], [0]
     home = None if battle is None else pool.bind(battle, chosen, now)
@@ -177,7 +183,8 @@ async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, fir
         for w in (up_writer, client_writer):await _close(w)
         if log_row is not None:
             closed = time.time();log_row(dict(backend=f'{chosen[0]}:{chosen[1]}', opened=opened, closed=closed, seconds=closed - opened,
-                bytes_to_backend=sent[0], bytes_to_client=received[0], battle_id=battle, home=home, gpu=pool.gpu[chosen]))
+                bytes_to_backend=sent[0], bytes_to_client=received[0], battle_id=None if battle is None else battle[0],
+                owner=None if battle is None else battle[1], home=home, gpu=pool.gpu[chosen]))
 
 
 async def wait_ready(backends, seconds):
