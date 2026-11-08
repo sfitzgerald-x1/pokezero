@@ -162,7 +162,7 @@ class RecoilOwningEventTests(unittest.TestCase):
    if side!=owner:
     hp=min(99,(100*hp+maximum-1)//maximum) if hp<maximum else 100;maximum=100
    return f'{hp}/{maximum}'+tokens[status]
-  for raw in np.asarray(tape.words[row,:int(tape.count[row])]):
+  for index,raw in enumerate(np.asarray(tape.words[row,:int(tape.count[row])])):
    k=int(raw[0])
    if k==events.MOVE:lines.append(f'|move|{ident[int(raw[1])]}|Double-Edge|{ident[int(raw[3])]}')
    elif 21<=k<=23:lines.append('|'+{21:'-crit',22:'-supereffective',23:'-resisted'}[k]+'|'+ident[int(raw[3])])
@@ -172,7 +172,7 @@ class RecoilOwningEventTests(unittest.TestCase):
     self.assertEqual(raw.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0]);lines.extend(['|','|t:|1'])
    elif k==life.ACTION_END:lines.append('|')
    elif k==life.UPKEEP:lines.append('|upkeep')
-   elif k==life.TURN:lines.append(f'|turn|{int(tape.event_turn[row,len(lines)])}')
+   elif k==life.TURN:lines.append(f'|turn|{int(tape.event_turn[row,index])}')
    else:self.fail('unrepresented reference raw '+str(k))
   _,projections=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog))
   return np.array([event.words() for projection in projections for event in projection.events],np.int32)
