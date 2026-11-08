@@ -53,7 +53,7 @@ class TerminalSourceTests(unittest.TestCase):
   self.same(actual.step.state,tr.step_with_chance(before,j.zeros((2,2),j.int32),self.f.table,self.f.chance()).state)
   self.assertEqual(frame.state.done.tolist(),[True,True]);self.assertEqual(frame.state.winner.tolist(),[0,0])
   self.assertEqual(actual.callbacks.refusal.tolist(),[1,1]);self.assertEqual(actual.callbacks.execution.risks.carry.risk.tolist(),[0,0])
-  self.assertEqual(actual.callbacks.words[0,:int(actual.callbacks.count[0]),0].tolist(),[1,2,3])
+  self.assertEqual(actual.callbacks.words[0,:int(actual.callbacks.count[0]),0].tolist(),[35,1,2,3])
   c=actual.callbacks.execution.terminal
   self.same(c.before_hp,before.hp);self.same(c.final_hp,frame.state.hp);self.same(c.final_max_hp,frame.state.max_hp)
   self.assertEqual(c.candidates.tolist(),[1,1]);self.assertEqual(c.finalized.tolist(),[1,1])

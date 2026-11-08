@@ -35,7 +35,9 @@ class CurrentTypesTests(unittest.TestCase):
         calls=[]
         def request(*args):
             calls.append(args)
-            return args[-1]
+            # The appended Encore proof follows the original type proof.
+            self.assertEqual(len(args),9)
+            return args[7]
         r=dict(self.fixture.runtime if runtime is None else runtime,request_fast=request)
         result=branch._requests_after_frame(r,frame,prior,publics,orders,admitted)
         for owner,args in enumerate(calls):
@@ -95,7 +97,7 @@ class CurrentTypesTests(unittest.TestCase):
 
     def test_disabled_context_and_mode_retain_closed_none_default(self):
         for update in ({'direct_hit_context':None},{'direct_hit_mode':'closed'},
-                {'direct_hit_context':NS(data=NS(color_change=None))}):
+                {'direct_hit_context':NS(data=NS(color_change=None,encore=None))}):
             with self.subTest(update=update):
                 self.assertEqual(self.join(runtime=dict(self.fixture.runtime,**update)),(None,None))
 
