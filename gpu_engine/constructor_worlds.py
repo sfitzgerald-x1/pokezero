@@ -44,7 +44,10 @@ dict keys and leaves two members None). This module turns prepared roots into De
   PrebuiltWorlds (prepare refuses a second attempt at an address, and none is needed). Nothing in it is D3-only. A batch
   without requests (every root refused) prices nothing and returns (None, None).
 - reduce: per root, depthn_backups.backup(rule) and reduce_completed_q per block, then the K blocks by the equal-weight
-  mean of their completed-Q (d3_search_latency.compose: every world weighted 1/W); any refused block refuses the root.
+  mean of their completed-Q (d3_search_latency.compose: every world weighted 1/W); any refused block refuses the root. A
+  ValueError from the reduction (reduce_completed_q's range check: a block's completed-Q rounding outside [-1, 1], e.g. an
+  action winning against every reply in both worlds, its reply prior summing to 1 + ulp) refuses that root only, cause
+  'reduction' with the error in `reduction_error`; the batch's other roots still label.
   Two moves: `action_mean_q`, the argmax of that mean completed-Q over the legal actions (lower action on ties): the
   ladder's root operator (phase_d_ladder_search.reduce_q); and `action_policy_target`, the argmax of the improved
   target softmax(root logits + q) (D's training target, the latency tool's move).
@@ -301,19 +304,22 @@ def reduce(frame,batch,*,rule=backups.learner_max):
     """Per prepared root: status LABELED with the K-block composition (completed_q, policy_target, root_value and the
     moves `action_mean_q` and `action_policy_target`, module docstring), or REFUSED with a cause (the build reason, or the
     first refused block's depthn_backups.refusal_summary cause, 'materialization' for a constructor world refusal, else
-    'reduction'). `block_causes` lists each block's cause. `frame` is None for a batch without requests."""
+    'reduction'; a ValueError from this root's reduction is 'reduction' with its text in `reduction_error`, never raised).
+    `block_causes` lists each block's cause. `frame` is None for a batch without requests."""
     from .d3_search_latency import compose,reduce_block
     if frame is None and batch.requests:raise ValueError('a frame is required for a batch with requests')
     causes=backups.refusal_summary(frame)['roots']if batch.requests else()
     results=[]
     for root in batch.roots:
         out=dict(index=root['index'],request_id=root['request_id'],status='REFUSED',cause=root['reason'],worlds=batch.count,blocks=batch.blocks,
-            block_causes=None,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None)
+            block_causes=None,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,reduction_error=None)
         if root['status']!='PRICED':results.append(out);continue
-        logits,legal=root['root_logits'],root['root_legal']
-        composed=compose([reduce_block(backups.backup(frame,row,rule),logits,legal,original)for row in root['rows']],logits,legal,original)
-        out.update(block_causes=tuple(causes[row]['cause']for row in root['rows']),status=composed['status'],completed_q=composed['completed_q'],
-            policy_target=composed['policy_target'],root_value=composed['root_value'])
+        logits,legal=root['root_logits'],root['root_legal'];out['block_causes']=tuple(causes[row]['cause']for row in root['rows'])
+        prices=[backups.backup(frame,row,rule)for row in root['rows']]
+        try:composed=compose([reduce_block(pair,logits,legal,original)for pair in prices],logits,legal,original)
+        except ValueError as error:   # this root's reduction only (its range check), never the batch
+            out.update(cause='reduction',reduction_error=f'{type(error).__name__}: {error}');results.append(out);continue
+        out.update(status=composed['status'],completed_q=composed['completed_q'],policy_target=composed['policy_target'],root_value=composed['root_value'])
         if composed['status']=='LABELED':
             mean_q,target=root_actions(composed['completed_q'],composed['policy_target'],legal)
             out.update(cause=None,action_mean_q=mean_q,action_policy_target=target)
