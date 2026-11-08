@@ -29,7 +29,11 @@ FLAGS = ('--constructor-roster', 'roster.json', 'a' * 64, '--showdown-root', 'sh
     'b' * 64, '--constructor-vocabulary', 'vocabulary.json', 'c' * 64)
 RUNTIME = ('--saved-roots', 'saved', '--index-sha256', 'd' * 64)
 HARNESS = ('--fixed-shapes', '--block-invariance')
+COVERED = ('--depth', '2', '--k-own', '9', '--k-opp', '9')   # what declaration A-C covers (k1 9/9 and W 8 by default)
+AC = gate.REPO_ROOT / gate.CONSTRUCTOR_DECLARATION['repo_path']
+DECLARED = ('--declared-bounds', str(AC), '--declared-bounds-sha256', gate.CONSTRUCTOR_DECLARATION['sha256'], '--declared-bounds-commit', '4' * 40)
 CHAMPION = C.ChampionCommandLineTests.FLAGS
+MODE = (*RUNTIME, *CHAMPION, *FLAGS, *HARNESS, *COVERED, *DECLARED)   # a complete, valid CONSTRUCTOR_ROOTS command line
 
 
 def dn():
@@ -215,6 +219,32 @@ class AveragingTests(unittest.TestCase):
         self.assertEqual((beyond['passed'], beyond['disagree_within_bound'], beyond['disagree_beyond_bound']), (False, 1, 1));self.assertIn('contradicts (e)', beyond['reasons'][0])
         self.assertTrue(gate.averaging_verdict([dict(roots=[far], replaced={})], .1)['passed'])   # .2 <= 2 x .1
 
+    def test_the_gated_margin_is_the_oracle_sides_own_action_against_the_pricer_sides(self):
+        """The pricer plays the oracle side's third-best action: the oracle's top-two margin (.01) is within the bound, margin_pair (.20) is not."""
+        third = gate.averaging_root(blocks([(.30, .29, .50)] * 8), blocks([(.50, .49, .30)] * 8), LOGITS, LEGAL)
+        self.assertEqual((third['agree'], third['action']), (False, [2, 0]))
+        self.assertAlmostEqual(third['margin_oracle'], .01);self.assertAlmostEqual(third['margin_pair'], .20)   # the pricer side's own gap is .20 too
+        verdict = gate.averaging_verdict([dict(roots=[third], replaced={})], .032)
+        self.assertEqual((verdict['passed'], verdict['disagree_beyond_bound'], verdict['disagree_within_bound']), (False, 1, 0))
+        self.assertAlmostEqual(verdict['disagreements'][0]['margin_oracle'], .01);self.assertAlmostEqual(verdict['disagreements'][0]['margin_pair'], .20)
+        self.assertIn('margin_pair', verdict['reasons'][0])
+
+    def test_a_premise_mismatch_fails(self):
+        r = gate.averaging_root(blocks([(.5, .3, 0.)] * 8), blocks([(.5, .3, 0.)] * 8), LOGITS, LEGAL)
+        self.assertEqual((r['premise_gap'], r['premise_holds']), ([None, None], None))   # averaging_call fills them
+        verdict = gate.averaging_verdict([dict(roots=[dict(r, premise_gap=[0., 1e-3], premise_holds=False)], replaced={})], .032)
+        self.assertEqual((verdict['passed'], verdict['premise_failures'], verdict['max_premise_gap']), (False, 1, 1e-3));self.assertIn('premise', verdict['reasons'][0])
+
+    def test_no_compared_root_is_incomplete(self):
+        result = dict(checks=dict(a=dict(passed=True, compared=dict(leaf_status=4))), tolerance=dict(value_bound=.1), passed=True)
+        gate.constructor_checks(result, [])   # no call ran the check: it is added, with nothing compared
+        self.assertEqual((result['checks']['averaging_argmax']['roots_compared'], result['checks']['averaging_argmax']['bound']), (0, .2))
+        self.assertEqual(gate.gate_status_n(result), ('INCOMPLETE', ['vacuous: averaging_argmax compared no root (every root refused on both sides, or (e) did not run)']))
+        refused = gate.averaging_root('BLOCK_REFUSED: pre', 'BLOCK_REFUSED: pre', LOGITS, LEGAL)
+        result['checks']['averaging_argmax'] = gate.averaging_verdict([dict(roots=[refused], replaced={})], .032)
+        self.assertEqual(gate.gate_status_n(result)[0], 'INCOMPLETE');result['checks'].pop('averaging_argmax')
+        self.assertEqual(gate.gate_status_n(result), ('PASS', []))   # without the check (every other mode) nothing changes
+
     def test_one_sided_decisions_fail_and_refusals_on_both_sides_are_counted(self):
         unknown = blocks([(.5, .3, None)] + [(.5, .3, 0.)] * 7)
         one = gate.averaging_root(blocks([(.5, .3, 0.)] * 8), unknown, LOGITS, LEGAL)
@@ -228,33 +258,53 @@ class AveragingTests(unittest.TestCase):
 
 class FlagTests(unittest.TestCase):
     def parse(self, *argv):
-        return gate.parse(['--out', 'o', *RUNTIME, *CHAMPION, *FLAGS, *HARNESS, *argv])[1]
+        return gate.parse(['--out', 'o', *MODE, *argv])[1]
 
     def refused(self, *argv, base=None):
         with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as raised:
-            gate.parse(['--out', 'o', *(base if base is not None else (*RUNTIME, *CHAMPION, *FLAGS, *HARNESS)), *argv])
+            gate.parse(['--out', 'o', *(base if base is not None else MODE), *argv])
         self.assertEqual(raised.exception.code, 2, argv);return err.getvalue()
 
     def test_defaults_and_pairs(self):
         args = self.parse()
         self.assertEqual((args.constructor_worlds, args.constructor_seed, args.constructor_per_band), (8, 20261103, 10))
         self.assertEqual((args.constructor_roster, args.constructor_metadata, args.constructor_vocabulary), (['roster.json', 'a' * 64], ['metadata.json', 'b' * 64], ['vocabulary.json', 'c' * 64]))
-        self.assertEqual(self.parse('--constructor-worlds', '16', '--constructor-per-band', '3').constructor_per_band, 3)
+        self.assertEqual((self.parse('--constructor-worlds', '8', '--constructor-per-band', '10', '--k1-own', '9').depth, args.declared_bounds), (2, str(AC)))
 
     def test_refusals(self):
         for argv in (('--n2-equivalence',), ('--max-roots', '4'), ('--worlds-blocks', '2'), ('--mutation-test', '--depth', '3'), ('--save-oracle',),
                 ('--depth3-diagnostics',), ('--capacity', '256'), ('--block-lanes', '729'), ('--oracle-chunk', '64'), ('--constructor-worlds', '4'),
-                ('--constructor-per-band', '0'), ('--constructor-seed', '-1')):
+                ('--constructor-per-band', '0'), ('--constructor-seed', '-1'), ('--sample-leaves', '2')):
             with self.subTest(argv=argv):self.refused(*argv)
-        self.assertIn('keeps declaration A', self.refused(base=(*RUNTIME, *CHAMPION, *FLAGS, '--fixed-shapes')))
-        self.assertIn('needs --champion-archive', self.refused(base=(*RUNTIME, *FLAGS, *HARNESS)))
-        self.assertIn('refused with --d3-root', self.refused(base=('--d3-root', 'r', '--chunk', '0', *CHAMPION, *FLAGS, *HARNESS)))
-        self.assertIn('needs --constructor-vocabulary', self.refused(base=(*RUNTIME, *CHAMPION, *FLAGS[:-3], *HARNESS)))
-        self.assertIn('a 64-hex sha256', self.refused(base=(*RUNTIME, *CHAMPION, *FLAGS[:-1], 'x', *HARNESS)))
+        for argv in (('--constructor-worlds', '16'), ('--constructor-per-band', '3'), ('--depth', '3'), ('--k-own', '3'), ('--k-opp', '9,9'), ('--k1-opp', '3'),
+                ('--depth', '3', '--selection', 'searched')):   # only what A-C covers
+            with self.subTest(argv=argv):self.assertIn('declaration A-C covers', self.refused(*argv))
+        self.assertIn('keeps declaration A', self.refused(base=(*RUNTIME, *CHAMPION, *FLAGS, *COVERED, *DECLARED, '--fixed-shapes')))
+        self.assertIn('needs --champion-archive', self.refused(base=(*RUNTIME, *FLAGS, *HARNESS, *COVERED)))
+        self.assertIn('refused with --d3-root', self.refused(base=('--d3-root', 'r', '--chunk', '0', *CHAMPION, *FLAGS, *HARNESS, *COVERED, *DECLARED)))
+        self.assertIn('needs --constructor-vocabulary', self.refused(base=(*RUNTIME, *CHAMPION, *FLAGS[:-3], *HARNESS, *COVERED, *DECLARED)))
+        self.assertIn('a 64-hex sha256', self.refused(base=(*RUNTIME, *CHAMPION, *FLAGS[:-1], 'x', *HARNESS, *COVERED, *DECLARED)))
         self.assertIn('need --constructor-roster', self.refused(base=(*RUNTIME, *CHAMPION, '--constructor-worlds', '8')))
         self.assertIn('need --constructor-roster', self.refused(base=(*RUNTIME, *CHAMPION, '--showdown-root', 's')))
         self.assertIn('refused with --diagnostics-from', self.refused(base=('--diagnostics-from', 'x', *FLAGS)))
         self.assertIn('takes no other option', self.refused(base=('--reverdict', 'gate.json', '--constructor-worlds', '8')))
+
+    def test_the_mode_runs_under_declaration_a_c_only(self):
+        a = gate.REPO_ROOT / gate.DECLARED_SUBDIR / 'champion-9375-bf16-r1r3-20261107.json';a_sha = hashlib.sha256(a.read_bytes()).hexdigest()
+        base = (*RUNTIME, *CHAMPION, *FLAGS, *HARNESS, *COVERED)
+        for declared in ((), ('--declared-bounds', str(a), '--declared-bounds-sha256', a_sha, '--declared-bounds-commit', '4' * 40),   # declaration A itself
+                ('--declared-bounds', str(AC), '--declared-bounds-sha256', a_sha, '--declared-bounds-commit', '4' * 40),   # A-C's path, another sha256
+                ('--declared-bounds', str(a), *DECLARED[2:])):   # A's path, A-C's sha256
+            with self.subTest(declared=declared[1:2]):self.assertIn('under declaration A-C only', self.refused(base=(*base, *declared)))
+        self.assertEqual(gate.repo_path_of(AC), gate.CONSTRUCTOR_DECLARATION['repo_path']);self.assertEqual(hashlib.sha256(AC.read_bytes()).hexdigest(), gate.CONSTRUCTOR_DECLARATION['sha256'])
+
+    def test_the_mode_refuses_a_head_and_sampled_leaves_itself(self):
+        """check_constructor_arguments' own refusals, beside the champion's and the declaration's (which refuse a head first on the command line)."""
+        parser, args = gate.parse(['--out', 'o', *MODE])
+        for name, value in (('head_archive', 'head.npz'), ('sample_leaves', 2)):
+            with self.subTest(name=name), contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+                gate.check_constructor_arguments(parser, SimpleNamespace(**dict(vars(args), **{name: value})))
+            self.assertIn('refused with --' + name.replace('_', '-'), err.getvalue())
 
 
 class DeclarationACTests(unittest.TestCase):
@@ -329,6 +379,10 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         self.assertEqual((averaging['roots'], averaging['agreement_rate'], averaging['one_sided']), (len(self.ROOTS), 1., 0))
         self.assertEqual(averaging['roots_compared'] + averaging['both_refused'], len(self.ROOTS));self.assertGreaterEqual(averaging['both_refused'], 2)   # 3 and 7 refuse
         self.assertEqual(averaging['roots_compared'], result['checks']['e']['roots_compared'] // 2)   # (e) compares each of a root's two blocks
+        self.assertEqual({r['ordinal']: r['refusal'] for r in averaging['per_root'] if not any(s == 'COMPLETE' for s in r['status'])},
+            {103: ['BLOCK_REFUSED: materialization'] * 2, 107: ['BLOCK_REFUSED: pre'] * 2})   # the live search's block rule, before deciding
+        self.assertEqual((averaging['premise_failures'], [r['premise_holds'] for r in averaging['per_root'] if r['status'] == ['COMPLETE'] * 2]),
+            (0, [True] * averaging['roots_compared']));self.assertLessEqual(averaging['max_premise_gap'], gate.REL_EPS)
         self.assertEqual(summary['averaging_argmax'], dict(roots=len(self.ROOTS), compared=averaging['roots_compared'], agree=averaging['roots_compared']))
 
     def test_the_worlds_path_prices_the_d3_path_bit_for_bit(self):
@@ -357,6 +411,18 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         self.assertEqual(sum(r['margin_oracle'] > averaging['bound'] for r in averaging['disagreements']), averaging['disagree_beyond_bound'])
         self.assertEqual(gate.gate_status_n(result)[0], 'FAIL')
 
+    def test_the_premise_is_checked_against_es_own_reduction(self):
+        """averaging's input backed up under another rule (depthn_backups.average for learner_max) still decides, but its q is no longer the mean of
+        (e)'s per-block completed-Q (learner_max_root): the premise fails and so does the check."""
+        evaluation, _, call = self.run_worlds(self.ctor(), lanes=(2187,), mutation={});held = evaluation[gate.MUTATION_INPUTS]
+        real = importlib.import_module('gpu_engine.depthn_backups')
+        proxy = SimpleNamespace(backup=real.backup, learner_max=real.average, learner_max_root=real.learner_max_root, refusal_summary=real.refusal_summary)
+        report = gate.averaging_call(held['frame'], held['data'], call['requests'], call['roots'], backups=proxy)
+        verdict = gate.averaging_verdict([report], 1e-4);decided = [r for r in report['roots'] if r['compared']]
+        self.assertTrue(decided);self.assertFalse(verdict['passed']);self.assertGreater(verdict['premise_failures'], 0);self.assertGreater(verdict['max_premise_gap'], 1e-3)
+        clean = gate.averaging_call(held['frame'], held['data'], call['requests'], call['roots'], backups=real)
+        self.assertEqual([r['premise_holds'] for r in clean['roots'] if r['compared']], [True] * len(decided))
+
     def test_bind_constructor_runs_bind_roots_and_fails_closed(self):
         requests = self.ctor().requests;g2 = gate.g2
         with patch.object(batch.v5_model, 'forward', side_effect=C.no_v2):
@@ -373,7 +439,17 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         unchecked = lambda groups, params, plan, evaluator: (groups, [], [], False)
         with patch.object(g2, 'bind_roots', unchecked), self.assertRaisesRegex(ValueError, 'no evaluator check'):gate.bind_constructor(requests, self.params, None, self.champion)
 
-    def main(self, ctor, *argv, out=None, lines=None):
+    def declaration(self, **bounds):
+        """A declaration for this champion committed in a scratch repository (main() takes it as the checkout and as the pinned A-C)."""
+        measurement = Path(tempfile.mkdtemp(prefix='r1c-measure-')) / 'm.json';measurement.write_bytes(b'{}\n')
+        content = N.declaration(evaluator=dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=C.CHECKPOINT),
+            bounds=N.bounds(**dict(dict(value_bound=1e-6, turn1_logit_bound=.05, root_logit_bound=.04, near_tie_q_bound=2e-6), **bounds)),
+            source_measurement=dict(path=str(measurement), sha256=hashlib.sha256(measurement.read_bytes()).hexdigest()))
+        return N.committed(content)
+
+    def main(self, ctor, *argv, out=None, lines=None, record=None):
+        """main() under --constructor-roster with the fixture's harness and `record` (default: self.declaration()) as declaration A-C."""
+        record = record or self.declaration();self.record = record
         out = out or Path(tempfile.mkdtemp(prefix='r1c-cli-')) / 'out';log = (lambda m, **k: lines.append(dict(k, message=m))) if lines is not None else (lambda *a, **k: None)
         loaded = SimpleNamespace(provider=SimpleNamespace(executor=self.ex, materializer=self.tables, recipe=self.recipe, source=self.tables.source),
             plan=SimpleNamespace(model=object(), historical_window=2), source=dict(fixture=True))
@@ -381,10 +457,15 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
             evaluator=dict(override=True, **self.champion.header(), arm_checked=True, dropped_roots=[]), constructor=ctor)
         with self.engine(), patch.object(gate, 'constructor_roots', lambda args: roots), patch.object(gate, 'load_roots', side_effect=AssertionError('D3 roots')), \
                 patch.object(gate, 'log', log), patch.object(gate, 'CONSTRUCTOR_HARNESS', dict(capacity=32, block_lanes=2187, oracle_chunk=64)), \
-                patch.object(batch.FramePricer, 'price', side_effect=AssertionError('D3 priced')):
-            code = gate.main(['--out', str(out), *RUNTIME, *CHAMPION, *FLAGS, *HARNESS, '--capacity', '32', '--oracle-chunk', '64', '--depth', '2', '--k-own', '9',
-                '--k-opp', '9', *argv])
+                patch.object(batch.FramePricer, 'price', side_effect=AssertionError('D3 priced')), patch.object(gate, 'REPO_ROOT', record.root), \
+                patch.object(gate, 'CONSTRUCTOR_DECLARATION', dict(repo_path=record.path.relative_to(record.root).as_posix(), sha256=record.sha256)):
+            code = gate.main(['--out', str(out), *RUNTIME, *CHAMPION, *FLAGS, *HARNESS, *COVERED, '--capacity', '32', '--oracle-chunk', '64',
+                '--declared-bounds', str(record.path), '--declared-bounds-sha256', record.sha256, '--declared-bounds-commit', record.commit, *argv])
         return code, out
+
+    def reverdicted(self, out):
+        with patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'REPO_ROOT', self.record.root):
+            return gate.main(['--reverdict', str(out / 'gate.json')])
 
     def test_the_command_line_run_reports_the_mode_and_reverdicts(self):
         """main() under --constructor-roster: two carry signatures price as two calls; gate.json is CONSTRUCTOR_ROOTS with (b) NOT_APPLICABLE, the
@@ -398,33 +479,27 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         self.assertEqual(sum(1 for x in lines if x['message'] == 'CALL_CHECKED'), 2);self.assertEqual(next(x for x in lines if x['message'] == 'GATE_START')['mode'], gate.CONSTRUCTOR_MODE)
         header = report['header'];parity = header['merged_depth2_parity']['remaining_differences']
         self.assertEqual(parity[-1], gate.CONSTRUCTOR_B_DIFFERENCE);self.assertEqual(len(parity), len(gate.MERGED_DEPTH2_DIFFERENCES) + 1)
+        matched = header['merged_depth2_parity']['matched'];self.assertEqual(matched, gate.MERGED_DEPTH2_MATCHED_CONSTRUCTOR)
+        self.assertNotIn(gate.B_MATCHED, matched);self.assertIn(gate.B_MATCHED, gate.MERGED_DEPTH2_MATCHED);self.assertIn('(b) NOT made', matched)
+        self.assertEqual(gate.merged_depth2_parity('gate', oracle_consistency=True)['matched'], gate.MERGED_DEPTH2_MATCHED)   # every other mode as before
         import jax
         self.assertEqual(header['constructor_roots']['matmul_precision']['jax_default_matmul_precision'], jax.config.jax_default_matmul_precision)
         self.assertEqual(header['constructor_roots']['mode'], gate.CONSTRUCTOR_MODE);self.assertEqual(report['source'], ctor.source)
         averaging = report['checks']['averaging_argmax'];self.assertEqual((averaging['agreement_rate'], averaging['bound']), (1., 2 * report['tolerance']['q_noise_bound']))
         self.assertEqual(report['refusals']['dropped_roots']['count'], 0);self.assertNotIn('depth1', report['refusals'])
         self.assertEqual(report['constructor']['class_counts']['primary'], dict(other=len(self.ROOTS)));self.assertEqual(report['constructor']['b2_view']['equal'], len(self.ROOTS))
-        with patch.object(gate, 'log', lambda *a, **k: None):self.assertEqual(gate.main(['--reverdict', str(out / 'gate.json')]), 0)
-        again = json.loads((out / gate.REVERDICT_FILE).read_text())
+        self.assertEqual(report['header']['declared_bounds']['sha256'], self.record.sha256)
+        self.assertEqual(self.reverdicted(out), 0);again = json.loads((out / gate.REVERDICT_FILE).read_text())
         self.assertEqual((again['status'], again['mode'], again['reverdict']['changed_quantities']), ('PASS', gate.CONSTRUCTOR_MODE, []))
         self.assertEqual(again['header']['constructor_roots'], header['constructor_roots']);self.assertEqual(again['checks']['averaging_argmax'], averaging)
         self.assertEqual(gate.reverdict_missing(dict(report, mode='OTHER'))[0], f'mode SAVED_ROOTS|BANK_CHUNK|{gate.CONSTRUCTOR_MODE} (got \'OTHER\')')
 
-    def test_a_declared_run_judges_without_b(self):
-        """Under --declared-bounds (a declaration for this champion, committed in a scratch repository) the constructor run PASSes with no (b) site."""
-        measurement = Path(tempfile.mkdtemp(prefix='r1c-measure-')) / 'm.json';measurement.write_bytes(b'{}\n')
-        content = N.declaration(evaluator=dict(kind='champion', archive_sha256='f' * 64, precision='bfloat16', checkpoint_sha256=C.CHECKPOINT),
-            bounds=N.bounds(value_bound=1e-6, turn1_logit_bound=.05, root_logit_bound=.04, near_tie_q_bound=2e-6),
-            source_measurement=dict(path=str(measurement), sha256=hashlib.sha256(measurement.read_bytes()).hexdigest()))
-        record = N.committed(content)
-        with patch.object(gate, 'REPO_ROOT', record.root):
-            code, out = self.main(self.ctor(), '--declared-bounds', str(record.path), '--declared-bounds-sha256', record.sha256, '--declared-bounds-commit', record.commit)
-        report = json.loads((out / 'gate.json').read_text())
+    def test_the_declared_numbers_reach_every_site_without_b(self):
+        """Under its declaration the constructor run PASSes with no (b) site; averaging_argmax takes 2 x the declared near_tie_q_bound."""
+        code, out = self.main(self.ctor(), record=self.declaration(near_tie_q_bound=3e-6));report = json.loads((out / 'gate.json').read_text())
         self.assertEqual((code, report['status']), (0, 'PASS'), report.get('status_reasons'));self.assertNotIn('b', report['checks'])
-        self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['q_noise_bound'], report['checks']['averaging_argmax']['bound']), (1e-6, 2e-6, 4e-6))
-        self.assertFalse(any(k.startswith('b.') for k in report['tolerance']['guard_declared']['modes']))
-        with patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'REPO_ROOT', record.root):
-            self.assertEqual(gate.main(['--reverdict', str(out / 'gate.json')]), 0)
+        self.assertEqual((report['tolerance']['value_bound'], report['tolerance']['q_noise_bound'], report['checks']['averaging_argmax']['bound']), (1e-6, 3e-6, 6e-6))
+        self.assertFalse(any(k.startswith('b.') for k in report['tolerance']['guard_declared']['modes']));self.assertEqual(self.reverdicted(out), 0)
 
 
 class WiringTests(unittest.TestCase):

@@ -103,8 +103,9 @@ refusal breakdown, values section and sibling spread are absent; its reported-on
 (stricter) in gate mode and reported under --n2-equivalence; the guard's p10 is over non-zero spreads, not every spread (looser or equal); the raw-head check does not apply to the champion
 (nothing is substituted; the first-root exact check and the digests over its view stand in); gate --block-invariance varies the DepthNPricer's
 block_lanes, not a Depth2Pricer child block; (e)'s backups, sampling seeds and offline modes differ; (a), (f) and leaf_walk_* are extra.
---constructor-roster PATH SHA (CONSTRUCTOR_ROOTS, R1-C; with --saved-roots as the runtime only, --champion-archive and declaration A's harness,
-CONSTRUCTOR_HARNESS): the roots are Codex's ProtocolConstructor worlds (gpu_engine.constructor_worlds) on a roster's captured Showdown roots,
+--constructor-roster PATH SHA (CONSTRUCTOR_ROOTS, R1-C; with --saved-roots as the runtime only, --champion-archive, declaration A's harness
+(CONSTRUCTOR_HARNESS), exactly what declaration A-C covers (CONSTRUCTOR_COVERED) and A-C itself as --declared-bounds (CONSTRUCTOR_DECLARATION;
+no --sample-leaves): the roots are Codex's ProtocolConstructor worlds (gpu_engine.constructor_worlds) on a roster's captured Showdown roots,
 chosen by CONSTRUCTOR_RULE before anything is priced. ONE PrebuiltWorlds per call goes to the full-width depth-2 pass, the depth-N pricer and
 its block-invariance twin (worlds=), and the oracle stacks its pairs. D3's FramePricer has no pre-built worlds input, so (b) is NOT_APPLICABLE
 (NO_B); every other check is unchanged. Each request's root prior is the champion's (g2.bind_roots and its exact first-root check; a dropped
@@ -1937,8 +1938,9 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
 
 
 def gate_status_n(result, *, sampled=False):
-    """FAIL if any check failed; INCOMPLETE if none ran or one is vacuous (no leaf compared by (a), (e) compared no root, or (f) compared
-    no interior node outside SKIPPED_SAMPLED); PASS_SAMPLED with sampled leaves ((e) skipped, (f) on fully checked nodes); else PASS."""
+    """FAIL if any check failed; INCOMPLETE if none ran or one is vacuous (no leaf compared by (a), (e) compared no root, (f) compared
+    no interior node outside SKIPPED_SAMPLED, or averaging_argmax (CONSTRUCTOR_ROOTS only) compared no root); PASS_SAMPLED with sampled leaves
+    ((e) skipped, (f) on fully checked nodes); else PASS."""
     checks = result['checks']
     if any(not c['passed'] for c in checks.values()):return 'FAIL', []
     reasons = [] if checks else ['no check ran']
@@ -1946,6 +1948,8 @@ def gate_status_n(result, *, sampled=False):
     if 'e' in checks and not checks['e'].get('roots_compared'):reasons.append('vacuous: (e) compared no root (every root refused or unlabeled)')
     if 'f' in checks and checks['f'].get('status') != 'SKIPPED_SAMPLED' and not checks['f'].get('comparisons'):
         reasons.append('vacuous: (f) compared no interior node')
+    if 'averaging_argmax' in checks and not checks['averaging_argmax'].get('roots_compared'):
+        reasons.append('vacuous: averaging_argmax compared no root (every root refused on both sides, or (e) did not run)')
     if reasons:return 'INCOMPLETE', reasons
     return ('PASS_SAMPLED' if sampled else 'PASS'), []
 
@@ -3149,11 +3153,16 @@ CONSTRUCTOR_B_DIFFERENCE = dict(name='(b) on constructor worlds', effect='looser
     'the oracle')
 
 
+B_MATCHED = '(b) check_d (the same function), '   # MERGED_DEPTH2_MATCHED's (b) clause; not made under --constructor-roster
+MERGED_DEPTH2_MATCHED_CONSTRUCTOR = MERGED_DEPTH2_MATCHED.replace(B_MATCHED, '(b) NOT made: NOT_APPLICABLE on constructor worlds (see the (b) remaining '
+    'difference), ')
+
+
 def merged_depth2_parity(mode, *, oracle_consistency=False, child_block_invariance=False, constructor_roots=False):
     """The header's merged_depth2_parity section (champion path, depth-2 surfaces: gate --depth 2 or --n2-equivalence): what this run
     gates of the merged depth-2 gate's checks, whether the two champion-path additions ran here, and every remaining difference, so the
-    report reads neither stricter nor looser than it is. constructor_roots (gate mode under --constructor-roster): one more remaining
-    difference, CONSTRUCTOR_B_DIFFERENCE."""
+    report reads neither stricter nor looser than it is. constructor_roots (gate mode under --constructor-roster): `matched` without (b)
+    (MERGED_DEPTH2_MATCHED_CONSTRUCTOR) and one more remaining difference, CONSTRUCTOR_B_DIFFERENCE."""
     ran = dict(gate=('ran (D2_ORACLE_CONSISTENCY), gated in checks.oracle_consistency' if oracle_consistency else 'not run'),
         n2_equivalence='not in this mode: gate --depth 2 runs it')
     blocks = dict(gate='not in this mode: --n2-equivalence --block-invariance checks the merged Depth2Pricer across child blocks',
@@ -3161,7 +3170,7 @@ def merged_depth2_parity(mode, *, oracle_consistency=False, child_block_invarian
             else 'not run: pass --block-invariance with --n2-equivalence'))
     decision = dict(gate='not in this mode: --n2-equivalence runs it on the merged Depth2Pricer',
         n2_equivalence='ran (MERGED_DEPTH2_DECISION), gated per config in configs.*.e_merged_depth2')
-    return dict(mode=mode, matched=MERGED_DEPTH2_MATCHED, champion_path_additions=dict(d2_oracle_consistency=ran[mode], child_block_invariance=blocks[mode],
+    return dict(mode=mode, matched=MERGED_DEPTH2_MATCHED_CONSTRUCTOR if constructor_roots else MERGED_DEPTH2_MATCHED, champion_path_additions=dict(d2_oracle_consistency=ran[mode], child_block_invariance=blocks[mode],
         merged_depth2_decision=decision[mode], rules=dict(d2_oracle_consistency=D2_ORACLE_CONSISTENCY, child_block_invariance=CHILD_BLOCK_INVARIANCE,
             merged_depth2_decision=MERGED_DEPTH2_DECISION)),
         remaining_differences=[dict(d) for d in MERGED_DEPTH2_DIFFERENCES] + ([dict(CONSTRUCTOR_B_DIFFERENCE)] if constructor_roots else []),
@@ -4015,8 +4024,11 @@ CONSTRUCTOR_PAIRS = ('constructor_roster', 'constructor_metadata', 'constructor_
 CONSTRUCTOR_FLAGS = CONSTRUCTOR_PAIRS + ('showdown_root', 'node_binary') + tuple(CONSTRUCTOR_DEFAULTS)
 CONSTRUCTOR_WORLD_COUNTS = (8, 16)   # the live rungs (depthn_live_search.RUNGS)
 CONSTRUCTOR_HARNESS = dict(capacity=512, block_lanes=2187, oracle_chunk=512)   # declaration A's, with --fixed-shapes and --block-invariance
+CONSTRUCTOR_COVERED = dict(depth=2, selection='prior', k_own='9', k_opp='9', k1_own=9, k1_opp=9, constructor_worlds=8, constructor_per_band=10)   # R1-C, A-C's scope
+CONSTRUCTOR_DECLARATION = dict(repo_path='gpu_engine/declared_bounds/champion-9375-bf16-r1c-20261108.json',   # declaration A-C, the one this mode runs under
+    sha256='57d134161d0733e9406baa08bf50456dc2e7cf4e0434188a38be5a1573056ad3')
 CONSTRUCTOR_REFUSED = ('d3_root', 'n2_equivalence', 'max_roots', 'head_archive', 'depth3_diagnostics', 'diagnostics_from', 'mutation_from', 'mutation_test',
-    'save_oracle')
+    'save_oracle', 'sample_leaves')   # sample_leaves: averaging_argmax and (e) need every leaf
 REQUEST_KEYS = ('battle_id', 'owner', 'stream_id', 'decision_index', 'generation', 'prefix_sha256', 'lines', 'own_request_line')   # the coverage script's
 TOP_UP = ('forced_switch', 'sleep', 'fresh_substitute', 'wish')   # the class top-up, in this order
 ROSTER_SIZE = 200
@@ -4040,13 +4052,16 @@ AVERAGING_RULE = ('averaging_argmax (CONSTRUCTOR_ROOTS, run beside (e) on its or
     'depthn_live_search.decide, takes the input the live search builds: block k\'s depthn_backups.backup(frame, row_k, learner_max) as worlds 2k and '
     '2k+1, i.e. search_hedge.averaging over the 2K worlds, each world\'s reply prior the softmax of its root_peer_logits over the replies turn 1 '
     'enumerated, divisor W. A root with a refused block is refused (the live search\'s rule). Run once on the pricer frame and once on '
-    'oracle_heads_frame_n\'s copy. Reported: the agreement rate over roots decided on both sides, every disagreement with the oracle side\'s '
-    'top-two margin in averaging\'s q, max |dq| beside the largest per-block |dQ|. Bound: 2 x q_noise_bound, (e)\'s bound. Why it follows from '
+    'oracle_heads_frame_n\'s copy. Reported: the agreement rate over roots decided on both sides; every disagreement with margin_pair = '
+    'q_o(a*) - q_o(a\') (the oracle side\'s q at its own action a* minus at the pricer side\'s action a\') and, beside it, the oracle side\'s '
+    'top-two margin (<= margin_pair); max |dq| beside the largest per-block |dQ|. Bound: 2 x q_noise_bound, (e)\'s bound. Why it follows from '
     '(e): averaging\'s q(a) is the mean over the K blocks of each block\'s completed-Q (the same worlds, priors and per-world weight as '
-    'reduce_completed_q), so |dq(a)| <= mean_k |dQ_k(a)| <= q_noise_bound, the per-block bound (e) gates. If the oracle side plays a* and the '
-    'pricer side a\', then q_o(a*) - q_o(a\') <= dq(a\') - dq(a*) <= 2 x q_noise_bound, and the oracle\'s top-two margin is at most q_o(a*) - '
-    'q_o(a\'). FAIL: a disagreement whose margin exceeds the bound (up to REL_EPS), which would contradict (e); a root decided on one side only; '
-    'an incomplete oracle-heads copy. Disagreements within the bound are reported, not gated')
+    'reduce_completed_q), so |dq(a)| <= mean_k |dQ_k(a)| <= q_noise_bound, the per-block bound (e) gates; then q_o(a*) - q_o(a\') <= dq(a\') - '
+    'dq(a*) <= 2 x q_noise_bound. The premise is checked, not assumed: on each side, averaging\'s q(a) must equal the mean over the root\'s blocks '
+    'of (e)\'s own completed-Q (depthn_backups.learner_max_root per block) within REL_EPS (absolute; every q lies in [-1, 1]). FAIL: a '
+    'disagreement whose margin_pair exceeds the bound (up to REL_EPS), which would contradict (e); a premise mismatch; a root decided on one side '
+    'only; an incomplete oracle-heads copy; and the status is INCOMPLETE when no root is compared. Disagreements within the bound are reported, '
+    'not gated')
 
 
 def read_roster(path, sha256):
@@ -4202,8 +4217,8 @@ def averaging_root(pricer_blocks, oracle_blocks, root_logits, root_legal):
         else:sides.append(live.decide(blocks, tuple(root_logits), legal))
     mine, theirs = sides
     out = dict(status=[mine['status'], theirs['status']], refusal=[mine['refusal'], theirs['refusal']], action=[mine['action_index'], theirs['action_index']],
-        compared=False, agree=None, margin_oracle=None, margin_pair=None, max_abs_dq=None, dq_pair=None, max_abs_block_dq=None,
-        q_pricer=mine['q_values'], q_oracle_heads=theirs['q_values'])
+        compared=False, agree=None, margin_oracle=None, margin_pair=None, max_abs_dq=None, dq_pair=None, max_abs_block_dq=None, premise_gap=[None, None],
+        premise_holds=None, q_pricer=mine['q_values'], q_oracle_heads=theirs['q_values'])
     if mine['status'] != 'COMPLETE' or theirs['status'] != 'COMPLETE':return out
     qa, qb, acts = mine['q_values'], theirs['q_values'], [a for a in range(9) if legal[a]];a, b = mine['action_index'], theirs['action_index']
     out.update(compared=True, agree=a == b, margin_oracle=_gap([qb[x] for x in acts]), margin_pair=qb[b] - qb[a], max_abs_dq=max(abs(qa[x] - qb[x]) for x in acts),
@@ -4228,23 +4243,40 @@ def averaging_call(frame, data, requests, roots, *, backups=None, context=None):
         for f in (frame, swapped):
             try:sides.append([backups.backup(f, r, backups.learner_max) for r in rows])
             except ValueError as error:sides.append(error)
-        out.append(dict(where, **averaging_root(*sides, first.root_logits, first.root_legal)))
+        record = averaging_root(*sides, first.root_logits, first.root_legal);legal = tuple(map(bool, first.root_legal))
+        decided = [s == 'COMPLETE' for s in record['status']]
+        gaps = [_premise_gap(backups, f, rows, first.root_logits, legal, q) if ok else None
+            for f, q, ok in ((frame, record['q_pricer'], decided[0]), (swapped, record['q_oracle_heads'], decided[1]))]
+        record.update(premise_gap=gaps, premise_holds=None if not any(decided) else all(g is not None and g <= REL_EPS for g, ok in zip(gaps, decided) if ok))
+        out.append(dict(where, **record))
     return dict(roots=out, replaced=counts)
 
 
-AVERAGING_SHOWN = ('ordinal', 'rows', 'status', 'action', 'agree', 'margin_oracle', 'margin_pair', 'max_abs_dq', 'dq_pair', 'max_abs_block_dq')
+def _premise_gap(backups, frame, rows, root_logits, legal, q):
+    """max over the legal actions of |q(a) - the mean over the root's blocks of (e)'s completed-Q (backups.learner_max_root on each block, an
+    independent path from averaging's input)|; None when a block does not label (or its reduction raises)."""
+    try:labels = [backups.learner_max_root(frame, r, tuple(map(float, root_logits)), legal).improvement for r in rows]
+    except ValueError:return None
+    if any(x is None for x in labels):return None
+    return max(abs(q[a] - math.fsum(x.completed_q[a] for x in labels) / len(labels)) for a in range(9) if legal[a])
+
+
+AVERAGING_SHOWN = ('ordinal', 'rows', 'status', 'refusal', 'action', 'agree', 'margin_pair', 'margin_oracle', 'max_abs_dq', 'dq_pair', 'max_abs_block_dq',
+    'premise_gap', 'premise_holds')
 
 
 def averaging_verdict(reports, q_noise_bound):
     """averaging_argmax over the run's calls (averaging_call reports) under (e)'s q_noise_bound (AVERAGING_RULE): passed unless a disagreement's
-    oracle-side top-two margin exceeds 2 x q_noise_bound (up to REL_EPS), a root is decided on one side only or the oracle-heads copy is
-    incomplete."""
+    margin_pair exceeds 2 x q_noise_bound (up to REL_EPS), a root's averaging q is not its blocks' mean (e) completed-Q (the premise), a root is
+    decided on one side only or the oracle-heads copy is incomplete."""
     roots = [dict(r, block=r.get('block'), call=r.get('call')) for report in reports for r in report['roots']];bound = 2. * float(q_noise_bound)
     compared = [r for r in roots if r['compared']];one_sided = [r for r in roots if r['status'].count('COMPLETE') == 1]
-    differ = [r for r in compared if not r['agree']];beyond = [r for r in differ if r['margin_oracle'] is not None and not _within(r['margin_oracle'], bound)]
+    differ = [r for r in compared if not r['agree']];beyond = [r for r in differ if not _within(r['margin_pair'], bound)]
+    premise = [r for r in roots if r.get('premise_holds') is False]
     unmatched = sum((report.get('replaced') or {}).get('unmatched_head_leaves', 0) for report in reports)
     row = lambda r: {k: r.get(k) for k in ('block', 'call') + AVERAGING_SHOWN}
-    reasons = ([f'{len(beyond)} root(s) decide differently with an oracle-side top-two margin above {bound:.3g} (contradicts (e))'] if beyond else []) \
+    reasons = ([f'{len(beyond)} root(s) decide differently with margin_pair q_o(a*) - q_o(a\') above {bound:.3g} (contradicts (e))'] if beyond else []) \
+        + ([f'{len(premise)} root(s) whose averaging q is not the mean of their blocks\' (e) completed-Q (the bound\'s premise)'] if premise else []) \
         + ([f'{len(one_sided)} root(s) decided on one side only'] if one_sided else []) \
         + (['head-valued pricer leaves without an oracle head value: the copy is incomplete (fail closed)'] if unmatched else [])
     largest = lambda key: max((r[key] for r in compared if r[key] is not None), default=None)
@@ -4252,15 +4284,16 @@ def averaging_verdict(reports, q_noise_bound):
         roots_compared=len(compared), both_refused=sum(r['status'].count('COMPLETE') == 0 for r in roots), one_sided=len(one_sided),
         agree=len(compared) - len(differ), agreement_rate=None if not compared else (len(compared) - len(differ)) / len(compared),
         disagree_within_bound=len(differ) - len(beyond), disagree_beyond_bound=len(beyond), max_abs_dq=largest('max_abs_dq'),
-        max_abs_block_dq=largest('max_abs_block_dq'), unmatched_head_leaves=unmatched, disagreements=[row(r) for r in differ],
+        max_abs_block_dq=largest('max_abs_block_dq'), premise_failures=len(premise),
+        max_premise_gap=max((g for r in roots for g in r.get('premise_gap') or () if g is not None), default=None), unmatched_head_leaves=unmatched,
+        disagreements=[row(r) for r in differ],
         one_sided_roots=[dict(row(r), refusal=r['refusal']) for r in one_sided], per_root=[row(r) for r in roots], reasons=reasons)
 
 
 def constructor_checks(result, evaluations):
-    """averaging_argmax added to a summarized constructor-roots result's checks under its (e) q_noise_bound, and result.passed again; nothing when
-    (e) did not run (sampled leaves: the oracle-heads copy needs every leaf)."""
+    """averaging_argmax added to a summarized constructor-roots result's checks under its (e) q_noise_bound (the value bound if (e) did not run),
+    and result.passed again. Always added: with no root compared (no call ran it, or every root refused) gate_status_n makes the run INCOMPLETE."""
     reports = [e['averaging'] for e in evaluations if 'averaging' in e]
-    if 'e' not in result['checks'] or not reports:return result
     tolerance = result['tolerance'];q = tolerance.get('q_noise_bound', tolerance['value_bound'])
     result['checks']['averaging_argmax'] = averaging_verdict(reports, q)
     result['passed'] = bool(result['checks']) and all(x['passed'] for x in result['checks'].values())
@@ -4383,8 +4416,10 @@ def constructor_roots(args):
 def check_constructor_arguments(parser, args):
     """--constructor-roster (CONSTRUCTOR_ROOTS): every constructor flag needs it. With it, --showdown-root, --node-binary, --constructor-metadata
     and --constructor-vocabulary are required (each PATH SHA a 64-hex sha256), and so are --saved-roots (the D3 runtime only), --champion-archive,
-    declaration A's harness (--fixed-shapes, --block-invariance, CONSTRUCTOR_HARNESS) and --worlds-blocks 1; it is refused with CONSTRUCTOR_REFUSED.
-    Fills CONSTRUCTOR_DEFAULTS."""
+    declaration A's harness (--fixed-shapes, --block-invariance, CONSTRUCTOR_HARNESS), --worlds-blocks 1, exactly what declaration A-C covers
+    (CONSTRUCTOR_COVERED: R1's depth 2 at full width, W 8, 10 roots per band; W 16 or other settings need their own declaration) and
+    --declared-bounds naming A-C itself (CONSTRUCTOR_DECLARATION: its repo_path under the checkout and its sha256; declaration A or any other is
+    refused); it is refused with CONSTRUCTOR_REFUSED. Fills CONSTRUCTOR_DEFAULTS."""
     flag = lambda name: '--' + name.replace('_', '-');given = [name for name in CONSTRUCTOR_FLAGS if getattr(args, name, None) is not None]
     if getattr(args, 'constructor_roster', None) is None:
         if given:parser.error(', '.join(map(flag, given)) + ' need --constructor-roster')
@@ -4402,7 +4437,16 @@ def check_constructor_arguments(parser, args):
         parser.error('--constructor-roster keeps declaration A\'s harness: --fixed-shapes --block-invariance ' + ' '.join(f'{flag(k)} {v}' for k, v in CONSTRUCTOR_HARNESS.items()))
     for name, value in CONSTRUCTOR_DEFAULTS.items():
         if getattr(args, name) is None:setattr(args, name, value)
-    if args.constructor_seed < 0 or args.constructor_per_band < 1:parser.error('--constructor-seed >= 0 and --constructor-per-band >= 1 required')
+    if args.constructor_seed < 0:parser.error('--constructor-seed >= 0 required')
+    if {k: (str(getattr(args, k)) if k in ('k_own', 'k_opp') else getattr(args, k)) for k in CONSTRUCTOR_COVERED} != CONSTRUCTOR_COVERED:
+        parser.error('--constructor-roster runs only what declaration A-C covers: ' + ' '.join(f'{flag(k)} {v}' for k, v in CONSTRUCTOR_COVERED.items())
+            + ' (other settings, W 16 included, need their own declaration)')
+    pinned = CONSTRUCTOR_DECLARATION
+    try:where = repo_path_of(args.declared_bounds) if args.declared_bounds else None
+    except DeclaredBoundsError:where = None
+    if where != pinned['repo_path'] or args.declared_bounds_sha256 != pinned['sha256']:
+        parser.error(f'--constructor-roster runs under declaration A-C only: --declared-bounds {pinned["repo_path"]} --declared-bounds-sha256 {pinned["sha256"]} '
+            f'(given: {args.declared_bounds!r} at {where!r}, sha256 {args.declared_bounds_sha256!r})')
     return args
 
 
@@ -4504,7 +4548,8 @@ def parse(argv=None):
         'PR (required with it; recorded with the file\'s git blob sha1; with --reverdict: must be the report\'s recorded one)')
     parser.add_argument('--constructor-roster', nargs=2, metavar=('PATH', 'SHA256'), help='CONSTRUCTOR_ROOTS (R1-C): price Codex\'s ProtocolConstructor '
         'worlds on this roster\'s captured roots (read as scripts/phase_d_constructor_coverage.py reads it, pinned by sha256) instead of D3 roots, '
-        'selected by CONSTRUCTOR_RULE; (b) NOT_APPLICABLE; needs --saved-roots (the runtime only), --champion-archive and declaration A\'s harness')
+        'selected by CONSTRUCTOR_RULE; (b) NOT_APPLICABLE; needs --saved-roots (the runtime only), --champion-archive, declaration A\'s harness, the '
+        'settings declaration A-C covers and A-C itself as --declared-bounds (check_constructor_arguments)')
     parser.add_argument('--showdown-root', help='with --constructor-roster: the pinned, clean Showdown checkout (phase_d_protocol_constructor.load_inputs)')
     parser.add_argument('--node-binary', help='with --constructor-roster: the node binary the constructor\'s Showdown config runs')
     parser.add_argument('--constructor-metadata', nargs=2, metavar=('PATH', 'SHA256'), help='with --constructor-roster: the engine metadata at its sha256')
