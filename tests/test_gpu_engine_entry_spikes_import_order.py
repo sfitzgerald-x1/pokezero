@@ -46,7 +46,7 @@ class EntrySpikesImportOrderTests(unittest.TestCase):
             return next(n.value for n in ast.parse(path.read_text()).body if isinstance(n,ast.Assign)
                 and any(isinstance(t,ast.Name)and t.id==name for t in n.targets))
         pins=ast.literal_eval(assignment(gpu/'engine_source_frame_witness.py','SOURCE_PINS'))
-        self.assertEqual(len(pins),76)
+        self.assertEqual(len(pins),88)
         for name,digest in pins.items():self.assertEqual(hashlib.sha256((gpu/name).read_bytes()).hexdigest(),digest,name)
         value=assignment(gpu/'chance_consumers.py','DOMAIN_MODULES')
         modules=value.args[0].func.value.value.split()
