@@ -53,8 +53,8 @@ MOVE_WALL = dict(search_time_ms=1000, label='Foul Play at search_time_ms 1000: s
                  source=dict(path='calibration/move-walls.json', sha256='7'*64))
 
 
-ACTOR = dict(cells_per_worker=100, fresh_worker_first_arm='RAW', search_overlaps_greedy=True, warm_p95_seconds=dict(encode=.045, greedy=.715),
-             cold_first_decision_p50_seconds=3.8, source=dict(path='calibration/move-walls.json', sha256='7'*64))
+ACTOR = dict(cells_per_worker=100, warmup_decisions=panel.WARMUP_DECISIONS, search_overlaps_greedy=True, warm_p95_seconds=dict(encode=.045, greedy=.715),
+             preflight_search_wall_p95_seconds=2.1, source=dict(path='preflight/preflight.json', sha256='7'*64))
 
 
 PROVENANCE = dict(
@@ -193,11 +193,11 @@ class DeclarationTests(unittest.TestCase):
 
     def test_refuses_a_malformed_actor(self):
         for value in (None, {}, dict(ACTOR, extra=1), dict(ACTOR, cells_per_worker=1), dict(ACTOR, cells_per_worker=100.),
-                      dict(ACTOR, fresh_worker_first_arm='DN2W8'), dict(ACTOR, search_overlaps_greedy=False),
+                      dict(ACTOR, warmup_decisions=0), dict(ACTOR, search_overlaps_greedy=False),
                       dict(ACTOR, warm_p95_seconds=dict(encode=.045)), dict(ACTOR, warm_p95_seconds=dict(encode=.045, greedy=float('nan'))),
-                      dict(ACTOR, cold_first_decision_p50_seconds=0.), dict(ACTOR, source=None)):
+                      dict(ACTOR, preflight_search_wall_p95_seconds=2.61), dict(ACTOR, preflight_search_wall_p95_seconds=0.), dict(ACTOR, source=None)):
             d = declaration('a'*64); d['actor'] = value
-            with self.subTest(value), self.assertRaisesRegex(ValueError, 'actor: persistent workers'):
+            with self.subTest(value), self.assertRaisesRegex(ValueError, 'actor: persistent warmed workers'):
                 panel.validate(d)
 
     def test_init_refuses_a_move_wall_for_another_search_time(self):
@@ -643,20 +643,18 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(len({v['pid'] for v in done.values()}), 3)
         self.assertEqual((done['a']['server'], done['b']['server']), (None, dict(host='h', port=1)))
 
+    def test_the_warmup_capture_reaches_every_worker_command(self):
+        directory = Path(self.directory.name); seen = []
+        def command(pair, cache, warmup=None): seen.append((pair, warmup)); return [sys.executable, '-c', FAKE_WORKER]
+        packets = [dict(path=str(directory/n), sha256='0'*64, arm=a) for n, a in (('a', 'RAW'), ('b', 'DN2W8'))]
+        asyncio.run(asyncio.wait_for(panel.dispatch(packets, pairs=[(0, 1)], servers=SERVERS, command=command, cells_per_worker=5, warmup='/w.jsonl'), DISPATCH_TIMEOUT))
+        self.assertEqual(seen, [((0, 1), '/w.jsonl')])
+        self.assertEqual(panel.worker_command((3, 4), '/c', warmup='/w.jsonl')[-2:], ['--warmup-capture', '/w.jsonl'])
+        self.assertNotIn('--warmup-capture', panel.worker_command((3, 4), '/c'))
+
     def test_persistent_worker_when_asked(self):
         result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1)], cells_per_worker=5)
         self.assertEqual(result['dispatched'], 3); self.assertEqual(len({v['pid'] for v in done.values()}), 1)
-
-    def test_a_fresh_worker_takes_a_raw_cell_first(self):
-        names = ['s0', 'r0', 's1', 'r1', 's2', 'r2']; arms = ['DN2W8', 'RAW']*3
-        result, done = self.run_dispatch(names, arms=arms, pairs=[(0, 1)], cells_per_worker=2)
-        self.assertEqual(result['dispatched'], 6)
-        firsts = sorted(name for name, v in done.items() if v['n'] == 0)
-        self.assertEqual(firsts, ['r0', 'r1', 'r2'])   # every process's cold first cell is RAW; the search cell follows it warm
-        for r, s_ in (('r0', 's0'), ('r1', 's1'), ('r2', 's2')): self.assertEqual(done[r]['pid'], done[s_]['pid'])
-        result, done = self.run_dispatch(['s3', 's4'], arms=['DN2W8', 'DN2W8'], pairs=[(0, 1)], cells_per_worker=2,
-                                         attempted=dict(RAW=1, DN2W8=0))   # no RAW cell qualifies: packet order
-        self.assertEqual(result['dispatched'], 2)
 
     def test_a_failed_worker_stops_all_dispatch(self):
         for kwargs in (dict(pairs=[(0, 1)]), dict(pairs=[(0, 1)], cells_per_worker=4), dict(pairs=[(0, 1), (2, 3)])):
@@ -669,7 +667,7 @@ class DispatchTests(unittest.TestCase):
 
     def test_a_lane_failure_stops_a_persistent_worker_in_another_lane(self):
         names = ['slow-a', 'fail']+[f'slow-{c}' for c in 'cdefgh']
-        arms = ['RAW', 'RAW', 'DN2W8', 'DN2W8']*2   # each fresh worker takes a RAW cell first: 'fail' is the second lane's first
+        arms = ['RAW', 'RAW', 'DN2W8', 'DN2W8']*2   # 'fail' is the second lane's first cell
         result, done = self.run_dispatch(names, arms=arms, pairs=[(0, 1), (2, 3)], cells_per_worker=10)
         self.assertTrue(any(f.endswith('fail') for f in result['failed'])); self.assertLessEqual(result['dispatched'], 2)
         self.assertGreaterEqual(result['not_dispatched'], 5); self.assertNotIn('slow-h', done)
@@ -1431,6 +1429,67 @@ class CalibrationTests(unittest.TestCase):
                 asyncio.run(panel.calibration_worker(dict(path=eval_packet['path'], sha256=eval_packet['sha256'], setting='solo', server=None),
                                                      expected_pair=(1, 2), original='o', runtime_class=Runtime))
         self.assertFalse((run_root/'claims').exists())
+
+    def test_warm_actor_decides_captured_roots_in_fresh_games_once_per_worker(self):
+        wire = make_capture(Path(self.directory.name)/'wire', turns=3); built = []
+        class Original:
+            runtime = ('model', 'result', 'env')
+            def prepare(self, config):
+                built.append(config)
+                return NS(actor=lambda runtime: built.append(runtime) or fixture.actor())
+        original = Original()
+        value = panel.warm_actor(original, 'config', wire)
+        self.assertEqual((value['decisions'], len(value['seconds']), value['capture']), (3, 3, str(wire.resolve())))
+        self.assertTrue(all(x >= 0 for x in value['seconds'])); self.assertEqual(built, ['config', ('model', 'result', 'env')])
+        self.assertIsNone(panel._warm_once(original, 'config', None))   # no capture: no warmup
+        first = panel._warm_once(original, 'config', wire); self.assertEqual(first['decisions'], 3)
+        self.assertIsNone(panel._warm_once(original, 'config', wire))   # once per worker process
+        empty = Path(self.directory.name)/'empty.jsonl'; empty.write_bytes(b'')
+        with self.assertRaisesRegex(ValueError, 'warmup capture'): panel.warm_actor(Original(), 'config', empty)
+
+    def test_preflight_alternates_arms_with_the_declared_client(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
+        packets = panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=3., reserve_seconds=.15)
+        self.assertEqual([p['arm'] for p in packets], ['RAW', 'DN2W8', 'RAW', 'DN2W8']); self.assertEqual({p['setting'] for p in packets}, {'preflight'})
+        request = ladder.read_bound(packets[1]['path'], packets[1]['sha256'])
+        self.assertEqual((request['schema'], request['arm'], request['deadline_seconds'], request['reserve_seconds']),
+                         (panel.PREFLIGHT_REQUEST_SCHEMA, 'DN2W8', 3., .15))
+        for bad in (dict(arm='RAW', games=2), dict(arm='DN2W8', games=0)):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                panel.preflight_packets(self.root, deadline_seconds=3., reserve_seconds=.15, **bad)
+        config = NS(checkpoint=Path('/inert/champion.pt')); sha = ActorContract.champion().checkpoint_sha256; seen = []
+        class Runtime:
+            def __init__(self, **kw): seen.append(kw)
+            async def run(self, config): raise RuntimeError('inert game')
+        server = dict(host='127.0.0.1', port=7000)
+        with patch.object(panel.ladder, 'configuration', return_value=config), patch.object(panel.ladder, 'owning_capture', inert_capture), \
+                patch('pokezero.live_protocol_runtime._checkpoint_sha', return_value=sha):
+            wire = lambda p, srv: dict(path=p['path'], sha256=p['sha256'], setting='preflight', server=srv)
+            for p, srv in ((packets[0], server), (packets[1], None)):   # RAW with a server, a search arm without one
+                with self.subTest(p['arm']), self.assertRaisesRegex(ValueError, 'RAW runs without a server'):
+                    asyncio.run(panel.calibration_worker(wire(p, srv), expected_pair=(1, 2), original='o', runtime_class=Runtime))
+            self.assertEqual(asyncio.run(panel.calibration_worker(wire(packets[1], server), expected_pair=(1, 2), original='o', runtime_class=Runtime)), 0)
+        client = seen[-1]['client']
+        self.assertEqual((seen[-1]['arm'], client.rung, client.deadline, client.reserve), ('DN2W8', 'DN2W8', 3., .15))
+        claim = json.loads((self.root/'claims'/f"{request['cell']['ordinal']}.json").read_bytes())
+        self.assertEqual((claim['arm'], claim['setting'], claim['warmup']), ('DN2W8', 'preflight', None))
+        result = json.loads((self.root/'results'/f"{request['cell']['ordinal']}.json").read_bytes()); self.assertEqual(result['arm'], 'DN2W8')
+
+    def test_preflight_summary_reads_first_decisions_and_the_search_wall(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
+        band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
+        def game(cell, arm, walls, source):
+            rows = [dict(decision_index=i, select_seconds=w, encode_seconds=.04, greedy=dict(seconds=.5), source=source, cause=None)
+                    for i, w in enumerate(walls)]
+            panel.write_new(self.root/'results'/f"{cell['ordinal']}.json", dict(status='COMPLETE', setting='preflight', arm=arm, cell=cell))
+            (self.root/'telemetry').mkdir(exist_ok=True)
+            (self.root/'telemetry'/f"{cell['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
+        game(band[0], 'RAW', [.6]+[.5]*20, 'raw_arm'); game(band[1], 'DN2W8', [2.0]+[2.0]*19+[2.4], 'search')
+        value = panel.preflight_summary(self.root)
+        self.assertEqual((value['arms']['RAW']['first_within_warm_p99'], value['arms']['DN2W8']['first_within_warm_p99']), (False, True))
+        self.assertEqual(value['arms']['DN2W8']['search_wall']['p95'], 2.0); self.assertTrue(value['search_wall_within'])
+        self.assertEqual(value['arms']['RAW']['warm_greedy']['p95'], .5)
+        game(band[3], 'DN2W8', [2.7]*21, 'search'); self.assertFalse(panel.preflight_summary(self.root)['search_wall_within'])
 
     def test_init_verifies_the_calibration_and_dispatch_gates_on_it(self):
         with TemporaryDirectory() as directory:

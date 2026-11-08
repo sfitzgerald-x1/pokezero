@@ -377,6 +377,49 @@ class FactoryTests(unittest.TestCase):
         self.assertEqual(row['greedy']['action_index'], 0); self.assertEqual(row['request_kind'], 'move')
         self.assertGreaterEqual(row['encode_seconds'], 0)
 
+    def overlap(self, responder, *, greedy_waits=None, greedy_seconds=0.):
+        """One searched decision with a controllable greedy: it may wait for an event and then take greedy_seconds; returns the
+        decision, the row, and the times (monotonic) at which greedy finished and the decision returned."""
+        marks = {}
+        def before():
+            if greedy_waits is not None: self.assertTrue(greedy_waits.wait(5))
+            time.sleep(greedy_seconds)
+        calls = []
+        factory = raw_factory(calls, before=before)
+        policy_factory = factory.policy_factory
+        def timed_policy(c, **kw):
+            policy = policy_factory(c, **kw); select = policy.select_action
+            def select_action(observation, *, rng):
+                out = select(observation, rng=rng); marks['greedy_done'] = time.monotonic(); return out
+            policy.select_action = select_action; return policy
+        factory = OwningActorFactory('jax-owning', ActorContract.champion(), factory.backend_factory, timed_policy)
+        value = live.factory(NS(), raw_factory=factory, client=fake_client(calls, responder), telemetry_path=self.path, arm='DN2W8', cell=CELL)
+        (decision,) = play(value); marks['returned'] = time.monotonic()
+        row, = self.rows()
+        return decision, row, marks
+
+    def test_search_back_before_greedy_waits_for_greedy(self):
+        answered = threading.Event()
+        def responder(r): answered.set(); return complete(r, action=4, q=.25)
+        decision, row, marks = self.overlap(responder, greedy_waits=answered, greedy_seconds=.2)   # greedy ends 0.2 s after the answer
+        self.assertEqual((decision.action_index, row['source']), (4, 'search')); self.assertGreaterEqual(row['greedy']['seconds'], .2)
+        self.assertLessEqual(marks['greedy_done'], marks['returned'])   # nothing is played before greedy has finished
+
+    def test_greedy_first_then_search_is_played(self):
+        def responder(r): time.sleep(.3); return complete(r, action=4, q=.25)
+        decision, row, marks = self.overlap(responder)
+        self.assertEqual((decision.action_index, row['source'], row['greedy']['action_index']), (4, 'search', 0))
+        self.assertGreaterEqual(row['select_seconds'], .3); self.assertLessEqual(marks['greedy_done'], marks['returned'])
+
+    def test_a_search_failure_while_greedy_runs_plays_greedy_once_it_finishes(self):
+        for name, responder in (('timeout', lambda r: refused(r, 'timeout')), ('server_error', lambda r: refused(r, 'server_error'))):
+            with self.subTest(name):
+                self.fresh(name); failed = threading.Event()
+                def answer(r, responder=responder, failed=failed): out = responder(r); failed.set(); return out
+                decision, row, marks = self.overlap(answer, greedy_waits=failed, greedy_seconds=.2)   # the failure lands mid-greedy
+                self.assertEqual((decision.action_index, row['source'], row['cause']), (0, 'greedy_fallback', name))
+                self.assertLessEqual(marks['greedy_done'], marks['returned']); self.assertGreaterEqual(row['greedy']['seconds'], .2)
+
     def test_every_refusal_cause_plays_the_greedy_decision(self):
         for cause in live.SERVER_CAUSES+('timeout', 'connection_error'):
             with self.subTest(cause):

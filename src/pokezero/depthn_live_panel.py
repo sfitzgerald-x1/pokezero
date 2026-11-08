@@ -95,6 +95,9 @@ PHASES=('screen','extension')
 CALIBRATION_SCHEMA='depthn-foulplay-panel.calibration.v1'
 CALIBRATION_RUN_SCHEMA='depthn-foulplay-panel.calibration-run.v1'
 CALIBRATION_REQUEST_SCHEMA='depthn-foulplay-panel.calibration-request.v1'
+PREFLIGHT_REQUEST_SCHEMA='depthn-foulplay-panel.preflight-request.v1'
+PREFLIGHT_SCHEMA='depthn-foulplay-panel.preflight.v1'
+PREFLIGHT_WALL_P95_MAX=2.6   # the lead's bound on the search arm's end-to-end decision wall p95
 CALIBRATION_RATIO_MIN=.9
 CALIBRATION_FLOORS=dict(fairness.CALIBRATION_FLOORS)   # rated moves per budget stratum and setting (the lead's ruling)
 CALIBRATION_Z90=1.6448536269514722   # two-sided 90% normal quantile, for each stratum's descriptive ratio CI
@@ -108,7 +111,7 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
       'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
       'search_choice','foulplay_move_wall','actor'}
-ACTOR_KEYS={'cells_per_worker','fresh_worker_first_arm','search_overlaps_greedy','warm_p95_seconds','cold_first_decision_p50_seconds','source'}
+ACTOR_KEYS={'cells_per_worker','warmup_decisions','search_overlaps_greedy','warm_p95_seconds','preflight_search_wall_p95_seconds','source'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
 MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
 MOVE_WALL_KEYS={'search_time_ms','label','strata','source'}
@@ -183,16 +186,17 @@ def validate(declaration):
 
 def validate_actor(value):
     """The actor's time against search's budget (the lead's check; dispatch enforces cells_per_worker): persistent workers
-    (cells_per_worker > 1, a fresh worker's first cell RAW, so each process's one cold decision runs where no search budget
-    does), the search request sent before the greedy forward, and the measured warm p95s (encode, greedy) and cold first
-    decision p50, with their source file (calibration_move_walls' actor section)."""
+    (cells_per_worker >= 2), each warmed once before its first claim (warm_actor on warmup_decisions captured decisions), the
+    search request sent before the greedy forward, the measured warm p95s (encode, greedy) and the pre-flight's search-arm
+    end-to-end decision wall p95 (at most PREFLIGHT_WALL_P95_MAX), with their source (the pre-flight's preflight.json)."""
     v=value;warm=v.get('warm_p95_seconds')if type(v)is dict else None
     if (type(v)is not dict or set(v)!=ACTOR_KEYS or type(v['cells_per_worker'])is not int or v['cells_per_worker']<2
-            or v['fresh_worker_first_arm']!='RAW'or v['search_overlaps_greedy']is not True or not _evidence(v['source'])
+            or v['warmup_decisions']!=WARMUP_DECISIONS or v['search_overlaps_greedy']is not True or not _evidence(v['source'])
             or type(warm)is not dict or set(warm)!={'encode','greedy'}
-            or any(type(x)is not float or not math.isfinite(x)or x<=0 for x in (*warm.values(),v['cold_first_decision_p50_seconds']))):
-        raise ValueError('actor: persistent workers (cells_per_worker >= 2, fresh worker first arm RAW), the search request overlapping '
-                         'greedy, and the measured warm encode / greedy p95 and cold first-decision p50 with their source required')
+            or any(type(x)is not float or not math.isfinite(x)or x<=0 for x in (*warm.values(),v['preflight_search_wall_p95_seconds']))
+            or v['preflight_search_wall_p95_seconds']>PREFLIGHT_WALL_P95_MAX):
+        raise ValueError('actor: persistent warmed workers (cells_per_worker >= 2, the declared warmup), the search request overlapping '
+                         'greedy, the measured warm encode / greedy p95 and a pre-flight search wall p95 within the bound, with its source required')
     return v
 
 
@@ -510,7 +514,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
     return value
 
 
-async def worker(packet,*,expected_pair,original,runtime_class=None):
+async def worker(packet,*,expected_pair,original,runtime_class=None,warmup=None):
     """Exactly one cell. All validation precedes the claim; the claim precedes any game work."""
     if type(packet)is not dict or set(packet)!={'path','sha256','server'}:raise ValueError('one panel cell packet required')
     path,digest,server=packet['path'],packet['sha256'],packet['server']
@@ -533,8 +537,9 @@ async def worker(packet,*,expected_pair,original,runtime_class=None):
     telemetry=root/'telemetry'/f"{cell['ordinal']}.jsonl"
     runtime=(Runtime if runtime_class is None else runtime_class)(client=client,telemetry_path=telemetry,arm=cell['arm'],cell=cell,
         original=original,archive_sha256=d['archive_sha256'])
+    warmed=_warm_once(original,config,warmup)
     write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=digest,cell=cell,cpu_pair=list(expected_pair),
-        server=server,pid=os.getpid(),claimed_unix_seconds=time.time()))
+        server=server,pid=os.getpid(),claimed_unix_seconds=time.time(),warmup=warmed))
     started=time.monotonic();document=game=None;load=dict(start=list(os.getloadavg()))
     try:
         with ladder.owning_capture(root/'owning-wire',cell=cell,declaration_sha256=value['declaration_sha256']):result=await runtime.run(config)
@@ -602,29 +607,88 @@ def calibration_packets(directory,*,setting):
     return todo
 
 
-async def calibration_worker(packet,*,expected_pair,original,runtime_class=None):
-    """One RAW calibration game through the same Runtime, bridge and Foul Play path; claims and results stay in the
-    calibration directory, and only band cells (disjoint from every eval cell) are accepted."""
-    if type(packet)is not dict or set(packet)!={'path','sha256','server','setting'}or packet['server']is not None:
-        raise ValueError('one RAW calibration packet required')
+def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
+    """Pre-flight packets (the lead's check of the overlapped path, outcome-blind, never counted): the band's first `games`
+    not-attempted cells, alternately RAW and `arm`, each request carrying its arm and the declared client deadline and reserve."""
+    root,run,lad,band=calibration_load(directory);todo=[]
+    if arm not in SEARCH_ARMS or type(games)is not int or games<1:raise ValueError('a declared search arm and games >= 1 required')
+    for k,cell in enumerate(c for c in band if not (root/'claims'/f"{c['ordinal']}.json").exists()):
+        if k>=games:break
+        path=root/'requests'/f"{cell['ordinal']}.json"
+        value=dict(schema=PREFLIGHT_REQUEST_SCHEMA,run_directory=run['run_directory'],cell=cell,checkpoint=run['checkpoint'],
+            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'],arm='RAW'if k%2==0 else arm,
+            deadline_seconds=float(deadline_seconds),reserve_seconds=float(reserve_seconds))
+        if path.exists():
+            if path.read_bytes()!=encoded(value):raise ValueError('existing pre-flight request differs')
+        else:write_new(path,value)
+        todo.append(dict(path=str(path),sha256=sha(value),arm=value['arm'],mode='calibration',setting='preflight',pair_ordinal=cell['pair_ordinal']))
+    return todo
+
+
+def preflight_summary(directory):
+    """The pre-flight's readings: per arm, each game's first-decision wall against the warm (decision >= 1) distribution's p99
+    (the warmup's check), and the search arm's end-to-end decision wall (select_seconds, non-single-legal decisions) p95
+    against PREFLIGHT_WALL_P95_MAX, with fallback causes; plus the workers' warmups."""
+    root,run,lad,band=calibration_load(directory);arms={}
+    for cell in band:
+        result=root/'results'/f"{cell['ordinal']}.json"
+        if not result.exists():continue
+        value=json.loads(result.read_bytes())
+        if value.get('setting')!='preflight':continue
+        arm=value.get('arm');rows=telemetry_rows(root,cell['ordinal'])
+        a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter()));a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
+        for r in rows:
+            (a['first']if r.get('decision_index')==0 else a['warm']).append(r['select_seconds'])
+            if r.get('decision_index')!=0:a['encode'].append(r['encode_seconds']);a['greedy'].append(r['greedy']['seconds'])
+            if r.get('source')in ('search','greedy_fallback'):
+                a['search'].append(r['select_seconds'])
+                if r.get('cause')is not None:a['causes'][r['cause']]+=1
+    out={}
+    for arm,a in sorted(arms.items(),key=lambda x:str(x[0])):
+        warm=_quantiles(a['warm']);p99=None if warm is None else warm['p99']
+        out[arm]=dict(games=a['games'],complete=a['complete'],first_decision=sorted(a['first']),warm=warm,
+            warm_encode=_quantiles(a['encode']),warm_greedy=_quantiles(a['greedy']),
+            first_within_warm_p99=None if p99 is None else all(x<=p99 for x in a['first']),
+            search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())))
+    walls=[out[a]['search_wall']for a in out if a in SEARCH_ARMS and out[a]['search_wall']]
+    claims=[json.loads(p.read_bytes())for p in sorted((root/'claims').glob('*.json'))]
+    return dict(schema=PREFLIGHT_SCHEMA,arms=out,search_wall_p95_max=PREFLIGHT_WALL_P95_MAX,
+        search_wall_within=None if not walls else all(w['p95']<=PREFLIGHT_WALL_P95_MAX for w in walls),
+        warmups=[c['warmup']for c in claims if c.get('setting')=='preflight'and c.get('warmup')is not None],
+        seed_band=run['seed_band'],lanes=run['lanes'],tree=run['tree'])
+
+
+async def calibration_worker(packet,*,expected_pair,original,runtime_class=None,warmup=None):
+    """One RAW calibration game (or, in setting 'preflight', one RAW or search-arm pre-flight game: outcome-blind, never
+    counted) through the same Runtime, bridge and Foul Play path; claims and results stay in the calibration directory, and
+    only band cells (disjoint from every eval cell) are accepted."""
+    if type(packet)is not dict or set(packet)!={'path','sha256','server','setting'}:raise ValueError('one calibration packet required')
     value=read_bound(packet['path'],packet['sha256']);root=Path(value.get('run_directory','')).resolve()
-    _,run,lad,band=calibration_load(root);cell=value.get('cell')
-    if (set(value)!={'schema','run_directory','cell','checkpoint','checkpoint_sha256','base_config'}or value['schema']!=CALIBRATION_REQUEST_SCHEMA
+    _,run,lad,band=calibration_load(root);cell=value.get('cell');preflight=packet['setting']=='preflight'
+    keys={'schema','run_directory','cell','checkpoint','checkpoint_sha256','base_config'}|({'arm','deadline_seconds','reserve_seconds'}if preflight else set())
+    if (set(value)!=keys or value['schema']!=(PREFLIGHT_REQUEST_SCHEMA if preflight else CALIBRATION_REQUEST_SCHEMA)
             or cell not in band or Path(packet['path']).resolve()!=root/'requests'/f"{cell['ordinal']}.json"
-            or packet['setting']not in ('solo','concurrent')):raise ValueError('a band calibration request at its own path required')
+            or packet['setting']not in ('solo','concurrent','preflight')):raise ValueError('a band calibration request at its own path required')
+    arm=value['arm']if preflight else'RAW';server=packet['server']
+    if arm not in ARMS or (server is None)!=(arm=='RAW')or server is not None and (type(server)is not dict or set(server)!={'host','port'}):
+        raise ValueError('RAW runs without a server; a search arm needs one')
     config=ladder.configuration(value['base_config'],cell,checkpoint=value['checkpoint'],cpu_pair=expected_pair)
     from .live_protocol_runtime import _checkpoint_sha
     if _checkpoint_sha(config.checkpoint)!=value['checkpoint_sha256']:raise ValueError('original champion bytes differ')
-    from .depthn_live_actor import Runtime
-    runtime=(Runtime if runtime_class is None else runtime_class)(client=None,telemetry_path=root/'telemetry'/f"{cell['ordinal']}.jsonl",
-        arm='RAW',cell=cell,original=original)
-    write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=packet['sha256'],cell=cell,setting=packet['setting'],cpu_pair=list(expected_pair)))
+    from .depthn_live_actor import Client,Runtime
+    client=None if server is None else Client(server['host'],server['port'],rung=arm,deadline_seconds=value['deadline_seconds'],
+        reserve_seconds=value['reserve_seconds'])
+    runtime=(Runtime if runtime_class is None else runtime_class)(client=client,telemetry_path=root/'telemetry'/f"{cell['ordinal']}.jsonl",
+        arm=arm,cell=cell,original=original)
+    warmed=_warm_once(original,config,warmup)
+    write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=packet['sha256'],cell=cell,setting=packet['setting'],
+        cpu_pair=list(expected_pair),arm=arm,pid=os.getpid(),warmup=warmed))
     load=dict(start=list(os.getloadavg()));document=game=None
     try:
         with ladder.owning_capture(root/'owning-wire',cell=cell,declaration_sha256=sha(run)):result=await runtime.run(config)
         document=result.to_dict();game=result.games[0].to_dict();status,error='COMPLETE',None
     except Exception as error_:status,error=('UNKNOWN',type(error_).__name__+': '+str(error_))
-    write_new(root/'results'/f"{cell['ordinal']}.json",dict(schema=CELL_SCHEMA,status=status,error=error,cell=cell,setting=packet['setting'],
+    write_new(root/'results'/f"{cell['ordinal']}.json",dict(schema=CELL_SCHEMA,status=status,error=error,cell=cell,setting=packet['setting'],arm=arm,
         cpu_pair=list(expected_pair),source_game=game,benchmark=document,owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),
         worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg()))))
     return 0
@@ -687,13 +751,7 @@ def calibration_move_walls(directory):
             if c not in walls or not all(type(row.get(k))in (int,float)for k in ('wait_seconds','overlap_seconds')):continue
             walls[c][r['setting']].append(row['wait_seconds']+row['overlap_seconds']);shape[c][(row.get('sampled_battles'),row.get('budget_ms_per_sample'))]+=1
     quantiles=lambda v:None if not v else dict(moves=len(v),**{k:x for k,x in _quantiles(v).items()if k in ('p50','p95')})
-    rows=[r for c in band for r in telemetry_rows(root,c['ordinal'])]
-    cold=[r['select_seconds']for r in rows if r.get('decision_index')==0]
-    warm=[r for r in rows if type(r.get('decision_index'))is int and r['decision_index']>=1]
-    actor=dict(note='our actor (RAW games: encode, then the greedy forward); decision 0 is each worker process\'s first (cold) one '
-        'when a process plays one cell',cold_first_decision=_quantiles(cold),warm=dict(encode=_quantiles([r['encode_seconds']for r in warm]),
-        greedy=_quantiles([r['greedy']['seconds']for r in warm]),select=_quantiles([r['select_seconds']for r in warm])))
-    return dict(schema=MOVE_WALL_SCHEMA,actor=actor,search_time_ms=run['base_config'].get('search_time_ms')if isinstance(run.get('base_config'),dict)else None,
+    return dict(schema=MOVE_WALL_SCHEMA,search_time_ms=run['base_config'].get('search_time_ms')if isinstance(run.get('base_config'),dict)else None,
         strata={c:dict(shapes={f'{b}x{m}ms':n for (b,m),n in sorted(shape[c].items(),key=str)},**{s:quantiles(walls[c][s])for s in ('solo','concurrent')})
             for c in fairness.CALIBRATION_STRATA},seed_band=run['seed_band'],lanes=run['lanes'],tree=run['tree'])
 
@@ -740,8 +798,9 @@ def worker_identity():
     return dict(hostname=socket.gethostname(),**{k.lower():os.environ[k]for k in WORKER_IDENTITY_ENVIRONMENT if os.environ.get(k)})
 
 
-async def serve(pair,cache_directory):
-    """CPU-only worker: one game at a time, packets on stdin until EOF."""
+async def serve(pair,cache_directory,warmup=None):
+    """CPU-only worker: one game at a time, packets on stdin until EOF; with a warmup capture, warm_actor once before the
+    first claim."""
     from .b4_canary_endpoint import pin_owned_actor
     pin_owned_actor(pair);os.environ['JAX_PLATFORMS']='cpu';os.environ['CUDA_VISIBLE_DEVICES']=''
     import contextlib,jax,torch
@@ -754,26 +813,56 @@ async def serve(pair,cache_directory):
     for line in sys.stdin:
         packet=json.loads(line);run=calibration_worker if packet.get('mode')=='calibration'else worker
         if run is calibration_worker:packet={k:v for k,v in packet.items()if k!='mode'}
-        with contextlib.redirect_stdout(sys.stderr):code=await run(packet,expected_pair=pair,original=original)
+        with contextlib.redirect_stdout(sys.stderr):code=await run(packet,expected_pair=pair,original=original,warmup=warmup)
         output.write(json.dumps({'exit':code})+'\n');output.flush()
 
 
-def worker_command(pair,cache_directory):
-    return [sys.executable,'-m','pokezero.depthn_live_panel','--cpu-pair',str(pair[0]),str(pair[1]),'--cache-directory',str(cache_directory)]
+def worker_command(pair,cache_directory,warmup=None):
+    return [sys.executable,'-m','pokezero.depthn_live_panel','--cpu-pair',str(pair[0]),str(pair[1]),'--cache-directory',str(cache_directory),
+        *(()if warmup is None else ('--warmup-capture',str(warmup)))]
 
 
-async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_command,cache_directory=None,attempted=None,after=None):
+WARMUP_DECISIONS=12
+_WARMED={}
+
+
+def warm_actor(original,config,capture,*,decisions=WARMUP_DECISIONS):
+    """A worker's warmup (the lead's ruling), once, before its first claim: the champion's own encode + greedy forward on
+    `decisions` captured decisions spread over one owning-wire capture, each in a fresh game of the original raw actor (no
+    telemetry, no search, no Foul Play), so the encoder's jit and torch's first forward are paid outside any game. The raw
+    factory and model are the ones every later game of this worker uses (ChampionWorkerRuntime.prepare). Returns the
+    capture, the decision count and each decision's seconds."""
+    import random
+    from .phase_d_owning_capture import read_capture
+    rows=list(read_capture(capture))
+    if not rows or type(decisions)is not int or decisions<1:raise ValueError('a warmup capture with decisions required')
+    rows=rows[::max(1,len(rows)//decisions)][:decisions]
+    factory=original.prepare(config);model,result,env=original.runtime[:3];actor=factory.actor((model,result,env));seconds=[]
+    for k,row in enumerate(rows):
+        actor.begin_game(battle_id=f'warmup-{os.getpid()}-{k}',owner=row['owner'],seed=k,stream_id=k+1)
+        try:
+            actor.accept_owner_stream(battle_id=actor.battle_id,owner=row['owner'],generation=0,prefix_sha256=hashlib.sha256().hexdigest(),
+                lines=tuple(row['lines']))
+            started=time.monotonic();actor.decide(actor.snapshot_boundary(),rng=random.Random(k));seconds.append(time.monotonic()-started)
+        finally:actor.close_game()
+    return dict(capture=str(Path(capture).resolve()),decisions=len(seconds),seconds=seconds)
+
+
+def _warm_once(original,config,warmup):
+    """warm_actor on this worker's first cell only (None afterwards, or without a warmup capture)."""
+    if warmup is None or id(original)in _WARMED:return None
+    _WARMED[id(original)]=value=warm_actor(original,config,warmup);return value
+
+
+async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_command,cache_directory=None,attempted=None,after=None,warmup=None):
     """One worker process per core pair at a time, fresh after cells_per_worker cells.
 
     servers maps every arm to its server (None for RAW). Interleave: a cell is taken
     (in packet order) only if its arm stays at most len(pairs) cells ahead of every
     other arm, counting attempted cells; when no cell qualifies, dispatch stops
-    ('interleave') rather than run one arm alone. With cells_per_worker > 1 (a
-    persistent worker: its model and compiled functions load once), a fresh worker
-    process takes a RAW cell first when one qualifies, so the one cold decision of
-    each process (its first encode and forward, about 3.8 s) lands where no search
-    budget runs; later cells keep packet order. (With one cell per process every
-    cell is cold, and packet order is kept.) after(packet), called once per
+    ('interleave') rather than run one arm alone. With warmup (a capture path), each
+    worker process runs warm_actor once before its first claim, so no game pays the
+    encoder's jit or torch's first forward. after(packet), called once per
     completed cell, may stop dispatch by returning a reason. A worker that fails to
     report stops all dispatch: its cell stays claimed or unclaimed as the worker
     left it, and no further cell is attempted this run.
@@ -783,20 +872,20 @@ async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_com
     if type(servers)is not dict or not servers or any(p.get('arm')not in servers for p in packets):raise ValueError('a server entry for every arm required')
     queue=list(packets);done=[];failed=[];stopped=[];lead=len(pairs)
     started=Counter({arm:0 for arm in servers});started.update(attempted or {})
-    def take(prefer=None):
-        ranked=sorted(range(len(queue)),key=lambda i:queue[i]['arm']!=prefer)if prefer is not None else range(len(queue))
-        for i in ranked:
-            packet=queue[i];arm=packet['arm']
+    def take():
+        for i,packet in enumerate(queue):
+            arm=packet['arm']
             if all(started[arm]+1-started[other]<=lead for other in servers if other!=arm):
                 started[arm]+=1;return queue.pop(i)
         stopped.append(f'interleave: no arm may run more than {lead} cells ahead of another');return None
     async def lane(pair):
         while queue and not failed and not stopped:
-            process=await asyncio.create_subprocess_exec(*command(pair,cache_directory),stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE)
+            argv=command(pair,cache_directory)if warmup is None else command(pair,cache_directory,warmup=warmup)
+            process=await asyncio.create_subprocess_exec(*argv,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE)
             try:
-                for n in range(cells_per_worker):
+                for _ in range(cells_per_worker):
                     if not queue or failed or stopped:break
-                    packet=take('RAW'if n==0 and cells_per_worker>1 else None)
+                    packet=take()
                     if packet is None:break
                     wire=dict(path=packet['path'],sha256=packet['sha256'],server=servers[packet['arm']],
                         **{k:packet[k]for k in ('mode','setting')if k in packet})
@@ -1205,5 +1294,5 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
 if __name__=='__main__':
     import argparse
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--cpu-pair',nargs=2,type=int,required=True)
-    p.add_argument('--cache-directory',required=True)
-    args=p.parse_args();asyncio.run(serve(tuple(args.cpu_pair),args.cache_directory))
+    p.add_argument('--cache-directory',required=True);p.add_argument('--warmup-capture')
+    args=p.parse_args();asyncio.run(serve(tuple(args.cpu_pair),args.cache_directory,warmup=args.warmup_capture))
