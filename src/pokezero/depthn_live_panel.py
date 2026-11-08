@@ -92,7 +92,10 @@ CALIBRATION_SCHEMA='depthn-foulplay-panel.calibration.v1'
 CALIBRATION_RUN_SCHEMA='depthn-foulplay-panel.calibration-run.v1'
 CALIBRATION_REQUEST_SCHEMA='depthn-foulplay-panel.calibration-request.v1'
 CALIBRATION_RATIO_MIN=.9
-CALIBRATION_MIN_MOVES=300
+CALIBRATION_FLOORS=dict(fairness.CALIBRATION_FLOORS)   # rated moves per budget stratum and setting (the lead's ruling)
+CALIBRATION_Z90=1.6448536269514722   # two-sided 90% normal quantile, for each stratum's descriptive ratio CI
+CALIBRATION_START_NOTE=('concurrent lanes start together, so early-stratum contention is worse than the eval\'s staggered steady state: '
+    'a conservative direction')
 WORKER_IDENTITY_ENVIRONMENT=('POD_NAME','NODE_NAME')
 TRANSPORT=('timeout','connection_error','server_error')
 T_QUANTILE=.95  # Two-sided 90%; validate() pins confidence to .9.
@@ -147,7 +150,8 @@ def validate(declaration):
     observable=d['fairness_observable'];cal=d['calibration']
     if (type(d['worker_lanes'])is not int or d['worker_lanes']<1 or type(observable)is not dict or set(observable)!={'value','evidence'}
             or type(observable['value'])is not bool or not _evidence(observable['evidence'])
-            or type(cal)is not dict or set(cal)!={'status','sha256','ratios','seed_band'}or not _hex(cal['sha256'])
+            or type(cal)is not dict or set(cal)!={'status','sha256','ratios','seed_band','floors'}or not _hex(cal['sha256'])
+            or cal['floors']!=CALIBRATION_FLOORS
             or cal['status']!=('MEASURED'if observable['value']else'UNMEASURABLE')
             or (cal['ratios']is not None if cal['status']=='UNMEASURABLE'else type(cal['ratios'])is not dict
                 or set(cal['ratios'])!=set(fairness.CALIBRATION_STRATA)
@@ -286,12 +290,12 @@ def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladde
                          'base config (Foul Play budget included) and champion checkpoint')
     if cal['status']=='MEASURED':   # valid evidence: the move floor held, and the ratios are the recorded rates' own
         strata=measured.get('strata')
-        if (type(measured.get('min_moves'))is not int or measured['min_moves']<CALIBRATION_MIN_MOVES or type(strata)is not dict
+        if (measured.get('floors')!=CALIBRATION_FLOORS or type(strata)is not dict
                 or set(strata)!=set(fairness.CALIBRATION_STRATA)
-                or any(type(strata[s].get(k))is not dict or type(strata[s][k].get('moves'))is not int or strata[s][k]['moves']<CALIBRATION_MIN_MOVES
+                or any(type(strata[s].get(k))is not dict or type(strata[s][k].get('moves'))is not int or strata[s][k]['moves']<CALIBRATION_FLOORS[s]
                        or type(strata[s][k].get('rate'))is not float or strata[s][k]['rate']<=0 for s in strata for k in ('solo','concurrent'))
                 or any(strata[s]['concurrent']['rate']/strata[s]['solo']['rate']!=cal['ratios'][s]for s in strata)):
-            raise ValueError(f'calibration.json is not valid evidence: >= {CALIBRATION_MIN_MOVES} rated moves per stratum and setting, '
+            raise ValueError(f'calibration.json is not valid evidence: the declared floors {CALIBRATION_FLOORS} of rated moves per stratum and setting, '
                              'and ratios recomputed from its rates, required')
     base=read_bound(base_config,base_config_sha256)
     if type(base)is not dict:raise ValueError('literal base configuration required')
@@ -575,7 +579,18 @@ async def calibration_worker(packet,*,expected_pair,original,runtime_class=None)
     return 0
 
 
-def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
+def ratio_ci90(concurrent,solo):
+    """A descriptive two-sided 90% CI of mean(concurrent)/mean(solo) by the delta method (independent samples), or None with fewer
+    than two of either."""
+    if len(concurrent)<2 or len(solo)<2:return None
+    mc,ms=fmean(concurrent),fmean(solo)
+    if mc<=0 or ms<=0:return None
+    from statistics import variance
+    r=mc/ms;se=r*math.sqrt(variance(concurrent)/(len(concurrent)*mc*mc)+variance(solo)/(len(solo)*ms*ms))
+    return [r-CALIBRATION_Z90*se,r+CALIBRATION_Z90*se]
+
+
+def calibration_summary(directory,*,floors=CALIBRATION_FLOORS):
     """Per budget stratum and setting: rated moves and mean iterations_per_budget_second; the concurrent/solo ratio; the
     observability the games' headers report; status MEASURED, INSUFFICIENT or UNMEASURABLE."""
     root,run,lad,band=calibration_load(directory);results=[read_result(root,c['ordinal'])for c in band]
@@ -592,12 +607,14 @@ def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
     strata={c:dict(solo=dict(moves=len(rates['solo'][c]),rate=fmean(rates['solo'][c])if rates['solo'][c]else None),
         concurrent=dict(moves=len(rates['concurrent'][c]),rate=fmean(rates['concurrent'][c])if rates['concurrent'][c]else None))
         for c in fairness.CALIBRATION_STRATA}
-    for value in strata.values():
+    for c,value in strata.items():
         value['ratio']=(value['concurrent']['rate']/value['solo']['rate']if value['solo']['rate']and value['concurrent']['rate']is not None else None)
-    enough=all(v[s]['moves']>=min_moves for v in strata.values()for s in ('solo','concurrent'))
+        value['ratio_ci90']=ratio_ci90(rates['concurrent'][c],rates['solo'][c])   # descriptive; the gate is the point estimate
+    enough=all(v[s]['moves']>=floors[c]for c,v in strata.items()for s in ('solo','concurrent'))
     status='INSUFFICIENT'if mixed else'UNMEASURABLE'if observable is not True else'MEASURED'if enough else'INSUFFICIENT'
     return dict(schema=CALIBRATION_SCHEMA,status=status,iterations_observable=observable,observability_mixed=mixed,strata=strata,
-        ratios={c:v['ratio']for c,v in strata.items()}if status=='MEASURED'else None,ratio_min=CALIBRATION_RATIO_MIN,min_moves=min_moves,
+        ratios={c:v['ratio']for c,v in strata.items()}if status=='MEASURED'else None,ratio_min=CALIBRATION_RATIO_MIN,floors=dict(floors),
+        concurrent_start=CALIBRATION_START_NOTE,
         lanes=run['lanes'],seed_band=run['seed_band'],ladder_declaration_sha256=run['ladder_declaration_sha256'],
         base_config_sha256=run['base_config_sha256'],checkpoint_sha256=run['checkpoint_sha256'],
         games={s:sum(r['setting']==s for r in results)for s in ('solo','concurrent')},
@@ -605,24 +622,24 @@ def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
         core_pairs=[list(pair)for pair in sorted({tuple(r['cpu_pair'])for r in results if r.get('cpu_pair')})],tree=run['tree'])
 
 
-async def calibrate(directory,*,pairs,cache_directory=None,command=None,min_moves=CALIBRATION_MIN_MOVES,dispatch_function=None):
-    """Solo (one lane) then concurrent (the planned lanes) RAW games on band seeds until every budget stratum has min_moves
+async def calibrate(directory,*,pairs,cache_directory=None,command=None,floors=CALIBRATION_FLOORS,dispatch_function=None):
+    """Solo (one lane) then concurrent (the planned lanes) RAW games on band seeds until every budget stratum has its floor of
     rated moves in the setting (or Foul Play's work proves unobservable, or the band runs out); writes calibration.json once."""
     root,run,lad,band=calibration_load(directory);run_dispatch=dispatch if dispatch_function is None else dispatch_function
     command=worker_command if command is None else command
     if len(pairs)!=run['lanes']:raise ValueError('calibrate with exactly the planned worker lanes')
     for setting,lanes in (('solo',pairs[:1]),('concurrent',pairs)):
         def enough():
-            value=calibration_summary(root,min_moves=min_moves)
+            value=calibration_summary(root,floors=floors)
             if value['iterations_observable']is False:return 'UNOBSERVABLE'
-            return 'ENOUGH'if all(v[setting]['moves']>=min_moves for v in value['strata'].values())else None
+            return 'ENOUGH'if all(v[setting]['moves']>=floors[c]for c,v in value['strata'].items())else None
         state=enough()
         if state=='UNOBSERVABLE':break
         if state=='ENOUGH':continue
         outcome=await run_dispatch(calibration_packets(root,setting=setting),pairs=lanes,servers={'RAW':None},cache_directory=cache_directory,
             command=command,after=lambda packet:enough())
         if outcome.get('stopped')=='UNOBSERVABLE'or outcome.get('failed'):break
-    value=calibration_summary(root,min_moves=min_moves);write_new(root/'calibration.json',value)
+    value=calibration_summary(root,floors=floors);write_new(root/'calibration.json',value)
     return value
 
 

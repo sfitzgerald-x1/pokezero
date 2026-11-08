@@ -41,7 +41,7 @@ def parser():
         a.add_argument('--'+name,required=True)
     for name in ('battle-seed-start','foulplay-seed-start','seed-count'):a.add_argument('--'+name,type=int,required=True)
     a.add_argument('--cpu-pair',nargs=2,type=int,action='append',required=True,help='actor core, Foul Play core; one per planned lane')
-    a.add_argument('--min-moves',type=int,default=panel.CALIBRATION_MIN_MOVES);a.add_argument('--tree-commit')
+    a.add_argument('--tree-commit')   # the per-stratum floors are declared (panel.CALIBRATION_FLOORS), not a flag
     a=sub.add_parser('dispatch',help='run not-attempted cells of RAW and one search arm, interleaved, one game per worker process')
     a.add_argument('--run-directory',required=True);a.add_argument('--search-arm',choices=panel.SEARCH_ARMS,required=True)
     a.add_argument('--limit',type=int,choices=(500,2000),required=True)
@@ -78,8 +78,7 @@ def main(argv=None):
                 checkpoint=args.checkpoint,base_config=args.base_config,base_config_sha256=args.base_config_sha256,
                 band=dict(battle_seed_start=args.battle_seed_start,foulplay_seed_start=args.foulplay_seed_start,count=args.seed_count),
                 lanes=len(args.cpu_pair),tree_commit=args.tree_commit)
-        value=asyncio.run(panel.calibrate(args.directory,pairs=[tuple(p)for p in args.cpu_pair],cache_directory=Path(args.cache_directory).resolve(),
-            min_moves=args.min_moves))
+        value=asyncio.run(panel.calibrate(args.directory,pairs=[tuple(p)for p in args.cpu_pair],cache_directory=Path(args.cache_directory).resolve()))
         print(json.dumps(dict(status=value['status'],ratios=value['ratios'],sha256=panel.sha(value))));return 0 if value['status']!='INSUFFICIENT'else 1
     if args.mode=='acknowledge':
         print(json.dumps(panel.acknowledge_arm_fairness(args.run_directory,cause=args.cause,note=args.note)));return 0
