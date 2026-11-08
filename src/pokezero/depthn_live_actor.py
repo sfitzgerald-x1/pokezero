@@ -3,9 +3,19 @@
 Per decision: the champion's greedy action FIRST (a legal base action exists
 before search), then at most one bounded search request; any refusal, client
 deadline, transport failure, illegal action or bad Q plays that greedy action
-with one counted cause. No retries, ever. Arm RAW is the same actor with search
-disabled: greedy only, no client. Import loads no model, JAX program or GPU
-stack; this module never imports gpu_engine.
+with one counted cause. A single-legal decision is never searched. No retries,
+ever. Arm RAW is the same actor with search disabled: greedy only, no client.
+The budget clock starts when the owning snapshot reaches encode. Import loads no
+model, JAX program or GPU stack; this module never imports gpu_engine.
+
+Played Q: the server's q is an equal-weight mean of world values in [-1, 1], so
+a forced win or loss is exactly +-1 or within a few ulp of it (fsum rounding).
+A searched action is played only if its q is finite and |q| <= 1 + 1e-9.
+
+Against design note section 6: greedy logits/probabilities are NOT logged. The
+champion's raw policy is pinned with record_policy_distribution=False, and
+neither the observation nor the encode path carries them. Each row keeps the
+greedy action, behavior probability, value estimate and timings.
 """
 from dataclasses import replace
 import json
@@ -18,7 +28,7 @@ import time
 import uuid
 
 from . import phase_d_search_server as wire
-from .live_protocol_actor import ActorContract,RawPolicy,_packet
+from .live_protocol_actor import ActorContract,RawPolicy
 from .live_protocol_bridge import OwningActorFactory,require_actor_factory
 from .phase_d_ladder_panel import encoded
 from .policy import PolicyDecision
@@ -29,7 +39,9 @@ POLICY_IDS={'RAW':'champion-raw-ours',**{arm:'champion-depthn-'+arm for arm in S
 ROW_SCHEMA='depthn-live.decision.v1'
 SERVER_CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request')
 CAUSES=SERVER_CAUSES+('timeout','connection_error','illegal_action','bad_q')
+SOURCES=('search','greedy_fallback','single_legal','raw_arm')
 REQUEST_KINDS=('move','switch','forced')
+Q_BOUND=1.+1e-9
 clock=time.monotonic
 
 
@@ -37,20 +49,26 @@ class _Refused(Exception):
     def __init__(self,cause,message):super().__init__(message);self.cause=cause
 
 
-def _constant(value):raise ValueError('nonfinite JSON constant '+value)
-
-
 class Client:
-    """One connection per request; socket timeout is the remaining budget."""
+    """One connection per request to ONE address resolved here, never per request.
+
+    Connect, send and every read get the remaining budget as their timeout.
+    Anything the server sends maps to a REFUSED cause; request() never raises
+    on server content.
+    """
     def __init__(self,host,port,*,rung,deadline_seconds=3.,reserve_seconds=.15):
         if (rung not in SEARCH_ARMS or type(host)is not str or not host or type(port)is not int or not 0<port<65536
                 or any(type(x)not in (int,float)or not math.isfinite(x)for x in (deadline_seconds,reserve_seconds))
                 or not 0<deadline_seconds<=60 or not 0<=reserve_seconds<deadline_seconds):
             raise ValueError('declared DepthN rung and bounded client deadline required')
-        self.address=(host,port);self.rung=rung;self.deadline=float(deadline_seconds);self.reserve=float(reserve_seconds)
+        # A slow lookup or a second dead address must never spend a decision's budget:
+        # resolve here once and connect to ONE address (the first IPv4 one, if any).
+        found=socket.getaddrinfo(host,port,type=socket.SOCK_STREAM)
+        self.family,_,_,_,self.address=next((x for x in found if x[0]==socket.AF_INET),found[0])
+        self.host=host;self.rung=rung;self.deadline=float(deadline_seconds);self.reserve=float(reserve_seconds)
 
     def budget(self,started):
-        """Deadline from select() entry, less elapsed and the reserve."""
+        """Deadline from the decision's start (encode), less elapsed and the reserve."""
         return self.deadline-(clock()-started)-self.reserve
 
     def request(self,snapshot,*,decision_index,started):
@@ -69,7 +87,7 @@ class Client:
         except _Refused as error:response=self._refused(request,error.cause,error)
         except TimeoutError as error:response=self._refused(request,'timeout',error)
         except OSError as error:response=self._refused(request,'connection_error',error)
-        except (ValueError,TypeError,KeyError,struct.error)as error:response=self._refused(request,'server_error',error)
+        except Exception as error:response=self._refused(request,'server_error',error)
         return dict(response,budget_seconds=budget,client_wall_seconds=clock()-sent)
 
     def _exchange(self,packet,sent,budget):
@@ -77,7 +95,8 @@ class Client:
             left=budget-(clock()-sent)
             if left<=0:raise TimeoutError('client search deadline reached; no retry')
             return left
-        with socket.create_connection(self.address,timeout=remaining())as stream:
+        with socket.socket(self.family,socket.SOCK_STREAM)as stream:
+            stream.settimeout(remaining());stream.connect(self.address)
             stream.settimeout(remaining());stream.sendall(packet)
             def exact(n):
                 output=bytearray()
@@ -88,7 +107,7 @@ class Client:
                 return bytes(output)
             length=struct.unpack('!I',exact(4))[0]
             if not 0<length<=wire.MAX_PACKET:raise ValueError('bounded search response required')
-            return json.loads(exact(length),parse_constant=_constant)
+            return json.loads(exact(length))
 
     def _check(self,response,request):
         if (type(response)is not dict or response.get('schema')!=wire.SCHEMA
@@ -97,30 +116,30 @@ class Client:
         status,cause=response.get('status'),response.get('cause')
         if not (status=='COMPLETE'and cause is None or status=='REFUSED'and cause in SERVER_CAUSES):
             raise ValueError('literal status and declared refusal cause required')
+        encoded(response)  # Finite JSON only: NaN, Infinity and 1e999 never reach play or telemetry.
 
     def _refused(self,request,cause,error):
         return dict(schema=wire.SCHEMA,request_id=request['request_id'],rung=self.rung,status='REFUSED',
-            action_index=None,q_values=None,refusal=type(error).__name__+': '+str(error),cause=cause,
+            action_index=None,q_values=None,refusal=(type(error).__name__+': '+str(error))[:1000],cause=cause,
             requested_worlds=None,constructed_worlds=None,decision_seconds=None,client_refused=True)
 
 
-def request_kind(own_request_line,owner):
-    """forced: one legal action; switch: a forceSwitch request; else move."""
-    from .showdown import _legal_action_mask
-    packet=_packet(own_request_line,owner)
-    if sum(_legal_action_mask(packet))==1:return 'forced'
-    force=packet.get('forceSwitch')
-    return 'switch'if type(force)is list and any(force)else'move'
+def request_kind(legal_action_mask):
+    """forced: one legal action; switch: no move legal (a forceSwitch request); else move."""
+    legal=tuple(map(bool,legal_action_mask))
+    if len(legal)!=9 or not any(legal):raise ValueError('nine-action legal mask required')
+    if sum(legal)==1:return 'forced'
+    return 'move'if any(legal[:4])else'switch'
 
 
 def searched_action(response,observation):
-    """(action, None) only for a COMPLETE legal action with finite Q in (-1, 1)."""
+    """(action, None) only for a COMPLETE legal action with finite |q| <= Q_BOUND."""
     if response['status']!='COMPLETE':return None,response['cause']
     action=response.get('action_index');q=response.get('q_values')
     if type(action)is not int or not 0<=action<9 or not observation.legal_action_mask[action]:return None,'illegal_action'
     if type(q)is not list or len(q)!=9:return None,'bad_q'
     value=q[action]
-    if type(value)not in (int,float)or not math.isfinite(value)or not -1<value<1:return None,'bad_q'
+    if type(value)not in (int,float)or not math.isfinite(value)or not abs(value)<=Q_BOUND:return None,'bad_q'
     return action,None
 
 
@@ -140,7 +159,7 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None):
         provider=raw_factory.backend_factory(contract,env_config=env_config,**identity)
         encode=provider.encode
         def capture(snapshot):
-            output=encode(snapshot);pending['snapshot']=snapshot;return output
+            started=clock();output=encode(snapshot);pending.update(snapshot=snapshot,started=started);return output
         provider.encode=capture
         return provider
     def policy(contract,*,model,result):
@@ -149,16 +168,18 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None):
             def claim(self,c):fallback.claim(c);super().claim(c)
             def close(self):fallback.close()
         def select(observation,*,rng):
-            started=clock();snapshot=pending.pop('snapshot',None)
-            if snapshot is None or observation.metadata.get('owner_prefix_sha256')!=snapshot.prefix_sha256:
+            entered=clock();snapshot=pending.pop('snapshot',None);started=pending.pop('started',None)
+            if snapshot is None or started is None or observation.metadata.get('owner_prefix_sha256')!=snapshot.prefix_sha256:
                 raise ValueError('same current B2 owning root required')
-            index=pending['index'];pending['index']+=1
-            greedy=fallback.select_action(observation,rng=rng);greedy_seconds=clock()-started
+            index=pending['index'];pending['index']+=1;kind=request_kind(observation.legal_action_mask)
+            greedy=fallback.select_action(observation,rng=rng);greedy_seconds=clock()-entered
             response=action=cause=None
-            if client is not None:
+            if client is None:source='raw_arm'
+            elif kind=='forced':source='single_legal'
+            else:
                 response=client.request(snapshot,decision_index=index,started=started)
                 action,cause=searched_action(response,observation)
-            source='search'if action is not None else'raw_arm'if client is None else'greedy_fallback'
+                source='search'if action is not None else'greedy_fallback'
             if action is not None:
                 decision=PolicyDecision(action,policy_id,action_probability=1.,value_estimate=float(response['q_values'][action]),
                     metadata=dict(depthn_live=dict(arm=arm,source=source,cause=None,request_id=response['request_id'])))
@@ -166,10 +187,10 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None):
                 decision=replace(greedy,metadata={**dict(greedy.metadata),'depthn_live':dict(arm=arm,source=source,cause=cause,
                     request_id=None if response is None else response['request_id'])})
             row=dict(schema=ROW_SCHEMA,arm=arm,policy_id=policy_id,cell=cell,battle_id=snapshot.battle_id,owner=snapshot.owner,
-                stream_id=snapshot.stream_id,generation=snapshot.generation,decision_index=index,
-                request_kind=request_kind(snapshot.own_request_line,snapshot.owner),prefix_sha256=snapshot.prefix_sha256,
+                stream_id=snapshot.stream_id,generation=snapshot.generation,decision_index=index,request_kind=kind,
+                prefix_sha256=snapshot.prefix_sha256,encode_seconds=entered-started,
                 greedy=dict(action_index=greedy.action_index,policy_id=greedy.policy_id,action_probability=greedy.action_probability,
-                    value_estimate=greedy.value_estimate,policy_distribution=greedy.metadata.get('policy_distribution'),seconds=greedy_seconds),
+                    value_estimate=greedy.value_estimate,seconds=greedy_seconds),
                 search=response,played_action_index=decision.action_index,source=source,cause=cause,
                 search_differs=None if action is None else action!=greedy.action_index,select_seconds=clock()-started)
             emit(row)
