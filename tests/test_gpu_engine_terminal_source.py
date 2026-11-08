@@ -61,7 +61,7 @@ class TerminalSourceTests(unittest.TestCase):
   paired=self.pair(actual,frame,consumers)
   self.assertEqual(paired.report.frame_inputs_complete.tolist(),[True,True],msg=str(dict(
       refusal=paired.report.refusal.tolist(),expected=paired.report.expected_cutpoints.tolist(),observed=paired.report.observed_cutpoints.tolist())))
-  self.assertEqual(paired.terminal_closeout.tolist(),[True,True]);self.assertEqual(paired.ledger.stage[:,0].tolist(),[3,3])
+  self.assertEqual(paired.terminal_closeout.tolist(),[True,True]);self.assertEqual(paired.ledger.count.tolist(),[2,2]);self.assertEqual(paired.ledger.site[:,:2].tolist(),[[int(ex.Site.TURNLOOP_PREFIX),int(ex.Site.DIRECT_HIT)]]*2);self.assertEqual(paired.ledger.stage[:,:2].tolist(),[[3,3]]*2)
   for owner,result in enumerate(paired.owners):
    self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertFalse(bool(result.projection.B4_qualified.any()))
    for row in (0,1):np.testing.assert_array_equal(self.f.f.words(result.projection,row),self.f.reference_words(actual.callbacks,row,owner))
