@@ -420,6 +420,22 @@ class FactoryTests(unittest.TestCase):
                 self.assertEqual((decision.action_index, row['source'], row['cause']), (0, 'greedy_fallback', name))
                 self.assertLessEqual(marks['greedy_done'], marks['returned']); self.assertGreaterEqual(row['greedy']['seconds'], .2)
 
+    def test_search_and_greedy_are_in_flight_together(self):
+        # the review's case: each side waits for the other to have started, so either serial order fails
+        greedy_started, sent = threading.Event(), threading.Event()
+        def responder(r):
+            sent.set()
+            if not greedy_started.wait(2): raise AssertionError('greedy never started while the request was out')
+            return complete(r, action=4, q=.25)
+        def before():
+            greedy_started.set()
+            if not sent.wait(2): raise AssertionError('the request never left while greedy ran')
+        calls = []
+        value = live.factory(NS(), raw_factory=raw_factory(calls, before=before), client=fake_client(calls, responder),
+                             telemetry_path=self.path, arm='DN2W8', cell=CELL)
+        (decision,) = play(value)
+        self.assertEqual(decision.action_index, 4)
+
     def test_every_refusal_cause_plays_the_greedy_decision(self):
         for cause in live.SERVER_CAUSES+('timeout', 'connection_error'):
             with self.subTest(cause):
