@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.phase_d_constructor_timing import (
-    SCHEMA, ROSTER_SHA256, measure, p95, summarize, validate_config,
+    SCHEMA, ROSTER_SHA256, measure, p95, request_for, summarize, validate_config,
 )
 from pokezero.phase_d_saved_roots import address
 from pokezero.phase_d_ladder_admission import timing_roster
@@ -34,6 +34,23 @@ def records(*, worlds=8, phase='warm'):
 
 
 class ConstructorTimingTests(unittest.TestCase):
+    def test_same_address_cannot_substitute_battle_stream_or_generation(self):
+        meta = dict(roster()[0], battle_id='original-battle', stream_id=101,
+                    generation=3, capture_path='/inert/capture', capture_row=7)
+        captured = dict(meta, lines=['|turn|1', '|request|{}'], own_request_line='|request|{}')
+        with patch('pokezero.phase_d_owning_capture.read_capture', return_value=iter([captured])):
+            result = request_for(meta, worlds=8, phase='warm', ordinal=0)
+        self.assertEqual((result['battle_id'], result['stream_id'], result['generation']),
+                         ('original-battle', 101, 3))
+        for key, changed in (('battle_id', 'different-battle'), ('stream_id', 202),
+                             ('generation', 4)):
+            row = dict(captured, **{key: changed})
+            self.assertEqual(address(row), address(meta))
+            with (self.subTest(key=key),
+                  patch('pokezero.phase_d_owning_capture.read_capture', return_value=iter([row])),
+                  self.assertRaisesRegex(ValueError, 'identity differs')):
+                request_for(meta, worlds=8, phase='warm', ordinal=0)
+
     def run_inert_point(self, output, *, resume=False):
         selected = [dict(cell=dict(ordinal=i * 6), owner='p1', decision_index=i,
                     prefix_sha256=f'{i:064x}', turn=(1, 4, 10, 20)[i // 50])

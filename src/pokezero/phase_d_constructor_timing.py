@@ -138,6 +138,11 @@ def request_for(meta, *, worlds, phase, ordinal):
                   if row['capture_row'] == meta['capture_row']), None)
     if found is None or address(found) != address(meta):
         raise ValueError('Same original captured root unavailable')
+    # These identities also feed the original constructor/sampler keys; an
+    # unchanged prefix/address alone cannot authorize a substituted battle.
+    for key in ('battle_id', 'stream_id', 'generation'):
+        if type(found.get(key)) is not type(meta[key]) or found.get(key) != meta[key]:
+            raise ValueError('Frozen captured root identity differs: ' + key)
     return dict(schema=request_schema,
                 request_id=f'{ROSTER_SHA256}:R7:constructor:{worlds}:{phase}:{ordinal}',
                 **{key: found[key] for key in ('battle_id', 'owner', 'stream_id',
