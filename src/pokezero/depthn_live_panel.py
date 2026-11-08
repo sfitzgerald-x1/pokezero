@@ -48,11 +48,15 @@ Eval readiness (the lead's rulings):
   readout reports Foul Play's wait + overlap per arm as description only.
 - Calibration (RAW only, seeds disjoint from every eval cell): `calibrate` runs
   RAW games solo (one lane) and at the declared worker-lane count, measures Foul
-  Play's iterations_per_budget_second per budget stratum (>= 300 rated moves per
-  stratum per setting) and writes calibration.json; the declaration records its
+  Play's iterations_per_budget_second per budget stratum (at least the declared
+  floor of rated moves per stratum and setting: 60 for 4x500ms, 300 for
+  2x1000ms) and writes calibration.json; the declaration records its
   sha256 and the concurrent/solo ratios, init verifies them, and dispatch refuses
   unless every ratio is >= 0.90, or, when Foul Play is not observable, an explicit
   accept-uncalibrated is recorded.
+- Search choice and provenance (descriptive, recorded before any dispatch): the
+  evidence that chose the search arm's W (the cells' commit, their files by
+  sha256, a summary of the result), and the opponent's and engine's identity.
 """
 import asyncio
 from collections import Counter
@@ -102,7 +106,9 @@ T_QUANTILE=.95  # Two-sided 90%; validate() pins confidence to .9.
 KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256','arms','search','root_operator','deadline_seconds',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
-      'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance'}
+      'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
+      'search_choice'}
+SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
 PROVENANCE_KEYS={'foulplay','showdown_commit','engine_tables','base_config_sha256'}
 FOULPLAY_KEYS={'commit','applied_diff_sha256','patch_blobs','poke_engine','runtime_metadata_sha256','python'}
 POKE_ENGINE_KEYS={'version','features','sdist_sha256','setup_script_sha256','gen3_patch_list_sha256','native_so_sha256'}
@@ -160,6 +166,12 @@ def validate(declaration):
             or any(type(v)is not int or v<1 for v in cal['seed_band'].values())):
         raise ValueError('worker lanes >= 1, fairness observability with its evidence, and a calibration (MEASURED with '
                          'positive per-stratum ratios when observable, else UNMEASURABLE) with its sha256 and seed band required')
+    choice=d['search_choice']
+    if (type(choice)is not dict or set(choice)!=SEARCH_CHOICE_KEYS or choice['arm']!=arms[1]or not _hex(choice['cell_commit'],40)
+            or type(choice['evidence'])is not list or not choice['evidence']or not all(map(_evidence,choice['evidence']))
+            or type(choice['summary'])is not str or not choice['summary'].strip()):
+        raise ValueError('search choice: the declared search arm, the commit of the cells that chose it, their files (path and sha256) '
+                         'and a summary of the result required')
     validate_provenance(d['provenance'])
     return d
 

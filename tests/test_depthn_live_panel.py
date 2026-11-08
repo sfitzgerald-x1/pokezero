@@ -58,6 +58,8 @@ PROVENANCE = dict(
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64,
                 provenance=PROVENANCE):
     return dict(schema=panel.SCHEMA, provenance=copy.deepcopy(provenance), ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
+        search_choice=dict(arm=arms[1], cell_commit='8'*40, evidence=[dict(path='cells/w16.json', sha256='4'*64), dict(path='out/w16-pairs.jsonl', sha256='5'*64)],
+                           summary='W16 - W8 = +2.45, 90% CI (+0.50, +4.41)'),
         worker_lanes=4, fairness_observable=dict(value=observable, evidence=dict(path='calibration/calibration.json', sha256=calibration_sha)),
         calibration=dict(status='MEASURED' if observable else 'UNMEASURABLE', sha256=calibration_sha, ratios=dict(ratios) if observable else None,
                          seed_band=dict(CALIBRATION_BAND), floors=dict(panel.CALIBRATION_FLOORS)),
@@ -156,6 +158,15 @@ class DeclarationTests(unittest.TestCase):
                       dict(PROVENANCE, engine_tables=dict(tables, digest='e'*63))):
             with self.subTest(value), self.assertRaises(ValueError):
                 panel.validate(declaration('a'*64, provenance=value))
+
+    def test_refuses_a_malformed_search_choice(self):
+        good = declaration('a'*64)['search_choice']
+        for value in (None, {}, dict(good, extra=1), dict(good, arm='DN2W16'), dict(good, cell_commit='8'*39), dict(good, evidence=[]),
+                      dict(good, evidence=[dict(path='x', sha256='4'*63)]), dict(good, evidence=good['evidence'][0]), dict(good, summary=' ')):
+            d = declaration('a'*64); d['search_choice'] = value
+            with self.subTest(value), self.assertRaisesRegex(ValueError, 'search choice'):
+                panel.validate(d)
+        panel.validate(declaration('a'*64, arms=('RAW', 'DN2W16')))   # the choice follows the declared search arm
 
     def test_init_refuses_a_provenance_for_another_base_config(self):
         with TemporaryDirectory() as directory:
