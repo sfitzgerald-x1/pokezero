@@ -900,7 +900,14 @@ def warm_actor(original,config,capture,*,decisions=WARMUP_DECISIONS):
     rows=list(read_capture(capture))
     if type(decisions)is not int or decisions<1 or len(rows)<decisions:raise ValueError(f'a warmup capture with at least {decisions} decisions required')
     rows=rows[::max(1,len(rows)//decisions)][:decisions]
-    factory=original.prepare(config);model,result,env=original.runtime[:3];actor=factory.actor((model,result,env));seconds=[]
+    factory=original.prepare(config);model,result,env=original.runtime[:3]
+    # Every game's first step in ChampionWorkerRuntime.run, verbatim: the bridge's policy (it puts the shared model in eval mode on
+    # CPU, which the owning policy factory requires before any actor is built).
+    from . import foulplay_bridge as bridge
+    bridge._build_policy(config=config,model=model,result=result,value_model=model,value_result=result,env_config=env,
+        rollout_config=bridge.RolloutConfig(max_decision_rounds=config.max_decision_rounds,format_id=config.format_id),
+        policy_id=str(result.model_config.policy_id))
+    actor=factory.actor((model,result,env));seconds=[]
     for k,row in enumerate(rows):
         actor.begin_game(battle_id=f'warmup-{os.getpid()}-{k}',owner=row['owner'],seed=k,stream_id=k+1)
         try:

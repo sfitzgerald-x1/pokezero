@@ -1587,16 +1587,21 @@ class CalibrationTests(unittest.TestCase):
 
     def test_warm_actor_decides_captured_roots_in_fresh_games_once_per_worker(self):
         wire = make_capture(Path(self.directory.name)/'wire', turns=3); built = []
+        result = NS(model_config=NS(policy_id='champion'))
         class Original:
-            runtime = ('model', 'result', 'env')
+            runtime = ('model', result, 'env')
             def prepare(self, config):
                 built.append(config)
                 return NS(actor=lambda runtime: built.append(runtime) or fixture.actor())
-        original = Original()
-        with self.assertRaisesRegex(ValueError, 'at least 12 decisions'): panel.warm_actor(original, 'config', wire)   # 3 roots < 12
-        built.clear(); value = panel.warm_actor(original, 'config', wire, decisions=3)
+        original = Original(); config = NS(max_decision_rounds=300, format_id='gen3randombattle')
+        policy = lambda **kw: built.append(('policy', kw['model'], kw['env_config'], kw['policy_id'], kw['rollout_config'].max_decision_rounds))
+        with patch('pokezero.foulplay_bridge._build_policy', side_effect=policy):
+            with self.assertRaisesRegex(ValueError, 'at least 12 decisions'): panel.warm_actor(original, config, wire)   # 3 roots < 12
+            built.clear(); value = panel.warm_actor(original, config, wire, decisions=3)
         self.assertEqual((value['decisions'], len(value['seconds']), value['capture']), (3, 3, str(wire.resolve())))
-        self.assertTrue(all(x >= 0 for x in value['seconds'])); self.assertEqual(built, ['config', ('model', 'result', 'env')])
+        # the runtime's own first step (the bridge policy: the model in eval mode) precedes the actor, as in every game
+        self.assertTrue(all(x >= 0 for x in value['seconds']))
+        self.assertEqual(built, [config, ('policy', 'model', 'env', 'champion', 300), ('model', result, 'env')])
         self.assertIsNone(panel._warm_once(original, 'config', None))   # no capture: no warmup
         with patch.object(panel, 'WARMUP_DECISIONS', 3), patch.object(panel, 'warm_actor', side_effect=lambda o, c, w: dict(decisions=3)):
             first = panel._warm_once(original, 'config', wire); self.assertEqual(first['decisions'], 3)
