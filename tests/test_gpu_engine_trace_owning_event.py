@@ -93,7 +93,7 @@ class TraceOwningEventTests(unittest.TestCase):
   self.assertFalse(bool(speed.retain_frame_device(failed,after,out.stream_id,d,out).qualified_birth[0]))
  def test_default_numerical_AST_and_pinned_trace_grammar(self):
   old=subprocess.check_output(['git','show','cc42bce4:gpu_engine/transition.py'],text=True)
-  current_text=Path('gpu_engine/transition.py').read_text()
+  current_text=subprocess.check_output(['git','show','47a15a55:gpu_engine/transition.py'],text=True)
   # Private assembly may also include the separately tested hypothetical-only
   # observer seam. Normalize that explicit extension before the unchanged
   # default-observer proof; real HP/RNG/keywords remain in both checks.
@@ -106,10 +106,14 @@ class TraceOwningEventTests(unittest.TestCase):
   baseline=dump_default_program(old_tree)
   self.assertEqual(baseline,dump_default_program(current))
   assert_hp_rng_mutations_detected(self,current,baseline)
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));current=ast.parse(Path('gpu_engine/transition.py').read_text())
+  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
   def enter_body(text):
    return next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=='enter')
   old_entry=subprocess.check_output(['git','show','cc42bce4:gpu_engine/entry.py'],text=True)
-  self.assertEqual(dump_default_program(enter_body(old_entry)),dump_default_program(enter_body(Path('gpu_engine/entry.py').read_text())))
+  feature_entry=subprocess.check_output(['git','show','47a15a55:gpu_engine/entry.py'],text=True)
+  self.assertEqual(dump_default_program(enter_body(old_entry)),dump_default_program(enter_body(feature_entry)))
+  self.assertEqual(ast.dump(ast.parse(Path('gpu_engine/entry.py').read_text())),ast.dump(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/entry.py'],text=True))))
   root=Path(showdown_root_str())
   callback=(root/'data/mods/gen3/abilities.ts').read_text().split('\ttrace: {',1)[1].split('\n\t},',1)[0]
   self.assertIn('pokemon.setAbility(ability, target)',callback);self.assertIn('onUpdate: undefined',callback)
