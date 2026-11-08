@@ -22,19 +22,29 @@ PARAMS=CW.PARAMS[:1]
 U=2.**-53
 KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_values','refusal','cause','requested_worlds','constructed_worlds',
     'decision_seconds','root_operator','policy_target','root_value','action_policy_target','block_causes','world_refusals','timings','batch_size',
-    'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note'}
+    'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note','root_classes','root_class',
+    'root_class_source'}
 TREE='0123456789abcdef'*2+'01234567'
 
 
-def prefix(battle,decision):
-    """A player-stream prefix whose decision d+1 extends decision d (the incremental fold's successor rule)."""
+def prefix(battle,decision,*,owner='p1',last=None,before=()):
+    """A player-stream prefix whose decision d+1 extends decision d (the incremental fold's successor rule): literal own
+    requests (Codex's _packet parses them), `last` merged into the final one and `before` inserted ahead of it."""
     lines=['|init|battle',f'|title|{battle}']
-    for d in range(decision+1):lines+=[f'|turn|{d+1}',f'|request|{{"rqid":{d}}}']
+    for d in range(decision+1):
+        own=dict(rqid=d,side=dict(id=owner,name=owner,pokemon=[dict(ident=f'{owner}a: Snorlax',details='Snorlax, L80',condition='100/100',active=True)]))
+        lines+=[f'|turn|{d+1}',*(before if d==decision else()),'|request|'+json.dumps(dict(own,**(last or{})if d==decision else{}),separators=(',',':'))]
     return lines
 
 
-def request(battle,decision,*,owner='p1',stream=7,rung='DN2W8',budget=3.,**over):
-    lines=prefix(battle,decision)
+def payload(**sides):
+    """A public materialization payload (capture_root's) with benign sides, `sides` overriding one side's dict."""
+    base={side:dict(pokemon=[dict(species='Snorlax',condition='100/100',active=True)],volatiles=[])for side in('p1','p2')}
+    base.update(sides);return dict(turn=1,sides=base,wishSetTurns={})
+
+
+def request(battle,decision,*,owner='p1',stream=7,rung='DN2W8',budget=3.,last=None,before=(),**over):
+    lines=prefix(battle,decision,owner=owner,last=last,before=before)
     out=dict(schema=SCHEMA,request_id=f'{battle}:{decision}',battle_id=battle,owner=owner,stream_id=stream,decision_index=decision,generation=1,
         prefix_sha256=hashlib.sha256(''.join(x+'\n'for x in lines).encode()).hexdigest(),lines=lines,own_request_line=lines[-1],rung=rung,budget_seconds=budget)
     out.update(over);return out
@@ -44,8 +54,10 @@ class Codex:
     """Codex's ProtocolConstructor.prepare runs unchanged (key set, schema, address, prefix hash, `seen`, `sessions`); only its
     heavy collaborators are faked: the B2 adapter (records its resets and fed lines), the public-root capture (raises
     outcomes[(battle, decision)] when that is an exception), from_b2 and the world sampler (that outcome's made() root and
-    WorldSet) and the request packet (B2's legal mask is the outcome's)."""
-    def __init__(self,outcomes):self.outcomes=outcomes;self.adapters=[];self.captures=[];self.current=None
+    WorldSet) and B2's legal mask (the outcome's). The capture's public payload is payloads[(battle, decision)] (default
+    payload()): the live search's classification reads it through the same capture_root. The own request is Codex's real
+    _packet."""
+    def __init__(self,outcomes,payloads=None):self.outcomes=outcomes;self.payloads=payloads or{};self.adapters=[];self.captures=[];self.current=None
 
     def __enter__(self):
         harness=self
@@ -57,11 +69,15 @@ class Codex:
         def capture(*,config,contract,lines,address,battle_id,seed):
             harness.captures.append((battle_id,address.frame));out=harness.outcomes[(battle_id,address.frame)]
             if isinstance(out,BaseException):raise out
-            harness.current=out;return NS(address=out[0].address)
+            harness.current=out;return NS(address=out[0].address,materialization_payload=harness.payloads.get((battle_id,address.frame))or payload())
         self.stack=ExitStack()
-        for target,name,value in((pc,'JaxRecordedAdapter',Adapter),(pc,'capture_root',capture),(pc,'_packet',lambda line,owner:(line,owner)),
-                (pc.worlds,'from_b2',lambda adapter,packet,source,metadata,*,address:harness.current[0]),
-                (pc.protocol,'sample',lambda public,detached,**kw:harness.current[1])):
+        # Batch 2's prepare also reads the protocol tail's facts and passes defer_sleep / protocol_facts to from_b2: fake the
+        # first (its shape: phase_d_tail.facts) and accept the second, so the outcome's root and worlds come through unchanged.
+        tail=getattr(pc.protocol,'tail',None)
+        for target,name,value in((pc,'JaxRecordedAdapter',Adapter),(pc,'capture_root',capture),
+                (pc.worlds,'from_b2',lambda adapter,packet,source,metadata,*,address,**kw:harness.current[0]),
+                (pc.protocol,'sample',lambda public,detached,**kw:harness.current[1]),
+                *(()if tail is None else((tail,'facts',lambda *a,**k:dict(replacement=None,fresh_substitutes={},wish_set_turns={},turn=0)),))):
             self.stack.enter_context(patch.object(target,name,value))
         return self
 
@@ -93,13 +109,14 @@ class LiveSearchTests(unittest.TestCase):
     def test_complete_responses_follow_the_contract_and_the_direct_pipeline(self):
         reqs=[request(f'b{i}',0,stream=10+i)for i in range(3)];outcomes={(f'b{i}',0):self.outcome(i)for i in range(3)}
         s=self.search();rows,codex=self.run_batch(s,reqs,outcomes)
-        self.assertEqual([r['request_id']for r in rows],[r['request_id']for r in reqs]);self.assertEqual(len(codex.captures),3)
+        self.assertEqual([r['request_id']for r in rows],[r['request_id']for r in reqs]);self.assertEqual(len(set(codex.captures)),3)
         legal=CW.T.ROOT_LEGAL
         for row in rows:
             self.assertEqual(set(row),KEYS);encode(row);json.loads(json.dumps(row,allow_nan=False))
             self.assertEqual((row['schema'],row['rung'],row['status'],row['cause'],row['refusal'],row['root_operator'],row['root_operator_impl'],row['reduction_note']),
                 (SCHEMA,'DN2W8','COMPLETE',None,None,'ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging',None))
             self.assertEqual(row['mean_q_agrees'],row['action_mean_q']==row['action_index'])
+            self.assertEqual((row['root_classes'],row['root_class'],row['root_class_source']),([],'other','protocol_facts'))
             self.assertEqual((row['archive_sha256'],row['tree_commit'],row['requested_worlds'],row['constructed_worlds'],row['world_refusals']),('ab'*32,TREE,8,8,[]))
             self.assertEqual((row['batch_size'],row['bucket'],row['block_causes']),(3,4,[None]*4))
             self.assertEqual(len(row['q_values']),9);self.assertEqual([q is None for q in row['q_values']],[not x for x in legal])
@@ -134,6 +151,71 @@ class LiveSearchTests(unittest.TestCase):
         with patch.object(latency,'compose',side_effect=other):rows,_=self.run_batch(self.search(),[request('t',0)],{('t',0):self.outcome(0)})
         row=rows[0];self.assertEqual(row['status'],'COMPLETE');self.assertFalse(row['mean_q_agrees']);self.assertNotEqual(row['action_index'],row['action_mean_q'])
         self.assertEqual(row['action_index'],max(legal,key=lambda a:(row['q_values'][a],-a)))   # averaging's argmax plays
+
+    # root classes, refused classes, carry structure -----------------------------------------------------------------------------
+    def test_root_classes_come_from_batch_2s_protocol_facts(self):
+        fresh=dict(pokemon=[dict(species='Snorlax',condition='100/100',active=True)],volatiles=['substitute'],substituteHealthState='full',
+            substituteDepletion=0,substituteMinDepletion=0,substituteOriginSpecies='Snorlax')
+        sub_lines=('|switch|p2a: Snorlax|Snorlax, L80|100/100','|-start|p2a: Snorlax|Substitute')
+        cases=dict(   # battle: (request keywords, public payload, classes, root_class, source)
+            plain=(dict(),None,[],'other','protocol_facts'),
+            forced=(dict(last=dict(forceSwitch=[True])),None,['forced_switch'],'forced_switch','protocol_facts'),   # the request; its replacement check TRIGGERED
+            wish=(dict(),dict(payload(),wishSetTurns={'p2':1}),['wish'],'wish','protocol_facts'),
+            sub=(dict(before=sub_lines),payload(p2=fresh),['fresh_substitute'],'fresh_substitute','protocol_facts'),
+            stale=(dict(before=sub_lines),payload(p2=dict(fresh,substituteHealthState='damaged')),['fresh_substitute'],'fresh_substitute','protocol_facts'),
+            asleep=(dict(),payload(p2=dict(pokemon=[dict(species='Snorlax',condition='100/100 slp',active=True)],volatiles=[])),['sleep'],'sleep','protocol_facts'),
+            slept=(dict(before=('|-status|p2a: Snorlax|slp',)),None,['sleep'],'sleep','protocol_facts'),   # the public history (_sleep_origins)
+            both=(dict(last=dict(forceSwitch=[True]),before=('|-status|p2a: Snorlax|slp',)),dict(payload(),wishSetTurns={'p1':0}),
+                ['forced_switch','sleep','wish'],'forced_switch','protocol_facts'),
+            refused=(dict(last=dict(forceSwitch=[True])),None,['forced_switch'],'forced_switch','request_and_lines'))   # capture fails: request and lines only
+        outcomes={(b,0):(Refusal('PUBLIC_REPLACEMENT_PHASE_UNAVAILABLE')if b=='refused'else self.outcome(i))for i,b in enumerate(cases)}
+        payloads={(b,0):c[1]for b,c in cases.items()if c[1]is not None}
+        with Codex(outcomes,payloads):rows=self.search().process_many([request(b,0,**c[0])for b,c in cases.items()])
+        for(b,(_,_,classes,first,source)),row in zip(cases.items(),rows):
+            with self.subTest(b):
+                self.assertEqual((row['root_classes'],row['root_class'],row['root_class_source']),(classes,first,source))
+                self.assertTrue(type(row['timings']['classify_seconds'])is float)
+                self.assertEqual(row['status'],'REFUSED'if b=='refused'else'COMPLETE')   # classification decides nothing by itself
+        with patch.object(live,'classify',side_effect=RuntimeError('boom')):rows,_=self.run_batch(self.search(),[request('plain',0)],{('plain',0):self.outcome(0)})
+        self.assertEqual((rows[0]['status'],rows[0]['root_classes'],rows[0]['root_class'],rows[0]['root_class_source']),('COMPLETE',None,None,'UNCLASSIFIED: RuntimeError: boom'))
+        self.assertEqual([live.root_class(c)for c in([],['sleep','wish'],['fresh_substitute','sleep','wish'])],['other','wish','fresh_substitute'])
+
+    def test_refused_classes_are_refused_before_pricing(self):
+        s=self.search(refuse_classes=('sleep','forced_switch'))
+        self.assertEqual(s.refuse_classes,('forced_switch','sleep'))
+        outcomes={('f',0):self.outcome(0),('p',0):self.outcome(1),('r',0):Refusal('PUBLIC_REPLACEMENT_PHASE_UNAVAILABLE'),('fs',0):self.outcome(2)}
+        rows,_=self.run_batch(s,[request('f',0,last=dict(forceSwitch=[True])),request('p',0),request('r',0,last=dict(forceSwitch=[True])),
+            request('fs',0,last=dict(forceSwitch=[True]),before=('|-status|p2a: Snorlax|slp',))],outcomes)
+        self.assertEqual([(r['status'],r['cause'],r['refusal'])for r in rows],[('REFUSED','class_refused','ROOT_CLASS_REFUSED:forced_switch'),('COMPLETE',None,None),
+            ('REFUSED','constructor_refused','constructor-root:PUBLIC_REPLACEMENT_PHASE_UNAVAILABLE'),('REFUSED','class_refused','ROOT_CLASS_REFUSED:forced_switch,sleep')])
+        self.assertEqual((rows[0]['constructed_worlds'],rows[1]['bucket'],s.pricers[1].last_timing['roots']),(8,1,4))   # one root priced, no device work for the others
+        self.assertIn('class_refused',live.CAUSES)
+        with self.assertRaisesRegex(ValueError,'refuse_classes'):self.search(refuse_classes=('nap',))
+
+    def test_a_root_whose_carry_differs_is_refused_alone(self):
+        outcomes={('ok',0):self.outcome(0),('odd',0):self.outcome(1,carry='plain'),('w0',0):self.outcome(2)}   # odd: the fake's own carry, not the constructor's
+        s=self.search();rows,_=self.run_batch(s,[request('ok',0),request('odd',0)],outcomes)
+        self.assertEqual([(r['status'],r['cause'],r['bucket'])for r in rows],[('COMPLETE',None,1),('REFUSED','depthn_refused',1)])
+        self.assertTrue(rows[1]['refusal'].startswith("WORLD_STRUCTURE_MISMATCH:world 0: missing [1].features['choice_locked']"),rows[1]['refusal'])
+        self.assertTrue(s.carry['provisional'])   # no warmup: the first constructed world seen
+        s=self.search()
+        with Codex(outcomes):report=s.warmup([request('w0',0)])
+        self.assertEqual((s.carry['provisional'],report['carry_signature']),(False,s.carry['signature']))
+        rows,_=self.run_batch(s,[request('odd',0),request('ok',0)],outcomes)   # warmed: the recorded reference, whichever root comes first
+        self.assertEqual([(r['status'],r['cause'])for r in rows],[('REFUSED','depthn_refused'),('COMPLETE',None)])
+        # Without the check the two would share one frame, which DepthN refuses as a whole.
+        constructor=self.cw.constructor(8)
+        with Codex(outcomes):prepared=cw.prepare_roots(constructor,[{k:r[k]for k in live.PROTOCOL_KEYS}for r in(request('ok',0),request('odd',0))])
+        made=cw.build(constructor,prepared,s.pricers[2],PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,only_complete=True)
+        with self.assertRaisesRegex(ValueError,'one world source per frame'):cw.price(s.pricers[2],made,self.cw.binding,self.cw.recipe,PARAMS)
+
+    def test_a_structural_exception_at_bucket_1_is_that_roots_server_error(self):
+        error=ValueError('one world source per frame: pre-built worlds with different (state, public) structures')
+        with patch.object(live.cw,'price',side_effect=error):
+            rows,_=self.run_batch(self.search(),[request('ok',0,last=dict(forceSwitch=[True]))],{('ok',0):self.outcome(0)})
+        self.assertEqual((rows[0]['cause'],rows[0]['refusal'],rows[0]['bucket'],rows[0]['root_classes'],rows[0]['root_class']),
+            ('server_error',f'ValueError: {error}',None,['forced_switch'],'forced_switch'))   # still classified: the bench counts it per class
+        self.assertTrue(type(rows[0]['timings']['classify_seconds'])is float);encode(rows[0])
 
     def test_bucket_is_the_smallest_holding_the_priced_blocks_and_long_lists_chunk(self):
         for n,bucket in((1,1),(2,2),(3,4),(4,4)):
@@ -182,7 +264,7 @@ class LiveSearchTests(unittest.TestCase):
         rows,codex=self.run_batch(s,reqs,outcomes)
         self.assertEqual([r['cause']for r in rows],['expired_in_queue',None,None,None,'expired_in_queue'])
         self.assertEqual([r['timings']['queue_seconds']for r in rows],[2.5,1.5,0.,0.,0.]);self.assertTrue(rows[0]['refusal'].startswith('EXPIRED_IN_QUEUE'))
-        self.assertEqual(sorted(codex.captures),[('e1',0),('e2',0),('e3',0)]);self.assertEqual(rows[1]['bucket'],4)
+        self.assertEqual(sorted(set(codex.captures)),[('e1',0),('e2',0),('e3',0)]);self.assertEqual(rows[1]['bucket'],4)
         rows,_=self.run_batch(s,[dict(request('e0',0),**{live.ARRIVAL:999.9})],outcomes);self.assertEqual(rows[0]['status'],'COMPLETE')   # never attempted
 
     def test_constructor_refusals(self):

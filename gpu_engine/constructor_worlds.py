@@ -45,6 +45,11 @@ dict keys and leaves two members None). This module turns prepared roots into De
   without requests (every root refused) prices nothing and returns (None, None).
 - reduce: per root, depthn_backups.backup(rule) and reduce_completed_q per block, then the K blocks by the equal-weight
   mean of their completed-Q (d3_search_latency.compose: every world weighted 1/W); any refused block refuses the root.
+  reduce_completed_q's target range check (v5_contract._real, RANGE_EDGE) raises when a block's completed-Q rounds outside
+  [-1, 1] (an action winning against every reply in both worlds, its reply prior summing to 1 + ulp): that refuses the
+  root only, its cause the first refused block's if any, else 'reduction', the error in `reduction_error`; the batch's
+  other roots still label. Any other ValueError there is malformed input (build validated it) and raises, as
+  v2_search_head_to_head's _reduce_tolerating_rounding matches the same message.
   Two moves: `action_mean_q`, the argmax of that mean completed-Q over the legal actions (lower action on ties): the
   ladder's root operator (phase_d_ladder_search.reduce_q); and `action_policy_target`, the argmax of the improved
   target softmax(root logits + q) (D's training target, the latency tool's move).
@@ -76,6 +81,7 @@ SOURCE='phase-d-protocol-constructor'
 # What ProtocolConstructor.construct treats as a root refusal (phase_d_live_worlds.Refusal is a ValueError).
 ROOT_ERRORS=(ValueError,KeyError,TypeError,IndexError,AttributeError)
 UNNAMED='UNNAMED_CONSTRUCTOR_WORLD_REFUSAL'
+RANGE_EDGE='finite in-range numerical value required'   # v5_contract._real's error: on reduce's path only RootImprovement.validate raises it
 B2_TOKEN_KEYS=('numeric_features','categorical_ids','token_type_ids','attention_mask')   # B2's encode(): [23,F] / [23]
 
 
@@ -301,19 +307,25 @@ def reduce(frame,batch,*,rule=backups.learner_max):
     """Per prepared root: status LABELED with the K-block composition (completed_q, policy_target, root_value and the
     moves `action_mean_q` and `action_policy_target`, module docstring), or REFUSED with a cause (the build reason, or the
     first refused block's depthn_backups.refusal_summary cause, 'materialization' for a constructor world refusal, else
-    'reduction'). `block_causes` lists each block's cause. `frame` is None for a batch without requests."""
+    'reduction'; the target range check's ValueError (RANGE_EDGE) refuses that root, its text in `reduction_error`, never
+    raised; any other ValueError raises).
+    `block_causes` lists each block's cause. `frame` is None for a batch without requests."""
     from .d3_search_latency import compose,reduce_block
     if frame is None and batch.requests:raise ValueError('a frame is required for a batch with requests')
     causes=backups.refusal_summary(frame)['roots']if batch.requests else()
     results=[]
     for root in batch.roots:
         out=dict(index=root['index'],request_id=root['request_id'],status='REFUSED',cause=root['reason'],worlds=batch.count,blocks=batch.blocks,
-            block_causes=None,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None)
+            block_causes=None,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,reduction_error=None)
         if root['status']!='PRICED':results.append(out);continue
-        logits,legal=root['root_logits'],root['root_legal']
-        composed=compose([reduce_block(backups.backup(frame,row,rule),logits,legal,original)for row in root['rows']],logits,legal,original)
-        out.update(block_causes=tuple(causes[row]['cause']for row in root['rows']),status=composed['status'],completed_q=composed['completed_q'],
-            policy_target=composed['policy_target'],root_value=composed['root_value'])
+        logits,legal=root['root_logits'],root['root_legal'];out['block_causes']=tuple(causes[row]['cause']for row in root['rows'])
+        prices=[backups.backup(frame,row,rule)for row in root['rows']]
+        try:composed=compose([reduce_block(pair,logits,legal,original)for pair in prices],logits,legal,original)
+        except ValueError as error:   # the rounding edge of the target range check refuses this root only; anything else is a bug
+            if str(error)!=RANGE_EDGE:raise
+            out.update(cause=next((c for c in out['block_causes']if c),'reduction'),reduction_error=f'{type(error).__name__}: {error}')
+            results.append(out);continue
+        out.update(status=composed['status'],completed_q=composed['completed_q'],policy_target=composed['policy_target'],root_value=composed['root_value'])
         if composed['status']=='LABELED':
             mean_q,target=root_actions(composed['completed_q'],composed['policy_target'],legal)
             out.update(cause=None,action_mean_q=mean_q,action_policy_target=target)
