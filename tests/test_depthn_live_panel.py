@@ -168,9 +168,9 @@ def preflight_value(d, **change):
         server=dict(host='h', port=7000), cells_per_worker=d['actor']['cells_per_worker'],
         dispatch=dict(dispatched=24, failed=[], not_dispatched=0, stopped=None), search_wall_p95_max=2.6, search_wall_within=True, timeouts_within=True,
         code_tree=dict(commit='c'*40, source_sha256='e'*64),
-        arms={'RAW': dict(first_within_warm_p99=True, warm_encode=q(d['actor']['warm_p95_seconds']['encode']),
+        arms={'RAW': dict(first_within_warm_p99=True, first_actor_within_warm_p99=True, warm_encode=q(d['actor']['warm_p95_seconds']['encode']),
                           warm_greedy=q(d['actor']['warm_p95_seconds']['greedy'])),
-              arm: dict(first_within_warm_p99=True, search_wall=q(d['actor']['preflight_search_wall_p95_seconds']))})
+              arm: dict(first_within_warm_p99=True, first_actor_within_warm_p99=True, search_wall=q(d['actor']['preflight_search_wall_p95_seconds']))})
     for k, v in change.items():
         if '.' in k: a, b = k.split('.'); value['arms'][a] = dict(value['arms'][a], **{b: v})
         else: value[k] = v
@@ -195,7 +195,7 @@ class PreflightBindingTests(unittest.TestCase):
         for change in (dict(arm='DN2W16'), dict(deadline_seconds=5.), dict(reserve_seconds=.2), dict(cells_per_worker=1),
                        dict(dispatch=dict(dispatched=3, failed=['x'], not_dispatched=21, stopped=None)),
                        dict(dispatch=dict(dispatched=3, failed=[], not_dispatched=21, stopped='interleave')), dict(dispatch=None),
-                       dict(search_wall_within=False), dict(timeouts_within=False), dict(timeouts_within=None), {'RAW.first_within_warm_p99': False}, {'DN2W8.first_within_warm_p99': None},
+                       dict(search_wall_within=False), dict(timeouts_within=False), dict(timeouts_within=None), {'RAW.first_actor_within_warm_p99': False}, {'DN2W8.first_actor_within_warm_p99': None},
                        {'DN2W8.search_wall': dict(p95=2.0)}, {'RAW.warm_encode': dict(p95=.05)}, {'RAW.warm_greedy': dict(p95=.8)},
                        dict(schema='other'), dict(code_tree=dict(source_sha256='f'*64)), dict(code_tree=None)):
             with self.subTest(change), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
@@ -1735,6 +1735,8 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual((search['timeout_share'], search['constructor_refused_share'], search['searched_share_of_non_timeouts']), (0., 2/21, 19/21))
         self.assertEqual((search['constructor_refusal_kinds'], value['timeouts_within']), ({'WORLD_CONSTRUCTOR_REFUSED:volatile:#': 2}, True))
         self.assertEqual((value['arms']['RAW']['first_within_warm_p99'], value['arms']['DN2W8']['first_within_warm_p99']), (False, True))
+        self.assertEqual((value['arms']['RAW']['first_actor_within_warm_p99'], value['arms']['RAW']['first_actor']), (True, [.54]))   # encode .04 + greedy .5
+        self.assertEqual(value['arms']['DN2W8']['warm_actor']['p99'], .54)
         self.assertEqual(value['arms']['DN2W8']['search_wall']['p95'], 2.0); self.assertTrue(value['search_wall_within'])
         self.assertEqual(value['arms']['RAW']['warm_greedy']['p95'], .5)
         self.assertEqual((value['arm'], value['deadline_seconds'], value['reserve_seconds']), ('DN2W8', 3., .15))

@@ -692,11 +692,13 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
         value=json.loads(result.read_bytes())
         if value.get('setting')!='preflight':continue
         arm=value.get('arm');rows=telemetry_rows(root,cell['ordinal']);off=non_home(rows)
-        a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter(),kinds=Counter(),non_home=0,answered=0));
+        a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter(),kinds=Counter(),non_home=0,answered=0,
+            first_actor=[],warm_actor=[]));
         a['non_home']+=len(off);a['answered']+=sum(1 for r in rows if type((r.get('search')or {}).get('server_id'))is str and (r.get('search')or {}).get('client_refused')is not True)
         a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
         for r in rows:
             (a['first']if r.get('decision_index')==0 else a['warm']).append(r['select_seconds'])
+            (a['first_actor']if r.get('decision_index')==0 else a['warm_actor']).append(r['encode_seconds']+r['greedy']['seconds'])
             if r.get('decision_index')!=0:a['encode'].append(r['encode_seconds']);a['greedy'].append(r['greedy']['seconds'])
             if r.get('source')in ('search','greedy_fallback'):
                 a['search'].append(r['select_seconds'])
@@ -705,9 +707,12 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
     out={}
     for arm,a in sorted(arms.items(),key=lambda x:str(x[0])):
         warm=_quantiles(a['warm']);p99=None if warm is None else warm['p99']
+        actor=_quantiles(a['warm_actor']);actor_p99=None if actor is None else actor['p99']
         out[arm]=dict(games=a['games'],complete=a['complete'],first_decision=sorted(a['first']),warm=warm,
             warm_encode=_quantiles(a['encode']),warm_greedy=_quantiles(a['greedy']),
-            first_within_warm_p99=None if p99 is None else all(x<=p99 for x in a['first']),
+            first_within_warm_p99=None if p99 is None else all(x<=p99 for x in a['first']),   # descriptive: includes the server's time
+            first_actor=sorted(a['first_actor']),warm_actor=actor,   # the warmup's check: the actor's own time (encode + greedy) on first decisions
+            first_actor_within_warm_p99=None if actor_p99 is None else all(x<=actor_p99 for x in a['first_actor']),
             search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())),
             timeout_share=_share(a['causes']['timeout'],len(a['search'])),constructor_refused_share=_share(a['causes']['constructor_refused'],len(a['search'])),
             searched_share_of_non_timeouts=_share(len(a['search'])-sum(a['causes'].values()),len(a['search'])-a['causes']['timeout']),
@@ -735,8 +740,9 @@ def require_clean_tree(tree):
 
 def check_preflight(d,tree):
     """The declared actor block against its source (the pre-flight's preflight.json, sha256-bound): the declared arm, deadline,
-    reserve and cells per worker; a dispatch that neither failed nor stopped; every game's first decision within its arm's warm
-    p99 (the warmup worked); the search wall within the bound; the declared numbers equal to the file's; and the pre-flight's code
+    reserve and cells per worker; a dispatch that neither failed nor stopped; every game's first decision's actor time (encode +
+    greedy) within its arm's warm actor p99 (the warmup worked; the end-to-end first decision, which also carries the server's time
+    and the start-together GPU wave, is descriptive); the search wall within the bound; the declared numbers equal to the file's; and the pre-flight's code
     the eval's (the worker code digest: the declaration JSON is not part of it)."""
     a=d['actor'];value=read_bound(a['source']['path'],a['source']['sha256']);arm=d['arms'][1]
     raw=(value.get('arms')or {}).get('RAW')or {};search=(value.get('arms')or {}).get(arm)or {}
@@ -746,7 +752,7 @@ def check_preflight(d,tree):
             or value.get('reserve_seconds')!=d['reserve_seconds']or value.get('cells_per_worker')!=a['cells_per_worker']
             or outcome.get('failed')!=[]or outcome.get('stopped')is not None or value.get('search_wall_within')is not True
             or value.get('timeouts_within')is not True
-            or raw.get('first_within_warm_p99')is not True or search.get('first_within_warm_p99')is not True
+            or raw.get('first_actor_within_warm_p99')is not True or search.get('first_actor_within_warm_p99')is not True
             or pick(search.get('search_wall'),'p95')!=a['preflight_search_wall_p95_seconds']
             or pick(raw.get('warm_encode'),'p95')!=a['warm_p95_seconds']['encode']or pick(raw.get('warm_greedy'),'p95')!=a['warm_p95_seconds']['greedy']
             or pick(value.get('code_tree'),'source_sha256')!=tree['source_sha256']):
