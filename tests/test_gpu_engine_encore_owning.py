@@ -50,7 +50,7 @@ class EncoreOwningTests(unittest.TestCase):
   witness._source();d=self.helper.device.encore;self.assertEqual(int(d.move_id),self.move)
   self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[self.move]),0)
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.encore)
-  baseline=subprocess.check_output(['git','show','6bd337da:gpu_engine/transition.py'],text=True)
+  baseline=subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True)
   self.assertEqual(dump_default_program(ast.parse(baseline)),dump_default_program(ast.parse(Path(tr.__file__).read_text())))
   assert_hp_rng_mutations_detected(self,ast.parse(Path(tr.__file__).read_text()),dump_default_program(ast.parse(baseline)))
   from gpu_engine import encore

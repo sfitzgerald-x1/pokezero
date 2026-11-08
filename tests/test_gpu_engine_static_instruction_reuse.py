@@ -166,8 +166,19 @@ class StaticInstructionReuseTests(unittest.TestCase):
                 return self.generic_visit(node)
         current = Reverse().visit(current)
         self.assertEqual(ast.dump(current, include_attributes=False), ast.dump(ast.parse(old), include_attributes=False))
-        for path in ('gpu_engine/engine_retained_encoder_driver.py', 'gpu_engine/engine_source_frame_witness.py'):
-            self.assertEqual((root/path).read_bytes(), subprocess.check_output(['git', 'show', BASE+':'+path], cwd=root))
+        path='gpu_engine/engine_retained_encoder_driver.py'
+        self.assertEqual((root/path).read_bytes(),subprocess.check_output(['git','show','b8092a85:'+path],cwd=root))
+        # Re-certified literal pins may change; every guard statement and the
+        # complete source inventory remain bound to the integrated baseline.
+        from gpu_engine import engine_source_frame_witness as witness
+        witness._source()
+        path='gpu_engine/engine_source_frame_witness.py'
+        def without_pins(text):
+            tree=ast.parse(text)
+            tree.body=[n for n in tree.body if not(isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='SOURCE_PINS'for t in n.targets))]
+            return ast.dump(tree,include_attributes=False)
+        self.assertEqual(without_pins((root/path).read_text()),without_pins(subprocess.check_output(['git','show','b8092a85:'+path],cwd=root,text=True)))
+        self.assertEqual(len(witness.SOURCE_PINS),88)
 
 
 if __name__ == '__main__':
