@@ -45,13 +45,18 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   (_sleep_origins(lines)). Constructor-refused roots are classified too. When the capture itself fails, only the request
   and the lines classify (forceSwitch, _sleep_origins): root_class_source says which ('protocol_facts' or
   'request_and_lines'). Its cost is timings.classify_seconds (one more public-root capture per root).
-- refuse_classes: a prepared root in any of these classes is REFUSED before pricing, cause class_refused, refusal
-  ROOT_CLASS_REFUSED:<its refused classes> (a constructor refusal keeps its own cause).
-- structure check, per root before packing: every constructed world's (state, public) pytree paths, shapes and dtypes
-  (what DepthN's carry signature keys programs on) must equal the reference recorded at warmup (checked against the
-  warmed program keys' carry signature); a root that differs is REFUSED depthn_refused, WORLD_STRUCTURE_MISMATCH:<short
-  diff>, and the batch's other roots still price (DepthN would refuse the whole frame). Before any warmup the first
-  constructed world seen is a provisional reference (carry['provisional']); warmup replaces it.
+  For a fully constructed root, root_class_crosscheck compares them with the CLEAR checks the constructor's own world
+  builds wrote (class_crosscheck), reported only.
+- refuse_classes: a fully constructed root in any of these classes is REFUSED before pricing, cause class_refused,
+  refusal ROOT_CLASS_REFUSED:<its refused classes>; one that could not be classified, ROOT_CLASS_UNKNOWN, when any class
+  is refused. A root prepare() refused, or one with a refused world, keeps its constructor cause.
+- structure check, per fully constructed root before packing (timings.structure_seconds): every world's (state, public)
+  pytree paths, shapes and dtypes (what DepthN's carry signature keys programs on) must equal the reference; a root that
+  differs is REFUSED depthn_refused, WORLD_STRUCTURE_MISMATCH:<short diff>, and the batch's other roots still price
+  (DepthN would refuse the whole frame). Warmup records the reference from its first fully constructed root, refuses to
+  finish unless every warmup root shares it, and checks it is the only constructor-world carry signature in the warmed
+  program keys; the warm report (and READY) names the reference root. Before any warmup the first such root seen is a
+  provisional reference (carry['provisional']); warmup replaces it.
 - precision: JAX's default matmul precision, the configuration the DepthN champion gates certified, recorded in the
   pricer identity (matmul_precision). Codex's ladder server sets jax_default_matmul_precision='highest' for its own
   champion search; 'highest' forces full-f32 matmul algorithms where the default may use faster reduced-precision ones on
@@ -90,7 +95,7 @@ CLASSES=('forced_switch','fresh_substitute','wish','sleep')   # root_class prior
 PROTOCOL_KEYS=('schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line')
 OURS=('rung','budget_seconds')
 ARRIVAL='_arrival_monotonic'   # stamped by the server's queue (time.monotonic at arrival); a client's value is overwritten
-STAGES=('queue_seconds','prepare_seconds','classify_seconds','build_seconds','price_seconds','reduce_seconds')
+STAGES=('queue_seconds','prepare_seconds','classify_seconds','structure_seconds','build_seconds','price_seconds','reduce_seconds')
 DEPTH=2;WIDTH=9
 FATAL=(MemoryError,)
 WARMUP_BUDGET=3600.
@@ -158,6 +163,23 @@ def classify(constructor,request):
     except ValueError:classes.add('sleep')   # PUBLIC_SLEEP_FAINT_CONFLICT: a slp condition is there
     except(KeyError,IndexError,TypeError,AttributeError):pass
     return sorted(classes),'protocol_facts'
+
+
+CROSSCHECK={'PUBLIC_REPLACEMENT_PHASE':'forced_switch','PUBLIC_FRESH_SUBSTITUTE':'fresh_substitute','PUBLIC_WISH_RECIPIENT_STATE':'wish'}
+
+
+def class_crosscheck(classes,made):
+    """Faithfulness cross-check of the recomputed classes on a fully constructed root, against the CLEAR checks the
+    constructor's own world builds wrote (phase_d_tail.restore: PUBLIC_REPLACEMENT_PHASE, PUBLIC_FRESH_SUBSTITUTE,
+    PUBLIC_WISH_RECIPIENT_STATE; _restore_sleep: PUBLIC_SLEEP_WORLD_POSTERIOR with CURRENT_SLEEP): 'agrees', or
+    'DISAGREES: recomputed only [...]; worlds only [...]'. None when the worlds carry no diagnostics or nothing was classified.
+    Reported only; the recomputed classes stay the source."""
+    rows=[c for entry in getattr(made,'mapper_diagnostics',())or()for c in(entry.get('checks')or())if isinstance(c,dict)]
+    if classes is None or not rows:return None
+    seen={CROSSCHECK[c['kind']]for c in rows if c.get('status')=='CLEAR'and c.get('kind')in CROSSCHECK}
+    if any(c.get('kind')=='PUBLIC_SLEEP_WORLD_POSTERIOR'and c.get('status')=='CLEAR'and c.get('applicability')=='CURRENT_SLEEP'for c in rows):seen.add('sleep')
+    mine=set(classes)
+    return'agrees'if mine==seen else f'DISAGREES: recomputed only {sorted(mine-seen)}; worlds only {sorted(seen-mine)}'
 
 
 def root_class(classes):
@@ -248,7 +270,7 @@ class DepthNLiveSearch:
             refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=ROOT_OPERATOR,
             root_operator_impl=ROOT_OPERATOR_IMPL,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
             mean_q_agrees=None,reduction_note=None,block_causes=None,world_refusals=None,timings=dict.fromkeys(STAGES),batch_size=n,bucket=None,
-            root_classes=None,root_class=None,root_class_source=None,
+            root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
             tree_commit=self.tree_commit,pricer=dict(self.pricer_identity))
 
     @staticmethod
@@ -292,8 +314,8 @@ class DepthNLiveSearch:
             except Exception as error:
                 done={}
                 for i,_,row in todo:
-                    labels=dict(classified.get(i,{}));seconds=labels.pop('classify_seconds',None)
-                    done[i]=dict(row,**labels,timings=dict(row['timings'],classify_seconds=seconds),cause='server_error',refusal=f'{type(error).__name__}: {error}')
+                    labels=dict(classified.get(i,{}));seconds={k:labels.pop(k,None)for k in('classify_seconds','structure_seconds')}
+                    done[i]=dict(row,**labels,timings=dict(row['timings'],**seconds),cause='server_error',refusal=f'{type(error).__name__}: {error}')
             finally:self._evict()
             for i,row in done.items():out[i]=row
         for i,row in enumerate(out):
@@ -314,12 +336,14 @@ class DepthNLiveSearch:
             try:classes,source=classify(self.constructor,p)
             except FATAL:raise
             except Exception as error:classes,source=None,f'UNCLASSIFIED: {type(error).__name__}: {error}'
+            full=type(item)is cw.Prepared and item.made.fully_constructed   # a root with a refused world keeps its constructor cause
             classified[i]=dict(root_classes=classes,root_class=None if classes is None else root_class(classes),root_class_source=source,
-                classify_seconds=time.perf_counter()-clock)
+                root_class_crosscheck=class_crosscheck(classes,item.made)if full else None,classify_seconds=time.perf_counter()-clock,structure_seconds=None)
             refused=[c for c in self.refuse_classes if classes and c in classes]
-            if type(item)is cw.Prepared and refused:gates[i]=('class_refused','ROOT_CLASS_REFUSED:'+','.join(refused))
-            elif type(item)is cw.Prepared:
-                diff=self._structure(item)
+            if full and refused:gates[i]=('class_refused','ROOT_CLASS_REFUSED:'+','.join(refused))
+            elif full and classes is None and self.refuse_classes:gates[i]=('class_refused','ROOT_CLASS_UNKNOWN')
+            elif full:
+                clock=time.perf_counter();diff=self._structure(item,p,classes);classified[i]['structure_seconds']=time.perf_counter()-clock
                 if diff:gates[i]=('depthn_refused','WORLD_STRUCTURE_MISMATCH:'+diff)
             gated.append(cw.RootRefusal(item.request_id,'GATED','',item.seconds,item.binding)if i in gates else item)
         t_classify=time.perf_counter()
@@ -342,9 +366,9 @@ class DepthNLiveSearch:
             raise ValueError('the decisions do not answer the batch\'s requests in order')
         out={}
         for(i,_,row),item,result in zip(todo,prepared,results):
-            worlds=item.made.worlds if type(item)is cw.Prepared else();labels=dict(classified[i]);seconds=labels.pop('classify_seconds')
-            timings=dict(row['timings'],prepare_seconds=item.seconds,classify_seconds=seconds,build_seconds=t_build-t_classify,price_seconds=t_price-t_build,
-                reduce_seconds=t_reduce-t_price)
+            worlds=item.made.worlds if type(item)is cw.Prepared else();labels=dict(classified[i])
+            timings=dict(row['timings'],prepare_seconds=item.seconds,classify_seconds=labels.pop('classify_seconds'),structure_seconds=labels.pop('structure_seconds'),
+                build_seconds=t_build-t_classify,price_seconds=t_price-t_build,reduce_seconds=t_reduce-t_price)
             base=dict(row,**labels,constructed_worlds=sum(w.state is not None for w in worlds),world_refusals=[dict(world=w.index,kinds=list(w.refusals))for w in worlds if w.refusals],
                 timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']))
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
@@ -354,13 +378,16 @@ class DepthNLiveSearch:
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
 
-    def _structure(self,item):
-        """WORLD_STRUCTURE_MISMATCH detail for a prepared root whose constructed worlds' carry differs from the reference
-        (recorded at warmup; before it, the first constructed world seen in the batch), else None."""
+    def _structure(self,item,request,classes):
+        """WORLD_STRUCTURE_MISMATCH detail for a fully constructed root whose worlds' carry differs from the reference (recorded
+        at warmup from its first fully constructed root, every other warmup root held to it; before any warmup, the first
+        such root seen, provisionally), else None. The reference keeps its root's address and classes."""
         for world in item.made.worlds:
-            if world.state is None:continue
             got=carry_structure(world)
-            if self.carry is None:self.carry=dict(structure=got,signature=dn.carry_signature(((world,),)),provisional=not self.warming)
+            if self.carry is None:
+                self.carry=dict(structure=got,signature=dn.carry_signature(((world,),)),provisional=not self.warming,
+                    root=dict(battle_id=request['battle_id'],owner=request['owner'],stream_id=request['stream_id'],decision_index=request['decision_index'],
+                        prefix_sha256=request['prefix_sha256'],root_classes=classes))
             diff=structure_diff(got,self.carry['structure'])
             if diff:return f'world {world.index}: {diff}'
         return None
@@ -376,7 +403,8 @@ class DepthNLiveSearch:
         seen.difference_update([a for a in seen if type(a)is tuple and len(a)==3 and _battle(a[0])in drop])
         self.evicted+=len(drop)
 
-    def _reset_sessions(self):
+    def reset_sessions(self):
+        """Forget every constructor session and attempted address (warmup does, around each pass; a bench between rosters)."""
         self.constructor.seen.clear();self.constructor.sessions.clear();self.battles.clear()
 
     # Warmup -------------------------------------------------------------------------------------------------------------------------
@@ -393,8 +421,9 @@ class DepthNLiveSearch:
         bucket, so every program compiles before READY. Windows of the saved requests are tried until one prices at the bucket
         with every program of a live call compiled (missing_programs; RuntimeError if none does, e.g. saved roots whose every
         turn-1 cell is terminal never reach the leaf program). Returns dict(buckets={b: seconds, compiles and outcomes},
-        programs, seconds, carry_signature). It also records the carry reference of the structure check (the warmed roots'
-        worlds), which must equal the carry signature in the warmed program keys."""
+        programs, seconds, carry_signature, carry_reference: the reference root's address and classes). It also records the
+        carry reference of the structure check: every warmup root must share it (RuntimeError on any WORLD_STRUCTURE_MISMATCH),
+        and it must be the only constructor-world carry signature in the warmed program keys."""
         keys=PROTOCOL_KEYS[2:];pool=[]
         for r in requests:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
@@ -402,11 +431,12 @@ class DepthNLiveSearch:
         if not pool:raise ValueError('at least one saved request required')
         report={};started=time.perf_counter();self.carry=None;self.warming=True
         try:report=self._warm_buckets(pool)
-        finally:self.warming=False;self._reset_sessions()
+        finally:self.warming=False;self.reset_sessions()
         signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
         if self.carry is None or signatures!={self.carry['signature']}:
             raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
-        self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'])
+        self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
+            carry_reference=self.carry['root'])
         return self.warm
 
     def _warm_buckets(self,pool):
@@ -415,14 +445,16 @@ class DepthNLiveSearch:
             for attempt in range(-(-len(pool)//b)):
                 batch=[dict(pool[(attempt*b+j)%len(pool)],schema=SCHEMA,request_id=f'warmup-b{b}-{attempt}-{j}',rung=self.rung,budget_seconds=WARMUP_BUDGET)
                     for j in range(b)]
-                self._reset_sessions();clock=time.perf_counter();rows=self._batch(batch,bucket=b);cold=time.perf_counter()-clock
+                self.reset_sessions();clock=time.perf_counter();rows=self._batch(batch,bucket=b);cold=time.perf_counter()-clock
+                odd=[r['refusal']for r in rows if str(r['refusal']or'').startswith('WORLD_STRUCTURE_MISMATCH')]
+                if odd:raise RuntimeError(f'warmup: every warmup root must share one carry structure; against the reference root {self.carry["root"]}: '+'; '.join(odd))
                 if any(r['bucket']==b for r in rows)and not self.missing_programs(b):break
             else:
-                self._reset_sessions();missing=self.missing_programs(b)
+                self.reset_sessions();missing=self.missing_programs(b)
                 raise RuntimeError(f'warmup: no saved request priced at bucket {b} with every program compiled (missing: {", ".join(missing) or "none"}): '
                     +'; '.join(sorted({f'{r["cause"]}: {r["refusal"]}'for r in rows})))
             compiles=self.pricers[b].compiles
-            self._reset_sessions();clock=time.perf_counter();again=self._batch(batch,bucket=b);warm=time.perf_counter()-clock
+            self.reset_sessions();clock=time.perf_counter();again=self._batch(batch,bucket=b);warm=time.perf_counter()-clock
             report[b]=dict(cold_seconds=cold,warm_seconds=warm,attempts=attempt+1,roots=b,complete=sum(r['status']=='COMPLETE'for r in rows),
                 causes=sorted({r['cause']for r in rows if r['cause']}),compiled=len(compiles),lower_seconds=sum(c[1]for c in compiles),
                 compile_seconds=sum(c[2]for c in compiles),warm_compiled=len(self.pricers[b].compiles)if any(r['bucket']==b for r in again)else None)
