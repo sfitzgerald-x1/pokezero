@@ -2079,14 +2079,20 @@ def n2_float_sections(c):
     return dict(floats=('floats', c['floats']), **({} if inv is None else dict(block_invariance=('block_invariance.floats', inv['floats']))))
 
 
+def champion_report(report):
+    """Whether a saved report's evaluator header is the champion's (evaluator.kind 'champion'): load_roots sets it only with the champion's
+    forward, the one case where run_n2 writes header.merged_depth2_parity, every config's e_merged_depth2 and each Depth2Pricer's evaluator."""
+    return isinstance(report.get('evaluator'), dict) and report['evaluator'].get('kind') == 'champion'
+
+
 def n2_ran(report, name):
     """(the merged (e) ran, child-block invariance ran) for config `name`, as the saved report records it outside the config: run_n2 runs
-    MERGED_DEPTH2_DECISION on the champion path (header.merged_depth2_parity; options.<name>.depth2_options.evaluator) and child-block
-    invariance where options.<name>.child_blocks is set (the parity section's child_block_invariance 'ran ...')."""
+    MERGED_DEPTH2_DECISION on the champion path (champion_report; header.merged_depth2_parity; options.<name>.depth2_options.evaluator) and
+    child-block invariance where options.<name>.child_blocks is set (the parity section's child_block_invariance 'ran ...')."""
     header = report.get('header') if isinstance(report.get('header'), dict) else {};parity = header.get('merged_depth2_parity')
     option = (report.get('options') or {}).get(name) if isinstance(report.get('options'), dict) else None;option = option if isinstance(option, dict) else {}
     additions = (parity.get('champion_path_additions') or {}) if isinstance(parity, dict) else {}
-    merged = parity is not None or (isinstance(option.get('depth2_options'), dict) and 'evaluator' in option['depth2_options'])
+    merged = champion_report(report) or parity is not None or (isinstance(option.get('depth2_options'), dict) and 'evaluator' in option['depth2_options'])
     return merged, bool(option.get('child_blocks')) or str(additions.get('child_block_invariance', '')).startswith('ran')
 
 
@@ -2112,9 +2118,14 @@ def reverdict_n2_missing(report):
     missing += ([] if 'status' in report else ['status']) + ([] if isinstance(report.get('configs'), dict) else ['configs'])
     if not (isinstance(report.get('options'), dict) and all(isinstance(o, dict) for o in report['options'].values())):missing.append('options (per config: a JSON object)')
     if missing:return missing
+    champion = champion_report(report)   # the champion's forward: run_n2 wrote all three records of the merged (e)
+    if champion and not isinstance((report.get('header') if isinstance(report.get('header'), dict) else {}).get('merged_depth2_parity'), dict):
+        missing.append('header.merged_depth2_parity (a champion report: run_n2 ran the merged (e))')
     for name, c in report['configs'].items():
         at = f'configs.{name}';lacks = _lacks(at, c, ('status', 'world_reports_equal', 'world_reports_first_difference'), objects=('discrete', 'floats', 'e', 'tolerance'))
-        merged, invariance = n2_ran(report, name)
+        merged, invariance = n2_ran(report, name);option = report['options'].get(name, {})
+        if champion and not (isinstance(option.get('depth2_options'), dict) and 'evaluator' in option['depth2_options']):
+            lacks.append(f'options.{name}.depth2_options.evaluator (a champion report: its Depth2Pricer priced with the champion)')
         if isinstance(c, dict):
             lacks += ([f'{at}.e_merged_depth2 (the merged (e) ran: header.merged_depth2_parity)'] if merged and c.get('e_merged_depth2') is None else []) \
                 + ([f'{at}.block_invariance (child-block invariance ran: options.{name}.child_blocks)'] if invariance and c.get('block_invariance') is None else [])

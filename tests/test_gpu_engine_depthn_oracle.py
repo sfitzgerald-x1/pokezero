@@ -3136,6 +3136,10 @@ class N2ReverdictTests(FixtureN, unittest.TestCase):
             unmatched_key=(drop('configs', 'top2', 'e', 'replaced', 'unmatched_head_leaves'), 'configs.top2.e.replaced.unmatched_head_leaves (an integer)'),
             merged_section=(drop('configs', 'full_width', 'e_merged_depth2'), 'configs.full_width.e_merged_depth2 (the merged (e) ran: header.merged_depth2_parity)'),
             merged_by_options=(lambda r: (drop('configs', 'full_width', 'e_merged_depth2')(r), r['header'].pop('merged_depth2_parity')), 'configs.full_width.e_merged_depth2'),
+            champion_all_three=(lambda r: (r['header'].pop('merged_depth2_parity'), [(c.pop('e_merged_depth2'), r['options'][n]['depth2_options'].pop('evaluator'))
+                for n, c in r['configs'].items()]), 'header.merged_depth2_parity (a champion report: run_n2 ran the merged (e))'),
+            champion_parity=(drop('header', 'merged_depth2_parity'), 'header.merged_depth2_parity (a champion report'),
+            champion_option=(drop('options', 'top2', 'depth2_options', 'evaluator'), 'options.top2.depth2_options.evaluator (a champion report'),
             invariance_section=(drop('configs', 'top2', 'block_invariance'), 'configs.top2.block_invariance (child-block invariance ran: options.top2.child_blocks)'),
             n2_float=(drop('configs', 'top2', 'floats', 't1_own_logits'), 'configs.top2.floats.t1_own_logits (n2_compare compares it'),
             invariance_float=(drop('configs', 'top2', 'block_invariance', 'floats', 'root_peer_logits'), 'configs.top2.block_invariance.floats.root_peer_logits (block invariance'),
@@ -3283,29 +3287,46 @@ class N2ReverdictTests(FixtureN, unittest.TestCase):
                     self.assertIsNone(out);self.assertIn(message, text);self.assertIn('fail closed', text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
 
     def test_live_n2_reports_reverdict_as_written(self):
-        """run_n2's own n2-equivalence.json through main(): without a declaration (the stand-in, which carries no world_reports, FAILs) and
-        under a declaration written where git could not verify it (a checkout without git; the real pricer when on the tree: PASS); --reverdict
-        reproduces every config, the latter's audit on the work tree holding the commit clearing its provisional reason."""
+        """run_n2's own n2-equivalence.json through main() without a declaration (the stand-in, which carries no world_reports, FAILs):
+        --reverdict reproduces every config."""
         code, out = self.main('--n2-equivalence', '--n2-k', '2');report = json.loads((out / gate.N2_FILE).read_text())
         self.assertEqual((code, report['status']), (1, 'FAIL'))
         with patch.object(gate, 'log', lambda *a, **k: None):code = gate.main(['--reverdict', str(out / gate.N2_FILE)])
         again = json.loads((out / gate.N2_REVERDICT_FILE).read_text())
         self.assertEqual((code, again['status'], again['reverdict']['changed'], again['configs']), (1, 'FAIL', [], report['configs']))
-        record = committed(measured_declaration());exported = Path(tempfile.mkdtemp(prefix='depthn-exported-'))
-        target = exported / gate.DECLARED_SUBDIR / 'champion.json';target.parent.mkdir(parents=True);target.write_bytes(record.path.read_bytes())
-        roots = self.roots;self.roots = lambda: setattr((r := roots()), 'evaluator', dict(N2_CHAMPION)) or r   # what load_roots resolves for CHAMPION_FLAGS
+
+    @unittest.skipUnless(HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+    def test_a_live_champion_report_audits_and_keeps_its_merged_decision(self):
+        """run_n2 on the champion path, as only it writes a champion report: the champion tests' fixture (an exact stand-in champion as the run's
+        forward, as load_roots resolves --champion-archive) under a declaration written where git could not verify it (a checkout without git).
+        The report carries header.merged_depth2_parity, every config's e_merged_depth2 and each Depth2Pricer's evaluator and PASSes
+        provisionally; the audit on the work tree holding the commit re-judges it PASS with nothing changed and no reason left; with all three
+        records deleted it is refused and nothing is written."""
+        champion = importlib.import_module('tests.test_gpu_engine_champion_evaluator');cli = champion.ChampionCommandLineTests
+        live = type('LiveChampionN2', (champion.ChampionFixture, unittest.TestCase), dict(main=cli.main, roots=cli.roots, declared=cli.declared, FLAGS=cli.FLAGS,
+            runTest=lambda self: None))
+        live.setUpClass()
         try:
-            with patch.object(gate, 'REPO_ROOT', exported):
-                code, out = self.main('--n2-equivalence', '--n2-k', '2', *CHAMPION_FLAGS, '--declared-bounds', str(target), '--declared-bounds-sha256', record.sha256,
-                    '--declared-bounds-commit', record.commit, real=HAVE_PRICER)
-        finally:self.roots = roots
-        report = json.loads((out / gate.N2_FILE).read_text());want = 'PASS' if HAVE_PRICER else 'FAIL'
-        self.assertEqual((code, report['status'], report['header']['declared_bounds']['git_verification']['status']), (int(want != 'PASS'), want, 'not verifiable here'))
-        self.assertTrue(report['status_reasons'][0].startswith('provisional: git_verification'))
-        self.assertEqual({c['tolerance']['guard_declared']['modes']['floats.t2_value'] for c in report['configs'].values()}, {'gated'})   # the fixture prices with two parameter sets
-        code, again, _, _ = n2_reverdicted(report, '--declared-bounds-commit', record.commit, '--declared-bounds-sha256', record.sha256, repo=record.root)
-        self.assertEqual((code, again['status'], again['status_reasons'], again['reverdict']['changed'], again['configs']), (int(want != 'PASS'), want, [], [], report['configs']))
+            run = live();_, flags, sha = run.declared();record = run.record
+            exported = Path(tempfile.mkdtemp(prefix='depthn-exported-'));target = exported / gate.DECLARED_SUBDIR / 'champion.json'
+            target.parent.mkdir(parents=True);target.write_bytes(record.path.read_bytes());run.repo = exported   # the run's checkout: not a git work tree
+            code, out = run.main('--n2-equivalence', '--n2-k', '2', '--declared-bounds', str(target), *flags[2:])
+        finally:live.tearDownClass()
+        report = json.loads((out / gate.N2_FILE).read_text())
+        self.assertEqual((code, report['status'], report['evaluator']['kind'], report['header']['declared_bounds']['git_verification']['status']),
+            (0, 'PASS', 'champion', 'not verifiable here'))
+        self.assertTrue(report['status_reasons'][0].startswith('provisional: git_verification'));self.assertIn('merged_depth2_parity', report['header'])
+        self.assertEqual({n: ('e_merged_depth2' in c, 'evaluator' in report['options'][n]['depth2_options']) for n, c in report['configs'].items()},
+            dict(full_width=(True, True), top2=(True, True)))
+        audit = ('--declared-bounds-commit', record.commit, '--declared-bounds-sha256', sha)
+        code, again, _, _ = n2_reverdicted(report, *audit, repo=record.root)
+        self.assertEqual((code, again['status'], again['status_reasons'], again['reverdict']['changed'], again['configs']), (0, 'PASS', [], [], report['configs']))
         self.assertEqual(again['reverdict']['declared_bounds_reverified']['git']['status'], 'verified')
+        r = copy.deepcopy(report);r['header'].pop('merged_depth2_parity')
+        for name, c in r['configs'].items():c.pop('e_merged_depth2');r['options'][name]['depth2_options'].pop('evaluator')
+        text, again, _, path = n2_reverdicted(r, *audit, repo=record.root)
+        self.assertIsNone(again);self.assertIn('lacks what the verdict needs: header.merged_depth2_parity (a champion report', text)
+        self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
 
 
 # ---------------------------------------------------------------- the frozen default paths, byte for byte
