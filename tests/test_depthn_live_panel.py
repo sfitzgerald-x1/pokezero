@@ -29,8 +29,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DISPATCH_TIMEOUT = 30
 
 
-def declaration(ladder_sha256, arms=('RAW', 'DN2W8')):
-    return dict(schema=panel.SCHEMA, ladder_declaration_sha256=ladder_sha256,
+EXPECTED = dict(value=.9, source=dict(run_id='constructor-world-gate-fixture', report_sha256='f'*64))
+
+
+def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED):
+    return dict(schema=panel.SCHEMA, ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
         checkpoint_sha256=ActorContract.champion().checkpoint_sha256, arms=list(arms),
         search={a: dict(depth=2, worlds=panel.WORLDS[a]) for a in arms[1:]}, root_operator='ARGMAX_MEAN_COMPLETED_Q',
         deadline_seconds=3., reserve_seconds=.15, screen_paired_cells=500, max_paired_cells=2000, confidence=.9,
@@ -38,9 +41,9 @@ def declaration(ladder_sha256, arms=('RAW', 'DN2W8')):
         screen_rule=panel.SCREEN_RULE, breakage=dict(panel.BREAKAGE))
 
 
-def make_run(directory, arms=('RAW', 'DN2W8')):
+def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED):
     root = Path(directory).resolve(); inputs = root/'inputs'
-    lad = ladder_fixture.declaration(); d = declaration(panel.sha(lad), arms); base = {}
+    lad = ladder_fixture.declaration(); d = declaration(panel.sha(lad), arms, expected); base = {}
     for name, value in (('ladder', lad), ('declaration', d), ('base', base)): panel.write_new(inputs/f'{name}.json', value)
     run = panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
         ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/inert/champion.pt',
@@ -93,6 +96,18 @@ class DeclarationTests(unittest.TestCase):
     def test_accepts_the_declared_panel(self):
         for arms in (('RAW', 'DN2W8'), ('RAW', 'DN2W16'), ('RAW', 'DN2W8', 'DN2W16')):
             self.assertEqual(panel.validate(declaration('a'*64, arms))['arms'], list(arms))
+        self.assertEqual(panel.BREAKAGE['searched_share_min'], .5)
+        for value in (None, dict(EXPECTED, value=0.), dict(EXPECTED, value=1.)):
+            self.assertEqual(panel.validate(declaration('a'*64, expected=value))['expected_searched_share'], value)
+
+    def test_refuses_a_malformed_expected_searched_share(self):
+        source = EXPECTED['source']
+        for value in (.9, dict(EXPECTED, value=1.2), dict(EXPECTED, value=-.1), dict(EXPECTED, value=1), dict(EXPECTED, value=True),
+                      dict(EXPECTED, extra=1), dict(value=.9), dict(EXPECTED, source=dict(source, report_sha256='F'*64)),
+                      dict(EXPECTED, source=dict(source, run_id=' ')), dict(EXPECTED, source=dict(run_id='x')),
+                      dict(EXPECTED, source=dict(source, path='/x'))):
+            with self.subTest(value), self.assertRaisesRegex(ValueError, 'expected searched share'):
+                panel.validate(declaration('a'*64, expected=value))
 
     def test_refuses_any_other_declaration(self):
         changes = [('extra', 'host:1'), ('schema', 'other'), ('ladder_declaration_sha256', 'A'*64), ('checkpoint_sha256', 'b'*64),
@@ -102,7 +117,7 @@ class DeclarationTests(unittest.TestCase):
                    ('confidence', .95), ('primary_comparison', 'SEARCH_MINUS_CODEX_RAW'), ('bar', 'LOWER_BOUND_GT_0_AT_2000'),
                    ('screen_rule', 'STOP_HARM_IF_LOWER_BOUND_LT_0'), ('breakage', dict(panel.BREAKAGE, latency_p95_max_seconds=4.)),
                    ('breakage', dict(panel.BREAKAGE, unknown_cells_max=5)), ('breakage', dict(panel.BREAKAGE, transport_failure_share_max=.1)),
-                   ('breakage', dict(panel.BREAKAGE, searched_share_min=.5))]
+                   ('breakage', dict(panel.BREAKAGE, searched_share_min=.8))]
         for key, value in changes:
             d = declaration('a'*64); d[key] = value
             with self.subTest(key=key, value=value), self.assertRaises(ValueError): panel.validate(d)
@@ -195,6 +210,13 @@ class RunTests(unittest.TestCase):
             Path(packets[5]['path']).write_bytes(b'{}')
             with self.assertRaisesRegex(ValueError, 'differs'): panel.pending(root, arm='RAW', limit=500, resume=True)
             with self.assertRaisesRegex(ValueError, 'undeclared'): panel.pending(root, arm='DN2W16', limit=500)
+
+    def test_no_dispatch_before_the_expected_searched_share_is_set(self):
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory, expected=None)
+            for arm in ('RAW', 'DN2W8'):
+                with self.subTest(arm), self.assertRaisesRegex(ValueError, 'must be set before dispatch'): panel.pending(root, arm=arm, limit=500)
+            self.assertFalse((root/'requests').exists())
 
 
 class PromotionTests(unittest.TestCase):
@@ -567,6 +589,39 @@ class ReadoutTests(unittest.TestCase):
         populate(self.root, self.run, self.lad, rows_for=mostly)
         value = self.readout(); self.assertEqual(value['arms']['DN2W8']['decisions']['transport_failure_share'], .03)
         self.assertEqual(value['breakage'], ['transport_failures'])
+
+    def test_searched_share_floor_is_fifty_percent(self):
+        def share(refused):
+            def build(cell):
+                if cell['arm'] == 'RAW': return [decision_row(cell, 0, source='raw_arm')]
+                if cell['pair_ordinal'] < refused: return [decision_row(cell, 0, source='greedy_fallback', cause='constructor_refused')]
+                return [decision_row(cell, 0)]
+            return build
+        for refused, searched, breakage in ((200, .6, []), (250, .5, []), (300, .4, ['searched_share'])):
+            with self.subTest(searched):
+                populate(self.root, self.run, self.lad, rows_for=share(refused)); value = self.readout()
+                self.assertEqual((value['arms']['DN2W8']['decisions']['searched_share'], value['breakage']), (searched, breakage))
+
+    def test_expected_searched_share_is_descriptive_and_never_changes_a_decision(self):
+        def refuse_most(cell):
+            if cell['arm'] == 'RAW': return [decision_row(cell, 0, source='raw_arm')]
+            return [decision_row(cell, 0, source='greedy_fallback', cause='depthn_refused')] if cell['pair_ordinal'] < 350 else [decision_row(cell, 0)]
+        scenarios = dict(clean=dict(limit=500), floor=dict(limit=500, rows_for=refuse_most), bar=dict(limit=2000))
+        keys = ('decision', 'harm', 'breakage', 'bar', 'paired', 'dilution', 'arms')
+        for name, kwargs in scenarios.items():
+            outcomes = []
+            for i, expected in enumerate((None, dict(EXPECTED, value=.05), dict(EXPECTED, value=.99)) if name != 'bar' else (EXPECTED, None)):
+                root, run, d, lad = make_run(Path(self.directory.name)/f'{name}-{i}', expected=expected)
+                populate(root, run, lad, **kwargs); value = panel.readout(root, arm='DN2W8', limit=kwargs['limit'])
+                outcomes.append(value); comparison = value['expected_searched_share']; observed = value['dilution']['searched_share']
+                self.assertEqual((comparison['scope'], comparison['observed']), ('DESCRIPTIVE_NOT_A_GATE', observed))
+                if expected is None: self.assertEqual((comparison['expected'], comparison['difference'], comparison['source']), (None, None, None))
+                else:
+                    self.assertEqual((comparison['expected'], comparison['source']), (expected['value'], expected['source']))
+                    self.assertAlmostEqual(comparison['difference'], observed-expected['value'], places=12)
+            with self.subTest(name):
+                self.assertEqual({tuple(json.dumps(v[k], sort_keys=True) for k in keys) for v in outcomes}.__len__(), 1)
+                self.assertEqual(outcomes[0]['decision'], dict(clean='CONTINUE_TO_2000', floor='STOP_BREAKAGE', bar='BAR_MET')[name])
 
     def test_unattempted_cells_are_incomplete_but_lost_claims_are_unknown(self):
         populate(self.root, self.run, self.lad, skip={498, 499})

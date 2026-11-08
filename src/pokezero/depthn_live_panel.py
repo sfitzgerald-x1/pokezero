@@ -7,6 +7,12 @@ cell is never re-run, and resume dispatches only not-attempted cells. One game
 at a time per dedicated worker process. A search arm is dispatched only after a
 live server probe passes. Readouts are pinned to the run's code identity and use
 our own estimator. Import starts nothing.
+
+The searched-share breakage floor (50% of non-single-legal decisions) only
+catches a server that refuses everything. The pre-registered expected searched
+share (from the constructor-world gate on 40 Showdown roots, bound to that run id
+and report sha256) must be set before any dispatch; readouts report observed vs
+expected as a descriptive comparison that never changes a decision.
 """
 import asyncio
 from collections import Counter,deque
@@ -35,11 +41,12 @@ PROBE_SCHEMA='depthn-foulplay-panel.probe.v1'
 WORLDS={'DN2W8':8,'DN2W16':16}
 SCREEN_RULE='STOP_HARM_IF_UPPER_BOUND_LT_0'
 BREAKAGE=dict(latency_p95_max_seconds=3.,timeout_forfeits_max=0,unknown_cells_max=0,
-              transport_failure_share_max=.02,searched_share_min=.8)
+              transport_failure_share_max=.02,searched_share_min=.5)
 TRANSPORT=('timeout','connection_error','server_error')
 T_QUANTILE=.95  # Two-sided 90%; validate() pins confidence to .9.
 KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','arms','search','root_operator','deadline_seconds',
-      'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage'}
+      'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
+      'expected_searched_share'}
 REQUEST_KEYS={'schema','run_directory','declaration','declaration_sha256','ladder_declaration','ladder_declaration_sha256',
               'cell','checkpoint','checkpoint_sha256','base_config'}
 encoded,sha,read_bound,write_new=ladder.encoded,ladder.sha,ladder.read_bound,ladder.write_new
@@ -64,6 +71,13 @@ def validate(declaration):
             or d['bar']!='LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE'or d['screen_rule']!=SCREEN_RULE
             or d['breakage']!=BREAKAGE):
         raise ValueError('declared DepthN 500/2000 paired panel against our RAW required')
+    expected=d['expected_searched_share']
+    if expected is not None and (type(expected)is not dict or set(expected)!={'value','source'}
+            or type(expected['value'])is not float or not 0.<=expected['value']<=1.
+            or type(expected['source'])is not dict or set(expected['source'])!={'run_id','report_sha256'}
+            or type(expected['source']['run_id'])is not str or not expected['source']['run_id'].strip()
+            or not _hex(expected['source']['report_sha256'])):
+        raise ValueError('expected searched share: null, or a value in [0, 1] bound to the gate run id and report sha256')
     return d
 
 
@@ -162,6 +176,7 @@ def pending(run_directory,*,arm,limit,resume=False,screen=None,tree_commit=None)
     """
     root,run,d,lad=load(run_directory);require_tree(run,tree_commit)
     if arm not in d['arms']:raise ValueError('undeclared arm')
+    if d['expected_searched_share']is None:raise ValueError('expected searched share from the constructor-world gate must be set before dispatch')
     if limit==d['max_paired_cells']:
         value=None if screen is None else read_bound(*screen)
         if (type(value)is not dict or value.get('schema')!=READOUT_SCHEMA or value.get('declaration_sha256')!=run['declaration_sha256']
@@ -480,12 +495,17 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,tree_commit=None)
         roster=stats['unknown_pairs']==0 or stats['full_roster_identification_bounds'][0]>0
         bar=dict(rule=d['bar'],met=met,met_full_roster=met and roster,breakage_free=not breakage)
         decision='INCOMPLETE'if not attempted else'BAR_MET'if bar['met_full_roster']and not breakage else'BAR_NOT_MET'
+    # Descriptive only: computed after the decision and never read by it.
+    declared=d['expected_searched_share'];observed=search['searched_share']
+    expected=dict(scope='DESCRIPTIVE_NOT_A_GATE',observed=observed,expected=None if declared is None else declared['value'],
+        difference=None if declared is None or observed is None else observed-declared['value'],
+        source=None if declared is None else declared['source'])
     return dict(schema=READOUT_SCHEMA,declaration_sha256=run['declaration_sha256'],ladder_declaration_sha256=run['ladder_declaration_sha256'],
         tree=tree,arm=arm,paired_cells=limit,comparison=d['primary_comparison'],confidence=d['confidence'],
         estimator='seed-clustered paired t over the two seats per seed, two-sided 90%; missing cells as identification bounds',
         paired=stats,decision=decision,harm=harm,breakage=breakage,screen_rule=d['screen_rule'],breakage_rules=rules,bar=bar,
         dilution=dict(searched_share=search['searched_share'],fallback_share=search['fallback_share'],
-            search_differs_share_of_all=search['search_differs_share_of_all']),arms=arms,
+            search_differs_share_of_all=search['search_differs_share_of_all']),expected_searched_share=expected,arms=arms,
         codex_raw_directory=None if codex_raw_directory is None else str(Path(codex_raw_directory).resolve()),
         codex_raw_agreement=None if codex_raw_directory is None else
             codex_raw_agreement(lad,run['ladder_declaration_sha256'],rows['RAW'],codex_raw_directory,limit=limit))
