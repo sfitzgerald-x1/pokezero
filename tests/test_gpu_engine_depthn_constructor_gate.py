@@ -544,7 +544,7 @@ class TableIdentityTests(unittest.TestCase):
     def test_every_kind_of_difference_is_named_by_path(self):
         from gpu_engine import constructor_worlds as cw
         base = nested()
-        for change, text in ((dict(power=np.asarray([0, 41, 90], np.int32)), 'tables.power: bytes differ (<i4 [3]; first differing byte 4)'),
+        for change, text in ((dict(power=np.asarray([0, 41, 90], np.int32)), 'tables.power: bytes differ (int32 [3]; first differing byte 4)'),
                 (dict(power=np.asarray([0, 40, 90], np.int64)), 'tables.power: array'), (dict(chart=np.ones((2, 3), np.float32)), 'tables.chart: array'),
                 (dict(effects=np.zeros(1)), 'tables.effects: scalar'), (dict(lookup={'a': 8, 'b': np.zeros(1, np.uint8)}), "tables.lookup['a']: scalar"),
                 (dict(lookup={'a': 7}), "tables.lookup: node"), (dict(rows=[np.float32(.5)]), 'tables.rows: node')):
@@ -552,6 +552,10 @@ class TableIdentityTests(unittest.TestCase):
                 found = cw.tables_differences(base, nested(**change));self.assertTrue(found and found[0].startswith(text), found)
                 self.assertNotEqual(cw.tables_digest(base), cw.tables_digest(nested(**change)))
         with self.assertRaisesRegex(TypeError, r'tables.effects: unsupported compiled-table member'):cw.table_leaves(nested(effects=Leaf()))
+        import jax.numpy as jnp
+        brain = cw.table_leaves(nested(chart=jnp.ones((2, 2), jnp.bfloat16)))[2];half = cw.table_leaves(nested(chart=np.ones((2, 2), np.float16)))[2]
+        self.assertEqual((brain[2], half[2]), (('<V2', 'bfloat16', (2, 2)), ('<f2', 'float16', (2, 2))))   # bfloat16 is named, not only <V2
+        self.assertTrue(cw.tables_differences(nested(chart=jnp.ones((2, 2), jnp.bfloat16)), nested(chart=np.zeros((2, 2), np.dtype('V2'))))[0].startswith('tables.chart: array'))
 
 
 @requires_showdown('the tables bridge compiles the real Gen 3 engine tables')
@@ -604,6 +608,21 @@ class TablesBridgeTests(unittest.TestCase):
         chart['type_chart'][row][col] = 2
         with self.assertRaisesRegex(ValueError, r"tables\['engine'\]\.type_num: bytes differ"):gate.tables_bridge(bank, self.catalog, chart, self.catalog)
 
+    def test_a_catalog_that_changes_only_the_observation_tables_fails_naming_them(self):
+        """The same metadata with a catalog whose stats_block mask is flipped: the engine tables are equal, the observation tables are not."""
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.recorded_mirror_roots import CHAMPION_CONTRACT
+        from gpu_engine import constructor_worlds as cw, public_belief, v4_encoder
+        root = showdown_root();masks = dict(CHAMPION_CONTRACT['feature_masks'], stats_block=not CHAMPION_CONTRACT['feature_masks']['stats_block'])
+        flipped = v4_encoder.compile_encoder(public_belief.compile_source(load_gen3_randbat_source_cached(root)), load_showdown_dex_cached(root),
+            gen3_category_vocabulary(root, include_feature_pack_v4=True), checkpoint_sha256='a' * 64, feature_masks=masks)
+        bank, live = self.documents();mine, theirs = cw.engine_tables(live, self.catalog), cw.engine_tables(live, flipped)
+        self.assertEqual(cw.tables_differences(dict(engine=mine[0]), dict(engine=theirs[0])), [])   # the engine tables do not read the catalog
+        with self.assertRaisesRegex(ValueError, r"compiled tables differ \(TABLES_BRIDGE\): tables\['observation'\]\."):
+            gate.tables_bridge(bank, self.catalog, live, flipped)
+
     def test_the_bank_executors_own_tables_are_held_to_their_recompile(self):
         from gpu_engine import constructor_worlds as cw
         bank, live = self.documents();moved = json.loads(json.dumps(bank));moved['type_chart'][0][0] = 2 if moved['type_chart'][0][0] != 2 else 1
@@ -618,18 +637,21 @@ class WiringTests(unittest.TestCase):
         constructor_vocabulary=('vocabulary.json', 'c' * 64), showdown_root='showdown', node_binary='node', constructor_worlds=4, constructor_seed=3,
         constructor_per_band=2)
 
-    def run_roots(self, *, refuse_build=False, refused=(1, 6), unavailable=(5,), turns=(2,) * 4 + (5,) * 4 + (12,) * 4 + (25,) * 4, bridge_error=None):
+    def run_roots(self, *, refuse_build=False, refused=(1, 6), unavailable=(5,), turns=(2,) * 4 + (5,) * 4 + (12,) * 4 + (25,) * 4, bridge_error=None,
+            bank_binding=dict(metadata_sha256='bank-m')):
         from gpu_engine import constructor_worlds as cw, depthn_live_search as live, phase_d_protocol_constructor as pc
         made, self.calls = [], collections.defaultdict(list)
         provider = SimpleNamespace(executor='EX', source='SRC', prepared=SimpleNamespace(metadata_json='{"m": 1, "move_frequency": 2}', catalog='CAT',
             engine_tables='BANK-E', observation_tables='BANK-O'), recipe=SimpleNamespace(seed=11))
         def bridge(bank_metadata, bank_catalog, metadata, catalog, *, reference=None):
             self.calls['bridge'].append((bank_metadata, bank_catalog, metadata, catalog, reference))
-            if bridge_error:raise ValueError(bridge_error)
+            if bridge_error:raise bridge_error if isinstance(bridge_error, Exception) else ValueError(bridge_error)
             return ('E', 'O'), dict(digest='9' * 64, equal=True)
         def executor(metadata, catalog, *, tables=None):self.calls['executor'].append((metadata, catalog, tables));return 'LIVE'
         loaded = SimpleNamespace(provider=provider, plan='PLAN', source=dict(saved_roots='saved'))
-        binding = dn().WorldBinding('s', 'r', 'b', 'm', (('checkpoint_sha256', 'e' * 64),))
+        binding = dn().WorldBinding('s', 'r', 'b', 'm', (('checkpoint_sha256', 'e' * 64),));bank = replace(binding, **bank_binding)
+        def bind(source, metadata, catalog):   # the bank's inputs give the bank's binding, the constructor's the live one
+            self.calls['binding'].append((source, metadata, catalog));return bank if source == 'SRC' else binding
         class Constructor:
             def __init__(self, **kw):made.append(kw)
         def request(meta, i, *, roster_sha256, worlds):
@@ -643,6 +665,7 @@ class WiringTests(unittest.TestCase):
             return (cw.Prepared(r['request_id'], 'detached', SimpleNamespace(fully_constructed=not partial, worlds=worlds), (True,) * 9, .25, 'B'),)
         def build(constructor, prepared, pricer, params, *, binding, recipe, only_complete):
             self.assertEqual((pricer.executor, params, recipe, only_complete), ('LIVE', ('P',), provider.recipe, True))   # root views: the live executor
+            self.calls['build_binding'].append(binding)
             roots, requests, pairs = [], [], []
             for n, item in enumerate(prepared):
                 rows = (len(requests), len(requests) + 1);requests += [f'{item.request_id}-0', f'{item.request_id}-1']
@@ -654,7 +677,7 @@ class WiringTests(unittest.TestCase):
         with patch.object(gate.g2, 'saved_root_requests', lambda args: loaded), patch.object(gate.g2, 'load_champion', lambda args, l: SimpleNamespace(params='P')), \
                 patch.object(gate.g2, 'evaluator_header', lambda args, l, head, champion=None: dict(kind='champion')), \
                 patch.object(pc, 'load_inputs', lambda a: ('catalog', 'source', dict(m=1), 'config')), patch.object(pc, 'ProtocolConstructor', Constructor), \
-                patch.object(cw, 'binding', lambda *a: binding), patch.object(gate, 'read_roster', lambda path, sha: (dict(declaration=dict(seed=1), capture_prefix=dict(games=64),
+                patch.object(cw, 'binding', bind), patch.object(gate, 'read_roster', lambda path, sha: (dict(declaration=dict(seed=1), capture_prefix=dict(games=64),
                     selected=[]), roster(turns))), patch.object(gate, 'roster_request', request), patch.object(cw, 'prepare_roots', prepare), \
                 patch.object(live, 'classify', lambda constructor, r: (['sleep'], 'protocol_facts') if r['i'] == 9 else ([], 'protocol_facts')), \
                 patch.object(cw, 'build', build), patch.object(gate, 'bind_constructor', lambda requests, params, plan, ev: (tuple(requests), [.5] * len(requests), True)), \
@@ -687,13 +710,41 @@ class WiringTests(unittest.TestCase):
         # executor from the bridge's tables, and the constructor's own binding
         self.assertEqual(self.calls['bridge'], [(dict(m=1, move_frequency=2), 'CAT', dict(m=1), 'catalog', ('BANK-E', 'BANK-O'))])
         self.assertEqual(self.calls['executor'], [(dict(m=1), 'catalog', ('E', 'O'))]);self.assertEqual(ctor.executor, 'LIVE')
-        self.assertEqual(pins['tables'], dict(digest='9' * 64, equal=True, bank_binding_differs=[]));self.assertEqual(pins['executor'], gate.LIVE_EXECUTOR)
+        self.assertEqual(pins['tables'], dict(digest='9' * 64, equal=True, bank_binding_differs=['metadata_sha256']));self.assertEqual(pins['executor'], gate.LIVE_EXECUTOR)
+        # the live binding is built from the constructor's own inputs (the bank's only for the comparison) and is the one build and the run use
+        self.assertEqual(sorted(self.calls['binding'], key=repr), [('SRC', dict(m=1, move_frequency=2), 'CAT'), ('source', dict(m=1), 'catalog')])   # once each
+        self.assertEqual(self.calls['build_binding'][0].metadata_sha256, 'm');self.assertIs(ctor.binding, self.calls['build_binding'][0])
+        self.assertEqual(pins['binding']['metadata_sha256'], 'm')
         self.assertEqual(next(x for x in lines if x['message'] == 'TABLES_BRIDGE')['digest'], '9' * 64)
 
     def test_a_tables_difference_fails_before_any_root_is_prepared(self):
         with self.assertRaisesRegex(SystemExit, r"fail closed\): .*tables\['engine'\].power"):
             self.run_roots(bridge_error="the bank's and the constructor's compiled tables differ (TABLES_BRIDGE): tables['engine'].power: bytes differ")
         self.assertEqual((len(self.calls['bridge']), self.calls['prepare'], self.calls['executor']), (1, [], []))
+
+    def test_the_source_binding_stays_gated(self):
+        """Only metadata_sha256 may differ between the bank's binding and the live one (TABLES_BRIDGE stands in for it); any other field fails
+        closed before any root is prepared."""
+        for differs in (dict(metadata_sha256='bank-m', source_binding_sha256='x'), dict(source_hash='x'), dict(encoder=(('checkpoint_sha256', 'f' * 64),))):
+            with self.subTest(differs=sorted(differs)), self.assertRaisesRegex(SystemExit, r'binding differs from the live one in .*' + sorted(set(differs) - {'metadata_sha256'})[0]):
+                self.run_roots(bank_binding=differs)
+            self.assertEqual(self.calls['prepare'], [])
+        out, _, _ = self.run_roots(bank_binding={});self.assertEqual(out.constructor.pins['tables']['bank_binding_differs'], [])   # equal bindings pass
+
+    def test_an_unknown_table_member_fails_closed_with_a_message(self):
+        with self.assertRaisesRegex(SystemExit, r'fail closed\): tables\[.engine.\]\.public_port: unsupported compiled-table member'):
+            self.run_roots(bridge_error=TypeError("tables['engine'].public_port: unsupported compiled-table member builtins.object"))
+        self.assertEqual(self.calls['prepare'], [])
+
+    def test_the_live_executor_is_the_live_servers(self):
+        """constructor_worlds.live_executor: device_public_teacher.make_executor on the given (or compiled) tables with the device teacher and
+        batched joint steps, as scripts/depthn_live_server.build has always built it."""
+        from gpu_engine import constructor_worlds as cw, device_public_teacher as teacher
+        made = []
+        with patch.object(teacher, 'make_executor', lambda *a, **k: made.append((a, k)) or 'executor'), patch.object(cw, 'engine_tables', lambda m, c: (('E', m), ('O', c))):
+            self.assertEqual((cw.live_executor('meta', 'cat', tables=('e', 'o')), cw.live_executor('meta', 'cat')), ('executor', 'executor'))
+        flags = dict(enable_device_teacher=True, batch_joint=True)
+        self.assertEqual(made, [(('e', 'o'), flags), ((('E', 'meta'), ('O', 'cat')), flags)])
 
     def test_fail_closed(self):
         with self.assertRaisesRegex(SystemExit, 'build refused selected roots'):self.run_roots(refuse_build=True)

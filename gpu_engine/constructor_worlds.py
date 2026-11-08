@@ -142,7 +142,7 @@ def live_executor(metadata,catalog,*,tables=None):
 def table_leaves(tables,path='tables'):
     """Every node and leaf of a compiled table structure in a deterministic order: (path, kind, descriptor, bytes). Nodes (NamedTuple, dataclass,
     tuple, list, dict: dict keys sorted by repr) record their class and field names; arrays (numpy or jax, fetched to the host) their dtype, shape
-    and C-order bytes; None, bool, int, float and str their type and repr. Any other leaf raises TypeError: an unknown table member is never
+    (its byte-order string and its name) and C-order bytes; None, bool, int, float and str their type and repr. Any other leaf raises TypeError: an unknown table member is never
     compared by identity."""
     import dataclasses
     out=[]
@@ -157,7 +157,7 @@ def table_leaves(tables,path='tables'):
             keys=sorted(x,key=repr);out.append((at,'node',(kind,tuple(map(repr,keys))),b''));[walk(x[k],f'{at}[{k!r}]')for k in keys]
         elif x is None or type(x)in(bool,int,float,str):out.append((at,'scalar',(kind,repr(x)),b''))
         elif isinstance(x,(np.ndarray,np.generic,jax.Array)):
-            a=np.ascontiguousarray(np.asarray(jax.device_get(x)));out.append((at,'array',(a.dtype.str,a.shape),a.tobytes()))
+            a=np.ascontiguousarray(np.asarray(jax.device_get(x)));out.append((at,'array',(a.dtype.str,str(a.dtype),a.shape),a.tobytes()))   # the name too: bfloat16's str is <V2
         else:raise TypeError(f'{at}: unsupported compiled-table member {kind}')
     walk(tables,path);return out
 
@@ -189,7 +189,7 @@ def tables_differences(a,b,*,limit=20):
         if x[1:3]!=y[1:3]:out.append(f'{x[0]}: {x[1]} {x[2]} != {y[1]} {y[2]}')
         elif x[3]!=y[3]:
             u,v=np.frombuffer(x[3],np.uint8),np.frombuffer(y[3],np.uint8);first=int(np.flatnonzero(u!=v)[0])if len(u)==len(v)else 0
-            out.append(f'{x[0]}: bytes differ ({x[2][0]} {list(x[2][1])}; first differing byte {first})')
+            out.append(f'{x[0]}: bytes differ ({x[2][1]} {list(x[2][2])}; first differing byte {first})')
     if len(out)<limit and len(left)!=len(right):
         extra=(left if len(left)>len(right)else right)[min(len(left),len(right))]
         out.append(f'{extra[0]}: present on one side only ({len(left)} against {len(right)} entries)')

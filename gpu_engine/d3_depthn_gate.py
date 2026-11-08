@@ -4070,7 +4070,10 @@ AVERAGING_RULE = ('averaging_argmax (CONSTRUCTOR_ROOTS, run beside (e) on its or
 LIVE_EXECUTOR = ('CONSTRUCTOR_ROOTS prices on the live executor: constructor_worlds.live_executor and binding over the constructor\'s own engine '
     'metadata and catalog (phase_d_protocol_constructor.load_inputs), as scripts/depthn_live_server.build serves, for the full-width depth-2 pass, '
     'every depth-N pricer (the block-invariance twin included), the oracle and the root views. The D3 bank (--saved-roots) supplies only the '
-    'champion\'s catalog check, the evaluator header, the recipe and the bank metadata TABLES_BRIDGE compares')
+    'champion\'s catalog check, the evaluator header, the recipe and the bank metadata TABLES_BRIDGE compares. The live binding must equal the '
+    'bank\'s (its source, engine metadata and catalog) in every field but BINDING_BRIDGED (metadata_sha256, which TABLES_BRIDGE replaces): fail '
+    'closed otherwise')
+BINDING_BRIDGED = ('metadata_sha256',)   # the one WorldBinding field the live binding may differ from the bank's in (TABLES_BRIDGE replaces it)
 TABLES_BRIDGE = ('tables identity (gated at gate start, before any root is prepared): the engine tables are compiled through the executor\'s own code '
     'paths (constructor_worlds.engine_tables: transition.tables_from_metadata, engine_device_observation.compile_tables) from the bank\'s metadata '
     'with the bank\'s catalog and from the constructor\'s with its own, and the two compiled structures must be equal entry for entry '
@@ -4096,7 +4099,8 @@ def tables_bridge(bank_metadata, bank_catalog, metadata, catalog, *, reference=N
 
 
 def binding_differences(bank, live):
-    """The WorldBinding fields where the bank's binding (its source, metadata and catalog) differs from the live one; reported, never gated."""
+    """The WorldBinding fields where the bank's binding (its source, metadata and catalog) differs from the live one (constructor_roots fails
+    closed on any but BINDING_BRIDGED)."""
     return [f.name for f in dataclasses.fields(live) if getattr(bank, f.name, None) != getattr(live, f.name)]
 
 
@@ -4362,8 +4366,8 @@ def constructor_roots(args):
     sha256s); TABLES_BRIDGE (fail closed); the live executor and binding over the constructor's own metadata and catalog (LIVE_EXECUTOR, as
     scripts/depthn_live_server.build); the ProtocolConstructor (W worlds, the seed, saved-root admission, as the coverage script); the roster and
     CONSTRUCTOR_RULE (prepare on the CPU, once per root); constructor_worlds.build (only_complete) under that binding, its root views through the
-    live executor; bind_constructor; each root's carry signature (host, before any pricing). SystemExit (fail closed) on a tables difference, a
-    band short of roots, a selected root build refuses, a bind mismatch or a root whose own worlds differ in carry."""
+    live executor; bind_constructor; each root's carry signature (host, before any pricing). SystemExit (fail closed) on a tables difference (or
+    an unknown table member), a binding difference beyond BINDING_BRIDGED, a band short of roots, a selected root build refuses, a bind mismatch or a root whose own worlds differ in carry."""
     loaded = g2.saved_root_requests(args)   # the runtime only (its memory policy precedes the first JAX import)
     champion = g2.load_champion(args, loaded);provider, params = loaded.provider, (champion.params,)
     from pokezero.live_protocol_actor import ActorContract
@@ -4378,10 +4382,14 @@ def constructor_roots(args):
     bank_metadata = json.loads(provider.prepared.metadata_json)
     try:tables, bridge = tables_bridge(bank_metadata, provider.prepared.catalog, metadata, catalog,
         reference=(provider.prepared.engine_tables, provider.prepared.observation_tables))
-    except ValueError as error:raise SystemExit(f'--constructor-roster (fail closed): {error}')
-    bridge['bank_binding_differs'] = binding_differences(cw.binding(provider.source, bank_metadata, provider.prepared.catalog), cw.binding(source, metadata, catalog))
+    except (ValueError, TypeError) as error:raise SystemExit(f'--constructor-roster (fail closed): {error}')   # TypeError: an unknown table member
+    binding = cw.binding(source, metadata, catalog)   # LIVE_EXECUTOR: the constructor's own source, metadata and catalog
+    bridge['bank_binding_differs'] = differs = binding_differences(cw.binding(provider.source, bank_metadata, provider.prepared.catalog), binding)
+    if set(differs) - set(BINDING_BRIDGED):
+        raise SystemExit(f'--constructor-roster (fail closed): the bank\'s binding differs from the live one in {differs}; only {list(BINDING_BRIDGED)} may '
+            '(TABLES_BRIDGE stands in for it)')
     log('TABLES_BRIDGE', **bridge)
-    executor, binding = cw.live_executor(metadata, catalog, tables=tables), cw.binding(source, metadata, catalog)   # LIVE_EXECUTOR
+    executor = cw.live_executor(metadata, catalog, tables=tables)   # LIVE_EXECUTOR, on the tables TABLES_BRIDGE compared
     constructor = ProtocolConstructor(catalog=catalog, source=source, metadata=metadata, owning_config=config, count=W, seed=seed, saved_root_admission=True)
     declaration, roster = read_roster(roster_path, roster_sha);held, built, classified = {}, {}, {}
     def request_of(i):   # (request, pin), or the error that made the captured root unavailable; read once per root
