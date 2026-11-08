@@ -32,6 +32,9 @@ VERDICT_SCHEMA = 'depthn-foulplay-panel.amended-verdict.v1'
 T_QUANTILE = .95   # two-sided 90%, as the declared estimator
 KEPT = ('VOID_FAIRNESS', 'VOID_LATENCY', 'FLAG_ARM_FAIRNESS', 'INCOMPLETE')
 SCREEN_CELLS, BAR_CELLS = 500, 2000   # the declaration's screen_paired_cells and max_paired_cells
+PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b',   # the committed files (the CLI refuses others)
+              addendum='dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f',
+              both='98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13')
 CAUSES = (('round cap', 'round_cap'), ('foul-play challenge', 'foulplay_challenge_timeout'), ('foul-play choice', 'foulplay_choice_timeout'))
 
 
@@ -100,7 +103,8 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
         raise ValueError('the both-bounds addendum to this amendment and its harm addendum required')
     if (readout.get('tree') or {}).get('commit') != amendment['run']['tree_commit']:raise ValueError('a readout of the amended run\'s tree required')
     arm, limit = readout['arm'], readout['paired_cells']
-    if limit not in (SCREEN_CELLS, BAR_CELLS) or (readout['bar'] is None) != (limit == SCREEN_CELLS):raise ValueError('a screen or bar readout required')
+    if limit not in (SCREEN_CELLS, BAR_CELLS) or readout['decision'] not in KEPT and (readout['bar'] is None) != (limit == SCREEN_CELLS):
+        raise ValueError('a screen or bar readout required')   # a kept decision (void, held flag) carries no bar at either size
     screen = limit == SCREEN_CELLS;rule = amendment['rule'];cap = rule['unknown_share_max_per_arm']
     arms = {name: cells(run_directory, name, limit, amendment['declaration_sha256']) for name in ('RAW', arm)}
     unknown = {}
@@ -159,6 +163,10 @@ def main(argv=None):
         p.add_argument('--' + name, required=True)
     p.add_argument('--output', help='write the verdict once here')
     args = p.parse_args(argv)
+    for name, given in (('amendment', args.amendment_sha256), ('addendum', args.addendum_sha256), ('both', args.both_sha256)):
+        if given != PINNED[name]:raise SystemExit(f'--{name}-sha256 must be the committed file\'s {PINNED[name]}')
+    amendment = read_bound(args.amendment, args.amendment_sha256)
+    if str(Path(args.run_directory).resolve()) != amendment['run']['run_directory']:raise SystemExit('--run-directory must be the amended run\'s')
     value = verdict(read_bound(args.readout, args.readout_sha256), read_bound(args.amendment, args.amendment_sha256), args.run_directory,
         readout_sha256=args.readout_sha256, amendment_sha256=args.amendment_sha256, addendum=read_bound(args.addendum, args.addendum_sha256),
         addendum_sha256=args.addendum_sha256, both=read_bound(args.both, args.both_sha256), both_sha256=args.both_sha256)

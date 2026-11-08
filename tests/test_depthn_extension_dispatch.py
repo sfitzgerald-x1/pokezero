@@ -23,7 +23,7 @@ def files_for(run):
     real = E.committed();out = {};shas = {}
     for name in ('amendment', 'addendum', 'both', 'extension'):
         value = copy.deepcopy(real[name][0]);value['declaration_sha256'] = run['declaration_sha256']
-        value['run'] = dict(value['run'], tree_commit=run['tree']['commit'])
+        value['run'] = dict(value['run'], tree_commit=run['tree']['commit'], run_directory=run['run_directory'])
         if name == 'addendum':value['addendum_to'] = dict(value['addendum_to'], sha256=shas['amendment'])
         if name == 'both':value['addendum_to'] = [dict(path='a', sha256=shas['amendment']), dict(path='b', sha256=shas['addendum'])]
         if name == 'extension':value['addendum_to'] = [dict(path=k, sha256=shas[k]) for k in ('amendment', 'addendum', 'both')]
@@ -90,6 +90,12 @@ class ExtensionTests(unittest.TestCase):
         broken = dict(self.files, extension=(dict(self.files['extension'][0], addendum_to=[]), self.files['extension'][1]))
         with self.assertRaisesRegex(ValueError, 'extension addendum'): E.gate(self.root, screen=self.screen, verdict=pinned, files=broken)
         with self.assertRaisesRegex(ValueError, 'tree commit'): E.gate(self.root, screen=self.screen, verdict=pinned, files=self.files, tree_commit='0'*40)
+
+    def test_another_run_directory_or_unpinned_files_are_refused(self):
+        verdict = self.pin_verdict('verdict', self.amended())
+        moved = dict(self.files, amendment=(dict(self.files['amendment'][0], run=dict(self.files['amendment'][0]['run'], run_directory='/out/other')), self.files['amendment'][1]))
+        with self.assertRaisesRegex(ValueError, "amended run's directory"): E.gate(self.root, screen=self.screen, verdict=verdict, files=moved)
+        with self.assertRaisesRegex(ValueError, 'not the committed amendment file'): E.committed(dict(E.PINNED, both='0'*64))
 
     def test_the_committed_chain_names_each_earlier_file(self):
         real = E.committed()

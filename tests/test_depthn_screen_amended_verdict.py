@@ -145,7 +145,9 @@ class AmendedVerdictTests(unittest.TestCase):
             self.assertEqual(self.run_verdict(official(self.root, 2000, decision=kept))['decision'], kept)
         bar = self.run_verdict(official(self.root, 2000, decision='BAR_NOT_MET'))
         self.assertEqual(bar['decision'], 'BAR_MET'); self.assertGreater(bar['conservative']['lower_bound'], 0)
-        value = self.run_verdict(dict(official(self.root, 2000, decision='VOID_LATENCY'), paired=None))   # no screen statistic: no interval
+        for kept in ('VOID_FAIRNESS', 'FLAG_ARM_FAIRNESS'):   # the panel sets no bar on a void or held flag, at 2,000 too: kept, never refused
+            self.assertEqual(self.run_verdict(dict(official(self.root, 2000, decision=kept), bar=None))['decision'], kept)
+        value = self.run_verdict(dict(official(self.root, 2000, decision='VOID_LATENCY'), paired=None, bar=None))   # no screen statistic: no interval
         self.assertEqual((value['decision'], value['conservative'], value['harm_mirror']), ('VOID_LATENCY', None, None))
 
     def test_the_files_are_bound_to_the_readout(self):
@@ -173,8 +175,17 @@ class AmendedVerdictTests(unittest.TestCase):
         argv = ['--readout', str(path), '--readout-sha256', sha, '--amendment', str(AMENDMENT), '--amendment-sha256', self.sha,
                 '--addendum', str(ADDENDUM), '--addendum-sha256', self.addendum_sha, '--both', str(BOTH), '--both-sha256', self.both_sha,
                 '--run-directory', str(self.root), '--output', str(out)]
-        self.assertEqual(V.main(argv), 0); self.assertEqual(json.loads(out.read_text())['readout_sha256'], sha)
-        with self.assertRaises(FileExistsError): V.main(argv)
+        self.assertEqual(V.PINNED, dict(amendment=self.sha, addendum=self.addendum_sha, both=self.both_sha))   # the committed files are the pinned ones
+        with self.assertRaisesRegex(SystemExit, "amended run's"): V.main(argv)   # this temporary directory is not /out/screen-r1
+        with self.assertRaisesRegex(SystemExit, 'committed file'): V.main([x if x != self.both_sha else '0'*64 for x in argv])
+        real = V.read_bound
+        def here(p, digest):   # the committed amendment, read for a run at this temporary directory (its bytes and sha unchanged)
+            value = real(p, digest)
+            return dict(value, run=dict(value['run'], run_directory=str(self.root.resolve()))) if Path(p) == AMENDMENT else value
+        from unittest import mock
+        with mock.patch.object(V, 'read_bound', side_effect=here):
+            self.assertEqual(V.main(argv), 0); self.assertEqual(json.loads(out.read_text())['readout_sha256'], sha)
+            with self.assertRaises(FileExistsError): V.main(argv)
 
 
 if __name__ == '__main__':

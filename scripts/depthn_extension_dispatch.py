@@ -27,12 +27,20 @@ FILES = dict(amendment='evals/depthn-foulplay-dn2w16-amendment-unknown-cells-202
              addendum='evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json',
              both='evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json',
              extension='evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json')
+# The committed chain, pinned: main() refuses any other bytes (a self-consistent but different chain would otherwise pass the gate).
+PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b',
+              addendum='dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f',
+              both='98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13',
+              extension='8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00')
 
 
-def committed():
-    """The four committed files of this tree as {name: (value, sha256)}."""
+def committed(pinned=PINNED):
+    """The four committed files of this tree as {name: (value, sha256)}, each refused unless its bytes are the pinned ones."""
     out = {}
-    for name, path in FILES.items():raw = (TREE/path).read_bytes();out[name] = (json.loads(raw), hashlib.sha256(raw).hexdigest())
+    for name, path in FILES.items():
+        raw = (TREE/path).read_bytes();digest = hashlib.sha256(raw).hexdigest()
+        if pinned is not None and digest != pinned[name]:raise ValueError(f'{path}: not the committed amendment file ({digest})')
+        out[name] = (json.loads(raw), digest)
     return out
 
 
@@ -41,6 +49,7 @@ def gate(run_directory, *, screen, verdict, files, tree_commit=None):
     amended verdict; raises ValueError on anything else."""
     root, run, d, lad = panel.load(run_directory);panel.require_tree(run, tree_commit)
     (amendment, amendment_sha), (addendum, addendum_sha), (both, both_sha), (extension, _) = (files[k] for k in ('amendment', 'addendum', 'both', 'extension'))
+    if run['run_directory'] != amendment['run']['run_directory']:raise ValueError('the amended run\'s directory required')
     if (extension.get('schema') != V.AMENDMENT_SCHEMA or extension.get('declaration_sha256') != run['declaration_sha256']
             or sorted(x.get('sha256') for x in extension.get('addendum_to') or ()) != sorted([amendment_sha, addendum_sha, both_sha])):
         raise ValueError('the extension addendum to this declaration\'s amendment and both addenda required')
@@ -117,7 +126,8 @@ def main(argv=None):
     cache = Path(args.cache_directory).resolve()
     result = asyncio.run(panel.dispatch(packets, pairs=[tuple(p) for p in args.cpu_pair], servers={'RAW': None, args.search_arm: args.server},
         cells_per_worker=args.cells_per_worker, cache_directory=cache, attempted=attempted, after=monitor, warmup=capture))
-    print(json.dumps(dict(result, probe=probe['status'], amended_decision=amended['decision'])))
+    scripts = {Path(f).name: hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in (__file__, V.__file__)}   # outside the panel's digest
+    print(json.dumps(dict(result, probe=probe['status'], amended_decision=amended['decision'], scripts=scripts)))
     return 1 if result['failed'] or result['stopped'] else 0
 
 
