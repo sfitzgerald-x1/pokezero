@@ -553,7 +553,9 @@ def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
     root,run,lad,band=calibration_load(directory);results=[read_result(root,c['ordinal'])for c in band]
     results=[r for r in results if r.get('status')=='COMPLETE']
     headers={((r.get('benchmark')or {}).get('foulplay_think')or {}).get('iterations_observable')for r in results}
-    # UNMEASURABLE only when no game reports True; None is the bridge's failed probe, not a reading.
+    # UNMEASURABLE only when no game reports True; None is the bridge's failed probe, not a reading. Games that report both
+    # True and False contradict each other: INSUFFICIENT (fail closed: the screen waits until someone looks).
+    mixed=True in headers and False in headers
     observable=True if True in headers else False if False in headers else None
     rates={s:{c:[]for c in fairness.CALIBRATION_STRATA}for s in ('solo','concurrent')}
     for r in results:
@@ -565,8 +567,8 @@ def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
     for value in strata.values():
         value['ratio']=(value['concurrent']['rate']/value['solo']['rate']if value['solo']['rate']and value['concurrent']['rate']is not None else None)
     enough=all(v[s]['moves']>=min_moves for v in strata.values()for s in ('solo','concurrent'))
-    status='UNMEASURABLE'if observable is not True else'MEASURED'if enough else'INSUFFICIENT'
-    return dict(schema=CALIBRATION_SCHEMA,status=status,iterations_observable=observable,strata=strata,
+    status='INSUFFICIENT'if mixed else'UNMEASURABLE'if observable is not True else'MEASURED'if enough else'INSUFFICIENT'
+    return dict(schema=CALIBRATION_SCHEMA,status=status,iterations_observable=observable,observability_mixed=mixed,strata=strata,
         ratios={c:v['ratio']for c,v in strata.items()}if status=='MEASURED'else None,ratio_min=CALIBRATION_RATIO_MIN,min_moves=min_moves,
         lanes=run['lanes'],seed_band=run['seed_band'],ladder_declaration_sha256=run['ladder_declaration_sha256'],
         base_config_sha256=run['base_config_sha256'],checkpoint_sha256=run['checkpoint_sha256'],

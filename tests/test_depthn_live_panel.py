@@ -1266,6 +1266,11 @@ class CalibrationTests(unittest.TestCase):
         run, _ = self.fake_dispatch(rates, observable=True)
         asyncio.run(run(panel.calibration_packets(self.root, setting='solo')[:1], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: 'stop'))
         self.assertEqual(panel.calibration_summary(self.root)['iterations_observable'], True)
+        self.assertFalse(panel.calibration_summary(self.root)['observability_mixed'])
+        run, _ = self.fake_dispatch(rates, observable=False)   # games contradicting each other: fail closed
+        asyncio.run(run(panel.calibration_packets(self.root, setting='solo')[:1], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: 'stop'))
+        value = panel.calibration_summary(self.root)
+        self.assertEqual((value['status'], value['observability_mixed'], value['ratios']), ('INSUFFICIENT', True, None))
 
     def test_a_calibration_game_stays_in_its_own_directory(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
