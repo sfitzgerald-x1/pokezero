@@ -104,15 +104,19 @@ refusal breakdown, values section and sibling spread are absent; its reported-on
 (nothing is substituted; the first-root exact check and the digests over its view stand in); gate --block-invariance varies the DepthNPricer's
 block_lanes, not a Depth2Pricer child block; (e)'s backups, sampling seeds and offline modes differ; (a), (f) and leaf_walk_* are extra.
 --constructor-roster PATH SHA (CONSTRUCTOR_ROOTS, R1-C; with --saved-roots as the runtime only, --champion-archive, declaration A's harness
-(CONSTRUCTOR_HARNESS), exactly what declaration A-C covers (CONSTRUCTOR_COVERED) and A-C itself as --declared-bounds (CONSTRUCTOR_DECLARATION;
+(CONSTRUCTOR_HARNESS), exactly what its declarations cover (CONSTRUCTOR_COVERED; W 8 or 16) and, as --declared-bounds, the declaration of its W
+(CONSTRUCTOR_DECLARATIONS: A-C at W 8, A-C16 at W 16;
 no --sample-leaves): the roots are Codex's ProtocolConstructor worlds (gpu_engine.constructor_worlds) on a roster's captured Showdown roots,
-chosen by CONSTRUCTOR_RULE before anything is priced. ONE PrebuiltWorlds per call goes to the full-width depth-2 pass, the depth-N pricer and
-its block-invariance twin (worlds=), and the oracle stacks its pairs. D3's FramePricer has no pre-built worlds input, so (b) is NOT_APPLICABLE
+chosen by CONSTRUCTOR_RULE before anything is priced. They price on the live executor (LIVE_EXECUTOR: the constructor's own metadata and
+catalog, as scripts/depthn_live_server.build), held at gate start to the bank's executor by compiled-table identity (TABLES_BRIDGE). ONE
+PrebuiltWorlds per call goes to the full-width depth-2 pass, the depth-N pricer and its block-invariance twin (worlds=), and the oracle stacks
+its pairs. D3's FramePricer has no pre-built worlds input, so (b) is NOT_APPLICABLE
 (NO_B); every other check is unchanged. Each request's root prior is the champion's (g2.bind_roots and its exact first-root check; a dropped
 request or a changed logit fails closed). Roots of different carry signatures never share a frame (one call per signature, checked on the host
 before pricing). averaging_argmax (AVERAGING_RULE) holds the live operator's W-world decision on the pricer frame to its oracle-heads copy. The
 header's constructor_roots section pins the roster, each root's capture chain and prefix, the Showdown revision, the metadata and vocabulary
-sha256s, the seed, W and the effective matmul precision. Without the flag nothing is built, judged, logged or written differently.
+sha256s, the tables bridge (both metadata canonical sha256s, the compiled tables' digest), the seed, W and the effective matmul precision.
+Without the flag nothing is built, judged, logged or written differently.
 """
 import argparse
 import collections
@@ -4024,9 +4028,12 @@ CONSTRUCTOR_PAIRS = ('constructor_roster', 'constructor_metadata', 'constructor_
 CONSTRUCTOR_FLAGS = CONSTRUCTOR_PAIRS + ('showdown_root', 'node_binary') + tuple(CONSTRUCTOR_DEFAULTS)
 CONSTRUCTOR_WORLD_COUNTS = (8, 16)   # the live rungs (depthn_live_search.RUNGS)
 CONSTRUCTOR_HARNESS = dict(capacity=512, block_lanes=2187, oracle_chunk=512)   # declaration A's, with --fixed-shapes and --block-invariance
-CONSTRUCTOR_COVERED = dict(depth=2, selection='prior', k_own='9', k_opp='9', k1_own=9, k1_opp=9, constructor_worlds=8, constructor_per_band=10)   # R1-C, A-C's scope
-CONSTRUCTOR_DECLARATION = dict(repo_path='gpu_engine/declared_bounds/champion-9375-bf16-r1c-20261108.json',   # declaration A-C, the one this mode runs under
-    sha256='57d134161d0733e9406baa08bf50456dc2e7cf4e0434188a38be5a1573056ad3')
+CONSTRUCTOR_COVERED = dict(depth=2, selection='prior', k_own='9', k_opp='9', k1_own=9, k1_opp=9, constructor_per_band=10)   # R1-C, A-C's and A-C16's scope
+CONSTRUCTOR_DECLARATIONS = {   # W -> the one declaration a run at that W runs under (repo_path under the checkout, sha256); any other pairing is refused
+    8: dict(name='A-C', repo_path='gpu_engine/declared_bounds/champion-9375-bf16-r1c-20261108.json',
+        sha256='57d134161d0733e9406baa08bf50456dc2e7cf4e0434188a38be5a1573056ad3'),
+    16: dict(name='A-C16', repo_path='gpu_engine/declared_bounds/champion-9375-bf16-r1c-w16-20261108.json',
+        sha256='aa506b12e83271f52d0f7beca9330c260c2adab9a9db0427e33ba9b800f1fefa')}
 CONSTRUCTOR_REFUSED = ('d3_root', 'n2_equivalence', 'max_roots', 'head_archive', 'depth3_diagnostics', 'diagnostics_from', 'mutation_from', 'mutation_test',
     'save_oracle', 'sample_leaves')   # sample_leaves: averaging_argmax and (e) need every leaf
 REQUEST_KEYS = ('battle_id', 'owner', 'stream_id', 'decision_index', 'generation', 'prefix_sha256', 'lines', 'own_request_line')   # the coverage script's
@@ -4062,6 +4069,43 @@ AVERAGING_RULE = ('averaging_argmax (CONSTRUCTOR_ROOTS, run beside (e) on its or
     'disagreement whose margin_pair exceeds the bound (up to REL_EPS), which would contradict (e); a premise mismatch; a root decided on one side '
     'only; an incomplete oracle-heads copy; and the status is INCOMPLETE when no root is compared. Disagreements within the bound are reported, '
     'not gated')
+
+
+LIVE_EXECUTOR = ('CONSTRUCTOR_ROOTS prices on the live executor: constructor_worlds.live_executor and binding over the constructor\'s own engine '
+    'metadata and catalog (phase_d_protocol_constructor.load_inputs), as scripts/depthn_live_server.build serves, for the full-width depth-2 pass, '
+    'every depth-N pricer (the block-invariance twin included), the oracle and the root views. The D3 bank (--saved-roots) supplies only the '
+    'champion\'s catalog check, the evaluator header, the recipe and the bank metadata TABLES_BRIDGE compares. The live binding must equal the '
+    'bank\'s (its source, engine metadata and catalog) in every field but BINDING_BRIDGED (metadata_sha256, which TABLES_BRIDGE replaces): fail '
+    'closed otherwise')
+BINDING_BRIDGED = ('metadata_sha256',)   # the one WorldBinding field the live binding may differ from the bank's in (TABLES_BRIDGE replaces it)
+TABLES_BRIDGE = ('tables identity (gated at gate start, before any root is prepared): the engine tables are compiled through the executor\'s own code '
+    'paths (constructor_worlds.engine_tables: transition.tables_from_metadata, engine_device_observation.compile_tables) from the bank\'s metadata '
+    'with the bank\'s catalog and from the constructor\'s with its own, and the two compiled structures must be equal entry for entry '
+    '(constructor_worlds.table_leaves: every node\'s class and fields, every array\'s dtype, shape and bytes); the bank\'s recompile must also '
+    'equal the tables the bank\'s own executor holds (prepared.engine_tables / observation_tables, R1-R3\'s). A difference fails closed naming '
+    'the first differing path. Recorded: both metadata canonical sha256s and constructor_worlds.engine_tables_digest of the compiled tables (one '
+    'digest: the sides are equal). Comparing compiled outputs, not metadata keys, means a key nobody knew the executor reads cannot slip through')
+
+
+def tables_bridge(bank_metadata, bank_catalog, metadata, catalog, *, reference=None):
+    """TABLES_BRIDGE: ((engine, observation) tables compiled from the constructor's metadata and catalog, the record). reference: the bank
+    executor's own (engine, observation) tables, held to the bank's recompile. ValueError naming the first differing path otherwise."""
+    from . import constructor_worlds as cw
+    bank, mine = cw.engine_tables(bank_metadata, bank_catalog), cw.engine_tables(metadata, catalog);names = ('engine', 'observation')
+    for what, a, b in (('the bank\'s and the constructor\'s compiled tables', bank, mine),) + (() if reference is None else
+            (('the bank executor\'s tables and their recompile from its metadata', tuple(reference), bank),)):
+        found = [d for x, y, name in zip(a, b, names) for d in cw.tables_differences({name: x}, {name: y})]
+        if found:raise ValueError(f'{what} differ (TABLES_BRIDGE): ' + '; '.join(found[:FIRST]))
+    return mine, dict(rule=TABLES_BRIDGE, equal=True, digest=cw.engine_tables_digest(mine), digest_function='gpu_engine.constructor_worlds.engine_tables_digest',
+        bank_metadata_canonical_sha256=cw.metadata_sha256(bank_metadata), constructor_metadata_canonical_sha256=cw.metadata_sha256(metadata),
+        entries=len(cw.table_leaves(dict(zip(names, mine)))), bank_executor_reproduced=None if reference is None else True,
+        metadata_keys_differing=sorted(k for k in set(bank_metadata) | set(metadata) if bank_metadata.get(k) != metadata.get(k)))
+
+
+def binding_differences(bank, live):
+    """The WorldBinding fields where the bank's binding (its source, metadata and catalog) differs from the live one (constructor_roots fails
+    closed on any but BINDING_BRIDGED)."""
+    return [f.name for f in dataclasses.fields(live) if getattr(bank, f.name, None) != getattr(live, f.name)]
 
 
 def read_roster(path, sha256):
@@ -4321,12 +4365,13 @@ def constructor_section(ctor, calls):
 
 def constructor_roots(args):
     """main's roots under --constructor-roster (load_roots' namespace, groups None, plus `constructor`): the D3 runtime from --saved-roots (its
-    executor, Tables source, engine metadata, catalog and recipe; its saved roots are never priced) and the champion (g2.load_champion); Codex's
-    ProtocolConstructor (phase_d_protocol_constructor.load_inputs: the clean pinned Showdown, the metadata and vocabulary at their sha256s; W
-    worlds, the seed, saved-root admission, as the coverage script); the roster and CONSTRUCTOR_RULE (prepare on the CPU, once per root);
-    constructor_worlds.build (only_complete) under the pricer-side binding (the runtime's source, engine metadata and catalog: the constructor's
-    must equal it); bind_constructor; each root's carry signature (host, before any pricing). SystemExit (fail closed) on a band short of roots,
-    a selected root build refuses, a bind mismatch or a root whose own worlds differ in carry."""
+    engine metadata and catalog for TABLES_BRIDGE, its recipe; its saved roots are never priced, its executor never prices) and the champion
+    (g2.load_champion); Codex's inputs (phase_d_protocol_constructor.load_inputs: the clean pinned Showdown, the metadata and vocabulary at their
+    sha256s); TABLES_BRIDGE (fail closed); the live executor and binding over the constructor's own metadata and catalog (LIVE_EXECUTOR, as
+    scripts/depthn_live_server.build); the ProtocolConstructor (W worlds, the seed, saved-root admission, as the coverage script); the roster and
+    CONSTRUCTOR_RULE (prepare on the CPU, once per root); constructor_worlds.build (only_complete) under that binding, its root views through the
+    live executor; bind_constructor; each root's carry signature (host, before any pricing). SystemExit (fail closed) on a tables difference (or
+    an unknown table member), a binding difference beyond BINDING_BRIDGED, a band short of roots, a selected root build refuses, a bind mismatch or a root whose own worlds differ in carry."""
     loaded = g2.saved_root_requests(args)   # the runtime only (its memory policy precedes the first JAX import)
     champion = g2.load_champion(args, loaded);provider, params = loaded.provider, (champion.params,)
     from pokezero.live_protocol_actor import ActorContract
@@ -4338,8 +4383,18 @@ def constructor_roots(args):
     W, seed, per_band = args.constructor_worlds, args.constructor_seed, args.constructor_per_band;contract = ActorContract.champion()
     catalog, source, metadata, config = load_inputs(SimpleNamespace(showdown_root=args.showdown_root, node_binary=args.node_binary, metadata=metadata_path,
         expected_metadata_sha256=metadata_sha, vocabulary=vocabulary_path, expected_vocabulary_sha256=vocabulary_sha))
+    bank_metadata = json.loads(provider.prepared.metadata_json)
+    try:tables, bridge = tables_bridge(bank_metadata, provider.prepared.catalog, metadata, catalog,
+        reference=(provider.prepared.engine_tables, provider.prepared.observation_tables))
+    except (ValueError, TypeError) as error:raise SystemExit(f'--constructor-roster (fail closed): {error}')   # TypeError: an unknown table member
+    binding = cw.binding(source, metadata, catalog)   # LIVE_EXECUTOR: the constructor's own source, metadata and catalog
+    bridge['bank_binding_differs'] = differs = binding_differences(cw.binding(provider.source, bank_metadata, provider.prepared.catalog), binding)
+    if set(differs) - set(BINDING_BRIDGED):
+        raise SystemExit(f'--constructor-roster (fail closed): the bank\'s binding differs from the live one in {differs}; only {list(BINDING_BRIDGED)} may '
+            '(TABLES_BRIDGE stands in for it)')
+    log('TABLES_BRIDGE', **bridge)
+    executor = cw.live_executor(metadata, catalog, tables=tables)   # LIVE_EXECUTOR, on the tables TABLES_BRIDGE compared
     constructor = ProtocolConstructor(catalog=catalog, source=source, metadata=metadata, owning_config=config, count=W, seed=seed, saved_root_admission=True)
-    binding = cw.binding(provider.source, json.loads(provider.prepared.metadata_json), provider.prepared.catalog)
     declaration, roster = read_roster(roster_path, roster_sha);held, built, classified = {}, {}, {}
     def request_of(i):   # (request, pin), or the error that made the captured root unavailable; read once per root
         if i not in built:
@@ -4372,7 +4427,7 @@ def constructor_roots(args):
     chosen = selection['selected']
     for i, record in held.items():   # only the selected roots' worlds are kept
         if i not in chosen:record['item'] = None
-    batch = cw.build(constructor, [held[i]['item'] for i in chosen], SimpleNamespace(executor=provider.executor, forward=champion), params,
+    batch = cw.build(constructor, [held[i]['item'] for i in chosen], SimpleNamespace(executor=executor, forward=champion), params,
         binding=binding, recipe=provider.recipe, only_complete=True)
     refused = [f'{i}: {root["reason"]}' for i, root in zip(chosen, batch.roots) if root['status'] != 'PRICED']
     if refused:raise SystemExit('--constructor-roster (fail closed): constructor_worlds.build refused selected roots (never refilled): ' + '; '.join(refused[:FIRST]))
@@ -4395,7 +4450,7 @@ def constructor_roots(args):
             capture_prefix=declaration.get('capture_prefix')),
         showdown=dict(root=str(args.showdown_root), revision=contract.showdown_revision, clean=True, node_binary=str(args.node_binary),
             note='phase_d_protocol_constructor.load_inputs refuses a Showdown checkout at another revision or with tracked changes'),
-        metadata=dict(path=str(metadata_path), sha256=metadata_sha, canonical_sha256=cw.metadata_sha256(metadata)),
+        metadata=dict(path=str(metadata_path), sha256=metadata_sha, canonical_sha256=cw.metadata_sha256(metadata)), tables=bridge, executor=LIVE_EXECUTOR,
         vocabulary=dict(path=str(vocabulary_path), sha256=vocabulary_sha, category_vocab_sha256=contract.category_vocab_sha256),
         worlds=W, blocks=W // 2, seed=seed, per_band=per_band, recipe_seed=provider.recipe.seed, binding=dataclasses.asdict(binding),
         roots=[dict(ordinal=r['ordinal'], band=r['band'], turn=r['turn'], selected_by=r['selected_by'], request_id=r['request_id'], **r['capture']) for r in roots],
@@ -4407,7 +4462,7 @@ def constructor_roots(args):
     log('EVALUATOR_RESOLVED', evaluator=evaluator, root_value_scale=g2.percentiles(values))
     log('CONSTRUCTOR_ROOTS', selected=len(chosen), bands=report['bands'], top_up=report['top_up'], refused=len(report['refused']),
         carry_signatures=sorted(set(map(str, signatures))), requests=len(requests))
-    ctor = SimpleNamespace(requests=requests, worlds=batch.worlds, binding=binding, roots=roots, selection=report, pins=pins,
+    ctor = SimpleNamespace(requests=requests, worlds=batch.worlds, binding=binding, executor=executor, roots=roots, selection=report, pins=pins,
         source=dict(constructor_roster=str(roster_path), constructor_roster_sha256=roster_sha, runtime=loaded.source))
     return SimpleNamespace(loaded=loaded, head=None, params=params, groups=None, root_values=values, evaluator=evaluator, forward=champion,
         actor_capacity=len(params), constructor=ctor)
@@ -4416,10 +4471,10 @@ def constructor_roots(args):
 def check_constructor_arguments(parser, args):
     """--constructor-roster (CONSTRUCTOR_ROOTS): every constructor flag needs it. With it, --showdown-root, --node-binary, --constructor-metadata
     and --constructor-vocabulary are required (each PATH SHA a 64-hex sha256), and so are --saved-roots (the D3 runtime only), --champion-archive,
-    declaration A's harness (--fixed-shapes, --block-invariance, CONSTRUCTOR_HARNESS), --worlds-blocks 1, exactly what declaration A-C covers
-    (CONSTRUCTOR_COVERED: R1's depth 2 at full width, W 8, 10 roots per band; W 16 or other settings need their own declaration) and
-    --declared-bounds naming A-C itself (CONSTRUCTOR_DECLARATION: its repo_path under the checkout and its sha256; declaration A or any other is
-    refused); it is refused with CONSTRUCTOR_REFUSED. Fills CONSTRUCTOR_DEFAULTS."""
+    declaration A's harness (--fixed-shapes, --block-invariance, CONSTRUCTOR_HARNESS), --worlds-blocks 1, exactly what its declarations cover
+    (CONSTRUCTOR_COVERED: R1's depth 2 at full width, 10 roots per band; W 8 or 16) and --declared-bounds naming the declaration of that W
+    (CONSTRUCTOR_DECLARATIONS: A-C at W 8, A-C16 at W 16, each by repo_path under the checkout and sha256; the other one, declaration A or any
+    other is refused); it is refused with CONSTRUCTOR_REFUSED. Fills CONSTRUCTOR_DEFAULTS."""
     flag = lambda name: '--' + name.replace('_', '-');given = [name for name in CONSTRUCTOR_FLAGS if getattr(args, name, None) is not None]
     if getattr(args, 'constructor_roster', None) is None:
         if given:parser.error(', '.join(map(flag, given)) + ' need --constructor-roster')
@@ -4439,14 +4494,15 @@ def check_constructor_arguments(parser, args):
         if getattr(args, name) is None:setattr(args, name, value)
     if args.constructor_seed < 0:parser.error('--constructor-seed >= 0 required')
     if {k: (str(getattr(args, k)) if k in ('k_own', 'k_opp') else getattr(args, k)) for k in CONSTRUCTOR_COVERED} != CONSTRUCTOR_COVERED:
-        parser.error('--constructor-roster runs only what declaration A-C covers: ' + ' '.join(f'{flag(k)} {v}' for k, v in CONSTRUCTOR_COVERED.items())
-            + ' (other settings, W 16 included, need their own declaration)')
-    pinned = CONSTRUCTOR_DECLARATION
+        parser.error('--constructor-roster runs only what declarations A-C and A-C16 cover: ' + ' '.join(f'{flag(k)} {v}' for k, v in CONSTRUCTOR_COVERED.items())
+            + ' (other settings need their own declaration)')
+    pinned = CONSTRUCTOR_DECLARATIONS.get(args.constructor_worlds)
+    if pinned is None:parser.error(f'--constructor-worlds {args.constructor_worlds}: no declaration covers it (W {sorted(CONSTRUCTOR_DECLARATIONS)})')
     try:where = repo_path_of(args.declared_bounds) if args.declared_bounds else None
     except DeclaredBoundsError:where = None
     if where != pinned['repo_path'] or args.declared_bounds_sha256 != pinned['sha256']:
-        parser.error(f'--constructor-roster runs under declaration A-C only: --declared-bounds {pinned["repo_path"]} --declared-bounds-sha256 {pinned["sha256"]} '
-            f'(given: {args.declared_bounds!r} at {where!r}, sha256 {args.declared_bounds_sha256!r})')
+        parser.error(f'--constructor-worlds {args.constructor_worlds} runs under declaration {pinned["name"]} only: --declared-bounds {pinned["repo_path"]} '
+            f'--declared-bounds-sha256 {pinned["sha256"]} (given: {args.declared_bounds!r} at {where!r}, sha256 {args.declared_bounds_sha256!r})')
     return args
 
 
@@ -4549,7 +4605,7 @@ def parse(argv=None):
     parser.add_argument('--constructor-roster', nargs=2, metavar=('PATH', 'SHA256'), help='CONSTRUCTOR_ROOTS (R1-C): price Codex\'s ProtocolConstructor '
         'worlds on this roster\'s captured roots (read as scripts/phase_d_constructor_coverage.py reads it, pinned by sha256) instead of D3 roots, '
         'selected by CONSTRUCTOR_RULE; (b) NOT_APPLICABLE; needs --saved-roots (the runtime only), --champion-archive, declaration A\'s harness, the '
-        'settings declaration A-C covers and A-C itself as --declared-bounds (check_constructor_arguments)')
+        'settings its declarations cover and the declaration of its W as --declared-bounds: A-C at W 8, A-C16 at W 16 (check_constructor_arguments)')
     parser.add_argument('--showdown-root', help='with --constructor-roster: the pinned, clean Showdown checkout (phase_d_protocol_constructor.load_inputs)')
     parser.add_argument('--node-binary', help='with --constructor-roster: the node binary the constructor\'s Showdown config runs')
     parser.add_argument('--constructor-metadata', nargs=2, metavar=('PATH', 'SHA256'), help='with --constructor-roster: the engine metadata at its sha256')
@@ -4668,16 +4724,17 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
     d2_parity = forward is not None and args.depth == 2   # the champion's depth-2 gate: D2_ORACLE_CONSISTENCY, the merged_depth2_parity header
     ctor = getattr(roots, 'constructor', None)   # --constructor-roster (CONSTRUCTOR_ROOTS); None: every line below as before
     parity = merged_depth2_parity('gate', oracle_consistency=True, **({} if ctor is None else dict(constructor_roots=True))) if d2_parity else None
-    pricers = DepthNPricers(module, provider.executor, plan.model, depth=args.depth, k_own=args.k_own_ply, k_opp=args.k_opp_ply, selection=args.selection,
+    executor = provider.executor if ctor is None else ctor.executor   # CONSTRUCTOR_ROOTS: the live executor (LIVE_EXECUTOR) for every consumer
+    pricers = DepthNPricers(module, executor, plan.model, depth=args.depth, k_own=args.k_own_ply, k_opp=args.k_opp_ply, selection=args.selection,
         capacity=args.capacity, actor_capacity=roots.actor_capacity, lanes=lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, fixed_capacity=args.fixed_shapes,
         forward=forward)
-    depth2_pricer = depth2_pass_pricer(module, provider.executor, plan.model, capacity=args.capacity, actor_capacity=roots.actor_capacity,
+    depth2_pricer = depth2_pass_pricer(module, executor, plan.model, capacity=args.capacity, actor_capacity=roots.actor_capacity,
         k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, digest=True, fixed_capacity=args.fixed_shapes, forward=forward)
     if ctor is None:capacity = g2.call_capacity(frame_pricer, [depth2_pricer]);groups = g2.split_groups(roots.groups, capacity)
     else:   # one call per carry signature, whole roots, at the pricers' capacity (no FramePricer)
         capacity = args.capacity;built = constructor_calls(ctor, capacity);groups = [c['requests'] for c in built]
     harness = fixed_shapes_harness(capacity) if args.fixed_shapes else None;shaped = {} if harness is None else dict(harness=harness)
-    oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log),
+    oracle = reference.DepthNOracle(executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log),
         raw_model=roots.head[1] if args.raw_head_check else None, **forward_kwargs(forward))
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), pricer_options=pricers.options(), sample_leaves=args.sample_leaves, seeds=seeds,
         mutation_test=args.mutation_test, save_oracle=args.save_oracle, **shaped, **declared_only,
