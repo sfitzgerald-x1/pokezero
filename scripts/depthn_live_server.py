@@ -136,7 +136,9 @@ PRECISION_ENVIRONMENT='JAX_DEFAULT_MATMUL_PRECISION'
 
 
 def check_precision_environment(p,args):
-    """Before anything heavy loads: JAX reads JAX_DEFAULT_MATMUL_PRECISION at import, and it must name the pinned precision."""
+    """Before anything heavy loads: JAX reads JAX_DEFAULT_MATMUL_PRECISION at import, and it must name the pinned precision.
+    An early fail-fast only: the guard is build()'s check of JAX's own setting, which also catches a process that imported
+    or reconfigured JAX before this check could see it."""
     found=os.environ.get(PRECISION_ENVIRONMENT)
     if found!=args.matmul_precision:
         p.error(f'{PRECISION_ENVIRONMENT} must be {args.matmul_precision!r} (the precision the champion gates were certified under); found {found!r}')

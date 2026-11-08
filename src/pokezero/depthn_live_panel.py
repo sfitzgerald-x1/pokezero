@@ -27,13 +27,32 @@ Eval readiness (the lead's rulings):
   stops, no screen statistic is computed, the readout reports the end-to-end wall
   distribution and each candidate deadline's coverage (wall + reserve), and the
   run is never resumed (a restart is a fresh run with a fresh declaration).
+- One search arm per run (the lead fixes W at declaration time): arms are exactly
+  RAW and one search arm.
 - Arm fairness: Foul Play's 1,000 ms is wall clock, so both arms run interleaved
   (pair by pair, RAW then search, neither arm more than the concurrency ahead),
-  Foul Play keeps Codex's dedicated actor/FP core pair, each cell records its core
-  pair, worker identity and load average, and Foul Play's per-move cost (MCTS
-  iterations, else wait seconds, from the bridge's opponent_think rows) is compared
-  by arm: more than 5% apart (relative to RAW, once each arm has 1,000 measured
-  moves) flags FLAG_ARM_FAIRNESS and stops dispatch until the lead acknowledges.
+  Foul Play keeps Codex's dedicated actor/FP core pair, and each cell records its
+  core pair, worker identity and load average. Whether Foul Play's realized work is
+  observable (the bridge's iterations_observable) is declared up front with its
+  evidence (fairness_observable); a cell contradicting it is breakage. When
+  observable, depthn_live_fairness reads iterations_per_budget_second stratified by
+  budget stratum x turn band; the Monitor evaluates it only at checkpoints (every
+  50 completed pairs) once both floors hold (50 pairs, 1,000 rated moves per arm),
+  per phase (screen, extension) and per acknowledgement window. A flag stops
+  dispatch until `acknowledge --cause benign|fault`: benign re-arms over the moves
+  after it (depthn_live_fairness.flag's re-arm rule), fault voids the run
+  (VOID_FAIRNESS, never resumed). The extension starts un-acknowledged. Flags,
+  acknowledgements and checks are phase-scoped files, so a pinned screen readout
+  recomputes identically whatever the extension records. When not observable, the
+  gate is UNMEASURABLE: it rests on structural isolation plus interleaving, and the
+  readout reports Foul Play's wait + overlap per arm as description only.
+- Calibration (RAW only, seeds disjoint from every eval cell): `calibrate` runs
+  RAW games solo (one lane) and at the declared worker-lane count, measures Foul
+  Play's iterations_per_budget_second per budget stratum (>= 300 rated moves per
+  stratum per setting) and writes calibration.json; the declaration records its
+  sha256 and the concurrent/solo ratios, init verifies them, and dispatch refuses
+  unless every ratio is >= 0.90, or, when Foul Play is not observable, an explicit
+  accept-uncalibrated is recorded.
 """
 import asyncio
 from collections import Counter
@@ -51,6 +70,7 @@ import time
 from types import SimpleNamespace
 import uuid
 
+from . import depthn_live_fairness as fairness
 from . import phase_d_ladder_panel as ladder
 from .depthn_live_actor import ARMS,CAUSES,CHAMPION_ARCHIVE_SHA256,REQUEST_KINDS,ROW_SCHEMA,SEARCH_ARMS,SOURCES
 
@@ -66,15 +86,20 @@ BREAKAGE=dict(timeout_forfeits_max=0,unknown_cells_max=0,transport_failure_share
 DEADLINES=(3.,5.,10.,15.)
 LATENCY_RULE=dict(searched_decisions=1000,timeout_rate_max=.01,coverage_deadlines=[5.,10.,15.],coverage_min=.995)
 INTERLEAVE='ALTERNATE_ARMS_BY_PAIR_ORDINAL_LEAD_AT_MOST_CONCURRENCY'
-ARM_FAIRNESS=dict(metric='MEAN_FOULPLAY_ITERATIONS_PER_MOVE',fallback='MEAN_FOULPLAY_WAIT_SECONDS_PER_MOVE',reference='RAW',
-                  relative_difference_max=.05,min_moves_per_arm=1000)
+ARM_FAIRNESS=fairness.RULE
+PHASES=('screen','extension')
+CALIBRATION_SCHEMA='depthn-foulplay-panel.calibration.v1'
+CALIBRATION_RUN_SCHEMA='depthn-foulplay-panel.calibration-run.v1'
+CALIBRATION_REQUEST_SCHEMA='depthn-foulplay-panel.calibration-request.v1'
+CALIBRATION_RATIO_MIN=.9
+CALIBRATION_MIN_MOVES=300
 WORKER_IDENTITY_ENVIRONMENT=('POD_NAME','NODE_NAME')
 TRANSPORT=('timeout','connection_error','server_error')
 T_QUANTILE=.95  # Two-sided 90%; validate() pins confidence to .9.
 KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256','arms','search','root_operator','deadline_seconds',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
-      'bench_source','server_processes_per_gpu','interleave','arm_fairness'}
+      'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration'}
 REQUEST_KEYS={'schema','run_directory','declaration','declaration_sha256','ladder_declaration','ladder_declaration_sha256',
               'cell','checkpoint','checkpoint_sha256','base_config'}
 encoded,sha,read_bound,write_new=ladder.encoded,ladder.sha,ladder.read_bound,ladder.write_new
@@ -91,7 +116,7 @@ def validate(declaration):
     arms=d['arms']
     if (d['schema']!=SCHEMA or not _hex(d['ladder_declaration_sha256'])
             or d['checkpoint_sha256']!=ActorContract.champion().checkpoint_sha256 or d['archive_sha256']!=CHAMPION_ARCHIVE_SHA256
-            or type(arms)is not list or arms!=['RAW']+[a for a in SEARCH_ARMS if a in arms]or len(arms)<2
+            or type(arms)is not list or len(arms)!=2 or arms[0]!='RAW'or arms[1]not in SEARCH_ARMS
             or d['search']!={a:dict(depth=2,worlds=WORLDS[a])for a in arms[1:]}
             or d['root_operator']!='ARGMAX_MEAN_COMPLETED_Q'or type(d['deadline_seconds'])is not float
             or d['deadline_seconds']not in DEADLINES or d['reserve_seconds']!=.15
@@ -115,7 +140,36 @@ def validate(declaration):
             or not _hex(bench['sha256'])or type(d['server_processes_per_gpu'])is not int or d['server_processes_per_gpu']<1):
         raise ValueError('descriptive fields: roster share in [0, 1] or null, bench p95 > 0 with its summary path and sha256, '
                          'server processes per GPU >= 1')
+    observable=d['fairness_observable'];cal=d['calibration']
+    if (type(d['worker_lanes'])is not int or d['worker_lanes']<1 or type(observable)is not dict or set(observable)!={'value','evidence'}
+            or type(observable['value'])is not bool or not _evidence(observable['evidence'])
+            or type(cal)is not dict or set(cal)!={'status','sha256','ratios','seed_band'}or not _hex(cal['sha256'])
+            or cal['status']!=('MEASURED'if observable['value']else'UNMEASURABLE')
+            or (cal['ratios']is not None if cal['status']=='UNMEASURABLE'else type(cal['ratios'])is not dict
+                or set(cal['ratios'])!=set(fairness.CALIBRATION_STRATA)
+                or any(type(r)is not float or not math.isfinite(r)or r<=0 for r in cal['ratios'].values()))
+            or type(cal['seed_band'])is not dict or set(cal['seed_band'])!={'battle_seed_start','foulplay_seed_start','count'}
+            or any(type(v)is not int or v<1 for v in cal['seed_band'].values())):
+        raise ValueError('worker lanes >= 1, fairness observability with its evidence, and a calibration (MEASURED with '
+                         'positive per-stratum ratios when observable, else UNMEASURABLE) with its sha256 and seed band required')
     return d
+
+
+def _evidence(value):
+    return (type(value)is dict and set(value)=={'path','sha256'}and type(value['path'])is str and bool(value['path'].strip())
+            and _hex(value['sha256']))
+
+
+def calibration_cells(ladder_declaration,band):
+    """RAW calibration cells on the declared band: both seats of `count` seeds, disjoint from every eval cell's battle and
+    Foul Play seeds (the ladder's 1,000 seeds from each start)."""
+    d=ladder.validate(ladder_declaration)
+    if type(band)is not dict or set(band)!={'battle_seed_start','foulplay_seed_start','count'}or any(type(v)is not int or v<1 for v in band.values()):
+        raise ValueError('calibration seed band required')
+    for start,key in ((band['battle_seed_start'],'battle_seed_start'),(band['foulplay_seed_start'],'foulplay_seed_start')):
+        if start<d[key]+d['seeds']and d[key]<start+band['count']:raise ValueError('calibration seeds overlap the eval cells')
+    return tuple(dict(ordinal=k,pair_ordinal=k,offset=k//2,seat=k%2,arm='RAW',seed=band['battle_seed_start']+k//2,
+        fp_seed=band['foulplay_seed_start']+k//2,calibration=True)for k in range(2*band['count']))
 
 
 def _pairing(cell):return tuple(cell[k]for k in ('pair_ordinal','offset','seat','seed','fp_seed'))
@@ -189,18 +243,24 @@ def require_tree(run,declared=None):
 
 
 def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladder_declaration_sha256,checkpoint,base_config,
-         base_config_sha256,tree_commit=None):
-    """Bind one run directory to both pinned declarations, one base config and the code identity."""
+         base_config_sha256,calibration,tree_commit=None):
+    """Bind one run directory to both pinned declarations, one base config, the calibration and the code identity."""
     d=validate(read_bound(declaration,declaration_sha256));lad=ladder.validate(read_bound(ladder_declaration,ladder_declaration_sha256))
     if d['ladder_declaration_sha256']!=ladder_declaration_sha256 or lad['checkpoint_sha256']!=d['checkpoint_sha256']:
         raise ValueError('panel declaration must pin this ladder declaration and champion')
+    cal=d['calibration'];calibration_cells(lad,cal['seed_band']);measured=read_bound(calibration,cal['sha256'])
+    if (type(measured)is not dict or measured.get('schema')!=CALIBRATION_SCHEMA or measured.get('status')!=cal['status']
+            or measured.get('ratios')!=cal['ratios']or measured.get('seed_band')!=cal['seed_band']
+            or measured.get('lanes')!=d['worker_lanes']or measured.get('iterations_observable')is not d['fairness_observable']['value']
+            or measured.get('ladder_declaration_sha256')!=ladder_declaration_sha256):
+        raise ValueError('calibration.json must match the declared status, ratios, seed band, lanes, observability and ladder')
     base=read_bound(base_config,base_config_sha256)
     if type(base)is not dict:raise ValueError('literal base configuration required')
     root=Path(run_directory).resolve()
     run=dict(schema=RUN_SCHEMA,run_directory=str(root),declaration=str(Path(declaration).resolve()),declaration_sha256=declaration_sha256,
         ladder_declaration=str(Path(ladder_declaration).resolve()),ladder_declaration_sha256=ladder_declaration_sha256,
         checkpoint=str(Path(checkpoint).resolve()),checkpoint_sha256=d['checkpoint_sha256'],base_config=base,
-        base_config_sha256=base_config_sha256,tree=tree_identity(tree_commit))
+        base_config_sha256=base_config_sha256,calibration=str(Path(calibration).resolve()),tree=tree_identity(tree_commit))
     write_new(root/'run.json',run)
     return run
 
@@ -267,22 +327,50 @@ def interleaved(run_directory,*,search_arm,limit,resume=False,screen=None,tree_c
 def state_path(root,name):return Path(root)/'state'/name
 
 
+def phase_of(d,pair_ordinal):return 'screen'if pair_ordinal<d['screen_paired_cells']else'extension'
+
+
+def fairness_directory(root,phase):return state_path(root,'fairness')/phase
+
+
+def fairness_state(root,phase):
+    """One phase's fairness record: its flags and acknowledgements in order, its checkpoint checks and any fault void."""
+    directory=fairness_directory(root,phase)
+    def numbered(prefix):
+        found=sorted(directory.glob(prefix+'-*.json'),key=lambda p:int(p.stem.split('-')[1]))if directory.exists()else []
+        return [json.loads(p.read_bytes())for p in found]
+    checks=directory/'checks.jsonl';void=directory/'void.json'
+    return dict(flags=numbered('flag'),acks=numbered('ack'),void=json.loads(void.read_bytes())if void.exists()else None,
+        checks=[json.loads(x)for x in checks.read_bytes().splitlines()]if checks.exists()else [])
+
+
 def refuse_by_state(root):
     """A voided run is never resumed; a fairness flag holds dispatch until the lead acknowledges it."""
     rule=state_path(root,'latency_rule.json')
     if rule.exists()and json.loads(rule.read_bytes())['status']=='VOID_LATENCY':
         raise ValueError('VOID_LATENCY: a voided screen is never resumed; restart with a fresh run and declaration')
-    if state_path(root,'arm_fairness_flag.json').exists()and not state_path(root,'arm_fairness_acknowledged.json').exists():
-        raise ValueError("FLAG_ARM_FAIRNESS: dispatch waits for the lead's acknowledgement")
+    for phase in PHASES:
+        state=fairness_state(root,phase)
+        if state['void']is not None:raise ValueError('VOID_FAIRNESS: a run voided by an arm fairness fault is never resumed; restart fresh')
+        if len(state['flags'])>len(state['acks']):raise ValueError("FLAG_ARM_FAIRNESS: dispatch waits for the lead's acknowledgement")
 
 
-def acknowledge_arm_fairness(run_directory,*,note):
-    """The lead's acknowledgement of a recorded fairness flag (written once); online fairness stops end for this run."""
-    root=Path(run_directory).resolve();flag=state_path(root,'arm_fairness_flag.json')
-    if not flag.exists():raise ValueError('no arm fairness flag to acknowledge')
-    if type(note)is not str or not note.strip():raise ValueError('a note is required')
-    value=dict(flag_sha256=hashlib.sha256(flag.read_bytes()).hexdigest(),note=note,acknowledged_unix_seconds=time.time())
-    write_new(state_path(root,'arm_fairness_acknowledged.json'),value)
+def acknowledge_arm_fairness(run_directory,*,cause,note):
+    """The lead's acknowledgement of the pending fairness flag. benign re-arms the check over the moves after it; fault
+    voids the run (VOID_FAIRNESS). The note must name the diagnosed cause."""
+    root,run,d,lad=load(run_directory)
+    if cause not in ('benign','fault')or type(note)is not str or not note.strip():raise ValueError('cause benign|fault and a note naming the cause required')
+    backfill(root,lad,d['arms'][1])   # the window after this acknowledgement starts after every cell completed before it
+    for phase in PHASES:
+        state=fairness_state(root,phase)
+        if len(state['flags'])>len(state['acks']):break
+    else:raise ValueError('no arm fairness flag to acknowledge')
+    flag=state['flags'][-1];number=len(state['flags']);directory=fairness_directory(root,phase)
+    value=dict(phase=phase,flag=number,flag_sha256=hashlib.sha256((directory/f'flag-{number}.json').read_bytes()).hexdigest(),cause=cause,
+        note=note,difference=flag['reading']['difference'],coverage_difference=flag['reading']['coverage_difference'],
+        log_length=len(completions(root)),acknowledged_unix_seconds=time.time())
+    write_new(directory/f'ack-{number}.json',value)
+    if cause=='fault':write_new(directory/'void.json',dict(value,status='VOID_FAIRNESS'))
     return value
 
 
@@ -380,6 +468,137 @@ async def worker(packet,*,expected_pair,original,runtime_class=None):
     return 0
 
 
+def calibration_init(directory,*,ladder_declaration,ladder_declaration_sha256,checkpoint,base_config,base_config_sha256,band,lanes,tree_commit=None):
+    """A calibration directory (its own claims and results; never an eval run's) bound to the ladder, base config, the seed
+    band and the planned worker-lane count."""
+    lad=ladder.validate(read_bound(ladder_declaration,ladder_declaration_sha256));calibration_cells(lad,band)
+    if type(lanes)is not int or lanes<1:raise ValueError('planned worker lanes >= 1 required')
+    base=read_bound(base_config,base_config_sha256)
+    if type(base)is not dict:raise ValueError('literal base configuration required')
+    root=Path(directory).resolve()
+    run=dict(schema=CALIBRATION_RUN_SCHEMA,run_directory=str(root),ladder_declaration=str(Path(ladder_declaration).resolve()),
+        ladder_declaration_sha256=ladder_declaration_sha256,checkpoint=str(Path(checkpoint).resolve()),checkpoint_sha256=lad['checkpoint_sha256'],
+        base_config=base,base_config_sha256=base_config_sha256,seed_band=band,lanes=lanes,tree=tree_identity(tree_commit))
+    write_new(root/'calibration-run.json',run)
+    return run
+
+
+def calibration_load(directory):
+    root=Path(directory).resolve();manifest=root/'calibration-run.json'
+    if not manifest.exists():raise ValueError('a calibration directory required')
+    run=json.loads(manifest.read_bytes())
+    if run.get('schema')!=CALIBRATION_RUN_SCHEMA or run.get('run_directory')!=str(root):raise ValueError('this calibration manifest required')
+    lad=ladder.validate(read_bound(run['ladder_declaration'],run['ladder_declaration_sha256']))
+    return root,run,lad,calibration_cells(lad,run['seed_band'])
+
+
+def calibration_packets(directory,*,setting):
+    """Packets for the band's not-attempted calibration cells, in order, for one setting (solo or concurrent)."""
+    root,run,lad,band=calibration_load(directory);todo=[]
+    if setting not in ('solo','concurrent'):raise ValueError('setting solo or concurrent required')
+    for cell in band:
+        if (root/'claims'/f"{cell['ordinal']}.json").exists():continue
+        path=root/'requests'/f"{cell['ordinal']}.json"
+        value=dict(schema=CALIBRATION_REQUEST_SCHEMA,run_directory=run['run_directory'],cell=cell,checkpoint=run['checkpoint'],
+            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'])
+        if path.exists():
+            if path.read_bytes()!=encoded(value):raise ValueError('existing calibration request differs')
+        else:write_new(path,value)
+        todo.append(dict(path=str(path),sha256=sha(value),arm='RAW',mode='calibration',setting=setting,pair_ordinal=cell['pair_ordinal']))
+    return todo
+
+
+async def calibration_worker(packet,*,expected_pair,original,runtime_class=None):
+    """One RAW calibration game through the same Runtime, bridge and Foul Play path; claims and results stay in the
+    calibration directory, and only band cells (disjoint from every eval cell) are accepted."""
+    if type(packet)is not dict or set(packet)!={'path','sha256','server','setting'}or packet['server']is not None:
+        raise ValueError('one RAW calibration packet required')
+    value=read_bound(packet['path'],packet['sha256']);root=Path(value.get('run_directory','')).resolve()
+    _,run,lad,band=calibration_load(root);cell=value.get('cell')
+    if (set(value)!={'schema','run_directory','cell','checkpoint','checkpoint_sha256','base_config'}or value['schema']!=CALIBRATION_REQUEST_SCHEMA
+            or cell not in band or Path(packet['path']).resolve()!=root/'requests'/f"{cell['ordinal']}.json"
+            or packet['setting']not in ('solo','concurrent')):raise ValueError('a band calibration request at its own path required')
+    config=ladder.configuration(value['base_config'],cell,checkpoint=value['checkpoint'],cpu_pair=expected_pair)
+    from .live_protocol_runtime import _checkpoint_sha
+    if _checkpoint_sha(config.checkpoint)!=value['checkpoint_sha256']:raise ValueError('original champion bytes differ')
+    from .depthn_live_actor import Runtime
+    runtime=(Runtime if runtime_class is None else runtime_class)(client=None,telemetry_path=root/'telemetry'/f"{cell['ordinal']}.jsonl",
+        arm='RAW',cell=cell,original=original)
+    write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=packet['sha256'],cell=cell,setting=packet['setting'],cpu_pair=list(expected_pair)))
+    load=dict(start=list(os.getloadavg()));document=game=None
+    try:
+        with ladder.owning_capture(root/'owning-wire',cell=cell,declaration_sha256=sha(run)):result=await runtime.run(config)
+        document=result.to_dict();game=result.games[0].to_dict();status,error='COMPLETE',None
+    except Exception as error_:status,error=('UNKNOWN',type(error_).__name__+': '+str(error_))
+    write_new(root/'results'/f"{cell['ordinal']}.json",dict(schema=CELL_SCHEMA,status=status,error=error,cell=cell,setting=packet['setting'],
+        cpu_pair=list(expected_pair),source_game=game,benchmark=document,owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),
+        worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg()))))
+    return 0
+
+
+def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
+    """Per budget stratum and setting: rated moves and mean iterations_per_budget_second; the concurrent/solo ratio; the
+    observability the games' headers report; status MEASURED, INSUFFICIENT or UNMEASURABLE."""
+    root,run,lad,band=calibration_load(directory);results=[read_result(root,c['ordinal'])for c in band]
+    results=[r for r in results if r.get('status')=='COMPLETE']
+    headers={((r.get('benchmark')or {}).get('foulplay_think')or {}).get('iterations_observable')for r in results}
+    observable=True if headers=={True}else False if False in headers or None in headers else None
+    rates={s:{c:[]for c in fairness.CALIBRATION_STRATA}for s in ('solo','concurrent')}
+    for r in results:
+        for stratum,_,rate in fairness.moves(r)['rated']:   # per budget stratum only: no turn bands needed
+            if stratum in fairness.CALIBRATION_STRATA:rates[r['setting']][stratum].append(rate)
+    strata={c:dict(solo=dict(moves=len(rates['solo'][c]),rate=fmean(rates['solo'][c])if rates['solo'][c]else None),
+        concurrent=dict(moves=len(rates['concurrent'][c]),rate=fmean(rates['concurrent'][c])if rates['concurrent'][c]else None))
+        for c in fairness.CALIBRATION_STRATA}
+    for value in strata.values():
+        value['ratio']=(value['concurrent']['rate']/value['solo']['rate']if value['solo']['rate']and value['concurrent']['rate']is not None else None)
+    enough=all(v[s]['moves']>=min_moves for v in strata.values()for s in ('solo','concurrent'))
+    status='UNMEASURABLE'if observable is not True else'MEASURED'if enough else'INSUFFICIENT'
+    return dict(schema=CALIBRATION_SCHEMA,status=status,iterations_observable=observable,strata=strata,
+        ratios={c:v['ratio']for c,v in strata.items()}if status=='MEASURED'else None,ratio_min=CALIBRATION_RATIO_MIN,min_moves=min_moves,
+        lanes=run['lanes'],seed_band=run['seed_band'],ladder_declaration_sha256=run['ladder_declaration_sha256'],
+        games={s:sum(r['setting']==s for r in results)for s in ('solo','concurrent')},
+        hosts=sorted({encoded(r['worker']).decode()for r in results if isinstance(r.get('worker'),dict)}),
+        core_pairs=[list(pair)for pair in sorted({tuple(r['cpu_pair'])for r in results if r.get('cpu_pair')})],tree=run['tree'])
+
+
+async def calibrate(directory,*,pairs,cache_directory=None,command=None,min_moves=CALIBRATION_MIN_MOVES,dispatch_function=None):
+    """Solo (one lane) then concurrent (the planned lanes) RAW games on band seeds until every budget stratum has min_moves
+    rated moves in the setting (or Foul Play's work proves unobservable, or the band runs out); writes calibration.json once."""
+    root,run,lad,band=calibration_load(directory);run_dispatch=dispatch if dispatch_function is None else dispatch_function
+    command=worker_command if command is None else command
+    if len(pairs)!=run['lanes']:raise ValueError('calibrate with exactly the planned worker lanes')
+    for setting,lanes in (('solo',pairs[:1]),('concurrent',pairs)):
+        def enough():
+            value=calibration_summary(root,min_moves=min_moves)
+            if value['iterations_observable']is False:return 'UNOBSERVABLE'
+            return 'ENOUGH'if all(v[setting]['moves']>=min_moves for v in value['strata'].values())else None
+        state=enough()
+        if state=='UNOBSERVABLE':break
+        if state=='ENOUGH':continue
+        outcome=await run_dispatch(calibration_packets(root,setting=setting),pairs=lanes,servers={'RAW':None},cache_directory=cache_directory,
+            command=command,after=lambda packet:enough())
+        if outcome.get('stopped')=='UNOBSERVABLE'or outcome.get('failed'):break
+    value=calibration_summary(root,min_moves=min_moves);write_new(root/'calibration.json',value)
+    return value
+
+
+def require_calibration(root,d,*,pairs,accept_uncalibrated=False):
+    """The screen starts only within the calibrated concurrency and with every stratum's concurrent/solo ratio >= 0.90;
+    an unobservable (UNMEASURABLE) calibration needs an explicit accept-uncalibrated, recorded once."""
+    if len(pairs)>d['worker_lanes']:raise ValueError(f"more worker lanes than the {d['worker_lanes']} calibrated")
+    cal=d['calibration']
+    if cal['status']=='MEASURED':
+        low={s:r for s,r in cal['ratios'].items()if r<CALIBRATION_RATIO_MIN}
+        if low:raise ValueError(f'calibration concurrent/solo ratios below {CALIBRATION_RATIO_MIN}: {low}; lower the concurrency or give Foul Play '
+                                'more cores, then recalibrate')
+        return None
+    if not accept_uncalibrated:raise ValueError('calibration UNMEASURABLE (Foul Play not observable): pass --accept-uncalibrated to proceed')
+    path=state_path(root,'accept_uncalibrated.json')
+    if not path.exists():write_new(path,dict(status=cal['status'],accepted_unix_seconds=time.time()))
+    return json.loads(path.read_bytes())
+
+
 def worker_identity():
     """This worker's host and, when the environment provides them, its pod and node: run outputs only."""
     return dict(hostname=socket.gethostname(),**{k.lower():os.environ[k]for k in WORKER_IDENTITY_ENVIRONMENT if os.environ.get(k)})
@@ -397,7 +616,9 @@ async def serve(pair,cache_directory):
     torch.backends.cuda.matmul.allow_tf32=False;torch.backends.cudnn.allow_tf32=False
     original=ChampionWorkerRuntime();output=sys.stdout
     for line in sys.stdin:
-        with contextlib.redirect_stdout(sys.stderr):code=await worker(json.loads(line),expected_pair=pair,original=original)
+        packet=json.loads(line);run=calibration_worker if packet.get('mode')=='calibration'else worker
+        if run is calibration_worker:packet={k:v for k,v in packet.items()if k!='mode'}
+        with contextlib.redirect_stdout(sys.stderr):code=await run(packet,expected_pair=pair,original=original)
         output.write(json.dumps({'exit':code})+'\n');output.flush()
 
 
@@ -435,7 +656,8 @@ async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_com
                     if not queue or failed or stopped:break
                     packet=take()
                     if packet is None:break
-                    wire=dict(path=packet['path'],sha256=packet['sha256'],server=servers[packet['arm']])
+                    wire=dict(path=packet['path'],sha256=packet['sha256'],server=servers[packet['arm']],
+                        **{k:packet[k]for k in ('mode','setting')if k in packet})
                     process.stdin.write((json.dumps(wire)+'\n').encode());await process.stdin.drain()
                     line=await process.stdout.readline()
                     try:ok=json.loads(line)=={'exit':0}
@@ -476,46 +698,61 @@ def latency_rule(root,d,*,search_arm,log):
         timeout_rate_max=rule['timeout_rate_max'],cells=used,scope='first searched decisions of the screen in completion order; timeout causes only')
 
 
-def foulplay_cost(rows):
-    """Foul Play's per-move cost in these cell results: the bridge's opponent_think rows (MCTS iterations; wait seconds)."""
-    iterations=[];waits=[]
-    for row in rows:
-        for think in (row.get('source_game')or {}).get('opponent_think')or ():
-            if type(think.get('iterations'))is int:iterations.append(think['iterations'])
-            if type(think.get('wait_seconds'))in (int,float)and math.isfinite(think['wait_seconds']):waits.append(float(think['wait_seconds']))
-    return dict(cells=len(rows),iteration_moves=len(iterations),mean_iterations=fmean(iterations)if iterations else None,
-        wait_moves=len(waits),mean_wait_seconds=fmean(waits)if waits else None)
+def missing_from_log(root,lad,search_arm,log):
+    """Cells with a result but no completion-log line (dispatch stopped in between), in their one deterministic place:
+    RAW then the search arm, each by ordinal."""
+    known={entry['ordinal']for entry in log}
+    return [dict(ordinal=c['ordinal'],arm=c['arm'],pair_ordinal=c['pair_ordinal'])for arm in ('RAW',search_arm)for c in cells(lad,arm)
+            if c['ordinal']not in known and (Path(root)/'results'/f"{c['ordinal']}.json").exists()]
 
 
-def arm_fairness(raw,search,rule):
-    """Search vs RAW relative difference of Foul Play's mean per-move iterations (wait seconds when either arm lacks the
-    iteration count), once both arms have the declared minimum of measured moves."""
-    least=rule['min_moves_per_arm'];metric=a=b=None
-    if raw['iteration_moves']>=least and search['iteration_moves']>=least:metric,a,b=rule['metric'],raw['mean_iterations'],search['mean_iterations']
-    elif raw['wait_moves']>=least and search['wait_moves']>=least:metric,a,b=rule['fallback'],raw['mean_wait_seconds'],search['mean_wait_seconds']
-    difference=None if metric is None or not a else abs(b-a)/a
-    return dict(metric=metric,raw=raw,search=search,relative_difference=difference,relative_difference_max=rule['relative_difference_max'],
-        flagged=difference is not None and difference>rule['relative_difference_max'],
-        status='EVALUATED'if difference is not None else'INSUFFICIENT_MOVES')
+def effective_log(root,lad,search_arm):
+    """The completion log as the Monitor holds it: the recorded order, then any missing cells in their deterministic place.
+    Readouts evaluate the latency rule and fairness windows on exactly this."""
+    log=completions(root);return log+missing_from_log(root,lad,search_arm,log)
+
+
+def backfill(root,lad,search_arm):
+    """Append the missing cells to the completion log (what effective_log reads), once."""
+    for entry in missing_from_log(root,lad,search_arm,completions(root)):_log(root,entry)
+
+
+def _log(root,entry):
+    path=state_path(root,'completions.jsonl');path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('ab')as stream:stream.write(encoded(entry)+b'\n');stream.flush();os.fsync(stream.fileno())
+
+
+def read_result(root,ordinal):
+    path=Path(root)/'results'/f'{ordinal}.json'
+    return json.loads(path.read_bytes())if path.exists()else {}
+
+
+def cell_moves(root,ordinal,result=None):
+    """One cell's Foul Play moves (depthn_live_fairness.moves), banded by its owner capture's turns."""
+    result=read_result(root,ordinal)if result is None else result
+    return fairness.moves(result,fairness.round_turns(result.get('owning_wire')or Path(root)/'owning-wire'/f'{ordinal}.jsonl'))
+
+
+def completed_pairs(entries,search_arm):
+    arms={}
+    for entry in entries:arms.setdefault(entry['pair_ordinal'],set()).add(entry['arm'])
+    return sum(found>={'RAW',search_arm}for found in arms.values())
+
+
+def observability_contradictions(results,declared):
+    """Cells whose bridge header says iterations are (not) observable against the declaration."""
+    return sum(((r.get('benchmark')or {}).get('foulplay_think')or {}).get('iterations_observable')is not declared
+               for r in results if r.get('status')=='COMPLETE')
 
 
 class Monitor:
     """Run state after each completed cell: completion order, the screen latency rule (evaluated once, recorded) and arm
-    fairness (a flag is recorded once and stops dispatch until acknowledged). Returns a stop reason or None."""
+    fairness at its checkpoints (phase-scoped; a flag is recorded and stops dispatch until acknowledged). Returns a stop
+    reason or None."""
     def __init__(self,run_directory,*,search_arm):
-        self.root,self.run,self.d,self.lad=load(run_directory);self.arm=search_arm;self.costs={}
-        if search_arm not in self.d['arms'][1:]:raise ValueError('declared search arm required')
-        known={entry['ordinal']for entry in completions(self.root)}
-        # A cell whose result exists but never reached the log (dispatch stopped in between) joins it now, by ordinal.
-        for arm in ('RAW',search_arm):
-            for cell in cells(self.lad,arm):
-                if cell['ordinal']not in known and (self.root/'results'/f"{cell['ordinal']}.json").exists():self._append(cell)
-
-    def _append(self,cell):
-        path=state_path(self.root,'completions.jsonl');path.parent.mkdir(parents=True,exist_ok=True)
-        with path.open('ab')as stream:
-            stream.write(encoded(dict(ordinal=cell['ordinal'],arm=cell['arm'],pair_ordinal=cell['pair_ordinal']))+b'\n')
-            stream.flush();os.fsync(stream.fileno())
+        self.root,self.run,self.d,self.lad=load(run_directory);self.arm=search_arm;self.moves={}
+        if search_arm!=self.d['arms'][1]:raise ValueError('the declared search arm required')
+        backfill(self.root,self.lad,search_arm)
 
     def latency(self):
         path=state_path(self.root,'latency_rule.json')
@@ -524,29 +761,42 @@ class Monitor:
         if value is not None:write_new(path,value)
         return value
 
-    def fairness(self):
-        rows={'RAW':[], self.arm:[]}
-        for entry in completions(self.root):
-            if entry['arm']in rows:
-                if entry['ordinal']not in self.costs:
-                    path=self.root/'results'/f"{entry['ordinal']}.json"
-                    self.costs[entry['ordinal']]=json.loads(path.read_bytes())if path.exists()else {}
-                rows[entry['arm']].append(self.costs[entry['ordinal']])
-        return arm_fairness(foulplay_cost(rows['RAW']),foulplay_cost(rows[self.arm]),self.d['arm_fairness'])
+    def checkpoint(self,phase):
+        """Evaluate this phase's fairness at the next checkpoint of its current window, if reached; record it."""
+        rule=self.d['arm_fairness'];state=fairness_state(self.root,phase)
+        if len(state['flags'])>len(state['acks']):return 'FLAG_ARM_FAIRNESS'
+        ack=state['acks'][-1]if state['acks']else None;start=ack['log_length']if ack else 0
+        entries=[e for e in completions(self.root)[start:]if phase_of(self.d,e['pair_ordinal'])==phase]
+        pairs=completed_pairs(entries,self.arm);done=[c for c in state['checks']if c['window']==start]
+        if pairs<(done[-1]['pairs']if done else 0)+rule['checkpoint_pairs']:return None
+        for entry in entries:
+            if entry['ordinal']not in self.moves:self.moves[entry['ordinal']]=cell_moves(self.root,entry['ordinal'])
+        arms={arm:fairness.pool([self.moves[e['ordinal']]for e in entries if e['arm']==arm])for arm in ('RAW',self.arm)}
+        value=fairness.reading(arms['RAW'],arms[self.arm],rule)
+        floors=pairs>=rule['min_pairs']and min(value['moves'].values())>=rule['min_moves_per_arm']
+        reason=fairness.flag(value,rule,ack)if floors else None
+        check=dict(window=start,pairs=pairs//rule['checkpoint_pairs']*rule['checkpoint_pairs'],floors=floors,reason=reason,
+            weighted_ratio=value['weighted_ratio'],difference=value['difference'],coverage_difference=value['coverage_difference'],moves=value['moves'])
+        _append_line(fairness_directory(self.root,phase)/'checks.jsonl',check)
+        if reason is None:return None
+        write_new(fairness_directory(self.root,phase)/f"flag-{len(state['flags'])+1}.json",dict(phase=phase,reason=reason,window=start,
+            pairs=check['pairs'],acknowledged=ack,reading=value))
+        return 'FLAG_ARM_FAIRNESS'
 
     def __call__(self,packet):
         ordinal=int(Path(packet['path']).stem);arm=ARMS[ordinal%len(ARMS)]
         if arm!=packet['arm']:raise ValueError('completed packet arm differs from its cell')
-        self._append(cells(self.lad,arm)[ordinal//len(ARMS)])
+        cell=cells(self.lad,arm)[ordinal//len(ARMS)]
+        _log(self.root,dict(ordinal=ordinal,arm=arm,pair_ordinal=cell['pair_ordinal']))
         rule=self.latency()
         if rule is not None and rule['status']=='VOID_LATENCY':return 'VOID_LATENCY'
-        if state_path(self.root,'arm_fairness_acknowledged.json').exists():return None
-        fair=self.fairness()
-        if fair['flagged']:
-            flag=state_path(self.root,'arm_fairness_flag.json')
-            if not flag.exists():write_new(flag,fair)
-            return 'FLAG_ARM_FAIRNESS'
-        return None
+        if not self.d['fairness_observable']['value']:return None   # UNMEASURABLE: isolation and interleaving only
+        return self.checkpoint(phase_of(self.d,cell['pair_ordinal']))
+
+
+def _append_line(path,value):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('ab')as stream:stream.write(encoded(value)+b'\n');stream.flush();os.fsync(stream.fileno())
 
 
 def _quantiles(values):
@@ -638,7 +888,6 @@ def arm_summary(root,lad,*,arm,limit,declaration_sha256,deadline,worlds=None,arc
         score_mean=None if not complete else sum(r['score']for r in complete)/len(complete),
         telemetry_mismatches=len(mismatch),telemetry_mismatch_pairs=mismatch[:50],
         decisions=decisions(telemetry,deadline=deadline,worlds=worlds,archive=archive,precision=precision),
-        foulplay_cost=foulplay_cost(rows),
         load_average_1m=_quantiles([r['load_average']['end'][0]for r in rows if isinstance(r.get('load_average'),dict)]),
         workers=len({encoded(r['worker']).decode()for r in rows if isinstance(r.get('worker'),dict)}))
 
@@ -695,20 +944,23 @@ def codex_raw_agreement(lad,ladder_sha256,ours,directory,*,limit):
 
 
 def server_seconds(paths):
-    """request_id -> the server's own seconds from arrival to result, from depthn_live_server --telemetry files."""
+    """request_id -> the server's own seconds from arrival to result, from depthn_live_server --telemetry files, for replies
+    that were COMPLETE only: any other reply (expired_in_queue reports just its queue wait) leaves the decision censored."""
     out={}
     for path in paths or ():
         for line in Path(path).read_bytes().splitlines():
             row=json.loads(line)
-            if (row.get('kind')=='request'and isinstance(row.get('response'),dict)and type(row.get('server_seconds'))in (int,float)
-                    and math.isfinite(row['server_seconds'])):out[row['response'].get('request_id')]=row['server_seconds']
+            if (row.get('kind')=='request'and isinstance(row.get('response'),dict)and row['response'].get('status')=='COMPLETE'
+                    and type(row.get('server_seconds'))in (int,float)and math.isfinite(row['server_seconds'])):
+                out[row['response'].get('request_id')]=row['server_seconds']
     return out
 
 
 def deadline_coverage(rows,*,reserve,deadlines,minimum,late=None):
     """End-to-end wall (select_seconds) of searched decisions and, per candidate deadline, the share whose wall + reserve
-    fits. A timeout's wall is censored at the client deadline: with the server's telemetry it is the pre-send time plus the
-    server's own seconds, else it is unknown (lower bound counts it as not fitting, upper bound as fitting)."""
+    fits. A timeout's wall is censored at the client deadline: with the server's telemetry showing its reply COMPLETE it is the
+    pre-send time plus the server's own seconds, else it is unknown (lower bound counts it as not fitting, upper bound as
+    fitting)."""
     walls=[]
     for row in rows:
         wall=row['select_seconds']
@@ -732,12 +984,22 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
         rows[name],arms[name]=arm_summary(root,lad,arm=name,limit=limit,declaration_sha256=run['declaration_sha256'],
             deadline=d['deadline_seconds'],worlds=None if name=='RAW'else d['search'][arm]['worlds'],
             archive=None if name=='RAW'else d['archive_sha256'],precision=None if name=='RAW'else d['matmul_precision'])
-    recorded=state_path(root,'latency_rule.json')
-    latency=json.loads(recorded.read_bytes())if recorded.exists()else latency_rule(root,d,search_arm=arm,log=completions(root))
+    recorded=state_path(root,'latency_rule.json')   # else the Monitor's own window: the effective completion log
+    latency=json.loads(recorded.read_bytes())if recorded.exists()else latency_rule(root,d,search_arm=arm,log=effective_log(root,lad,arm))
     telemetry_paths=None if server_telemetry is None else [str(Path(x).resolve())for x in server_telemetry]
-    fair=arm_fairness(arms['RAW']['foulplay_cost'],arms[arm]['foulplay_cost'],d['arm_fairness'])
-    acknowledged=state_path(root,'arm_fairness_acknowledged.json').exists()
-    fair.update(acknowledged=acknowledged,recorded_flag=state_path(root,'arm_fairness_flag.json').exists())
+    observable=d['fairness_observable']['value']
+    fair=dict(observable=d['fairness_observable'],rule=d['arm_fairness'],calibration=d['calibration'],
+        accepted_uncalibrated=state_path(root,'accept_uncalibrated.json').exists(),phases={})
+    for phase in PHASES[:1]if limit==d['screen_paired_cells']else PHASES:   # the screen readout reads screen-phase state only
+        state=fairness_state(root,phase)
+        pooled={name:fairness.pool([cell_moves(root,r['cell']['ordinal'],r)for r in rows[name]if phase_of(d,r['cell']['pair_ordinal'])==phase])
+                for name in rows}
+        reading=(fairness.reading(pooled['RAW'],pooled[arm],d['arm_fairness'])if observable else dict(status='UNMEASURABLE',
+            basis='structural isolation (dedicated Foul Play cores; servers in their own pods) plus interleaving',
+            descriptive_request_to_answer_seconds=fairness.descriptive_waits(pooled['RAW'],pooled[arm])))
+        fair['phases'][phase]=dict(reading=reading,flags=state['flags'],acks=state['acks'],void=state['void'],checks=state['checks'])
+    held=any(len(v['flags'])>len(v['acks'])for v in fair['phases'].values())
+    fault=any(v['void']is not None for v in fair['phases'].values())
     void=latency is not None and latency['status']=='VOID_LATENCY'
     coverage=None
     if void:   # the input for re-declaring the deadline: every searched decision of the screen so far
@@ -760,9 +1022,10 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
     if search['transport_failure_share']is not None and search['transport_failure_share']>rules['transport_failure_share_max']:
         breakage.append('transport_failures')
     if search['searched_share']is not None and search['searched_share']<rules['searched_share_min']:breakage.append('searched_share')
+    if observability_contradictions(rows['RAW']+rows[arm],observable):breakage.append('fairness_observability')
     attempted=all(a['not_attempted']==0 for a in arms.values());harm=interval is not None and interval[1]<0;bar=None
-    held=fair['flagged']and not acknowledged
-    if void:decision='VOID_LATENCY'
+    if fault:decision='VOID_FAIRNESS'
+    elif void:decision='VOID_LATENCY'
     elif held:decision='FLAG_ARM_FAIRNESS'
     elif limit==d['screen_paired_cells']:
         decision='INCOMPLETE'if not attempted else'STOP_HARM'if harm else'STOP_BREAKAGE'if breakage else'CONTINUE_TO_2000'
