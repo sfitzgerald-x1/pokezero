@@ -95,6 +95,7 @@ def main(argv=None):
         print(json.dumps(dict(status=value['status'],ratios=value['ratios'],sha256=panel.sha(value))));return 0 if value['status']!='INSUFFICIENT'else 1
     if args.mode=='preflight':
         if (Path(args.directory)/'preflight.json').exists():raise SystemExit('preflight.json exists: a pre-flight runs once per directory')
+        code_tree=panel.tree_identity(args.tree_commit)   # up front: a tree that cannot be named fails before any game
         if not (Path(args.directory)/'calibration-run.json').exists():
             panel.calibration_init(args.directory,ladder_declaration=args.ladder_declaration,ladder_declaration_sha256=args.ladder_declaration_sha256,
                 checkpoint=args.checkpoint,base_config=args.base_config,base_config_sha256=args.base_config_sha256,
@@ -104,7 +105,7 @@ def main(argv=None):
             reserve_seconds=args.reserve_seconds)
         outcome=asyncio.run(panel.dispatch(packets,pairs=[tuple(p)for p in args.cpu_pair],servers={'RAW':None,args.arm:args.server},
             cells_per_worker=args.cells_per_worker,cache_directory=Path(args.cache_directory).resolve(),warmup=args.warmup_capture))
-        value=panel.preflight_summary(args.directory,dispatch=outcome,server=args.server,cells_per_worker=args.cells_per_worker,tree_commit=args.tree_commit)
+        value=panel.preflight_summary(args.directory,dispatch=outcome,server=args.server,cells_per_worker=args.cells_per_worker,code_tree=code_tree)
         path=Path(args.directory)/'preflight.json';panel.write_new(path,value)
         print(json.dumps(dict(path=str(path.resolve()),sha256=panel.sha(value),dispatch=outcome,search_wall_within=value['search_wall_within'],
             arms={a:dict(first=v['first_decision'],warm_p99=(v['warm']or{}).get('p99'),first_within_warm_p99=v['first_within_warm_p99'],

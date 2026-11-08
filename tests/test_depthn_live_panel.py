@@ -49,6 +49,7 @@ def calibration_fixture(ladder_sha256, *, observable=True, ratios=RATIOS, lanes=
 SERVER_TREE = 'c0'*20   # the servers' tree commit, declared
 REAL_SERVER_TREE_CHECK = panel.server_tree_check
 REAL_CHECK_PREFLIGHT = panel.check_preflight
+REAL_REQUIRE_CLEAN_TREE = panel.require_clean_tree
 
 
 def setUpModule():
@@ -57,7 +58,8 @@ def setUpModule():
     global _patches
     _patches = [patch.object(panel, 'server_tree_check', side_effect=lambda server, eval_, declaration: dict(
         server_commit=server, eval_commit=eval_, declaration_path='evals/declaration.json', files=['evals/declaration.json'], ok=True)),
-        patch.object(panel, 'check_preflight', side_effect=lambda d: None)]
+        patch.object(panel, 'check_preflight', side_effect=lambda d, tree: None),
+        patch.object(panel, 'require_clean_tree', side_effect=lambda tree: tree)]   # a working copy under test may be dirty
     for p in _patches: p.start()
 
 
@@ -165,6 +167,7 @@ def preflight_value(d, **change):
     value = dict(schema=panel.PREFLIGHT_SCHEMA, arm=arm, deadline_seconds=d['deadline_seconds'], reserve_seconds=d['reserve_seconds'],
         server=dict(host='h', port=7000), cells_per_worker=d['actor']['cells_per_worker'],
         dispatch=dict(dispatched=24, failed=[], not_dispatched=0, stopped=None), search_wall_p95_max=2.6, search_wall_within=True,
+        code_tree=dict(commit='c'*40, source_sha256='e'*64),
         arms={'RAW': dict(first_within_warm_p99=True, warm_encode=q(d['actor']['warm_p95_seconds']['encode']),
                           warm_greedy=q(d['actor']['warm_p95_seconds']['greedy'])),
               arm: dict(first_within_warm_p99=True, search_wall=q(d['actor']['preflight_search_wall_p95_seconds']))})
@@ -187,17 +190,30 @@ class PreflightBindingTests(unittest.TestCase):
 
     def test_the_declared_actor_must_be_its_preflights(self):
         d = declaration('a'*64)
-        self.assertEqual(REAL_CHECK_PREFLIGHT(self.declared(preflight_value(d)))['arm'], 'DN2W8')
+        tree = dict(source_sha256='e'*64)
+        self.assertEqual(REAL_CHECK_PREFLIGHT(self.declared(preflight_value(d)), tree)['arm'], 'DN2W8')
         for change in (dict(arm='DN2W16'), dict(deadline_seconds=5.), dict(reserve_seconds=.2), dict(cells_per_worker=1),
                        dict(dispatch=dict(dispatched=3, failed=['x'], not_dispatched=21, stopped=None)),
                        dict(dispatch=dict(dispatched=3, failed=[], not_dispatched=21, stopped='interleave')), dict(dispatch=None),
                        dict(search_wall_within=False), {'RAW.first_within_warm_p99': False}, {'DN2W8.first_within_warm_p99': None},
                        {'DN2W8.search_wall': dict(p95=2.0)}, {'RAW.warm_encode': dict(p95=.05)}, {'RAW.warm_greedy': dict(p95=.8)},
-                       dict(schema='other')):
+                       dict(schema='other'), dict(code_tree=dict(source_sha256='f'*64)), dict(code_tree=None)):
             with self.subTest(change), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
-                REAL_CHECK_PREFLIGHT(self.declared(preflight_value(d, **change)))
+                REAL_CHECK_PREFLIGHT(self.declared(preflight_value(d, **change)), tree)
         wrong = self.declared(preflight_value(d)); wrong['actor']['source']['sha256'] = '0'*64
-        with self.assertRaises(ValueError): REAL_CHECK_PREFLIGHT(wrong)
+        with self.assertRaises(ValueError): REAL_CHECK_PREFLIGHT(wrong, tree)
+
+    def test_init_calls_the_preflight_check_and_refuses_a_dirty_tree(self):
+        seen = []
+        def refuse(d, tree): seen.append(tree['commit']); raise ValueError('the declared actor must be its pre-flight')
+        with patch.object(panel, 'check_preflight', side_effect=refuse), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
+            make_run(self.root/'a')
+        self.assertEqual(len(seen), 1)
+        for dirty in (True, None):
+            with self.subTest(dirty=dirty), self.assertRaisesRegex(ValueError, 'clean git tree'): REAL_REQUIRE_CLEAN_TREE(dict(commit='c'*40, dirty=dirty))
+        self.assertEqual(REAL_REQUIRE_CLEAN_TREE(dict(commit='c'*40, dirty=False))['commit'], 'c'*40)
+        with patch.object(panel, 'require_clean_tree', side_effect=ValueError('a clean git tree required')), self.assertRaisesRegex(ValueError, 'clean git tree'):
+            make_run(self.root/'dirty')   # init calls it
 
     def test_eval_and_calibration_directories_never_mix(self):
         root, run, d, lad = make_run(self.root/'eval')
@@ -489,6 +505,12 @@ class PromotionTests(unittest.TestCase):
 
     def pin(self, name, value):
         path = Path(self.directory.name)/f'{name}.json'; panel.write_new(path, value); return path, panel.sha(value)
+
+    def test_a_screen_readout_with_nodes_can_be_continued(self):   # the review's reproduction
+        genuine = panel.readout(self.root, arm='DN2W8', limit=500, nodes=dict(workers='node-w', servers='node-s'))
+        self.assertEqual(genuine['decision'], 'CONTINUE_TO_2000')
+        screen = self.pin('go-nodes', genuine)
+        self.assertEqual(len(panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=screen)), 5)
 
     def test_extension_needs_a_genuine_continuing_screen_readout(self):
         with self.assertRaisesRegex(ValueError, 'pinned 500-cell'): panel.pending(self.root, arm='DN2W8', limit=2000, resume=True)
@@ -1677,6 +1699,9 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaises(KeyError): panel.calibration_summary(self.root)['strata']['4x500ms']['preflight']   # pre-flight games never count
         self.assertEqual(panel.calibration_summary(self.root)['games'], dict(solo=0, concurrent=0))
         game(band[3], 'DN2W8', [2.7]*21, 'search'); self.assertFalse(panel.preflight_summary(self.root)['search_wall_within'])
+        for cell in band[:4]: panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", dict(setting='preflight'))
+        panel.preflight_packets(self.root, arm='DN2W8', games=2, deadline_seconds=5., reserve_seconds=.15)   # a second deadline
+        with self.assertRaisesRegex(ValueError, 'one search arm, deadline and reserve'): panel.preflight_summary(self.root)
 
     def test_init_verifies_the_calibration_and_dispatch_gates_on_it(self):
         with TemporaryDirectory() as directory:

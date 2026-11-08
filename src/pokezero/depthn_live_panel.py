@@ -369,7 +369,7 @@ def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladde
     if base.get('search_time_ms')!=d['foulplay_move_wall']['search_time_ms']:raise ValueError('the declared Foul Play search_time_ms must be the base config\'s')
     root=Path(run_directory).resolve();tree=tree_identity(tree_commit)
     if (root/'calibration-run.json').exists():raise ValueError('a calibration or pre-flight directory is never an eval run directory')
-    check_preflight(d)
+    require_clean_tree(tree);check_preflight(d,tree)
     servers=server_tree_check(d['server_tree_commit'],tree['commit'],declaration)
     if not servers['ok']:raise ValueError(f'the servers\' tree may differ from the eval tree only in the declaration: {servers}')
     run=dict(schema=RUN_SCHEMA,run_directory=str(root),declaration=str(Path(declaration).resolve()),declaration_sha256=declaration_sha256,
@@ -413,7 +413,7 @@ def pending(run_directory,*,arm,limit,resume=False,screen=None,tree_commit=None)
                 or value.get('arm')!=arm and arm!='RAW'):
             raise ValueError('pinned 500-cell screen readout continuing to 2000 required')
         again=readout(root,arm=value['arm'],limit=d['screen_paired_cells'],codex_raw_directory=value['codex_raw_directory'],
-            server_telemetry=value['server_telemetry'],tree_commit=tree_commit)
+            server_telemetry=value['server_telemetry'],tree_commit=tree_commit,nodes=value.get('nodes'))
         if sha(again)!=screen[1]:raise ValueError('screen readout differs from its recomputation')
     todo=[];attempted=0
     for cell in cells(lad,arm,limit=limit):
@@ -647,7 +647,7 @@ def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
     return todo
 
 
-def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=None,tree_commit=None):
+def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=None,code_tree=None,tree_commit=None):
     """The pre-flight's readings: per arm, each game's first-decision wall against the warm (decision >= 1) distribution's p99
     (the warmup's check), and the search arm's end-to-end decision wall (select_seconds, non-single-legal decisions) p95
     against PREFLIGHT_WALL_P95_MAX, with fallback causes; plus the workers' warmups."""
@@ -684,13 +684,21 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
         dispatch=dispatch,arms=out,search_wall_p95_max=PREFLIGHT_WALL_P95_MAX,
         search_wall_within=None if not walls else all(w['p95']<=PREFLIGHT_WALL_P95_MAX for w in walls),
         warmups=[c['warmup']for c in claims if c.get('setting')=='preflight'and c.get('warmup')is not None],
-        seed_band=run['seed_band'],lanes=run['lanes'],calibration_tree=run['tree'],code_tree=tree_identity(tree_commit))
+        seed_band=run['seed_band'],lanes=run['lanes'],calibration_tree=run['tree'],
+        code_tree=code_tree if code_tree is not None else tree_identity(tree_commit))
 
 
-def check_preflight(d):
+def require_clean_tree(tree):
+    """init's eval tree: a clean git checkout (dirty False), since the server-tree rule compares commits, not working trees."""
+    if tree.get('dirty')is not False:raise ValueError('a clean git tree required: the server-tree rule compares commits')
+    return tree
+
+
+def check_preflight(d,tree):
     """The declared actor block against its source (the pre-flight's preflight.json, sha256-bound): the declared arm, deadline,
     reserve and cells per worker; a dispatch that neither failed nor stopped; every game's first decision within its arm's warm
-    p99 (the warmup worked); the search wall within the bound; and the declared numbers equal to the file's."""
+    p99 (the warmup worked); the search wall within the bound; the declared numbers equal to the file's; and the pre-flight's code
+    the eval's (the worker code digest: the declaration JSON is not part of it)."""
     a=d['actor'];value=read_bound(a['source']['path'],a['source']['sha256']);arm=d['arms'][1]
     raw=(value.get('arms')or {}).get('RAW')or {};search=(value.get('arms')or {}).get(arm)or {}
     outcome=value.get('dispatch')if isinstance(value.get('dispatch'),dict)else {}
@@ -700,9 +708,10 @@ def check_preflight(d):
             or outcome.get('failed')!=[]or outcome.get('stopped')is not None or value.get('search_wall_within')is not True
             or raw.get('first_within_warm_p99')is not True or search.get('first_within_warm_p99')is not True
             or pick(search.get('search_wall'),'p95')!=a['preflight_search_wall_p95_seconds']
-            or pick(raw.get('warm_encode'),'p95')!=a['warm_p95_seconds']['encode']or pick(raw.get('warm_greedy'),'p95')!=a['warm_p95_seconds']['greedy']):
+            or pick(raw.get('warm_encode'),'p95')!=a['warm_p95_seconds']['encode']or pick(raw.get('warm_greedy'),'p95')!=a['warm_p95_seconds']['greedy']
+            or pick(value.get('code_tree'),'source_sha256')!=tree['source_sha256']):
         raise ValueError('the declared actor must be its pre-flight\'s: same arm, deadline, reserve and cells per worker, a clean dispatch, '
-                         'first decisions within the warm p99, the search wall within the bound and the same numbers')
+                         'first decisions within the warm p99, the search wall within the bound, the same numbers and the same code')
     return value
 
 
