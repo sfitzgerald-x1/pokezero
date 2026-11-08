@@ -1,0 +1,200 @@
+{
+ "actor": {
+  "cells_per_worker": 100,
+  "preflight_search_wall_p95_seconds": 2.241361822001636,
+  "search_overlaps_greedy": true,
+  "source": {
+   "path": "/out/preflight-r5/preflight.json",
+   "sha256": "860317f52bdffb4b22a3cfa8cc52caa2614f052fb9d33305a34aade270275732"
+  },
+  "warm_p95_seconds": {
+   "encode": 0.044163154903799295,
+   "greedy": 0.26930616586469114
+  },
+  "warmup_decisions": 12
+ },
+ "archive_sha256": "e450515351bce1497ab50a712955fe17b761bbb5f424b23ec299e96cda5b165c",
+ "arm_fairness": {
+  "checkpoint_pairs": 50,
+  "combine": "POOLED_COUNT_WEIGHTED_RATIO_OF_MEANS",
+  "coverage_difference_max": 0.05,
+  "metric": "ITERATIONS_PER_BUDGET_SECOND",
+  "min_cell_moves": 30,
+  "min_moves_per_arm": 1000,
+  "min_pairs": 50,
+  "ratio_tolerance": 0.05,
+  "rearm_margin": 0.025,
+  "reference": "RAW",
+  "strata": "FOULPLAY_BUDGET_STRATUM_X_TURN_BAND"
+ },
+ "arms": [
+  "RAW",
+  "DN2W16"
+ ],
+ "bar": "LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE",
+ "bench_p95_wall_seconds": 1.9809927470050752,
+ "bench_source": {
+  "path": "/out/gap4b-sess-DN2W16/summary.json",
+  "sha256": "f82b062460e7ccc29d48878da8db25a6bc808d3ab6b55c8cb9eb37fe43688431"
+ },
+ "breakage": {
+  "latency_p95_max_seconds": 3.0,
+  "searched_share_min": 0.5,
+  "timeout_forfeits_max": 0,
+  "transport_failure_share_max": 0.02,
+  "unknown_cells_max": 0
+ },
+ "calibration": {
+  "floors": {
+   "2x1000ms": 300,
+   "4x500ms": 60
+  },
+  "ratios": {
+   "2x1000ms": 1.057854414653111,
+   "4x500ms": 0.9236617520404113
+  },
+  "seed_band": {
+   "battle_seed_start": 2103402000,
+   "count": 200,
+   "foulplay_seed_start": 2103502000
+  },
+  "sha256": "7cc906ecf857ebf1de79df70cf458e71f3fad39977f827e0b7d6877c29994af9",
+  "status": "MEASURED"
+ },
+ "checkpoint_sha256": "0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be",
+ "confidence": 0.9,
+ "deadline_seconds": 3.0,
+ "expected_searched_share": {
+  "source": {
+   "report_sha256": "f82b062460e7ccc29d48878da8db25a6bc808d3ab6b55c8cb9eb37fe43688431",
+   "run_id": "gap4b-sess-DN2W16"
+  },
+  "value": 0.9435421500386698
+ },
+ "expected_searched_share_roster": 0.9545454545454546,
+ "fairness_observable": {
+  "evidence": {
+   "path": "/out/calibration-r2/calibration.json",
+   "sha256": "7cc906ecf857ebf1de79df70cf458e71f3fad39977f827e0b7d6877c29994af9"
+  },
+  "value": true
+ },
+ "foulplay_move_wall": {
+  "label": "Foul Play at search_time_ms 1000 (Codex's ladder base config, verbatim): per move it samples battles one after another (search parallelism 1): 4 x 500 ms early, 2 x 1000 ms later, about 2 s of search per move in both strata; the per-move wall is the bridge's request-forwarded-to-choice window (wait + overlap seconds), measured on the calibration games",
+  "search_time_ms": 1000,
+  "source": {
+   "path": "/out/calibration-r2/move-walls.json",
+   "sha256": "22a7ac2f0e3309cab61b147886b64be733b80e1cb13d7aa4a311fdc6a55d608f"
+  },
+  "strata": {
+   "2x1000ms": {
+    "concurrent": {
+     "moves": 1162,
+     "p50": 2.556297,
+     "p95": 2.634354
+    },
+    "ms_per_sample": 1000,
+    "sampled_battles": 2,
+    "solo": {
+     "moves": 798,
+     "p50": 2.3527240000000003,
+     "p95": 2.436266
+    }
+   },
+   "4x500ms": {
+    "concurrent": {
+     "moves": 91,
+     "p50": 2.584474,
+     "p95": 4.349285
+    },
+    "ms_per_sample": 500,
+    "sampled_battles": 4,
+    "solo": {
+     "moves": 62,
+     "p50": 2.304813,
+     "p95": 4.24361
+    }
+   }
+  }
+ },
+ "interleave": "ALTERNATE_ARMS_BY_PAIR_ORDINAL_LEAD_AT_MOST_CONCURRENCY",
+ "ladder_declaration_sha256": "982215c8a31701adb13ed22f28381c87eef11454442fe442fa1da26ae82b3e5a",
+ "matmul_precision": "highest",
+ "max_paired_cells": 2000,
+ "primary_comparison": "SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL",
+ "provenance": {
+  "base_config_sha256": "6fefe349ffe6b5f69ce31f8eed0bf067c3ec1cdb96aa4ca1b931f916f0d0ef48",
+  "engine_tables": {
+   "bank_metadata_sha256": "18065d7cf29a7d613ddc8803086146c1ff13b55838db311620cd58599492a833",
+   "constructor_metadata_sha256": "fad2db5adee11d6f9efb72a5967bde3e2b5c9970ac61b79d4af5e08bfbfb7052",
+   "digest": "e349be50d83625ebd8222cfaa6f6f61d9424647625275211c45e85c0359c4882"
+  },
+  "foulplay": {
+   "applied_diff_sha256": "d4b94a1ecf669e01cedfafe26992fe498daecad348f8144466357469de4633e1",
+   "commit": "9955255176688a877f8b3586ee7c6bda39df5fdb",
+   "patch_blobs": {
+    "third_party/foulplay-capture.patch": "157e288a",
+    "third_party/foulplay-local-nosec.patch": "1aecc657",
+    "third_party/foulplay-rest-cant.patch": "b3e95eab"
+   },
+   "poke_engine": {
+    "features": "poke-engine/gen3, no default features",
+    "gen3_patch_list_sha256": "f5f1c8324fe87a92339e13c0abf85e94f0cc6050f1db344d509f62e24adf49dd",
+    "native_so_sha256": "f35d5083511580a1e2964968c0a394b424472d20da3ce12750958257d37348dc",
+    "sdist_sha256": "84a7dfad5ce4650a2cb9250999597c594385069eb33622c6a14bb1279694b434",
+    "setup_script_sha256": "cb95be7a19806a450a1e21d261e93c85986060486bbdd66c914965e75bb9abbe",
+    "version": "0.0.47"
+   },
+   "python": "3.12.13 aarch64",
+   "runtime_metadata_sha256": "17cb9f9e27bd192b97a28053bb83214d8c5c7276d88651a5cb69630dd9b3d96e"
+  },
+  "showdown_commit": "f76228a1354b5d0f307ca2d16101294ad3a2308b"
+ },
+ "reserve_seconds": 0.15,
+ "root_operator": "ARGMAX_MEAN_COMPLETED_Q",
+ "schema": "depthn-foulplay-panel.declaration.v1",
+ "screen_latency_rule": {
+  "coverage_deadlines": [
+   5.0,
+   10.0,
+   15.0
+  ],
+  "coverage_min": 0.995,
+  "searched_decisions": 1000,
+  "timeout_rate_max": 0.01
+ },
+ "screen_paired_cells": 500,
+ "screen_rule": "STOP_HARM_IF_UPPER_BOUND_LT_0",
+ "search": {
+  "DN2W16": {
+   "depth": 2,
+   "worlds": 16
+  }
+ },
+ "search_choice": {
+  "arm": "DN2W16",
+  "cell_commit": "8e9d08c107e8b423e1c05efc9194ae5cb4489441",
+  "evidence": [
+   {
+    "path": "/out/cells/chmp-v3lmw16-greedy.json",
+    "sha256": "46f3105635917b0f71f138d225cf236285faf18dced215b4844d41a72d90f8f2"
+   },
+   {
+    "path": "/out/out/chmp-v3lmw16-greedy/chmp-v3lmw16-greedy-pairs.jsonl",
+    "sha256": "50a85785008cdc45a56019488044c85f0e7d9d44538e0cc70a6bf57c8d2a426b"
+   },
+   {
+    "path": "/out/ref/chmp-d2/chmp-v3lmw8-greedy-pairs.jsonl",
+    "sha256": "48122280d88d22c8fc65e844e13db5ae9e82740a298dc76f1be23c480ee8e60a"
+   },
+   {
+    "path": "/out/ref/chmp-d2/chmp-greedy-mirror-pairs.jsonl",
+    "sha256": "bd6579d4d87c992ed31f78f52295db47efbc81cffd47f40b9f3057e1d5f8ddf8"
+   }
+  ],
+  "summary": "W=16 (the lead's ruling, both conditions met). Champion greedy-leaf cells at depth 2, 1,019 pairs: W16 - W8 = +2.45 points, 90% CI (+0.50, +4.41); W16 - greedy mirror = +17.69 (+16.10, +19.27). Live session bench at W=16 (40 whole battles): p95 wall 1.981 s against the 2.6 s W=16 bound; searched share 0.944. Paths are the producing devbox's /out."
+ },
+ "server_processes_per_gpu": 3,
+ "server_tree_commit": "77235041b9f5623a62d7cb8ddfa884e72d76b4b2",
+ "worker_lanes": 12
+}
