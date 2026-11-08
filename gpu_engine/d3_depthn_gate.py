@@ -103,6 +103,15 @@ refusal breakdown, values section and sibling spread are absent; its reported-on
 (stricter) in gate mode and reported under --n2-equivalence; the guard's p10 is over non-zero spreads, not every spread (looser or equal); the raw-head check does not apply to the champion
 (nothing is substituted; the first-root exact check and the digests over its view stand in); gate --block-invariance varies the DepthNPricer's
 block_lanes, not a Depth2Pricer child block; (e)'s backups, sampling seeds and offline modes differ; (a), (f) and leaf_walk_* are extra.
+--constructor-roster PATH SHA (CONSTRUCTOR_ROOTS, R1-C; with --saved-roots as the runtime only, --champion-archive and declaration A's harness,
+CONSTRUCTOR_HARNESS): the roots are Codex's ProtocolConstructor worlds (gpu_engine.constructor_worlds) on a roster's captured Showdown roots,
+chosen by CONSTRUCTOR_RULE before anything is priced. ONE PrebuiltWorlds per call goes to the full-width depth-2 pass, the depth-N pricer and
+its block-invariance twin (worlds=), and the oracle stacks its pairs. D3's FramePricer has no pre-built worlds input, so (b) is NOT_APPLICABLE
+(NO_B); every other check is unchanged. Each request's root prior is the champion's (g2.bind_roots and its exact first-root check; a dropped
+request or a changed logit fails closed). Roots of different carry signatures never share a frame (one call per signature, checked on the host
+before pricing). averaging_argmax (AVERAGING_RULE) holds the live operator's W-world decision on the pricer frame to its oracle-heads copy. The
+header's constructor_roots section pins the roster, each root's capture chain and prefix, the Showdown revision, the metadata and vocabulary
+sha256s, the seed, W and the effective matmul precision. Without the flag nothing is built, judged, logged or written differently.
 """
 import argparse
 import collections
@@ -117,6 +126,7 @@ import importlib.util
 import itertools
 import json
 import math
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -451,7 +461,8 @@ def declared_cover_n(frame, data, d_results):
     dict(outside, inexact)}}, outside = value-compared positions outside (a)'s t1_digest_own mask (_turn1_viewed over the oracle's cells),
     inexact = those whose values are not bit-equal. (c) t1_value_head / raw_head_t1_value: g2.check_heads' valued cells (status and error as
     the oracle's, expanded or code 5/6). (b) t1_value: g2.check_d's compared cells (enumerated, priced by D without a D error), terminal cells
-    included (they lie outside every digest mask). Recorded in every evaluation, read only under --declared-bounds."""
+    included (they lie outside every digest mask). Recorded in every evaluation, read only under --declared-bounds. d_results None (constructor
+    worlds: no D3 counterpart) records no (b) part."""
     children = data['children'];cells = np.asarray(children['cells'], np.int64).reshape(-1, 4);out = dict(b={}, c={})
     if len(cells):
         at = tuple(cells.T);status, error = np.asarray(children['status']), np.asarray(children['error'])
@@ -459,6 +470,7 @@ def declared_cover_n(frame, data, d_results):
         outside = same & ((status == 2) | np.isin(error, g2.DEPTH2_CODES)) & ~_turn1_viewed(status, error);value = np.asarray(frame.t1_value)[at]
         for name, key in (('t1_value_head', 'head_value'), ('raw_head_t1_value', 'raw_head_value')):
             if key in children:out['c'][name] = dict(outside=int(outside.sum()), inexact=int(np.count_nonzero(outside & _inexact(value, children[key]))))
+    if d_results is None:return out
     viewed = set(map(tuple, cells[_turn1_viewed(np.asarray(children['status']), np.asarray(children['error']))].tolist())) if len(cells) else set()
     t1s, t1v = np.asarray(frame.t1_status), np.asarray(frame.t1_value);outside = inexact = 0
     if len(d_results) != len(t1s):return out   # (b) compares no value
@@ -1200,19 +1212,24 @@ def backup_checks(evaluation, frame, data, requests, *, context=None, backups=No
 
 
 def _evaluate_n(frame, d_results, requests, data, *, context=None, full_turn1=True, progress=None):
+    """(a)-(d) and oracle consistency on one call; d_results None (constructor worlds: no D3 counterpart, NO_B) leaves (b) out of the evaluation,
+    so no summary judges it."""
     context = context or {};geometry = frame_geometry_n(frame, len(requests), data['plan']);depth = data['plan']['depth']
     if geometry:
         bad = dict(passed=False, compared={}, mismatched=dict(frame_geometry=len(geometry)),
             first_mismatches=[dict(context, field='frame_geometry', problems=geometry[:FIRST])])
-        return dict(a=bad, b=dict(bad, values={}), c={}, d=bad, oracle=check_oracle_n(data, Findings(context)).report(), geometry=geometry, depth=depth)
+        return dict(a=bad, **({} if d_results is None else dict(b=dict(bad, values={}))), c={}, d=bad, oracle=check_oracle_n(data, Findings(context)).report(),
+            geometry=geometry, depth=depth)
     with stage(progress, 'check_a', **context) as info:a = check_exact_n(frame, data, Findings(context)).report();info['passed'] = a['passed']
-    with stage(progress, 'check_b', **context) as info:
-        found = g2.check_d(frame, d_results, requests, Findings(context), full_turn1=full_turn1);b = dict(found.report(), values=found.values)
-        info['passed'] = b['passed']
+    b = None
+    if d_results is not None:
+        with stage(progress, 'check_b', **context) as info:
+            found = g2.check_d(frame, d_results, requests, Findings(context), full_turn1=full_turn1);b = dict(found.report(), values=found.values)
+            info['passed'] = b['passed']
     with stage(progress, 'check_c', **context):c = check_heads_n(frame, data, d_results);cover = digest_cover_n(frame, data)
     with stage(progress, 'check_d', **context) as info:d = check_enumeration_n(frame, data, Findings(context)).report();info['passed'] = d['passed']
     with stage(progress, 'check_oracle_consistency', **context):oracle = check_oracle_n(data, Findings(context)).report()
-    return dict(a=a, b=b, c=c, d=d, oracle=oracle, geometry=[], spreads=node_spreads(frame), depth=depth, digest_cover=cover,
+    return dict(a=a, **({} if b is None else dict(b=b)), c=c, d=d, oracle=oracle, geometry=[], spreads=node_spreads(frame), depth=depth, digest_cover=cover,
         declared_cover=declared_cover_n(frame, data, d_results))
 
 
@@ -1800,20 +1817,25 @@ def depth2_pass_check(depth2_frame, frame, data, *, oracle, stack, params, sampl
 
 def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer, frame_pricer, oracle, sample, block, context,
                progress=None, decision=None, save=None, evaluator=None, backups=None, pass_sample=8, choices=True, save_oracle=False, mutation=None,
-               stack_rows=None, d2_consistency=False):
+               stack_rows=None, d2_consistency=False, worlds=None, averaging_roots=None):
     """One request list: the full-width depth-2 pass (refusals; `searched` maps), the depth-N pricer (and its block-invariance
     twins), D3, the oracle at every ply and the checks ((e) unsampled unless `decision` says otherwise, (f) unless choices=False).
     save: (directory, prefix) for --save-arrays (save_oracle: the oracle data too, save_oracle_data); mutation: a dict (--mutation-test;
     may carry `source` and `sweep`) keeping the call's frame, oracle data and D3 results in evaluation[MUTATION_INPUTS] for mutation_tests,
     which runs once the run's value bound is known. stack_rows: --fixed-shapes' oracle stack size (depth2_oracle.stack(size=); it refuses
     a call with more world rows), None for the per-call bucket. d2_consistency: D2_ORACLE_CONSISTENCY merged into the oracle-consistency
-    check (run_gate: the champion path at depth 2); False changes nothing. Returns (evaluation, summary)."""
+    check (run_gate: the champion path at depth 2); False changes nothing. worlds: CONSTRUCTOR_ROOTS' PrebuiltWorlds for these requests
+    (`materializer` is then the pricer-side WorldBinding and frame_pricer None): the SAME object goes to the depth-2 pass, every depth-N pricer
+    and (its pairs) the oracle stack; no D3 call, so (b) is absent (NO_B). averaging_roots: the call's roots (index, ordinal, rows) for
+    averaging_argmax, run beside (e). Both None change nothing. Returns (evaluation, summary)."""
     from gpu_engine import device_public_teacher_batch as batch
     reference = importlib.import_module('gpu_engine.depthn_oracle');module = pricers.module
+    if (worlds is None) != (frame_pricer is not None):raise ValueError('pre-built worlds take no D3 FramePricer, and D3\'s own worlds need one')
+    on = {} if worlds is None else dict(worlds=worlds)   # the one PrebuiltWorlds every DepthNPricer call of this request list takes
     requests = tuple(requests);context = dict(context or {});timing, costs = {}, {};depth2_frame = None
     if depth2_pricer is not None:
         with stage(progress, 'depth2_full_width_pass', roots=len(requests), **context) as info:
-            clock = time.perf_counter();raw = depth2_pricer.price(requests, materializer, recipe, params);depth2_frame = module.as_depth2_frame(raw)
+            clock = time.perf_counter();raw = depth2_pricer.price(requests, materializer, recipe, params, **on);depth2_frame = module.as_depth2_frame(raw)
             costs['depth2_pass'] = dict(wall_seconds=time.perf_counter() - clock, **g2.pricer_costs(getattr(raw, 'timing', None)));info.update(costs['depth2_pass'])
     selection_maps, first, extras = None, None, ()
     if pricers.selection == 'searched':
@@ -1824,7 +1846,7 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
     plan, instances = pricers.get();pricer, others = instances[-1], instances[:-1]
     if first is not None and (first[0] > plan['k_own'][0] or first[1] > plan['k_opp'][0]):
         raise ValueError(f'searched_maps returned widths {first}, wider than the pricer\'s ply-2 slot widths {(plan["k_own"][0], plan["k_opp"][0])}')
-    kwargs = {} if selection_maps is None else dict(selection_maps=selection_maps);other_frames = []
+    kwargs = dict({} if selection_maps is None else dict(selection_maps=selection_maps), **on);other_frames = []
     for i, other in enumerate(others):
         with stage(progress, f'depthn_pricer_invariance_{i}', block_lanes=other.block_lanes, **context) as info:
             clock = time.perf_counter();other_frames.append(other.price(requests, materializer, recipe, params, **kwargs))
@@ -1832,13 +1854,15 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
     with stage(progress, 'depthn_pricer', roots=len(requests), block_lanes=pricer.block_lanes, **context) as info:
         clock = time.perf_counter();frame = pricer.price(requests, materializer, recipe, params, **kwargs)
         costs['depthn_pricer'] = dict(wall_seconds=time.perf_counter() - clock, **g2.pricer_costs(getattr(frame, 'timing', None)));info.update(costs['depthn_pricer'])
-    with stage(progress, 'frame_pricer', **context) as info:
-        clock = time.perf_counter();d_results = frame_pricer.price(requests, materializer, recipe, params)
-        costs['frame_pricer'] = dict(wall_seconds=time.perf_counter() - clock, **g2.pricer_costs(getattr(frame_pricer, 'last_timing', None)))
-        info.update(costs['frame_pricer'])
+    d_results = None   # pre-built worlds: no D3 counterpart (NO_B)
+    if frame_pricer is not None:
+        with stage(progress, 'frame_pricer', **context) as info:
+            clock = time.perf_counter();d_results = frame_pricer.price(requests, materializer, recipe, params)
+            costs['frame_pricer'] = dict(wall_seconds=time.perf_counter() - clock, **g2.pricer_costs(getattr(frame_pricer, 'last_timing', None)))
+            info.update(costs['frame_pricer'])
     clock = time.perf_counter();before = dict(oracle.seconds)
     with stage(progress, 'oracle', **context) as info:
-        stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe), size=stack_rows)
+        stack = reference.stack(requests, batch._numpy_worlds(requests, materializer, recipe) if worlds is None else worlds.pairs, size=stack_rows)
         data = oracle_levels(oracle=oracle, stack=stack, requests=requests, recipe=recipe, params=params, frame=frame, plan=plan,
             selection_maps=selection_maps, sample=sample, block=block, reference=reference)
         info.update(nodes={str(p): len(r.get('specs', r.get('cells', ()))) for p, r in data['levels'].items()},
@@ -1875,6 +1899,11 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
         refusals = None if evaluation['geometry'] else refusal_report_n(frame, d_results, depth2_frame, root_legal)
     backup_checks(evaluation, frame, data, requests, context=context, backups=backups, decision=sample is None if decision is None else decision,
         choices=choices, sampled=sample is not None, progress=progress)
+    if averaging_roots is not None and 'e' in evaluation and not evaluation['geometry']:   # beside (e), on its oracle-heads copy (AVERAGING_RULE)
+        with stage(progress, 'check_averaging_argmax', **context) as info:
+            evaluation['averaging'] = averaging_call(frame, data, requests, averaging_roots, backups=backups, context=context)
+            info.update(roots=len(averaging_roots), compared=sum(r['compared'] for r in evaluation['averaging']['roots']),
+                agree=sum(bool(r['agree']) for r in evaluation['averaging']['roots']))
     if not evaluation['geometry']:evaluation['abs_t1'] = abs_t1(frame)
     saved = []
     if save is not None:
@@ -1896,11 +1925,14 @@ def run_call_n(*, requests, recipe, materializer, params, pricers, depth2_pricer
         searched_maps=evaluation.get('searched_maps'), saved_frames=saved, depth2_pass=evaluation.get('depth2_pass'), topk=data.get('topk'),
         searched={k: json.loads(json.dumps((getattr(frame, 'timing', None) or {}).get(k), default=str)) for k in ('searched_k', 'searched_widths')}
             if plan['selection'] == 'searched' else None,
-        passed=dict(a=evaluation['a']['passed'], b_discrete=evaluation['b']['passed'], d=evaluation['d']['passed'], oracle=evaluation['oracle']['passed'],
+        passed=dict(a=evaluation['a']['passed'], **({'b_discrete': evaluation['b']['passed']} if 'b' in evaluation else {}), d=evaluation['d']['passed'],
+            oracle=evaluation['oracle']['passed'],
             **({'block_invariance_discrete': all(r['passed'] for r in evaluation['invariance'])} if evaluation.get('invariance') else {}),
             **({'e': evaluation['e']['passed']} if 'e' in evaluation else {})),
         choices=None if 'f' not in evaluation else {k: (len(v) if k == 'differing' else v) for k, v in evaluation['f'].items()
-            if k in ('nodes', 'comparisons', 'differing', 'one_sided', 'problems', 'not_comparable', 'max_abs_delta_row_q', 'max_abs_delta_child_value', 'reason')})
+            if k in ('nodes', 'comparisons', 'differing', 'one_sided', 'problems', 'not_comparable', 'max_abs_delta_row_q', 'max_abs_delta_child_value', 'reason')},
+        **({} if 'averaging' not in evaluation else dict(averaging_argmax=dict(roots=len(evaluation['averaging']['roots']),
+            compared=sum(r['compared'] for r in evaluation['averaging']['roots']), agree=sum(bool(r['agree']) for r in evaluation['averaging']['roots'])))))
     return evaluation, summary
 
 
@@ -1937,7 +1969,7 @@ def reverdict_missing(report):
     """What --reverdict needs that a saved report lacks (or why it is not a depth-N gate report); [] when complete."""
     if not isinstance(report, dict):return ['a JSON object']
     missing = [] if report.get('schema') == SCHEMA else [f'schema {SCHEMA} (got {report.get("schema")!r})']
-    if report.get('mode') not in ('SAVED_ROOTS', 'BANK_CHUNK'):missing.append(f'mode SAVED_ROOTS|BANK_CHUNK (got {report.get("mode")!r})')
+    if report.get('mode') not in ('SAVED_ROOTS', 'BANK_CHUNK', CONSTRUCTOR_MODE):missing.append(f'mode SAVED_ROOTS|BANK_CHUNK|{CONSTRUCTOR_MODE} (got {report.get("mode")!r})')
     missing += [key for key in ('status', 'checks', 'sample_leaves', 'tolerance', 'pricer_options') if key not in report]
     if missing:return missing
     if type((report['pricer_options'] or {}).get('depth')) is not int:missing.append('pricer_options.depth')
@@ -2025,7 +2057,9 @@ def reverdict(path, *, expected=None):
         **({} if declared is None else dict(declared_bounds_sha256=declared['sha256'], declared_bounds_commit=declared['commit'],
             declared_bounds_reverified=declared['reverified'], guard_declared_rule=GUARD_DECLARED_RULE, declared_bounds='the bounds the report recorded (header.declared_bounds: its sha256 and '
             'git blob sha1 re-verified, the local git history and the source measurement re-checked where available), re-applied'))))
-    report = _with_header(report, header_block(report['checks'], declared=section, parity=(report['header'] if isinstance(report.get('header'), dict) else {}).get('merged_depth2_parity')))
+    saved_header = report['header'] if isinstance(report.get('header'), dict) else {}
+    report = _with_header(report, header_block(report['checks'], declared=section, parity=saved_header.get('merged_depth2_parity'),
+        constructor=saved_header.get('constructor_roots')))
     text = json.dumps(report, indent=1, allow_nan=False, default=str) + '\n'   # before the file exists: a failure here leaves none behind
     try:
         with out.open('x') as handle:handle.write(text)
@@ -2373,11 +2407,12 @@ RULES_CHANGED_AFTER_FAILURE = (
 FROZEN_NOTE = 'the gate code at the PR #1833 merge is the frozen rule set for every later run; a rule changed after that names its triggering run here'
 
 
-def header_block(checks=None, *, configs=None, declared=None, parity=None):
+def header_block(checks=None, *, configs=None, declared=None, parity=None, constructor=None):
     """Every report's header: (e)'s and (f)'s near-tie counts and flips among near ties (per config under --n2-equivalence; None where the
     check did not run) and the rules changed after a failure, each with its triggering run and approval; under --declared-bounds a
     separate `declared_bounds` section (declared_section: the declaration, its sha256 and DECLARED_NOTE), never mixed into those rules;
-    on the champion path's depth-2 surfaces a `merged_depth2_parity` section (merged_depth2_parity)."""
+    on the champion path's depth-2 surfaces a `merged_depth2_parity` section (merged_depth2_parity); under --constructor-roster a
+    `constructor_roots` section (constructor_header: the pins)."""
     def e_ties(e):
         return None if not isinstance(e, dict) else dict(near_tie_roots=e.get('near_tie_roots'), near_tie_flips=e.get('near_tie_flips'), q_noise_bound=e.get('q_noise_bound'))
     def f_ties(f):
@@ -2388,6 +2423,7 @@ def header_block(checks=None, *, configs=None, declared=None, parity=None):
     block = dict(near_ties=near, rules_changed_after_failure=[dict(r) for r in RULES_CHANGED_AFTER_FAILURE], frozen_rule_set=FROZEN_NOTE)
     if declared is not None:block['declared_bounds'] = declared
     if parity is not None:block['merged_depth2_parity'] = parity
+    if constructor is not None:block['constructor_roots'] = constructor
     return block
 
 
@@ -3107,10 +3143,17 @@ def merged_depth2_decision(frame, pricer, *, requests, recipe, oracle, stack, pa
     return g2.decision_check(frame, data, requests, context=context, backups=backups)
 
 
-def merged_depth2_parity(mode, *, oracle_consistency=False, child_block_invariance=False):
+CONSTRUCTOR_B_DIFFERENCE = dict(name='(b) on constructor worlds', effect='looser here', detail='under --constructor-roster (CONSTRUCTOR_ROOTS) '
+    '(b) is NOT_APPLICABLE (NO_B): the merged gate\'s check_d against D3\'s FramePricer, the depth1_noise_floor and root_logit_floor it measures and '
+    'the depth-1 refusal counts are absent, because D3 has no input for pre-built worlds. (a) and (c) still gate the same turn-1 quantities against '
+    'the oracle')
+
+
+def merged_depth2_parity(mode, *, oracle_consistency=False, child_block_invariance=False, constructor_roots=False):
     """The header's merged_depth2_parity section (champion path, depth-2 surfaces: gate --depth 2 or --n2-equivalence): what this run
     gates of the merged depth-2 gate's checks, whether the two champion-path additions ran here, and every remaining difference, so the
-    report reads neither stricter nor looser than it is."""
+    report reads neither stricter nor looser than it is. constructor_roots (gate mode under --constructor-roster): one more remaining
+    difference, CONSTRUCTOR_B_DIFFERENCE."""
     ran = dict(gate=('ran (D2_ORACLE_CONSISTENCY), gated in checks.oracle_consistency' if oracle_consistency else 'not run'),
         n2_equivalence='not in this mode: gate --depth 2 runs it')
     blocks = dict(gate='not in this mode: --n2-equivalence --block-invariance checks the merged Depth2Pricer across child blocks',
@@ -3121,7 +3164,7 @@ def merged_depth2_parity(mode, *, oracle_consistency=False, child_block_invarian
     return dict(mode=mode, matched=MERGED_DEPTH2_MATCHED, champion_path_additions=dict(d2_oracle_consistency=ran[mode], child_block_invariance=blocks[mode],
         merged_depth2_decision=decision[mode], rules=dict(d2_oracle_consistency=D2_ORACLE_CONSISTENCY, child_block_invariance=CHILD_BLOCK_INVARIANCE,
             merged_depth2_decision=MERGED_DEPTH2_DECISION)),
-        remaining_differences=[dict(d) for d in MERGED_DEPTH2_DIFFERENCES],
+        remaining_differences=[dict(d) for d in MERGED_DEPTH2_DIFFERENCES] + ([dict(CONSTRUCTOR_B_DIFFERENCE)] if constructor_roots else []),
         note='the merged depth-2 gate (d3_depth2_gate) has no champion flags; on the champion path this gate\'s depth-2 surfaces stand in for it, '
             'with these additions and differences')
 
@@ -3964,6 +4007,405 @@ def offline_diagnostics(directories, *, backups=None, backups2=None, progress=No
     return dict(merge_diagnostics(calls), calls=len(calls), skipped=skipped, duplicates=duplicates, directories=[str(d) for d in directories])
 
 
+# ---------------------------------------------------------------- constructor-world roots (--constructor-roster: CONSTRUCTOR_ROOTS, R1-C)
+
+CONSTRUCTOR_MODE = 'CONSTRUCTOR_ROOTS'
+CONSTRUCTOR_DEFAULTS = dict(constructor_worlds=8, constructor_seed=20261103, constructor_per_band=10)
+CONSTRUCTOR_PAIRS = ('constructor_roster', 'constructor_metadata', 'constructor_vocabulary')   # PATH SHA256 flags
+CONSTRUCTOR_FLAGS = CONSTRUCTOR_PAIRS + ('showdown_root', 'node_binary') + tuple(CONSTRUCTOR_DEFAULTS)
+CONSTRUCTOR_WORLD_COUNTS = (8, 16)   # the live rungs (depthn_live_search.RUNGS)
+CONSTRUCTOR_HARNESS = dict(capacity=512, block_lanes=2187, oracle_chunk=512)   # declaration A's, with --fixed-shapes and --block-invariance
+CONSTRUCTOR_REFUSED = ('d3_root', 'n2_equivalence', 'max_roots', 'head_archive', 'depth3_diagnostics', 'diagnostics_from', 'mutation_from', 'mutation_test',
+    'save_oracle')
+REQUEST_KEYS = ('battle_id', 'owner', 'stream_id', 'decision_index', 'generation', 'prefix_sha256', 'lines', 'own_request_line')   # the coverage script's
+TOP_UP = ('forced_switch', 'sleep', 'fresh_substitute', 'wish')   # the class top-up, in this order
+ROSTER_SIZE = 200
+CONSTRUCTOR_RULE = ('roots, outcome-blind and fixed before anything is priced: the roster read as scripts/phase_d_constructor_coverage.py reads it '
+    '(read_bound at its sha256; `selected`, 200 roots, band-major over phase_d_saved_roots.TURN_BANDS), each root\'s request rebuilt from its own '
+    'capture row through phase_d_owning_capture.read_capture, its address equal to the roster\'s. Per turn band, in roster order: the first per_band '
+    'roots that ProtocolConstructor.prepare (W worlds, the seed, saved-root admission) fully constructs; a band short of per_band fails closed and is '
+    'never refilled from another band. Class top-up: each selected root is classified as the live search classifies it (depthn_live_search.classify '
+    'and root_class); for each TOP_UP class (forced_switch, sleep, fresh_substitute, wish) absent from the band selection, the first fully '
+    'constructing root of that class in roster order outside it is added (at most one per class; a class the roster lacks stays absent and is '
+    'reported). The top-up classifies each candidate first and prepares only those of the class, which selects the same root. prepare runs at '
+    'most once per root (the constructor refuses a second attempt at an address). Every attempted root that did not fully '
+    'construct is listed (ordinal, band, kind, constructed worlds) and never priced. A selected root that constructor_worlds.build refuses (root '
+    'view, legal mask, root forward) fails the run closed: the selection is never refilled')
+NO_B = ('(b) NOT_APPLICABLE on constructor worlds: D3\'s FramePricer prices only worlds it materializes itself from D3 Tables under the bank recipe '
+    '(it has no input for pre-built worlds), so these roots have no depth-1 counterpart. Not checked here: turn 1 against D3 (the discrete fields, '
+    't1_value, root_peer_logits), the depth1_noise_floor and root_logit_floor it measures, and the depth-1 refusal counts. Nothing the live '
+    'decision rests on is lost: (a) and (c) still gate the same turn-1 quantities against the oracle, and R1 showed DepthN turn 1 equal to D3 on '
+    'the code the worlds path shares')
+AVERAGING_RULE = ('averaging_argmax (CONSTRUCTOR_ROOTS, run beside (e) on its oracle-heads copy). Per root, the live operator itself, '
+    'depthn_live_search.decide, takes the input the live search builds: block k\'s depthn_backups.backup(frame, row_k, learner_max) as worlds 2k and '
+    '2k+1, i.e. search_hedge.averaging over the 2K worlds, each world\'s reply prior the softmax of its root_peer_logits over the replies turn 1 '
+    'enumerated, divisor W. A root with a refused block is refused (the live search\'s rule). Run once on the pricer frame and once on '
+    'oracle_heads_frame_n\'s copy. Reported: the agreement rate over roots decided on both sides, every disagreement with the oracle side\'s '
+    'top-two margin in averaging\'s q, max |dq| beside the largest per-block |dQ|. Bound: 2 x q_noise_bound, (e)\'s bound. Why it follows from '
+    '(e): averaging\'s q(a) is the mean over the K blocks of each block\'s completed-Q (the same worlds, priors and per-world weight as '
+    'reduce_completed_q), so |dq(a)| <= mean_k |dQ_k(a)| <= q_noise_bound, the per-block bound (e) gates. If the oracle side plays a* and the '
+    'pricer side a\', then q_o(a*) - q_o(a\') <= dq(a\') - dq(a*) <= 2 x q_noise_bound, and the oracle\'s top-two margin is at most q_o(a*) - '
+    'q_o(a\'). FAIL: a disagreement whose margin exceeds the bound (up to REL_EPS), which would contradict (e); a root decided on one side only; '
+    'an incomplete oracle-heads copy. Disagreements within the bound are reported, not gated')
+
+
+def read_roster(path, sha256):
+    """(declaration, roots) of a roster as scripts/phase_d_constructor_coverage.py reads it: phase_d_protocol_constructor.read_bound (its bytes at
+    `sha256`; ValueError otherwise) and its `selected`, ROSTER_SIZE roots."""
+    from .phase_d_protocol_constructor import read_bound
+    declaration = read_bound(path, sha256);roots = tuple(declaration['selected'])
+    if len(roots) != ROSTER_SIZE:raise ValueError('same frozen200 genuine root roster required')
+    return declaration, roots
+
+
+def capture_chain_head(path, row):
+    """sha256 of capture record `row` without its newline: the next record's previous_sha256, so it chains every earlier record of the file."""
+    with Path(path).open('rb') as stream:
+        for i, raw in enumerate(stream):
+            if i == row:return hashlib.sha256(raw[:-1] if raw.endswith(b'\n') else raw).hexdigest()
+    raise ValueError(f'{path} has no record {row}')
+
+
+def roster_request(meta, ordinal, *, roster_sha256, worlds):
+    """(protocol request, capture pin) of roster root `ordinal` as the coverage script builds its request: the capture row re-read through
+    phase_d_owning_capture.read_capture (which validates the chain up to it), its address equal to the roster's (ValueError otherwise). The pin:
+    capture path and row, the capture's declaration sha256, the chain head at the root (capture_chain_head) and prefix_sha256."""
+    from pokezero import phase_d_ladder_admission as admission, phase_d_owning_capture as capture
+    from pokezero.phase_d_search_server import SCHEMA as REQUEST_SCHEMA
+    found = next((row for row in capture.read_capture(meta['capture_path']) if row['capture_row'] == meta['capture_row']), None)
+    if found is None or admission.address(found) != admission.address(meta):raise ValueError('same original genuine captured root unavailable')
+    request = dict(schema=REQUEST_SCHEMA, request_id=f'{roster_sha256}:{CONSTRUCTOR_MODE}:{worlds}:{ordinal}', **{k: found[k] for k in REQUEST_KEYS})
+    return request, dict(capture_path=str(meta['capture_path']), capture_row=int(meta['capture_row']), capture_declaration_sha256=found['declaration_sha256'],
+        capture_chain_sha256=capture_chain_head(meta['capture_path'], meta['capture_row']), prefix_sha256=found['prefix_sha256'])
+
+
+def select_constructor_roots(roster, attempt, classify, *, per_band):
+    """CONSTRUCTOR_RULE over `roster` (metadata rows, banded by their captured `turn`: phase_d_saved_roots.band). attempt(ordinal) -> dict(full,
+    constructed, kind) is the caller's prepare, run at most once per ordinal; classify(ordinal) -> (classes or None, source), run at most once per
+    ordinal: on every band-selected root, and in the top-up on each candidate before its prepare (only a candidate of the class is prepared; the
+    first of the class in roster order that fully constructs is the same root either way). Returns dict(selected: ordinals in roster order,
+    bands: {band: its band-selected ordinals},
+    top_up: {class: ordinal or None} for each TOP_UP class absent from the band selection, classes: {selected ordinal: (classes, source)},
+    refused: (ordinal, band, kind, constructed) of every attempted root that did not fully construct, attempted: ordinals). ValueError (fail
+    closed) when a band cannot reach per_band."""
+    from pokezero.phase_d_saved_roots import TURN_BANDS, band
+    attempts, classes = {}, {}
+    def tried(i):
+        if i not in attempts:attempts[i] = attempt(i)
+        return attempts[i]
+    def classed(i):
+        if i not in classes:classes[i] = classify(i)
+        return classes[i]
+    bands = {b: [] for b in range(len(TURN_BANDS))};chosen = {b: [] for b in bands}
+    for i, meta in enumerate(roster):bands[band(meta['turn'])].append(i)
+    for b, ordinals in bands.items():
+        for i in ordinals:
+            if len(chosen[b]) == per_band:break
+            if tried(i)['full']:chosen[b].append(i)
+        if len(chosen[b]) < per_band:
+            raise ValueError(f'turn band {b} {TURN_BANDS[b]}: {len(chosen[b])} of the {per_band} roots required fully construct among its '
+                f'{len(ordinals)} roster roots (fail closed: a band is never refilled)')
+    base = {i for b in chosen.values() for i in b}
+    present = {c for i in sorted(base) for c in (classed(i)[0] or ())};top_up = {}
+    for name in TOP_UP:
+        if name in present:continue
+        top_up[name] = next((i for i in range(len(roster)) if i not in base and name in (classed(i)[0] or ()) and tried(i)['full']), None)
+    selected = sorted(base | {i for i in top_up.values() if i is not None})
+    refused = [dict(ordinal=i, band=band(roster[i]['turn']), kind=r['kind'], constructed=r['constructed']) for i, r in sorted(attempts.items()) if not r['full']]
+    return dict(selected=selected, bands=chosen, top_up=top_up, classes={i: classes[i] for i in selected}, refused=refused, attempted=sorted(attempts))
+
+
+def class_counts(roots):
+    """Class coverage of the selected roots: per class (every class a root belongs to; 'other' for none, 'unclassified' when the classifier
+    failed) and per primary class (root_class), overall and per turn band."""
+    def counts(rows):
+        member, primary = collections.Counter(), collections.Counter()
+        for r in rows:
+            member.update(['unclassified'] if r['classes'] is None else (r['classes'] or ['other']));primary['unclassified' if r['classes'] is None else r['root_class']] += 1
+        return dict(roots=len(rows), member=dict(sorted(member.items())), primary=dict(sorted(primary.items())))
+    return dict(counts(roots), by_band={str(b): counts([r for r in roots if r['band'] == b]) for b in sorted({r['band'] for r in roots})})
+
+
+def bind_constructor(requests, params, plan, evaluator):
+    """g2.bind_roots unchanged (the champion's exact first-root check) on the constructor requests, whose root logits build already took from
+    the same evaluator on the same root inputs: ValueError (fail closed) when a request is dropped, or its bound root logits or actors differ.
+    Returns (bound requests, root |v| values, arm_checked)."""
+    groups, values, dropped, checked = g2.bind_roots([list(requests)], params, plan, evaluator=evaluator)
+    bound = [r for group in groups for r in group]
+    if dropped or len(bound) != len(requests):
+        raise ValueError(f'bind_roots dropped {len(requests) - len(bound)} constructor request(s) {list(dropped)[:FIRST]} (fail closed)')
+    differ = [i for i, (a, b) in enumerate(zip(requests, bound)) if tuple(map(float, a.root_logits)) != tuple(map(float, b.root_logits))
+        or (a.learner_actor, a.opponent_actor) != (b.learner_actor, b.opponent_actor)]
+    if differ:raise ValueError(f'bind_roots gives other root logits or actors than build at request(s) {differ[:FIRST]} (fail closed)')
+    if not checked:raise ValueError('bind_roots ran no evaluator check (fail closed)')
+    return tuple(bound), values, checked
+
+
+def root_signatures(pairs, roots):
+    """Each root's carry signature (device_depthn_pricer.carry_signature over its own world pairs: what a frame's programs key on), on the host
+    before any pricing. ValueError (fail closed) when one root's own worlds differ in carry structure: no frame can hold that root."""
+    dn = importlib.import_module('gpu_engine.device_depthn_pricer');out = []
+    for root in roots:
+        try:out.append(dn.carry_signature([pairs[r] for r in root['rows']]))
+        except ValueError as error:raise ValueError(f'root {root.get("ordinal", root.get("index"))}: its own worlds differ in carry structure ({error})') from None
+    return out
+
+
+def constructor_calls(ctor, capacity):
+    """CONSTRUCTOR_ROOTS' calls: one per carry signature (in roster order of first appearance), never two signatures in a frame, each split by
+    whole roots at `capacity` requests. Each call is dict(signature, requests, worlds: ONE PrebuiltWorlds (build's source tag and binding, this
+    call's pairs), roots: [dict(index, ordinal, rows in the call)])."""
+    dn = importlib.import_module('gpu_engine.device_depthn_pricer');groups, calls = {}, []
+    for root in ctor.roots:groups.setdefault(root['carry_signature'], []).append(root)
+    for signature, members in groups.items():
+        current = []
+        for root in members:
+            if len(root['rows']) > capacity:raise ValueError(f'root {root["ordinal"]}: {len(root["rows"])} requests exceed the call capacity {capacity}')
+            if sum(len(r['rows']) for r in current) + len(root['rows']) > capacity:calls.append((signature, current));current = []
+            current.append(root)
+        if current:calls.append((signature, current))
+    out = []
+    for signature, members in calls:
+        rows = [r for root in members for r in root['rows']];local, at = [], 0
+        for root in members:local.append(dict(index=root['index'], ordinal=root['ordinal'], rows=tuple(range(at, at + len(root['rows'])))));at += len(root['rows'])
+        out.append(dict(signature=signature, requests=tuple(ctor.requests[r] for r in rows), roots=local,
+            worlds=dn.PrebuiltWorlds(ctor.worlds.source, ctor.worlds.binding, tuple(ctor.worlds.pairs[r] for r in rows))))
+    return out
+
+
+def _refused_side(refusal):
+    return dict(status='REFUSED', refusal=refusal, action_index=None, q_values=None)
+
+
+def _block_dq(pricer_blocks, oracle_blocks, root_logits, legal):
+    """max over blocks and legal actions of |dQ_k(a)|, each block's completed-Q by reduce_completed_q (what (e) compares per block); None when a
+    block does not reduce on both sides."""
+    from pokezero import v5_gumbel as original
+    worst = 0.
+    for mine, theirs in zip(pricer_blocks, oracle_blocks):
+        try:q = [original.reduce_completed_q(root_logits=tuple(root_logits), root_legal=legal, worlds=pair) for pair in (mine, theirs)]
+        except ValueError:return None
+        if any(x.improvement is None for x in q):return None
+        a, b = (x.improvement.completed_q for x in q)
+        worst = max([worst] + [abs(a[i] - b[i]) for i in range(9) if legal[i]])
+    return worst
+
+
+def averaging_root(pricer_blocks, oracle_blocks, root_logits, root_legal):
+    """One root's averaging_argmax record (AVERAGING_RULE): depthn_live_search.decide on each side's blocks (a list of (world, world) per block;
+    the ValueError backing a side up raised refuses it, the live search's AVERAGING_ERROR; a text refuses it with that refusal), then the
+    comparison when both decide."""
+    live = importlib.import_module('gpu_engine.depthn_live_search');legal = tuple(map(bool, root_legal));sides = []
+    for blocks in (pricer_blocks, oracle_blocks):
+        if isinstance(blocks, str):sides.append(_refused_side(blocks))
+        elif isinstance(blocks, Exception):sides.append(_refused_side(f'AVERAGING_ERROR: {blocks}'))
+        else:sides.append(live.decide(blocks, tuple(root_logits), legal))
+    mine, theirs = sides
+    out = dict(status=[mine['status'], theirs['status']], refusal=[mine['refusal'], theirs['refusal']], action=[mine['action_index'], theirs['action_index']],
+        compared=False, agree=None, margin_oracle=None, margin_pair=None, max_abs_dq=None, dq_pair=None, max_abs_block_dq=None,
+        q_pricer=mine['q_values'], q_oracle_heads=theirs['q_values'])
+    if mine['status'] != 'COMPLETE' or theirs['status'] != 'COMPLETE':return out
+    qa, qb, acts = mine['q_values'], theirs['q_values'], [a for a in range(9) if legal[a]];a, b = mine['action_index'], theirs['action_index']
+    out.update(compared=True, agree=a == b, margin_oracle=_gap([qb[x] for x in acts]), margin_pair=qb[b] - qb[a], max_abs_dq=max(abs(qa[x] - qb[x]) for x in acts),
+        dq_pair=abs(qa[a] - qb[a]) + abs(qa[b] - qb[b]), max_abs_block_dq=_block_dq(pricer_blocks, oracle_blocks, root_logits, legal))
+    return out
+
+
+def averaging_call(frame, data, requests, roots, *, backups=None, context=None):
+    """averaging_argmax's records for one call (AVERAGING_RULE): per root (index, ordinal, rows in the call), the live search's input on the
+    pricer frame and on oracle_heads_frame_n's copy ((e)'s), each through averaging_root; a root with a block refusal_summary refuses is refused
+    on both sides. Returns dict(roots, replaced: the copy's counts)."""
+    backups = backups or importlib.import_module('gpu_engine.depthn_backups');swapped, counts = oracle_heads_frame_n(frame, data)
+    causes = backups.refusal_summary(frame)['roots'] if hasattr(backups, 'refusal_summary') else None;out = []
+    for root in roots:
+        rows = tuple(root['rows']);first = requests[rows[0]];where = dict(context or {}, root=root['index'], ordinal=root.get('ordinal'), rows=list(rows))
+        if any(tuple(requests[r].root_logits) != tuple(first.root_logits) or tuple(requests[r].root_legal) != tuple(first.root_legal) for r in rows):
+            raise ValueError(f'root {root.get("ordinal")}: its blocks carry different root logits or legal masks')
+        cause = None if causes is None else next((causes[r]['cause'] for r in rows if causes[r]['cause']), None)
+        if cause is not None:   # the live search refuses a root with a refused block before deciding
+            out.append(dict(where, **averaging_root(f'BLOCK_REFUSED: {cause}', f'BLOCK_REFUSED: {cause}', first.root_logits, first.root_legal)));continue
+        sides = []
+        for f in (frame, swapped):
+            try:sides.append([backups.backup(f, r, backups.learner_max) for r in rows])
+            except ValueError as error:sides.append(error)
+        out.append(dict(where, **averaging_root(*sides, first.root_logits, first.root_legal)))
+    return dict(roots=out, replaced=counts)
+
+
+AVERAGING_SHOWN = ('ordinal', 'rows', 'status', 'action', 'agree', 'margin_oracle', 'margin_pair', 'max_abs_dq', 'dq_pair', 'max_abs_block_dq')
+
+
+def averaging_verdict(reports, q_noise_bound):
+    """averaging_argmax over the run's calls (averaging_call reports) under (e)'s q_noise_bound (AVERAGING_RULE): passed unless a disagreement's
+    oracle-side top-two margin exceeds 2 x q_noise_bound (up to REL_EPS), a root is decided on one side only or the oracle-heads copy is
+    incomplete."""
+    roots = [dict(r, block=r.get('block'), call=r.get('call')) for report in reports for r in report['roots']];bound = 2. * float(q_noise_bound)
+    compared = [r for r in roots if r['compared']];one_sided = [r for r in roots if r['status'].count('COMPLETE') == 1]
+    differ = [r for r in compared if not r['agree']];beyond = [r for r in differ if r['margin_oracle'] is not None and not _within(r['margin_oracle'], bound)]
+    unmatched = sum((report.get('replaced') or {}).get('unmatched_head_leaves', 0) for report in reports)
+    row = lambda r: {k: r.get(k) for k in ('block', 'call') + AVERAGING_SHOWN}
+    reasons = ([f'{len(beyond)} root(s) decide differently with an oracle-side top-two margin above {bound:.3g} (contradicts (e))'] if beyond else []) \
+        + ([f'{len(one_sided)} root(s) decided on one side only'] if one_sided else []) \
+        + (['head-valued pricer leaves without an oracle head value: the copy is incomplete (fail closed)'] if unmatched else [])
+    largest = lambda key: max((r[key] for r in compared if r[key] is not None), default=None)
+    return dict(passed=not reasons, rule=AVERAGING_RULE, q_noise_bound=q_noise_bound, bound=bound, bound_rule='2 x q_noise_bound', roots=len(roots),
+        roots_compared=len(compared), both_refused=sum(r['status'].count('COMPLETE') == 0 for r in roots), one_sided=len(one_sided),
+        agree=len(compared) - len(differ), agreement_rate=None if not compared else (len(compared) - len(differ)) / len(compared),
+        disagree_within_bound=len(differ) - len(beyond), disagree_beyond_bound=len(beyond), max_abs_dq=largest('max_abs_dq'),
+        max_abs_block_dq=largest('max_abs_block_dq'), unmatched_head_leaves=unmatched, disagreements=[row(r) for r in differ],
+        one_sided_roots=[dict(row(r), refusal=r['refusal']) for r in one_sided], per_root=[row(r) for r in roots], reasons=reasons)
+
+
+def constructor_checks(result, evaluations):
+    """averaging_argmax added to a summarized constructor-roots result's checks under its (e) q_noise_bound, and result.passed again; nothing when
+    (e) did not run (sampled leaves: the oracle-heads copy needs every leaf)."""
+    reports = [e['averaging'] for e in evaluations if 'averaging' in e]
+    if 'e' not in result['checks'] or not reports:return result
+    tolerance = result['tolerance'];q = tolerance.get('q_noise_bound', tolerance['value_bound'])
+    result['checks']['averaging_argmax'] = averaging_verdict(reports, q)
+    result['passed'] = bool(result['checks']) and all(x['passed'] for x in result['checks'].values())
+    return result
+
+
+def constructor_header(ctor):
+    """The header's constructor_roots section: the pins (CONSTRUCTOR_RULE's inputs) and the effective JAX numerics, read when the report is
+    written (the run's environment sets them; this gate never overrides them)."""
+    import jax
+    return dict(ctor.pins, matmul_precision=dict(jax_default_matmul_precision=jax.config.jax_default_matmul_precision, jax_enable_x64=bool(jax.config.jax_enable_x64),
+        environment={k: os.environ.get(k) for k in ('JAX_DEFAULT_MATMUL_PRECISION', 'JAX_ENABLE_X64')}))
+
+
+def constructor_section(ctor, calls):
+    """The report's `constructor` section: the rules, the selection (bands, top-up, refused roots), class coverage, every priced root's pins and
+    diagnostics (b2_view, reported, never gated) and the calls by carry signature."""
+    return dict(mode=CONSTRUCTOR_MODE, rule=CONSTRUCTOR_RULE, b=dict(status='NOT_APPLICABLE', reason=NO_B), averaging_rule=AVERAGING_RULE,
+        selection=ctor.selection, class_counts=class_counts(ctor.roots), roots=ctor.roots,
+        b2_view=dict(equal=sum((r.get('b2_view') or {}).get('equal') is True for r in ctor.roots), roots=len(ctor.roots),
+            note='each root\'s b2_view (constructor_worlds.b2_view_check): world 0\'s view against B2\'s own encoding of the literal root; reported, never gated'),
+        carry_signatures=sorted({str(r['carry_signature']) for r in ctor.roots}),
+        calls=[dict(call=i, carry_signature=c['signature'], roots=[r['ordinal'] for r in c['roots']], requests=len(c['requests'])) for i, c in enumerate(calls)])
+
+
+def constructor_roots(args):
+    """main's roots under --constructor-roster (load_roots' namespace, groups None, plus `constructor`): the D3 runtime from --saved-roots (its
+    executor, Tables source, engine metadata, catalog and recipe; its saved roots are never priced) and the champion (g2.load_champion); Codex's
+    ProtocolConstructor (phase_d_protocol_constructor.load_inputs: the clean pinned Showdown, the metadata and vocabulary at their sha256s; W
+    worlds, the seed, saved-root admission, as the coverage script); the roster and CONSTRUCTOR_RULE (prepare on the CPU, once per root);
+    constructor_worlds.build (only_complete) under the pricer-side binding (the runtime's source, engine metadata and catalog: the constructor's
+    must equal it); bind_constructor; each root's carry signature (host, before any pricing). SystemExit (fail closed) on a band short of roots,
+    a selected root build refuses, a bind mismatch or a root whose own worlds differ in carry."""
+    loaded = g2.saved_root_requests(args)   # the runtime only (its memory policy precedes the first JAX import)
+    champion = g2.load_champion(args, loaded);provider, params = loaded.provider, (champion.params,)
+    from pokezero.live_protocol_actor import ActorContract
+    from pokezero.phase_d_saved_roots import band
+    from . import constructor_worlds as cw, depthn_live_search as live
+    from .phase_d_protocol_constructor import ProtocolConstructor, load_inputs
+    (roster_path, roster_sha), (metadata_path, metadata_sha), (vocabulary_path, vocabulary_sha) = (args.constructor_roster, args.constructor_metadata,
+        args.constructor_vocabulary)
+    W, seed, per_band = args.constructor_worlds, args.constructor_seed, args.constructor_per_band;contract = ActorContract.champion()
+    catalog, source, metadata, config = load_inputs(SimpleNamespace(showdown_root=args.showdown_root, node_binary=args.node_binary, metadata=metadata_path,
+        expected_metadata_sha256=metadata_sha, vocabulary=vocabulary_path, expected_vocabulary_sha256=vocabulary_sha))
+    constructor = ProtocolConstructor(catalog=catalog, source=source, metadata=metadata, owning_config=config, count=W, seed=seed, saved_root_admission=True)
+    binding = cw.binding(provider.source, json.loads(provider.prepared.metadata_json), provider.prepared.catalog)
+    declaration, roster = read_roster(roster_path, roster_sha);held, built, classified = {}, {}, {}
+    def request_of(i):   # (request, pin), or the error that made the captured root unavailable; read once per root
+        if i not in built:
+            try:built[i] = roster_request(roster[i], i, roster_sha256=roster_sha, worlds=W)
+            except (ValueError, KeyError, TypeError, IndexError, OSError) as error:
+                if isinstance(error, PermissionError):raise
+                built[i] = error
+        return built[i]
+    def attempt(i):
+        made = request_of(i)
+        if isinstance(made, Exception):held[i] = dict(full=False, constructed=0, kind=f'CAPTURED_ROOT_UNAVAILABLE: {type(made).__name__}: {made}', seconds=None)
+        else:
+            item = cw.prepare_roots(constructor, [made[0]], start_index=i, device='cpu')[0];full = type(item) is cw.Prepared and item.made.fully_constructed
+            if type(item) is cw.RootRefusal:kind, constructed = 'constructor-root:' + item.kind + (':' + item.detail if item.detail and item.detail != item.kind else ''), 0
+            else:
+                constructed = sum(w.state is not None for w in item.made.worlds)
+                kind = None if full else 'WORLD_CONSTRUCTOR_REFUSED:' + ';'.join(sorted({r for w in item.made.worlds for r in w.refusals}))
+            held[i] = dict(full=full, constructed=constructed, kind=kind, seconds=item.seconds, item=item if full else None)
+        log('CONSTRUCTOR_ROOT', ordinal=i, turn=roster[i].get('turn'), **{k: held[i][k] for k in ('full', 'constructed', 'kind', 'seconds')})
+        return held[i]
+    def classify(i):
+        made, clock = request_of(i), time.perf_counter()
+        if isinstance(made, Exception):return None, f'UNCLASSIFIED: CAPTURED_ROOT_UNAVAILABLE: {type(made).__name__}: {made}'
+        try:found = tuple(live.classify(constructor, made[0]))
+        except MemoryError:raise
+        except Exception as error:found = (None, f'UNCLASSIFIED: {type(error).__name__}: {error}')   # the live search's rule: no class
+        classified[i] = time.perf_counter() - clock;return found
+    try:selection = select_constructor_roots(roster, attempt, classify, per_band=per_band)
+    except ValueError as error:raise SystemExit(f'--constructor-roster (fail closed): {error}')
+    chosen = selection['selected']
+    for i, record in held.items():   # only the selected roots' worlds are kept
+        if i not in chosen:record['item'] = None
+    batch = cw.build(constructor, [held[i]['item'] for i in chosen], SimpleNamespace(executor=provider.executor, forward=champion), params,
+        binding=binding, recipe=provider.recipe, only_complete=True)
+    refused = [f'{i}: {root["reason"]}' for i, root in zip(chosen, batch.roots) if root['status'] != 'PRICED']
+    if refused:raise SystemExit('--constructor-roster (fail closed): constructor_worlds.build refused selected roots (never refilled): ' + '; '.join(refused[:FIRST]))
+    try:
+        requests, _, checked = bind_constructor(batch.requests, params, loaded.plan, champion)
+        signatures = root_signatures(batch.worlds.pairs, [dict(root, ordinal=i) for i, root in zip(chosen, batch.roots)])
+    except ValueError as error:raise SystemExit(f'--constructor-roster (fail closed): {error}')
+    by_band = {i for ordinals in selection['bands'].values() for i in ordinals};top_for = collections.defaultdict(list)
+    for name, i in selection['top_up'].items():
+        if i is not None:top_for[i].append(name)
+    roots = []
+    for i, root, signature in zip(chosen, batch.roots, signatures):
+        classes, class_source = selection['classes'][i]
+        roots.append(dict(index=root['index'], ordinal=i, band=band(roster[i]['turn']), turn=roster[i]['turn'], selected_by='band' if i in by_band else 'top_up',
+            top_up_for=top_for.get(i, []), classes=None if classes is None else list(classes), root_class=None if classes is None else live.root_class(classes),
+            class_source=class_source, rows=tuple(root['rows']), carry_signature=signature, address=list(root['address']), request_id=root['request_id'],
+            capture=built[i][1], prepare_seconds=held[i]['seconds'], classify_seconds=classified.get(i), root_value=root['root_value'],
+            root_legal=list(root['root_legal']), b2_view=root.get('b2_view')))
+    pins = dict(mode=CONSTRUCTOR_MODE, roster=dict(path=str(roster_path), sha256=roster_sha, roots=len(roster), declaration=declaration.get('declaration'),
+            capture_prefix=declaration.get('capture_prefix')),
+        showdown=dict(root=str(args.showdown_root), revision=contract.showdown_revision, clean=True, node_binary=str(args.node_binary),
+            note='phase_d_protocol_constructor.load_inputs refuses a Showdown checkout at another revision or with tracked changes'),
+        metadata=dict(path=str(metadata_path), sha256=metadata_sha, canonical_sha256=cw.metadata_sha256(metadata)),
+        vocabulary=dict(path=str(vocabulary_path), sha256=vocabulary_sha, category_vocab_sha256=contract.category_vocab_sha256),
+        worlds=W, blocks=W // 2, seed=seed, per_band=per_band, recipe_seed=provider.recipe.seed, binding=dataclasses.asdict(binding),
+        roots=[dict(ordinal=r['ordinal'], band=r['band'], turn=r['turn'], selected_by=r['selected_by'], request_id=r['request_id'], **r['capture']) for r in roots],
+        rule=CONSTRUCTOR_RULE, b=dict(status='NOT_APPLICABLE', reason=NO_B))
+    report = dict(bands={str(b): v for b, v in selection['bands'].items()}, top_up=selection['top_up'], refused=selection['refused'],
+        attempted=len(selection['attempted']), classified=len(classified), selected=len(chosen))
+    evaluator = dict(g2.evaluator_header(args, loaded, None, champion=champion), arm_checked=checked, dropped_roots=[])
+    values = [abs(float(root['root_value'])) for root in batch.roots]
+    log('EVALUATOR_RESOLVED', evaluator=evaluator, root_value_scale=g2.percentiles(values))
+    log('CONSTRUCTOR_ROOTS', selected=len(chosen), bands=report['bands'], top_up=report['top_up'], refused=len(report['refused']),
+        carry_signatures=sorted(set(map(str, signatures))), requests=len(requests))
+    ctor = SimpleNamespace(requests=requests, worlds=batch.worlds, binding=binding, roots=roots, selection=report, pins=pins,
+        source=dict(constructor_roster=str(roster_path), constructor_roster_sha256=roster_sha, runtime=loaded.source))
+    return SimpleNamespace(loaded=loaded, head=None, params=params, groups=None, root_values=values, evaluator=evaluator, forward=champion,
+        actor_capacity=len(params), constructor=ctor)
+
+
+def check_constructor_arguments(parser, args):
+    """--constructor-roster (CONSTRUCTOR_ROOTS): every constructor flag needs it. With it, --showdown-root, --node-binary, --constructor-metadata
+    and --constructor-vocabulary are required (each PATH SHA a 64-hex sha256), and so are --saved-roots (the D3 runtime only), --champion-archive,
+    declaration A's harness (--fixed-shapes, --block-invariance, CONSTRUCTOR_HARNESS) and --worlds-blocks 1; it is refused with CONSTRUCTOR_REFUSED.
+    Fills CONSTRUCTOR_DEFAULTS."""
+    flag = lambda name: '--' + name.replace('_', '-');given = [name for name in CONSTRUCTOR_FLAGS if getattr(args, name, None) is not None]
+    if getattr(args, 'constructor_roster', None) is None:
+        if given:parser.error(', '.join(map(flag, given)) + ' need --constructor-roster')
+        return args
+    missing = [name for name in ('showdown_root', 'node_binary', 'constructor_metadata', 'constructor_vocabulary') if getattr(args, name) is None]
+    if missing:parser.error('--constructor-roster needs ' + ', '.join(map(flag, missing)))
+    for name in CONSTRUCTOR_PAIRS:
+        if not ce._hex64(getattr(args, name)[1]):parser.error(f'{flag(name)} PATH SHA256: a 64-hex sha256')
+    refused = [name for name in CONSTRUCTOR_REFUSED if getattr(args, name, None)]
+    if refused:parser.error('--constructor-roster is refused with ' + ', '.join(map(flag, refused)))
+    if not args.saved_roots:parser.error('--constructor-roster needs --saved-roots (the D3 runtime only: its roots are never priced)')
+    if not args.champion_archive:parser.error('--constructor-roster needs --champion-archive (the champion prices and binds every root)')
+    if args.worlds_blocks != 1:parser.error('--constructor-roster needs --worlds-blocks 1 (the constructor builds every world of a root)')
+    if not (args.fixed_shapes and args.block_invariance) or {k: getattr(args, k) for k in CONSTRUCTOR_HARNESS} != CONSTRUCTOR_HARNESS:
+        parser.error('--constructor-roster keeps declaration A\'s harness: --fixed-shapes --block-invariance ' + ' '.join(f'{flag(k)} {v}' for k, v in CONSTRUCTOR_HARNESS.items()))
+    for name, value in CONSTRUCTOR_DEFAULTS.items():
+        if getattr(args, name) is None:setattr(args, name, value)
+    if args.constructor_seed < 0 or args.constructor_per_band < 1:parser.error('--constructor-seed >= 0 and --constructor-per-band >= 1 required')
+    return args
+
+
 # ---------------------------------------------------------------- command line
 
 def per_ply(text, depth, name):
@@ -4060,6 +4502,18 @@ def parse(argv=None):
         'the report\'s recorded one)')
     parser.add_argument('--declared-bounds-commit', metavar='COMMIT', help=f'the commit that added --declared-bounds under {DECLARED_SUBDIR}/ through a reviewed '
         'PR (required with it; recorded with the file\'s git blob sha1; with --reverdict: must be the report\'s recorded one)')
+    parser.add_argument('--constructor-roster', nargs=2, metavar=('PATH', 'SHA256'), help='CONSTRUCTOR_ROOTS (R1-C): price Codex\'s ProtocolConstructor '
+        'worlds on this roster\'s captured roots (read as scripts/phase_d_constructor_coverage.py reads it, pinned by sha256) instead of D3 roots, '
+        'selected by CONSTRUCTOR_RULE; (b) NOT_APPLICABLE; needs --saved-roots (the runtime only), --champion-archive and declaration A\'s harness')
+    parser.add_argument('--showdown-root', help='with --constructor-roster: the pinned, clean Showdown checkout (phase_d_protocol_constructor.load_inputs)')
+    parser.add_argument('--node-binary', help='with --constructor-roster: the node binary the constructor\'s Showdown config runs')
+    parser.add_argument('--constructor-metadata', nargs=2, metavar=('PATH', 'SHA256'), help='with --constructor-roster: the engine metadata at its sha256')
+    parser.add_argument('--constructor-vocabulary', nargs=2, metavar=('PATH', 'SHA256'), help='with --constructor-roster: the champion\'s category '
+        'vocabulary document at its sha256')
+    parser.add_argument('--constructor-worlds', type=int, choices=CONSTRUCTOR_WORLD_COUNTS, help=f'with --constructor-roster: W worlds per root '
+        f'(default {CONSTRUCTOR_DEFAULTS["constructor_worlds"]}; K = W/2 requests)')
+    parser.add_argument('--constructor-seed', type=int, help=f'with --constructor-roster: the constructor\'s seed (default {CONSTRUCTOR_DEFAULTS["constructor_seed"]})')
+    parser.add_argument('--constructor-per-band', type=int, help=f'with --constructor-roster: roots per turn band (default {CONSTRUCTOR_DEFAULTS["constructor_per_band"]})')
     g2.add_head_arguments(parser);ce.add_arguments(parser)
     args = parser.parse_args(argv)
     if args.reverdict:
@@ -4070,7 +4524,7 @@ def parse(argv=None):
         if args.declared_bounds_sha256 is not None and not ce._hex64(args.declared_bounds_sha256):parser.error('--declared-bounds-sha256 must be a 64-hex sha256')
         if args.declared_bounds_commit is not None and not _commit_id(args.declared_bounds_commit):parser.error('--declared-bounds-commit must be a full lowercase hex commit id')
         return parser, args
-    g2.check_head_arguments(parser, args);ce.check_arguments(parser, args);check_declared_arguments(parser, args)
+    g2.check_head_arguments(parser, args);ce.check_arguments(parser, args);check_declared_arguments(parser, args);check_constructor_arguments(parser, args)
     if args.raw_head_check and not args.head_archive:parser.error('--raw-head-check needs --head-archive')
     if not args.out:parser.error('--out is required (every mode but --reverdict)')
     if args.diagnostics_from or args.mutation_from:
@@ -4143,11 +4597,12 @@ def main(argv=None):
             **{k: declared[k] for k in ('repo_path', 'git_blob_sha1', 'commit', 'git_verification', 'source_measurement_verification', 'run_started_at')},
             rule=DECLARED_RULE, note=DECLARED_NOTE)
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
-    roots = load_roots(args);provider, plan = roots.loaded.provider, roots.loaded.plan;module = pricer_module()
+    roots = (constructor_roots if args.constructor_roster else load_roots)(args);provider, plan = roots.loaded.provider, roots.loaded.plan;module = pricer_module()
     if declared is not None:
         mismatched = evaluator_mismatches(declared['content'], evaluator_identity(roots.evaluator))
         if mismatched:raise SystemExit('--declared-bounds (fail closed): the declaration is not for the resolved evaluator: ' + '; '.join(mismatched))
-    reference = importlib.import_module('gpu_engine.depthn_oracle');frame_pricer = g2.with_forward(roots.loaded.frame_pricer, getattr(roots, 'forward', None))
+    reference = importlib.import_module('gpu_engine.depthn_oracle')
+    frame_pricer = None if args.constructor_roster else g2.with_forward(roots.loaded.frame_pricer, getattr(roots, 'forward', None))   # NO_B: no D3 on constructor worlds
     seeds = g2.world_block_seeds(provider.recipe.seed, args.worlds_blocks)
     common = dict(roots=roots, provider=provider, plan=plan, module=module, frame_pricer=frame_pricer, seeds=seeds, out=out, reference=reference,
         **({} if declared is None else dict(declared=declared)))
@@ -4166,27 +4621,34 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
     evaluator = roots.evaluator if declared is None else dict(roots.evaluator, declared_bounds_sha256=declared['sha256'])   # saved frames' meta (--mutation-from refuses them)
     declared_only = {} if declared is None else dict(declared_bounds_sha256=declared['sha256'])
     d2_parity = forward is not None and args.depth == 2   # the champion's depth-2 gate: D2_ORACLE_CONSISTENCY, the merged_depth2_parity header
-    parity = merged_depth2_parity('gate', oracle_consistency=True) if d2_parity else None
+    ctor = getattr(roots, 'constructor', None)   # --constructor-roster (CONSTRUCTOR_ROOTS); None: every line below as before
+    parity = merged_depth2_parity('gate', oracle_consistency=True, **({} if ctor is None else dict(constructor_roots=True))) if d2_parity else None
     pricers = DepthNPricers(module, provider.executor, plan.model, depth=args.depth, k_own=args.k_own_ply, k_opp=args.k_opp_ply, selection=args.selection,
         capacity=args.capacity, actor_capacity=roots.actor_capacity, lanes=lanes, k1_own=args.k1_own, k1_opp=args.k1_opp, fixed_capacity=args.fixed_shapes,
         forward=forward)
     depth2_pricer = depth2_pass_pricer(module, provider.executor, plan.model, capacity=args.capacity, actor_capacity=roots.actor_capacity,
         k1_own=args.k1_own, k1_opp=args.k1_opp, block_lanes=args.block_lanes, digest=True, fixed_capacity=args.fixed_shapes, forward=forward)
-    capacity = g2.call_capacity(frame_pricer, [depth2_pricer]);groups = g2.split_groups(roots.groups, capacity)
+    if ctor is None:capacity = g2.call_capacity(frame_pricer, [depth2_pricer]);groups = g2.split_groups(roots.groups, capacity)
+    else:   # one call per carry signature, whole roots, at the pricers' capacity (no FramePricer)
+        capacity = args.capacity;built = constructor_calls(ctor, capacity);groups = [c['requests'] for c in built]
     harness = fixed_shapes_harness(capacity) if args.fixed_shapes else None;shaped = {} if harness is None else dict(harness=harness)
     oracle = reference.DepthNOracle(provider.executor, plan.model, chunk=args.oracle_chunk, progress=g2.oracle_chunk_progress(log),
         raw_model=roots.head[1] if args.raw_head_check else None, **forward_kwargs(forward))
     log('GATE_START', roots=sum(map(len, groups)), calls=len(groups) * len(seeds), pricer_options=pricers.options(), sample_leaves=args.sample_leaves, seeds=seeds,
-        mutation_test=args.mutation_test, save_oracle=args.save_oracle, **shaped, **declared_only)
+        mutation_test=args.mutation_test, save_oracle=args.save_oracle, **shaped, **declared_only,
+        **({} if ctor is None else dict(mode=CONSTRUCTOR_MODE, carry_signatures=[c['signature'] for c in built])))
     evaluations, calls = [], []
-    for block, call, recipe, requests in each_call(provider, groups, seeds):
-        evaluation, summary = run_call_n(requests=requests, recipe=recipe, materializer=provider.materializer, params=roots.params, pricers=pricers,
+    work = each_call(provider, groups, seeds) if ctor is None else ((0, call, provider.recipe, c['requests']) for call, c in enumerate(built))
+    for block, call, recipe, requests in work:
+        seam = {} if ctor is None else dict(worlds=built[call]['worlds'], averaging_roots=built[call]['roots'])   # one PrebuiltWorlds per call
+        evaluation, summary = run_call_n(requests=requests, recipe=recipe, materializer=provider.materializer if ctor is None else ctor.binding, params=roots.params, pricers=pricers,
             depth2_pricer=depth2_pricer, frame_pricer=frame_pricer, oracle=oracle, sample=args.sample_leaves, block=block,
             context=dict(block=block, call=call), progress=log, save=(out, f'frames-block{block}-call{call}') if args.save_arrays else None,
             evaluator=evaluator, pass_sample=args.depth2_pass_sample, save_oracle=args.save_oracle,
-            mutation={} if args.mutation_test else None, stack_rows=None if harness is None else harness['oracle_stack_rows'], d2_consistency=d2_parity)
+            mutation={} if args.mutation_test else None, stack_rows=None if harness is None else harness['oracle_stack_rows'], d2_consistency=d2_parity, **seam)
         evaluations.append(evaluation);calls.append(summary);log('CALL_CHECKED', **summary)
     result = summarize_run(evaluations, lanes, declared=declared);log('TOLERANCE', **tolerance_line_n(result['tolerance']))
+    if ctor is not None:constructor_checks(result, evaluations)   # averaging_argmax under (e)'s q_noise_bound
     status, reasons = gate_status_n(result, sampled=args.sample_leaves is not None)
     if declared is not None:reasons = reasons + provisional_reasons(declared['git_verification'], declared['source_measurement_verification'])   # verdict and exit code stand
     reported = [c for c in calls if c['refusals'] is not None]
@@ -4194,10 +4656,11 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
         calls_reported=len(reported),
         rule='reference (D) at every ply: any world pre != 0 or any status-3 node or leaf refuses the root; depth2_full_width is the full-width depth-2 pass')
     abs_values = np.concatenate([e['abs_t1'] for e in evaluations if 'abs_t1' in e]) if any('abs_t1' in e for e in evaluations) else []
-    report = dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(result['checks'], declared=section, parity=parity), tolerance=result['tolerance'], schema=SCHEMA, status=status,
+    report = dict(header(args, roots, abs_values, roots.loaded.source if ctor is None else ctor.source), header=header_block(result['checks'], declared=section, parity=parity,
+        constructor=None if ctor is None else constructor_header(ctor)), tolerance=result['tolerance'], schema=SCHEMA, status=status,
         passed=status in ('PASS', 'PASS_SAMPLED'), status_reasons=reasons, checks=result['checks'],
         decision=result['checks'].get('e', dict(status='SKIPPED_SAMPLED', reason='check (e) needs every leaf checked (no --sample-leaves)')),
-        mode='SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', pricer_options=pricers.options(), block_invariance=args.block_invariance,
+        mode=CONSTRUCTOR_MODE if ctor is not None else 'SAVED_ROOTS' if args.saved_roots else 'BANK_CHUNK', pricer_options=pricers.options(), block_invariance=args.block_invariance,
         raw_head_check=args.raw_head_check, split_capacity=capacity, **shaped, worlds_blocks=args.worlds_blocks, block_seeds=list(seeds), max_roots=args.max_roots,
         sample_leaves=args.sample_leaves, sample_seed=g2.SAMPLE_SEED,
         leaves=dict(enumerated=sum(c['leaves_enumerated'] for c in calls), checked=sum(c['leaves_checked'] for c in calls),
@@ -4209,10 +4672,13 @@ def run_gate(args, *, roots, provider, plan, module, frame_pricer, seeds, out, r
             for k in ('enumerated', 'rerun', 'forced')}),
         topk_boundary=merge_topk_n([c.get('topk') for c in calls], **({} if declared is None else dict(logit_bound=declared_numbers(declared)['turn1_logit_bound'],
             root_logit_bound=declared_numbers(declared).get('root_logit_bound')))),
-        refusals=refusals, calls=calls, oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk))
+        refusals=refusals, calls=calls, oracle_cost=dict(seconds=oracle.seconds, rows=oracle.rows, chunk=args.oracle_chunk),
+        **({} if ctor is None else dict(not_applicable=dict(b=dict(status='NOT_APPLICABLE', reason=NO_B)), constructor=constructor_section(ctor, built))))
     write(out / 'gate.json', report)
     log('DEPTHN_GATE_COMPLETE', status=status, out=str(out / 'gate.json'), status_reasons=reasons, checks={k: v['passed'] for k, v in result['checks'].items()},
-        refused_share={k: refusals.get(k, {}).get('refused_share') for k in ('depthn', 'depth2_full_width', 'depth1')}, header=report['header'])
+        refused_share={k: refusals.get(k, {}).get('refused_share') for k in ('depthn', 'depth2_full_width', 'depth1')}, header=report['header'],
+        **({} if ctor is None else dict(averaging_argmax={k: (result['checks'].get('averaging_argmax') or {}).get(k) for k in ('passed', 'roots_compared',
+            'agreement_rate', 'disagree_within_bound', 'disagree_beyond_bound')})))
     if not args.mutation_test:return 0 if report['passed'] else 1
     bound = result['tolerance']['value_bound']
     with stage(log, 'mutation_test', calls=len(evaluations), value_bound=bound) as info:
