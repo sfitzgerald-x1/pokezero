@@ -38,7 +38,7 @@ class SelfBoostUnionTests(unittest.TestCase):
         closed=[]
         for owner,(stream,public) in enumerate(consumers):
             ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=f.account.device,adapter_tables=f.adapter.device,catalog=f.catalog);closed.append(ledger)
-            self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,:2].tolist(),[[3,3],[3,3]])
+            self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.site[:,0].tolist(),[int(ex.Site.TURNLOOP_PREFIX)]*2);self.assertEqual(ledger.stage[:,:3].tolist(),[[3,3,3],[3,3,3]])
             self.assertEqual(result.public.mons.boosts[:,:,0].tolist(),[[0,2],[2,0]])
             self.assertEqual(result.public.mons.boosts[:,:,2:4].tolist(),[[[1,1],[0,0]],[[0,0],[1,1]]])
             self.assertFalse(bool(result.projection.B4_qualified.any()))
@@ -52,6 +52,9 @@ class SelfBoostUnionTests(unittest.TestCase):
                         move=f.metadata['vocabulary']['moves'][int(w[5])];label=f.catalog.dex.moves[move].name;lines.append(f'|move|{ident[side]}|{label}|{ident[side]}')
                     elif kind==30:lines.append(f'|-boost|{ident[side]}|'+('spa' if int(w[4])==2 else 'spd')+'|1')
                     elif kind==32:lines.append(f'|-boost|{ident[side]}|atk|2')
+                    elif kind==life.TURNLOOP_PREFIX:
+                     self.assertEqual(w.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
+                     lines.extend(['|','|t:|1'])
                     elif kind==life.ACTION_END:lines.append('|')
                     elif kind==life.UPKEEP:lines.append('|upkeep')
                     elif kind==life.TURN:lines.append(f'|turn|{int(actual.callbacks.event_turn[row,index])}')

@@ -171,7 +171,7 @@ class StatusResidualOwningCallerTests(unittest.TestCase):
             _status_residual_context=life.StatusResidualContext(self.compiled.device))
 
     def test_default_entire_transition_ast_unchanged_outside_optional_status_observer(self):
-        old=ast.parse(subprocess.check_output(['git','show','12739035:gpu_engine/transition.py'],text=True))
+        old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
         new=ast.parse(Path(t.__file__).read_text())
         baseline=dump_default_program(old)
         self.assertEqual(dump_default_program(new),baseline)

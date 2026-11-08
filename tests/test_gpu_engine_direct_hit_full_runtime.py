@@ -47,7 +47,11 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
             for i,w in enumerate(np.asarray(lower.chunk.words[row])[np.asarray(lower.chunk.valid[row])]):
                 kind,_,turn,_,actor,_,target,_,*p=map(int,w)
                 raw=np.asarray(frame.callbacks.words[row,i]);rawkind=int(raw[0])
-                if kind==inputs.Kind.SWITCH:
+                if rawkind==life.TURNLOOP_PREFIX:
+                    self.assertEqual(kind,int(inputs.Kind.ABILITY))
+                    self.assertEqual(raw.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
+                    lines.extend(['|','|t:|1'])
+                elif kind==inputs.Kind.SWITCH:
                     name=self.f.catalog.species.names[p[1]];label=f'p{target+1}a: '+name
                     active[target]=label
                     detail=name+f', L{p[3]}'+('' if p[4]==0 else ', M' if p[4]==1 else ', F')

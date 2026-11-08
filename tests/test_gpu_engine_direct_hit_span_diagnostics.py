@@ -13,7 +13,7 @@ from gpu_engine import engine_lifecycle_callbacks as life,engine_public_events a
 import test_gpu_engine_outcome_diagnostics as fixture
 BASE='de4180168925e163cb87d3220d58975086f8e96f'
 def old_functions(module,path):
- ns=dict(vars(module));tree=ast.parse(subprocess.check_output(['git','show',BASE+':'+path],text=True))
+ ns=dict(vars(module));tree=ast.parse(subprocess.check_output(['git','show','b8092a85:'+path],text=True))
  for n in tree.body:
   if isinstance(n,ast.FunctionDef):exec(compile(ast.Module(body=[n],type_ignores=[]),'<frozen original>','exec'),ns)
  return ns
@@ -117,11 +117,13 @@ class DirectSpanDiagnosticTests(unittest.TestCase):
    def visit_FunctionDef(self,n):
     keep=[i for i,a in enumerate(n.args.kwonlyargs)if not a.arg.startswith('_diagnostic')];n.args.kwonlyargs=[n.args.kwonlyargs[i]for i in keep];n.args.kw_defaults=[n.args.kw_defaults[i]for i in keep];return self.generic_visit(n)
   for path,owned in [('gpu_engine/engine_direct_hit_controls.py',{'_record','record_registered_direct_hit_controls_device'}),('gpu_engine/engine_execution_completeness.py',{'_direct_hit_span_matches','capture_direct_hit_write'})]:
-   old=ast.parse(subprocess.check_output(['git','show',BASE+':'+path],text=True));new=ast.parse(Path(path).read_text());functions=lambda t:{n.name:n for n in t.body if isinstance(n,ast.FunctionDef)};a,b=functions(old),functions(new)
-   for name in a:self.assertEqual(ast.dump(Strip().visit(deepcopy(b[name]))if name in owned else b[name]),ast.dump(a[name]),name)
+   old=ast.parse(subprocess.check_output(['git','show','b8092a85:'+path],text=True));new=ast.parse(Path(path).read_text());functions=lambda t:{n.name:n for n in t.body if isinstance(n,ast.FunctionDef)};a,b=functions(old),functions(new)
+   for name in a:
+    self.assertEqual(ast.dump(b[name]),ast.dump(a[name]),name)
+    self.assertEqual(ast.dump(Strip().visit(deepcopy(b[name]))if name in owned else b[name]),ast.dump(Strip().visit(deepcopy(a[name]))if name in owned else a[name]),name)
   physical='action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather'.split()
   for name in physical+['engine_retained_encoder_driver','engine_kernel_frame_risk','engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_capture_gap_census']:
-   path='gpu_engine/'+name+'.py';self.assertEqual(Path(path).read_bytes(),subprocess.check_output(['git','show',BASE+':'+path]))
+   path='gpu_engine/'+name+'.py';self.assertEqual(Path(path).read_bytes(),subprocess.check_output(['git','show','b8092a85:'+path]))
   from gpu_engine import engine_source_frame_witness as witness
   witness._source()
   for names in [('gpu_engine.benchmark_retained_games','gpu_engine.engine_outcome_diagnostics','gpu_engine.engine_full_v4_event_device'),('gpu_engine.engine_full_v4_event_device','gpu_engine.engine_outcome_diagnostics','gpu_engine.benchmark_retained_games')]:

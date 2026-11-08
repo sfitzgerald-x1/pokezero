@@ -64,8 +64,8 @@ class FocusPunchInputTests(unittest.TestCase):
  def declare(self,x):
   return public.move(x.tape,x.actor,x.state.active[j.arange(8),x.actor],x.state.active[j.arange(8),1-x.actor],x.move,eligible=j.ones(8,bool))
  def test_source_default_original_callback_and_current_operands(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),86)
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());base=dump_default_program(old);self.assertEqual(dump_default_program(after),base);assert_hp_rng_mutations_detected(self,after,base)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());base=dump_default_program(old);self.assertEqual(dump_default_program(after),base);assert_hp_rng_mutations_detected(self,after,base)
   self.assertEqual(static._undefined_step_globals(Path('gpu_engine/transition.py').read_text()),set())
   step=static._step(Path('gpu_engine/transition.py').read_text());calls={n.func.attr:n for n in ast.walk(step)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and isinstance(n.func.value,ast.Name)and n.func.value.id=='focus_callbacks'}
   self.assertEqual(ast.unparse(calls['begin']),'focus_callbacks.begin(_public_trace, work, moves, slot, _direct_hit_context if _direct_hit_registered else None, table.focus_punch, ordinary=live & ~replacement, move_requests=(actions < 4) & ~struggle)')

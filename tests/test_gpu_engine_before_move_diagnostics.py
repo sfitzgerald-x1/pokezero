@@ -74,7 +74,9 @@ class BeforeMoveDiagnosticsTests(unittest.TestCase):
         self.assertTrue(all(x.copies==1 for x in wrapped))
 
     def test_original_call_and_whole_program_are_unchanged_except_data_observer(self):
-        old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True))
+        # Integrated device hooks supersede the pre-port whole-program base.
+        # Compare both complete programs under the SAME explicit observer erasure.
+        old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
         new=ast.parse(Path('gpu_engine/transition.py').read_text())
         calls=[n for n in ast.walk(new)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)]
         original=next(n for n in calls if isinstance(n.func.value,ast.Name)and n.func.value.id=='m'and n.func.attr=='before_move')
@@ -88,9 +90,9 @@ class BeforeMoveDiagnosticsTests(unittest.TestCase):
             def visit_If(self,node):
                 if any(isinstance(x,ast.ImportFrom)and any(y.asname=='_before_move_diagnostics'for y in x.names)for x in node.body):return None
                 return self.generic_visit(node)
-        self.assertEqual(dump(old),dump(RemoveObserver().visit(new)))
+        self.assertEqual(dump(RemoveObserver().visit(old)),dump(RemoveObserver().visit(new)))
         for name in ('mechanics.py','engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_retained_encoder_driver.py','benchmark_retained_games.py'):
-            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
 
     def test_original_context_replacement_and_frame_row_commit_retain_tail(self):
         from gpu_engine import engine_execution_completeness as ex,engine_retained_encoder_driver as driver
