@@ -6,7 +6,11 @@ and the base configuration are sha256 pinned too. A dispatched cell is claimed
 once by its worker and never re-run; --resume dispatches only unattempted cells.
 A search arm is dispatched only after a live probe of its server passes. Every
 mode refuses a code identity that differs from the run's; outside git, pass
---tree-commit.
+--tree-commit. Dispatch always runs RAW and one search arm interleaved (pair by
+pair, neither arm more than the concurrency ahead); after each cell it records the
+completion order, evaluates the screen latency rule once and checks arm fairness,
+stopping on VOID_LATENCY (never resumed) or FLAG_ARM_FAIRNESS (resumed only after
+`acknowledge`).
 """
 import argparse
 import asyncio
@@ -28,11 +32,11 @@ def parser():
     for name in ('run-directory','declaration','declaration-sha256','ladder-declaration','ladder-declaration-sha256',
                  'checkpoint','base-config','base-config-sha256'):a.add_argument('--'+name,required=True)
     a.add_argument('--tree-commit',help='required outside git; must equal HEAD inside git')
-    a=sub.add_parser('dispatch',help='run not-attempted cells of one arm, one game per worker process')
-    a.add_argument('--run-directory',required=True);a.add_argument('--arm',choices=panel.ARMS,required=True)
+    a=sub.add_parser('dispatch',help='run not-attempted cells of RAW and one search arm, interleaved, one game per worker process')
+    a.add_argument('--run-directory',required=True);a.add_argument('--search-arm',choices=panel.SEARCH_ARMS,required=True)
     a.add_argument('--limit',type=int,choices=(500,2000),required=True)
     a.add_argument('--cpu-pair',nargs=2,type=int,action='append',required=True,help='actor core, Foul Play core; repeat per worker')
-    a.add_argument('--cache-directory',required=True);a.add_argument('--server',type=server,help='HOST:PORT; search arms only')
+    a.add_argument('--cache-directory',required=True);a.add_argument('--server',type=server,required=True,help="the search arm's HOST:PORT")
     a.add_argument('--probe-capture',help='owning-wire capture for the server probe; default: the first closed RAW cell of this run')
     a.add_argument('--cells-per-worker',type=int,default=1);a.add_argument('--resume',action='store_true')
     a.add_argument('--screen-readout');a.add_argument('--screen-readout-sha256');a.add_argument('--tree-commit')
@@ -40,7 +44,11 @@ def parser():
     a.add_argument('--run-directory',required=True);a.add_argument('--arm',choices=panel.SEARCH_ARMS,required=True)
     a.add_argument('--limit',type=int,choices=(500,2000),required=True)
     a.add_argument('--codex-raw-run-directory',help="Codex's ladder RAW run (read only); plumbing agreement only")
+    a.add_argument('--server-telemetry',action='append',help="the search server's --telemetry file(s): a timed-out decision's end-to-end "
+        'wall in the void-screen deadline coverage (repeatable)')
     a.add_argument('--output',help='write the readout once here');a.add_argument('--tree-commit')
+    a=sub.add_parser('acknowledge',help="record the lead's acknowledgement of an arm fairness flag (dispatch may resume)")
+    a.add_argument('--run-directory',required=True);a.add_argument('--note',required=True)
     return p
 
 
@@ -51,19 +59,21 @@ def main(argv=None):
             ladder_declaration=args.ladder_declaration,ladder_declaration_sha256=args.ladder_declaration_sha256,
             checkpoint=args.checkpoint,base_config=args.base_config,base_config_sha256=args.base_config_sha256,tree_commit=args.tree_commit)
         print(json.dumps(dict(run_directory=run['run_directory'],tree=run['tree'])));return 0
+    if args.mode=='acknowledge':
+        print(json.dumps(panel.acknowledge_arm_fairness(args.run_directory,note=args.note)));return 0
     if args.mode=='dispatch':
-        if (args.server is None)!=(args.arm=='RAW'):raise SystemExit('--server is required for search arms and refused for RAW')
         screen=None if args.screen_readout is None else (args.screen_readout,args.screen_readout_sha256)
-        packets=panel.pending(args.run_directory,arm=args.arm,limit=args.limit,resume=args.resume,screen=screen,tree_commit=args.tree_commit)
-        probe=None
-        if args.arm!='RAW':
-            capture=args.probe_capture or panel.probe_capture(args.run_directory)
-            probe=panel.probe(args.run_directory,arm=args.arm,server=args.server,capture=capture,tree_commit=args.tree_commit)
+        packets,attempted=panel.interleaved(args.run_directory,search_arm=args.search_arm,limit=args.limit,resume=args.resume,screen=screen,
+            tree_commit=args.tree_commit)
+        monitor=panel.Monitor(args.run_directory,search_arm=args.search_arm)
+        capture=args.probe_capture or panel.probe_capture(args.run_directory)
+        probe=panel.probe(args.run_directory,arm=args.search_arm,server=args.server,capture=capture,tree_commit=args.tree_commit)
         cache=Path(args.cache_directory).resolve()
-        result=asyncio.run(panel.dispatch(packets,pairs=[tuple(p)for p in args.cpu_pair],server=args.server,
-            cells_per_worker=args.cells_per_worker,cache_directory=cache))
-        print(json.dumps(dict(result,probe=None if probe is None else probe['status'])));return 1 if result['failed']else 0
-    value=panel.readout(args.run_directory,arm=args.arm,limit=args.limit,codex_raw_directory=args.codex_raw_run_directory,tree_commit=args.tree_commit)
+        result=asyncio.run(panel.dispatch(packets,pairs=[tuple(p)for p in args.cpu_pair],servers={'RAW':None,args.search_arm:args.server},
+            cells_per_worker=args.cells_per_worker,cache_directory=cache,attempted=attempted,after=monitor))
+        print(json.dumps(dict(result,probe=probe['status'])));return 1 if result['failed']or result['stopped']else 0
+    value=panel.readout(args.run_directory,arm=args.arm,limit=args.limit,codex_raw_directory=args.codex_raw_run_directory,
+        server_telemetry=args.server_telemetry,tree_commit=args.tree_commit)
     if args.output:
         panel.write_new(args.output,value);print(json.dumps(dict(output=args.output,sha256=panel.sha(value),decision=value['decision'])))
     else:print(json.dumps(value,sort_keys=True,indent=1))

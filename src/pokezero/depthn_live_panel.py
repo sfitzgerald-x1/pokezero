@@ -13,15 +13,37 @@ catches a server that refuses everything. The pre-registered expected searched
 share (from the constructor-world gate on 40 Showdown roots, bound to that run id
 and report sha256) must be set before any dispatch; readouts report observed vs
 expected as a descriptive comparison that never changes a decision.
+
+Eval readiness (the lead's rulings):
+- Precision: the declaration pins matmul_precision 'highest' (the gates' certified
+  precision); the probe fails, and the readout reports breakage, on any COMPLETE
+  response whose pricer.matmul_precision differs.
+- Deadline: the declaration's deadline (3, 5, 10 or 15 s) and reserve reach every
+  search-arm client (worker and probe); the latency p95 breakage bound equals it.
+- Screen latency rule (outcome-blind): once the screen's first 1,000 searched
+  decisions (non-single-legal decisions of search-arm cells, cells in completion
+  order, rows in decision order) exist, their timeout rate is evaluated exactly
+  once and recorded in run state; above 1% the screen is VOID_LATENCY: dispatch
+  stops, no screen statistic is computed, the readout reports the end-to-end wall
+  distribution and each candidate deadline's coverage (wall + reserve), and the
+  run is never resumed (a restart is a fresh run with a fresh declaration).
+- Arm fairness: Foul Play's 1,000 ms is wall clock, so both arms run interleaved
+  (pair by pair, RAW then search, neither arm more than the concurrency ahead),
+  Foul Play keeps Codex's dedicated actor/FP core pair, each cell records its core
+  pair, worker identity and load average, and Foul Play's per-move cost (MCTS
+  iterations, else wait seconds, from the bridge's opponent_think rows) is compared
+  by arm: more than 5% apart (relative to RAW, once each arm has 1,000 measured
+  moves) flags FLAG_ARM_FAIRNESS and stops dispatch until the lead acknowledges.
 """
 import asyncio
-from collections import Counter,deque
+from collections import Counter
 import hashlib
 from itertools import islice
 import json
 import math
 import os
 from pathlib import Path
+import socket
 from statistics import fmean,variance
 import subprocess
 import sys
@@ -40,13 +62,19 @@ READOUT_SCHEMA='depthn-foulplay-panel.readout.v1'
 PROBE_SCHEMA='depthn-foulplay-panel.probe.v1'
 WORLDS={'DN2W8':8,'DN2W16':16}
 SCREEN_RULE='STOP_HARM_IF_UPPER_BOUND_LT_0'
-BREAKAGE=dict(latency_p95_max_seconds=3.,timeout_forfeits_max=0,unknown_cells_max=0,
-              transport_failure_share_max=.02,searched_share_min=.5)
+BREAKAGE=dict(timeout_forfeits_max=0,unknown_cells_max=0,transport_failure_share_max=.02,searched_share_min=.5)
+DEADLINES=(3.,5.,10.,15.)
+LATENCY_RULE=dict(searched_decisions=1000,timeout_rate_max=.01,coverage_deadlines=[5.,10.,15.],coverage_min=.995)
+INTERLEAVE='ALTERNATE_ARMS_BY_PAIR_ORDINAL_LEAD_AT_MOST_CONCURRENCY'
+ARM_FAIRNESS=dict(metric='MEAN_FOULPLAY_ITERATIONS_PER_MOVE',fallback='MEAN_FOULPLAY_WAIT_SECONDS_PER_MOVE',reference='RAW',
+                  relative_difference_max=.05,min_moves_per_arm=1000)
+WORKER_IDENTITY_ENVIRONMENT=('POD_NAME','NODE_NAME')
 TRANSPORT=('timeout','connection_error','server_error')
 T_QUANTILE=.95  # Two-sided 90%; validate() pins confidence to .9.
 KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256','arms','search','root_operator','deadline_seconds',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
-      'expected_searched_share'}
+      'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
+      'bench_source','server_processes_per_gpu','interleave','arm_fairness'}
 REQUEST_KEYS={'schema','run_directory','declaration','declaration_sha256','ladder_declaration','ladder_declaration_sha256',
               'cell','checkpoint','checkpoint_sha256','base_config'}
 encoded,sha,read_bound,write_new=ladder.encoded,ladder.sha,ladder.read_bound,ladder.write_new
@@ -65,11 +93,13 @@ def validate(declaration):
             or d['checkpoint_sha256']!=ActorContract.champion().checkpoint_sha256 or d['archive_sha256']!=CHAMPION_ARCHIVE_SHA256
             or type(arms)is not list or arms!=['RAW']+[a for a in SEARCH_ARMS if a in arms]or len(arms)<2
             or d['search']!={a:dict(depth=2,worlds=WORLDS[a])for a in arms[1:]}
-            or d['root_operator']!='ARGMAX_MEAN_COMPLETED_Q'or d['deadline_seconds']!=3. or d['reserve_seconds']!=.15
+            or d['root_operator']!='ARGMAX_MEAN_COMPLETED_Q'or type(d['deadline_seconds'])is not float
+            or d['deadline_seconds']not in DEADLINES or d['reserve_seconds']!=.15
             or d['screen_paired_cells']!=500 or d['max_paired_cells']!=2000 or d['confidence']!=.9
             or d['primary_comparison']!='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL'
             or d['bar']!='LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE'or d['screen_rule']!=SCREEN_RULE
-            or d['breakage']!=BREAKAGE):
+            or d['breakage']!=dict(BREAKAGE,latency_p95_max_seconds=d['deadline_seconds'])or d['matmul_precision']!='highest'
+            or d['screen_latency_rule']!=LATENCY_RULE or d['interleave']!=INTERLEAVE or d['arm_fairness']!=ARM_FAIRNESS):
         raise ValueError('declared DepthN 500/2000 paired panel against our RAW required')
     expected=d['expected_searched_share']
     if expected is not None and (type(expected)is not dict or set(expected)!={'value','source'}
@@ -78,6 +108,13 @@ def validate(declaration):
             or type(expected['source']['run_id'])is not str or not expected['source']['run_id'].strip()
             or not _hex(expected['source']['report_sha256'])):
         raise ValueError('expected searched share: null, or a value in [0, 1] bound to the gate run id and report sha256')
+    roster=d['expected_searched_share_roster'];bench=d['bench_source'];p95=d['bench_p95_wall_seconds']
+    if (roster is not None and(type(roster)is not float or not 0.<=roster<=1.)
+            or type(p95)is not float or not math.isfinite(p95)or p95<=0
+            or type(bench)is not dict or set(bench)!={'path','sha256'}or type(bench['path'])is not str or not bench['path'].strip()
+            or not _hex(bench['sha256'])or type(d['server_processes_per_gpu'])is not int or d['server_processes_per_gpu']<1):
+        raise ValueError('descriptive fields: roster share in [0, 1] or null, bench p95 > 0 with its summary path and sha256, '
+                         'server processes per GPU >= 1')
     return d
 
 
@@ -193,13 +230,15 @@ def pending(run_directory,*,arm,limit,resume=False,screen=None,tree_commit=None)
     root,run,d,lad=load(run_directory);require_tree(run,tree_commit)
     if arm not in d['arms']:raise ValueError('undeclared arm')
     if d['expected_searched_share']is None:raise ValueError('expected searched share from the constructor-world gate must be set before dispatch')
+    refuse_by_state(root)
     if limit==d['max_paired_cells']:
         value=None if screen is None else read_bound(*screen)
         if (type(value)is not dict or value.get('schema')!=READOUT_SCHEMA or value.get('declaration_sha256')!=run['declaration_sha256']
                 or value.get('paired_cells')!=d['screen_paired_cells']or value.get('decision')!='CONTINUE_TO_2000'
                 or value.get('arm')!=arm and arm!='RAW'):
             raise ValueError('pinned 500-cell screen readout continuing to 2000 required')
-        again=readout(root,arm=value['arm'],limit=d['screen_paired_cells'],codex_raw_directory=value['codex_raw_directory'],tree_commit=tree_commit)
+        again=readout(root,arm=value['arm'],limit=d['screen_paired_cells'],codex_raw_directory=value['codex_raw_directory'],
+            server_telemetry=value['server_telemetry'],tree_commit=tree_commit)
         if sha(again)!=screen[1]:raise ValueError('screen readout differs from its recomputation')
     todo=[];attempted=0
     for cell in cells(lad,arm,limit=limit):
@@ -208,9 +247,43 @@ def pending(run_directory,*,arm,limit,resume=False,screen=None,tree_commit=None)
         if path.exists():
             if path.read_bytes()!=encoded(value):raise ValueError('existing cell request differs')
         else:write_new(path,value)
-        todo.append(dict(path=str(path),sha256=sha(value)))
+        todo.append(dict(path=str(path),sha256=sha(value),arm=arm,pair_ordinal=cell['pair_ordinal']))
     if attempted and not resume:raise ValueError('attempted cells exist; resume explicitly')
     return todo
+
+
+def interleaved(run_directory,*,search_arm,limit,resume=False,screen=None,tree_commit=None):
+    """Both arms' not-attempted cells in the declared interleave (pair by pair, RAW then the search arm) and each arm's
+    attempted count (claims), which dispatch's lead rule starts from, so a resume keeps the interleave."""
+    root,run,d,lad=load(run_directory)
+    if search_arm not in d['arms'][1:]:raise ValueError('declared search arm required')
+    packets=[]
+    for arm in ('RAW',search_arm):packets+=pending(root,arm=arm,limit=limit,resume=resume,screen=screen,tree_commit=tree_commit)
+    packets.sort(key=lambda p:(p['pair_ordinal'],p['arm']!='RAW'))
+    attempted={arm:sum((root/'claims'/f"{c['ordinal']}.json").exists()for c in cells(lad,arm,limit=limit))for arm in ('RAW',search_arm)}
+    return packets,attempted
+
+
+def state_path(root,name):return Path(root)/'state'/name
+
+
+def refuse_by_state(root):
+    """A voided run is never resumed; a fairness flag holds dispatch until the lead acknowledges it."""
+    rule=state_path(root,'latency_rule.json')
+    if rule.exists()and json.loads(rule.read_bytes())['status']=='VOID_LATENCY':
+        raise ValueError('VOID_LATENCY: a voided screen is never resumed; restart with a fresh run and declaration')
+    if state_path(root,'arm_fairness_flag.json').exists()and not state_path(root,'arm_fairness_acknowledged.json').exists():
+        raise ValueError("FLAG_ARM_FAIRNESS: dispatch waits for the lead's acknowledgement")
+
+
+def acknowledge_arm_fairness(run_directory,*,note):
+    """The lead's acknowledgement of a recorded fairness flag (written once); online fairness stops end for this run."""
+    root=Path(run_directory).resolve();flag=state_path(root,'arm_fairness_flag.json')
+    if not flag.exists():raise ValueError('no arm fairness flag to acknowledge')
+    if type(note)is not str or not note.strip():raise ValueError('a note is required')
+    value=dict(flag_sha256=hashlib.sha256(flag.read_bytes()).hexdigest(),note=note,acknowledged_unix_seconds=time.time())
+    write_new(state_path(root,'arm_fairness_acknowledged.json'),value)
+    return value
 
 
 def probe_capture(run_directory,*,limit=500):
@@ -219,13 +292,13 @@ def probe_capture(run_directory,*,limit=500):
     for cell in cells(lad,'RAW',limit=limit):
         path=root/'owning-wire'/f"{cell['ordinal']}.jsonl"
         if (root/'results'/f"{cell['ordinal']}.json").exists()and path.exists():return path
-    raise ValueError('no closed RAW capture in this run; run RAW first or pass a capture')
+    raise ValueError('no closed RAW capture in this run; pass a capture (the arms run interleaved)')
 
 
 def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
     """Live search exchanges on captured roots, under fresh battle ids, before any dispatch.
 
-    Pass: a COMPLETE response on the declared rung, W and root operator. Every
+    Pass: a COMPLETE response on the declared rung, W, root operator and matmul precision. Every
     server response must carry the declared champion archive_sha256. Any transport
     failure, server_error, bad_request or expired request fails at once; a
     constructor, DepthN or root-class refusal moves to the next root. The record
@@ -245,8 +318,9 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         if response.get('client_refused')is False and response.get('archive_sha256')!=d['archive_sha256']:
             reason='server archive differs from the declared champion archive';break
         if response['status']=='COMPLETE':
-            good=response.get('requested_worlds')==d['search'][arm]['worlds']and response.get('root_operator')==d['root_operator']
-            status,reason=('PASS',None)if good else('FAIL','COMPLETE response with another W or root operator');break
+            good=(response.get('requested_worlds')==d['search'][arm]['worlds']and response.get('root_operator')==d['root_operator']
+                and (response.get('pricer')or {}).get('matmul_precision')==d['matmul_precision'])
+            status,reason=('PASS',None)if good else('FAIL','COMPLETE response with another W, root operator or matmul precision');break
         if response['cause']not in ('constructor_refused','depthn_refused','class_refused'):reason='refused: '+str(response['cause']);break
     value=dict(schema=PROBE_SCHEMA,arm=arm,server=server,capture=str(Path(capture).resolve()),status=status,reason=reason,tried=tried)
     write_new(root/'probes'/f'{arm}-{time.time_ns()}.json',value)
@@ -279,7 +353,7 @@ async def worker(packet,*,expected_pair,original,runtime_class=None):
         original=original,archive_sha256=d['archive_sha256'])
     write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=digest,cell=cell,cpu_pair=list(expected_pair),
         server=server,pid=os.getpid(),claimed_unix_seconds=time.time()))
-    started=time.monotonic();document=game=None
+    started=time.monotonic();document=game=None;load=dict(start=list(os.getloadavg()))
     try:
         with ladder.owning_capture(root/'owning-wire',cell=cell,declaration_sha256=value['declaration_sha256']):result=await runtime.run(config)
         document=result.to_dict()
@@ -301,9 +375,14 @@ async def worker(packet,*,expected_pair,original,runtime_class=None):
         cpu_pair=list(expected_pair),server=server,duration_seconds=time.monotonic()-started,source_game=game,
         benchmark=document,telemetry=str(telemetry),
         # The bridge's per-game result keeps no protocol log; the owner's literal wire is this capture.
-        owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"))
+        owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg())))
     write_new(root/'results'/f"{cell['ordinal']}.json",outcome)
     return 0
+
+
+def worker_identity():
+    """This worker's host and, when the environment provides them, its pod and node: run outputs only."""
+    return dict(hostname=socket.gethostname(),**{k.lower():os.environ[k]for k in WORKER_IDENTITY_ENVIRONMENT if os.environ.get(k)})
 
 
 async def serve(pair,cache_directory):
@@ -326,32 +405,148 @@ def worker_command(pair,cache_directory):
     return [sys.executable,'-m','pokezero.depthn_live_panel','--cpu-pair',str(pair[0]),str(pair[1]),'--cache-directory',str(cache_directory)]
 
 
-async def dispatch(packets,*,pairs,server,cells_per_worker=1,command=worker_command,cache_directory=None):
+async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_command,cache_directory=None,attempted=None,after=None):
     """One worker process per core pair at a time, fresh after cells_per_worker cells.
 
-    A worker that fails to report stops all dispatch: its cell stays claimed or
-    unclaimed as the worker left it, and no further cell is attempted this run.
+    servers maps every arm to its server (None for RAW). Interleave: a cell is taken
+    (in packet order) only if its arm stays at most len(pairs) cells ahead of every
+    other arm, counting attempted cells; when no cell qualifies, dispatch stops
+    ('interleave') rather than run one arm alone. after(packet), called once per
+    completed cell, may stop dispatch by returning a reason. A worker that fails to
+    report stops all dispatch: its cell stays claimed or unclaimed as the worker
+    left it, and no further cell is attempted this run.
     """
     if (type(cells_per_worker)is not int or cells_per_worker<1 or not pairs
             or len({p for pair in pairs for p in pair})!=2*len(pairs)):raise ValueError('disjoint core pairs and positive cells per worker required')
-    queue=deque(dict(p,server=server)for p in packets);done=[];failed=[]
+    if type(servers)is not dict or not servers or any(p.get('arm')not in servers for p in packets):raise ValueError('a server entry for every arm required')
+    queue=list(packets);done=[];failed=[];stopped=[];lead=len(pairs)
+    started=Counter({arm:0 for arm in servers});started.update(attempted or {})
+    def take():
+        for i,packet in enumerate(queue):
+            arm=packet['arm']
+            if all(started[arm]+1-started[other]<=lead for other in servers if other!=arm):
+                started[arm]+=1;return queue.pop(i)
+        stopped.append(f'interleave: no arm may run more than {lead} cells ahead of another');return None
     async def lane(pair):
-        while queue and not failed:
+        while queue and not failed and not stopped:
             process=await asyncio.create_subprocess_exec(*command(pair,cache_directory),stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE)
             try:
                 for _ in range(cells_per_worker):
-                    if not queue or failed:break
-                    packet=queue.popleft();process.stdin.write((json.dumps(packet)+'\n').encode());await process.stdin.drain()
+                    if not queue or failed or stopped:break
+                    packet=take()
+                    if packet is None:break
+                    wire=dict(path=packet['path'],sha256=packet['sha256'],server=servers[packet['arm']])
+                    process.stdin.write((json.dumps(wire)+'\n').encode());await process.stdin.drain()
                     line=await process.stdout.readline()
                     try:ok=json.loads(line)=={'exit':0}
                     except ValueError:ok=False
                     (done if ok else failed).append(packet['path'])
                     if not ok:break
+                    reason=None if after is None else after(packet)
+                    if reason:stopped.append(reason);break
             finally:
                 process.stdin.close();code=await process.wait()
             if code!=0:failed.append(f'worker exit {code}')
     await asyncio.gather(*(lane(pair)for pair in pairs))
-    return dict(dispatched=len(done),failed=failed,not_dispatched=len(queue))
+    return dict(dispatched=len(done),failed=failed,not_dispatched=len(queue),stopped=stopped[0]if stopped else None)
+
+
+def completions(root):
+    path=state_path(root,'completions.jsonl')
+    return [json.loads(x)for x in path.read_bytes().splitlines()]if path.exists()else []
+
+
+def telemetry_rows(root,ordinal):
+    path=Path(root)/'telemetry'/f'{ordinal}.jsonl'
+    return [json.loads(x)for x in path.read_bytes().splitlines()]if path.exists()else []
+
+
+def latency_rule(root,d,*,search_arm,log):
+    """The screen latency rule on the first N searched decisions (non-single-legal decisions of search-arm screen cells,
+    cells in completion order, rows in decision order): None until N exist; outcome-blind (timeout causes only)."""
+    rule=d['screen_latency_rule'];n=rule['searched_decisions'];searched=[];used=[]
+    for entry in log:
+        if entry['arm']!=search_arm or entry['pair_ordinal']>=d['screen_paired_cells']:continue
+        used.append(entry['ordinal'])
+        searched+=[r for r in telemetry_rows(root,entry['ordinal'])if r.get('source')in ('search','greedy_fallback')]
+        if len(searched)>=n:break
+    if len(searched)<n:return None
+    timeouts=sum(r.get('cause')=='timeout'for r in searched[:n]);rate=timeouts/n
+    return dict(status='VOID_LATENCY'if rate>rule['timeout_rate_max']else'CONTINUE',searched_decisions=n,timeouts=timeouts,timeout_rate=rate,
+        timeout_rate_max=rule['timeout_rate_max'],cells=used,scope='first searched decisions of the screen in completion order; timeout causes only')
+
+
+def foulplay_cost(rows):
+    """Foul Play's per-move cost in these cell results: the bridge's opponent_think rows (MCTS iterations; wait seconds)."""
+    iterations=[];waits=[]
+    for row in rows:
+        for think in (row.get('source_game')or {}).get('opponent_think')or ():
+            if type(think.get('iterations'))is int:iterations.append(think['iterations'])
+            if type(think.get('wait_seconds'))in (int,float)and math.isfinite(think['wait_seconds']):waits.append(float(think['wait_seconds']))
+    return dict(cells=len(rows),iteration_moves=len(iterations),mean_iterations=fmean(iterations)if iterations else None,
+        wait_moves=len(waits),mean_wait_seconds=fmean(waits)if waits else None)
+
+
+def arm_fairness(raw,search,rule):
+    """Search vs RAW relative difference of Foul Play's mean per-move iterations (wait seconds when either arm lacks the
+    iteration count), once both arms have the declared minimum of measured moves."""
+    least=rule['min_moves_per_arm'];metric=a=b=None
+    if raw['iteration_moves']>=least and search['iteration_moves']>=least:metric,a,b=rule['metric'],raw['mean_iterations'],search['mean_iterations']
+    elif raw['wait_moves']>=least and search['wait_moves']>=least:metric,a,b=rule['fallback'],raw['mean_wait_seconds'],search['mean_wait_seconds']
+    difference=None if metric is None or not a else abs(b-a)/a
+    return dict(metric=metric,raw=raw,search=search,relative_difference=difference,relative_difference_max=rule['relative_difference_max'],
+        flagged=difference is not None and difference>rule['relative_difference_max'],
+        status='EVALUATED'if difference is not None else'INSUFFICIENT_MOVES')
+
+
+class Monitor:
+    """Run state after each completed cell: completion order, the screen latency rule (evaluated once, recorded) and arm
+    fairness (a flag is recorded once and stops dispatch until acknowledged). Returns a stop reason or None."""
+    def __init__(self,run_directory,*,search_arm):
+        self.root,self.run,self.d,self.lad=load(run_directory);self.arm=search_arm;self.costs={}
+        if search_arm not in self.d['arms'][1:]:raise ValueError('declared search arm required')
+        known={entry['ordinal']for entry in completions(self.root)}
+        # A cell whose result exists but never reached the log (dispatch stopped in between) joins it now, by ordinal.
+        for arm in ('RAW',search_arm):
+            for cell in cells(self.lad,arm):
+                if cell['ordinal']not in known and (self.root/'results'/f"{cell['ordinal']}.json").exists():self._append(cell)
+
+    def _append(self,cell):
+        path=state_path(self.root,'completions.jsonl');path.parent.mkdir(parents=True,exist_ok=True)
+        with path.open('ab')as stream:
+            stream.write(encoded(dict(ordinal=cell['ordinal'],arm=cell['arm'],pair_ordinal=cell['pair_ordinal']))+b'\n')
+            stream.flush();os.fsync(stream.fileno())
+
+    def latency(self):
+        path=state_path(self.root,'latency_rule.json')
+        if path.exists():return json.loads(path.read_bytes())
+        value=latency_rule(self.root,self.d,search_arm=self.arm,log=completions(self.root))
+        if value is not None:write_new(path,value)
+        return value
+
+    def fairness(self):
+        rows={'RAW':[], self.arm:[]}
+        for entry in completions(self.root):
+            if entry['arm']in rows:
+                if entry['ordinal']not in self.costs:
+                    path=self.root/'results'/f"{entry['ordinal']}.json"
+                    self.costs[entry['ordinal']]=json.loads(path.read_bytes())if path.exists()else {}
+                rows[entry['arm']].append(self.costs[entry['ordinal']])
+        return arm_fairness(foulplay_cost(rows['RAW']),foulplay_cost(rows[self.arm]),self.d['arm_fairness'])
+
+    def __call__(self,packet):
+        ordinal=int(Path(packet['path']).stem);arm=ARMS[ordinal%len(ARMS)]
+        if arm!=packet['arm']:raise ValueError('completed packet arm differs from its cell')
+        self._append(cells(self.lad,arm)[ordinal//len(ARMS)])
+        rule=self.latency()
+        if rule is not None and rule['status']=='VOID_LATENCY':return 'VOID_LATENCY'
+        if state_path(self.root,'arm_fairness_acknowledged.json').exists():return None
+        fair=self.fairness()
+        if fair['flagged']:
+            flag=state_path(self.root,'arm_fairness_flag.json')
+            if not flag.exists():write_new(flag,fair)
+            return 'FLAG_ARM_FAIRNESS'
+        return None
 
 
 def _quantiles(values):
@@ -364,15 +559,15 @@ def _quantiles(values):
 def _share(a,b):return None if b==0 else a/b
 
 
-def decisions(rows,*,deadline,worlds=None,archive=None):
+def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
     """Shares over non-single-legal decisions: search, fallback by cause and kind, transport.
 
     Also latency quantiles, search-vs-greedy, and COMPLETE responses whose
-    requested_worlds is not the arm's W or whose archive_sha256 is not the
-    declared champion archive. class_refused is a counted fallback cause; it is
+    requested_worlds is not the arm's W, whose archive_sha256 is not the declared
+    champion archive, or whose pricer.matmul_precision is not the pinned precision. class_refused is a counted fallback cause; it is
     neither a transport failure nor breakage.
     """
-    seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=wrong_archive=0
+    seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=wrong_archive=wrong_precision=0
     times={k:[]for k in ('select','encode','greedy','client','server_wall','queue','prepare','build','price','reduce')}
     provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')}
     for row in rows:
@@ -398,6 +593,7 @@ def decisions(rows,*,deadline,worlds=None,archive=None):
         if search['status']=='COMPLETE':
             wrong_worlds+=worlds is not None and search.get('requested_worlds')!=worlds
             wrong_archive+=archive is not None and search.get('archive_sha256')!=archive
+            wrong_precision+=precision is not None and (search.get('pricer')if isinstance(search.get('pricer'),dict)else {}).get('matmul_precision')!=precision
             for name in provenance:
                 value=search.get(name);provenance[name][value if type(value)is not dict else encoded(value).decode()]+=1
     n=len(seen);searched=sources['search'];eligible=n-sources['single_legal']
@@ -410,7 +606,7 @@ def decisions(rows,*,deadline,worlds=None,archive=None):
             fallback_by_cause=dict(sorted(v['causes'].items())),search_differs=v['differs'],
             search_differs_share=_share(v['differs'],v['searched']))for kind,v in sorted(kinds.items())},
         search_differs=differs,search_differs_share_of_searched=_share(differs,searched),search_differs_share_of_all=_share(differs,n),
-        wrong_worlds=wrong_worlds,wrong_archive=wrong_archive,latency={k:_quantiles(v)for k,v in times.items()},
+        wrong_worlds=wrong_worlds,wrong_archive=wrong_archive,wrong_precision=wrong_precision,latency={k:_quantiles(v)for k,v in times.items()},
         late_decisions=late,deadline_seconds=deadline,
         provenance={k:sorted(map(str,v))for k,v in provenance.items()})
 
@@ -420,7 +616,7 @@ def _timeout_forfeit(row):
     return row['status']!='COMPLETE'and type(error)is str and ('TimeoutError'in error or 'deadline'in error)
 
 
-def arm_summary(root,lad,*,arm,limit,declaration_sha256,deadline,worlds=None,archive=None):
+def arm_summary(root,lad,*,arm,limit,declaration_sha256,deadline,worlds=None,archive=None,precision=None):
     rows=[];telemetry=[];mismatch=[];lost=unattempted=0
     for cell in cells(lad,arm,limit=limit):
         path=root/'results'/f"{cell['ordinal']}.json"
@@ -441,7 +637,10 @@ def arm_summary(root,lad,*,arm,limit,declaration_sha256,deadline,worlds=None,arc
         not_attempted=unattempted,timeout_forfeits=sum(map(_timeout_forfeit,rows)),
         score_mean=None if not complete else sum(r['score']for r in complete)/len(complete),
         telemetry_mismatches=len(mismatch),telemetry_mismatch_pairs=mismatch[:50],
-        decisions=decisions(telemetry,deadline=deadline,worlds=worlds,archive=archive))
+        decisions=decisions(telemetry,deadline=deadline,worlds=worlds,archive=archive,precision=precision),
+        foulplay_cost=foulplay_cost(rows),
+        load_average_1m=_quantiles([r['load_average']['end'][0]for r in rows if isinstance(r.get('load_average'),dict)]),
+        workers=len({encoded(r['worker']).decode()for r in rows if isinstance(r.get('worker'),dict)}))
 
 
 def paired(raw,search,*,limit):
@@ -495,16 +694,59 @@ def codex_raw_agreement(lad,ladder_sha256,ours,directory,*,limit):
         our_score_mean=mean(mine),codex_score_mean=mean(codex),disagreeing_pairs=differ[:50])
 
 
-def readout(run_directory,*,arm,limit,codex_raw_directory=None,tree_commit=None):
+def server_seconds(paths):
+    """request_id -> the server's own seconds from arrival to result, from depthn_live_server --telemetry files."""
+    out={}
+    for path in paths or ():
+        for line in Path(path).read_bytes().splitlines():
+            row=json.loads(line)
+            if (row.get('kind')=='request'and isinstance(row.get('response'),dict)and type(row.get('server_seconds'))in (int,float)
+                    and math.isfinite(row['server_seconds'])):out[row['response'].get('request_id')]=row['server_seconds']
+    return out
+
+
+def deadline_coverage(rows,*,reserve,deadlines,minimum,late=None):
+    """End-to-end wall (select_seconds) of searched decisions and, per candidate deadline, the share whose wall + reserve
+    fits. A timeout's wall is censored at the client deadline: with the server's telemetry it is the pre-send time plus the
+    server's own seconds, else it is unknown (lower bound counts it as not fitting, upper bound as fitting)."""
+    walls=[]
+    for row in rows:
+        wall=row['select_seconds']
+        if row.get('cause')=='timeout':
+            search=row.get('search')or {};seconds=(late or {}).get(search.get('request_id'));client=search.get('client_wall_seconds')
+            wall=None if seconds is None or client is None else row['select_seconds']-client+seconds
+        walls.append(wall)
+    known=[w for w in walls if w is not None];n=len(walls);censored=n-len(known)
+    table={str(limit):dict(lower=None if not n else sum(w+reserve<=limit for w in known)/n,
+        upper=None if not n else (sum(w+reserve<=limit for w in known)+censored)/n)for limit in deadlines}
+    covering=next((limit for limit in deadlines if n and table[str(limit)]['lower']>=minimum),None)
+    return dict(decisions=n,censored_timeouts=censored,wall=_quantiles(known),coverage=table,coverage_min=minimum,
+        smallest_covering_deadline=covering,reserve_seconds=reserve)
+
+
+def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=None,tree_commit=None):
     root,run,d,lad=load(run_directory);tree=require_tree(run,tree_commit)
     if arm not in d['arms'][1:]or limit not in (d['screen_paired_cells'],d['max_paired_cells']):raise ValueError('declared search arm and cell count required')
     rows={};arms={}
     for name in ('RAW',arm):
         rows[name],arms[name]=arm_summary(root,lad,arm=name,limit=limit,declaration_sha256=run['declaration_sha256'],
             deadline=d['deadline_seconds'],worlds=None if name=='RAW'else d['search'][arm]['worlds'],
-            archive=None if name=='RAW'else d['archive_sha256'])
-    stats=paired(rows['RAW'],rows[arm],limit=limit)
-    interval=stats['interval90'];search=arms[arm]['decisions'];rules=d['breakage'];breakage=[]
+            archive=None if name=='RAW'else d['archive_sha256'],precision=None if name=='RAW'else d['matmul_precision'])
+    recorded=state_path(root,'latency_rule.json')
+    latency=json.loads(recorded.read_bytes())if recorded.exists()else latency_rule(root,d,search_arm=arm,log=completions(root))
+    telemetry_paths=None if server_telemetry is None else [str(Path(x).resolve())for x in server_telemetry]
+    fair=arm_fairness(arms['RAW']['foulplay_cost'],arms[arm]['foulplay_cost'],d['arm_fairness'])
+    acknowledged=state_path(root,'arm_fairness_acknowledged.json').exists()
+    fair.update(acknowledged=acknowledged,recorded_flag=state_path(root,'arm_fairness_flag.json').exists())
+    void=latency is not None and latency['status']=='VOID_LATENCY'
+    coverage=None
+    if void:   # the input for re-declaring the deadline: every searched decision of the screen so far
+        searched=[r for cell in cells(lad,arm,limit=d['screen_paired_cells'])for r in telemetry_rows(root,cell['ordinal'])
+                  if r.get('source')in ('search','greedy_fallback')]
+        coverage=deadline_coverage(searched,reserve=d['reserve_seconds'],deadlines=d['screen_latency_rule']['coverage_deadlines'],
+            minimum=d['screen_latency_rule']['coverage_min'],late=server_seconds(telemetry_paths))
+    stats=None if void else paired(rows['RAW'],rows[arm],limit=limit)
+    interval=None if stats is None else stats['interval90'];search=arms[arm]['decisions'];rules=d['breakage'];breakage=[]
     if sum(a['unknown']for a in arms.values())>rules['unknown_cells_max']:breakage.append('unknown_cells')
     if sum(a['timeout_forfeits']for a in arms.values())>rules['timeout_forfeits_max']:breakage.append('timeout_forfeits')
     p95=(search['latency']['select']or {}).get('p95')
@@ -514,11 +756,15 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,tree_commit=None)
     if any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']]):breakage.append('search_provenance')
     if search['wrong_worlds']:breakage.append('requested_worlds')
     if search['wrong_archive']:breakage.append('archive')
+    if search['wrong_precision']:breakage.append('matmul_precision')
     if search['transport_failure_share']is not None and search['transport_failure_share']>rules['transport_failure_share_max']:
         breakage.append('transport_failures')
     if search['searched_share']is not None and search['searched_share']<rules['searched_share_min']:breakage.append('searched_share')
     attempted=all(a['not_attempted']==0 for a in arms.values());harm=interval is not None and interval[1]<0;bar=None
-    if limit==d['screen_paired_cells']:
+    held=fair['flagged']and not acknowledged
+    if void:decision='VOID_LATENCY'
+    elif held:decision='FLAG_ARM_FAIRNESS'
+    elif limit==d['screen_paired_cells']:
         decision='INCOMPLETE'if not attempted else'STOP_HARM'if harm else'STOP_BREAKAGE'if breakage else'CONTINUE_TO_2000'
     else:
         met=interval is not None and interval[0]>0
@@ -534,9 +780,10 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,tree_commit=None)
         tree=tree,arm=arm,paired_cells=limit,comparison=d['primary_comparison'],confidence=d['confidence'],
         estimator='seed-clustered paired t over the two seats per seed, two-sided 90%; missing cells as identification bounds',
         paired=stats,decision=decision,harm=harm,breakage=breakage,screen_rule=d['screen_rule'],breakage_rules=rules,bar=bar,
+        latency_rule=latency,deadline_coverage=coverage,arm_fairness=fair,deadline_seconds=d['deadline_seconds'],reserve_seconds=d['reserve_seconds'],
         dilution=dict(searched_share=search['searched_share'],fallback_share=search['fallback_share'],
             search_differs_share_of_all=search['search_differs_share_of_all']),expected_searched_share=expected,arms=arms,
-        codex_raw_directory=None if codex_raw_directory is None else str(Path(codex_raw_directory).resolve()),
+        codex_raw_directory=None if codex_raw_directory is None else str(Path(codex_raw_directory).resolve()),server_telemetry=telemetry_paths,
         codex_raw_agreement=None if codex_raw_directory is None else
             codex_raw_agreement(lad,run['ladder_declaration_sha256'],rows['RAW'],codex_raw_directory,limit=limit))
 

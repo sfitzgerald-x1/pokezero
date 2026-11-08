@@ -1,11 +1,12 @@
 """Inert DepthN panel controls: declarations, cells, claims, probe, dispatch and readout."""
 import asyncio
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import copy
 import importlib.util
 import io
 import json
 import math
+import os
 from pathlib import Path
 import random
 import socket
@@ -29,21 +30,25 @@ ROOT = Path(__file__).resolve().parents[1]
 DISPATCH_TIMEOUT = 30
 
 
-EXPECTED = dict(value=.9, source=dict(run_id='constructor-world-gate-fixture', report_sha256='f'*64))
+EXPECTED = dict(value=.944, source=dict(run_id='constructor-world-gate-fixture', report_sha256='f'*64))
 
 
-def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED):
+def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3.):
     return dict(schema=panel.SCHEMA, ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
-        checkpoint_sha256=ActorContract.champion().checkpoint_sha256, archive_sha256=live.CHAMPION_ARCHIVE_SHA256, arms=list(arms),
+        expected_searched_share_roster=.955, checkpoint_sha256=ActorContract.champion().checkpoint_sha256,
+        archive_sha256=live.CHAMPION_ARCHIVE_SHA256, arms=list(arms),
         search={a: dict(depth=2, worlds=panel.WORLDS[a]) for a in arms[1:]}, root_operator='ARGMAX_MEAN_COMPLETED_Q',
-        deadline_seconds=3., reserve_seconds=.15, screen_paired_cells=500, max_paired_cells=2000, confidence=.9,
+        deadline_seconds=deadline, reserve_seconds=.15, screen_paired_cells=500, max_paired_cells=2000, confidence=.9,
         primary_comparison='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL', bar='LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE',
-        screen_rule=panel.SCREEN_RULE, breakage=dict(panel.BREAKAGE))
+        screen_rule=panel.SCREEN_RULE, breakage=dict(panel.BREAKAGE, latency_p95_max_seconds=deadline), matmul_precision='highest',
+        screen_latency_rule=copy.deepcopy(panel.LATENCY_RULE), bench_p95_wall_seconds=1.39,
+        bench_source=dict(path='bench/w8-sessions/summary.json', sha256='e'*64), server_processes_per_gpu=1,
+        interleave=panel.INTERLEAVE, arm_fairness=dict(panel.ARM_FAIRNESS))
 
 
-def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED):
+def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3.):
     root = Path(directory).resolve(); inputs = root/'inputs'
-    lad = ladder_fixture.declaration(); d = declaration(panel.sha(lad), arms, expected); base = {}
+    lad = ladder_fixture.declaration(); d = declaration(panel.sha(lad), arms, expected, deadline); base = {}
     for name, value in (('ladder', lad), ('declaration', d), ('base', base)): panel.write_new(inputs/f'{name}.json', value)
     run = panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
         ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/inert/champion.pt',
@@ -52,22 +57,24 @@ def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED):
 
 
 def decision_row(cell, i, *, source='search', cause=None, kind=None, differs=False, select=.5,
-                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256):
+                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256, precision='highest'):
     kind = kind or ('forced' if source == 'single_legal' else 'move')
     search = None if source in ('raw_arm', 'single_legal') else dict(status='COMPLETE' if source == 'search' else 'REFUSED',
         cause=cause, client_wall_seconds=select-.05, server_wall_seconds=select-.1, tree_commit='t'*40, archive_sha256=archive,
+        request_id=f"r{cell['ordinal']}-{i}",
         root_operator=operator if source == 'search' else None, requested_worlds=worlds if source == 'search' else None,
-        pricer=dict(k=1, depth=2, W=8, K=4) if source == 'search' else None,
+        pricer=dict(k=1, depth=2, W=8, K=4, matmul_precision=precision) if source == 'search' else None,
         timings=dict(queue_seconds=.01, prepare_seconds=.2, build_seconds=.05, price_seconds=.2, reduce_seconds=.01) if source == 'search' else None)
     return dict(schema=live.ROW_SCHEMA, arm=cell['arm'], cell=cell, battle_id=f"b{cell['ordinal']}", owner='p1', decision_index=i,
         prefix_sha256=f'{i:064x}', request_kind=kind, source=source, cause=cause, search_differs=differs if source == 'search' else None,
         encode_seconds=.01, select_seconds=select, greedy=dict(seconds=.05), search=search)
 
 
-def write_cell(root, cell, d_sha, *, score, status='COMPLETE', error=None, rows=(), decisions=None):
+def write_cell(root, cell, d_sha, *, score, status='COMPLETE', error=None, rows=(), decisions=None, think=None):
     for name in ('results', 'telemetry'): (root/name).mkdir(exist_ok=True)
+    game = dict(pokezero_decisions=len(rows) if decisions is None else decisions, **({} if think is None else dict(opponent_think=list(think))))
     value = dict(schema=panel.CELL_SCHEMA, cell=cell, declaration_sha256=d_sha, status=status, score=score if status == 'COMPLETE' else None,
-                 error=error, source_game=dict(pokezero_decisions=len(rows) if decisions is None else decisions))
+                 error=error, source_game=game)
     (root/'results'/f"{cell['ordinal']}.json").write_bytes(panel.encoded(value))
     if rows: (root/'telemetry'/f"{cell['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
 
@@ -359,6 +366,18 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(FileExistsError): self.work(packet)
         self.assertEqual(FakeRuntime.runs, [cell['ordinal']]); self.assertEqual((self.root/'claims'/f"{cell['ordinal']}.json").read_bytes(), claim)
 
+    def test_the_declared_deadline_reaches_the_client_and_the_cell_records_its_host(self):
+        root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
+        cell = panel.cells(lad, 'DN2W8')[0]; path = root/'requests'/f"{cell['ordinal']}.json"; value = panel.request(run, cell)
+        panel.write_new(path, value)
+        with patch.dict(os.environ, {'POD_NAME': 'pod-x'}):
+            asyncio.run(panel.worker(dict(path=str(path), sha256=panel.sha(value), server=dict(host='127.0.0.1', port=9)),
+                                     expected_pair=(1, 2), original='shared', runtime_class=FakeRuntime))
+        runtime = FakeRuntime.made[-1]; self.assertEqual((runtime.client.deadline, runtime.client.reserve), (10., .15))
+        result = json.loads((root/'results'/f"{cell['ordinal']}.json").read_bytes())
+        self.assertEqual((result['worker']['hostname'], result['worker']['pod_name'], result['cpu_pair']), (socket.gethostname(), 'pod-x', [1, 2]))
+        self.assertEqual((len(result['load_average']['start']), len(result['load_average']['end'])), (3, 3))
+
     def test_interrupted_game_is_unknown_and_claimed(self):
         packet, cell = self.packet('RAW', 0)
         with patch.object(FakeRuntime, 'run', side_effect=RuntimeError('inert interrupted game')):
@@ -398,7 +417,8 @@ def make_capture(directory, ordinal=0, turns=3):
 
 
 def champion_complete(request, **change):
-    return {**actor_tests.complete(request), 'archive_sha256': live.CHAMPION_ARCHIVE_SHA256, **change}
+    return {**actor_tests.complete(request), 'archive_sha256': live.CHAMPION_ARCHIVE_SHA256,
+            'pricer': dict(k=[9, 9], depth=2, W=8, K=4, matmul_precision='highest'), **change}
 
 
 def champion_refused(request, cause):
@@ -427,6 +447,13 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual((request['lines'], request['own_request_line'], request['prefix_sha256']),
                          (list(root['lines']), root['own_request_line'], root['prefix_sha256']))
 
+    def test_the_probe_budgets_by_the_declared_deadline(self):
+        root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
+        with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
+            value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
+            request, = server.requests
+        self.assertEqual(value['status'], 'PASS'); self.assertTrue(3. < request['budget_seconds'] <= 9.85)
+
     def test_constructor_refusals_move_to_the_next_root(self):
         replies = iter(['constructor_refused', 'class_refused', 'depthn_refused', None])
         def reply(request, conn):
@@ -441,6 +468,8 @@ class ProbeTests(unittest.TestCase):
                      operator=actor_tests.send(lambda r: champion_complete(r, root_operator='ARGMAX_POLICY_TARGET')),
                      rung=actor_tests.send(lambda r: champion_complete(r, rung='DN2W16')),
                      archive=actor_tests.send(lambda r: champion_complete(r, archive_sha256='a'*64)),
+                     precision=actor_tests.send(lambda r: champion_complete(r, pricer=dict(W=8, matmul_precision='default'))),
+                     no_precision=actor_tests.send(lambda r: champion_complete(r, pricer=None)),
                      refusal_archive=actor_tests.send(lambda r: dict(champion_refused(r, 'constructor_refused'), archive_sha256='a'*64)),
                      server_error=actor_tests.send(lambda r: champion_refused(r, 'server_error')),
                      all_refused=actor_tests.send(lambda r: champion_refused(r, 'constructor_refused')))
@@ -474,10 +503,15 @@ for line in sys.stdin:
 '''
 
 
+SERVERS = {'RAW': None, 'DN2W8': dict(host='h', port=1)}
+
+
 class DispatchTests(unittest.TestCase):
-    def run_dispatch(self, names, **kwargs):
-        directory = Path(self.directory.name); packets = [dict(path=str(directory/n), sha256='0'*64) for n in names]
-        work = panel.dispatch(packets, command=lambda pair, cache: [sys.executable, '-c', FAKE_WORKER], **kwargs)
+    def run_dispatch(self, names, arms=None, servers=SERVERS, **kwargs):
+        directory = Path(self.directory.name)
+        arms = arms or ['RAW' if i % 2 == 0 else 'DN2W8' for i in range(len(names))]
+        packets = [dict(path=str(directory/n), sha256='0'*64, arm=a) for n, a in zip(names, arms)]
+        work = panel.dispatch(packets, servers=servers, command=lambda pair, cache: [sys.executable, '-c', FAKE_WORKER], **kwargs)
         result = asyncio.run(asyncio.wait_for(work, DISPATCH_TIMEOUT))
         done = {n: json.loads((directory/(n+'.done')).read_text()) for n in names if (directory/(n+'.done')).exists()}
         return result, done
@@ -486,32 +520,56 @@ class DispatchTests(unittest.TestCase):
     def tearDown(self): self.directory.cleanup()
 
     def test_one_cell_per_fresh_worker_process_by_default(self):
-        result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1), (2, 3)], server=dict(host='h', port=1))
-        self.assertEqual(result, dict(dispatched=3, failed=[], not_dispatched=0))
-        self.assertEqual(len({v['pid'] for v in done.values()}), 3); self.assertEqual(done['a']['server'], dict(host='h', port=1))
+        result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1), (2, 3)])
+        self.assertEqual(result, dict(dispatched=3, failed=[], not_dispatched=0, stopped=None))
+        self.assertEqual(len({v['pid'] for v in done.values()}), 3)
+        self.assertEqual((done['a']['server'], done['b']['server']), (None, dict(host='h', port=1)))
 
     def test_persistent_worker_when_asked(self):
-        result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1)], server=None, cells_per_worker=5)
+        result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1)], cells_per_worker=5)
         self.assertEqual(result['dispatched'], 3); self.assertEqual(len({v['pid'] for v in done.values()}), 1)
 
     def test_a_failed_worker_stops_all_dispatch(self):
         for kwargs in (dict(pairs=[(0, 1)]), dict(pairs=[(0, 1)], cells_per_worker=4), dict(pairs=[(0, 1), (2, 3)])):
             with self.subTest(kwargs):
                 self.directory.cleanup(); self.directory = TemporaryDirectory()
-                result, done = self.run_dispatch(['a', 'fail', 'c', 'd', 'e', 'f'], server=None, **kwargs)
+                result, done = self.run_dispatch(['a', 'fail', 'c', 'd', 'e', 'f'], **kwargs)
                 self.assertGreaterEqual(len(result['failed']), 1); self.assertTrue(any(f.endswith('fail') for f in result['failed']))
                 self.assertLessEqual(result['dispatched'], 2); self.assertGreaterEqual(result['not_dispatched'], 3)
                 self.assertNotIn('f', done)
 
     def test_a_lane_failure_stops_a_persistent_worker_in_another_lane(self):
         names = ['slow-a', 'fail']+[f'slow-{c}' for c in 'cdefgh']
-        result, done = self.run_dispatch(names, pairs=[(0, 1), (2, 3)], server=None, cells_per_worker=10)
+        result, done = self.run_dispatch(names, pairs=[(0, 1), (2, 3)], cells_per_worker=10)
         self.assertTrue(any(f.endswith('fail') for f in result['failed'])); self.assertLessEqual(result['dispatched'], 2)
         self.assertGreaterEqual(result['not_dispatched'], 5); self.assertNotIn('slow-h', done)
 
-    def test_core_pairs_must_be_disjoint(self):
+    def test_no_arm_runs_more_than_the_concurrency_ahead(self):
+        for pairs, dispatched in (([(0, 1)], 1), ([(0, 1), (2, 3)], 2)):
+            with self.subTest(lanes=len(pairs)):
+                self.directory.cleanup(); self.directory = TemporaryDirectory()
+                result, done = self.run_dispatch(['a', 'b', 'c', 'd', 'e'], arms=['RAW']*5, pairs=pairs, cells_per_worker=5)
+                self.assertEqual(result['dispatched'], dispatched); self.assertTrue(result['stopped'].startswith('interleave'))
+                self.assertEqual(result['not_dispatched'], 5-dispatched)
+
+    def test_a_resume_catches_the_lagging_arm_up_first(self):
+        order = []
+        result, _ = self.run_dispatch(['r0', 'd0', 'r1', 'd1', 'r2', 'd2'], pairs=[(0, 1)], cells_per_worker=10,
+                                      attempted={'RAW': 3, 'DN2W8': 0}, after=lambda packet: order.append(Path(packet['path']).name))
+        self.assertEqual(order, ['d0', 'd1', 'd2', 'r0']); self.assertTrue(result['stopped'].startswith('interleave'))
+
+    def test_the_after_hook_stops_dispatch(self):
+        calls = []
+        def after(packet):
+            calls.append(packet['arm']); return 'VOID_LATENCY' if len(calls) == 2 else None
+        result, done = self.run_dispatch(['a', 'b', 'c', 'd', 'e', 'f'], pairs=[(0, 1)], cells_per_worker=10, after=after)
+        self.assertEqual((result['stopped'], result['dispatched'], result['not_dispatched'], calls), ('VOID_LATENCY', 2, 4, ['RAW', 'DN2W8']))
+
+    def test_core_pairs_must_be_disjoint_and_every_arm_needs_a_server(self):
         for kwargs in (dict(pairs=[(0, 1), (1, 2)]), dict(pairs=[(0, 0)]), dict(pairs=[]), dict(pairs=[(0, 1)], cells_per_worker=0)):
-            with self.subTest(kwargs), self.assertRaises(ValueError): asyncio.run(panel.dispatch([], server=None, **kwargs))
+            with self.subTest(kwargs), self.assertRaises(ValueError): asyncio.run(panel.dispatch([], servers={'RAW': None}, **kwargs))
+        with self.assertRaisesRegex(ValueError, 'every arm'):
+            asyncio.run(panel.dispatch([dict(path='x', sha256='0'*64, arm='DN2W8')], servers={'RAW': None}, pairs=[(0, 1)]))
 
 
 class EstimatorTests(unittest.TestCase):
@@ -786,6 +844,152 @@ class DecisionSummaryTests(unittest.TestCase):
             with self.assertRaises(ValueError): panel.decisions([bad], deadline=3.)
 
 
+def completed(root, cell):
+    return dict(path=str(root/'requests'/f"{cell['ordinal']}.json"), arm=cell['arm'])
+
+
+class EvalReadinessTests(unittest.TestCase):
+    """The lead's rulings: precision pin, declared deadline, screen latency rule, arm fairness."""
+    def setUp(self):
+        self.directory = TemporaryDirectory(); self.root, self.run, self.d, self.lad = make_run(self.directory.name)
+        self.raws, self.searches = panel.cells(self.lad, 'RAW', limit=500), panel.cells(self.lad, 'DN2W8', limit=500)
+
+    def tearDown(self): self.directory.cleanup()
+
+    def play(self, monitor, count, *, timeouts=(), raw_think=None, search_think=None, start=0):
+        """Complete RAW then search cell by cell (pairs start..start+count-1): 30 searched decisions and one single-legal
+        decision per search cell; `timeouts` are positions among the searched decisions (completion order)."""
+        reasons = []
+        for k in range(start, start+count):
+            raw, search = self.raws[k], self.searches[k]
+            for cell in (raw, search): panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", {})
+            write_cell(self.root, raw, self.run['declaration_sha256'], score=1., rows=[decision_row(raw, 0, source='raw_arm')], think=raw_think)
+            reasons.append(monitor(completed(self.root, raw)))
+            rows = [decision_row(search, i, source='greedy_fallback', cause='timeout') if 30*k+i in timeouts else decision_row(search, i)
+                    for i in range(30)]+[decision_row(search, 30, source='single_legal')]
+            write_cell(self.root, search, self.run['declaration_sha256'], score=0., rows=rows, think=search_think)
+            reasons.append(monitor(completed(self.root, search)))
+        return reasons
+
+    def rule(self): return json.loads(panel.state_path(self.root, 'latency_rule.json').read_bytes())
+
+    def test_new_declaration_fields_are_validated(self):
+        self.assertEqual(panel.validate(declaration('a'*64))['expected_searched_share_roster'], .955)
+        for deadline in panel.DEADLINES: self.assertEqual(panel.validate(declaration('a'*64, deadline=deadline))['deadline_seconds'], deadline)
+        changes = [('deadline_seconds', 4.), ('deadline_seconds', 5), ('breakage', dict(panel.BREAKAGE, latency_p95_max_seconds=5.)),
+                   ('matmul_precision', 'default'), ('screen_latency_rule', dict(panel.LATENCY_RULE, timeout_rate_max=.02)),
+                   ('screen_latency_rule', dict(panel.LATENCY_RULE, searched_decisions=500)), ('bench_p95_wall_seconds', 0.),
+                   ('bench_p95_wall_seconds', 1), ('bench_p95_wall_seconds', float('nan')), ('bench_source', dict(path='', sha256='e'*64)),
+                   ('bench_source', dict(path='x', sha256='E'*64)), ('bench_source', dict(path='x')), ('server_processes_per_gpu', 0),
+                   ('server_processes_per_gpu', True), ('server_processes_per_gpu', 1.), ('expected_searched_share_roster', 1.2),
+                   ('expected_searched_share_roster', 1), ('interleave', 'SEARCH_THEN_RAW'), ('arm_fairness', dict(panel.ARM_FAIRNESS, relative_difference_max=.1)),
+                   ('arm_fairness', dict(panel.ARM_FAIRNESS, reference='DN2W8'))]
+        for key, value in changes:
+            d = declaration('a'*64); d[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError): panel.validate(d)
+        d = declaration('a'*64); d['expected_searched_share_roster'] = None; self.assertIsNone(panel.validate(d)['expected_searched_share_roster'])
+        d = declaration('a'*64, deadline=10.); self.assertEqual(panel.validate(d)['breakage']['latency_p95_max_seconds'], 10.)
+
+    def test_a_response_priced_under_another_precision_is_breakage(self):
+        populate(self.root, self.run, self.lad, rows_for=lambda cell: [decision_row(cell, 0, source='raw_arm')] if cell['arm'] == 'RAW'
+                 else [decision_row(cell, 0, precision='default')])
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertEqual((value['breakage'], value['decision']), (['matmul_precision'], 'STOP_BREAKAGE'))
+        self.assertEqual(value['arms']['DN2W8']['decisions']['wrong_precision'], 500)
+
+    def test_the_latency_rule_continues_on_nine_timeouts_in_the_first_thousand(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        reasons = self.play(monitor, 34, timeouts=set(range(9))|set(range(1005, 1015)))
+        self.assertEqual(set(reasons), {None})
+        rule = self.rule(); recorded = panel.state_path(self.root, 'latency_rule.json').read_bytes()
+        self.assertEqual((rule['status'], rule['timeouts'], rule['searched_decisions'], len(rule['cells'])), ('CONTINUE', 9, 1000, 34))
+        self.assertEqual(rule['cells'], [c['ordinal'] for c in self.searches[:34]])
+        self.assertEqual(set(self.play(monitor, 3, timeouts=set(range(1020, 1110)), start=34)), {None})   # evaluated once only
+        self.assertEqual(panel.state_path(self.root, 'latency_rule.json').read_bytes(), recorded)
+        self.assertEqual(panel.Monitor(self.root, search_arm='DN2W8').latency(), rule)
+
+    def test_eleven_timeouts_void_the_screen_and_dispatch_never_resumes(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        reasons = self.play(monitor, 34, timeouts=set(range(11)))
+        self.assertEqual(reasons[:-1], [None]*67); self.assertEqual(reasons[-1], 'VOID_LATENCY')
+        self.assertEqual((self.rule()['status'], self.rule()['timeouts'], self.rule()['timeout_rate']), ('VOID_LATENCY', 11, .011))
+        with self.assertRaisesRegex(ValueError, 'never resumed'): panel.pending(self.root, arm='RAW', limit=500, resume=True)
+        with self.assertRaisesRegex(ValueError, 'never resumed'): panel.interleaved(self.root, search_arm='DN2W8', limit=500, resume=True)
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertEqual((value['decision'], value['paired'], value['bar']), ('VOID_LATENCY', None, None))
+        coverage = value['deadline_coverage']
+        self.assertEqual((coverage['decisions'], coverage['censored_timeouts'], coverage['smallest_covering_deadline']), (1020, 11, None))
+        self.assertEqual(coverage['coverage']['5.0'], dict(lower=1009/1020, upper=1.)); self.assertEqual(coverage['wall']['max'], .5)
+        late = Path(self.directory.name)/'server.jsonl'
+        late.write_text(''.join(json.dumps(dict(kind='request', response=dict(request_id=f"r{self.searches[p//30]['ordinal']}-{p%30}"),
+            server_seconds=6.))+'\n' for p in range(11)))
+        value = panel.readout(self.root, arm='DN2W8', limit=500, server_telemetry=[late])
+        coverage = value['deadline_coverage']
+        self.assertEqual((coverage['censored_timeouts'], coverage['smallest_covering_deadline']), (0, 10.))
+        self.assertEqual((coverage['coverage']['5.0']['lower'], coverage['coverage']['10.0']['lower']), (1009/1020, 1.))
+
+    def test_fewer_than_a_thousand_searched_decisions_never_void(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual(set(self.play(monitor, 20, timeouts=set(range(300)))), {None})
+        self.assertFalse(panel.state_path(self.root, 'latency_rule.json').exists())
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertIsNone(value['latency_rule']); self.assertEqual(value['decision'], 'INCOMPLETE'); self.assertIsNotNone(value['paired'])
+
+    def test_cells_missing_from_the_completion_log_join_it_by_ordinal(self):
+        for k in (1, 0):
+            write_cell(self.root, self.searches[k], self.run['declaration_sha256'], score=1., rows=[decision_row(self.searches[k], 0)])
+        panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual([e['ordinal'] for e in panel.completions(self.root)], [self.searches[0]['ordinal'], self.searches[1]['ordinal']])
+
+    def test_arms_interleave_pair_by_pair_and_resume_keeps_the_count(self):
+        packets, attempted = panel.interleaved(self.root, search_arm='DN2W8', limit=500)
+        self.assertEqual(attempted, dict(RAW=0, DN2W8=0)); self.assertEqual(len(packets), 1000)
+        self.assertEqual([(p['pair_ordinal'], p['arm']) for p in packets[:4]], [(0, 'RAW'), (0, 'DN2W8'), (1, 'RAW'), (1, 'DN2W8')])
+        for cell in self.raws[:3]: panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", {})
+        packets, attempted = panel.interleaved(self.root, search_arm='DN2W8', limit=500, resume=True)
+        self.assertEqual(attempted, dict(RAW=3, DN2W8=0)); self.assertEqual([(p['pair_ordinal'], p['arm']) for p in packets[:4]],
+                                                                          [(0, 'DN2W8'), (1, 'DN2W8'), (2, 'DN2W8'), (3, 'RAW')])
+        with self.assertRaisesRegex(ValueError, 'search arm'): panel.interleaved(self.root, search_arm='RAW', limit=500)
+
+    def test_arm_fairness_flags_above_five_percent_relative_to_raw(self):
+        def cost(values, key='iterations'): return panel.foulplay_cost([dict(source_game=dict(opponent_think=[{key: v} for v in values]))])
+        rule = panel.ARM_FAIRNESS; raw = cost([100]*1000)
+        for search, flagged in (([105]*900+[104]*100, False), ([105]*900+[106]*100, True), ([95]*1000, False), ([94]*1000, True)):
+            value = panel.arm_fairness(raw, cost(search), rule)
+            with self.subTest(mean=fmean(search)):
+                self.assertEqual((value['metric'], value['flagged'], value['status']), (rule['metric'], flagged, 'EVALUATED'))
+                self.assertAlmostEqual(value['relative_difference'], abs(fmean(search)-100)/100, places=12)
+        value = panel.arm_fairness(cost([1.]*1000, 'wait_seconds'), cost([1.06]*1000, 'wait_seconds'), rule)
+        self.assertEqual((value['metric'], value['flagged']), (rule['fallback'], True))
+        value = panel.arm_fairness(raw, cost([200]*999), rule)
+        self.assertEqual((value['status'], value['flagged'], value['relative_difference']), ('INSUFFICIENT_MOVES', False, None))
+
+    def test_a_fairness_flag_stops_dispatch_until_the_lead_acknowledges(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        reasons = self.play(monitor, 50, raw_think=[dict(iterations=100)]*20, search_think=[dict(iterations=106)]*20)
+        self.assertEqual(reasons[:-1], [None]*99); self.assertEqual(reasons[-1], 'FLAG_ARM_FAIRNESS')
+        flag = json.loads(panel.state_path(self.root, 'arm_fairness_flag.json').read_bytes())
+        self.assertEqual((flag['raw']['mean_iterations'], flag['search']['mean_iterations'], flag['flagged']), (100, 106, True))
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertEqual(value['decision'], 'FLAG_ARM_FAIRNESS'); self.assertAlmostEqual(value['arm_fairness']['relative_difference'], .06)
+        self.assertEqual((value['arms']['RAW']['foulplay_cost']['iteration_moves'], value['arms']['DN2W8']['foulplay_cost']['mean_iterations']), (1000, 106))
+        with self.assertRaisesRegex(ValueError, 'FLAG_ARM_FAIRNESS'): panel.pending(self.root, arm='RAW', limit=500, resume=True)
+        with self.assertRaisesRegex(ValueError, 'note'): panel.acknowledge_arm_fairness(self.root, note=' ')
+        panel.acknowledge_arm_fairness(self.root, note='looked: contention explained')
+        self.assertEqual(len(panel.pending(self.root, arm='RAW', limit=500, resume=True)), 450)
+        self.assertEqual(set(self.play(monitor, 1, raw_think=[dict(iterations=100)]*20, search_think=[dict(iterations=200)]*20, start=50)), {None})
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertEqual((value['decision'], value['arm_fairness']['flagged'], value['arm_fairness']['acknowledged']), ('INCOMPLETE', True, True))
+
+    def test_within_five_percent_never_flags(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual(set(self.play(monitor, 50, raw_think=[dict(iterations=100)]*20, search_think=[dict(iterations=104)]*20)), {None})
+        self.assertFalse(panel.state_path(self.root, 'arm_fairness_flag.json').exists())
+
+    def test_without_an_unacknowledged_flag_there_is_nothing_to_acknowledge(self):
+        with self.assertRaisesRegex(ValueError, 'no arm fairness flag'): panel.acknowledge_arm_fairness(self.root, note='x')
+
+
 class ScriptTests(unittest.TestCase):
     def script(self):
         spec = importlib.util.spec_from_file_location('depthn_foulplay_panel_script', ROOT/'scripts'/'depthn_foulplay_panel.py')
@@ -802,8 +1006,8 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(json.loads(printed.getvalue())['sha256'], ladder.sha(json.loads(output.read_bytes())))
             with self.assertRaises(FileExistsError): script.main(argv)
             base = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cpu-pair', '0', '1', '--cache-directory', directory]
-            for extra in (['--arm', 'RAW', '--server', 'h:1'], ['--arm', 'DN2W8']):
-                with self.assertRaises(SystemExit): script.main(base+extra)
+            for extra in (['--arm', 'RAW', '--server', 'h:1'], ['--search-arm', 'DN2W8'], ['--search-arm', 'RAW', '--server', 'h:1']):
+                with self.subTest(extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit): script.main(base+extra)
         self.assertEqual(script.server('10.0.0.1:7000'), dict(host='10.0.0.1', port=7000))
 
     def test_a_failed_probe_dispatches_nothing(self):
@@ -812,7 +1016,7 @@ class ScriptTests(unittest.TestCase):
             root, run, d, lad = make_run(directory); wire = make_capture(Path(directory)/'wire')
             dead = socket.create_server(('127.0.0.1', 0)); port = dead.getsockname()[1]; dead.close()
             argv = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cpu-pair', '0', '1', '--cache-directory', directory,
-                    '--arm', 'DN2W8', '--server', f'127.0.0.1:{port}', '--probe-capture', str(wire)]
+                    '--search-arm', 'DN2W8', '--server', f'127.0.0.1:{port}', '--probe-capture', str(wire)]
             with patch.object(panel, 'dispatch', side_effect=AssertionError('must not dispatch')), self.assertRaisesRegex(ValueError, 'probe failed'):
                 script.main(argv)
             self.assertFalse((root/'claims').exists())
