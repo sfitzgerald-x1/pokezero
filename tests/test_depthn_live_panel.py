@@ -1065,6 +1065,21 @@ class ReadoutTests(unittest.TestCase):
         write_cell(self.root, cell, 'f'*64, score=1., rows=[decision_row(cell, 0, source='raw_arm')])
         with self.assertRaisesRegex(ValueError, 'foreign'): self.readout()
 
+    def test_non_home_above_one_percent_is_breakage(self):
+        populate(self.root, self.run, self.lad)
+        cells = panel.cells(self.lad, 'DN2W8', limit=500)
+        def stamp(cell, servers):
+            path = self.root/'telemetry'/f"{cell['ordinal']}.jsonl"; rows = [json.loads(x) for x in path.read_bytes().splitlines()]
+            for row, sid in zip(rows, servers): row['search']['server_id'] = sid
+            path.write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
+        for cell in cells: stamp(cell, ['a', 'a'])
+        self.assertNotIn('non_home', self.readout()['breakage'])
+        for cell in cells[:5]: stamp(cell, ['a', 'b'])   # 5 of 1000 answered: 0.5%
+        value = self.readout(); self.assertEqual(value['arms']['DN2W8']['decisions']['non_home']['decisions'], 5)
+        self.assertNotIn('non_home', value['breakage'])
+        for cell in cells[5:11]: stamp(cell, ['a', 'b'])   # 11 of 1000: 1.1%
+        self.assertIn('non_home', self.readout()['breakage'])
+
     def test_a_server_on_another_tree_is_breakage_and_both_commits_and_nodes_are_recorded(self):
         populate(self.root, self.run, self.lad)
         value = self.readout(nodes=dict(workers='node-w', servers='node-s'))
@@ -1126,6 +1141,23 @@ class DecisionSummaryTests(unittest.TestCase):
                     dict(rows[0], source='raw_arm'), dict(rows[0], schema='other'), dict(rows[3], request_kind='move'),
                     dict(rows[0], request_kind='forced'), dict(rows[4], request_kind='forced'), dict(rows[3], search=rows[0]['search'])):
             with self.assertRaises(ValueError): panel.decisions([bad], deadline=3.)
+
+    def test_non_home_decisions_are_tagged_counted_and_bounded(self):
+        cell = dict(arm='DN2W16', ordinal=1); rows = []
+        for i, (sid, source, cause, differs) in enumerate([('a', 'search', None, True), (None, 'greedy_fallback', 'timeout', None),
+                ('a', 'search', None, False), ('b', 'search', None, True), ('a', 'greedy_fallback', 'constructor_refused', None),
+                ('b', 'search', None, False)]):
+            row = decision_row(cell, i, source=source, cause=cause, differs=bool(differs))
+            if sid is not None: row['search']['server_id'] = sid
+            else: row['search']['client_refused'] = True
+            rows.append(row)
+        self.assertEqual(panel.non_home(rows), {('b1', 'p1', 3), ('b1', 'p1', 4), ('b1', 'p1', 5)})   # home a; b at 3 breaks it for the rest
+        value = panel.decisions(rows, deadline=3.)['non_home']
+        self.assertEqual((value['decisions'], value['answered'], value['share_of_answered']), (3, 5, .6))
+        self.assertEqual((value['constructor_refused_share'], value['override_rate']), (1/3, .5))
+        other = dict(rows[0], battle_id='b2'); other['search'] = dict(rows[0]['search'], server_id='c')
+        self.assertEqual(panel.non_home([other]), set())   # each battle has its own home
+        self.assertEqual(panel.decisions(rows[:3], deadline=3.)['non_home']['decisions'], 0)
 
     def test_latency_breaks_down_by_the_server_that_answered(self):
         cell = dict(arm='DN2W16', ordinal=1)
@@ -1709,6 +1741,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(value['code_tree']['commit'], panel.tree_identity()['commit'])
         with self.assertRaises(KeyError): panel.calibration_summary(self.root)['strata']['4x500ms']['preflight']   # pre-flight games never count
         self.assertEqual(panel.calibration_summary(self.root)['games'], dict(solo=0, concurrent=0))
+        self.assertEqual((search['non_home'], search['answered']), (0, 0))   # no server_id in these rows: nothing answered by a known server
         game(band[3], 'DN2W8', [2.7]*21, 'search', causes=('timeout',)*3); late = panel.preflight_summary(self.root)
         self.assertFalse(late['search_wall_within']); self.assertFalse(late['timeouts_within'])   # 3 of 42: over 1%
         self.assertEqual(late['arms']['DN2W8']['searched_share_of_non_timeouts'], 37/39)

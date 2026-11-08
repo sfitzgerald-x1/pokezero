@@ -101,6 +101,29 @@ PREFLIGHT_WALL_P95_MAX=2.6   # the lead's bound on the search arm's end-to-end d
 PREFLIGHT_TIMEOUT_SHARE_MAX=.01   # the lead's bound on the search arm's timeout share (of non-single-legal decisions)
 
 
+NON_HOME_SHARE_MAX=.01   # the lead's breakage bound: answered search decisions off their battle's home server
+
+
+def non_home(rows):
+    """Keys (battle_id, owner, decision_index) of answered decisions off their battle's home: per battle, in decision order, the home
+    is the first server (the response's server_id) that answered; a decision answered by another server, and every answered decision
+    of that battle after it, is non_home (its server's constructor session missed decisions: a path the gates never validated).
+    Unanswered decisions (no server_id) neither set nor break a home."""
+    battles={}
+    for r in rows:
+        x=r.get('search')if isinstance(r.get('search'),dict)else {};sid=x.get('server_id')
+        if type(sid)is str and sid and x.get('client_refused')is not True:
+            battles.setdefault((r.get('battle_id'),r.get('owner')),[]).append((r.get('decision_index'),sid))
+    out=set()
+    for (battle,owner),seen in battles.items():
+        home=None;broken=False
+        for index,sid in sorted(seen,key=lambda x:(x[0]if type(x[0])is int else -1)):
+            if home is None:home=sid
+            broken=broken or sid!=home
+            if broken:out.add((battle,owner,index))
+    return out
+
+
 def refusal_kind(text):
     """A refusal's kind: its text with numbers masked, first 120 characters (for counting kinds)."""
     import re
@@ -668,8 +691,10 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
         if not result.exists():continue
         value=json.loads(result.read_bytes())
         if value.get('setting')!='preflight':continue
-        arm=value.get('arm');rows=telemetry_rows(root,cell['ordinal'])
-        a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter(),kinds=Counter()));a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
+        arm=value.get('arm');rows=telemetry_rows(root,cell['ordinal']);off=non_home(rows)
+        a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter(),kinds=Counter(),non_home=0,answered=0));
+        a['non_home']+=len(off);a['answered']+=sum(1 for r in rows if type((r.get('search')or {}).get('server_id'))is str and (r.get('search')or {}).get('client_refused')is not True)
+        a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
         for r in rows:
             (a['first']if r.get('decision_index')==0 else a['warm']).append(r['select_seconds'])
             if r.get('decision_index')!=0:a['encode'].append(r['encode_seconds']);a['greedy'].append(r['greedy']['seconds'])
@@ -686,7 +711,8 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
             search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())),
             timeout_share=_share(a['causes']['timeout'],len(a['search'])),constructor_refused_share=_share(a['causes']['constructor_refused'],len(a['search'])),
             searched_share_of_non_timeouts=_share(len(a['search'])-sum(a['causes'].values()),len(a['search'])-a['causes']['timeout']),
-            constructor_refusal_kinds=dict(a['kinds'].most_common(10)))
+            constructor_refusal_kinds=dict(a['kinds'].most_common(10)),non_home=a['non_home'],answered=a['answered'],
+            non_home_share=_share(a['non_home'],a['answered']))
     if len(conditions)!=1:raise ValueError(f'one search arm, deadline and reserve per pre-flight required, found {sorted(conditions)}')
     (arm,deadline,reserve),=conditions
     walls=[out[a]['search_wall']for a in out if a in SEARCH_ARMS and out[a]['search_wall']]
@@ -1170,6 +1196,14 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
             wrong_precision+=precision is not None and (search.get('pricer')if isinstance(search.get('pricer'),dict)else {}).get('matmul_precision')!=precision
             for name in provenance:
                 value=search.get(name);provenance[name][value if type(value)is not dict else encoded(value).decode()]+=1
+    off=non_home(rows);answered=nh=nh_refused=nh_searched=nh_differs=0
+    for row in rows:
+        x=row.get('search')if isinstance(row.get('search'),dict)else {}
+        if type(x.get('server_id'))is not str or x.get('client_refused')is True:continue
+        answered+=1
+        if (row.get('battle_id'),row.get('owner'),row.get('decision_index'))in off:
+            nh+=1;nh_refused+=row.get('cause')=='constructor_refused'
+            if row.get('source')=='search':nh_searched+=1;nh_differs+=row.get('search_differs')is True
     n=len(seen);searched=sources['search'];eligible=n-sources['single_legal']
     return dict(decisions=n,eligible_decisions=eligible,by_source=dict(sources),searched_share=_share(searched,eligible),
         fallback_share=_share(sources['greedy_fallback'],eligible),
@@ -1184,6 +1218,8 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
         late_decisions=late,deadline_seconds=deadline,
         provenance={k:sorted(map(str,v))for k,v in provenance.items()},
         constructor_refusal_kinds=dict(kinds_refused.most_common(10)),
+        non_home=dict(decisions=nh,answered=answered,share_of_answered=_share(nh,answered),constructor_refused_share=_share(nh_refused,nh),
+            override_rate=_share(nh_differs,nh_searched),max_share=NON_HOME_SHARE_MAX),
         by_server={k:dict(responses=sum(v['statuses'].values()),statuses=dict(sorted(v['statuses'].items())),
             latency={t:_quantiles(v[t])for t in ('select','client','server_wall')})for k,v in sorted(servers.items())})
 
@@ -1345,6 +1381,7 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
     if any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']]):breakage.append('search_provenance')
     servers=dict(server_tree_check(d['server_tree_commit'],tree['commit'],run['declaration']),observed=origin['tree_commit'])
     if not servers['ok']or origin['tree_commit']not in ([],[d['server_tree_commit']]):breakage.append('server_tree')
+    if (search['non_home']['share_of_answered']or 0.)>NON_HOME_SHARE_MAX:breakage.append('non_home')   # routing not holding
     if search['wrong_worlds']:breakage.append('requested_worlds')
     if search['wrong_archive']:breakage.append('archive')
     if search['wrong_precision']:breakage.append('matmul_precision')
