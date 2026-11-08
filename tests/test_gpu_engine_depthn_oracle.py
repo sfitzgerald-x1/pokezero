@@ -2947,6 +2947,388 @@ class DeclaredBoundsTests(FixtureN, unittest.TestCase):
         self.assertIsNone(gate.parse(['--out', 'o', '--d3-root', 'b', '--chunk', '0'])[1].declared_bounds)
 
 
+# ---------------------------------------------------------------- --reverdict on a saved n2-equivalence.json
+
+N2_CHAMPION = dict(override=True, kind='champion', archive_sha256=DECLARED_ARCHIVE, precision='bfloat16', checkpoint_sha256=DECLARED_CHECKPOINT)   # CHAMPION_FLAGS' header
+
+
+def n2_saved(per_config, *, declared=None, evaluator=None):
+    """An n2-equivalence.json as run_n2 writes it (its keys, header, options and statuses) from summarize_n2 on `per_config` ({'full_width' |
+    'top{k}': [call]}) under `declared`, JSON round-tripped: calls carrying the merged (e) stand for the champion path (the header's
+    merged_depth2_parity, each Depth2Pricer's evaluator), calls carrying child-block invariance name the child blocks in options."""
+    configs = gate.summarize_n2(per_config, declared=declared);status = gate.n2_run_status(configs)
+    section = None if declared is None else gate.declared_section(declared, evaluator)
+    merged = any('e_merged' in x for calls in per_config.values() for x in calls);blocks = any('invariance' in x for calls in per_config.values() for x in calls)
+    options = {name: dict(k=9 if name == 'full_width' else int(name[3:]), depth2_options=dict(digest=True, **(dict(evaluator=dict(kind='champion')) if merged else {})),
+        **(dict(child_blocks=[27, 81]) if 'block_invariance' in c else {})) for name, c in configs.items()}
+    parity = gate.merged_depth2_parity('n2_equivalence', child_block_invariance=blocks) if merged else None
+    report = dict(evaluator=evaluator or dict(override=False), value_scale={}, source=dict(fixture=True), header=gate.header_block(configs=configs, declared=section, parity=parity),
+        schema=gate.SCHEMA, mode=gate.N2_MODE, status=status, passed=status == 'PASS', configs=configs, options=options, split_capacity=32, block_seeds=[0],
+        **({} if declared is None else dict(status_reasons=gate.provisional_reasons(declared['git_verification'], declared['source_measurement_verification']))),
+        rule='per config (run_n2)')
+    return json.loads(json.dumps(report, allow_nan=False, default=str))
+
+
+def n2_reverdicted(report, *extra, repo=None):
+    """(exit code or the SystemExit text, n2-equivalence-reverdict.json or None, log lines, path) of --reverdict (and `extra`) on `report`
+    written as n2-equivalence.json to a new directory, `repo` (default: this checkout) the checkout git verifies against."""
+    directory = Path(tempfile.mkdtemp(prefix='depthn-n2-reverdict-'));path = directory / gate.N2_FILE;path.write_text(json.dumps(report));lines = []
+    with patch.object(gate, 'log', lambda message, **values: lines.append(dict(values, message=message))), patch.object(gate, 'REPO_ROOT', repo or gate.REPO_ROOT):
+        try:code = gate.main(['--reverdict', str(path), *extra])
+        except SystemExit as raised:return str(raised.code), None, lines, path
+    return code, json.loads((directory / gate.N2_REVERDICT_FILE).read_text()), lines, path
+
+
+def measured_declaration(**changes):
+    """declaration() for the champion N2_CHAMPION names (its checkpoint pinned) with a readable source measurement, changes applied."""
+    measurement = Path(tempfile.mkdtemp(prefix='depthn-measure-')) / 'spread.json';measurement.write_bytes(b'{"spread": 0.003}\n')
+    return declaration(**dict(dict(evaluator=dict(declaration()['evaluator'], checkpoint_sha256=DECLARED_CHECKPOINT),
+        source_measurement=dict(path=str(measurement), sha256=hashlib.sha256(measurement.read_bytes()).hexdigest())), **changes))
+
+
+class N2ReverdictTests(FixtureN, unittest.TestCase):
+    """--reverdict on a saved n2-equivalence.json (reverdict_n2): the audit of a declared report written where git could not verify its record
+    (provisional) clears it on the work tree holding the commit; every saved verdict is re-judged from its own numbers and a disagreement, a
+    bound off the declaration or the live path's, or a guard mode the saved evidence does not support is refused; the saved statuses are
+    re-derived (a FAIL stays FAIL, an inconsistent one is corrected and recorded, as the gate path re-derives its status); a report without a
+    declaration is judged under the frozen rule from each config's own floor. The gate path's reverdict tests above are unchanged."""
+    _n2_frame = GateNTests._n2_frame
+    main, roots = CommandLineRunTests.main, CommandLineRunTests.roots
+
+    def call(self, *, values=.006, invariance=True, actors=1):
+        """One --n2-equivalence call's results as n2_equivalence_call records them: the stand-in N=2 frame against a copy whose expanded turn-1
+        values and head-valued leaves are `values` off (.006: beyond the guard .005, within the value bound .008), (e) and the merged (e)
+        through depth2_backups, the synthetic floor FLOOR and spreads SPREAD, `actors` parameter sets, the per-position covers and child-block
+        invariance against the copy."""
+        frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame);t1s, t2s = np.asarray(other.t1_status), np.asarray(other.t2_status)
+        other.t1_value[t1s == 2] += np.float32(values);other.t2_value[t2s == 4] += np.float32(values)
+        found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
+        return dict(a=found, floats=floats, c=dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.])), e=e, e_merged=copy.deepcopy(e), spreads=[SPREAD] * 10,
+            cover=gate.n2_cover(frame, other), actors=actors, **(dict(invariance=[gate.g2.block_invariance(frame, other)], invariance_cover=[gate.invariance_cover(frame, other)])
+                if invariance else {}))
+
+    def declared_report(self, *, numbers=None, **call):
+        """(report, record, audit arguments) of a declared run on the champion as a pod without git writes it: the declaration (default: value
+        .008, turn-1 logits .1, near-tie Q .009, root logits .05) committed in a scratch repository with a readable source measurement, and
+        git_verification 'not verifiable here' in the run's record (provisional)."""
+        record = committed(measured_declaration(bounds=numbers or bounds(near_tie_q_bound=.009, root_logit_bound=.05)))
+        d = dict(load(record), git_verification=dict(status='not verifiable here', detail='/work/gate is not the top of a git work tree'))
+        report = n2_saved({'full_width': [self.call(**call)], 'top2': [self.call(**call)]}, declared=d, evaluator=N2_CHAMPION)
+        return report, record, ('--declared-bounds-commit', record.commit, '--declared-bounds-sha256', record.sha256)
+
+    def test_a_declared_report_audits_on_the_work_tree_holding_its_commit(self):
+        """The provisional PASS (guards digest-certified, the root prior at its declared bound, (e)'s q_noise_bound the near-tie Q bound): the
+        audit re-judges it PASS with git and the source measurement verified and no reason left, every config and the header as saved, written
+        beside it and never overwritten; on a checkout without git --reverdict alone keeps the reason and the audit refuses."""
+        report, record, audit = self.declared_report();top = report['configs']['top2']
+        self.assertEqual((report['status'], [c['status'] for c in report['configs'].values()]), ('PASS', ['PASS', 'PASS']))
+        self.assertEqual(len(report['status_reasons']), 1);self.assertTrue(report['status_reasons'][0].startswith('provisional: git_verification not verifiable here'))
+        self.assertEqual(top['tolerance']['guard_declared']['modes'], dict.fromkeys(('floats.t1_value', 'floats.t2_value', 'block_invariance.t1_value',
+            'block_invariance.t2_value'), 'digest_certified'))
+        self.assertEqual((top['floats']['root_peer_logits']['bound'], top['floats']['root_peer_logits']['bound_rule'], top['e']['q_noise_bound'], top['e_merged_depth2']['q_noise_bound']),
+            (.05, 'declared_root_logit_bound', .009, .009))
+        code, out, lines, path = n2_reverdicted(report, *audit, repo=record.root);rv = out['reverdict']
+        self.assertEqual((code, out['status'], out['passed'], out['status_reasons']), (0, 'PASS', True, []))
+        self.assertEqual((rv['source_status'], rv['source_status_reasons'], rv['configs'], rv['changed']), ('PASS', report['status_reasons'], dict(full_width='PASS', top2='PASS'), []))
+        self.assertEqual((rv['declared_bounds_sha256'], rv['declared_bounds_commit'], rv['declared_bounds_reverified']['git']['status'],
+            rv['declared_bounds_reverified']['source_measurement']['status']), (record.sha256, record.commit, 'verified', 'verified'))
+        self.assertIn('nothing was re-priced', rv['note']);self.assertEqual(rv['rule'], gate.N2_REVERDICT_RULE)
+        self.assertEqual((out['configs'], out['header']), (report['configs'], report['header']))   # every saved verdict re-derived as saved
+        self.assertEqual(list(out)[:4], ['evaluator', 'value_scale', 'source', 'header'])
+        line = next(x for x in lines if x['message'] == 'REVERDICT')
+        self.assertEqual((line['old_status'], line['new_status'], line['status_reasons'], line['changed'], line['out']), ('PASS', 'PASS', [], [], str(path.with_name(gate.N2_REVERDICT_FILE))))
+        before = path.with_name(gate.N2_REVERDICT_FILE).read_bytes()
+        with patch.object(gate, 'log', lambda *a, **k: None), patch.object(gate, 'REPO_ROOT', record.root), self.assertRaises(SystemExit) as raised:
+            gate.main(['--reverdict', str(path), *audit])
+        self.assertIn('never overwritten', str(raised.exception.code));self.assertEqual(path.with_name(gate.N2_REVERDICT_FILE).read_bytes(), before)
+        exported = Path(tempfile.mkdtemp(prefix='depthn-exported-'))   # a checkout that is not a git work tree
+        code, out, _, _ = n2_reverdicted(report, repo=exported)
+        self.assertEqual((code, out['status'], len(out['status_reasons'])), (0, 'PASS', 1));self.assertTrue(out['status_reasons'][0].startswith('provisional: git_verification'))
+        text, out, _, path = n2_reverdicted(report, *audit, repo=exported)
+        self.assertIsNone(out);self.assertIn('requires git_verification verified', text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+
+    def test_the_audit_refuses_what_the_saved_numbers_or_the_record_do_not_support(self):
+        """Each edit of the declared report (or a commit / sha256 given that is not the recorded one) is refused and nothing is written: the
+        declaration's text and sections, a config's tolerance off the declaration, a bound off the live path's, a verdict off its own numbers,
+        a guard mode the saved digest findings or per-position evidence do not support, an (e) whose passed its numbers contradict; a field the
+        verdict needs, missing."""
+        report, record, audit = self.declared_report();h = lambda r: r['header']['declared_bounds'];top = lambda r: r['configs']['top2']
+        def stripped(r):
+            r['header'].pop('declared_bounds')
+            for c in r['configs'].values():c['tolerance'].pop('declared_bounds')
+        def evidence(section, **values):
+            return lambda r: [m['guard_evidence'].update(values) for m in top(r)[section].values() if 'guard_evidence' in m]
+        cases = dict(
+            other_commit=(None, ('--declared-bounds-commit', 'b' * 40), 'is not the recorded'), other_sha=(None, ('--declared-bounds-sha256', '0' * 64), 'is not the recorded'),
+            content_text=(lambda r: h(r).__setitem__('content_text', h(r)['content_text'].replace('0.008', '0.5')), audit, 'does not hash'),
+            header=(lambda r: r['header'].pop('declared_bounds'), audit, 'configs.top2.tolerance.declared_bounds without header.declared_bounds'),
+            stripped=(stripped, (), 'left traces'), evaluator=(lambda r: r['evaluator'].__setitem__('archive_sha256', '6' * 64), audit, 'evaluator.archive_sha256'),
+            config_value_bound=(lambda r: top(r)['tolerance'].__setitem__('value_bound', .5), audit, 'configs.top2.tolerance value_bound / logit_bound [0.5, 0.1]'),
+            config_root_bound=(lambda r: top(r)['tolerance'].pop('root_logit_bound'), audit, 'configs.top2.tolerance.root_logit_bound None'),
+            config_sha=(lambda r: top(r)['tolerance']['declared_bounds'].__setitem__('sha256', '0' * 64), audit, 'configs.top2.tolerance.declared_bounds does not name'),
+            q_noise_bound=(lambda r: top(r)['tolerance'].__setitem__('q_noise_bound', .008), audit, 'configs.top2.tolerance.q_noise_bound 0.008 is not 0.009'),
+            e_q_noise_bound=(lambda r: top(r)['e_merged_depth2'].__setitem__('q_noise_bound', .008), audit, 'configs.top2.e_merged_depth2.q_noise_bound'),
+            float_bound=(lambda r: top(r)['floats']['t1_own_logits'].__setitem__('bound', .2), audit, "configs.top2.floats.t1_own_logits: bound, guard_bound, bound_rule"),
+            root_rule=(lambda r: top(r)['block_invariance']['floats']['root_peer_logits'].pop('bound_rule'), audit, "are not the live path's [0.05, None, 'declared_root_logit_bound']"),
+            guard_bound=(lambda r: top(r)['floats']['t2_value'].__setitem__('guard_bound', .007), audit, 'configs.top2.floats.t2_value: bound, guard_bound'),
+            within_bound=(lambda r: top(r)['floats']['t2_value'].__setitem__('within_bound', False), audit, 'disagree with their own numbers'),
+            within_guard=(lambda r: top(r)['floats']['t1_value'].__setitem__('within_guard', True), audit, 'disagree with their own numbers'),
+            raised_max=(lambda r: top(r)['block_invariance']['floats']['t2_value'].__setitem__('max_abs_difference', .5), audit, 'disagree with their own numbers'),
+            float_passed=(lambda r: top(r)['floats']['t1_own_logits'].__setitem__('passed', False), audit, 'configs.top2.floats.t1_own_logits: passed False, re-derived True'),
+            digest_mismatch=(lambda r: (top(r)['discrete']['mismatched'].__setitem__('t2_digest', 1), top(r)['discrete']['first_mismatches'].append(dict(field='t2_digest',
+                cell=[0, 0, 0, 0, 0, 0], pricer=[1, 0], oracle=[0, 0]))), audit, "configs.top2.floats.t2_value: saved 'digest_certified', re-derived 'gated'"),
+            inexact_outside=(lambda r: top(r)['floats']['t1_value']['guard_evidence'].__setitem__('value_positions_outside_digest_inexact', 1), audit, 'saved guard modes differ'),
+            invariance_digest=(lambda r: top(r)['block_invariance']['floats']['t2_value']['guard_evidence'].__setitem__('digest_mismatched', 1), audit, 'saved guard modes differ'),
+            two_actors=(evidence('floats', evaluator_actors=2), audit, 'saved guard modes differ'), mode_gated=(lambda r: top(r)['floats']['t2_value'].__setitem__('guard_mode', 'gated'), audit,
+                'saved guard modes differ'),
+            record_gated=(lambda r: top(r)['tolerance']['guard_declared']['modes'].__setitem__('floats.t2_value', 'gated'), audit, 'configs.top2.tolerance.guard_declared.modes'),
+            e_passed=(lambda r: top(r)['e'].__setitem__('max_abs_delta_q', .02), audit, 'configs.top2.e: passed True, q_noise_within_bound True; re-derived False, False'),
+            merged_passed=(lambda r: top(r)['e_merged_depth2'].__setitem__('argmax_q_differs_non_tie', 1), audit, 'configs.top2.e_merged_depth2: passed True'),
+            # decision_passed clause by clause: each count that fails (e), with passed left true; a record without gating; the within flag alone
+            unmatched=(lambda r: top(r)['e_merged_depth2']['replaced'].__setitem__('unmatched_head_leaves', 1), audit, 'configs.top2.e_merged_depth2: passed True, '
+                'q_noise_within_bound True; re-derived False, True'),
+            status_differs=(lambda r: top(r)['e'].__setitem__('status_differs', 1), audit, 'configs.top2.e: passed True, q_noise_within_bound True; re-derived False, True'),
+            nonfinite=(lambda r: top(r)['e_merged_depth2'].__setitem__('nonfinite_roots', 1), audit, 'configs.top2.e_merged_depth2: passed True, q_noise_within_bound True; '
+                're-derived False, True'),
+            target_flip=(lambda r: top(r)['e'].__setitem__('argmax_target_differs_non_tie', 1), audit, 'configs.top2.e: passed True, q_noise_within_bound True; re-derived False'),
+            no_gating=(lambda r: top(r)['e'].pop('gating'), audit, 'configs.top2.e: passed True, q_noise_within_bound True; re-derived False, None'),
+            within_flag=(lambda r: top(r)['e'].__setitem__('q_noise_within_bound', False), audit, 'configs.top2.e: passed True, q_noise_within_bound False; re-derived True, True'),
+            # the aggregates the saved records determine
+            listed_mismatch=(lambda r: top(r)['discrete']['first_mismatches'].append(dict(field='t2_status', cell=[0], pricer=1, oracle=2)), audit,
+                "configs.top2.discrete: first_mismatches list ['t2_status'] against mismatched counts 0"),
+            discrete_equal=(lambda r: top(r)['block_invariance'].__setitem__('discrete_equal', False), audit, 'configs.top2.block_invariance.discrete_equal False but differing records []'),
+            differing_hidden=(lambda r: top(r)['block_invariance'].update(differing=dict(t2_status=dict(count=3, size=100)), first_differences=[dict(field='t2_status', cell=[0])]),
+                audit, "configs.top2.block_invariance.discrete_equal True but differing records ['t2_status']"),
+            differing_unlisted=(lambda r: top(r)['block_invariance'].update(differing=dict(t2_status=dict(count=3, size=100)), discrete_equal=False, passed=False), audit,
+                'configs.top2.block_invariance: first_differences against differing counts'),
+            world_flag=(lambda r: top(r).__setitem__('world_reports_first_difference', dict(root=0, depth2=None, depthn={'reason': 'x'})), audit,
+                'configs.top2.world_reports_equal True with world_reports_first_difference recorded'),
+            world_converse=(lambda r: top(r).__setitem__('world_reports_equal', False), audit, 'configs.top2.world_reports_equal False with world_reports_first_difference null'),
+            # the guard number: GUARD_FACTOR x the saved p10 (g2.tolerance_rule, guard_note), and the p10 None iff no spread is non-zero
+            guard_number=(lambda r: top(r)['tolerance'].__setitem__('guard_bound', .05), audit, 'configs.top2.tolerance guard_bound, guard [0.05, \'applied\'] are not the live path'),
+            p10=(lambda r: top(r)['tolerance'].__setitem__('p10_cell_a2_spread', 1.), audit, 'configs.top2.tolerance guard_bound, guard'),
+            p10_nulled=(lambda r: top(r)['tolerance'].update(p10_cell_a2_spread=None, guard_bound=None, guard=gate.guard_note(dict(guard_bound=None), top(r)['tolerance']['spread'])['guard']),
+                audit, 'configs.top2.tolerance.p10_cell_a2_spread None with spread.nonzero 10'))
+        for case, (change, extra, message) in cases.items():
+            with self.subTest(case):
+                r = copy.deepcopy(report)
+                if change is not None:change(r)
+                text, out, _, path = n2_reverdicted(r, *extra, repo=record.root)
+                self.assertIsNone(out, case);self.assertIn(message, text);self.assertIn('fail closed', text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+        def drop(*keys):
+            def change(r):
+                node = r
+                for key in keys[:-1]:node = node[key]
+                node.pop(keys[-1])
+            return change
+        missing = dict(within_bound=(drop('configs', 'top2', 'floats', 't2_value', 'within_bound'), 'configs.top2.floats.t2_value.within_bound'),
+            within_guard=(drop('configs', 'top2', 'block_invariance', 'floats', 't1_value', 'within_guard'), 'configs.top2.block_invariance.floats.t1_value.within_guard'),
+            max_dq=(drop('configs', 'full_width', 'e', 'max_abs_delta_q'), 'configs.full_width.e.max_abs_delta_q (a number)'),
+            q_noise_bound=(drop('configs', 'top2', 'tolerance', 'q_noise_bound'), 'configs.top2.tolerance.q_noise_bound (a number)'),
+            mismatched=(drop('configs', 'top2', 'discrete', 'mismatched'), 'configs.top2.discrete.mismatched (a JSON object)'),
+            discrete_equal=(drop('configs', 'top2', 'block_invariance', 'discrete_equal'), 'configs.top2.block_invariance.discrete_equal'),
+            world_reports=(lambda r: top(r).__setitem__('world_reports_equal', 'yes'), 'configs.top2.world_reports_equal (true or false)'),
+            digest_count=(lambda r: top(r)['discrete']['compared'].__setitem__('t1_digest_own', '9'), 'configs.top2.discrete.compared (counts)'),
+            evidence_count=(lambda r: top(r)['floats']['t1_value']['guard_evidence'].__setitem__('value_positions_outside_digest', 'none'),
+                'configs.top2.floats.t1_value.guard_evidence.value_positions_outside_digest (an integer or null)'),
+            differing=(lambda r: top(r)['block_invariance'].__setitem__('differing', dict(t2_digest=dict(count='1'))), 'configs.top2.block_invariance.differing'),
+            not_an_object=(lambda r: r['configs'].__setitem__('top2', [1]), 'configs.top2 (a JSON object)'),
+            unmatched_key=(drop('configs', 'top2', 'e', 'replaced', 'unmatched_head_leaves'), 'configs.top2.e.replaced.unmatched_head_leaves (an integer)'),
+            merged_section=(drop('configs', 'full_width', 'e_merged_depth2'), 'configs.full_width.e_merged_depth2 (the merged (e) ran: header.merged_depth2_parity)'),
+            merged_by_options=(lambda r: (drop('configs', 'full_width', 'e_merged_depth2')(r), r['header'].pop('merged_depth2_parity')), 'configs.full_width.e_merged_depth2'),
+            champion_all_three=(lambda r: (r['header'].pop('merged_depth2_parity'), [(c.pop('e_merged_depth2'), r['options'][n]['depth2_options'].pop('evaluator'))
+                for n, c in r['configs'].items()]), 'header.merged_depth2_parity (a champion report: run_n2 ran the merged (e))'),
+            champion_parity=(drop('header', 'merged_depth2_parity'), 'header.merged_depth2_parity (a champion report'),
+            champion_option=(drop('options', 'top2', 'depth2_options', 'evaluator'), 'options.top2.depth2_options.evaluator (a champion report'),
+            invariance_section=(drop('configs', 'top2', 'block_invariance'), 'configs.top2.block_invariance (child-block invariance ran: options.top2.child_blocks)'),
+            n2_float=(drop('configs', 'top2', 'floats', 't1_own_logits'), 'configs.top2.floats.t1_own_logits (n2_compare compares it'),
+            invariance_float=(drop('configs', 'top2', 'block_invariance', 'floats', 'root_peer_logits'), 'configs.top2.block_invariance.floats.root_peer_logits (block invariance'),
+            first_difference=(drop('configs', 'top2', 'world_reports_first_difference'), 'configs.top2.world_reports_first_difference'),
+            spread=(drop('configs', 'top2', 'tolerance', 'spread'), 'configs.top2.tolerance.spread (a JSON object)'),
+            options=(drop('options'), 'options (per config: a JSON object)'),
+            configs=(drop('configs'), 'configs'), schema=(lambda r: r.__setitem__('schema', 'v0'), 'schema'))
+        for case, (change, message) in missing.items():
+            with self.subTest(case):
+                r = copy.deepcopy(report);change(r);text, out, _, path = n2_reverdicted(r, *audit, repo=record.root)
+                self.assertIsNone(out, case);self.assertIn('lacks what the verdict needs', text);self.assertIn(message, text)
+                self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+
+    def test_the_saved_statuses_are_rederived(self):
+        """A saved FAIL (values .012 off, beyond the value bound) stays FAIL with nothing changed. A saved status that its own parts contradict is
+        re-derived from them (n2_status, n2_run_status) as the gate path re-derives its status, the saved one kept as source_status and each
+        differing field listed in `changed`: a config saved FAIL whose parts all pass is PASS, a mismatch count under a saved PASS fails the
+        config (discrete.passed re-derived), an (e) that compared no root makes it INCOMPLETE."""
+        failing, record, audit = self.declared_report(values=.012);top = failing['configs']['top2']
+        self.assertEqual((failing['status'], top['status'], top['floats']['t2_value']['within_bound'], top['floats']['t2_value']['guard_mode']), ('FAIL', 'FAIL', False, 'digest_certified'))
+        code, out, _, _ = n2_reverdicted(failing, *audit, repo=record.root)
+        self.assertEqual((code, out['status'], out['reverdict']['configs'], out['reverdict']['changed'], out['status_reasons']), (1, 'FAIL', dict(full_width='FAIL', top2='FAIL'), [], []))
+        self.assertEqual(out['configs'], failing['configs'])
+        report, record, audit = self.declared_report()
+        def edited(change):
+            r = copy.deepcopy(report);change(r);return n2_reverdicted(r, *audit, repo=record.root)
+        code, out, lines, _ = edited(lambda r: (r['configs']['top2'].update(status='FAIL', passed=False), r.update(status='FAIL', passed=False)))
+        self.assertEqual((code, out['status'], out['configs']['top2']['status'], out['reverdict']['source_status'], out['reverdict']['source_configs']['top2']),
+            (0, 'PASS', 'PASS', 'FAIL', 'FAIL'))
+        self.assertEqual(out['reverdict']['changed'], [dict(config='top2', field='status', before='FAIL', after='PASS'), dict(config='top2', field='passed', before=False, after=True)])
+        self.assertEqual(next(x for x in lines if x['message'] == 'REVERDICT')['changed'], out['reverdict']['changed'])
+        code, out, _, _ = edited(lambda r: (r['configs']['full_width']['discrete']['mismatched'].__setitem__('t1_status', 1),
+            r['configs']['full_width']['discrete']['first_mismatches'].append(dict(field='t1_status', cell=[0, 0, 0, 0], pricer=1, oracle=2))))
+        self.assertEqual((code, out['status'], out['reverdict']['configs'], out['configs']['full_width']['discrete']['passed']), (1, 'FAIL', dict(full_width='FAIL', top2='PASS'), False))
+        self.assertEqual([(c['field'], c['before'], c['after']) for c in out['reverdict']['changed']],
+            [('status', 'PASS', 'FAIL'), ('passed', True, False), ('discrete.passed', True, False)])
+        code, out, _, _ = edited(lambda r: r['configs']['top2']['e'].__setitem__('roots_compared', 0))
+        self.assertEqual((code, out['status'], out['configs']['top2']['status'], out['configs']['top2']['status_reasons']), (1, 'INCOMPLETE', 'INCOMPLETE', ['(e) compared no root']))
+
+    def test_a_report_without_a_declaration_is_judged_under_the_frozen_rule(self):
+        """No declaration: each config's numbers must be the frozen rule's from its own floor (value bound 2 x FLOOR, LOGIT_BOUND, q_noise_bound
+        the value bound, the floats' bounds their class's) and no trace of a declaration may remain; then it is re-judged as saved (PASS within
+        the guard, FAIL beyond it: the frozen rule gates the guard); a pre-registration record given for it is refused."""
+        report = n2_saved({'full_width': [self.call(values=.002)], 'top2': [self.call(values=.002)]})
+        self.assertEqual((report['status'], report['configs']['top2']['tolerance']['value_bound'], 'status_reasons' in report), ('PASS', 2 * float(np.float32(FLOOR)), False))
+        code, out, _, _ = n2_reverdicted(report)
+        self.assertEqual((code, out['status'], out['status_reasons'], out['reverdict']['changed'], out['configs']), (0, 'PASS', [], [], report['configs']))
+        self.assertFalse(any(k.startswith('declared') for k in out['reverdict']));self.assertNotIn('declared_bounds', out['header'])
+        frozen = n2_saved({'full_width': [self.call()], 'top2': [self.call()]});code, out, _, _ = n2_reverdicted(frozen)   # .006: beyond the guard, which the frozen rule gates
+        self.assertEqual((code, out['status'], {q for q, m in out['configs']['top2']['floats'].items() if not m['passed']}), (1, 'FAIL', {'t1_value', 't2_value'}))
+        text, out, _, _ = n2_reverdicted(report, '--declared-bounds-commit', 'b' * 40);self.assertIsNone(out);self.assertIn('records no declaration', text)
+        top = lambda r: r['configs']['top2']
+        cases = dict(value_bound=(lambda r: top(r)['tolerance'].__setitem__('value_bound', .05), "configs.top2.tolerance.value_bound 0.05 is not the frozen rule's"),
+            no_floor=(lambda r: top(r)['tolerance'].__setitem__('depth1_noise_floor', None), "not the frozen rule's 0.0001"),
+            logit_bound=(lambda r: top(r)['tolerance'].__setitem__('logit_bound', .15), 'configs.top2.tolerance.logit_bound 0.15 is not LOGIT_BOUND'),
+            rule_text=(lambda r: top(r)['tolerance'].__setitem__('rule', gate.DECLARED_TOLERANCE_RULE), 'left traces'),
+            frozen_record=(lambda r: top(r)['tolerance'].__setitem__('frozen_rule', {}), 'configs.top2.tolerance.frozen_rule'),
+            bound_rule=(lambda r: top(r)['floats']['root_peer_logits'].__setitem__('bound_rule', 'declared_root_logit_bound'), 'configs.top2.floats.root_peer_logits.bound_rule'),
+            guard_mode=(lambda r: top(r)['block_invariance']['floats']['t1_value'].__setitem__('guard_mode', 'digest_certified'), 'block_invariance.floats.t1_value.guard_mode'),
+            reverdict_of_one=(lambda r: r.__setitem__('reverdict', dict(declared_bounds_sha256='a' * 64)), 'reverdict.declared_bounds_sha256'),
+            q_noise_bound=(lambda r: top(r)['tolerance'].__setitem__('q_noise_bound', .009), 'configs.top2.tolerance.q_noise_bound 0.009 is not'),
+            float_bound=(lambda r: top(r)['floats']['t1_own_logits'].__setitem__('bound', .15), "live path's [0.1, None, None]"),
+            invariance_bound=(lambda r: top(r)['block_invariance']['floats']['t2_value'].__setitem__('bound', .05), 'configs.top2.block_invariance.floats.t2_value'))
+        for case, (change, message) in cases.items():
+            with self.subTest(case):
+                r = copy.deepcopy(report);change(r);text, out, _, path = n2_reverdicted(r)
+                self.assertIsNone(out, case);self.assertIn(message, text);self.assertIn('fail closed', text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+
+    def test_a_failure_cannot_be_hidden_by_dropping_or_editing_what_records_it(self):
+        """Each genuine failure (the merged (e), child-block invariance's discrete arrays, the world reports) re-judges FAIL with nothing changed.
+        Dropping the section that records it, or editing one record against another, with every status reset to PASS, is refused and writes
+        nothing: the merged (e) (header.merged_depth2_parity), block invariance (options' child_blocks), discrete_equal against differing,
+        world_reports_equal against its first difference; so is dropping a float, a config (with or without its option), renaming one or adding a
+        float n2_compare never writes. A float absent where a :shape mismatch is recorded is no omission: the config FAILs on the mismatch."""
+        report, record, audit = self.declared_report()
+        def failed(kind):
+            def change(r):
+                c = r['configs']['full_width' if kind == 'merged' else 'top2']
+                if kind == 'merged':c['e_merged_depth2'].update(argmax_q_differs_non_tie=1, argmax_q_differs=1, passed=False)
+                if kind == 'invariance':c['block_invariance'].update(differing=dict(t2_status=dict(count=3, size=100)), first_differences=[dict(field='t2_status', cell=[0])],
+                    discrete_equal=False, passed=False)
+                if kind == 'world':c.update(world_reports_equal=False, world_reports_first_difference=dict(root=5, depth2={'a': 1}, depthn={'a': 2}))
+                c.update(status='FAIL', passed=False);r.update(status='FAIL', passed=False)
+            return change
+        def unpassed(r):
+            for c in r['configs'].values():c.update(status='PASS', passed=True)
+            r.update(status='PASS', passed=True)
+        for kind in ('merged', 'invariance', 'world'):
+            with self.subTest(genuine=kind):
+                r = copy.deepcopy(report);failed(kind)(r);code, out, _, _ = n2_reverdicted(r, *audit, repo=record.root)
+                self.assertEqual((code, out['status'], out['reverdict']['changed']), (1, 'FAIL', []))
+        top = lambda r: r['configs']['top2']
+        forged = dict(
+            merged_dropped=(lambda r: (failed('merged')(r), r['configs']['full_width'].pop('e_merged_depth2'), unpassed(r)), 'lacks what the verdict needs: configs.full_width.e_merged_depth2'),
+            invariance_dropped=(lambda r: (failed('invariance')(r), top(r).pop('block_invariance'), unpassed(r)), 'lacks what the verdict needs: configs.top2.block_invariance'),
+            discrete_equal_flipped=(lambda r: (failed('invariance')(r), top(r)['block_invariance'].update(discrete_equal=True), unpassed(r)), 'discrete_equal True but differing'),
+            world_flag_flipped=(lambda r: (failed('world')(r), top(r).update(world_reports_equal=True), unpassed(r)), 'world_reports_equal True with world_reports_first_difference recorded'),
+            float_dropped=(lambda r: top(r)['floats'].pop('t1_own_logits'), 'lacks what the verdict needs: configs.top2.floats.t1_own_logits'),
+            config_dropped=(lambda r: r['configs'].pop('top2'), "as run_n2 writes it (fail closed): configs ['full_width'] are not the configs options names"),
+            config_and_option_dropped=(lambda r: (r['configs'].pop('top2'), r['options'].pop('top2')), 'run_n2 writes full_width (options k 9) and top{k}'),
+            renamed=(lambda r: (r['configs'].__setitem__('top3', r['configs'].pop('top2')), r['options'].__setitem__('top3', r['options'].pop('top2'))), 'run_n2 writes full_width'),
+            unknown_float=(lambda r: top(r)['floats'].__setitem__('t9_value', dict(top(r)['floats']['t1_own_logits'])), "configs.top2.floats.t9_value: not one of n2_compare's floats"))
+        for case, (change, message) in forged.items():
+            with self.subTest(case):
+                r = copy.deepcopy(report);change(r);text, out, _, path = n2_reverdicted(r, *audit, repo=record.root)
+                self.assertIsNone(out, case);self.assertIn(message, text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+        shaped = n2_saved({'full_width': [self.call(values=.002)], 'top2': [self.call(values=.002)]});c = shaped['configs']['top2']   # undeclared
+        c['discrete']['mismatched']['t1_status:shape'] = 1;c['discrete']['first_mismatches'].append(dict(field='t1_status:shape', cell=[0], pricer=[1], oracle=[2]))
+        for q in ('t1_own_logits', 't1_peer_logits'):c['floats'].pop(q)
+        c['world_reports_equal'] = False   # n2_compare returns before comparing the world reports: neither record is written
+        code, out, _, _ = n2_reverdicted(shaped)
+        self.assertEqual((code, out['status'], out['configs']['top2']['discrete']['passed'], [x['field'] for x in out['reverdict']['changed']]),
+            (1, 'FAIL', False, ['status', 'passed', 'discrete.passed']))
+
+    def test_a_forged_guard_number_is_refused(self):
+        """The guard number is GUARD_FACTOR x the saved p10 (g2.tolerance_rule, guard_note), None iff the p10 is (none iff no spread is non-zero).
+        A report FAILing on the guard, under the frozen rule and under a declaration with two parameter sets (every mode gated), whose guard is
+        raised or removed, with every float and status made to pass, is refused and writes nothing; so is the p10 nulled beside non-zero spreads
+        with the skipped guard's own text."""
+        frozen = n2_saved({'full_width': [self.call()], 'top2': [self.call()]});declared, record, audit = self.declared_report(actors=2)
+        self.assertEqual((frozen['status'], declared['status'], set(declared['configs']['top2']['tolerance']['guard_declared']['modes'].values())), ('FAIL', 'FAIL', {'gated'}))
+        def guard(value):
+            def change(r):
+                for c in r['configs'].values():
+                    c['tolerance']['guard_bound'] = value
+                    for _, floats in gate.n2_float_sections(c).values():
+                        for m in floats.values():
+                            if 'guard_bound' not in m:continue
+                            if value is None:
+                                for k in ('guard_bound', 'within_guard', 'ratio_to_guard'):m.pop(k)
+                            else:m.update(guard_bound=value, within_guard=True)
+                            m['passed'] = True
+                    c['block_invariance']['passed'] = True;c.update(status='PASS', passed=True)
+                r.update(status='PASS', passed=True)
+            return change
+        def nulled(r):
+            guard(None)(r)
+            for c in r['configs'].values():c['tolerance'].update(p10_cell_a2_spread=None, guard=gate.guard_note(dict(guard_bound=None), c['tolerance']['spread'])['guard'])
+        for name, report, extra, repo in (('frozen', frozen, (), None), ('declared', declared, audit, record.root)):
+            for case, change, message in (('raised', guard(.05), "guard_bound, guard [0.05, 'applied'] are not the live path's [0.005, 'applied']"),
+                    ('removed', guard(None), "guard_bound, guard [None, 'applied'] are not the live path's [0.005, 'applied']"),
+                    ('p10_nulled', nulled, 'p10_cell_a2_spread None with spread.nonzero 10')):
+                with self.subTest(name=name, case=case):
+                    r = copy.deepcopy(report);change(r);text, out, _, path = n2_reverdicted(r, *extra, repo=repo)
+                    self.assertIsNone(out);self.assertIn(message, text);self.assertIn('fail closed', text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+
+    def test_live_n2_reports_reverdict_as_written(self):
+        """run_n2's own n2-equivalence.json through main() without a declaration (the stand-in, which carries no world_reports, FAILs):
+        --reverdict reproduces every config."""
+        code, out = self.main('--n2-equivalence', '--n2-k', '2');report = json.loads((out / gate.N2_FILE).read_text())
+        self.assertEqual((code, report['status']), (1, 'FAIL'))
+        with patch.object(gate, 'log', lambda *a, **k: None):code = gate.main(['--reverdict', str(out / gate.N2_FILE)])
+        again = json.loads((out / gate.N2_REVERDICT_FILE).read_text())
+        self.assertEqual((code, again['status'], again['reverdict']['changed'], again['configs']), (1, 'FAIL', [], report['configs']))
+
+    @unittest.skipUnless(HAVE_PRICER, 'gpu_engine.device_depthn_pricer / depthn_backups are not on this tree')
+    def test_a_live_champion_report_audits_and_keeps_its_merged_decision(self):
+        """run_n2 on the champion path, as only it writes a champion report: the champion tests' fixture (an exact stand-in champion as the run's
+        forward, as load_roots resolves --champion-archive) under a declaration written where git could not verify it (a checkout without git).
+        The report carries header.merged_depth2_parity, every config's e_merged_depth2 and each Depth2Pricer's evaluator and PASSes
+        provisionally; the audit on the work tree holding the commit re-judges it PASS with nothing changed and no reason left; with all three
+        records deleted it is refused and nothing is written."""
+        champion = importlib.import_module('tests.test_gpu_engine_champion_evaluator');cli = champion.ChampionCommandLineTests
+        live = type('LiveChampionN2', (champion.ChampionFixture, unittest.TestCase), dict(main=cli.main, roots=cli.roots, declared=cli.declared, FLAGS=cli.FLAGS,
+            runTest=lambda self: None))
+        live.setUpClass()
+        try:
+            run = live();_, flags, sha = run.declared();record = run.record
+            exported = Path(tempfile.mkdtemp(prefix='depthn-exported-'));target = exported / gate.DECLARED_SUBDIR / 'champion.json'
+            target.parent.mkdir(parents=True);target.write_bytes(record.path.read_bytes());run.repo = exported   # the run's checkout: not a git work tree
+            code, out = run.main('--n2-equivalence', '--n2-k', '2', '--declared-bounds', str(target), *flags[2:])
+        finally:live.tearDownClass()
+        report = json.loads((out / gate.N2_FILE).read_text())
+        self.assertEqual((code, report['status'], report['evaluator']['kind'], report['header']['declared_bounds']['git_verification']['status']),
+            (0, 'PASS', 'champion', 'not verifiable here'))
+        self.assertTrue(report['status_reasons'][0].startswith('provisional: git_verification'));self.assertIn('merged_depth2_parity', report['header'])
+        self.assertEqual({n: ('e_merged_depth2' in c, 'evaluator' in report['options'][n]['depth2_options']) for n, c in report['configs'].items()},
+            dict(full_width=(True, True), top2=(True, True)))
+        audit = ('--declared-bounds-commit', record.commit, '--declared-bounds-sha256', sha)
+        code, again, _, _ = n2_reverdicted(report, *audit, repo=record.root)
+        self.assertEqual((code, again['status'], again['status_reasons'], again['reverdict']['changed'], again['configs']), (0, 'PASS', [], [], report['configs']))
+        self.assertEqual(again['reverdict']['declared_bounds_reverified']['git']['status'], 'verified')
+        r = copy.deepcopy(report);r['header'].pop('merged_depth2_parity')
+        for name, c in r['configs'].items():c.pop('e_merged_depth2');r['options'][name]['depth2_options'].pop('evaluator')
+        text, again, _, path = n2_reverdicted(r, *audit, repo=record.root)
+        self.assertIsNone(again);self.assertIn('lacks what the verdict needs: header.merged_depth2_parity (a champion report', text)
+        self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+
+
 # ---------------------------------------------------------------- the frozen default paths, byte for byte
 
 REFERENCE_DROP = ('costs', 'oracle_cost', 'timing', 'pricer_timing', 'plies_work', 'compiles', 'compiled')   # timing and compile records

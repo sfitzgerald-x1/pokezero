@@ -456,6 +456,34 @@ class ConstructorWorldsTests(unittest.TestCase):
             PARAMS,binding=self.binding,recipe=self.recipe)
         self.assertEqual(b.roots[0]['status'],'PRICED');self.assertIsNone(b.roots[0]['b2_view']['equal']);self.assertIn('KeyError',b.roots[0]['b2_view']['error'])
 
+    def test_a_reduction_error_refuses_its_root_only(self):
+        """reduce_completed_q's range check raises when a block's completed-Q rounds outside [-1, 1]: here action 0 wins against
+        every reply in both worlds of a block whose reply prior sums to 1 + ulp. That root alone refuses (cause 'reduction',
+        the error kept); the batch's other root still labels."""
+        legal=(True,True)+(False,)*7;opp=(True,)*3+(False,)*6;logits=(1.746,-2.561,-1.426)+(0.,)*6
+        world=lambda v0,v1:original.WorldPrices(True,opp,logits,tuple(tuple(((v0,v1)[a]if a<2 and b<3 else None)for b in range(9))for a in range(9)))
+        p=original._probabilities(logits,opp);self.assertEqual(math.fsum([x/2 for x in p[:3]]*2),1+2.**-52)   # the all-win block's completed-Q
+        wins=world(1.,0.);plain=world(.1,.2);blocks={0:(wins,wins),1:(plain,plain),2:(plain,plain),3:(plain,plain)}
+        roots=tuple(dict(index=i,request_id=f'r{i}',status='PRICED',reason=None,rows=rows,root_logits=(0.,)*9,root_legal=legal)for i,rows in enumerate(((0,1),(2,3))))
+        with patch.object(cw.backups,'backup',side_effect=lambda frame,row,rule:blocks[row]),\
+                patch.object(cw.backups,'refusal_summary',return_value=dict(roots=[dict(cause=None)]*4)):
+            results=cw.reduce(object(),cw.Batch((object(),)*4,None,roots,4,2))
+        self.assertEqual([(x['status'],x['cause'])for x in results],[('REFUSED','reduction'),('LABELED',None)])
+        self.assertEqual([x['reduction_error']for x in results],['ValueError: finite in-range numerical value required',None])
+        self.assertEqual((results[0]['block_causes'],results[0]['completed_q'],results[0]['action_mean_q']),((None,None),None,None))
+        self.assertEqual(results[1]['action_mean_q'],1);self.assertAlmostEqual(results[1]['completed_q'][1],.2,places=15)
+        # A block that refused (turn2) keeps the root's cause even when another block's reduction raises; the error is still kept.
+        blocks[0]=(None,plain);causes=[dict(cause='turn2')]+[dict(cause=None)]*3;blocks[1]=(wins,wins)
+        with patch.object(cw.backups,'backup',side_effect=lambda frame,row,rule:blocks[row]),patch.object(cw.backups,'refusal_summary',return_value=dict(roots=causes)):
+            results=cw.reduce(object(),cw.Batch((object(),)*4,None,roots,4,2))
+        self.assertEqual([(x['status'],x['cause'],x['block_causes'])for x in results],[('REFUSED','turn2',('turn2',None)),('LABELED',None,(None,None))])
+        self.assertEqual(results[0]['reduction_error'],'ValueError: finite in-range numerical value required')
+        # Any other ValueError from the reduction is malformed input, not the rounding edge: it raises.
+        from gpu_engine import d3_search_latency as latency
+        with patch.object(cw.backups,'backup',side_effect=lambda frame,row,rule:blocks[row]),patch.object(cw.backups,'refusal_summary',return_value=dict(roots=causes)),\
+                patch.object(latency,'reduce_block',side_effect=ValueError('both declared posterior worlds required')),self.assertRaisesRegex(ValueError,'both declared'):
+            cw.reduce(object(),cw.Batch((object(),)*4,None,roots,4,2))
+
     def test_both_root_moves_are_reported_and_can_differ(self):
         from gpu_engine.d3_search_latency import compose
         legal=(True,True)+(False,)*7;logits=(3.,0.)+(0.,)*7
