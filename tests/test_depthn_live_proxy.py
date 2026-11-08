@@ -173,6 +173,73 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual([r['backend'] for r in dead], ['unserved'])
 
 
+class StickyTests(unittest.TestCase):
+    """Battle affinity: a battle's decisions stay on one backend (its constructor session); new battles spread in --backend order."""
+    def run_sticky(self, scenario, names, **kw):
+        async def main():
+            served, servers, backends, rows = [], {}, [], []
+            for name in names:
+                s = await framed_backend(name, 0., served);servers[name] = s;backends.append(('127.0.0.1', s.sockets[0].getsockname()[1]))
+            box = {}
+            task = asyncio.create_task(P.run(('127.0.0.1', 0), backends, log=lambda line: None, report_seconds=0, log_row=rows.append,
+                started=lambda server, pool: box.update(port=server.sockets[0].getsockname()[1], pool=pool), **kw))
+            while 'port' not in box:await asyncio.sleep(.01)
+            try:return await scenario(box['port'], box['pool'], servers, rows)
+            finally:
+                task.cancel()
+                for s in servers.values():s.close()
+        return asyncio.run(main())
+
+    def test_a_battle_sticks_to_its_home_and_new_battles_spread_in_backend_order(self):
+        async def scenario(port, pool, servers, rows):
+            out = []
+            for battle in ('x', 'y', 'x', 'z', 'y', 'x', 'w'):
+                out.append((await request(port, dict(battle_id=battle, i=len(out))))['backend'])
+            for _ in range(100):
+                if len(rows) >= 7:break
+                await asyncio.sleep(.01)
+            return out, rows
+        out, rows = self.run_sticky(scenario, ['a', 'b', 'c'])
+        self.assertEqual(out, ['a', 'b', 'a', 'c', 'b', 'a', 'a'])   # w: every backend holds one live battle, none in flight: backend order
+        self.assertEqual([(r['battle_id'], r['home']) for r in rows][:6], [('x', False), ('y', False), ('x', True), ('z', False), ('y', True), ('x', True)])
+
+    def test_a_dead_home_rehomes_its_battle(self):
+        async def scenario(port, pool, servers, rows):
+            first = (await request(port, dict(battle_id='x')))['backend']
+            servers[first].close();await servers[first].wait_closed()
+            second = (await request(port, dict(battle_id='x')))['backend'];third = (await request(port, dict(battle_id='x')))['backend']
+            return first, second, third
+        first, second, third = self.run_sticky(scenario, ['a', 'b'])
+        self.assertEqual((first, second, third), ('a', 'b', 'b'))   # setup to a fails: b, and x now lives on b
+
+    def test_a_client_that_sends_no_request_is_unserved_and_nothing_is_forwarded(self):
+        async def scenario(port, pool, servers, rows):
+            reader, writer = await asyncio.open_connection('127.0.0.1', port)
+            closed = await asyncio.wait_for(reader.read(), 5);writer.close()
+            for _ in range(100):
+                if rows:break
+                await asyncio.sleep(.01)
+            return closed, pool.unserved, rows, sum(pool.served.values())
+        closed, unserved, rows, served = self.run_sticky(scenario, ['a'], first_frame_timeout=.2)
+        self.assertEqual((closed, unserved, served, rows[0]['reason']), (b'', 1, 0, 'no request'))
+
+    def test_a_request_without_a_battle_id_is_still_forwarded_byte_for_byte(self):
+        async def scenario(port, pool, servers, rows):
+            return await request(port, dict(i=1)), await request(port, [1, 2])
+        one, two = self.run_sticky(scenario, ['a', 'b'])
+        self.assertEqual((one['echo'], two['echo']), (dict(i=1), [1, 2]))
+
+    def test_live_battles_expire_and_homes_are_bounded(self):
+        pool = P.Pool([('h', 1), ('h', 2)], sticky_idle=10., sticky_cap=2)
+        self.assertFalse(pool.bind('x', ('h', 1), now=0.));self.assertTrue(pool.bind('x', ('h', 1), now=1.))
+        self.assertEqual(pool.order(now=2., battle='y')[0], ('h', 2))   # x is live on h:1
+        self.assertEqual(pool.order(now=20., battle='y')[0], ('h', 1))   # x idle: both empty, backend order
+        pool.bind('y', ('h', 2), now=21.);pool.bind('z', ('h', 1), now=22.)
+        self.assertEqual(list(pool.homes), ['y', 'z'])   # LRU: x evicted
+        self.assertEqual(pool.order(now=23., battle='z')[0], ('h', 1))
+        pool.failed_at[('h', 1)] = 23.;self.assertEqual(pool.order(now=24., battle='z')[0], ('h', 2))   # a cooling home is skipped
+
+
 async def codex_like_backend(name, delay, served, *, answer=True):
     """Like phase_d_search_server.Server.handle: reads framed requests until EOF; never closes after a response."""
     async def handle(reader, writer):

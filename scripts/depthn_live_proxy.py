@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One listening address in front of several depthn_live_server processes: each incoming connection goes to the least-busy backend.
+"""One listening address in front of several depthn_live_server processes: each battle sticks to one backend; other traffic goes least busy.
 
 Design. The panel's dispatch talks to ONE search server address (--server HOST:PORT), and the actor's client opens one connection per
 request (phase_d_search_server framing: one request, one response). A server process answers one decision at a time (max_requests 1;
@@ -10,6 +10,14 @@ closes. A backend's slot is reserved before its connection is opened, so connect
 rewrites, retries or replays a request: connection setup alone is retried on the next backend (--connect-timeout each, before any byte
 is forwarded); when no backend accepts, the client's connection is closed, which its client records as a transport failure
 (connection_error, or server_error on a bare EOF) and plays greedy, as with a dead server.
+- Battle affinity (sticky): a server keeps one constructor session per battle, so a battle whose decisions scatter over the pool
+  folds from a stale or empty session on every switch (pre-flight r3: battles touched 8-12 of 12 servers, prepare p95 2.04 s against
+  1.20 s on the same server, 28% timeouts). The proxy therefore reads each connection's first frame (the request: a 4-byte length
+  and its JSON, within --first-frame-timeout) for its battle_id, sends those bytes on verbatim, and routes: a battle seen before goes
+  to its home backend unless that backend is cooling down; a new battle (or a re-homed one) goes to the backend with the fewest
+  live battles (seen within --sticky-idle seconds), ties by in-flight connections, then by --backend order (give the backends
+  GPU-interleaved, so new battles spread across GPUs). The home map is an LRU of at most --sticky-cap battles. A request without a
+  string battle_id keeps the least-busy order below. The connection log records each connection's battle_id and whether it went home.
 - Startup identity (the lead's rule: a pool must not hide a wrong backend): --probe-requests PATH (JSONL, one request per line in the
   servers' wire format, e.g. built from a closed RAW cell's owning-wire capture as the panel's probe builds them) is sent to EVERY backend
   directly, each request under a fresh request_id and battle id, before the proxy listens. Per backend, requests are tried in order: a
@@ -26,6 +34,7 @@ is forwarded); when no backend accepts, the client's connection is closed, which
 """
 import argparse
 import asyncio
+from collections import Counter, OrderedDict
 import itertools
 import json
 import math
@@ -54,23 +63,41 @@ def bounded(lo, hi):
 class Pool:
     """Backends with their in-flight counts; order() is least busy first, recently failed backends last, ties round-robin."""
 
-    def __init__(self, backends, *, cooldown=5.):
+    def __init__(self, backends, *, cooldown=5., sticky_idle=120., sticky_cap=4096):
         if not backends or len(set(backends)) != len(backends):raise ValueError('one or more distinct backends required')
         self.backends = list(backends);self.active = {b: 0 for b in backends};self.served = {b: 0 for b in backends}
         self.refused = {b: 0 for b in backends};self.failed_at = {b: None for b in backends};self.unserved = 0;self.cooldown = cooldown
+        self.homes = OrderedDict();self.sticky_idle = sticky_idle;self.sticky_cap = sticky_cap   # battle_id -> [backend, last seen]
         self._turn = itertools.cycle(range(len(backends)))
 
-    def order(self, now=None):
-        now = time.monotonic() if now is None else now;start = next(self._turn);ring = self.backends[start:] + self.backends[:start]
-        return sorted(ring, key=lambda b: (self.cooling(b, now), self.active[b]))
+    def live(self, now):
+        """Battles per backend seen within sticky_idle seconds."""
+        return Counter(b for b, seen in self.homes.values() if now - seen < self.sticky_idle)
+
+    def order(self, now=None, battle=None):
+        now = time.monotonic() if now is None else now
+        if battle is None:   # no battle to keep together: least busy, ties round-robin
+            start = next(self._turn);ring = self.backends[start:] + self.backends[:start]
+            return sorted(ring, key=lambda b: (self.cooling(b, now), self.active[b]))
+        live = self.live(now);rank = sorted(self.backends, key=lambda b: (self.cooling(b, now), live[b], self.active[b], self.backends.index(b)))
+        home = self.homes.get(battle)
+        if home is not None and not self.cooling(home[0], now):rank.remove(home[0]);rank.insert(0, home[0])
+        return rank
+
+    def bind(self, battle, backend, now=None):
+        """The battle's home is now `backend` (LRU, at most sticky_cap); True when it already was."""
+        now = time.monotonic() if now is None else now;before = self.homes.pop(battle, None);self.homes[battle] = [backend, now]
+        while len(self.homes) > self.sticky_cap:self.homes.popitem(last=False)
+        return before is not None and before[0] == backend
 
     def cooling(self, backend, now=None):
         now = time.monotonic() if now is None else now
         return self.failed_at[backend] is not None and now - self.failed_at[backend] < self.cooldown
 
     def snapshot(self):
+        live = self.live(time.monotonic())
         return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)],
-            cooling=self.cooling((h, p))) for h, p in self.backends], unserved=self.unserved)
+            cooling=self.cooling((h, p)), live_battles=live[(h, p)]) for h, p in self.backends], unserved=self.unserved, battles=len(self.homes))
 
 
 async def pipe(reader, writer, counter):
@@ -91,9 +118,26 @@ async def _close(writer):
     except OSError:pass
 
 
-async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, log_row=None):
+async def first_frame(reader, timeout):
+    """The connection's first frame as read (its bytes, sent on verbatim) and its battle_id (None if absent or not JSON)."""
+    head = await asyncio.wait_for(reader.readexactly(4), timeout);n = struct.unpack('!I', head)[0]
+    if not 0 < n <= MAX_PACKET:return head, None   # an unbounded length: forwarded as is, for the server to refuse
+    body = await asyncio.wait_for(reader.readexactly(n), timeout)
+    try:value = json.loads(body)
+    except (ValueError, UnicodeDecodeError):return head + body, None
+    battle = value.get('battle_id') if isinstance(value, dict) else None
+    return head + body, battle if isinstance(battle, str) and battle else None
+
+
+async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, first_frame_timeout=2., log_row=None):
     opened, chosen, upstream = time.time(), None, None
-    for backend in pool.order():
+    try:first, battle = await first_frame(client_reader, first_frame_timeout)
+    except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError):   # no request to route: nothing forwarded
+        pool.unserved += 1
+        if log_row is not None:log_row(dict(backend='unserved', reason='no request', opened=opened, closed=time.time(), seconds=time.time() - opened))
+        await _close(client_writer);return
+    now = time.monotonic()
+    for backend in pool.order(now, battle=battle):
         pool.active[backend] += 1   # reserved before connecting, so simultaneous clients spread out
         try:
             upstream = await asyncio.wait_for(asyncio.open_connection(*backend), connect_timeout);chosen = backend;break
@@ -103,16 +147,21 @@ async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, log
             pool.active[backend] -= 1;raise
     if upstream is None:
         pool.unserved += 1
-        if log_row is not None:log_row(dict(backend='unserved', opened=opened, closed=time.time(), seconds=time.time() - opened))
+        if log_row is not None:log_row(dict(backend='unserved', battle_id=battle, opened=opened, closed=time.time(), seconds=time.time() - opened))
         await _close(client_writer);return
-    up_reader, up_writer = upstream;pool.served[chosen] += 1;sent, received = [0], [0]
-    try:await asyncio.gather(pipe(client_reader, up_writer, sent), pipe(up_reader, client_writer, received))
+    up_reader, up_writer = upstream;pool.served[chosen] += 1;sent, received = [len(first)], [0]
+    home = None if battle is None else pool.bind(battle, chosen, now)
+    async def forward():
+        try:up_writer.write(first);await up_writer.drain()
+        except OSError:return
+        await pipe(client_reader, up_writer, sent)
+    try:await asyncio.gather(forward(), pipe(up_reader, client_writer, received))
     finally:
         pool.active[chosen] -= 1
         for w in (up_writer, client_writer):await _close(w)
         if log_row is not None:
             closed = time.time();log_row(dict(backend=f'{chosen[0]}:{chosen[1]}', opened=opened, closed=closed, seconds=closed - opened,
-                bytes_to_backend=sent[0], bytes_to_client=received[0]))
+                bytes_to_backend=sent[0], bytes_to_client=received[0], battle_id=battle, home=home))
 
 
 async def wait_ready(backends, seconds):
@@ -175,14 +224,15 @@ async def check_identity(backends, requests, expect, *, timeout=120.):
 
 
 async def run(listen, backends, *, wait_ready_seconds=0., report_seconds=60., log=print, started=None, connect_timeout=.25, cooldown=5.,
-              probe_requests=None, expect=None, probe_timeout=120., log_row=None):
+              first_frame_timeout=2., sticky_idle=120., sticky_cap=4096, probe_requests=None, expect=None, probe_timeout=120., log_row=None):
     if listen in backends:raise SystemExit('--listen must not be one of the backends')
-    pool = Pool(backends, cooldown=cooldown)
+    if type(sticky_cap) is not int or sticky_cap < 1:raise SystemExit('--sticky-cap must be a positive integer')
+    pool = Pool(backends, cooldown=cooldown, sticky_idle=sticky_idle, sticky_cap=sticky_cap)
     if wait_ready_seconds > 0:
         missing = await wait_ready(backends, wait_ready_seconds)
         if missing:raise SystemExit(f'backends not ready after {wait_ready_seconds} s: ' + ', '.join(f'{h}:{p}' for h, p in missing))
     identities = None if probe_requests is None else await check_identity(backends, probe_requests, expect or {}, timeout=probe_timeout)
-    server = await asyncio.start_server(lambda r, w: handle(pool, r, w, connect_timeout=connect_timeout, log_row=log_row), *listen)
+    server = await asyncio.start_server(lambda r, w: handle(pool, r, w, connect_timeout=connect_timeout, first_frame_timeout=first_frame_timeout, log_row=log_row), *listen)
     log(json.dumps(dict(event='READY', listen=f'{listen[0]}:{server.sockets[0].getsockname()[1]}', backends=[f'{h}:{p}' for h, p in backends],
         identity=None if identities is None else next(iter(identities.values())), probed=identities is not None)))
     if started is not None:started(server, pool)
@@ -203,6 +253,9 @@ def main(argv=None):
     p.add_argument('--wait-ready', type=bounded(0., 3600.), default=0., help='seconds to wait for every backend to accept a connection')
     p.add_argument('--connect-timeout', type=bounded(.01, 5.), default=.25, help='per-backend connection setup timeout (seconds)')
     p.add_argument('--cooldown', type=bounded(0., 600.), default=5., help='seconds a backend whose setup failed sorts last')
+    p.add_argument('--first-frame-timeout', type=bounded(.01, 60.), default=2., help='seconds to read a connection\'s request (its battle_id)')
+    p.add_argument('--sticky-idle', type=bounded(1., 86400.), default=120., help='a battle unseen this long no longer counts as live')
+    p.add_argument('--sticky-cap', type=int, default=4096, help='battle homes kept (LRU)')
     p.add_argument('--report-seconds', type=bounded(0., 86400.), default=60.)
     p.add_argument('--probe-requests', help='JSONL: requests in the servers\' wire format, tried on every backend before listening')
     p.add_argument('--probe-timeout', type=bounded(1., 3600.), default=120.)
@@ -221,7 +274,8 @@ def main(argv=None):
     def log_row(row):stream.write(json.dumps(row, sort_keys=True) + '\n');stream.flush()
     def log(line):print(line, flush=True)
     try:asyncio.run(run(args.listen, args.backend, wait_ready_seconds=args.wait_ready, report_seconds=args.report_seconds, log=log,
-        connect_timeout=args.connect_timeout, cooldown=args.cooldown, probe_requests=probe, expect=expect, probe_timeout=args.probe_timeout,
+        connect_timeout=args.connect_timeout, cooldown=args.cooldown, first_frame_timeout=args.first_frame_timeout, sticky_idle=args.sticky_idle,
+        sticky_cap=args.sticky_cap, probe_requests=probe, expect=expect, probe_timeout=args.probe_timeout,
         log_row=None if stream is None else log_row))
     except KeyboardInterrupt:return 0
     finally:
