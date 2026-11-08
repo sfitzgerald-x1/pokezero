@@ -33,8 +33,9 @@ FLAGS = ('--constructor-roster', 'roster.json', 'a' * 64, '--showdown-root', 'sh
 RUNTIME = ('--saved-roots', 'saved', '--index-sha256', 'd' * 64)
 HARNESS = ('--fixed-shapes', '--block-invariance')
 COVERED = ('--depth', '2', '--k-own', '9', '--k-opp', '9')   # what declaration A-C covers (k1 9/9 and W 8 by default)
-AC = gate.REPO_ROOT / gate.CONSTRUCTOR_DECLARATION['repo_path']
-DECLARED = ('--declared-bounds', str(AC), '--declared-bounds-sha256', gate.CONSTRUCTOR_DECLARATION['sha256'], '--declared-bounds-commit', '4' * 40)
+AC, AC16 = (gate.REPO_ROOT / gate.CONSTRUCTOR_DECLARATIONS[w]['repo_path'] for w in (8, 16))
+DECLARED, DECLARED16 = (('--declared-bounds', str(gate.REPO_ROOT / gate.CONSTRUCTOR_DECLARATIONS[w]['repo_path']), '--declared-bounds-sha256',
+    gate.CONSTRUCTOR_DECLARATIONS[w]['sha256'], '--declared-bounds-commit', '4' * 40) for w in (8, 16))
 CHAMPION = C.ChampionCommandLineTests.FLAGS
 MODE = (*RUNTIME, *CHAMPION, *FLAGS, *HARNESS, *COVERED, *DECLARED)   # a complete, valid CONSTRUCTOR_ROOTS command line
 
@@ -279,9 +280,9 @@ class FlagTests(unittest.TestCase):
                 ('--depth3-diagnostics',), ('--capacity', '256'), ('--block-lanes', '729'), ('--oracle-chunk', '64'), ('--constructor-worlds', '4'),
                 ('--constructor-per-band', '0'), ('--constructor-seed', '-1'), ('--sample-leaves', '2')):
             with self.subTest(argv=argv):self.refused(*argv)
-        for argv in (('--constructor-worlds', '16'), ('--constructor-per-band', '3'), ('--depth', '3'), ('--k-own', '3'), ('--k-opp', '9,9'), ('--k1-opp', '3'),
-                ('--depth', '3', '--selection', 'searched')):   # only what A-C covers
-            with self.subTest(argv=argv):self.assertIn('declaration A-C covers', self.refused(*argv))
+        for argv in (('--constructor-per-band', '3'), ('--depth', '3'), ('--k-own', '3'), ('--k-opp', '9,9'), ('--k1-opp', '3'),
+                ('--depth', '3', '--selection', 'searched')):   # only what A-C and A-C16 cover
+            with self.subTest(argv=argv):self.assertIn('declarations A-C and A-C16 cover', self.refused(*argv))
         self.assertIn('keeps declaration A', self.refused(base=(*RUNTIME, *CHAMPION, *FLAGS, *COVERED, *DECLARED, '--fixed-shapes')))
         self.assertIn('needs --champion-archive', self.refused(base=(*RUNTIME, *FLAGS, *HARNESS, *COVERED)))
         self.assertIn('refused with --d3-root', self.refused(base=('--d3-root', 'r', '--chunk', '0', *CHAMPION, *FLAGS, *HARNESS, *COVERED, *DECLARED)))
@@ -299,7 +300,18 @@ class FlagTests(unittest.TestCase):
                 ('--declared-bounds', str(AC), '--declared-bounds-sha256', a_sha, '--declared-bounds-commit', '4' * 40),   # A-C's path, another sha256
                 ('--declared-bounds', str(a), *DECLARED[2:])):   # A's path, A-C's sha256
             with self.subTest(declared=declared[1:2]):self.assertIn('under declaration A-C only', self.refused(base=(*base, *declared)))
-        self.assertEqual(gate.repo_path_of(AC), gate.CONSTRUCTOR_DECLARATION['repo_path']);self.assertEqual(hashlib.sha256(AC.read_bytes()).hexdigest(), gate.CONSTRUCTOR_DECLARATION['sha256'])
+        for w, path in ((8, AC), (16, AC16)):
+            self.assertEqual(gate.repo_path_of(path), gate.CONSTRUCTOR_DECLARATIONS[w]['repo_path']);self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), gate.CONSTRUCTOR_DECLARATIONS[w]['sha256'])
+
+    def test_each_w_runs_under_its_own_declaration(self):
+        """W 8 with A-C and W 16 with A-C16 parse; A-C at W 16, A-C16 at W 8 and declaration A at either W are refused."""
+        a = gate.REPO_ROOT / gate.DECLARED_SUBDIR / 'champion-9375-bf16-r1r3-20261107.json';a_sha = hashlib.sha256(a.read_bytes()).hexdigest()
+        A = ('--declared-bounds', str(a), '--declared-bounds-sha256', a_sha, '--declared-bounds-commit', '4' * 40);base = (*RUNTIME, *CHAMPION, *FLAGS, *HARNESS, *COVERED)
+        self.assertEqual(gate.parse(['--out', 'o', *base, *DECLARED, '--constructor-worlds', '8'])[1].constructor_worlds, 8)
+        self.assertEqual(gate.parse(['--out', 'o', *base, *DECLARED16, '--constructor-worlds', '16'])[1].declared_bounds, str(AC16))
+        for worlds, declared, name in (('16', DECLARED, 'A-C16'), ('8', DECLARED16, 'A-C'), ('16', A, 'A-C16'), ('8', A, 'A-C'), ('16', (), 'A-C16')):
+            with self.subTest(worlds=worlds, declared=declared[1:2]):
+                self.assertIn(f'--constructor-worlds {worlds} runs under declaration {name} only', self.refused(base=(*base, *declared, '--constructor-worlds', worlds)))
 
     def test_the_mode_refuses_a_head_and_sampled_leaves_itself(self):
         """check_constructor_arguments' own refusals, beside the champion's and the declaration's (which refuse a head first on the command line)."""
@@ -325,6 +337,13 @@ class DeclarationACTests(unittest.TestCase):
         for text in ('R1-C', '--constructor-roster', 'R1.b.*', 'NOT_APPLICABLE', 'no new float site', 'JAX_DEFAULT_MATMUL_PRECISION=highest'):
             self.assertIn(text.lower(), content['derivation'].lower(), text)
         self.assertGreaterEqual(gate._utc(content['declared_at']), gate._utc(a['declared_at']))
+        w16 = json.loads(AC16.read_bytes());raw16 = AC16.read_bytes()
+        self.assertEqual((gate.declared_problems(w16), gate.declared_from_bytes(raw16, hashlib.sha256(raw16).hexdigest(), path=AC16)['sha256']),
+            ([], gate.CONSTRUCTOR_DECLARATIONS[16]['sha256']))
+        for key in ('schema', 'evaluator', 'bounds', 'source_measurement', 'declared_by'):self.assertEqual(w16[key], content[key], key)
+        self.assertTrue(w16['derivation'].startswith('SCOPE: declaration A-C16'));self.assertGreaterEqual(gate._utc(w16['declared_at']), gate._utc(content['declared_at']))
+        for text in ('W = 16 worlds per root (K = 8 requests', 'reads all 16 worlds', 'mean of the 8 blocks', 'for the same reason as A-C', 'R1.b.*'):
+            self.assertIn(text, w16['derivation'], text)
         self.assertEqual(gate.evaluator_mismatches(content, gate.args_identity(gate.parse(['--out', 'o', *RUNTIME, '--champion-archive', 'x',
             '--champion-archive-sha256', a['evaluator']['archive_sha256'], '--champion-checkpoint-sha256', a['evaluator']['checkpoint_sha256']])[1])), [])
 
@@ -335,11 +354,12 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
     pair, all under ONE PrebuiltWorlds with the fixture source's binding (the real DepthNPricer validates it); no FramePricer."""
     ROOTS = (0, 1, 3, 7, 16, 17, 25, 26)   # plain; chance re-keyed; a missing world; pre-refused (shifted root inputs); terminal leaves; waiting; interaction
 
-    def ctor(self, signatures=None):
+    def ctor(self, signatures=None, *, blocks=2):
+        """Each root a fixture request priced as `blocks` blocks of its own world pair (W = 2 x blocks), as many roots as fit one call of 32."""
         requests, pairs, roots = [], [], []
-        for n, q in enumerate(self.ROOTS):
+        for n, q in enumerate(self.ROOTS[:32 // blocks]):
             r = self.requests[q];pair = tuple(self.materialize(r.plans.root, s, self.tables, self.recipe) for s in r.plans.starts)
-            rows = (len(requests), len(requests) + 1);requests += [r, r];pairs += [pair, pair]
+            rows = tuple(range(len(requests), len(requests) + blocks));requests += [r] * blocks;pairs += [pair] * blocks
             roots.append(dict(index=n, ordinal=100 + q, band=n % 4, turn=2, selected_by='band', top_up_for=[], classes=[], root_class='other', class_source='test',
                 rows=rows, carry_signature=(signatures or {}).get(n, 'sig'), address=[r.plans.root.address.stream, r.plans.root.address.frame, r.plans.root.address.owner],
                 capture=dict(capture_path='c', capture_row=q), b2_view=dict(equal=True)))
@@ -415,6 +435,22 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         self.assertEqual(sum(r['margin_oracle'] > averaging['bound'] for r in averaging['disagreements']), averaging['disagree_beyond_bound'])
         self.assertEqual(gate.gate_status_n(result)[0], 'FAIL')
 
+    def test_w16_prices_eight_blocks_per_root_and_averages_sixteen_worlds(self):
+        """W = 16 at CPU-fake scale: every root is 8 requests (blocks of two worlds) in one frame, (e) compares each block, and the live operator
+        averages each decided root's 16 worlds; the run PASSes with the averaging check's 2 x q_noise_bound."""
+        from gpu_engine import search_hedge
+        real, read = search_hedge.averaging, []
+        def averaging(worlds, root_legal):
+            worlds = tuple(worlds);read.append(len(worlds));return real(worlds, root_legal)
+        ctor = self.ctor(blocks=8)
+        with patch.object(search_hedge, 'averaging', averaging):evaluation, _, call = self.run_worlds(ctor, lanes=(2187,))
+        self.assertEqual([len(r['rows']) for r in call['roots']], [8] * len(call['roots']));self.assertEqual(len(call['requests']), 8 * len(call['roots']))
+        result, _ = self.judged(evaluation);gate.constructor_checks(result, [evaluation]);averaging_check = result['checks']['averaging_argmax']
+        self.assertEqual(gate.gate_status_n(result)[0], 'PASS', N.failing(result))
+        self.assertEqual(read, [16] * (2 * averaging_check['roots_compared']));self.assertGreater(averaging_check['roots_compared'], 0)   # both sides, 16 worlds
+        self.assertEqual(result['checks']['e']['roots_compared'], 8 * averaging_check['roots_compared'])
+        self.assertTrue(all(r['premise_holds'] for r in averaging_check['per_root'] if r['status'] == ['COMPLETE'] * 2))
+
     def test_the_premise_is_checked_against_es_own_reduction(self):
         """averaging's input backed up under another rule (depthn_backups.average for learner_max) still decides, but its q is no longer the mean of
         (e)'s per-block completed-Q (learner_max_root): the premise fails and so does the check."""
@@ -466,7 +502,8 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         with self.engine(), patch.object(gate, 'constructor_roots', lambda args: roots), patch.object(gate, 'load_roots', side_effect=AssertionError('D3 roots')), \
                 patch.object(gate, 'log', log), patch.object(gate, 'CONSTRUCTOR_HARNESS', dict(capacity=32, block_lanes=2187, oracle_chunk=64)), \
                 patch.object(batch.FramePricer, 'price', side_effect=AssertionError('D3 priced')), patch.object(gate, 'REPO_ROOT', record.root), \
-                patch.object(gate, 'CONSTRUCTOR_DECLARATION', dict(repo_path=record.path.relative_to(record.root).as_posix(), sha256=record.sha256)), \
+                patch.object(gate, 'CONSTRUCTOR_DECLARATIONS', {w: dict(name=f'test-{w}', repo_path=record.path.relative_to(record.root).as_posix(), sha256=record.sha256)
+                    for w in (8, 16)}), \
                 patch.object(dn().DepthNPricer, '__init__', record_pricer), patch.object(depthn_oracle.DepthNOracle, '__init__', record_oracle):
             code = gate.main(['--out', str(out), *RUNTIME, *CHAMPION, *FLAGS, *HARNESS, *COVERED, '--capacity', '32', '--oracle-chunk', '64',
                 '--declared-bounds', str(record.path), '--declared-bounds-sha256', record.sha256, '--declared-bounds-commit', record.commit, *argv])

@@ -104,7 +104,8 @@ refusal breakdown, values section and sibling spread are absent; its reported-on
 (nothing is substituted; the first-root exact check and the digests over its view stand in); gate --block-invariance varies the DepthNPricer's
 block_lanes, not a Depth2Pricer child block; (e)'s backups, sampling seeds and offline modes differ; (a), (f) and leaf_walk_* are extra.
 --constructor-roster PATH SHA (CONSTRUCTOR_ROOTS, R1-C; with --saved-roots as the runtime only, --champion-archive, declaration A's harness
-(CONSTRUCTOR_HARNESS), exactly what declaration A-C covers (CONSTRUCTOR_COVERED) and A-C itself as --declared-bounds (CONSTRUCTOR_DECLARATION;
+(CONSTRUCTOR_HARNESS), exactly what its declarations cover (CONSTRUCTOR_COVERED; W 8 or 16) and, as --declared-bounds, the declaration of its W
+(CONSTRUCTOR_DECLARATIONS: A-C at W 8, A-C16 at W 16;
 no --sample-leaves): the roots are Codex's ProtocolConstructor worlds (gpu_engine.constructor_worlds) on a roster's captured Showdown roots,
 chosen by CONSTRUCTOR_RULE before anything is priced. They price on the live executor (LIVE_EXECUTOR: the constructor's own metadata and
 catalog, as scripts/depthn_live_server.build), held at gate start to the bank's executor by compiled-table identity (TABLES_BRIDGE). ONE
@@ -4027,9 +4028,12 @@ CONSTRUCTOR_PAIRS = ('constructor_roster', 'constructor_metadata', 'constructor_
 CONSTRUCTOR_FLAGS = CONSTRUCTOR_PAIRS + ('showdown_root', 'node_binary') + tuple(CONSTRUCTOR_DEFAULTS)
 CONSTRUCTOR_WORLD_COUNTS = (8, 16)   # the live rungs (depthn_live_search.RUNGS)
 CONSTRUCTOR_HARNESS = dict(capacity=512, block_lanes=2187, oracle_chunk=512)   # declaration A's, with --fixed-shapes and --block-invariance
-CONSTRUCTOR_COVERED = dict(depth=2, selection='prior', k_own='9', k_opp='9', k1_own=9, k1_opp=9, constructor_worlds=8, constructor_per_band=10)   # R1-C, A-C's scope
-CONSTRUCTOR_DECLARATION = dict(repo_path='gpu_engine/declared_bounds/champion-9375-bf16-r1c-20261108.json',   # declaration A-C, the one this mode runs under
-    sha256='57d134161d0733e9406baa08bf50456dc2e7cf4e0434188a38be5a1573056ad3')
+CONSTRUCTOR_COVERED = dict(depth=2, selection='prior', k_own='9', k_opp='9', k1_own=9, k1_opp=9, constructor_per_band=10)   # R1-C, A-C's and A-C16's scope
+CONSTRUCTOR_DECLARATIONS = {   # W -> the one declaration a run at that W runs under (repo_path under the checkout, sha256); any other pairing is refused
+    8: dict(name='A-C', repo_path='gpu_engine/declared_bounds/champion-9375-bf16-r1c-20261108.json',
+        sha256='57d134161d0733e9406baa08bf50456dc2e7cf4e0434188a38be5a1573056ad3'),
+    16: dict(name='A-C16', repo_path='gpu_engine/declared_bounds/champion-9375-bf16-r1c-w16-20261108.json',
+        sha256='aa506b12e83271f52d0f7beca9330c260c2adab9a9db0427e33ba9b800f1fefa')}
 CONSTRUCTOR_REFUSED = ('d3_root', 'n2_equivalence', 'max_roots', 'head_archive', 'depth3_diagnostics', 'diagnostics_from', 'mutation_from', 'mutation_test',
     'save_oracle', 'sample_leaves')   # sample_leaves: averaging_argmax and (e) need every leaf
 REQUEST_KEYS = ('battle_id', 'owner', 'stream_id', 'decision_index', 'generation', 'prefix_sha256', 'lines', 'own_request_line')   # the coverage script's
@@ -4467,10 +4471,10 @@ def constructor_roots(args):
 def check_constructor_arguments(parser, args):
     """--constructor-roster (CONSTRUCTOR_ROOTS): every constructor flag needs it. With it, --showdown-root, --node-binary, --constructor-metadata
     and --constructor-vocabulary are required (each PATH SHA a 64-hex sha256), and so are --saved-roots (the D3 runtime only), --champion-archive,
-    declaration A's harness (--fixed-shapes, --block-invariance, CONSTRUCTOR_HARNESS), --worlds-blocks 1, exactly what declaration A-C covers
-    (CONSTRUCTOR_COVERED: R1's depth 2 at full width, W 8, 10 roots per band; W 16 or other settings need their own declaration) and
-    --declared-bounds naming A-C itself (CONSTRUCTOR_DECLARATION: its repo_path under the checkout and its sha256; declaration A or any other is
-    refused); it is refused with CONSTRUCTOR_REFUSED. Fills CONSTRUCTOR_DEFAULTS."""
+    declaration A's harness (--fixed-shapes, --block-invariance, CONSTRUCTOR_HARNESS), --worlds-blocks 1, exactly what its declarations cover
+    (CONSTRUCTOR_COVERED: R1's depth 2 at full width, 10 roots per band; W 8 or 16) and --declared-bounds naming the declaration of that W
+    (CONSTRUCTOR_DECLARATIONS: A-C at W 8, A-C16 at W 16, each by repo_path under the checkout and sha256; the other one, declaration A or any
+    other is refused); it is refused with CONSTRUCTOR_REFUSED. Fills CONSTRUCTOR_DEFAULTS."""
     flag = lambda name: '--' + name.replace('_', '-');given = [name for name in CONSTRUCTOR_FLAGS if getattr(args, name, None) is not None]
     if getattr(args, 'constructor_roster', None) is None:
         if given:parser.error(', '.join(map(flag, given)) + ' need --constructor-roster')
@@ -4490,14 +4494,15 @@ def check_constructor_arguments(parser, args):
         if getattr(args, name) is None:setattr(args, name, value)
     if args.constructor_seed < 0:parser.error('--constructor-seed >= 0 required')
     if {k: (str(getattr(args, k)) if k in ('k_own', 'k_opp') else getattr(args, k)) for k in CONSTRUCTOR_COVERED} != CONSTRUCTOR_COVERED:
-        parser.error('--constructor-roster runs only what declaration A-C covers: ' + ' '.join(f'{flag(k)} {v}' for k, v in CONSTRUCTOR_COVERED.items())
-            + ' (other settings, W 16 included, need their own declaration)')
-    pinned = CONSTRUCTOR_DECLARATION
+        parser.error('--constructor-roster runs only what declarations A-C and A-C16 cover: ' + ' '.join(f'{flag(k)} {v}' for k, v in CONSTRUCTOR_COVERED.items())
+            + ' (other settings need their own declaration)')
+    pinned = CONSTRUCTOR_DECLARATIONS.get(args.constructor_worlds)
+    if pinned is None:parser.error(f'--constructor-worlds {args.constructor_worlds}: no declaration covers it (W {sorted(CONSTRUCTOR_DECLARATIONS)})')
     try:where = repo_path_of(args.declared_bounds) if args.declared_bounds else None
     except DeclaredBoundsError:where = None
     if where != pinned['repo_path'] or args.declared_bounds_sha256 != pinned['sha256']:
-        parser.error(f'--constructor-roster runs under declaration A-C only: --declared-bounds {pinned["repo_path"]} --declared-bounds-sha256 {pinned["sha256"]} '
-            f'(given: {args.declared_bounds!r} at {where!r}, sha256 {args.declared_bounds_sha256!r})')
+        parser.error(f'--constructor-worlds {args.constructor_worlds} runs under declaration {pinned["name"]} only: --declared-bounds {pinned["repo_path"]} '
+            f'--declared-bounds-sha256 {pinned["sha256"]} (given: {args.declared_bounds!r} at {where!r}, sha256 {args.declared_bounds_sha256!r})')
     return args
 
 
@@ -4600,7 +4605,7 @@ def parse(argv=None):
     parser.add_argument('--constructor-roster', nargs=2, metavar=('PATH', 'SHA256'), help='CONSTRUCTOR_ROOTS (R1-C): price Codex\'s ProtocolConstructor '
         'worlds on this roster\'s captured roots (read as scripts/phase_d_constructor_coverage.py reads it, pinned by sha256) instead of D3 roots, '
         'selected by CONSTRUCTOR_RULE; (b) NOT_APPLICABLE; needs --saved-roots (the runtime only), --champion-archive, declaration A\'s harness, the '
-        'settings declaration A-C covers and A-C itself as --declared-bounds (check_constructor_arguments)')
+        'settings its declarations cover and the declaration of its W as --declared-bounds: A-C at W 8, A-C16 at W 16 (check_constructor_arguments)')
     parser.add_argument('--showdown-root', help='with --constructor-roster: the pinned, clean Showdown checkout (phase_d_protocol_constructor.load_inputs)')
     parser.add_argument('--node-binary', help='with --constructor-roster: the node binary the constructor\'s Showdown config runs')
     parser.add_argument('--constructor-metadata', nargs=2, metavar=('PATH', 'SHA256'), help='with --constructor-roster: the engine metadata at its sha256')
