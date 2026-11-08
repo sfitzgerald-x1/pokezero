@@ -99,7 +99,11 @@ T_QUANTILE=.95  # Two-sided 90%; validate() pins confidence to .9.
 KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256','arms','search','root_operator','deadline_seconds',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
-      'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration'}
+      'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance'}
+PROVENANCE_KEYS={'foulplay','showdown_commit','engine_tables','base_config_sha256'}
+FOULPLAY_KEYS={'commit','applied_diff_sha256','patch_blobs','poke_engine','runtime_metadata_sha256','python'}
+POKE_ENGINE_KEYS={'version','features','sdist_sha256','setup_script_sha256','gen3_patch_list_sha256','native_so_sha256'}
+ENGINE_TABLES_KEYS={'digest','constructor_metadata_sha256','bank_metadata_sha256'}
 REQUEST_KEYS={'schema','run_directory','declaration','declaration_sha256','ladder_declaration','ladder_declaration_sha256',
               'cell','checkpoint','checkpoint_sha256','base_config'}
 encoded,sha,read_bound,write_new=ladder.encoded,ladder.sha,ladder.read_bound,ladder.write_new
@@ -152,7 +156,30 @@ def validate(declaration):
             or any(type(v)is not int or v<1 for v in cal['seed_band'].values())):
         raise ValueError('worker lanes >= 1, fairness observability with its evidence, and a calibration (MEASURED with '
                          'positive per-stratum ratios when observable, else UNMEASURABLE) with its sha256 and seed band required')
+    validate_provenance(d['provenance'])
     return d
+
+
+def validate_provenance(value):
+    """The opponent's and the engine's identity, recorded in the declaration (descriptive; init only checks the base config sha):
+    the Foul Play runtime (its commit, applied patch diff and patch blobs, the poke-engine build: version, features, sdist, setup
+    script, gen3 patch list and native .so sha256s, runtime metadata, python), the Showdown commit, the live executor's compiled
+    engine tables (constructor_worlds.engine_tables_digest and both metadata shas the R1-C bridge compares) and the base config."""
+    v=value;fp=v.get('foulplay')if type(v)is dict else None;pe=fp.get('poke_engine')if type(fp)is dict else None
+    tables=v.get('engine_tables')if type(v)is dict else None
+    if (type(v)is not dict or set(v)!=PROVENANCE_KEYS or type(fp)is not dict or set(fp)!=FOULPLAY_KEYS
+            or not _hex(fp['commit'],40)or not _hex(fp['applied_diff_sha256'])or not _hex(fp['runtime_metadata_sha256'])
+            or type(fp['python'])is not str or not fp['python'].strip()
+            or type(fp['patch_blobs'])is not dict or not fp['patch_blobs']
+            or any(type(k)is not str or not k.strip()or type(b)is not str or len(b)<8 or not _hex(b,len(b))for k,b in fp['patch_blobs'].items())
+            or type(pe)is not dict or set(pe)!=POKE_ENGINE_KEYS or type(pe['version'])is not str or not pe['version'].strip()
+            or type(pe['features'])is not str or not pe['features'].strip()
+            or not all(_hex(pe[k])for k in ('sdist_sha256','setup_script_sha256','gen3_patch_list_sha256','native_so_sha256'))
+            or not _hex(v['showdown_commit'],40)or type(tables)is not dict or set(tables)!=ENGINE_TABLES_KEYS
+            or not all(_hex(tables[k])for k in ENGINE_TABLES_KEYS)or not _hex(v['base_config_sha256'])):
+        raise ValueError('provenance: the Foul Play runtime identity, the Showdown commit, the engine tables digest with both metadata '
+                         'shas, and the base config sha required')
+    return v
 
 
 def _evidence(value):
@@ -248,6 +275,7 @@ def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladde
     d=validate(read_bound(declaration,declaration_sha256));lad=ladder.validate(read_bound(ladder_declaration,ladder_declaration_sha256))
     if d['ladder_declaration_sha256']!=ladder_declaration_sha256 or lad['checkpoint_sha256']!=d['checkpoint_sha256']:
         raise ValueError('panel declaration must pin this ladder declaration and champion')
+    if d['provenance']['base_config_sha256']!=base_config_sha256:raise ValueError('the declaration\'s provenance must pin this base config')
     cal=d['calibration'];calibration_cells(lad,cal['seed_band']);measured=read_bound(calibration,cal['sha256'])
     if (type(measured)is not dict or measured.get('schema')!=CALIBRATION_SCHEMA or measured.get('status')!=cal['status']
             or measured.get('ratios')!=cal['ratios']or measured.get('seed_band')!=cal['seed_band']

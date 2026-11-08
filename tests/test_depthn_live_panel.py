@@ -46,8 +46,18 @@ def calibration_fixture(ladder_sha256, *, observable=True, ratios=RATIOS, lanes=
                 ladder_declaration_sha256=ladder_sha256, base_config_sha256=panel.sha({}), checkpoint_sha256=ActorContract.champion().checkpoint_sha256)
 
 
-def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64):
-    return dict(schema=panel.SCHEMA, ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
+PROVENANCE = dict(
+    foulplay=dict(commit='9'*40, applied_diff_sha256='d'*64, patch_blobs={'third_party/foulplay-rest-cant.patch': 'b3e95eab'},
+                  poke_engine=dict(version='0.0.47', features='poke-engine/gen3, no default features', sdist_sha256='8'*64,
+                                   setup_script_sha256='c'*64, gen3_patch_list_sha256='f'*64, native_so_sha256='f'*64),
+                  runtime_metadata_sha256='1'*64, python='3.12.13 aarch64'),
+    showdown_commit='f'*40, engine_tables=dict(digest='e'*64, constructor_metadata_sha256='f'*64, bank_metadata_sha256='1'*64),
+    base_config_sha256=panel.sha({}))
+
+
+def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64,
+                provenance=PROVENANCE):
+    return dict(schema=panel.SCHEMA, provenance=copy.deepcopy(provenance), ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
         worker_lanes=4, fairness_observable=dict(value=observable, evidence=dict(path='calibration/calibration.json', sha256=calibration_sha)),
         calibration=dict(status='MEASURED' if observable else 'UNMEASURABLE', sha256=calibration_sha, ratios=dict(ratios) if observable else None,
                          seed_band=dict(CALIBRATION_BAND)),
@@ -125,6 +135,30 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual(panel.BREAKAGE['searched_share_min'], .5)
         for value in (None, dict(EXPECTED, value=0.), dict(EXPECTED, value=1.)):
             self.assertEqual(panel.validate(declaration('a'*64, expected=value))['expected_searched_share'], value)
+
+    def test_refuses_a_malformed_provenance(self):
+        fp, pe, tables = PROVENANCE['foulplay'], PROVENANCE['foulplay']['poke_engine'], PROVENANCE['engine_tables']
+        for value in (None, {}, dict(PROVENANCE, extra=1), {k: v for k, v in PROVENANCE.items() if k != 'engine_tables'},
+                      dict(PROVENANCE, showdown_commit='f'*39), dict(PROVENANCE, base_config_sha256='F'*64),
+                      dict(PROVENANCE, foulplay=dict(fp, commit='g'*40)), dict(PROVENANCE, foulplay=dict(fp, patch_blobs={})),
+                      dict(PROVENANCE, foulplay=dict(fp, patch_blobs={'p': 'b3e9'})), dict(PROVENANCE, foulplay=dict(fp, python=' ')),
+                      dict(PROVENANCE, foulplay=dict(fp, poke_engine=dict(pe, native_so_sha256='x'))),
+                      dict(PROVENANCE, foulplay=dict(fp, poke_engine={k: v for k, v in pe.items() if k != 'features'})),
+                      dict(PROVENANCE, engine_tables=dict(tables, digest='e'*63))):
+            with self.subTest(value), self.assertRaises(ValueError):
+                panel.validate(declaration('a'*64, provenance=value))
+
+    def test_init_refuses_a_provenance_for_another_base_config(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); inputs = root/'inputs'
+            lad = ladder_fixture.declaration(); calibration = calibration_fixture(panel.sha(lad))
+            d = declaration(panel.sha(lad), calibration_sha=panel.sha(calibration), provenance=dict(PROVENANCE, base_config_sha256='0'*64))
+            for name, value in (('ladder', lad), ('declaration', d), ('base', {}), ('calibration', calibration)):
+                panel.write_new(inputs/f'{name}.json', value)
+            with self.assertRaisesRegex(ValueError, 'provenance must pin this base config'):
+                panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
+                    ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/inert/champion.pt',
+                    base_config=inputs/'base.json', base_config_sha256=panel.sha({}), calibration=inputs/'calibration.json')
 
     def test_refuses_a_malformed_expected_searched_share(self):
         source = EXPECTED['source']
