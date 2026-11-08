@@ -91,10 +91,11 @@ class ThunderWaveRuntimeTests(unittest.TestCase):
         self.assertEqual(thunder.supported_raw(raw).tolist(),[True]);self.assertEqual(primary.supported_raw(raw).tolist(),[False])
         for field,value in [('applied',no),('accuracy_hit',no),('hit',no),('type_immune',yes),('ability_immune',yes),('substitute_block',yes),('protected',yes),('absorbed',yes),('damage_immune',yes),('old_status',j.full(1,m.PAR,j.int32)),('new_status',j.full(1,m.TOX,j.int32)),('old_counter',j.ones(1,j.int32))]:
             changed=attempt._replace(**{field:value});self.assertFalse(bool(thunder.supported_raw(primary.words_device(side,side,side,j.full(1,self.move_id,j.int32),changed)).any()),field)
-        traces=[]
+        traces=[];tape=NS(count=zero)
         with patch.object(risks,'_captured_toxic_matches',return_value=yes),patch.object(risks,'_captured_thunder_wave_matches',return_value=yes),patch.object(risks,'_observe',side_effect=lambda *a,**k:traces.append(a) or a[0]):
-            risks.observe_primary_status_device(NS(stream_id=zero),object(),yes,object(),active=yes,captured=object(),captured_thunder_wave=object())
+            risks.observe_primary_status_device(NS(stream_id=zero),tape,yes,object(),active=yes,captured=object(),captured_thunder_wave=object())
         self.assertEqual(len(traces),1)
+        self.assertIs(traces[0][1],tape);self.assertEqual(traces[0][4].tolist(),[0])
 
     def test_current_source_span_b8_and_lum_scope_stay_closed(self):
         b=8;mask=j.array([True]*6+[False]*2);side=j.zeros(b,j.int32);physical=j.full(b,3,j.int32);target=j.full(b,5,j.int32);move=j.full(b,self.move_id,j.int32)
