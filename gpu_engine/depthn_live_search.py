@@ -32,6 +32,26 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   averaging (an unknown price, or its error) is depthn_refused. Any other exception in the shared batch (prepare_roots,
   build, price, the backups) refuses every request of the batch server_error with its text; MemoryError propagates.
   Every response must pass phase_d_search_server.encode (else server_error), so no value breaks the wire.
+- root classes (batch 2 admits forced-switch, sleep, fresh-substitute and wish roots): `root_classes`, the sorted subset of
+  CLASSES the root belongs to (empty: other), and `root_class`, the first by priority forced_switch > fresh_substitute >
+  wish > sleep, else 'other', on every response of a request that reached prepare (None otherwise). Source: batch 2's own
+  protocol facts, recomputed after prepare with the constructor's own helpers on the request's own lines, because prepare
+  keeps neither its public root nor its facts and reaching them would mean patching Codex's module: capture_root (the
+  constructor module's reference, the same config and seed) gives the public materialization payload, then
+  phase_d_tail.inspect_facts(own request, payload, lines): replacement -> forced_switch, fresh_substitutes ->
+  fresh_substitute, wish_set_turns -> wish, a fact check that TRIGGERED for a class counting in it too (the constructor
+  refuses those roots, they are still of that class); the own request's forceSwitch -> forced_switch; sleep: a sleeper in
+  the payload (phase_d_protocol_world._defer_sleep, what the constructor defers) or in the public history
+  (_sleep_origins(lines)). Constructor-refused roots are classified too. When the capture itself fails, only the request
+  and the lines classify (forceSwitch, _sleep_origins): root_class_source says which ('protocol_facts' or
+  'request_and_lines'). Its cost is timings.classify_seconds (one more public-root capture per root).
+- refuse_classes: a prepared root in any of these classes is REFUSED before pricing, cause class_refused, refusal
+  ROOT_CLASS_REFUSED:<its refused classes> (a constructor refusal keeps its own cause).
+- structure check, per root before packing: every constructed world's (state, public) pytree paths, shapes and dtypes
+  (what DepthN's carry signature keys programs on) must equal the reference recorded at warmup (checked against the
+  warmed program keys' carry signature); a root that differs is REFUSED depthn_refused, WORLD_STRUCTURE_MISMATCH:<short
+  diff>, and the batch's other roots still price (DepthN would refuse the whole frame). Before any warmup the first
+  constructed world seen is a provisional reference (carry['provisional']); warmup replaces it.
 - precision: JAX's default matmul precision, the configuration the DepthN champion gates certified, recorded in the
   pricer identity (matmul_precision). Codex's ladder server sets jax_default_matmul_precision='highest' for its own
   champion search; 'highest' forces full-f32 matmul algorithms where the default may use faster reduced-precision ones on
@@ -56,6 +76,7 @@ import math
 import time
 
 import jax
+import numpy as np
 
 from pokezero import v5_gumbel as original
 from pokezero.phase_d_search_server import SCHEMA,encode
@@ -64,11 +85,12 @@ from . import champion_evaluator as evaluators,constructor_worlds as cw,depthn_b
 RUNGS={'DN2W8':8,'DN2W16':16}
 ROOT_OPERATOR='ARGMAX_MEAN_COMPLETED_Q'
 ROOT_OPERATOR_IMPL='search_hedge.averaging'
-CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request')
+CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request','class_refused')
+CLASSES=('forced_switch','fresh_substitute','wish','sleep')   # root_class priority order
 PROTOCOL_KEYS=('schema','request_id','battle_id','owner','stream_id','decision_index','generation','prefix_sha256','lines','own_request_line')
 OURS=('rung','budget_seconds')
 ARRIVAL='_arrival_monotonic'   # stamped by the server's queue (time.monotonic at arrival); a client's value is overwritten
-STAGES=('queue_seconds','prepare_seconds','build_seconds','price_seconds','reduce_seconds')
+STAGES=('queue_seconds','prepare_seconds','classify_seconds','build_seconds','price_seconds','reduce_seconds')
 DEPTH=2;WIDTH=9
 FATAL=(MemoryError,)
 WARMUP_BUDGET=3600.
@@ -113,6 +135,52 @@ def decide(blocks,root_logits,root_legal):
     return dict(out,**report)
 
 
+def classify(constructor,request):
+    """(root_classes, root_class_source) of a protocol request (module docstring): batch 2's protocol facts recomputed with
+    the constructor's own helpers. Raises only on a malformed own request."""
+    from . import phase_d_protocol_constructor as pc,phase_d_protocol_world as world,phase_d_tail as tail
+    lines=tuple(request['lines']);packet=pc._packet(request['own_request_line'],request['owner']);classes=set()
+    if any(packet.get('forceSwitch',())):classes.add('forced_switch')
+    try:
+        if world._sleep_origins(lines):classes.add('sleep')
+    except cw.ROOT_ERRORS:pass
+    try:
+        public=pc.capture_root(config=constructor.owning_config,contract=pc.ActorContract.champion(),lines=lines,battle_id=request['battle_id'],
+            address=pc.DecisionAddress(request['stream_id'],request['decision_index'],int(request['owner'][1])-1),seed=constructor.seed&0xffffffff)
+        payload=public.materialization_payload;checks,facts=tail.inspect_facts(packet,payload,lines)
+    except cw.ROOT_ERRORS:return sorted(classes),'request_and_lines'
+    triggered={c['kind']for c in checks if c.get('status')=='TRIGGERED'}
+    if facts.get('replacement')is not None or any(k.startswith('PUBLIC_REPLACEMENT')for k in triggered):classes.add('forced_switch')
+    if facts.get('fresh_substitutes')or'PUBLIC_SUBSTITUTE_NOT_FRESH_OR_PASSED'in triggered:classes.add('fresh_substitute')
+    if facts.get('wish_set_turns')or'PUBLIC_WISH_TIMING_UNAVAILABLE'in triggered:classes.add('wish')
+    try:
+        if world._defer_sleep(payload)[1]:classes.add('sleep')
+    except ValueError:classes.add('sleep')   # PUBLIC_SLEEP_FAINT_CONFLICT: a slp condition is there
+    except(KeyError,IndexError,TypeError,AttributeError):pass
+    return sorted(classes),'protocol_facts'
+
+
+def root_class(classes):
+    """The first of `classes` by CLASSES' priority, else 'other'."""
+    return next((c for c in CLASSES if c in classes),'other')
+
+
+def carry_structure(world):
+    """A world's (state, public) pytree as (treedef, ((path, shape, dtype), ...)): what DepthN's carry signature hashes."""
+    flat,tree=jax.tree_util.tree_flatten_with_path((world.state,world.public))
+    return str(tree),tuple((jax.tree_util.keystr(path),tuple(np.shape(x)),str(x.dtype if hasattr(x,'dtype')else np.asarray(x).dtype))for path,x in flat)
+
+
+def structure_diff(got,want,limit=3):
+    """A short description of how carry structure `got` differs from `want`, or None when equal."""
+    if got==want:return None
+    g={p:(s,d)for p,s,d in got[1]};w={p:(s,d)for p,s,d in want[1]}
+    out=[f'missing {p}'for p in w if p not in g]+[f'extra {p}'for p in g if p not in w]
+    out+=[f'{p} {g[p][0]}/{g[p][1]}!={w[p][0]}/{w[p][1]}'for p in w if p in g and g[p]!=w[p]]
+    out=out or['pytree structure differs']
+    return'; '.join(out[:limit])+(f' (+{len(out)-limit} more)'if len(out)>limit else'')
+
+
 def refusal_cause(reason):
     """constructor_refused for a root prepare() refused or with a refused world (Codex's all-W rule), else depthn_refused."""
     return('constructor_refused'if reason.startswith(('constructor-root:','WORLD_CONSTRUCTOR_REFUSED'))or reason=='materialization'
@@ -130,7 +198,7 @@ def _real(x):
 
 class DepthNLiveSearch:
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
-            archive_sha256=None,device='cpu',clock=time.monotonic):
+            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=()):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
         arrival clock (time.monotonic)."""
@@ -153,6 +221,9 @@ class DepthNLiveSearch:
         if not _real(min_price_seconds)or min_price_seconds<0:raise ValueError('finite min_price_seconds >= 0 required')
         if type(tree_commit)is not str or not tree_commit:raise ValueError('the tree commit required')
         if type(params)is not tuple or not params:raise ValueError('the champion bank (params,) required')
+        refuse_classes=tuple(refuse_classes)
+        if any(c not in CLASSES for c in refuse_classes):raise ValueError(f'refuse_classes from {CLASSES} required, got {refuse_classes!r}')
+        self.refuse_classes=tuple(sorted(set(refuse_classes),key=CLASSES.index));self.carry=None;self.warming=False
         if cw.constructor_binding(constructor)!=binding:raise ValueError('the constructor builds under another binding than the pricer\'s')
         if isinstance(self.forward,evaluators.ChampionEvaluator):evaluators.check_binding(self.forward,constructor.catalog)
         self.constructor,self.pricers,self.params,self.binding,self.recipe=constructor,dict(pricers),params,binding,recipe
@@ -177,6 +248,7 @@ class DepthNLiveSearch:
             refusal=None,cause=None,requested_worlds=self.W,constructed_worlds=0,decision_seconds=None,root_operator=ROOT_OPERATOR,
             root_operator_impl=ROOT_OPERATOR_IMPL,completed_q=None,policy_target=None,root_value=None,action_mean_q=None,action_policy_target=None,
             mean_q_agrees=None,reduction_note=None,block_causes=None,world_refusals=None,timings=dict.fromkeys(STAGES),batch_size=n,bucket=None,
+            root_classes=None,root_class=None,root_class_source=None,
             tree_commit=self.tree_commit,pricer=dict(self.pricer_identity))
 
     @staticmethod
@@ -214,9 +286,14 @@ class DepthNLiveSearch:
                     f'under the {self.min_price_seconds:.3f}s minimum to price');continue
             todo.append((i,{k:request[k]for k in PROTOCOL_KEYS},row))
         if todo:
-            try:done=self._search(todo,started,bucket)
+            classified={}   # filled per root as soon as it is classified, so a batch exception still reports the classes
+            try:done=self._search(todo,started,bucket,classified)
             except FATAL:raise
-            except Exception as error:done={i:dict(row,cause='server_error',refusal=f'{type(error).__name__}: {error}')for i,_,row in todo}
+            except Exception as error:
+                done={}
+                for i,_,row in todo:
+                    labels=dict(classified.get(i,{}));seconds=labels.pop('classify_seconds',None)
+                    done[i]=dict(row,**labels,timings=dict(row['timings'],classify_seconds=seconds),cause='server_error',refusal=f'{type(error).__name__}: {error}')
             finally:self._evict()
             for i,row in done.items():out[i]=row
         for i,row in enumerate(out):
@@ -225,12 +302,28 @@ class DepthNLiveSearch:
                 out[i]=dict(self._response(row.get('request_id'),n),cause='server_error',refusal=f'RESPONSE_NOT_ENCODABLE: {type(error).__name__}: {error}')
         return out
 
-    def _search(self,todo,started,bucket):
-        """prepare -> build -> one price -> reduce for the batch's valid requests; {response index: response}."""
+    def _search(self,todo,started,bucket,classified):
+        """prepare -> classify -> gates (refused classes, carry structure) -> build -> one price -> decide for the batch's valid
+        requests; {response index: response}."""
         for _,p,_ in todo:
             if type(p['battle_id'])is str:self.battles[p['battle_id']]=None;self.battles.move_to_end(p['battle_id'])
         prepared=cw.prepare_roots(self.constructor,[p for _,p,_ in todo],device=self.device);t_prepare=time.perf_counter()
-        made=cw.build(self.constructor,prepared,self.pricers[self.buckets[0]],self.params,binding=self.binding,recipe=self.recipe,only_complete=True)
+        gated=[];gates={}
+        for(i,p,_),item in zip(todo,prepared):
+            clock=time.perf_counter()
+            try:classes,source=classify(self.constructor,p)
+            except FATAL:raise
+            except Exception as error:classes,source=None,f'UNCLASSIFIED: {type(error).__name__}: {error}'
+            classified[i]=dict(root_classes=classes,root_class=None if classes is None else root_class(classes),root_class_source=source,
+                classify_seconds=time.perf_counter()-clock)
+            refused=[c for c in self.refuse_classes if classes and c in classes]
+            if type(item)is cw.Prepared and refused:gates[i]=('class_refused','ROOT_CLASS_REFUSED:'+','.join(refused))
+            elif type(item)is cw.Prepared:
+                diff=self._structure(item)
+                if diff:gates[i]=('depthn_refused','WORLD_STRUCTURE_MISMATCH:'+diff)
+            gated.append(cw.RootRefusal(item.request_id,'GATED','',item.seconds,item.binding)if i in gates else item)
+        t_classify=time.perf_counter()
+        made=cw.build(self.constructor,gated,self.pricers[self.buckets[0]],self.params,binding=self.binding,recipe=self.recipe,only_complete=True)
         t_build=time.perf_counter();chosen=frame=None
         if made.requests:
             chosen=bucket if bucket is not None else next((b for b in self.buckets if len(made.requests)<=b*self.K),None)
@@ -249,15 +342,28 @@ class DepthNLiveSearch:
             raise ValueError('the decisions do not answer the batch\'s requests in order')
         out={}
         for(i,_,row),item,result in zip(todo,prepared,results):
-            worlds=item.made.worlds if type(item)is cw.Prepared else()
-            timings=dict(row['timings'],prepare_seconds=item.seconds,build_seconds=t_build-t_prepare,price_seconds=t_price-t_build,reduce_seconds=t_reduce-t_price)
-            base=dict(row,constructed_worlds=sum(w.state is not None for w in worlds),world_refusals=[dict(world=w.index,kinds=list(w.refusals))for w in worlds if w.refusals],
+            worlds=item.made.worlds if type(item)is cw.Prepared else();labels=dict(classified[i]);seconds=labels.pop('classify_seconds')
+            timings=dict(row['timings'],prepare_seconds=item.seconds,classify_seconds=seconds,build_seconds=t_build-t_classify,price_seconds=t_price-t_build,
+                reduce_seconds=t_reduce-t_price)
+            base=dict(row,**labels,constructed_worlds=sum(w.state is not None for w in worlds),world_refusals=[dict(world=w.index,kinds=list(w.refusals))for w in worlds if w.refusals],
                 timings=timings,bucket=chosen,block_causes=None if result['block_causes']is None else list(result['block_causes']))
-            if result['status']=='COMPLETE':
+            if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
+            elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
                     'action_policy_target','mean_q_agrees','reduction_note')},decision_seconds=decided)
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
+
+    def _structure(self,item):
+        """WORLD_STRUCTURE_MISMATCH detail for a prepared root whose constructed worlds' carry differs from the reference
+        (recorded at warmup; before it, the first constructed world seen in the batch), else None."""
+        for world in item.made.worlds:
+            if world.state is None:continue
+            got=carry_structure(world)
+            if self.carry is None:self.carry=dict(structure=got,signature=dn.carry_signature(((world,),)),provisional=not self.warming)
+            diff=structure_diff(got,self.carry['structure'])
+            if diff:return f'world {world.index}: {diff}'
+        return None
 
     # Sessions -----------------------------------------------------------------------------------------------------------------------
     def _evict(self):
@@ -287,13 +393,24 @@ class DepthNLiveSearch:
         bucket, so every program compiles before READY. Windows of the saved requests are tried until one prices at the bucket
         with every program of a live call compiled (missing_programs; RuntimeError if none does, e.g. saved roots whose every
         turn-1 cell is terminal never reach the leaf program). Returns dict(buckets={b: seconds, compiles and outcomes},
-        programs, seconds)."""
+        programs, seconds, carry_signature). It also records the carry reference of the structure check (the warmed roots'
+        worlds), which must equal the carry signature in the warmed program keys."""
         keys=PROTOCOL_KEYS[2:];pool=[]
         for r in requests:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
-        report={};started=time.perf_counter()
+        report={};started=time.perf_counter();self.carry=None;self.warming=True
+        try:report=self._warm_buckets(pool)
+        finally:self.warming=False;self._reset_sessions()
+        signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
+        if self.carry is None or signatures!={self.carry['signature']}:
+            raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
+        self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'])
+        return self.warm
+
+    def _warm_buckets(self,pool):
+        report={}
         for b in self.buckets:
             for attempt in range(-(-len(pool)//b)):
                 batch=[dict(pool[(attempt*b+j)%len(pool)],schema=SCHEMA,request_id=f'warmup-b{b}-{attempt}-{j}',rung=self.rung,budget_seconds=WARMUP_BUDGET)
@@ -309,6 +426,4 @@ class DepthNLiveSearch:
             report[b]=dict(cold_seconds=cold,warm_seconds=warm,attempts=attempt+1,roots=b,complete=sum(r['status']=='COMPLETE'for r in rows),
                 causes=sorted({r['cause']for r in rows if r['cause']}),compiled=len(compiles),lower_seconds=sum(c[1]for c in compiles),
                 compile_seconds=sum(c[2]for c in compiles),warm_compiled=len(self.pricers[b].compiles)if any(r['bucket']==b for r in again)else None)
-        self._reset_sessions()
-        self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started)
-        return self.warm
+        return report
