@@ -10,9 +10,12 @@ The amendment (the lead's ruling, committed before any paired or outcome statist
 - the screen's harm check (the addendum, evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json) is the mirror image: every
   UNKNOWN or missing search cell scores 1 and every UNKNOWN or missing RAW cell 0, the same clustered interval; harm only if its upper
   bound is < 0 (the known-pairs upper bound beside it, descriptive);
-- decision: a void, a held fairness flag or an incomplete run keeps the official decision; at the screen, STOP_HARM if mirror harm, else
-  STOP_BREAKAGE if any amended breakage, else CONTINUE_TO_2000; at the bar, BAR_MET when the conservative lower bound is > 0 with no
-  amended breakage, else BAR_NOT_MET;
+- both bounds (the addendum evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json): harm needs the known-pairs upper bound < 0
+  AND the mirror upper bound < 0; the bar needs the known-pairs lower bound > 0 AND the conservative lower bound > 0, so the amendment
+  only adds robustness to unknowns and never makes a claim easier than the declared estimator;
+- decision: a void, a held fairness flag or an incomplete run keeps the official decision; at the screen, STOP_HARM if harm (both), else
+  STOP_BREAKAGE if any amended breakage, else CONTINUE_TO_2000; at the bar, BAR_MET when both lower bounds are > 0 with no amended
+  breakage, else BAR_NOT_MET;
 - every UNKNOWN cell is classified by cause (round_cap, foulplay_challenge_timeout, foulplay_choice_timeout, other) and arm.
 Only the standard library and scipy (the declared estimator's own t quantile). Writes the verdict once with --output.
 """
@@ -86,12 +89,15 @@ def conservative_interval(raw, search, limit):return clustered_interval(raw, sea
 def mirror_interval(raw, search, limit):return clustered_interval(raw, search, limit, search_unknown=1., raw_unknown=0.)
 
 
-def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha256, addendum, addendum_sha256):
+def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha256, addendum, addendum_sha256, both, both_sha256):
     if amendment.get('schema') != AMENDMENT_SCHEMA or readout.get('declaration_sha256') != amendment.get('declaration_sha256'):
         raise ValueError('an amendment of this readout\'s declaration required')
     if (addendum.get('schema') != AMENDMENT_SCHEMA or addendum.get('declaration_sha256') != amendment['declaration_sha256']
             or (addendum.get('addendum_to') or {}).get('sha256') != amendment_sha256):
         raise ValueError('the harm addendum to this amendment required')
+    if (both.get('schema') != AMENDMENT_SCHEMA or both.get('declaration_sha256') != amendment['declaration_sha256']
+            or sorted(x.get('sha256') for x in both.get('addendum_to') or ()) != sorted([amendment_sha256, addendum_sha256])):
+        raise ValueError('the both-bounds addendum to this amendment and its harm addendum required')
     if (readout.get('tree') or {}).get('commit') != amendment['run']['tree_commit']:raise ValueError('a readout of the amended run\'s tree required')
     arm, limit = readout['arm'], readout['paired_cells']
     if limit not in (SCREEN_CELLS, BAR_CELLS) or (readout['bar'] is None) != (limit == SCREEN_CELLS):raise ValueError('a screen or bar readout required')
@@ -127,12 +133,15 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
     lower = None if void or bound['interval90'] is None else bound['interval90'][0]
     mirror = None if void else mirror_interval(arms['RAW'], arms[arm], limit)
     upper = None if void or mirror['interval90'] is None else mirror['interval90'][1]
-    harm = upper is not None and upper < 0   # the addendum: a harm stop survives every unknown counted for search
+    known = None if void else paired.get('interval90')   # the declared estimator's known-pairs interval
+    harm = known is not None and known[1] < 0 and upper is not None and upper < 0   # both: declared and mirror
+    met = known is not None and known[0] > 0 and lower is not None and lower > 0   # both: declared and conservative
     if readout['decision'] in KEPT:decision = readout['decision']
     elif screen:decision = 'STOP_HARM' if harm else 'STOP_BREAKAGE' if breakage else 'CONTINUE_TO_2000'
-    else:decision = 'BAR_MET' if lower is not None and lower > 0 and not breakage else 'BAR_NOT_MET'
+    else:decision = 'BAR_MET' if met and not breakage else 'BAR_NOT_MET'
     paired = paired or {}
-    return dict(schema=VERDICT_SCHEMA, amendment_sha256=amendment_sha256, addendum_sha256=addendum_sha256, readout_sha256=readout_sha256,
+    return dict(schema=VERDICT_SCHEMA, amendment_sha256=amendment_sha256, addendum_sha256=addendum_sha256, both_sha256=both_sha256,
+        readout_sha256=readout_sha256, tree_commit=readout['tree']['commit'], bar_met=None if screen else met,
         arm=arm, paired_cells=limit, official_decision=readout['decision'], official_breakage=readout['breakage'], official_harm=readout['harm'],
         decision=decision, breakage=breakage, harm=harm,
         conservative=None if void else dict(rule='UNKNOWN or missing: search 0, RAW 1; seed-clustered t, two-sided 90%', **bound, lower_bound=lower),
@@ -146,13 +155,13 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    for name in ('readout', 'readout-sha256', 'amendment', 'amendment-sha256', 'addendum', 'addendum-sha256', 'run-directory'):
+    for name in ('readout', 'readout-sha256', 'amendment', 'amendment-sha256', 'addendum', 'addendum-sha256', 'both', 'both-sha256', 'run-directory'):
         p.add_argument('--' + name, required=True)
     p.add_argument('--output', help='write the verdict once here')
     args = p.parse_args(argv)
     value = verdict(read_bound(args.readout, args.readout_sha256), read_bound(args.amendment, args.amendment_sha256), args.run_directory,
         readout_sha256=args.readout_sha256, amendment_sha256=args.amendment_sha256, addendum=read_bound(args.addendum, args.addendum_sha256),
-        addendum_sha256=args.addendum_sha256)
+        addendum_sha256=args.addendum_sha256, both=read_bound(args.both, args.both_sha256), both_sha256=args.both_sha256)
     text = json.dumps(value, indent=1, sort_keys=True) + '\n'
     if args.output:
         with open(args.output, 'x') as f:f.write(text)

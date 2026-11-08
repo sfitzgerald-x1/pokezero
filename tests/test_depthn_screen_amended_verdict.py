@@ -11,6 +11,7 @@ from scripts import depthn_screen_amended_verdict as V
 EVALS = Path(__file__).resolve().parents[1]/'evals'
 AMENDMENT = EVALS/'depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json'
 ADDENDUM = EVALS/'depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json'
+BOTH = EVALS/'depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json'
 DECLARATION_SHA256 = '1d6f227d74555b8c98f313b7cf50cebb05c2261de6a7ef9b1b25464486237065'
 TREE = '1aaa75f94d41b538f1bca22f5b4afc0627e627f4'
 ROUND_CAP = 'RuntimeError: owning game round cap without actual owner terminal'
@@ -56,19 +57,39 @@ class AmendedVerdictTests(unittest.TestCase):
         self.directory = TemporaryDirectory(); self.root = Path(self.directory.name)
         self.amendment = json.loads(AMENDMENT.read_bytes()); self.sha = hashlib.sha256(AMENDMENT.read_bytes()).hexdigest()
         self.addendum = json.loads(ADDENDUM.read_bytes()); self.addendum_sha = hashlib.sha256(ADDENDUM.read_bytes()).hexdigest()
+        self.both = json.loads(BOTH.read_bytes()); self.both_sha = hashlib.sha256(BOTH.read_bytes()).hexdigest()
 
     def tearDown(self): self.directory.cleanup()
 
     def fresh(self): self.directory.cleanup(); self.directory = TemporaryDirectory(); self.root = Path(self.directory.name)
 
-    def run_verdict(self, value, addendum=None):
+    def run_verdict(self, value, addendum=None, both=None):
         return V.verdict(value, self.amendment, self.root, readout_sha256='r'*64, amendment_sha256=self.sha,
-                         addendum=self.addendum if addendum is None else addendum, addendum_sha256=self.addendum_sha)
+                         addendum=self.addendum if addendum is None else addendum, addendum_sha256=self.addendum_sha,
+                         both=self.both if both is None else both, both_sha256=self.both_sha)
 
     def test_the_committed_files_are_the_rules_applied(self):
         self.assertEqual((self.amendment['schema'], self.amendment['declaration_sha256'], self.amendment['rule']['unknown_share_max_per_arm'],
                           self.amendment['run']['tree_commit']), (V.AMENDMENT_SCHEMA, DECLARATION_SHA256, .05, TREE))
         self.assertEqual((self.addendum['addendum_to']['sha256'], self.addendum['declaration_sha256']), (self.sha, DECLARATION_SHA256))
+        self.assertEqual(sorted(x['sha256'] for x in self.both['addendum_to']), sorted([self.sha, self.addendum_sha]))
+
+    def test_harm_and_the_bar_need_both_the_declared_and_the_imputed_bound(self):
+        rng = random.Random(11); raw, search = scores(500, rng), scores(500, rng, mean=.1)   # search clearly worse: mirror upper < 0
+        write_run(self.root, raw, search); value = official(self.root, 500, decision='STOP_HARM', harm=True)
+        self.assertEqual(self.run_verdict(value)['decision'], 'STOP_HARM')
+        loose = dict(value, paired=dict(value['paired'], interval90=[-.06, .001]))   # the declared bound does not show harm: neither do we
+        self.assertEqual((self.run_verdict(loose)['harm'], self.run_verdict(loose)['decision']), (False, 'CONTINUE_TO_2000'))
+        self.fresh(); raw, search = scores(2000, rng, mean=.3), scores(2000, rng, mean=.8)   # search clearly better: conservative lower > 0
+        write_run(self.root, raw, search); value = official(self.root, 2000, decision='BAR_MET')
+        self.assertEqual((self.run_verdict(value)['bar_met'], self.run_verdict(value)['decision']), (True, 'BAR_MET'))
+        short = dict(value, paired=dict(value['paired'], interval90=[-.01, .2]))   # the declared lower bound misses: so does the bar
+        self.assertEqual((self.run_verdict(short)['bar_met'], self.run_verdict(short)['decision']), (False, 'BAR_NOT_MET'))
+        self.fresh()
+        for p in range(2000):
+            if p % 4 != 3: search[p] = CHALLENGE   # three of four search cells unknown, counted as losses: the conservative lower bound misses
+        write_run(self.root, raw, search); value = official(self.root, 2000, decision='BAR_MET')
+        self.assertEqual(self.run_verdict(dict(value, paired=dict(value['paired'], interval90=[.05, .3])))['bar_met'], False)
 
     def test_a_few_unknowns_are_no_longer_breakage_and_are_classified(self):
         rng = random.Random(1); raw, search = scores(500, rng), scores(500, rng)
@@ -144,11 +165,14 @@ class AmendedVerdictTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'amendment of this readout'): self.run_verdict(dict(value, declaration_sha256='0'*64))
         with self.assertRaisesRegex(ValueError, 'harm addendum'):
             self.run_verdict(value, addendum=dict(self.addendum, addendum_to=dict(self.addendum['addendum_to'], sha256='0'*64)))
+        with self.assertRaisesRegex(ValueError, 'both-bounds addendum'):
+            self.run_verdict(value, both=dict(self.both, addendum_to=self.both['addendum_to'][:1]))
         path = self.root/'readout.json'; path.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError, 'sha256 differs'): V.read_bound(path, '0'*64)
         out = self.root/'verdict.json'; sha = hashlib.sha256(path.read_bytes()).hexdigest()
         argv = ['--readout', str(path), '--readout-sha256', sha, '--amendment', str(AMENDMENT), '--amendment-sha256', self.sha,
-                '--addendum', str(ADDENDUM), '--addendum-sha256', self.addendum_sha, '--run-directory', str(self.root), '--output', str(out)]
+                '--addendum', str(ADDENDUM), '--addendum-sha256', self.addendum_sha, '--both', str(BOTH), '--both-sha256', self.both_sha,
+                '--run-directory', str(self.root), '--output', str(out)]
         self.assertEqual(V.main(argv), 0); self.assertEqual(json.loads(out.read_text())['readout_sha256'], sha)
         with self.assertRaises(FileExistsError): V.main(argv)
 
