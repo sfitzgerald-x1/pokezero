@@ -10,6 +10,7 @@ import struct
 import tempfile
 import threading
 import time
+from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
@@ -160,11 +161,14 @@ class ServerTests(unittest.TestCase):
         args=S.options(base+champion)
         self.assertEqual((args.rung,args.buckets,args.max_requests,args.champion_precision,args.min_price_seconds,args.session_cap,args.host),
             ('DN2W8',(1,2,4),4,'bf16',1.,256,'127.0.0.1'))
-        args=S.options(base+champion+['--rung','DN2W16','--buckets','2,1','--max-requests','1'])
-        self.assertEqual((args.rung,args.buckets,args.max_requests),('DN2W16',(1,2),1))
+        args=S.options(base+champion+['--rung','DN2W16','--buckets','2,1','--max-requests','1','--refuse-classes','wish,forced_switch'])
+        self.assertEqual((args.rung,args.buckets,args.max_requests,args.refuse_classes),('DN2W16',(1,2),1,('wish','forced_switch')))
+        self.assertEqual(S.options(base+champion).refuse_classes,())
+        search=NS(tree_commit='t',rung='DN2W8',max_requests=4,min_price_seconds=1.,session_cap=256,refuse_classes=('forced_switch','wish'),pricer_identity={})
+        self.assertEqual(S.header(args,search)['refuse_classes'],['forced_switch','wish'])   # recorded in READY and the telemetry header
         for bad in(base,base+champion[:2],base+champion+['--max-requests','5'],base+champion+['--buckets','0,1'],base+champion+['--rung','R1'],
                 base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion,
-                base+champion+['--batch-wait-seconds','.5'],base+champion+['--queue-limit','2']):   # the last two: Codex's queue checks, before any load
+                base+champion+['--batch-wait-seconds','.5'],base+champion+['--queue-limit','2'],base+champion+['--refuse-classes','nap']):   # the last two: Codex's queue checks, before any load
             with self.subTest(bad=bad[len(base)-2:]),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(bad)
         with tempfile.TemporaryDirectory()as tmp:
             path=Path(tmp)/'w.jsonl';path.write_text('{"battle_id":"a"}\n\n{"battle_id":"b"}\n')

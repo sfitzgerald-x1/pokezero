@@ -4,7 +4,8 @@
 Design. build() loads Codex's pinned constructor inputs (phase_d_protocol_constructor.load_inputs: B2 catalog, bound
 source, engine metadata, owning config), the champion (champion_evaluator's flags: archive and checkpoint sha256s, bf16 by
 default), one ProtocolConstructor (W from the rung, sessions keyed by the rung), the executor over the same metadata and
-catalog, and one DepthNPricer per capacity bucket (depthn_live_search.make_pricers), and returns a DepthNLiveSearch. run()
+catalog, and one DepthNPricer per capacity bucket (depthn_live_search.make_pricers), and returns a DepthNLiveSearch
+(--refuse-classes passed through: those root classes are refused before pricing; recorded in the header and READY). run()
 warms it up on --warmup-requests (every bucket's programs compile while nothing listens), wraps it for --telemetry and
 serves it until stopped (SIGTERM or an interrupt); it is never restarted per game.
 - Server is phase_d_search_server.Server set up through its own _initialize, as phase_d_ladder_transport.Server: Codex's
@@ -151,6 +152,12 @@ def buckets_arg(text):
     return values
 
 
+def classes_arg(text):
+    values=tuple(x for x in text.split(',')if x)
+    if any(x not in live.CLASSES for x in values):raise argparse.ArgumentTypeError(f'comma-separated root classes from {", ".join(live.CLASSES)} required')
+    return values
+
+
 def parser():
     p=argparse.ArgumentParser(description=__doc__.split('\n')[0])
     for name in('showdown-root','node-binary','metadata','expected-metadata-sha256','vocabulary','expected-vocabulary-sha256'):p.add_argument('--'+name,required=True)
@@ -162,6 +169,8 @@ def parser():
     p.add_argument('--batch-wait-seconds',type=float,default=.005);p.add_argument('--queue-limit',type=int,default=256)
     p.add_argument('--min-price-seconds',type=float,default=1.,help='refuse expired_in_queue when the queue wait leaves less of the budget')
     p.add_argument('--session-cap',type=int,default=256,help='constructor sessions kept, by least-recent battle')
+    p.add_argument('--refuse-classes',type=classes_arg,default=(),help='root classes refused before pricing (class_refused), comma-separated from '
+        +', '.join(live.CLASSES)+' (default none)')
     p.add_argument('--seed',type=int,default=20261103,help='constructor world seed (Codex\'s default)')
     p.add_argument('--recipe-seed',type=int,default=20261103,help='the pricer\'s lane-order recipe seed')
     p.add_argument('--saved-root-admission',action='store_true',help='Codex\'s stateless mode: every prefix folded from scratch, no sessions')
@@ -220,14 +229,14 @@ def build(args):
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call)
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
-        max_requests=args.max_requests,session_cap=args.session_cap)
+        max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes)
 
 
 def header(args,search):
     """The run's identity for READY and the telemetry: code, champion, pricer, constructor and server settings."""
     import jax
     return dict(tree_commit=search.tree_commit,rung=search.rung,max_requests=search.max_requests,min_price_seconds=search.min_price_seconds,
-        session_cap=search.session_cap,batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
+        session_cap=search.session_cap,refuse_classes=list(search.refuse_classes),batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
