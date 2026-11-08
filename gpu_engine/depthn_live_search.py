@@ -57,10 +57,12 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   finish unless every warmup root shares it, and checks it is the only constructor-world carry signature in the warmed
   program keys; the warm report (and READY) names the reference root. Before any warmup the first such root seen is a
   provisional reference (carry['provisional']); warmup replaces it.
-- precision: JAX's default matmul precision, the configuration the DepthN champion gates certified, recorded in the
-  pricer identity (matmul_precision). Codex's ladder server sets jax_default_matmul_precision='highest' for its own
-  champion search; 'highest' forces full-f32 matmul algorithms where the default may use faster reduced-precision ones on
-  GPU, so pricing under it would be a configuration the gates never certified.
+- precision: the champion gates R1/R2/R3 were certified under JAX_DEFAULT_MATMUL_PRECISION=highest (and
+  JAX_ENABLE_X64=0), set by the devbox environment; Codex's ladder server also prices under 'highest' (full-f32 matmul
+  algorithms where JAX's default may use faster reduced-precision ones on GPU). The live server hard-pins it
+  (depthn_live_server --matmul-precision, default 'highest': it refuses to start on any other setting); this module
+  records jax.config.jax_default_matmul_precision in the pricer identity (matmul_precision) of every response, and the
+  panel's probe and readout refuse a response priced under another precision.
 Response, per the live contract: schema, request_id, rung, archive_sha256, status, action_index, q_values (9, None on
 illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_seconds (batch start -> result, COMPLETE
 only); ours: root_operator, root_operator_impl, completed_q, policy_target, root_value, action_mean_q,

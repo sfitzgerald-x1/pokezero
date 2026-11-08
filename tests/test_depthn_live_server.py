@@ -15,6 +15,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero import phase_d_search_server as original
+PINNED={'JAX_DEFAULT_MATMUL_PRECISION':'highest'}
 from gpu_engine import depthn_live_search as live
 from scripts import depthn_live_server as S
 
@@ -138,8 +139,9 @@ class ServerTests(unittest.TestCase):
         base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
             '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
             '--champion-checkpoint-sha256','d'*64,'--refuse-classes','wish,sleep','--max-requests','2','--session-cap','64','--tree-commit','t'*40]
-        args=S.options(base);made={}
-        stand_ins=((jax,'devices',lambda:[NS(platform='gpu')]),(pc,'load_inputs',lambda a:('catalog','source','metadata','config')),
+        with patch.dict(os.environ,PINNED):args=S.options(base)
+        made={}
+        stand_ins=((S,'matmul_precision',lambda:'highest'),(jax,'devices',lambda:[NS(platform='gpu')]),(pc,'load_inputs',lambda a:('catalog','source','metadata','config')),
             (S.evaluators,'load_from_arguments',lambda a:NS(params='champion')),(pc,'ProtocolConstructor',lambda **kw:NS(**kw)),
             (teacher,'make_executor',lambda *a,**k:'executor'),(transition,'tables_from_metadata',lambda m:'tables'),
             (engine_device_observation,'compile_tables',lambda m,catalog:'observation'),(S.live,'make_pricers',lambda *a,**k:'pricers'),
@@ -148,6 +150,28 @@ class ServerTests(unittest.TestCase):
             for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
             self.assertEqual(S.build(args),'search')
         self.assertEqual((made['refuse_classes'],made['max_requests'],made['session_cap'],made['tree_commit'],made['binding']),(('wish','sleep'),2,64,'t'*40,'binding'))
+
+    def test_the_matmul_precision_is_hard_pinned(self):
+        """The environment is checked before anything loads; JAX's own setting again in build, before any input or champion."""
+        from gpu_engine import phase_d_protocol_constructor as pc
+        base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
+            '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
+            '--champion-checkpoint-sha256','d'*64]
+        for environment in({},{'JAX_DEFAULT_MATMUL_PRECISION':'default'},{'JAX_DEFAULT_MATMUL_PRECISION':'high'}):
+            with self.subTest(environment=environment),patch.dict(os.environ,environment,clear=False),redirect_stderr(io.StringIO())as err:
+                if not environment:os.environ.pop('JAX_DEFAULT_MATMUL_PRECISION',None)
+                with self.assertRaises(SystemExit):S.options(base)
+                self.assertIn('JAX_DEFAULT_MATMUL_PRECISION',err.getvalue())
+        with patch.dict(os.environ,{'JAX_DEFAULT_MATMUL_PRECISION':'high'}):self.assertEqual(S.options(base+['--matmul-precision','high']).matmul_precision,'high')
+        with patch.dict(os.environ,PINNED):args=S.options(base)
+        self.assertEqual(args.matmul_precision,'highest')
+        with patch.object(S,'matmul_precision',return_value='None'),patch.object(pc,'load_inputs',side_effect=AssertionError('nothing loads'))as load,\
+                self.assertRaisesRegex(ValueError,'differs from the pinned'):
+            S.build(args)
+        load.assert_not_called()
+        search=NS(tree_commit='t',rung='DN2W8',max_requests=4,min_price_seconds=1.,session_cap=256,refuse_classes=(),pricer_identity={})
+        with patch.object(S,'matmul_precision',return_value='highest'):header=S.header(args,search)
+        self.assertEqual((header['matmul_precision'],header['matmul_precision_pin']),('highest','highest'))
 
     def test_the_arrival_queue_stamps_every_put_and_passes_the_sentinel(self):
         async def scenario():
@@ -179,6 +203,7 @@ class ServerTests(unittest.TestCase):
         base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
             '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl']
         champion=['--champion-archive','c.npz','--champion-archive-sha256','c'*64,'--champion-checkpoint-sha256','d'*64]
+        environment=patch.dict(os.environ,PINNED);environment.start();self.addCleanup(environment.stop)
         args=S.options(base+champion)
         self.assertEqual((args.rung,args.buckets,args.max_requests,args.champion_precision,args.min_price_seconds,args.session_cap,args.host),
             ('DN2W8',(1,2,4),4,'bf16',1.,256,'127.0.0.1'))

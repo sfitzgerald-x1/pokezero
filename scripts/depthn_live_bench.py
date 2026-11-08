@@ -47,6 +47,8 @@ action), exactly the server's path; nothing is re-implemented here.
 - Latency (both modes) over eligible decisions (not single-legal, whatever their status: a refusal is a decision too):
   wall and prepare percentiles per turn band, the share within the LADDER_SECONDS cap and each DEADLINES client deadline's
   coverage, both as the client budgets them: the share whose wall + RESERVE_SECONDS fits (the lead's eval-deadline rule reads these; nothing is decided here).
+Precision: the server's hard pin (--matmul-precision, default 'highest'): the environment is checked here before anything
+loads, and JAX's own setting again in the server's build; the header records both.
 Informational: no verdict, no bound. Exit 0 when any root priced, 2 when none did.
 """
 import argparse
@@ -102,7 +104,7 @@ def parser():
 
 
 def options(argv=None):
-    p = parser();args = p.parse_args(argv);server.evaluators.check_arguments(p, args)
+    p = parser();args = p.parse_args(argv);server.evaluators.check_arguments(p, args);server.check_precision_environment(p, args)
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     if args.buckets != (1,):p.error('the bench prices at bucket 1 only (one decision per call)')
     if args.warmup_count < 1:p.error('--warmup-count must be >= 1')

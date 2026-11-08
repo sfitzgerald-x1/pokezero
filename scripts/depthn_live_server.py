@@ -23,8 +23,12 @@ serves it until stopped (SIGTERM or an interrupt); it is never restarted per gam
 - Telemetry (--telemetry PATH, appended): a `ready` row (the READY line), then one `request` row per request (the
   response, the request's address, rung, budget and line count, its arrival and the server-side seconds to its result),
   written, flushed and fsynced per batch by a writer thread, off the executor's critical path.
-JAX: x64 pinned off (as Codex's ladder server) and the default matmul precision, as the gates' DepthN champion runs
-(depthn_live_search records it); the champion's own precision flag (bf16 by default) sets its forward.
+JAX: x64 pinned off (as Codex's ladder server) and the matmul precision hard-pinned to --matmul-precision (default
+'highest', the precision the champion gates R1/R2/R3 were certified under, through the environment's
+JAX_DEFAULT_MATMUL_PRECISION; Codex's ladder server uses 'highest' too). The server refuses to start when the environment
+names another precision (checked before anything heavy loads) and again when JAX's own jax_default_matmul_precision differs
+once it is imported (in build, before any warmup); READY and the telemetry header record it, and depthn_live_search
+records it in every response's pricer identity. The champion's own precision flag (bf16 by default) sets its forward.
 """
 import argparse
 import asyncio
@@ -128,6 +132,22 @@ class Recorder:
 def _print(row):print(json.dumps(row,sort_keys=True,default=repr),flush=True)
 
 
+PRECISION_ENVIRONMENT='JAX_DEFAULT_MATMUL_PRECISION'
+
+
+def check_precision_environment(p,args):
+    """Before anything heavy loads: JAX reads JAX_DEFAULT_MATMUL_PRECISION at import, and it must name the pinned precision."""
+    found=os.environ.get(PRECISION_ENVIRONMENT)
+    if found!=args.matmul_precision:
+        p.error(f'{PRECISION_ENVIRONMENT} must be {args.matmul_precision!r} (the precision the champion gates were certified under); found {found!r}')
+
+
+def matmul_precision():
+    """JAX's own default matmul precision, as configured in this process."""
+    import jax
+    return str(jax.config.jax_default_matmul_precision)
+
+
 def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,queue_limit=256,telemetry=None,header=None,log=_print,on_server=None):
     """Build the Server (Codex's queue checks), warm `search` up, then serve until stopped; READY is logged (and recorded)
     once it is warm AND its own listener accepts connections. `on_server(server)` sees the Server before the warmup (its
@@ -180,11 +200,14 @@ def parser():
     p.add_argument('--telemetry',help='server-side JSONL, appended, fsynced per batch')
     p.add_argument('--tree-commit',help='the code commit served (default: this checkout\'s HEAD, +dirty when tracked files differ)')
     p.add_argument('--compilation-cache',help='absolute directory for JAX\'s persistent compilation cache')
+    p.add_argument('--matmul-precision',choices=('highest','high','default'),default='highest',
+        help='the pinned JAX default matmul precision (default highest, the gates\' certified precision); the server refuses to start '
+        'unless JAX_DEFAULT_MATMUL_PRECISION and JAX\'s own setting both name it')
     return p
 
 
 def options(argv=None):
-    p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args)
+    p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
@@ -212,7 +235,9 @@ def tree_commit():
 def build(args):
     """The DepthNLiveSearch the arguments name, on the one visible GPU (module docstring)."""
     import jax
-    jax.config.update('jax_enable_x64',False)   # pinned off, as phase_d_ladder_server; matmul precision stays JAX's default
+    jax.config.update('jax_enable_x64',False)   # pinned off, as phase_d_ladder_server
+    if matmul_precision()!=args.matmul_precision:   # the hard pin, again once JAX is imported, before anything loads or warms up
+        raise ValueError(f'JAX default matmul precision {matmul_precision()!r} differs from the pinned {args.matmul_precision!r}')
     if args.compilation_cache:
         from pokezero.owning_worker_runtime import configure_compilation_cache
         configure_compilation_cache(args.compilation_cache)
@@ -240,7 +265,7 @@ def header(args,search):
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
-        jax_enable_x64=bool(jax.config.jax_enable_x64))
+        jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
 
 
 def main(argv=None):

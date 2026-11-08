@@ -1,4 +1,7 @@
+from contextlib import redirect_stderr
+import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -126,6 +129,18 @@ class BenchTests(unittest.TestCase):
         s = B.summarize(rows, 8)
         self.assertEqual((s['stages']['prepare_seconds']['n'], s['stages']['prepare_seconds']['max'], s['stages']['wall_seconds']['max']), (1, .5, 1.))
         self.assertEqual(s['wall_eligible']['max'], 9.)   # every eligible root, refused or not
+
+    def setUp(self):
+        environment = patch.dict(os.environ, {'JAX_DEFAULT_MATMUL_PRECISION': 'highest'});environment.start();self.addCleanup(environment.stop)
+
+    def test_options_refuse_an_unpinned_precision(self):
+        base = ['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x', '--vocabulary', 'v',
+            '--expected-vocabulary-sha256', 'y', '--roster', 'r', 'z', '--out', 'o', '--champion-archive', 'a', '--champion-archive-sha256', 'c' * 64,
+            '--champion-checkpoint-sha256', 'd' * 64]
+        with patch.object(B.server.evaluators, 'check_arguments'):
+            self.assertEqual(B.options(base).matmul_precision, 'highest')
+            with patch.dict(os.environ, {'JAX_DEFAULT_MATMUL_PRECISION': 'default'}), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                B.options(base)
 
     def test_options_refuse_other_buckets(self):
         base = ['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x', '--vocabulary', 'v',
