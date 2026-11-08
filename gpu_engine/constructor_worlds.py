@@ -36,6 +36,12 @@ dict keys and leaves two members None). This module turns prepared roots into De
   pricer side's (the run's D3 Tables source, engine metadata and catalog), and with a champion evaluator
   champion_evaluator.check_binding(evaluator, the constructor's catalog); the pricer checks the binding again on every
   call: fail closed.
+- Executor: `live_executor(metadata, catalog)` is the device executor over the constructor's own engine metadata and
+  catalog (`engine_tables`: transition.tables_from_metadata and engine_device_observation.compile_tables), the one
+  scripts/depthn_live_server.build serves with; with binding(source, metadata, catalog) it makes the pricer side equal to
+  the constructor's by construction. `tables_digest` (sha256 over every compiled array's path, dtype, shape and bytes,
+  `table_leaves`' order; `engine_tables_digest` for an engine_tables pair) and `tables_differences` compare two compiled
+  table sets mechanically (the depth-N gate's tables-identity bridge from the bank's executor to this one).
 - Programs: the worlds go in as DepthN's PrebuiltWorlds under the tag SOURCE, so every compiled-program key gains
   ('worlds', SOURCE, carry signature) after the evaluator's identity: constructor and D3 worlds never share a program,
   nor do two carry structures, nor two evaluators.
@@ -115,6 +121,79 @@ def _check_binding(built,expected,what):
     if type(expected)is not dn.WorldBinding or type(built)is not dn.WorldBinding or built!=expected:
         differ=[f for f in dn.WorldBinding.__dataclass_fields__ if getattr(built,f,None)!=getattr(expected,f,None)]
         raise ValueError(what+': '+', '.join(differ))
+
+
+# Executor and compiled tables -------------------------------------------------------------------------------------------------------
+def engine_tables(metadata,catalog):
+    """(engine tables, observation tables) compiled from engine `metadata` and an encoder `catalog` through the executor's own code paths:
+    transition.tables_from_metadata and engine_device_observation.compile_tables."""
+    from . import engine_device_observation,transition
+    return transition.tables_from_metadata(metadata),engine_device_observation.compile_tables(metadata,catalog=catalog)
+
+
+def live_executor(metadata,catalog,*,tables=None):
+    """The device executor over the constructor's metadata and catalog (scripts/depthn_live_server.build's): device_public_teacher.make_executor
+    on engine_tables(metadata, catalog), or on `tables` already compiled from them, with the device teacher and batched joint steps."""
+    from . import device_public_teacher as teacher
+    engine,observation=engine_tables(metadata,catalog)if tables is None else tables
+    return teacher.make_executor(engine,observation,enable_device_teacher=True,batch_joint=True)
+
+
+def table_leaves(tables,path='tables'):
+    """Every node and leaf of a compiled table structure in a deterministic order: (path, kind, descriptor, bytes). Nodes (NamedTuple, dataclass,
+    tuple, list, dict: dict keys sorted by repr) record their class and field names; arrays (numpy or jax, fetched to the host) their dtype, shape
+    and C-order bytes; None, bool, int, float and str their type and repr. Any other leaf raises TypeError: an unknown table member is never
+    compared by identity."""
+    import dataclasses
+    out=[]
+    def walk(x,at):
+        kind=type(x).__module__+'.'+type(x).__qualname__
+        if isinstance(x,tuple)and hasattr(x,'_fields'):
+            out.append((at,'node',(kind,tuple(x._fields)),b''));[walk(getattr(x,k),f'{at}.{k}')for k in x._fields]
+        elif dataclasses.is_dataclass(x)and not isinstance(x,type):
+            names=tuple(f.name for f in dataclasses.fields(x));out.append((at,'node',(kind,names),b''));[walk(getattr(x,k),f'{at}.{k}')for k in names]
+        elif isinstance(x,(tuple,list)):out.append((at,'node',(kind,len(x)),b''));[walk(v,f'{at}[{i}]')for i,v in enumerate(x)]
+        elif isinstance(x,dict):
+            keys=sorted(x,key=repr);out.append((at,'node',(kind,tuple(map(repr,keys))),b''));[walk(x[k],f'{at}[{k!r}]')for k in keys]
+        elif x is None or type(x)in(bool,int,float,str):out.append((at,'scalar',(kind,repr(x)),b''))
+        elif isinstance(x,(np.ndarray,np.generic,jax.Array)):
+            a=np.ascontiguousarray(np.asarray(jax.device_get(x)));out.append((at,'array',(a.dtype.str,a.shape),a.tobytes()))
+        else:raise TypeError(f'{at}: unsupported compiled-table member {kind}')
+    walk(tables,path);return out
+
+
+def tables_digest(tables):
+    """sha256 hex over table_leaves(tables): per entry its path, kind and descriptor (canonical JSON) and its bytes, each length-prefixed. Equal
+    compiled tables (same structure, dtypes, shapes and bytes) give the same digest wherever they were compiled."""
+    h=hashlib.sha256()
+    for at,kind,descriptor,raw in table_leaves(tables):
+        head=json.dumps([at,kind,descriptor],separators=(',',':'),default=list).encode()
+        for part in(head,raw):h.update(len(part).to_bytes(8,'big'));h.update(part)
+    return h.hexdigest()
+
+
+def engine_tables_digest(tables):
+    """tables_digest of an (engine, observation) pair as engine_tables returns it, i.e. of {'engine': engine, 'observation': observation}: the
+    digest the depth-N gate records for the live executor's tables (TABLES_BRIDGE), and one a declaration can record for the same tables."""
+    engine,observation=tables
+    return tables_digest(dict(engine=engine,observation=observation))
+
+
+def tables_differences(a,b,*,limit=20):
+    """The first `limit` differences between two compiled table structures, as 'path: what differs' (structure, class, dtype, shape or bytes),
+    in table_leaves' order; [] when they are equal entry for entry."""
+    left,right=table_leaves(a),table_leaves(b);out=[]
+    for x,y in zip(left,right):
+        if len(out)>=limit:break
+        if x[0]!=y[0]:out.append(f'{x[0]}: structure differs (the other side has {y[0]} here)');break   # later paths no longer align
+        if x[1:3]!=y[1:3]:out.append(f'{x[0]}: {x[1]} {x[2]} != {y[1]} {y[2]}')
+        elif x[3]!=y[3]:
+            u,v=np.frombuffer(x[3],np.uint8),np.frombuffer(y[3],np.uint8);first=int(np.flatnonzero(u!=v)[0])if len(u)==len(v)else 0
+            out.append(f'{x[0]}: bytes differ ({x[2][0]} {list(x[2][1])}; first differing byte {first})')
+    if len(out)<limit and len(left)!=len(right):
+        extra=(left if len(left)>len(right)else right)[min(len(left),len(right))]
+        out.append(f'{extra[0]}: present on one side only ({len(left)} against {len(right)} entries)')
+    return out[:limit]
 
 
 # Prepare ----------------------------------------------------------------------------------------------------------------------------

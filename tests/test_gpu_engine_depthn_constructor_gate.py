@@ -13,6 +13,8 @@ import importlib
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -23,6 +25,7 @@ import numpy as np
 from pokezero import v5_gumbel as original
 from gpu_engine import d3_depthn_gate as gate, depthn_oracle, device_public_teacher_batch as batch, device_public_world_state as mapping
 from tests import test_gpu_engine_champion_evaluator as C, test_gpu_engine_depthn_oracle as N
+from _showdown_root import requires_showdown, showdown_root
 
 TURNS = (2,) * 50 + (5,) * 50 + (12,) * 50 + (25,) * 50   # band-major, 50 per turn band, as the roster
 FLAGS = ('--constructor-roster', 'roster.json', 'a' * 64, '--showdown-root', 'showdown', '--node-binary', 'node', '--constructor-metadata', 'metadata.json',
@@ -342,6 +345,7 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
                 capture=dict(capture_path='c', capture_row=q), b2_view=dict(equal=True)))
         source = self.tables.source;binding = dn().WorldBinding(source.source_hash, source.source_rows_sha256, source.binding_sha256, 'm' * 64, ())
         return SimpleNamespace(requests=tuple(requests), worlds=dn().PrebuiltWorlds('test-constructor', binding, tuple(pairs)), binding=binding, roots=roots,
+            executor=replace(self.ex),   # the live executor: the fake engine, a distinct object from any other
             selection=dict(bands={}, top_up={}, refused=[], attempted=len(roots), selected=len(roots)), pins=dict(mode=gate.CONSTRUCTOR_MODE, worlds=4, seed=1),
             source=dict(constructor_roster='roster.json', runtime=dict(fixture=True)))
 
@@ -452,14 +456,18 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         """main() under --constructor-roster with the fixture's harness and `record` (default: self.declaration()) as declaration A-C."""
         record = record or self.declaration();self.record = record
         out = out or Path(tempfile.mkdtemp(prefix='r1c-cli-')) / 'out';log = (lambda m, **k: lines.append(dict(k, message=m))) if lines is not None else (lambda *a, **k: None)
-        loaded = SimpleNamespace(provider=SimpleNamespace(executor=self.ex, materializer=self.tables, recipe=self.recipe, source=self.tables.source),
-            plan=SimpleNamespace(model=object(), historical_window=2), source=dict(fixture=True))
+        loaded = SimpleNamespace(provider=SimpleNamespace(executor=None, materializer=self.tables, recipe=self.recipe, source=self.tables.source),   # the bank's
+            plan=SimpleNamespace(model=object(), historical_window=2), source=dict(fixture=True))                                         # executor never prices
+        self.seen = seen = dict(pricer=[], oracle=[]);pricer_init, oracle_init = dn().DepthNPricer.__init__, depthn_oracle.DepthNOracle.__init__
+        def record_pricer(pricer, executor, *a, **k):seen['pricer'].append(executor);pricer_init(pricer, executor, *a, **k)
+        def record_oracle(oracle, executor, *a, **k):seen['oracle'].append(executor);oracle_init(oracle, executor, *a, **k)
         roots = SimpleNamespace(loaded=loaded, head=None, params=self.params, groups=None, root_values=[.1, .2], forward=self.champion, actor_capacity=1,
             evaluator=dict(override=True, **self.champion.header(), arm_checked=True, dropped_roots=[]), constructor=ctor)
         with self.engine(), patch.object(gate, 'constructor_roots', lambda args: roots), patch.object(gate, 'load_roots', side_effect=AssertionError('D3 roots')), \
                 patch.object(gate, 'log', log), patch.object(gate, 'CONSTRUCTOR_HARNESS', dict(capacity=32, block_lanes=2187, oracle_chunk=64)), \
                 patch.object(batch.FramePricer, 'price', side_effect=AssertionError('D3 priced')), patch.object(gate, 'REPO_ROOT', record.root), \
-                patch.object(gate, 'CONSTRUCTOR_DECLARATION', dict(repo_path=record.path.relative_to(record.root).as_posix(), sha256=record.sha256)):
+                patch.object(gate, 'CONSTRUCTOR_DECLARATION', dict(repo_path=record.path.relative_to(record.root).as_posix(), sha256=record.sha256)), \
+                patch.object(dn().DepthNPricer, '__init__', record_pricer), patch.object(depthn_oracle.DepthNOracle, '__init__', record_oracle):
             code = gate.main(['--out', str(out), *RUNTIME, *CHAMPION, *FLAGS, *HARNESS, *COVERED, '--capacity', '32', '--oracle-chunk', '64',
                 '--declared-bounds', str(record.path), '--declared-bounds-sha256', record.sha256, '--declared-bounds-commit', record.commit, *argv])
         return code, out
@@ -478,6 +486,9 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         self.assertEqual([c['roots'] for c in report['constructor']['calls']], [[100, 103, 107, 117, 125, 126], [101, 116]])
         self.assertEqual([c['carry_signature'] for c in report['constructor']['calls']], ['sig', 'other']);self.assertEqual(len(report['calls']), 2)
         self.assertEqual(sum(1 for x in lines if x['message'] == 'CALL_CHECKED'), 2);self.assertEqual(next(x for x in lines if x['message'] == 'GATE_START')['mode'], gate.CONSTRUCTOR_MODE)
+        # LIVE_EXECUTOR: the depth-2 pass, the checked pricer, its block-invariance twin and the oracle all hold the constructor's executor
+        self.assertEqual((len(self.seen['pricer']), len(self.seen['oracle'])), (3, 1))
+        self.assertTrue(all(e is ctor.executor for e in self.seen['pricer'] + self.seen['oracle']), self.seen)
         header = report['header'];parity = header['merged_depth2_parity']['remaining_differences']
         self.assertEqual(parity[-1], gate.CONSTRUCTOR_B_DIFFERENCE);self.assertEqual(len(parity), len(gate.MERGED_DEPTH2_DIFFERENCES) + 1)
         matched = header['merged_depth2_parity']['matched'];self.assertEqual(matched, gate.MERGED_DEPTH2_MATCHED_CONSTRUCTOR)
@@ -503,6 +514,103 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         self.assertFalse(any(k.startswith('b.') for k in report['tolerance']['guard_declared']['modes']));self.assertEqual(self.reverdicted(out), 0)
 
 
+class Leaf:
+    pass
+
+
+def nested(**changes):
+    """A compiled-table-like structure: a NamedTuple holding arrays (jax and numpy), None, a dataclass, a dict and a list."""
+    import dataclasses, typing
+    import jax.numpy as jnp
+    Inner = dataclasses.make_dataclass('Inner', [('weights', object), ('flag', object)], frozen=True)
+    Outer = typing.NamedTuple('Outer', [('power', object), ('chart', object), ('effects', object), ('inner', object), ('lookup', object), ('rows', object)])
+    parts = dict(power=jnp.asarray([0, 40, 90], jnp.int32), chart=np.ones((2, 2), np.float32), effects=None,
+        inner=Inner(np.arange(3, dtype=np.int16), True), lookup={'b': np.zeros(1, np.uint8), 'a': 7}, rows=[np.float32(.5), 'x'])
+    parts.update(changes);return Outer(**parts)
+
+
+class TableIdentityTests(unittest.TestCase):
+    """constructor_worlds' compiled-table walk, digest and differences on a synthetic structure."""
+    def test_equal_structures_digest_alike_and_compare_equal(self):
+        from gpu_engine import constructor_worlds as cw
+        import jax.numpy as jnp
+        a, b = nested(), nested(power=np.asarray([0, 40, 90], np.int32), lookup={'a': 7, 'b': jnp.zeros(1, jnp.uint8)})   # numpy for jax, keys reordered
+        self.assertEqual(cw.tables_differences(a, b), []);self.assertEqual(cw.tables_digest(a), cw.tables_digest(b))
+        paths = [x[0] for x in cw.table_leaves(a)]
+        self.assertEqual(paths, ['tables', 'tables.power', 'tables.chart', 'tables.effects', 'tables.inner', 'tables.inner.weights', 'tables.inner.flag',
+            'tables.lookup', "tables.lookup['a']", "tables.lookup['b']", 'tables.rows', 'tables.rows[0]', 'tables.rows[1]'])
+        self.assertEqual(len(cw.tables_digest(a)), 64);self.assertEqual(cw.engine_tables_digest((a, b)), cw.tables_digest(dict(engine=a, observation=b)))
+
+    def test_every_kind_of_difference_is_named_by_path(self):
+        from gpu_engine import constructor_worlds as cw
+        base = nested()
+        for change, text in ((dict(power=np.asarray([0, 41, 90], np.int32)), 'tables.power: bytes differ (<i4 [3]; first differing byte 4)'),
+                (dict(power=np.asarray([0, 40, 90], np.int64)), 'tables.power: array'), (dict(chart=np.ones((2, 3), np.float32)), 'tables.chart: array'),
+                (dict(effects=np.zeros(1)), 'tables.effects: scalar'), (dict(lookup={'a': 8, 'b': np.zeros(1, np.uint8)}), "tables.lookup['a']: scalar"),
+                (dict(lookup={'a': 7}), "tables.lookup: node"), (dict(rows=[np.float32(.5)]), 'tables.rows: node')):
+            with self.subTest(text=text):
+                found = cw.tables_differences(base, nested(**change));self.assertTrue(found and found[0].startswith(text), found)
+                self.assertNotEqual(cw.tables_digest(base), cw.tables_digest(nested(**change)))
+        with self.assertRaisesRegex(TypeError, r'tables.effects: unsupported compiled-table member'):cw.table_leaves(nested(effects=Leaf()))
+
+
+@requires_showdown('the tables bridge compiles the real Gen 3 engine tables')
+@unittest.skipUnless(shutil.which('node'), 'node is needed to read the generator\'s static metadata')
+class TablesBridgeTests(unittest.TestCase):
+    """TABLES_BRIDGE through the real code paths (transition.tables_from_metadata, engine_device_observation.compile_tables) on the generator's
+    own static metadata and the real encoder catalog: documents differing only in the team-sample statistics compile to identical tables; a
+    perturbed moves entry or type chart value fails, naming the differing path."""
+    STATISTICS = ('move_frequency', 'move_slots', 'seed_start', 'target85_move_count')   # the four keys the bank and Codex's metadata differ in
+
+    @classmethod
+    def setUpClass(cls):
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.randbat import load_gen3_randbat_source_cached
+        from pokezero.randbat_vocab import gen3_category_vocabulary
+        from pokezero.recorded_mirror_roots import CHAMPION_CONTRACT
+        from gpu_engine import public_belief, v4_encoder
+        root = showdown_root()
+        script = (r"""const fs=require('fs'),vm=require('vm'),s=fs.readFileSync(process.argv[1],'utf8'),start=s.indexOf('async function generate('),"""
+            r"""body=s.slice(s.indexOf('{',start)+1,s.indexOf('  async function emit(',start)).split('\n').filter(x=>!x.includes("const {Teams}")&&"""
+            r"""!x.includes('const rngPackage')).join('\n');const code=s.slice(0,start)+'\nfunction metadata(root){'+body+"return {format:'gen3randombattle',"""
+            r"""compiled_tree:compiledTree(path.join(root,'dist')),vocabulary,moves,type_chart:chart,stats_order:STATS};}\nJSON.stringify(metadata(ROOT))";"""
+            r"""process.stdout.write(vm.runInNewContext(code,{require,ROOT:process.argv[2]}));""")
+        cls.metadata = json.loads(subprocess.check_output(['node', '-e', script, str(gate.REPO_ROOT / 'gpu_engine/generate_teams.cjs'), str(root)], text=True))
+        vocabulary = gen3_category_vocabulary(root, include_feature_pack_v4=True)
+        cls.catalog = v4_encoder.compile_encoder(public_belief.compile_source(load_gen3_randbat_source_cached(root)), load_showdown_dex_cached(root), vocabulary,
+            checkpoint_sha256='a' * 64, feature_masks=CHAMPION_CONTRACT['feature_masks'])
+
+    def documents(self):
+        """(bank, constructor) metadata: the generator's static metadata with the four statistics keys at different values on each side."""
+        bank = dict(json.loads(json.dumps(self.metadata)), move_frequency={'tackle': 3}, move_slots=[[1, 2]], seed_start=1, target85_move_count=85)
+        live = dict(json.loads(json.dumps(self.metadata)), move_frequency={'tackle': 4, 'surf': 1}, move_slots=[[2, 1], [3]], seed_start=9, target85_move_count=86)
+        return bank, live
+
+    def test_the_statistics_keys_compile_to_identical_tables(self):
+        from gpu_engine import constructor_worlds as cw
+        bank, live = self.documents();reference = cw.engine_tables(bank, self.catalog)
+        tables, record = gate.tables_bridge(bank, self.catalog, live, self.catalog, reference=reference)
+        self.assertEqual(record['metadata_keys_differing'], sorted(self.STATISTICS));self.assertTrue(record['equal'] and record['bank_executor_reproduced'])
+        self.assertNotEqual(record['bank_metadata_canonical_sha256'], record['constructor_metadata_canonical_sha256'])
+        self.assertEqual(record['digest'], cw.engine_tables_digest(reference));self.assertEqual(record['digest'], cw.engine_tables_digest(tables))
+        self.assertEqual(record['digest_function'], 'gpu_engine.constructor_worlds.engine_tables_digest');self.assertGreater(record['entries'], 200)
+
+    def test_a_perturbed_moves_entry_or_type_chart_value_fails_naming_the_path(self):
+        bank, live = self.documents();at = next(i for i, row in enumerate(live['moves']) if row and type(row.get('base_power')) is int and row['base_power'] > 0)
+        moved = json.loads(json.dumps(live));moved['moves'][at]['base_power'] += 10
+        with self.assertRaisesRegex(ValueError, r"compiled tables differ \(TABLES_BRIDGE\): tables\['engine'\]\.power: bytes differ"):
+            gate.tables_bridge(bank, self.catalog, moved, self.catalog)
+        chart = json.loads(json.dumps(live));row, col = next((r, c) for r, line in enumerate(chart['type_chart']) for c, x in enumerate(line) if x == 1)
+        chart['type_chart'][row][col] = 2
+        with self.assertRaisesRegex(ValueError, r"tables\['engine'\]\.type_num: bytes differ"):gate.tables_bridge(bank, self.catalog, chart, self.catalog)
+
+    def test_the_bank_executors_own_tables_are_held_to_their_recompile(self):
+        from gpu_engine import constructor_worlds as cw
+        bank, live = self.documents();moved = json.loads(json.dumps(bank));moved['type_chart'][0][0] = 2 if moved['type_chart'][0][0] != 2 else 1
+        with self.assertRaisesRegex(ValueError, "the bank executor's tables and their recompile from its metadata differ"):
+            gate.tables_bridge(bank, self.catalog, live, self.catalog, reference=cw.engine_tables(moved, self.catalog))
+
+
 class WiringTests(unittest.TestCase):
     """constructor_roots with every collaborator it loads faked (the D3 runtime, the champion, Codex's constructor inputs, the roster, prepare,
     the classifier, build and the bind): the selection, the pins, the refusal list and the fail-closed paths are wired as documented."""
@@ -510,10 +618,16 @@ class WiringTests(unittest.TestCase):
         constructor_vocabulary=('vocabulary.json', 'c' * 64), showdown_root='showdown', node_binary='node', constructor_worlds=4, constructor_seed=3,
         constructor_per_band=2)
 
-    def run_roots(self, *, refuse_build=False, refused=(1, 6), unavailable=(5,), turns=(2,) * 4 + (5,) * 4 + (12,) * 4 + (25,) * 4):
+    def run_roots(self, *, refuse_build=False, refused=(1, 6), unavailable=(5,), turns=(2,) * 4 + (5,) * 4 + (12,) * 4 + (25,) * 4, bridge_error=None):
         from gpu_engine import constructor_worlds as cw, depthn_live_search as live, phase_d_protocol_constructor as pc
-        made = []
-        provider = SimpleNamespace(executor='EX', source='SRC', prepared=SimpleNamespace(metadata_json='{"m": 1}', catalog='CAT'), recipe=SimpleNamespace(seed=11))
+        made, self.calls = [], collections.defaultdict(list)
+        provider = SimpleNamespace(executor='EX', source='SRC', prepared=SimpleNamespace(metadata_json='{"m": 1, "move_frequency": 2}', catalog='CAT',
+            engine_tables='BANK-E', observation_tables='BANK-O'), recipe=SimpleNamespace(seed=11))
+        def bridge(bank_metadata, bank_catalog, metadata, catalog, *, reference=None):
+            self.calls['bridge'].append((bank_metadata, bank_catalog, metadata, catalog, reference))
+            if bridge_error:raise ValueError(bridge_error)
+            return ('E', 'O'), dict(digest='9' * 64, equal=True)
+        def executor(metadata, catalog, *, tables=None):self.calls['executor'].append((metadata, catalog, tables));return 'LIVE'
         loaded = SimpleNamespace(provider=provider, plan='PLAN', source=dict(saved_roots='saved'))
         binding = dn().WorldBinding('s', 'r', 'b', 'm', (('checkpoint_sha256', 'e' * 64),))
         class Constructor:
@@ -523,12 +637,12 @@ class WiringTests(unittest.TestCase):
             return dict(request_id=f'{roster_sha256[:4]}:{worlds}:{i}', i=i), dict(capture_path='wire.jsonl', capture_row=i, capture_declaration_sha256='d' * 64,
                 capture_chain_sha256=str(i) * 64, prefix_sha256='f' * 64)
         def prepare(constructor, requests, *, start_index, device):
-            (r,) = requests;i = r['i']
+            (r,) = requests;i = r['i'];self.calls['prepare'].append(i)
             if i in refused:return (cw.RootRefusal(r['request_id'], 'SEARCH_PREFIX_OR_REQUEST_MISMATCH', '', .5, 'B'),)
             partial = i == 2;worlds = [SimpleNamespace(state=None if partial and w == 3 else 1, refusals=('MAPPER',) if partial and w == 3 else ()) for w in range(4)]
             return (cw.Prepared(r['request_id'], 'detached', SimpleNamespace(fully_constructed=not partial, worlds=worlds), (True,) * 9, .25, 'B'),)
         def build(constructor, prepared, pricer, params, *, binding, recipe, only_complete):
-            self.assertEqual((pricer.executor, params, recipe, only_complete), ('EX', ('P',), provider.recipe, True))
+            self.assertEqual((pricer.executor, params, recipe, only_complete), ('LIVE', ('P',), provider.recipe, True))   # root views: the live executor
             roots, requests, pairs = [], [], []
             for n, item in enumerate(prepared):
                 rows = (len(requests), len(requests) + 1);requests += [f'{item.request_id}-0', f'{item.request_id}-1']
@@ -544,7 +658,8 @@ class WiringTests(unittest.TestCase):
                     selected=[]), roster(turns))), patch.object(gate, 'roster_request', request), patch.object(cw, 'prepare_roots', prepare), \
                 patch.object(live, 'classify', lambda constructor, r: (['sleep'], 'protocol_facts') if r['i'] == 9 else ([], 'protocol_facts')), \
                 patch.object(cw, 'build', build), patch.object(gate, 'bind_constructor', lambda requests, params, plan, ev: (tuple(requests), [.5] * len(requests), True)), \
-                patch.object(gate, 'log', lambda m, **k: lines.append(dict(k, message=m))):
+                patch.object(gate, 'log', lambda m, **k: lines.append(dict(k, message=m))), patch.object(gate, 'tables_bridge', bridge), \
+                patch.object(cw, 'live_executor', executor):
             out = gate.constructor_roots(self.ARGS)
         return out, made, lines
 
@@ -568,6 +683,17 @@ class WiringTests(unittest.TestCase):
         self.assertEqual([p['ordinal'] for p in pins['roots']], [0, 3, 4, 7, 8, 9, 12, 13]);self.assertEqual(pins['b']['status'], 'NOT_APPLICABLE')
         self.assertEqual((out.params, out.actor_capacity, out.groups, out.evaluator['dropped_roots']), (('P',), 1, None, []))
         json.dumps(dict(pins=pins, section=gate.constructor_section(ctor, gate.constructor_calls(ctor, 512))), allow_nan=False, default=str)
+        # TABLES_BRIDGE: the bank's metadata and catalog against the constructor's, the bank executor's own tables as the reference; the live
+        # executor from the bridge's tables, and the constructor's own binding
+        self.assertEqual(self.calls['bridge'], [(dict(m=1, move_frequency=2), 'CAT', dict(m=1), 'catalog', ('BANK-E', 'BANK-O'))])
+        self.assertEqual(self.calls['executor'], [(dict(m=1), 'catalog', ('E', 'O'))]);self.assertEqual(ctor.executor, 'LIVE')
+        self.assertEqual(pins['tables'], dict(digest='9' * 64, equal=True, bank_binding_differs=[]));self.assertEqual(pins['executor'], gate.LIVE_EXECUTOR)
+        self.assertEqual(next(x for x in lines if x['message'] == 'TABLES_BRIDGE')['digest'], '9' * 64)
+
+    def test_a_tables_difference_fails_before_any_root_is_prepared(self):
+        with self.assertRaisesRegex(SystemExit, r"fail closed\): .*tables\['engine'\].power"):
+            self.run_roots(bridge_error="the bank's and the constructor's compiled tables differ (TABLES_BRIDGE): tables['engine'].power: bytes differ")
+        self.assertEqual((len(self.calls['bridge']), self.calls['prepare'], self.calls['executor']), (1, [], []))
 
     def test_fail_closed(self):
         with self.assertRaisesRegex(SystemExit, 'build refused selected roots'):self.run_roots(refuse_build=True)
