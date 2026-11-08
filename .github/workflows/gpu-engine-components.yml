@@ -20,7 +20,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: gpu-components-${{ github.event.pull_request.number }}
+  # A configured isolated run preserves an older hosted run's diagnostics.
+  group: gpu-components-${{ github.event.pull_request.number }}${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_RUNNER && '-isolated' || '' }}
   cancel-in-progress: true
 
 jobs:
