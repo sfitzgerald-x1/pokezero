@@ -1737,7 +1737,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual((value['arms']['RAW']['first_within_warm_p99'], value['arms']['DN2W8']['first_within_warm_p99']), (False, True))
         self.assertEqual((value['arms']['RAW']['first_actor_within_warm_p99'], value['arms']['RAW']['first_actor']), (True, [.54]))   # encode .04 + greedy .5
         self.assertEqual(value['arms']['DN2W8']['warm_actor']['p99'], .54)
-        self.assertIn('descriptive', value['arms']['DN2W8']['first_end_to_end_note'])
+        self.assertIn('descriptive', value['arms']['DN2W8']['first_end_to_end_note']); self.assertIsNone(value['arms']['RAW']['first_end_to_end_note'])
         self.assertEqual(value['arms']['DN2W8']['search_wall']['p95'], 2.0); self.assertTrue(value['search_wall_within'])
         self.assertEqual(value['arms']['RAW']['warm_greedy']['p95'], .5)
         self.assertEqual((value['arm'], value['deadline_seconds'], value['reserve_seconds']), ('DN2W8', 3., .15))
@@ -1748,6 +1748,13 @@ class CalibrationTests(unittest.TestCase):
         game(band[3], 'DN2W8', [2.7]*21, 'search', causes=('timeout',)*3); late = panel.preflight_summary(self.root)
         self.assertFalse(late['search_wall_within']); self.assertFalse(late['timeouts_within'])   # 3 of 42: over 1%
         self.assertEqual(late['arms']['DN2W8']['searched_share_of_non_timeouts'], 37/39)
+        cold = band[5]   # the review's case: a cold actor on decision 0 (encode 1.5 + greedy 2.2) fails the gate, though end to end it is in range
+        panel.write_new(self.root/'results'/f"{cold['ordinal']}.json", dict(status='COMPLETE', setting='preflight', arm='DN2W8', cell=cold))
+        rows = [dict(decision_index=i, select_seconds=2.0, encode_seconds=1.5 if i == 0 else .04, greedy=dict(seconds=2.2 if i == 0 else .5),
+                     source='search', cause=None) for i in range(21)]
+        (self.root/'telemetry'/f"{cold['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
+        cold_value = panel.preflight_summary(self.root)['arms']['DN2W8']
+        self.assertEqual((cold_value['first_actor_within_warm_p99'], cold_value['first_within_warm_p99']), (False, True))
         for cell in band[:4]: panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", dict(setting='preflight'))
         panel.preflight_packets(self.root, arm='DN2W8', games=2, deadline_seconds=5., reserve_seconds=.15)   # a second deadline
         with self.assertRaisesRegex(ValueError, 'one search arm, deadline and reserve'): panel.preflight_summary(self.root)

@@ -711,8 +711,9 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
         out[arm]=dict(games=a['games'],complete=a['complete'],first_decision=sorted(a['first']),warm=warm,
             warm_encode=_quantiles(a['encode']),warm_greedy=_quantiles(a['greedy']),
             first_within_warm_p99=None if p99 is None else all(x<=p99 for x in a['first']),   # descriptive: includes the server's time
-            first_end_to_end_note=('descriptive: the end-to-end first decision carries the server\'s time too; all lanes start together, so '
-                'the opening search battles price at once and share GPUs (r4: price about 1.3 s against 0.66 on half of them)'),
+            first_end_to_end_note=None if arm not in SEARCH_ARMS else ('descriptive: a search arm\'s end-to-end first decision carries '
+                'the server\'s time too; all lanes start together, so the opening search battles price at once and share GPUs (see the '
+                'server telemetry\'s price times); the warmup is gated on the actor time (first_actor_within_warm_p99)'),
             first_actor=sorted(a['first_actor']),warm_actor=actor,   # the warmup's check: the actor's own time (encode + greedy) on first decisions
             first_actor_within_warm_p99=None if actor_p99 is None else all(x<=actor_p99 for x in a['first_actor']),
             search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())),
