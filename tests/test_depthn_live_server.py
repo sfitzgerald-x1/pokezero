@@ -47,7 +47,8 @@ class FakeSearch:
     def warmup(self,requests):
         if self.release is not None and not self.release.wait(10):raise TimeoutError('never released')
         self.warmed=True;self.saved=list(requests)
-        return dict(buckets={1:dict(cold_seconds=1.5,warm_seconds=.5),2:dict(cold_seconds=2.5,warm_seconds=.75)},programs=7)
+        return dict(buckets={1:dict(cold_seconds=1.5,warm_seconds=.5),2:dict(cold_seconds=2.5,warm_seconds=.75)},programs=7,
+            carry_reference=dict(battle_id='w',decision_index=3,root_classes=['sleep']))
 
     def process_many(self,requests):
         self.batches.append((time.monotonic(),[dict(r)for r in requests]));time.sleep(self.delay)
@@ -95,6 +96,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(len(logs),1);ready=logs[0]
             self.assertEqual((ready['event'],ready['tree_commit'],ready['port'],ready['programs'],ready['cold_seconds'],ready['warm_seconds']),
                 ('READY','abc',port,7,{1:1.5,2:2.5},{1:.5,2:.75}))
+            self.assertEqual(ready['carry_reference'],dict(battle_id='w',decision_index=3,root_classes=['sleep']))   # the warmup's reference root
             self.assertTrue(search.warmed);self.assertEqual(search.saved,[dict(battle_id='w')])
             row=blocking_request(port,request(1,budget_seconds=2.5));self.assertTrue(row['warmed'])   # served only after warmup
             servers[0].stop();thread.join(10);self.assertFalse(thread.is_alive())
