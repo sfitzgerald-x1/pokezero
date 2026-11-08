@@ -8,7 +8,7 @@ import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_direct_hit_controls as hit
 from gpu_engine import engine_full_v4_event_device as full, engine_lifecycle_callbacks as life
-from gpu_engine import public_wire, public_inputs as inputs, transition, v4_encoder as v4
+from gpu_engine import public_wire, public_inputs as inputs, public_toxic, transition, v4_encoder as v4
 from gpu_engine import engine_retained_encoder_driver as driver, engine_execution_completeness as accounting
 import test_gpu_engine_engine_full_v4_event_device as fixture
 
@@ -48,7 +48,8 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
                 kind,_,turn,_,actor,_,target,_,*p=map(int,w)
                 raw=np.asarray(frame.callbacks.words[row,i]);rawkind=int(raw[0])
                 if rawkind==life.TURNLOOP_PREFIX:
-                    self.assertEqual(kind,int(inputs.Kind.ABILITY))
+                    self.assertEqual(kind,int(inputs.Kind.TOXIC))
+                    self.assertEqual(p,[public_toxic.TIMESTAMP,0,0,-1,0,1,0,0])
                     self.assertEqual(raw.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
                     lines.extend(['|','|t:|1'])
                 elif kind==inputs.Kind.ABILITY and rawkind==24:

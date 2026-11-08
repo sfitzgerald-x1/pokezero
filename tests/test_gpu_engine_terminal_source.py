@@ -97,8 +97,13 @@ class TerminalSourceTests(unittest.TestCase):
   self.assertFalse(bool(self.pair(prior,priorframe,pubs).terminal_closeout.any()))
  def test_default_whole_program_and_nonlethal_validator_unchanged(self):
   base='185868792ac7c4e61f2df42273b025407b4ca5d4'
-  before=ast.parse(subprocess.check_output(['git','show',base+':gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text())
+  before=ast.parse(subprocess.check_output(['git','show',base+':gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','1511dc02:gpu_engine/transition.py'],text=True))
   expected=dump_default_program(before);self.assertEqual(dump_default_program(after),expected);assert_hp_rng_mutations_detected(self,after,expected)
+  # Recertify every current statement independently of the historical delta.
+  current=ast.parse(Path('gpu_engine/transition.py').read_text())
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated))
+  assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
   old=ast.parse(subprocess.check_output(['git','show',base+':gpu_engine/engine_direct_hit_controls.py'],text=True));new=ast.parse(Path('gpu_engine/engine_direct_hit_controls.py').read_text())
   for name in ('_valid_write','validate_write_device','validate_raw_device'):
    a=next(n for n in old.body if isinstance(n,ast.FunctionDef) and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name==name)

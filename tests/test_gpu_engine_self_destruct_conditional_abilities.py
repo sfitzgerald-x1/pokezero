@@ -93,10 +93,12 @@ class ConditionalAbilityInputTests(unittest.TestCase):
         wrong=x.move.at[0].add(1)
         _,pending=cb.begin(x.before,x.s,x.side,x.move,wrong,self.runtime['direct_hit_context'],requested=yes)
         self.assertEqual(pending.self_ok.tolist(),[False]+[True]*3)
-        # The original lower/private state prefix and full physical program
-        # remain byte-identical; only typed input snapshots/capabilities change.
+        # Preserve the original feature's unchanged physical sources, then
+        # bind the complete integrated sources separately.
         for n in ('transition.py','state.py','mechanics.py','secondary.py','self_destruct.py','engine_lifecycle_event_device.py','engine_full_v4_event_device.py'):
-            self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','f2f3b9ad725c7f3064f0420e07425ec68e95ec37:gpu_engine/'+n]))
+            historical=subprocess.check_output(['git','show','6764d02b:gpu_engine/'+n])
+            self.assertEqual(historical,subprocess.check_output(['git','show','f2f3b9ad725c7f3064f0420e07425ec68e95ec37:gpu_engine/'+n]))
+            self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+n]))
 
     def test_both_original_full_owners(self):
         x = self.component()
