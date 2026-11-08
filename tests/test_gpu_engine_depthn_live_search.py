@@ -59,9 +59,13 @@ class Codex:
             if isinstance(out,BaseException):raise out
             harness.current=out;return NS(address=out[0].address)
         self.stack=ExitStack()
+        # Batch 2's prepare also reads the protocol tail's facts and passes defer_sleep / protocol_facts to from_b2: fake the
+        # first (its shape: phase_d_tail.facts) and accept the second, so the outcome's root and worlds come through unchanged.
+        tail=getattr(pc.protocol,'tail',None)
         for target,name,value in((pc,'JaxRecordedAdapter',Adapter),(pc,'capture_root',capture),(pc,'_packet',lambda line,owner:(line,owner)),
-                (pc.worlds,'from_b2',lambda adapter,packet,source,metadata,*,address:harness.current[0]),
-                (pc.protocol,'sample',lambda public,detached,**kw:harness.current[1])):
+                (pc.worlds,'from_b2',lambda adapter,packet,source,metadata,*,address,**kw:harness.current[0]),
+                (pc.protocol,'sample',lambda public,detached,**kw:harness.current[1]),
+                *(()if tail is None else((tail,'facts',lambda *a,**k:dict(replacement=None,fresh_substitutes={},wish_set_turns={},turn=0)),))):
             self.stack.enter_context(patch.object(target,name,value))
         return self
 
