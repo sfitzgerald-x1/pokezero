@@ -150,6 +150,9 @@ class TreeTests(unittest.TestCase):
             declared = panel.tree_identity('b'*40)
         self.assertEqual((declared['commit'], declared['dirty'], declared['commit_source']), ('b'*40, None, 'declared'))
         self.assertEqual(declared['source_sha256'], tree['source_sha256'])
+        for status, dirty in ((' M src/pokezero/x.py\n', True), ('', False)):
+            git = lambda *args, s=status: 'c'*40+'\n' if args[0] == 'rev-parse' else s
+            with patch.object(panel, '_git', git): self.assertEqual(panel.tree_identity()['dirty'], dirty)
 
     def test_every_mode_refuses_another_code_identity(self):
         with TemporaryDirectory() as directory:
