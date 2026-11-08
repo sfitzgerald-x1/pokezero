@@ -416,7 +416,8 @@ class ConstructorRunTests(C.ChampionFixture, unittest.TestCase):
         (e)'s per-block completed-Q (learner_max_root): the premise fails and so does the check."""
         evaluation, _, call = self.run_worlds(self.ctor(), lanes=(2187,), mutation={});held = evaluation[gate.MUTATION_INPUTS]
         real = importlib.import_module('gpu_engine.depthn_backups')
-        proxy = SimpleNamespace(backup=real.backup, learner_max=real.average, learner_max_root=real.learner_max_root, refusal_summary=real.refusal_summary)
+        proxy = SimpleNamespace(backup=real.backup, learner_max=real.average, average=real.average, learner_max_root=real.learner_max_root,
+            refusal_summary=real.refusal_summary)
         report = gate.averaging_call(held['frame'], held['data'], call['requests'], call['roots'], backups=proxy)
         verdict = gate.averaging_verdict([report], 1e-4);decided = [r for r in report['roots'] if r['compared']]
         self.assertTrue(decided);self.assertFalse(verdict['passed']);self.assertGreater(verdict['premise_failures'], 0);self.assertGreater(verdict['max_premise_gap'], 1e-3)
