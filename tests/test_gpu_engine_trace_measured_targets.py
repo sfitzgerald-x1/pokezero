@@ -121,12 +121,17 @@ class TraceMeasuredTargetsTests(unittest.TestCase):
  def test_default_core_and_pinned_setability_source(self):
   for name in ('entry.py','transition.py','mechanics.py','state.py'):
    before=subprocess.check_output(['git','show','27fa443a:'+str(Path('gpu_engine')/name)])
-   after=Path('gpu_engine',name).read_bytes()
+   after=subprocess.check_output(['git','show','4d294c5d:'+str(Path('gpu_engine')/name)])
    if name=='transition.py':
     original=ast.parse(before);current=ast.parse(after)
     self.assertEqual(dump_default_program(current),dump_default_program(original))
     assert_hp_rng_mutations_detected(self,current,dump_default_program(original))
    else:self.assertEqual(after,before)
+   integrated=subprocess.check_output(['git','show','b8092a85:'+str(Path('gpu_engine')/name)])
+   current_bytes=Path('gpu_engine',name).read_bytes()
+   if name=='transition.py':
+    self.assertEqual(ast.dump(ast.parse(current_bytes)),ast.dump(ast.parse(integrated)));assert_hp_rng_mutations_detected(self,ast.parse(current_bytes),dump_default_program(ast.parse(integrated)))
+   else:self.assertEqual(current_bytes,integrated)
   for name,expected in witness.SOURCE_PINS.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),expected)
   root=Path(showdown_root_str())
   for name in ('sim/pokemon.ts','data/mods/gen3/abilities.ts'):

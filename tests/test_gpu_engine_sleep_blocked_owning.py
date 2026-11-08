@@ -20,7 +20,9 @@ class SleepBlockedOwningTests(unittest.TestCase):
  def test_original_source_default_program_and_legacy_scope(self):
   from gpu_engine import engine_source_frame_witness as witness,engine_direct_hit_controls as direct
   witness._source();self.assertEqual(len(witness.SOURCE_PINS),88);self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.sleep_blocked)
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','6bd337da:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  new=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(new),ast.dump(integrated));assert_hp_rng_mutations_detected(self,new,dump_default_program(integrated))
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),f=d.conditions.get('slp').onBeforeMove,out=[];
 for(const [time,early,sleepUsable]of [[3,false,false],[2,false,false],[2,true,false],[4,true,false],[3,false,true]]){
  const lines=[],p={statusState:{time},hasAbility:id=>id==='earlybird'&&early,cureStatus(){lines.push('cure')},toString:()=> 'p2a: Actor'},b={effectState:{skippedTime:0},add:(...a)=>lines.push(a.map(String).join('|'))};

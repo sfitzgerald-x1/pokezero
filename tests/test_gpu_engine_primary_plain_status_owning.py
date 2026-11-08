@@ -41,7 +41,10 @@ class PrimaryPlainStatusTests(unittest.TestCase):
    at=self.metadata['vocabulary']['moves'].index(name);self.assertTrue(bool(d.candidates[at]));self.assertEqual(int(d.status[at]),code);self.assertEqual(int(self.runtime['kernel_risk_compiled'].device.selected_risk[at]),0)
   for name in ('thunderwave','sleeppowder','bulkup'):self.assertFalse(bool(d.candidates[self.metadata['vocabulary']['moves'].index(name)]))
   self.assertIsNone(direct.compile_direct_hit_controls(engine_catalog=self.producer).device.primary_plain_status)
-  old=ast.parse(subprocess.check_output(['git','show','e1478066:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  # Prove the actual plain-status parent, before the parallel Color Change merge.
+  old=ast.parse(subprocess.check_output(['git','show','ec5878a1:gpu_engine/transition.py'],text=True));after=ast.parse(subprocess.check_output(['git','show','bad7cd59:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  after=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(after),ast.dump(integrated));assert_hp_rng_mutations_detected(self,after,dump_default_program(integrated))
   script="const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),out=[];for(const id of ['willowisp','stunspore']){let m=d.moves.get(id),p={toString:()=> 'p2a: Target'},lines=[];d.conditions.get(m.status).onStart.call({add:(...v)=>lines.push(v.map(String).join('|'))},p,{toString:()=> 'p1a: Actor'},m);out.push(lines);}process.stdout.write(JSON.stringify(out));"
   self.assertEqual(json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True)),[['-status|p2a: Target|brn'],['-status|p2a: Target|par']])
  def component(self,*,consume=True):

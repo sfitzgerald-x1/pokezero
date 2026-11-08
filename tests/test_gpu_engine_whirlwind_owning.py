@@ -61,7 +61,7 @@ class WhirlwindOwningTests(unittest.TestCase):
    scope=todo.pop();todo.extend(scope.get_children());bad|={x.get_name()for x in scope.get_symbols()if x.is_global()and x.is_referenced()and x.get_name()not in names}
   self.assertEqual(bad,set());call=next(n for n in ast.walk(ast.parse(text))if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and n.func.attr=='begin'and isinstance(n.func.value,ast.Name)and n.func.value.id=='whirlwind_callbacks');self.assertEqual([ast.unparse(x)for x in call.args[4:7]],['caller_move','chosen_slot','phazing_draws[rows, side]']);self.assertEqual({x.arg:ast.unparse(x.value)for x in call.keywords},dict(eligible='acts',hit='hit',immune='immune',protected='_risk_protected',absorbed='_risk_absorbed'))
   from gpu_engine_default_observer_ast import dump_default_program,assert_hp_rng_mutations_detected
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(text);baseline=dump_default_program(old)
+  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','448e93f2:gpu_engine/transition.py'],text=True));baseline=dump_default_program(old)
   # Reverse ONLY the additive exact observer block to the original drag call.
   class Strip(ast.NodeTransformer):
    def visit_If(self,node):
@@ -71,6 +71,8 @@ class WhirlwindOwningTests(unittest.TestCase):
    def visit_Assign(self,node):
     return []if any(isinstance(x,ast.Name)and x.id=='_whirlwind_pending'for x in node.targets)else self.generic_visit(node)
   stripped=Strip().visit(new);self.assertEqual(dump_default_program(stripped),baseline);assert_hp_rng_mutations_detected(self,stripped,baseline)
+  current=ast.parse(text);integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
 
  def test_original_source_drag_writer_and_closed_paths(self):
   script=r"""
