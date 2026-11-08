@@ -906,6 +906,19 @@ class DecisionSummaryTests(unittest.TestCase):
                     dict(rows[0], request_kind='forced'), dict(rows[4], request_kind='forced'), dict(rows[3], search=rows[0]['search'])):
             with self.assertRaises(ValueError): panel.decisions([bad], deadline=3.)
 
+    def test_latency_breaks_down_by_the_server_that_answered(self):
+        cell = dict(arm='DN2W16', ordinal=1)
+        rows = [decision_row(cell, i, select=s) for i, s in enumerate((.5, .7, .9, 1.1))] + [decision_row(cell, 4, source='greedy_fallback', cause='connection_error')]
+        for row, sid in zip(rows, ('gpu0:7001', 'gpu0:7001', 'gpu1:7001', None, None)):
+            if sid is not None: row['search']['server_id'] = sid
+        rows[3]['search']['server_id'] = ''   # not a usable id: counted as unknown, like a client that got no answer
+        by = panel.decisions(rows, deadline=3.)['by_server']
+        self.assertEqual(sorted(by), ['gpu0:7001', 'gpu1:7001', 'unknown'])
+        self.assertEqual((by['gpu0:7001']['responses'], by['gpu0:7001']['statuses'], by['gpu0:7001']['latency']['select']['max']), (2, dict(COMPLETE=2), .7))
+        self.assertEqual(by['gpu1:7001']['latency']['client']['p50'], .9-.05)
+        self.assertEqual((by['unknown']['responses'], by['unknown']['statuses']), (2, dict(COMPLETE=1, REFUSED=1)))
+        self.assertEqual(panel.decisions([decision_row(dict(arm='RAW', ordinal=0), 0, source='raw_arm', kind='forced')], deadline=3.)['by_server'], {})
+
 
 def completed(root, cell):
     return dict(path=str(root/'requests'/f"{cell['ordinal']}.json"), arm=cell['arm'])

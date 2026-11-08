@@ -876,11 +876,13 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
     Also latency quantiles, search-vs-greedy, and COMPLETE responses whose
     requested_worlds is not the arm's W, whose archive_sha256 is not the declared
     champion archive, or whose pricer.matmul_precision is not the pinned precision. class_refused is a counted fallback cause; it is
-    neither a transport failure nor breakage.
+    neither a transport failure nor breakage. by_server: per server_id (the process that answered, behind a pool;
+    'unknown' when the client got no answer to read it from), the responses by status and their select, client and
+    server-wall latency quantiles.
     """
     seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=wrong_archive=wrong_precision=0
     times={k:[]for k in ('select','encode','greedy','client','server_wall','queue','prepare','build','price','reduce')}
-    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')}
+    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')};servers={}
     for row in rows:
         key=(row.get('battle_id'),row.get('owner'),row.get('decision_index'),row.get('prefix_sha256'))
         source,cause,kind=row.get('source'),row.get('cause'),row.get('request_kind')
@@ -897,8 +899,11 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
         times['select'].append(row['select_seconds']);late+=row['select_seconds']>deadline
         times['encode'].append(row['encode_seconds']);times['greedy'].append(row['greedy']['seconds']);search=row['search']
         if search is None:continue
-        if search.get('client_wall_seconds')is not None:times['client'].append(search['client_wall_seconds'])
-        if search.get('server_wall_seconds')is not None:times['server_wall'].append(search['server_wall_seconds'])
+        server_id=search.get('server_id');server_id=server_id if type(server_id)is str and server_id else 'unknown'
+        by=servers.setdefault(server_id,dict(statuses=Counter(),select=[],client=[],server_wall=[]))
+        by['statuses'][str(search.get('status'))]+=1;by['select'].append(row['select_seconds'])
+        if search.get('client_wall_seconds')is not None:times['client'].append(search['client_wall_seconds']);by['client'].append(search['client_wall_seconds'])
+        if search.get('server_wall_seconds')is not None:times['server_wall'].append(search['server_wall_seconds']);by['server_wall'].append(search['server_wall_seconds'])
         for name,value in (search.get('timings')or {}).items():
             if name.endswith('_seconds')and name[:-8]in times and value is not None:times[name[:-8]].append(value)
         if search['status']=='COMPLETE':
@@ -919,7 +924,9 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
         search_differs=differs,search_differs_share_of_searched=_share(differs,searched),search_differs_share_of_all=_share(differs,n),
         wrong_worlds=wrong_worlds,wrong_archive=wrong_archive,wrong_precision=wrong_precision,latency={k:_quantiles(v)for k,v in times.items()},
         late_decisions=late,deadline_seconds=deadline,
-        provenance={k:sorted(map(str,v))for k,v in provenance.items()})
+        provenance={k:sorted(map(str,v))for k,v in provenance.items()},
+        by_server={k:dict(responses=sum(v['statuses'].values()),statuses=dict(sorted(v['statuses'].items())),
+            latency={t:_quantiles(v[t])for t in ('select','client','server_wall')})for k,v in sorted(servers.items())})
 
 
 def _timeout_forfeit(row):

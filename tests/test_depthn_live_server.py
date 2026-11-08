@@ -87,7 +87,7 @@ class ServerTests(unittest.TestCase):
             fsync=os.fsync;synced=[]
             def counting(fd):synced.append(fd);return fsync(fd)
             thread=threading.Thread(target=S.run,kwargs=dict(search=search,host='127.0.0.1',port=port,warmup_requests=[dict(battle_id='w')],max_requests=4,
-                telemetry=str(path),header=dict(tree_commit='abc'),log=logs.append,on_server=servers.append),daemon=True)
+                telemetry=str(path),header=dict(tree_commit='abc'),log=logs.append,on_server=servers.append,server_id='gpu0:7001'),daemon=True)
             patcher=patch.object(S.os,'fsync',side_effect=counting);patcher.start();self.addCleanup(patcher.stop)
             thread.start();time.sleep(.3)
             self.assertEqual((logs,search.warmed,len(servers)),([],False,1))   # warming: the Server is built (its checks ran), no READY, nothing listening
@@ -100,11 +100,20 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(ready['carry_reference'],dict(battle_id='w',decision_index=3,root_classes=['sleep']))   # the warmup's reference root
             self.assertTrue(search.warmed);self.assertEqual(search.saved,[dict(battle_id='w')])
             row=blocking_request(port,request(1,budget_seconds=2.5));self.assertTrue(row['warmed'])   # served only after warmup
+            self.assertEqual((ready['server_id'],row['server_id']),('gpu0:7001','gpu0:7001'))   # which process answered, for a pool's readout
             servers[0].stop();thread.join(10);self.assertFalse(thread.is_alive())
             rows=[json.loads(line)for line in path.read_text().splitlines()];self.assertGreaterEqual(len(synced),2)   # each written batch fsynced
         self.assertEqual([r['kind']for r in rows],['ready','request']);self.assertEqual(rows[0]['event'],'READY')
         self.assertEqual((rows[1]['response']['request_id'],rows[1]['address']['battle_id'],rows[1]['lines'],rows[1]['budget_seconds']),('r1','b1',1,2.5))
         self.assertEqual(rows[1]['arrival_monotonic'],rows[1]['response']['arrival']);self.assertGreaterEqual(rows[1]['server_seconds'],0)
+        self.assertEqual(rows[1]['response']['server_id'],'gpu0:7001')
+
+    def test_server_id_stamps_responses_only_when_given(self):
+        plain=S.Recorder(FakeSearch()).process_many([request(1)]);self.assertNotIn('server_id',plain[0])   # no id: the search's responses, unchanged
+        named=S.Recorder(FakeSearch(),server_id='h:1').process_many([request(1),request(2)])
+        self.assertEqual([r['server_id']for r in named],['h:1','h:1'])
+        for bad in('',3):
+            with self.subTest(bad=bad),self.assertRaisesRegex(ValueError,'server_id'):S.Recorder(FakeSearch(),server_id=bad)
 
     def test_a_foreign_listener_on_the_port_never_triggers_ready(self):
         """The review's repro (ready_race.py): a stale listener already holds the port. Its accepted probe must not count as
