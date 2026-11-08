@@ -23,6 +23,8 @@ serves it until stopped (SIGTERM or an interrupt); it is never restarted per gam
 - Telemetry (--telemetry PATH, appended): a `ready` row (the READY line), then one `request` row per request (the
   response, the request's address, rung, budget and line count, its arrival and the server-side seconds to its result),
   written, flushed and fsynced per batch by a writer thread, off the executor's critical path.
+- server_id (--server-id, default HOSTNAME:PORT): this process's name, in READY and in every response it sends, so a client
+  behind a pool (scripts/depthn_live_proxy) records which process answered and the panel readout breaks latency down by it.
 JAX: x64 pinned off (as Codex's ladder server) and the matmul precision hard-pinned to --matmul-precision (default
 'highest', the precision the champion gates R1/R2/R3 were certified under, through the environment's
 JAX_DEFAULT_MATMUL_PRECISION; Codex's ladder server uses 'highest' too). The server refuses to start when the environment
@@ -39,6 +41,7 @@ from pathlib import Path
 import queue
 from types import SimpleNamespace
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -106,15 +109,18 @@ def request_row(request,response,finished):
 
 
 class Recorder:
-    """What the Server calls: the search's process_many, unchanged, plus telemetry rows queued for a writer thread."""
-    def __init__(self,search,path=None):
-        self.search=search;self.rows=self.thread=self.file=None
+    """What the Server calls: the search's process_many, its responses stamped with server_id (when one is given), plus telemetry
+    rows queued for a writer thread."""
+    def __init__(self,search,path=None,*,server_id=None):
+        if server_id is not None and (type(server_id)is not str or not server_id):raise ValueError('a non-empty server_id required')
+        self.search=search;self.server_id=server_id;self.rows=self.thread=self.file=None
         if path is not None:
             self.file=open(path,'a',encoding='utf-8');self.rows=queue.SimpleQueue()
             self.thread=threading.Thread(target=self._write,name='depthn-live-telemetry',daemon=True);self.thread.start()
 
     def process_many(self,requests):
         requests=list(requests);responses=self.search.process_many(requests);finished=time.monotonic()
+        if self.server_id is not None:responses=[dict(r,server_id=self.server_id)if isinstance(r,dict)else r for r in responses]
         if self.rows is not None:self.rows.put([request_row(q,r,finished)for q,r in zip(requests,responses)])
         return responses
 
@@ -150,16 +156,17 @@ def matmul_precision():
     return str(jax.config.jax_default_matmul_precision)
 
 
-def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,queue_limit=256,telemetry=None,header=None,log=_print,on_server=None):
+def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,queue_limit=256,telemetry=None,header=None,log=_print,on_server=None,
+        server_id=None):
     """Build the Server (Codex's queue checks), warm `search` up, then serve until stopped; READY is logged (and recorded)
     once it is warm AND its own listener accepts connections. `on_server(server)` sees the Server before the warmup (its
     stop() ends run once serving)."""
-    recorder=Recorder(search,telemetry)
+    recorder=Recorder(search,telemetry,server_id=server_id)
     try:
         server=Server(recorder,max_requests=max_requests,batch_wait_seconds=batch_wait_seconds,queue_limit=queue_limit)
         if on_server is not None:on_server(server)
         warm=search.warmup(warmup_requests);buckets=warm.get('buckets',{})
-        ready=dict(event='READY',host=host,port=port,**(header or{}),cold_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
+        ready=dict(event='READY',host=host,port=port,server_id=server_id,**(header or{}),cold_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
             warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),carry_reference=warm.get('carry_reference'),warmup=warm)
         def announce():log(ready);recorder.record(dict(ready,kind='ready'))
         asyncio.run(server.serve(host,port,on_ready=announce))
@@ -200,6 +207,7 @@ def parser():
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')
     p.add_argument('--telemetry',help='server-side JSONL, appended, fsynced per batch')
+    p.add_argument('--server-id',help='this process\'s name in READY and every response (default HOSTNAME:PORT)')
     p.add_argument('--tree-commit',help='the code commit served (default: this checkout\'s HEAD, +dirty when tracked files differ)')
     p.add_argument('--compilation-cache',help='absolute directory for JAX\'s persistent compilation cache')
     p.add_argument('--matmul-precision',choices=('highest','high','default'),default='highest',
@@ -272,7 +280,7 @@ def header(args,search):
 def main(argv=None):
     args=options(argv);saved=read_requests(args.warmup_requests);search=build(args)
     run(search,host=args.host,port=args.port,warmup_requests=saved,max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
-        queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search))
+        queue_limit=args.queue_limit,telemetry=args.telemetry,header=header(args,search),server_id=args.server_id or f'{socket.gethostname()}:{args.port}')
 
 
 if __name__=='__main__':main()

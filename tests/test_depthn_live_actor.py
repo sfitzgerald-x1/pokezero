@@ -363,21 +363,85 @@ class FactoryTests(unittest.TestCase):
     def fresh(self, name):
         self.path = Path(self.directory.name)/'cases'/f'{name}.jsonl'
 
-    def test_greedy_first_then_complete_legal_search_is_played(self):
-        (decision,), calls = self.run_arm(lambda r: complete(r, action=4, q=.25))
-        self.assertEqual(calls, ['greedy', 'search'])
+    def test_the_search_request_leaves_before_greedy_and_a_complete_legal_search_is_played(self):
+        sent = threading.Event()
+        def responder(r): sent.set(); return complete(r, action=4, q=.25)
+        calls = []
+        value = live.factory(NS(), raw_factory=raw_factory(calls, before=lambda: self.assertTrue(sent.wait(5))), client=fake_client(calls, responder),
+                             telemetry_path=self.path, arm='DN2W8', cell=CELL)
+        (decision,) = play(value)   # greedy waits for the request: a serial greedy-then-search actor never gets here
+        self.assertEqual(calls, ['search', 'greedy'])
         self.assertEqual((decision.action_index, decision.policy_id, decision.value_estimate), (4, 'champion-depthn-DN2W8', .25))
         row, = self.rows()
         self.assertEqual((row['source'], row['cause'], row['played_action_index'], row['search_differs']), ('search', None, 4, True))
         self.assertEqual(row['greedy']['action_index'], 0); self.assertEqual(row['request_kind'], 'move')
         self.assertGreaterEqual(row['encode_seconds'], 0)
 
+    def overlap(self, responder, *, greedy_waits=None, greedy_seconds=0.):
+        """One searched decision with a controllable greedy: it may wait for an event and then take greedy_seconds; returns the
+        decision, the row, and the times (monotonic) at which greedy finished and the decision returned."""
+        marks = {}
+        def before():
+            if greedy_waits is not None: self.assertTrue(greedy_waits.wait(5))
+            time.sleep(greedy_seconds)
+        calls = []
+        factory = raw_factory(calls, before=before)
+        policy_factory = factory.policy_factory
+        def timed_policy(c, **kw):
+            policy = policy_factory(c, **kw); select = policy.select_action
+            def select_action(observation, *, rng):
+                out = select(observation, rng=rng); marks['greedy_done'] = time.monotonic(); return out
+            policy.select_action = select_action; return policy
+        factory = OwningActorFactory('jax-owning', ActorContract.champion(), factory.backend_factory, timed_policy)
+        value = live.factory(NS(), raw_factory=factory, client=fake_client(calls, responder), telemetry_path=self.path, arm='DN2W8', cell=CELL)
+        (decision,) = play(value); marks['returned'] = time.monotonic()
+        row, = self.rows()
+        return decision, row, marks
+
+    def test_search_back_before_greedy_waits_for_greedy(self):
+        answered = threading.Event()
+        def responder(r): answered.set(); return complete(r, action=4, q=.25)
+        decision, row, marks = self.overlap(responder, greedy_waits=answered, greedy_seconds=.2)   # greedy ends 0.2 s after the answer
+        self.assertEqual((decision.action_index, row['source']), (4, 'search')); self.assertGreaterEqual(row['greedy']['seconds'], .2)
+        self.assertLessEqual(marks['greedy_done'], marks['returned'])   # nothing is played before greedy has finished
+
+    def test_greedy_first_then_search_is_played(self):
+        def responder(r): time.sleep(.3); return complete(r, action=4, q=.25)
+        decision, row, marks = self.overlap(responder)
+        self.assertEqual((decision.action_index, row['source'], row['greedy']['action_index']), (4, 'search', 0))
+        self.assertGreaterEqual(row['select_seconds'], .3); self.assertLessEqual(marks['greedy_done'], marks['returned'])
+
+    def test_a_search_failure_while_greedy_runs_plays_greedy_once_it_finishes(self):
+        for name, responder in (('timeout', lambda r: refused(r, 'timeout')), ('server_error', lambda r: refused(r, 'server_error'))):
+            with self.subTest(name):
+                self.fresh(name); failed = threading.Event()
+                def answer(r, responder=responder, failed=failed): out = responder(r); failed.set(); return out
+                decision, row, marks = self.overlap(answer, greedy_waits=failed, greedy_seconds=.2)   # the failure lands mid-greedy
+                self.assertEqual((decision.action_index, row['source'], row['cause']), (0, 'greedy_fallback', name))
+                self.assertLessEqual(marks['greedy_done'], marks['returned']); self.assertGreaterEqual(row['greedy']['seconds'], .2)
+
+    def test_search_and_greedy_are_in_flight_together(self):
+        # the review's case: each side waits for the other to have started, so either serial order fails
+        greedy_started, sent = threading.Event(), threading.Event()
+        def responder(r):
+            sent.set()
+            if not greedy_started.wait(2): raise AssertionError('greedy never started while the request was out')
+            return complete(r, action=4, q=.25)
+        def before():
+            greedy_started.set()
+            if not sent.wait(2): raise AssertionError('the request never left while greedy ran')
+        calls = []
+        value = live.factory(NS(), raw_factory=raw_factory(calls, before=before), client=fake_client(calls, responder),
+                             telemetry_path=self.path, arm='DN2W8', cell=CELL)
+        (decision,) = play(value)
+        self.assertEqual(decision.action_index, 4)
+
     def test_every_refusal_cause_plays_the_greedy_decision(self):
         for cause in live.SERVER_CAUSES+('timeout', 'connection_error'):
             with self.subTest(cause):
                 self.fresh(cause)
                 (decision,), calls = self.run_arm(lambda r, c=cause: refused(r, c))
-                self.assertEqual(calls, ['greedy', 'search']); self.assertEqual(decision.action_index, 0)
+                self.assertEqual(sorted(calls), ['greedy', 'search']); self.assertEqual(decision.action_index, 0)
                 self.assertEqual(decision.policy_id, 'champion-raw')
                 self.assertEqual(decision.metadata['depthn_live'], dict(arm='DN2W8', source='greedy_fallback', cause=cause, request_id='f'*32))
                 row, = self.rows()
@@ -456,7 +520,7 @@ class FactoryTests(unittest.TestCase):
         deep = nested(30000)
         (decision,), calls = self.run_arm(lambda r: dict(complete(r), zz=deep))
         row, = self.rows()
-        self.assertEqual(calls, ['greedy', 'search']); self.assertEqual(decision.action_index, 0)
+        self.assertEqual(sorted(calls), ['greedy', 'search']); self.assertEqual(decision.action_index, 0)
         self.assertEqual((row['source'], row['cause'], row['played_action_index'], row['search_differs']), ('greedy_fallback', 'server_error', 0, None))
         self.assertEqual((row['search']['status'], row['search']['cause'], row['search']['request_id']), ('REFUSED', 'server_error', 'f'*32))
         self.assertTrue(row['search']['refusal'].startswith('telemetry row: RecursionError'))
@@ -467,7 +531,7 @@ class FactoryTests(unittest.TestCase):
         self.assertIn('class_refused', live.SERVER_CAUSES)
         (decision,), calls = self.run_arm(lambda r: refused(r, 'class_refused'))
         row, = self.rows()
-        self.assertEqual((decision.action_index, row['source'], row['cause'], calls), (0, 'greedy_fallback', 'class_refused', ['greedy', 'search']))
+        self.assertEqual((decision.action_index, row['source'], row['cause'], sorted(calls)), (0, 'greedy_fallback', 'class_refused', ['greedy', 'search']))
 
     def test_rows_carry_turn_and_champion_archive(self):
         with FakeServer(send(lambda r: dict(complete(r), archive_sha256='a'*64))) as server:
@@ -497,7 +561,7 @@ class FactoryTests(unittest.TestCase):
     def test_single_legal_decision_is_never_searched(self):
         lines = [request_line(trapped=True), fixture.request(), request_line(members=2, force=True)]
         decisions, calls = self.run_arm(lambda r: complete(r), lines=lines)
-        self.assertEqual(calls, ['greedy', 'greedy', 'search', 'greedy'])
+        self.assertEqual(calls[:1] + sorted(calls[1:3]) + calls[3:], ['greedy', 'greedy', 'search', 'greedy'])   # one decision at a time; within one, either order
         rows = self.rows()
         self.assertEqual([r['decision_index'] for r in rows], [0, 1, 2]); self.assertEqual([d.action_index for d in decisions], [0, 4, 4])
         self.assertEqual([(r['source'], r['request_kind'], r['search'] is None, r['cause']) for r in rows],
@@ -546,17 +610,20 @@ class FactoryTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             live.factory(NS(), raw_factory=raw_factory([]), client=None, telemetry_path=self.path, arm='RAW')
 
-    def test_budget_starts_at_encode_and_counts_greedy_and_reserve(self):
+    def test_budget_starts_at_encode_and_counts_the_reserve_but_not_greedy(self):
         now = [100.]
         class SlowBackend(Backend):
             def encode(self, snapshot): now[0] += .3; return Backend.encode(self, snapshot)
-        def greedy_cost(): now[0] += .4
+        def greedy_cost():   # greedy runs while the request is out: its 0.4 s is not taken from search's budget
+            deadline = time.monotonic() + 5
+            while not server.requests and time.monotonic() < deadline: time.sleep(.001)
+            now[0] += .4
         with FakeServer(send(complete)) as server, patch.object(live, 'clock', lambda: now[0]):
             client = live.Client('127.0.0.1', server.port, rung='DN2W8')
             value = live.factory(NS(), raw_factory=raw_factory([], before=greedy_cost, backend=SlowBackend), client=client,
                                  telemetry_path=self.path, arm='DN2W8', cell=CELL)
             decision, = play(value)
-        self.assertAlmostEqual(server.requests[0]['budget_seconds'], 2.15, places=12)
+        self.assertAlmostEqual(server.requests[0]['budget_seconds'], 2.55, places=12)
         row, = self.rows(); self.assertAlmostEqual(row['encode_seconds'], .3, places=12)
         self.assertAlmostEqual(row['greedy']['seconds'], .4, places=12); self.assertAlmostEqual(row['select_seconds'], .7, places=12)
         self.assertEqual((decision.action_index, row['source']), (4, 'search'))

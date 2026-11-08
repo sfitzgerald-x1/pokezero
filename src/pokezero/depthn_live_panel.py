@@ -48,11 +48,15 @@ Eval readiness (the lead's rulings):
   readout reports Foul Play's wait + overlap per arm as description only.
 - Calibration (RAW only, seeds disjoint from every eval cell): `calibrate` runs
   RAW games solo (one lane) and at the declared worker-lane count, measures Foul
-  Play's iterations_per_budget_second per budget stratum (>= 300 rated moves per
-  stratum per setting) and writes calibration.json; the declaration records its
+  Play's iterations_per_budget_second per budget stratum (at least the declared
+  floor of rated moves per stratum and setting: 60 for 4x500ms, 300 for
+  2x1000ms) and writes calibration.json; the declaration records its
   sha256 and the concurrent/solo ratios, init verifies them, and dispatch refuses
   unless every ratio is >= 0.90, or, when Foul Play is not observable, an explicit
   accept-uncalibrated is recorded.
+- Search choice and provenance (descriptive, recorded before any dispatch): the
+  evidence that chose the search arm's W (the cells' commit, their files by
+  sha256, a summary of the result), and the opponent's and engine's identity.
 """
 import asyncio
 from collections import Counter
@@ -91,15 +95,61 @@ PHASES=('screen','extension')
 CALIBRATION_SCHEMA='depthn-foulplay-panel.calibration.v1'
 CALIBRATION_RUN_SCHEMA='depthn-foulplay-panel.calibration-run.v1'
 CALIBRATION_REQUEST_SCHEMA='depthn-foulplay-panel.calibration-request.v1'
+PREFLIGHT_REQUEST_SCHEMA='depthn-foulplay-panel.preflight-request.v1'
+PREFLIGHT_SCHEMA='depthn-foulplay-panel.preflight.v1'
+PREFLIGHT_WALL_P95_MAX=2.6   # the lead's bound on the search arm's end-to-end decision wall p95
+PREFLIGHT_TIMEOUT_SHARE_MAX=.01   # the lead's bound on the search arm's timeout share (of non-single-legal decisions)
+
+
+NON_HOME_SHARE_MAX=.01   # the lead's breakage bound: answered search decisions off their battle's home server
+
+
+def non_home(rows):
+    """Keys (battle_id, owner, decision_index) of answered decisions off their battle's home: per battle, in decision order, the home
+    is the first server (the response's server_id) that answered; a decision answered by another server, and every answered decision
+    of that battle after it, is non_home (its server's constructor session missed decisions: a path the gates never validated).
+    Unanswered decisions (no server_id) neither set nor break a home."""
+    battles={}
+    for r in rows:
+        x=r.get('search')if isinstance(r.get('search'),dict)else {};sid=x.get('server_id')
+        if type(sid)is str and sid and x.get('client_refused')is not True:
+            battles.setdefault((r.get('battle_id'),r.get('owner')),[]).append((r.get('decision_index'),sid))
+    out=set()
+    for (battle,owner),seen in battles.items():
+        home=None;broken=False
+        for index,sid in sorted(seen,key=lambda x:(x[0]if type(x[0])is int else -1)):
+            if home is None:home=sid
+            broken=broken or sid!=home
+            if broken:out.add((battle,owner,index))
+    return out
+
+
+def refusal_kind(text):
+    """A refusal's kind: its text with numbers masked, first 120 characters (for counting kinds)."""
+    import re
+    return re.sub(r'[0-9]+','#',str(text or ''))[:120]
 CALIBRATION_RATIO_MIN=.9
-CALIBRATION_MIN_MOVES=300
+CALIBRATION_FLOORS=dict(fairness.CALIBRATION_FLOORS)   # rated moves per budget stratum and setting (the lead's ruling)
+CALIBRATION_Z90=1.6448536269514722   # two-sided 90% normal quantile, for each stratum's descriptive ratio CI
+CALIBRATION_START_NOTE=('concurrent lanes start together, so early-stratum contention is worse than the eval\'s staggered steady state: '
+    'a conservative direction')
 WORKER_IDENTITY_ENVIRONMENT=('POD_NAME','NODE_NAME')
 TRANSPORT=('timeout','connection_error','server_error')
 T_QUANTILE=.95  # Two-sided 90%; validate() pins confidence to .9.
 KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256','arms','search','root_operator','deadline_seconds',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
-      'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration'}
+      'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
+      'search_choice','foulplay_move_wall','actor','server_tree_commit'}
+ACTOR_KEYS={'cells_per_worker','warmup_decisions','search_overlaps_greedy','warm_p95_seconds','preflight_search_wall_p95_seconds','source'}
+SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
+MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
+MOVE_WALL_KEYS={'search_time_ms','label','strata','source'}
+MOVE_WALL_STRATUM_KEYS={'sampled_battles','ms_per_sample','solo','concurrent'}
+PROVENANCE_KEYS={'foulplay','showdown_commit','engine_tables','base_config_sha256'}
+FOULPLAY_KEYS={'commit','applied_diff_sha256','patch_blobs','poke_engine','runtime_metadata_sha256','python'}
+POKE_ENGINE_KEYS={'version','features','sdist_sha256','setup_script_sha256','gen3_patch_list_sha256','native_so_sha256'}
+ENGINE_TABLES_KEYS={'digest','constructor_metadata_sha256','bank_metadata_sha256'}
 REQUEST_KEYS={'schema','run_directory','declaration','declaration_sha256','ladder_declaration','ladder_declaration_sha256',
               'cell','checkpoint','checkpoint_sha256','base_config'}
 encoded,sha,read_bound,write_new=ladder.encoded,ladder.sha,ladder.read_bound,ladder.write_new
@@ -143,7 +193,8 @@ def validate(declaration):
     observable=d['fairness_observable'];cal=d['calibration']
     if (type(d['worker_lanes'])is not int or d['worker_lanes']<1 or type(observable)is not dict or set(observable)!={'value','evidence'}
             or type(observable['value'])is not bool or not _evidence(observable['evidence'])
-            or type(cal)is not dict or set(cal)!={'status','sha256','ratios','seed_band'}or not _hex(cal['sha256'])
+            or type(cal)is not dict or set(cal)!={'status','sha256','ratios','seed_band','floors'}or not _hex(cal['sha256'])
+            or cal['floors']!=CALIBRATION_FLOORS or any(type(x)is not int for x in cal['floors'].values())
             or cal['status']!=('MEASURED'if observable['value']else'UNMEASURABLE')
             or (cal['ratios']is not None if cal['status']=='UNMEASURABLE'else type(cal['ratios'])is not dict
                 or set(cal['ratios'])!=set(fairness.CALIBRATION_STRATA)
@@ -152,7 +203,72 @@ def validate(declaration):
             or any(type(v)is not int or v<1 for v in cal['seed_band'].values())):
         raise ValueError('worker lanes >= 1, fairness observability with its evidence, and a calibration (MEASURED with '
                          'positive per-stratum ratios when observable, else UNMEASURABLE) with its sha256 and seed band required')
+    choice=d['search_choice']
+    if (type(choice)is not dict or set(choice)!=SEARCH_CHOICE_KEYS or choice['arm']!=arms[1]or not _hex(choice['cell_commit'],40)
+            or type(choice['evidence'])is not list or not choice['evidence']or not all(map(_evidence,choice['evidence']))
+            or type(choice['summary'])is not str or not choice['summary'].strip()):
+        raise ValueError('search choice: the declared search arm, the commit of the cells that chose it, their files (path and sha256) '
+                         'and a summary of the result required')
+    validate_move_wall(d['foulplay_move_wall']);validate_actor(d['actor'])
+    if not _hex(d['server_tree_commit'],40):raise ValueError('the servers\' tree commit (40 hex) required')
+    validate_provenance(d['provenance'])
     return d
+
+
+def validate_actor(value):
+    """The actor's time against search's budget (the lead's check; dispatch enforces cells_per_worker): persistent workers
+    (cells_per_worker >= 2), each warmed once before its first claim (warm_actor on warmup_decisions captured decisions), the
+    search request sent before the greedy forward, the measured warm p95s (encode, greedy) and the pre-flight's search-arm
+    end-to-end decision wall p95 (at most PREFLIGHT_WALL_P95_MAX), with their source (the pre-flight's preflight.json)."""
+    v=value;warm=v.get('warm_p95_seconds')if type(v)is dict else None
+    if (type(v)is not dict or set(v)!=ACTOR_KEYS or type(v['cells_per_worker'])is not int or v['cells_per_worker']<2
+            or type(v['warmup_decisions'])is not int or v['warmup_decisions']!=WARMUP_DECISIONS or v['search_overlaps_greedy']is not True or not _evidence(v['source'])
+            or type(warm)is not dict or set(warm)!={'encode','greedy'}
+            or any(type(x)is not float or not math.isfinite(x)or x<=0 for x in (*warm.values(),v['preflight_search_wall_p95_seconds']))
+            or v['preflight_search_wall_p95_seconds']>PREFLIGHT_WALL_P95_MAX):
+        raise ValueError('actor: persistent warmed workers (cells_per_worker >= 2, the declared warmup), the search request overlapping '
+                         'greedy, the measured warm encode / greedy p95 and a pre-flight search wall p95 within the bound, with its source required')
+    return v
+
+
+def validate_move_wall(value):
+    """Descriptive: what 'Foul Play at search_time_ms' means in this run. The base config's search_time_ms (init checks it),
+    a label, and per budget stratum its sampled battles and ms per sample (as Foul Play reports them) with the per-move wall
+    (the bridge's wait + overlap seconds: request forwarded to choice received) p50 / p95 over the calibration's moves in each
+    setting, from calibration_move_walls' file (source)."""
+    v=value;strata=v.get('strata')if type(v)is dict else None
+    good=lambda q:(type(q)is dict and set(q)=={'moves','p50','p95'}and type(q['moves'])is int and q['moves']>0
+                   and all(type(q[k])is float and math.isfinite(q[k])and q[k]>0 for k in ('p50','p95')))
+    if (type(v)is not dict or set(v)!=MOVE_WALL_KEYS or type(v['search_time_ms'])is not int or v['search_time_ms']<=0
+            or type(v['label'])is not str or not v['label'].strip()or not _evidence(v['source'])
+            or type(strata)is not dict or set(strata)!=set(fairness.CALIBRATION_STRATA)
+            or any(type(x)is not dict or set(x)!=MOVE_WALL_STRATUM_KEYS or any(type(x[k])is not int or x[k]<=0 for k in ('sampled_battles','ms_per_sample'))
+                   or f"{x['sampled_battles']}x{x['ms_per_sample']}ms"!=c or not good(x['solo'])or not good(x['concurrent'])for c,x in strata.items())):
+        raise ValueError('foulplay move wall: the base config\'s search_time_ms, a label, and per budget stratum its sampled battles, ms per '
+                         'sample and per-move wall p50 / p95 per setting, with its source file, required')
+    return v
+
+
+def validate_provenance(value):
+    """The opponent's and the engine's identity, recorded in the declaration (descriptive; init only checks the base config sha):
+    the Foul Play runtime (its commit, applied patch diff and patch blobs, the poke-engine build: version, features, sdist, setup
+    script, gen3 patch list and native .so sha256s, runtime metadata, python), the Showdown commit, the live executor's compiled
+    engine tables (constructor_worlds.engine_tables_digest and both metadata shas the R1-C bridge compares) and the base config."""
+    v=value;fp=v.get('foulplay')if type(v)is dict else None;pe=fp.get('poke_engine')if type(fp)is dict else None
+    tables=v.get('engine_tables')if type(v)is dict else None
+    if (type(v)is not dict or set(v)!=PROVENANCE_KEYS or type(fp)is not dict or set(fp)!=FOULPLAY_KEYS
+            or not _hex(fp['commit'],40)or not _hex(fp['applied_diff_sha256'])or not _hex(fp['runtime_metadata_sha256'])
+            or type(fp['python'])is not str or not fp['python'].strip()
+            or type(fp['patch_blobs'])is not dict or not fp['patch_blobs']
+            or any(type(k)is not str or not k.strip()or type(b)is not str or len(b)<8 or not _hex(b,len(b))for k,b in fp['patch_blobs'].items())
+            or type(pe)is not dict or set(pe)!=POKE_ENGINE_KEYS or type(pe['version'])is not str or not pe['version'].strip()
+            or type(pe['features'])is not str or not pe['features'].strip()
+            or not all(_hex(pe[k])for k in ('sdist_sha256','setup_script_sha256','gen3_patch_list_sha256','native_so_sha256'))
+            or not _hex(v['showdown_commit'],40)or type(tables)is not dict or set(tables)!=ENGINE_TABLES_KEYS
+            or not all(_hex(tables[k])for k in ENGINE_TABLES_KEYS)or not _hex(v['base_config_sha256'])):
+        raise ValueError('provenance: the Foul Play runtime identity, the Showdown commit, the engine tables digest with both metadata '
+                         'shas, and the base config sha required')
+    return v
 
 
 def _evidence(value):
@@ -199,6 +315,18 @@ def _git(*args):
         out=subprocess.run(['git','-C',str(Path(__file__).resolve().parent),*args],capture_output=True,text=True,timeout=30)
     except (OSError,subprocess.SubprocessError):return None
     return out.stdout if out.returncode==0 else None
+
+
+def server_tree_check(server_commit,eval_commit,declaration):
+    """The lead's rule for servers started before the declaration was committed: they may run another commit than the eval tree
+    only if `git diff --name-only server eval` is exactly the declaration's own repo path (or nothing: the same tree). Anything
+    else, or no git answer, is not ok. Returns both commits, the declaration path, the differing files and ok."""
+    path=_git('ls-files','--full-name','--error-unmatch',str(Path(declaration).resolve()))
+    names=_git('diff','--name-only',str(server_commit),str(eval_commit))if _hex(server_commit,40)and _hex(eval_commit,40)else None
+    files=None if names is None else sorted(x for x in names.splitlines()if x)
+    declared=None if path is None else path.strip()
+    ok=files is not None and declared is not None and files in ([],[declared])
+    return dict(server_commit=server_commit,eval_commit=eval_commit,declaration_path=declared,files=files,ok=ok)
 
 
 def tree_identity(declared=None):
@@ -248,6 +376,7 @@ def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladde
     d=validate(read_bound(declaration,declaration_sha256));lad=ladder.validate(read_bound(ladder_declaration,ladder_declaration_sha256))
     if d['ladder_declaration_sha256']!=ladder_declaration_sha256 or lad['checkpoint_sha256']!=d['checkpoint_sha256']:
         raise ValueError('panel declaration must pin this ladder declaration and champion')
+    if d['provenance']['base_config_sha256']!=base_config_sha256:raise ValueError('the declaration\'s provenance must pin this base config')
     cal=d['calibration'];calibration_cells(lad,cal['seed_band']);measured=read_bound(calibration,cal['sha256'])
     if (type(measured)is not dict or measured.get('schema')!=CALIBRATION_SCHEMA or measured.get('status')!=cal['status']
             or measured.get('ratios')!=cal['ratios']or measured.get('seed_band')!=cal['seed_band']
@@ -258,20 +387,25 @@ def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladde
                          'base config (Foul Play budget included) and champion checkpoint')
     if cal['status']=='MEASURED':   # valid evidence: the move floor held, and the ratios are the recorded rates' own
         strata=measured.get('strata')
-        if (type(measured.get('min_moves'))is not int or measured['min_moves']<CALIBRATION_MIN_MOVES or type(strata)is not dict
+        if (measured.get('floors')!=CALIBRATION_FLOORS or type(strata)is not dict
                 or set(strata)!=set(fairness.CALIBRATION_STRATA)
-                or any(type(strata[s].get(k))is not dict or type(strata[s][k].get('moves'))is not int or strata[s][k]['moves']<CALIBRATION_MIN_MOVES
+                or any(type(strata[s].get(k))is not dict or type(strata[s][k].get('moves'))is not int or strata[s][k]['moves']<CALIBRATION_FLOORS[s]
                        or type(strata[s][k].get('rate'))is not float or strata[s][k]['rate']<=0 for s in strata for k in ('solo','concurrent'))
                 or any(strata[s]['concurrent']['rate']/strata[s]['solo']['rate']!=cal['ratios'][s]for s in strata)):
-            raise ValueError(f'calibration.json is not valid evidence: >= {CALIBRATION_MIN_MOVES} rated moves per stratum and setting, '
+            raise ValueError(f'calibration.json is not valid evidence: the declared floors {CALIBRATION_FLOORS} of rated moves per stratum and setting, '
                              'and ratios recomputed from its rates, required')
     base=read_bound(base_config,base_config_sha256)
     if type(base)is not dict:raise ValueError('literal base configuration required')
-    root=Path(run_directory).resolve()
+    if base.get('search_time_ms')!=d['foulplay_move_wall']['search_time_ms']:raise ValueError('the declared Foul Play search_time_ms must be the base config\'s')
+    root=Path(run_directory).resolve();tree=tree_identity(tree_commit)
+    if (root/'calibration-run.json').exists():raise ValueError('a calibration or pre-flight directory is never an eval run directory')
+    require_clean_tree(tree);check_preflight(d,tree)
+    servers=server_tree_check(d['server_tree_commit'],tree['commit'],declaration)
+    if not servers['ok']:raise ValueError(f'the servers\' tree may differ from the eval tree only in the declaration: {servers}')
     run=dict(schema=RUN_SCHEMA,run_directory=str(root),declaration=str(Path(declaration).resolve()),declaration_sha256=declaration_sha256,
         ladder_declaration=str(Path(ladder_declaration).resolve()),ladder_declaration_sha256=ladder_declaration_sha256,
         checkpoint=str(Path(checkpoint).resolve()),checkpoint_sha256=d['checkpoint_sha256'],base_config=base,
-        base_config_sha256=base_config_sha256,calibration=str(Path(calibration).resolve()),tree=tree_identity(tree_commit))
+        base_config_sha256=base_config_sha256,calibration=str(Path(calibration).resolve()),tree=tree,server_tree=servers)
     write_new(root/'run.json',run)
     return run
 
@@ -309,7 +443,7 @@ def pending(run_directory,*,arm,limit,resume=False,screen=None,tree_commit=None)
                 or value.get('arm')!=arm and arm!='RAW'):
             raise ValueError('pinned 500-cell screen readout continuing to 2000 required')
         again=readout(root,arm=value['arm'],limit=d['screen_paired_cells'],codex_raw_directory=value['codex_raw_directory'],
-            server_telemetry=value['server_telemetry'],tree_commit=tree_commit)
+            server_telemetry=value['server_telemetry'],tree_commit=tree_commit,nodes=value.get('nodes'))
         if sha(again)!=screen[1]:raise ValueError('screen readout differs from its recomputation')
     todo=[];attempted=0
     for cell in cells(lad,arm,limit=limit):
@@ -416,6 +550,8 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
             'tree_commit','archive_sha256','pricer','client_wall_seconds')})
         if response.get('client_refused')is False and response.get('archive_sha256')!=d['archive_sha256']:
             reason='server archive differs from the declared champion archive';break
+        if response.get('client_refused')is False and response.get('tree_commit')!=d['server_tree_commit']:
+            reason='server tree commit differs from the declared server tree';break
         if response['status']=='COMPLETE':
             good=(response.get('requested_worlds')==d['search'][arm]['worlds']and response.get('root_operator')==d['root_operator']
                 and (response.get('pricer')or {}).get('matmul_precision')==d['matmul_precision'])
@@ -427,7 +563,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
     return value
 
 
-async def worker(packet,*,expected_pair,original,runtime_class=None):
+async def worker(packet,*,expected_pair,original,runtime_class=None,warmup=None):
     """Exactly one cell. All validation precedes the claim; the claim precedes any game work."""
     if type(packet)is not dict or set(packet)!={'path','sha256','server'}:raise ValueError('one panel cell packet required')
     path,digest,server=packet['path'],packet['sha256'],packet['server']
@@ -450,8 +586,9 @@ async def worker(packet,*,expected_pair,original,runtime_class=None):
     telemetry=root/'telemetry'/f"{cell['ordinal']}.jsonl"
     runtime=(Runtime if runtime_class is None else runtime_class)(client=client,telemetry_path=telemetry,arm=cell['arm'],cell=cell,
         original=original,archive_sha256=d['archive_sha256'])
+    warmed=_warm_once(original,config,warmup)
     write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=digest,cell=cell,cpu_pair=list(expected_pair),
-        server=server,pid=os.getpid(),claimed_unix_seconds=time.time()))
+        server=server,pid=os.getpid(),claimed_unix_seconds=time.time(),warmup=warmed))
     started=time.monotonic();document=game=None;load=dict(start=list(os.getloadavg()))
     try:
         with ladder.owning_capture(root/'owning-wire',cell=cell,declaration_sha256=value['declaration_sha256']):result=await runtime.run(config)
@@ -487,6 +624,7 @@ def calibration_init(directory,*,ladder_declaration,ladder_declaration_sha256,ch
     base=read_bound(base_config,base_config_sha256)
     if type(base)is not dict:raise ValueError('literal base configuration required')
     root=Path(directory).resolve()
+    if (root/'run.json').exists():raise ValueError('an eval run directory is never a calibration or pre-flight directory')
     run=dict(schema=CALIBRATION_RUN_SCHEMA,run_directory=str(root),ladder_declaration=str(Path(ladder_declaration).resolve()),
         ladder_declaration_sha256=ladder_declaration_sha256,checkpoint=str(Path(checkpoint).resolve()),checkpoint_sha256=lad['checkpoint_sha256'],
         base_config=base,base_config_sha256=base_config_sha256,seed_band=band,lanes=lanes,tree=tree_identity(tree_commit))
@@ -519,39 +657,164 @@ def calibration_packets(directory,*,setting):
     return todo
 
 
-async def calibration_worker(packet,*,expected_pair,original,runtime_class=None):
-    """One RAW calibration game through the same Runtime, bridge and Foul Play path; claims and results stay in the
-    calibration directory, and only band cells (disjoint from every eval cell) are accepted."""
-    if type(packet)is not dict or set(packet)!={'path','sha256','server','setting'}or packet['server']is not None:
-        raise ValueError('one RAW calibration packet required')
+def preflight_packets(directory,*,arm,games,deadline_seconds,reserve_seconds):
+    """Pre-flight packets (the lead's check of the overlapped path, outcome-blind, never counted): the band's first `games`
+    not-attempted cells, alternately RAW and `arm`, each request carrying its arm and the declared client deadline and reserve."""
+    root,run,lad,band=calibration_load(directory);todo=[]
+    if arm not in SEARCH_ARMS or type(games)is not int or games<1:raise ValueError('a declared search arm and games >= 1 required')
+    if (root/'calibration.json').exists()or any(json.loads(c.read_bytes()).get('setting')in ('solo','concurrent')for c in (root/'claims').glob('*.json')):
+        raise ValueError('a pre-flight runs in its own directory, never a calibration\'s')
+    for k,cell in enumerate(c for c in band if not (root/'claims'/f"{c['ordinal']}.json").exists()):
+        if k>=games:break
+        path=root/'requests'/f"{cell['ordinal']}.json"
+        value=dict(schema=PREFLIGHT_REQUEST_SCHEMA,run_directory=run['run_directory'],cell=cell,checkpoint=run['checkpoint'],
+            checkpoint_sha256=run['checkpoint_sha256'],base_config=run['base_config'],arm='RAW'if k%2==0 else arm,
+            deadline_seconds=float(deadline_seconds),reserve_seconds=float(reserve_seconds))
+        if path.exists():
+            if path.read_bytes()!=encoded(value):raise ValueError('existing pre-flight request differs')
+        else:write_new(path,value)
+        todo.append(dict(path=str(path),sha256=sha(value),arm=value['arm'],mode='calibration',setting='preflight',pair_ordinal=cell['pair_ordinal']))
+    return todo
+
+
+def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=None,code_tree=None,tree_commit=None):
+    """The pre-flight's readings: per arm, each game's first-decision wall against the warm (decision >= 1) distribution's p99
+    (the warmup's check), and the search arm's end-to-end decision wall (select_seconds, non-single-legal decisions) p95
+    against PREFLIGHT_WALL_P95_MAX, with fallback causes; plus the workers' warmups."""
+    root,run,lad,band=calibration_load(directory);arms={};conditions=set()
+    for cell in band:
+        request=root/'requests'/f"{cell['ordinal']}.json"
+        if request.exists():
+            q=json.loads(request.read_bytes())
+            if q.get('schema')==PREFLIGHT_REQUEST_SCHEMA and q.get('arm')in SEARCH_ARMS:conditions.add((q['arm'],q['deadline_seconds'],q['reserve_seconds']))
+        result=root/'results'/f"{cell['ordinal']}.json"
+        if not result.exists():continue
+        value=json.loads(result.read_bytes())
+        if value.get('setting')!='preflight':continue
+        arm=value.get('arm');rows=telemetry_rows(root,cell['ordinal']);off=non_home(rows)
+        a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter(),kinds=Counter(),non_home=0,answered=0,
+            first_actor=[],warm_actor=[]));
+        a['non_home']+=len(off);a['answered']+=sum(1 for r in rows if type((r.get('search')or {}).get('server_id'))is str and (r.get('search')or {}).get('client_refused')is not True)
+        a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
+        for r in rows:
+            (a['first']if r.get('decision_index')==0 else a['warm']).append(r['select_seconds'])
+            (a['first_actor']if r.get('decision_index')==0 else a['warm_actor']).append(r['encode_seconds']+r['greedy']['seconds'])
+            if r.get('decision_index')!=0:a['encode'].append(r['encode_seconds']);a['greedy'].append(r['greedy']['seconds'])
+            if r.get('source')in ('search','greedy_fallback'):
+                a['search'].append(r['select_seconds'])
+                if r.get('cause')is not None:a['causes'][r['cause']]+=1
+                if r.get('cause')=='constructor_refused':a['kinds'][refusal_kind((r.get('search')or {}).get('refusal'))]+=1
+    out={}
+    for arm,a in sorted(arms.items(),key=lambda x:str(x[0])):
+        warm=_quantiles(a['warm']);p99=None if warm is None else warm['p99']
+        actor=_quantiles(a['warm_actor']);actor_p99=None if actor is None else actor['p99']
+        out[arm]=dict(games=a['games'],complete=a['complete'],first_decision=sorted(a['first']),warm=warm,
+            warm_encode=_quantiles(a['encode']),warm_greedy=_quantiles(a['greedy']),
+            first_within_warm_p99=None if p99 is None else all(x<=p99 for x in a['first']),   # descriptive: includes the server's time
+            first_end_to_end_note=None if arm not in SEARCH_ARMS else ('descriptive: a search arm\'s end-to-end first decision carries '
+                'the server\'s time too; all lanes start together, so the opening search battles price at once and share GPUs (see the '
+                'server telemetry\'s price times); the warmup is gated on the actor time (first_actor_within_warm_p99)'),
+            first_actor=sorted(a['first_actor']),warm_actor=actor,   # the warmup's check: the actor's own time (encode + greedy) on first decisions
+            first_actor_within_warm_p99=None if actor_p99 is None else all(x<=actor_p99 for x in a['first_actor']),
+            search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())),
+            timeout_share=_share(a['causes']['timeout'],len(a['search'])),constructor_refused_share=_share(a['causes']['constructor_refused'],len(a['search'])),
+            searched_share_of_non_timeouts=_share(len(a['search'])-sum(a['causes'].values()),len(a['search'])-a['causes']['timeout']),
+            constructor_refusal_kinds=dict(a['kinds'].most_common(10)),non_home=a['non_home'],answered=a['answered'],
+            non_home_share=_share(a['non_home'],a['answered']))
+    if len(conditions)!=1:raise ValueError(f'one search arm, deadline and reserve per pre-flight required, found {sorted(conditions)}')
+    (arm,deadline,reserve),=conditions
+    walls=[out[a]['search_wall']for a in out if a in SEARCH_ARMS and out[a]['search_wall']]
+    timeouts=[out[a]['timeout_share']for a in out if a in SEARCH_ARMS and out[a]['timeout_share']is not None]
+    claims=[json.loads(p.read_bytes())for p in sorted((root/'claims').glob('*.json'))]
+    return dict(schema=PREFLIGHT_SCHEMA,arm=arm,deadline_seconds=deadline,reserve_seconds=reserve,server=server,cells_per_worker=cells_per_worker,
+        dispatch=dispatch,arms=out,search_wall_p95_max=PREFLIGHT_WALL_P95_MAX,
+        search_wall_within=None if not walls else all(w['p95']<=PREFLIGHT_WALL_P95_MAX for w in walls),
+        timeout_share_max=PREFLIGHT_TIMEOUT_SHARE_MAX,timeouts_within=None if not timeouts else all(t<=PREFLIGHT_TIMEOUT_SHARE_MAX for t in timeouts),
+        warmups=[c['warmup']for c in claims if c.get('setting')=='preflight'and c.get('warmup')is not None],
+        seed_band=run['seed_band'],lanes=run['lanes'],calibration_tree=run['tree'],
+        code_tree=code_tree if code_tree is not None else tree_identity(tree_commit))
+
+
+def require_clean_tree(tree):
+    """init's eval tree: a clean git checkout (dirty False), since the server-tree rule compares commits, not working trees."""
+    if tree.get('dirty')is not False:raise ValueError('a clean git tree required: the server-tree rule compares commits')
+    return tree
+
+
+def check_preflight(d,tree):
+    """The declared actor block against its source (the pre-flight's preflight.json, sha256-bound): the declared arm, deadline,
+    reserve and cells per worker; a dispatch that neither failed nor stopped; every game's first decision's actor time (encode +
+    greedy) within its arm's warm actor p99 (the warmup worked; the end-to-end first decision, which also carries the server's time
+    and the start-together GPU wave, is descriptive); the search wall within the bound; the declared numbers equal to the file's; and the pre-flight's code
+    the eval's (the worker code digest: the declaration JSON is not part of it)."""
+    a=d['actor'];value=read_bound(a['source']['path'],a['source']['sha256']);arm=d['arms'][1]
+    raw=(value.get('arms')or {}).get('RAW')or {};search=(value.get('arms')or {}).get(arm)or {}
+    outcome=value.get('dispatch')if isinstance(value.get('dispatch'),dict)else {}
+    pick=lambda q,k:(q or {}).get(k)
+    if (value.get('schema')!=PREFLIGHT_SCHEMA or value.get('arm')!=arm or value.get('deadline_seconds')!=d['deadline_seconds']
+            or value.get('reserve_seconds')!=d['reserve_seconds']or value.get('cells_per_worker')!=a['cells_per_worker']
+            or outcome.get('failed')!=[]or outcome.get('stopped')is not None or value.get('search_wall_within')is not True
+            or value.get('timeouts_within')is not True
+            or raw.get('first_actor_within_warm_p99')is not True or search.get('first_actor_within_warm_p99')is not True
+            or pick(search.get('search_wall'),'p95')!=a['preflight_search_wall_p95_seconds']
+            or pick(raw.get('warm_encode'),'p95')!=a['warm_p95_seconds']['encode']or pick(raw.get('warm_greedy'),'p95')!=a['warm_p95_seconds']['greedy']
+            or pick(value.get('code_tree'),'source_sha256')!=tree['source_sha256']):
+        raise ValueError('the declared actor must be its pre-flight\'s: same arm, deadline, reserve and cells per worker, a clean dispatch, '
+                         'first decisions within the warm p99, the search wall and timeouts within their bounds, the same numbers and the same code')
+    return value
+
+
+async def calibration_worker(packet,*,expected_pair,original,runtime_class=None,warmup=None):
+    """One RAW calibration game (or, in setting 'preflight', one RAW or search-arm pre-flight game: outcome-blind, never
+    counted) through the same Runtime, bridge and Foul Play path; claims and results stay in the calibration directory, and
+    only band cells (disjoint from every eval cell) are accepted."""
+    if type(packet)is not dict or set(packet)!={'path','sha256','server','setting'}:raise ValueError('one calibration packet required')
     value=read_bound(packet['path'],packet['sha256']);root=Path(value.get('run_directory','')).resolve()
-    _,run,lad,band=calibration_load(root);cell=value.get('cell')
-    if (set(value)!={'schema','run_directory','cell','checkpoint','checkpoint_sha256','base_config'}or value['schema']!=CALIBRATION_REQUEST_SCHEMA
+    _,run,lad,band=calibration_load(root);cell=value.get('cell');preflight=packet['setting']=='preflight'
+    keys={'schema','run_directory','cell','checkpoint','checkpoint_sha256','base_config'}|({'arm','deadline_seconds','reserve_seconds'}if preflight else set())
+    if (set(value)!=keys or value['schema']!=(PREFLIGHT_REQUEST_SCHEMA if preflight else CALIBRATION_REQUEST_SCHEMA)
             or cell not in band or Path(packet['path']).resolve()!=root/'requests'/f"{cell['ordinal']}.json"
-            or packet['setting']not in ('solo','concurrent')):raise ValueError('a band calibration request at its own path required')
+            or packet['setting']not in ('solo','concurrent','preflight')):raise ValueError('a band calibration request at its own path required')
+    arm=value['arm']if preflight else'RAW';server=packet['server']
+    if arm not in ARMS or (server is None)!=(arm=='RAW')or server is not None and (type(server)is not dict or set(server)!={'host','port'}):
+        raise ValueError('RAW runs without a server; a search arm needs one')
     config=ladder.configuration(value['base_config'],cell,checkpoint=value['checkpoint'],cpu_pair=expected_pair)
     from .live_protocol_runtime import _checkpoint_sha
     if _checkpoint_sha(config.checkpoint)!=value['checkpoint_sha256']:raise ValueError('original champion bytes differ')
-    from .depthn_live_actor import Runtime
-    runtime=(Runtime if runtime_class is None else runtime_class)(client=None,telemetry_path=root/'telemetry'/f"{cell['ordinal']}.jsonl",
-        arm='RAW',cell=cell,original=original)
-    write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=packet['sha256'],cell=cell,setting=packet['setting'],cpu_pair=list(expected_pair)))
+    from .depthn_live_actor import Client,Runtime
+    client=None if server is None else Client(server['host'],server['port'],rung=arm,deadline_seconds=value['deadline_seconds'],
+        reserve_seconds=value['reserve_seconds'])
+    runtime=(Runtime if runtime_class is None else runtime_class)(client=client,telemetry_path=root/'telemetry'/f"{cell['ordinal']}.jsonl",
+        arm=arm,cell=cell,original=original)
+    warmed=_warm_once(original,config,warmup)
+    write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=packet['sha256'],cell=cell,setting=packet['setting'],
+        cpu_pair=list(expected_pair),arm=arm,pid=os.getpid(),warmup=warmed))
     load=dict(start=list(os.getloadavg()));document=game=None
     try:
         with ladder.owning_capture(root/'owning-wire',cell=cell,declaration_sha256=sha(run)):result=await runtime.run(config)
         document=result.to_dict();game=result.games[0].to_dict();status,error='COMPLETE',None
     except Exception as error_:status,error=('UNKNOWN',type(error_).__name__+': '+str(error_))
-    write_new(root/'results'/f"{cell['ordinal']}.json",dict(schema=CELL_SCHEMA,status=status,error=error,cell=cell,setting=packet['setting'],
+    write_new(root/'results'/f"{cell['ordinal']}.json",dict(schema=CELL_SCHEMA,status=status,error=error,cell=cell,setting=packet['setting'],arm=arm,
         cpu_pair=list(expected_pair),source_game=game,benchmark=document,owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"),
         worker=worker_identity(),load_average=dict(load,end=list(os.getloadavg()))))
     return 0
 
 
-def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
+def ratio_ci90(concurrent,solo):
+    """A descriptive two-sided 90% CI of mean(concurrent)/mean(solo) by the delta method (independent samples), or None with fewer
+    than two of either."""
+    if len(concurrent)<2 or len(solo)<2:return None
+    mc,ms=fmean(concurrent),fmean(solo)
+    if mc<=0 or ms<=0:return None
+    r=mc/ms;se=r*math.sqrt(variance(concurrent)/(len(concurrent)*mc*mc)+variance(solo)/(len(solo)*ms*ms))
+    return [r-CALIBRATION_Z90*se,r+CALIBRATION_Z90*se]
+
+
+def calibration_summary(directory,*,floors=CALIBRATION_FLOORS):
     """Per budget stratum and setting: rated moves and mean iterations_per_budget_second; the concurrent/solo ratio; the
     observability the games' headers report; status MEASURED, INSUFFICIENT or UNMEASURABLE."""
     root,run,lad,band=calibration_load(directory);results=[read_result(root,c['ordinal'])for c in band]
-    results=[r for r in results if r.get('status')=='COMPLETE']
+    results=[r for r in results if r.get('status')=='COMPLETE'and r.get('setting')in ('solo','concurrent')]   # pre-flight games never count
     headers={((r.get('benchmark')or {}).get('foulplay_think')or {}).get('iterations_observable')for r in results}
     # UNMEASURABLE only when no game reports True; None is the bridge's failed probe, not a reading. Games that report both
     # True and False contradict each other: INSUFFICIENT (fail closed: the screen waits until someone looks).
@@ -564,12 +827,15 @@ def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
     strata={c:dict(solo=dict(moves=len(rates['solo'][c]),rate=fmean(rates['solo'][c])if rates['solo'][c]else None),
         concurrent=dict(moves=len(rates['concurrent'][c]),rate=fmean(rates['concurrent'][c])if rates['concurrent'][c]else None))
         for c in fairness.CALIBRATION_STRATA}
-    for value in strata.values():
+    for c,value in strata.items():
         value['ratio']=(value['concurrent']['rate']/value['solo']['rate']if value['solo']['rate']and value['concurrent']['rate']is not None else None)
-    enough=all(v[s]['moves']>=min_moves for v in strata.values()for s in ('solo','concurrent'))
+        value['ratio_ci90']=ratio_ci90(rates['concurrent'][c],rates['solo'][c])   # descriptive; the gate is the point estimate
+        value['ratio_ci90_note']='moves treated as independent; they cluster by game, so this interval is too narrow (descriptive only)'
+    enough=all(v[s]['moves']>=floors[c]for c,v in strata.items()for s in ('solo','concurrent'))
     status='INSUFFICIENT'if mixed else'UNMEASURABLE'if observable is not True else'MEASURED'if enough else'INSUFFICIENT'
     return dict(schema=CALIBRATION_SCHEMA,status=status,iterations_observable=observable,observability_mixed=mixed,strata=strata,
-        ratios={c:v['ratio']for c,v in strata.items()}if status=='MEASURED'else None,ratio_min=CALIBRATION_RATIO_MIN,min_moves=min_moves,
+        ratios={c:v['ratio']for c,v in strata.items()}if status=='MEASURED'else None,ratio_min=CALIBRATION_RATIO_MIN,floors=dict(floors),
+        concurrent_start=CALIBRATION_START_NOTE,
         lanes=run['lanes'],seed_band=run['seed_band'],ladder_declaration_sha256=run['ladder_declaration_sha256'],
         base_config_sha256=run['base_config_sha256'],checkpoint_sha256=run['checkpoint_sha256'],
         games={s:sum(r['setting']==s for r in results)for s in ('solo','concurrent')},
@@ -577,24 +843,43 @@ def calibration_summary(directory,*,min_moves=CALIBRATION_MIN_MOVES):
         core_pairs=[list(pair)for pair in sorted({tuple(r['cpu_pair'])for r in results if r.get('cpu_pair')})],tree=run['tree'])
 
 
-async def calibrate(directory,*,pairs,cache_directory=None,command=None,min_moves=CALIBRATION_MIN_MOVES,dispatch_function=None):
-    """Solo (one lane) then concurrent (the planned lanes) RAW games on band seeds until every budget stratum has min_moves
+def calibration_move_walls(directory,*,tree_commit=None):
+    """Descriptive (no rule reads it): per budget stratum, the sampled battles and ms per sample Foul Play reported and, per
+    setting, its per-move wall: the bridge's wait + overlap seconds (request forwarded to its choice received), over the
+    calibration's COMPLETE cells. With search parallelism 1 the sampled battles run one after another, so the wall is about
+    sampled battles x ms per sample plus overhead."""
+    root,run,lad,band=calibration_load(directory);results=[read_result(root,c['ordinal'])for c in band]
+    walls={c:{s:[]for s in ('solo','concurrent')}for c in fairness.CALIBRATION_STRATA};shape={c:Counter()for c in fairness.CALIBRATION_STRATA}
+    for r in results:
+        if r.get('status')!='COMPLETE'or r.get('setting')not in ('solo','concurrent'):continue
+        for row in (r.get('source_game')or {}).get('opponent_think')or ():
+            c=row.get('stratum')
+            if c not in walls or not all(type(row.get(k))in (int,float)for k in ('wait_seconds','overlap_seconds')):continue
+            walls[c][r['setting']].append(row['wait_seconds']+row['overlap_seconds']);shape[c][(row.get('sampled_battles'),row.get('budget_ms_per_sample'))]+=1
+    quantiles=lambda v:None if not v else dict(moves=len(v),**{k:x for k,x in _quantiles(v).items()if k in ('p50','p95')})
+    return dict(schema=MOVE_WALL_SCHEMA,search_time_ms=run['base_config'].get('search_time_ms')if isinstance(run.get('base_config'),dict)else None,
+        strata={c:dict(shapes={f'{b}x{m}ms':n for (b,m),n in sorted(shape[c].items(),key=str)},**{s:quantiles(walls[c][s])for s in ('solo','concurrent')})
+            for c in fairness.CALIBRATION_STRATA},seed_band=run['seed_band'],lanes=run['lanes'],calibration_tree=run['tree'],code_tree=tree_identity(tree_commit))
+
+
+async def calibrate(directory,*,pairs,cache_directory=None,command=None,floors=CALIBRATION_FLOORS,dispatch_function=None):
+    """Solo (one lane) then concurrent (the planned lanes) RAW games on band seeds until every budget stratum has its floor of
     rated moves in the setting (or Foul Play's work proves unobservable, or the band runs out); writes calibration.json once."""
     root,run,lad,band=calibration_load(directory);run_dispatch=dispatch if dispatch_function is None else dispatch_function
     command=worker_command if command is None else command
     if len(pairs)!=run['lanes']:raise ValueError('calibrate with exactly the planned worker lanes')
     for setting,lanes in (('solo',pairs[:1]),('concurrent',pairs)):
         def enough():
-            value=calibration_summary(root,min_moves=min_moves)
+            value=calibration_summary(root,floors=floors)
             if value['iterations_observable']is False:return 'UNOBSERVABLE'
-            return 'ENOUGH'if all(v[setting]['moves']>=min_moves for v in value['strata'].values())else None
+            return 'ENOUGH'if all(v[setting]['moves']>=floors[c]for c,v in value['strata'].items())else None
         state=enough()
         if state=='UNOBSERVABLE':break
         if state=='ENOUGH':continue
         outcome=await run_dispatch(calibration_packets(root,setting=setting),pairs=lanes,servers={'RAW':None},cache_directory=cache_directory,
             command=command,after=lambda packet:enough())
         if outcome.get('stopped')=='UNOBSERVABLE'or outcome.get('failed'):break
-    value=calibration_summary(root,min_moves=min_moves);write_new(root/'calibration.json',value)
+    value=calibration_summary(root,floors=floors);write_new(root/'calibration.json',value)
     return value
 
 
@@ -619,8 +904,17 @@ def worker_identity():
     return dict(hostname=socket.gethostname(),**{k.lower():os.environ[k]for k in WORKER_IDENTITY_ENVIRONMENT if os.environ.get(k)})
 
 
-async def serve(pair,cache_directory):
-    """CPU-only worker: one game at a time, packets on stdin until EOF."""
+async def run_packet(packet,*,pair,original,warmup=None):
+    """One packet to its worker: calibration and pre-flight packets (mode 'calibration') to calibration_worker, eval cells to
+    worker, each with this process's warmup capture."""
+    run=calibration_worker if packet.get('mode')=='calibration'else worker
+    if run is calibration_worker:packet={k:v for k,v in packet.items()if k!='mode'}
+    return await run(packet,expected_pair=pair,original=original,warmup=warmup)
+
+
+async def serve(pair,cache_directory,warmup=None):
+    """CPU-only worker: one game at a time, packets on stdin until EOF; with a warmup capture, warm_actor once before the
+    first claim."""
     from .b4_canary_endpoint import pin_owned_actor
     pin_owned_actor(pair);os.environ['JAX_PLATFORMS']='cpu';os.environ['CUDA_VISIBLE_DEVICES']=''
     import contextlib,jax,torch
@@ -631,23 +925,64 @@ async def serve(pair,cache_directory):
     torch.backends.cuda.matmul.allow_tf32=False;torch.backends.cudnn.allow_tf32=False
     original=ChampionWorkerRuntime();output=sys.stdout
     for line in sys.stdin:
-        packet=json.loads(line);run=calibration_worker if packet.get('mode')=='calibration'else worker
-        if run is calibration_worker:packet={k:v for k,v in packet.items()if k!='mode'}
-        with contextlib.redirect_stdout(sys.stderr):code=await run(packet,expected_pair=pair,original=original)
+        with contextlib.redirect_stdout(sys.stderr):code=await run_packet(json.loads(line),pair=pair,original=original,warmup=warmup)
         output.write(json.dumps({'exit':code})+'\n');output.flush()
 
 
-def worker_command(pair,cache_directory):
-    return [sys.executable,'-m','pokezero.depthn_live_panel','--cpu-pair',str(pair[0]),str(pair[1]),'--cache-directory',str(cache_directory)]
+def worker_command(pair,cache_directory,warmup=None):
+    return [sys.executable,'-m','pokezero.depthn_live_panel','--cpu-pair',str(pair[0]),str(pair[1]),'--cache-directory',str(cache_directory),
+        *(()if warmup is None else ('--warmup-capture',str(warmup)))]
 
 
-async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_command,cache_directory=None,attempted=None,after=None):
+WARMUP_DECISIONS=12
+_WARMED={}
+
+
+def warm_actor(original,config,capture,*,decisions=WARMUP_DECISIONS):
+    """A worker's warmup (the lead's ruling), once, before its first claim: the champion's own encode + greedy forward on
+    `decisions` captured decisions spread over one owning-wire capture, each in a fresh game of the original raw actor (no
+    telemetry, no search, no Foul Play), so the encoder's jit and torch's first forward are paid outside any game. The raw
+    factory and model are the ones every later game of this worker uses (ChampionWorkerRuntime.prepare). Returns the
+    capture, the decision count and each decision's seconds."""
+    import random
+    from .phase_d_owning_capture import read_capture
+    rows=list(read_capture(capture))
+    if type(decisions)is not int or decisions<1 or len(rows)<decisions:raise ValueError(f'a warmup capture with at least {decisions} decisions required')
+    rows=rows[::max(1,len(rows)//decisions)][:decisions]
+    factory=original.prepare(config);model,result,env=original.runtime[:3]
+    # Every game's first step in ChampionWorkerRuntime.run, verbatim: the bridge's policy (it puts the shared model in eval mode on
+    # CPU, which the owning policy factory requires before any actor is built).
+    from . import foulplay_bridge as bridge
+    bridge._build_policy(config=config,model=model,result=result,value_model=model,value_result=result,env_config=env,
+        rollout_config=bridge.RolloutConfig(max_decision_rounds=config.max_decision_rounds,format_id=config.format_id),
+        policy_id=str(result.model_config.policy_id))
+    actor=factory.actor((model,result,env));seconds=[]
+    for k,row in enumerate(rows):
+        actor.begin_game(battle_id=f'warmup-{os.getpid()}-{k}',owner=row['owner'],seed=k,stream_id=k+1)
+        try:
+            actor.accept_owner_stream(battle_id=actor.battle_id,owner=row['owner'],generation=0,prefix_sha256=hashlib.sha256().hexdigest(),
+                lines=tuple(row['lines']))
+            started=time.monotonic();actor.decide(actor.snapshot_boundary(),rng=random.Random(k));seconds.append(time.monotonic()-started)
+        finally:actor.close_game()
+    return dict(capture=str(Path(capture).resolve()),decisions=len(seconds),seconds=seconds)
+
+
+def _warm_once(original,config,warmup):
+    """warm_actor on this worker's first cell only (None afterwards, or without a warmup capture)."""
+    if warmup is None or id(original)in _WARMED:return None
+    value=warm_actor(original,config,warmup);_WARMED[id(original)]=(original,value)   # held: its id is never reused
+    return value
+
+
+async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_command,cache_directory=None,attempted=None,after=None,warmup=None):
     """One worker process per core pair at a time, fresh after cells_per_worker cells.
 
     servers maps every arm to its server (None for RAW). Interleave: a cell is taken
     (in packet order) only if its arm stays at most len(pairs) cells ahead of every
     other arm, counting attempted cells; when no cell qualifies, dispatch stops
-    ('interleave') rather than run one arm alone. after(packet), called once per
+    ('interleave') rather than run one arm alone. With warmup (a capture path), each
+    worker process runs warm_actor once before its first claim, so no game pays the
+    encoder's jit or torch's first forward. after(packet), called once per
     completed cell, may stop dispatch by returning a reason. A worker that fails to
     report stops all dispatch: its cell stays claimed or unclaimed as the worker
     left it, and no further cell is attempted this run.
@@ -665,7 +1000,8 @@ async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_com
         stopped.append(f'interleave: no arm may run more than {lead} cells ahead of another');return None
     async def lane(pair):
         while queue and not failed and not stopped:
-            process=await asyncio.create_subprocess_exec(*command(pair,cache_directory),stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE)
+            argv=command(pair,cache_directory)if warmup is None else command(pair,cache_directory,warmup=warmup)
+            process=await asyncio.create_subprocess_exec(*argv,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE)
             try:
                 for _ in range(cells_per_worker):
                     if not queue or failed or stopped:break
@@ -831,11 +1167,13 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
     Also latency quantiles, search-vs-greedy, and COMPLETE responses whose
     requested_worlds is not the arm's W, whose archive_sha256 is not the declared
     champion archive, or whose pricer.matmul_precision is not the pinned precision. class_refused is a counted fallback cause; it is
-    neither a transport failure nor breakage.
+    neither a transport failure nor breakage. by_server: per server_id (the process that answered, behind a pool;
+    'unknown' when the client got no answer to read it from), the responses by status and their select, client and
+    server-wall latency quantiles.
     """
     seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=wrong_archive=wrong_precision=0
     times={k:[]for k in ('select','encode','greedy','client','server_wall','queue','prepare','build','price','reduce')}
-    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')}
+    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')};servers={};kinds_refused=Counter()
     for row in rows:
         key=(row.get('battle_id'),row.get('owner'),row.get('decision_index'),row.get('prefix_sha256'))
         source,cause,kind=row.get('source'),row.get('cause'),row.get('request_kind')
@@ -848,12 +1186,17 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
         k=kinds.setdefault(kind,dict(decisions=0,searched=0,fallback=0,differs=0,causes=Counter()));k['decisions']+=1
         if source=='search':
             k['searched']+=1;hit=row['search_differs']is True;k['differs']+=hit;differs+=hit
-        elif source=='greedy_fallback':k['fallback']+=1;k['causes'][cause]+=1;causes[cause]+=1
+        elif source=='greedy_fallback':
+            k['fallback']+=1;k['causes'][cause]+=1;causes[cause]+=1
+            if cause=='constructor_refused':kinds_refused[refusal_kind((row.get('search')or {}).get('refusal'))]+=1
         times['select'].append(row['select_seconds']);late+=row['select_seconds']>deadline
         times['encode'].append(row['encode_seconds']);times['greedy'].append(row['greedy']['seconds']);search=row['search']
         if search is None:continue
-        if search.get('client_wall_seconds')is not None:times['client'].append(search['client_wall_seconds'])
-        if search.get('server_wall_seconds')is not None:times['server_wall'].append(search['server_wall_seconds'])
+        server_id=search.get('server_id');server_id=server_id if type(server_id)is str and server_id else 'unknown'
+        by=servers.setdefault(server_id,dict(statuses=Counter(),select=[],client=[],server_wall=[]))
+        by['statuses'][str(search.get('status'))]+=1;by['select'].append(row['select_seconds'])
+        if search.get('client_wall_seconds')is not None:times['client'].append(search['client_wall_seconds']);by['client'].append(search['client_wall_seconds'])
+        if search.get('server_wall_seconds')is not None:times['server_wall'].append(search['server_wall_seconds']);by['server_wall'].append(search['server_wall_seconds'])
         for name,value in (search.get('timings')or {}).items():
             if name.endswith('_seconds')and name[:-8]in times and value is not None:times[name[:-8]].append(value)
         if search['status']=='COMPLETE':
@@ -862,6 +1205,14 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
             wrong_precision+=precision is not None and (search.get('pricer')if isinstance(search.get('pricer'),dict)else {}).get('matmul_precision')!=precision
             for name in provenance:
                 value=search.get(name);provenance[name][value if type(value)is not dict else encoded(value).decode()]+=1
+    off=non_home(rows);answered=nh=nh_refused=nh_searched=nh_differs=0
+    for row in rows:
+        x=row.get('search')if isinstance(row.get('search'),dict)else {}
+        if type(x.get('server_id'))is not str or x.get('client_refused')is True:continue
+        answered+=1
+        if (row.get('battle_id'),row.get('owner'),row.get('decision_index'))in off:
+            nh+=1;nh_refused+=row.get('cause')=='constructor_refused'
+            if row.get('source')=='search':nh_searched+=1;nh_differs+=row.get('search_differs')is True
     n=len(seen);searched=sources['search'];eligible=n-sources['single_legal']
     return dict(decisions=n,eligible_decisions=eligible,by_source=dict(sources),searched_share=_share(searched,eligible),
         fallback_share=_share(sources['greedy_fallback'],eligible),
@@ -874,7 +1225,12 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
         search_differs=differs,search_differs_share_of_searched=_share(differs,searched),search_differs_share_of_all=_share(differs,n),
         wrong_worlds=wrong_worlds,wrong_archive=wrong_archive,wrong_precision=wrong_precision,latency={k:_quantiles(v)for k,v in times.items()},
         late_decisions=late,deadline_seconds=deadline,
-        provenance={k:sorted(map(str,v))for k,v in provenance.items()})
+        provenance={k:sorted(map(str,v))for k,v in provenance.items()},
+        constructor_refusal_kinds=dict(kinds_refused.most_common(10)),
+        non_home=dict(decisions=nh,answered=answered,share_of_answered=_share(nh,answered),constructor_refused_share=_share(nh_refused,nh),
+            override_rate=_share(nh_differs,nh_searched),max_share=NON_HOME_SHARE_MAX),
+        by_server={k:dict(responses=sum(v['statuses'].values()),statuses=dict(sorted(v['statuses'].items())),
+            latency={t:_quantiles(v[t])for t in ('select','client','server_wall')})for k,v in sorted(servers.items())})
 
 
 def _timeout_forfeit(row):
@@ -992,7 +1348,7 @@ def deadline_coverage(rows,*,reserve,deadlines,minimum,late=None):
         smallest_covering_deadline=covering,reserve_seconds=reserve)
 
 
-def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=None,tree_commit=None):
+def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=None,tree_commit=None,nodes=None):
     root,run,d,lad=load(run_directory);tree=require_tree(run,tree_commit)
     if arm not in d['arms'][1:]or limit not in (d['screen_paired_cells'],d['max_paired_cells']):raise ValueError('declared search arm and cell count required')
     rows={};arms={}
@@ -1032,6 +1388,9 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
     if any(a['telemetry_mismatches']for a in arms.values()):breakage.append('telemetry')
     origin=search['provenance']
     if any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']]):breakage.append('search_provenance')
+    servers=dict(server_tree_check(d['server_tree_commit'],tree['commit'],run['declaration']),observed=origin['tree_commit'])
+    if not servers['ok']or origin['tree_commit']not in ([],[d['server_tree_commit']]):breakage.append('server_tree')
+    if (search['non_home']['share_of_answered']or 0.)>NON_HOME_SHARE_MAX:breakage.append('non_home')   # routing not holding
     if search['wrong_worlds']:breakage.append('requested_worlds')
     if search['wrong_archive']:breakage.append('archive')
     if search['wrong_precision']:breakage.append('matmul_precision')
@@ -1057,7 +1416,7 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
         difference=None if declared is None or observed is None else observed-declared['value'],
         source=None if declared is None else declared['source'])
     return dict(schema=READOUT_SCHEMA,declaration_sha256=run['declaration_sha256'],ladder_declaration_sha256=run['ladder_declaration_sha256'],
-        tree=tree,arm=arm,paired_cells=limit,comparison=d['primary_comparison'],confidence=d['confidence'],
+        tree=tree,server_tree=servers,nodes=nodes,arm=arm,paired_cells=limit,comparison=d['primary_comparison'],confidence=d['confidence'],
         estimator='seed-clustered paired t over the two seats per seed, two-sided 90%; missing cells as identification bounds',
         paired=stats,decision=decision,harm=harm,breakage=breakage,screen_rule=d['screen_rule'],breakage_rules=rules,bar=bar,
         latency_rule=latency,deadline_coverage=coverage,arm_fairness=fair,deadline_seconds=d['deadline_seconds'],reserve_seconds=d['reserve_seconds'],
@@ -1071,5 +1430,5 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
 if __name__=='__main__':
     import argparse
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--cpu-pair',nargs=2,type=int,required=True)
-    p.add_argument('--cache-directory',required=True)
-    args=p.parse_args();asyncio.run(serve(tuple(args.cpu_pair),args.cache_directory))
+    p.add_argument('--cache-directory',required=True);p.add_argument('--warmup-capture')
+    args=p.parse_args();asyncio.run(serve(tuple(args.cpu_pair),args.cache_directory,warmup=args.warmup_capture))

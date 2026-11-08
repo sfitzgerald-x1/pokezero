@@ -1,9 +1,13 @@
 """DepthN live actor over the unchanged controlled B2 Foul Play owning path.
 
-Per decision: the champion's greedy action FIRST (a legal base action exists
-before search), then at most one bounded search request; any refusal, client
-deadline, transport failure, illegal action or bad Q plays that greedy action
-with one counted cause. A single-legal decision is never searched. No retries,
+Per decision: at most one bounded search request, sent as soon as the snapshot
+is encoded (on a helper thread, whose socket wait uses no CPU), while the
+champion's greedy action is computed on the actor's own core; the decision waits
+for both, so a legal base action always exists. Search's critical path therefore
+carries the encode but not the greedy forward (the lead's actor-time check: the
+greedy forward is about 0.5 s on one pinned core). Any refusal, client deadline,
+transport failure, illegal action or bad Q plays that greedy action with one
+counted cause. A single-legal decision is never searched. No retries,
 ever. Arm RAW is the same actor with search disabled: greedy only, no client.
 The budget clock starts when the owning snapshot reaches encode. Import loads no
 model, JAX program or GPU stack; this module never imports gpu_engine.
@@ -23,6 +27,7 @@ behavior probability, value estimate and timings, and the client's deadline and 
 because of server content is replaced by a minimal server_error row and the
 greedy decision is played: select() never raises on anything the server sends.
 """
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import json
 import math
@@ -189,20 +194,26 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
         return provider
     def policy(contract,*,model,result):
         fallback=raw_factory.policy_factory(contract,model=model,result=result)
+        searcher=None if client is None else ThreadPoolExecutor(1,thread_name_prefix='depthn-search')
         class LivePolicy(RawPolicy):
             def claim(self,c):fallback.claim(c);super().claim(c)
-            def close(self):fallback.close()
+            def close(self):
+                try:fallback.close()
+                finally:
+                    if searcher is not None:searcher.shutdown(wait=False)
         def select(observation,*,rng):
             entered=clock();snapshot=pending.pop('snapshot',None);started=pending.pop('started',None)
             if snapshot is None or started is None or observation.metadata.get('owner_prefix_sha256')!=snapshot.prefix_sha256:
                 raise ValueError('same current B2 owning root required')
             index=pending['index'];pending['index']+=1;kind=request_kind(observation.legal_action_mask)
+            # The search request leaves now (its budget counts from encode), the greedy forward runs meanwhile.
+            searching=None if client is None or kind=='forced'else searcher.submit(client.request,snapshot,decision_index=index,started=started)
             greedy=fallback.select_action(observation,rng=rng);greedy_seconds=clock()-entered
             response=action=cause=None
             if client is None:source='raw_arm'
             elif kind=='forced':source='single_legal'
             else:
-                response=client.request(snapshot,decision_index=index,started=started)
+                response=searching.result()
                 action,cause=searched_action(response,observation)
                 source='search'if action is not None else'greedy_fallback'
             if action is not None:

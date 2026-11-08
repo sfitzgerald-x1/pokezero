@@ -1,0 +1,21 @@
+{
+ "addendum_to": {
+  "path": "evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json",
+  "sha256": "c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b"
+ },
+ "application": "scripts/depthn_screen_amended_verdict.py applies this addendum (by sha256) with the amendment it adds to",
+ "computed_before": "Only the screen latency rule (CONTINUE: 0 timeouts in the first 1,000 searched decisions), fairness checkpoint 1 (50 pairs, no flag) and a descriptive re-stratification of Foul Play's iteration rates had been computed; none carries outcomes. No paired, score or outcome statistic of this run had been computed.",
+ "decided_by": "the lead (search, V2, CUDA): the harm check's conservative direction, symmetric to the verdict's lower bound",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-20261108.json",
+ "declaration_sha256": "1d6f227d74555b8c98f313b7cf50cebb05c2261de6a7ef9b1b25464486237065",
+ "made_at_utc": "2026-11-08T20:41:57Z",
+ "replaces": "the screen's harm check on the declared estimator (the known-pairs interval's upper bound < 0)",
+ "rule": {
+  "harm": "a harm stop is a claim against search, so its conservative direction is the mirror image: every UNKNOWN or missing search cell counts as a win (1) and every UNKNOWN or missing RAW cell as a loss (0); the same seed clusters and seed-clustered t interval, two-sided 90%; the screen stops for harm only if this upper bound is < 0. The known-pairs interval's upper bound is reported beside it, descriptive"
+ },
+ "run": {
+  "run_directory": "/out/screen-r1",
+  "tree_commit": "1aaa75f94d41b538f1bca22f5b4afc0627e627f4"
+ },
+ "schema": "depthn-foulplay-panel.amendment.v1"
+}

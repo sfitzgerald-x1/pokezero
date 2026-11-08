@@ -2,7 +2,7 @@
 
 Foul Play's 1,000 ms is wall clock, so its strength depends on CPU contention. The bridge's opponent_think rows record, per
 Foul Play move, the MCTS work it realized within its budget (iterations_per_budget_second), the budget stratum it ran under
-(8x500ms early, 2x1000ms later: foulplay_bridge._foulplay_think_stratum) and the decision round. Waits are not a contention
+(4x500ms early, 2x1000ms later at the bridge's --search-parallelism 1: foulplay_bridge._foulplay_think_stratum) and the decision round. Waits are not a contention
 reading: the bridge starts a wait only after our own decision returns, so a search arm's waits are shorter by construction,
 and Foul Play stops at its budget whatever work it did. The metric is therefore iterations_per_budget_second only, and it
 is measurable only when the bridge's iterations_observable header is true (declared up front: fairness_observable).
@@ -29,7 +29,12 @@ from .phase_d_saved_roots import TURN_BANDS, band as turn_band
 RULE = dict(metric='ITERATIONS_PER_BUDGET_SECOND', strata='FOULPLAY_BUDGET_STRATUM_X_TURN_BAND',
             combine='POOLED_COUNT_WEIGHTED_RATIO_OF_MEANS', reference='RAW', ratio_tolerance=.05, coverage_difference_max=.05,
             min_moves_per_arm=1000, min_pairs=50, checkpoint_pairs=50, rearm_margin=.025, min_cell_moves=30)
-CALIBRATION_STRATA = ('8x500ms', '2x1000ms')
+# Foul Play's own schedule (fp/search/main.py search_time_num_battles_randombattles) at the bridge's --search-parallelism 1 and
+# with no Showdown timer (no time pressure): 4 sampled battles x 500 ms while <= 3 opponent Pokemon are revealed and its active one
+# has shown no move, else 2 x 1000 ms. (A bridge comment's '8x500ms' assumed parallelism 2.) The lead's per-stratum calibration
+# floors: the early stratum is rare (~3 moves a game) but the one most exposed to starvation, so it stays gated at 60 moves.
+CALIBRATION_STRATA = ('4x500ms', '2x1000ms')
+CALIBRATION_FLOORS = {'4x500ms': 60, '2x1000ms': 300}
 BANDS = tuple(f'{lo}+' if hi is None else f'{lo}-{hi}' for lo, hi in TURN_BANDS)
 
 

@@ -1,0 +1,28 @@
+{
+ "addendum_to": [
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json",
+   "sha256": "c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b"
+  },
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json",
+   "sha256": "dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f"
+  }
+ ],
+ "application": "scripts/depthn_screen_amended_verdict.py, with the amendment and both earlier files by sha256",
+ "computed_before": "Only the screen latency rule (CONTINUE: 0 timeouts in the first 1,000 searched decisions), fairness checkpoint 1 (50 pairs, no flag) and a descriptive re-stratification of Foul Play's iteration rates had been computed; none carries outcomes. No paired, score or outcome statistic of this run had been computed.",
+ "decided_by": "the lead (search, V2, CUDA), on the Opus review's finding that an imputed interval alone can be harsher or easier than the declared estimator",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-20261108.json",
+ "declaration_sha256": "1d6f227d74555b8c98f313b7cf50cebb05c2261de6a7ef9b1b25464486237065",
+ "made_at_utc": "2026-11-08T20:49:38Z",
+ "rule": {
+  "bar": "bar met = the known-pairs interval's lower bound > 0 AND the conservative interval's lower bound > 0 (both), with no amended breakage, at the 2,000-cell verdict; the screen continues only without harm (as above) and without amended breakage",
+  "harm": "harm = the known-pairs interval's upper bound < 0 AND the mirror interval's upper bound < 0 (both)",
+  "principle": "the amendment can only add robustness to unknowns; it never makes a claim easier than the declared estimator"
+ },
+ "run": {
+  "run_directory": "/out/screen-r1",
+  "tree_commit": "1aaa75f94d41b538f1bca22f5b4afc0627e627f4"
+ },
+ "schema": "depthn-foulplay-panel.amendment.v1"
+}
