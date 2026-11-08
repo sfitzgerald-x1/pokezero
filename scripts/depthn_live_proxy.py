@@ -16,10 +16,12 @@ is forwarded); when no backend accepts, the client's connection is closed, which
   constructor, DepthN or root-class refusal moves to the next (as the panel's probe does); anything else that is not COMPLETE, or no
   COMPLETE at all, fails. The COMPLETE answer must carry the rung, archive_sha256, requested_worlds, root_operator and
   pricer.matmul_precision given by --expect-rung / --expect-archive-sha256 / --expect-worlds / --expect-root-operator /
-  --expect-matmul-precision, and all backends must agree on those and on tree_commit; otherwise the proxy exits non-zero.
+  --expect-matmul-precision, and all backends must agree on those, on tree_commit and on the whole pricer identity (evaluator, W, K,
+  buckets, precision); otherwise the proxy exits non-zero. (The rung is the request's own, echoed; a backend serving another rung
+  refuses the probe as a bad request, which fails it. requested_worlds is the W check.)
 - --wait-ready SECONDS (0 to 3600): before the identity probe, wait until every backend accepts a connection, else exit non-zero.
 - --connection-log PATH (JSONL, appended, flushed): one row per client connection (backend, opened, closed, seconds, bytes each way,
-  or 'unserved'), so latency breaks down by backend (the panel readout's --proxy-log). READY (one JSON line, with each backend's probe
+  or 'unserved'), so latency breaks down by backend (the servers' own server_id in each response is the panel readout's breakdown). READY (one JSON line, with each backend's probe
   answer) and periodic POOL lines go to stdout; send stdout to a file or the container log.
 """
 import argparse
@@ -32,7 +34,6 @@ import sys
 import time
 import uuid
 
-IDENTITY = ('rung', 'archive_sha256', 'requested_worlds', 'root_operator', 'matmul_precision', 'tree_commit')
 MAX_PACKET = 16 * 1024 * 1024
 
 
@@ -61,12 +62,15 @@ class Pool:
 
     def order(self, now=None):
         now = time.monotonic() if now is None else now;start = next(self._turn);ring = self.backends[start:] + self.backends[:start]
-        cooling = lambda b: self.failed_at[b] is not None and now - self.failed_at[b] < self.cooldown
-        return sorted(ring, key=lambda b: (cooling(b), self.active[b]))
+        return sorted(ring, key=lambda b: (self.cooling(b, now), self.active[b]))
+
+    def cooling(self, backend, now=None):
+        now = time.monotonic() if now is None else now
+        return self.failed_at[backend] is not None and now - self.failed_at[backend] < self.cooldown
 
     def snapshot(self):
-        return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)])
-            for h, p in self.backends], unserved=self.unserved)
+        return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)],
+            cooling=self.cooling((h, p))) for h, p in self.backends], unserved=self.unserved)
 
 
 async def pipe(reader, writer, counter):
@@ -129,7 +133,7 @@ async def ask(backend, request, *, timeout):
     reader, writer = await asyncio.wait_for(asyncio.open_connection(*backend), timeout)
     try:
         raw = json.dumps(request, sort_keys=True, separators=(',', ':')).encode()
-        writer.write(struct.pack('!I', len(raw)) + raw);await writer.drain()
+        writer.write(struct.pack('!I', len(raw)) + raw);await asyncio.wait_for(writer.drain(), timeout)
         n = struct.unpack('!I', await asyncio.wait_for(reader.readexactly(4), timeout))[0]
         if not 0 < n <= MAX_PACKET:raise ValueError('bounded response required')
         return json.loads(await asyncio.wait_for(reader.readexactly(n), timeout))
@@ -139,7 +143,8 @@ async def ask(backend, request, *, timeout):
 def identity(answer):
     pricer = answer.get('pricer') if isinstance(answer.get('pricer'), dict) else {}
     return dict(rung=answer.get('rung'), archive_sha256=answer.get('archive_sha256'), requested_worlds=answer.get('requested_worlds'),
-        root_operator=answer.get('root_operator'), matmul_precision=pricer.get('matmul_precision'), tree_commit=answer.get('tree_commit'))
+        root_operator=answer.get('root_operator'), matmul_precision=pricer.get('matmul_precision'), tree_commit=answer.get('tree_commit'),
+        pricer=answer.get('pricer'))
 
 
 NEXT_ROOT = ('constructor_refused', 'depthn_refused', 'class_refused')

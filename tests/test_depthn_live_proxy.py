@@ -29,8 +29,8 @@ async def framed_backend(name, delay, served):
 async def request(port, body):
     reader, writer = await asyncio.open_connection('127.0.0.1', port)
     raw = json.dumps(body).encode();writer.write(struct.pack('!I', len(raw)) + raw);await writer.drain()
-    try:
-        n = struct.unpack('!I', await reader.readexactly(4))[0];return json.loads(await reader.readexactly(n))
+    try:   # bounded: a proxy that never forwards EOF or truncates fails the test instead of hanging it
+        n = struct.unpack('!I', await asyncio.wait_for(reader.readexactly(4), 10))[0];return json.loads(await asyncio.wait_for(reader.readexactly(n), 10))
     except asyncio.IncompleteReadError:return None
     finally:writer.close()
 
@@ -84,6 +84,7 @@ class ProxyTests(unittest.TestCase):
             outs = [await request(port, dict(i=i)) for i in range(3)];return [o['backend'] for o in outs], pool.snapshot()
         names, snap = self.run_proxy(scenario, [('a', 0.), ('dead', None)])
         self.assertEqual(names, ['a', 'a', 'a']);self.assertGreaterEqual(snap['backends'][1]['refused'], 1)
+        self.assertEqual(snap['backends'][1]['active'], 0);self.assertTrue(snap['backends'][1]['cooling'])   # a failed setup releases its reservation
 
     def test_no_backend_closes_the_client_connection(self):
         async def scenario(port, pool, served, lines):
@@ -110,15 +111,19 @@ class ProxyTests(unittest.TestCase):
         asyncio.run(main())
 
     def test_simultaneous_clients_reserve_distinct_backends(self):
-        # one backend busy; two clients accepted in the same instant must go to the two idle ones (the slot is reserved before connecting)
+        # the review's case: 'a' busy, turns moved on, then two clients in the same instant whose rings both put 'b' first; only a
+        # reservation taken before connecting sends the second to 'c'
         async def scenario(port, pool, served, lines):
-            first = asyncio.create_task(request(port, dict(i='hold')))
+            first = asyncio.create_task(request(port, dict(i='hold')))   # turn 0: a
             while sum(pool.active.values()) < 1:await asyncio.sleep(.005)
-            outs = await asyncio.gather(*(request(port, dict(i=i)) for i in range(2)));held = await first
+            for i in range(2):await request(port, dict(i=f's{i}'))   # turns 1, 2
+            for _ in range(100):
+                if sum(pool.active.values()) == 1:break
+                await asyncio.sleep(.01)
+            outs = await asyncio.gather(*(request(port, dict(i=i)) for i in range(2)));held = await first   # turns 0, 1
             return held['backend'], sorted(o['backend'] for o in outs)
-        for _ in range(4):
-            held, pair = self.run_proxy(scenario, [('a', .3), ('b', .3), ('c', .3)])
-            self.assertEqual(len(set(pair)), 2);self.assertNotIn(held, pair)
+        held, pair = self.run_proxy(scenario, [('a', .6), ('b', .15), ('c', .15)])
+        self.assertEqual(held, 'a');self.assertEqual(pair, ['b', 'c'])
 
     def test_a_hung_backend_costs_one_connect_timeout_then_cools_down(self):
         real = asyncio.open_connection;hung = {}
@@ -214,8 +219,8 @@ class CodexLikeBackendTests(unittest.TestCase):
         async def scenario(port, pool, served):
             body = json.dumps(dict(pad='x' * (P.MAX_PACKET - 100))).encode()
             r, w = await asyncio.open_connection('127.0.0.1', port)
-            w.write(struct.pack('!I', len(body)) + body);await w.drain()
-            n = struct.unpack('!I', await r.readexactly(4))[0];out = json.loads(await r.readexactly(n));w.close()
+            w.write(struct.pack('!I', len(body)) + body);await asyncio.wait_for(w.drain(), 10)
+            n = struct.unpack('!I', await asyncio.wait_for(r.readexactly(4), 10))[0];out = json.loads(await asyncio.wait_for(r.readexactly(n), 10));w.close()
             return out['sha'] == hashlib.sha256(body).hexdigest(), n
         same, n = self.harness(scenario, [('a', 0., True)])
         self.assertTrue(same);self.assertGreater(n, P.MAX_PACKET - 300)
@@ -228,7 +233,7 @@ class CodexLikeBackendTests(unittest.TestCase):
         self.assertEqual(sum(o is None for o in outs), served.count('crash'))   # the client sees EOF; no second backend gets it
 
 
-def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, precision='highest'):
+def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, precision='highest', K=8):
     """Answers each framed request with the next status in `script` (COMPLETE, or a refusal cause) and the identity fields."""
     steps = iter(script)
     async def handle(reader, writer):
@@ -237,7 +242,7 @@ def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, 
             step = next(steps, 'COMPLETE')
             out = json.dumps(dict(request_id=q['request_id'], status='COMPLETE' if step == 'COMPLETE' else 'REFUSED', cause=None if step == 'COMPLETE' else step,
                 refusal=None, rung=q['rung'], archive_sha256=archive, requested_worlds=worlds, root_operator='ARGMAX_MEAN_COMPLETED_Q',
-                tree_commit=tree, pricer=dict(matmul_precision=precision))).encode()
+                tree_commit=tree, pricer=dict(matmul_precision=precision, K=K, W=worlds))).encode()
             writer.write(struct.pack('!I', len(out)) + out);await writer.drain()
         except asyncio.IncompleteReadError:pass
         finally:writer.close()
@@ -280,7 +285,8 @@ class IdentityTests(unittest.TestCase):
             with self.subTest(kw=kw), self.assertRaisesRegex(SystemExit, 'differs from the expected'):self.go([('a', [], {}), ('b', [], kw)])
 
     def test_backends_that_disagree_refuse_to_start(self):
-        with self.assertRaisesRegex(SystemExit, 'disagree'):self.go([('a', [], {}), ('b', [], dict(tree='t2'))])
+        for kw in (dict(tree='t2'), dict(K=4)):   # tree commit, or any pricer field
+            with self.subTest(kw=kw), self.assertRaisesRegex(SystemExit, 'disagree'):self.go([('a', [], {}), ('b', [], kw)])
 
     def test_a_backend_without_a_complete_probe_refuses_to_start(self):
         with self.assertRaisesRegex(SystemExit, 'no COMPLETE'):self.go([('a', ['server_error'], {})])
