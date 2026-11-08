@@ -9,6 +9,7 @@ import jax.numpy as j
 import numpy as np
 from gpu_engine import transition as tr,engine_direct_hit_controls as direct,engine_kernel_frame_risk as risks
 from gpu_engine import engine_execution_completeness as ex,engine_public_events as events,engine_lifecycle_callbacks as life
+from gpu_engine import engine_no_damage_callbacks as nd
 from gpu_engine import engine_public_event_device as base,engine_full_v4_event_device as full,v4_encoder as v4,public_wire
 from pokezero.category_vocab import CategoryVocabulary
 from pokezero.dex import ShowdownDex
@@ -64,6 +65,16 @@ class SeismicTossOwningTests(unittest.TestCase):
     side,hp,maximum=map(int,(w[3],w[5],w[6]))
     if side!=owner:hp=min(99,(100*hp+maximum-1)//maximum) if hp<maximum else 100;maximum=100
     lines.append(f'|-damage|{ident[side]}|{hp}/{maximum}')
+   elif k==nd.TARGET_NO_DAMAGE:
+    reason=int(w[6]);target=ident[int(w[3])]
+    if reason==nd.MISS:lines.append(f'|-miss|{ident[int(w[1])]}|{target}')
+    elif reason==nd.TYPE_IMMUNE:lines.append('|-immune|'+target)
+    else:self.fail('unrepresented no-damage source '+str(reason))
+   elif k==nd.ABSORB_FACTS:
+    self.assertEqual(int(tape.words[row,index-1,0]),nd.TARGET_NO_DAMAGE)
+   elif k==life.TURNLOOP_PREFIX:
+    self.assertEqual(w.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
+    lines.extend(['|','|t:|1'])
    elif k==life.TURN:lines.append(f'|turn|{int(tape.event_turn[row,index])}')
    elif k==life.ACTION_END:lines.append('|')
    elif k==life.UPKEEP:lines.append('|upkeep')
@@ -97,17 +108,38 @@ class SeismicTossOwningTests(unittest.TestCase):
    for row in (0,1):np.testing.assert_array_equal(self.f.words(result.projection,row),self.reference_words(actual.callbacks,row,owner))
   joined,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()));self.assertEqual(joined.stage[:,:2].tolist(),[[3,3],[3,3]])
  def test_miss_substitute_immune_ko_nightshade_and_prior_bits_remain_unknown(self):
-  state,cursor,_=self.initial(8)
+  state,cursor,consumers=self.initial(8)
   state=state._replace(boosts=state.boosts.at[1,0,0,5].set(-6),substitute_hp=state.substitute_hp.at[2,1,0].set(100),
       types=state.types.at[3,1,0,0].set(8),hp=state.hp.at[4,1,0].set(10),moves=state.moves.at[5,0,0,0].set(self.ids['nightshade']))
   chance=self.chance(8)._replace(draws=self.chance(8).draws.at[1,0,6].set(99));prior=j.ones(8,j.int32).at[6].set(65)
   actual=self.play(state,cursor,chance=chance,prior=prior);plain=tr.step_with_chance(state,j.zeros((8,2),j.int32),self.table,chance);self.same(actual.step.state,plain.state)
   self.assertEqual(int(actual.callbacks.refusal[0]),1);self.assertEqual(int(actual.callbacks.refusal[7]),1)
-  self.assertTrue(bool(((actual.callbacks.refusal[1:5]&~1)!=0).all()));self.assertTrue(int(actual.callbacks.refusal[6])&64)
+  # Later named no-damage consumers capture misses and pure type immunity.
+  # Substitute and fixed-level KO remain refused; no existing bit is cleared.
+  self.assertEqual(actual.callbacks.refusal[j.array([1,3])].tolist(),[1,1])
+  self.assertEqual(actual.callbacks.execution.risks.carry.risk[j.array([1,3])].tolist(),[0,0])
+  self.assertTrue(bool(((actual.callbacks.refusal[j.array([2,4])]&~1)!=0).all()));self.assertTrue(int(actual.callbacks.refusal[6])&64)
   self.assertTrue(int(actual.callbacks.execution.risks.carry.risk[5])&risks.NON_WEATHER)
-  for row in (1,2,3,4):
+  owned,header,_=nd.owned_pair(actual.callbacks,2,self.hit.device.no_damage)
+  self.assertEqual(owned.tolist(),[False,True,False,True,False,False,False,False])
+  self.assertEqual(header[j.array([1,3]),6].tolist(),[nd.MISS,nd.TYPE_IMMUNE])
+  bad=actual.callbacks._replace(words=actual.callbacks.words.at[1,2,6].set(nd.TYPE_IMMUNE))
+  self.assertFalse(bool(nd.owned_pair(bad,2,self.hit.device.no_damage)[0][1]))
+  self.assertTrue(bool(nd.owned_pair(bad,2,self.hit.device.no_damage)[0][3]))
+  for row in (2,4):
    ledger=actual.callbacks.execution.ledger;direct_slots=(ledger.site[row]==int(ex.Site.DIRECT_HIT))&(ledger.side[row]==1)
    self.assertTrue(bool(j.any(direct_slots)));self.assertTrue(bool(j.all(j.where(direct_slots,ledger.stage[row]==1,True))))
+  measured=j.array([False,True,False,True,False,False,False,False])
+  frame=life.LifecycleResult(actual.step.state,actual.callbacks.cursor,actual.callbacks,life.snapshot(cursor),life.snapshot(actual.callbacks.cursor),j.zeros(8,bool),j.zeros(8,j.int32));closed=[]
+  for owner,(stream,public) in enumerate(consumers):
+   ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=measured,tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger)
+   self.assertEqual(result.projection.error[j.array([1,3])].tolist(),[0,0])
+   self.assertTrue(bool(ex.report(ledger,tables=self.account.device).scoped_drained[j.array([1,3])].all()))
+   self.assertFalse(bool(result.projection.B4_qualified.any()))
+   for row in (1,3):np.testing.assert_array_equal(self.f.words(result.projection,row),self.reference_words(actual.callbacks,row,owner))
+   for before,after in zip(jax.tree.leaves((stream,public)),jax.tree.leaves((result.projection.state,result.public))):np.testing.assert_array_equal(np.asarray(before)[~np.asarray(measured)],np.asarray(after)[~np.asarray(measured)])
+  _,good=ex.join_consumed_owners(*closed,tables=self.account.device)
+  self.assertTrue(bool(good[j.array([1,3])].all()));self.assertFalse(bool(good[j.array([2,4,5,6])].any()))
   # Fixed-source capabilities cannot be copied/replaced at the original host boundary.
   changed=replace(self.hit,device=self.hit.device._replace(seismic_toss_move=j.array(self.ids['nightshade'],j.int32)))
   with self.assertRaises(ValueError):direct.check_compiled(changed)
