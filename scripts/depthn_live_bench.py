@@ -40,11 +40,13 @@ action), exactly the server's path; nothing is re-implemented here.
 - Session mode (--sessions N): the live server's own per-battle sessions instead of from-scratch folds. The first N distinct
   battles (each roster root's capture_path, in roster order) are replayed decision by decision, every captured decision of
   the battle in its own order (phase_d_owning_capture.read_capture), through one session-mode constructor (saved-root
-  admission off), exactly as a live battle feeds the server: each decision folds only its new lines. Rows record the
+  admission off), as a live battle feeds the server: each decision folds only its new lines since the last decision sent.
+  A single-legal decision is never sent (the live actor plays it without a search request), so the next one folds its lines
+  too, as live; it is recorded SKIPPED_SINGLE_LEGAL, outside every count but `skipped_single_legal`. Rows record the
   battle (its capture path), the decision's turn (its last |turn| line; 0 before the first) and band.
 - Latency (both modes) over eligible decisions (not single-legal, whatever their status: a refusal is a decision too):
-  wall and prepare percentiles per turn band, the share within LADDER_SECONDS, and each DEADLINES client deadline's
-  coverage: the share whose wall + RESERVE_SECONDS fits it (the lead's eval-deadline rule reads these; nothing is decided here).
+  wall and prepare percentiles per turn band, the share within the LADDER_SECONDS cap and each DEADLINES client deadline's
+  coverage, both as the client budgets them: the share whose wall + RESERVE_SECONDS fits (the lead's eval-deadline rule reads these; nothing is decided here).
 Informational: no verdict, no bound. Exit 0 when any root priced, 2 when none did.
 """
 import argparse
@@ -63,6 +65,7 @@ from scripts import depthn_live_server as server   # noqa: E402
 from pokezero.phase_d_saved_roots import TURN_BANDS, band as turn_band   # noqa: E402
 
 BUDGET = 600.
+NOT_PRICED = ('UNAVAILABLE', 'SKIPPED_SINGLE_LEGAL')
 LADDER_SECONDS, RESERVE_SECONDS, DEADLINES = 3.0, .15, (5., 10., 15.)   # the ladder cap; the client's reserve; the eval-deadline candidates
 TIMINGS = ('prepare_seconds', 'classify_seconds', 'structure_seconds', 'build_seconds', 'price_seconds', 'reduce_seconds')   # the response's own stages
 STAGES = TIMINGS + ('decision_seconds', 'wall_seconds')
@@ -106,6 +109,7 @@ def options(argv=None):
     if args.limit is not None and args.limit < 1:p.error('--limit must be >= 1')
     if args.sessions is not None:
         if args.sessions < 1:p.error('--sessions must be >= 1')
+        if args.limit is not None:p.error('--limit applies to roster roots; session mode replays whole battles (use --sessions N)')
         args.saved_root_admission = False   # the live server's per-battle sessions
     args.port = args.port or 0;args.max_requests = 1
     return args
@@ -159,7 +163,7 @@ def latency(eligible):
     """Wall and prepare percentiles per turn band and overall, the share within LADDER_SECONDS and each DEADLINES deadline's
     coverage (wall + RESERVE_SECONDS fits), over eligible decision rows (any status)."""
     walls = [r['wall_seconds'] for r in eligible if isinstance(r.get('wall_seconds'), (int, float))]
-    return dict(n=len(walls), within_ladder=None if not walls else sum(w <= LADDER_SECONDS for w in walls) / len(walls),
+    return dict(n=len(walls), within_ladder=None if not walls else sum(w + RESERVE_SECONDS <= LADDER_SECONDS for w in walls) / len(walls),
         deadline_coverage={str(d): None if not walls else sum(w + RESERVE_SECONDS <= d for w in walls) / len(walls) for d in DEADLINES},
         wall=percentiles(walls), prepare=percentiles(r.get('prepare_seconds') for r in eligible),
         bands={b: dict(wall=percentiles(r['wall_seconds'] for r in eligible if r['band'] == b),
@@ -218,10 +222,11 @@ def by_class(priced):
 
 def summarize(rows, W, weights=None):
     """The summary of record rows (one roster or pooled)."""
-    priced = [r for r in rows if r['status'] != 'UNAVAILABLE'];complete = [r for r in priced if r['status'] == 'COMPLETE']
+    priced = [r for r in rows if r['status'] not in NOT_PRICED];complete = [r for r in priced if r['status'] == 'COMPLETE']
     stages = {s: percentiles(r[s] for r in complete) for s in STAGES}
     wall = stages['wall_seconds'];classes = by_class(priced);bands, reweighted = by_band(priced, weights or (1.,) * len(BANDS))
-    return dict(roots=len(rows), unavailable=len(rows) - len(priced), priced=len(priced), complete=len(complete), **shares(priced),
+    return dict(roots=len(rows), unavailable=sum(r['status'] == 'UNAVAILABLE' for r in rows), priced=len(priced), complete=len(complete),
+        skipped_single_legal=sum(r['status'] == 'SKIPPED_SINGLE_LEGAL' for r in rows), **shares(priced),
         bands=bands, band_weights=list(weights or (1.,) * len(BANDS)), searched_share_reweighted=reweighted,
         wall_eligible=percentiles(r['wall_seconds'] for r in priced if not r['single_legal']),
         legal_mask_disagreements=sum(r['legal_mask_agrees'] is False for r in priced), classes=classes,
@@ -248,12 +253,13 @@ def band(turn):
     except (ValueError, TypeError, IndexError):return None
 
 
-def record(roster, ordinal, address, response, wall, *, request=None, turn=None):
-    """One records.jsonl row from a process_many response (or None for an unavailable root)."""
+def record(roster, ordinal, address, response, wall, *, request=None, turn=None, status='UNAVAILABLE'):
+    """One records.jsonl row from a process_many response; with response None, a root never priced (`status` UNAVAILABLE, or
+    SKIPPED_SINGLE_LEGAL in session mode) with `wall` its reason."""
     mask = None if request is None else legal_mask(request)
     common = dict(turn=turn, band=band(turn), legal_count=None if mask is None else sum(mask), single_legal=mask is not None and sum(mask) == 1)
     if response is None:
-        return dict(roster=roster, ordinal=ordinal, address=list(address), status='UNAVAILABLE', cause=None, refusal=wall, world_refusal_kinds=[],
+        return dict(roster=roster, ordinal=ordinal, address=list(address), status=status, cause=None, refusal=wall, world_refusal_kinds=[],
             **dict.fromkeys(STAGES), action_index=None, mean_q_agrees=None, constructed_worlds=0, root_classes=None, root_class=None,
             root_class_source=None, structural=False, legal_mask_agrees=None, **common)
     timings = response.get('timings') or {}
@@ -295,7 +301,7 @@ def markdown(summary):
         + ('' if not summary.get('battles') else f"; session mode: {summary['battles']['count']} battles, {summary['battles']['decisions']} decisions"), '']
     for name, s in [*summary['rosters'].items(), ('pooled', summary['pooled'])]:
         wall = s['wall_eligible']
-        lines += [f"## {name}", '', f"- roots {s['roots']}, unavailable {s['unavailable']}, priced {s['priced']}, single-legal {s['single_legal']}, "
+        lines += [f"## {name}", '', f"- roots {s['roots']}, unavailable {s['unavailable']}, single-legal not sent {s['skipped_single_legal']}, priced {s['priced']}, single-legal {s['single_legal']}, "
             f"eligible {s['eligible']}, COMPLETE {s['complete']} (searched share {fmt(s['searched_share'])}, declared: searched / eligible; "
             f"all-roots share {fmt(s['searched_share_all'])}; reweighted by bands {s['band_weights']}: {fmt(s['searched_share_reweighted'])})",
             '- by turn band (declared share): ' + '; '.join(f"{b} {x['searched']}/{x['eligible']} = {fmt(x['searched_share'])}" for b, x in s['bands'].items()),
@@ -304,7 +310,7 @@ def markdown(summary):
             f"- causes {s['causes']}; world refusal kinds {s['world_refusal_kinds']}; action_mean_q disagreements {s['mean_q_disagreements']}"]
         lat = s['latency']
         if lat['n']:
-            lines.append(f"- latency over {lat['n']} eligible decisions: within {LADDER_SECONDS} s {fmt(lat['within_ladder'])}; deadline coverage (wall + "
+            lines.append(f"- latency over {lat['n']} eligible decisions: within the {LADDER_SECONDS} s cap (wall + {RESERVE_SECONDS} s) {fmt(lat['within_ladder'])}; deadline coverage (wall + "
                 f"{RESERVE_SECONDS} s) " + ', '.join(f'{d} s {fmt(c)}' for d, c in lat['deadline_coverage'].items()))
             lines += ['', '| Band | n | wall p50 | wall p95 | wall p99 | wall max | prepare p50 | prepare p95 |', '| --- | --- | --- | --- | --- | --- | --- | --- |']
             for b, x in [*lat['bands'].items(), ('all', dict(wall=lat['wall'], prepare=lat['prepare']))]:
@@ -338,6 +344,8 @@ def main(argv=None):
             if not args.sessions and callable(getattr(search, 'reset_sessions', None)):search.reset_sessions()   # a root shared by two rosters is priced in each
             for ordinal, address, request, problem, turn in items:
                 if request is None:row = record(name, ordinal, address, None, problem, turn=turn)
+                elif args.sessions and sum(legal_mask(request) or ()) == 1:   # the live actor never sends a single-legal decision
+                    row = record(name, ordinal, address, None, 'SINGLE_LEGAL_NOT_SENT', request=request, turn=turn, status='SKIPPED_SINGLE_LEGAL')
                 else:
                     body = dict(request, schema=server.original.SCHEMA, request_id=f'bench-{name}-{ordinal}-{os.getpid()}', rung=search.rung, budget_seconds=BUDGET)
                     clock = time.perf_counter();response = search.process_many([body])[0]

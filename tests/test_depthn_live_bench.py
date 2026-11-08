@@ -191,7 +191,7 @@ class BenchTests(unittest.TestCase):
     def test_latency_coverage_and_bands_over_eligible_decisions(self):
         rows = [dict(wall_seconds=w, prepare_seconds=w - .4, band=b) for w, b in ((1., '1-3'), (2.9, '1-3'), (4.85, '4-9'), (4.9, '4-9'), (9.9, '20+'), (20., '20+'))]
         lat = B.latency(rows)
-        self.assertEqual(lat['n'], 6);self.assertAlmostEqual(lat['within_ladder'], 2 / 6)
+        self.assertEqual(lat['n'], 6);self.assertAlmostEqual(lat['within_ladder'], 1 / 6)   # 2.9 + 0.15 overruns the 3.0 s cap
         self.assertEqual(lat['deadline_coverage'], {'5.0': 3 / 6, '10.0': 4 / 6, '15.0': 5 / 6})   # wall + 0.15 must fit: 4.85 fits 5, 4.9 does not
         self.assertEqual((lat['bands']['1-3']['wall']['n'], lat['bands']['10-19']['wall'], lat['wall']['max']), (2, None, 20.))
         self.assertEqual(B.latency([])['within_ladder'], None)
@@ -204,7 +204,9 @@ class BenchTests(unittest.TestCase):
                 patch('pokezero.phase_d_owning_capture.read_capture', side_effect=capture), \
                 patch('pokezero.phase_d_ladder_admission.address', side_effect=lambda row: (row['battle_id'], row['decision_index'])):
             got = B.battle_requests([('r.json', 'z')], 2)
+            three = B.battle_requests([('r.json', 'z')], 3)
         self.assertEqual(list(got), ['w/2.jsonl', 'w/1.jsonl'])   # distinct, roster order, first two
+        self.assertEqual(list(three), ['w/2.jsonl', 'w/1.jsonl', 'w/3.jsonl'])   # the repeated w/2 is one battle
         self.assertEqual([(o, t, r['battle_id']) for o, _, r, _, t in got['w/2.jsonl']], [(0, 0, 'b20'), (1, 1, 'b21'), (2, 2, 'b22')])
         self.assertTrue(all(set(r) == set(B.KEYS) for _, _, r, _, _ in got['w/1.jsonl']))
 
@@ -216,8 +218,10 @@ class BenchTests(unittest.TestCase):
             self.assertTrue(B.options(base + ['--out', 'o']).saved_root_admission)
             self.assertFalse(B.options(base + ['--out', 'o', '--sessions', '3']).saved_root_admission)
             with self.assertRaises(SystemExit):B.options(base + ['--out', 'o', '--sessions', '0'])
-        battles = {'w/1.jsonl': [(i, ('a', i), live_request(i), None, i) for i in range(3)], 'w/2.jsonl': [(i, ('b', i), live_request(10 + i), None, 12) for i in range(2)]}
-        fake = FakeSearch([response(prepare=p) for p in (.5, .6, .7, 2.5, 6.)])
+            with self.assertRaises(SystemExit):B.options(base + ['--out', 'o', '--sessions', '2', '--limit', '5'])
+        battles = {'w/1.jsonl': [(i, ('a', i), live_request(i, single=i == 1), None, i) for i in range(3)],
+            'w/2.jsonl': [(i, ('b', i), live_request(10 + i), None, 12) for i in range(2)]}
+        fake = FakeSearch([response(prepare=p) for p in (.5, .7, 2.5, 6.)])
         with tempfile.TemporaryDirectory() as tmp:
             args = B.parser().parse_args(base[:-6] + ['--out', str(Path(tmp) / 'o'), '--sessions', '2'])
             args.saved_root_admission = False
@@ -227,9 +231,10 @@ class BenchTests(unittest.TestCase):
             summary = json.loads((Path(tmp) / 'o' / 'summary.json').read_text());md = (Path(tmp) / 'o' / 'summary.md').read_text()
         self.assertEqual(source.call_args.args[1], 2)
         self.assertEqual(fake.resets, [])   # sessions persist across battles, as on the live server
-        self.assertEqual([r['battle_id'] for r in fake.seen], ['b0', 'b1', 'b2', 'b10', 'b11'])   # each battle's decisions in order
+        self.assertEqual([r['battle_id'] for r in fake.seen], ['b0', 'b2', 'b10', 'b11'])   # in order; the single-legal b1 is never sent
         self.assertEqual((summary['rosters'], summary['battles']['count'], summary['battles']['decisions'], summary['sessions']), ({}, 2, 5, 2))
-        self.assertEqual(summary['pooled']['latency']['n'], 5);self.assertIn('session mode: 2 battles, 5 decisions', md)
+        self.assertEqual((summary['pooled']['latency']['n'], summary['pooled']['skipped_single_legal'], summary['pooled']['priced']), (4, 1, 4))
+        self.assertIn('session mode: 2 battles, 5 decisions', md)
         self.assertIn('deadline coverage', md)
 
     def test_main_exit_2_when_nothing_priced(self):
