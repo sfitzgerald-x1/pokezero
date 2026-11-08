@@ -46,6 +46,22 @@ def calibration_fixture(ladder_sha256, *, observable=True, ratios=RATIOS, lanes=
                 ladder_declaration_sha256=ladder_sha256, base_config_sha256=panel.sha(BASE), checkpoint_sha256=ActorContract.champion().checkpoint_sha256)
 
 
+SERVER_TREE = 'c0'*20   # the servers' tree commit, declared
+REAL_SERVER_TREE_CHECK = panel.server_tree_check
+
+
+def setUpModule():
+    # Test declarations are not tracked files: the git rule (server tree vs eval tree differ only in the declaration) has its
+    # own tests below; everywhere else it passes.
+    global _server_tree_patch
+    _server_tree_patch = patch.object(panel, 'server_tree_check', side_effect=lambda server, eval_, declaration: dict(
+        server_commit=server, eval_commit=eval_, declaration_path='evals/declaration.json', files=['evals/declaration.json'], ok=True))
+    _server_tree_patch.start()
+
+
+def tearDownModule(): _server_tree_patch.stop()
+
+
 BASE = dict(search_time_ms=1000)   # a base config: the declared Foul Play search_time_ms is its own
 MOVE_WALL = dict(search_time_ms=1000, label='Foul Play at search_time_ms 1000: sampled battles one after another',
                  strata={'4x500ms': dict(sampled_battles=4, ms_per_sample=500, solo=dict(moves=60, p50=2.1, p95=2.3), concurrent=dict(moves=60, p50=2.2, p95=2.5)),
@@ -69,7 +85,7 @@ PROVENANCE = dict(
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64,
                 provenance=PROVENANCE):
     return dict(schema=panel.SCHEMA, provenance=copy.deepcopy(provenance), ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
-        foulplay_move_wall=copy.deepcopy(MOVE_WALL), actor=copy.deepcopy(ACTOR),
+        foulplay_move_wall=copy.deepcopy(MOVE_WALL), actor=copy.deepcopy(ACTOR), server_tree_commit=SERVER_TREE,
         search_choice=dict(arm=arms[1], cell_commit='8'*40, evidence=[dict(path='cells/w16.json', sha256='4'*64), dict(path='out/w16-pairs.jsonl', sha256='5'*64)],
                            summary='W16 - W8 = +2.45, 90% CI (+0.50, +4.41)'),
         worker_lanes=4, fairness_observable=dict(value=observable, evidence=dict(path='calibration/calibration.json', sha256=calibration_sha)),
@@ -102,7 +118,7 @@ def decision_row(cell, i, *, source='search', cause=None, kind=None, differs=Fal
                  operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256, precision='highest'):
     kind = kind or ('forced' if source == 'single_legal' else 'move')
     search = None if source in ('raw_arm', 'single_legal') else dict(status='COMPLETE' if source == 'search' else 'REFUSED',
-        cause=cause, client_wall_seconds=select-.05, server_wall_seconds=select-.1, tree_commit='t'*40, archive_sha256=archive,
+        cause=cause, client_wall_seconds=select-.05, server_wall_seconds=select-.1, tree_commit=SERVER_TREE, archive_sha256=archive,
         request_id=f"r{cell['ordinal']}-{i}",
         root_operator=operator if source == 'search' else None, requested_worlds=worlds if source == 'search' else None,
         pricer=dict(k=1, depth=2, W=8, K=4, matmul_precision=precision) if source == 'search' else None,
@@ -139,6 +155,39 @@ def seed_cluster_interval(deltas):
     clusters = [(deltas[i]+deltas[i+1])/2 for i in range(0, len(deltas), 2)]
     radius = float(t.ppf(.95, len(clusters)-1))*math.sqrt(variance(clusters)/len(clusters))
     return [max(-1., fmean(clusters)-radius), min(1., fmean(clusters)+radius)]
+
+
+class ServerTreeTests(unittest.TestCase):
+    """The lead's rule: servers on the eval tree's parent are fine only if the two commits differ in exactly the declaration."""
+    def check(self, ls, diff, server='a'*40, eval_='b'*40):
+        def git(*args): return ls if args[0] == 'ls-files' else diff
+        with patch.object(panel, '_git', side_effect=git): return REAL_SERVER_TREE_CHECK(server, eval_, '/repo/evals/d.json')
+
+    def test_only_the_declaration_or_nothing_may_differ(self):
+        self.assertTrue(self.check('evals/d.json\n', 'evals/d.json\n')['ok'])
+        self.assertTrue(self.check('evals/d.json\n', '')['ok'])   # the same tree
+        value = self.check('evals/d.json\n', 'evals/d.json\nsrc/pokezero/x.py\n')
+        self.assertEqual((value['ok'], value['files']), (False, ['evals/d.json', 'src/pokezero/x.py']))
+        self.assertFalse(self.check('evals/d.json\n', 'src/pokezero/x.py\n')['ok'])
+        self.assertFalse(self.check(None, 'evals/d.json\n')['ok'])   # the declaration is not a tracked file
+        self.assertFalse(self.check('evals/d.json\n', None)['ok'])   # git has no answer (unknown commit)
+        self.assertFalse(self.check('evals/d.json\n', '', server='x'*40)['ok'])
+
+    def test_the_real_git_answer_for_one_tree(self):
+        head = panel._git('rev-parse', 'HEAD')
+        if head is None: self.skipTest('not a git checkout')
+        value = REAL_SERVER_TREE_CHECK(head.strip(), head.strip(), __file__)
+        self.assertEqual((value['ok'], value['files'], value['declaration_path']), (True, [], 'tests/test_depthn_live_panel.py'))
+
+    def test_init_and_readout_fail_on_another_server_tree(self):
+        bad = lambda server, eval_, declaration: dict(server_commit=server, eval_commit=eval_, declaration_path='evals/d.json',
+                                                      files=['evals/d.json', 'src/x.py'], ok=False)
+        with TemporaryDirectory() as directory:
+            with patch.object(panel, 'server_tree_check', side_effect=bad), self.assertRaisesRegex(ValueError, 'only in the declaration'):
+                make_run(directory)
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory)
+            self.assertEqual((run['server_tree']['ok'], run['server_tree']['server_commit']), (True, SERVER_TREE))
 
 
 class DeclarationTests(unittest.TestCase):
@@ -535,12 +584,12 @@ def make_capture(directory, ordinal=0, turns=3):
 
 
 def champion_complete(request, **change):
-    return {**actor_tests.complete(request), 'archive_sha256': live.CHAMPION_ARCHIVE_SHA256,
+    return {**actor_tests.complete(request), 'archive_sha256': live.CHAMPION_ARCHIVE_SHA256, 'tree_commit': SERVER_TREE,
             'pricer': dict(k=[9, 9], depth=2, W=8, K=4, matmul_precision='highest'), **change}
 
 
 def champion_refused(request, cause):
-    return dict(actor_tests.refused(request, cause), archive_sha256=live.CHAMPION_ARCHIVE_SHA256)
+    return dict(actor_tests.refused(request, cause), archive_sha256=live.CHAMPION_ARCHIVE_SHA256, tree_commit=SERVER_TREE)
 
 
 class ProbeTests(unittest.TestCase):
@@ -586,6 +635,7 @@ class ProbeTests(unittest.TestCase):
                      operator=actor_tests.send(lambda r: champion_complete(r, root_operator='ARGMAX_POLICY_TARGET')),
                      rung=actor_tests.send(lambda r: champion_complete(r, rung='DN2W16')),
                      archive=actor_tests.send(lambda r: champion_complete(r, archive_sha256='a'*64)),
+                     tree=actor_tests.send(lambda r: champion_complete(r, tree_commit='d'*40)),
                      precision=actor_tests.send(lambda r: champion_complete(r, pricer=dict(W=8, matmul_precision='default'))),
                      no_precision=actor_tests.send(lambda r: champion_complete(r, pricer=None)),
                      refusal_archive=actor_tests.send(lambda r: dict(champion_refused(r, 'constructor_refused'), archive_sha256='a'*64)),
@@ -595,6 +645,7 @@ class ProbeTests(unittest.TestCase):
             with self.subTest(name), self.assertRaisesRegex(ValueError, 'probe failed'): self.probe(reply)
             self.assertEqual(self.records()[-1]['status'], 'FAIL')
             if 'archive' in name: self.assertIn('archive', self.records()[-1]['reason'])
+            if name == 'tree': self.assertIn('server tree', self.records()[-1]['reason'])
         self.assertEqual(len(self.records()[-1]['tried']), 3)
         dead = socket.create_server(('127.0.0.1', 0)); port = dead.getsockname()[1]; dead.close()
         with self.assertRaisesRegex(ValueError, 'connection_error'):
@@ -922,6 +973,19 @@ class ReadoutTests(unittest.TestCase):
         cell = panel.cells(self.lad, 'RAW', limit=500)[0]
         write_cell(self.root, cell, 'f'*64, score=1., rows=[decision_row(cell, 0, source='raw_arm')])
         with self.assertRaisesRegex(ValueError, 'foreign'): self.readout()
+
+    def test_a_server_on_another_tree_is_breakage_and_both_commits_and_nodes_are_recorded(self):
+        populate(self.root, self.run, self.lad)
+        value = self.readout(nodes=dict(workers='node-w', servers='node-s'))
+        self.assertEqual(value['breakage'], []); self.assertEqual(value['nodes'], dict(workers='node-w', servers='node-s'))
+        self.assertEqual((value['server_tree']['server_commit'], value['server_tree']['observed'], value['server_tree']['ok']), (SERVER_TREE, [SERVER_TREE], True))
+        self.assertEqual(value['server_tree']['eval_commit'], value['tree']['commit'])
+        bad = lambda server, eval_, declaration: dict(server_commit=server, eval_commit=eval_, declaration_path='d', files=['d', 'x'], ok=False)
+        with patch.object(panel, 'server_tree_check', side_effect=bad): self.assertIn('server_tree', self.readout()['breakage'])
+        for cell in panel.cells(self.lad, 'DN2W8', limit=500)[:1]:   # one response from a server on another tree
+            path = self.root/'telemetry'/f"{cell['ordinal']}.jsonl"; rows = [json.loads(x) for x in path.read_bytes().splitlines()]
+            rows[0]['search']['tree_commit'] = 'd'*40; path.write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
+        self.assertIn('server_tree', self.readout()['breakage'])
 
     def test_codex_raw_agreement_is_a_plumbing_check(self):
         populate(self.root, self.run, self.lad)

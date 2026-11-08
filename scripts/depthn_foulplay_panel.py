@@ -69,6 +69,7 @@ def parser():
     a.add_argument('--codex-raw-run-directory',help="Codex's ladder RAW run (read only); plumbing agreement only")
     a.add_argument('--server-telemetry',action='append',help="the search server's --telemetry file(s): a timed-out decision's end-to-end "
         'wall in the void-screen deadline coverage (repeatable)')
+    a.add_argument('--worker-node',help='the worker pod\'s node (recorded in the readout only)');a.add_argument('--server-node',help='the server pod\'s node')
     a.add_argument('--output',help='write the readout once here');a.add_argument('--tree-commit')
     a=sub.add_parser('acknowledge',help="record the lead's acknowledgement of an arm fairness flag (dispatch may resume)")
     a.add_argument('--run-directory',required=True);a.add_argument('--cause',choices=('benign','fault'),required=True)
@@ -127,7 +128,8 @@ def main(argv=None):
             cells_per_worker=args.cells_per_worker,cache_directory=cache,attempted=attempted,after=monitor,warmup=capture))
         print(json.dumps(dict(result,probe=probe['status'])));return 1 if result['failed']or result['stopped']else 0
     value=panel.readout(args.run_directory,arm=args.arm,limit=args.limit,codex_raw_directory=args.codex_raw_run_directory,
-        server_telemetry=args.server_telemetry,tree_commit=args.tree_commit)
+        server_telemetry=args.server_telemetry,tree_commit=args.tree_commit,
+        nodes=None if args.worker_node is None and args.server_node is None else dict(workers=args.worker_node,servers=args.server_node))
     if args.output:
         panel.write_new(args.output,value);print(json.dumps(dict(output=args.output,sha256=panel.sha(value),decision=value['decision'])))
     else:print(json.dumps(value,sort_keys=True,indent=1))

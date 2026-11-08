@@ -110,7 +110,7 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
       'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
-      'search_choice','foulplay_move_wall','actor'}
+      'search_choice','foulplay_move_wall','actor','server_tree_commit'}
 ACTOR_KEYS={'cells_per_worker','warmup_decisions','search_overlaps_greedy','warm_p95_seconds','preflight_search_wall_p95_seconds','source'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
 MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
@@ -180,6 +180,7 @@ def validate(declaration):
         raise ValueError('search choice: the declared search arm, the commit of the cells that chose it, their files (path and sha256) '
                          'and a summary of the result required')
     validate_move_wall(d['foulplay_move_wall']);validate_actor(d['actor'])
+    if not _hex(d['server_tree_commit'],40):raise ValueError('the servers\' tree commit (40 hex) required')
     validate_provenance(d['provenance'])
     return d
 
@@ -286,6 +287,18 @@ def _git(*args):
     return out.stdout if out.returncode==0 else None
 
 
+def server_tree_check(server_commit,eval_commit,declaration):
+    """The lead's rule for servers started before the declaration was committed: they may run another commit than the eval tree
+    only if `git diff --name-only server eval` is exactly the declaration's own repo path (or nothing: the same tree). Anything
+    else, or no git answer, is not ok. Returns both commits, the declaration path, the differing files and ok."""
+    path=_git('ls-files','--full-name','--error-unmatch',str(Path(declaration).resolve()))
+    names=_git('diff','--name-only',str(server_commit),str(eval_commit))if _hex(server_commit,40)and _hex(eval_commit,40)else None
+    files=None if names is None else sorted(x for x in names.splitlines()if x)
+    declared=None if path is None else path.strip()
+    ok=files is not None and declared is not None and files in ([],[declared])
+    return dict(server_commit=server_commit,eval_commit=eval_commit,declaration_path=declared,files=files,ok=ok)
+
+
 def tree_identity(declared=None):
     """Commit, dirty flag and a digest of the worker code (package, gpu_engine, bridge scripts).
 
@@ -354,11 +367,13 @@ def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladde
     base=read_bound(base_config,base_config_sha256)
     if type(base)is not dict:raise ValueError('literal base configuration required')
     if base.get('search_time_ms')!=d['foulplay_move_wall']['search_time_ms']:raise ValueError('the declared Foul Play search_time_ms must be the base config\'s')
-    root=Path(run_directory).resolve()
+    root=Path(run_directory).resolve();tree=tree_identity(tree_commit)
+    servers=server_tree_check(d['server_tree_commit'],tree['commit'],declaration)
+    if not servers['ok']:raise ValueError(f'the servers\' tree may differ from the eval tree only in the declaration: {servers}')
     run=dict(schema=RUN_SCHEMA,run_directory=str(root),declaration=str(Path(declaration).resolve()),declaration_sha256=declaration_sha256,
         ladder_declaration=str(Path(ladder_declaration).resolve()),ladder_declaration_sha256=ladder_declaration_sha256,
         checkpoint=str(Path(checkpoint).resolve()),checkpoint_sha256=d['checkpoint_sha256'],base_config=base,
-        base_config_sha256=base_config_sha256,calibration=str(Path(calibration).resolve()),tree=tree_identity(tree_commit))
+        base_config_sha256=base_config_sha256,calibration=str(Path(calibration).resolve()),tree=tree,server_tree=servers)
     write_new(root/'run.json',run)
     return run
 
@@ -503,6 +518,8 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
             'tree_commit','archive_sha256','pricer','client_wall_seconds')})
         if response.get('client_refused')is False and response.get('archive_sha256')!=d['archive_sha256']:
             reason='server archive differs from the declared champion archive';break
+        if response.get('client_refused')is False and response.get('tree_commit')!=d['server_tree_commit']:
+            reason='server tree commit differs from the declared server tree';break
         if response['status']=='COMPLETE':
             good=(response.get('requested_worlds')==d['search'][arm]['worlds']and response.get('root_operator')==d['root_operator']
                 and (response.get('pricer')or {}).get('matmul_precision')==d['matmul_precision'])
@@ -1215,7 +1232,7 @@ def deadline_coverage(rows,*,reserve,deadlines,minimum,late=None):
         smallest_covering_deadline=covering,reserve_seconds=reserve)
 
 
-def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=None,tree_commit=None):
+def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=None,tree_commit=None,nodes=None):
     root,run,d,lad=load(run_directory);tree=require_tree(run,tree_commit)
     if arm not in d['arms'][1:]or limit not in (d['screen_paired_cells'],d['max_paired_cells']):raise ValueError('declared search arm and cell count required')
     rows={};arms={}
@@ -1255,6 +1272,8 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
     if any(a['telemetry_mismatches']for a in arms.values()):breakage.append('telemetry')
     origin=search['provenance']
     if any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']]):breakage.append('search_provenance')
+    servers=dict(server_tree_check(d['server_tree_commit'],tree['commit'],run['declaration']),observed=origin['tree_commit'])
+    if not servers['ok']or origin['tree_commit']not in ([],[d['server_tree_commit']]):breakage.append('server_tree')
     if search['wrong_worlds']:breakage.append('requested_worlds')
     if search['wrong_archive']:breakage.append('archive')
     if search['wrong_precision']:breakage.append('matmul_precision')
@@ -1280,7 +1299,7 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,server_telemetry=
         difference=None if declared is None or observed is None else observed-declared['value'],
         source=None if declared is None else declared['source'])
     return dict(schema=READOUT_SCHEMA,declaration_sha256=run['declaration_sha256'],ladder_declaration_sha256=run['ladder_declaration_sha256'],
-        tree=tree,arm=arm,paired_cells=limit,comparison=d['primary_comparison'],confidence=d['confidence'],
+        tree=tree,server_tree=servers,nodes=nodes,arm=arm,paired_cells=limit,comparison=d['primary_comparison'],confidence=d['confidence'],
         estimator='seed-clustered paired t over the two seats per seed, two-sided 90%; missing cells as identification bounds',
         paired=stats,decision=decision,harm=harm,breakage=breakage,screen_rule=d['screen_rule'],breakage_rules=rules,bar=bar,
         latency_rule=latency,deadline_coverage=coverage,arm_fairness=fair,deadline_seconds=d['deadline_seconds'],reserve_seconds=d['reserve_seconds'],
