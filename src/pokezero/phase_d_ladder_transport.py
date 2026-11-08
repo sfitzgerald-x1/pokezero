@@ -13,7 +13,8 @@ SCHEMA=original.SCHEMA
 class Server(original.Server):
     def __init__(self,search,*,max_requests=32,batch_wait_seconds=.005,queue_limit=256):
         from gpu_engine.phase_d_ladder_search import Search
-        if type(search)is not Search:raise ValueError('one genuine champion ladder GPU owner required')
+        from gpu_engine.phase_d_depthn import Search as DepthNSearch
+        if type(search)not in (Search,DepthNSearch):raise ValueError('one genuine champion ladder GPU owner required')
         self._initialize(search,max_requests,batch_wait_seconds,queue_limit)
 
 

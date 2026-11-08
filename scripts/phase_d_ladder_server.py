@@ -19,7 +19,10 @@ def build(args):
     jax.config.update('jax_enable_x64',False);jax.config.update('jax_default_matmul_precision','highest')
     if len(jax.devices())!=1 or jax.devices()[0].platform!='gpu':raise ValueError('ONE shared GPU required')
     from gpu_engine import transition,engine_device_observation
-    from gpu_engine.phase_d_ladder_search import Search
+    if args.pricer=='depthn':
+        from gpu_engine.phase_d_depthn import Search
+    else:
+        from gpu_engine.phase_d_ladder_search import Search
     from gpu_engine.phase_d_protocol_constructor import load_inputs
     catalog,bound,metadata,config=load_inputs(args)
     return Search(args.archive,expected_archive_sha256=args.expected_archive_sha256,catalog=catalog,source=bound,metadata=metadata,
@@ -33,6 +36,7 @@ def parser():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('showdown-root','node-binary','metadata','expected-metadata-sha256','vocabulary','expected-vocabulary-sha256','archive','expected-archive-sha256'):
         p.add_argument('--'+name,required=True)
+    p.add_argument('--pricer',choices=('serial','depthn'),default='serial')
     p.add_argument('--rung',choices=('R1','R3','R4','R7','R5'),required=True)
     p.add_argument('--host',default='127.0.0.1');p.add_argument('--port',type=int,required=True)
     p.add_argument('--seed',type=int,default=20261103);p.add_argument('--branch-cap',type=int,default=262144)
