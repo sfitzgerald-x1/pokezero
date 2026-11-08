@@ -182,6 +182,56 @@ class BenchTests(unittest.TestCase):
         self.assertEqual(fake.resets, [0, 1])   # before each roster's first root
         self.assertEqual(list(summary['rosters']), ['a/roster.json@z1', 'b/roster.json@z2'])   # same file name, two rosters
 
+    def test_turn_of_reads_the_last_turn_line(self):
+        self.assertEqual(B.turn_of(['|start', '|turn|1', '|move|x', '|turn|12', '|request|{}']), 12)
+        self.assertEqual(B.turn_of(['|start', '|request|{}']), 0)   # before the first turn
+        self.assertIsNone(B.turn_of(['|turn|x']))
+        self.assertEqual((B.band(12), B.band(0), B.band(None)), ('10-19', None, None))
+
+    def test_latency_coverage_and_bands_over_eligible_decisions(self):
+        rows = [dict(wall_seconds=w, prepare_seconds=w - .4, band=b) for w, b in ((1., '1-3'), (2.9, '1-3'), (4.85, '4-9'), (4.9, '4-9'), (9.9, '20+'), (20., '20+'))]
+        lat = B.latency(rows)
+        self.assertEqual(lat['n'], 6);self.assertAlmostEqual(lat['within_ladder'], 2 / 6)
+        self.assertEqual(lat['deadline_coverage'], {'5.0': 3 / 6, '10.0': 4 / 6, '15.0': 5 / 6})   # wall + 0.15 must fit: 4.85 fits 5, 4.9 does not
+        self.assertEqual((lat['bands']['1-3']['wall']['n'], lat['bands']['10-19']['wall'], lat['wall']['max']), (2, None, 20.))
+        self.assertEqual(B.latency([])['within_ladder'], None)
+
+    def test_battle_requests_take_distinct_battles_in_roster_order_with_every_decision(self):
+        selected = [dict(capture_path='w/2.jsonl'), dict(capture_path='w/1.jsonl'), dict(capture_path='w/2.jsonl'), dict(capture_path='w/3.jsonl')]
+        def capture(path):
+            return [dict(address_request(int(path[2]) * 10 + i), lines=[f'|turn|{i}', f'|request|{i}'], capture_row=i) for i in range(3)]
+        with patch('pokezero.phase_d_ladder_panel.read_bound', return_value=dict(selected=selected)), \
+                patch('pokezero.phase_d_owning_capture.read_capture', side_effect=capture), \
+                patch('pokezero.phase_d_ladder_admission.address', side_effect=lambda row: (row['battle_id'], row['decision_index'])):
+            got = B.battle_requests([('r.json', 'z')], 2)
+        self.assertEqual(list(got), ['w/2.jsonl', 'w/1.jsonl'])   # distinct, roster order, first two
+        self.assertEqual([(o, t, r['battle_id']) for o, _, r, _, t in got['w/2.jsonl']], [(0, 0, 'b20'), (1, 1, 'b21'), (2, 2, 'b22')])
+        self.assertTrue(all(set(r) == set(B.KEYS) for _, _, r, _, _ in got['w/1.jsonl']))
+
+    def test_session_mode_turns_saved_root_admission_off_and_pools_only(self):
+        base = ['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x', '--vocabulary', 'v',
+            '--expected-vocabulary-sha256', 'y', '--roster', 'r.json', 'z', '--champion-archive', 'a', '--champion-archive-sha256', 'c' * 64,
+            '--champion-checkpoint-sha256', 'd' * 64]
+        with patch.object(B.server.evaluators, 'check_arguments'):
+            self.assertTrue(B.options(base + ['--out', 'o']).saved_root_admission)
+            self.assertFalse(B.options(base + ['--out', 'o', '--sessions', '3']).saved_root_admission)
+            with self.assertRaises(SystemExit):B.options(base + ['--out', 'o', '--sessions', '0'])
+        battles = {'w/1.jsonl': [(i, ('a', i), live_request(i), None, i) for i in range(3)], 'w/2.jsonl': [(i, ('b', i), live_request(10 + i), None, 12) for i in range(2)]}
+        fake = FakeSearch([response(prepare=p) for p in (.5, .6, .7, 2.5, 6.)])
+        with tempfile.TemporaryDirectory() as tmp:
+            args = B.parser().parse_args(base[:-6] + ['--out', str(Path(tmp) / 'o'), '--sessions', '2'])
+            args.saved_root_admission = False
+            with patch.object(B, 'options', return_value=args), patch.object(B, 'battle_requests', return_value=battles) as source, \
+                    patch.object(B.server, 'build', return_value=fake), patch.object(B.server, 'header', return_value={}):
+                self.assertEqual(B.main([]), 0)
+            summary = json.loads((Path(tmp) / 'o' / 'summary.json').read_text());md = (Path(tmp) / 'o' / 'summary.md').read_text()
+        self.assertEqual(source.call_args.args[1], 2)
+        self.assertEqual(fake.resets, [])   # sessions persist across battles, as on the live server
+        self.assertEqual([r['battle_id'] for r in fake.seen], ['b0', 'b1', 'b2', 'b10', 'b11'])   # each battle's decisions in order
+        self.assertEqual((summary['rosters'], summary['battles']['count'], summary['battles']['decisions'], summary['sessions']), ({}, 2, 5, 2))
+        self.assertEqual(summary['pooled']['latency']['n'], 5);self.assertIn('session mode: 2 battles, 5 decisions', md)
+        self.assertIn('deadline coverage', md)
+
     def test_main_exit_2_when_nothing_priced(self):
         items = [(0, ('a',), address_request(0), None, 1)]
         with tempfile.TemporaryDirectory() as tmp:

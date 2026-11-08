@@ -37,6 +37,14 @@ action), exactly the server's path; nothing is re-implemented here.
   Structural failures (cause server_error, or a WORLD_STRUCTURE_MISMATCH refusal) are counted apart from clean refusals,
   and `structural_classes` lists the classes with any (pooled): the lead's input on --refuse-classes, which the bench passes
   through to the search (as the server does) and never decides.
+- Session mode (--sessions N): the live server's own per-battle sessions instead of from-scratch folds. The first N distinct
+  battles (each roster root's capture_path, in roster order) are replayed decision by decision, every captured decision of
+  the battle in its own order (phase_d_owning_capture.read_capture), through one session-mode constructor (saved-root
+  admission off), exactly as a live battle feeds the server: each decision folds only its new lines. Rows record the
+  battle (its capture path), the decision's turn (its last |turn| line; 0 before the first) and band.
+- Latency (both modes) over eligible decisions (not single-legal, whatever their status: a refusal is a decision too):
+  wall and prepare percentiles per turn band, the share within LADDER_SECONDS, and each DEADLINES client deadline's
+  coverage: the share whose wall + RESERVE_SECONDS fits it (the lead's eval-deadline rule reads these; nothing is decided here).
 Informational: no verdict, no bound. Exit 0 when any root priced, 2 when none did.
 """
 import argparse
@@ -55,6 +63,7 @@ from scripts import depthn_live_server as server   # noqa: E402
 from pokezero.phase_d_saved_roots import TURN_BANDS, band as turn_band   # noqa: E402
 
 BUDGET = 600.
+LADDER_SECONDS, RESERVE_SECONDS, DEADLINES = 3.0, .15, (5., 10., 15.)   # the ladder cap; the client's reserve; the eval-deadline candidates
 TIMINGS = ('prepare_seconds', 'classify_seconds', 'structure_seconds', 'build_seconds', 'price_seconds', 'reduce_seconds')   # the response's own stages
 STAGES = TIMINGS + ('decision_seconds', 'wall_seconds')
 GROUPS = server.live.CLASSES + ('other', 'unclassified')
@@ -81,6 +90,8 @@ def parser():
     p.add_argument('--warmup-count', type=int, default=8, help='roster roots used for the warmup (default 8)')
     p.add_argument('--limit', type=int, help='at most this many roots per roster (default all)')
     p.add_argument('--out', required=True, help='a new output directory')
+    p.add_argument('--sessions', type=int, help='session mode: replay the first N distinct battles of the rosters decision by decision through '
+        'per-battle sessions (saved-root admission off), as the live server does')
     p.add_argument('--band-weights', type=band_weights, default=(1.,) * len(BANDS),
         help='weights of the turn bands ' + ', '.join(BANDS) + ' for the reweighted searched share (default equal)')
     p.set_defaults(saved_root_admission=True, buckets=(1,))
@@ -93,6 +104,9 @@ def options(argv=None):
     if args.buckets != (1,):p.error('the bench prices at bucket 1 only (one decision per call)')
     if args.warmup_count < 1:p.error('--warmup-count must be >= 1')
     if args.limit is not None and args.limit < 1:p.error('--limit must be >= 1')
+    if args.sessions is not None:
+        if args.sessions < 1:p.error('--sessions must be >= 1')
+        args.saved_root_admission = False   # the live server's per-battle sessions
     args.port = args.port or 0;args.max_requests = 1
     return args
 
@@ -115,6 +129,41 @@ def roster_requests(path, digest, *, limit=None):
             if isinstance(error, PermissionError):raise
             out.append((ordinal, address, None, f'{type(error).__name__}: {error}', meta.get('turn')))
     return out
+
+
+def turn_of(lines):
+    """A decision's battle turn: the number on its prefix's last |turn| line, 0 before the first."""
+    for line in reversed(lines):
+        if line.startswith('|turn|'):
+            try:return int(line.split('|')[2])
+            except (IndexError, ValueError):return None
+    return 0
+
+
+def battle_requests(rosters, battles):
+    """{battle: [(ordinal, address, request, None, turn)]}: the first `battles` distinct capture paths of the rosters' roots, in
+    roster order, each with every captured decision of the battle in its own order."""
+    from pokezero import phase_d_owning_capture as capture, phase_d_ladder_admission as admission
+    from pokezero.phase_d_ladder_panel import read_bound
+    paths = []
+    for path, digest in rosters:
+        for meta in read_bound(path, digest)['selected']:
+            if meta['capture_path'] not in paths:paths.append(meta['capture_path'])
+    out = {}
+    for path in paths[:battles]:
+        out[path] = [(i, admission.address(row), {k: row[k] for k in KEYS}, None, turn_of(row['lines'])) for i, row in enumerate(capture.read_capture(path))]
+    return out
+
+
+def latency(eligible):
+    """Wall and prepare percentiles per turn band and overall, the share within LADDER_SECONDS and each DEADLINES deadline's
+    coverage (wall + RESERVE_SECONDS fits), over eligible decision rows (any status)."""
+    walls = [r['wall_seconds'] for r in eligible if isinstance(r.get('wall_seconds'), (int, float))]
+    return dict(n=len(walls), within_ladder=None if not walls else sum(w <= LADDER_SECONDS for w in walls) / len(walls),
+        deadline_coverage={str(d): None if not walls else sum(w + RESERVE_SECONDS <= d for w in walls) / len(walls) for d in DEADLINES},
+        wall=percentiles(walls), prepare=percentiles(r.get('prepare_seconds') for r in eligible),
+        bands={b: dict(wall=percentiles(r['wall_seconds'] for r in eligible if r['band'] == b),
+            prepare=percentiles(r.get('prepare_seconds') for r in eligible if r['band'] == b)) for b in BANDS})
 
 
 def percentiles(values):
@@ -180,6 +229,7 @@ def summarize(rows, W, weights=None):
         causes=dict(collections.Counter(r['cause'] for r in priced if r['status'] != 'COMPLETE')),
         world_refusal_kinds=dict(collections.Counter(k for r in priced for k in r['world_refusal_kinds'])),
         mean_q_disagreements=sum(r['mean_q_agrees'] is False for r in complete), stages=stages,
+        latency=latency([r for r in priced if not r['single_legal']]),
         w16_condition=None if W != 16 or wall is None else dict(p95_wall_seconds=wall['p95'], bound=W16_P95_SECONDS, met=wall['p95'] <= W16_P95_SECONDS))
 
 
@@ -193,9 +243,9 @@ def legal_mask(request):
 
 
 def band(turn):
-    """The roster turn's band label (phase_d_saved_roots.band), or None."""
+    """The turn's band label (phase_d_saved_roots.band), or None (no turn, or before turn 1)."""
     try:return BANDS[turn_band(turn)]
-    except ValueError:return None
+    except (ValueError, TypeError, IndexError):return None
 
 
 def record(roster, ordinal, address, response, wall, *, request=None, turn=None):
@@ -241,7 +291,8 @@ def class_lines(classes):
 
 def markdown(summary):
     lines = [f"# Gap 4B: live search cost and coverage, {summary['rung']} (W={summary['W']}), bucket 1", '',
-        f"- Tree `{summary['tree_commit']}`; warmup {summary['warmup_seconds']:.1f} s on {summary['warmup_count']} roots; saved-root admission {summary['saved_root_admission']}", '']
+        f"- Tree `{summary['tree_commit']}`; warmup {summary['warmup_seconds']:.1f} s on {summary['warmup_count']} roots; saved-root admission {summary['saved_root_admission']}"
+        + ('' if not summary.get('battles') else f"; session mode: {summary['battles']['count']} battles, {summary['battles']['decisions']} decisions"), '']
     for name, s in [*summary['rosters'].items(), ('pooled', summary['pooled'])]:
         wall = s['wall_eligible']
         lines += [f"## {name}", '', f"- roots {s['roots']}, unavailable {s['unavailable']}, priced {s['priced']}, single-legal {s['single_legal']}, "
@@ -251,6 +302,16 @@ def markdown(summary):
             '- wall over every eligible root: ' + ('-' if wall is None else f"n {wall['n']}, p50 {wall['p50']:.3f}, p95 {wall['p95']:.3f}, p99 {wall['p99']:.3f}, max {wall['max']:.3f}")
             + f"; legal mask disagreements {s['legal_mask_disagreements']}",
             f"- causes {s['causes']}; world refusal kinds {s['world_refusal_kinds']}; action_mean_q disagreements {s['mean_q_disagreements']}"]
+        lat = s['latency']
+        if lat['n']:
+            lines.append(f"- latency over {lat['n']} eligible decisions: within {LADDER_SECONDS} s {fmt(lat['within_ladder'])}; deadline coverage (wall + "
+                f"{RESERVE_SECONDS} s) " + ', '.join(f'{d} s {fmt(c)}' for d, c in lat['deadline_coverage'].items()))
+            lines += ['', '| Band | n | wall p50 | wall p95 | wall p99 | wall max | prepare p50 | prepare p95 |', '| --- | --- | --- | --- | --- | --- | --- | --- |']
+            for b, x in [*lat['bands'].items(), ('all', dict(wall=lat['wall'], prepare=lat['prepare']))]:
+                w, q = x['wall'], x['prepare']
+                lines.append(f"| {b} | - | - | - | - | - | - | - |" if w is None else f"| {b} | {w['n']} | {w['p50']:.3f} | {w['p95']:.3f} | {w['p99']:.3f} | "
+                    f"{w['max']:.3f} | {'-' if q is None else format(q['p50'], '.3f')} | {'-' if q is None else format(q['p95'], '.3f')} |")
+            lines.append('')
         if s['w16_condition'] is not None:lines.append(f"- W=16 condition: p95 wall {s['w16_condition']['p95_wall_seconds']:.3f} s against {W16_P95_SECONDS} s: met {s['w16_condition']['met']}")
         lines += [f"- structural failures {s['structural']}; structural classes {s['structural_classes']}", '', *stage_table(s['stages'], 'Stage (COMPLETE roots)'),
             '', f'### {name}: by root class', '', *class_lines(s['classes']), '']
@@ -264,7 +325,8 @@ def main(argv=None):
     if args.producer_review:
         from pokezero.phase_d_ladder_panel import read_bound
         read_bound(*args.producer_review)
-    rosters = {f'{path}@{digest}': roster_requests(path, digest, limit=args.limit) for path, digest in args.roster}
+    rosters = (battle_requests(args.roster, args.sessions) if args.sessions else
+        {f'{path}@{digest}': roster_requests(path, digest, limit=args.limit) for path, digest in args.roster})
     available = [req for items in rosters.values() for _, _, req, _, _ in items if req is not None]
     if not available:raise SystemExit('no roster root is available')
     search = server.build(args);header = server.header(args, search)
@@ -273,7 +335,7 @@ def main(argv=None):
     rows = []
     with (out / 'records.jsonl').open('x') as stream:
         for name, items in rosters.items():
-            if callable(getattr(search, 'reset_sessions', None)):search.reset_sessions()   # a root shared by two rosters is priced in each
+            if not args.sessions and callable(getattr(search, 'reset_sessions', None)):search.reset_sessions()   # a root shared by two rosters is priced in each
             for ordinal, address, request, problem, turn in items:
                 if request is None:row = record(name, ordinal, address, None, problem, turn=turn)
                 else:
@@ -283,9 +345,10 @@ def main(argv=None):
                 rows.append(row);stream.write(json.dumps(row, sort_keys=True, default=repr) + '\n');stream.flush();os.fsync(stream.fileno())
                 print(json.dumps(dict(roster=name, ordinal=ordinal, status=row['status'], cause=row['cause'], wall=row['wall_seconds'])), flush=True)
     W = search.W
-    summary = dict(header=header, rung=search.rung, W=W, tree_commit=search.tree_commit, saved_root_admission=args.saved_root_admission,
+    summary = dict(header=header, rung=search.rung, W=W, tree_commit=search.tree_commit, saved_root_admission=args.saved_root_admission, sessions=args.sessions,
         warmup_count=args.warmup_count, warmup_seconds=warm_seconds,
-        rosters={n: summarize([r for r in rows if r['roster'] == n], W, args.band_weights) for n in rosters},
+        rosters={} if args.sessions else {n: summarize([r for r in rows if r['roster'] == n], W, args.band_weights) for n in rosters},
+        battles=None if not args.sessions else dict(count=len(rosters), decisions=len(rows), paths=list(rosters)),
         pooled=summarize(rows, W, args.band_weights), rosters_declared=[dict(path=p, sha256=d) for p, d in args.roster], refuse_classes=list(args.refuse_classes),
         band_weights=list(args.band_weights),
         scope='INFORMATIONAL: warm per-decision cost at bucket 1 with no queue, and coverage; no verdict')
