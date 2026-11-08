@@ -112,6 +112,8 @@ def main(argv=None):
     p.add_argument('--probe-capture');p.add_argument('--cells-per-worker', type=int, default=1);p.add_argument('--resume', action='store_true')
     p.add_argument('--accept-uncalibrated', action='store_true');p.add_argument('--tree-commit')
     args = p.parse_args(argv)
+    scripts = {Path(f).name: hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in (__file__, V.__file__)}   # outside the panel's digest
+    print(json.dumps(dict(event='EXTENSION_START', scripts=scripts)), flush=True)   # first, so a crash mid-dispatch keeps the audit trail
     amended = gate(args.run_directory, screen=(args.screen_readout, args.screen_readout_sha256),
         verdict=(args.amended_verdict, args.amended_verdict_sha256), files=committed(), tree_commit=args.tree_commit)
     packets, attempted = extension_interleaved(args.run_directory, search_arm=args.search_arm, resume=args.resume, tree_commit=args.tree_commit)
@@ -126,7 +128,6 @@ def main(argv=None):
     cache = Path(args.cache_directory).resolve()
     result = asyncio.run(panel.dispatch(packets, pairs=[tuple(p) for p in args.cpu_pair], servers={'RAW': None, args.search_arm: args.server},
         cells_per_worker=args.cells_per_worker, cache_directory=cache, attempted=attempted, after=monitor, warmup=capture))
-    scripts = {Path(f).name: hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in (__file__, V.__file__)}   # outside the panel's digest
     print(json.dumps(dict(result, probe=probe['status'], amended_decision=amended['decision'], scripts=scripts)))
     return 1 if result['failed'] or result['stopped'] else 0
 

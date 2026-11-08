@@ -146,7 +146,8 @@ class AmendedVerdictTests(unittest.TestCase):
         bar = self.run_verdict(official(self.root, 2000, decision='BAR_NOT_MET'))
         self.assertEqual(bar['decision'], 'BAR_MET'); self.assertGreater(bar['conservative']['lower_bound'], 0)
         for kept in ('VOID_FAIRNESS', 'FLAG_ARM_FAIRNESS'):   # the panel sets no bar on a void or held flag, at 2,000 too: kept, never refused
-            self.assertEqual(self.run_verdict(dict(official(self.root, 2000, decision=kept), bar=None))['decision'], kept)
+            kept_value = self.run_verdict(dict(official(self.root, 2000, decision=kept), bar=None))
+            self.assertEqual((kept_value['decision'], kept_value['bar_met']), (kept, None))
         value = self.run_verdict(dict(official(self.root, 2000, decision='VOID_LATENCY'), paired=None, bar=None))   # no screen statistic: no interval
         self.assertEqual((value['decision'], value['conservative'], value['harm_mirror']), ('VOID_LATENCY', None, None))
 

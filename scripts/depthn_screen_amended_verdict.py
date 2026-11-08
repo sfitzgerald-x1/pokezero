@@ -145,7 +145,7 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
     else:decision = 'BAR_MET' if met and not breakage else 'BAR_NOT_MET'
     paired = paired or {}
     return dict(schema=VERDICT_SCHEMA, amendment_sha256=amendment_sha256, addendum_sha256=addendum_sha256, both_sha256=both_sha256,
-        readout_sha256=readout_sha256, tree_commit=readout['tree']['commit'], bar_met=None if screen else met,
+        readout_sha256=readout_sha256, tree_commit=readout['tree']['commit'], bar_met=None if screen or readout['decision'] in KEPT else met,
         arm=arm, paired_cells=limit, official_decision=readout['decision'], official_breakage=readout['breakage'], official_harm=readout['harm'],
         decision=decision, breakage=breakage, harm=harm,
         conservative=None if void else dict(rule='UNKNOWN or missing: search 0, RAW 1; seed-clustered t, two-sided 90%', **bound, lower_bound=lower),
