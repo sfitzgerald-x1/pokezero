@@ -187,27 +187,46 @@ class OwnerTests(unittest.TestCase):
 
     def test_late_observed_exit_zero_remains_capped(self):
         actual_spawn, actual_clock = owner.subprocess.Popen, owner.time.monotonic
-        finished = False
-        def spawn(*args,**kwargs):
-            worker = actual_spawn(*args,**kwargs)
-            actual_wait = worker.wait
-            def wait(*a,**kw):
-                nonlocal finished
-                result = actual_wait(*a,**kw)
-                finished = True
-                return result
-            worker.wait = wait
-            return worker
-        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()), \
-                mock.patch.object(owner.subprocess,"Popen",side_effect=spawn), \
-                mock.patch.object(owner.time,"monotonic",side_effect=lambda:actual_clock()+(10 if finished else 0)):
-            out = Path(directory)/"attempt"
-            result = own([sys.executable,"-c","import time;time.sleep(.05)"],
-                out=out,panel=out/"panel",entry=ENTRY,calendar_seconds=5)
-            terminal = json.loads((out/"owner-terminal.json").read_bytes())
-        self.assertEqual(terminal["actual_worker_exit"],0)
-        self.assertTrue(terminal["timed_out"])
-        self.assertEqual(result,124)
+        for observation in ("poll", "wait"):
+            with self.subTest(observation=observation):
+                finished = False
+                observed = []
+                def spawn(*args,**kwargs):
+                    worker = actual_spawn(*args,**kwargs)
+                    actual_wait, actual_poll = worker.wait, worker.poll
+                    first_poll = True
+                    if observation == "poll":
+                        # Force the child to finish before the owner's first poll.
+                        actual_wait()
+                    def poll():
+                        nonlocal finished, first_poll
+                        if observation == "wait" and first_poll:
+                            first_poll = False
+                            return None
+                        result = actual_poll()
+                        if result is not None:
+                            finished = True
+                            observed.append("poll")
+                        return result
+                    def wait(*a,**kw):
+                        nonlocal finished
+                        result = actual_wait(*a,**kw)
+                        finished = True
+                        observed.append("wait")
+                        return result
+                    worker.poll, worker.wait = poll, wait
+                    return worker
+                with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()), \
+                        mock.patch.object(owner.subprocess,"Popen",side_effect=spawn), \
+                        mock.patch.object(owner.time,"monotonic",side_effect=lambda:actual_clock()+(10 if finished else 0)):
+                    out = Path(directory)/"attempt"
+                    result = own([sys.executable,"-c","pass"],
+                        out=out,panel=out/"panel",entry=ENTRY,calendar_seconds=5)
+                    terminal = json.loads((out/"owner-terminal.json").read_bytes())
+                self.assertEqual(observed[0],observation)
+                self.assertEqual(terminal["actual_worker_exit"],0)
+                self.assertTrue(terminal["timed_out"])
+                self.assertEqual(result,124)
 
 
 if __name__ == "__main__":
