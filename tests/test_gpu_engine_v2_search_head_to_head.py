@@ -120,6 +120,7 @@ class ChooseTests(unittest.TestCase):
         search.original, search.worlds, search.source, search.materializer = g, FakeWorlds, None, None
         search.capacities, search.kind, search.pricer, search.params = (4,), 'depth1', FakePricer(grids, edges), (None,)
         search.seed, search.workers, search.pool, search._reduce = 5, 1, None, g.reduce_completed_q
+        search.evaluator, search.evaluator_checked = None, True
         search.configure(reduction=reduction, blend=.5, world_blocks=1)
         return search
 
@@ -160,6 +161,124 @@ class ChooseTests(unittest.TestCase):
         self.assertEqual(hedge.top_action((0., .5, .5) + (0.,) * 6), 1)
         self.assertEqual(hedge.top_action((.2, .3, .5) + (0.,) * 6), 2)
         with self.assertRaises(ValueError):hedge.top_action((0.,) * 9)
+
+
+class ChampionMirrorTests(unittest.TestCase):
+    """The champion mirror's harness seams on CPU fakes: per-seat forwards, greedy fallback, the evaluator check, CLI guards."""
+    def test_grouped_forward_routes_each_seat_to_its_actor(self):
+        import jax
+        from types import SimpleNamespace
+        b = 3;a_side = j.asarray([0, 1, 0], j.int32)
+        # Row r of the flat [2b] inputs is lane r // 2, seat r % 2; its feature encodes (lane, seat). Row 5 is NaN (invalid).
+        features = [[10. * (r // 2) + r % 2] for r in range(2 * b)];features[5] = [float('nan')]
+        inputs = dict(numeric_features=j.asarray(features, j.float32))
+        def make(sign):   # two DIFFERENT forwards: A's adds params, B's subtracts it
+            return lambda params, x: SimpleNamespace(policy_logits=j.repeat(x['numeric_features'] + sign * params, 9, axis=1),
+                value=x['numeric_features'][:, 0] * 0 + sign * params, valid=j.isfinite(x['numeric_features'][:, 0]))
+        run = jax.jit(lambda x, a: h2h.grouped_forward(x, (100., 200.), (make(1.), make(-1.)), a, lambda o: o.valid))
+        logits, values, ok = run(inputs, a_side)
+        for lane in range(b):
+            for seat in (0, 1):
+                r = 2 * lane + seat;mine = seat == int(a_side[lane]);shift = 100. if mine else -200.
+                if r == 5:   # the invalid row: refused, NaN outputs (the champion adapter's convention)
+                    self.assertFalse(bool(ok[lane, seat]));self.assertTrue(np.isnan(float(logits[lane, seat, 0])))
+                    self.assertTrue(np.isnan(float(values[lane, seat])))
+                else:
+                    self.assertTrue(bool(ok[lane, seat]));self.assertEqual(float(values[lane, seat]), shift)
+                    self.assertEqual(float(logits[lane, seat, 0]), 10. * lane + seat + shift)
+
+    def test_fallback_actions(self):
+        legal = np.asarray([[True, True, False] + [False] * 6, [False, True, True] + [False] * 6])
+        logits = np.asarray([[1., 1., 9.] + [0.] * 6, [5., 2., 3.] + [0.] * 6], np.float32)
+        np.testing.assert_array_equal(h2h.fallback_actions('argmax', [1, 2], logits, legal), [0, 2])   # legal only; ties low
+        np.testing.assert_array_equal(h2h.fallback_actions('sample', [1, 2], logits, legal), [1, 2])
+        with self.assertRaises(ValueError):h2h.fallback_actions('greedy', [1, 2], logits, legal)
+
+    def test_champion_setup_binds_in_order(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from gpu_engine import champion_evaluator
+        calls = [];evaluator = SimpleNamespace(archive_sha256='a' * 64, checkpoint_sha256='c' * 64, params={'w': 1}, header=lambda: {'kind': 'champion'})
+        with mock.patch.object(champion_evaluator, 'load_from_arguments', lambda args: calls.append('load') or evaluator), \
+                mock.patch.object(champion_evaluator, 'check_binding', lambda e, catalog: calls.append(('bind', e is evaluator, catalog)) or True):
+            got, record, params = h2h.champion_setup(SimpleNamespace(), 'CATALOG')
+        self.assertEqual(calls, ['load', ('bind', True, 'CATALOG')])
+        self.assertIs(got, evaluator);self.assertIs(params, evaluator.params)
+        self.assertEqual((record.iteration, record.checkpoint_sha256, record.evaluator), (9375, 'c' * 64, {'kind': 'champion'}))
+
+    def test_refused_decision_plays_the_greedy_fallback_and_raw_stays_raw(self):
+        tests = ChooseTests();grids = {0: None, 1: [[1., -.5], [-.5, .5]]}
+        legal = np.zeros((2, 9), bool);legal[:, :2] = True
+        inputs = {'numeric_features': np.zeros((2, 2), np.float32)}
+        out = tests.search('average', grids).choose(None, [0, 1], [0, 0], np.zeros((2, 9), np.float32), legal, inputs,
+            np.asarray([1, 1]), fallback_actions=np.asarray([0, 1]))
+        self.assertEqual(out[0][0], 0);self.assertFalse(out[0][1]['searched'])    # refused: the greedy fallback, not raw 1
+        self.assertEqual(out[1][0], 0);self.assertTrue(out[1][1]['searched'])     # searched: averaging argmax, not its fallback 1
+        raw = tests.search('raw', grids).choose(None, [1], [0], np.zeros((1, 9), np.float32), legal[:1], {'numeric_features': np.zeros((1, 2))},
+            np.asarray([1]), fallback_actions=np.asarray([0]))
+        self.assertEqual(raw[0][0], 1)                                              # the plumbing reduction replays the raw sample
+
+    def test_evaluator_is_checked_once_on_the_first_request(self):
+        seen = []
+        class Evaluator:
+            def check(self, params, inputs):seen.append({k: np.shape(v) for k, v in inputs.items()});return True
+        tests = ChooseTests();search = tests.search('average', {0: [[1., -.5], [-.5, .5]]})
+        search.evaluator, search.evaluator_checked = Evaluator(), False
+        legal = np.zeros((1, 9), bool);legal[:, :2] = True
+        for _ in range(2):
+            search.choose(None, [0], [0], np.zeros((1, 9), np.float32), legal, {'numeric_features': np.zeros((1, 29, 132), np.float32)}, np.asarray([0]))
+        self.assertEqual(seen, [{'numeric_features': (1, 1, 29, 132), 'history_mask': (1, 1)}])
+
+    def test_champion_command_line_guards(self):
+        sha = 'a' * 64
+        with tempfile.TemporaryDirectory() as root:
+            base = ['--config', 'unused.json', '--out', root, '--reduction', 'none', '--label', 'x', '--b-run', 'champion', '--b-iteration', '0']
+            for extra in (['--champion-archive', 'c.npz'],                                                   # shas missing
+                    ['--champion-archive', 'c.npz', '--champion-archive-sha256', sha, '--champion-checkpoint-sha256', sha, '--a-run', 'r', '--a-iteration', '1']):
+                with self.assertRaises(SystemExit):h2h.main(base + extra)
+            champion = ['--champion-archive', 'c.npz', '--champion-archive-sha256', sha, '--champion-checkpoint-sha256', sha]
+            with self.assertRaises(SystemExit):h2h.main(base + champion + ['--collector-check', '3'])   # no v5 collector check
+            with self.assertRaises(SystemExit):h2h.main(base + champion + ['--a-iteration', '9'])       # A is the champion
+            cells = Path(root, 'cells.json')
+            for cell, extra in ((dict(label='x', b_run='/some/run', b_iteration=99, reduction='none'), champion),   # V2 opponent in champion mode
+                    (dict(label='x', b_run='champion', b_iteration=0, reduction='none'), ['--a-run', 'r', '--a-iteration', '1']),   # champion in V2 mode
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='raw', fallback='argmax'), ['--a-run', 'r', '--a-iteration', '1']),
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='none', fallback='argmax'), ['--a-run', 'r', '--a-iteration', '1'])):
+                cells.write_text(json.dumps([cell]))
+                with self.assertRaises(SystemExit):h2h.main(['--config', 'unused.json', '--out', root, '--cells', str(cells)] + extra)
+
+
+class NearTerminalTests(unittest.TestCase):
+    def write(self, root, games, decisions):
+        prefix = Path(root, 'c');np.savez(str(prefix) + '-games.npz', **games)
+        Path(str(prefix) + '-decisions.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in decisions));return prefix
+
+    def test_verdicts_floor_and_exclusions(self):
+        games = dict(streams=np.asarray([1, 2, 3, 4]), status=np.asarray([1, 1, 1, 2]), winner=np.asarray([0, 1, 2, -1]),
+            terminal_frame=np.asarray([10, 10, 10, 1024]))
+        def decisions(n_agree, n_disagree, v=.9):
+            # stream 1: A (seat 0) won; stream 2: A (seat 0) lost; stream 3 a draw; stream 4 capped (excluded).
+            win = [dict(frame=8, searched=True, root_value=v)] * n_agree + [dict(frame=8, searched=True, root_value=-v)] * n_disagree
+            extra = [dict(frame=2, searched=True, root_value=v), dict(frame=9, searched=False, root_value=v), dict(frame=10, searched=True, root_value=v)]
+            return [dict(stream=1, a_side=0, decisions=win + extra), dict(stream=2, a_side=0, decisions=[dict(frame=9, searched=True, root_value=-.2)]),
+                dict(stream=3, a_side=0, decisions=[dict(frame=9, searched=True, root_value=.7)]), dict(stream=4, a_side=0, decisions=[dict(frame=1022, searched=True, root_value=.9)])]
+        with tempfile.TemporaryDirectory() as root:
+            r = compare.near_terminal(self.write(root, games, decisions(45, 5)))
+            self.assertEqual(r['verdict'], 'PASS');self.assertEqual(r['confident']['decisions'], 50)
+            self.assertAlmostEqual(r['confident']['agreement'], .9);self.assertEqual(r['draws'], 1)
+            self.assertEqual(r['unconfident'], dict(decisions=1, agreement=1.0, mean_abs_value=.2))   # the loss, |v| .2, right sign
+            self.assertEqual(compare.near_terminal(self.write(root, games, decisions(35, 15)))['verdict'], 'FAIL')
+            self.assertEqual(compare.near_terminal(self.write(root, games, decisions(40, 0)))['verdict'], 'INCONCLUSIVE')
+
+    def test_seat_one_and_window_edges(self):
+        # A in seat 1 on both streams: stream 5 seat 1 won (A won), stream 6 seat 0 won (A lost). Terminal frame 20, so a
+        # decision at frame 17 (3 frames out) counts and one at frame 16 (4 out) doesn't; the dropped ones carry the wrong sign.
+        games = dict(streams=np.asarray([5, 6]), status=np.asarray([1, 1]), winner=np.asarray([1, 0]), terminal_frame=np.asarray([20, 20]))
+        won = [dict(frame=17, searched=True, root_value=.9)] * 50 + [dict(frame=16, searched=True, root_value=-.9)] * 2
+        lost = [dict(frame=19, searched=True, root_value=-.9), dict(frame=16, searched=True, root_value=.9)]
+        with tempfile.TemporaryDirectory() as root:
+            r = compare.near_terminal(self.write(root, games, [dict(stream=5, a_side=1, decisions=won), dict(stream=6, a_side=1, decisions=lost)]))
+        self.assertEqual(r['verdict'], 'PASS');self.assertEqual(r['confident'], dict(decisions=51, agreement=1.0, mean_abs_value=.9))
 
 
 class CompareTests(unittest.TestCase):
