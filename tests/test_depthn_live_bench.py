@@ -7,11 +7,13 @@ from unittest.mock import patch
 from scripts import depthn_live_bench as B
 
 
-def response(status='COMPLETE', cause=None, prepare=.5, kinds=(), agrees=True):
-    return dict(status=status, cause=cause, refusal=None if status == 'COMPLETE' else 'no', action_index=0 if status == 'COMPLETE' else None,
+def response(status='COMPLETE', cause=None, prepare=.5, kinds=(), agrees=True, classes=None, refusal='no'):
+    return dict(status=status, cause=cause, refusal=None if status == 'COMPLETE' else refusal, action_index=0 if status == 'COMPLETE' else None,
         mean_q_agrees=agrees if status == 'COMPLETE' else None, constructed_worlds=8 if status == 'COMPLETE' else 3, decision_seconds=prepare + .4,
-        timings=dict(queue_seconds=0., prepare_seconds=prepare, build_seconds=.05, price_seconds=.3, reduce_seconds=.01),
-        world_refusals=[dict(world=1, kinds=list(kinds))] if kinds else [])
+        timings=dict(queue_seconds=0., prepare_seconds=prepare, classify_seconds=.02, build_seconds=.05, price_seconds=.3, reduce_seconds=.01),
+        world_refusals=[dict(world=1, kinds=list(kinds))] if kinds else [], root_classes=classes,
+        root_class=None if classes is None else next((c for c in ('forced_switch', 'fresh_substitute', 'wish', 'sleep') if c in classes), 'other'),
+        root_class_source=None if classes is None else 'protocol_facts')
 
 
 class FakeSearch:
@@ -49,6 +51,30 @@ class BenchTests(unittest.TestCase):
         self.assertEqual(s['w16_condition'], dict(p95_wall_seconds=3.0, bound=2.6, met=False))
         self.assertIsNone(B.summarize(rows, 8)['w16_condition'])
 
+    def test_per_class_breakdown_counts_structural_failures_apart(self):
+        rows = [B.record('r', 0, ('a',), response(prepare=.5, classes=['forced_switch', 'sleep']), 1.),
+            B.record('r', 1, ('b',), response('REFUSED', 'server_error', classes=['forced_switch'], refusal='ValueError: one world source per frame'), .1),
+            B.record('r', 2, ('c',), response('REFUSED', 'depthn_refused', classes=['wish'], refusal='WORLD_STRUCTURE_MISMATCH:world 0: missing x'), .1),
+            B.record('r', 3, ('d',), response('REFUSED', 'constructor_refused', classes=[], refusal='constructor-root:X'), .1),
+            B.record('r', 4, ('e',), response(prepare=1.5, classes=[]), 2.),
+            B.record('r', 5, ('f',), response('REFUSED', 'class_refused', classes=['sleep'], refusal='ROOT_CLASS_REFUSED:sleep'), .1),
+            B.record('r', 6, ('g',), None, 'gone'), B.record('r', 7, ('h',), response(prepare=.7), 1.2)]   # unavailable; never classified
+        self.assertEqual([r['structural'] for r in rows], [False, True, True, False, False, False, False, False])
+        s = B.summarize(rows, 8);c = s['classes']
+        self.assertEqual(list(c), ['forced_switch', 'fresh_substitute', 'wish', 'sleep', 'other', 'unclassified'])
+        got = {g: (x['roots'], x['priced'], x['complete'], x['structural'], x['clean_refusals']) for g, x in c.items()}
+        self.assertEqual(got, dict(forced_switch=(2, 2, 1, 1, 0), fresh_substitute=(0, 0, 0, 0, 0), wish=(1, 1, 0, 1, 0), sleep=(2, 2, 1, 0, 1),
+            other=(2, 2, 1, 0, 1), unclassified=(1, 1, 1, 0, 0)))   # a root in two classes counts in each; unavailable roots in none
+        self.assertEqual((c['forced_switch']['searched_share'], c['fresh_substitute']['searched_share'], c['wish']['causes']), (.5, None, {'depthn_refused': 1}))
+        self.assertEqual((c['forced_switch']['stages']['prepare_seconds']['p50'], c['other']['stages']['prepare_seconds']['p50']), (.5, 1.5))
+        self.assertEqual(c['sleep']['stages']['classify_seconds']['max'], .02)
+        self.assertEqual((s['structural'], s['structural_classes']), (2, ['forced_switch', 'wish']))
+        md = B.markdown(dict(rung='DN2W8', W=8, tree_commit='t', warmup_seconds=1., warmup_count=1, saved_root_admission=True, rosters={'r': s}, pooled=s,
+            structural_classes=s['structural_classes']))
+        self.assertIn('| forced_switch | 2 | 2 | 1 | 0.500 | 1 | 0 |', md);self.assertIn('| prepare_seconds | 1 | 0.500 |', md)
+        self.assertIn('other: stage (COMPLETE roots)', md);self.assertNotIn('fresh_substitute: stage', md)
+        self.assertIn("structural_classes (pooled): ['forced_switch', 'wish']", md)
+
     def test_options_refuse_other_buckets(self):
         base = ['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x', '--vocabulary', 'v',
             '--expected-vocabulary-sha256', 'y', '--roster', 'r', 'z', '--out', 'o']
@@ -56,18 +82,23 @@ class BenchTests(unittest.TestCase):
             B.options(base + ['--buckets', '1,2'])
         with patch.object(B.server.evaluators, 'check_arguments'), self.assertRaises(SystemExit):
             B.options(base)   # no champion archive
+        args = B.parser().parse_args(base + ['--refuse-classes', 'wish,forced_switch'])   # the server's flag, passed through to build
+        self.assertEqual((args.refuse_classes, B.parser().parse_args(base).refuse_classes), (('wish', 'forced_switch'), ()))
 
     def test_main_prices_each_root_alone_and_writes_reports(self):
         items = [(i, ('addr', i), address_request(i), None) for i in range(3)] + [(3, ('addr', 3), None, 'OSError: gone')]
-        fake = FakeSearch([response(prepare=.5), response('REFUSED', 'depthn_refused'), response(prepare=1.5, agrees=False)])
+        fake = FakeSearch([response(prepare=.5, classes=['wish']), response('REFUSED', 'server_error', classes=['forced_switch']),
+            response(prepare=1.5, agrees=False, classes=[])])
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / 'run'
             args = B.parser().parse_args(['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x',
-                '--vocabulary', 'v', '--expected-vocabulary-sha256', 'y', '--roster', 'r.json', 'z', '--out', str(out), '--warmup-count', '2'])
+                '--vocabulary', 'v', '--expected-vocabulary-sha256', 'y', '--roster', 'r.json', 'z', '--out', str(out), '--warmup-count', '2',
+                '--refuse-classes', 'sleep'])
             args.port, args.max_requests = 0, 1
             with patch.object(B, 'options', return_value=args), patch.object(B, 'roster_requests', return_value=items), \
-                    patch.object(B.server, 'build', return_value=fake), patch.object(B.server, 'header', return_value=dict(h=1)):
+                    patch.object(B.server, 'build', return_value=fake) as build, patch.object(B.server, 'header', return_value=dict(h=1)):
                 self.assertEqual(B.main([]), 0)
+            self.assertEqual(build.call_args.args[0].refuse_classes, ('sleep',))
             self.assertEqual(len(fake.warmed), 2)
             self.assertEqual([r['battle_id'] for r in fake.seen], ['b0', 'b1', 'b2'])
             self.assertTrue(all(r['rung'] == 'DN2W16' and r['budget_seconds'] == B.BUDGET for r in fake.seen))
@@ -77,6 +108,8 @@ class BenchTests(unittest.TestCase):
             summary = json.loads((out / 'summary.json').read_text())
             self.assertEqual((summary['pooled']['complete'], summary['pooled']['priced'], summary['pooled']['mean_q_disagreements']), (2, 3, 1))
             self.assertIn('searched share 0.667', (out / 'summary.md').read_text())
+            self.assertEqual((summary['structural_classes'], summary['refuse_classes'], summary['pooled']['classes']['wish']['complete']), (['forced_switch'], ['sleep'], 1))
+            self.assertEqual([r['root_classes'] for r in rows], [['wish'], ['forced_switch'], [], None])
             with patch.object(B, 'options', return_value=args), self.assertRaises(FileExistsError):
                 B.main([])   # never into an existing directory
 
