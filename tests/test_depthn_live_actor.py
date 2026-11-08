@@ -23,8 +23,25 @@ from tests import test_phase_d_prerequisites as fixture
 
 REQUEST_KEYS = {'schema','request_id','battle_id','owner','stream_id','decision_index','generation',
                 'prefix_sha256','lines','own_request_line','rung','budget_seconds'}
-ROW_KEYS = {'schema','arm','policy_id','cell','battle_id','owner','stream_id','generation','decision_index','request_kind',
-            'prefix_sha256','encode_seconds','greedy','search','played_action_index','source','cause','search_differs','select_seconds'}
+ROW_KEYS = {'schema','arm','policy_id','cell','battle_id','owner','stream_id','generation','turn','decision_index','request_kind',
+            'prefix_sha256','archive_sha256','archive_source','encode_seconds','greedy','search','played_action_index','source','cause',
+            'search_differs','select_seconds'}
+
+
+def decode_edge():
+    """Deepest '{"zz":[[...]]}' json.loads accepts here; the row holds it one level deeper."""
+    low, high = 1, 200000
+    while low < high:
+        middle = (low+high+1)//2
+        try: json.loads('{"zz":'+'['*middle+']'*middle+'}'); low = middle
+        except RecursionError: high = middle-1
+    return low
+
+
+def nested(depth):
+    value = []
+    for _ in range(depth-1): value = [value]
+    return value
 
 
 def complete(request, *, action=4, q=.25, **extra):
@@ -396,9 +413,86 @@ class FactoryTests(unittest.TestCase):
         for value in (float('nan'), float('inf'), -float('inf'), 1.001):
             q = [value]+[None]*8
             self.assertEqual(live.searched_action(dict(status='COMPLETE', action_index=0, q_values=q), observation), (None, 'bad_q'))
-        for value in (1., -1., 1+4*2**-53):
+        for value in (1., -1., 1+4*2**-53, 1, -1, 0):
             q = [value]+[None]*8
             self.assertEqual(live.searched_action(dict(status='COMPLETE', action_index=0, q_values=q), observation), (0, None))
+        for value in (10**400, -10**400, 2, True, False):
+            q = [value]+[None]*8
+            self.assertEqual(live.searched_action(dict(status='COMPLETE', action_index=0, q_values=q), observation), (None, 'bad_q'))
+
+    def test_huge_json_integers_never_raise(self):
+        cases = dict(q=(lambda t: t.replace('0.25', '1'+'0'*400), (0, 'greedy_fallback', 'bad_q')),
+                     root_value=(lambda t: t.replace('"root_value":0.2', '"root_value":1'+'0'*400), (4, 'search', None)))
+        for name, (edit, expected) in cases.items():
+            with self.subTest(name), FakeServer(raw_reply(edit)) as server:
+                self.fresh(f'bigint-{name}')
+                client = live.Client('127.0.0.1', server.port, rung='DN2W8')
+                value = live.factory(NS(), raw_factory=raw_factory([]), client=client, telemetry_path=self.path, arm='DN2W8')
+                decision, = play(value); row = self.rows()[0]
+                self.assertEqual((decision.action_index, row['source'], row['cause']), expected)
+
+    def test_a_response_at_the_row_depth_edge_is_refused_by_the_client(self):
+        edge = decode_edge(); results = {}
+        for depth in range(edge-8, edge+3):
+            with FakeServer(raw_reply(lambda t, d=depth: t[:-1]+',"zz":'+'['*d+']'*d+'}')) as server:
+                client = live.Client('127.0.0.1', server.port, rung='DN2W8')
+                response = client.request(snapshot(), decision_index=0, started=live.clock()); results[depth] = response
+            if response['status'] == 'COMPLETE': live.encoded(dict(search=response))
+        self.assertTrue(any(r['cause'] == 'server_error' and r['client_refused'] for r in results.values()))
+        self.assertTrue(any(r['status'] == 'COMPLETE' for r in results.values()))
+
+    def test_select_never_raises_at_the_depth_edge(self):
+        edge = decode_edge(); sources = set()
+        for depth in range(edge-8, edge+3):
+            with FakeServer(raw_reply(lambda t, d=depth: t[:-1]+',"zz":'+'['*d+']'*d+'}')) as server:
+                self.fresh(f'edge-{depth}')
+                client = live.Client('127.0.0.1', server.port, rung='DN2W8')
+                value = live.factory(NS(), raw_factory=raw_factory([]), client=client, telemetry_path=self.path, arm='DN2W8')
+                decision, = play(value); row = self.rows()[0]
+                sources.add((decision.action_index, row['source'], row['cause']))
+        self.assertTrue(sources <= {(4, 'search', None), (0, 'greedy_fallback', 'server_error')}); self.assertEqual(len(sources), 2)
+
+    def test_a_row_that_cannot_be_written_records_server_error_and_plays_greedy(self):
+        deep = nested(30000)
+        (decision,), calls = self.run_arm(lambda r: dict(complete(r), zz=deep))
+        row, = self.rows()
+        self.assertEqual(calls, ['greedy', 'search']); self.assertEqual(decision.action_index, 0)
+        self.assertEqual((row['source'], row['cause'], row['played_action_index'], row['search_differs']), ('greedy_fallback', 'server_error', 0, None))
+        self.assertEqual((row['search']['status'], row['search']['cause'], row['search']['request_id']), ('REFUSED', 'server_error', 'f'*32))
+        self.assertTrue(row['search']['refusal'].startswith('telemetry row: RecursionError'))
+        self.assertEqual(row['search']['client_wall_seconds'], .01); self.assertEqual(row['archive_source'], 'pinned')
+        self.assertEqual(decision.metadata['depthn_live'], dict(arm='DN2W8', source='greedy_fallback', cause='server_error', request_id='f'*32))
+
+    def test_class_refused_is_a_counted_greedy_fallback(self):
+        self.assertIn('class_refused', live.SERVER_CAUSES)
+        (decision,), calls = self.run_arm(lambda r: refused(r, 'class_refused'))
+        row, = self.rows()
+        self.assertEqual((decision.action_index, row['source'], row['cause'], calls), (0, 'greedy_fallback', 'class_refused', ['greedy', 'search']))
+
+    def test_rows_carry_turn_and_champion_archive(self):
+        with FakeServer(send(lambda r: dict(complete(r), archive_sha256='a'*64))) as server:
+            client = live.Client('127.0.0.1', server.port, rung='DN2W8')
+            value = live.factory(NS(), raw_factory=raw_factory([]), client=client, telemetry_path=self.path, arm='DN2W8',
+                                 archive_sha256='b'*64)
+            play(value, lines=[fixture.request(), request_line(trapped=True), fixture.request()])
+        rows = self.rows()
+        self.assertEqual([(r['turn'], r['decision_index'], r['source'], r['archive_sha256'], r['archive_source']) for r in rows],
+                         [(1, 0, 'search', 'a'*64, 'server'), (2, 1, 'single_legal', 'b'*64, 'pinned'), (3, 2, 'search', 'a'*64, 'server')])
+        self.fresh('raw-archive')
+        self.run_arm(None, arm='RAW'); row, = self.rows()
+        self.assertEqual((row['archive_sha256'], row['archive_source']), (live.CHAMPION_ARCHIVE_SHA256, 'pinned'))
+        self.fresh('timeout-archive')
+        self.run_arm(lambda r: dict(refused(r, 'timeout'), client_refused=True)); row, = self.rows()
+        self.assertEqual((row['archive_sha256'], row['archive_source']), (live.CHAMPION_ARCHIVE_SHA256, 'pinned'))
+        for bad in ('B'*64, 'b'*63, None):
+            with self.assertRaises(ValueError):
+                live.factory(NS(), raw_factory=raw_factory([]), client=None, telemetry_path=Path(self.directory.name)/'x.jsonl', arm='RAW',
+                             archive_sha256=bad)
+
+    def test_battle_turn_from_the_owner_lines(self):
+        self.assertEqual(live.battle_turn(('|start', '|turn|1', '|move|x', '|turn|12', '|request|{}')), 12)
+        for lines in ((), ('|start', '|request|{}'), ('|turn|x',), ('|turn|²',), ('|turn|',)):
+            self.assertIsNone(live.battle_turn(lines))
 
     def test_single_legal_decision_is_never_searched(self):
         lines = [request_line(trapped=True), fixture.request(), request_line(members=2, force=True)]
@@ -442,6 +536,9 @@ class FactoryTests(unittest.TestCase):
             self.assertEqual((row['schema'], row['cell'], row['battle_id'], row['owner']), (live.ROW_SCHEMA, CELL, 'literal', 'p1'))
             self.assertEqual(set(row['greedy']), {'action_index','policy_id','action_probability','value_estimate','seconds'})
             self.assertEqual(len(row['prefix_sha256']), 64); self.assertFalse(row['search_differs'])
+            self.assertEqual((row['archive_sha256'], row['archive_source']), (live.CHAMPION_ARCHIVE_SHA256, 'pinned'))
+        self.assertEqual([r['turn'] for r in rows], [1, 2, 3])
+        for row in rows:
             self.assertEqual(row['search']['timings']['prepare_seconds'], .2)
             self.assertGreaterEqual(row['select_seconds'], row['greedy']['seconds']+row['encode_seconds']-1e-9)
         with self.assertRaises(FileExistsError):
