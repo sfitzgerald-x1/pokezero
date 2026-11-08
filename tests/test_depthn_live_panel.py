@@ -965,6 +965,14 @@ class EvalReadinessTests(unittest.TestCase):
         self.assertEqual(seen, recorded); self.assertEqual(recorded['status'], 'VOID_LATENCY')
         self.assertEqual(recorded['cells'][:4], [self.searches[5]['ordinal'], self.searches[4]['ordinal'], self.searches[0]['ordinal'], self.searches[1]['ordinal']])
 
+    def test_missing_cells_join_the_log_raw_then_search_by_ordinal(self):
+        for cell in (self.searches[1], self.raws[2], self.searches[0], self.raws[0]):
+            write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, 0, source='raw_arm' if cell['arm'] == 'RAW' else 'search')])
+        expected = [self.raws[0]['ordinal'], self.raws[2]['ordinal'], self.searches[0]['ordinal'], self.searches[1]['ordinal']]
+        self.assertEqual([e['ordinal'] for e in panel.effective_log(self.root, self.lad, 'DN2W8')], expected)
+        panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual([e['ordinal'] for e in panel.completions(self.root)], expected)
+
     def test_eleven_timeouts_void_the_screen_and_dispatch_never_resumes(self):
         monitor = panel.Monitor(self.root, search_arm='DN2W8')
         reasons = self.play(monitor, range(34), timeouts={(0, i) for i in range(11)})
