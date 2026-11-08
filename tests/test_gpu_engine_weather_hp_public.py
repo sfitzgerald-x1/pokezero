@@ -54,6 +54,9 @@ class WeatherHPPublicTests(unittest.TestCase):
                     self.assertEqual(kind,int(inputs.Kind.ABILITY))
                     self.assertEqual(raw.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
                     lines.extend(['|','|t:|1'])
+                elif kind==inputs.Kind.ABILITY and int(raw[0])==24:
+                    if int(before.projection.state.causal.owner[row])==target:
+                        lines.append(f'|-ability|{active[target]}|Pressure|[silent]')
                 elif kind==inputs.Kind.SWITCH:
                     name=self.f.catalog.species.names[p[1]];active[target]=f'p{target+1}a: {name}'
                     lines.append(f'|switch|{active[target]}|{name}, L{p[3]}'+(', M' if p[4]==1 else ', F' if p[4]==2 else '')+f'|{p[5]}/{p[6]}')

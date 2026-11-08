@@ -55,7 +55,8 @@ class ConsumerDiagnosticTests(unittest.TestCase):
   def fold(current,chunk,catalog):
    return current._replace(cursor=current.cursor._replace(sequence=current.cursor.sequence+j.sum(chunk.valid,axis=1,dtype=j.int32))),j.array([0,0,9,0],j.int32)
   with mock.patch.object(full,'project_frame',return_value=projected),mock.patch.object(full.v4_encoder,'fold_chunk',side_effect=fold),mock.patch.object(full,'_commit_public',side_effect=full._commit):
-   old=old_function(full,'project_and_fold');expected=old(state,None,None,public,None);actual=full.project_and_fold(state,None,None,public,None)
+   frame=NS(callbacks=NS(execution=None,count=j.zeros(len(state.sequence),j.int32))) # Absent Baton transaction.
+   old=old_function(full,'project_and_fold');expected=old(state,frame,None,public,None);actual=full.project_and_fold(state,frame,None,public,None)
   same(self,expected,actual._replace(projection=actual.projection._replace(fold_diagnostics=None)))
   d=dict(zip(full.FOLD_DIAGNOSTIC_FIELDS,np.array(actual.projection.fold_diagnostics).T.tolist()))
   self.assertEqual(d['projection_error'],[0,6,0,0]);self.assertEqual(d['fold_error'],[0,0,9,0])
@@ -148,19 +149,20 @@ class ConsumerDiagnosticTests(unittest.TestCase):
     if isinstance(n.func,ast.Name)and n.func.id=='Report':n.args=[a for a in n.args if not(isinstance(a,ast.Call)and isinstance(a.func,ast.Name)and a.func.id=='ConsumerDiagnostics')]
     return n
   for module,name in((full,'project_and_fold'),(ex,'consume_frame_device'),(witness,'consume_pair_device')):
-   path=Path(module.__file__);old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/'+path.name],text=True));new=ast.parse(path.read_text())
+   path=Path(module.__file__);old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/'+path.name],text=True));new=ast.parse(path.read_text())
    get=lambda tree:next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name==name)
-   normalized=Remove().visit(get(new));self.assertEqual(ast.dump(get(old),include_attributes=False),ast.dump(normalized,include_attributes=False),name)
+   self.assertEqual(ast.dump(get(old),include_attributes=False),ast.dump(get(new),include_attributes=False),name)
+   reference=Remove().visit(get(old));normalized=Remove().visit(get(new));self.assertEqual(ast.dump(reference,include_attributes=False),ast.dump(normalized,include_attributes=False),name)
    # An actual admission/refusal edit remains detectable after normalization.
    import copy
    mutant=copy.deepcopy(normalized);target={'project_and_fold':'ok','consume_frame_device':'good','consume_pair_device':'complete'}[name]
    changed=0
    for node in ast.walk(mutant):
     if isinstance(node,ast.Assign)and any(isinstance(t,ast.Name)and t.id==target for t in node.targets):node.value=ast.Constant(True);changed+=1
-   self.assertGreater(changed,0);self.assertNotEqual(ast.dump(get(old),include_attributes=False),ast.dump(mutant,include_attributes=False))
+   self.assertGreater(changed,0);self.assertNotEqual(ast.dump(reference,include_attributes=False),ast.dump(mutant,include_attributes=False))
   # Physical assignments, chance, driver, sampler and generic join unchanged.
   for name in('transition.py','state.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   text=Path(witness.__file__).read_text();pins=ast.literal_eval(next(n for n in ast.parse(text).body if isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='SOURCE_PINS'for t in n.targets)).value)
   import hashlib
   for name,digest in pins.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),digest,name)

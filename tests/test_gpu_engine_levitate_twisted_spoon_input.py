@@ -64,7 +64,7 @@ class TwistedSpoonLevitateTests(unittest.TestCase):
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_no_damage_callbacks.py'],text=True));new=ast.parse(Path(nd.__file__).read_text())
   self.assertEqual(ast.dump(ast.Module(body=[n for n in old.body if not(isinstance(n,ast.FunctionDef)and n.name=='compile_data')],type_ignores=[])),ast.dump(ast.Module(body=[n for n in new.body if not(isinstance(n,ast.FunctionDef)and n.name=='compile_data')],type_ignores=[])))
   for name in ('transition.py','mechanics.py','state.py','items.py','absorption.py','engine_kernel_frame_risk.py','engine_execution_completeness.py'):
-   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',BASE+':gpu_engine/'+name]))
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
   witness._source()
  def test_one_existing_full_grammar_packet_no_private_revelation(self):
   # One owner, two mirrored rows. Reuse existing Levitate grammar, not a FULL

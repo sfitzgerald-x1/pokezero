@@ -125,7 +125,7 @@ console.log(JSON.stringify(out));"""
   for file,key,count in(('chance_consumers.py','SOURCE_PINS',13),('ordinary_law.py','MAPPING_PINS',6),('conditional_law.py','MAPPING_PINS',4)):
    tree=ast.parse(Path('gpu_engine',file).read_text());mapping=ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id==key for x in n.targets)));self.assertEqual(len(mapping),count)
    for name,value in mapping.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),value)
-  self.assertEqual(len(witness.SOURCE_PINS),86)
+  self.assertEqual(len(witness.SOURCE_PINS),88)
 
  def test_original_both_owner_drag_words(self):
   s,t,p,consumers=self.literal(True);before_registry=life.snapshot(t.cursor);after,t,changed,ko=self.run_write(s,t,p);yes=j.ones(8,bool);no=~yes;z=j.zeros(8,j.int32);t=life.action_end(t,yes);t=life.finish(t,after,live=yes,replacement=no,pending_before=no,residual_ready=yes,defer_residual=no,turn_context=yes);frame=life.LifecycleResult(after,t.cursor,t,before_registry,life.snapshot(t.cursor),no,z);packets=[]
