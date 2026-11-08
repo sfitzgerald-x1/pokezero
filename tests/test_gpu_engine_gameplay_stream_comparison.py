@@ -149,7 +149,7 @@ class GameplayCaptureTests(unittest.TestCase):
 
     def test_default_inference_admission_preparation_ast_is_unchanged(self):
         import subprocess
-        before=ast.parse(subprocess.check_output(['git','show','384e81c2:gpu_engine/benchmark_retained_games.py'],text=True))
+        before=ast.parse(subprocess.check_output(['git','show','c2e00592^:gpu_engine/benchmark_retained_games.py'],text=True))
         after=ast.parse(Path(bench.__file__).read_text())
         for name in ('prepare','_checked','_network','_admission','_decide','_keys'):
             get=lambda tree:next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name==name)

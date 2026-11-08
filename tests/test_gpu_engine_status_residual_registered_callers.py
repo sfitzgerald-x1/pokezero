@@ -97,7 +97,10 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         for prior in (256,128,512):
             result=emit(base._replace(refusal=j.full(2,prior,j.int32)))
             self.assertEqual(result.refusal.tolist(),[prior|256]*2)
-        for kwargs in (dict(status=m.TOX,before=15,after=15),dict(new=0),dict(new=100),dict(after=1)):
+        capped=emit(base,status=m.TOX,before=15,after=15)
+        self.assertEqual(capped.refusal.tolist(),[1,1])
+        self.assertEqual(capped.words[:,0,1:3].tolist(),[[15,15],[15,15]])
+        for kwargs in (dict(new=0),dict(new=100),dict(after=1)):
             got=emit(base,**kwargs);self.assertTrue(bool((got.refusal&256).all()))
         overflow=emit(good);self.assertTrue(bool((overflow.refusal&public.OVERFLOW).all()))
         self.assertTrue(bool((overflow.refusal&256).all()))
@@ -108,7 +111,11 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
             if not kwargs:record=record._replace(qualified_birth=j.array([False,True]))
             result=self.run_step(state,cursor,record)
             ledger=result.callbacks.execution.ledger
-            if kwargs:
+            if kwargs.get('toxic'):
+                # Literal capped 15->15 Toxic writes are now represented.
+                self.assertEqual(result.callbacks.refusal.tolist(),[1,1])
+                for row in range(2):self.assertEqual(self.status_entries(result,row).tolist(),[2,2])
+            elif kwargs:
                 self.assertTrue(bool((result.callbacks.refusal&256).all()))
                 self.assertTrue(bool((result.callbacks.refusal&512).all()))
                 for row in range(2):
@@ -197,7 +204,9 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         for row in range(2):self.assertTrue(bool((self.status_entries(blocked,row)==1).all()))
         result=self.run_step(state,cursor,record,capacity=1)
         self.assertTrue(bool((result.callbacks.refusal&public.OVERFLOW).all()))
-        self.assertFalse(bool((result.callbacks.execution.ledger.stage==2).any()))
+        # The already-proven timestamp remains captured before overflow;
+        # neither incomplete status span may receive capture credit.
+        for row in range(2):self.assertEqual(self.status_entries(result,row).tolist(),[1,1])
 
     def test_default_numeric_ast_parent_identity_and_detect_changed_residual_input(self):
         old=ast.parse(subprocess.check_output(['git','show','df4c0dc5:gpu_engine/transition.py'],text=True))
