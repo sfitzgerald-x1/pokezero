@@ -30,7 +30,7 @@ from types import SimpleNamespace
 import uuid
 
 from . import phase_d_ladder_panel as ladder
-from .depthn_live_actor import ARMS,CAUSES,REQUEST_KINDS,ROW_SCHEMA,SEARCH_ARMS,SOURCES
+from .depthn_live_actor import ARMS,CAUSES,CHAMPION_ARCHIVE_SHA256,REQUEST_KINDS,ROW_SCHEMA,SEARCH_ARMS,SOURCES
 
 SCHEMA='depthn-foulplay-panel.declaration.v1'
 RUN_SCHEMA='depthn-foulplay-panel.run.v1'
@@ -44,7 +44,7 @@ BREAKAGE=dict(latency_p95_max_seconds=3.,timeout_forfeits_max=0,unknown_cells_ma
               transport_failure_share_max=.02,searched_share_min=.5)
 TRANSPORT=('timeout','connection_error','server_error')
 T_QUANTILE=.95  # Two-sided 90%; validate() pins confidence to .9.
-KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','arms','search','root_operator','deadline_seconds',
+KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256','arms','search','root_operator','deadline_seconds',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
       'expected_searched_share'}
 REQUEST_KEYS={'schema','run_directory','declaration','declaration_sha256','ladder_declaration','ladder_declaration_sha256',
@@ -62,7 +62,7 @@ def validate(declaration):
     if type(d)is not dict or set(d)!=KEYS:raise ValueError('exact DepthN panel declaration keys required')
     arms=d['arms']
     if (d['schema']!=SCHEMA or not _hex(d['ladder_declaration_sha256'])
-            or d['checkpoint_sha256']!=ActorContract.champion().checkpoint_sha256
+            or d['checkpoint_sha256']!=ActorContract.champion().checkpoint_sha256 or d['archive_sha256']!=CHAMPION_ARCHIVE_SHA256
             or type(arms)is not list or arms!=['RAW']+[a for a in SEARCH_ARMS if a in arms]or len(arms)<2
             or d['search']!={a:dict(depth=2,worlds=WORLDS[a])for a in arms[1:]}
             or d['root_operator']!='ARGMAX_MEAN_COMPLETED_Q'or d['deadline_seconds']!=3. or d['reserve_seconds']!=.15
@@ -116,22 +116,38 @@ def tree_identity(declared=None):
     Outside git, an explicit 40-hex commit is required and recorded as declared;
     the source digest is then the verified identity.
     """
-    repo=Path(__file__).resolve().parents[2];digest=hashlib.sha256()
-    for base,pattern in (('src/pokezero','**/*.py'),('gpu_engine','**/*.py'),('scripts','*.mjs')):
-        for path in sorted((repo/base).glob(pattern)):
-            if '__pycache__'not in path.parts:digest.update(str(path.relative_to(repo)).encode()+b'\0'+path.read_bytes())
+    digest=code_digest(Path(__file__).resolve().parents[2])
     head=_git('rev-parse','HEAD');status=_git('status','--porcelain','--untracked-files=no')
     if head is not None and status is not None:
         commit=head.strip()
         if declared is not None and declared!=commit:raise ValueError('declared tree commit differs from git HEAD')
-        return dict(commit=commit,dirty=bool(status.strip()),source_sha256=digest.hexdigest(),commit_source='git')
+        return dict(commit=commit,dirty=bool(status.strip()),source_sha256=digest,commit_source='git')
     if not _hex(declared,40):raise ValueError('outside git an explicit 40-hex tree commit is required')
-    return dict(commit=declared,dirty=None,source_sha256=digest.hexdigest(),commit_source='declared')
+    return dict(commit=declared,dirty=None,source_sha256=digest,commit_source='declared')
+
+
+CODE=(('src/pokezero','**/*.py'),('gpu_engine','**/*.py'),('scripts','*.mjs'))
+
+
+def code_digest(repo):
+    digest=hashlib.sha256()
+    for base,pattern in CODE:
+        for path in sorted((repo/base).glob(pattern)):
+            if '__pycache__'not in path.parts:digest.update(str(path.relative_to(repo)).encode()+b'\0'+path.read_bytes())
+    return digest.hexdigest()
+
+
+def same_tree(a,b):
+    """Same commit and code digest; the dirty flags must agree, and an unknown
+    (outside git) flag matches only a clean checkout. Fail-closed otherwise."""
+    if a['commit']!=b['commit']or a['source_sha256']!=b['source_sha256']:return False
+    if a['dirty']is None or b['dirty']is None:return not (a['dirty']or b['dirty'])
+    return a['dirty']==b['dirty']
 
 
 def require_tree(run,declared=None):
     tree=tree_identity(declared)
-    if tree!=run['tree']:raise ValueError('code identity differs from the run manifest')
+    if not same_tree(tree,run['tree']):raise ValueError('code identity differs from the run manifest')
     return tree
 
 
@@ -209,9 +225,11 @@ def probe_capture(run_directory,*,limit=500):
 def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
     """Live search exchanges on captured roots, under fresh battle ids, before any dispatch.
 
-    Pass: a COMPLETE response on the declared rung, W and root operator. Any
-    transport failure, server_error or bad_request fails at once; a constructor
-    or DepthN refusal moves to the next root. The record is written once.
+    Pass: a COMPLETE response on the declared rung, W and root operator. Every
+    server response must carry the declared champion archive_sha256. Any transport
+    failure, server_error, bad_request or expired request fails at once; a
+    constructor, DepthN or root-class refusal moves to the next root. The record
+    is written once.
     """
     from .depthn_live_actor import Client,clock
     from .phase_d_owning_capture import read_capture
@@ -224,10 +242,12 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         response=client.request(snapshot,decision_index=row['decision_index'],started=clock())
         tried.append({k:response.get(k)for k in ('request_id','status','cause','refusal','requested_worlds','root_operator',
             'tree_commit','archive_sha256','pricer','client_wall_seconds')})
+        if response.get('client_refused')is False and response.get('archive_sha256')!=d['archive_sha256']:
+            reason='server archive differs from the declared champion archive';break
         if response['status']=='COMPLETE':
             good=response.get('requested_worlds')==d['search'][arm]['worlds']and response.get('root_operator')==d['root_operator']
             status,reason=('PASS',None)if good else('FAIL','COMPLETE response with another W or root operator');break
-        if response['cause']not in ('constructor_refused','depthn_refused'):reason='refused: '+str(response['cause']);break
+        if response['cause']not in ('constructor_refused','depthn_refused','class_refused'):reason='refused: '+str(response['cause']);break
     value=dict(schema=PROBE_SCHEMA,arm=arm,server=server,capture=str(Path(capture).resolve()),status=status,reason=reason,tried=tried)
     write_new(root/'probes'/f'{arm}-{time.time_ns()}.json',value)
     if status!='PASS':raise ValueError('search server probe failed: '+reason)
@@ -255,7 +275,8 @@ async def worker(packet,*,expected_pair,original,runtime_class=None):
     client=None if server is None else Client(server['host'],server['port'],rung=cell['arm'],
         deadline_seconds=d['deadline_seconds'],reserve_seconds=d['reserve_seconds'])
     telemetry=root/'telemetry'/f"{cell['ordinal']}.jsonl"
-    runtime=(Runtime if runtime_class is None else runtime_class)(client=client,telemetry_path=telemetry,arm=cell['arm'],cell=cell,original=original)
+    runtime=(Runtime if runtime_class is None else runtime_class)(client=client,telemetry_path=telemetry,arm=cell['arm'],cell=cell,
+        original=original,archive_sha256=d['archive_sha256'])
     write_new(root/'claims'/f"{cell['ordinal']}.json",dict(request_sha256=digest,cell=cell,cpu_pair=list(expected_pair),
         server=server,pid=os.getpid(),claimed_unix_seconds=time.time()))
     started=time.monotonic();document=game=None
@@ -278,7 +299,9 @@ async def worker(packet,*,expected_pair,original,runtime_class=None):
     outcome.update(schema=CELL_SCHEMA,request_sha256=digest,declaration_sha256=value['declaration_sha256'],
         ladder_declaration_sha256=value['ladder_declaration_sha256'],cell=cell,checkpoint_sha256=value['checkpoint_sha256'],
         cpu_pair=list(expected_pair),server=server,duration_seconds=time.monotonic()-started,source_game=game,
-        benchmark=document,telemetry=str(telemetry))
+        benchmark=document,telemetry=str(telemetry),
+        # The bridge's per-game result keeps no protocol log; the owner's literal wire is this capture.
+        owning_wire=str(root/'owning-wire'/f"{cell['ordinal']}.jsonl"))
     write_new(root/'results'/f"{cell['ordinal']}.json",outcome)
     return 0
 
@@ -341,13 +364,15 @@ def _quantiles(values):
 def _share(a,b):return None if b==0 else a/b
 
 
-def decisions(rows,*,deadline,worlds=None):
+def decisions(rows,*,deadline,worlds=None,archive=None):
     """Shares over non-single-legal decisions: search, fallback by cause and kind, transport.
 
     Also latency quantiles, search-vs-greedy, and COMPLETE responses whose
-    requested_worlds is not the arm's W.
+    requested_worlds is not the arm's W or whose archive_sha256 is not the
+    declared champion archive. class_refused is a counted fallback cause; it is
+    neither a transport failure nor breakage.
     """
-    seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=0
+    seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=wrong_archive=0
     times={k:[]for k in ('select','encode','greedy','client','server_wall','queue','prepare','build','price','reduce')}
     provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')}
     for row in rows:
@@ -366,12 +391,13 @@ def decisions(rows,*,deadline,worlds=None):
         times['select'].append(row['select_seconds']);late+=row['select_seconds']>deadline
         times['encode'].append(row['encode_seconds']);times['greedy'].append(row['greedy']['seconds']);search=row['search']
         if search is None:continue
-        times['client'].append(search['client_wall_seconds'])
+        if search.get('client_wall_seconds')is not None:times['client'].append(search['client_wall_seconds'])
         if search.get('server_wall_seconds')is not None:times['server_wall'].append(search['server_wall_seconds'])
         for name,value in (search.get('timings')or {}).items():
             if name.endswith('_seconds')and name[:-8]in times and value is not None:times[name[:-8]].append(value)
         if search['status']=='COMPLETE':
             wrong_worlds+=worlds is not None and search.get('requested_worlds')!=worlds
+            wrong_archive+=archive is not None and search.get('archive_sha256')!=archive
             for name in provenance:
                 value=search.get(name);provenance[name][value if type(value)is not dict else encoded(value).decode()]+=1
     n=len(seen);searched=sources['search'];eligible=n-sources['single_legal']
@@ -384,7 +410,8 @@ def decisions(rows,*,deadline,worlds=None):
             fallback_by_cause=dict(sorted(v['causes'].items())),search_differs=v['differs'],
             search_differs_share=_share(v['differs'],v['searched']))for kind,v in sorted(kinds.items())},
         search_differs=differs,search_differs_share_of_searched=_share(differs,searched),search_differs_share_of_all=_share(differs,n),
-        wrong_worlds=wrong_worlds,latency={k:_quantiles(v)for k,v in times.items()},late_decisions=late,deadline_seconds=deadline,
+        wrong_worlds=wrong_worlds,wrong_archive=wrong_archive,latency={k:_quantiles(v)for k,v in times.items()},
+        late_decisions=late,deadline_seconds=deadline,
         provenance={k:sorted(map(str,v))for k,v in provenance.items()})
 
 
@@ -393,7 +420,7 @@ def _timeout_forfeit(row):
     return row['status']!='COMPLETE'and type(error)is str and ('TimeoutError'in error or 'deadline'in error)
 
 
-def arm_summary(root,lad,*,arm,limit,declaration_sha256,deadline,worlds=None):
+def arm_summary(root,lad,*,arm,limit,declaration_sha256,deadline,worlds=None,archive=None):
     rows=[];telemetry=[];mismatch=[];lost=unattempted=0
     for cell in cells(lad,arm,limit=limit):
         path=root/'results'/f"{cell['ordinal']}.json"
@@ -413,7 +440,8 @@ def arm_summary(root,lad,*,arm,limit,declaration_sha256,deadline,worlds=None):
     return rows,dict(results=len(rows),complete=len(complete),unknown=len(rows)-len(complete)+lost,claimed_without_result=lost,
         not_attempted=unattempted,timeout_forfeits=sum(map(_timeout_forfeit,rows)),
         score_mean=None if not complete else sum(r['score']for r in complete)/len(complete),
-        telemetry_mismatches=len(mismatch),telemetry_mismatch_pairs=mismatch[:50],decisions=decisions(telemetry,deadline=deadline,worlds=worlds))
+        telemetry_mismatches=len(mismatch),telemetry_mismatch_pairs=mismatch[:50],
+        decisions=decisions(telemetry,deadline=deadline,worlds=worlds,archive=archive))
 
 
 def paired(raw,search,*,limit):
@@ -473,7 +501,8 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,tree_commit=None)
     rows={};arms={}
     for name in ('RAW',arm):
         rows[name],arms[name]=arm_summary(root,lad,arm=name,limit=limit,declaration_sha256=run['declaration_sha256'],
-            deadline=d['deadline_seconds'],worlds=None if name=='RAW'else d['search'][arm]['worlds'])
+            deadline=d['deadline_seconds'],worlds=None if name=='RAW'else d['search'][arm]['worlds'],
+            archive=None if name=='RAW'else d['archive_sha256'])
     stats=paired(rows['RAW'],rows[arm],limit=limit)
     interval=stats['interval90'];search=arms[arm]['decisions'];rules=d['breakage'];breakage=[]
     if sum(a['unknown']for a in arms.values())>rules['unknown_cells_max']:breakage.append('unknown_cells')
@@ -484,6 +513,7 @@ def readout(run_directory,*,arm,limit,codex_raw_directory=None,tree_commit=None)
     origin=search['provenance']
     if any(len(v)>1 for v in origin.values())or origin['root_operator']not in ([],[d['root_operator']]):breakage.append('search_provenance')
     if search['wrong_worlds']:breakage.append('requested_worlds')
+    if search['wrong_archive']:breakage.append('archive')
     if search['transport_failure_share']is not None and search['transport_failure_share']>rules['transport_failure_share_max']:
         breakage.append('transport_failures')
     if search['searched_share']is not None and search['searched_share']<rules['searched_share_min']:breakage.append('searched_share')

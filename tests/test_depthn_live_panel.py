@@ -34,7 +34,7 @@ EXPECTED = dict(value=.9, source=dict(run_id='constructor-world-gate-fixture', r
 
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED):
     return dict(schema=panel.SCHEMA, ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
-        checkpoint_sha256=ActorContract.champion().checkpoint_sha256, arms=list(arms),
+        checkpoint_sha256=ActorContract.champion().checkpoint_sha256, archive_sha256=live.CHAMPION_ARCHIVE_SHA256, arms=list(arms),
         search={a: dict(depth=2, worlds=panel.WORLDS[a]) for a in arms[1:]}, root_operator='ARGMAX_MEAN_COMPLETED_Q',
         deadline_seconds=3., reserve_seconds=.15, screen_paired_cells=500, max_paired_cells=2000, confidence=.9,
         primary_comparison='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL', bar='LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE',
@@ -52,10 +52,10 @@ def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED):
 
 
 def decision_row(cell, i, *, source='search', cause=None, kind=None, differs=False, select=.5,
-                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8):
+                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256):
     kind = kind or ('forced' if source == 'single_legal' else 'move')
     search = None if source in ('raw_arm', 'single_legal') else dict(status='COMPLETE' if source == 'search' else 'REFUSED',
-        cause=cause, client_wall_seconds=select-.05, server_wall_seconds=select-.1, tree_commit='t'*40, archive_sha256='a'*64,
+        cause=cause, client_wall_seconds=select-.05, server_wall_seconds=select-.1, tree_commit='t'*40, archive_sha256=archive,
         root_operator=operator if source == 'search' else None, requested_worlds=worlds if source == 'search' else None,
         pricer=dict(k=1, depth=2, W=8, K=4) if source == 'search' else None,
         timings=dict(queue_seconds=.01, prepare_seconds=.2, build_seconds=.05, price_seconds=.2, reduce_seconds=.01) if source == 'search' else None)
@@ -111,6 +111,7 @@ class DeclarationTests(unittest.TestCase):
 
     def test_refuses_any_other_declaration(self):
         changes = [('extra', 'host:1'), ('schema', 'other'), ('ladder_declaration_sha256', 'A'*64), ('checkpoint_sha256', 'b'*64),
+                   ('archive_sha256', 'b'*64), ('archive_sha256', None),
                    ('arms', ['DN2W8', 'RAW']), ('arms', ['RAW']), ('arms', ['RAW', 'R1']), ('arms', ['RAW', 'DN2W8', 'DN2W8']),
                    ('search', {'DN2W8': dict(depth=2, worlds=16)}), ('root_operator', 'ARGMAX_MEAN_COMPLETED_Q_COMMON_ALL_RUNGS'),
                    ('deadline_seconds', 2.5), ('reserve_seconds', 0.), ('screen_paired_cells', 400), ('max_paired_cells', 1000),
@@ -168,6 +169,30 @@ class TreeTests(unittest.TestCase):
         for status, dirty in ((' M src/pokezero/x.py\n', True), ('', False)):
             git = lambda *args, s=status: 'c'*40+'\n' if args[0] == 'rev-parse' else s
             with patch.object(panel, '_git', git): self.assertEqual(panel.tree_identity()['dirty'], dirty)
+
+    def test_code_digest_covers_the_package_gpu_engine_and_bridge_scripts(self):
+        with TemporaryDirectory() as directory:
+            repo = Path(directory)
+            files = dict(package=repo/'src/pokezero/a.py', engine=repo/'gpu_engine/sub/b.py', bridge=repo/'scripts/c.mjs',
+                         docs=repo/'docs/x.md', cache=repo/'gpu_engine/__pycache__/b.py', script=repo/'scripts/d.py')
+            for path in files.values(): path.parent.mkdir(parents=True, exist_ok=True); path.write_text('0')
+            base = panel.code_digest(repo)
+            for name, path in files.items():
+                path.write_text('1'); changed = panel.code_digest(repo) != base; path.write_text('0')
+                with self.subTest(name): self.assertEqual(changed, name in ('package', 'engine', 'bridge'))
+
+    def test_same_tree_compares_commit_digest_and_dirty_fail_closed(self):
+        git = dict(commit='c'*40, dirty=False, source_sha256='d'*64, commit_source='git')
+        declared = dict(git, dirty=None, commit_source='declared')
+        self.assertTrue(panel.same_tree(git, declared)); self.assertTrue(panel.same_tree(declared, git))
+        self.assertTrue(panel.same_tree(declared, declared)); self.assertTrue(panel.same_tree(dict(git, dirty=True), dict(git, dirty=True)))
+        for a, b in ((dict(git, dirty=True), declared), (declared, dict(git, dirty=True)), (git, dict(git, dirty=True)),
+                     (git, dict(git, commit='e'*40)), (git, dict(git, source_sha256='e'*64)), (declared, dict(declared, commit='e'*40))):
+            with self.subTest(a=a, b=b): self.assertFalse(panel.same_tree(a, b))
+        run = dict(tree=declared)
+        with patch.object(panel, 'tree_identity', return_value=git): self.assertEqual(panel.require_tree(run), git)
+        with patch.object(panel, 'tree_identity', return_value=dict(git, dirty=True)), self.assertRaisesRegex(ValueError, 'code identity'):
+            panel.require_tree(run)
 
     def test_every_mode_refuses_another_code_identity(self):
         with TemporaryDirectory() as directory:
@@ -268,8 +293,9 @@ class PromotionTests(unittest.TestCase):
 class FakeRuntime:
     made = []
     runs = []
-    def __init__(self, *, client, telemetry_path, arm, cell, original):
+    def __init__(self, *, client, telemetry_path, arm, cell, original, archive_sha256):
         self.client, self.telemetry_path, self.arm, self.cell, self.original = client, telemetry_path, arm, cell, original
+        self.archive_sha256 = archive_sha256
         FakeRuntime.made.append(self)
     async def run(self, config):
         FakeRuntime.runs.append(self.cell['ordinal'])
@@ -327,6 +353,8 @@ class WorkerTests(unittest.TestCase):
         value = self.result(cell)
         self.assertEqual((value['status'], value['score'], value['schema'], value['cell']), ('COMPLETE', 1., panel.CELL_SCHEMA, cell))
         self.assertEqual(value['server'], dict(host='127.0.0.1', port=9)); self.assertTrue(value['telemetry'].endswith(f"telemetry/{cell['ordinal']}.jsonl"))
+        self.assertEqual(value['owning_wire'], str(self.root/'owning-wire'/f"{cell['ordinal']}.jsonl"))
+        self.assertEqual(runtime.archive_sha256, live.CHAMPION_ARCHIVE_SHA256)
         claim = (self.root/'claims'/f"{cell['ordinal']}.json").read_bytes()
         with self.assertRaises(FileExistsError): self.work(packet)
         self.assertEqual(FakeRuntime.runs, [cell['ordinal']]); self.assertEqual((self.root/'claims'/f"{cell['ordinal']}.json").read_bytes(), claim)
@@ -369,6 +397,14 @@ def make_capture(directory, ordinal=0, turns=3):
     return Path(directory)/f'{ordinal}.jsonl'
 
 
+def champion_complete(request, **change):
+    return {**actor_tests.complete(request), 'archive_sha256': live.CHAMPION_ARCHIVE_SHA256, **change}
+
+
+def champion_refused(request, cause):
+    return dict(actor_tests.refused(request, cause), archive_sha256=live.CHAMPION_ARCHIVE_SHA256)
+
+
 class ProbeTests(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory(); self.root, self.run, self.d, self.lad = make_run(self.directory.name)
@@ -384,7 +420,7 @@ class ProbeTests(unittest.TestCase):
     def records(self): return [json.loads(p.read_bytes()) for p in sorted((self.root/'probes').glob('*.json'))]
 
     def test_pass_on_the_declared_rung_worlds_and_operator(self):
-        value, server = self.probe(actor_tests.send(actor_tests.complete))
+        value, server = self.probe(actor_tests.send(champion_complete))
         self.assertEqual((value['status'], len(value['tried'])), ('PASS', 1)); self.assertEqual(self.records(), [value])
         request, = self.requests; root = next(capture.read_capture(self.capture))
         self.assertTrue(request['battle_id'].startswith('probe-')); self.assertEqual(request['rung'], 'DN2W8')
@@ -392,22 +428,26 @@ class ProbeTests(unittest.TestCase):
                          (list(root['lines']), root['own_request_line'], root['prefix_sha256']))
 
     def test_constructor_refusals_move_to_the_next_root(self):
-        replies = iter(['constructor_refused', 'depthn_refused', None])
+        replies = iter(['constructor_refused', 'class_refused', 'depthn_refused', None])
         def reply(request, conn):
             cause = next(replies)
-            actor_tests.send(lambda r: actor_tests.complete(r) if cause is None else actor_tests.refused(r, cause))(request, conn)
+            actor_tests.send(lambda r: champion_complete(r) if cause is None else champion_refused(r, cause))(request, conn)
+        self.capture = make_capture(Path(self.directory.name)/'wire4', turns=4)
         value, _ = self.probe(reply)
-        self.assertEqual([t['status'] for t in value['tried']], ['REFUSED', 'REFUSED', 'COMPLETE']); self.assertEqual(value['status'], 'PASS')
+        self.assertEqual([t['status'] for t in value['tried']], ['REFUSED']*3+['COMPLETE']); self.assertEqual(value['status'], 'PASS')
 
     def test_wrong_or_dead_servers_fail_and_are_recorded(self):
-        cases = dict(worlds=actor_tests.send(lambda r: dict(actor_tests.complete(r), requested_worlds=16)),
-                     operator=actor_tests.send(lambda r: dict(actor_tests.complete(r), root_operator='ARGMAX_POLICY_TARGET')),
-                     rung=actor_tests.send(lambda r: dict(actor_tests.complete(r), rung='DN2W16')),
-                     server_error=actor_tests.send(lambda r: actor_tests.refused(r, 'server_error')),
-                     all_refused=actor_tests.send(lambda r: actor_tests.refused(r, 'constructor_refused')))
+        cases = dict(worlds=actor_tests.send(lambda r: champion_complete(r, requested_worlds=16)),
+                     operator=actor_tests.send(lambda r: champion_complete(r, root_operator='ARGMAX_POLICY_TARGET')),
+                     rung=actor_tests.send(lambda r: champion_complete(r, rung='DN2W16')),
+                     archive=actor_tests.send(lambda r: champion_complete(r, archive_sha256='a'*64)),
+                     refusal_archive=actor_tests.send(lambda r: dict(champion_refused(r, 'constructor_refused'), archive_sha256='a'*64)),
+                     server_error=actor_tests.send(lambda r: champion_refused(r, 'server_error')),
+                     all_refused=actor_tests.send(lambda r: champion_refused(r, 'constructor_refused')))
         for name, reply in cases.items():
             with self.subTest(name), self.assertRaisesRegex(ValueError, 'probe failed'): self.probe(reply)
             self.assertEqual(self.records()[-1]['status'], 'FAIL')
+            if 'archive' in name: self.assertIn('archive', self.records()[-1]['reason'])
         self.assertEqual(len(self.records()[-1]['tried']), 3)
         dead = socket.create_server(('127.0.0.1', 0)); port = dead.getsockname()[1]; dead.close()
         with self.assertRaisesRegex(ValueError, 'connection_error'):
@@ -424,10 +464,11 @@ class ProbeTests(unittest.TestCase):
 
 
 FAKE_WORKER = r'''
-import json, os, sys
+import json, os, sys, time
 for line in sys.stdin:
     packet = json.loads(line)
     if os.path.basename(packet['path']).startswith('fail'): sys.exit(3)
+    if os.path.basename(packet['path']).startswith('slow'): time.sleep(.8)
     with open(packet['path'] + '.done', 'x') as stream: json.dump(dict(pid=os.getpid(), server=packet['server']), stream)
     print(json.dumps({'exit': 0}), flush=True)
 '''
@@ -461,6 +502,12 @@ class DispatchTests(unittest.TestCase):
                 self.assertGreaterEqual(len(result['failed']), 1); self.assertTrue(any(f.endswith('fail') for f in result['failed']))
                 self.assertLessEqual(result['dispatched'], 2); self.assertGreaterEqual(result['not_dispatched'], 3)
                 self.assertNotIn('f', done)
+
+    def test_a_lane_failure_stops_a_persistent_worker_in_another_lane(self):
+        names = ['slow-a', 'fail']+[f'slow-{c}' for c in 'cdefgh']
+        result, done = self.run_dispatch(names, pairs=[(0, 1), (2, 3)], server=None, cells_per_worker=10)
+        self.assertTrue(any(f.endswith('fail') for f in result['failed'])); self.assertLessEqual(result['dispatched'], 2)
+        self.assertGreaterEqual(result['not_dispatched'], 5); self.assertNotIn('slow-h', done)
 
     def test_core_pairs_must_be_disjoint(self):
         for kwargs in (dict(pairs=[(0, 1), (1, 2)]), dict(pairs=[(0, 0)]), dict(pairs=[]), dict(pairs=[(0, 1)], cells_per_worker=0)):
@@ -576,19 +623,39 @@ class ReadoutTests(unittest.TestCase):
                 return [decision_row(cell, 0, source='greedy_fallback', cause=cause), decision_row(cell, 1, source='single_legal')]
             return build
         for cause, expected in (('connection_error', ['transport_failures', 'searched_share']), ('timeout', ['transport_failures', 'searched_share']),
-                                ('constructor_refused', ['searched_share'])):
+                                ('server_error', ['transport_failures', 'searched_share']), ('constructor_refused', ['searched_share']),
+                                ('class_refused', ['searched_share'])):
             with self.subTest(cause):
                 populate(self.root, self.run, self.lad, rows_for=rows(cause))
                 value = self.readout(); search = value['arms']['DN2W8']['decisions']
                 self.assertEqual(value['breakage'], expected); self.assertEqual(value['decision'], 'STOP_BREAKAGE')
                 self.assertEqual((search['eligible_decisions'], search['searched_share'], search['fallback_share']), (500, 0., 1.))
-        def mostly(cell):
-            if cell['arm'] == 'RAW': return [decision_row(cell, 0, source='raw_arm')]
-            if cell['pair_ordinal'] < 15: return [decision_row(cell, 0, source='greedy_fallback', cause='timeout')]
-            return [decision_row(cell, 0)]
-        populate(self.root, self.run, self.lad, rows_for=mostly)
-        value = self.readout(); self.assertEqual(value['arms']['DN2W8']['decisions']['transport_failure_share'], .03)
-        self.assertEqual(value['breakage'], ['transport_failures'])
+        def failing(count, cause='timeout'):
+            def build(cell):
+                if cell['arm'] == 'RAW': return [decision_row(cell, 0, source='raw_arm')]
+                if cell['pair_ordinal'] < count: return [decision_row(cell, 0, source='greedy_fallback', cause=cause)]
+                return [decision_row(cell, 0)]
+            return build
+        for count, cause, share, breakage in ((10, 'server_error', .02, []), (11, 'server_error', .022, ['transport_failures']),
+                                              (15, 'timeout', .03, ['transport_failures']), (60, 'class_refused', 0., [])):
+            with self.subTest(count=count, cause=cause):
+                populate(self.root, self.run, self.lad, rows_for=failing(count, cause)); value = self.readout()
+                search = value['arms']['DN2W8']['decisions']
+                self.assertEqual((search['transport_failure_share'], value['breakage']), (share, breakage))
+                self.assertEqual(search['fallback_by_cause'][cause]['count'], count)
+
+    def test_unattempted_raw_cells_keep_the_screen_incomplete(self):
+        populate(self.root, self.run, self.lad, arms=('RAW',), skip={499}); populate(self.root, self.run, self.lad, arms=('DN2W8',))
+        value = self.readout()
+        self.assertEqual((value['arms']['RAW']['not_attempted'], value['arms']['DN2W8']['not_attempted']), (1, 0))
+        self.assertEqual(value['decision'], 'INCOMPLETE')
+
+    def test_a_server_on_another_archive_is_breakage(self):
+        populate(self.root, self.run, self.lad, rows_for=lambda cell: [decision_row(cell, 0, source='raw_arm')] if cell['arm'] == 'RAW'
+                 else [decision_row(cell, 0, archive='a'*64)])
+        value = self.readout()
+        self.assertEqual(value['breakage'], ['archive']); self.assertEqual(value['arms']['DN2W8']['decisions']['wrong_archive'], 500)
+        self.assertEqual(value['decision'], 'STOP_BREAKAGE')
 
     def test_searched_share_floor_is_fifty_percent(self):
         def share(refused):
