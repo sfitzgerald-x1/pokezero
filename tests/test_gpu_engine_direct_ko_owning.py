@@ -48,19 +48,19 @@ class DirectKOOwningTests(unittest.TestCase):
  def test_actual_hp0_faint_span_both_full_and_no_terminal_promotion(self):
   state,cursor,consumers=self.initial();actual=self.play(state,cursor);self.same(actual.step.state,tr.step_with_chance(state,j.zeros((2,2),j.int32),self.table,self.chance()).state)
   self.assertEqual(actual.callbacks.refusal.tolist(),[1,1]);self.assertEqual(actual.callbacks.execution.risks.carry.risk.tolist(),[0,0]);self.assertEqual(actual.step.state.hp[:,1,0].tolist(),[0,0]);self.assertEqual(actual.step.state.done.tolist(),[False,False]);self.assertEqual(actual.step.state.pending_residual.tolist(),[True,True]);self.assertEqual(actual.step.state.forced_switch.tolist(),[[False,True]]*2)
-  raw=np.array(actual.callbacks.words[0,:int(actual.callbacks.count[0])]);self.assertEqual(raw[:,0].tolist(),[1,2,3]);self.assertEqual(actual.callbacks.execution.ledger.stage[:,0].tolist(),[2,2])
+  raw=np.array(actual.callbacks.words[0,:int(actual.callbacks.count[0])]);self.assertEqual(raw[:,0].tolist(),[35,1,2,3]);self.assertEqual(actual.callbacks.execution.ledger.count.tolist(),[2,2]);self.assertEqual(actual.callbacks.execution.ledger.site[:,:2].tolist(),[[int(ex.Site.TURNLOOP_PREFIX),int(ex.Site.DIRECT_HIT)]]*2);self.assertEqual(actual.callbacks.execution.ledger.stage[:,:2].tolist(),[[2,2]]*2)
   frame=life.LifecycleResult(actual.step.state,actual.callbacks.cursor,actual.callbacks,life.snapshot(cursor),life.snapshot(actual.callbacks.cursor),j.zeros(2,bool),j.zeros(2,j.int32));closed=[]
   for owner,(stream,public) in enumerate(consumers):
    ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger)
-   self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,0].tolist(),[3,3]);self.assertFalse(bool(result.projection.B4_qualified.any()))
+   self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,:2].tolist(),[[3,3]]*2);self.assertFalse(bool(result.projection.B4_qualified.any()))
    for row in (0,1):np.testing.assert_array_equal(self.f.words(result.projection,row),self.reference_words(actual.callbacks,row,owner))
   _,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
  def test_critical_resisted_ko_controls_are_exact_owned_suffixes_both_full(self):
   state,cursor,consumers=self.initial();state=state._replace(types=state.types.at[:,1,0,0].set(6));chance=self.chance()._replace(draws=self.chance().draws.at[:,0,4].set(0));actual=self.play(state,cursor,chance=chance)
-  self.same(actual.step.state,tr.step_with_chance(state,j.zeros((2,2),j.int32),self.table,chance).state);self.assertEqual(actual.callbacks.refusal.tolist(),[1,1]);self.assertEqual(actual.callbacks.words[0,:5,0].tolist(),[1,21,23,2,3])
+  self.same(actual.step.state,tr.step_with_chance(state,j.zeros((2,2),j.int32),self.table,chance).state);self.assertEqual(actual.callbacks.refusal.tolist(),[1,1]);self.assertEqual(actual.callbacks.words[0,:6,0].tolist(),[35,1,21,23,2,3])
   frame=life.LifecycleResult(actual.step.state,actual.callbacks.cursor,actual.callbacks,life.snapshot(cursor),life.snapshot(actual.callbacks.cursor),j.zeros(2,bool),j.zeros(2,j.int32));closed=[]
   for owner,(stream,public) in enumerate(consumers):
-   ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger);self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,0].tolist(),[3,3])
+   ledger,result=ex.consume_frame_device(actual.callbacks.execution.ledger,frame,stream,public,active=j.ones(2,bool),tables=self.account.device,adapter_tables=self.adapter.device,catalog=self.catalog);closed.append(ledger);self.assertEqual(result.projection.error.tolist(),[0,0]);self.assertEqual(ledger.stage[:,:2].tolist(),[[3,3]]*2)
    for row in (0,1):np.testing.assert_array_equal(self.f.words(result.projection,row),self.reference_words(actual.callbacks,row,owner))
   _,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
  def pending(self,b=8,*,mask=None,write_change=None,last=False):
