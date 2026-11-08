@@ -107,8 +107,11 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
       'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
-      'search_choice'}
+      'search_choice','foulplay_move_wall'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
+MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
+MOVE_WALL_KEYS={'search_time_ms','label','strata','source'}
+MOVE_WALL_STRATUM_KEYS={'sampled_battles','ms_per_sample','solo','concurrent'}
 PROVENANCE_KEYS={'foulplay','showdown_commit','engine_tables','base_config_sha256'}
 FOULPLAY_KEYS={'commit','applied_diff_sha256','patch_blobs','poke_engine','runtime_metadata_sha256','python'}
 POKE_ENGINE_KEYS={'version','features','sdist_sha256','setup_script_sha256','gen3_patch_list_sha256','native_so_sha256'}
@@ -172,8 +175,27 @@ def validate(declaration):
             or type(choice['summary'])is not str or not choice['summary'].strip()):
         raise ValueError('search choice: the declared search arm, the commit of the cells that chose it, their files (path and sha256) '
                          'and a summary of the result required')
+    validate_move_wall(d['foulplay_move_wall'])
     validate_provenance(d['provenance'])
     return d
+
+
+def validate_move_wall(value):
+    """Descriptive: what 'Foul Play at search_time_ms' means in this run. The base config's search_time_ms (init checks it),
+    a label, and per budget stratum its sampled battles and ms per sample (as Foul Play reports them) with the per-move wall
+    (the bridge's wait + overlap seconds: request forwarded to choice received) p50 / p95 over the calibration's moves in each
+    setting, from calibration_move_walls' file (source)."""
+    v=value;strata=v.get('strata')if type(v)is dict else None
+    good=lambda q:(type(q)is dict and set(q)=={'moves','p50','p95'}and type(q['moves'])is int and q['moves']>0
+                   and all(type(q[k])is float and math.isfinite(q[k])and q[k]>0 for k in ('p50','p95')))
+    if (type(v)is not dict or set(v)!=MOVE_WALL_KEYS or type(v['search_time_ms'])is not int or v['search_time_ms']<=0
+            or type(v['label'])is not str or not v['label'].strip()or not _evidence(v['source'])
+            or type(strata)is not dict or set(strata)!=set(fairness.CALIBRATION_STRATA)
+            or any(type(x)is not dict or set(x)!=MOVE_WALL_STRATUM_KEYS or any(type(x[k])is not int or x[k]<=0 for k in ('sampled_battles','ms_per_sample'))
+                   or not good(x['solo'])or not good(x['concurrent'])for x in strata.values())):
+        raise ValueError('foulplay move wall: the base config\'s search_time_ms, a label, and per budget stratum its sampled battles, ms per '
+                         'sample and per-move wall p50 / p95 per setting, with its source file, required')
+    return v
 
 
 def validate_provenance(value):
@@ -311,6 +333,7 @@ def init(run_directory,*,declaration,declaration_sha256,ladder_declaration,ladde
                              'and ratios recomputed from its rates, required')
     base=read_bound(base_config,base_config_sha256)
     if type(base)is not dict:raise ValueError('literal base configuration required')
+    if base.get('search_time_ms')!=d['foulplay_move_wall']['search_time_ms']:raise ValueError('the declared Foul Play search_time_ms must be the base config\'s')
     root=Path(run_directory).resolve()
     run=dict(schema=RUN_SCHEMA,run_directory=str(root),declaration=str(Path(declaration).resolve()),declaration_sha256=declaration_sha256,
         ladder_declaration=str(Path(ladder_declaration).resolve()),ladder_declaration_sha256=ladder_declaration_sha256,
@@ -632,6 +655,25 @@ def calibration_summary(directory,*,floors=CALIBRATION_FLOORS):
         games={s:sum(r['setting']==s for r in results)for s in ('solo','concurrent')},
         hosts=sorted({encoded(r['worker']).decode()for r in results if isinstance(r.get('worker'),dict)}),
         core_pairs=[list(pair)for pair in sorted({tuple(r['cpu_pair'])for r in results if r.get('cpu_pair')})],tree=run['tree'])
+
+
+def calibration_move_walls(directory):
+    """Descriptive (no rule reads it): per budget stratum, the sampled battles and ms per sample Foul Play reported and, per
+    setting, its per-move wall: the bridge's wait + overlap seconds (request forwarded to its choice received), over the
+    calibration's COMPLETE cells. With search parallelism 1 the sampled battles run one after another, so the wall is about
+    sampled battles x ms per sample plus overhead."""
+    root,run,lad,band=calibration_load(directory);results=[read_result(root,c['ordinal'])for c in band]
+    walls={c:{s:[]for s in ('solo','concurrent')}for c in fairness.CALIBRATION_STRATA};shape={c:Counter()for c in fairness.CALIBRATION_STRATA}
+    for r in results:
+        if r.get('status')!='COMPLETE':continue
+        for row in (r.get('source_game')or {}).get('opponent_think')or ():
+            c=row.get('stratum')
+            if c not in walls or not all(type(row.get(k))in (int,float)for k in ('wait_seconds','overlap_seconds')):continue
+            walls[c][r['setting']].append(row['wait_seconds']+row['overlap_seconds']);shape[c][(row.get('sampled_battles'),row.get('budget_ms_per_sample'))]+=1
+    quantiles=lambda v:None if not v else dict(moves=len(v),**{k:x for k,x in _quantiles(v).items()if k in ('p50','p95')})
+    return dict(schema=MOVE_WALL_SCHEMA,search_time_ms=run['base_config'].get('search_time_ms')if isinstance(run.get('base_config'),dict)else None,
+        strata={c:dict(shapes={f'{b}x{m}ms':n for (b,m),n in sorted(shape[c].items(),key=str)},**{s:quantiles(walls[c][s])for s in ('solo','concurrent')})
+            for c in fairness.CALIBRATION_STRATA},seed_band=run['seed_band'],lanes=run['lanes'],tree=run['tree'])
 
 
 async def calibrate(directory,*,pairs,cache_directory=None,command=None,floors=CALIBRATION_FLOORS,dispatch_function=None):

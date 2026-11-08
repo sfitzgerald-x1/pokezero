@@ -42,6 +42,9 @@ def parser():
     for name in ('battle-seed-start','foulplay-seed-start','seed-count'):a.add_argument('--'+name,type=int,required=True)
     a.add_argument('--cpu-pair',nargs=2,type=int,action='append',required=True,help='actor core, Foul Play core; one per planned lane')
     a.add_argument('--tree-commit')   # the per-stratum floors are declared (panel.CALIBRATION_FLOORS), not a flag
+    a=sub.add_parser('move-walls',help="Foul Play's per-move wall by budget stratum and setting over a calibration's games (descriptive); "
+                     'written once as move-walls.json in the calibration directory')
+    a.add_argument('--directory',required=True)
     a=sub.add_parser('dispatch',help='run not-attempted cells of RAW and one search arm, interleaved, one game per worker process')
     a.add_argument('--run-directory',required=True);a.add_argument('--search-arm',choices=panel.SEARCH_ARMS,required=True)
     a.add_argument('--limit',type=int,choices=(500,2000),required=True)
@@ -80,6 +83,9 @@ def main(argv=None):
                 lanes=len(args.cpu_pair),tree_commit=args.tree_commit)
         value=asyncio.run(panel.calibrate(args.directory,pairs=[tuple(p)for p in args.cpu_pair],cache_directory=Path(args.cache_directory).resolve()))
         print(json.dumps(dict(status=value['status'],ratios=value['ratios'],sha256=panel.sha(value))));return 0 if value['status']!='INSUFFICIENT'else 1
+    if args.mode=='move-walls':
+        value=panel.calibration_move_walls(args.directory);path=Path(args.directory)/'move-walls.json';panel.write_new(path,value)
+        print(json.dumps(dict(path=str(path.resolve()),sha256=panel.sha(value),strata=value['strata'])));return 0
     if args.mode=='acknowledge':
         print(json.dumps(panel.acknowledge_arm_fairness(args.run_directory,cause=args.cause,note=args.note)));return 0
     if args.mode=='dispatch':

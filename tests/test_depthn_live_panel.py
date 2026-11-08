@@ -43,7 +43,14 @@ def calibration_fixture(ladder_sha256, *, observable=True, ratios=RATIOS, lanes=
     strata = {s: dict(solo=dict(moves=moves, rate=1.), concurrent=dict(moves=moves, rate=float(r)), ratio=float(r)) for s, r in ratios.items()}
     return dict(schema=panel.CALIBRATION_SCHEMA, status='MEASURED' if observable else 'UNMEASURABLE', iterations_observable=observable,
                 ratios=dict(ratios) if observable else None, strata=strata, floors=dict(panel.CALIBRATION_FLOORS), seed_band=dict(CALIBRATION_BAND), lanes=lanes,
-                ladder_declaration_sha256=ladder_sha256, base_config_sha256=panel.sha({}), checkpoint_sha256=ActorContract.champion().checkpoint_sha256)
+                ladder_declaration_sha256=ladder_sha256, base_config_sha256=panel.sha(BASE), checkpoint_sha256=ActorContract.champion().checkpoint_sha256)
+
+
+BASE = dict(search_time_ms=1000)   # a base config: the declared Foul Play search_time_ms is its own
+MOVE_WALL = dict(search_time_ms=1000, label='Foul Play at search_time_ms 1000: sampled battles one after another',
+                 strata={'4x500ms': dict(sampled_battles=4, ms_per_sample=500, solo=dict(moves=60, p50=2.1, p95=2.3), concurrent=dict(moves=60, p50=2.2, p95=2.5)),
+                         '2x1000ms': dict(sampled_battles=2, ms_per_sample=1000, solo=dict(moves=300, p50=2.1, p95=2.2), concurrent=dict(moves=300, p50=2.1, p95=2.4))},
+                 source=dict(path='calibration/move-walls.json', sha256='7'*64))
 
 
 PROVENANCE = dict(
@@ -52,12 +59,13 @@ PROVENANCE = dict(
                                    setup_script_sha256='c'*64, gen3_patch_list_sha256='f'*64, native_so_sha256='f'*64),
                   runtime_metadata_sha256='1'*64, python='3.12.13 aarch64'),
     showdown_commit='f'*40, engine_tables=dict(digest='e'*64, constructor_metadata_sha256='f'*64, bank_metadata_sha256='1'*64),
-    base_config_sha256=panel.sha({}))
+    base_config_sha256=panel.sha(BASE))
 
 
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64,
                 provenance=PROVENANCE):
     return dict(schema=panel.SCHEMA, provenance=copy.deepcopy(provenance), ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
+        foulplay_move_wall=copy.deepcopy(MOVE_WALL),
         search_choice=dict(arm=arms[1], cell_commit='8'*40, evidence=[dict(path='cells/w16.json', sha256='4'*64), dict(path='out/w16-pairs.jsonl', sha256='5'*64)],
                            summary='W16 - W8 = +2.45, 90% CI (+0.50, +4.41)'),
         worker_lanes=4, fairness_observable=dict(value=observable, evidence=dict(path='calibration/calibration.json', sha256=calibration_sha)),
@@ -77,7 +85,7 @@ def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadlin
 def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS):
     root = Path(directory).resolve(); inputs = root/'inputs'
     lad = ladder_fixture.declaration(); calibration = calibration_fixture(panel.sha(lad), observable=observable, ratios=ratios)
-    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration)); base = {}
+    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration)); base = dict(BASE)
     for name, value in (('ladder', lad), ('declaration', d), ('base', base), ('calibration', calibration)):
         panel.write_new(inputs/f'{name}.json', value)
     run = panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
@@ -168,17 +176,40 @@ class DeclarationTests(unittest.TestCase):
                 panel.validate(d)
         panel.validate(declaration('a'*64, arms=('RAW', 'DN2W16')))   # the choice follows the declared search arm
 
+    def test_refuses_a_malformed_foulplay_move_wall(self):
+        s4 = MOVE_WALL['strata']['4x500ms']
+        for value in (None, {}, dict(MOVE_WALL, extra=1), dict(MOVE_WALL, search_time_ms=1000.), dict(MOVE_WALL, label=''),
+                      dict(MOVE_WALL, source=dict(path='x', sha256='7'*63)), dict(MOVE_WALL, strata={'4x500ms': s4}),
+                      dict(MOVE_WALL, strata=dict(MOVE_WALL['strata'], **{'4x500ms': dict(s4, sampled_battles=0)})),
+                      dict(MOVE_WALL, strata=dict(MOVE_WALL['strata'], **{'4x500ms': dict(s4, solo=dict(moves=60, p50=2.1, p95=None))})),
+                      dict(MOVE_WALL, strata=dict(MOVE_WALL['strata'], **{'4x500ms': dict(s4, concurrent=dict(moves=0, p50=2.1, p95=2.2))}))):
+            d = declaration('a'*64); d['foulplay_move_wall'] = value
+            with self.subTest(value), self.assertRaisesRegex(ValueError, 'foulplay move wall'):
+                panel.validate(d)
+
+    def test_init_refuses_a_move_wall_for_another_search_time(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); inputs = root/'inputs'
+            lad = ladder_fixture.declaration(); calibration = calibration_fixture(panel.sha(lad))
+            d = declaration(panel.sha(lad), calibration_sha=panel.sha(calibration)); d['foulplay_move_wall']['search_time_ms'] = 2000
+            for name, value in (('ladder', lad), ('declaration', d), ('base', BASE), ('calibration', calibration)):
+                panel.write_new(inputs/f'{name}.json', value)
+            with self.assertRaisesRegex(ValueError, 'search_time_ms must be the base config'):
+                panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
+                    ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/inert/champion.pt',
+                    base_config=inputs/'base.json', base_config_sha256=panel.sha(BASE), calibration=inputs/'calibration.json')
+
     def test_init_refuses_a_provenance_for_another_base_config(self):
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve(); inputs = root/'inputs'
             lad = ladder_fixture.declaration(); calibration = calibration_fixture(panel.sha(lad))
             d = declaration(panel.sha(lad), calibration_sha=panel.sha(calibration), provenance=dict(PROVENANCE, base_config_sha256='0'*64))
-            for name, value in (('ladder', lad), ('declaration', d), ('base', {}), ('calibration', calibration)):
+            for name, value in (('ladder', lad), ('declaration', d), ('base', BASE), ('calibration', calibration)):
                 panel.write_new(inputs/f'{name}.json', value)
             with self.assertRaisesRegex(ValueError, 'provenance must pin this base config'):
                 panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
                     ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/inert/champion.pt',
-                    base_config=inputs/'base.json', base_config_sha256=panel.sha({}), calibration=inputs/'calibration.json')
+                    base_config=inputs/'base.json', base_config_sha256=panel.sha(BASE), calibration=inputs/'calibration.json')
 
     def test_refuses_a_malformed_expected_searched_share(self):
         source = EXPECTED['source']
@@ -293,7 +324,7 @@ class RunTests(unittest.TestCase):
             self.assertEqual(panel.load(root)[1], run); self.assertEqual(run['checkpoint_sha256'], lad['checkpoint_sha256'])
             inputs = Path(directory).resolve()/'inputs'
             kwargs = dict(declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d), ladder_declaration=inputs/'ladder.json',
-                ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json', base_config_sha256=panel.sha({}),
+                ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json', base_config_sha256=panel.sha(BASE),
                 calibration=inputs/'calibration.json')
             with self.assertRaises(FileExistsError): panel.init(root, **kwargs)
             with self.assertRaisesRegex(ValueError, 'differs'): panel.init(Path(directory)/'b', **dict(kwargs, ladder_declaration_sha256='0'*64))
@@ -1266,9 +1297,9 @@ class CalibrationTests(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory(); root = Path(self.directory.name).resolve(); inputs = root/'inputs'
         self.lad = ladder_fixture.declaration()
-        for name, value in (('ladder', self.lad), ('base', {})): panel.write_new(inputs/f'{name}.json', value)
+        for name, value in (('ladder', self.lad), ('base', BASE)): panel.write_new(inputs/f'{name}.json', value)
         self.kwargs = dict(ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(self.lad), checkpoint='/inert/champion.pt',
-                           base_config=inputs/'base.json', base_config_sha256=panel.sha({}))
+                           base_config=inputs/'base.json', base_config_sha256=panel.sha(BASE))
         self.root = root/'calibration'
 
     def tearDown(self): self.directory.cleanup()
@@ -1310,6 +1341,19 @@ class CalibrationTests(unittest.TestCase):
         stored = ladder.read_bound(self.root/'calibration.json', panel.sha(value)); self.assertEqual(stored, value)
         with self.assertRaises(FileExistsError): asyncio.run(panel.calibrate(self.root, pairs=[(0, 1), (2, 3), (4, 5), (6, 7)], dispatch_function=run))
         with self.assertRaisesRegex(ValueError, 'planned worker lanes'): asyncio.run(panel.calibrate(self.root, pairs=[(0, 1)], dispatch_function=run))
+
+    def test_move_walls_per_stratum_and_setting(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=2, **self.kwargs)
+        rates = dict(solo={'4x500ms': 100., '2x1000ms': 200.}, concurrent={'4x500ms': 95., '2x1000ms': 190.})
+        run, _ = self.fake_dispatch(rates, moves=10)
+        for setting in ('solo', 'concurrent'):
+            asyncio.run(run(panel.calibration_packets(self.root, setting=setting)[:2], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: None))
+        result = self.root/'results'/'0.json'; value = json.loads(result.read_bytes())   # one move without its overlap: not a wall reading
+        del value['source_game']['opponent_think'][0]['overlap_seconds']; result.write_bytes(panel.encoded(value))
+        walls = panel.calibration_move_walls(self.root)
+        self.assertEqual((walls['schema'], walls['search_time_ms'], walls['lanes']), (panel.MOVE_WALL_SCHEMA, 1000, 2))
+        self.assertEqual(walls['strata']['4x500ms']['solo'], dict(moves=19, p50=1., p95=1.))   # wait .4 + overlap .6
+        self.assertEqual(walls['strata']['2x1000ms']['concurrent']['moves'], 20)
 
     def test_unobservable_work_makes_calibration_unmeasurable(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=2, **self.kwargs)
@@ -1378,7 +1422,7 @@ class CalibrationTests(unittest.TestCase):
             panel.write_new(inputs/'d3.json', d3)
             with self.assertRaisesRegex(ValueError, 'calibration.json must match'):
                 panel.init(Path(directory)/'other', declaration=inputs/'d3.json', declaration_sha256=panel.sha(d3), ladder_declaration=inputs/'ladder.json',
-                    ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json', base_config_sha256=panel.sha({}),
+                    ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json', base_config_sha256=panel.sha(BASE),
                     calibration=inputs/'wrong.json')
 
     def test_init_refuses_a_calibration_that_is_not_valid_evidence(self):
@@ -1392,7 +1436,7 @@ class CalibrationTests(unittest.TestCase):
                 with self.subTest(name), self.assertRaisesRegex(ValueError, message):
                     panel.init(Path(directory)/name, declaration=inputs/f'{name}-declaration.json', declaration_sha256=panel.sha(declared),
                         ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json',
-                        base_config_sha256=panel.sha({}), calibration=inputs/f'{name}.json')
+                        base_config_sha256=panel.sha(BASE), calibration=inputs/f'{name}.json')
             bad('floor', lambda v: v.update(floors=dict(panel.CALIBRATION_FLOORS, **{'2x1000ms': 299})), 'not valid evidence')
             bad('floor-missing', lambda v: v.pop('floors'), 'not valid evidence')
             bad('solo-moves', lambda v: v['strata']['4x500ms']['solo'].update(moves=59), 'not valid evidence')
