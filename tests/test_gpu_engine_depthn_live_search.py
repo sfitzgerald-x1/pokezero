@@ -1,0 +1,405 @@
+"""DepthNLiveSearch on the fake engine: Codex's real ProtocolConstructor.prepare (its heavy collaborators faked), the real
+constructor_worlds path and DepthNPricer; the response contract, causes, buckets, sessions and warmup; and the lead's
+equivalence of action_mean_q with search_hedge.averaging."""
+from contextlib import ExitStack
+import hashlib
+import json
+import math
+from types import SimpleNamespace as NS
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+
+from pokezero import v5_gumbel as original
+from pokezero.phase_d_search_server import SCHEMA,encode
+from gpu_engine import constructor_worlds as cw,depthn_backups as backups,depthn_live_search as live,search_hedge as hedge
+from gpu_engine import phase_d_protocol_constructor as pc
+from gpu_engine.phase_d_live_worlds import Refusal
+from tests import test_gpu_engine_constructor_worlds as CW
+
+PARAMS=CW.PARAMS[:1]
+U=2.**-53
+KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_values','refusal','cause','requested_worlds','constructed_worlds',
+    'decision_seconds','root_operator','policy_target','root_value','action_policy_target','block_causes','world_refusals','timings','batch_size',
+    'bucket','tree_commit','pricer'}
+TREE='0123456789abcdef'*2+'01234567'
+
+
+def prefix(battle,decision):
+    """A player-stream prefix whose decision d+1 extends decision d (the incremental fold's successor rule)."""
+    lines=['|init|battle',f'|title|{battle}']
+    for d in range(decision+1):lines+=[f'|turn|{d+1}',f'|request|{{"rqid":{d}}}']
+    return lines
+
+
+def request(battle,decision,*,owner='p1',stream=7,rung='DN2W8',budget=3.,**over):
+    lines=prefix(battle,decision)
+    out=dict(schema=SCHEMA,request_id=f'{battle}:{decision}',battle_id=battle,owner=owner,stream_id=stream,decision_index=decision,generation=1,
+        prefix_sha256=hashlib.sha256(''.join(x+'\n'for x in lines).encode()).hexdigest(),lines=lines,own_request_line=lines[-1],rung=rung,budget_seconds=budget)
+    out.update(over);return out
+
+
+class Codex:
+    """Codex's ProtocolConstructor.prepare runs unchanged (key set, schema, address, prefix hash, `seen`, `sessions`); only its
+    heavy collaborators are faked: the B2 adapter (records its resets and fed lines), the public-root capture (raises
+    outcomes[(battle, decision)] when that is an exception), from_b2 and the world sampler (that outcome's made() root and
+    WorldSet) and the request packet (B2's legal mask is the outcome's)."""
+    def __init__(self,outcomes):self.outcomes=outcomes;self.adapters=[];self.captures=[];self.current=None
+
+    def __enter__(self):
+        harness=self
+        class Adapter:
+            def __init__(self,catalog,owner_side,compiled_functions):self.fed=[];self.resets=[];harness.adapters.append(self)
+            def reset(self,*,stream_id,battle_id):self.resets.append((stream_id,battle_id))
+            def feed(self,lines):self.fed.extend(lines)
+            def encode(self,packet,*,owner_side):return dict(legal_action_mask=harness.current[2])
+        def capture(*,config,contract,lines,address,battle_id,seed):
+            harness.captures.append((battle_id,address.frame));out=harness.outcomes[(battle_id,address.frame)]
+            if isinstance(out,BaseException):raise out
+            harness.current=out;return NS(address=out[0].address)
+        self.stack=ExitStack()
+        for target,name,value in((pc,'JaxRecordedAdapter',Adapter),(pc,'capture_root',capture),(pc,'_packet',lambda line,owner:(line,owner)),
+                (pc.worlds,'from_b2',lambda adapter,packet,source,metadata,*,address:harness.current[0]),
+                (pc.protocol,'sample',lambda public,detached,**kw:harness.current[1])):
+            self.stack.enter_context(patch.object(target,name,value))
+        return self
+
+    def __exit__(self,*exc):return self.stack.__exit__(*exc)
+
+
+class LiveSearchTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        CW.ConstructorWorldsTests.setUpClass();cls.cw=CW.ConstructorWorldsTests('test_both_root_moves_are_reported_and_can_differ')
+        cls.executor=CW.carry_executor();cls.evaluator=CW.Evaluator()
+        cls.pricers={8:cls.make_pricers(8,(1,2,4)),16:cls.make_pricers(16,(1,))}
+
+    @classmethod
+    def make_pricers(cls,W,buckets):return live.make_pricers(cls.executor,cls.evaluator,PARAMS,worlds=W,buckets=buckets,block_lanes=81,blocks_per_call=4)
+
+    def search(self,W=8,*,pricers=None,saved_root_admission=False,**kw):
+        kw.setdefault('tree_commit',TREE)
+        constructor=self.cw.constructor(W,saved_root_admission=saved_root_admission,rung=f'DN2W{W}')
+        return live.DepthNLiveSearch(constructor=constructor,pricers=pricers or self.pricers[W],params=PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,**kw)
+
+    def outcome(self,i,W=8,**kw):return self.cw.made(i,0,self.cw.modes(i,W),**kw)
+
+    def run_batch(self,search,requests,outcomes):
+        with Codex(outcomes)as codex:rows=search.process_many(requests)
+        return rows,codex
+
+    # the contract --------------------------------------------------------------------------------------------------------------
+    def test_complete_responses_follow_the_contract_and_the_direct_pipeline(self):
+        reqs=[request(f'b{i}',0,stream=10+i)for i in range(3)];outcomes={(f'b{i}',0):self.outcome(i)for i in range(3)}
+        s=self.search();rows,codex=self.run_batch(s,reqs,outcomes)
+        self.assertEqual([r['request_id']for r in rows],[r['request_id']for r in reqs]);self.assertEqual(len(codex.captures),3)
+        legal=CW.T.ROOT_LEGAL
+        for row in rows:
+            self.assertEqual(set(row),KEYS);encode(row);json.loads(json.dumps(row,allow_nan=False))
+            self.assertEqual((row['schema'],row['rung'],row['status'],row['cause'],row['refusal'],row['root_operator']),(SCHEMA,'DN2W8','COMPLETE',None,None,'ARGMAX_MEAN_COMPLETED_Q'))
+            self.assertEqual((row['archive_sha256'],row['tree_commit'],row['requested_worlds'],row['constructed_worlds'],row['world_refusals']),('ab'*32,TREE,8,8,[]))
+            self.assertEqual((row['batch_size'],row['bucket'],row['block_causes']),(3,4,[None]*4))
+            self.assertEqual(len(row['q_values']),9);self.assertEqual([q is None for q in row['q_values']],[not x for x in legal])
+            self.assertTrue(all(-1<q<1 for q in row['q_values']if q is not None));self.assertTrue(legal[row['action_index']])
+            acts=[a for a in range(9)if legal[a]]
+            self.assertEqual(row['action_index'],max(acts,key=lambda a:(row['q_values'][a],-a)))
+            self.assertEqual(row['action_policy_target'],max(acts,key=lambda a:(row['policy_target'][a],-a)))
+            self.assertEqual(set(row['timings']),set(live.STAGES));self.assertTrue(all(type(v)is float and v>=0 for v in row['timings'].values()))
+            self.assertTrue(type(row['decision_seconds'])is float and row['decision_seconds']>=0)
+            self.assertEqual({k:row['pricer'][k]for k in('depth','k','k1','selection','W','K','buckets','capacities','fixed_capacity','precision','evaluator')},
+                dict(depth=2,k=[9,9],k1=[9,9],selection='prior',W=8,K=4,buckets=[1,2,4],capacities=[4,8,16],fixed_capacity=True,precision='bfloat16',
+                evaluator=['champion','ab'*32,'bfloat16']))
+        # The same roots through constructor_worlds directly, on the same bucket's pricer: bit-equal; and the deployment cell's
+        # averaging over each root's 2K backed-up worlds (block order) plays the same action.
+        constructor=self.cw.constructor(8)
+        with Codex(outcomes):prepared=cw.prepare_roots(constructor,[{k:r[k]for k in live.PROTOCOL_KEYS}for r in reqs])
+        made=cw.build(constructor,prepared,s.pricers[4],PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,only_complete=True)
+        frame,_=cw.price(s.pricers[4],made,self.cw.binding,self.cw.recipe,PARAMS)
+        for row,direct,root in zip(rows,cw.reduce(frame,made),made.roots):
+            self.assertEqual((row['q_values'],row['policy_target'],row['root_value'],row['action_index'],row['action_policy_target']),
+                (list(direct['completed_q']),list(direct['policy_target']),direct['root_value'],direct['action_mean_q'],direct['action_policy_target']))
+            prices=tuple(w for r in root['rows']for w in backups.backup(frame,r,backups.learner_max))
+            self.assertEqual(row['action_index'],hedge.top_action(hedge.averaging(prices,root['root_legal']).strategy))
+
+    def test_the_played_action_is_action_mean_q_never_the_policy_target(self):
+        reduce=cw.reduce;legal=[a for a in range(9)if CW.T.ROOT_LEGAL[a]]
+        def other(frame,batch):   # the improved target's move made to differ from the mean-Q move
+            return[dict(r,action_policy_target=next(a for a in legal if a!=r['action_mean_q']))for r in reduce(frame,batch)]
+        with patch.object(live.cw,'reduce',side_effect=other):rows,_=self.run_batch(self.search(),[request('t',0)],{('t',0):self.outcome(0)})
+        row=rows[0];self.assertEqual(row['status'],'COMPLETE');self.assertNotEqual(row['action_index'],row['action_policy_target'])
+        self.assertEqual(row['action_index'],max(legal,key=lambda a:(row['q_values'][a],-a)))
+
+    def test_bucket_is_the_smallest_holding_the_priced_blocks_and_long_lists_chunk(self):
+        for n,bucket in((1,1),(2,2),(3,4),(4,4)):
+            s=self.search();outcomes={(f'n{i}',0):self.outcome(i)for i in range(n)}
+            rows,_=self.run_batch(s,[request(f'n{i}',0)for i in range(n)],outcomes)
+            self.assertEqual({(r['status'],r['bucket'],r['batch_size'])for r in rows},{('COMPLETE',bucket,n)})
+            self.assertEqual((s.pricers[bucket].last_timing['root_capacity'],s.pricers[bucket].last_timing['roots']),(4*bucket,4*n))
+        s=self.search();outcomes={('a',0):self.outcome(0),('b',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH'),('c',0):self.outcome(2)}
+        rows,_=self.run_batch(s,[request(x,0)for x in'abc'],outcomes)   # one constructor refusal: two roots priced, bucket 2
+        self.assertEqual([(r['status'],r['bucket'])for r in rows],[('COMPLETE',2),('REFUSED',2),('COMPLETE',2)])
+        s=self.search(max_requests=2);outcomes={(f'c{i}',0):self.outcome(i)for i in range(5)}
+        rows,_=self.run_batch(s,[request(f'c{i}',0)for i in range(5)],outcomes)
+        self.assertEqual([(r['batch_size'],r['bucket'])for r in rows],[(2,2)]*4+[(1,1)]);self.assertEqual({r['status']for r in rows},{'COMPLETE'})
+        s=self.search(16);rows,_=self.run_batch(s,[request('w',0,rung='DN2W16')],{('w',0):self.outcome(0,16)})
+        self.assertEqual((rows[0]['status'],rows[0]['rung'],rows[0]['requested_worlds'],rows[0]['constructed_worlds'],rows[0]['bucket'],rows[0]['pricer']['K']),
+            ('COMPLETE','DN2W16',16,16,1,8));self.assertEqual(rows[0]['block_causes'],[None]*8)
+
+    # refusals ------------------------------------------------------------------------------------------------------------------
+    def test_bad_requests_are_refused_unprepared(self):
+        good=request('b0',0);drop=lambda k:{x:v for x,v in good.items()if x!=k}
+        cases=dict(not_a_dict=['b0'],no_rung=drop('rung'),no_budget=drop('budget_seconds'),no_lines=drop('lines'),extra=dict(good,extra=1),
+            schema=dict(good,schema='other'),request_id=dict(good,request_id=5),empty_id=dict(good,request_id=''),rung_type=dict(good,rung=8),
+            budget_zero=dict(good,budget_seconds=0.),budget_negative=dict(good,budget_seconds=-1),budget_nan=dict(good,budget_seconds=float('nan')),
+            budget_inf=dict(good,budget_seconds=float('inf')),budget_bool=dict(good,budget_seconds=True),budget_str=dict(good,budget_seconds='3'),
+            arrival=dict(good,**{live.ARRIVAL:'soon'}))
+        s=self.search();rows,codex=self.run_batch(s,list(cases.values()),{})
+        for name,row in zip(cases,rows):
+            with self.subTest(name):
+                self.assertEqual((row['status'],row['cause'],set(row)),('REFUSED','bad_request',KEYS));self.assertTrue(row['refusal'].startswith('MALFORMED_REQUEST'))
+                self.assertEqual(row['request_id'],cases[name]['request_id']if isinstance(cases[name],dict)and type(cases[name].get('request_id'))is str else None)
+                encode(row)
+        self.assertEqual((codex.captures,s.constructor.seen,s.battles),([],set(),{}))
+
+    def test_a_rung_this_server_does_not_serve_is_a_bad_request(self):
+        s=self.search();outcomes={('b0',0):self.outcome(0)}
+        rows,codex=self.run_batch(s,[request('b0',0,rung='DN2W16')],outcomes)
+        self.assertEqual((rows[0]['cause'],rows[0]['rung']),('bad_request','DN2W8'));self.assertTrue(rows[0]['refusal'].startswith("RUNG_NOT_SERVED: 'DN2W16'"))
+        self.assertEqual((codex.captures,s.constructor.seen),([],set()))
+        rows,_=self.run_batch(s,[request('b0',0)],outcomes);self.assertEqual(rows[0]['status'],'COMPLETE')   # never attempted, so not ALREADY_ATTEMPTED
+
+    def test_a_request_whose_queue_wait_leaves_too_little_budget_expires_unpriced(self):
+        s=self.search(clock=lambda:1000.,min_price_seconds=1.);outcomes={(f'e{i}',0):self.outcome(i)for i in range(5)}
+        reqs=[dict(request('e0',0),**{live.ARRIVAL:997.5}),dict(request('e1',0),**{live.ARRIVAL:998.5}),request('e2',0),
+            dict(request('e3',0,budget=1.),**{live.ARRIVAL:1000.}),request('e4',0,budget=.5)]
+        rows,codex=self.run_batch(s,reqs,outcomes)
+        self.assertEqual([r['cause']for r in rows],['expired_in_queue',None,None,None,'expired_in_queue'])
+        self.assertEqual([r['timings']['queue_seconds']for r in rows],[2.5,1.5,0.,0.,0.]);self.assertTrue(rows[0]['refusal'].startswith('EXPIRED_IN_QUEUE'))
+        self.assertEqual(sorted(codex.captures),[('e1',0),('e2',0),('e3',0)]);self.assertEqual(rows[1]['bucket'],4)
+        rows,_=self.run_batch(s,[dict(request('e0',0),**{live.ARRIVAL:999.9})],outcomes);self.assertEqual(rows[0]['status'],'COMPLETE')   # never attempted
+
+    def test_constructor_refusals(self):
+        s=self.search()
+        outcomes={('p',0):Refusal('SEARCH_PREFIX_OR_REQUEST_MISMATCH'),('w',0):self.outcome(1,refused=(3,)),('ok',0):self.outcome(2),('m',0):self.outcome(3)}
+        rows,_=self.run_batch(s,[request('p',0),request('w',0),request('ok',0),request('m',0,stream=0)],outcomes)   # stream 0: Codex's own address check
+        self.assertEqual([(r['status'],r['cause'])for r in rows],[('REFUSED','constructor_refused'),('REFUSED','constructor_refused'),('COMPLETE',None),
+            ('REFUSED','constructor_refused')])
+        self.assertEqual([r['refusal']for r in rows],['constructor-root:SEARCH_PREFIX_OR_REQUEST_MISMATCH','WORLD_CONSTRUCTOR_REFUSED:named-refusal',None,
+            'constructor-root:MALFORMED_SEARCH_ADDRESS'])
+        self.assertEqual((rows[1]['constructed_worlds'],rows[1]['world_refusals'],rows[1]['bucket']),(7,[dict(world=3,kinds=['named-refusal'])],1))
+        self.assertEqual((rows[0]['constructed_worlds'],rows[0]['world_refusals']),(0,[]))
+        rows,_=self.run_batch(s,[dict(request('ok',0),request_id='again')],outcomes)   # Codex's no-retry rule holds
+        self.assertEqual((rows[0]['cause'],rows[0]['refusal'],rows[0]['bucket']),('constructor_refused','constructor-root:SEARCH_REQUEST_ALREADY_ATTEMPTED',None))
+
+    def test_depthn_refusals(self):
+        s=self.search();empty=self.outcome(1);empty=empty[:2]+((False,)*9,)
+        outcomes={('pre',0):self.outcome(0,values={5:.5}),('empty',0):empty,('ok',0):self.outcome(2),('bad',0):self.outcome(3)}
+        rows,_=self.run_batch(s,[request('pre',0),request('empty',0)],outcomes)
+        self.assertEqual([(r['cause'],r['refusal'],r['block_causes'])for r in rows],[('depthn_refused','pre',[None,None,'pre',None]),
+            ('depthn_refused','ROOT_LEGAL_EMPTY',None)])
+        # reduce_completed_q's range check (constructor_worlds.reduce does not catch it) refuses that root only, never the batch
+        reduce=cw.reduce
+        def failing(frame,batch):
+            if batch.roots[0]['request_id']=='bad:0':raise ValueError('finite in-range numerical value required')
+            return reduce(frame,batch)
+        with patch.object(live.cw,'reduce',side_effect=failing):rows,_=self.run_batch(s,[request('ok',0),request('bad',0)],outcomes)
+        self.assertEqual([(r['status'],r['cause'])for r in rows],[('COMPLETE',None),('REFUSED','depthn_refused')])
+        self.assertEqual(rows[1]['refusal'],'REDUCTION_ERROR: ValueError: finite in-range numerical value required')
+
+    def test_a_batch_exception_refuses_every_request_of_the_batch_server_error(self):
+        outcomes={(f'x{i}',0):self.outcome(i)for i in range(2)};bad=dict(request('y',0),schema='other')
+        old=dict(request('z',0),**{live.ARRIVAL:0.})   # expired: waited since monotonic 0
+        for target,error in(('price',RuntimeError('device lost')),('prepare_roots',TypeError('prepare changed')),('build',ValueError('binding differs'))):
+            s=self.search()
+            with patch.object(live.cw,target,side_effect=error):rows,_=self.run_batch(s,[request('x0',0),bad,request('x1',0),old],outcomes)
+            self.assertEqual([r['cause']for r in rows],['server_error','bad_request','server_error','expired_in_queue'])
+            self.assertEqual(rows[0]['refusal'],f'{type(error).__name__}: {error}');self.assertIsNotNone(rows[0]['timings']['queue_seconds'])
+            self.assertEqual(set(s.battles),{'x0','x1'})   # still accounted for eviction
+        s=self.search()
+        with patch.object(live.cw,'price',side_effect=MemoryError()),self.assertRaises(MemoryError):self.run_batch(s,[request('x0',0)],outcomes)
+        reduce=cw.reduce
+        with patch.object(live.cw,'reduce',side_effect=lambda f,b:[dict(r,root_value=math.nan)for r in reduce(f,b)]):
+            rows,_=self.run_batch(self.search(),[request('x0',0)],outcomes)
+        self.assertEqual(rows[0]['cause'],'server_error');self.assertTrue(rows[0]['refusal'].startswith('RESPONSE_NOT_ENCODABLE'));encode(rows[0])
+
+    # sessions ------------------------------------------------------------------------------------------------------------------
+    def test_sessions_evict_the_least_recent_battles_and_keep_live_ones(self):
+        s=self.search(max_requests=2,session_cap=2)
+        outcomes={(b,d):self.outcome(i)for i,(b,d)in enumerate((('A',0),('B',0),('C',0),('B',1),('A',1),('D',0),('E',0)))}
+        battles=lambda:({k[1]for k in s.constructor.sessions},{a[0][1]for a in s.constructor.seen})
+        with Codex(outcomes)as codex:
+            for b in'ABC':self.assertEqual(s.process_many([request(b,0)])[0]['status'],'COMPLETE')
+            self.assertEqual(battles(),({'B','C'},{'B','C'}));self.assertEqual(s.evicted,1)
+            self.assertTrue(all(type(k)is tuple and k[0]=='DN2W8'for k in s.constructor.sessions))   # Codex's (rung, battle, owner, stream) keys
+            adapters=len(codex.adapters);b_adapter=codex.adapters[1]
+            self.assertEqual(s.process_many([request('B',1)])[0]['status'],'COMPLETE')   # B's fold continues incrementally
+            self.assertEqual(len(codex.adapters),adapters);self.assertEqual(b_adapter.fed,[x for x in prefix('B',1)if not x.startswith('|request|')])
+            row=s.process_many([dict(request('B',0),request_id='B:retry')])[0]   # a live battle keeps its no-retry rule
+            self.assertEqual(row['refusal'],'constructor-root:SEARCH_REQUEST_ALREADY_ATTEMPTED')
+            self.assertEqual(s.process_many([request('A',1)])[0]['status'],'COMPLETE')   # evicted A returns: a fresh adapter folds its full prefix
+            fresh=codex.adapters[-1];self.assertEqual((fresh.resets,fresh.fed),([(7,'A')],[x for x in prefix('A',1)if not x.startswith('|request|')]))
+            self.assertEqual(battles(),({'A','B'},{'A','B'}))
+            rows=s.process_many([request('D',0),request('E',0)])   # the current batch's battles are never the ones evicted
+        self.assertEqual([r['status']for r in rows],['COMPLETE']*2);self.assertEqual(battles(),({'D','E'},{'D','E'}));self.assertEqual(list(s.battles),['D','E'])
+        with self.assertRaisesRegex(ValueError,'session cap'):self.search(max_requests=4,session_cap=2)
+
+    # warmup --------------------------------------------------------------------------------------------------------------------
+    def test_warmup_compiles_every_bucket_before_live_requests(self):
+        pricers=self.make_pricers(8,(1,2,4));s=self.search(pricers=pricers)
+        outcomes={('w0',0):self.outcome(0),('w1',0):self.outcome(1),**{(f'l{i}',0):self.outcome(2+i)for i in range(3)}}
+        with Codex(outcomes):report=s.warmup([request('w0',0),request('w1',0)])   # two saved roots: bucket 4 cycles them (repeats refused, still priced at 4)
+        self.assertEqual(set(report['buckets']),{1,2,4});json.dumps(report)
+        for b,entry in report['buckets'].items():
+            self.assertGreater(entry['cold_seconds'],0);self.assertGreater(entry['warm_seconds'],0);self.assertEqual(entry['warm_compiled'],0)
+            self.assertEqual(entry['complete'],min(b,2))
+        self.assertGreater(report['buckets'][1]['compiled'],0);self.assertGreater(report['buckets'][4]['compiled'],0)
+        self.assertEqual(report['buckets'][4]['causes'],['constructor_refused'])
+        self.assertEqual(report['programs'],len(pricers[1].programs));self.assertEqual({k[1]for k in pricers[1].programs if k[0]=='P1'},{4,8,16})
+        self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}));self.assertIs(s.warm,report)
+        for n,b in((1,1),(2,2),(3,4)):
+            rows,_=self.run_batch(s,[dict(request(f'l{i}',0),request_id=f'l{i}:{n}')for i in range(n)],outcomes)
+            self.assertEqual({(r['status'],r['bucket'])for r in rows},{('COMPLETE',b)});self.assertEqual(pricers[b].compiles,())
+            s._reset_sessions()
+        with Codex({('r',0):Refusal('WORLD_CONSTRUCTOR_REFUSED','all')}),self.assertRaisesRegex(RuntimeError,'no saved request priced at bucket 1'):
+            self.search().warmup([request('r',0)])
+        with self.assertRaisesRegex(ValueError,'saved requests with'):self.search().warmup([{'battle_id':'x'}])
+        with self.assertRaisesRegex(ValueError,'at least one'):self.search().warmup([])
+
+    def test_configuration_is_checked(self):
+        bad=dict(depth=lambda W:{1:self.cw.pricer(self.executor,depth=3,k_own=9,k_opp=9,capacity=4,fixed_capacity=True,forward=self.evaluator)},
+            width=lambda W:{1:self.cw.pricer(self.executor,depth=2,k_own=2,k_opp=2,capacity=4,fixed_capacity=True,forward=self.evaluator)},
+            capacity=lambda W:{1:self.cw.pricer(self.executor,depth=2,k_own=9,k_opp=9,capacity=8,fixed_capacity=True,forward=self.evaluator)},
+            fixed=lambda W:{1:self.cw.pricer(self.executor,depth=2,k_own=9,k_opp=9,capacity=4,forward=self.evaluator)},
+            v2=lambda W:{1:self.cw.pricer(self.executor,depth=2,k_own=9,k_opp=9,capacity=4,fixed_capacity=True)})
+        for name,make in bad.items():
+            with self.subTest(name),self.assertRaises(ValueError):self.search(pricers=make(8))
+        with self.assertRaisesRegex(ValueError,'W in'):self.search(2,pricers=self.pricers[8])
+        with self.assertRaisesRegex(ValueError,'max_requests'):self.search(max_requests=5)
+        with self.assertRaisesRegex(ValueError,'tree commit'):self.search(tree_commit='')
+        with self.assertRaisesRegex(ValueError,'min_price_seconds'):self.search(min_price_seconds=float('nan'))
+        other=self.cw.constructor(8,metadata=dict(self.cw.metadata,moves=[None,*[dict(pp=11)]*4]))
+        with self.assertRaisesRegex(ValueError,'another binding'):
+            live.DepthNLiveSearch(constructor=other,pricers=self.pricers[8],params=PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,tree_commit=TREE)
+
+
+def world(values,*,opponent=None,logits=None):
+    """WorldPrices with the given action -> {reply: value} rows; `opponent` the legal replies (None: a waiting opponent, column 0)."""
+    jv=[[None]*9 for _ in range(9)]
+    for a,row in values.items():
+        for b,v in row.items():jv[a][b]=v
+    legal=tuple(b in opponent for b in range(9))if opponent else(False,)*9
+    return original.WorldPrices(bool(opponent),legal,tuple(logits or(0.,)*9),tuple(map(tuple,jv)))
+
+
+class AveragingEquivalenceTests(unittest.TestCase):
+    """action_mean_q (constructor_worlds.reduce, the live root operator) against the deployment cell's search_hedge.averaging
+    (v2_search_head_to_head.Search.choose: `average = hedge.averaging(prices, root_legal)`, prices = every block's backed-up
+    worlds concatenated in block order; the 'average' cell then plays its one-hot strategy) on the SAME per-world prices.
+
+    The map. Block k (k = 0..K-1, K = W/2) prices worlds 2k and 2k+1 (constructor_worlds.build: request row k holds the pair
+    worlds[2k:2k+2]) and depthn_backups.backup(frame, row_k, learner_max) gives its two WorldPrices (at N=2 the numbers of
+    depth2_backups.backup_learner_max, the cell's backup). World j of block k is averaging's world 2k+j:
+    averaging(backup(row_0) + ... + backup(row_{K-1}), legal). Both take the reply prior pi_w = v5_gumbel._probabilities over
+    the enumerated replies (unit mass on column 0 for a waiting opponent) and the same products t_wb = fl(pi_w(b) G_w[a][b]).
+    Ours: reduce_completed_q per block, q_k(a) = fsum_{w in k, b} t_wb / 2, then compose, Q(a) = fsum_k q_k(a) / K.
+    Averaging: Q'(a) = fsum_{w, b} t_wb / W. In exact arithmetic both are (1/W) sum_w sum_b pi_w(b) G_w[a][b]. In floating
+    point, W, K and 2 are powers of two, so each division is exact (barring subnormals) and fsum rounds once:
+    W Q(a) = fl(sum_k fl(S_k)) and W Q'(a) = fl(sum_k S_k) with S_k = sum_{w in k, b} t_wb, so they differ only by the
+    rounding of the K block sums, |Q - Q'| <= 3u (u = 2^-53, |S_k| <= 2). Both then take the argmax over the legal actions,
+    lowest index on ties (root_actions; averaging's max over (q, -i)).
+
+    Hence the same action whenever averaging's best legal action leads every other by more than 6u (~6.7e-16), and on exact
+    ties whose per-block sums agree (identical columns, exactly representable sums). They CAN differ when two actions' exact
+    means are within an ulp and group differently across blocks: pinned below, both directions. In random sweeps (20k roots
+    per mode and W) that happened only with artificially equal reply priors and discrete values (31 of 20k at W=8, 5 at
+    W=16), never with continuous priors or values. Separately, reduce_completed_q refuses (ValueError) a block whose
+    completed-Q rounds outside [-1, 1] (an action winning against every reply in both worlds, its prior summing to 1 + ulp:
+    33 of 20k random all-win blocks); averaging has no range check, so there the cell plays its argmax while the live search
+    refuses the root (greedy). Pinned below.
+    """
+    def ours(self,prices,legal,logits=(0.,)*9):
+        """constructor_worlds.reduce itself on one root whose block k backs up to prices[2k:2k+2] (its learner_max rule checked)."""
+        K=len(prices)//2;rules=[]
+        def backup(frame,row,rule):rules.append(rule);return tuple(prices[2*row:2*row+2])
+        root=dict(index=0,request_id='r',status='PRICED',reason=None,rows=tuple(range(K)),root_logits=tuple(logits),root_legal=tuple(legal))
+        with patch.object(cw.backups,'backup',side_effect=backup),patch.object(cw.backups,'refusal_summary',return_value=dict(roots=[dict(cause=None)]*K)):
+            result=cw.reduce(object(),cw.Batch(tuple(range(K)),None,(root,),2*K,K))[0]
+        self.assertTrue(all(r is backups.learner_max for r in rules))
+        return result
+
+    def theirs(self,prices,legal):
+        choice=hedge.averaging(tuple(prices),tuple(legal))
+        if choice is None:return None,None
+        action=hedge.top_action(choice.strategy);self.assertEqual(hedge.sample(choice.strategy,.999999),action)   # the cell's draw
+        return action,choice.q
+
+    def random_world(self,rng,legal,mode):
+        requested=rng.random()<.8;opponent=[b for b in range(9)if rng.random()<.5]if requested else None
+        if requested and not opponent:opponent=[int(rng.integers(9))]
+        value={'f64':lambda:float(rng.uniform(-1,1)),'f32':lambda:float(np.float32(rng.uniform(-1,1))),
+            'terminal':lambda:float(rng.choice([-1.,0.,1.]))}[mode]
+        return world({a:{b:value()for b in(opponent or[0])}for a in range(9)if legal[a]},opponent=opponent,logits=[float(x)for x in rng.normal(0,2,9)])
+
+    def test_random_roots_pick_the_same_action(self):
+        rng=np.random.default_rng(20261108);largest=0.
+        for mode in('f64','f32','terminal'):
+            for W in(8,16):
+                for case in range(400):
+                    legal=tuple(bool(x)for x in rng.random(9)<.6)
+                    if not any(legal):legal=(True,)+legal[1:]
+                    prices=[self.random_world(rng,legal,mode)for _ in range(W)]
+                    try:result=self.ours(prices,legal)
+                    except ValueError:continue   # a block out of range (pinned below): ours refuses, never a different action
+                    action,q=self.theirs(prices,legal)
+                    with self.subTest(mode=mode,W=W,case=case):
+                        self.assertEqual(result['status'],'LABELED');self.assertEqual(result['action_mean_q'],action)
+                        gap=max(abs(x-y)for x,y in zip(result['completed_q'],q)if x is not None);largest=max(largest,gap)
+                        self.assertLessEqual(gap,3*U)
+        self.assertLessEqual(largest,3*U)
+
+    def test_exact_ties_go_to_the_lowest_index_in_both(self):
+        rng=np.random.default_rng(7);legal=(False,True,True,False,True,True,False,True,False)
+        for W in(8,16):
+            # identical columns: actions 2 and 5 share every world's values (continuous), every other action is lower
+            prices=[]
+            for w in range(W):
+                opponent=sorted(rng.choice(9,size=3,replace=False).tolist());top={b:float(rng.uniform(.5,1))for b in opponent}
+                rows={a:({b:v for b,v in top.items()}if a in(2,5)else{b:float(rng.uniform(-1,.4))for b in opponent})for a in range(9)if legal[a]}
+                prices.append(world(rows,opponent=opponent,logits=[float(x)for x in rng.normal(0,1,9)]))
+            result=self.ours(prices,legal);action,q=self.theirs(prices,legal)
+            self.assertEqual((result['action_mean_q'],action),(2,2));self.assertEqual(result['completed_q'][2],result['completed_q'][5]);self.assertEqual(q[2],q[5])
+            # exactly representable sums placed in different blocks: dyadic values, unit or 1/2-1/4 dyadic priors
+            prices=[world({a:{0:0.}for a in range(9)if legal[a]})for _ in range(W)]
+            prices[0]=world({1:{3:.5,6:.25},2:{3:0.,6:0.},4:{3:.125,6:0.},5:{3:0.,6:0.},7:{3:-.5,6:.5}},opponent=[3,6])   # pi = (1/2, 1/2)
+            prices[W-1]=world({1:{0:0.},2:{0:.375},4:{0:.25},5:{0:0.},7:{0:-.25}})
+            result=self.ours(prices,legal);action,q=self.theirs(prices,legal)
+            self.assertEqual(q[1],q[2]);self.assertEqual(result['completed_q'][1],result['completed_q'][2]);self.assertEqual((result['action_mean_q'],action),(1,1))
+            self.assertEqual(list(result['completed_q']),list(q))
+            # every legal action tied: the lowest legal index
+            same=[world({a:{0:.3}for a in range(9)if legal[a]})for _ in range(W)]
+            self.assertEqual((self.ours(same,legal)['action_mean_q'],self.theirs(same,legal)[0]),(1,1))
+
+    def test_they_can_differ_by_one_ulp_at_a_near_tie(self):
+        legal=(True,True)+(False,)*7;e=2.**-55
+        pair=lambda a0,a1:[world({0:{0:x},1:{0:y}})for x,y in zip(a0,a1)]
+        # averaging resolves 0.5 + 2^-53 for action 1; the block sums (0.5 + 2^-54 per block, half an ulp) round to even: ours ties
+        prices=pair([.5]+[0.]*7,[.5,2.*e,2.*e]+[0.]*5)
+        result=self.ours(prices,legal);action,q=self.theirs(prices,legal)
+        self.assertEqual((result['action_mean_q'],action),(0,1));self.assertEqual(q[1]-q[0],2.**-56);self.assertEqual(result['completed_q'][0],result['completed_q'][1])
+        # and the other way: three blocks each round up by 2^-55, the exact sums tie (averaging plays 0), ours plays 1 by one ulp
+        prices=pair([.75]+[0.]*7,[.25,3*e,.25,3*e,.25,3*e,-9*e,0.])
+        result=self.ours(prices,legal);action,q=self.theirs(prices,legal)
+        self.assertEqual((result['action_mean_q'],action),(1,0));self.assertEqual(q[0],q[1]);self.assertEqual(result['completed_q'][1]-result['completed_q'][0],2.**-56)
+
+    def test_unknown_prices_refuse_both_and_an_out_of_range_block_refuses_only_ours(self):
+        legal=(True,True)+(False,)*7;base=[world({0:{0:.1},1:{0:.2}})for _ in range(8)]
+        missing=list(base);missing[5]=world({0:{0:.1},1:{0:None}})
+        self.assertEqual((self.ours(missing,legal)['status'],self.theirs(missing,legal)[0]),('REFUSED',None))
+        logits=[1.746,-2.561,-1.426]+[0.]*6;wins=world({0:{0:1.,1:1.,2:1.},1:{0:0.,1:0.,2:0.}},opponent=[0,1,2],logits=logits)   # its prior sums to 1 + ulp
+        prices=[wins,wins]+base[2:]
+        with self.assertRaisesRegex(ValueError,'in-range'):self.ours(prices,legal)
+        self.assertEqual(self.theirs(prices,legal)[0],0)
+
+
+if __name__=='__main__':unittest.main()
