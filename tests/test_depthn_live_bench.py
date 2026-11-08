@@ -20,13 +20,34 @@ class FakeSearch:
     W, rung, tree_commit = 16, 'DN2W16', 'abc'
 
     def __init__(self, responses):
-        self.responses, self.seen, self.warmed = list(responses), [], None
+        self.responses, self.seen, self.warmed, self.resets = list(responses), [], None, []
+
+    def reset_sessions(self):
+        self.resets.append(len(self.seen))
 
     def warmup(self, requests):
         self.warmed = list(requests);return dict(buckets={1: 1.})
 
     def process_many(self, requests):
         assert len(requests) == 1;self.seen.append(requests[0]);return [dict(self.responses.pop(0), request_id=requests[0]['request_id'])]
+
+
+def mon(i, active=False, hp='100/100'):
+    return dict(ident=f'p1: M{i}', details=f'M{i}, L80', condition=hp, active=active)
+
+
+def own_request(single):
+    """A literal own request with one legal action (a forced switch to the one living bench member) or nine (four moves,
+    five switches)."""
+    if single:raw = dict(forceSwitch=[True], side=dict(id='p1', name='a', pokemon=[mon(0, True, '0 fnt'), mon(1), *[mon(i, hp='0 fnt') for i in range(2, 6)]]))
+    else:raw = dict(active=[dict(moves=[dict(move=f'm{i}', id=f'm{i}', pp=5, maxpp=5, disabled=False) for i in range(4)])],
+        side=dict(id='p1', name='a', pokemon=[mon(i, i == 0) for i in range(6)]))
+    return '|request|' + json.dumps(raw)
+
+
+def live_request(i, single=False):
+    line = own_request(single)
+    return dict(battle_id=f'b{i}', owner='p1', stream_id=1, decision_index=i, generation=1, prefix_sha256=f'{i:064x}', lines=[line], own_request_line=line)
 
 
 def address_request(i):
@@ -71,9 +92,40 @@ class BenchTests(unittest.TestCase):
         self.assertEqual((s['structural'], s['structural_classes']), (2, ['forced_switch', 'wish']))
         md = B.markdown(dict(rung='DN2W8', W=8, tree_commit='t', warmup_seconds=1., warmup_count=1, saved_root_admission=True, rosters={'r': s}, pooled=s,
             structural_classes=s['structural_classes']))
-        self.assertIn('| forced_switch | 2 | 2 | 1 | 0.500 | 1 | 0 |', md);self.assertIn('| prepare_seconds | 1 | 0.500 |', md)
+        self.assertIn('| forced_switch | 2 | 2 | 0 | 1 | 0.500 | 0.500 | 1 | 0 |', md);self.assertIn('| prepare_seconds | 1 | 0.500 |', md)
         self.assertIn('other: stage (COMPLETE roots)', md);self.assertNotIn('fresh_substitute: stage', md)
         self.assertIn("structural_classes (pooled): ['forced_switch', 'wish']", md)
+
+    def test_single_legal_roots_leave_the_declared_denominator(self):
+        q = lambda legal: [0. if x else None for x in legal]
+        rows = [B.record('r', 0, ('a',), dict(response(prepare=.5), q_values=q([True] * 9)), 1., request=live_request(0), turn=2),
+            B.record('r', 1, ('b',), response('REFUSED', 'depthn_refused'), .3, request=live_request(1), turn=2),
+            B.record('r', 2, ('c',), dict(response(prepare=.5), q_values=q([False] * 4 + [True] + [False] * 4)), 4., request=live_request(2, True), turn=25),
+            B.record('r', 3, ('d',), response('REFUSED', 'constructor_refused'), 5., request=live_request(3, True), turn=25),
+            B.record('r', 4, ('e',), dict(response(prepare=.5), q_values=q([True] * 8 + [False])), 2., request=live_request(4), turn=30),   # lanes disagree
+            B.record('r', 5, ('f',), None, 'gone', turn=7)]
+        self.assertEqual([(r['legal_count'], r['single_legal'], r['band']) for r in rows], [(9, False, '1-3'), (9, False, '1-3'), (1, True, '20+'),
+            (1, True, '20+'), (9, False, '20+'), (None, False, '4-9')])
+        self.assertEqual([r['legal_mask_agrees'] for r in rows], [True, None, True, None, False, None])
+        s = B.summarize(rows, 8, (3., 1., 1., 1.))
+        self.assertEqual((s['priced'], s['single_legal'], s['eligible'], s['searched'], s['complete']), (5, 2, 3, 2, 3))
+        self.assertAlmostEqual(s['searched_share'], 2 / 3);self.assertAlmostEqual(s['searched_share_all'], 3 / 5)   # declared; all roots secondary
+        self.assertEqual({b: (x['eligible'], x['searched']) for b, x in s['bands'].items()}, {'1-3': (2, 1), '4-9': (0, 0), '10-19': (0, 0), '20+': (1, 1)})
+        self.assertAlmostEqual(s['searched_share_reweighted'], (3 * .5 + 1 * 1.) / 4)   # bands without eligible roots drop out of the weights
+        self.assertEqual((s['wall_eligible']['n'], s['wall_eligible']['max'], s['stages']['wall_seconds']['n'], s['stages']['wall_seconds']['max']), (3, 2., 3, 4.))
+        self.assertEqual(s['legal_mask_disagreements'], 1);self.assertEqual(s['classes']['unclassified']['single_legal'], 2)
+        md = B.markdown(dict(rung='DN2W8', W=8, tree_commit='t', warmup_seconds=1., warmup_count=1, saved_root_admission=True, rosters={}, pooled=s,
+            structural_classes=[]))
+        self.assertIn('single-legal 2, eligible 3, COMPLETE 3 (searched share 0.667, declared: searched / eligible; all-roots share 0.600', md)
+        self.assertIn('1-3 1/2 = 0.500', md);self.assertIn('reweighted by bands [3.0, 1.0, 1.0, 1.0]: 0.625', md)
+        with self.assertRaises(Exception):B.band_weights('1,2,3')
+        self.assertEqual(B.band_weights('4,3,2,1'), (4., 3., 2., 1.))
+
+    def test_pooled_stages_cover_complete_roots_only(self):
+        rows = [B.record('r', 0, ('a',), response(prepare=.5), 1.), B.record('r', 1, ('b',), response('REFUSED', 'depthn_refused', prepare=9.), 9.)]
+        s = B.summarize(rows, 8)
+        self.assertEqual((s['stages']['prepare_seconds']['n'], s['stages']['prepare_seconds']['max'], s['stages']['wall_seconds']['max']), (1, .5, 1.))
+        self.assertEqual(s['wall_eligible']['max'], 9.)   # every eligible root, refused or not
 
     def test_options_refuse_other_buckets(self):
         base = ['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x', '--vocabulary', 'v',
@@ -86,14 +138,14 @@ class BenchTests(unittest.TestCase):
         self.assertEqual((args.refuse_classes, B.parser().parse_args(base).refuse_classes), (('wish', 'forced_switch'), ()))
 
     def test_main_prices_each_root_alone_and_writes_reports(self):
-        items = [(i, ('addr', i), address_request(i), None) for i in range(3)] + [(3, ('addr', 3), None, 'OSError: gone')]
+        items = [(i, ('addr', i), live_request(i, single=i == 1), None, 4 + i) for i in range(3)] + [(3, ('addr', 3), None, 'OSError: gone', 20)]
         fake = FakeSearch([response(prepare=.5, classes=['wish']), response('REFUSED', 'server_error', classes=['forced_switch']),
             response(prepare=1.5, agrees=False, classes=[])])
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / 'run'
             args = B.parser().parse_args(['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x',
                 '--vocabulary', 'v', '--expected-vocabulary-sha256', 'y', '--roster', 'r.json', 'z', '--out', str(out), '--warmup-count', '2',
-                '--refuse-classes', 'sleep'])
+                '--refuse-classes', 'sleep', '--band-weights', '1,2,3,4'])
             args.port, args.max_requests = 0, 1
             with patch.object(B, 'options', return_value=args), patch.object(B, 'roster_requests', return_value=items), \
                     patch.object(B.server, 'build', return_value=fake) as build, patch.object(B.server, 'header', return_value=dict(h=1)):
@@ -107,14 +159,31 @@ class BenchTests(unittest.TestCase):
             self.assertEqual([r['status'] for r in rows], ['COMPLETE', 'REFUSED', 'COMPLETE', 'UNAVAILABLE'])
             summary = json.loads((out / 'summary.json').read_text())
             self.assertEqual((summary['pooled']['complete'], summary['pooled']['priced'], summary['pooled']['mean_q_disagreements']), (2, 3, 1))
-            self.assertIn('searched share 0.667', (out / 'summary.md').read_text())
+            self.assertIn('searched share 1.000, declared: searched / eligible; all-roots share 0.667', (out / 'summary.md').read_text())   # root 1 is single-legal
             self.assertEqual((summary['structural_classes'], summary['refuse_classes'], summary['pooled']['classes']['wish']['complete']), (['forced_switch'], ['sleep'], 1))
             self.assertEqual([r['root_classes'] for r in rows], [['wish'], ['forced_switch'], [], None])
+            self.assertEqual([(r['band'], r['single_legal']) for r in rows], [('4-9', False), ('4-9', True), ('4-9', False), ('20+', False)])
+            self.assertEqual((summary['pooled']['eligible'], summary['pooled']['searched_share'], summary['band_weights']), (2, 1., [1., 2., 3., 4.]))
+            self.assertEqual(list(summary['rosters']), ['r.json@z']);self.assertEqual(summary['rosters_declared'], [dict(path='r.json', sha256='z')])
             with patch.object(B, 'options', return_value=args), self.assertRaises(FileExistsError):
                 B.main([])   # never into an existing directory
 
+    def test_sessions_reset_per_roster_so_a_shared_root_prices_in_each(self):
+        shared = (0, ('addr', 0), live_request(0), None, 2)
+        fake = FakeSearch([response(), response()])
+        with tempfile.TemporaryDirectory() as tmp:
+            args = B.parser().parse_args(['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x',
+                '--vocabulary', 'v', '--expected-vocabulary-sha256', 'y', '--roster', 'a/roster.json', 'z1', '--roster', 'b/roster.json', 'z2',
+                '--out', str(Path(tmp) / 'o')])
+            with patch.object(B, 'options', return_value=args), patch.object(B, 'roster_requests', return_value=[shared]), \
+                    patch.object(B.server, 'build', return_value=fake), patch.object(B.server, 'header', return_value={}):
+                self.assertEqual(B.main([]), 0)
+            summary = json.loads((Path(tmp) / 'o' / 'summary.json').read_text())
+        self.assertEqual(fake.resets, [0, 1])   # before each roster's first root
+        self.assertEqual(list(summary['rosters']), ['a/roster.json@z1', 'b/roster.json@z2'])   # same file name, two rosters
+
     def test_main_exit_2_when_nothing_priced(self):
-        items = [(0, ('a',), address_request(0), None)]
+        items = [(0, ('a',), address_request(0), None, 1)]
         with tempfile.TemporaryDirectory() as tmp:
             args = B.parser().parse_args(['--showdown-root', 's', '--node-binary', 'n', '--metadata', 'm', '--expected-metadata-sha256', 'x',
                 '--vocabulary', 'v', '--expected-vocabulary-sha256', 'y', '--roster', 'r.json', 'z', '--out', str(Path(tmp) / 'o')])
