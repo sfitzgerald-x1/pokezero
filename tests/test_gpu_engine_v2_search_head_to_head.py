@@ -113,7 +113,7 @@ class FakePricer:
 
 class ChooseTests(unittest.TestCase):
     """Search.choose end to end on CPU fakes: surfaces -> reduction -> played action."""
-    def search(self, reduction, grids, edges=()):
+    def search(self, reduction, grids, edges=(), prior_c=None):
         import collections
         from pokezero import v5_gumbel as g
         search = h2h.Search.__new__(h2h.Search)
@@ -121,7 +121,7 @@ class ChooseTests(unittest.TestCase):
         search.capacities, search.kind, search.pricer, search.params = (4,), 'depth1', FakePricer(grids, edges), (None,)
         search.seed, search.workers, search.pool, search._reduce = 5, 1, None, g.reduce_completed_q
         search.evaluator, search.evaluator_checked = None, True
-        search.configure(reduction=reduction, blend=.5, world_blocks=1)
+        search.configure(reduction=reduction, blend=.5, world_blocks=1, prior_c=prior_c)
         return search
 
     def choose(self, search, rows, raw):
@@ -146,10 +146,25 @@ class ChooseTests(unittest.TestCase):
         self.assertEqual(self.choose(self.search('average', grids), [0], [1])[0][0], 0)
         self.assertEqual(self.choose(self.search('raw', grids), [0], [1])[0][0], 1)
 
+    def test_prior_reduction_trades_q_against_the_root_policy(self):
+        # Q = (.3, .2); A's root logits (0, 2) on the legal pair: greedy is action 1 and the switch point is c = .05.
+        legal = np.zeros((1, 9), bool);legal[:, :2] = True
+        logits = np.zeros((1, 9), np.float32);logits[0, 1] = 2.
+        inputs = {'numeric_features': np.zeros((1, 2), np.float32)}
+        def play(reduction, prior_c=None):
+            return self.search(reduction, {0: [[.3, .3], [.2, .2]]}, prior_c=prior_c).choose(None, [0], [0], logits, legal, inputs, np.asarray([1]))[0]
+        self.assertEqual(play('average')[0], 0);self.assertEqual(play('prior', 0.)[0], 0)
+        action, record = play('prior', .04)
+        self.assertEqual(action, 0);self.assertTrue(record['searched']);self.assertAlmostEqual(record['q_gain_vs_argmax'], .1)
+        action, record = play('prior', .06)
+        self.assertEqual(action, 1);self.assertEqual(record['q_gain_vs_argmax'], 0.)
+        for reduction, prior_c in (('prior', None), ('prior', -.1), ('prior', float('inf')), ('prior', True), ('average', .1)):
+            with self.assertRaises(ValueError):self.search(reduction, {0: [[0.]]}, prior_c=prior_c)
+
     def test_unknown_cell_refuses_every_reduction_and_edges_count_real_rows_only(self):
         holed = [[1., None], [-.5, .5]]
-        for reduction in ('raw', 'average', 'hedge', 'hedgedet', 'blend'):
-            out = self.choose(self.search(reduction, {0: holed}), [0], [1])
+        for reduction, prior_c in (('raw', None), ('average', None), ('hedge', None), ('hedgedet', None), ('blend', None), ('prior', .1)):
+            out = self.choose(self.search(reduction, {0: holed}, prior_c=prior_c), [0], [1])
             self.assertEqual(out[0][0], 1);self.assertEqual(out[0][1]['refusal'], 'reduction-unknown-cell')
         # One real row on a rounding edge, priced in a call padded to capacity 4 with copies of it: counted once.
         search = self.search('average', {0: [[1., -.5], [-.5, .5]]}, edges=(0,))
@@ -243,7 +258,12 @@ class ChampionMirrorTests(unittest.TestCase):
             for cell, extra in ((dict(label='x', b_run='/some/run', b_iteration=99, reduction='none'), champion),   # V2 opponent in champion mode
                     (dict(label='x', b_run='champion', b_iteration=0, reduction='none'), ['--a-run', 'r', '--a-iteration', '1']),   # champion in V2 mode
                     (dict(label='x', b_run='/r', b_iteration=1, reduction='raw', fallback='argmax'), ['--a-run', 'r', '--a-iteration', '1']),
-                    (dict(label='x', b_run='/r', b_iteration=1, reduction='none', fallback='argmax'), ['--a-run', 'r', '--a-iteration', '1'])):
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='none', fallback='argmax'), ['--a-run', 'r', '--a-iteration', '1']),
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='prior'), ['--a-run', 'r', '--a-iteration', '1']),              # no prior_c
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='prior', prior_c=-.1), ['--a-run', 'r', '--a-iteration', '1']),
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='prior', prior_c=float('inf')), ['--a-run', 'r', '--a-iteration', '1']),
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='prior', prior_c=True), ['--a-run', 'r', '--a-iteration', '1']),
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='average', prior_c=.1), ['--a-run', 'r', '--a-iteration', '1'])):
                 cells.write_text(json.dumps([cell]))
                 with self.assertRaises(SystemExit):h2h.main(['--config', 'unused.json', '--out', root, '--cells', str(cells)] + extra)
 

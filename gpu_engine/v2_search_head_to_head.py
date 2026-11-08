@@ -16,7 +16,8 @@ Search (A's head prices both seats; B's model is never used by search):
 - `--reduction`: none (raw play, no search), raw (full search path, then the raw sampled action: the plumbing
   gate), average (D's completed-Q argmax; at depth 2 over learner-max backups), hedge (Bayesian zero-sum LP,
   sampled; at depth 2 over per-world turn-2 zero-sum values), blend (the LP blended with the reply prior at
-  --blend, sampled).
+  --blend, sampled), prior (argmax of completed-Q + prior_c * log pi over the legal actions, pi the temperature-1
+  softmax of A's root logits; prior_c 0 is average).
 - A refused root plays the cell's fallback: the raw sampled action (`fallback=sample`, exactly as raw play would) or the
   greedy argmax of A's legal logits (`fallback=argmax`). `b_policy=argmax` makes B play its greedy argmax.
 - Champion mode (`--champion-archive` and its shas): both seats and the search evaluator are champion 9375 through
@@ -42,7 +43,7 @@ from gpu_engine.v2_bench_collector import log
 from gpu_engine.v2_head_to_head import SWAP_OFFSET, snapshot
 
 BLOCK_DOMAIN = 'v2s.world-block.v1'
-REDUCTIONS = ('none', 'argmax', 'raw', 'average', 'hedge', 'hedgedet', 'blend')
+REDUCTIONS = ('none', 'argmax', 'raw', 'average', 'hedge', 'hedgedet', 'blend', 'prior')
 NO_SEARCH = ('none', 'argmax')   # raw play: the sampled action, or the greedy argmax of the raw policy (a control)
 TURN_BANDS = ((0, 3), (4, 9), (10, 19), (20, 10**9))   # the engine's turn counter; the first band also holds turn 0
 
@@ -215,7 +216,7 @@ class Search:
     """Host side of the search seat: detach, plans, priced worlds, reduction, choice."""
 
     def __init__(self, prepared, plan, params, *, pricer, reduction, blend, world_blocks, seed, capacities, depth2_options, workers=1,
-            evaluator=None, forward=None):
+            evaluator=None, forward=None, prior_c=None):
         import jax
         from pokezero import v5_gumbel as original
         from gpu_engine import device_public_worlds as worlds, device_public_world_state as states, device_public_teacher as teacher
@@ -238,12 +239,15 @@ class Search:
         # A champion evaluator is checked op by op against champion.forward on the first request (its tools' bind_roots).
         self.evaluator = evaluator;self.evaluator_checked = evaluator is None
         self._reduce = original.reduce_completed_q;self.events = collections.Counter()
-        self.configure(reduction=reduction, blend=blend, world_blocks=world_blocks)
+        self.configure(reduction=reduction, blend=blend, world_blocks=world_blocks, prior_c=prior_c)
 
-    def configure(self, *, reduction, blend, world_blocks):
+    def configure(self, *, reduction, blend, world_blocks, prior_c=None):
         """Per-cell settings; the pricer and its compiled kernels are shared across cells of one process."""
+        from gpu_engine import search_hedge as hedge
         if reduction in NO_SEARCH or reduction not in REDUCTIONS:raise ValueError('search reduction required')
-        self.reduction = reduction;self.blend = blend;self.world_blocks = world_blocks
+        if (reduction == 'prior') != (prior_c is not None) or (prior_c is not None and not hedge.valid_prior_c(prior_c)):
+            raise ValueError('a finite prior_c >= 0 required with the prior reduction, and only with it')
+        self.reduction = reduction;self.blend = blend;self.world_blocks = world_blocks;self.prior_c = prior_c
         self.recipes = tuple(self.original.Recipe(s) for s in world_block_seeds(self.seed, world_blocks))
         self.timing = collections.Counter();self.calls = [];self.events = collections.Counter();self.leaf_sample = []
         if self.kind == 'depth2' and reduction in ('hedge', 'hedgedet', 'blend') and self.workers > 1 and self.pool is None:
@@ -354,6 +358,7 @@ class Search:
                 elif self.reduction == 'average':choice = average
                 elif self.reduction in ('hedge', 'hedgedet'):choice = hedge.bayes_hedge(prices, root_legal, lam=0.)
                 elif self.reduction == 'blend':choice = hedge.bayes_hedge(prices, root_legal, lam=self.blend)
+                elif self.reduction == 'prior':choice = hedge.prior_regularized(average, logits[i], root_legal, self.prior_c)
                 else:raise ValueError('search reduction required')
                 if choice is None:record.update(searched=False, refusal='reduction-unknown-cell')
                 else:
@@ -412,9 +417,10 @@ def main(argv=None):
     parser.add_argument('--pricer', choices=('depth1', 'depth2'), default='depth1')
     parser.add_argument('--reduction', choices=REDUCTIONS)
     parser.add_argument('--blend', type=float, default=.5, help='reply-prior weight lambda for --reduction blend')
+    parser.add_argument('--prior-c', type=float, help='policy-prior weight c for --reduction prior')
     parser.add_argument('--world-blocks', type=int, default=4, help='W = 2 * blocks')
     parser.add_argument('--cells', help='JSON list of cells played in order by this process (label, b_run, b_iteration, '
-        'reduction, and optionally blend, world_blocks, never_borrow, b_policy sample|argmax, fallback sample|argmax); '
+        'reduction, and optionally blend, prior_c (prior only), world_blocks, never_borrow, b_policy sample|argmax, fallback sample|argmax); '
         'replaces the single-cell options')
     parser.add_argument('--search-seed', type=int, default=2026110500)
     parser.add_argument('--capacities', default='64,512', help='fixed pricer root capacities (padded)')
@@ -436,10 +442,14 @@ def main(argv=None):
     else:
         if None in (args.b_run, args.b_iteration, args.reduction, args.label):raise SystemExit('--b-run, --b-iteration, --reduction and --label required')
         cells = [dict(label=args.label, b_run=args.b_run, b_iteration=args.b_iteration, reduction=args.reduction, blend=args.blend,
-            world_blocks=args.world_blocks, never_borrow=args.never_borrow, b_policy='sample', fallback='sample')]
+            world_blocks=args.world_blocks, never_borrow=args.never_borrow, b_policy='sample', fallback='sample',
+            **(dict(prior_c=args.prior_c) if args.prior_c is not None else {}))]
+    from gpu_engine import search_hedge as hedge
     for cell in cells:
-        if (set(cell) - {'label', 'b_run', 'b_iteration', 'reduction', 'blend', 'world_blocks', 'never_borrow', 'b_policy', 'fallback'}
+        if (set(cell) - {'label', 'b_run', 'b_iteration', 'reduction', 'blend', 'prior_c', 'world_blocks', 'never_borrow', 'b_policy', 'fallback'}
                 or cell['reduction'] not in REDUCTIONS or cell.get('b_policy', 'sample') not in ('sample', 'argmax')
+                or ('prior_c' in cell) != (cell['reduction'] == 'prior')
+                or ('prior_c' in cell and not hedge.valid_prior_c(cell['prior_c']))
                 or cell.get('fallback', 'sample') not in ('sample', 'argmax') or (cell['b_run'] == 'champion') != champion
                 or (cell.get('fallback', 'sample') != 'sample' and cell['reduction'] in NO_SEARCH + ('raw',))):   # nothing to fall back from
             raise SystemExit('malformed cell: ' + json.dumps(cell))
@@ -511,11 +521,11 @@ def main(argv=None):
         cell = dict(dict(blend=args.blend, world_blocks=args.world_blocks, never_borrow=False, b_policy='sample', fallback='sample'), **cell)
         if cell['reduction'] not in NO_SEARCH:
             if search is None:
-                search = Search(prepared, plan, a_params, pricer=args.pricer, reduction=cell['reduction'], blend=cell['blend'],
+                search = Search(prepared, plan, a_params, pricer=args.pricer, reduction=cell['reduction'], blend=cell['blend'], prior_c=cell.get('prior_c'),
                     world_blocks=cell['world_blocks'], seed=args.search_seed, capacities=tuple(int(x) for x in args.capacities.split(',')),
                     depth2_options=dict(child_block=args.depth2_child_block, **(dict(fixed_capacity=True) if args.depth2_fixed_capacity else {})),
                     workers=args.workers, evaluator=evaluator, forward=evaluator)
-            else:search.configure(reduction=cell['reduction'], blend=cell['blend'], world_blocks=cell['world_blocks'])
+            else:search.configure(reduction=cell['reduction'], blend=cell['blend'], world_blocks=cell['world_blocks'], prior_c=cell.get('prior_c'))
         play_cell(setup, cell, fresh(), (a_params, b_params), b, search if cell['reduction'] not in NO_SEARCH else None, out,
             setup_seconds=time.perf_counter() - begin)
     return 0
@@ -630,6 +640,7 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
         a=dict(run=args.a_run, iteration=a.iteration, archive_sha256=a.archive_sha256),
         b=dict(run=cell['b_run'], iteration=b.iteration, archive_sha256=b.archive_sha256, policy=cell['b_policy']),
         search=dict(reduction=cell['reduction'], pricer=args.pricer, blend=cell['blend'] if cell['reduction'] == 'blend' else None,
+            prior_c=cell.get('prior_c'),
             q_gain_basis=None if search is None else ('completed-Q over D depth-1 worlds' if args.pricer == 'depth1' else
                 'completed-Q over hedged turn-2 values' if cell['reduction'] in ('hedge', 'hedgedet', 'blend') else 'completed-Q over learner-max backups'),
             worlds=2 * cell['world_blocks'] if search else 0, search_seed=args.search_seed,
