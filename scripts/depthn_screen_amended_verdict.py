@@ -28,6 +28,7 @@ AMENDMENT_SCHEMA = 'depthn-foulplay-panel.amendment.v1'
 VERDICT_SCHEMA = 'depthn-foulplay-panel.amended-verdict.v1'
 T_QUANTILE = .95   # two-sided 90%, as the declared estimator
 KEPT = ('VOID_FAIRNESS', 'VOID_LATENCY', 'FLAG_ARM_FAIRNESS', 'INCOMPLETE')
+SCREEN_CELLS, BAR_CELLS = 500, 2000   # the declaration's screen_paired_cells and max_paired_cells
 CAUSES = (('round cap', 'round_cap'), ('foul-play challenge', 'foulplay_challenge_timeout'), ('foul-play choice', 'foulplay_choice_timeout'))
 
 
@@ -42,14 +43,26 @@ def cause(error):
     return next((name for needle, name in CAUSES if needle in text), 'other')
 
 
-def cells(run_directory, arm, limit):
-    """{pair_ordinal: (status, score, error)} for the arm's result files within the first `limit` pairs."""
+CELL_SCHEMA = 'depthn-foulplay-panel.cell.v1'
+LOST = 'claimed_without_result'
+
+
+def cells(run_directory, arm, limit, declaration_sha256=None):
+    """{pair_ordinal: (status, score, error)} for the arm's cells within the first `limit` pairs: each result file (of this panel and
+    declaration, when declaration_sha256 is given), and each claim without a result as (LOST, None, None), as the official arm summary
+    counts it."""
     out = {}
     for path in sorted(Path(run_directory, 'results').glob('*.json')):
         value = json.loads(path.read_bytes());cell = value.get('cell') or {}
         if cell.get('arm') == arm and type(cell.get('pair_ordinal')) is int and 0 <= cell['pair_ordinal'] < limit:
+            if declaration_sha256 is not None and (value.get('schema') != CELL_SCHEMA or value.get('declaration_sha256') != declaration_sha256
+                    or path.stem != str(cell.get('ordinal'))):raise ValueError(f'{path}: a result of another panel, declaration or cell')
             if cell['pair_ordinal'] in out:raise ValueError(f'two results for {arm} pair {cell["pair_ordinal"]}')
             out[cell['pair_ordinal']] = (value.get('status'), value.get('score'), value.get('error'))
+    for path in sorted(Path(run_directory, 'claims').glob('*.json')):
+        cell = (json.loads(path.read_bytes()).get('cell') or {})
+        if cell.get('arm') == arm and type(cell.get('pair_ordinal')) is int and 0 <= cell['pair_ordinal'] < limit and cell['pair_ordinal'] not in out:
+            out[cell['pair_ordinal']] = (LOST, None, None)
     return out
 
 
@@ -60,8 +73,9 @@ def clustered_interval(raw, search, limit, *, search_unknown, raw_unknown):
     score = lambda cell, imputed: cell[1] if cell is not None and cell[0] == 'COMPLETE' else imputed
     deltas = [score(search.get(p), search_unknown) - score(raw.get(p), raw_unknown) for p in range(limit)]
     clusters = [(deltas[s] + deltas[s + 1]) / 2 for s in range(0, limit - 1, 2)]
+    if len(clusters) < 2 or statistics.variance(clusters) == 0:
+        return dict(mean=statistics.fmean(clusters) if clusters else None, interval90=None, clusters=len(clusters))
     mean = statistics.fmean(clusters)
-    if len(clusters) < 2 or statistics.variance(clusters) == 0:return dict(mean=mean, interval90=None, clusters=len(clusters))
     radius = float(t.ppf(T_QUANTILE, len(clusters) - 1)) * math.sqrt(statistics.variance(clusters) / len(clusters))
     return dict(mean=mean, interval90=[max(-1., mean - radius), min(1., mean + radius)], clusters=len(clusters))
 
@@ -78,32 +92,51 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
     if (addendum.get('schema') != AMENDMENT_SCHEMA or addendum.get('declaration_sha256') != amendment['declaration_sha256']
             or (addendum.get('addendum_to') or {}).get('sha256') != amendment_sha256):
         raise ValueError('the harm addendum to this amendment required')
-    arm, limit = readout['arm'], readout['paired_cells'];screen = readout['bar'] is None
-    rule = amendment['rule'];cap = rule['unknown_share_max_per_arm']
-    arms = {name: cells(run_directory, name, limit) for name in ('RAW', arm)}
+    if (readout.get('tree') or {}).get('commit') != amendment['run']['tree_commit']:raise ValueError('a readout of the amended run\'s tree required')
+    arm, limit = readout['arm'], readout['paired_cells']
+    if limit not in (SCREEN_CELLS, BAR_CELLS) or (readout['bar'] is None) != (limit == SCREEN_CELLS):raise ValueError('a screen or bar readout required')
+    screen = limit == SCREEN_CELLS;rule = amendment['rule'];cap = rule['unknown_share_max_per_arm']
+    arms = {name: cells(run_directory, name, limit, amendment['declaration_sha256']) for name in ('RAW', arm)}
     unknown = {}
     for name, found in arms.items():
+        official = readout['arms'][name]
+        complete = sum(c[0] == 'COMPLETE' for c in found.values());lost = sum(c[0] == LOST for c in found.values())
+        results = len(found) - lost;score_mean = (statistics.fmean([c[1] for c in found.values() if c[0] == 'COMPLETE']) if complete else None)
+        mine = dict(results=results, complete=complete, unknown=len(found) - complete, claimed_without_result=lost,
+            not_attempted=limit - len(found), score_mean=score_mean)
+        theirs = {k: official.get(k) for k in mine}
+        if mine != theirs:raise ValueError(f'{name}: the run directory\'s cells differ from the readout\'s {theirs} (found {mine})')
         bad = {p: c for p, c in found.items() if c[0] != 'COMPLETE'}
         by_cause = {}
-        for _, (_, _, error) in sorted(bad.items()):by_cause[cause(error)] = by_cause.get(cause(error), 0) + 1
+        for _, (status, _, error) in sorted(bad.items()):
+            kind = LOST if status == LOST else cause(error);by_cause[kind] = by_cause.get(kind, 0) + 1
         unknown[name] = dict(cells=len(bad), share=len(bad) / limit, by_cause=dict(sorted(by_cause.items())), pairs=sorted(bad),
-            results=len(found))
+            results=results, not_attempted=limit - len(found))
+    paired = readout.get('paired')
+    if paired is not None:   # the run's own known pairs and full-roster bounds, recomputed: the files are the readout's
+        score = lambda name, p: arms[name][p][1] if p in arms[name] and arms[name][p][0] == 'COMPLETE' else None
+        known = [p for p in range(limit) if score('RAW', p) is not None and score(arm, p) is not None]
+        low = statistics.fmean([(0. if score(arm, p) is None else score(arm, p)) - (1. if score('RAW', p) is None else score('RAW', p)) for p in range(limit)])
+        high = statistics.fmean([(1. if score(arm, p) is None else score(arm, p)) - (0. if score('RAW', p) is None else score('RAW', p)) for p in range(limit)])
+        if paired.get('known_pairs') != len(known) or paired.get('full_roster_identification_bounds') != [low, high]:
+            raise ValueError('the run directory\'s pairs differ from the readout\'s')
     breakage = [b for b in readout['breakage'] if b != 'unknown_cells']
     if any(u['share'] > cap for u in unknown.values()):breakage.append('unknown_share')
-    bound = conservative_interval(arms['RAW'], arms[arm], limit)
-    lower = None if bound['interval90'] is None else bound['interval90'][0]
-    mirror = mirror_interval(arms['RAW'], arms[arm], limit)
-    upper = None if mirror['interval90'] is None else mirror['interval90'][1]
+    void = paired is None   # VOID_LATENCY computes no screen statistic: neither do we
+    bound = None if void else conservative_interval(arms['RAW'], arms[arm], limit)
+    lower = None if void or bound['interval90'] is None else bound['interval90'][0]
+    mirror = None if void else mirror_interval(arms['RAW'], arms[arm], limit)
+    upper = None if void or mirror['interval90'] is None else mirror['interval90'][1]
     harm = upper is not None and upper < 0   # the addendum: a harm stop survives every unknown counted for search
     if readout['decision'] in KEPT:decision = readout['decision']
     elif screen:decision = 'STOP_HARM' if harm else 'STOP_BREAKAGE' if breakage else 'CONTINUE_TO_2000'
     else:decision = 'BAR_MET' if lower is not None and lower > 0 and not breakage else 'BAR_NOT_MET'
-    paired = readout.get('paired') or {}
+    paired = paired or {}
     return dict(schema=VERDICT_SCHEMA, amendment_sha256=amendment_sha256, addendum_sha256=addendum_sha256, readout_sha256=readout_sha256,
         arm=arm, paired_cells=limit, official_decision=readout['decision'], official_breakage=readout['breakage'], official_harm=readout['harm'],
         decision=decision, breakage=breakage, harm=harm,
-        conservative=dict(rule='UNKNOWN or missing: search 0, RAW 1; seed-clustered t, two-sided 90%', **bound, lower_bound=lower),
-        harm_mirror=dict(rule='UNKNOWN or missing: search 1, RAW 0; seed-clustered t, two-sided 90%; harm only if the upper bound < 0', **mirror,
+        conservative=None if void else dict(rule='UNKNOWN or missing: search 0, RAW 1; seed-clustered t, two-sided 90%', **bound, lower_bound=lower),
+        harm_mirror=None if void else dict(rule='UNKNOWN or missing: search 1, RAW 0; seed-clustered t, two-sided 90%; harm only if the upper bound < 0', **mirror,
             upper_bound=upper, known_pairs_upper_bound=None if not (paired.get('interval90')) else paired['interval90'][1]),
         known_pairs=dict(scope='descriptive (the declared estimator)', interval90=paired.get('interval90'), known_pairs=paired.get('known_pairs'),
             complete_seed_difference=paired.get('complete_seed_difference'),
