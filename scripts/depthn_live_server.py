@@ -15,8 +15,8 @@ serves it until stopped (SIGTERM or an interrupt); it is never restarted per gam
   the queue, through asyncio.Queue._put, the hook put and put_nowait share. process_many reads the stamp for
   expired_in_queue; a client cannot forge it (the stamp overwrites any value sent). The queue is the one point the handle
   loop and the consumer share, so hooking it stamps arrival without copying (and so forking) Codex's handle loop.
-- READY: one JSON line (the run header, each bucket's cold (compile and run) and warm seconds, the program count, the full
-  warmup report) printed once warmup is done AND this server's own listener has accepted a probe connection: the probe
+- READY: one JSON line (the run header, each bucket's cold (compile and run) and warm seconds, the program count, the carry
+  reference root (address and classes), the full warmup report) printed once warmup is done AND this server's own listener has accepted a probe connection: the probe
   counts only when Codex's handler registers it in this server's `clients` while serving, so another process already
   listening on the port never triggers READY (the bind then fails and serve raises). The Server (Codex's queue and
   batch checks) is built before the warmup, so a bad queue setting fails before any compile.
@@ -138,7 +138,7 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
         if on_server is not None:on_server(server)
         warm=search.warmup(warmup_requests);buckets=warm.get('buckets',{})
         ready=dict(event='READY',host=host,port=port,**(header or{}),cold_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
-            warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),warmup=warm)
+            warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),carry_reference=warm.get('carry_reference'),warmup=warm)
         def announce():log(ready);recorder.record(dict(ready,kind='ready'))
         asyncio.run(server.serve(host,port,on_ready=announce))
     finally:recorder.close()
