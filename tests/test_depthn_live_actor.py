@@ -24,7 +24,7 @@ from tests import test_phase_d_prerequisites as fixture
 REQUEST_KEYS = {'schema','request_id','battle_id','owner','stream_id','decision_index','generation',
                 'prefix_sha256','lines','own_request_line','rung','budget_seconds'}
 ROW_KEYS = {'schema','arm','policy_id','cell','battle_id','owner','stream_id','generation','turn','decision_index','request_kind',
-            'prefix_sha256','archive_sha256','archive_source','encode_seconds','greedy','search','played_action_index','source','cause',
+            'prefix_sha256','archive_sha256','archive_source','deadline_seconds','reserve_seconds','encode_seconds','greedy','search','played_action_index','source','cause',
             'search_differs','select_seconds'}
 
 
@@ -513,6 +513,7 @@ class FactoryTests(unittest.TestCase):
             self.assertEqual((row['arm'], row['policy_id'], row['source'], row['cause'], row['search'], row['search_differs']),
                              ('RAW', 'champion-raw-ours', 'raw_arm', None, None, None))
         self.assertEqual([r['request_kind'] for r in rows], ['move', 'forced'])
+        self.assertEqual({(r['deadline_seconds'], r['reserve_seconds']) for r in rows}, {(None, None)})
         searched = Path(self.directory.name)/'searched.jsonl'; self.path, raw_path = searched, self.path
         self.run_arm(lambda r: complete(r))
         self.assertEqual(set(json.loads(raw_path.read_bytes().splitlines()[0])), set(self.rows()[0]))
@@ -538,6 +539,7 @@ class FactoryTests(unittest.TestCase):
             self.assertEqual(len(row['prefix_sha256']), 64); self.assertFalse(row['search_differs'])
             self.assertEqual((row['archive_sha256'], row['archive_source']), (live.CHAMPION_ARCHIVE_SHA256, 'pinned'))
         self.assertEqual([r['turn'] for r in rows], [1, 2, 3])
+        self.assertEqual({(r['deadline_seconds'], r['reserve_seconds']) for r in rows}, {(3., .15)})
         for row in rows:
             self.assertEqual(row['search']['timings']['prepare_seconds'], .2)
             self.assertGreaterEqual(row['select_seconds'], row['greedy']['seconds']+row['encode_seconds']-1e-9)
@@ -567,7 +569,7 @@ class FactoryTests(unittest.TestCase):
             decision, = play(value); release.set()
         row, = self.rows()
         self.assertEqual((decision.action_index, row['cause']), (0, 'timeout')); self.assertLess(row['select_seconds'], 1.)
-        self.assertIsNone(row['cell'])
+        self.assertIsNone(row['cell']); self.assertEqual((row['deadline_seconds'], row['reserve_seconds']), (1., .3))
 
     def test_select_never_raises_on_server_content(self):
         deep = b'['*200000+b']'*200000
