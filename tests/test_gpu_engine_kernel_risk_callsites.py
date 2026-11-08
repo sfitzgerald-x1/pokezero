@@ -3,7 +3,6 @@ import ast
 from copy import deepcopy
 from pathlib import Path
 import subprocess
-from typing import NamedTuple
 import unittest
 from unittest.mock import patch
 import jax
@@ -15,11 +14,9 @@ from gpu_engine import transition as t, secondary, entry
 import test_gpu_engine_engine_weather_public as fixture
 
 
-class ExecutionContext(NamedTuple):
-    # Test-only stand-in for the parent's separately owned Context field.
-    ledger: a.Ledger
-    tables: a.Tables
-    risks: object=None
+# Exercise the integrated lifecycle context, including its optional transaction
+# fields, rather than the three-field stand-in used before those hooks existed.
+ExecutionContext = a.Context
 
 
 class KernelRiskCallsitesTests(unittest.TestCase):
@@ -118,11 +115,19 @@ class KernelRiskCallsitesTests(unittest.TestCase):
             self.assertTrue(bool((trace.execution.risks.carry.risk&r.BOOST).all()))
             self.assertEqual(trace.execution.risks.carry.counts[:,r.Branch.SECONDARY_STATS-1].tolist(),[3,3])
             self.assertEqual(trace.execution.risks.carry.counts[:,r.Branch.SECONDARY_FLINCH-1].tolist(),[1,1])
-            # Literal entry table control exercises the actual Own Tempo set0
-            # branch at counter0; no original ability-physics claim is made.
+            # Zero is an absent confusion volatile: visiting Own Tempo's entry
+            # hook records the cutpoint without manufacturing a cure risk.
             ability=state.ability[:,0,0]
             entry_table=self.table.entry._replace(own_tempo=self.table.entry.own_tempo.at[ability].set(True))
             updated,_,trace=entry.enter(state,j.zeros(2,j.int32),entry_table,eligible=j.ones(2,bool),
+                hazards=False,_weather_trace=tape)
+            self.assertEqual(updated.confusion_counter[:,0,0].tolist(),[0,0])
+            self.assertFalse(bool((trace.execution.risks.carry.risk&r.FIELD_VOLATILE).any()))
+            self.assertEqual(trace.execution.risks.carry.counts[:,r.Branch.ENTRY_CONFUSION_CURE-1].tolist(),[1,1])
+            # Existing confusion, including a malformed negative counter,
+            # still takes the conservative risk path and is actually cleared.
+            confused=state._replace(confusion_counter=state.confusion_counter.at[:,0,0].set(j.array([3,-1],j.int32)))
+            updated,_,trace=entry.enter(confused,j.zeros(2,j.int32),entry_table,eligible=j.ones(2,bool),
                 hazards=False,_weather_trace=tape)
             self.assertEqual(updated.confusion_counter[:,0,0].tolist(),[0,0])
             self.assertTrue(bool((trace.execution.risks.carry.risk&r.FIELD_VOLATILE).all()))
