@@ -94,6 +94,8 @@ def main(argv=None):
             tree_commit=args.tree_commit)
         root,_,declaration,_=panel.load(args.run_directory)
         panel.require_calibration(root,declaration,pairs=args.cpu_pair,accept_uncalibrated=args.accept_uncalibrated)
+        if args.cells_per_worker!=declaration['actor']['cells_per_worker']:
+            raise SystemExit(f"--cells-per-worker must be the declared {declaration['actor']['cells_per_worker']}")
         monitor=panel.Monitor(args.run_directory,search_arm=args.search_arm)
         capture=args.probe_capture or panel.probe_capture(args.run_directory)
         probe=panel.probe(args.run_directory,arm=args.search_arm,server=args.server,capture=capture,tree_commit=args.tree_commit)

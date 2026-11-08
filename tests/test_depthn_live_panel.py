@@ -53,6 +53,10 @@ MOVE_WALL = dict(search_time_ms=1000, label='Foul Play at search_time_ms 1000: s
                  source=dict(path='calibration/move-walls.json', sha256='7'*64))
 
 
+ACTOR = dict(cells_per_worker=100, fresh_worker_first_arm='RAW', search_overlaps_greedy=True, warm_p95_seconds=dict(encode=.045, greedy=.715),
+             cold_first_decision_p50_seconds=3.8, source=dict(path='calibration/move-walls.json', sha256='7'*64))
+
+
 PROVENANCE = dict(
     foulplay=dict(commit='9'*40, applied_diff_sha256='d'*64, patch_blobs={'third_party/foulplay-rest-cant.patch': 'b3e95eab'},
                   poke_engine=dict(version='0.0.47', features='poke-engine/gen3, no default features', sdist_sha256='8'*64,
@@ -65,7 +69,7 @@ PROVENANCE = dict(
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64,
                 provenance=PROVENANCE):
     return dict(schema=panel.SCHEMA, provenance=copy.deepcopy(provenance), ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
-        foulplay_move_wall=copy.deepcopy(MOVE_WALL),
+        foulplay_move_wall=copy.deepcopy(MOVE_WALL), actor=copy.deepcopy(ACTOR),
         search_choice=dict(arm=arms[1], cell_commit='8'*40, evidence=[dict(path='cells/w16.json', sha256='4'*64), dict(path='out/w16-pairs.jsonl', sha256='5'*64)],
                            summary='W16 - W8 = +2.45, 90% CI (+0.50, +4.41)'),
         worker_lanes=4, fairness_observable=dict(value=observable, evidence=dict(path='calibration/calibration.json', sha256=calibration_sha)),
@@ -185,6 +189,15 @@ class DeclarationTests(unittest.TestCase):
                       dict(MOVE_WALL, strata=dict(MOVE_WALL['strata'], **{'4x500ms': dict(s4, concurrent=dict(moves=0, p50=2.1, p95=2.2))}))):
             d = declaration('a'*64); d['foulplay_move_wall'] = value
             with self.subTest(value), self.assertRaisesRegex(ValueError, 'foulplay move wall'):
+                panel.validate(d)
+
+    def test_refuses_a_malformed_actor(self):
+        for value in (None, {}, dict(ACTOR, extra=1), dict(ACTOR, cells_per_worker=1), dict(ACTOR, cells_per_worker=100.),
+                      dict(ACTOR, fresh_worker_first_arm='DN2W8'), dict(ACTOR, search_overlaps_greedy=False),
+                      dict(ACTOR, warm_p95_seconds=dict(encode=.045)), dict(ACTOR, warm_p95_seconds=dict(encode=.045, greedy=float('nan'))),
+                      dict(ACTOR, cold_first_decision_p50_seconds=0.), dict(ACTOR, source=None)):
+            d = declaration('a'*64); d['actor'] = value
+            with self.subTest(value), self.assertRaisesRegex(ValueError, 'actor: persistent workers'):
                 panel.validate(d)
 
     def test_init_refuses_a_move_wall_for_another_search_time(self):
@@ -599,11 +612,11 @@ class ProbeTests(unittest.TestCase):
 
 FAKE_WORKER = r'''
 import json, os, sys, time
-for line in sys.stdin:
+for n, line in enumerate(sys.stdin):
     packet = json.loads(line)
     if os.path.basename(packet['path']).startswith('fail'): sys.exit(3)
     if os.path.basename(packet['path']).startswith('slow'): time.sleep(.8)
-    with open(packet['path'] + '.done', 'x') as stream: json.dump(dict(pid=os.getpid(), server=packet['server']), stream)
+    with open(packet['path'] + '.done', 'x') as stream: json.dump(dict(pid=os.getpid(), server=packet['server'], n=n), stream)
     print(json.dumps({'exit': 0}), flush=True)
 '''
 
@@ -634,6 +647,17 @@ class DispatchTests(unittest.TestCase):
         result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1)], cells_per_worker=5)
         self.assertEqual(result['dispatched'], 3); self.assertEqual(len({v['pid'] for v in done.values()}), 1)
 
+    def test_a_fresh_worker_takes_a_raw_cell_first(self):
+        names = ['s0', 'r0', 's1', 'r1', 's2', 'r2']; arms = ['DN2W8', 'RAW']*3
+        result, done = self.run_dispatch(names, arms=arms, pairs=[(0, 1)], cells_per_worker=2)
+        self.assertEqual(result['dispatched'], 6)
+        firsts = sorted(name for name, v in done.items() if v['n'] == 0)
+        self.assertEqual(firsts, ['r0', 'r1', 'r2'])   # every process's cold first cell is RAW; the search cell follows it warm
+        for r, s_ in (('r0', 's0'), ('r1', 's1'), ('r2', 's2')): self.assertEqual(done[r]['pid'], done[s_]['pid'])
+        result, done = self.run_dispatch(['s3', 's4'], arms=['DN2W8', 'DN2W8'], pairs=[(0, 1)], cells_per_worker=2,
+                                         attempted=dict(RAW=1, DN2W8=0))   # no RAW cell qualifies: packet order
+        self.assertEqual(result['dispatched'], 2)
+
     def test_a_failed_worker_stops_all_dispatch(self):
         for kwargs in (dict(pairs=[(0, 1)]), dict(pairs=[(0, 1)], cells_per_worker=4), dict(pairs=[(0, 1), (2, 3)])):
             with self.subTest(kwargs):
@@ -645,7 +669,8 @@ class DispatchTests(unittest.TestCase):
 
     def test_a_lane_failure_stops_a_persistent_worker_in_another_lane(self):
         names = ['slow-a', 'fail']+[f'slow-{c}' for c in 'cdefgh']
-        result, done = self.run_dispatch(names, pairs=[(0, 1), (2, 3)], cells_per_worker=10)
+        arms = ['RAW', 'RAW', 'DN2W8', 'DN2W8']*2   # each fresh worker takes a RAW cell first: 'fail' is the second lane's first
+        result, done = self.run_dispatch(names, arms=arms, pairs=[(0, 1), (2, 3)], cells_per_worker=10)
         self.assertTrue(any(f.endswith('fail') for f in result['failed'])); self.assertLessEqual(result['dispatched'], 2)
         self.assertGreaterEqual(result['not_dispatched'], 5); self.assertNotIn('slow-h', done)
 
@@ -1480,7 +1505,10 @@ class ScriptTests(unittest.TestCase):
             root, run, d, lad = make_run(directory); wire = make_capture(Path(directory)/'wire')
             dead = socket.create_server(('127.0.0.1', 0)); port = dead.getsockname()[1]; dead.close()
             argv = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cpu-pair', '0', '1', '--cache-directory', directory,
-                    '--search-arm', 'DN2W8', '--server', f'127.0.0.1:{port}', '--probe-capture', str(wire)]
+                    '--search-arm', 'DN2W8', '--server', f'127.0.0.1:{port}', '--cells-per-worker', '100', '--probe-capture', str(wire)]
+            with patch.object(panel, 'dispatch', side_effect=AssertionError('must not dispatch')), patch.object(panel, 'probe', side_effect=AssertionError('no probe')), \
+                    self.assertRaisesRegex(SystemExit, 'must be the declared 100'):
+                script.main([x if x != '100' else '1' for x in argv])   # another cells-per-worker than declared: refused before the probe
             with patch.object(panel, 'dispatch', side_effect=AssertionError('must not dispatch')), self.assertRaisesRegex(ValueError, 'probe failed'):
                 script.main(argv)
             self.assertFalse((root/'claims').exists())

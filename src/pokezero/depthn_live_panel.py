@@ -107,7 +107,8 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'reserve_seconds','screen_paired_cells','max_paired_cells','confidence','primary_comparison','bar','screen_rule','breakage',
       'expected_searched_share','expected_searched_share_roster','matmul_precision','screen_latency_rule','bench_p95_wall_seconds',
       'bench_source','server_processes_per_gpu','interleave','arm_fairness','worker_lanes','fairness_observable','calibration','provenance',
-      'search_choice','foulplay_move_wall'}
+      'search_choice','foulplay_move_wall','actor'}
+ACTOR_KEYS={'cells_per_worker','fresh_worker_first_arm','search_overlaps_greedy','warm_p95_seconds','cold_first_decision_p50_seconds','source'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
 MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
 MOVE_WALL_KEYS={'search_time_ms','label','strata','source'}
@@ -175,9 +176,24 @@ def validate(declaration):
             or type(choice['summary'])is not str or not choice['summary'].strip()):
         raise ValueError('search choice: the declared search arm, the commit of the cells that chose it, their files (path and sha256) '
                          'and a summary of the result required')
-    validate_move_wall(d['foulplay_move_wall'])
+    validate_move_wall(d['foulplay_move_wall']);validate_actor(d['actor'])
     validate_provenance(d['provenance'])
     return d
+
+
+def validate_actor(value):
+    """The actor's time against search's budget (the lead's check; dispatch enforces cells_per_worker): persistent workers
+    (cells_per_worker > 1, a fresh worker's first cell RAW, so each process's one cold decision runs where no search budget
+    does), the search request sent before the greedy forward, and the measured warm p95s (encode, greedy) and cold first
+    decision p50, with their source file (calibration_move_walls' actor section)."""
+    v=value;warm=v.get('warm_p95_seconds')if type(v)is dict else None
+    if (type(v)is not dict or set(v)!=ACTOR_KEYS or type(v['cells_per_worker'])is not int or v['cells_per_worker']<2
+            or v['fresh_worker_first_arm']!='RAW'or v['search_overlaps_greedy']is not True or not _evidence(v['source'])
+            or type(warm)is not dict or set(warm)!={'encode','greedy'}
+            or any(type(x)is not float or not math.isfinite(x)or x<=0 for x in (*warm.values(),v['cold_first_decision_p50_seconds']))):
+        raise ValueError('actor: persistent workers (cells_per_worker >= 2, fresh worker first arm RAW), the search request overlapping '
+                         'greedy, and the measured warm encode / greedy p95 and cold first-decision p50 with their source required')
+    return v
 
 
 def validate_move_wall(value):
@@ -671,7 +687,13 @@ def calibration_move_walls(directory):
             if c not in walls or not all(type(row.get(k))in (int,float)for k in ('wait_seconds','overlap_seconds')):continue
             walls[c][r['setting']].append(row['wait_seconds']+row['overlap_seconds']);shape[c][(row.get('sampled_battles'),row.get('budget_ms_per_sample'))]+=1
     quantiles=lambda v:None if not v else dict(moves=len(v),**{k:x for k,x in _quantiles(v).items()if k in ('p50','p95')})
-    return dict(schema=MOVE_WALL_SCHEMA,search_time_ms=run['base_config'].get('search_time_ms')if isinstance(run.get('base_config'),dict)else None,
+    rows=[r for c in band for r in telemetry_rows(root,c['ordinal'])]
+    cold=[r['select_seconds']for r in rows if r.get('decision_index')==0]
+    warm=[r for r in rows if type(r.get('decision_index'))is int and r['decision_index']>=1]
+    actor=dict(note='our actor (RAW games: encode, then the greedy forward); decision 0 is each worker process\'s first (cold) one '
+        'when a process plays one cell',cold_first_decision=_quantiles(cold),warm=dict(encode=_quantiles([r['encode_seconds']for r in warm]),
+        greedy=_quantiles([r['greedy']['seconds']for r in warm]),select=_quantiles([r['select_seconds']for r in warm])))
+    return dict(schema=MOVE_WALL_SCHEMA,actor=actor,search_time_ms=run['base_config'].get('search_time_ms')if isinstance(run.get('base_config'),dict)else None,
         strata={c:dict(shapes={f'{b}x{m}ms':n for (b,m),n in sorted(shape[c].items(),key=str)},**{s:quantiles(walls[c][s])for s in ('solo','concurrent')})
             for c in fairness.CALIBRATION_STRATA},seed_band=run['seed_band'],lanes=run['lanes'],tree=run['tree'])
 
@@ -746,7 +768,12 @@ async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_com
     servers maps every arm to its server (None for RAW). Interleave: a cell is taken
     (in packet order) only if its arm stays at most len(pairs) cells ahead of every
     other arm, counting attempted cells; when no cell qualifies, dispatch stops
-    ('interleave') rather than run one arm alone. after(packet), called once per
+    ('interleave') rather than run one arm alone. With cells_per_worker > 1 (a
+    persistent worker: its model and compiled functions load once), a fresh worker
+    process takes a RAW cell first when one qualifies, so the one cold decision of
+    each process (its first encode and forward, about 3.8 s) lands where no search
+    budget runs; later cells keep packet order. (With one cell per process every
+    cell is cold, and packet order is kept.) after(packet), called once per
     completed cell, may stop dispatch by returning a reason. A worker that fails to
     report stops all dispatch: its cell stays claimed or unclaimed as the worker
     left it, and no further cell is attempted this run.
@@ -756,9 +783,10 @@ async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_com
     if type(servers)is not dict or not servers or any(p.get('arm')not in servers for p in packets):raise ValueError('a server entry for every arm required')
     queue=list(packets);done=[];failed=[];stopped=[];lead=len(pairs)
     started=Counter({arm:0 for arm in servers});started.update(attempted or {})
-    def take():
-        for i,packet in enumerate(queue):
-            arm=packet['arm']
+    def take(prefer=None):
+        ranked=sorted(range(len(queue)),key=lambda i:queue[i]['arm']!=prefer)if prefer is not None else range(len(queue))
+        for i in ranked:
+            packet=queue[i];arm=packet['arm']
             if all(started[arm]+1-started[other]<=lead for other in servers if other!=arm):
                 started[arm]+=1;return queue.pop(i)
         stopped.append(f'interleave: no arm may run more than {lead} cells ahead of another');return None
@@ -766,9 +794,9 @@ async def dispatch(packets,*,pairs,servers,cells_per_worker=1,command=worker_com
         while queue and not failed and not stopped:
             process=await asyncio.create_subprocess_exec(*command(pair,cache_directory),stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE)
             try:
-                for _ in range(cells_per_worker):
+                for n in range(cells_per_worker):
                     if not queue or failed or stopped:break
-                    packet=take()
+                    packet=take('RAW'if n==0 and cells_per_worker>1 else None)
                     if packet is None:break
                     wire=dict(path=packet['path'],sha256=packet['sha256'],server=servers[packet['arm']],
                         **{k:packet[k]for k in ('mode','setting')if k in packet})
