@@ -3,6 +3,8 @@ import ast,json,subprocess,unittest
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import gc
+from unittest.mock import patch
 import jax
 import jax.numpy as j
 import numpy as np
@@ -21,6 +23,25 @@ from _showdown_root import showdown_root
 import test_gpu_engine_no_damage_owning as fixture
 
 class BellyDrumOwningTests(unittest.TestCase):
+ def setUp(self):
+  self.release_compilers()
+ @staticmethod
+ def release_compilers(*completed):
+  # Keep the exact arrays, but release completed CPU executable heaps before
+  # compiling the next genuine phase. This is a correctness fixture only.
+  jax.block_until_ready(completed);jax.clear_caches();gc.collect()
+ def completed_phase(self,name,_milliseconds):
+  if name in ('engine','requests','public_p2','admission_p2'):
+   self.release_compilers()
+   print(type(self).__name__+' completed CPU phase '+name,flush=True)
+ def construct(self,*args,**kwargs):
+  original=driver._consume
+  def initial_consume(runtime,state,frame,*a,**kw):
+   self.release_compilers(state,frame)
+   print(type(self).__name__+' constructor inputs ready',flush=True)
+   return original(runtime,state,frame,*a,**dict(kw,timing_callback=self.completed_phase))
+  with patch.object(driver,'_consume',side_effect=initial_consume):
+   return driver.construct(*args,**kwargs)
  @classmethod
  def setUpClass(cls):
   fixture.NoDamageOwningTests.setUpClass();cls.f=fixture.NoDamageOwningTests;cls.metadata=deepcopy(cls.f.metadata)
@@ -128,12 +149,12 @@ const result=m.onHit.call(b,p);out.push({lines,hp:p.hp,atk:p.boosts.atk,failed:r
     self.assertEqual(arrays['types'][team,physical].tolist(),expected)
   with TemporaryDirectory()as tmp:
    p=Path(tmp)/'literal.npz';np.savez_compressed(p,**dict(arrays,metadata_utf8=np.frombuffer(json.dumps(self.metadata).encode(),np.uint8)));pool=source_provenance.load_constructor_pool(p)
-   session=driver.construct(pool,np.tile([[0,1]],(2,1)).astype(np.int64),prepared=self.prepared,stream_ids=j.array([60001,60002],j.int32),seed=31)
+   session=self.construct(pool,np.tile([[0,1]],(2,1)).astype(np.int64),prepared=self.prepared,stream_ids=j.array([60001,60002],j.int32),seed=31)
   self.assertEqual(session.state.core.admitted.tolist(),[True,True]);self.assertTrue(all(bool(o.encoded.observation.admitted.all())for o in session.result.owners));before=session.state
   actions=j.array([[0,1],[1,0]],j.int32);draws=j.zeros((2,2,12),j.int32).at[:,:,4].set(1);chance=tr.ChanceInputs(draws,*[j.zeros((2,2),j.int32)for _ in range(4)],j.zeros(2,j.int32));frames=[];original=self.runtime['frame']
   def capture(*a,**kw):f=original(*a,**kw);frames.append(f);return f
   self.runtime['frame']=capture
-  try:result=driver.advance(session,actions,chance_inputs=chance)
+  try:result=driver.advance(session,actions,chance_inputs=chance,timing_callback=self.completed_phase)
   finally:self.runtime['frame']=original
   frame=frames[-1];plain=jax.jit(lambda state,actions:tr.step_with_chance(state,actions,self.table,chance).state)(before.core.engine,actions)
   for a,z in zip(jax.tree.leaves(frame.state),jax.tree.leaves(plain),strict=True):np.testing.assert_array_equal(a,z)
