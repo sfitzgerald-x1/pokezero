@@ -21,8 +21,9 @@ Checks (gate.json; exit code 0 iff all pass):
      raw-head values within the value bound, both seats' child logits and the root peer logits within the logit bound.
  Float bounds are evaluator-relative (TOLERANCE_RULE): values <= 2 x this run's depth-1 noise floor (max |D3 t1_value -
  oracle t1 head|; 1e-4 if unmeasurable), logits <= 0.1, and every value comparison < 0.25 x the p10 learner-max a2
- spread of the frame (the misplacement guard, skipped when undefined). gate.json's tolerance section gives the numbers
- and each check's max |diff| with its ratios to its bound and guard.
+ spread of the frame (the misplacement guard, skipped when undefined; not applicable when the p10 is 0, GUARD_P10_ZERO:
+ the value bound alone judges). gate.json's tolerance section gives the numbers and each check's max |diff| with its
+ ratios to its bound and guard.
  (d) enumeration: the pricer's enumerated turn-1 and turn-2 sets equal the oracle's.
  (e) decision, when every leaf is checked (no --sample-leaves): depth2_backups.learner_max_root on the
      pricer frame and on a copy carrying the oracle's turn-2 head values and child-prior logits (statuses,
@@ -78,7 +79,8 @@ SCHEMA = 'pokezero.depth2-gate.v1'
 # scales with the head's values). Values: max |diff| <= FLOOR_FACTOR x the run's own depth-1 noise floor (max |D3 t1_value -
 # oracle t1 head| over the compared cells), VALUE_FALLBACK when no floor cell exists. Logits: LOGIT_BOUND absolute. Guard
 # against misplacement: every value comparison's max |diff| < GUARD_FACTOR x the p10 learner-max a2 spread of the frame's
-# expanded cells (values.cell_a2_spread), skipped when undefined. Digests, discrete fields and (e) stay exact.
+# expanded cells (values.cell_a2_spread), skipped when undefined, not applicable when 0 (GUARD_P10_ZERO). Digests, discrete
+# fields and (e) stay exact.
 FLOOR_FACTOR = 2.
 VALUE_FALLBACK = 1e-4
 LOGIT_BOUND = .1
@@ -88,6 +90,12 @@ SPREAD_THRESHOLD = 1e-4    # sibling spread: share of children whose p10 leaf-pa
 TOLERANCE_RULE = ('values: max |diff| <= 2 x depth1_noise_floor (max |D3 t1_value - oracle t1 head| of this run; 1e-4 if unmeasurable); '
     'logits: max |diff| <= 0.1; guard: every value max |diff| < 0.25 x p10 cell_a2_spread (skipped if undefined); '
     'digests, discrete fields and (e) exact')
+# p10 cell_a2_spread == 0 (>= 10% of the expanded cells have identical a2 values): the guard's two conditions are no non-finite
+# |diff| and max |diff| < 0.25 x p10; the second, "< 0", holds for no comparison, not even a bit-exact one, so it is not
+# applicable (guard_bound None: no within_guard, the table's ratio_to_guard None) and each value comparison is judged on its
+# value bound, which also covers the first: a non-finite |diff| is inf, beyond any (finite) bound. A p10 > 0 keeps the guard.
+GUARD_P10_ZERO = ('not_applicable_p10_zero: p10 cell_a2_spread is 0, so 0.25 x p10 is 0 and no |diff| can be below it; the guard '
+    'is not applied and every value comparison is judged on its value bound alone (which also fails any non-finite |diff|)')
 FLOORS = ('depth1_noise_floor', 'root_logit_floor')   # reported beside the bounds, never gated
 PROGRESS_INTERVAL = 10.    # seconds between oracle chunk progress lines (first and last chunk always logged)
 FIRST = 20
@@ -372,17 +380,18 @@ def finalize_numeric(m, bound, guard=None):
 
 def tolerance_rule(floor, spread_p10):
     """The run's bounds: 2 x the measured depth-1 noise floor for values (VALUE_FALLBACK when no floor cell exists or a floor
-    cell is non-finite), LOGIT_BOUND for logits, and GUARD_FACTOR x the p10 cell spread (None: guard skipped)."""
+    cell is non-finite), LOGIT_BOUND for logits, and GUARD_FACTOR x the p10 cell spread (None: guard skipped; 0: not
+    applicable, GUARD_P10_ZERO: the p10 is reported, guard_bound is None, so the value bound alone judges)."""
     measured = floor is not None and floor.get('compared', 0) > 0 and not floor.get('nonfinite')
     value = FLOOR_FACTOR * floor['max_abs_difference'] if measured else VALUE_FALLBACK
-    usable = spread_p10 is not None and np.isfinite(spread_p10)
+    usable = spread_p10 is not None and np.isfinite(spread_p10);applies = usable and GUARD_FACTOR * float(spread_p10) > 0   # a subnormal p10 whose guard rounds to 0 is not applicable too
     return dict(rule=TOLERANCE_RULE, depth1_noise_floor=floor['max_abs_difference'] if measured else None,
         floor_cells=None if floor is None else floor.get('compared'), value_bound=value,
         value_bound_source='2 x depth1_noise_floor' if measured else ('fallback 1e-4: the depth-1 noise floor is not measurable '
             '(no cell with both a D3 value and an oracle head value' + (', or a non-finite one)' if floor else ')')),
         logit_bound=LOGIT_BOUND, p10_cell_a2_spread=float(spread_p10) if usable else None,
-        guard_bound=GUARD_FACTOR * float(spread_p10) if usable else None,
-        guard='applied' if usable else 'skipped: no expanded cell with two enumerated a2 (p10 cell_a2_spread undefined)')
+        guard_bound=GUARD_FACTOR * float(spread_p10) if applies else None,
+        guard='applied' if applies else GUARD_P10_ZERO if usable else 'skipped: no expanded cell with two enumerated a2 (p10 cell_a2_spread undefined)')
 
 
 def bound_for(name, rule):
@@ -512,16 +521,19 @@ def gate_status(result, *, sampled=False, unavailable=None, skipped=None):
     return ('PASS_SAMPLED' if sampled else 'PASS'), [f'skipped: {k} ({v})' for k, v in sorted((skipped or {}).items())]
 
 
-def summarize(calls, *, spread_p10=None):
+def summarize(calls, *, spread_p10=None, bounds=None):
     """Merge per-call evaluations into the gate's checks under the run's evaluator-relative bounds (tolerance_rule):
     (b) discrete exact + D3 floats, (c) head quantities against the oracle, block invariance floats; spread_p10 is the
-    p10 cell_a2_spread of the same frames (the misplacement guard; None skips it)."""
+    p10 cell_a2_spread of the same frames (the misplacement guard; None skips it). bounds: None (this gate, always) or
+    d3_depthn_gate's --declared-bounds hook, rule -> rule with the declared numbers (and optionally q_noise_bound)."""
     have = lambda key: bool(calls) and all(key in x for x in calls)   # offline rechecks may lack a check's inputs
     checks = {}
     for key, name in (('a', 'a'), ('d', 'd'), ('oracle', 'oracle_consistency')):
         if have(key):checks[name] = merge_findings([c[key] for c in calls])
     quantities = merge_numeric([x['c'] for x in calls]) if have('c') else {}
     rule = tolerance_rule(quantities.get('depth1_noise_floor'), spread_p10);table = []
+    if bounds is not None:rule = bounds(rule)
+    q_noise = rule.get('q_noise_bound', rule['value_bound'])   # tolerance_rule sets none: the value bound, as always
     if have('b'):
         b = merge_findings([c['b'] for c in calls]);values = merge_numeric([x['b'].get('values', {}) for x in calls])
         for name, m in values.items():finalize_numeric(m, bound_for(name, rule), guard_for(name, rule));table.append(_row('b', name, m))
@@ -529,10 +541,11 @@ def summarize(calls, *, spread_p10=None):
         b['passed'] = b['passed'] and all(v['passed'] for v in values.values());checks['b'] = b
     if have('c'):checks['c'] = _heads_check(quantities, rule, calls, table)
     if any('e' in x for x in calls):
-        checks['e'] = e = merge_decisions([x['e'] for x in calls if 'e' in x], q_noise_bound=rule['value_bound'])
-        rule.update(q_noise_bound=rule['value_bound'], max_abs_delta_q=e.get('max_abs_delta_q'), near_tie_roots=e.get('near_tie_roots'),
+        checks['e'] = e = merge_decisions([x['e'] for x in calls if 'e' in x], q_noise_bound=q_noise)
+        rule.update(q_noise_bound=q_noise, max_abs_delta_q=e.get('max_abs_delta_q'), near_tie_roots=e.get('near_tie_roots'),
             near_tie_flips=e.get('near_tie_flips'), q_noise_rule='(e): a root is a numerical near-tie when its top-two completed-Q gap in either frame '
-                'is <= q_noise_bound (= the value bound); its flips are reported, not gated; max |dQ| must stay <= q_noise_bound')
+                f'is <= q_noise_bound ({"= the value bound" if "q_noise_bound" not in rule else "the near_tie_q_bound the hook declared"}); its flips are '
+                'reported, not gated; max |dQ| must stay <= q_noise_bound')
     if any('invariance' in x for x in calls):
         checks['block_invariance'] = merge_invariance([r for x in calls for r in x.get('invariance', ())], rule=rule)
         table.extend(_row('block_invariance', name, m) for name, m in checks['block_invariance']['floats'].items())
@@ -1435,13 +1448,17 @@ def load_head(args, *, plan, labels, category_sha256):
     return params, head_config, meta, model_sha256
 
 
-def bind_roots(groups, params, plan, *, head_config=None):
+def bind_roots(groups, params, plan, *, head_config=None, evaluator=None):
     """Each request's learner value head on its own root inputs (D arm, bf16, batch 1).
 
     With a head override (head_config, params = (head,)): the arm check on the first request, where the D-arm and head-arm
     forwards must give exactly equal value and policy logits, as U1. Each request then takes the head's root logits (U1's
     root prior) and actors 0/0, and a root whose head output is invalid or non-finite is dropped (U1 refuses it).
+    With a non-V2 evaluator (evaluator = a champion_evaluator.ChampionEvaluator, params = (champion,)): bind_evaluator_roots.
     Returns (groups, root |v| list, dropped addresses, arm_checked)."""
+    if evaluator is not None:
+        if head_config is not None:raise ValueError('a head override and a champion evaluator are exclusive')
+        return bind_evaluator_roots(groups, params, evaluator)
     import jax
     from gpu_engine import v5_model
     forward = jax.jit(lambda p, x: v5_model.forward(p, x, plan.model, compute_dtype='bfloat16'))
@@ -1476,6 +1493,50 @@ def bind_roots(groups, params, plan, *, head_config=None):
     return out, values, dropped, checked
 
 
+def bind_evaluator_roots(groups, params, evaluator):
+    """bind_roots under a non-V2 evaluator, params = (its parameters,). The V2 arm check (D-arm vs head-arm geometry) does not
+    apply: the pricers run this evaluator itself, not a V2 geometry substitute. Its own check replaces it on the first request
+    (evaluator.check: for the champion, the adapter on the V2 root inputs must be valid and exactly equal, policy logits and
+    value, sign included, to champion.forward on the independently sliced 23-token layout, both op by op). Then, as the head override,
+    each request takes the evaluator's root logits (the root prior: pricing order and root backup) and actors 0/0, and a root
+    whose output is invalid, non-finite or |v| > 1 is dropped. Returns (groups, root |v| list, dropped addresses, checked)."""
+    import jax
+    if len(params) != 1:raise ValueError('a champion evaluator prices with its own parameters alone: params = (champion,)')
+    forward = jax.jit(lambda p, x: evaluator(p, x));out, values, dropped, checked = [], [], [], False
+    for group in groups:
+        kept = []
+        for request in group:
+            inputs = {k: np.asarray(v) for k, v in request.root_inputs.items()}
+            if not checked:checked = evaluator.check(params[0], inputs)
+            output = jax.device_get(forward(params[0], inputs))
+            value, logits = float(np.asarray(output.value).reshape(-1)[0]), np.asarray(output.policy_logits, np.float32).reshape(-1)
+            usable = bool(np.asarray(output.valid).reshape(-1)[0]) and np.isfinite(logits).all() and np.isfinite(value) and abs(value) <= 1
+            if not usable:
+                a = request.plans.root.address;dropped.append([a.stream, a.frame, a.owner]);continue
+            values.append(abs(value));kept.append(replace(request, root_logits=tuple(map(float, logits)), learner_actor=0, opponent_actor=0))
+        if kept:out.append(kept)
+    return out, values, dropped, checked
+
+
+def load_champion(args, loaded):
+    """--champion-archive: champion_evaluator.load (the archive bytes' and the export's checkpoint sha256, 23 tokens, the
+    precision) and check_binding against the bank's encoder catalog (the real 9375; the catalog compiled for its checkpoint,
+    vocabulary and masks). Returns the ChampionEvaluator."""
+    from gpu_engine import champion_evaluator as ce
+    evaluator = ce.load_from_arguments(args)
+    ce.check_binding(evaluator, loaded.provider.prepared.catalog)
+    return evaluator
+
+
+def with_forward(frame_pricer, forward):
+    """D3's FramePricer under the run's evaluator: the same pricer for the V2 default (forward None), else a FramePricer with
+    the same options and forward= (its depth-1 values are then the evaluator's, as the pricers' turn 1)."""
+    if forward is None:return frame_pricer
+    from gpu_engine.device_public_teacher_batch import FramePricer
+    return FramePricer(frame_pricer.executor, frame_pricer.model, capacity=frame_pricer.capacity, block_rows=frame_pricer.block_rows,
+        actor_capacity=frame_pricer.actor_capacity, vectorized=frame_pricer.vectorized, host_prep=frame_pricer.host_prep, forward=forward)
+
+
 def leaf_counts(calls, sample):
     """Turn-2 leaves over calls: the oracle's enumeration, the pricer's terminal/error leaves every sample includes, and those checked."""
     total = lambda key: sum(c.get(key) or 0 for c in calls)
@@ -1483,23 +1544,36 @@ def leaf_counts(calls, sample):
         scope='checked = forced + up to sample_leaves uniform others per world' if sample is not None else 'every enumerated leaf is checked')
 
 
-def with_dropped(refusals, dropped):
-    """The refusal section plus the roots the head override dropped before pricing (U1 refuses a root with an invalid head output)."""
-    return dict(refusals, dropped_roots=dict(count=len(dropped), addresses=list(dropped)[:FIRST],
-        reason='head override: the head\'s D-arm output on the root inputs is invalid or non-finite; never priced'))
+DROPPED_REASONS = dict(v2='head override: the head\'s D-arm output on the root inputs is invalid or non-finite; never priced',
+    champion='champion evaluator: its output on the root inputs is invalid, non-finite or |v| > 1; never priced')
 
 
-def evaluator_header(args, loaded, head):
-    """Who priced: the override head, or the bank snapshot's actor (iteration -1 is the bank's untrained actor)."""
+def with_dropped(refusals, dropped, evaluator=None):
+    """The refusal section plus the roots the evaluator override dropped before pricing (U1 refuses a root with an invalid head
+    output; bind_evaluator_roots likewise for the champion). evaluator: the report's evaluator header, whose kind names the reason
+    (the head override's wording otherwise, unchanged)."""
+    kind = (evaluator or {}).get('kind') or 'v2'
+    return dict(refusals, dropped_roots=dict(count=len(dropped), addresses=list(dropped)[:FIRST], reason=DROPPED_REASONS.get(kind, DROPPED_REASONS['v2'])))
+
+
+def evaluator_header(args, loaded, head, champion=None):
+    """Who priced: the override head, champion 9375 (--champion-archive), or the bank snapshot's actor (iteration -1 is the bank's
+    untrained actor). Every header names the evaluator's kind, identity and precision."""
     plan = loaded.plan
+    if champion is not None:
+        s = loaded.snapshot
+        return dict(override=True, **champion.header(), archive=args.champion_archive, iteration=None, head_arm=None, pricer_arm=None,
+            executor_model_arm=plan.model.arm, category_vocabulary_sha256=loaded.category_sha256, label_vocabulary_sha256=loaded.labels.sha256,
+            bank_actor=dict(archive=s.get('archive'), archive_sha256=s.get('archive_sha256'), iteration=s.get('iteration'), role='not an evaluator: '
+                'the bank\'s actor only collected the roots; the executor and tables follow its plan'))
     if head is not None:
         _, config, meta, model_sha256 = head
-        return dict(override=True, archive=args.head_archive, archive_sha256=args.head_archive_sha256,
+        return dict(override=True, kind='v2', identity=['v2'], precision='bfloat16', archive=args.head_archive, archive_sha256=args.head_archive_sha256,
             checkpoint=meta.get('checkpoint_path') or meta.get('checkpoint'), checkpoint_sha256=args.head_checkpoint_sha256, iteration=None,
             model_sha256=model_sha256, head_arm=config.arm, pricer_arm=plan.model.arm, parameter_count=meta.get('parameter_count'),
             category_vocabulary_sha256=loaded.category_sha256, label_vocabulary_sha256=loaded.labels.sha256)
     s = loaded.snapshot
-    header = dict(override=False, archive=s.get('archive'), archive_sha256=s.get('archive_sha256'), checkpoint=s.get('checkpoint'),
+    header = dict(override=False, kind='v2', identity=['v2'], precision='bfloat16', archive=s.get('archive'), archive_sha256=s.get('archive_sha256'), checkpoint=s.get('checkpoint'),
         checkpoint_sha256=s.get('checkpoint_sha256'), iteration=s.get('iteration'), model_sha256=s.get('model_sha256'), head_arm=plan.model.arm,
         pricer_arm=plan.model.arm, category_vocabulary_sha256=loaded.category_sha256, label_vocabulary_sha256=loaded.labels.sha256)
     if s.get('iteration') == -1:header['warning'] = 'iteration -1 is the bank\'s own UNTRAINED actor: values are not a trained head\'s'
@@ -1536,23 +1610,29 @@ def split_groups(groups, capacity):
     return [g[i:i + capacity] for g in groups for i in range(0, len(g), capacity) if g[i:i + capacity]]
 
 
-def make_pricer(executor, model, *, widths, actor_capacity, child_block=None, capacity=None):
+def make_pricer(executor, model, *, widths, actor_capacity, child_block=None, capacity=None, forward=None):
     """Depth2Pricer(executor, model, digest=True, widths..., child_block, capacity) - imported lazily: it lands on another branch.
 
     Options the constructor does not take are dropped, unless they would change what is priced or how much one call
-    holds: a width other than 9, an explicit child_block or an explicit capacity, then refuse."""
+    holds: a width other than 9, an explicit child_block, an explicit capacity or an evaluator (forward=), then refuse.
+    The returned options name an evaluator by its identity (champion_evaluator.describe), never the object."""
     from gpu_engine.device_depth2_pricer import Depth2Pricer
     options = dict(digest=True, actor_capacity=actor_capacity, **widths)
     required = {k for k, v in widths.items() if v != 9}
     if child_block is not None:options['child_block'] = child_block;required.add('child_block')
     if capacity is not None:options['capacity'] = capacity;required.add('capacity')
+    if forward is not None:options['forward'] = forward;required.add('forward')
     parameters = inspect.signature(Depth2Pricer).parameters
     if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
         if 'digest' not in parameters:raise SystemExit('Depth2Pricer has no digest option')
         unsupported = sorted(k for k in required if k not in parameters)
         if unsupported:raise SystemExit('Depth2Pricer does not accept option(s): ' + ','.join(unsupported))
         options = {k: v for k, v in options.items() if k in parameters}
-    return Depth2Pricer(executor, model, **options), options
+    pricer = Depth2Pricer(executor, model, **options)
+    if forward is not None:
+        from gpu_engine import champion_evaluator as ce
+        options = dict({k: v for k, v in options.items() if k != 'forward'}, evaluator=ce.describe(forward))
+    return pricer, options
 
 
 INVARIANCE_BLOCKS = (27, 81)   # --block-invariance: child_block values priced; the last frame is the checked one

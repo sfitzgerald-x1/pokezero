@@ -21,6 +21,10 @@ Progress is JSON lines; the result is throughput.json in a new --out directory.
 --head-archive/--head-archive-sha256/--head-checkpoint-sha256 price with that v5 head instead of the bank snapshot's
 actor (the gate's override: U1's load, arm checks, the head's root logits, one actor). throughput.json and the first
 JSON line carry the evaluator; device time does not depend on the weight values, so the evaluator is a label only.
+--champion-archive/--champion-archive-sha256/--champion-checkpoint-sha256 [--champion-precision] (exclusive with
+--head-archive) price with champion 9375 through the forward= seam (gpu_engine.champion_evaluator): a different network, so
+here the evaluator does change the time. Depth2Pricer, --d1's FramePricer and --profile-split's three variants all take it
+(the constant variant wraps it: turn-1 forwards stay the champion's, turn-2 leaf forwards become zeros of its output shapes).
 """
 import argparse
 from contextlib import nullcontext
@@ -38,6 +42,13 @@ import numpy as np
 SCHEMA = 'pokezero.depth2-throughput.v1'
 LANES = 81   # D3's fixed joint lanes per world
 WEIGHTS_NOTE = 'false (device time independent of the weight values; label only)'
+CHAMPION_SPEED_NOTE = ('true: champion 9375 is a different network from the V2 heads (layer norm, dense 2,048 FFN, 23 tokens), so the evaluator '
+    'changes the device time; its weight values still do not')
+
+
+def weights_note(args):
+    """weights_affect_speed for the run's evaluator: a V2 head (bank actor or override) is a label only; the champion is not."""
+    return CHAMPION_SPEED_NOTE if getattr(args, 'champion_archive', None) else WEIGHTS_NOTE
 CONFIGS = ('depth1', 'depth2', 'constant')
 MEMORY_SCOPE = ('process_peak_bytes_so_far is jax.local_devices()[0].memory_stats()[\'peak_bytes_in_use\'] after the call: the PROCESS '
     'lifetime peak so far, so it includes the bank load and any config measured earlier in the same process (see measured_order); '
@@ -65,9 +76,10 @@ def parse(argv=None):
         'memory peak is that config\'s own (each subprocess reloads the bank chunk)')
     parser.add_argument('--only', choices=CONFIGS, help=argparse.SUPPRESS)   # one config; used by --isolate
     from gpu_engine.d3_depth2_gate import add_head_arguments, check_head_arguments   # numpy only: no JAX before the memory policy
-    add_head_arguments(parser)
+    from gpu_engine import champion_evaluator as ce
+    add_head_arguments(parser);ce.add_arguments(parser)
     args = parser.parse_args(argv)
-    check_head_arguments(parser, args)
+    check_head_arguments(parser, args);ce.check_arguments(parser, args)
     if args.chunk < 0:parser.error('--chunk N >= 0 required')
     if args.capacity < 1 or args.repeats < 1 or args.worlds_blocks < 1:parser.error('positive --capacity, --repeats and --worlds-blocks required')
     if any(not 1 <= v <= 9 for v in (args.k_own, args.k_opp, args.k1_own, args.k1_opp)):parser.error('widths must be 1..9')
@@ -220,15 +232,19 @@ def make_depth2(executor, model, *, capacity, widths, child_block, actor_capacit
 
 
 def prepare(args):
-    """The bank chunk's requests (the gate's builder), the evaluator (head override or the snapshot actor) and the planned blocks."""
+    """The bank chunk's requests (the gate's builder), the evaluator (head override, champion 9375 or the snapshot actor) and the
+    planned blocks. `forward` is the champion evaluator (None: the V2 default)."""
     from gpu_engine import d3_depth2_gate as gate
     with gate.stage(gate.log, 'load_bank_chunk', chunk=args.chunk):
         loaded = gate.bank_chunk_requests(args)
     provider, plan, params, source = loaded.provider, loaded.plan, loaded.params, loaded.source
     head = gate.load_head(args, plan=plan, labels=loaded.labels, category_sha256=loaded.category_sha256) if args.head_archive else None
+    champion = gate.load_champion(args, loaded) if getattr(args, 'champion_archive', None) else None
     if head is not None:params = (head[0],)
-    groups, root_values, dropped, arm_checked = gate.bind_roots(loaded.groups, params, plan, head_config=None if head is None else head[1])
-    evaluator = dict(gate.evaluator_header(args, loaded, head), arm_checked=arm_checked, dropped_roots=dropped, weights_affect_speed=WEIGHTS_NOTE)
+    if champion is not None:params = (champion.params,)
+    groups, root_values, dropped, arm_checked = gate.bind_roots(loaded.groups, params, plan, head_config=None if head is None else head[1], evaluator=champion)
+    evaluator = dict(gate.evaluator_header(args, loaded, head, champion=champion), arm_checked=arm_checked, dropped_roots=dropped,
+        weights_affect_speed=weights_note(args))
     gate.log('EVALUATOR_RESOLVED', evaluator=evaluator, root_value_scale=gate.percentiles(root_values))
     from pokezero import v5_gumbel as original
     from gpu_engine import device_public_worlds as worlds
@@ -243,7 +259,8 @@ def prepare(args):
                 requests = roots if block == 0 else [replace(r, plans=worlds.plan_starts(r.plans.root, provider.source, recipe)) for r in roots]
             yield block, recipe, requests, context
     return SimpleNamespace(provider=provider, plan=plan, params=params, source=source, evaluator=evaluator, root_values=root_values, available=available,
-        widths=widths, seeds=seeds, planned=list(blocks()), actor_capacity=len(params) if head is not None else plan.historical_window + 1)
+        widths=widths, seeds=seeds, planned=list(blocks()), forward=champion,
+        actor_capacity=len(params) if head is not None or champion is not None else plan.historical_window + 1)
 
 
 def depth1_blocks(args, planned):
@@ -259,17 +276,19 @@ def run_context(ctx, devices):
 
 def measure_config(config, args, ctx, progress):
     """One measured config in this process: 'depth1' (FramePricer), 'depth2' (Depth2Pricer, every block) or 'constant'
-    (block 0 with the turn-2 forward replaced by zeros). Returns its report section."""
+    (block 0 with the turn-2 forward replaced by zeros). Every pricer takes ctx.forward, the run's evaluator (the champion's, or
+    none: the V2 default), and the constant variant wraps it. Returns its report section."""
     from gpu_engine import v5_model
     from gpu_engine.device_public_teacher_batch import FramePricer
+    forward = getattr(ctx, 'forward', None);seam = {} if forward is None else dict(forward=forward)
     if config == 'depth1':
         d1 = FramePricer(ctx.provider.executor, ctx.plan.model, capacity=args.capacity, block_rows=args.capacity, actor_capacity=ctx.actor_capacity,
-            vectorized=True, host_prep=True)
+            vectorized=True, host_prep=True, **seam)
         planned = depth1_blocks(args, ctx.planned)
         blocks = measure('depth1', depth1_call, d1, planned, ctx.provider.materializer, ctx.params, args.repeats, memory=memory_stats, progress=progress)
         return dict(blocks=blocks, derived=derive(blocks, args.capacity), leaves='enumerated = D required turn-1 pairs; evaluated = FramePricer evaluated_joint_slots')
     pricer, options = make_depth2(ctx.provider.executor, ctx.plan.model, capacity=args.capacity, widths=ctx.widths, child_block=args.child_block,
-        actor_capacity=ctx.actor_capacity)
+        actor_capacity=ctx.actor_capacity, forward=forward)
     if config == 'depth2':
         t1 = []
         blocks = measure('depth2', depth2_call, pricer, ctx.planned, ctx.provider.materializer, ctx.params, args.repeats, memory=memory_stats,
@@ -277,7 +296,7 @@ def measure_config(config, args, ctx, progress):
         return dict(blocks=blocks, derived=derive(blocks, args.capacity), options=options, abs_t1=np.concatenate(t1).tolist() if t1 else [])
     rows = turn2_rows(options['child_block'], args.k_own, args.k_opp);reason = split_check(rows, args.capacity);census = []
     if reason is not None:return dict(skipped=reason, rows=rows, census=[])
-    real = lambda p, inputs: v5_model.forward(p, inputs, ctx.plan.model, compute_dtype='bfloat16')
+    real = forward if forward is not None else lambda p, inputs: v5_model.forward(p, inputs, ctx.plan.model, compute_dtype='bfloat16')
     variant, _ = make_depth2(ctx.provider.executor, ctx.plan.model, capacity=args.capacity, widths=ctx.widths, child_block=args.child_block,
         actor_capacity=ctx.actor_capacity, forward=constant_turn2_forward(real, rows, census))
     blocks = measure('split_constant_turn2_forward', depth2_call, variant, ctx.planned[:1], ctx.provider.materializer, ctx.params, args.repeats,
@@ -311,9 +330,10 @@ def main(argv=None):
     args = parse(argv)
     import importlib.util   # fail before loading the bank; find_spec does not import JAX
     if importlib.util.find_spec('gpu_engine.device_depth2_pricer') is None:raise SystemExit('gpu_engine.device_depth2_pricer is not on this tree')
-    from gpu_engine import d3_depth2_gate as gate
-    gate.log('EVALUATOR', override=bool(args.head_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
-        checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference, weights_affect_speed=WEIGHTS_NOTE,
+    from gpu_engine import d3_depth2_gate as gate, champion_evaluator as ce
+    gate.log('EVALUATOR', override=bool(args.head_archive or args.champion_archive), archive=args.head_archive, archive_sha256=args.head_archive_sha256,
+        checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference,
+        weights_affect_speed=weights_note(args), **ce.log_fields(args),
         resolved='EVALUATOR_RESOLVED follows once the bank is loaded')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     if args.isolate:
@@ -337,7 +357,7 @@ def main(argv=None):
     devices = context['devices'];available = context['roots_available']
     depth2 = sections['depth2'];abs_t1 = depth2.pop('abs_t1', [])
     report = dict(evaluator=context['evaluator'], value_scale=gate.value_scale(context['root_values'], gate.percentiles(abs_t1), args.value_reference),
-        weights_affect_speed=WEIGHTS_NOTE, schema=SCHEMA, source=context['source'], capacity=args.capacity, widths=context['widths'],
+        weights_affect_speed=weights_note(args), schema=SCHEMA, source=context['source'], capacity=args.capacity, widths=context['widths'],
         child_block=depth2['options']['child_block'], worlds_blocks=args.worlds_blocks, block_seeds=context['block_seeds'], repeats=args.repeats,
         roots_available=available, roots_per_call=args.capacity, cycled=available < args.capacity, pricer_options=depth2['options'], devices=devices,
         measured_order=order, isolated=args.isolate, memory_scope=MEMORY_SCOPE + (' (isolated: one process per config)' if args.isolate else ''),

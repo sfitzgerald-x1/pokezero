@@ -23,6 +23,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 
+import jax
 import jax.numpy as j
 import numpy as np
 
@@ -189,6 +190,34 @@ def simple_requests(ex, specs):
     return requests, worlds
 
 
+def legacy_stack(requests, worlds):
+    """depth2_oracle.stack before its `size` option (4ca092b3), verbatim but for the name: stack(size=None) must equal it byte for byte."""
+    requests, worlds = tuple(requests), tuple(worlds)
+    if len(requests) != len(worlds):raise ValueError('one materialized world pair per request required')
+    rows, states, publics, owner, learner, opponent = {}, [], [], [], [], []
+    for q, (request, pair) in enumerate(zip(requests, worlds)):
+        if len(pair) != 2:raise ValueError('two materialized worlds per request required')
+        for wi, world in enumerate(pair):
+            if world.state is None:continue
+            rows[(q, wi)] = len(states)
+            states.append(world.state);publics.append(world.public)
+            owner.append(int(request.plans.root.address.owner))
+            learner.append(int(request.learner_actor));opponent.append(int(request.opponent_actor))
+    owner, learner, opponent = (np.asarray(x, np.int32) for x in (owner, learner, opponent))
+    if not states:return reference.Stack(rows, None, None, None, owner, learner, opponent)
+    size = reference.bucket(len(states));states = states + [states[0]] * (size - len(states));publics = publics + [publics[0]] * (size - len(publics))
+    pack = lambda *leaves: np.stack([np.asarray(x) for x in leaves])
+    states = jax.device_put(jax.tree.map(pack, *jax.device_get(states)))
+    publics = jax.device_put(jax.tree.map(pack, *jax.device_get(publics)))
+    padded = lambda x: np.concatenate([x, np.repeat(x[:1], size - len(x))])
+    return reference.Stack(rows, states, publics, j.asarray(padded(owner)), owner, learner, opponent)
+
+
+def stack_leaves(stack):
+    """A Stack's device arrays as host arrays, in a fixed order (states, publics, owners)."""
+    return [np.asarray(x) for x in jax.tree.leaves((stack.states, stack.publics, stack.owners))]
+
+
 class OracleTests(unittest.TestCase):
     recipe = v5_gumbel.Recipe(7)
 
@@ -313,6 +342,54 @@ class OracleTests(unittest.TestCase):
         first = results[0]
         for other in results[1:]:
             self.assertEqual(first[1], other[1]);self.assertEqual(first[3], other[3])
+            for a, b in ((first[2], other[2]), (first[4], other[4])):
+                self.assertEqual(set(a), set(b))
+                for key in a:np.testing.assert_array_equal(a[key], b[key], err_msg=key)
+        self.assertGreater(len(first[3]), 100)
+
+    def test_stack_size_pads_to_exactly_size_with_row_zero(self):
+        """stack(size=): the row axis is exactly `size`, the padding rows repeat row 0, and `rows` and every host array are unchanged;
+        size=None is byte-identical to the stack before the option (legacy_stack); a size that is not a power of two, is under 8 or is
+        below the materialized rows raises (never truncates)."""
+        ex = executor();requests, worlds = simple_requests(ex, tuple((i % 3, i % 2, (i, i + 50)) for i in range(5)))
+        worlds = list(worlds);worlds[2] = (worlds[2][0], SimpleNamespace(state=None, public=None))   # a materialization refusal: 9 rows
+        base, legacy = reference.stack(requests, worlds), legacy_stack(requests, worlds)
+        self.assertEqual(base.rows, legacy.rows);self.assertNotIn((2, 1), base.rows);self.assertEqual(len(base.rows), 9)
+        for x, y in zip(stack_leaves(base) + [base.owner, base.learner, base.opponent], stack_leaves(legacy) + [legacy.owner, legacy.learner, legacy.opponent]):
+            self.assertEqual((x.shape, x.dtype), (y.shape, y.dtype));self.assertEqual(x.tobytes(), y.tobytes())
+        self.assertEqual(base.states.value.shape[0], 16)   # bucket(9)
+        for size in (16, 32, 128):
+            with self.subTest(size=size):
+                fixed = reference.stack(requests, worlds, size=size);self.assertEqual(fixed.rows, base.rows)
+                for name in ('owner', 'learner', 'opponent'):
+                    x, y = getattr(fixed, name), getattr(base, name);self.assertEqual((x.dtype, x.tobytes()), (y.dtype, y.tobytes()))
+                for x, y in zip(stack_leaves(fixed), stack_leaves(base)):
+                    self.assertEqual(x.shape, (size,) + y.shape[1:]);self.assertEqual(x[:9].tobytes(), y[:9].tobytes())
+                    self.assertEqual(x[9:].tobytes(), np.repeat(x[:1], size - 9, axis=0).tobytes())
+        for size in (8, 12, 24, 4, 0, -8, 16., True, '16'):   # 8 < 9 rows; not a power of two; under 8; not an int
+            with self.subTest(size=size), self.assertRaises(ValueError):reference.stack(requests, worlds, size=size)
+        empty = reference.stack([], [], size=8);self.assertEqual((empty.rows, empty.states), ({}, None))
+        with self.assertRaises(ValueError):reference.stack([], [], size=12)
+
+    def test_a_fixed_stack_size_changes_no_result(self):
+        """The oracle over stacks of 12 rows padded to 16 (bucket), 32 and 128: every root, child and leaf result is identical (no spec
+        indexes a padding row)."""
+        specs = tuple((mode, i % 2, (70 + i, 90 + i)) for i, mode in enumerate((0, 3, 8, 9, 11, 12)))
+        ex = executor();requests, worlds = simple_requests(ex, specs);results = []
+        with patch.object(batch.v5_model, 'forward', side_effect=forward):
+            oracle = reference.Oracle(ex, object(), chunk=8)
+            for size in (None, 32, 128):
+                stack = reference.stack(requests, worlds, size=size);self.assertEqual(stack.states.value.shape[0], size or 16)
+                roots, cells, children, leaves = reference.enumerate_specs(oracle, stack, requests, self.recipe, PARAMS)
+                results.append((roots, cells, children, leaves, oracle.leaves(stack, leaves, PARAMS)))
+        first = results[0]
+        for other in results[1:]:
+            self.assertEqual(first[1], other[1]);self.assertEqual(first[3], other[3]);self.assertEqual(set(first[0]), set(other[0]))
+            for key, root in first[0].items():
+                for name, value in root.items():
+                    if isinstance(value, dict):
+                        for k in value:np.testing.assert_array_equal(value[k], other[0][key][name][k], err_msg=(key, name, k))
+                    else:np.testing.assert_array_equal(value, other[0][key][name], err_msg=(key, name))
             for a, b in ((first[2], other[2]), (first[4], other[4])):
                 self.assertEqual(set(a), set(b))
                 for key in a:np.testing.assert_array_equal(a[key], b[key], err_msg=key)
@@ -975,6 +1052,28 @@ class AnalysisTests(GateFixture, unittest.TestCase):
                 self.assertEqual(gate.recheck(old, backups=FakeBackups)['refusals']['depth2']['source'], 'depth2_backups.refusal_summary')
             pruning = gate.offline_pruning(old, backups=FakeBackups);self.assertTrue(pruning['full_width']);self.assertGreater(pruning['per_cell']['total'], 0)
 
+    def test_recheck_with_every_cell_a2_spread_zero(self):
+        """The reviewer's case: every expanded cell's a2 rows identical, so the recheck's p10 cell_a2_spread is 0 (it raised
+        ZeroDivisionError in finalize_numeric); now the guard is not applicable and the value bound alone judges."""
+        cell_rows = gate.cell_rows   # every enumerated a2 row the same value: each cell_a2_spread is 0
+        flat = lambda *a: (lambda rows: None if rows is None else np.where(np.isnan(rows), np.nan, .5))(cell_rows(*a))
+        with tempfile.TemporaryDirectory() as directory:
+            self.run_saved(directory)
+            with patch.object(gate, 'cell_rows', flat):report = gate.recheck(directory, backups=FakeBackups, progress=None)
+            spread = report['values']['totals']['cell_a2_spread'];self.assertGreater(spread['count'], 0);self.assertEqual(spread['p10'], 0.)
+            self.assertEqual(report['status'], 'PASS');self.assertTrue(report['tolerance']['guard'].startswith('not_applicable_p10_zero'))
+            self.assertEqual((report['tolerance']['p10_cell_a2_spread'], report['tolerance']['guard_bound']), (0., None))
+            for row in report['tolerance']['table']:self.assertIsNone(row['ratio_to_guard'], row)
+            json.dumps(report, allow_nan=False, default=str)
+            with np.load(Path(directory) / 'arrays-block0-call0.npz') as z:arrays = {k: z[k] for k in z.files}
+        with tempfile.TemporaryDirectory() as tampered:   # a value beyond the value bound still fails under a zero p10
+            changed = dict(arrays);changed['frame_t2_value'] = arrays['frame_t2_value'].copy()
+            at = tuple(np.argwhere(arrays['frame_t2_status'] == 4)[0]);changed['frame_t2_value'][at] += np.float32(1e-3)
+            np.savez_compressed(Path(tampered) / 'arrays-block0-call0.npz', **changed)
+            with patch.object(gate, 'cell_rows', flat):report = gate.recheck(tampered, backups=FakeBackups, progress=None)
+            self.assertEqual(report['values']['totals']['cell_a2_spread']['p10'], 0.);self.assertEqual(report['status'], 'FAIL')
+            self.assertFalse(report['checks']['c']['quantities']['t2_value']['within_bound'])
+
     def test_offline_cli_writes_recheck_and_pruning(self):
         with tempfile.TemporaryDirectory() as directory:
             self.run_saved(directory, invariance=False)
@@ -1198,6 +1297,39 @@ class RelativeToleranceTests(GateFixture, unittest.TestCase):
         # The live gate takes the guard's spread from the same frames' values section.
         values = gate.values_section([(gate.value_samples(frame, self.requests, backups=FakeBackups), None)], oracle_checked=True)
         self.assertGreater(values['totals']['cell_a2_spread']['p10'], 0)
+
+    def test_a_zero_p10_makes_the_guard_not_applicable(self):
+        """p10 cell_a2_spread == 0: no ZeroDivisionError, the guard reported not applicable, the value bound still gated."""
+        frame, d_results, data, _ = self.shifted(1e-3)   # value bound 2e-3
+        for p10 in (0., np.float64(0.)):
+            result = self.judged(self.noisy(frame, data, 1.5e-3), d_results, data, spread_p10=p10);rule = result['tolerance']
+            self.assertTrue(result['passed']);self.assertTrue(rule['guard'].startswith('not_applicable_p10_zero'))
+            self.assertEqual((rule['p10_cell_a2_spread'], rule['guard_bound']), (0., None))
+            t2 = result['checks']['c']['quantities']['t2_value'];self.assertTrue(t2['within_bound'])
+            for key in ('guard_bound', 'within_guard', 'ratio_to_guard'):self.assertNotIn(key, t2)
+            rows = {(r['check'], r['quantity']): r for r in gate.tolerance_line(rule)['checks']}
+            self.assertEqual((rows[('c', 't2_value')]['ratio_to_guard'], rows[('b', 't1_value')]['ratio_to_guard']), (None, None))
+            json.dumps(result, allow_nan=False, default=str)
+        beyond = self.judged(self.noisy(frame, data, 2.5e-3), d_results, data, spread_p10=0.)   # the value bound stays gated
+        self.assertFalse(beyond['passed']);self.assertFalse(beyond['checks']['c']['quantities']['t2_value']['within_bound'])
+        nan = self.judged(self.noisy(frame, data, np.nan), d_results, data, spread_p10=0.)   # and fails a non-finite |diff| (the guard's other condition)
+        t2 = nan['checks']['c']['quantities']['t2_value'];self.assertFalse(nan['passed']);self.assertEqual((t2['nonfinite'], t2['within_bound']), (3, False))
+        floor = dict(compared=10, nonfinite=0, max_abs_difference=1e-4)   # block invariance takes the same rule
+        head = tuple(data['leaves']['specs'][list(data['leaves']['status']).index(4)])
+        def moved(delta):
+            other = copy.deepcopy(frame);other['t2_value'][head] = np.float32(other['t2_value'][head] + delta)
+            return gate.merge_invariance([gate.block_invariance(frame, other)], rule=gate.tolerance_rule(floor, 0.))
+        self.assertTrue(moved(1e-4)['passed']);self.assertNotIn('within_guard', moved(1e-4)['floats']['t2_value']);self.assertFalse(moved(3e-4)['passed'])
+
+    def test_a_positive_p10_keeps_the_guard(self):
+        """Any p10 > 0, however small, applies and gates the guard exactly as before the zero case was handled."""
+        frame, d_results, data, _ = self.shifted(1e-2);noisy = self.noisy(frame, data, 5e-3)   # value bound 2e-2
+        for p10, passed in ((1e-2, False), (1e-300, False), (.1, True)):
+            result = self.judged(noisy, d_results, data, spread_p10=p10);rule = result['tolerance'];t2 = result['checks']['c']['quantities']['t2_value']
+            self.assertEqual((rule['p10_cell_a2_spread'], rule['guard_bound'], rule['guard']), (p10, gate.GUARD_FACTOR * p10, 'applied'))
+            self.assertEqual((result['passed'], t2['within_guard'], t2['guard_bound']), (passed, passed, gate.GUARD_FACTOR * p10))
+            self.assertEqual(t2['ratio_to_guard'], t2['max_abs_difference'] / (gate.GUARD_FACTOR * p10))
+        self.assertEqual(gate.tolerance_rule(None, 1e-2)['guard_bound'], 2.5e-3);self.assertIsNone(gate.tolerance_rule(None, float('nan'))['guard_bound'])
 
     def test_fallback_when_the_floor_cannot_be_measured(self):
         frame, d_results, data, _ = self.priced()

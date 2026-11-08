@@ -29,8 +29,31 @@ the host once per ply. The gather and write programs are keyed by the pool's
 row count, but they are a bare XLA gather and dynamic-update-slice, so a new
 capacity or ply recompiles nothing expensive. Padding (roots, worlds, lanes,
 dead slots, block and call slots) is computed but never enumerated.
+
+The evaluator is the forward= seam (default: the V2 head in bf16). Every program
+key carries the evaluator's identity (champion_evaluator.program_suffix: nothing
+for the V2 default, so its keys are byte-identical to before), so a program table
+shared between pricers (the latency tool's) never hands one evaluator's compiled
+program to another; digests hash the evaluator's digest view (its own slice of
+the inputs; unchanged for the default).
+
+Pre-built worlds (`price(..., worlds=PrebuiltWorlds)`): instead of materializing
+D3's two worlds per request, price one given (World, World) pair per request,
+e.g. Codex's Phase D protocol constructor worlds (gpu_engine.constructor_worlds
+builds them, W = 2K worlds of a root as K requests). `materializer` is then the
+pricer side's WorldBinding (source, engine metadata, encoder), which must equal
+the binding the worlds were built under; recipe is used for the lane order only
+and the quarter selection is not applied (plans must be selected). A world
+without a state is pre -1 (`physical-materialization:<refusals>`), as a D3
+materialization refusal. Every program key of such a call gains
+(('worlds', source tag, carry signature),): the tag names the world source and
+the signature hashes the (state, public) pytree structure and leaf shapes and
+dtypes, which every constructed world of the frame must share. So a table never
+hands a D3 program to pre-built worlds or one carry structure's program to
+another. Without `worlds` nothing changes: same keys, programs and frames.
 """
 from dataclasses import dataclass,replace
+import hashlib
 import math
 import time
 
@@ -40,7 +63,7 @@ import numpy as np
 
 from pokezero import v5_gumbel as original
 from . import device_public_teacher as serial,device_public_teacher_batch as batch,device_public_world_state as mapping
-from . import device_depth2_pricer as depth2,depth2_backups,depth2_digest as digests
+from . import champion_evaluator as evaluators,device_depth2_pricer as depth2,depth2_backups,depth2_digest as digests
 
 LANES=depth2.LANES;UNAVAILABLE=depth2.UNAVAILABLE;INPUT_KEYS=depth2.INPUT_KEYS
 PEER_VIEW_ERROR=depth2.PEER_VIEW_ERROR;PEER_PRIOR_REFUSED=depth2.PEER_PRIOR_REFUSED
@@ -113,6 +136,76 @@ class DepthNFrame:
     leaf_digest:object=None
 
 
+@dataclass(frozen=True)
+class WorldBinding:
+    """What pre-built worlds were built under, and what a pricer prices under; the worlds= seam requires equality of every field.
+
+    The public source (`source_hash`, `source_rows_sha256` and `source_binding_sha256`, device_public_worlds.Source's
+    binding over the source and the engine's five namespaces), `metadata_sha256` (sha256 of the canonical JSON of the
+    engine metadata the states were mapped with and the executor's tables were compiled from) and `encoder` (the
+    encoder catalog: checkpoint sha256, category vocabulary sha256 and size, feature masks, catalog source hash).
+    constructor_worlds.binding builds one from (Source, metadata, catalog)."""
+    source_hash:str
+    source_rows_sha256:str
+    source_binding_sha256:str
+    metadata_sha256:str
+    encoder:tuple
+
+
+@dataclass(frozen=True)
+class PrebuiltWorlds:
+    """The worlds= input: `pairs[i]` is request i's two device_public_world_state.World (a world without a state is a
+    refusal with named `refusals`), `source` the world-source tag every program key of the call carries, `binding` the
+    WorldBinding they were built under."""
+    source:str
+    binding:WorldBinding
+    pairs:tuple
+
+
+def carry_signature(pairs):
+    """sha256[:16] of the (state, public) pytree structure and leaf shapes and dtypes that every constructed world in
+    `pairs` shares (None when no world has a state); ValueError when two differ: a frame holds one world source."""
+    seen=None
+    for pair in pairs:
+        for world in pair:
+            if world.state is None:continue
+            leaves,tree=jax.tree.flatten((world.state,world.public))
+            signature=(str(tree),tuple((tuple(np.shape(x)),str(x.dtype if hasattr(x,'dtype')else np.asarray(x).dtype))for x in leaves))
+            if seen is None:seen=signature
+            elif signature!=seen:raise ValueError('one world source per frame: pre-built worlds with different (state, public) structures')
+    return None if seen is None else hashlib.sha256(repr(seen).encode()).hexdigest()[:16]
+
+
+def validate_world_requests(requests,worlds,binding,recipe,params):
+    """The worlds= checks: D3's request checks less the materializer and the quarter selection, plus the binding and the world
+    pairs. Returns the frame's carry signature; raises ValueError."""
+    if type(recipe)is not original.Recipe or type(worlds)is not PrebuiltWorlds or type(binding)is not WorldBinding:
+        raise ValueError('pre-built worlds, the pricer-side WorldBinding and a random recipe required')
+    if type(worlds.source)is not str or not worlds.source:raise ValueError('a world-source tag required')
+    if type(worlds.binding)is not WorldBinding or worlds.binding!=binding:
+        differ=[f for f in WorldBinding.__dataclass_fields__ if getattr(worlds.binding,f,None)!=getattr(binding,f)]
+        raise ValueError('pre-built worlds were built under another binding than the pricer\'s: '+', '.join(differ))
+    pairs=tuple(tuple(pair)for pair in worlds.pairs)
+    if len(pairs)!=len(requests):raise ValueError('one pre-built world pair per request required')
+    for request,pair in zip(requests,pairs):
+        p=request.plans
+        if len(pair)!=2 or any(type(w)is not mapping.World or(w.state is None)!=(w.public is None)or bool(w.refusals)!=(w.state is None)for w in pair):
+            raise ValueError('two device_public_world_state.World per request, a world without a state naming its refusals')
+        if pair[0].index==pair[1].index:raise ValueError('two distinct worlds per request: one world twice in a pair')
+        if p.selected is not True:raise ValueError('selected plans required (the quarter selection is not applied)')
+        if len(p.starts)!=2 or tuple(s.world for s in p.starts)!=tuple(w.index for w in pair):
+            raise ValueError('plan starts must name the pair\'s worlds, in order')
+        if p.source_hash!=binding.source_hash or p.source_rows_sha256!=binding.source_rows_sha256:
+            raise ValueError('plan public source differs from the binding\'s')
+        if p.root.source_binding_sha256!=binding.source_binding_sha256:raise ValueError('root source binding differs from the binding\'s')
+        original._probabilities(tuple(request.root_logits),original._mask(request.root_legal))
+        if not request.root_inputs or set(request.root_inputs)-set(INPUT_KEYS):
+            raise ValueError('original encoder input keys required')
+        if any(type(x)is not int or not 0<=x<len(params)for x in(request.learner_actor,request.opponent_actor)):
+            raise ValueError('verified original actor index required')
+    return carry_signature(pairs)
+
+
 def arrays(frame):
     """Every array of a frame as (name, array) pairs, plies included; for equality checks."""
     for name in DepthNFrame.__dataclass_fields__:
@@ -171,9 +264,10 @@ def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,d
     is never enumerated. Outputs are flattened [G*B*K(,...)] in (block, node,
     own slot, opponent slot) order; at the leaf ply status/value/error (and
     the digest) only. The shape key is (B, G, K): nothing here depends on the
-    pool, the capacity or the ply.
+    pool, the capacity or the ply. Digests hash the forward's digest view
+    (champion_evaluator.digest_view; the inputs unchanged for the default).
     """
-    b=nodes;g=blocks;K=k_own*k_opp
+    b=nodes;g=blocks;K=k_own*k_opp;seen=depth2._seen(forward)
     joint=(depth2._make_leaf_joint if leaf else _make_expand_joint)(executor);views=depth2._make_views(executor)
     stacked=params[0]if len(params)==1 else jax.tree.map(lambda *xs:j.stack(xs),*params)
     actor_params=lambda actor:params[0]if len(params)==1 else jax.tree.map(lambda x:x[actor],stacked)
@@ -203,7 +297,7 @@ def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,d
             if leaf:
                 result=dict(status=j.where(~enumerated,0,j.where(err!=0,3,j.where(done,1,4))).astype(j.int8),
                     value=j.where(enumerated&(err==0),j.where(done,terminal,v),0.).astype(j.float32),error=j.where(enumerated,err,0).astype(j.int8))
-                if digest:result['digest']=keep(enumerated,digests.batched(inputs,axes=2))
+                if digest:result['digest']=keep(enumerated,digests.batched(seen(inputs),axes=2))
                 return result
             new_states,new_publics,masks,own_legal,opp_legal,opp_error,opp_inputs=out[5:]
             values=j.where(done,terminal,v)
@@ -222,7 +316,7 @@ def make_block_program(executor,*,params,forward,nodes,blocks,k_own,k_opp,leaf,d
                 own_requested=keep(viewed,own_req),opp_requested=keep(viewed,opp_req),own_legal=keep(viewed,own_legal),opp_legal=keep(viewed,opp_legal),
                 own_logits=keep(viewed,j.where(own_req[...,None],lg,0.)),opp_logits=keep(expanded,j.where(opp_req[...,None],plg,0.)),
                 states=new_states,publics=new_publics)
-            if digest:result.update(digest_own=keep(enumerated,digests.batched(inputs,axes=2)),digest_opp=keep(enumerated,digests.batched(opp_inputs,axes=2)))
+            if digest:result.update(digest_own=keep(enumerated,digests.batched(seen(inputs),axes=2)),digest_opp=keep(enumerated,digests.batched(seen(opp_inputs),axes=2)))
             return result
         def empty():
             z=lambda shape,dtype:j.zeros((b,K)+shape,dtype)
@@ -415,7 +509,10 @@ class DepthNPricer:
         shrinking request count never recompiles; the block programs never
         depend on capacity. `digest` adds bit-exact view digests at every ply;
         `forward(params, inputs)` is the only actor seam (default: the v5 head
-        in bf16).
+        in bf16; a champion_evaluator.ChampionEvaluator for champion 9375).
+        Every program key gains the forward's identity
+        (`evaluator_suffix` = champion_evaluator.program_suffix(forward): () for
+        the default), so one evaluator reuses its programs and two never share.
         """
         if type(capacity)is not int or capacity<=0 or type(actor_capacity)is not int or actor_capacity<=0:
             raise ValueError('finite explicit root/actor capacities required')
@@ -431,6 +528,8 @@ class DepthNPricer:
         self.executor=executor;self.model=model;self.capacity=capacity;self.actor_capacity=actor_capacity;self.depth=depth
         self.k1_own=k1_own;self.k1_opp=k1_opp;self.block_lanes=block_lanes;self.blocks_per_call=blocks_per_call;self.selection=selection;self.fixed_capacity=fixed_capacity
         self.digest=digest;self.forward=forward if forward is not None else depth2.default_forward(model)
+        self.evaluator_suffix=evaluators.program_suffix(forward)
+        self._world_suffix=()  # set per price(): () for D3's own worlds, (('worlds', tag, carry signature),) for pre-built ones
         self.programs={};self.compiles=();self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
     def bind(self,params):
@@ -440,7 +539,9 @@ class DepthNPricer:
             self.params=tuple(params);self.param_key=key;self.programs={};self.source_params=tuple(params)
 
     def _program(self,key,build,*args):
-        """Lower and compile once per shape key; later calls reuse the executable (args must keep their shapes and dtypes)."""
+        """Lower and compile once per shape key, evaluator and world source (the key gains `evaluator_suffix`, then the call's
+        world suffix: nothing for D3's own worlds); later calls reuse the executable (args must keep their shapes and dtypes)."""
+        key=key+self.evaluator_suffix+self._world_suffix
         if key not in self.programs:
             fn=build();clock=time.perf_counter();lowered=fn.lower(*args);lower=time.perf_counter()-clock
             clock=time.perf_counter();self.programs[key]=lowered.compile();self.compiles+=((key,lower,time.perf_counter()-clock),)
@@ -498,20 +599,32 @@ class DepthNPricer:
         own[~expanded]=-1;opp[~expanded]=-1
         return own,opp
 
-    def price(self,requests,materializer,recipe,params,*,selection_maps=None):
+    def price(self,requests,materializer,recipe,params,*,selection_maps=None,worlds=None):
+        """One frame for `requests`. D3 (worlds=None): `materializer` is the D3 Tables and each request's two worlds are
+        materialized here. Pre-built (worlds=PrebuiltWorlds): `materializer` is the pricer-side WorldBinding, the worlds are
+        `worlds.pairs[i]` for request i, `world_prepare_seconds` is the check time, and timing and reports gain the world
+        source (module docstring). `searched` mode passes the same worlds to the full-width pass and to this call."""
         requests=tuple(requests);count=len(requests)
         if self.selection=='prior'and selection_maps is not None:raise ValueError('selection maps belong to the searched mode')
         if self.selection=='searched'and(not isinstance(selection_maps,dict)or 2 not in selection_maps):
             raise ValueError('searched selection needs selection_maps={2: (own, opp), ...}')
         if selection_maps is not None and any(type(p)is not int or not 2<=p<=self.depth for p in selection_maps):raise ValueError('selection map plies are2..N')
+        if worlds is not None and(type(worlds)is not PrebuiltWorlds or type(materializer)is not WorldBinding or type(recipe)is not original.Recipe):
+            raise ValueError('pre-built worlds need the pricer-side WorldBinding and a random recipe')
         if not count:return self._frame(None,None,0,(),dict(roots=0,device_invocations=0))
-        if type(recipe)is not original.Recipe or type(materializer)is not mapping.Tables:
+        if worlds is None and(type(recipe)is not original.Recipe or type(materializer)is not mapping.Tables):
             raise ValueError('original materializer and random recipe required')
         if count>self.capacity:raise ValueError('one frame exceeds declared root capacity')
         capacity=self.capacity if self.fixed_capacity else min(self.capacity,1<<(count-1).bit_length())
         self.bind(params);started=time.perf_counter();self.compiles=()
-        depth2.validate_requests(requests,materializer,recipe,params)
-        worlds=batch._numpy_worlds(requests,materializer,recipe);prepared=time.perf_counter()
+        if worlds is None:
+            self._world_suffix=();source=None
+            depth2.validate_requests(requests,materializer,recipe,params)
+            worlds=batch._numpy_worlds(requests,materializer,recipe);prepared=time.perf_counter()
+        else:
+            signature=validate_world_requests(requests,worlds,materializer,recipe,params)
+            source=dict(world_source=worlds.source,world_carry=signature);self._world_suffix=(('worlds',worlds.source,signature),)
+            worlds=[tuple(pair)for pair in worlds.pairs];prepared=time.perf_counter()
         available=[w for pair in worlds for w in pair if w.state is not None]
         n=2*capacity;N=self.depth;device=0.;invocations=0;host={};pool=None
         data=depth2.pack_turn1(requests,worlds,recipe,capacity,params,k1_own=self.k1_own,fixed_capacity=self.fixed_capacity)
@@ -612,9 +725,11 @@ class DepthNPricer:
             substituted_world_slots=0 if data is None else 2*count-len(available),pre_refused_available_worlds=int(np.count_nonzero(t1['pre'][:2*count]>0)),
             plies=tuple(work),enumerated_leaves=work[-1]['enumerated']if work else 0,evaluated_leaf_lanes=work[-1]['lanes']if work else 0,
             bytes_per_node_state=node_bytes)
+        if source is not None:timing.update(source)
         self.last_timing=timing
         frame=self._frame(t1,levels,count,leaves,timing)
-        reports=tuple(self._reports(i,r,pair,frame)for i,(r,pair)in enumerate(zip(requests,worlds)))
+        tag=None if source is None else source['world_source']
+        reports=tuple(self._reports(i,r,pair,frame,tag)for i,(r,pair)in enumerate(zip(requests,worlds)))
         return replace(frame,world_reports=reports)
 
     @staticmethod
@@ -660,12 +775,13 @@ class DepthNPricer:
         return dict(status=((),np.int8),value=((),np.float32),error=((),np.int8),own_requested=((),bool),opp_requested=((),bool),
             own_legal=((9,),bool),opp_legal=((9,),bool),own_logits=((9,),np.float32),opp_logits=((9,),np.float32))
 
-    def _reports(self,index,request,worlds,frame):
+    def _reports(self,index,request,worlds,frame,world_source=None):
         N=self.depth;reports=[]
         for wi,(start,world)in enumerate(zip(request.plans.starts,worlds)):
             report=dict(world=start.world,posterior_seed=start.seed,kernel_seed=world.kernel_seed,status='REFUSED',reason=None,
                 required_pairs=None,completed_pairs=0,unknown_pairs=None,ply_required=None,ply_unknown=None,
                 reply_history_approximation=None if world.state is None or world.reply_private_history_available else serial.REPLY_HISTORY_APPROXIMATION)
+            if world_source is not None:report['world_source']=world_source
             reports.append(report)
             if world.state is None:report['reason']='physical-materialization:'+','.join(world.refusals);continue
             code=int(frame.pre[index,wi])

@@ -96,6 +96,26 @@ def averaging(worlds, root_legal):
     return Choice(_strategy(actions, [1. if i == best else 0. for i in range(len(actions))]), q[best], tuple(full))
 
 
+def valid_prior_c(c):
+    """A prior weight is a finite, nonnegative int or float (not a bool, not inf or nan)."""
+    return type(c) in (int, float) and math.isfinite(c) and c >= 0
+
+
+def prior_regularized(average, logits, root_legal, c):
+    """argmax over the priced legal actions of completed-Q + c * log pi, lowest index on ties (amendment 19).
+
+    `average` is averaging()'s Choice (its q). pi is the temperature-1 softmax of the root logits over the legal
+    actions. c = 0 is averaging's own choice exactly; a large c plays the greedy argmax of the legal logits, except
+    that between exactly tied logits Q, not the lower index, decides."""
+    if not valid_prior_c(c):raise ValueError('finite prior weight c >= 0 required')
+    legal = [a for a in range(9) if root_legal[a]]
+    top = max(float(logits[a]) for a in legal)
+    log_z = top + math.log(math.fsum(math.exp(float(logits[a]) - top) for a in legal))
+    score = {a: average.q[a] + (c * (float(logits[a]) - log_z) if c else 0.) for a in legal if average.q[a] is not None}
+    best = max(score, key=lambda a: (score[a], -a))
+    return Choice(tuple(1. if a == best else 0. for a in range(9)), average.q[best], average.q)
+
+
 def _linprog(c, a_ub, b_ub, a_eq, b_eq, bounds):
     from scipy.optimize import linprog
     result = linprog(c, A_ub=a_ub, b_ub=b_ub, A_eq=a_eq, b_eq=b_eq, bounds=bounds, method='highs')
@@ -148,6 +168,12 @@ def matrix_game(values):
     return float((x @ m).min()), x
 
 
+def hedge_rule(grid, pi_own=None, pi_opp=None):
+    """Per-node value rule for depthn_backups.backup(frame, root, rule): the node's zero-sum game value over its
+    enumerated [own slots x opp slots] grid (priors unused). Module-level so a process pool can pickle it."""
+    return matrix_game(np.asarray(grid, np.float64))[0]
+
+
 def _hedged_cell(frame, root, world, a1, r1):
     status = int(frame.t1_status[root, world, a1, r1])
     if status == 1:return float(frame.t1_value[root, world, a1, r1])
@@ -183,6 +209,12 @@ def depth2_hedged_root(fields):
     """depth2_hedged_worlds for one root given its per-root arrays (leading world axis): the pool's unit of work."""
     from types import SimpleNamespace
     return depth2_hedged_worlds(SimpleNamespace(**{k: np.asarray(fields[k])[None] for k in DEPTH2_FIELDS}), 0)
+
+
+def top_action(strategy):
+    """The highest-probability action of a mixed strategy; ties go to the lower action index (deterministic play)."""
+    if not any(p > 0. for p in strategy):raise ValueError('empty mixed strategy')
+    return max(range(len(strategy)), key=lambda a: (strategy[a], -a))
 
 
 def search_uniform(seed, address):
