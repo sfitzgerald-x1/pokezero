@@ -8,6 +8,8 @@ panel's own cell, request, packet, interleave and dispatch functions, unchanged,
 - the amended verdict (sha256-bound) is the one depthn_screen_amended_verdict.verdict gives for that readout, this run's result files and
   the committed amendment and its first two addenda (each by sha256; the extension addendum names all three), and its decision is exactly
   CONTINUE_TO_2000 with no amended breakage (every official breakage item except unknown_cells still applies);
+- the final fairness gate (evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json, an addendum to all four earlier files),
+  recomputed here over the whole screen by depthn_fairness_final.final_gate, is within 5%; the amended verdict must carry that result;
 - anything else is refused: STOP_HARM, STOP_BREAKAGE, VOID_*, FLAG_ARM_FAIRNESS, INCOMPLETE, another tree or a sha256 that does not match.
 After the gate, extension_pending is pending()'s body past its own gate, verbatim (tests pin equal packets, order and attempted counts
 with pending(limit=2000) on an official CONTINUE_TO_2000), and the dispatch steps are depthn_foulplay_panel's dispatch mode's.
@@ -20,22 +22,25 @@ from pathlib import Path
 import sys
 
 from pokezero import depthn_live_panel as panel
+from scripts import depthn_fairness_final as FF
 from scripts import depthn_screen_amended_verdict as V
 
 TREE = Path(__file__).resolve().parents[1]
 FILES = dict(amendment='evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json',
              addendum='evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json',
              both='evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json',
-             extension='evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json')
+             extension='evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json',
+             final='evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json')
 # The committed chain, pinned: main() refuses any other bytes (a self-consistent but different chain would otherwise pass the gate).
 PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b',
               addendum='dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f',
               both='98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13',
-              extension='8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00')
+              extension='8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00',
+              final='b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e')
 
 
 def committed(pinned=PINNED):
-    """The four committed files of this tree as {name: (value, sha256)}, each refused unless its bytes are the pinned ones."""
+    """The five committed files of this tree as {name: (value, sha256)}, each refused unless its bytes are the pinned ones."""
     out = {}
     for name, path in FILES.items():
         raw = (TREE/path).read_bytes();digest = hashlib.sha256(raw).hexdigest()
@@ -60,9 +65,14 @@ def gate(run_directory, *, screen, verdict, files, tree_commit=None):
     again = panel.readout(root, arm=value['arm'], limit=d['screen_paired_cells'], codex_raw_directory=value['codex_raw_directory'],
         server_telemetry=value['server_telemetry'], tree_commit=tree_commit, nodes=value.get('nodes'))
     if panel.sha(again) != screen[1]:raise ValueError('screen readout differs from its recomputation')
+    final, final_sha = files['final']
+    if not {amendment_sha, addendum_sha, both_sha, files['extension'][1]} <= {x.get('sha256') for x in final.get('addendum_to') or ()}:
+        raise ValueError('the final-fairness addendum to this amendment chain required')
     amended = panel.read_bound(*verdict)
+    final_fairness = FF.final_gate(root, value['arm'], d['screen_paired_cells'])   # the whole run, recomputed here
+    if final_fairness['within'] is not True:raise ValueError(f"the final fairness gate fails: {final_fairness['finer']}")
     expected = V.verdict(value, amendment, root, readout_sha256=screen[1], amendment_sha256=amendment_sha, addendum=addendum,
-        addendum_sha256=addendum_sha, both=both, both_sha256=both_sha)
+        addendum_sha256=addendum_sha, both=both, both_sha256=both_sha, final=final, final_sha256=final_sha, final_fairness=final_fairness)
     if amended != json.loads(json.dumps(expected)):raise ValueError('amended verdict differs from its recomputation')
     if amended['decision'] != 'CONTINUE_TO_2000' or amended['breakage'] != []:
         raise ValueError(f"an amended verdict continuing to 2000 with no breakage required (found {amended['decision']}, {amended['breakage']})")
@@ -112,7 +122,7 @@ def main(argv=None):
     p.add_argument('--probe-capture');p.add_argument('--cells-per-worker', type=int, default=1);p.add_argument('--resume', action='store_true')
     p.add_argument('--accept-uncalibrated', action='store_true');p.add_argument('--tree-commit')
     args = p.parse_args(argv)
-    scripts = {Path(f).name: hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in (__file__, V.__file__)}   # outside the panel's digest
+    scripts = {Path(f).name: hashlib.sha256(Path(f).read_bytes()).hexdigest() for f in (__file__, V.__file__, FF.__file__)}   # outside the panel's digest
     print(json.dumps(dict(event='EXTENSION_START', scripts=scripts)), flush=True)   # first, so a crash mid-dispatch keeps the audit trail
     amended = gate(args.run_directory, screen=(args.screen_readout, args.screen_readout_sha256),
         verdict=(args.amended_verdict, args.amended_verdict_sha256), files=committed(), tree_commit=args.tree_commit)

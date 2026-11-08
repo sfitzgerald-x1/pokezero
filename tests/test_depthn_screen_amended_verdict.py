@@ -12,6 +12,8 @@ EVALS = Path(__file__).resolve().parents[1]/'evals'
 AMENDMENT = EVALS/'depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json'
 ADDENDUM = EVALS/'depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json'
 BOTH = EVALS/'depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json'
+FINAL = EVALS/'depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json'
+FAIR = dict(within=True, finer=dict(difference=-.01))   # a final fairness gate that passes (depthn_fairness_final.final_gate's shape)
 DECLARATION_SHA256 = '1d6f227d74555b8c98f313b7cf50cebb05c2261de6a7ef9b1b25464486237065'
 TREE = '1aaa75f94d41b538f1bca22f5b4afc0627e627f4'
 ROUND_CAP = 'RuntimeError: owning game round cap without actual owner terminal'
@@ -58,21 +60,41 @@ class AmendedVerdictTests(unittest.TestCase):
         self.amendment = json.loads(AMENDMENT.read_bytes()); self.sha = hashlib.sha256(AMENDMENT.read_bytes()).hexdigest()
         self.addendum = json.loads(ADDENDUM.read_bytes()); self.addendum_sha = hashlib.sha256(ADDENDUM.read_bytes()).hexdigest()
         self.both = json.loads(BOTH.read_bytes()); self.both_sha = hashlib.sha256(BOTH.read_bytes()).hexdigest()
+        self.final = json.loads(FINAL.read_bytes()); self.final_sha = hashlib.sha256(FINAL.read_bytes()).hexdigest()
 
     def tearDown(self): self.directory.cleanup()
 
     def fresh(self): self.directory.cleanup(); self.directory = TemporaryDirectory(); self.root = Path(self.directory.name)
 
-    def run_verdict(self, value, addendum=None, both=None):
+    def run_verdict(self, value, addendum=None, both=None, final=None, final_fairness=FAIR):
         return V.verdict(value, self.amendment, self.root, readout_sha256='r'*64, amendment_sha256=self.sha,
                          addendum=self.addendum if addendum is None else addendum, addendum_sha256=self.addendum_sha,
-                         both=self.both if both is None else both, both_sha256=self.both_sha)
+                         both=self.both if both is None else both, both_sha256=self.both_sha,
+                         final=self.final if final is None else final, final_sha256=self.final_sha, final_fairness=final_fairness)
 
     def test_the_committed_files_are_the_rules_applied(self):
         self.assertEqual((self.amendment['schema'], self.amendment['declaration_sha256'], self.amendment['rule']['unknown_share_max_per_arm'],
                           self.amendment['run']['tree_commit']), (V.AMENDMENT_SCHEMA, DECLARATION_SHA256, .05, TREE))
         self.assertEqual((self.addendum['addendum_to']['sha256'], self.addendum['declaration_sha256']), (self.sha, DECLARATION_SHA256))
         self.assertEqual(sorted(x['sha256'] for x in self.both['addendum_to']), sorted([self.sha, self.addendum_sha]))
+        self.assertLessEqual({self.sha, self.addendum_sha, self.both_sha}, {x['sha256'] for x in self.final['addendum_to']})
+        self.assertEqual((self.final['declaration_sha256'], self.final['run']['tree_commit']), (DECLARATION_SHA256, TREE))
+
+    def test_the_final_fairness_gate_voids_before_any_interval(self):
+        rng = random.Random(7); raw, search = scores(500, rng), scores(500, rng, mean=.1)   # search clearly worse: harm, were intervals computed
+        write_run(self.root, raw, search); value = official(self.root, 500, decision='STOP_HARM', harm=True)
+        unfair = dict(within=False, finer=dict(difference=-.08))
+        out = self.run_verdict(value, final_fairness=unfair)
+        self.assertEqual((out['decision'], out['harm'], out['conservative'], out['harm_mirror'], out['bar_met'], out['final_fairness']),
+                         ('VOID_FAIRNESS', False, None, None, None, unfair))
+        self.assertEqual((out['official_decision'], out['final_sha256']), ('STOP_HARM', self.final_sha))
+        self.assertEqual(self.run_verdict(value)['decision'], 'STOP_HARM')   # the same run within the gate
+        self.fresh(); raw, search = scores(2000, rng, mean=.3), scores(2000, rng, mean=.8)   # at the bar too: no BAR_MET
+        write_run(self.root, raw, search); value = official(self.root, 2000, decision='BAR_MET')
+        self.assertEqual((self.run_verdict(value, final_fairness=unfair)['decision'], self.run_verdict(value)['decision']), ('VOID_FAIRNESS', 'BAR_MET'))
+        with self.assertRaisesRegex(ValueError, "final fairness gate's result"): self.run_verdict(value, final_fairness=dict(finer={}))
+        with self.assertRaisesRegex(ValueError, 'final-fairness addendum'):
+            self.run_verdict(value, final=dict(self.final, addendum_to=self.final['addendum_to'][1:]))
 
     def test_harm_and_the_bar_need_both_the_declared_and_the_imputed_bound(self):
         rng = random.Random(11); raw, search = scores(500, rng), scores(500, rng, mean=.1)   # search clearly worse: mirror upper < 0
@@ -175,17 +197,21 @@ class AmendedVerdictTests(unittest.TestCase):
         out = self.root/'verdict.json'; sha = hashlib.sha256(path.read_bytes()).hexdigest()
         argv = ['--readout', str(path), '--readout-sha256', sha, '--amendment', str(AMENDMENT), '--amendment-sha256', self.sha,
                 '--addendum', str(ADDENDUM), '--addendum-sha256', self.addendum_sha, '--both', str(BOTH), '--both-sha256', self.both_sha,
-                '--run-directory', str(self.root), '--output', str(out)]
-        self.assertEqual(V.PINNED, dict(amendment=self.sha, addendum=self.addendum_sha, both=self.both_sha))   # the committed files are the pinned ones
+                '--final', str(FINAL), '--final-sha256', self.final_sha, '--run-directory', str(self.root), '--output', str(out)]
+        self.assertEqual(V.PINNED, dict(amendment=self.sha, addendum=self.addendum_sha, both=self.both_sha, final=self.final_sha))   # the committed files are the pinned ones
         with self.assertRaisesRegex(SystemExit, "amended run's"): V.main(argv)   # this temporary directory is not /out/screen-r1
         with self.assertRaisesRegex(SystemExit, 'committed file'): V.main([x if x != self.both_sha else '0'*64 for x in argv])
+        with self.assertRaisesRegex(SystemExit, 'committed file'): V.main([x if x != self.final_sha else '0'*64 for x in argv])
         real = V.read_bound
         def here(p, digest):   # the committed amendment, read for a run at this temporary directory (its bytes and sha unchanged)
             value = real(p, digest)
             return dict(value, run=dict(value['run'], run_directory=str(self.root.resolve()))) if Path(p) == AMENDMENT else value
         from unittest import mock
-        with mock.patch.object(V, 'read_bound', side_effect=here):
-            self.assertEqual(V.main(argv), 0); self.assertEqual(json.loads(out.read_text())['readout_sha256'], sha)
+        from scripts import depthn_fairness_final
+        with mock.patch.object(V, 'read_bound', side_effect=here), mock.patch.object(depthn_fairness_final, 'final_gate', return_value=FAIR) as gate:
+            self.assertEqual(V.main(argv), 0); written = json.loads(out.read_text())
+            self.assertEqual((written['readout_sha256'], written['final_fairness'], written['final_sha256']), (sha, FAIR, self.final_sha))
+            self.assertEqual(gate.call_args.args, (str(self.root), 'DN2W16', 500))   # the whole run, at the readout's limit
             with self.assertRaises(FileExistsError): V.main(argv)
 
 

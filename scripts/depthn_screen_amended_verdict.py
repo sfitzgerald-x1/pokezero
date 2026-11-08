@@ -13,6 +13,9 @@ The amendment (the lead's ruling, committed before any paired or outcome statist
 - both bounds (the addendum evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json): harm needs the known-pairs upper bound < 0
   AND the mirror upper bound < 0; the bar needs the known-pairs lower bound > 0 AND the conservative lower bound > 0, so the amendment
   only adds robustness to unknowns and never makes a claim easier than the declared estimator;
+- the final fairness gate (the addendum evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json, computed by
+  depthn_fairness_final.final_gate over the whole run): when its finer-stratified |difference| > 5% the decision is VOID_FAIRNESS, checked
+  before any interval (none is computed then);
 - decision: a void, a held fairness flag or an incomplete run keeps the official decision; at the screen, STOP_HARM if harm (both), else
   STOP_BREAKAGE if any amended breakage, else CONTINUE_TO_2000; at the bar, BAR_MET when both lower bounds are > 0 with no amended
   breakage, else BAR_NOT_MET;
@@ -34,7 +37,8 @@ KEPT = ('VOID_FAIRNESS', 'VOID_LATENCY', 'FLAG_ARM_FAIRNESS', 'INCOMPLETE')
 SCREEN_CELLS, BAR_CELLS = 500, 2000   # the declaration's screen_paired_cells and max_paired_cells
 PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b',   # the committed files (the CLI refuses others)
               addendum='dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f',
-              both='98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13')
+              both='98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13',
+              final='b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e')
 CAUSES = (('round cap', 'round_cap'), ('foul-play challenge', 'foulplay_challenge_timeout'), ('foul-play choice', 'foulplay_choice_timeout'))
 
 
@@ -92,7 +96,8 @@ def conservative_interval(raw, search, limit):return clustered_interval(raw, sea
 def mirror_interval(raw, search, limit):return clustered_interval(raw, search, limit, search_unknown=1., raw_unknown=0.)
 
 
-def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha256, addendum, addendum_sha256, both, both_sha256):
+def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha256, addendum, addendum_sha256, both, both_sha256,
+            final, final_sha256, final_fairness):
     if amendment.get('schema') != AMENDMENT_SCHEMA or readout.get('declaration_sha256') != amendment.get('declaration_sha256'):
         raise ValueError('an amendment of this readout\'s declaration required')
     if (addendum.get('schema') != AMENDMENT_SCHEMA or addendum.get('declaration_sha256') != amendment['declaration_sha256']
@@ -101,6 +106,10 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
     if (both.get('schema') != AMENDMENT_SCHEMA or both.get('declaration_sha256') != amendment['declaration_sha256']
             or sorted(x.get('sha256') for x in both.get('addendum_to') or ()) != sorted([amendment_sha256, addendum_sha256])):
         raise ValueError('the both-bounds addendum to this amendment and its harm addendum required')
+    if (final.get('schema') != AMENDMENT_SCHEMA or final.get('declaration_sha256') != amendment['declaration_sha256']
+            or not {amendment_sha256, addendum_sha256, both_sha256} <= {x.get('sha256') for x in final.get('addendum_to') or ()}):
+        raise ValueError('the final-fairness addendum to this amendment chain required')
+    if type(final_fairness) is not dict or type(final_fairness.get('within')) is not bool:raise ValueError('the final fairness gate\'s result required')
     if (readout.get('tree') or {}).get('commit') != amendment['run']['tree_commit']:raise ValueError('a readout of the amended run\'s tree required')
     arm, limit = readout['arm'], readout['paired_cells']
     if limit not in (SCREEN_CELLS, BAR_CELLS) or readout['decision'] not in KEPT and (readout['bar'] is None) != (limit == SCREEN_CELLS):
@@ -132,7 +141,8 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
             raise ValueError('the run directory\'s pairs differ from the readout\'s')
     breakage = [b for b in readout['breakage'] if b != 'unknown_cells']
     if any(u['share'] > cap for u in unknown.values()):breakage.append('unknown_share')
-    void = paired is None   # VOID_LATENCY computes no screen statistic: neither do we
+    unfair = final_fairness['within'] is False   # the final gate, before any interval
+    void = paired is None or unfair   # VOID_LATENCY computes no screen statistic, nor does a run that fails the final gate
     bound = None if void else conservative_interval(arms['RAW'], arms[arm], limit)
     lower = None if void or bound['interval90'] is None else bound['interval90'][0]
     mirror = None if void else mirror_interval(arms['RAW'], arms[arm], limit)
@@ -140,12 +150,14 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
     known = None if void else paired.get('interval90')   # the declared estimator's known-pairs interval
     harm = known is not None and known[1] < 0 and upper is not None and upper < 0   # both: declared and mirror
     met = known is not None and known[0] > 0 and lower is not None and lower > 0   # both: declared and conservative
-    if readout['decision'] in KEPT:decision = readout['decision']
+    if unfair:decision = 'VOID_FAIRNESS'
+    elif readout['decision'] in KEPT:decision = readout['decision']
     elif screen:decision = 'STOP_HARM' if harm else 'STOP_BREAKAGE' if breakage else 'CONTINUE_TO_2000'
     else:decision = 'BAR_MET' if met and not breakage else 'BAR_NOT_MET'
     paired = paired or {}
     return dict(schema=VERDICT_SCHEMA, amendment_sha256=amendment_sha256, addendum_sha256=addendum_sha256, both_sha256=both_sha256,
-        readout_sha256=readout_sha256, tree_commit=readout['tree']['commit'], bar_met=None if screen or readout['decision'] in KEPT else met,
+        final_sha256=final_sha256, final_fairness=final_fairness,
+        readout_sha256=readout_sha256, tree_commit=readout['tree']['commit'], bar_met=None if screen or void or readout['decision'] in KEPT else met,
         arm=arm, paired_cells=limit, official_decision=readout['decision'], official_breakage=readout['breakage'], official_harm=readout['harm'],
         decision=decision, breakage=breakage, harm=harm,
         conservative=None if void else dict(rule='UNKNOWN or missing: search 0, RAW 1; seed-clustered t, two-sided 90%', **bound, lower_bound=lower),
@@ -159,17 +171,22 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    for name in ('readout', 'readout-sha256', 'amendment', 'amendment-sha256', 'addendum', 'addendum-sha256', 'both', 'both-sha256', 'run-directory'):
+    for name in ('readout', 'readout-sha256', 'amendment', 'amendment-sha256', 'addendum', 'addendum-sha256', 'both', 'both-sha256', 'final',
+                 'final-sha256', 'run-directory'):
         p.add_argument('--' + name, required=True)
     p.add_argument('--output', help='write the verdict once here')
     args = p.parse_args(argv)
-    for name, given in (('amendment', args.amendment_sha256), ('addendum', args.addendum_sha256), ('both', args.both_sha256)):
+    for name, given in (('amendment', args.amendment_sha256), ('addendum', args.addendum_sha256), ('both', args.both_sha256), ('final', args.final_sha256)):
         if given != PINNED[name]:raise SystemExit(f'--{name}-sha256 must be the committed file\'s {PINNED[name]}')
     amendment = read_bound(args.amendment, args.amendment_sha256)
     if str(Path(args.run_directory).resolve()) != amendment['run']['run_directory']:raise SystemExit('--run-directory must be the amended run\'s')
-    value = verdict(read_bound(args.readout, args.readout_sha256), read_bound(args.amendment, args.amendment_sha256), args.run_directory,
+    from scripts import depthn_fairness_final   # the run's tree (pokezero) on the path
+    readout = read_bound(args.readout, args.readout_sha256)
+    final_fairness = depthn_fairness_final.final_gate(args.run_directory, readout['arm'], readout['paired_cells'])
+    value = verdict(readout, read_bound(args.amendment, args.amendment_sha256), args.run_directory,
         readout_sha256=args.readout_sha256, amendment_sha256=args.amendment_sha256, addendum=read_bound(args.addendum, args.addendum_sha256),
-        addendum_sha256=args.addendum_sha256, both=read_bound(args.both, args.both_sha256), both_sha256=args.both_sha256)
+        addendum_sha256=args.addendum_sha256, both=read_bound(args.both, args.both_sha256), both_sha256=args.both_sha256,
+        final=read_bound(args.final, args.final_sha256), final_sha256=args.final_sha256, final_fairness=final_fairness)
     text = json.dumps(value, indent=1, sort_keys=True) + '\n'
     if args.output:
         with open(args.output, 'x') as f:f.write(text)

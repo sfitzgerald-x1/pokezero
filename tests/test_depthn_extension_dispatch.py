@@ -21,12 +21,13 @@ def tearDownModule(): T.tearDownModule()
 def files_for(run):
     """The committed amendment chain, re-bound to a fixture run's declaration and tree: {name: (value, sha256)}."""
     real = E.committed();out = {};shas = {}
-    for name in ('amendment', 'addendum', 'both', 'extension'):
+    for name in ('amendment', 'addendum', 'both', 'extension', 'final'):
         value = copy.deepcopy(real[name][0]);value['declaration_sha256'] = run['declaration_sha256']
         value['run'] = dict(value['run'], tree_commit=run['tree']['commit'], run_directory=run['run_directory'])
         if name == 'addendum':value['addendum_to'] = dict(value['addendum_to'], sha256=shas['amendment'])
         if name == 'both':value['addendum_to'] = [dict(path='a', sha256=shas['amendment']), dict(path='b', sha256=shas['addendum'])]
         if name == 'extension':value['addendum_to'] = [dict(path=k, sha256=shas[k]) for k in ('amendment', 'addendum', 'both')]
+        if name == 'final':value['addendum_to'] = [dict(path=k, sha256=shas[k]) for k in ('amendment', 'addendum', 'both', 'extension')]
         raw = json.dumps(value, sort_keys=True).encode();shas[name] = hashlib.sha256(raw).hexdigest();out[name] = (value, shas[name])
     return out
 
@@ -40,6 +41,8 @@ class ExtensionTests(unittest.TestCase):
             for cell in panel.cells(self.lad, arm)[:1995]:
                 (self.root/'claims').mkdir(exist_ok=True); (self.root/'claims'/f"{cell['ordinal']}.json").write_bytes(b'{}')
         self.files = files_for(self.run)
+        self.fair = dict(within=True, finer=dict(difference=0.))   # the fixture records no Foul Play rates: the final gate is patched
+        patcher = patch.object(E.FF, 'final_gate', return_value=self.fair); self.final_gate = patcher.start(); self.addCleanup(patcher.stop)
         self.genuine = panel.readout(self.root, arm='DN2W8', limit=500)
         self.screen = self.pin('screen', self.genuine)
 
@@ -51,9 +54,9 @@ class ExtensionTests(unittest.TestCase):
         return path, panel.sha(value)
 
     def amended(self, readout=None, screen=None):
-        (a, a_sha), (h, h_sha), (b, b_sha) = (self.files[k] for k in ('amendment', 'addendum', 'both'))
+        (a, a_sha), (h, h_sha), (b, b_sha), (f, f_sha) = (self.files[k] for k in ('amendment', 'addendum', 'both', 'final'))
         return V.verdict(readout or self.genuine, a, self.root, readout_sha256=(screen or self.screen)[1], amendment_sha256=a_sha,
-                         addendum=h, addendum_sha256=h_sha, both=b, both_sha256=b_sha)
+                         addendum=h, addendum_sha256=h_sha, both=b, both_sha256=b_sha, final=f, final_sha256=f_sha, final_fairness=self.fair)
 
     def pin_verdict(self, name, value): return self.pin(name, json.loads(json.dumps(value)))
 
@@ -75,6 +78,16 @@ class ExtensionTests(unittest.TestCase):
         for name, value in cases.items():   # genuine verdicts (their recomputation agrees) that do not continue cleanly
             with self.subTest(name), patch.object(E.V, 'verdict', return_value=value), self.assertRaisesRegex(ValueError, 'continuing to 2000 with no breakage'):
                 E.gate(self.root, screen=self.screen, verdict=self.pin_verdict(f'v-{name}', value), files=self.files)
+
+    def test_refuses_a_run_that_fails_the_final_fairness_gate(self):
+        pinned = self.pin_verdict('verdict', self.amended())
+        self.assertEqual(E.gate(self.root, screen=self.screen, verdict=pinned, files=self.files)['decision'], 'CONTINUE_TO_2000')
+        self.assertEqual(self.final_gate.call_args.args[1:], ('DN2W8', 500))   # recomputed over the whole screen
+        self.final_gate.return_value = dict(within=False, finer=dict(difference=-.06))   # the stored verdict predates it: still refused
+        with self.assertRaisesRegex(ValueError, 'final fairness gate fails'): E.gate(self.root, screen=self.screen, verdict=pinned, files=self.files)
+        self.final_gate.return_value = self.fair
+        broken = dict(self.files, final=(dict(self.files['final'][0], addendum_to=self.files['final'][0]['addendum_to'][:3]), self.files['final'][1]))
+        with self.assertRaisesRegex(ValueError, 'final-fairness addendum'): E.gate(self.root, screen=self.screen, verdict=pinned, files=broken)
 
     def test_refuses_forged_mismatched_or_foreign_inputs(self):
         verdict = self.amended(); pinned = self.pin_verdict('verdict', verdict)
@@ -102,6 +115,7 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(sorted(x['sha256'] for x in real['extension'][0]['addendum_to']), sorted(real[k][1] for k in ('amendment', 'addendum', 'both')))
         self.assertEqual(sorted(x['sha256'] for x in real['both'][0]['addendum_to']), sorted(real[k][1] for k in ('amendment', 'addendum')))
         self.assertEqual(real['addendum'][0]['addendum_to']['sha256'], real['amendment'][1])
+        self.assertEqual(sorted(x['sha256'] for x in real['final'][0]['addendum_to']), sorted(real[k][1] for k in ('amendment', 'addendum', 'both', 'extension')))
 
 
 if __name__ == '__main__':
