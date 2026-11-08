@@ -243,9 +243,10 @@ class Search:
 
     def configure(self, *, reduction, blend, world_blocks, prior_c=None):
         """Per-cell settings; the pricer and its compiled kernels are shared across cells of one process."""
+        from gpu_engine import search_hedge as hedge
         if reduction in NO_SEARCH or reduction not in REDUCTIONS:raise ValueError('search reduction required')
-        if (reduction == 'prior') != (prior_c is not None) or (prior_c is not None and not prior_c >= 0.):
-            raise ValueError('prior_c >= 0 required with the prior reduction, and only with it')
+        if (reduction == 'prior') != (prior_c is not None) or (prior_c is not None and not hedge.valid_prior_c(prior_c)):
+            raise ValueError('a finite prior_c >= 0 required with the prior reduction, and only with it')
         self.reduction = reduction;self.blend = blend;self.world_blocks = world_blocks;self.prior_c = prior_c
         self.recipes = tuple(self.original.Recipe(s) for s in world_block_seeds(self.seed, world_blocks))
         self.timing = collections.Counter();self.calls = [];self.events = collections.Counter();self.leaf_sample = []
@@ -443,11 +444,12 @@ def main(argv=None):
         cells = [dict(label=args.label, b_run=args.b_run, b_iteration=args.b_iteration, reduction=args.reduction, blend=args.blend,
             world_blocks=args.world_blocks, never_borrow=args.never_borrow, b_policy='sample', fallback='sample',
             **(dict(prior_c=args.prior_c) if args.prior_c is not None else {}))]
+    from gpu_engine import search_hedge as hedge
     for cell in cells:
         if (set(cell) - {'label', 'b_run', 'b_iteration', 'reduction', 'blend', 'prior_c', 'world_blocks', 'never_borrow', 'b_policy', 'fallback'}
                 or cell['reduction'] not in REDUCTIONS or cell.get('b_policy', 'sample') not in ('sample', 'argmax')
                 or ('prior_c' in cell) != (cell['reduction'] == 'prior')
-                or ('prior_c' in cell and not (isinstance(cell['prior_c'], (int, float)) and cell['prior_c'] >= 0))
+                or ('prior_c' in cell and not hedge.valid_prior_c(cell['prior_c']))
                 or cell.get('fallback', 'sample') not in ('sample', 'argmax') or (cell['b_run'] == 'champion') != champion
                 or (cell.get('fallback', 'sample') != 'sample' and cell['reduction'] in NO_SEARCH + ('raw',))):   # nothing to fall back from
             raise SystemExit('malformed cell: ' + json.dumps(cell))

@@ -158,7 +158,7 @@ class ChooseTests(unittest.TestCase):
         self.assertEqual(action, 0);self.assertTrue(record['searched']);self.assertAlmostEqual(record['q_gain_vs_argmax'], .1)
         action, record = play('prior', .06)
         self.assertEqual(action, 1);self.assertEqual(record['q_gain_vs_argmax'], 0.)
-        for reduction, prior_c in (('prior', None), ('prior', -.1), ('average', .1)):
+        for reduction, prior_c in (('prior', None), ('prior', -.1), ('prior', float('inf')), ('prior', True), ('average', .1)):
             with self.assertRaises(ValueError):self.search(reduction, {0: [[0.]]}, prior_c=prior_c)
 
     def test_unknown_cell_refuses_every_reduction_and_edges_count_real_rows_only(self):
@@ -261,6 +261,8 @@ class ChampionMirrorTests(unittest.TestCase):
                     (dict(label='x', b_run='/r', b_iteration=1, reduction='none', fallback='argmax'), ['--a-run', 'r', '--a-iteration', '1']),
                     (dict(label='x', b_run='/r', b_iteration=1, reduction='prior'), ['--a-run', 'r', '--a-iteration', '1']),              # no prior_c
                     (dict(label='x', b_run='/r', b_iteration=1, reduction='prior', prior_c=-.1), ['--a-run', 'r', '--a-iteration', '1']),
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='prior', prior_c=float('inf')), ['--a-run', 'r', '--a-iteration', '1']),
+                    (dict(label='x', b_run='/r', b_iteration=1, reduction='prior', prior_c=True), ['--a-run', 'r', '--a-iteration', '1']),
                     (dict(label='x', b_run='/r', b_iteration=1, reduction='average', prior_c=.1), ['--a-run', 'r', '--a-iteration', '1'])):
                 cells.write_text(json.dumps([cell]))
                 with self.assertRaises(SystemExit):h2h.main(['--config', 'unused.json', '--out', root, '--cells', str(cells)] + extra)

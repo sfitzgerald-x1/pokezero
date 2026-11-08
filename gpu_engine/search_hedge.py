@@ -96,12 +96,18 @@ def averaging(worlds, root_legal):
     return Choice(_strategy(actions, [1. if i == best else 0. for i in range(len(actions))]), q[best], tuple(full))
 
 
+def valid_prior_c(c):
+    """A prior weight is a finite, nonnegative int or float (not a bool, not inf or nan)."""
+    return type(c) in (int, float) and math.isfinite(c) and c >= 0
+
+
 def prior_regularized(average, logits, root_legal, c):
     """argmax over the priced legal actions of completed-Q + c * log pi, lowest index on ties (amendment 19).
 
     `average` is averaging()'s Choice (its q). pi is the temperature-1 softmax of the root logits over the legal
-    actions. c = 0 is averaging's own choice exactly; a large c recovers the greedy argmax of the legal logits."""
-    if not c >= 0.:raise ValueError('prior weight c >= 0 required')
+    actions. c = 0 is averaging's own choice exactly; a large c plays the greedy argmax of the legal logits, except
+    that between exactly tied logits Q, not the lower index, decides."""
+    if not valid_prior_c(c):raise ValueError('finite prior weight c >= 0 required')
     legal = [a for a in range(9) if root_legal[a]]
     top = max(float(logits[a]) for a in legal)
     log_z = top + math.log(math.fsum(math.exp(float(logits[a]) - top) for a in legal))

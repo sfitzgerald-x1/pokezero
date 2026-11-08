@@ -186,14 +186,18 @@ class PriorRegularizedTests(unittest.TestCase):
 
     def test_trade_off_between_q_and_the_root_policy(self):
         # Q = (.3, .2); pi over the legal pair = softmax(0, 2): the log-pi gap is exactly 2, so the switch is at c = .05.
-        # The illegal action's huge logit must not enter the softmax.
+        # (An illegal action's logit would only shift log Z for every action alike; it is never playable.)
         root = legal(0, 1);average = h.averaging([world([[.3, .3], [.2, .2]])], root)
         logits = [0., 2., 0., 0., 0., 50., 0., 0., 0.]
         self.assertEqual(h.top_action(h.prior_regularized(average, logits, root, .04).strategy), 0)
         picked = h.prior_regularized(average, logits, root, .06)
         self.assertEqual(h.top_action(picked.strategy), 1);self.assertEqual(picked.value, average.q[1]);self.assertEqual(picked.q, average.q)
         with self.assertRaises(ValueError):h.prior_regularized(average, logits, root, -.1)
-        with self.assertRaises(ValueError):h.prior_regularized(average, logits, root, float('nan'))
+        for bad in (float('nan'), float('inf'), True, '0.1'):
+            with self.assertRaises(ValueError):h.prior_regularized(average, logits, root, bad)
+        # Exactly tied legal logits: even a huge c leaves Q to break the tie (greedy would take the lower index).
+        tied = h.averaging([world([[.2, .2], [.3, .3]])], root)
+        self.assertEqual(h.top_action(h.prior_regularized(tied, [1.] * 9, root, 1e9).strategy), 1)
 
 
 class Depth2HedgeTests(unittest.TestCase):
