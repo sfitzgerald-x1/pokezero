@@ -25,7 +25,8 @@ request_id. Per batch (process_many chunks a longer list into batches of max_req
   action_mean_q, action_policy_target (never played) and mean_q_agrees (action_mean_q == action_index; they can differ by
   one ulp at a near tie). If it refuses or raises (reduce_completed_q's range check raises when a block's completed-Q
   rounds outside [-1, 1]: an action winning, or losing, against every reply in both worlds of a block, its reply prior
-  summing to 1 + ulp), those fields are None and reduction_note says why; the root still plays averaging's action.
+  summing to 1 + ulp), or fails in any other way, those fields are None and reduction_note says why; the root still plays
+  averaging's action.
 - causes: a root prepare() refused, or one with a refused world, is constructor_refused; one refused by build's root
   checks (root view, legal mask, root forward), by DepthN's pricing (a block cause, depthn_backups.refusal_summary) or by
   averaging (an unknown price, or its error) is depthn_refused. Any other exception in the shared batch (prepare_roots,
@@ -40,7 +41,8 @@ illegal lanes), refusal, cause, requested_worlds, constructed_worlds, decision_s
 only); ours: root_operator, root_operator_impl, completed_q, policy_target, root_value, action_mean_q,
 action_policy_target, mean_q_agrees, reduction_note, block_causes, world_refusals, timings (queue_seconds,
 prepare_seconds (the root's own), build/price/reduce_seconds (the shared batch's; reduce = backups, averaging and the
-reporting reduction)), batch_size, bucket, tree_commit, pricer. Fields a request never reached are None.
+reporting reduction)), batch_size, bucket, tree_commit, pricer. Fields a request never reached are None. `rung` echoes the
+request's when it is a string (so a RUNG_NOT_SERVED refusal still matches the client's rung), else this server's.
 Sessions: Codex's constructor keeps `sessions` (the incremental protocol fold per (rung, battle, owner, stream)) and `seen`
 (every attempted address) forever. Here the battles least recently sent to prepare beyond session_cap lose both. A battle
 of the current batch is never evicted (session_cap >= max_requests), so a live battle keeps its fold and its no-retry
@@ -100,13 +102,15 @@ def decide(blocks,root_logits,root_legal):
     if not legal[action]or any(legal[a]!=(q[a]is not None)or legal[a]and not math.isfinite(q[a])for a in range(9)):
         return dict(out,refusal='AVERAGING_INVALID_RESULT')
     out.update(status='COMPLETE',action_index=action,q_values=list(q))
-    try:
+    try:   # reporting only: whatever happens here never changes the decision (MemoryError and non-Exception errors propagate)
         composed=compose([reduce_block(pair,root_logits,legal,original)for pair in blocks],root_logits,legal,original)
         if composed['status']!='LABELED':return dict(out,reduction_note='REDUCTION_REFUSED: a block reduce_completed_q refused')
         mean_q,target=cw.root_actions(composed['completed_q'],composed['policy_target'],legal)
-    except ValueError as error:return dict(out,reduction_note=f'REDUCTION_ERROR: ValueError: {error}')
-    return dict(out,completed_q=list(composed['completed_q']),policy_target=list(composed['policy_target']),root_value=composed['root_value'],
-        action_mean_q=mean_q,action_policy_target=target,mean_q_agrees=mean_q==action)
+        report=dict(completed_q=list(composed['completed_q']),policy_target=list(composed['policy_target']),root_value=composed['root_value'],
+            action_mean_q=mean_q,action_policy_target=target,mean_q_agrees=mean_q==action)
+    except FATAL:raise
+    except Exception as error:return dict(out,reduction_note=f'REDUCTION_ERROR: {type(error).__name__}: {error}')
+    return dict(out,**report)
 
 
 def refusal_cause(reason):
@@ -177,7 +181,9 @@ class DepthNLiveSearch:
 
     @staticmethod
     def _problem(request):
-        """Why a request is malformed (MALFORMED_REQUEST: ...), or None."""
+        """Why a request is malformed (MALFORMED_REQUEST: ...), or None. A well-formed ARRIVAL stamp is accepted whoever set it:
+        process_many cannot tell a client's from the server's, so a client-sent `_arrival_monotonic` is only safe behind
+        scripts/depthn_live_server's ArrivalQueue, which overwrites it with the server's own arrival time before any batch."""
         if not isinstance(request,dict):return'MALFORMED_REQUEST: a JSON object required'
         keys=set(request)-{ARRIVAL};want=set(PROTOCOL_KEYS)|set(OURS)
         if keys!=want:return'MALFORMED_REQUEST: missing '+','.join(sorted(want-keys))+'; unexpected '+','.join(sorted(map(str,keys-want)))
@@ -199,6 +205,7 @@ class DepthNLiveSearch:
         for i,request in enumerate(requests):
             rid=request.get('request_id')if isinstance(request,dict)else None
             row=self._response(rid if type(rid)is str else None,n);problem=self._problem(request)
+            if isinstance(request,dict)and type(request.get('rung'))is str:row['rung']=request['rung']   # the client matches its own rung
             if problem is None and request['rung']!=self.rung:problem=f'RUNG_NOT_SERVED: {request["rung"]!r} (this server serves {self.rung})'
             if problem is not None:out[i]=dict(row,cause='bad_request',refusal=problem);continue
             wait=max(0.,started-request.get(ARRIVAL,started));row['timings']['queue_seconds']=wait
@@ -267,10 +274,20 @@ class DepthNLiveSearch:
         self.constructor.seen.clear();self.constructor.sessions.clear();self.battles.clear()
 
     # Warmup -------------------------------------------------------------------------------------------------------------------------
+    def missing_programs(self,b):
+        """The programs a live call at bucket b runs that its pricer's table lacks (DepthNPricer program keys): P1 and the prior
+        selection at its capacity, the gather from its turn-1 pool, the ply-2 leaf block program (shared by every bucket)."""
+        cap=b*self.K;keys=self.pricers[b].programs
+        want=dict(P1=lambda k:k[0]=='P1'and k[1]==cap,select=lambda k:k[0]=='select'and k[1][0]==2*cap,
+            gather=lambda k:k[0]=='gather'and k[1]==2*cap*dn.LANES,leaf=lambda k:k[0]=='leaf')
+        return[name for name,test in want.items()if not any(test(k)for k in keys)]
+
     def warmup(self,requests):
         """The full path on saved requests (their eight address keys) once cold and once warm per bucket, each forced to that
         bucket, so every program compiles before READY. Windows of the saved requests are tried until one prices at the bucket
-        (RuntimeError if none does). Returns dict(buckets={b: seconds, compiles and outcomes}, programs, seconds)."""
+        with every program of a live call compiled (missing_programs; RuntimeError if none does, e.g. saved roots whose every
+        turn-1 cell is terminal never reach the leaf program). Returns dict(buckets={b: seconds, compiles and outcomes},
+        programs, seconds)."""
         keys=PROTOCOL_KEYS[2:];pool=[]
         for r in requests:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
@@ -282,10 +299,11 @@ class DepthNLiveSearch:
                 batch=[dict(pool[(attempt*b+j)%len(pool)],schema=SCHEMA,request_id=f'warmup-b{b}-{attempt}-{j}',rung=self.rung,budget_seconds=WARMUP_BUDGET)
                     for j in range(b)]
                 self._reset_sessions();clock=time.perf_counter();rows=self._batch(batch,bucket=b);cold=time.perf_counter()-clock
-                if any(r['bucket']==b for r in rows):break
+                if any(r['bucket']==b for r in rows)and not self.missing_programs(b):break
             else:
-                self._reset_sessions()
-                raise RuntimeError(f'warmup: no saved request priced at bucket {b}: '+'; '.join(sorted({f'{r["cause"]}: {r["refusal"]}'for r in rows})))
+                self._reset_sessions();missing=self.missing_programs(b)
+                raise RuntimeError(f'warmup: no saved request priced at bucket {b} with every program compiled (missing: {", ".join(missing) or "none"}): '
+                    +'; '.join(sorted({f'{r["cause"]}: {r["refusal"]}'for r in rows})))
             compiles=self.pricers[b].compiles
             self._reset_sessions();clock=time.perf_counter();again=self._batch(batch,bucket=b);warm=time.perf_counter()-clock
             report[b]=dict(cold_seconds=cold,warm_seconds=warm,attempts=attempt+1,roots=b,complete=sum(r['status']=='COMPLETE'for r in rows),
