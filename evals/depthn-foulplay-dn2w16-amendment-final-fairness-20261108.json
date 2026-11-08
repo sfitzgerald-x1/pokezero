@@ -1,0 +1,36 @@
+{
+ "addendum_to": [
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-unknown-cells-20261108.json",
+   "sha256": "c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea662b18e8b3b"
+  },
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json",
+   "sha256": "dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f"
+  },
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json",
+   "sha256": "98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13"
+  },
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json",
+   "sha256": "8a708ebbc6a4206dafc38b2d729656e25da6cf914931b5424353f441f6e9ed00"
+  }
+ ],
+ "application": "scripts/depthn_screen_amended_verdict.py (the gate, before any interval) and scripts/depthn_extension_dispatch.py (refusal)",
+ "computed_before": "Only the screen latency rule (CONTINUE), the fairness checkpoints (flags 1 and 2, acknowledged benign) and descriptive re-stratifications of Foul Play's iteration rates had been computed; none carries outcomes. No paired, score or outcome statistic of this run had been computed.",
+ "decided_by": "the lead (search, V2, CUDA), after two benign acknowledgements (flag 1 at 200 pairs, -5.0%; flag 2, drift, -13.75% in its window) left the declared online monitor's re-arm threshold at 16.25%",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-20261108.json",
+ "declaration_sha256": "1d6f227d74555b8c98f313b7cf50cebb05c2261de6a7ef9b1b25464486237065",
+ "made_at_utc": "2026-11-08T21:54:55Z",
+ "rule": {
+  "final_fairness_gate": "at the screen's end, and again at 2,000 if extended: the finer-stratified weighted ratio of Foul Play's iterations_per_budget_second, search over RAW, over the WHOLE run (not a window), with cells budget stratum x turn band x our alive bucket x their alive bucket (1-2, 3-4, 5-6), the declared sparse-cell merge and fairness.reading's weights; if |difference| > 5% the result is VOID_FAIRNESS. The amended verdict checks it before any interval; the extension dispatcher refuses on it",
+  "online_monitor": "unchanged: the declared checkpoints, thresholds and acknowledgements continue; the final gate certifies the run",
+  "process_age_check": "descriptive (Foul Play rates only, no outcomes): within the finer cells, Foul Play's rate against seconds since its game's start (bucketed), per arm, and the arm ratio with age buckets added to the stratification; reported in the readout. If the age-controlled ratio is beyond 5% while the position-only one is within, it is reported to the lead; the extension may still dispatch when the final gate passes"
+ },
+ "run": {
+  "run_directory": "/out/screen-r1",
+  "tree_commit": "1aaa75f94d41b538f1bca22f5b4afc0627e627f4"
+ },
+ "schema": "depthn-foulplay-panel.amendment.v1"
+}
