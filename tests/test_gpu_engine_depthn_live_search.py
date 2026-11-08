@@ -2,6 +2,7 @@
 constructor_worlds path and DepthNPricer; the response contract, causes, buckets, sessions and warmup; and the lead's
 equivalence of action_mean_q with search_hedge.averaging."""
 from contextlib import ExitStack
+from dataclasses import replace
 import hashlib
 import json
 import math
@@ -23,7 +24,7 @@ U=2.**-53
 KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_values','refusal','cause','requested_worlds','constructed_worlds',
     'decision_seconds','root_operator','policy_target','root_value','action_policy_target','block_causes','world_refusals','timings','batch_size',
     'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note','root_classes','root_class',
-    'root_class_source'}
+    'root_class_source','root_class_crosscheck'}
 TREE='0123456789abcdef'*2+'01234567'
 
 
@@ -167,6 +168,7 @@ class LiveSearchTests(unittest.TestCase):
             slept=(dict(before=('|-status|p2a: Snorlax|slp',)),None,['sleep'],'sleep','protocol_facts'),   # the public history (_sleep_origins)
             both=(dict(last=dict(forceSwitch=[True]),before=('|-status|p2a: Snorlax|slp',)),dict(payload(),wishSetTurns={'p1':0}),
                 ['forced_switch','sleep','wish'],'forced_switch','protocol_facts'),
+            forced_sub=(dict(last=dict(forceSwitch=[True]),before=sub_lines),payload(p2=fresh),['forced_switch','fresh_substitute'],'forced_switch','protocol_facts'),
             refused=(dict(last=dict(forceSwitch=[True])),None,['forced_switch'],'forced_switch','request_and_lines'))   # capture fails: request and lines only
         outcomes={(b,0):(Refusal('PUBLIC_REPLACEMENT_PHASE_UNAVAILABLE')if b=='refused'else self.outcome(i))for i,b in enumerate(cases)}
         payloads={(b,0):c[1]for b,c in cases.items()if c[1]is not None}
@@ -191,6 +193,30 @@ class LiveSearchTests(unittest.TestCase):
         self.assertEqual((rows[0]['constructed_worlds'],rows[1]['bucket'],s.pricers[1].last_timing['roots']),(8,1,4))   # one root priced, no device work for the others
         self.assertIn('class_refused',live.CAUSES)
         with self.assertRaisesRegex(ValueError,'refuse_classes'):self.search(refuse_classes=('nap',))
+        # A root with a refused world keeps the constructor's cause: no class gate, no structure check (nor a structural count).
+        outcomes={('part',0):self.outcome(0,refused=(3,)),('oddpart',0):self.outcome(1,carry='plain',refused=(3,)),('ok',0):self.outcome(2)}
+        rows,_=self.run_batch(self.search(refuse_classes=('forced_switch',)),[request('part',0,last=dict(forceSwitch=[True])),request('ok',0),
+            request('oddpart',0)],outcomes)
+        self.assertEqual([(r['status'],r['cause'],r['refusal'])for r in rows],[('REFUSED','constructor_refused','WORLD_CONSTRUCTOR_REFUSED:named-refusal'),
+            ('COMPLETE',None,None),('REFUSED','constructor_refused','WORLD_CONSTRUCTOR_REFUSED:named-refusal')])
+        self.assertEqual([r['timings']['structure_seconds']is None for r in rows],[True,False,True])
+        # Classes refused and a root that could not be classified: ROOT_CLASS_UNKNOWN; priced when no class is refused.
+        with patch.object(live,'classify',side_effect=RuntimeError('boom')):
+            rows,_=self.run_batch(self.search(refuse_classes=('wish',)),[request('u',0)],{('u',0):self.outcome(0)})
+        self.assertEqual((rows[0]['cause'],rows[0]['refusal'],rows[0]['root_classes']),('class_refused','ROOT_CLASS_UNKNOWN',None))
+
+    def test_the_recomputed_classes_are_cross_checked_against_the_worlds_restore_checks(self):
+        def diagnosed(i,*kinds,sleep=False):
+            d,m,l=self.outcome(i);checks=[dict(kind=k,status='CLEAR',fatal=True)for k in kinds]
+            checks.append(dict(kind='PUBLIC_SLEEP_WORLD_POSTERIOR',status='CLEAR',fatal=True,applicability='CURRENT_SLEEP'if sleep else'NO_CURRENT_SLEEP'))
+            return d,replace(m,mapper_diagnostics=tuple(dict(world=w,checks=list(checks))for w in range(len(m.worlds)))),l
+        outcomes={('f',0):diagnosed(0,'PUBLIC_REPLACEMENT_PHASE'),('s',0):diagnosed(1,sleep=True),('w',0):diagnosed(2,'PUBLIC_WISH_RECIPIENT_STATE'),
+            ('n',0):self.outcome(3)}
+        rows,_=self.run_batch(self.search(),[request('f',0,last=dict(forceSwitch=[True])),request('s',0,before=('|-status|p2a: Snorlax|slp',)),
+            request('w',0),request('n',0)],outcomes)
+        self.assertEqual([r['root_class_crosscheck']for r in rows],['agrees','agrees',"DISAGREES: recomputed only []; worlds only ['wish']",None])
+        self.assertEqual({r['status']for r in rows},{'COMPLETE'})   # reported only: the recomputed classes stay the source
+        self.assertEqual(rows[2]['root_classes'],[])
 
     def test_a_root_whose_carry_differs_is_refused_alone(self):
         outcomes={('ok',0):self.outcome(0),('odd',0):self.outcome(1,carry='plain'),('w0',0):self.outcome(2)}   # odd: the fake's own carry, not the constructor's
@@ -198,9 +224,11 @@ class LiveSearchTests(unittest.TestCase):
         self.assertEqual([(r['status'],r['cause'],r['bucket'])for r in rows],[('COMPLETE',None,1),('REFUSED','depthn_refused',1)])
         self.assertTrue(rows[1]['refusal'].startswith("WORLD_STRUCTURE_MISMATCH:world 0: missing [1].features['choice_locked']"),rows[1]['refusal'])
         self.assertTrue(s.carry['provisional'])   # no warmup: the first constructed world seen
-        s=self.search()
+        s=self.search();self.run_batch(s,[request('ok',0)],outcomes);self.assertTrue(s.carry['provisional'])   # a provisional reference first
         with Codex(outcomes):report=s.warmup([request('w0',0)])
-        self.assertEqual((s.carry['provisional'],report['carry_signature']),(False,s.carry['signature']))
+        self.assertEqual((s.carry['provisional'],report['carry_signature']),(False,s.carry['signature']))   # warmup replaced it with its own root
+        self.assertEqual(report['carry_reference'],dict(battle_id='w0',owner='p1',stream_id=7,decision_index=0,prefix_sha256=request('w0',0)['prefix_sha256'],
+            root_classes=[]))
         rows,_=self.run_batch(s,[request('odd',0),request('ok',0)],outcomes)   # warmed: the recorded reference, whichever root comes first
         self.assertEqual([(r['status'],r['cause'])for r in rows],[('REFUSED','depthn_refused'),('COMPLETE',None)])
         # Without the check the two would share one frame, which DepthN refuses as a whole.
@@ -208,6 +236,14 @@ class LiveSearchTests(unittest.TestCase):
         with Codex(outcomes):prepared=cw.prepare_roots(constructor,[{k:r[k]for k in live.PROTOCOL_KEYS}for r in(request('ok',0),request('odd',0))])
         made=cw.build(constructor,prepared,s.pricers[2],PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,only_complete=True)
         with self.assertRaisesRegex(ValueError,'one world source per frame'):cw.price(s.pricers[2],made,self.cw.binding,self.cw.recipe,PARAMS)
+
+    def test_warmup_holds_every_root_to_one_carry_and_its_programs_to_it(self):
+        outcomes={('odd',0):self.outcome(1,carry='plain'),('ok',0):self.outcome(0),('ok2',0):self.outcome(2)}
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,r"every warmup root must share one carry structure; against the reference root \{'battle_id': 'odd'"):
+            self.search().warmup([request('odd',0),request('ok',0)])   # the first root seen is never adopted silently
+        # A program table already holding another carry's programs is not this warmup's: the signature check refuses it.
+        pricers=self.make_pricers(8,(1,));self.run_batch(self.search(pricers=pricers),[request('odd',0)],outcomes)   # compiles the odd carry's programs
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,"is not the warmed programs"):self.search(pricers=pricers).warmup([request('ok',0)])
 
     def test_a_structural_exception_at_bucket_1_is_that_roots_server_error(self):
         error=ValueError('one world source per frame: pre-built worlds with different (state, public) structures')
@@ -371,7 +407,7 @@ class LiveSearchTests(unittest.TestCase):
         for n,b in((1,1),(2,2),(3,4)):
             rows,_=self.run_batch(s,[dict(request(f'l{i}',0),request_id=f'l{i}:{n}')for i in range(n)],outcomes)
             self.assertEqual({(r['status'],r['bucket'])for r in rows},{('COMPLETE',b)});self.assertEqual(pricers[b].compiles,())
-            s._reset_sessions()
+            s.reset_sessions()
         with Codex({('r',0):Refusal('WORLD_CONSTRUCTOR_REFUSED','all')}),self.assertRaisesRegex(RuntimeError,'no saved request priced at bucket 1'):
             self.search().warmup([request('r',0)])
         # A bucket priced without reaching the leaf program (here: its compiled leaf programs dropped) is not warm: warmup raises.
