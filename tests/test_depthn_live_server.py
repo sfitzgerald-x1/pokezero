@@ -1,6 +1,6 @@
 """The live server on CPU: fake (and one real fake-engine) search objects through Codex's real Server queue over localhost."""
 import asyncio
-from contextlib import redirect_stderr
+from contextlib import ExitStack,redirect_stderr
 import io
 import json
 import os
@@ -127,6 +127,25 @@ class ServerTests(unittest.TestCase):
             with self.subTest(**bad),self.assertRaisesRegex(ValueError,'bounded shared search queue'):
                 S.run(search,host='127.0.0.1',port=free_port(),warmup_requests=[{}],**{'max_requests':4,**bad})
         self.assertFalse(search.warmed)
+
+    def test_build_passes_the_command_line_through(self):
+        """build() on stand-ins for the GPU, Codex's inputs, the champion and the pricers: --refuse-classes (and the queue
+        settings) reach the DepthNLiveSearch it returns."""
+        import jax
+        from gpu_engine import constructor_worlds as cw,device_public_teacher as teacher,engine_device_observation,phase_d_protocol_constructor as pc,transition
+        base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
+            '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
+            '--champion-checkpoint-sha256','d'*64,'--refuse-classes','wish,sleep','--max-requests','2','--session-cap','64','--tree-commit','t'*40]
+        args=S.options(base);made={}
+        stand_ins=((jax,'devices',lambda:[NS(platform='gpu')]),(pc,'load_inputs',lambda a:('catalog','source','metadata','config')),
+            (S.evaluators,'load_from_arguments',lambda a:NS(params='champion')),(pc,'ProtocolConstructor',lambda **kw:NS(**kw)),
+            (teacher,'make_executor',lambda *a,**k:'executor'),(transition,'tables_from_metadata',lambda m:'tables'),
+            (engine_device_observation,'compile_tables',lambda m,catalog:'observation'),(S.live,'make_pricers',lambda *a,**k:'pricers'),
+            (cw,'binding',lambda *a:'binding'),(S.live,'DepthNLiveSearch',lambda **kw:made.update(kw)or'search'))
+        with ExitStack()as stack:
+            for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
+            self.assertEqual(S.build(args),'search')
+        self.assertEqual((made['refuse_classes'],made['max_requests'],made['session_cap'],made['tree_commit'],made['binding']),(('wish','sleep'),2,64,'t'*40,'binding'))
 
     def test_the_arrival_queue_stamps_every_put_and_passes_the_sentinel(self):
         async def scenario():
