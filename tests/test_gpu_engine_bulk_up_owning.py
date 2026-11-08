@@ -32,7 +32,8 @@ class BulkUpOwningTests(unittest.TestCase):
   # compiling the next genuine phase. This is a correctness fixture only.
   jax.block_until_ready(completed);jax.clear_caches();gc.collect()
  def completed_phase(self,name,_milliseconds):
-  if name in ('engine','requests','public_p2','admission_p2'):
+  # Source-witness mode completes both owner folds in public_pair.
+  if name in ('engine','requests','public_pair','public_p2','admission_p2'):
    self.release_compilers()
    print(type(self).__name__+' completed CPU phase '+name,flush=True)
  def construct(self,*args,**kwargs):
