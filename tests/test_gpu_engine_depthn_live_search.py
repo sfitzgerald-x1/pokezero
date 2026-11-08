@@ -22,7 +22,7 @@ PARAMS=CW.PARAMS[:1]
 U=2.**-53
 KEYS={'schema','request_id','rung','archive_sha256','status','action_index','q_values','refusal','cause','requested_worlds','constructed_worlds',
     'decision_seconds','root_operator','policy_target','root_value','action_policy_target','block_causes','world_refusals','timings','batch_size',
-    'bucket','tree_commit','pricer'}
+    'bucket','tree_commit','pricer','root_operator_impl','completed_q','action_mean_q','mean_q_agrees','reduction_note'}
 TREE='0123456789abcdef'*2+'01234567'
 
 
@@ -97,7 +97,9 @@ class LiveSearchTests(unittest.TestCase):
         legal=CW.T.ROOT_LEGAL
         for row in rows:
             self.assertEqual(set(row),KEYS);encode(row);json.loads(json.dumps(row,allow_nan=False))
-            self.assertEqual((row['schema'],row['rung'],row['status'],row['cause'],row['refusal'],row['root_operator']),(SCHEMA,'DN2W8','COMPLETE',None,None,'ARGMAX_MEAN_COMPLETED_Q'))
+            self.assertEqual((row['schema'],row['rung'],row['status'],row['cause'],row['refusal'],row['root_operator'],row['root_operator_impl'],row['reduction_note']),
+                (SCHEMA,'DN2W8','COMPLETE',None,None,'ARGMAX_MEAN_COMPLETED_Q','search_hedge.averaging',None))
+            self.assertEqual(row['mean_q_agrees'],row['action_mean_q']==row['action_index'])
             self.assertEqual((row['archive_sha256'],row['tree_commit'],row['requested_worlds'],row['constructed_worlds'],row['world_refusals']),('ab'*32,TREE,8,8,[]))
             self.assertEqual((row['batch_size'],row['bucket'],row['block_causes']),(3,4,[None]*4))
             self.assertEqual(len(row['q_values']),9);self.assertEqual([q is None for q in row['q_values']],[not x for x in legal])
@@ -107,28 +109,31 @@ class LiveSearchTests(unittest.TestCase):
             self.assertEqual(row['action_policy_target'],max(acts,key=lambda a:(row['policy_target'][a],-a)))
             self.assertEqual(set(row['timings']),set(live.STAGES));self.assertTrue(all(type(v)is float and v>=0 for v in row['timings'].values()))
             self.assertTrue(type(row['decision_seconds'])is float and row['decision_seconds']>=0)
-            self.assertEqual({k:row['pricer'][k]for k in('depth','k','k1','selection','W','K','buckets','capacities','fixed_capacity','precision','evaluator')},
-                dict(depth=2,k=[9,9],k1=[9,9],selection='prior',W=8,K=4,buckets=[1,2,4],capacities=[4,8,16],fixed_capacity=True,precision='bfloat16',
-                evaluator=['champion','ab'*32,'bfloat16']))
-        # The same roots through constructor_worlds directly, on the same bucket's pricer: bit-equal; and the deployment cell's
-        # averaging over each root's 2K backed-up worlds (block order) plays the same action.
+            self.assertEqual({k:row['pricer'][k]for k in('depth','k','k1','selection','W','K','buckets','capacities','fixed_capacity','precision','evaluator',
+                'root_operator','root_operator_impl','matmul_precision')},dict(depth=2,k=[9,9],k1=[9,9],selection='prior',W=8,K=4,buckets=[1,2,4],
+                capacities=[4,8,16],fixed_capacity=True,precision='bfloat16',evaluator=['champion','ab'*32,'bfloat16'],root_operator='ARGMAX_MEAN_COMPLETED_Q',
+                root_operator_impl='search_hedge.averaging',matmul_precision='default'))
+        # The same roots through constructor_worlds directly, on the same bucket's pricer: the played action and q_values are the
+        # deployment cell's averaging over each root's 2K backed-up worlds (block order), the reported fields constructor_worlds.reduce's.
         constructor=self.cw.constructor(8)
         with Codex(outcomes):prepared=cw.prepare_roots(constructor,[{k:r[k]for k in live.PROTOCOL_KEYS}for r in reqs])
         made=cw.build(constructor,prepared,s.pricers[4],PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,only_complete=True)
         frame,_=cw.price(s.pricers[4],made,self.cw.binding,self.cw.recipe,PARAMS)
         for row,direct,root in zip(rows,cw.reduce(frame,made),made.roots):
-            self.assertEqual((row['q_values'],row['policy_target'],row['root_value'],row['action_index'],row['action_policy_target']),
+            self.assertEqual((row['completed_q'],row['policy_target'],row['root_value'],row['action_mean_q'],row['action_policy_target']),
                 (list(direct['completed_q']),list(direct['policy_target']),direct['root_value'],direct['action_mean_q'],direct['action_policy_target']))
-            prices=tuple(w for r in root['rows']for w in backups.backup(frame,r,backups.learner_max))
-            self.assertEqual(row['action_index'],hedge.top_action(hedge.averaging(prices,root['root_legal']).strategy))
+            prices=tuple(w for r in root['rows']for w in backups.backup(frame,r,backups.learner_max));choice=hedge.averaging(prices,root['root_legal'])
+            self.assertEqual((row['action_index'],row['q_values']),(hedge.top_action(choice.strategy),list(choice.q)))
 
-    def test_the_played_action_is_action_mean_q_never_the_policy_target(self):
-        reduce=cw.reduce;legal=[a for a in range(9)if CW.T.ROOT_LEGAL[a]]
-        def other(frame,batch):   # the improved target's move made to differ from the mean-Q move
-            return[dict(r,action_policy_target=next(a for a in legal if a!=r['action_mean_q']))for r in reduce(frame,batch)]
-        with patch.object(live.cw,'reduce',side_effect=other):rows,_=self.run_batch(self.search(),[request('t',0)],{('t',0):self.outcome(0)})
-        row=rows[0];self.assertEqual(row['status'],'COMPLETE');self.assertNotEqual(row['action_index'],row['action_policy_target'])
-        self.assertEqual(row['action_index'],max(legal,key=lambda a:(row['q_values'][a],-a)))
+    def test_the_played_action_is_averagings_never_the_reported_moves(self):
+        from gpu_engine import d3_search_latency as latency
+        compose=latency.compose;legal=[a for a in range(9)if CW.T.ROOT_LEGAL[a]]
+        def other(improvements,logits,root_legal,original):   # the composed completed-Q made to favour another action than averaging's
+            out=compose(improvements,logits,root_legal,original);best=max(legal,key=lambda a:(out['completed_q'][a],-a));other=next(a for a in legal if a!=best)
+            return dict(out,completed_q=tuple(None if q is None else(.9 if a==other else -.9)for a,q in enumerate(out['completed_q'])))
+        with patch.object(latency,'compose',side_effect=other):rows,_=self.run_batch(self.search(),[request('t',0)],{('t',0):self.outcome(0)})
+        row=rows[0];self.assertEqual(row['status'],'COMPLETE');self.assertFalse(row['mean_q_agrees']);self.assertNotEqual(row['action_index'],row['action_mean_q'])
+        self.assertEqual(row['action_index'],max(legal,key=lambda a:(row['q_values'][a],-a)))   # averaging's argmax plays
 
     def test_bucket_is_the_smallest_holding_the_priced_blocks_and_long_lists_chunk(self):
         for n,bucket in((1,1),(2,2),(3,4),(4,4)):
@@ -198,14 +203,31 @@ class LiveSearchTests(unittest.TestCase):
         rows,_=self.run_batch(s,[request('pre',0),request('empty',0)],outcomes)
         self.assertEqual([(r['cause'],r['refusal'],r['block_causes'])for r in rows],[('depthn_refused','pre',[None,None,'pre',None]),
             ('depthn_refused','ROOT_LEGAL_EMPTY',None)])
-        # reduce_completed_q's range check (constructor_worlds.reduce does not catch it) refuses that root only, never the batch
-        reduce=cw.reduce
-        def failing(frame,batch):
-            if batch.roots[0]['request_id']=='bad:0':raise ValueError('finite in-range numerical value required')
-            return reduce(frame,batch)
-        with patch.object(live.cw,'reduce',side_effect=failing):rows,_=self.run_batch(s,[request('ok',0),request('bad',0)],outcomes)
-        self.assertEqual([(r['status'],r['cause'])for r in rows],[('COMPLETE',None),('REFUSED','depthn_refused')])
-        self.assertEqual(rows[1]['refusal'],'REDUCTION_ERROR: ValueError: finite in-range numerical value required')
+        # The reporting reduction failing (reduce_completed_q's range check) leaves the decision: the root still plays averaging's action.
+        from gpu_engine import d3_search_latency as latency
+        reduce_block=latency.reduce_block;calls=[]
+        def failing(prices,logits,legal,original):
+            calls.append(1)
+            if len(calls)>4:raise ValueError('finite in-range numerical value required')   # the second root's blocks
+            return reduce_block(prices,logits,legal,original)
+        with patch.object(latency,'reduce_block',side_effect=failing):rows,_=self.run_batch(self.search(),[request('ok',0),request('bad',0)],outcomes)
+        self.assertEqual([(r['status'],r['cause'],r['reduction_note'])for r in rows],[('COMPLETE',None,None),
+            ('COMPLETE',None,'REDUCTION_ERROR: ValueError: finite in-range numerical value required')])
+        self.assertEqual([rows[1][k]for k in('completed_q','policy_target','root_value','action_mean_q','action_policy_target','mean_q_agrees')],[None]*6)
+        self.assertTrue(rows[1]['q_values']and rows[1]['action_index']is not None)
+        # Averaging's own failures refuse the root: its error, an unknown price, a non-finite result, an invalid world price.
+        averaging=hedge.averaging
+        cases=dict(error=(live.hedge,'averaging',lambda p,l:(_ for _ in()).throw(ValueError('empty mixed strategy')),'AVERAGING_ERROR: empty mixed strategy'),
+            unknown=(live.hedge,'averaging',lambda p,l:None,'AVERAGING_UNKNOWN_PRICE'),
+            nan=(live.hedge,'averaging',lambda p,l:(lambda c:hedge.Choice(c.strategy,c.value,tuple(None if q is None else math.nan for q in c.q)))(averaging(p,l)),
+                'AVERAGING_INVALID_RESULT'),
+            value=(live.backups,'backup',lambda frame,row,rule:(_ for _ in()).throw(ValueError('public leaf value outside[-1,1]')),
+                'AVERAGING_ERROR: public leaf value outside[-1,1]'))
+        for name,(target,attr,fake,reason)in cases.items():
+            with self.subTest(name),patch.object(target,attr,side_effect=fake):rows,_=self.run_batch(self.search(),[request('ok',0)],outcomes)
+            self.assertEqual((rows[0]['status'],rows[0]['cause'],rows[0]['refusal'],rows[0]['action_index']),('REFUSED','depthn_refused',reason,None))
+        with self.assertRaisesRegex(ValueError,'outside'):backups.original.WorldPrices(False,(False,)*9,(0.,)*9,((1.5,)+(None,)*8,)+((None,)*9,)*8)
+        with self.assertRaisesRegex(ValueError,'finite'):backups.original.WorldPrices(False,(False,)*9,(0.,)*9,((math.nan,)+(None,)*8,)+((None,)*9,)*8)
 
     def test_a_batch_exception_refuses_every_request_of_the_batch_server_error(self):
         outcomes={(f'x{i}',0):self.outcome(i)for i in range(2)};bad=dict(request('y',0),schema='other')
@@ -218,9 +240,9 @@ class LiveSearchTests(unittest.TestCase):
             self.assertEqual(set(s.battles),{'x0','x1'})   # still accounted for eviction
         s=self.search()
         with patch.object(live.cw,'price',side_effect=MemoryError()),self.assertRaises(MemoryError):self.run_batch(s,[request('x0',0)],outcomes)
-        reduce=cw.reduce
-        with patch.object(live.cw,'reduce',side_effect=lambda f,b:[dict(r,root_value=math.nan)for r in reduce(f,b)]):
-            rows,_=self.run_batch(self.search(),[request('x0',0)],outcomes)
+        from gpu_engine import d3_search_latency as latency
+        compose=latency.compose
+        with patch.object(latency,'compose',side_effect=lambda *a:dict(compose(*a),root_value=math.nan)):rows,_=self.run_batch(self.search(),[request('x0',0)],outcomes)
         self.assertEqual(rows[0]['cause'],'server_error');self.assertTrue(rows[0]['refusal'].startswith('RESPONSE_NOT_ENCODABLE'));encode(rows[0])
 
     # sessions ------------------------------------------------------------------------------------------------------------------
@@ -293,32 +315,36 @@ def world(values,*,opponent=None,logits=None):
 
 
 class AveragingEquivalenceTests(unittest.TestCase):
-    """action_mean_q (constructor_worlds.reduce, the live root operator) against the deployment cell's search_hedge.averaging
-    (v2_search_head_to_head.Search.choose: `average = hedge.averaging(prices, root_legal)`, prices = every block's backed-up
-    worlds concatenated in block order; the 'average' cell then plays its one-hot strategy) on the SAME per-world prices.
+    """The played action against the deployment cell's search_hedge.averaging (v2_search_head_to_head.Search.choose:
+    `average = hedge.averaging(prices, root_legal)`, prices = every block's backed-up worlds concatenated in block order; the
+    'average' cell plays its one-hot strategy) on the SAME per-world prices, and the reported action_mean_q against both.
 
     The map. Block k (k = 0..K-1, K = W/2) prices worlds 2k and 2k+1 (constructor_worlds.build: request row k holds the pair
     worlds[2k:2k+2]) and depthn_backups.backup(frame, row_k, learner_max) gives its two WorldPrices (at N=2 the numbers of
-    depth2_backups.backup_learner_max, the cell's backup). World j of block k is averaging's world 2k+j:
-    averaging(backup(row_0) + ... + backup(row_{K-1}), legal). Both take the reply prior pi_w = v5_gumbel._probabilities over
-    the enumerated replies (unit mass on column 0 for a waiting opponent) and the same products t_wb = fl(pi_w(b) G_w[a][b]).
-    Ours: reduce_completed_q per block, q_k(a) = fsum_{w in k, b} t_wb / 2, then compose, Q(a) = fsum_k q_k(a) / K.
-    Averaging: Q'(a) = fsum_{w, b} t_wb / W. In exact arithmetic both are (1/W) sum_w sum_b pi_w(b) G_w[a][b]. In floating
-    point, W, K and 2 are powers of two, so each division is exact (barring subnormals) and fsum rounds once:
-    W Q(a) = fl(sum_k fl(S_k)) and W Q'(a) = fl(sum_k S_k) with S_k = sum_{w in k, b} t_wb, so they differ only by the
-    rounding of the K block sums, |Q - Q'| <= 3u (u = 2^-53, |S_k| <= 2). Both then take the argmax over the legal actions,
-    lowest index on ties (root_actions; averaging's max over (q, -i)).
+    depth2_backups.backup_learner_max, the cell's backup). World j of block k is averaging's world 2k+j. decide() calls
+    averaging on exactly that concatenation, so the played action and q_values are averaging's by construction, ties
+    included; this class checks it on every case, the pinned ones too.
 
-    Hence the same action whenever averaging's best legal action leads every other by more than 6u (~6.7e-16), and on exact
-    ties whose per-block sums agree (identical columns, exactly representable sums). They CAN differ when two actions' exact
-    means are within an ulp and group differently across blocks: pinned below, both directions. In random sweeps (20k roots
-    per mode and W) that happened only with artificially equal reply priors and discrete values (31 of 20k at W=8, 5 at
-    W=16), never with continuous priors or values. Separately, reduce_completed_q refuses (ValueError) a block whose
-    completed-Q rounds outside [-1, 1] (an action winning against every reply in both worlds, its prior summing to 1 + ulp:
-    33 of 20k random all-win blocks); averaging has no range check, so there the cell plays its argmax while the live search
-    refuses the root (greedy). Pinned below.
+    The reported action_mean_q (constructor_worlds' composition: reduce_completed_q per block, q_k(a) = fsum_{w in k, b}
+    t_wb / 2, then Q(a) = fsum_k q_k(a) / K, with t_wb = fl(pi_w(b) G_w[a][b]) as averaging's own products, averaging's
+    being Q'(a) = fsum_{w, b} t_wb / W): W, K and 2 are powers of two, so each division is exact (barring subnormals) and
+    W Q(a) = fl(sum_k fl(S_k)), W Q'(a) = fl(sum_k S_k), S_k = sum_{w in k, b} t_wb: they differ only by the rounding of the
+    K block sums, |Q - Q'| <= 3u (u = 2^-53). So action_mean_q equals the played action unless averaging's best two legal
+    actions are within ~6u and group differently across blocks (pinned below, both directions; in the random sweep only
+    with artificially equal reply priors and discrete values); mean_q_agrees reports it. reduce_completed_q also raises
+    when a block's completed-Q rounds outside [-1, 1] (an all-win block, its prior summing to 1 + ulp); averaging has no
+    such check, so that root still plays and only the reported fields are None (reduction_note).
     """
-    def ours(self,prices,legal,logits=(0.,)*9):
+    def played(self,prices,legal,logits=(0.,)*9):
+        return live.decide([tuple(prices[2*k:2*k+2])for k in range(len(prices)//2)],tuple(logits),tuple(legal))
+
+    def theirs(self,prices,legal):
+        choice=hedge.averaging(tuple(prices),tuple(legal))
+        if choice is None:return None,None
+        action=hedge.top_action(choice.strategy);self.assertEqual(hedge.sample(choice.strategy,.999999),action)   # the cell's draw
+        return action,choice.q
+
+    def reduced(self,prices,legal,logits=(0.,)*9):
         """constructor_worlds.reduce itself on one root whose block k backs up to prices[2k:2k+2] (its learner_max rule checked)."""
         K=len(prices)//2;rules=[]
         def backup(frame,row,rule):rules.append(rule);return tuple(prices[2*row:2*row+2])
@@ -328,37 +354,42 @@ class AveragingEquivalenceTests(unittest.TestCase):
         self.assertTrue(all(r is backups.learner_max for r in rules))
         return result
 
-    def theirs(self,prices,legal):
-        choice=hedge.averaging(tuple(prices),tuple(legal))
-        if choice is None:return None,None
-        action=hedge.top_action(choice.strategy);self.assertEqual(hedge.sample(choice.strategy,.999999),action)   # the cell's draw
-        return action,choice.q
+    def check(self,prices,legal,logits=(0.,)*9):
+        """The played decision is averaging's; the reported fields are constructor_worlds.reduce's (when it labels)."""
+        decision=self.played(prices,legal,logits);action,q=self.theirs(prices,legal)
+        self.assertEqual((decision['status'],decision['action_index'],decision['q_values']),('COMPLETE',action,list(q)))
+        if decision['reduction_note']is None:
+            reduced=self.reduced(prices,legal,logits);self.assertEqual(reduced['status'],'LABELED')
+            self.assertEqual((decision['action_mean_q'],decision['completed_q'],decision['policy_target']),
+                (reduced['action_mean_q'],list(reduced['completed_q']),list(reduced['policy_target'])))
+            self.assertEqual(decision['mean_q_agrees'],reduced['action_mean_q']==action)
+            self.assertLessEqual(max(abs(x-y)for x,y in zip(decision['completed_q'],q)if x is not None),3*U)
+        return decision
 
     def random_world(self,rng,legal,mode):
         requested=rng.random()<.8;opponent=[b for b in range(9)if rng.random()<.5]if requested else None
         if requested and not opponent:opponent=[int(rng.integers(9))]
         value={'f64':lambda:float(rng.uniform(-1,1)),'f32':lambda:float(np.float32(rng.uniform(-1,1))),
-            'terminal':lambda:float(rng.choice([-1.,0.,1.]))}[mode]
-        return world({a:{b:value()for b in(opponent or[0])}for a in range(9)if legal[a]},opponent=opponent,logits=[float(x)for x in rng.normal(0,2,9)])
+            'terminal':lambda:float(rng.choice([-1.,0.,1.])),'ties':lambda:float(rng.choice([-1.,0.,1.]))}[mode]
+        logits=(0.,)*9 if mode=='ties'else[float(x)for x in rng.normal(0,2,9)]   # 'ties': equal reply priors (1/n), the tie-rich regime
+        return world({a:{b:value()for b in(opponent or[0])}for a in range(9)if legal[a]},opponent=opponent,logits=logits)
 
-    def test_random_roots_pick_the_same_action(self):
-        rng=np.random.default_rng(20261108);largest=0.
-        for mode in('f64','f32','terminal'):
+    def test_random_roots_play_averagings_action_and_report_when_mean_q_differs(self):
+        rng=np.random.default_rng(20261108);differ={};notes={}
+        for mode,cases in(('f64',300),('f32',300),('terminal',300),('ties',1500)):
             for W in(8,16):
-                for case in range(400):
+                differ[mode,W]=notes[mode,W]=0
+                for case in range(cases):
                     legal=tuple(bool(x)for x in rng.random(9)<.6)
                     if not any(legal):legal=(True,)+legal[1:]
-                    prices=[self.random_world(rng,legal,mode)for _ in range(W)]
-                    try:result=self.ours(prices,legal)
-                    except ValueError:continue   # a block out of range (pinned below): ours refuses, never a different action
-                    action,q=self.theirs(prices,legal)
                     with self.subTest(mode=mode,W=W,case=case):
-                        self.assertEqual(result['status'],'LABELED');self.assertEqual(result['action_mean_q'],action)
-                        gap=max(abs(x-y)for x,y in zip(result['completed_q'],q)if x is not None);largest=max(largest,gap)
-                        self.assertLessEqual(gap,3*U)
-        self.assertLessEqual(largest,3*U)
+                        decision=self.check([self.random_world(rng,legal,mode)for _ in range(W)],legal)
+                        differ[mode,W]+=decision['mean_q_agrees']is False;notes[mode,W]+=decision['reduction_note']is not None
+        self.assertEqual({k:v for k,v in differ.items()if k[0]!='ties'},{(m,W):0 for m in('f64','f32','terminal')for W in(8,16)})
+        self.assertGreater(differ['ties',8]+differ['ties',16],0)   # the regime where it happens: reported, never played
+        self.assertEqual(sum(notes.values()),sum(notes[k]for k in notes if k[0]in('terminal','ties')))
 
-    def test_exact_ties_go_to_the_lowest_index_in_both(self):
+    def test_exact_ties_go_to_the_lowest_index(self):
         rng=np.random.default_rng(7);legal=(False,True,True,False,True,True,False,True,False)
         for W in(8,16):
             # identical columns: actions 2 and 5 share every world's values (continuous), every other action is lower
@@ -367,39 +398,42 @@ class AveragingEquivalenceTests(unittest.TestCase):
                 opponent=sorted(rng.choice(9,size=3,replace=False).tolist());top={b:float(rng.uniform(.5,1))for b in opponent}
                 rows={a:({b:v for b,v in top.items()}if a in(2,5)else{b:float(rng.uniform(-1,.4))for b in opponent})for a in range(9)if legal[a]}
                 prices.append(world(rows,opponent=opponent,logits=[float(x)for x in rng.normal(0,1,9)]))
-            result=self.ours(prices,legal);action,q=self.theirs(prices,legal)
-            self.assertEqual((result['action_mean_q'],action),(2,2));self.assertEqual(result['completed_q'][2],result['completed_q'][5]);self.assertEqual(q[2],q[5])
-            # exactly representable sums placed in different blocks: dyadic values, unit or 1/2-1/4 dyadic priors
+            decision=self.check(prices,legal);self.assertEqual((decision['action_index'],decision['action_mean_q']),(2,2))
+            self.assertEqual(decision['q_values'][2],decision['q_values'][5])
+            # exactly representable sums placed in different blocks: dyadic values, unit or 1/2-1/2 priors
             prices=[world({a:{0:0.}for a in range(9)if legal[a]})for _ in range(W)]
-            prices[0]=world({1:{3:.5,6:.25},2:{3:0.,6:0.},4:{3:.125,6:0.},5:{3:0.,6:0.},7:{3:-.5,6:.5}},opponent=[3,6])   # pi = (1/2, 1/2)
+            prices[0]=world({1:{3:.5,6:.25},2:{3:0.,6:0.},4:{3:.125,6:0.},5:{3:0.,6:0.},7:{3:-.5,6:.5}},opponent=[3,6])
             prices[W-1]=world({1:{0:0.},2:{0:.375},4:{0:.25},5:{0:0.},7:{0:-.25}})
-            result=self.ours(prices,legal);action,q=self.theirs(prices,legal)
-            self.assertEqual(q[1],q[2]);self.assertEqual(result['completed_q'][1],result['completed_q'][2]);self.assertEqual((result['action_mean_q'],action),(1,1))
-            self.assertEqual(list(result['completed_q']),list(q))
-            # every legal action tied: the lowest legal index
-            same=[world({a:{0:.3}for a in range(9)if legal[a]})for _ in range(W)]
-            self.assertEqual((self.ours(same,legal)['action_mean_q'],self.theirs(same,legal)[0]),(1,1))
+            decision=self.check(prices,legal)
+            self.assertEqual(decision['q_values'][1],decision['q_values'][2]);self.assertEqual(decision['completed_q'],decision['q_values'])
+            self.assertEqual((decision['action_index'],decision['action_mean_q'],decision['mean_q_agrees']),(1,1,True))
+            same=[world({a:{0:.3}for a in range(9)if legal[a]})for _ in range(W)]   # every legal action tied: the lowest legal index
+            self.assertEqual(self.check(same,legal)['action_index'],1)
 
-    def test_they_can_differ_by_one_ulp_at_a_near_tie(self):
+    def test_one_ulp_near_ties_play_averagings_action_and_report_the_disagreement(self):
         legal=(True,True)+(False,)*7;e=2.**-55
         pair=lambda a0,a1:[world({0:{0:x},1:{0:y}})for x,y in zip(a0,a1)]
-        # averaging resolves 0.5 + 2^-53 for action 1; the block sums (0.5 + 2^-54 per block, half an ulp) round to even: ours ties
-        prices=pair([.5]+[0.]*7,[.5,2.*e,2.*e]+[0.]*5)
-        result=self.ours(prices,legal);action,q=self.theirs(prices,legal)
-        self.assertEqual((result['action_mean_q'],action),(0,1));self.assertEqual(q[1]-q[0],2.**-56);self.assertEqual(result['completed_q'][0],result['completed_q'][1])
-        # and the other way: three blocks each round up by 2^-55, the exact sums tie (averaging plays 0), ours plays 1 by one ulp
-        prices=pair([.75]+[0.]*7,[.25,3*e,.25,3*e,.25,3*e,-9*e,0.])
-        result=self.ours(prices,legal);action,q=self.theirs(prices,legal)
-        self.assertEqual((result['action_mean_q'],action),(1,0));self.assertEqual(q[0],q[1]);self.assertEqual(result['completed_q'][1]-result['completed_q'][0],2.**-56)
+        # averaging resolves 0.5 + 2^-53 for action 1; the block sums (0.5 + 2^-54 per block, half an ulp) round to even: mean-Q ties
+        decision=self.check(pair([.5]+[0.]*7,[.5,2.*e,2.*e]+[0.]*5),legal)
+        self.assertEqual((decision['action_index'],decision['action_mean_q'],decision['mean_q_agrees']),(1,0,False))
+        self.assertEqual(decision['q_values'][1]-decision['q_values'][0],2.**-56);self.assertEqual(decision['completed_q'][0],decision['completed_q'][1])
+        # the other way: three blocks each round up by 2^-55, the exact sums tie (averaging plays 0), mean-Q prefers 1 by one ulp
+        decision=self.check(pair([.75]+[0.]*7,[.25,3*e,.25,3*e,.25,3*e,-9*e,0.]),legal)
+        self.assertEqual((decision['action_index'],decision['action_mean_q'],decision['mean_q_agrees']),(0,1,False))
+        self.assertEqual(decision['q_values'][0],decision['q_values'][1]);self.assertEqual(decision['completed_q'][1]-decision['completed_q'][0],2.**-56)
 
-    def test_unknown_prices_refuse_both_and_an_out_of_range_block_refuses_only_ours(self):
+    def test_unknown_prices_refuse_and_an_out_of_range_block_only_blanks_the_report(self):
+        from gpu_engine.d3_search_latency import reduce_block
         legal=(True,True)+(False,)*7;base=[world({0:{0:.1},1:{0:.2}})for _ in range(8)]
         missing=list(base);missing[5]=world({0:{0:.1},1:{0:None}})
-        self.assertEqual((self.ours(missing,legal)['status'],self.theirs(missing,legal)[0]),('REFUSED',None))
+        self.assertEqual(self.theirs(missing,legal)[0],None)
+        self.assertEqual((self.played(missing,legal)['status'],self.played(missing,legal)['refusal']),('REFUSED','AVERAGING_UNKNOWN_PRICE'))
         logits=[1.746,-2.561,-1.426]+[0.]*6;wins=world({0:{0:1.,1:1.,2:1.},1:{0:0.,1:0.,2:0.}},opponent=[0,1,2],logits=logits)   # its prior sums to 1 + ulp
         prices=[wins,wins]+base[2:]
-        with self.assertRaisesRegex(ValueError,'in-range'):self.ours(prices,legal)
-        self.assertEqual(self.theirs(prices,legal)[0],0)
+        with self.assertRaisesRegex(ValueError,'in-range'):reduce_block((wins,wins),(0.,)*9,legal,original)   # block 0's completed-Q is 1 + ulp
+        decision=self.check(prices,legal)
+        self.assertEqual((decision['action_index'],decision['reduction_note']),(0,'REDUCTION_ERROR: ValueError: finite in-range numerical value required'))
+        self.assertEqual([decision[k]for k in('completed_q','policy_target','root_value','action_mean_q','action_policy_target','mean_q_agrees')],[None]*6)
 
 
 if __name__=='__main__':unittest.main()
