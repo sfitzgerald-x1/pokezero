@@ -241,6 +241,13 @@ class LiveSearchTests(unittest.TestCase):
         outcomes={('odd',0):self.outcome(1,carry='plain'),('ok',0):self.outcome(0),('ok2',0):self.outcome(2)}
         with Codex(outcomes),self.assertRaisesRegex(RuntimeError,r"every warmup root must share one carry structure; against the reference root \{'battle_id': 'odd'"):
             self.search().warmup([request('odd',0),request('ok',0)])   # the first root seen is never adopted silently
+        # At bucket 1 only (the bench's setup) the priced window is the first root alone: every other warmup root is still checked.
+        single=self.make_pricers(8,(1,));s=self.search(pricers=single)
+        with Codex(outcomes),self.assertRaisesRegex(RuntimeError,r"against the reference root \{'battle_id': 'odd'.*ok/0: world 0: extra \[1\].features"):
+            s.warmup([request('odd',0),request('ok',0)])
+        self.assertEqual((s.constructor.seen,s.constructor.sessions,s.battles),(set(),{},{}))   # sessions and attempts reset after it
+        with Codex(outcomes):report=self.search(pricers=self.make_pricers(8,(1,))).warmup([request('ok',0),request('ok2',0)])   # one structure: fine
+        self.assertEqual(report['carry_reference']['battle_id'],'ok')
         # A program table already holding another carry's programs is not this warmup's: the signature check refuses it.
         pricers=self.make_pricers(8,(1,));self.run_batch(self.search(pricers=pricers),[request('odd',0)],outcomes)   # compiles the odd carry's programs
         with Codex(outcomes),self.assertRaisesRegex(RuntimeError,"is not the warmed programs"):self.search(pricers=pricers).warmup([request('ok',0)])
