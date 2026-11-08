@@ -2953,12 +2953,17 @@ N2_CHAMPION = dict(override=True, kind='champion', archive_sha256=DECLARED_ARCHI
 
 
 def n2_saved(per_config, *, declared=None, evaluator=None):
-    """An n2-equivalence.json as run_n2 writes it (its keys, header and statuses) from summarize_n2 on `per_config` ({config: [call]}) under
-    `declared`, JSON round-tripped."""
+    """An n2-equivalence.json as run_n2 writes it (its keys, header, options and statuses) from summarize_n2 on `per_config` ({'full_width' |
+    'top{k}': [call]}) under `declared`, JSON round-tripped: calls carrying the merged (e) stand for the champion path (the header's
+    merged_depth2_parity, each Depth2Pricer's evaluator), calls carrying child-block invariance name the child blocks in options."""
     configs = gate.summarize_n2(per_config, declared=declared);status = gate.n2_run_status(configs)
     section = None if declared is None else gate.declared_section(declared, evaluator)
-    report = dict(evaluator=evaluator or dict(override=False), value_scale={}, source=dict(fixture=True), header=gate.header_block(configs=configs, declared=section),
-        schema=gate.SCHEMA, mode=gate.N2_MODE, status=status, passed=status == 'PASS', configs=configs, options={}, split_capacity=32, block_seeds=[0],
+    merged = any('e_merged' in x for calls in per_config.values() for x in calls);blocks = any('invariance' in x for calls in per_config.values() for x in calls)
+    options = {name: dict(k=9 if name == 'full_width' else int(name[3:]), depth2_options=dict(digest=True, **(dict(evaluator=dict(kind='champion')) if merged else {})),
+        **(dict(child_blocks=[27, 81]) if 'block_invariance' in c else {})) for name, c in configs.items()}
+    parity = gate.merged_depth2_parity('n2_equivalence', child_block_invariance=blocks) if merged else None
+    report = dict(evaluator=evaluator or dict(override=False), value_scale={}, source=dict(fixture=True), header=gate.header_block(configs=configs, declared=section, parity=parity),
+        schema=gate.SCHEMA, mode=gate.N2_MODE, status=status, passed=status == 'PASS', configs=configs, options=options, split_capacity=32, block_seeds=[0],
         **({} if declared is None else dict(status_reasons=gate.provisional_reasons(declared['git_verification'], declared['source_measurement_verification']))),
         rule='per config (run_n2)')
     return json.loads(json.dumps(report, allow_nan=False, default=str))
@@ -2990,16 +2995,16 @@ class N2ReverdictTests(FixtureN, unittest.TestCase):
     _n2_frame = GateNTests._n2_frame
     main, roots = CommandLineRunTests.main, CommandLineRunTests.roots
 
-    def call(self, *, values=.006, invariance=True):
+    def call(self, *, values=.006, invariance=True, actors=1):
         """One --n2-equivalence call's results as n2_equivalence_call records them: the stand-in N=2 frame against a copy whose expanded turn-1
         values and head-valued leaves are `values` off (.006: beyond the guard .005, within the value bound .008), (e) and the merged (e)
-        through depth2_backups, the synthetic floor FLOOR and spreads SPREAD, one parameter set, the per-position covers and child-block
+        through depth2_backups, the synthetic floor FLOOR and spreads SPREAD, `actors` parameter sets, the per-position covers and child-block
         invariance against the copy."""
         frame = fake_as_depth2(self.cached('n2', self._n2_frame));other = copy.deepcopy(frame);t1s, t2s = np.asarray(other.t1_status), np.asarray(other.t2_status)
         other.t1_value[t1s == 2] += np.float32(values);other.t2_value[t2s == 4] += np.float32(values)
         found, floats = gate.n2_compare(frame, other);e = gate.decide_roots(frame, frame, self.requests, depth2_backups)
         return dict(a=found, floats=floats, c=dict(depth1_noise_floor=gate.g2._numeric([[0]], [FLOOR], [0.])), e=e, e_merged=copy.deepcopy(e), spreads=[SPREAD] * 10,
-            cover=gate.n2_cover(frame, other), actors=1, **(dict(invariance=[gate.g2.block_invariance(frame, other)], invariance_cover=[gate.invariance_cover(frame, other)])
+            cover=gate.n2_cover(frame, other), actors=actors, **(dict(invariance=[gate.g2.block_invariance(frame, other)], invariance_cover=[gate.invariance_cover(frame, other)])
                 if invariance else {}))
 
     def declared_report(self, *, numbers=None, **call):
@@ -3070,14 +3075,40 @@ class N2ReverdictTests(FixtureN, unittest.TestCase):
             within_guard=(lambda r: top(r)['floats']['t1_value'].__setitem__('within_guard', True), audit, 'disagree with their own numbers'),
             raised_max=(lambda r: top(r)['block_invariance']['floats']['t2_value'].__setitem__('max_abs_difference', .5), audit, 'disagree with their own numbers'),
             float_passed=(lambda r: top(r)['floats']['t1_own_logits'].__setitem__('passed', False), audit, 'configs.top2.floats.t1_own_logits: passed False, re-derived True'),
-            digest_mismatch=(lambda r: top(r)['discrete']['mismatched'].__setitem__('t2_digest', 1), audit, "configs.top2.floats.t2_value: saved 'digest_certified', re-derived 'gated'"),
+            digest_mismatch=(lambda r: (top(r)['discrete']['mismatched'].__setitem__('t2_digest', 1), top(r)['discrete']['first_mismatches'].append(dict(field='t2_digest',
+                cell=[0, 0, 0, 0, 0, 0], pricer=[1, 0], oracle=[0, 0]))), audit, "configs.top2.floats.t2_value: saved 'digest_certified', re-derived 'gated'"),
             inexact_outside=(lambda r: top(r)['floats']['t1_value']['guard_evidence'].__setitem__('value_positions_outside_digest_inexact', 1), audit, 'saved guard modes differ'),
             invariance_digest=(lambda r: top(r)['block_invariance']['floats']['t2_value']['guard_evidence'].__setitem__('digest_mismatched', 1), audit, 'saved guard modes differ'),
             two_actors=(evidence('floats', evaluator_actors=2), audit, 'saved guard modes differ'), mode_gated=(lambda r: top(r)['floats']['t2_value'].__setitem__('guard_mode', 'gated'), audit,
                 'saved guard modes differ'),
             record_gated=(lambda r: top(r)['tolerance']['guard_declared']['modes'].__setitem__('floats.t2_value', 'gated'), audit, 'configs.top2.tolerance.guard_declared.modes'),
             e_passed=(lambda r: top(r)['e'].__setitem__('max_abs_delta_q', .02), audit, 'configs.top2.e: passed True, q_noise_within_bound True; re-derived False, False'),
-            merged_passed=(lambda r: top(r)['e_merged_depth2'].__setitem__('argmax_q_differs_non_tie', 1), audit, 'configs.top2.e_merged_depth2: passed True'))
+            merged_passed=(lambda r: top(r)['e_merged_depth2'].__setitem__('argmax_q_differs_non_tie', 1), audit, 'configs.top2.e_merged_depth2: passed True'),
+            # decision_passed clause by clause: each count that fails (e), with passed left true; a record without gating; the within flag alone
+            unmatched=(lambda r: top(r)['e_merged_depth2']['replaced'].__setitem__('unmatched_head_leaves', 1), audit, 'configs.top2.e_merged_depth2: passed True, '
+                'q_noise_within_bound True; re-derived False, True'),
+            status_differs=(lambda r: top(r)['e'].__setitem__('status_differs', 1), audit, 'configs.top2.e: passed True, q_noise_within_bound True; re-derived False, True'),
+            nonfinite=(lambda r: top(r)['e_merged_depth2'].__setitem__('nonfinite_roots', 1), audit, 'configs.top2.e_merged_depth2: passed True, q_noise_within_bound True; '
+                're-derived False, True'),
+            target_flip=(lambda r: top(r)['e'].__setitem__('argmax_target_differs_non_tie', 1), audit, 'configs.top2.e: passed True, q_noise_within_bound True; re-derived False'),
+            no_gating=(lambda r: top(r)['e'].pop('gating'), audit, 'configs.top2.e: passed True, q_noise_within_bound True; re-derived False, None'),
+            within_flag=(lambda r: top(r)['e'].__setitem__('q_noise_within_bound', False), audit, 'configs.top2.e: passed True, q_noise_within_bound False; re-derived True, True'),
+            # the aggregates the saved records determine
+            listed_mismatch=(lambda r: top(r)['discrete']['first_mismatches'].append(dict(field='t2_status', cell=[0], pricer=1, oracle=2)), audit,
+                "configs.top2.discrete: first_mismatches list ['t2_status'] against mismatched counts 0"),
+            discrete_equal=(lambda r: top(r)['block_invariance'].__setitem__('discrete_equal', False), audit, 'configs.top2.block_invariance.discrete_equal False but differing records []'),
+            differing_hidden=(lambda r: top(r)['block_invariance'].update(differing=dict(t2_status=dict(count=3, size=100)), first_differences=[dict(field='t2_status', cell=[0])]),
+                audit, "configs.top2.block_invariance.discrete_equal True but differing records ['t2_status']"),
+            differing_unlisted=(lambda r: top(r)['block_invariance'].update(differing=dict(t2_status=dict(count=3, size=100)), discrete_equal=False, passed=False), audit,
+                'configs.top2.block_invariance: first_differences against differing counts'),
+            world_flag=(lambda r: top(r).__setitem__('world_reports_first_difference', dict(root=0, depth2=None, depthn={'reason': 'x'})), audit,
+                'configs.top2.world_reports_equal True with world_reports_first_difference recorded'),
+            world_converse=(lambda r: top(r).__setitem__('world_reports_equal', False), audit, 'configs.top2.world_reports_equal False with world_reports_first_difference null'),
+            # the guard number: GUARD_FACTOR x the saved p10 (g2.tolerance_rule, guard_note), and the p10 None iff no spread is non-zero
+            guard_number=(lambda r: top(r)['tolerance'].__setitem__('guard_bound', .05), audit, 'configs.top2.tolerance guard_bound, guard [0.05, \'applied\'] are not the live path'),
+            p10=(lambda r: top(r)['tolerance'].__setitem__('p10_cell_a2_spread', 1.), audit, 'configs.top2.tolerance guard_bound, guard'),
+            p10_nulled=(lambda r: top(r)['tolerance'].update(p10_cell_a2_spread=None, guard_bound=None, guard=gate.guard_note(dict(guard_bound=None), top(r)['tolerance']['spread'])['guard']),
+                audit, 'configs.top2.tolerance.p10_cell_a2_spread None with spread.nonzero 10'))
         for case, (change, extra, message) in cases.items():
             with self.subTest(case):
                 r = copy.deepcopy(report)
@@ -3102,6 +3133,15 @@ class N2ReverdictTests(FixtureN, unittest.TestCase):
                 'configs.top2.floats.t1_value.guard_evidence.value_positions_outside_digest (an integer or null)'),
             differing=(lambda r: top(r)['block_invariance'].__setitem__('differing', dict(t2_digest=dict(count='1'))), 'configs.top2.block_invariance.differing'),
             not_an_object=(lambda r: r['configs'].__setitem__('top2', [1]), 'configs.top2 (a JSON object)'),
+            unmatched_key=(drop('configs', 'top2', 'e', 'replaced', 'unmatched_head_leaves'), 'configs.top2.e.replaced.unmatched_head_leaves (an integer)'),
+            merged_section=(drop('configs', 'full_width', 'e_merged_depth2'), 'configs.full_width.e_merged_depth2 (the merged (e) ran: header.merged_depth2_parity)'),
+            merged_by_options=(lambda r: (drop('configs', 'full_width', 'e_merged_depth2')(r), r['header'].pop('merged_depth2_parity')), 'configs.full_width.e_merged_depth2'),
+            invariance_section=(drop('configs', 'top2', 'block_invariance'), 'configs.top2.block_invariance (child-block invariance ran: options.top2.child_blocks)'),
+            n2_float=(drop('configs', 'top2', 'floats', 't1_own_logits'), 'configs.top2.floats.t1_own_logits (n2_compare compares it'),
+            invariance_float=(drop('configs', 'top2', 'block_invariance', 'floats', 'root_peer_logits'), 'configs.top2.block_invariance.floats.root_peer_logits (block invariance'),
+            first_difference=(drop('configs', 'top2', 'world_reports_first_difference'), 'configs.top2.world_reports_first_difference'),
+            spread=(drop('configs', 'top2', 'tolerance', 'spread'), 'configs.top2.tolerance.spread (a JSON object)'),
+            options=(drop('options'), 'options (per config: a JSON object)'),
             configs=(drop('configs'), 'configs'), schema=(lambda r: r.__setitem__('schema', 'v0'), 'schema'))
         for case, (change, message) in missing.items():
             with self.subTest(case):
@@ -3127,7 +3167,8 @@ class N2ReverdictTests(FixtureN, unittest.TestCase):
             (0, 'PASS', 'PASS', 'FAIL', 'FAIL'))
         self.assertEqual(out['reverdict']['changed'], [dict(config='top2', field='status', before='FAIL', after='PASS'), dict(config='top2', field='passed', before=False, after=True)])
         self.assertEqual(next(x for x in lines if x['message'] == 'REVERDICT')['changed'], out['reverdict']['changed'])
-        code, out, _, _ = edited(lambda r: r['configs']['full_width']['discrete']['mismatched'].__setitem__('t1_status', 1))
+        code, out, _, _ = edited(lambda r: (r['configs']['full_width']['discrete']['mismatched'].__setitem__('t1_status', 1),
+            r['configs']['full_width']['discrete']['first_mismatches'].append(dict(field='t1_status', cell=[0, 0, 0, 0], pricer=1, oracle=2))))
         self.assertEqual((code, out['status'], out['reverdict']['configs'], out['configs']['full_width']['discrete']['passed']), (1, 'FAIL', dict(full_width='FAIL', top2='PASS'), False))
         self.assertEqual([(c['field'], c['before'], c['after']) for c in out['reverdict']['changed']],
             [('status', 'PASS', 'FAIL'), ('passed', True, False), ('discrete.passed', True, False)])
@@ -3143,8 +3184,8 @@ class N2ReverdictTests(FixtureN, unittest.TestCase):
         code, out, _, _ = n2_reverdicted(report)
         self.assertEqual((code, out['status'], out['status_reasons'], out['reverdict']['changed'], out['configs']), (0, 'PASS', [], [], report['configs']))
         self.assertFalse(any(k.startswith('declared') for k in out['reverdict']));self.assertNotIn('declared_bounds', out['header'])
-        frozen = n2_saved({'x': [self.call()]});code, out, _, _ = n2_reverdicted(frozen)   # .006: beyond the guard, which the frozen rule gates
-        self.assertEqual((code, out['status'], {q for q, m in out['configs']['x']['floats'].items() if not m['passed']}), (1, 'FAIL', {'t1_value', 't2_value'}))
+        frozen = n2_saved({'full_width': [self.call()], 'top2': [self.call()]});code, out, _, _ = n2_reverdicted(frozen)   # .006: beyond the guard, which the frozen rule gates
+        self.assertEqual((code, out['status'], {q for q, m in out['configs']['top2']['floats'].items() if not m['passed']}), (1, 'FAIL', {'t1_value', 't2_value'}))
         text, out, _, _ = n2_reverdicted(report, '--declared-bounds-commit', 'b' * 40);self.assertIsNone(out);self.assertIn('records no declaration', text)
         top = lambda r: r['configs']['top2']
         cases = dict(value_bound=(lambda r: top(r)['tolerance'].__setitem__('value_bound', .05), "configs.top2.tolerance.value_bound 0.05 is not the frozen rule's"),
@@ -3162,6 +3203,84 @@ class N2ReverdictTests(FixtureN, unittest.TestCase):
             with self.subTest(case):
                 r = copy.deepcopy(report);change(r);text, out, _, path = n2_reverdicted(r)
                 self.assertIsNone(out, case);self.assertIn(message, text);self.assertIn('fail closed', text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+
+    def test_a_failure_cannot_be_hidden_by_dropping_or_editing_what_records_it(self):
+        """Each genuine failure (the merged (e), child-block invariance's discrete arrays, the world reports) re-judges FAIL with nothing changed.
+        Dropping the section that records it, or editing one record against another, with every status reset to PASS, is refused and writes
+        nothing: the merged (e) (header.merged_depth2_parity), block invariance (options' child_blocks), discrete_equal against differing,
+        world_reports_equal against its first difference; so is dropping a float, a config (with or without its option), renaming one or adding a
+        float n2_compare never writes. A float absent where a :shape mismatch is recorded is no omission: the config FAILs on the mismatch."""
+        report, record, audit = self.declared_report()
+        def failed(kind):
+            def change(r):
+                c = r['configs']['full_width' if kind == 'merged' else 'top2']
+                if kind == 'merged':c['e_merged_depth2'].update(argmax_q_differs_non_tie=1, argmax_q_differs=1, passed=False)
+                if kind == 'invariance':c['block_invariance'].update(differing=dict(t2_status=dict(count=3, size=100)), first_differences=[dict(field='t2_status', cell=[0])],
+                    discrete_equal=False, passed=False)
+                if kind == 'world':c.update(world_reports_equal=False, world_reports_first_difference=dict(root=5, depth2={'a': 1}, depthn={'a': 2}))
+                c.update(status='FAIL', passed=False);r.update(status='FAIL', passed=False)
+            return change
+        def unpassed(r):
+            for c in r['configs'].values():c.update(status='PASS', passed=True)
+            r.update(status='PASS', passed=True)
+        for kind in ('merged', 'invariance', 'world'):
+            with self.subTest(genuine=kind):
+                r = copy.deepcopy(report);failed(kind)(r);code, out, _, _ = n2_reverdicted(r, *audit, repo=record.root)
+                self.assertEqual((code, out['status'], out['reverdict']['changed']), (1, 'FAIL', []))
+        top = lambda r: r['configs']['top2']
+        forged = dict(
+            merged_dropped=(lambda r: (failed('merged')(r), r['configs']['full_width'].pop('e_merged_depth2'), unpassed(r)), 'lacks what the verdict needs: configs.full_width.e_merged_depth2'),
+            invariance_dropped=(lambda r: (failed('invariance')(r), top(r).pop('block_invariance'), unpassed(r)), 'lacks what the verdict needs: configs.top2.block_invariance'),
+            discrete_equal_flipped=(lambda r: (failed('invariance')(r), top(r)['block_invariance'].update(discrete_equal=True), unpassed(r)), 'discrete_equal True but differing'),
+            world_flag_flipped=(lambda r: (failed('world')(r), top(r).update(world_reports_equal=True), unpassed(r)), 'world_reports_equal True with world_reports_first_difference recorded'),
+            float_dropped=(lambda r: top(r)['floats'].pop('t1_own_logits'), 'lacks what the verdict needs: configs.top2.floats.t1_own_logits'),
+            config_dropped=(lambda r: r['configs'].pop('top2'), "as run_n2 writes it (fail closed): configs ['full_width'] are not the configs options names"),
+            config_and_option_dropped=(lambda r: (r['configs'].pop('top2'), r['options'].pop('top2')), 'run_n2 writes full_width (options k 9) and top{k}'),
+            renamed=(lambda r: (r['configs'].__setitem__('top3', r['configs'].pop('top2')), r['options'].__setitem__('top3', r['options'].pop('top2'))), 'run_n2 writes full_width'),
+            unknown_float=(lambda r: top(r)['floats'].__setitem__('t9_value', dict(top(r)['floats']['t1_own_logits'])), "configs.top2.floats.t9_value: not one of n2_compare's floats"))
+        for case, (change, message) in forged.items():
+            with self.subTest(case):
+                r = copy.deepcopy(report);change(r);text, out, _, path = n2_reverdicted(r, *audit, repo=record.root)
+                self.assertIsNone(out, case);self.assertIn(message, text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
+        shaped = n2_saved({'full_width': [self.call(values=.002)], 'top2': [self.call(values=.002)]});c = shaped['configs']['top2']   # undeclared
+        c['discrete']['mismatched']['t1_status:shape'] = 1;c['discrete']['first_mismatches'].append(dict(field='t1_status:shape', cell=[0], pricer=[1], oracle=[2]))
+        for q in ('t1_own_logits', 't1_peer_logits'):c['floats'].pop(q)
+        c['world_reports_equal'] = False   # n2_compare returns before comparing the world reports: neither record is written
+        code, out, _, _ = n2_reverdicted(shaped)
+        self.assertEqual((code, out['status'], out['configs']['top2']['discrete']['passed'], [x['field'] for x in out['reverdict']['changed']]),
+            (1, 'FAIL', False, ['status', 'passed', 'discrete.passed']))
+
+    def test_a_forged_guard_number_is_refused(self):
+        """The guard number is GUARD_FACTOR x the saved p10 (g2.tolerance_rule, guard_note), None iff the p10 is (none iff no spread is non-zero).
+        A report FAILing on the guard, under the frozen rule and under a declaration with two parameter sets (every mode gated), whose guard is
+        raised or removed, with every float and status made to pass, is refused and writes nothing; so is the p10 nulled beside non-zero spreads
+        with the skipped guard's own text."""
+        frozen = n2_saved({'full_width': [self.call()], 'top2': [self.call()]});declared, record, audit = self.declared_report(actors=2)
+        self.assertEqual((frozen['status'], declared['status'], set(declared['configs']['top2']['tolerance']['guard_declared']['modes'].values())), ('FAIL', 'FAIL', {'gated'}))
+        def guard(value):
+            def change(r):
+                for c in r['configs'].values():
+                    c['tolerance']['guard_bound'] = value
+                    for _, floats in gate.n2_float_sections(c).values():
+                        for m in floats.values():
+                            if 'guard_bound' not in m:continue
+                            if value is None:
+                                for k in ('guard_bound', 'within_guard', 'ratio_to_guard'):m.pop(k)
+                            else:m.update(guard_bound=value, within_guard=True)
+                            m['passed'] = True
+                    c['block_invariance']['passed'] = True;c.update(status='PASS', passed=True)
+                r.update(status='PASS', passed=True)
+            return change
+        def nulled(r):
+            guard(None)(r)
+            for c in r['configs'].values():c['tolerance'].update(p10_cell_a2_spread=None, guard=gate.guard_note(dict(guard_bound=None), c['tolerance']['spread'])['guard'])
+        for name, report, extra, repo in (('frozen', frozen, (), None), ('declared', declared, audit, record.root)):
+            for case, change, message in (('raised', guard(.05), "guard_bound, guard [0.05, 'applied'] are not the live path's [0.005, 'applied']"),
+                    ('removed', guard(None), "guard_bound, guard [None, 'applied'] are not the live path's [0.005, 'applied']"),
+                    ('p10_nulled', nulled, 'p10_cell_a2_spread None with spread.nonzero 10')):
+                with self.subTest(name=name, case=case):
+                    r = copy.deepcopy(report);change(r);text, out, _, path = n2_reverdicted(r, *extra, repo=repo)
+                    self.assertIsNone(out);self.assertIn(message, text);self.assertIn('fail closed', text);self.assertFalse(path.with_name(gate.N2_REVERDICT_FILE).exists())
 
     def test_live_n2_reports_reverdict_as_written(self):
         """run_n2's own n2-equivalence.json through main(): without a declaration (the stand-in, which carries no world_reports, FAILs) and

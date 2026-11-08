@@ -2046,19 +2046,24 @@ def reverdict(path, *, expected=None):
 
 N2_MODE, N2_FILE, N2_REVERDICT_FILE = 'N2_EQUIVALENCE', 'n2-equivalence.json', 'n2-equivalence-reverdict.json'
 N2_DECISIONS = ('e', 'e_merged_depth2')   # (e) on both N=2 surfaces and MERGED_DEPTH2_DECISION, each g2.merge_decisions' record
+N2_FLOATS = ('t1_value', 't2_value', 'root_peer_logits', 't1_own_logits', 't1_peer_logits')   # n2_compare's floats: the Depth2Frame's float arrays
 EVIDENCE_COUNTS = ('digest_compared', 'digest_mismatched', 'value_compared', 'value_positions_outside_digest', 'value_positions_outside_digest_inexact',
     'evaluator_actors')   # a saved guard_evidence's counts (each an integer or null): what re-derives a GUARD_DECLARED_RULE mode
 N2_REFUSALS = (('bounds', 'saved bounds are not the ones the live --n2-equivalence path assigns under the report\'s rule'),
     ('numbers', 'saved verdicts disagree with their own numbers'), ('modes', 'saved guard modes differ from those re-derived from the saved digest findings'),
     ('verdicts', 'saved passed verdicts differ from those re-derived from their own numbers'))   # reverdict_n2's refusals, in this order
 N2_REVERDICT_RULE = ('--reverdict on a saved n2-equivalence.json (reverdict_n2), per config under the rule the report records (the frozen rule '
-    'from the config\'s own floor, or its re-verified declaration): every float\'s bound, guard and bound_rule as the live path assigns them '
-    '(n2_bounds), its within_bound / within_guard / passed from its own numbers (under a declaration GUARD_DECLARED_RULE\'s modes re-derived from '
-    'the saved digest findings and per-position evidence), (e)\'s and the merged (e)\'s q_noise_bound and passed from their counts and max |dQ| '
-    '(decision_passed): any disagreement is refused. Re-derived, the saved ones recorded in `changed`: discrete.passed (no mismatch), block '
-    'invariance\'s passed, each config\'s status (n2_status) and the run\'s (n2_run_status). Taken as saved (the report does not keep what '
-    'derives them): the comparisons\' counts and max |diff|, (e)\'s near-tie split (per-root gaps), world_reports_equal, block invariance\'s '
-    'discrete_equal and the guard\'s p10 spread; the turn-1 heads stay reported, not gated')
+    'from the config\'s own floor, or its re-verified declaration). Every section the report shows ran (the merged (e) on the champion path, '
+    'child-block invariance where options name child blocks) and every float the live path compares must be there, in the configs run_n2 '
+    'writes. Refused on any disagreement: the guard number from the saved p10 (g2.tolerance_rule, guard_note), every float\'s bound, guard and '
+    'bound_rule as the live path assigns them (n2_bounds), its within_bound / within_guard / passed from its own numbers (under a declaration '
+    'GUARD_DECLARED_RULE\'s modes re-derived from the saved digest findings and per-position evidence), (e)\'s and the merged (e)\'s q_noise_bound '
+    'and passed from their counts and max |dQ| (decision_passed), and the aggregates the saved records determine: discrete first_mismatches '
+    'against its counts, world_reports_equal against world_reports_first_difference, block invariance\'s discrete_equal and first_differences '
+    'against differing. Re-derived, the saved ones recorded in `changed`: discrete.passed (no mismatch), block invariance\'s passed, each '
+    'config\'s status (n2_status) and the run\'s (n2_run_status). Taken as saved (the report does not keep what derives them): the comparisons\' '
+    'counts and max |diff|, (e)\'s near-tie split (per-root gaps), whether the world reports were equal (where both records agree) and the '
+    'guard\'s p10 spread itself; the turn-1 heads stay reported, not gated')
 
 
 def _lacks(at, x, keys=(), numbers=(), objects=()):
@@ -2074,27 +2079,68 @@ def n2_float_sections(c):
     return dict(floats=('floats', c['floats']), **({} if inv is None else dict(block_invariance=('block_invariance.floats', inv['floats']))))
 
 
+def n2_ran(report, name):
+    """(the merged (e) ran, child-block invariance ran) for config `name`, as the saved report records it outside the config: run_n2 runs
+    MERGED_DEPTH2_DECISION on the champion path (header.merged_depth2_parity; options.<name>.depth2_options.evaluator) and child-block
+    invariance where options.<name>.child_blocks is set (the parity section's child_block_invariance 'ran ...')."""
+    header = report.get('header') if isinstance(report.get('header'), dict) else {};parity = header.get('merged_depth2_parity')
+    option = (report.get('options') or {}).get(name) if isinstance(report.get('options'), dict) else None;option = option if isinstance(option, dict) else {}
+    additions = (parity.get('champion_path_additions') or {}) if isinstance(parity, dict) else {}
+    merged = parity is not None or (isinstance(option.get('depth2_options'), dict) and 'evaluator' in option['depth2_options'])
+    return merged, bool(option.get('child_blocks')) or str(additions.get('child_block_invariance', '')).startswith('ran')
+
+
+def shape_mismatch(c):
+    """Whether a saved config's discrete findings record a frame-shape mismatch (n2_compare then compares no float in that call)."""
+    return any(str(k).endswith(':shape') and v for k, v in c['discrete']['mismatched'].items())
+
+
+def listed_counts(first, counts):
+    """Whether a saved findings record's listed rows and its counts agree (g2.Findings / merge_findings, g2.block_invariance /
+    merge_invariance): a row is listed only under a field it counts, and some row is listed whenever a count is non-zero."""
+    fields = {r.get('field') if isinstance(r, dict) else None for r in first}
+    return bool(first) == any(counts.values()) and all(counts.get(f) for f in fields)
+
+
 def reverdict_n2_missing(report):
-    """What --reverdict needs that a saved --n2-equivalence report lacks (reverdict_missing's counterpart); [] when complete."""
+    """What --reverdict needs that a saved --n2-equivalence report lacks (reverdict_missing's counterpart); [] when complete. Beyond the
+    fields the verdict reads, every section the report shows ran must be there (n2_ran: the merged (e), child-block invariance) and every
+    float the live path compares: n2_compare's N2_FLOATS unless a :shape mismatch is recorded, block invariance's unless differing names it."""
     if not isinstance(report, dict):return ['a JSON object']
     missing = [] if report.get('schema') == SCHEMA else [f'schema {SCHEMA} (got {report.get("schema")!r})']
     if report.get('mode') != N2_MODE:missing.append(f'mode {N2_MODE} (got {report.get("mode")!r})')
     missing += ([] if 'status' in report else ['status']) + ([] if isinstance(report.get('configs'), dict) else ['configs'])
+    if not (isinstance(report.get('options'), dict) and all(isinstance(o, dict) for o in report['options'].values())):missing.append('options (per config: a JSON object)')
     if missing:return missing
     for name, c in report['configs'].items():
-        at = f'configs.{name}';lacks = _lacks(at, c, ('status', 'world_reports_equal'), objects=('discrete', 'floats', 'e', 'tolerance'))
+        at = f'configs.{name}';lacks = _lacks(at, c, ('status', 'world_reports_equal', 'world_reports_first_difference'), objects=('discrete', 'floats', 'e', 'tolerance'))
+        merged, invariance = n2_ran(report, name)
+        if isinstance(c, dict):
+            lacks += ([f'{at}.e_merged_depth2 (the merged (e) ran: header.merged_depth2_parity)'] if merged and c.get('e_merged_depth2') is None else []) \
+                + ([f'{at}.block_invariance (child-block invariance ran: options.{name}.child_blocks)'] if invariance and c.get('block_invariance') is None else [])
         if isinstance(c, dict) and c.get('block_invariance') is not None:
-            lacks += _lacks(f'{at}.block_invariance', c['block_invariance'], ('passed', 'discrete_equal'), objects=('floats',))
-            differing = c['block_invariance'].get('differing', {}) if isinstance(c['block_invariance'], dict) else {}   # invariance_guards reads its counts
-            if not isinstance(differing, dict) or not all(isinstance(d, dict) and type(d.get('count', 0)) is int for d in differing.values()):
+            lacks += _lacks(f'{at}.block_invariance', c['block_invariance'], ('passed', 'discrete_equal', 'first_differences'), objects=('floats', 'differing'))
+            differing = c['block_invariance'].get('differing') if isinstance(c['block_invariance'], dict) else {}   # invariance_guards reads its counts
+            if isinstance(differing, dict) and not all(isinstance(d, dict) and type(d.get('count', 0)) is int for d in differing.values()):
                 lacks.append(f'{at}.block_invariance.differing (per array: a JSON object with an integer count)')
         if lacks:missing += lacks;continue
+        inv = c.get('block_invariance')
         missing += [f'{where} (true or false)' for where, x in ((f'{at}.world_reports_equal', c['world_reports_equal']),
-            (f'{at}.block_invariance.discrete_equal', (c.get('block_invariance') or {}).get('discrete_equal', False))) if type(x) is not bool]
-        missing += _lacks(f'{at}.tolerance', c['tolerance'], ('rule', 'depth1_noise_floor', 'guard_bound'), ('value_bound', 'logit_bound', 'q_noise_bound'))
-        missing += _lacks(f'{at}.discrete', c['discrete'], ('passed',), objects=('compared', 'mismatched'))
-        missing += [f'{at}.discrete.{key} (counts)' for key in ('compared', 'mismatched') if isinstance(c['discrete'].get(key), dict)
+            (f'{at}.block_invariance.discrete_equal', (inv or {}).get('discrete_equal', False))) if type(x) is not bool]
+        missing += [f'{at}.{where} (a list)' for where, x in (('discrete.first_mismatches', c['discrete'].get('first_mismatches', [])),
+            ('block_invariance.first_differences', (inv or {}).get('first_differences', []))) if not isinstance(x, list)]
+        t = c['tolerance'];missing += _lacks(f'{at}.tolerance', t, ('rule', 'depth1_noise_floor', 'guard_bound', 'guard', 'p10_cell_a2_spread'),
+            ('value_bound', 'logit_bound', 'q_noise_bound'), ('spread',))
+        missing += [f'{at}.tolerance.{k} (a number or null)' for k in ('guard_bound', 'p10_cell_a2_spread') if t.get(k) is not None and type(t[k]) not in (int, float)]
+        if isinstance(t.get('spread'), dict):missing += [f'{at}.tolerance.spread.{k} (an integer)' for k in ('parents', 'nonzero') if type(t['spread'].get(k)) is not int]
+        missing += _lacks(f'{at}.discrete', c['discrete'], ('passed', 'first_mismatches'), objects=('compared', 'mismatched'))
+        counts = [f'{at}.discrete.{key} (counts)' for key in ('compared', 'mismatched') if isinstance(c['discrete'].get(key), dict)
             and any(type(v) is not int for v in c['discrete'][key].values())]
+        missing += counts
+        if isinstance(c['discrete'].get('mismatched'), dict) and not counts and not shape_mismatch(c):
+            missing += [f'{at}.floats.{q} (n2_compare compares it: no :shape mismatch is recorded)' for q in N2_FLOATS if q not in c['floats']]
+        if inv is not None:missing += [f'{at}.block_invariance.floats.{q} (block invariance compares every float array; differing does not name it)'
+            for q in N2_FLOATS if q not in inv['floats'] and q not in inv['differing']]
         for where, floats in n2_float_sections(c).values():
             for q, m in floats.items():
                 missing += _lacks(f'{at}.{where}.{q}', m, ('within_bound', 'passed'), ('compared', 'max_abs_difference', 'nonfinite', 'bound'))
@@ -2108,7 +2154,27 @@ def reverdict_n2_missing(report):
             if isinstance(c[key], dict) and 'gating' in c[key]:   # else merge_decisions' record of a call that could not run (e): passed False
                 missing += _lacks(f'{at}.{key}', c[key], ('q_noise_within_bound',), ('roots_compared', 'status_differs', 'nonfinite_roots', 'argmax_q_differs_non_tie',
                     'argmax_target_differs_non_tie', 'max_abs_delta_q'), ('replaced',))
+                if isinstance(c[key].get('replaced'), dict) and type(c[key]['replaced'].get('unmatched_head_leaves')) is not int:
+                    missing.append(f'{at}.{key}.replaced.unmatched_head_leaves (an integer)')
     return missing
+
+
+def n2_shape_problems(report):
+    """Why a complete saved --n2-equivalence report is not shaped as run_n2 writes it ([] when it is): exactly the configs full_width (options
+    k 9) and top{k} (options k), the same names in options, and only n2_compare's floats (N2_FLOATS)."""
+    configs, options = report['configs'], report['options'];problems = []
+    tops = [n for n in configs if n != 'full_width'];k = options.get(tops[0], {}).get('k') if len(tops) == 1 else None
+    if set(configs) != set(options):problems.append(f'configs {sorted(configs)} are not the configs options names {sorted(options)}')
+    if 'full_width' not in configs or len(tops) != 1 or tops[0] != f'top{k}' or options.get('full_width', {}).get('k') != 9:
+        problems.append(f'configs {sorted(configs)}: run_n2 writes full_width (options k 9) and top{{k}} (options k)')
+    return problems + [f'configs.{n}.floats.{q}: not one of n2_compare\'s floats {list(N2_FLOATS)}' for n, c in configs.items() for q in c['floats'] if q not in N2_FLOATS]
+
+
+def n2_guard(tolerance):
+    """(guard_bound, guard) the live path derives from a config's saved p10_cell_a2_spread and spread section (g2.tolerance_rule, guard_note):
+    GUARD_FACTOR x the p10, None where the p10 is undefined or its guard rounds to zero, and the guard's text."""
+    rule = guard_note(g2.tolerance_rule(None, tolerance['p10_cell_a2_spread']), tolerance['spread'])
+    return rule['guard_bound'], rule['guard']
 
 
 def n2_traces(report):
@@ -2157,7 +2223,7 @@ def decision_passed(x):
     if 'gating' not in x:return False, None
     bound = x['q_noise_bound'];within = bound is None or x['max_abs_delta_q'] <= float(bound)
     return (x['argmax_q_differs_non_tie'] == 0 and x['argmax_target_differs_non_tie'] == 0 and x['status_differs'] == 0 and x['nonfinite_roots'] == 0
-        and (x.get('replaced') or {}).get('unmatched_head_leaves', 0) == 0 and within), within
+        and x['replaced']['unmatched_head_leaves'] == 0 and within), within
 
 
 def rejudge_n2(name, c, declared):
@@ -2168,6 +2234,22 @@ def rejudge_n2(name, c, declared):
     at, tolerance = f'configs.{name}', c['tolerance'];kinds = {kind: [] for kind, _ in N2_REFUSALS}
     near = None if declared is None else declared_numbers(declared)['near_tie_q_bound'];q_noise = tolerance['value_bound'] if near is None else near
     if tolerance['q_noise_bound'] != q_noise:kinds['bounds'].append(f'{at}.tolerance.q_noise_bound {tolerance["q_noise_bound"]!r} is not {q_noise!r}')
+    guard, p10, spread = n2_guard(tolerance), tolerance['p10_cell_a2_spread'], tolerance['spread']
+    if (tolerance['guard_bound'], tolerance['guard']) != guard:kinds['bounds'].append(f'{at}.tolerance guard_bound, guard {[tolerance["guard_bound"], tolerance["guard"]]} '
+        f'are not the live path\'s {list(guard)} from p10_cell_a2_spread {p10!r} (g2.tolerance_rule, guard_note)')
+    if (p10 is None) != (spread['nonzero'] == 0):kinds['bounds'].append(f'{at}.tolerance.p10_cell_a2_spread {p10!r} with spread.nonzero {spread["nonzero"]}: '
+        'guard_spread\'s p10 is over the non-zero spreads, None iff there are none')
+    discrete, inv = c['discrete'], c.get('block_invariance')   # the aggregates the saved records determine (g2.merge_findings, g2.merge_invariance, summarize_n2)
+    if not listed_counts(discrete['first_mismatches'], discrete['mismatched']):
+        kinds['numbers'].append(f'{at}.discrete: first_mismatches list {sorted({str((r or {}).get("field")) for r in discrete["first_mismatches"] if isinstance(r, dict)})} '
+            f'against mismatched counts {sum(discrete["mismatched"].values())} (a mismatch is listed when, and under the field where, it is counted)')
+    reports, first = c['world_reports_equal'], c['world_reports_first_difference']
+    if (reports and first is not None) or (not reports and first is None and not shape_mismatch(c)):   # n2_compare: a first difference iff unequal (a :shape mismatch writes neither)
+        kinds['numbers'].append(f'{at}.world_reports_equal {reports} with world_reports_first_difference {"null" if first is None else "recorded"}')
+    if inv is not None and inv['discrete_equal'] != (not inv['differing']):   # g2.merge_invariance: all calls' passed = not differing
+        kinds['numbers'].append(f'{at}.block_invariance.discrete_equal {inv["discrete_equal"]} but differing records {sorted(inv["differing"])}')
+    if inv is not None and not listed_counts(inv['first_differences'], {k: d.get('count', 0) for k, d in inv['differing'].items()}):
+        kinds['numbers'].append(f'{at}.block_invariance: first_differences against differing counts {sorted(inv["differing"])}')
     for prefix, (where, floats) in n2_float_sections(c).items():
         for q, m in floats.items():
             saved, live = (m['bound'], m.get('guard_bound'), m.get('bound_rule')), n2_bounds(q, tolerance, invariance=prefix == 'block_invariance')
@@ -2207,7 +2289,8 @@ def reverdict_n2(path, report, *, expected=None):
     """--reverdict on a saved n2-equivalence.json (`report`, mode N2_MODE): every verdict re-judged offline from the report's own numbers under
     the rule it records (N2_REVERDICT_RULE; nothing re-priced or re-compared), written to N2_REVERDICT_FILE beside it (never overwritten) with a
     `reverdict` section (source status and configs, what changed, the declaration's re-verification). Fail closed (SystemExit, nothing
-    written): a field the verdict needs missing (reverdict_n2_missing); a declaration failing saved_declared on the header and every config's
+    written): a field the verdict needs, a section the report shows ran or a float the live path compares missing (reverdict_n2_missing); a
+    report not shaped as run_n2 writes it (n2_shape_problems: its configs, options and floats); a declaration failing saved_declared on the header and every config's
     tolerance (the audit, --declared-bounds-commit, requires git_verification verified), or without one a trace of one (n2_traces) or a config
     tolerance off the frozen rule's numbers (n2_frozen_problems); then rejudge_n2's refusals, in N2_REFUSALS' order. The saved aggregates
     (discrete.passed, block invariance's passed, the config and run statuses) are re-derived, as the gate path re-derives its status, and
@@ -2217,6 +2300,8 @@ def reverdict_n2(path, report, *, expected=None):
     if out.exists():raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
     missing = reverdict_n2_missing(report)
     if missing:raise SystemExit(f'--reverdict: {path} lacks what the verdict needs: ' + ', '.join(missing[:FIRST]))
+    shaped = n2_shape_problems(report)
+    if shaped:raise SystemExit(f'--reverdict: {path} is not an n2-equivalence report as run_n2 writes it (fail closed): ' + '; '.join(shaped[:FIRST]))
     configs = report['configs']
     declared, section = saved_declared(report, expected=expected, tolerances={f'configs.{n}.tolerance': c['tolerance'] for n, c in configs.items()},
         undeclared=lambda r: (n2_traces(r), n2_frozen_problems(r)))
