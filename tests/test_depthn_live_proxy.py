@@ -202,6 +202,7 @@ class StickyTests(unittest.TestCase):
         out, rows = self.run_sticky(scenario, ['a', 'b', 'c'])
         self.assertEqual(out, ['a', 'b', 'a', 'c', 'b', 'a', 'a'])   # w: every backend holds one live battle, none in flight: backend order
         self.assertEqual([(r['battle_id'], r['home']) for r in rows][:6], [('x', False), ('y', False), ('x', True), ('z', False), ('y', True), ('x', True)])
+        self.assertTrue(all(r['gpu'] == r['backend'] for r in rows))   # unlabelled backends: each its own group
 
     def test_a_dead_home_rehomes_its_battle(self):
         async def scenario(port, pool, servers, rows):
@@ -228,6 +229,21 @@ class StickyTests(unittest.TestCase):
             return await request(port, dict(i=1)), await request(port, [1, 2])
         one, two = self.run_sticky(scenario, ['a', 'b'])
         self.assertEqual((one['echo'], two['echo']), (dict(i=1), [1, 2]))
+
+    def test_new_battles_go_to_the_least_loaded_gpu_first(self):
+        h = lambda port: ('h', port);gpus = {h(1): 'g0', h(2): 'g0', h(3): 'g1', h(4): 'g1'}
+        pool = P.Pool([h(1), h(2), h(3), h(4)], gpus=gpus);picks = []
+        for k, battle in enumerate('xyzw'):
+            pick = pool.order(now=float(k), battle=battle)[0];pool.bind(battle, pick, now=float(k));picks.append(pick)
+        self.assertEqual(picks, [h(1), h(3), h(2), h(4)])   # x on g0, y on g1 (fewer there), z on g0's free backend, w on g1's
+        self.assertEqual(pool.order(now=5., battle='v')[0], h(1))   # 2 and 2: the backend order breaks the tie
+        self.assertEqual(pool.order(now=100., battle='v')[0], h(1))   # all idle past 60 s: nothing counts
+        self.assertEqual(pool.snapshot()['backends'][0]['gpu'], 'g0')
+        with self.assertRaisesRegex(ValueError, 'unknown backend'):P.Pool([h(1)], gpus={h(9): 'g0'})
+        self.assertEqual(P.backend_spec('127.0.0.1:7001@3'), (('127.0.0.1', 7001), '3'))
+        self.assertEqual(P.backend_spec('127.0.0.1:7001'), (('127.0.0.1', 7001), None))
+        for bad in ('127.0.0.1:7001@', 'nohost@1'):
+            with self.subTest(bad), self.assertRaises(Exception):P.backend_spec(bad)
 
     def test_live_battles_expire_and_homes_are_bounded(self):
         pool = P.Pool([('h', 1), ('h', 2)], sticky_idle=10., sticky_cap=2)

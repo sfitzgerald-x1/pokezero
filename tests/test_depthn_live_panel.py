@@ -166,7 +166,7 @@ def preflight_value(d, **change):
     arm = d['arms'][1]; q = lambda p95: dict(n=100, p50=p95/2, p95=p95, p99=p95, max=p95)
     value = dict(schema=panel.PREFLIGHT_SCHEMA, arm=arm, deadline_seconds=d['deadline_seconds'], reserve_seconds=d['reserve_seconds'],
         server=dict(host='h', port=7000), cells_per_worker=d['actor']['cells_per_worker'],
-        dispatch=dict(dispatched=24, failed=[], not_dispatched=0, stopped=None), search_wall_p95_max=2.6, search_wall_within=True,
+        dispatch=dict(dispatched=24, failed=[], not_dispatched=0, stopped=None), search_wall_p95_max=2.6, search_wall_within=True, timeouts_within=True,
         code_tree=dict(commit='c'*40, source_sha256='e'*64),
         arms={'RAW': dict(first_within_warm_p99=True, warm_encode=q(d['actor']['warm_p95_seconds']['encode']),
                           warm_greedy=q(d['actor']['warm_p95_seconds']['greedy'])),
@@ -195,7 +195,7 @@ class PreflightBindingTests(unittest.TestCase):
         for change in (dict(arm='DN2W16'), dict(deadline_seconds=5.), dict(reserve_seconds=.2), dict(cells_per_worker=1),
                        dict(dispatch=dict(dispatched=3, failed=['x'], not_dispatched=21, stopped=None)),
                        dict(dispatch=dict(dispatched=3, failed=[], not_dispatched=21, stopped='interleave')), dict(dispatch=None),
-                       dict(search_wall_within=False), {'RAW.first_within_warm_p99': False}, {'DN2W8.first_within_warm_p99': None},
+                       dict(search_wall_within=False), dict(timeouts_within=False), dict(timeouts_within=None), {'RAW.first_within_warm_p99': False}, {'DN2W8.first_within_warm_p99': None},
                        {'DN2W8.search_wall': dict(p95=2.0)}, {'RAW.warm_encode': dict(p95=.05)}, {'RAW.warm_greedy': dict(p95=.8)},
                        dict(schema='other'), dict(code_tree=dict(source_sha256='f'*64)), dict(code_tree=None)):
             with self.subTest(change), self.assertRaisesRegex(ValueError, 'must be its pre-flight'):
@@ -1118,6 +1118,7 @@ class DecisionSummaryTests(unittest.TestCase):
         self.assertEqual(value['latency']['prepare']['n'], 4); self.assertEqual(value['latency']['client']['n'], 9)
         self.assertEqual(value['late_decisions'], 4); self.assertEqual(value['wrong_worlds'], 1)
         self.assertEqual(value['provenance']['root_operator'], ['ARGMAX_MEAN_COMPLETED_Q'])
+        self.assertEqual(sum(value['constructor_refusal_kinds'].values()), 1)   # the one constructor refusal, by kind
         with self.assertRaisesRegex(ValueError, 'unique'): panel.decisions(rows+rows[:1], deadline=3.)
         raw = dict(arm='RAW', ordinal=0)
         self.assertEqual(panel.decisions([decision_row(raw, 0, source='raw_arm', kind='forced')], deadline=3.)['eligible_decisions'], 1)
@@ -1688,14 +1689,19 @@ class CalibrationTests(unittest.TestCase):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
         band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
         panel.preflight_packets(self.root, arm='DN2W8', games=4, deadline_seconds=3., reserve_seconds=.15)
-        def game(cell, arm, walls, source):
+        def game(cell, arm, walls, source, causes=()):
             rows = [dict(decision_index=i, select_seconds=w, encode_seconds=.04, greedy=dict(seconds=.5), source=source, cause=None)
                     for i, w in enumerate(walls)]
+            for row, cause in zip(rows[1:], causes):
+                row.update(source='greedy_fallback', cause=cause, search=dict(refusal=None if cause == 'timeout' else 'WORLD_CONSTRUCTOR_REFUSED:volatile:12'))
             panel.write_new(self.root/'results'/f"{cell['ordinal']}.json", dict(status='COMPLETE', setting='preflight', arm=arm, cell=cell))
             (self.root/'telemetry').mkdir(exist_ok=True)
             (self.root/'telemetry'/f"{cell['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
-        game(band[0], 'RAW', [.6]+[.5]*20, 'raw_arm'); game(band[1], 'DN2W8', [2.0]+[2.0]*19+[2.4], 'search')
+        game(band[0], 'RAW', [.6]+[.5]*20, 'raw_arm'); game(band[1], 'DN2W8', [2.0]+[2.0]*19+[2.4], 'search', causes=('constructor_refused', 'constructor_refused'))
         value = panel.preflight_summary(self.root)
+        search = value['arms']['DN2W8']
+        self.assertEqual((search['timeout_share'], search['constructor_refused_share'], search['searched_share_of_non_timeouts']), (0., 2/21, 19/21))
+        self.assertEqual((search['constructor_refusal_kinds'], value['timeouts_within']), ({'WORLD_CONSTRUCTOR_REFUSED:volatile:#': 2}, True))
         self.assertEqual((value['arms']['RAW']['first_within_warm_p99'], value['arms']['DN2W8']['first_within_warm_p99']), (False, True))
         self.assertEqual(value['arms']['DN2W8']['search_wall']['p95'], 2.0); self.assertTrue(value['search_wall_within'])
         self.assertEqual(value['arms']['RAW']['warm_greedy']['p95'], .5)
@@ -1703,7 +1709,9 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(value['code_tree']['commit'], panel.tree_identity()['commit'])
         with self.assertRaises(KeyError): panel.calibration_summary(self.root)['strata']['4x500ms']['preflight']   # pre-flight games never count
         self.assertEqual(panel.calibration_summary(self.root)['games'], dict(solo=0, concurrent=0))
-        game(band[3], 'DN2W8', [2.7]*21, 'search'); self.assertFalse(panel.preflight_summary(self.root)['search_wall_within'])
+        game(band[3], 'DN2W8', [2.7]*21, 'search', causes=('timeout',)*3); late = panel.preflight_summary(self.root)
+        self.assertFalse(late['search_wall_within']); self.assertFalse(late['timeouts_within'])   # 3 of 42: over 1%
+        self.assertEqual(late['arms']['DN2W8']['searched_share_of_non_timeouts'], 37/39)
         for cell in band[:4]: panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", dict(setting='preflight'))
         panel.preflight_packets(self.root, arm='DN2W8', games=2, deadline_seconds=5., reserve_seconds=.15)   # a second deadline
         with self.assertRaisesRegex(ValueError, 'one search arm, deadline and reserve'): panel.preflight_summary(self.root)

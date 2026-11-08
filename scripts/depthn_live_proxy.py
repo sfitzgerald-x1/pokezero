@@ -14,10 +14,13 @@ is forwarded); when no backend accepts, the client's connection is closed, which
   folds from a stale or empty session on every switch (pre-flight r3: battles touched 8-12 of 12 servers, prepare p95 2.04 s against
   1.20 s on the same server, 28% timeouts). The proxy therefore reads each connection's first frame (the request: a 4-byte length
   and its JSON, within --first-frame-timeout) for its battle_id, sends those bytes on verbatim, and routes: a battle seen before goes
-  to its home backend unless that backend is cooling down; a new battle (or a re-homed one) goes to the backend with the fewest
-  live battles (seen within --sticky-idle seconds), ties by in-flight connections, then by --backend order (give the backends
-  GPU-interleaved, so new battles spread across GPUs). The home map is an LRU of at most --sticky-cap battles. A request without a
-  string battle_id keeps the least-busy order below. The connection log records each connection's battle_id and whether it went home.
+  to its home backend unless that backend is cooling down; a new battle (or a re-homed one) goes, the lead's rule, to the GPU with
+  the fewest live battles, then to that GPU's backend with the fewest (--backend HOST:PORT@GPU names each backend's GPU; live: a
+  decision within --sticky-idle seconds, default 60, so finished battles stop counting), ties by in-flight connections, then by
+  --backend order. Concurrent pricing on one GPU costs real time (r3: price p95 1.07 s against the bench's 0.67 s), so battles spread
+  across GPUs first. The home map is an LRU of at most --sticky-cap battles. A request without a string battle_id keeps the
+  least-busy order below. Each connection's log row records its battle_id, backend, GPU and whether it went home (home false with a
+  battle_id: an assignment).
 - Startup identity (the lead's rule: a pool must not hide a wrong backend): --probe-requests PATH (JSONL, one request per line in the
   servers' wire format, e.g. built from a closed RAW cell's owning-wire capture as the panel's probe builds them) is sent to EVERY backend
   directly, each request under a fresh request_id and battle id, before the proxy listens. Per backend, requests are tried in order: a
@@ -52,6 +55,13 @@ def address(text):
     return host, int(port)
 
 
+def backend_spec(text):
+    """HOST:PORT or HOST:PORT@GPU: the backend and its GPU label (None: its own)."""
+    where, sep, gpu = text.partition('@')
+    if sep and not gpu.strip():raise argparse.ArgumentTypeError(f'HOST:PORT@GPU needs a GPU label, got {text!r}')
+    return address(where), gpu if sep else None
+
+
 def bounded(lo, hi):
     def parse(text):
         value = float(text)
@@ -63,8 +73,11 @@ def bounded(lo, hi):
 class Pool:
     """Backends with their in-flight counts; order() is least busy first, recently failed backends last, ties round-robin."""
 
-    def __init__(self, backends, *, cooldown=5., sticky_idle=120., sticky_cap=4096):
+    def __init__(self, backends, *, cooldown=5., sticky_idle=60., sticky_cap=4096, gpus=None):
         if not backends or len(set(backends)) != len(backends):raise ValueError('one or more distinct backends required')
+        gpus = {} if gpus is None else dict(gpus)
+        if set(gpus) - set(backends):raise ValueError('a GPU label for an unknown backend')
+        self.gpu = {b: gpus.get(b) or f'{b[0]}:{b[1]}' for b in backends}   # unlabelled: its own group
         self.backends = list(backends);self.active = {b: 0 for b in backends};self.served = {b: 0 for b in backends}
         self.refused = {b: 0 for b in backends};self.failed_at = {b: None for b in backends};self.unserved = 0;self.cooldown = cooldown
         self.homes = OrderedDict();self.sticky_idle = sticky_idle;self.sticky_cap = sticky_cap   # battle_id -> [backend, last seen]
@@ -79,7 +92,9 @@ class Pool:
         if battle is None:   # no battle to keep together: least busy, ties round-robin
             start = next(self._turn);ring = self.backends[start:] + self.backends[:start]
             return sorted(ring, key=lambda b: (self.cooling(b, now), self.active[b]))
-        live = self.live(now);rank = sorted(self.backends, key=lambda b: (self.cooling(b, now), live[b], self.active[b], self.backends.index(b)))
+        live = self.live(now);per_gpu = Counter()
+        for b, n in live.items():per_gpu[self.gpu[b]] += n
+        rank = sorted(self.backends, key=lambda b: (self.cooling(b, now), per_gpu[self.gpu[b]], live[b], self.active[b], self.backends.index(b)))
         home = self.homes.get(battle)
         if home is not None and not self.cooling(home[0], now):rank.remove(home[0]);rank.insert(0, home[0])
         return rank
@@ -97,7 +112,8 @@ class Pool:
     def snapshot(self):
         live = self.live(time.monotonic())
         return dict(backends=[dict(backend=f'{h}:{p}', active=self.active[(h, p)], served=self.served[(h, p)], refused=self.refused[(h, p)],
-            cooling=self.cooling((h, p)), live_battles=live[(h, p)]) for h, p in self.backends], unserved=self.unserved, battles=len(self.homes))
+            cooling=self.cooling((h, p)), live_battles=live[(h, p)], gpu=self.gpu[(h, p)]) for h, p in self.backends], unserved=self.unserved,
+            battles=len(self.homes), live_battles_per_gpu=dict(sorted(Counter({self.gpu[b]: n for b, n in live.items()}).items())))
 
 
 async def pipe(reader, writer, counter):
@@ -161,7 +177,7 @@ async def handle(pool, client_reader, client_writer, *, connect_timeout=.25, fir
         for w in (up_writer, client_writer):await _close(w)
         if log_row is not None:
             closed = time.time();log_row(dict(backend=f'{chosen[0]}:{chosen[1]}', opened=opened, closed=closed, seconds=closed - opened,
-                bytes_to_backend=sent[0], bytes_to_client=received[0], battle_id=battle, home=home))
+                bytes_to_backend=sent[0], bytes_to_client=received[0], battle_id=battle, home=home, gpu=pool.gpu[chosen]))
 
 
 async def wait_ready(backends, seconds):
@@ -224,10 +240,10 @@ async def check_identity(backends, requests, expect, *, timeout=120.):
 
 
 async def run(listen, backends, *, wait_ready_seconds=0., report_seconds=60., log=print, started=None, connect_timeout=.25, cooldown=5.,
-              first_frame_timeout=2., sticky_idle=120., sticky_cap=4096, probe_requests=None, expect=None, probe_timeout=120., log_row=None):
+              first_frame_timeout=2., sticky_idle=60., sticky_cap=4096, gpus=None, probe_requests=None, expect=None, probe_timeout=120., log_row=None):
     if listen in backends:raise SystemExit('--listen must not be one of the backends')
     if type(sticky_cap) is not int or sticky_cap < 1:raise SystemExit('--sticky-cap must be a positive integer')
-    pool = Pool(backends, cooldown=cooldown, sticky_idle=sticky_idle, sticky_cap=sticky_cap)
+    pool = Pool(backends, cooldown=cooldown, sticky_idle=sticky_idle, sticky_cap=sticky_cap, gpus=gpus)
     if wait_ready_seconds > 0:
         missing = await wait_ready(backends, wait_ready_seconds)
         if missing:raise SystemExit(f'backends not ready after {wait_ready_seconds} s: ' + ', '.join(f'{h}:{p}' for h, p in missing))
@@ -249,12 +265,13 @@ async def run(listen, backends, *, wait_ready_seconds=0., report_seconds=60., lo
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--listen', type=address, required=True, help='HOST:PORT to listen on')
-    p.add_argument('--backend', type=address, action='append', required=True, help='a depthn_live_server HOST:PORT (repeat per process)')
+    p.add_argument('--backend', type=backend_spec, action='append', required=True,
+        help='a depthn_live_server HOST:PORT, or HOST:PORT@GPU naming its GPU (repeat per process)')
     p.add_argument('--wait-ready', type=bounded(0., 3600.), default=0., help='seconds to wait for every backend to accept a connection')
     p.add_argument('--connect-timeout', type=bounded(.01, 5.), default=.25, help='per-backend connection setup timeout (seconds)')
     p.add_argument('--cooldown', type=bounded(0., 600.), default=5., help='seconds a backend whose setup failed sorts last')
     p.add_argument('--first-frame-timeout', type=bounded(.01, 60.), default=2., help='seconds to read a connection\'s request (its battle_id)')
-    p.add_argument('--sticky-idle', type=bounded(1., 86400.), default=120., help='a battle unseen this long no longer counts as live')
+    p.add_argument('--sticky-idle', type=bounded(1., 86400.), default=60., help='a battle without a decision this long no longer counts as live')
     p.add_argument('--sticky-cap', type=int, default=4096, help='battle homes kept (LRU)')
     p.add_argument('--report-seconds', type=bounded(0., 86400.), default=60.)
     p.add_argument('--probe-requests', help='JSONL: requests in the servers\' wire format, tried on every backend before listening')
@@ -273,7 +290,8 @@ def main(argv=None):
     stream = open(args.connection_log, 'a', encoding='utf-8') if args.connection_log else None
     def log_row(row):stream.write(json.dumps(row, sort_keys=True) + '\n');stream.flush()
     def log(line):print(line, flush=True)
-    try:asyncio.run(run(args.listen, args.backend, wait_ready_seconds=args.wait_ready, report_seconds=args.report_seconds, log=log,
+    backends = [b for b, _ in args.backend];gpus = {b: g for b, g in args.backend if g is not None}
+    try:asyncio.run(run(args.listen, backends, gpus=gpus, wait_ready_seconds=args.wait_ready, report_seconds=args.report_seconds, log=log,
         connect_timeout=args.connect_timeout, cooldown=args.cooldown, first_frame_timeout=args.first_frame_timeout, sticky_idle=args.sticky_idle,
         sticky_cap=args.sticky_cap, probe_requests=probe, expect=expect, probe_timeout=args.probe_timeout,
         log_row=None if stream is None else log_row))

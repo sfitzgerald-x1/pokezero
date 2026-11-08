@@ -98,6 +98,13 @@ CALIBRATION_REQUEST_SCHEMA='depthn-foulplay-panel.calibration-request.v1'
 PREFLIGHT_REQUEST_SCHEMA='depthn-foulplay-panel.preflight-request.v1'
 PREFLIGHT_SCHEMA='depthn-foulplay-panel.preflight.v1'
 PREFLIGHT_WALL_P95_MAX=2.6   # the lead's bound on the search arm's end-to-end decision wall p95
+PREFLIGHT_TIMEOUT_SHARE_MAX=.01   # the lead's bound on the search arm's timeout share (of non-single-legal decisions)
+
+
+def refusal_kind(text):
+    """A refusal's kind: its text with numbers masked, first 120 characters (for counting kinds)."""
+    import re
+    return re.sub(r'[0-9]+','#',str(text or ''))[:120]
 CALIBRATION_RATIO_MIN=.9
 CALIBRATION_FLOORS=dict(fairness.CALIBRATION_FLOORS)   # rated moves per budget stratum and setting (the lead's ruling)
 CALIBRATION_Z90=1.6448536269514722   # two-sided 90% normal quantile, for each stratum's descriptive ratio CI
@@ -662,27 +669,33 @@ def preflight_summary(directory,*,dispatch=None,server=None,cells_per_worker=Non
         value=json.loads(result.read_bytes())
         if value.get('setting')!='preflight':continue
         arm=value.get('arm');rows=telemetry_rows(root,cell['ordinal'])
-        a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter()));a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
+        a=arms.setdefault(arm,dict(games=0,complete=0,first=[],warm=[],encode=[],greedy=[],search=[],causes=Counter(),kinds=Counter()));a['games']+=1;a['complete']+=value.get('status')=='COMPLETE'
         for r in rows:
             (a['first']if r.get('decision_index')==0 else a['warm']).append(r['select_seconds'])
             if r.get('decision_index')!=0:a['encode'].append(r['encode_seconds']);a['greedy'].append(r['greedy']['seconds'])
             if r.get('source')in ('search','greedy_fallback'):
                 a['search'].append(r['select_seconds'])
                 if r.get('cause')is not None:a['causes'][r['cause']]+=1
+                if r.get('cause')=='constructor_refused':a['kinds'][refusal_kind((r.get('search')or {}).get('refusal'))]+=1
     out={}
     for arm,a in sorted(arms.items(),key=lambda x:str(x[0])):
         warm=_quantiles(a['warm']);p99=None if warm is None else warm['p99']
         out[arm]=dict(games=a['games'],complete=a['complete'],first_decision=sorted(a['first']),warm=warm,
             warm_encode=_quantiles(a['encode']),warm_greedy=_quantiles(a['greedy']),
             first_within_warm_p99=None if p99 is None else all(x<=p99 for x in a['first']),
-            search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())))
+            search_wall=_quantiles(a['search']),fallback_causes=dict(sorted(a['causes'].items())),
+            timeout_share=_share(a['causes']['timeout'],len(a['search'])),constructor_refused_share=_share(a['causes']['constructor_refused'],len(a['search'])),
+            searched_share_of_non_timeouts=_share(len(a['search'])-sum(a['causes'].values()),len(a['search'])-a['causes']['timeout']),
+            constructor_refusal_kinds=dict(a['kinds'].most_common(10)))
     if len(conditions)!=1:raise ValueError(f'one search arm, deadline and reserve per pre-flight required, found {sorted(conditions)}')
     (arm,deadline,reserve),=conditions
     walls=[out[a]['search_wall']for a in out if a in SEARCH_ARMS and out[a]['search_wall']]
+    timeouts=[out[a]['timeout_share']for a in out if a in SEARCH_ARMS and out[a]['timeout_share']is not None]
     claims=[json.loads(p.read_bytes())for p in sorted((root/'claims').glob('*.json'))]
     return dict(schema=PREFLIGHT_SCHEMA,arm=arm,deadline_seconds=deadline,reserve_seconds=reserve,server=server,cells_per_worker=cells_per_worker,
         dispatch=dispatch,arms=out,search_wall_p95_max=PREFLIGHT_WALL_P95_MAX,
         search_wall_within=None if not walls else all(w['p95']<=PREFLIGHT_WALL_P95_MAX for w in walls),
+        timeout_share_max=PREFLIGHT_TIMEOUT_SHARE_MAX,timeouts_within=None if not timeouts else all(t<=PREFLIGHT_TIMEOUT_SHARE_MAX for t in timeouts),
         warmups=[c['warmup']for c in claims if c.get('setting')=='preflight'and c.get('warmup')is not None],
         seed_band=run['seed_band'],lanes=run['lanes'],calibration_tree=run['tree'],
         code_tree=code_tree if code_tree is not None else tree_identity(tree_commit))
@@ -706,12 +719,13 @@ def check_preflight(d,tree):
     if (value.get('schema')!=PREFLIGHT_SCHEMA or value.get('arm')!=arm or value.get('deadline_seconds')!=d['deadline_seconds']
             or value.get('reserve_seconds')!=d['reserve_seconds']or value.get('cells_per_worker')!=a['cells_per_worker']
             or outcome.get('failed')!=[]or outcome.get('stopped')is not None or value.get('search_wall_within')is not True
+            or value.get('timeouts_within')is not True
             or raw.get('first_within_warm_p99')is not True or search.get('first_within_warm_p99')is not True
             or pick(search.get('search_wall'),'p95')!=a['preflight_search_wall_p95_seconds']
             or pick(raw.get('warm_encode'),'p95')!=a['warm_p95_seconds']['encode']or pick(raw.get('warm_greedy'),'p95')!=a['warm_p95_seconds']['greedy']
             or pick(value.get('code_tree'),'source_sha256')!=tree['source_sha256']):
         raise ValueError('the declared actor must be its pre-flight\'s: same arm, deadline, reserve and cells per worker, a clean dispatch, '
-                         'first decisions within the warm p99, the search wall within the bound, the same numbers and the same code')
+                         'first decisions within the warm p99, the search wall and timeouts within their bounds, the same numbers and the same code')
     return value
 
 
@@ -1124,7 +1138,7 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
     """
     seen=set();sources=Counter();causes=Counter();kinds={};differs=late=wrong_worlds=wrong_archive=wrong_precision=0
     times={k:[]for k in ('select','encode','greedy','client','server_wall','queue','prepare','build','price','reduce')}
-    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')};servers={}
+    provenance={k:Counter()for k in ('tree_commit','archive_sha256','root_operator','pricer')};servers={};kinds_refused=Counter()
     for row in rows:
         key=(row.get('battle_id'),row.get('owner'),row.get('decision_index'),row.get('prefix_sha256'))
         source,cause,kind=row.get('source'),row.get('cause'),row.get('request_kind')
@@ -1137,7 +1151,9 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
         k=kinds.setdefault(kind,dict(decisions=0,searched=0,fallback=0,differs=0,causes=Counter()));k['decisions']+=1
         if source=='search':
             k['searched']+=1;hit=row['search_differs']is True;k['differs']+=hit;differs+=hit
-        elif source=='greedy_fallback':k['fallback']+=1;k['causes'][cause]+=1;causes[cause]+=1
+        elif source=='greedy_fallback':
+            k['fallback']+=1;k['causes'][cause]+=1;causes[cause]+=1
+            if cause=='constructor_refused':kinds_refused[refusal_kind((row.get('search')or {}).get('refusal'))]+=1
         times['select'].append(row['select_seconds']);late+=row['select_seconds']>deadline
         times['encode'].append(row['encode_seconds']);times['greedy'].append(row['greedy']['seconds']);search=row['search']
         if search is None:continue
@@ -1167,6 +1183,7 @@ def decisions(rows,*,deadline,worlds=None,archive=None,precision=None):
         wrong_worlds=wrong_worlds,wrong_archive=wrong_archive,wrong_precision=wrong_precision,latency={k:_quantiles(v)for k,v in times.items()},
         late_decisions=late,deadline_seconds=deadline,
         provenance={k:sorted(map(str,v))for k,v in provenance.items()},
+        constructor_refusal_kinds=dict(kinds_refused.most_common(10)),
         by_server={k:dict(responses=sum(v['statuses'].values()),statuses=dict(sorted(v['statuses'].items())),
             latency={t:_quantiles(v[t])for t in ('select','client','server_wall')})for k,v in sorted(servers.items())})
 
