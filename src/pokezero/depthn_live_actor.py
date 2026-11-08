@@ -19,7 +19,7 @@ neither the observation nor the encode path carries them. Each row keeps what an
 offline recompute needs: battle_id, the battle turn (null before the first
 |turn| line), decision_index and the champion archive_sha256 (the server's on
 server responses, else the pinned champion archive), plus the greedy action,
-behavior probability, value estimate and timings. A row that cannot be written
+behavior probability, value estimate and timings, and the client's deadline and reserve (None on arm RAW). A row that cannot be written
 because of server content is replaced by a minimal server_error row and the
 greedy decision is played: select() never raises on anything the server sends.
 """
@@ -216,6 +216,7 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
                 stream_id=snapshot.stream_id,generation=snapshot.generation,turn=battle_turn(snapshot.lines),decision_index=index,
                 request_kind=kind,prefix_sha256=snapshot.prefix_sha256,
                 archive_sha256=response.get('archive_sha256')if served else archive_sha256,archive_source='server'if served else'pinned',
+                deadline_seconds=None if client is None else client.deadline,reserve_seconds=None if client is None else client.reserve,
                 encode_seconds=entered-started,
                 greedy=dict(action_index=greedy.action_index,policy_id=greedy.policy_id,action_probability=greedy.action_probability,
                     value_estimate=greedy.value_estimate,seconds=greedy_seconds),

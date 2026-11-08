@@ -1,11 +1,12 @@
 """Inert DepthN panel controls: declarations, cells, claims, probe, dispatch and readout."""
 import asyncio
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import copy
 import importlib.util
 import io
 import json
 import math
+import os
 from pathlib import Path
 import random
 import socket
@@ -17,6 +18,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero import depthn_live_actor as live
+from pokezero import depthn_live_fairness as fairness
 from pokezero import depthn_live_panel as panel
 from pokezero import phase_d_ladder_panel as ladder
 from pokezero import phase_d_owning_capture as capture
@@ -29,45 +31,68 @@ ROOT = Path(__file__).resolve().parents[1]
 DISPATCH_TIMEOUT = 30
 
 
-EXPECTED = dict(value=.9, source=dict(run_id='constructor-world-gate-fixture', report_sha256='f'*64))
+EXPECTED = dict(value=.944, source=dict(run_id='constructor-world-gate-fixture', report_sha256='f'*64))
 
 
-def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED):
+CALIBRATION_BAND = dict(battle_seed_start=50000, foulplay_seed_start=60000, count=200)
+RATIOS = {'8x500ms': .95, '2x1000ms': .97}
+
+
+def calibration_fixture(ladder_sha256, *, observable=True, ratios=RATIOS, lanes=4, moves=300):
+    """A valid calibration.json: per-stratum rates whose concurrent/solo quotient is exactly the ratio (solo rate 1.0)."""
+    strata = {s: dict(solo=dict(moves=moves, rate=1.), concurrent=dict(moves=moves, rate=float(r)), ratio=float(r)) for s, r in ratios.items()}
+    return dict(schema=panel.CALIBRATION_SCHEMA, status='MEASURED' if observable else 'UNMEASURABLE', iterations_observable=observable,
+                ratios=dict(ratios) if observable else None, strata=strata, min_moves=300, seed_band=dict(CALIBRATION_BAND), lanes=lanes,
+                ladder_declaration_sha256=ladder_sha256, base_config_sha256=panel.sha({}), checkpoint_sha256=ActorContract.champion().checkpoint_sha256)
+
+
+def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64):
     return dict(schema=panel.SCHEMA, ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
-        checkpoint_sha256=ActorContract.champion().checkpoint_sha256, archive_sha256=live.CHAMPION_ARCHIVE_SHA256, arms=list(arms),
+        worker_lanes=4, fairness_observable=dict(value=observable, evidence=dict(path='calibration/calibration.json', sha256=calibration_sha)),
+        calibration=dict(status='MEASURED' if observable else 'UNMEASURABLE', sha256=calibration_sha, ratios=dict(ratios) if observable else None,
+                         seed_band=dict(CALIBRATION_BAND)),
+        expected_searched_share_roster=.955, checkpoint_sha256=ActorContract.champion().checkpoint_sha256,
+        archive_sha256=live.CHAMPION_ARCHIVE_SHA256, arms=list(arms),
         search={a: dict(depth=2, worlds=panel.WORLDS[a]) for a in arms[1:]}, root_operator='ARGMAX_MEAN_COMPLETED_Q',
-        deadline_seconds=3., reserve_seconds=.15, screen_paired_cells=500, max_paired_cells=2000, confidence=.9,
+        deadline_seconds=deadline, reserve_seconds=.15, screen_paired_cells=500, max_paired_cells=2000, confidence=.9,
         primary_comparison='SEARCH_MINUS_OUR_RAW_PAIRED_BY_CELL', bar='LOWER_BOUND_GT_0_AT_2000_FULL_ROSTER_NO_BREAKAGE',
-        screen_rule=panel.SCREEN_RULE, breakage=dict(panel.BREAKAGE))
+        screen_rule=panel.SCREEN_RULE, breakage=dict(panel.BREAKAGE, latency_p95_max_seconds=deadline), matmul_precision='highest',
+        screen_latency_rule=copy.deepcopy(panel.LATENCY_RULE), bench_p95_wall_seconds=1.39,
+        bench_source=dict(path='bench/w8-sessions/summary.json', sha256='e'*64), server_processes_per_gpu=1,
+        interleave=panel.INTERLEAVE, arm_fairness=dict(panel.ARM_FAIRNESS))
 
 
-def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED):
+def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS):
     root = Path(directory).resolve(); inputs = root/'inputs'
-    lad = ladder_fixture.declaration(); d = declaration(panel.sha(lad), arms, expected); base = {}
-    for name, value in (('ladder', lad), ('declaration', d), ('base', base)): panel.write_new(inputs/f'{name}.json', value)
+    lad = ladder_fixture.declaration(); calibration = calibration_fixture(panel.sha(lad), observable=observable, ratios=ratios)
+    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration)); base = {}
+    for name, value in (('ladder', lad), ('declaration', d), ('base', base), ('calibration', calibration)):
+        panel.write_new(inputs/f'{name}.json', value)
     run = panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
         ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/inert/champion.pt',
-        base_config=inputs/'base.json', base_config_sha256=panel.sha(base))
+        base_config=inputs/'base.json', base_config_sha256=panel.sha(base), calibration=inputs/'calibration.json')
     return root/'run', run, d, lad
 
 
 def decision_row(cell, i, *, source='search', cause=None, kind=None, differs=False, select=.5,
-                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256):
+                 operator='ARGMAX_MEAN_COMPLETED_Q', worlds=8, archive=live.CHAMPION_ARCHIVE_SHA256, precision='highest'):
     kind = kind or ('forced' if source == 'single_legal' else 'move')
     search = None if source in ('raw_arm', 'single_legal') else dict(status='COMPLETE' if source == 'search' else 'REFUSED',
         cause=cause, client_wall_seconds=select-.05, server_wall_seconds=select-.1, tree_commit='t'*40, archive_sha256=archive,
+        request_id=f"r{cell['ordinal']}-{i}",
         root_operator=operator if source == 'search' else None, requested_worlds=worlds if source == 'search' else None,
-        pricer=dict(k=1, depth=2, W=8, K=4) if source == 'search' else None,
+        pricer=dict(k=1, depth=2, W=8, K=4, matmul_precision=precision) if source == 'search' else None,
         timings=dict(queue_seconds=.01, prepare_seconds=.2, build_seconds=.05, price_seconds=.2, reduce_seconds=.01) if source == 'search' else None)
     return dict(schema=live.ROW_SCHEMA, arm=cell['arm'], cell=cell, battle_id=f"b{cell['ordinal']}", owner='p1', decision_index=i,
         prefix_sha256=f'{i:064x}', request_kind=kind, source=source, cause=cause, search_differs=differs if source == 'search' else None,
         encode_seconds=.01, select_seconds=select, greedy=dict(seconds=.05), search=search)
 
 
-def write_cell(root, cell, d_sha, *, score, status='COMPLETE', error=None, rows=(), decisions=None):
+def write_cell(root, cell, d_sha, *, score, status='COMPLETE', error=None, rows=(), decisions=None, think=None, observable=True):
     for name in ('results', 'telemetry'): (root/name).mkdir(exist_ok=True)
+    game = dict(pokezero_decisions=len(rows) if decisions is None else decisions, **({} if think is None else dict(opponent_think=list(think))))
     value = dict(schema=panel.CELL_SCHEMA, cell=cell, declaration_sha256=d_sha, status=status, score=score if status == 'COMPLETE' else None,
-                 error=error, source_game=dict(pokezero_decisions=len(rows) if decisions is None else decisions))
+                 error=error, source_game=game, benchmark=dict(foulplay_think=dict(iterations_observable=observable)))
     (root/'results'/f"{cell['ordinal']}.json").write_bytes(panel.encoded(value))
     if rows: (root/'telemetry'/f"{cell['ordinal']}.jsonl").write_bytes(b''.join(panel.encoded(r)+b'\n' for r in rows))
 
@@ -94,8 +119,9 @@ def seed_cluster_interval(deltas):
 
 class DeclarationTests(unittest.TestCase):
     def test_accepts_the_declared_panel(self):
-        for arms in (('RAW', 'DN2W8'), ('RAW', 'DN2W16'), ('RAW', 'DN2W8', 'DN2W16')):
+        for arms in (('RAW', 'DN2W8'), ('RAW', 'DN2W16')):
             self.assertEqual(panel.validate(declaration('a'*64, arms))['arms'], list(arms))
+        with self.assertRaises(ValueError): panel.validate(declaration('a'*64, ('RAW', 'DN2W8', 'DN2W16')))   # one search arm per run
         self.assertEqual(panel.BREAKAGE['searched_share_min'], .5)
         for value in (None, dict(EXPECTED, value=0.), dict(EXPECTED, value=1.)):
             self.assertEqual(panel.validate(declaration('a'*64, expected=value))['expected_searched_share'], value)
@@ -113,6 +139,7 @@ class DeclarationTests(unittest.TestCase):
         changes = [('extra', 'host:1'), ('schema', 'other'), ('ladder_declaration_sha256', 'A'*64), ('checkpoint_sha256', 'b'*64),
                    ('archive_sha256', 'b'*64), ('archive_sha256', None),
                    ('arms', ['DN2W8', 'RAW']), ('arms', ['RAW']), ('arms', ['RAW', 'R1']), ('arms', ['RAW', 'DN2W8', 'DN2W8']),
+                   ('arms', ['RAW', 'DN2W8', 'DN2W16']), ('arms', ['DN2W8', 'DN2W16']),
                    ('search', {'DN2W8': dict(depth=2, worlds=16)}), ('root_operator', 'ARGMAX_MEAN_COMPLETED_Q_COMMON_ALL_RUNGS'),
                    ('deadline_seconds', 2.5), ('reserve_seconds', 0.), ('screen_paired_cells', 400), ('max_paired_cells', 1000),
                    ('confidence', .95), ('primary_comparison', 'SEARCH_MINUS_CODEX_RAW'), ('bar', 'LOWER_BOUND_GT_0_AT_2000'),
@@ -212,7 +239,8 @@ class RunTests(unittest.TestCase):
             self.assertEqual(panel.load(root)[1], run); self.assertEqual(run['checkpoint_sha256'], lad['checkpoint_sha256'])
             inputs = Path(directory).resolve()/'inputs'
             kwargs = dict(declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d), ladder_declaration=inputs/'ladder.json',
-                ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json', base_config_sha256=panel.sha({}))
+                ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json', base_config_sha256=panel.sha({}),
+                calibration=inputs/'calibration.json')
             with self.assertRaises(FileExistsError): panel.init(root, **kwargs)
             with self.assertRaisesRegex(ValueError, 'differs'): panel.init(Path(directory)/'b', **dict(kwargs, ladder_declaration_sha256='0'*64))
             other = declaration('c'*64); panel.write_new(inputs/'other.json', other)
@@ -247,9 +275,9 @@ class RunTests(unittest.TestCase):
 class PromotionTests(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory()
-        self.root, self.run, self.d, self.lad = make_run(self.directory.name, arms=('RAW', 'DN2W8', 'DN2W16'))
-        populate(self.root, self.run, self.lad, arms=('RAW', 'DN2W8', 'DN2W16'))
-        for arm in panel.ARMS:  # Played screen cells are claimed; pre-claim most of the extension too.
+        self.root, self.run, self.d, self.lad = make_run(self.directory.name)
+        populate(self.root, self.run, self.lad)
+        for arm in ('RAW', 'DN2W8'):  # Played screen cells are claimed; pre-claim most of the extension too.
             for cell in panel.cells(self.lad, arm)[:1995]:
                 (self.root/'claims').mkdir(exist_ok=True); (self.root/'claims'/f"{cell['ordinal']}.json").write_bytes(b'{}')
 
@@ -273,9 +301,8 @@ class PromotionTests(unittest.TestCase):
         for name, value in cases.items():
             with self.subTest(name), self.assertRaisesRegex(ValueError, 'pinned 500-cell'):
                 panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=self.pin(name, value))
-        other = panel.readout(self.root, arm='DN2W16', limit=500); self.assertEqual(other['decision'], 'CONTINUE_TO_2000')
-        with self.assertRaisesRegex(ValueError, 'pinned 500-cell'):
-            panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=self.pin('other-arm', other))
+        with self.assertRaisesRegex(ValueError, 'pinned 500-cell'):   # another arm's screen: refused before any recomputation
+            panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=self.pin('other-arm', dict(genuine, arm='DN2W16')))
 
     def test_a_relabelled_or_edited_readout_fails_recomputation(self):
         genuine = panel.readout(self.root, arm='DN2W8', limit=500)
@@ -359,6 +386,18 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(FileExistsError): self.work(packet)
         self.assertEqual(FakeRuntime.runs, [cell['ordinal']]); self.assertEqual((self.root/'claims'/f"{cell['ordinal']}.json").read_bytes(), claim)
 
+    def test_the_declared_deadline_reaches_the_client_and_the_cell_records_its_host(self):
+        root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
+        cell = panel.cells(lad, 'DN2W8')[0]; path = root/'requests'/f"{cell['ordinal']}.json"; value = panel.request(run, cell)
+        panel.write_new(path, value)
+        with patch.dict(os.environ, {'POD_NAME': 'pod-x'}):
+            asyncio.run(panel.worker(dict(path=str(path), sha256=panel.sha(value), server=dict(host='127.0.0.1', port=9)),
+                                     expected_pair=(1, 2), original='shared', runtime_class=FakeRuntime))
+        runtime = FakeRuntime.made[-1]; self.assertEqual((runtime.client.deadline, runtime.client.reserve), (10., .15))
+        result = json.loads((root/'results'/f"{cell['ordinal']}.json").read_bytes())
+        self.assertEqual((result['worker']['hostname'], result['worker']['pod_name'], result['cpu_pair']), (socket.gethostname(), 'pod-x', [1, 2]))
+        self.assertEqual((len(result['load_average']['start']), len(result['load_average']['end'])), (3, 3))
+
     def test_interrupted_game_is_unknown_and_claimed(self):
         packet, cell = self.packet('RAW', 0)
         with patch.object(FakeRuntime, 'run', side_effect=RuntimeError('inert interrupted game')):
@@ -398,7 +437,8 @@ def make_capture(directory, ordinal=0, turns=3):
 
 
 def champion_complete(request, **change):
-    return {**actor_tests.complete(request), 'archive_sha256': live.CHAMPION_ARCHIVE_SHA256, **change}
+    return {**actor_tests.complete(request), 'archive_sha256': live.CHAMPION_ARCHIVE_SHA256,
+            'pricer': dict(k=[9, 9], depth=2, W=8, K=4, matmul_precision='highest'), **change}
 
 
 def champion_refused(request, cause):
@@ -427,6 +467,13 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual((request['lines'], request['own_request_line'], request['prefix_sha256']),
                          (list(root['lines']), root['own_request_line'], root['prefix_sha256']))
 
+    def test_the_probe_budgets_by_the_declared_deadline(self):
+        root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
+        with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
+            value = panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
+            request, = server.requests
+        self.assertEqual(value['status'], 'PASS'); self.assertTrue(3. < request['budget_seconds'] <= 9.85)
+
     def test_constructor_refusals_move_to_the_next_root(self):
         replies = iter(['constructor_refused', 'class_refused', 'depthn_refused', None])
         def reply(request, conn):
@@ -441,6 +488,8 @@ class ProbeTests(unittest.TestCase):
                      operator=actor_tests.send(lambda r: champion_complete(r, root_operator='ARGMAX_POLICY_TARGET')),
                      rung=actor_tests.send(lambda r: champion_complete(r, rung='DN2W16')),
                      archive=actor_tests.send(lambda r: champion_complete(r, archive_sha256='a'*64)),
+                     precision=actor_tests.send(lambda r: champion_complete(r, pricer=dict(W=8, matmul_precision='default'))),
+                     no_precision=actor_tests.send(lambda r: champion_complete(r, pricer=None)),
                      refusal_archive=actor_tests.send(lambda r: dict(champion_refused(r, 'constructor_refused'), archive_sha256='a'*64)),
                      server_error=actor_tests.send(lambda r: champion_refused(r, 'server_error')),
                      all_refused=actor_tests.send(lambda r: champion_refused(r, 'constructor_refused')))
@@ -474,10 +523,15 @@ for line in sys.stdin:
 '''
 
 
+SERVERS = {'RAW': None, 'DN2W8': dict(host='h', port=1)}
+
+
 class DispatchTests(unittest.TestCase):
-    def run_dispatch(self, names, **kwargs):
-        directory = Path(self.directory.name); packets = [dict(path=str(directory/n), sha256='0'*64) for n in names]
-        work = panel.dispatch(packets, command=lambda pair, cache: [sys.executable, '-c', FAKE_WORKER], **kwargs)
+    def run_dispatch(self, names, arms=None, servers=SERVERS, **kwargs):
+        directory = Path(self.directory.name)
+        arms = arms or ['RAW' if i % 2 == 0 else 'DN2W8' for i in range(len(names))]
+        packets = [dict(path=str(directory/n), sha256='0'*64, arm=a) for n, a in zip(names, arms)]
+        work = panel.dispatch(packets, servers=servers, command=lambda pair, cache: [sys.executable, '-c', FAKE_WORKER], **kwargs)
         result = asyncio.run(asyncio.wait_for(work, DISPATCH_TIMEOUT))
         done = {n: json.loads((directory/(n+'.done')).read_text()) for n in names if (directory/(n+'.done')).exists()}
         return result, done
@@ -486,32 +540,56 @@ class DispatchTests(unittest.TestCase):
     def tearDown(self): self.directory.cleanup()
 
     def test_one_cell_per_fresh_worker_process_by_default(self):
-        result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1), (2, 3)], server=dict(host='h', port=1))
-        self.assertEqual(result, dict(dispatched=3, failed=[], not_dispatched=0))
-        self.assertEqual(len({v['pid'] for v in done.values()}), 3); self.assertEqual(done['a']['server'], dict(host='h', port=1))
+        result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1), (2, 3)])
+        self.assertEqual(result, dict(dispatched=3, failed=[], not_dispatched=0, stopped=None))
+        self.assertEqual(len({v['pid'] for v in done.values()}), 3)
+        self.assertEqual((done['a']['server'], done['b']['server']), (None, dict(host='h', port=1)))
 
     def test_persistent_worker_when_asked(self):
-        result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1)], server=None, cells_per_worker=5)
+        result, done = self.run_dispatch(['a', 'b', 'c'], pairs=[(0, 1)], cells_per_worker=5)
         self.assertEqual(result['dispatched'], 3); self.assertEqual(len({v['pid'] for v in done.values()}), 1)
 
     def test_a_failed_worker_stops_all_dispatch(self):
         for kwargs in (dict(pairs=[(0, 1)]), dict(pairs=[(0, 1)], cells_per_worker=4), dict(pairs=[(0, 1), (2, 3)])):
             with self.subTest(kwargs):
                 self.directory.cleanup(); self.directory = TemporaryDirectory()
-                result, done = self.run_dispatch(['a', 'fail', 'c', 'd', 'e', 'f'], server=None, **kwargs)
+                result, done = self.run_dispatch(['a', 'fail', 'c', 'd', 'e', 'f'], **kwargs)
                 self.assertGreaterEqual(len(result['failed']), 1); self.assertTrue(any(f.endswith('fail') for f in result['failed']))
                 self.assertLessEqual(result['dispatched'], 2); self.assertGreaterEqual(result['not_dispatched'], 3)
                 self.assertNotIn('f', done)
 
     def test_a_lane_failure_stops_a_persistent_worker_in_another_lane(self):
         names = ['slow-a', 'fail']+[f'slow-{c}' for c in 'cdefgh']
-        result, done = self.run_dispatch(names, pairs=[(0, 1), (2, 3)], server=None, cells_per_worker=10)
+        result, done = self.run_dispatch(names, pairs=[(0, 1), (2, 3)], cells_per_worker=10)
         self.assertTrue(any(f.endswith('fail') for f in result['failed'])); self.assertLessEqual(result['dispatched'], 2)
         self.assertGreaterEqual(result['not_dispatched'], 5); self.assertNotIn('slow-h', done)
 
-    def test_core_pairs_must_be_disjoint(self):
+    def test_no_arm_runs_more_than_the_concurrency_ahead(self):
+        for pairs, dispatched in (([(0, 1)], 1), ([(0, 1), (2, 3)], 2)):
+            with self.subTest(lanes=len(pairs)):
+                self.directory.cleanup(); self.directory = TemporaryDirectory()
+                result, done = self.run_dispatch(['a', 'b', 'c', 'd', 'e'], arms=['RAW']*5, pairs=pairs, cells_per_worker=5)
+                self.assertEqual(result['dispatched'], dispatched); self.assertTrue(result['stopped'].startswith('interleave'))
+                self.assertEqual(result['not_dispatched'], 5-dispatched)
+
+    def test_a_resume_catches_the_lagging_arm_up_first(self):
+        order = []
+        result, _ = self.run_dispatch(['r0', 'd0', 'r1', 'd1', 'r2', 'd2'], pairs=[(0, 1)], cells_per_worker=10,
+                                      attempted={'RAW': 3, 'DN2W8': 0}, after=lambda packet: order.append(Path(packet['path']).name))
+        self.assertEqual(order, ['d0', 'd1', 'd2', 'r0']); self.assertTrue(result['stopped'].startswith('interleave'))
+
+    def test_the_after_hook_stops_dispatch(self):
+        calls = []
+        def after(packet):
+            calls.append(packet['arm']); return 'VOID_LATENCY' if len(calls) == 2 else None
+        result, done = self.run_dispatch(['a', 'b', 'c', 'd', 'e', 'f'], pairs=[(0, 1)], cells_per_worker=10, after=after)
+        self.assertEqual((result['stopped'], result['dispatched'], result['not_dispatched'], calls), ('VOID_LATENCY', 2, 4, ['RAW', 'DN2W8']))
+
+    def test_core_pairs_must_be_disjoint_and_every_arm_needs_a_server(self):
         for kwargs in (dict(pairs=[(0, 1), (1, 2)]), dict(pairs=[(0, 0)]), dict(pairs=[]), dict(pairs=[(0, 1)], cells_per_worker=0)):
-            with self.subTest(kwargs), self.assertRaises(ValueError): asyncio.run(panel.dispatch([], server=None, **kwargs))
+            with self.subTest(kwargs), self.assertRaises(ValueError): asyncio.run(panel.dispatch([], servers={'RAW': None}, **kwargs))
+        with self.assertRaisesRegex(ValueError, 'every arm'):
+            asyncio.run(panel.dispatch([dict(path='x', sha256='0'*64, arm='DN2W8')], servers={'RAW': None}, pairs=[(0, 1)]))
 
 
 class EstimatorTests(unittest.TestCase):
@@ -786,6 +864,480 @@ class DecisionSummaryTests(unittest.TestCase):
             with self.assertRaises(ValueError): panel.decisions([bad], deadline=3.)
 
 
+def completed(root, cell):
+    return dict(path=str(root/'requests'/f"{cell['ordinal']}.json"), arm=cell['arm'])
+
+
+def think(n, rate, *, stratum='2x1000ms'):
+    """n Foul Play moves at one rate (rounds 0..n-1: with no capture, bands by round + 1)."""
+    return [dict(round=i, stratum=stratum, iterations_per_budget_second=float(rate), iterations=int(rate), wait_seconds=.4, overlap_seconds=.6)
+            for i in range(n)]
+
+
+class EvalReadinessTests(unittest.TestCase):
+    """The lead's rulings: precision pin, declared deadline, screen latency rule, arm fairness."""
+    def setUp(self):
+        self.directory = TemporaryDirectory(); self.root, self.run, self.d, self.lad = make_run(self.directory.name)
+        self.raws, self.searches = panel.cells(self.lad, 'RAW'), panel.cells(self.lad, 'DN2W8')
+
+    def tearDown(self): self.directory.cleanup()
+
+    def play(self, monitor, ks, *, timeouts=(), raw_think=None, search_think=None, observable=True):
+        """Complete RAW then search cell by cell for pairs ks (in that order): 30 searched decisions and one single-legal
+        decision per search cell; `timeouts` are (pair, row) positions."""
+        reasons = []
+        for k in ks:
+            raw, search = self.raws[k], self.searches[k]
+            for cell in (raw, search): panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", {})
+            write_cell(self.root, raw, self.run['declaration_sha256'], score=1., rows=[decision_row(raw, 0, source='raw_arm')], think=raw_think,
+                       observable=observable)
+            reasons.append(monitor(completed(self.root, raw)))
+            rows = [decision_row(search, i, source='greedy_fallback', cause='timeout') if (k, i) in timeouts else decision_row(search, i)
+                    for i in range(30)]+[decision_row(search, 30, source='single_legal')]
+            write_cell(self.root, search, self.run['declaration_sha256'], score=0., rows=rows, think=search_think, observable=observable)
+            reasons.append(monitor(completed(self.root, search)))
+        return reasons
+
+    def rule(self): return json.loads(panel.state_path(self.root, 'latency_rule.json').read_bytes())
+
+    def test_new_declaration_fields_are_validated(self):
+        self.assertEqual(panel.validate(declaration('a'*64))['expected_searched_share_roster'], .955)
+        for deadline in panel.DEADLINES: self.assertEqual(panel.validate(declaration('a'*64, deadline=deadline))['deadline_seconds'], deadline)
+        with self.assertRaises(ValueError): panel.validate(declaration('a'*64, deadline=4.))   # membership alone: its breakage bound agrees
+        self.assertEqual(panel.validate(declaration('a'*64, observable=False))['calibration']['ratios'], None)
+        band = dict(CALIBRATION_BAND)
+        changes = [('deadline_seconds', 5), ('breakage', dict(panel.BREAKAGE, latency_p95_max_seconds=5.)),
+                   ('matmul_precision', 'default'), ('screen_latency_rule', dict(panel.LATENCY_RULE, timeout_rate_max=.02)),
+                   ('screen_latency_rule', dict(panel.LATENCY_RULE, searched_decisions=500)), ('bench_p95_wall_seconds', 0.),
+                   ('bench_p95_wall_seconds', 1), ('bench_p95_wall_seconds', float('nan')), ('bench_source', dict(path='', sha256='e'*64)),
+                   ('bench_source', dict(path='x', sha256='E'*64)), ('bench_source', dict(path='x')), ('server_processes_per_gpu', 0),
+                   ('server_processes_per_gpu', True), ('server_processes_per_gpu', 1.), ('expected_searched_share_roster', 1.2),
+                   ('expected_searched_share_roster', 1), ('interleave', 'SEARCH_THEN_RAW'), ('arm_fairness', dict(panel.ARM_FAIRNESS, ratio_tolerance=.1)),
+                   ('arm_fairness', dict(panel.ARM_FAIRNESS, min_cell_moves=10)), ('worker_lanes', 0), ('worker_lanes', True),
+                   ('fairness_observable', dict(value='yes', evidence=dict(path='x', sha256='e'*64))),
+                   ('fairness_observable', dict(value=True, evidence=dict(path='x'))),
+                   ('calibration', dict(status='UNMEASURABLE', sha256='c'*64, ratios=None, seed_band=band)),
+                   ('calibration', dict(status='MEASURED', sha256='c'*64, ratios={'8x500ms': .95}, seed_band=band)),
+                   ('calibration', dict(status='MEASURED', sha256='c'*64, ratios={'8x500ms': .95, '2x1000ms': 1}, seed_band=band)),
+                   ('calibration', dict(status='MEASURED', sha256='c'*64, ratios=dict(RATIOS), seed_band=dict(band, count=0))),
+                   ('calibration', dict(status='MEASURED', sha256='C'*64, ratios=dict(RATIOS), seed_band=band))]
+        for key, value in changes:
+            d = declaration('a'*64); d[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError): panel.validate(d)
+        d = declaration('a'*64, observable=False); d['calibration']['ratios'] = dict(RATIOS)
+        with self.assertRaises(ValueError): panel.validate(d)
+        d = declaration('a'*64); d['expected_searched_share_roster'] = None; self.assertIsNone(panel.validate(d)['expected_searched_share_roster'])
+        d = declaration('a'*64, deadline=10.); self.assertEqual(panel.validate(d)['breakage']['latency_p95_max_seconds'], 10.)
+
+    def test_a_response_priced_under_another_precision_is_breakage(self):
+        populate(self.root, self.run, self.lad, rows_for=lambda cell: [decision_row(cell, 0, source='raw_arm')] if cell['arm'] == 'RAW'
+                 else [decision_row(cell, 0, precision='default')])
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertEqual((value['breakage'], value['decision']), (['matmul_precision'], 'STOP_BREAKAGE'))
+        self.assertEqual(value['arms']['DN2W8']['decisions']['wrong_precision'], 500)
+
+    def test_ten_timeouts_in_the_first_thousand_continue_and_eleven_void(self):
+        for count, status in ((9, 'CONTINUE'), (10, 'CONTINUE'), (11, 'VOID_LATENCY')):
+            with self.subTest(count=count):
+                self.tearDown(); self.setUp(); monitor = panel.Monitor(self.root, search_arm='DN2W8')
+                reasons = self.play(monitor, range(34), timeouts={(0, i) for i in range(count)}|{(33, i) for i in range(25, 30)})
+                self.assertEqual(reasons[-1], None if status == 'CONTINUE' else 'VOID_LATENCY'); self.assertEqual(set(reasons[:-1]), {None})
+                self.assertEqual((self.rule()['status'], self.rule()['timeouts'], self.rule()['searched_decisions']), (status, count, 1000))
+
+    def test_the_window_follows_completion_order_and_is_evaluated_once(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        order = list(range(33, -1, -1))   # completion order reversed from ordinal order
+        self.assertEqual(set(self.play(monitor, order, timeouts={(0, i) for i in range(20, 30)}|{(1, i) for i in range(5)})), {None})
+        rule = self.rule(); recorded = panel.state_path(self.root, 'latency_rule.json').read_bytes()
+        self.assertEqual((rule['status'], rule['timeouts']), ('CONTINUE', 5)); self.assertEqual(rule['cells'], [self.searches[k]['ordinal'] for k in order])
+        self.assertEqual(set(self.play(monitor, range(34, 37), timeouts={(k, i) for k in range(34, 37) for i in range(30)})), {None})
+        self.assertEqual(panel.state_path(self.root, 'latency_rule.json').read_bytes(), recorded)
+        self.assertEqual(panel.readout(self.root, arm='DN2W8', limit=500)['latency_rule'], rule)
+
+    def test_a_readout_between_a_crash_and_a_resume_uses_the_monitors_window(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8'); self.play(monitor, [5, 4])
+        for k in range(33, 5, -1):   # completed, but never logged (dispatch stopped): placed RAW then search, by ordinal
+            for cell in (self.raws[k], self.searches[k]):
+                timeouts = {(k, i) for i in range(30)} if k == 31 else set()
+                rows = [decision_row(cell, i, source='greedy_fallback', cause='timeout') if (k, i) in timeouts else decision_row(cell, i)
+                        for i in range(30)] if cell['arm'] == 'DN2W8' else [decision_row(cell, 0, source='raw_arm')]
+                write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=rows)
+        for k in (2, 3, 1, 0): write_cell(self.root, self.searches[k], self.run['declaration_sha256'], score=1., rows=[decision_row(self.searches[k], i) for i in range(30)])
+        seen = panel.readout(self.root, arm='DN2W8', limit=500)['latency_rule']
+        recorded = panel.Monitor(self.root, search_arm='DN2W8').latency()
+        self.assertEqual(seen, recorded); self.assertEqual(recorded['status'], 'VOID_LATENCY')
+        self.assertEqual(recorded['cells'][:4], [self.searches[5]['ordinal'], self.searches[4]['ordinal'], self.searches[0]['ordinal'], self.searches[1]['ordinal']])
+
+    def test_missing_cells_join_the_log_raw_then_search_by_ordinal(self):
+        for cell in (self.searches[1], self.raws[2], self.searches[0], self.raws[0]):
+            write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, 0, source='raw_arm' if cell['arm'] == 'RAW' else 'search')])
+        expected = [self.raws[0]['ordinal'], self.raws[2]['ordinal'], self.searches[0]['ordinal'], self.searches[1]['ordinal']]
+        self.assertEqual([e['ordinal'] for e in panel.effective_log(self.root, self.lad, 'DN2W8')], expected)
+        panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual([e['ordinal'] for e in panel.completions(self.root)], expected)
+
+    def test_eleven_timeouts_void_the_screen_and_dispatch_never_resumes(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        reasons = self.play(monitor, range(34), timeouts={(0, i) for i in range(11)})
+        self.assertEqual(reasons[-1], 'VOID_LATENCY')
+        with self.assertRaisesRegex(ValueError, 'never resumed'): panel.pending(self.root, arm='RAW', limit=500, resume=True)
+        with self.assertRaisesRegex(ValueError, 'never resumed'): panel.interleaved(self.root, search_arm='DN2W8', limit=500, resume=True)
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertEqual((value['decision'], value['paired'], value['bar']), ('VOID_LATENCY', None, None))
+        coverage = value['deadline_coverage']
+        self.assertEqual((coverage['decisions'], coverage['censored_timeouts'], coverage['smallest_covering_deadline']), (1020, 11, None))
+        self.assertEqual(coverage['coverage']['5.0'], dict(lower=1009/1020, upper=1.)); self.assertEqual(coverage['wall']['max'], .5)
+        late = Path(self.directory.name)/'server.jsonl'
+        def reply(i, status): return dict(kind='request', response=dict(request_id=f"r{self.searches[0]['ordinal']}-{i}", status=status), server_seconds=6.)
+        late.write_text(''.join(json.dumps(reply(i, 'COMPLETE'))+'\n' for i in range(11)))
+        coverage = panel.readout(self.root, arm='DN2W8', limit=500, server_telemetry=[late])['deadline_coverage']
+        self.assertEqual((coverage['censored_timeouts'], coverage['smallest_covering_deadline']), (0, 10.))
+        self.assertEqual((coverage['coverage']['5.0']['lower'], coverage['coverage']['10.0']['lower']), (1009/1020, 1.))
+        late.write_text(''.join(json.dumps(reply(i, 'COMPLETE' if i < 5 else 'REFUSED'))+'\n' for i in range(11)))   # e.g. expired_in_queue
+        coverage = panel.readout(self.root, arm='DN2W8', limit=500, server_telemetry=[late])['deadline_coverage']
+        self.assertEqual((coverage['censored_timeouts'], coverage['coverage']['10.0']['lower']), (6, 1014/1020))
+
+    def test_fewer_than_a_thousand_searched_decisions_never_void(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual(set(self.play(monitor, range(20), timeouts={(k, i) for k in range(10) for i in range(30)})), {None})
+        self.assertFalse(panel.state_path(self.root, 'latency_rule.json').exists())
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertIsNone(value['latency_rule']); self.assertEqual(value['decision'], 'INCOMPLETE'); self.assertIsNotNone(value['paired'])
+
+    def test_arms_interleave_pair_by_pair_and_resume_keeps_the_count(self):
+        packets, attempted = panel.interleaved(self.root, search_arm='DN2W8', limit=500)
+        self.assertEqual(attempted, dict(RAW=0, DN2W8=0)); self.assertEqual(len(packets), 1000)
+        self.assertEqual([(p['pair_ordinal'], p['arm']) for p in packets[:4]], [(0, 'RAW'), (0, 'DN2W8'), (1, 'RAW'), (1, 'DN2W8')])
+        for cell in self.raws[:3]: panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", {})
+        packets, attempted = panel.interleaved(self.root, search_arm='DN2W8', limit=500, resume=True)
+        self.assertEqual(attempted, dict(RAW=3, DN2W8=0)); self.assertEqual([(p['pair_ordinal'], p['arm']) for p in packets[:4]],
+                                                                          [(0, 'DN2W8'), (1, 'DN2W8'), (2, 'DN2W8'), (3, 'RAW')])
+        with self.assertRaisesRegex(ValueError, 'search arm'): panel.interleaved(self.root, search_arm='RAW', limit=500)
+
+
+def pooled_moves(rows):
+    return dict(rated=list(rows), moves=len(rows), band_from_round=0, waits=[])
+
+
+class FairnessReadingTests(unittest.TestCase):
+    def test_strata_correct_a_schedule_mix_the_unstratified_ratio_does_not(self):
+        raw = pooled_moves([('8x500ms', 0, 100.)]*500+[('2x1000ms', 2, 200.)]*500)
+        search = pooled_moves([('8x500ms', 0, 100.)]*800+[('2x1000ms', 2, 200.)]*200)   # shorter games: more early moves
+        value = fairness.reading(raw, search)
+        self.assertAlmostEqual(value['weighted_ratio'], 1., places=12); self.assertAlmostEqual(value['unstratified_ratio'], 120/150, places=12)
+        self.assertIsNone(fairness.flag(value)); self.assertEqual(value['moves'], dict(RAW=1000, search=1000))
+
+    def test_weights_are_the_pooled_counts(self):
+        raw = pooled_moves([('8x500ms', 0, 100.)]*100+[('2x1000ms', 2, 100.)]*300)
+        search = pooled_moves([('8x500ms', 0, 110.)]*300+[('2x1000ms', 2, 100.)]*100)
+        self.assertAlmostEqual(fairness.reading(raw, search)['weighted_ratio'], (400*1.1+400*1.)/800, places=12)
+
+    def test_sparse_cells_merge_into_the_adjacent_band_of_their_stratum(self):
+        raw = pooled_moves([('2x1000ms', 0, 100.)]*10+[('2x1000ms', 1, 100.)]*40+[('2x1000ms', 2, 100.)]*40+[('2x1000ms', 3, 100.)]*5
+                           +[('8x500ms', 0, 50.)]*12)
+        search = pooled_moves([('2x1000ms', 0, 100.)]*40+[('2x1000ms', 1, 100.)]*40+[('2x1000ms', 2, 100.)]*40+[('2x1000ms', 3, 100.)]*40
+                              +[('8x500ms', 0, 50.)]*12)
+        value = fairness.reading(raw, search)
+        self.assertEqual(value['merge_map'], {'2x1000ms': [['1-3', '4-9'], ['10-19', '20+']], '8x500ms': [['1-3']]})
+        self.assertTrue(all(c['raw_moves'] >= 30 and c['search_moves'] >= 30 for c in value['cells'] if c['stratum'] == '2x1000ms'))
+        self.assertEqual([c['raw_moves'] for c in value['cells'] if c['stratum'] == '8x500ms'], [12])   # a single cell stays sparse
+
+    def test_coverage_counts_unrated_moves_and_flags_a_gap(self):
+        cell = lambda rated, unrated: dict(source_game=dict(opponent_think=think(rated, 100)+[dict(round=0, wait_seconds=.5)]*unrated, opponent_think_failures=0))
+        raw, search = fairness.moves(cell(950, 50)), fairness.moves(cell(890, 110))
+        value = fairness.reading(raw, search)
+        self.assertEqual(value['coverage'], dict(RAW=.95, search=.89)); self.assertAlmostEqual(value['coverage_difference'], .06)
+        self.assertEqual(fairness.flag(value), 'coverage')
+        for rated, reason in ((50, None), (49, 'coverage')):   # coverages .10 and .05 (.049): a gap of exactly five points does not flag
+            gap = fairness.reading(fairness.moves(cell(100, 900)), fairness.moves(cell(rated, 1000-rated)))
+            with self.subTest(rated=rated): self.assertEqual(fairness.flag(gap), reason)
+        self.assertEqual(fairness.reading(fairness.moves(cell(100, 900)), fairness.moves(cell(50, 950)))['coverage_difference'], .05)
+        failures = fairness.moves(dict(source_game=dict(opponent_think=think(9, 100), opponent_think_failures=1)))
+        self.assertEqual((failures['moves'], len(failures['rated'])), (10, 9))
+
+    def test_rows_without_a_rate_or_stratum_never_rate_and_turns_come_from_the_capture(self):
+        rows = [dict(round=0, stratum='8x500ms', wait_seconds=1., overlap_seconds=1.), dict(round=1, iterations_per_budget_second=5.),
+                dict(round=2, stratum='8x500ms', iterations_per_budget_second=True), dict(round=0, stratum='8x500ms', iterations_per_budget_second=7.)]
+        value = fairness.moves(dict(source_game=dict(opponent_think=rows)), [12, 25])
+        self.assertEqual((value['rated'], value['band_from_round'], value['waits']), ([('8x500ms', 2, 7.)], 0, [2.]))
+        with TemporaryDirectory() as directory:
+            capture_path = make_capture(Path(directory), turns=3)
+            self.assertEqual(fairness.round_turns(capture_path), [1, 2, 3]); self.assertIsNone(fairness.round_turns(Path(directory)/'none.jsonl'))
+
+    def test_a_cells_bands_come_from_its_capture_when_it_exists(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory); (root/'owning-wire').mkdir()
+            (root/'owning-wire'/'7.jsonl').write_text(json.dumps(dict(event='WIRE', lines=['|turn|12', '|request|{}', '|request|{}']))+'\n')
+            result = dict(source_game=dict(opponent_think=think(2, 100)))
+            captured = panel.cell_moves(root, 7, result); fallback = panel.cell_moves(root, 8, result)
+        self.assertEqual(([b for _, b, _ in captured['rated']], captured['band_from_round']), ([2, 2], 0))   # turn 12: band 10-19
+        self.assertEqual(([b for _, b, _ in fallback['rated']], fallback['band_from_round']), ([0, 0], 2))   # rounds 0, 1: turns 1, 2
+
+    def test_the_baseline_flag_and_the_benign_re_arm_rule(self):
+        def at(ratio, gap=0.): return dict(weighted_ratio=ratio, difference=ratio-1, coverage_difference=gap)
+        self.assertIsNone(fairness.flag(at(1.049))); self.assertEqual(fairness.flag(at(1.051)), 'ratio'); self.assertEqual(fairness.flag(at(.94)), 'ratio')
+        acknowledged = dict(difference=.06, coverage_difference=.01)
+        for ratio, reason in ((1.084, None), (1.086, 'drift'), (.951, None), (.949, 'sign'), (.96, None), (1.0, None)):
+            with self.subTest(ratio=ratio): self.assertEqual(fairness.flag(at(ratio), acknowledged=acknowledged), reason)
+        small = dict(difference=.01, coverage_difference=0.)   # a small acknowledged difference keeps the baseline bar
+        self.assertIsNone(fairness.flag(at(1.036), acknowledged=small)); self.assertEqual(fairness.flag(at(1.051), acknowledged=small), 'drift')
+        self.assertIsNone(fairness.flag(at(1.07, .06), acknowledged=dict(difference=.06, coverage_difference=.04)))
+        self.assertEqual(fairness.flag(at(1.07, .066), acknowledged=dict(difference=.06, coverage_difference=.04)), 'coverage')
+        self.assertIsNone(fairness.flag(dict(weighted_ratio=None, difference=None, coverage_difference=None)))
+
+
+class FairnessMonitorTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = TemporaryDirectory(); self.root, self.run, self.d, self.lad = make_run(self.directory.name)
+        self.raws, self.searches = panel.cells(self.lad, 'RAW'), panel.cells(self.lad, 'DN2W8')
+
+    def tearDown(self): self.directory.cleanup()
+
+    def play(self, monitor, ks, raw_rate, search_rate, moves=20, observable=True):
+        reasons = []
+        for k in ks:
+            for cell, rate in ((self.raws[k], raw_rate), (self.searches[k], search_rate)):
+                panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", {})
+                write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, 0, source='raw_arm' if cell['arm'] == 'RAW' else 'search')],
+                           think=think(moves, rate), observable=observable)
+                reasons.append(monitor(completed(self.root, cell)))
+        return reasons
+
+    def state(self, phase='screen'): return panel.fairness_state(self.root, phase)
+
+    def test_fairness_is_evaluated_only_at_checkpoints_once_the_floors_hold(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual(set(self.play(monitor, range(49), 100, 90, moves=25)), {None})   # 1,225 moves per arm, but no checkpoint yet
+        self.assertEqual(self.state()['checks'], [])
+        self.assertEqual(self.play(monitor, [49], 100, 90, moves=25), [None, 'FLAG_ARM_FAIRNESS'])
+        check, = self.state()['checks']; flag, = self.state()['flags']
+        self.assertEqual((check['pairs'], check['floors'], check['reason'], flag['reason']), (50, True, 'ratio', 'ratio'))
+        self.assertAlmostEqual(flag['reading']['difference'], -.1)
+        with self.assertRaisesRegex(ValueError, 'FLAG_ARM_FAIRNESS'): panel.pending(self.root, arm='RAW', limit=500, resume=True)
+
+    def test_below_the_move_floor_a_checkpoint_records_and_waits(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual(set(self.play(monitor, range(50), 100, 90, moves=10)), {None})
+        check, = self.state()['checks']; self.assertEqual((check['pairs'], check['floors'], check['reason']), (50, False, None))
+        self.assertEqual(self.play(monitor, range(50, 100), 100, 90, moves=10)[-1], 'FLAG_ARM_FAIRNESS')
+        self.assertEqual([c['pairs'] for c in self.state()['checks']], [50, 100])
+
+    def flagged_then_acknowledged(self, monitor, cause='benign'):
+        self.assertEqual(self.play(monitor, range(50), 100, 106)[-1], 'FLAG_ARM_FAIRNESS')
+        return panel.acknowledge_arm_fairness(self.root, cause=cause, note='residual position mix after a host restart')
+
+    def test_a_benign_acknowledgement_re_arms_over_later_moves(self):
+        for later, reason in ((107, None), (109, 'drift'), (94, 'sign'), (96, None)):
+            with self.subTest(later=later):
+                self.tearDown(); self.setUp(); monitor = panel.Monitor(self.root, search_arm='DN2W8')
+                ack = self.flagged_then_acknowledged(monitor)
+                self.assertEqual((ack['cause'], ack['flag'], ack['log_length']), ('benign', 1, 100)); self.assertAlmostEqual(ack['difference'], .06)
+                self.assertEqual(len(panel.pending(self.root, arm='RAW', limit=500, resume=True)), 450)
+                reasons = self.play(monitor, range(50, 100), 100, later)
+                self.assertEqual(reasons[-1], None if reason is None else 'FLAG_ARM_FAIRNESS'); self.assertEqual(set(reasons[:-1]), {None})
+                checks = self.state()['checks']; self.assertEqual([(c['window'], c['pairs']) for c in checks], [(0, 50), (100, 50)])
+                if reason: self.assertEqual(self.state()['flags'][1]['reason'], reason)
+
+    def test_a_fault_voids_the_run_for_good(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8'); self.flagged_then_acknowledged(monitor, cause='fault')
+        self.assertEqual(self.state()['void']['status'], 'VOID_FAIRNESS')
+        with self.assertRaisesRegex(ValueError, 'VOID_FAIRNESS'): panel.pending(self.root, arm='RAW', limit=500, resume=True)
+        self.assertEqual(panel.readout(self.root, arm='DN2W8', limit=500)['decision'], 'VOID_FAIRNESS')
+        for cause, note in (('neither', 'x'), ('benign', ' ')):
+            with self.assertRaisesRegex(ValueError, 'cause'): panel.acknowledge_arm_fairness(self.root, cause=cause, note=note)
+        with self.assertRaisesRegex(ValueError, 'no arm fairness flag'): panel.acknowledge_arm_fairness(self.root, cause='benign', note='x')
+
+    def test_the_extension_starts_unacknowledged(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8'); self.flagged_then_acknowledged(monitor)
+        self.assertEqual(self.play(monitor, range(500, 550), 100, 106)[-1], 'FLAG_ARM_FAIRNESS')   # 6% re-flags: no screen acknowledgement applies
+        flag, = self.state('extension')['flags']; self.assertEqual((flag['reason'], flag['acknowledged'], flag['window']), ('ratio', None, 0))
+
+    def test_unobservable_fairness_never_flags_and_says_why(self):
+        self.tearDown(); self.directory = TemporaryDirectory()
+        self.root, self.run, self.d, self.lad = make_run(self.directory.name, observable=False)
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual(set(self.play(monitor, range(60), 100, 70, observable=False)), {None})
+        self.assertEqual(self.state()['checks'], [])
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        reading = value['arm_fairness']['phases']['screen']['reading']
+        self.assertEqual(reading['status'], 'UNMEASURABLE'); self.assertIn('isolation', reading['basis'])
+        self.assertEqual(reading['descriptive_request_to_answer_seconds']['RAW'], dict(moves=1200, mean_seconds=1.))
+        self.assertNotIn('fairness_observability', value['breakage'])
+        cell = self.raws[60]; write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, 0, source='raw_arm')])
+        self.assertIn('fairness_observability', panel.readout(self.root, arm='DN2W8', limit=500)['breakage'])   # a cell contradicts it
+
+    def test_an_observable_declaration_contradicted_mid_run_is_breakage(self):
+        populate(self.root, self.run, self.lad)
+        self.assertNotIn('fairness_observability', panel.readout(self.root, arm='DN2W8', limit=500)['breakage'])
+        cell = self.searches[3]
+        write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, i) for i in range(2)], observable=None)
+        value = panel.readout(self.root, arm='DN2W8', limit=500)   # the bridge's probe failed: not a reading
+        self.assertNotIn('fairness_observability', value['breakage']); self.assertEqual(value['arm_fairness']['observability'], dict(contradictions=0, unknown=1))
+        write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, i) for i in range(2)], observable=False)
+        value = panel.readout(self.root, arm='DN2W8', limit=500)
+        self.assertIn('fairness_observability', value['breakage']); self.assertEqual(value['arm_fairness']['observability'], dict(contradictions=1, unknown=0))
+
+    def test_an_extension_flag_never_changes_the_pinned_screen_readout(self):
+        populate(self.root, self.run, self.lad)
+        for arm in ('RAW', 'DN2W8'):
+            for cell in panel.cells(self.lad, arm)[:1990]:
+                (self.root/'claims').mkdir(exist_ok=True); (self.root/'claims'/f"{cell['ordinal']}.json").write_bytes(b'{}')
+        genuine = panel.readout(self.root, arm='DN2W8', limit=500); self.assertEqual(genuine['decision'], 'CONTINUE_TO_2000')
+        path = Path(self.directory.name)/'screen.json'; panel.write_new(path, genuine); screen = (path, panel.sha(genuine))
+        self.assertEqual(len(panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=screen)), 10)
+        directory = panel.fairness_directory(self.root, 'extension'); directory.mkdir(parents=True)
+        panel.write_new(directory/'flag-1.json', dict(phase='extension', reason='ratio', reading=dict(difference=.07, coverage_difference=0.)))
+        with self.assertRaisesRegex(ValueError, 'FLAG_ARM_FAIRNESS'): panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=screen)
+        self.assertEqual(panel.acknowledge_arm_fairness(self.root, cause='benign', note='transient host event')['phase'], 'extension')
+        self.assertEqual(len(panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=screen)), 10)
+
+
+class CalibrationTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = TemporaryDirectory(); root = Path(self.directory.name).resolve(); inputs = root/'inputs'
+        self.lad = ladder_fixture.declaration()
+        for name, value in (('ladder', self.lad), ('base', {})): panel.write_new(inputs/f'{name}.json', value)
+        self.kwargs = dict(ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(self.lad), checkpoint='/inert/champion.pt',
+                           base_config=inputs/'base.json', base_config_sha256=panel.sha({}))
+        self.root = root/'calibration'
+
+    def tearDown(self): self.directory.cleanup()
+
+    def test_calibration_seeds_are_disjoint_from_every_eval_cell(self):
+        band = panel.calibration_cells(self.lad, CALIBRATION_BAND)
+        self.assertEqual(len(band), 400); self.assertTrue(all(c['calibration'] and c['arm'] == 'RAW' for c in band))
+        eval_seeds = {(c['seed'], c['fp_seed']) for c in panel.cells(self.lad, 'RAW')}
+        self.assertFalse({c['seed'] for c in band} & {s for s, _ in eval_seeds}); self.assertFalse({c['fp_seed'] for c in band} & {f for _, f in eval_seeds})
+        for overlap in (dict(CALIBRATION_BAND, battle_seed_start=10999), dict(CALIBRATION_BAND, foulplay_seed_start=19900, count=101)):
+            with self.subTest(overlap), self.assertRaisesRegex(ValueError, 'overlap'): panel.calibration_cells(self.lad, overlap)
+        self.assertEqual(len(panel.calibration_cells(self.lad, dict(CALIBRATION_BAND, foulplay_seed_start=19900, count=100))), 200)
+
+    def fake_dispatch(self, rates, observable=True, moves=40):
+        calls = []
+        async def run(packets, *, pairs, servers, after, **kwargs):
+            calls.append((packets[0]['setting'], len(pairs), len(packets))); done = 0
+            for packet in packets:
+                cell = ladder.read_bound(packet['path'], packet['sha256'])['cell']
+                panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", dict(setting=packet['setting']))
+                rows = think(moves, rates[packet['setting']]['8x500ms'], stratum='8x500ms')+think(moves, rates[packet['setting']]['2x1000ms'])
+                panel.write_new(self.root/'results'/f"{cell['ordinal']}.json", dict(status='COMPLETE', cell=cell, setting=packet['setting'],
+                    cpu_pair=list(pairs[done % len(pairs)]), source_game=dict(opponent_think=rows), worker=dict(hostname='h'),
+                    benchmark=dict(foulplay_think=dict(iterations_observable=observable))))
+                done += 1; reason = after(packet)
+                if reason: return dict(dispatched=done, failed=[], not_dispatched=len(packets)-done, stopped=reason)
+            return dict(dispatched=done, failed=[], not_dispatched=0, stopped=None)
+        return run, calls
+
+    def test_solo_then_concurrent_until_every_stratum_has_its_moves(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=4, **self.kwargs)
+        rates = dict(solo={'8x500ms': 100., '2x1000ms': 200.}, concurrent={'8x500ms': 95., '2x1000ms': 180.})
+        run, calls = self.fake_dispatch(rates)
+        value = asyncio.run(panel.calibrate(self.root, pairs=[(0, 1), (2, 3), (4, 5), (6, 7)], dispatch_function=run))
+        self.assertEqual([(s, lanes) for s, lanes, _ in calls], [('solo', 1), ('concurrent', 4)])
+        self.assertEqual((value['status'], value['ratios'], value['games']), ('MEASURED', {'8x500ms': .95, '2x1000ms': .9}, dict(solo=8, concurrent=8)))
+        self.assertEqual(value['strata']['8x500ms']['solo']['moves'], 320); self.assertEqual(value['hosts'], ['{"hostname":"h"}'])
+        claimed = sorted(int(p.stem) for p in (self.root/'claims').glob('*.json')); self.assertEqual(claimed, list(range(16)))
+        stored = ladder.read_bound(self.root/'calibration.json', panel.sha(value)); self.assertEqual(stored, value)
+        with self.assertRaises(FileExistsError): asyncio.run(panel.calibrate(self.root, pairs=[(0, 1), (2, 3), (4, 5), (6, 7)], dispatch_function=run))
+        with self.assertRaisesRegex(ValueError, 'planned worker lanes'): asyncio.run(panel.calibrate(self.root, pairs=[(0, 1)], dispatch_function=run))
+
+    def test_unobservable_work_makes_calibration_unmeasurable(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=2, **self.kwargs)
+        run, calls = self.fake_dispatch(dict(solo={'8x500ms': 1., '2x1000ms': 1.}, concurrent={'8x500ms': 1., '2x1000ms': 1.}), observable=False)
+        value = asyncio.run(panel.calibrate(self.root, pairs=[(0, 1), (2, 3)], dispatch_function=run))
+        self.assertEqual((value['status'], value['iterations_observable'], value['ratios'], value['games']), ('UNMEASURABLE', False, None, dict(solo=1, concurrent=0)))
+
+    def test_too_few_moves_is_insufficient_never_measured(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=2, **self.kwargs)
+        rates = dict(solo={'8x500ms': 100., '2x1000ms': 200.}, concurrent={'8x500ms': 95., '2x1000ms': 190.})
+        run, _ = self.fake_dispatch(rates)
+        for setting in ('solo', 'concurrent'):
+            asyncio.run(run(panel.calibration_packets(self.root, setting=setting)[:7], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: None))
+        value = panel.calibration_summary(self.root)   # 7 games: 280 rated moves per stratum and setting, under the 300 floor
+        self.assertEqual((value['status'], value['ratios'], value['strata']['8x500ms']['solo']['moves']), ('INSUFFICIENT', None, 280))
+
+    def test_calibration_is_unmeasurable_only_when_no_game_reports_true(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
+        rates = dict(solo={'8x500ms': 100., '2x1000ms': 200.}, concurrent={'8x500ms': 100., '2x1000ms': 200.})
+        run, _ = self.fake_dispatch(rates, observable=None)
+        asyncio.run(run(panel.calibration_packets(self.root, setting='solo')[:1], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: 'stop'))
+        self.assertEqual(panel.calibration_summary(self.root)['iterations_observable'], None)
+        self.assertEqual(panel.calibration_summary(self.root)['status'], 'UNMEASURABLE')
+        run, _ = self.fake_dispatch(rates, observable=True)
+        asyncio.run(run(panel.calibration_packets(self.root, setting='solo')[:1], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: 'stop'))
+        self.assertEqual(panel.calibration_summary(self.root)['iterations_observable'], True)
+        self.assertFalse(panel.calibration_summary(self.root)['observability_mixed'])
+        run, _ = self.fake_dispatch(rates, observable=False)   # games contradicting each other: fail closed
+        asyncio.run(run(panel.calibration_packets(self.root, setting='solo')[:1], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: 'stop'))
+        value = panel.calibration_summary(self.root)
+        self.assertEqual((value['status'], value['observability_mixed'], value['ratios']), ('INSUFFICIENT', True, None))
+
+    def test_a_calibration_game_stays_in_its_own_directory(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
+        packet = panel.calibration_packets(self.root, setting='solo')[0]; config = NS(checkpoint=Path('/inert/champion.pt'))
+        sha = ActorContract.champion().checkpoint_sha256
+        class Runtime:
+            def __init__(self, **kw): self.kw = kw
+            async def run(self, config): raise RuntimeError('inert game')
+        with patch.object(panel.ladder, 'configuration', return_value=config), patch.object(panel.ladder, 'owning_capture', inert_capture), \
+                patch('pokezero.live_protocol_runtime._checkpoint_sha', return_value=sha):
+            wire = {k: packet[k] for k in ('path', 'sha256', 'setting')}
+            self.assertEqual(asyncio.run(panel.calibration_worker(dict(wire, server=None), expected_pair=(1, 2), original='o', runtime_class=Runtime)), 0)
+            result = json.loads((self.root/'results'/'0.json').read_bytes())
+            self.assertEqual((result['status'], result['setting'], result['cell']['calibration']), ('UNKNOWN', 'solo', True))
+            with self.assertRaises(FileExistsError): asyncio.run(panel.calibration_worker(dict(wire, server=None), expected_pair=(1, 2), original='o', runtime_class=Runtime))
+            run_root, run, d, lad = make_run(Path(self.directory.name)/'eval')
+            eval_packet = panel.pending(run_root, arm='RAW', limit=500)[0]
+            with self.assertRaises(ValueError):
+                asyncio.run(panel.calibration_worker(dict(path=eval_packet['path'], sha256=eval_packet['sha256'], setting='solo', server=None),
+                                                     expected_pair=(1, 2), original='o', runtime_class=Runtime))
+        self.assertFalse((run_root/'claims').exists())
+
+    def test_init_verifies_the_calibration_and_dispatch_gates_on_it(self):
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory)
+            self.assertIsNone(panel.require_calibration(root, d, pairs=[(0, 1)]*4))
+            with self.assertRaisesRegex(ValueError, 'more worker lanes'): panel.require_calibration(root, d, pairs=[(0, 1)]*5)
+            for ratios, ok in (({'8x500ms': .9, '2x1000ms': .95}, True), ({'8x500ms': .89, '2x1000ms': .95}, False)):
+                d2 = declaration('a'*64, ratios=ratios)
+                if ok: self.assertIsNone(panel.require_calibration(root, d2, pairs=[(0, 1)]))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'below 0.9'): panel.require_calibration(root, d2, pairs=[(0, 1)])
+            inputs = Path(directory).resolve()/'inputs'; wrong = calibration_fixture(panel.sha(lad), ratios={'8x500ms': .95, '2x1000ms': .5})
+            panel.write_new(inputs/'wrong.json', wrong); d3 = dict(d, calibration=dict(d['calibration'], sha256=panel.sha(wrong)))
+            panel.write_new(inputs/'d3.json', d3)
+            with self.assertRaisesRegex(ValueError, 'calibration.json must match'):
+                panel.init(Path(directory)/'other', declaration=inputs/'d3.json', declaration_sha256=panel.sha(d3), ladder_declaration=inputs/'ladder.json',
+                    ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json', base_config_sha256=panel.sha({}),
+                    calibration=inputs/'wrong.json')
+
+    def test_init_refuses_a_calibration_that_is_not_valid_evidence(self):
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory); inputs = Path(directory).resolve()/'inputs'
+            good = calibration_fixture(panel.sha(lad))
+            def bad(name, change, message):
+                name = 'evidence-'+name; value = copy.deepcopy(good); change(value); panel.write_new(inputs/f'{name}.json', value)
+                declared = dict(d, calibration=dict(d['calibration'], sha256=panel.sha(value)))
+                panel.write_new(inputs/f'{name}-declaration.json', declared)
+                with self.subTest(name), self.assertRaisesRegex(ValueError, message):
+                    panel.init(Path(directory)/name, declaration=inputs/f'{name}-declaration.json', declaration_sha256=panel.sha(declared),
+                        ladder_declaration=inputs/'ladder.json', ladder_declaration_sha256=panel.sha(lad), checkpoint='/x', base_config=inputs/'base.json',
+                        base_config_sha256=panel.sha({}), calibration=inputs/f'{name}.json')
+            bad('floor', lambda v: v.update(min_moves=299), 'not valid evidence')
+            bad('solo-moves', lambda v: v['strata']['8x500ms']['solo'].update(moves=299), 'not valid evidence')
+            bad('concurrent-moves', lambda v: v['strata']['2x1000ms']['concurrent'].update(moves=10), 'not valid evidence')
+            bad('ratio', lambda v: v['strata']['8x500ms']['concurrent'].update(rate=.96), 'not valid evidence')
+            bad('stratum', lambda v: v['strata'].pop('2x1000ms'), 'not valid evidence')
+            bad('base', lambda v: v.update(base_config_sha256='0'*64), 'base config')
+            bad('checkpoint', lambda v: v.update(checkpoint_sha256='0'*64), 'base config')
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory, observable=False)
+            with self.assertRaisesRegex(ValueError, 'accept-uncalibrated'): panel.require_calibration(root, d, pairs=[(0, 1)])
+            recorded = panel.require_calibration(root, d, pairs=[(0, 1)], accept_uncalibrated=True)
+            self.assertEqual(recorded['status'], 'UNMEASURABLE'); self.assertEqual(panel.require_calibration(root, d, pairs=[(0, 1)], accept_uncalibrated=True), recorded)
+            self.assertTrue(panel.readout(root, arm='DN2W8', limit=500)['arm_fairness']['accepted_uncalibrated'])
+
+
 class ScriptTests(unittest.TestCase):
     def script(self):
         spec = importlib.util.spec_from_file_location('depthn_foulplay_panel_script', ROOT/'scripts'/'depthn_foulplay_panel.py')
@@ -802,8 +1354,8 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(json.loads(printed.getvalue())['sha256'], ladder.sha(json.loads(output.read_bytes())))
             with self.assertRaises(FileExistsError): script.main(argv)
             base = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cpu-pair', '0', '1', '--cache-directory', directory]
-            for extra in (['--arm', 'RAW', '--server', 'h:1'], ['--arm', 'DN2W8']):
-                with self.assertRaises(SystemExit): script.main(base+extra)
+            for extra in (['--arm', 'RAW', '--server', 'h:1'], ['--search-arm', 'DN2W8'], ['--search-arm', 'RAW', '--server', 'h:1']):
+                with self.subTest(extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit): script.main(base+extra)
         self.assertEqual(script.server('10.0.0.1:7000'), dict(host='10.0.0.1', port=7000))
 
     def test_a_failed_probe_dispatches_nothing(self):
@@ -812,12 +1364,28 @@ class ScriptTests(unittest.TestCase):
             root, run, d, lad = make_run(directory); wire = make_capture(Path(directory)/'wire')
             dead = socket.create_server(('127.0.0.1', 0)); port = dead.getsockname()[1]; dead.close()
             argv = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cpu-pair', '0', '1', '--cache-directory', directory,
-                    '--arm', 'DN2W8', '--server', f'127.0.0.1:{port}', '--probe-capture', str(wire)]
+                    '--search-arm', 'DN2W8', '--server', f'127.0.0.1:{port}', '--probe-capture', str(wire)]
             with patch.object(panel, 'dispatch', side_effect=AssertionError('must not dispatch')), self.assertRaisesRegex(ValueError, 'probe failed'):
                 script.main(argv)
             self.assertFalse((root/'claims').exists())
             with patch.object(panel, 'dispatch', side_effect=AssertionError('must not dispatch')), self.assertRaisesRegex(ValueError, 'no closed RAW'):
                 script.main(argv[:-2])
+
+    def test_cli_dispatch_never_skips_the_calibration_gate(self):
+        script = self.script()
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory, ratios={'8x500ms': .89, '2x1000ms': .95})
+            argv = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cpu-pair', '0', '1', '--cache-directory', directory,
+                    '--search-arm', 'DN2W8', '--server', '127.0.0.1:9', '--probe-capture', '/never/read']
+            with patch.object(panel, 'probe', side_effect=AssertionError('the gate comes first')), self.assertRaisesRegex(ValueError, 'below 0.9'):
+                script.main(argv)
+        with TemporaryDirectory() as directory:
+            root, run, d, lad = make_run(directory)
+            lanes = [x for k in range(5) for x in ('--cpu-pair', str(2*k), str(2*k+1))]
+            argv = ['dispatch', '--run-directory', str(root), '--limit', '500', '--cache-directory', directory, '--search-arm', 'DN2W8',
+                    '--server', '127.0.0.1:9', '--probe-capture', '/never/read']+lanes
+            with patch.object(panel, 'probe', side_effect=AssertionError('the gate comes first')), self.assertRaisesRegex(ValueError, 'more worker lanes'):
+                script.main(argv)
 
 
 if __name__ == '__main__': unittest.main()
