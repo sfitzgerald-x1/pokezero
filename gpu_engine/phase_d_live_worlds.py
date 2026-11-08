@@ -125,7 +125,7 @@ def _physical_toxic_counter(upcoming_stage):
     return max(0, min(15, stage - 1))
 
 
-def _exact_own(request, state, catalog, source, metadata, owner):
+def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=False, protocol_facts=None):
     """Copy literal request fields, checking static latent IVs against own stats.
 
     The original public set source is used as a static format rule, never as a
@@ -134,9 +134,10 @@ def _exact_own(request, state, catalog, source, metadata, owner):
     if request.get('side', {}).get('id') != f'p{owner+1}':
         raise Refusal('OWN_REQUEST_OWNER_MISMATCH')
     party = request['side'].get('pokemon')
-    if not isinstance(party, list) or len(party) != 6 or len(request.get('active', ())) != 1:
+    replacement=protocol_facts is not None and protocol_facts['replacement'] is not None
+    if not isinstance(party, list) or len(party) != 6 or (not replacement and len(request.get('active', ())) != 1):
         raise Refusal('OWN_COMPLETE_ORDINARY_REQUEST_REQUIRED')
-    if request.get('wait') or request.get('teamPreview') or any(request.get('forceSwitch', ())):
+    if request.get('wait') or request.get('teamPreview') or (any(request.get('forceSwitch', ())) and not replacement):
         raise Refusal('SUSPENDED_OR_REPLACEMENT_BOUNDARY')
     template = empty_state(1)
     own = {name: np.array(getattr(template, name)[0, owner], copy=True)
@@ -146,7 +147,8 @@ def _exact_own(request, state, catalog, source, metadata, owner):
     if len(active) != 1:
         raise Refusal('OWN_ACTIVE_UNAVAILABLE')
     own['active'][()] = active[0]
-    current = request['active'][0]
+    current = {} if replacement else request['active'][0]
+    own['forced_switch'][()] = replacement
     if current.get('maybeTrapped') and 'trapped' not in current:
         raise Refusal('OWN_TRAP_STATE_UNAVAILABLE')
     own['trapped'][()] = bool(current.get('trapped', False))
@@ -215,8 +217,9 @@ def _exact_own(request, state, catalog, source, metadata, owner):
         own['item'][slot] = _lookup(v['items'], mon['item'])
         status = next((x for x in condition[1:] if x in ('slp','par','brn','frz','psn','tox')), '')
         own['status'][slot] = {'':0,'par':1,'brn':2,'psn':3,'tox':4,'slp':5,'frz':6}[status]
-        if status == 'slp':
-            raise Refusal('OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE', species)
+        if status=='slp' and not defer_sleep:raise Refusal('OWN_SLEEP_LATENT_CLOCK_UNAVAILABLE',species)
+        # Known sleep status is exact; its hidden counter is restored per world
+        # only after the protocol route validates public sleep evidence.
         happiness=_own_happiness(mon,moves,species)
         if happiness is not None:own['happiness'][slot]=happiness
         if hp_move:
@@ -240,7 +243,7 @@ def _exact_own(request, state, catalog, source, metadata, owner):
                 uses = _host(state.context.moves.uses)[0,owner,public_slot]
                 used = sum(int(n) for m,n in zip(ids,uses) if m and _source_move(catalog.moves.names[int(m)]) == _source_move(name))
             own['pp'][slot,k] = max(0, pp*8//5-used)
-            if slot == active[0]:
+            if slot == active[0] and not replacement:
                 rows = [m for m in current.get('moves', ()) if _source_move(m.get('id','')) == _source_move(name)]
                 if len(rows) != 1 or type(rows[0].get('pp')) is not int:
                     raise Refusal('OWN_ACTIVE_PP_UNAVAILABLE')
@@ -251,7 +254,7 @@ def _exact_own(request, state, catalog, source, metadata, owner):
     return own, joined
 
 
-def from_b2(adapter, request, source, metadata, *, address):
+def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, protocol_facts=None):
     """One original owning fold plus own request; no engine donor accepted."""
     from pokezero.recorded_encoder_runner import JaxRecordedAdapter
     from . import v4_encoder
@@ -264,7 +267,8 @@ def from_b2(adapter, request, source, metadata, *, address):
     # Authoritative B2 admission happens before any materialization. This parses
     # ONLY request and reads original public fold, never another owner's packet.
     expected_inputs = adapter.encode(request, owner_side=owner)
-    own, joined = _exact_own(request,state,catalog,source,metadata,owner)
+    if type(defer_sleep)is not bool:raise Refusal('EXPLICIT_PROTOCOL_SLEEP_DEFER_REQUIRED')
+    own, joined = _exact_own(request,state,catalog,source,metadata,owner,defer_sleep=defer_sleep,protocol_facts=protocol_facts)
     from . import public_context
     ctx,beliefs,ok=public_context.observation_boundary_copy(state.context,state.beliefs,state.mons,
         catalog.source.device,catalog.context,valid=j.ones(1,bool))
@@ -323,7 +327,19 @@ def from_b2(adapter, request, source, metadata, *, address):
                 observed[0,side,slot,k] = _lookup(v['moves'],catalog.moves.names[m])
                 used[0,side,slot,k] = n
     own_slot = int(own['active']);pub_slot = joined[own_slot]
+    if protocol_facts is not None:
+        for seat,name in protocol_facts['fresh_substitutes'].items():
+            side=int(seat[1])-1;at=int(active_slots[0,side])
+            if normalize_id(v['species'][int(species[0,side,at])])!=name or not vol[0,side,at,hooks.VOLATILE_NAMES.index('substitute')]:
+                raise Refusal('PUBLIC_SUBSTITUTE_B2_PRESENCE_DISAGREEMENT')
+        if protocol_facts['replacement'] is not None and not fainted[0,owner,pub_slot]:
+            raise Refusal('PUBLIC_REPLACEMENT_FAINT_DISAGREEMENT')
+    replacement=protocol_facts is not None and protocol_facts['replacement'] is not None
+    fresh=protocol_facts.get('fresh_substitutes',{}) if protocol_facts is not None else {}
+    own_species=normalize_id(v['species'][int(own['species'][own_slot])])
     allowed = {'', 'leechseed', 'ingrain', 'trapped'}
+    if fresh.get('p'+str(owner+1))==own_species:
+        allowed.add('substitute');own['substitute_hp'][own_slot]=own['max_hp'][own_slot]//4
     own_vols = tuple(hooks.VOLATILE_NAMES[k] for k in np.flatnonzero(vol[0,owner,pub_slot]))
     if any(name not in allowed for name in own_vols):
         raise Refusal('OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE', ','.join(own_vols))
@@ -352,10 +368,18 @@ def from_b2(adapter, request, source, metadata, *, address):
         if not bool(_host(ctx.active.truant_known)[0,owner]):raise Refusal('OWN_TRUANT_PHASE_UNAVAILABLE')
         own['truant_loaf'][own_slot]=bool(_host(ctx.active.truant_loaf)[0,owner])
     field=ctx.field
-    if np.any(_host(ctx.damage.current_dealt)) or np.any(_host(ctx.damage.current_taken)):
+    if not replacement and (np.any(_host(ctx.damage.current_dealt)) or np.any(_host(ctx.damage.current_taken))):
         raise Refusal('MIDTURN_DAMAGE_WINDOW_NOT_MATERIALIZED')
-    if np.any((_host(field.wish_set_turn)>=0)&((_host(field.turn)[:,None]-_host(field.wish_set_turn))<=1)):
-        raise Refusal('PUBLIC_WISH_CASTER_AMOUNT_UNAVAILABLE')
+    starts=_host(field.wish_set_turn)[0];turn=int(_host(field.turn)[0])
+    pending={'p'+str(side+1):int(start) for side,start in enumerate(starts) if start>=0 and turn-int(start)<=1}
+    if protocol_facts is None and pending:raise Refusal('PUBLIC_WISH_CASTER_AMOUNT_UNAVAILABLE')
+    if protocol_facts is not None:
+        if pending!=protocol_facts['wish_set_turns']:raise Refusal('PUBLIC_WISH_PUBLIC_HISTORY_DISAGREEMENT')
+        if protocol_facts['turn']!=turn:raise Refusal('PUBLIC_TAIL_TURN_DISAGREEMENT')
+        if 'p'+str(owner+1) in pending:
+            own['wish_counter'][()]=2-(turn-pending['p'+str(owner+1)])
+            own['wish_amount'][()]=max(1,int(own['max_hp'][own_slot])//2)
+    if replacement:own['active_turns'][()]=protocol_facts['replacement']['ages'][owner]
     weather_name=catalog.field.weather_names[int(_host(field.weather)[0])]
     weather={'':0,'sunnyday':2,'raindance':1,'sandstorm':3,'hail':4}.get(weather_name)
     if weather is None:raise Refusal('PUBLIC_WEATHER_UNAVAILABLE')
@@ -410,6 +434,11 @@ def from_b2(adapter, request, source, metadata, *, address):
     hist=damage.History(j.zeros((1,2),j.int32).at[0,owner].set(own['hp'][own_slot]),
         j.zeros((1,2),j.int32).at[0,owner].set(own['max_hp'][own_slot]),
         j.zeros((1,2,2,2),j.float32),j.zeros((1,2,2,2),j.float32))
+    if replacement:
+        # Original B2 owner readout: owner's dealt is shown foe fraction;
+        # foe's dealt is exact own fraction. Unknown peer-private halves stay redacted.
+        from .phase_d_tail import carry_current_damage
+        hist=carry_current_damage(hist,ctx.damage.current_dealt,ctx.damage.current_taken,owner)
     from .engine_device_visible_belief import State as Visible
     hard=state.beliefs.hard[:,::-1];pin=state.beliefs.pin[:,::-1];pins=state.beliefs.pin_active[:,::-1]
     visible=Visible(pin,pins,state.beliefs.conflicts[:,::-1],hard,pin,pins,
@@ -426,6 +455,7 @@ class WorldSet:
     worlds: tuple
     seeds: tuple
     requested_worlds: int
+    mapper_diagnostics: tuple = ()
 
     @property
     def fully_constructed(self):
