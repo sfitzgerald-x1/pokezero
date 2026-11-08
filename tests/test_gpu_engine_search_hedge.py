@@ -172,6 +172,30 @@ def frame(t1_status, t1_value, t2_status, t2_value, *, pre=(0, 0), peer_requeste
         t2_status=t2_status[None], t2_value=t2_value[None])
 
 
+class PriorRegularizedTests(unittest.TestCase):
+    """Amendment 19's rule: argmax of completed-Q + c * log pi over the legal actions."""
+    def test_zero_weight_is_averaging_and_a_large_weight_is_greedy(self):
+        rng = random.Random(7)
+        for _ in range(300):
+            own = tuple(sorted(rng.sample(range(9), rng.randint(2, 5))));root = legal(*own)
+            worlds = [world([[rng.choice((-1., -.5, 0., .5, 1.)) for _ in range(2)] for _ in own], own=own) for _ in range(4)]
+            average = h.averaging(worlds, root);logits = [rng.gauss(0., 2.) for _ in range(9)]
+            self.assertEqual(h.prior_regularized(average, logits, root, 0.), average)   # ties included: lowest index
+            greedy = max(own, key=lambda a: (logits[a], -a))
+            self.assertEqual(h.top_action(h.prior_regularized(average, logits, root, 1e6).strategy), greedy)
+
+    def test_trade_off_between_q_and_the_root_policy(self):
+        # Q = (.3, .2); pi over the legal pair = softmax(0, 2): the log-pi gap is exactly 2, so the switch is at c = .05.
+        # The illegal action's huge logit must not enter the softmax.
+        root = legal(0, 1);average = h.averaging([world([[.3, .3], [.2, .2]])], root)
+        logits = [0., 2., 0., 0., 0., 50., 0., 0., 0.]
+        self.assertEqual(h.top_action(h.prior_regularized(average, logits, root, .04).strategy), 0)
+        picked = h.prior_regularized(average, logits, root, .06)
+        self.assertEqual(h.top_action(picked.strategy), 1);self.assertEqual(picked.value, average.q[1]);self.assertEqual(picked.q, average.q)
+        with self.assertRaises(ValueError):h.prior_regularized(average, logits, root, -.1)
+        with self.assertRaises(ValueError):h.prior_regularized(average, logits, root, float('nan'))
+
+
 class Depth2HedgeTests(unittest.TestCase):
     def setUp(self):
         self.t1_status = np.zeros((2, 9, 9), np.int8);self.t1_value = np.zeros((2, 9, 9), np.float32)
