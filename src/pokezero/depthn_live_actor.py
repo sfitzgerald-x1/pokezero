@@ -10,12 +10,18 @@ model, JAX program or GPU stack; this module never imports gpu_engine.
 
 Played Q: the server's q is an equal-weight mean of world values in [-1, 1], so
 a forced win or loss is exactly +-1 or within a few ulp of it (fsum rounding).
-A searched action is played only if its q is finite and |q| <= 1 + 1e-9.
+A searched action is played only if its q (int or float, never bool) is finite
+and |q| <= 1 + 1e-9.
 
 Against design note section 6: greedy logits/probabilities are NOT logged. The
 champion's raw policy is pinned with record_policy_distribution=False, and
-neither the observation nor the encode path carries them. Each row keeps the
-greedy action, behavior probability, value estimate and timings.
+neither the observation nor the encode path carries them. Each row keeps what an
+offline recompute needs: battle_id, the battle turn (null before the first
+|turn| line), decision_index and the champion archive_sha256 (the server's on
+server responses, else the pinned champion archive), plus the greedy action,
+behavior probability, value estimate and timings. A row that cannot be written
+because of server content is replaced by a minimal server_error row and the
+greedy decision is played: select() never raises on anything the server sends.
 """
 from dataclasses import replace
 import json
@@ -37,7 +43,9 @@ SEARCH_ARMS=('DN2W8','DN2W16')
 ARMS=('RAW',)+SEARCH_ARMS
 POLICY_IDS={'RAW':'champion-raw-ours',**{arm:'champion-depthn-'+arm for arm in SEARCH_ARMS}}
 ROW_SCHEMA='depthn-live.decision.v1'
-SERVER_CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request')
+SERVER_CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server_error','bad_request','class_refused')
+# The certified bf16 champion archive (gpu_engine/declared_bounds/champion-9375-bf16-*.json).
+CHAMPION_ARCHIVE_SHA256='e450515351bce1497ab50a712955fe17b761bbb5f424b23ec299e96cda5b165c'
 CAUSES=SERVER_CAUSES+('timeout','connection_error','illegal_action','bad_q')
 SOURCES=('search','greedy_fallback','single_legal','raw_arm')
 REQUEST_KINDS=('move','switch','forced')
@@ -116,7 +124,9 @@ class Client:
         status,cause=response.get('status'),response.get('cause')
         if not (status=='COMPLETE'and cause is None or status=='REFUSED'and cause in SERVER_CAUSES):
             raise ValueError('literal status and declared refusal cause required')
-        encoded(response)  # Finite JSON only: NaN, Infinity and 1e999 never reach play or telemetry.
+        # Finite JSON only (NaN, Infinity and 1e999 never reach play or telemetry), checked
+        # at the depth the decision row will hold it: the row nests the response once.
+        encoded(dict(search=response))
 
     def _refused(self,request,cause,error):
         return dict(schema=wire.SCHEMA,request_id=request['request_id'],rung=self.rung,status='REFUSED',
@@ -133,27 +143,42 @@ def request_kind(legal_action_mask):
 
 
 def searched_action(response,observation):
-    """(action, None) only for a COMPLETE legal action with finite |q| <= Q_BOUND."""
+    """(action, None) only for a COMPLETE legal action with finite |q| <= Q_BOUND.
+
+    q may be an int or a float, never a bool; a huge JSON integer is compared
+    exactly (no float conversion), so it is refused without overflow.
+    """
     if response['status']!='COMPLETE':return None,response['cause']
     action=response.get('action_index');q=response.get('q_values')
     if type(action)is not int or not 0<=action<9 or not observation.legal_action_mask[action]:return None,'illegal_action'
     if type(q)is not list or len(q)!=9:return None,'bad_q'
     value=q[action]
-    if type(value)not in (int,float)or not math.isfinite(value)or not abs(value)<=Q_BOUND:return None,'bad_q'
+    if (type(value)not in (int,float)or type(value)is float and not math.isfinite(value)
+            or not abs(value)<=Q_BOUND):return None,'bad_q'
     return action,None
 
 
-def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None):
+def battle_turn(lines):
+    """The last |turn|N in the owner's lines; None before the first turn line."""
+    for line in reversed(lines):
+        if line.startswith('|turn|'):
+            value=line.split('|')[2]
+            return int(value)if value.isascii()and value.isdigit()else None
+    return None
+
+
+def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha256=CHAMPION_ARCHIVE_SHA256):
     if (type(raw_factory)is not OwningActorFactory or raw_factory.contract!=ActorContract.champion()or arm not in ARMS
-            or (client is not None if arm=='RAW'else type(client)is not Client or client.rung!=arm)):
-        raise ValueError('champion raw factory and matching DepthN arm/client required')
+            or (client is not None if arm=='RAW'else type(client)is not Client or client.rung!=arm)
+            or type(archive_sha256)is not str or len(archive_sha256)!=64 or any(c not in '0123456789abcdef'for c in archive_sha256)):
+        raise ValueError('champion raw factory, matching DepthN arm/client and champion archive required')
     require_actor_factory(config,raw_factory)
     path=Path(telemetry_path);path.parent.mkdir(parents=True,exist_ok=True)
     with path.open('xb'):pass  # One fresh decision log per game; never appended across cells.
     cell=None if cell is None else json.loads(encoded(cell))
     policy_id=POLICY_IDS[arm];pending={}
-    def emit(row):
-        with path.open('ab')as stream:stream.write(encoded(row)+b'\n');stream.flush();os.fsync(stream.fileno())
+    def emit(blob):
+        with path.open('ab')as stream:stream.write(blob+b'\n');stream.flush();os.fsync(stream.fileno())
     def backend(contract,*,env_config,**identity):
         pending.clear();pending['index']=0
         provider=raw_factory.backend_factory(contract,env_config=env_config,**identity)
@@ -186,14 +211,30 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None):
             else:
                 decision=replace(greedy,metadata={**dict(greedy.metadata),'depthn_live':dict(arm=arm,source=source,cause=cause,
                     request_id=None if response is None else response['request_id'])})
+            served=response is not None and response.get('client_refused')is False
             row=dict(schema=ROW_SCHEMA,arm=arm,policy_id=policy_id,cell=cell,battle_id=snapshot.battle_id,owner=snapshot.owner,
-                stream_id=snapshot.stream_id,generation=snapshot.generation,decision_index=index,request_kind=kind,
-                prefix_sha256=snapshot.prefix_sha256,encode_seconds=entered-started,
+                stream_id=snapshot.stream_id,generation=snapshot.generation,turn=battle_turn(snapshot.lines),decision_index=index,
+                request_kind=kind,prefix_sha256=snapshot.prefix_sha256,
+                archive_sha256=response.get('archive_sha256')if served else archive_sha256,archive_source='server'if served else'pinned',
+                encode_seconds=entered-started,
                 greedy=dict(action_index=greedy.action_index,policy_id=greedy.policy_id,action_probability=greedy.action_probability,
                     value_estimate=greedy.value_estimate,seconds=greedy_seconds),
                 search=response,played_action_index=decision.action_index,source=source,cause=cause,
                 search_differs=None if action is None else action!=greedy.action_index,select_seconds=clock()-started)
-            emit(row)
+            try:blob=encoded(row)
+            except Exception as error:
+                if response is None:raise
+                # Server content the row cannot hold: a minimal server_error row, and greedy is played.
+                rid=response.get('request_id');rid=rid if type(rid)is str else None
+                response=dict(schema=wire.SCHEMA,request_id=rid,status='REFUSED',cause='server_error',client_refused=True,
+                    refusal=('telemetry row: '+type(error).__name__+': '+str(error))[:1000],
+                    **{k:response.get(k)if type(response.get(k))is float else None for k in ('budget_seconds','client_wall_seconds')})
+                source,cause='greedy_fallback','server_error'
+                decision=replace(greedy,metadata={**dict(greedy.metadata),'depthn_live':dict(arm=arm,source=source,cause=cause,request_id=rid)})
+                row.update(search=response,played_action_index=decision.action_index,source=source,cause=cause,search_differs=None,
+                    archive_sha256=archive_sha256,archive_source='pinned')
+                blob=encoded(row)
+            emit(blob)
             return decision
         return LivePolicy(contract,select,fallback.reset)
     value=OwningActorFactory('jax-owning',raw_factory.contract,backend,policy)
@@ -205,13 +246,14 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None):
 
 class Runtime:
     """One declared cell through ChampionWorkerRuntime and the original bridge."""
-    def __init__(self,*,client,telemetry_path,arm,cell,original=None):
+    def __init__(self,*,client,telemetry_path,arm,cell,original=None,archive_sha256=CHAMPION_ARCHIVE_SHA256):
         from .owning_worker_runtime import ChampionWorkerRuntime
         if (arm not in ARMS or (client is None)!=(arm=='RAW')or type(cell)is not dict
                 or any(type(cell.get(k))is not int for k in ('pair_ordinal','seed','seat','fp_seed'))or cell['seat']not in (0,1)):
             raise ValueError('declared arm, matching client and literal cell required')
         self.original=ChampionWorkerRuntime()if original is None else original
         self.client=client;self.telemetry_path=telemetry_path;self.arm=arm;self.cell=cell;self.factory=None
+        self.archive_sha256=archive_sha256
 
     async def run(self,config):
         from . import foulplay_bridge as bridge
@@ -221,7 +263,8 @@ class Runtime:
                 or config.pokezero_player!=('p1','p2')[cell['seat']]):
             raise ValueError('game configuration differs from the declared cell')
         original=self.original.prepare(config)
-        self.factory=factory(config,raw_factory=original,client=self.client,telemetry_path=self.telemetry_path,arm=self.arm,cell=cell)
+        self.factory=factory(config,raw_factory=original,client=self.client,telemetry_path=self.telemetry_path,arm=self.arm,cell=cell,
+            archive_sha256=self.archive_sha256)
         model,result,env,spec,vocab,dex,masks,digest=self.original.runtime
         policy_id=POLICY_IDS[self.arm]
         policy=bridge._build_policy(config=config,model=model,result=result,value_model=model,value_result=result,
