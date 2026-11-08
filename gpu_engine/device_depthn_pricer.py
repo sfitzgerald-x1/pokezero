@@ -148,9 +148,9 @@ def _make_expand_joint(executor):
     return jax.vmap(single,in_axes=(None,None,None,None,None,None,0,None))
 
 
-def make_p1(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=False,forward=None,verify_root_inputs=True):
+def make_p1(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=False,forward=None,verify_root_inputs=True,serial_surface_guards=False):
     """P1: the turn-1 stage's cell-indexed frame, each lane's cell id (81 when not enumerated) and the flat child pools."""
-    turn1,forward=depth2.make_turn1_stage(executor,model,params=params,capacity=capacity,k1_own=k1_own,k1_opp=k1_opp,digest=digest,forward=forward,verify_root_inputs=verify_root_inputs)
+    turn1,forward=depth2.make_turn1_stage(executor,model,params=params,capacity=capacity,k1_own=k1_own,k1_opp=k1_opp,digest=digest,forward=forward,verify_root_inputs=verify_root_inputs,serial_surface_guards=serial_surface_guards)
     n=2*capacity
     def run(a):
         t=turn1(a);flat=lambda x:x.reshape((n*LANES,)+x.shape[2:])
@@ -400,7 +400,7 @@ def _ply_widths(k,depth,name,limit):
 
 class DepthNPricer:
     def __init__(self,executor,model,*,capacity,depth,k_own,k_opp,k1_own=9,k1_opp=9,block_lanes=2187,blocks_per_call=16,selection='prior',
-            fixed_capacity=False,digest=False,forward=None,actor_capacity=33):
+            fixed_capacity=False,digest=False,forward=None,actor_capacity=33,serial_surface_guards=False):
         """`k_own`/`k_opp`: one integer per ply 2..N (an int repeats). In `prior` mode they are the slot widths (top-k by prior).
         In `searched` mode the ply-2 entries are the search widths k of `searched_maps(frame, k_own, k_opp)`, and the pricer
         derives the ply-2 SLOT widths from them with `searched_widths` (k_own+1 for the learner, up to k_own+2 for the
@@ -428,6 +428,8 @@ class DepthNPricer:
         depth2._widths(9,9,k1_own,k1_opp,1)
         if any(type(x)is not int or x<=0 for x in(block_lanes,blocks_per_call)):raise ValueError('positive block lane budget and blocks per call required')
         if any(type(x)is not bool for x in(fixed_capacity,digest)):raise ValueError('explicit digest/fixed-capacity bools required')
+        if type(serial_surface_guards)is not bool:raise ValueError('Explicit serial surface guards bool required')
+        self.serial_surface_guards=serial_surface_guards
         self.executor=executor;self.model=model;self.capacity=capacity;self.actor_capacity=actor_capacity;self.depth=depth
         self.k1_own=k1_own;self.k1_opp=k1_opp;self.block_lanes=block_lanes;self.blocks_per_call=blocks_per_call;self.selection=selection;self.fixed_capacity=fixed_capacity
         self.digest=digest;self.forward=forward if forward is not None else depth2.default_forward(model)
@@ -536,10 +538,10 @@ class DepthNPricer:
         actors=np.zeros((n,2),np.int32)
         if requests is not None:actors[:2*count]=np.repeat([(r.learner_actor,r.opponent_actor)for r in requests],2,axis=0)
         if data is not None:
-            key=('P1',capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']),('verify_root_inputs',requests is not None))
+            key=('P1',capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']),('verify_root_inputs',requests is not None),('serial_surface_guards',self.serial_surface_guards))
             device_data=jax.device_put(data)
             program=self._program(key,lambda:make_p1(self.executor,self.model,params=self.params,capacity=capacity,k1_own=self.k1_own,k1_opp=self.k1_opp,
-                digest=self.digest,forward=self.forward,verify_root_inputs=requests is not None),device_data)
+                digest=self.digest,forward=self.forward,verify_root_inputs=requests is not None,serial_surface_guards=self.serial_surface_guards),device_data)
             clock=time.perf_counter();out=jax.block_until_ready(program(device_data));device+=time.perf_counter()-clock;invocations=1
             pool=(out.pop('states'),out.pop('publics'));host=jax.device_get(out);device_data=out=None
         node_bytes=self._node_bytes(pool);ply_loop=host_pack=0.

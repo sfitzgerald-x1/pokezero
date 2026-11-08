@@ -71,7 +71,7 @@ class Depth2Frame:
     t1_digest_peer:object=None
 
 
-def _make_child_joint(executor):
+def _make_child_joint(executor,*,serial_surface_guards=False):
     """D3's _make_joint with the same dispatch/advance/observe sequence, keeping the child.
 
     The extra outputs (child state and trackers, the engine request masks, both
@@ -90,7 +90,10 @@ def _make_child_joint(executor):
         masks=executor.legal(after.step.state)
         view=executor.observe(after.step.state,after.trackers,owner,masks[:,owner[0]])
         foe=executor.observe(after.step.state,after.trackers,1-owner,masks[:,1-owner[0]])
-        return (after.step.invalid_actions,after.step.state.done,after.step.state.winner,view.observation.error,view.inputs,
+        error=view.observation.error
+        if serial_surface_guards:
+            error=j.where(j.any(masks[:,owner[0]],axis=-1),error,0)
+        return (after.step.invalid_actions,after.step.state.done,after.step.state.winner,error,view.inputs,
             after.step.state,after.trackers,masks,view.observation.legal_action_mask,foe.observation.legal_action_mask,foe.observation.error,foe.inputs)
     return jax.jit(jax.vmap(single,in_axes=(None,None,None,None,None,None,0,None)))
 
@@ -143,7 +146,7 @@ def default_forward(model):
     return forward
 
 
-def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=False,forward=None,verify_root_inputs=True):
+def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=False,forward=None,verify_root_inputs=True,serial_surface_guards=False):
     """D3's turn-1 frame with the child carry: the depth-2 kernel's first stage, traced inside the caller's jit.
 
     `turn1(a)` returns the cell-indexed [capacity,2,9,9,...] turn-1 fields under
@@ -158,7 +161,7 @@ def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=F
     if type(capacity)is not int or capacity<=0 or type(digest)is not bool:raise ValueError('explicit root capacity and digest bool required')
     if forward is None:forward=default_forward(model)
     n=capacity*2
-    child_joint=_make_child_joint(executor);views=_make_views(executor)
+    child_joint=_make_child_joint(executor,serial_surface_guards=serial_surface_guards);views=_make_views(executor)
     def grouped_forward(inputs,rows,*,joint=False):
         # D3's archive batches, verbatim: the current actor gets one dense
         # batch, historical archives share one padded geometry under vmap.
@@ -195,11 +198,15 @@ def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=F
                 expected=j.repeat(a['expected'][key],2,axis=0);value=own_inputs[key]
                 same=j.all(value==expected,axis=tuple(range(1,value.ndim)))
                 pre=j.where((pre==0)&~same,3+index,pre)
-        pre=j.where((pre==0)&(peer.error[:,0]!=0),8,pre)
+        pre=j.where((pre==0)&(peer.error[:,0]!=0)&(requested if serial_surface_guards else True),8,pre)
         logits,pv,valid=grouped_forward(peer_inputs,a['peer_rows'])
         logits=logits.reshape(n,9);pv=pv.reshape(n);valid=valid.reshape(n)
         usable=valid&j.all(j.isfinite(logits),axis=-1)&j.isfinite(pv)&(j.abs(pv)<=1)
-        pre=j.where((pre==0)&requested&~usable,9,pre)
+        pre=j.where((pre==0)&(requested|serial_surface_guards)&~usable,9,pre)
+        if serial_surface_guards:
+            own_lg,own_v,own_valid=grouped_forward(own_inputs,a['leaf_rows'])
+            own_usable=own_valid.reshape(n)&j.all(j.isfinite(own_lg.reshape(n,9)),axis=-1)&j.isfinite(own_v.reshape(n))&(j.abs(own_v.reshape(n))<=1)
+            pre=j.where((pre==0)&~own_usable,9,pre)
         logits=j.where(requested[:,None],logits,0.)
         kept=legal
         if k1_opp<9:
@@ -242,7 +249,7 @@ def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=F
         peer_logits2,peer_pv2,peer_valid2=grouped_forward(peer_child_inputs,a['peer_rows'],joint=True)
         peer_usable2=peer_valid2&j.all(j.isfinite(peer_logits2),axis=-1)&j.isfinite(peer_pv2)&(j.abs(peer_pv2)<=1)
         errors=j.where(viewed&peer_req2&(peer_error!=0),PEER_VIEW_ERROR,errors)
-        errors=j.where(viewed&(errors==0)&peer_req2&~peer_usable2,PEER_PRIOR_REFUSED,errors)
+        errors=j.where(viewed&(errors==0)&(peer_req2|serial_surface_guards)&~peer_usable2,PEER_PRIOR_REFUSED,errors)
         pre=j.where(a['available'].reshape(n),pre,UNAVAILABLE)
         enumerated=(ordinal<required[:,None])&(pre==0)[:,None];priced&=enumerated;viewed&=enumerated
         status1=j.where(~enumerated,0,j.where(errors!=0,3,j.where(done,1,2))).astype(j.int8);expanded=status1==2

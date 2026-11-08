@@ -54,10 +54,9 @@ def addressed_executor(legal,observe,dispatch,sample,advance):
     """Keep one-world tracker namespaces inside DepthN's mapped programs."""
     def view(w,p,owner,mask):
         result=observe(w.state,p,owner,mask)
-        # The serial path ignores an encoder error on an unrequested seat.
-        error=j.where(j.any(mask,axis=-1),result.observation.error,0)
-        return result._replace(observation=result.observation._replace(error=error),
-                               inputs=rename_inputs(result.inputs))
+        # Keep the original encoder error. Only surface-specific guards may
+        # ignore a waiting seat; a value leaf always requires its own view.
+        return result._replace(inputs=rename_inputs(result.inputs))
     def step(w,p,actions,chance):
         result=advance(folded_state(w),p,actions,chance)
         new=AddressedState(result.step.state,w.seeds,w.ply+1)
@@ -75,7 +74,7 @@ class PreparedPricer:
         self.pricer=depthn.DepthNPricer(executor,None,capacity=worlds//2,depth=2,
             k_own=9,k_opp=9,k1_own=9,k1_opp=9,block_lanes=block_lanes,
             blocks_per_call=blocks_per_call,selection='prior',fixed_capacity=True,
-            forward=lambda _,inputs:forward(original_inputs(inputs)),actor_capacity=1)
+            forward=lambda _,inputs:forward(original_inputs(inputs)),actor_capacity=1,serial_surface_guards=True)
         self.last_timing=None
 
     def price(self,nodes,legal):

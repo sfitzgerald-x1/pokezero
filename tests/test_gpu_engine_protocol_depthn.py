@@ -140,6 +140,49 @@ class ProtocolDepthNTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'REQUIRED_BRANCH_UNKNOWN'):
             p.price(nodes,[True,True]+[False]*7)
 
+    def test_serial_all_seat_finite_checks_include_unused_root_and_child_priors(self):
+        def marked_observe(s,p,owner,mask):
+            v=observe(s,p,owner,mask)
+            x=j.concatenate((v.inputs['numeric'],s.turn.astype(j.float32)[:,None,None]),axis=-1)
+            return v._replace(inputs={**v.inputs,'numeric':x})
+        for case in ('root_owner','waiting_root_peer','waiting_child_peer'):
+            def requested(s):
+                mask=legal(s)
+                waiting=(s.turn==(0 if case=='waiting_root_peer'else 1))&(case!='root_owner')
+                return mask.at[:,1].set(mask[:,1]&~waiting[:,None])
+            def bad_forward(inputs):
+                pred=forward(inputs);x=inputs['numeric'][:,0]
+                target=0 if case=='root_owner'else 1
+                turn=1 if case=='waiting_child_peer'else 0
+                bad=(x[:,1]==target)&(x[:,2]==turn)
+                return pred._replace(policy_logits=j.where(bad[:,None],j.nan,pred.policy_logits))
+            with self.subTest(case=case):
+                ex=addressed_executor(requested,marked_observe,dispatch,sample,advance)
+                p=PreparedPricer(ex,bad_forward,worlds=2,block_lanes=81,blocks_per_call=1)
+                nodes=[Node(state(i),j.array([0]),0,'e'*64,i,0)for i in range(2)]
+                with self.assertRaisesRegex(ValueError,'REQUIRED_(ROOT_SURFACE|BRANCH_UNKNOWN)'):
+                    p.price(nodes,[True,True]+[False]*7)
+
+    def test_waiting_owner_leaf_encoder_error_refuses_but_surface_error_is_ignored(self):
+        for error_ply,refused in ((1,False),(2,True)):
+            def requested(s):
+                mask=legal(s)
+                return mask.at[:,0].set(mask[:,0]&~(s.turn>=1)[:,None])
+            def error_observe(s,p,owner,mask):
+                v=observe(s,p,owner,mask)
+                error=j.where((owner==0)&(s.turn==error_ply),7,0).astype(j.int32)
+                return v._replace(observation=v.observation._replace(error=error))
+            with self.subTest(error_ply=error_ply):
+                ex=addressed_executor(requested,error_observe,dispatch,sample,advance)
+                p=PreparedPricer(ex,forward,worlds=2,block_lanes=81,blocks_per_call=1)
+                nodes=[Node(state(i),j.array([0]),0,'f'*64,i,0)for i in range(2)]
+                if refused:
+                    with self.assertRaisesRegex(ValueError,'REQUIRED_BRANCH_UNKNOWN'):
+                        p.price(nodes,[True,True]+[False]*7)
+                else:
+                    _,reports=p.price(nodes,[True,True]+[False]*7)
+                    self.assertTrue(all(math.isfinite(v)for r in reports for v in r.values()))
+
     def test_original_world_order_rejected_not_resampled(self):
         ex=addressed_executor(legal,observe,dispatch,sample,advance)
         p=PreparedPricer(ex,forward,worlds=2)
