@@ -82,7 +82,9 @@ jobs:
           # Hosted runners vary in free disk after dependency installation.
           # Keep six GiB for test outputs; never remove preinstalled assets.
           swap_gib=$((available_kib / 1024 / 1024 - 6))
-          if (( swap_gib > 24 )); then swap_gib=24; fi
+          # Complete optimized frames can exceed the former 24-GiB swap cap.
+          # Use available runner disk without changing compiler/test semantics.
+          if (( swap_gib > 64 )); then swap_gib=64; fi
           printf 'Free disk: %s KiB; additional swap: %s GiB; reserve: 6 GiB\n' "$available_kib" "$swap_gib"
           if (( swap_gib < 8 )); then
             echo 'Insufficient disk for eight GiB of swap plus the test-output reserve' >&2
