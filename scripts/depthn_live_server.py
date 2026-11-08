@@ -14,20 +14,25 @@ serves it until stopped (SIGTERM or an interrupt); it is never restarted per gam
   the queue, through asyncio.Queue._put, the hook put and put_nowait share. process_many reads the stamp for
   expired_in_queue; a client cannot forge it (the stamp overwrites any value sent). The queue is the one point the handle
   loop and the consumer share, so hooking it stamps arrival without copying (and so forking) Codex's handle loop.
-- READY: one JSON line (the run header, each bucket's cold compile-and-run seconds, the program count, the full warmup
-  report) printed once warmup is done AND the listener accepts a connection (serve() probes its own port), never before.
+- READY: one JSON line (the run header, each bucket's cold (compile and run) and warm seconds, the program count, the full
+  warmup report) printed once warmup is done AND this server's own listener has accepted a probe connection: the probe
+  counts only when Codex's handler registers it in this server's `clients` while serving, so another process already
+  listening on the port never triggers READY (the bind then fails and serve raises). The Server (Codex's queue and
+  batch checks) is built before the warmup, so a bad queue setting fails before any compile.
 - Telemetry (--telemetry PATH, appended): a `ready` row (the READY line), then one `request` row per request (the
   response, the request's address, rung, budget and line count, its arrival and the server-side seconds to its result),
   written, flushed and fsynced per batch by a writer thread, off the executor's critical path.
-JAX runs with its defaults (no x64, default matmul precision), as the gates' DepthN champion runs; the champion's own
-precision flag (bf16 by default) sets its forward.
+JAX: x64 pinned off (as Codex's ladder server) and the default matmul precision, as the gates' DepthN champion runs
+(depthn_live_search records it); the champion's own precision flag (bf16 by default) sets its forward.
 """
 import argparse
 import asyncio
+from contextlib import suppress
 import json
 import os
 from pathlib import Path
 import queue
+from types import SimpleNamespace
 import signal
 import subprocess
 import threading
@@ -61,13 +66,23 @@ class Server(original.Server):
         except asyncio.CancelledError:
             if not self.stopping:raise
 
-    async def _listening(self,host,port):
-        """True once (host, port) accepts a connection (the probe's empty read ends Codex's handler quietly); False, or the
-        listener's own error, if serving ended first."""
+    async def _listening(self,host,port,*,patience=1.):
+        """True once THIS server accepted a probe connection on (host, port): Codex's handle registers its task in
+        self.clients, so the probe counts only when a new task appears there while serving (its empty read then ends the
+        handler quietly). A connection accepted by anything else on the port never counts. False, or the listener's own
+        error (e.g. the port in use), if serving ended first."""
         while not self.task.done():
+            known=set(self.clients)
             try:_,writer=await asyncio.open_connection(host,port)
             except OSError:await asyncio.wait({self.task},timeout=.02);continue
-            writer.close();await writer.wait_closed();return True
+            try:
+                deadline=self.loop.time()+patience
+                while not self.task.done()and self.loop.time()<deadline:
+                    if set(self.clients)-known:return True
+                    await asyncio.wait({self.task},timeout=.01)
+            finally:
+                writer.close()
+                with suppress(OSError):await writer.wait_closed()
         self.task.result();return False
 
     def stop(self):
@@ -113,16 +128,16 @@ def _print(row):print(json.dumps(row,sort_keys=True,default=repr),flush=True)
 
 
 def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,queue_limit=256,telemetry=None,header=None,log=_print,on_server=None):
-    """Warm `search` up, then serve it until stopped; READY is logged (and recorded) once it is warm AND accepting connections.
-    `on_server(server)` sees the Server before it serves (its stop() ends run)."""
-    warm=search.warmup(warmup_requests)
+    """Build the Server (Codex's queue checks), warm `search` up, then serve until stopped; READY is logged (and recorded)
+    once it is warm AND its own listener accepts connections. `on_server(server)` sees the Server before the warmup (its
+    stop() ends run once serving)."""
     recorder=Recorder(search,telemetry)
     try:
         server=Server(recorder,max_requests=max_requests,batch_wait_seconds=batch_wait_seconds,queue_limit=queue_limit)
         if on_server is not None:on_server(server)
-        buckets=warm.get('buckets',{})
-        ready=dict(event='READY',host=host,port=port,**(header or{}),compile_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
-            programs=warm.get('programs'),warmup=warm)
+        warm=search.warmup(warmup_requests);buckets=warm.get('buckets',{})
+        ready=dict(event='READY',host=host,port=port,**(header or{}),cold_seconds={b:x.get('cold_seconds')for b,x in buckets.items()},
+            warm_seconds={b:x.get('warm_seconds')for b,x in buckets.items()},programs=warm.get('programs'),warmup=warm)
         def announce():log(ready);recorder.record(dict(ready,kind='ready'))
         asyncio.run(server.serve(host,port,on_ready=announce))
     finally:recorder.close()
@@ -164,6 +179,10 @@ def options(argv=None):
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     if args.max_requests is None:args.max_requests=args.buckets[-1]
     if not 1<=args.max_requests<=args.buckets[-1]:p.error('--max-requests must be in 1..the largest bucket')
+    try:   # Codex's own queue/batch checks (phase_d_search_server.Server._initialize), before anything loads or compiles
+        Server(SimpleNamespace(process_many=list),max_requests=args.max_requests,batch_wait_seconds=args.batch_wait_seconds,
+            queue_limit=args.queue_limit).executor.shutdown()
+    except ValueError as error:p.error(f'--max-requests/--batch-wait-seconds/--queue-limit: {error}')
     return args
 
 
@@ -184,6 +203,7 @@ def tree_commit():
 def build(args):
     """The DepthNLiveSearch the arguments name, on the one visible GPU (module docstring)."""
     import jax
+    jax.config.update('jax_enable_x64',False)   # pinned off, as phase_d_ladder_server; matmul precision stays JAX's default
     if args.compilation_cache:
         from pokezero.owning_worker_runtime import configure_compilation_cache
         configure_compilation_cache(args.compilation_cache)
@@ -205,11 +225,13 @@ def build(args):
 
 def header(args,search):
     """The run's identity for READY and the telemetry: code, champion, pricer, constructor and server settings."""
+    import jax
     return dict(tree_commit=search.tree_commit,rung=search.rung,max_requests=search.max_requests,min_price_seconds=search.min_price_seconds,
         session_cap=search.session_cap,batch_wait_seconds=args.batch_wait_seconds,queue_limit=args.queue_limit,constructor_seed=args.seed,
         recipe_seed=args.recipe_seed,saved_root_admission=args.saved_root_admission,metadata_sha256=args.expected_metadata_sha256,
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
-        champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity)
+        champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
+        jax_enable_x64=bool(jax.config.jax_enable_x64))
 
 
 def main(argv=None):

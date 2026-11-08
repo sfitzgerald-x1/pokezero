@@ -3,6 +3,7 @@ import asyncio
 from contextlib import redirect_stderr
 import io
 import json
+import os
 from pathlib import Path
 import socket
 import struct
@@ -10,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from pokezero import phase_d_search_server as original
 from gpu_engine import depthn_live_search as live
@@ -43,7 +45,8 @@ class FakeSearch:
 
     def warmup(self,requests):
         if self.release is not None and not self.release.wait(10):raise TimeoutError('never released')
-        self.warmed=True;self.saved=list(requests);return dict(buckets={1:dict(cold_seconds=1.5),2:dict(cold_seconds=2.5)},programs=7)
+        self.warmed=True;self.saved=list(requests)
+        return dict(buckets={1:dict(cold_seconds=1.5,warm_seconds=.5),2:dict(cold_seconds=2.5,warm_seconds=.75)},programs=7)
 
     def process_many(self,requests):
         self.batches.append((time.monotonic(),[dict(r)for r in requests]));time.sleep(self.delay)
@@ -78,22 +81,51 @@ class ServerTests(unittest.TestCase):
         release=threading.Event();search=FakeSearch(release=release);port=free_port();logs=[];servers=[]
         with tempfile.TemporaryDirectory()as tmp:
             path=Path(tmp)/'telemetry.jsonl'
+            fsync=os.fsync;synced=[]
+            def counting(fd):synced.append(fd);return fsync(fd)
             thread=threading.Thread(target=S.run,kwargs=dict(search=search,host='127.0.0.1',port=port,warmup_requests=[dict(battle_id='w')],max_requests=4,
                 telemetry=str(path),header=dict(tree_commit='abc'),log=logs.append,on_server=servers.append),daemon=True)
+            patcher=patch.object(S.os,'fsync',side_effect=counting);patcher.start();self.addCleanup(patcher.stop)
             thread.start();time.sleep(.3)
-            self.assertEqual((logs,search.warmed,servers),([],False,[]))   # warming: no READY, no server, nothing listening
+            self.assertEqual((logs,search.warmed,len(servers)),([],False,1))   # warming: the Server is built (its checks ran), no READY, nothing listening
             with self.assertRaises(OSError):socket.create_connection(('127.0.0.1',port),timeout=1).close()
             release.set();deadline=time.monotonic()+10
             while not logs and time.monotonic()<deadline:time.sleep(.01)
             self.assertEqual(len(logs),1);ready=logs[0]
-            self.assertEqual((ready['event'],ready['tree_commit'],ready['port'],ready['programs'],ready['compile_seconds']),('READY','abc',port,7,{1:1.5,2:2.5}))
+            self.assertEqual((ready['event'],ready['tree_commit'],ready['port'],ready['programs'],ready['cold_seconds'],ready['warm_seconds']),
+                ('READY','abc',port,7,{1:1.5,2:2.5},{1:.5,2:.75}))
             self.assertTrue(search.warmed);self.assertEqual(search.saved,[dict(battle_id='w')])
             row=blocking_request(port,request(1,budget_seconds=2.5));self.assertTrue(row['warmed'])   # served only after warmup
             servers[0].stop();thread.join(10);self.assertFalse(thread.is_alive())
-            rows=[json.loads(line)for line in path.read_text().splitlines()]
+            rows=[json.loads(line)for line in path.read_text().splitlines()];self.assertGreaterEqual(len(synced),2)   # each written batch fsynced
         self.assertEqual([r['kind']for r in rows],['ready','request']);self.assertEqual(rows[0]['event'],'READY')
         self.assertEqual((rows[1]['response']['request_id'],rows[1]['address']['battle_id'],rows[1]['lines'],rows[1]['budget_seconds']),('r1','b1',1,2.5))
         self.assertEqual(rows[1]['arrival_monotonic'],rows[1]['response']['arrival']);self.assertGreaterEqual(rows[1]['server_seconds'],0)
+
+    def test_a_foreign_listener_on_the_port_never_triggers_ready(self):
+        """The review's repro (ready_race.py): a stale listener already holds the port. Its accepted probe must not count as
+        this server's: no READY, and serve fails cleanly on its own bind."""
+        async def scenario():
+            stale=socket.socket();stale.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);stale.bind(('127.0.0.1',0));stale.listen(16)
+            port=stale.getsockname()[1];fired=[];server=S.Server(FakeSearch())
+            try:
+                with self.assertRaises(OSError):await asyncio.wait_for(server.serve('127.0.0.1',port,on_ready=lambda:fired.append('READY')),10)
+            finally:stale.close()
+            return fired,server
+        for _ in range(5):
+            fired,server=asyncio.run(scenario());self.assertEqual(fired,[]);self.assertEqual(server.clients,set())
+        with tempfile.TemporaryDirectory()as tmp,socket.socket()as stale:   # through run(): warm, then the bind fails; no READY line
+            stale.bind(('127.0.0.1',0));stale.listen(4);logs=[];search=FakeSearch()
+            with self.assertRaises(OSError):S.run(search,host='127.0.0.1',port=stale.getsockname()[1],warmup_requests=[{}],max_requests=4,
+                telemetry=str(Path(tmp)/'t.jsonl'),log=logs.append)
+            self.assertEqual((logs,search.warmed,(Path(tmp)/'t.jsonl').read_text()),([],True,''))
+
+    def test_queue_settings_fail_before_the_warmup(self):
+        search=FakeSearch()
+        for bad in(dict(batch_wait_seconds=.5),dict(queue_limit=2),dict(max_requests=0)):
+            with self.subTest(**bad),self.assertRaisesRegex(ValueError,'bounded shared search queue'):
+                S.run(search,host='127.0.0.1',port=free_port(),warmup_requests=[{}],**{'max_requests':4,**bad})
+        self.assertFalse(search.warmed)
 
     def test_the_arrival_queue_stamps_every_put_and_passes_the_sentinel(self):
         async def scenario():
@@ -131,7 +163,8 @@ class ServerTests(unittest.TestCase):
         args=S.options(base+champion+['--rung','DN2W16','--buckets','2,1','--max-requests','1'])
         self.assertEqual((args.rung,args.buckets,args.max_requests),('DN2W16',(1,2),1))
         for bad in(base,base+champion[:2],base+champion+['--max-requests','5'],base+champion+['--buckets','0,1'],base+champion+['--rung','R1'],
-                base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion):
+                base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion,
+                base+champion+['--batch-wait-seconds','.5'],base+champion+['--queue-limit','2']):   # the last two: Codex's queue checks, before any load
             with self.subTest(bad=bad[len(base)-2:]),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(bad)
         with tempfile.TemporaryDirectory()as tmp:
             path=Path(tmp)/'w.jsonl';path.write_text('{"battle_id":"a"}\n\n{"battle_id":"b"}\n')
