@@ -53,7 +53,9 @@ no oracle); --diagnostics-from DIR... recomputes them from saved frames (--save-
 frames-block{B}-call{C}-{depth2|prior-k{k}|searched-k{k}}.npz). --reverdict GATE_JSON (offline: no GPU, oracle or
 pricer) re-applies the current verdict rules to a saved gate.json (each (c) quantity's passed from its saved bound/guard
 numbers and guard_mode, (c), (f) through choice_verdict, the status through gate_status_n) and writes gate-reverdict.json
-beside it, never over an existing one; exit 0 iff PASS/PASS_SAMPLED. Every report carries a `header` (header_block): (e)'s
+beside it, never over an existing one; exit 0 iff PASS/PASS_SAMPLED. On a saved n2-equivalence.json it re-judges every config from
+the report's own numbers under the rule it records (reverdict_n2, N2_REVERDICT_RULE) and writes n2-equivalence-reverdict.json; exit 0
+iff PASS. Every report carries a `header` (header_block): (e)'s
 and (f)'s near-tie counts and flips among near ties, and RULES_CHANGED_AFTER_FAILURE with the run that triggered each.
 --mutation-test (MUTATION_RULE): once every call is priced, at the run's value bound, ten mutants (eight misplacements ({backup
 path, scatter path} x {sibling, cousin} x {single, systematic}), a turn-1 misread and wrong priors handed to the rule) and a seeded
@@ -82,7 +84,8 @@ floors are still reported beside the declared bounds, and every report's header 
 the note that it is a pre-registered evaluator-specific bound, not a rule change after a failure). --reverdict re-applies a report's recorded
 declaration after re-verifying its sha256 and git blob sha1 (and the commit and sha256 given with it: the audit, which requires git_verification
 "verified"), refuses a report that keeps traces of a declaration without its sections, re-judges any other report only if its numbers are the
-frozen rule's, and refuses any report whose saved (c) within_bound / within_guard disagree with its saved numbers. A live run whose record is
+frozen rule's, and refuses any report whose saved (c) within_bound / within_guard disagree with its saved numbers (an n2-equivalence.json:
+every config's tolerance and floats, reverdict_n2). A live run (gate or --n2-equivalence) whose record is
 "not verifiable here" (no git, no work tree, a shallow clone lacking the commit) keeps its status and exit code and lists "provisional: ..." in
 status_reasons until that audit. Without the flags nothing is built, judged, logged or written differently.
 The champion's depth-2 surfaces against the merged depth-2 gate (d3_depth2_gate, which has no champion flags): on the champion path
@@ -104,6 +107,7 @@ block_lanes, not a Depth2Pricer child block; (e)'s backups, sampling seeds and o
 import argparse
 import collections
 from contextlib import nullcontext
+import copy
 import dataclasses
 from dataclasses import replace
 import datetime
@@ -1978,8 +1982,12 @@ def reverdict(path, *, expected=None):
     to gate-reverdict.json beside it with a `reverdict` section (old status and reasons, changed quantities). Never
     overwrites; refuses (SystemExit, non-zero) a report missing a field the verdict needs. A report with a declared-bounds
     section is re-judged under the declaration it recorded, after saved_declared re-verifies it (refused otherwise); a report
-    without one exactly as before. Returns 0 iff PASS/PASS_SAMPLED."""
-    path = Path(path);out = path.with_name(REVERDICT_FILE)
+    without one exactly as before. A saved n2-equivalence.json (mode N2_MODE) goes to reverdict_n2. Returns 0 iff PASS/PASS_SAMPLED."""
+    path = Path(path)
+    try:saved = json.loads(path.read_text())
+    except (OSError, ValueError):saved = None   # the gate path below refuses it, as before
+    if isinstance(saved, dict) and saved.get('mode') == N2_MODE:return reverdict_n2(path, saved, expected=expected)
+    out = path.with_name(REVERDICT_FILE)
     if out.exists():raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
     try:report = json.loads(path.read_text())
     except (OSError, ValueError) as error:raise SystemExit(f'--reverdict: cannot read {path}: {error}')
@@ -2032,6 +2040,215 @@ def reverdict(path, *, expected=None):
         turn1_logit_floor=report['tolerance']['turn1_logit_floor'],
         deeper_logit_bound=report['tolerance']['deeper_logit_bound'], header=report['header'])
     return 0 if report['passed'] else 1
+
+
+# ---------------------------------------------------------------- offline re-verdict of a saved n2-equivalence.json
+
+N2_MODE, N2_FILE, N2_REVERDICT_FILE = 'N2_EQUIVALENCE', 'n2-equivalence.json', 'n2-equivalence-reverdict.json'
+N2_DECISIONS = ('e', 'e_merged_depth2')   # (e) on both N=2 surfaces and MERGED_DEPTH2_DECISION, each g2.merge_decisions' record
+EVIDENCE_COUNTS = ('digest_compared', 'digest_mismatched', 'value_compared', 'value_positions_outside_digest', 'value_positions_outside_digest_inexact',
+    'evaluator_actors')   # a saved guard_evidence's counts (each an integer or null): what re-derives a GUARD_DECLARED_RULE mode
+N2_REFUSALS = (('bounds', 'saved bounds are not the ones the live --n2-equivalence path assigns under the report\'s rule'),
+    ('numbers', 'saved verdicts disagree with their own numbers'), ('modes', 'saved guard modes differ from those re-derived from the saved digest findings'),
+    ('verdicts', 'saved passed verdicts differ from those re-derived from their own numbers'))   # reverdict_n2's refusals, in this order
+N2_REVERDICT_RULE = ('--reverdict on a saved n2-equivalence.json (reverdict_n2), per config under the rule the report records (the frozen rule '
+    'from the config\'s own floor, or its re-verified declaration): every float\'s bound, guard and bound_rule as the live path assigns them '
+    '(n2_bounds), its within_bound / within_guard / passed from its own numbers (under a declaration GUARD_DECLARED_RULE\'s modes re-derived from '
+    'the saved digest findings and per-position evidence), (e)\'s and the merged (e)\'s q_noise_bound and passed from their counts and max |dQ| '
+    '(decision_passed): any disagreement is refused. Re-derived, the saved ones recorded in `changed`: discrete.passed (no mismatch), block '
+    'invariance\'s passed, each config\'s status (n2_status) and the run\'s (n2_run_status). Taken as saved (the report does not keep what '
+    'derives them): the comparisons\' counts and max |diff|, (e)\'s near-tie split (per-root gaps), world_reports_equal, block invariance\'s '
+    'discrete_equal and the guard\'s p10 spread; the turn-1 heads stay reported, not gated')
+
+
+def _lacks(at, x, keys=(), numbers=(), objects=()):
+    """reverdict_n2_missing's entries for the JSON object `x` at `at`: absent keys, numbers that are not (a bool is not), objects that are not."""
+    if not isinstance(x, dict):return [f'{at} (a JSON object)']
+    return [f'{at}.{k}' for k in keys if k not in x] + [f'{at}.{k} (a number)' for k in numbers if type(x.get(k)) not in (int, float)] \
+        + [f'{at}.{k} (a JSON object)' for k in objects if not isinstance(x.get(k), dict)]
+
+
+def n2_float_sections(c):
+    """{GUARD_DECLARED_RULE's key prefix: (path, floats)} of a saved config: n2_compare's floats and, where it ran, child-block invariance's."""
+    inv = c.get('block_invariance')
+    return dict(floats=('floats', c['floats']), **({} if inv is None else dict(block_invariance=('block_invariance.floats', inv['floats']))))
+
+
+def reverdict_n2_missing(report):
+    """What --reverdict needs that a saved --n2-equivalence report lacks (reverdict_missing's counterpart); [] when complete."""
+    if not isinstance(report, dict):return ['a JSON object']
+    missing = [] if report.get('schema') == SCHEMA else [f'schema {SCHEMA} (got {report.get("schema")!r})']
+    if report.get('mode') != N2_MODE:missing.append(f'mode {N2_MODE} (got {report.get("mode")!r})')
+    missing += ([] if 'status' in report else ['status']) + ([] if isinstance(report.get('configs'), dict) else ['configs'])
+    if missing:return missing
+    for name, c in report['configs'].items():
+        at = f'configs.{name}';lacks = _lacks(at, c, ('status', 'world_reports_equal'), objects=('discrete', 'floats', 'e', 'tolerance'))
+        if isinstance(c, dict) and c.get('block_invariance') is not None:
+            lacks += _lacks(f'{at}.block_invariance', c['block_invariance'], ('passed', 'discrete_equal'), objects=('floats',))
+            differing = c['block_invariance'].get('differing', {}) if isinstance(c['block_invariance'], dict) else {}   # invariance_guards reads its counts
+            if not isinstance(differing, dict) or not all(isinstance(d, dict) and type(d.get('count', 0)) is int for d in differing.values()):
+                lacks.append(f'{at}.block_invariance.differing (per array: a JSON object with an integer count)')
+        if lacks:missing += lacks;continue
+        missing += [f'{where} (true or false)' for where, x in ((f'{at}.world_reports_equal', c['world_reports_equal']),
+            (f'{at}.block_invariance.discrete_equal', (c.get('block_invariance') or {}).get('discrete_equal', False))) if type(x) is not bool]
+        missing += _lacks(f'{at}.tolerance', c['tolerance'], ('rule', 'depth1_noise_floor', 'guard_bound'), ('value_bound', 'logit_bound', 'q_noise_bound'))
+        missing += _lacks(f'{at}.discrete', c['discrete'], ('passed',), objects=('compared', 'mismatched'))
+        missing += [f'{at}.discrete.{key} (counts)' for key in ('compared', 'mismatched') if isinstance(c['discrete'].get(key), dict)
+            and any(type(v) is not int for v in c['discrete'][key].values())]
+        for where, floats in n2_float_sections(c).values():
+            for q, m in floats.items():
+                missing += _lacks(f'{at}.{where}.{q}', m, ('within_bound', 'passed'), ('compared', 'max_abs_difference', 'nonfinite', 'bound'))
+                if isinstance(m, dict) and m.get('guard_bound') is not None:missing += _lacks(f'{at}.{where}.{q}', m, ('within_guard',), ('guard_bound',))
+                e = m.get('guard_evidence') if isinstance(m, dict) else None
+                if e is not None:missing += [f'{at}.{where}.{q}.guard_evidence.{k} (an integer or null)' for k in EVIDENCE_COUNTS
+                    if not isinstance(e, dict) or (e.get(k) is not None and type(e.get(k)) is not int)]
+        for key in N2_DECISIONS:
+            if key != 'e' and key not in c:continue
+            missing += _lacks(f'{at}.{key}', c[key], ('passed',), ('q_noise_bound',))
+            if isinstance(c[key], dict) and 'gating' in c[key]:   # else merge_decisions' record of a call that could not run (e): passed False
+                missing += _lacks(f'{at}.{key}', c[key], ('q_noise_within_bound',), ('roots_compared', 'status_differs', 'nonfinite_roots', 'argmax_q_differs_non_tie',
+                    'argmax_target_differs_non_tie', 'max_abs_delta_q'), ('replaced',))
+    return missing
+
+
+def n2_traces(report):
+    """declared_traces of a saved --n2-equivalence report: its header and reverdict (declared_traces), each config's tolerance
+    (tolerance_traces) and any float's bound_rule, guard_mode or guard_evidence (the live path writes them only under a declaration)."""
+    found = declared_traces(report)
+    for name, c in report['configs'].items():
+        found += tolerance_traces(c['tolerance'], f'configs.{name}.tolerance')
+        found += [f'configs.{name}.{where}.{q}.{key}' for where, floats in n2_float_sections(c).values() for q, m in floats.items()
+            for key in ('bound_rule', 'guard_mode', 'guard_evidence') if key in m]
+    return found
+
+
+def n2_frozen_problems(report):
+    """frozen_problems of a saved --n2-equivalence report: each config's tolerance numbers the frozen rule's from that config's own measured
+    floor (frozen_numbers); the floats' bounds and (e)'s q_noise_bound follow from them (rejudge_n2 checks those under either rule)."""
+    return [p for name, c in report['configs'].items() for p in frozen_numbers(c['tolerance'], f'configs.{name}.tolerance')]
+
+
+def n2_bounds(name, tolerance, invariance=False):
+    """(bound, guard_bound, bound_rule) the live --n2-equivalence path gives float `name` under a config's tolerance: n2_compare's floats through
+    finalize_n (g2.bound_for, or a declared root_logit_bound on ROOT_LOGITS; g2.guard_for), child-block invariance's through g2.merge_invariance
+    (g2.invariance_bound, the guard on *value) and refinalize_root; None where the live path writes no guard_bound or bound_rule."""
+    root = root_bound(name, tolerance)
+    bound, guard = (g2.invariance_bound(name, tolerance), tolerance['guard_bound'] if name.endswith('value') else None) if invariance \
+        else (g2.bound_for(name, tolerance), g2.guard_for(name, tolerance))
+    return (bound, guard, None) if root is None else (root, guard, 'declared_root_logit_bound')
+
+
+def n2_saved_actors(c):
+    """dict(count, source) of the evaluator parameter sets a saved config's values came from (GUARD_DECLARED_RULE): the one record its guarded
+    floats' guard_evidence all carry (summarize_n2 writes the calls' len(params) into each); count None (not established: the guard stays
+    gated) when they differ or carry none."""
+    records = [m['guard_evidence'] if isinstance(m.get('guard_evidence'), dict) else {} for _, floats in n2_float_sections(c).values() for m in floats.values()
+        if m.get('guard_bound') is not None]
+    counts = {e.get('evaluator_actors') for e in records}   # integers or None (reverdict_n2_missing)
+    if len(counts) == 1 and type(next(iter(counts))) is int:return dict(count=next(iter(counts)), source=records[0].get('evaluator_actors_source'))
+    return dict(count=None, source=f'not established: the saved guard evidence records {sorted(map(str, counts))}')
+
+
+def decision_passed(x):
+    """(passed, q_noise_within_bound) of a saved (e) record (g2.merge_decisions') re-derived from its counts and numbers as g2.decision_verdict
+    decides: no non-near-tie argmax-Q or target flip, no status flip, no non-finite root, no unmatched head leaf and max |dQ| <= q_noise_bound
+    (None: no Q clause). The near-tie split rests on per-root gaps the report does not keep: the non-tie counts are taken as saved. A record of
+    a call that could not run (e) (no `gating`) is (False, None)."""
+    if 'gating' not in x:return False, None
+    bound = x['q_noise_bound'];within = bound is None or x['max_abs_delta_q'] <= float(bound)
+    return (x['argmax_q_differs_non_tie'] == 0 and x['argmax_target_differs_non_tie'] == 0 and x['status_differs'] == 0 and x['nonfinite_roots'] == 0
+        and (x.get('replaced') or {}).get('unmatched_head_leaves', 0) == 0 and within), within
+
+
+def rejudge_n2(name, c, declared):
+    """reverdict_n2 on one saved config (its tolerance already re-verified by saved_declared): ({kind: [problem]} by N2_REFUSALS' kinds, the
+    re-derived verdict dict(status, status_reasons, passed, discrete_passed, invariance_passed)). On a copy, as summarize_n2 decides: each
+    float's passed = within_bound and within_guard (g2.finalize_numeric) or, under a declaration, judge_guard with declared_guard_mode on the
+    saved (a)-style findings (discrete) and per-position evidence (saved_cover) and invariance_guards on the saved section."""
+    at, tolerance = f'configs.{name}', c['tolerance'];kinds = {kind: [] for kind, _ in N2_REFUSALS}
+    near = None if declared is None else declared_numbers(declared)['near_tie_q_bound'];q_noise = tolerance['value_bound'] if near is None else near
+    if tolerance['q_noise_bound'] != q_noise:kinds['bounds'].append(f'{at}.tolerance.q_noise_bound {tolerance["q_noise_bound"]!r} is not {q_noise!r}')
+    for prefix, (where, floats) in n2_float_sections(c).items():
+        for q, m in floats.items():
+            saved, live = (m['bound'], m.get('guard_bound'), m.get('bound_rule')), n2_bounds(q, tolerance, invariance=prefix == 'block_invariance')
+            if saved != live:kinds['bounds'].append(f'{at}.{where}.{q}: bound, guard_bound, bound_rule {list(saved)} are not the live path\'s {list(live)}')
+        kinds['numbers'] += [f'{at}.{where}.{x}' for x in verdict_inconsistencies(floats)]
+    judged = copy.deepcopy(c);sections = n2_float_sections(judged);inv = judged.get('block_invariance')
+    for _, floats in sections.values():
+        for m in floats.values():m['passed'] = bool(m['within_bound']) and bool(m.get('within_guard', True))
+    if declared is not None:   # GUARD_DECLARED_RULE as summarize_n2 applies it, from the saved findings and evidence
+        actors = n2_saved_actors(c)
+        for q, m in judged['floats'].items():
+            if m.get('guard_bound') is not None:judge_guard(m, *declared_guard_mode('n2', q, m, c['discrete'], saved_cover(m), actors))
+        if inv is not None:invariance_guards(inv, None, actors)
+        guarded = [(f'{prefix}.{q}', m, n2_float_sections(c)[prefix][1][q]) for prefix, (_, floats) in sections.items() for q, m in floats.items() if m.get('guard_bound') is not None]
+        kinds['modes'] += [f'{at}.{k}: saved {s.get("guard_mode")!r}, re-derived {m["guard_mode"]!r}' for k, m, s in guarded if s.get('guard_mode') != m['guard_mode']]
+        record = tolerance.get('guard_declared') if isinstance(tolerance.get('guard_declared'), dict) else {}
+        derived = dict(modes={k: m['guard_mode'] for k, m, _ in guarded}, gated_no_certifying_digest=[k for k, m, _ in guarded if m['guard_evidence'].get('reason') == GUARD_NO_DIGEST])
+        kinds['modes'] += [f'{at}.tolerance.guard_declared.{k}: saved {record.get(k)!r}, re-derived {v!r}' for k, v in derived.items() if record.get(k) != v]
+    if inv is not None:inv['passed'] = inv['discrete_equal'] and all(m['passed'] for m in inv['floats'].values())   # g2.merge_invariance, invariance_guards
+    for prefix, (where, floats) in n2_float_sections(c).items():
+        kinds['verdicts'] += [f'{at}.{where}.{q}: passed {m["passed"]!r}, re-derived {sections[prefix][1][q]["passed"]!r}' for q, m in floats.items()
+            if m['passed'] != sections[prefix][1][q]['passed']]
+    decisions = {}
+    for key in N2_DECISIONS:
+        if key not in c:continue
+        x = c[key];ok, within = decision_passed(x);decisions[key] = dict(x, passed=ok)
+        if x['q_noise_bound'] != q_noise:kinds['bounds'].append(f'{at}.{key}.q_noise_bound {x["q_noise_bound"]!r} is not {q_noise!r}')
+        if x['passed'] != ok or ('gating' in x and x['q_noise_within_bound'] != within):
+            kinds['verdicts'].append(f'{at}.{key}: passed {x["passed"]!r}, q_noise_within_bound {x.get("q_noise_within_bound")!r}; re-derived {ok!r}, {within!r} '
+                f'(max |dQ| {x.get("max_abs_delta_q")!r}, q_noise_bound {x["q_noise_bound"]!r})')
+    discrete = dict(c['discrete'], passed=sum(c['discrete']['mismatched'].values()) == 0)   # g2.merge_findings
+    status, reasons, passed = n2_status(discrete, judged['floats'], decisions['e'], c['world_reports_equal'], inv, decisions.get('e_merged_depth2'))
+    return kinds, dict(status=status, status_reasons=reasons, passed=passed, discrete_passed=discrete['passed'], invariance_passed=None if inv is None else inv['passed'])
+
+
+def reverdict_n2(path, report, *, expected=None):
+    """--reverdict on a saved n2-equivalence.json (`report`, mode N2_MODE): every verdict re-judged offline from the report's own numbers under
+    the rule it records (N2_REVERDICT_RULE; nothing re-priced or re-compared), written to N2_REVERDICT_FILE beside it (never overwritten) with a
+    `reverdict` section (source status and configs, what changed, the declaration's re-verification). Fail closed (SystemExit, nothing
+    written): a field the verdict needs missing (reverdict_n2_missing); a declaration failing saved_declared on the header and every config's
+    tolerance (the audit, --declared-bounds-commit, requires git_verification verified), or without one a trace of one (n2_traces) or a config
+    tolerance off the frozen rule's numbers (n2_frozen_problems); then rejudge_n2's refusals, in N2_REFUSALS' order. The saved aggregates
+    (discrete.passed, block invariance's passed, the config and run statuses) are re-derived, as the gate path re-derives its status, and
+    each one that differs is listed in `changed`; status_reasons are the provisional reasons the re-verification leaves (provisional_reasons).
+    Returns 0 iff PASS."""
+    path = Path(path);out = path.with_name(N2_REVERDICT_FILE)
+    if out.exists():raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
+    missing = reverdict_n2_missing(report)
+    if missing:raise SystemExit(f'--reverdict: {path} lacks what the verdict needs: ' + ', '.join(missing[:FIRST]))
+    configs = report['configs']
+    declared, section = saved_declared(report, expected=expected, tolerances={f'configs.{n}.tolerance': c['tolerance'] for n, c in configs.items()},
+        undeclared=lambda r: (n2_traces(r), n2_frozen_problems(r)))
+    judged = {name: rejudge_n2(name, c, declared) for name, c in configs.items()}
+    for kind, message in N2_REFUSALS:
+        found = [p for kinds, _ in judged.values() for p in kinds[kind]]
+        if found:raise SystemExit(f'--reverdict: {message} (fail closed): ' + '; '.join(found[:FIRST]))
+    old = dict(status=report['status'], status_reasons=report.get('status_reasons'), configs={n: c['status'] for n, c in configs.items()});changed = []
+    for name, (_, v) in judged.items():
+        c = configs[name]
+        for field, before, after in (('status', c['status'], v['status']), ('status_reasons', c.get('status_reasons'), v['status_reasons']), ('passed', c.get('passed'), v['passed']),
+                ('discrete.passed', c['discrete']['passed'], v['discrete_passed']), ('block_invariance.passed', (c.get('block_invariance') or {}).get('passed'), v['invariance_passed'])):
+            if before != after:changed.append(dict(config=name, field=field, before=before, after=after))
+        c.update(status=v['status'], status_reasons=v['status_reasons'], passed=v['passed']);c['discrete']['passed'] = v['discrete_passed']
+        if v['invariance_passed'] is not None:c['block_invariance']['passed'] = v['invariance_passed']
+    status = n2_run_status(configs)
+    reasons = [] if declared is None else provisional_reasons(declared['reverified'].get('git'), declared['reverified'].get('source_measurement'))
+    report.update(status=status, passed=status == 'PASS', status_reasons=reasons, reverdict=dict(source=str(path), source_status=old['status'],
+        source_status_reasons=old['status_reasons'], source_configs=old['configs'], configs={n: c['status'] for n, c in configs.items()}, changed=changed,
+        rule=N2_REVERDICT_RULE, note='offline: the saved numbers re-judged by the rules the report records; nothing was re-priced or re-compared',
+        **({} if declared is None else dict(declared_bounds_sha256=declared['sha256'], declared_bounds_commit=declared['commit'],
+            declared_bounds_reverified=declared['reverified'], guard_declared_rule=GUARD_DECLARED_RULE, declared_bounds='the bounds the report recorded '
+            '(header.declared_bounds: its sha256 and git blob sha1 re-verified, the local git history and the source measurement re-checked where '
+            'available), re-applied to every config'))))
+    report = _with_header(report, header_block(configs=configs, declared=section, parity=(report['header'] if isinstance(report.get('header'), dict) else {}).get('merged_depth2_parity')))
+    text = json.dumps(report, indent=1, allow_nan=False, default=str) + '\n'   # before the file exists: a failure here leaves none behind
+    try:
+        with out.open('x') as handle:handle.write(text)
+    except FileExistsError:raise SystemExit(f'--reverdict: {out} exists; it is never overwritten')
+    log('REVERDICT', n2_equivalence=str(path), out=str(out), old_status=old['status'], new_status=status, old_status_reasons=old['status_reasons'],
+        status_reasons=reasons, old_configs=old['configs'], configs=report['reverdict']['configs'], changed=changed, header=report['header'])
+    return 0 if status == 'PASS' else 1
 
 
 # ---------------------------------------------------------------- report header (every report the gate writes)
@@ -2601,30 +2818,43 @@ def declared_section(declared, evaluator):
         run_started_at=declared['run_started_at'], note=DECLARED_NOTE, rule=DECLARED_RULE, guard_rule=GUARD_DECLARED_RULE)
 
 
+def tolerance_traces(tolerance, where='tolerance'):
+    """declared_traces of one tolerance section at `where`: its declared_bounds, frozen_rule, root_logit_bound and guard_declared records, the
+    declared tolerance texts and sources."""
+    found = [f'{where}.{key}' for key in ('declared_bounds', 'frozen_rule', 'root_logit_bound', 'guard_declared') if key in tolerance]
+    found += [f'{where}.{key}' for key, text in (('rule', DECLARED_TOLERANCE_RULE), ('deeper_logit_rule', DECLARED_DEEPER_RULE)) if tolerance.get(key) == text]
+    return found + [f'{where}.{key}' for key in ('value_bound_source', 'deeper_logit_bound_source') if str(tolerance.get(key) or '').startswith('declared')]
+
+
 def declared_traces(report):
     """Where a report still shows a declaration (header or tolerance sections, a declared root_logit_bound or guard record, the declared tolerance texts and
     sources, a (c) quantity's declared bound_rule, a reverdict of one); [] for a report judged under the frozen rule."""
     tolerance = report.get('tolerance') if isinstance(report.get('tolerance'), dict) else {};header = report.get('header') if isinstance(report.get('header'), dict) else {}
-    found = [f'{where}.{key}' for where, part, key in (('header', header, 'declared_bounds'), ('tolerance', tolerance, 'declared_bounds'), ('tolerance', tolerance, 'frozen_rule'),
-        ('tolerance', tolerance, 'root_logit_bound'), ('tolerance', tolerance, 'guard_declared')) if key in part]
-    found += [f'tolerance.{key}' for key, text in (('rule', DECLARED_TOLERANCE_RULE), ('deeper_logit_rule', DECLARED_DEEPER_RULE)) if tolerance.get(key) == text]
-    found += [f'tolerance.{key}' for key in ('value_bound_source', 'deeper_logit_bound_source') if str(tolerance.get(key) or '').startswith('declared')]
+    found = (['header.declared_bounds'] if 'declared_bounds' in header else []) + tolerance_traces(tolerance)
     quantities = ((report.get('checks') or {}).get('c') or {}).get('quantities') if isinstance(report.get('checks'), dict) else None
     found += [f'checks.c.quantities.{n}.bound_rule' for n, m in (quantities or {}).items() if isinstance(m, dict) and str(m.get('bound_rule') or '').startswith('declared_')]
     if isinstance(report.get('reverdict'), dict) and 'declared_bounds_sha256' in report['reverdict']:found.append('reverdict.declared_bounds_sha256')
     return found
 
 
+def frozen_numbers(tolerance, where='tolerance'):
+    """frozen_problems of one tolerance section at `where`: rule TOLERANCE_RULE, logit_bound LOGIT_BOUND, value_bound 2 x its
+    depth1_noise_floor (VALUE_FALLBACK without a floor)."""
+    floor = tolerance.get('depth1_noise_floor');problems = []
+    value = g2.VALUE_FALLBACK if floor is None else g2.FLOOR_FACTOR * floor if type(floor) in (int, float) else None
+    if tolerance.get('rule') != g2.TOLERANCE_RULE:problems.append(f'{where}.rule is not the frozen TOLERANCE_RULE')
+    if tolerance.get('logit_bound') != g2.LOGIT_BOUND:problems.append(f'{where}.logit_bound {tolerance.get("logit_bound")!r} is not LOGIT_BOUND {g2.LOGIT_BOUND}')
+    if value is None or tolerance.get('value_bound') != value:
+        problems.append(f'{where}.value_bound {tolerance.get("value_bound")!r} is not the frozen rule\'s {value!r} (2 x depth1_noise_floor {floor!r})')
+    return problems
+
+
 def frozen_problems(report):
     """Why a report without a declaration was not judged under the frozen rule's numbers ([] when it was): tolerance.rule is TOLERANCE_RULE,
-    logit_bound LOGIT_BOUND, value_bound 2 x depth1_noise_floor (VALUE_FALLBACK without a floor), and every saved bound of (b)'s values and of
-    the (c) quantities --reverdict keeps is its class's (values the value bound, priors LOGIT_BOUND; the deeper priors are re-bound anyway)."""
-    tolerance = report['tolerance'];floor = tolerance.get('depth1_noise_floor');problems = []
-    value = g2.VALUE_FALLBACK if floor is None else g2.FLOOR_FACTOR * floor if type(floor) in (int, float) else None
-    if tolerance.get('rule') != g2.TOLERANCE_RULE:problems.append('tolerance.rule is not the frozen TOLERANCE_RULE')
-    if tolerance.get('logit_bound') != g2.LOGIT_BOUND:problems.append(f'tolerance.logit_bound {tolerance.get("logit_bound")!r} is not LOGIT_BOUND {g2.LOGIT_BOUND}')
-    if value is None or tolerance.get('value_bound') != value:
-        problems.append(f'tolerance.value_bound {tolerance.get("value_bound")!r} is not the frozen rule\'s {value!r} (2 x depth1_noise_floor {floor!r})')
+    logit_bound LOGIT_BOUND, value_bound 2 x depth1_noise_floor (VALUE_FALLBACK without a floor) (frozen_numbers), and every saved bound of
+    (b)'s values and of the (c) quantities --reverdict keeps is its class's (values the value bound, priors LOGIT_BOUND; the deeper priors are
+    re-bound anyway)."""
+    tolerance = report['tolerance'];problems = frozen_numbers(tolerance)
     depth = report['pricer_options']['depth'];class_bound = lambda name: g2.LOGIT_BOUND if g2.is_logit(name) else tolerance.get('value_bound')
     sections = (('c', report['checks']['c'].get('quantities') or {}), ('b', (report['checks'].get('b') or {}).get('values') or {}))
     problems += [f'checks.{check}.{name}.bound {m.get("bound")!r} is not {class_bound(name)!r}' for check, part in sections for name, m in part.items()
@@ -2632,26 +2862,31 @@ def frozen_problems(report):
     return problems
 
 
-def saved_declared(report, *, expected=None):
+def saved_declared(report, *, expected=None, tolerances=None, undeclared=None):
     """(declared, header section) a report recorded under --declared-bounds, re-verified for --reverdict, or (None, None) for a report judged
     under the frozen rule. Fail closed (SystemExit) unless: with a declaration, the header section's content_text hashes to its sha256 and to
     its git blob sha1, parses (strictly) to its content, a valid declaration, matching the report's evaluator header, declared_at no later than
     the recorded run start, its repo_path under DECLARED_SUBDIR and its commit a full commit id, git_verification and the source
-    measurement re-run here contradicting nothing ('mismatch' / 'absent'), and the tolerance section naming the same sha256 with the declared
+    measurement re-run here contradicting nothing ('mismatch' / 'absent'), and each tolerance section naming the same sha256 with the declared
     value and turn-1 logit bounds and root_logit_bound (absent when not declared); without one, no trace of a declaration (declared_traces)
     and the frozen numbers (frozen_problems).
-    expected: dict(commit, sha256) given on the command line (the pre-registration record): each given must be the recorded one."""
+    expected: dict(commit, sha256) given on the command line (the pre-registration record): each given must be the recorded one.
+    tolerances: {where: tolerance section} (default: the report's top-level `tolerance`; reverdict_n2: each config's); undeclared: report ->
+    (traces, frozen-rule problems) of a report without a declaration (default: declared_traces, frozen_problems; reverdict_n2: per config)."""
     expected = {k: v for k, v in (expected or {}).items() if v is not None}
+    tolerances = {'tolerance': report.get('tolerance') or {}} if tolerances is None else tolerances
     header = report.get('header') if isinstance(report.get('header'), dict) else {}
-    section, recorded = header.get('declared_bounds'), (report.get('tolerance') or {}).get('declared_bounds')
-    if section is None and recorded is None:
-        traces, frozen = declared_traces(report), frozen_problems(report)
+    section, recorded = header.get('declared_bounds'), {where: t.get('declared_bounds') for where, t in tolerances.items()}
+    if section is None and all(r is None for r in recorded.values()):
+        traces, frozen = (declared_traces(report), frozen_problems(report)) if undeclared is None else undeclared(report)
         if traces:raise SystemExit('--reverdict: a declaration left traces but no declared_bounds sections (fail closed): ' + ', '.join(traces[:FIRST]))
         if frozen:raise SystemExit('--reverdict: the report is not judged under the frozen rule\'s numbers (fail closed): ' + '; '.join(frozen[:FIRST]))
         if expected:raise SystemExit('--reverdict: --declared-bounds-commit/--declared-bounds-sha256 given, but the report records no declaration (fail closed)')
         return None, None
     problems, content, text, sha, again = [], None, None, None, {}
-    if not isinstance(section, dict):problems.append('tolerance.declared_bounds without header.declared_bounds')
+    if not isinstance(section, dict):
+        named = [where for where, r in recorded.items() if r is not None] or list(tolerances)[:1] or ['tolerance']
+        problems.append(', '.join(f'{where}.declared_bounds' for where in named) + ' without header.declared_bounds')
     else:
         text, sha = section.get('content_text'), section.get('sha256')
         if not isinstance(text, str) or hashlib.sha256(text.encode('utf-8')).hexdigest() != sha:
@@ -2676,13 +2911,14 @@ def saved_declared(report, *, expected=None):
             problems += [f'source_measurement: {again["source_measurement"]["detail"]}'] if again['source_measurement']['status'] == 'mismatch' else []
             if 'commit' in expected and again['git']['status'] != 'verified':   # the audit certifies only what git here confirms
                 problems.append(f'the audit (--declared-bounds-commit) requires git_verification verified, got {again["git"]["status"]}: {again["git"]["detail"]}')
-        n, tolerance = declared_numbers(dict(content=content)), report.get('tolerance') or {}
-        if not isinstance(recorded, dict) or recorded.get('sha256') != sha:problems.append('tolerance.declared_bounds does not name the same sha256')
-        if (tolerance.get('value_bound'), tolerance.get('logit_bound')) != (n['value_bound'], n['turn1_logit_bound']):
-            problems.append(f'tolerance value_bound / logit_bound {[tolerance.get("value_bound"), tolerance.get("logit_bound")]} are not the declared '
-                f'{[n["value_bound"], n["turn1_logit_bound"]]}')
-        if tolerance.get('root_logit_bound') != n.get('root_logit_bound'):   # both absent without a declared root_logit_bound
-            problems.append(f'tolerance.root_logit_bound {tolerance.get("root_logit_bound")!r} is not the declared {n.get("root_logit_bound")!r}')
+        n = declared_numbers(dict(content=content))
+        for where, tolerance in tolerances.items():
+            if not isinstance(recorded[where], dict) or recorded[where].get('sha256') != sha:problems.append(f'{where}.declared_bounds does not name the same sha256')
+            if (tolerance.get('value_bound'), tolerance.get('logit_bound')) != (n['value_bound'], n['turn1_logit_bound']):
+                problems.append(f'{where} value_bound / logit_bound {[tolerance.get("value_bound"), tolerance.get("logit_bound")]} are not the declared '
+                    f'{[n["value_bound"], n["turn1_logit_bound"]]}')
+            if tolerance.get('root_logit_bound') != n.get('root_logit_bound'):   # both absent without a declared root_logit_bound
+                problems.append(f'{where}.root_logit_bound {tolerance.get("root_logit_bound")!r} is not the declared {n.get("root_logit_bound")!r}')
     if problems:raise SystemExit('--reverdict: the report\'s declared bounds fail their checks (fail closed): ' + '; '.join(problems[:FIRST]))
     keep = ('path', 'repo_path', 'git_blob_sha1', 'commit', 'git_verification', 'source_measurement_verification', 'run_started_at')
     return dict({k: section.get(k) for k in keep}, sha256=sha, content=content, content_text=text, reverified=dict(again, expected=expected)), section
@@ -3434,17 +3670,31 @@ def summarize_n2(per_config, *, declared=None):
             rule = dict(rule, guard_declared=dict(rule=GUARD_DECLARED_RULE, modes={k: m['guard_mode'] for k, m in guarded},
                 gated_no_certifying_digest=[k for k, m in guarded if m['guard_evidence'].get('reason') == GUARD_NO_DIGEST]))
         merged = None if not any('e_merged' in x for x in calls) else dict(g2.merge_decisions([x['e_merged'] for x in calls], q_noise_bound=q_noise), rule=MERGED_DEPTH2_DECISION)
-        passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed'] and reports_equal and (invariance is None or invariance['passed']) \
-            and (merged is None or merged['passed'])
-        vacuous = [reason for reason, empty in (('no turn-2 leaf compared', not discrete['compared'].get('t2_status')),
-            ('(e) compared no root', not e.get('roots_compared')), ('(e) on the merged Depth2Pricer compared no root', merged is not None and not merged.get('roots_compared')))
-            if empty]
-        report[name] = dict(status='FAIL' if not passed else 'INCOMPLETE' if vacuous else 'PASS', status_reasons=vacuous, passed=passed and not vacuous,
+        status, vacuous, passed = n2_status(discrete, floats, e, reports_equal, invariance, merged)
+        report[name] = dict(status=status, status_reasons=vacuous, passed=passed,
             discrete=discrete, floats=floats, e=e, tolerance=dict(rule, q_noise_bound=q_noise),
             turn1_heads_vs_oracle=dict(reported_not_gated=True, quantities=heads), world_reports_equal=reports_equal,
             world_reports_first_difference=next((x['a']['world_reports_first_difference'] for x in calls if x['a'].get('world_reports_first_difference')), None),
             **({} if invariance is None else dict(block_invariance=invariance)), **({} if merged is None else dict(e_merged_depth2=merged)))
     return report
+
+
+def n2_status(discrete, floats, e, reports_equal, invariance=None, merged=None):
+    """One --n2-equivalence config's (status, status_reasons, passed), live (summarize_n2) and offline (reverdict_n2) alike: FAIL unless the
+    discrete arrays, every float, (e), the world reports and, where they ran, child-block invariance and the merged depth-2 (e) pass;
+    INCOMPLETE when vacuous (no turn-2 leaf compared, or (e) or the merged (e) compared no root; listed under FAIL too); else PASS."""
+    passed = discrete['passed'] and all(m['passed'] for m in floats.values()) and e['passed'] and reports_equal and (invariance is None or invariance['passed']) \
+        and (merged is None or merged['passed'])
+    vacuous = [reason for reason, empty in (('no turn-2 leaf compared', not discrete['compared'].get('t2_status')),
+        ('(e) compared no root', not e.get('roots_compared')), ('(e) on the merged Depth2Pricer compared no root', merged is not None and not merged.get('roots_compared')))
+        if empty]
+    return ('FAIL' if not passed else 'INCOMPLETE' if vacuous else 'PASS'), vacuous, passed and not vacuous
+
+
+def n2_run_status(configs):
+    """run_n2's status from its configs' (n2_status): FAIL if one FAILs, INCOMPLETE if one is INCOMPLETE or none ran, else PASS."""
+    statuses = [r['status'] for r in configs.values()]
+    return 'FAIL' if 'FAIL' in statuses else 'INCOMPLETE' if 'INCOMPLETE' in statuses or not configs else 'PASS'
 
 
 # ---------------------------------------------------------------- depth-3 diagnostics (live frames or saved ones)
@@ -3672,8 +3922,9 @@ def parse(argv=None):
     parser.add_argument('--chunk', type=int, help='bank chunk index (with --d3-root); chunks 0..N are collected')
     parser.add_argument('--memory-policy', action='store_true', help="with --d3-root: apply the bank runtime's JAX memory policy")
     parser.add_argument('--out', help='new output directory (every mode but --reverdict)')
-    parser.add_argument('--reverdict', metavar='GATE_JSON', help='offline: re-apply the current verdict rules to a saved gate.json; writes '
-        'gate-reverdict.json beside it (never overwritten); exit 0 iff the new status is PASS/PASS_SAMPLED')
+    parser.add_argument('--reverdict', metavar='REPORT_JSON', help='offline: re-apply the current verdict rules to a saved gate.json (writes '
+        'gate-reverdict.json beside it), or re-judge a saved n2-equivalence.json from its own numbers (writes n2-equivalence-reverdict.json); '
+        'never overwritten; exit 0 iff the new status is PASS/PASS_SAMPLED')
     parser.add_argument('--depth', type=int, default=3, help='search depth N >= 2 (default 3)')
     parser.add_argument('--selection', choices=MODES, default='prior', help='ply-2 selection (plies 3..N always prior)')
     parser.add_argument('--k-own', default='3', help='learner width per ply 2..N, "k" or "k2,k3,..." (under searched, ply 2\'s is searched_maps\' k)')
@@ -3718,7 +3969,7 @@ def parse(argv=None):
     if args.reverdict:
         record = ('declared_bounds_commit', 'declared_bounds_sha256')   # the pre-registration record a declared report is compared with
         given = sorted(a.option_strings[0] for a in parser._actions if a.dest not in ('help', 'reverdict') + record and getattr(args, a.dest) != a.default)
-        if given:parser.error('--reverdict runs offline on a saved gate.json and takes no other option but --declared-bounds-commit / '
+        if given:parser.error('--reverdict runs offline on a saved gate.json or n2-equivalence.json and takes no other option but --declared-bounds-commit / '
             '--declared-bounds-sha256 (given: ' + ', '.join(given) + ')')
         if args.declared_bounds_sha256 is not None and not ce._hex64(args.declared_bounds_sha256):parser.error('--declared-bounds-sha256 must be a 64-hex sha256')
         if args.declared_bounds_commit is not None and not _commit_id(args.declared_bounds_commit):parser.error('--declared-bounds-commit must be a full lowercase hex commit id')
@@ -3899,15 +4150,14 @@ def run_n2(args, *, roots, provider, plan, module, frame_pricer, seeds, out, ref
             frame_pricer=frame_pricer, oracle=oracle, context=dict(block=block, call=call), progress=log, module=module, merged_decision=forward is not None)
         for name, result in results.items():per_config[name].append(result)
         log('N2_CALL', block=block, call=call, discrete={n: r['a']['passed'] for n, r in results.items()}, e={n: r['e'].get('argmax_q_differs') for n, r in results.items()})
-    report = summarize_n2(per_config, declared=declared);statuses = [r['status'] for r in report.values()]
-    status = 'FAIL' if 'FAIL' in statuses else 'INCOMPLETE' if 'INCOMPLETE' in statuses or not report else 'PASS'
-    write(out / 'n2-equivalence.json', dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(configs=report, declared=section, parity=parity), schema=SCHEMA, mode='N2_EQUIVALENCE',
+    report = summarize_n2(per_config, declared=declared);status = n2_run_status(report)
+    write(out / N2_FILE, dict(header(args, roots, abs_values, roots.loaded.source), header=header_block(configs=report, declared=section, parity=parity), schema=SCHEMA, mode=N2_MODE,
         status=status, passed=status == 'PASS', configs=report, options=options, split_capacity=capacity, block_seeds=list(seeds),
         **({} if declared is None else dict(status_reasons=provisional_reasons(declared['git_verification'], declared['source_measurement_verification']))),
         rule='per config: every discrete array exact and world_reports equal; floats only on scored cells (see n2_compare): values within the value '
             'bound and guard, priors within the logit bound (the run\'s evaluator-relative rule); (e) depth2_backups argmax per root equal except near '
             'ties; INCOMPLETE when no turn-2 leaf or no (e) root was compared'))
-    log('N2_EQUIVALENCE_COMPLETE', status=status, out=str(out / 'n2-equivalence.json'), configs={n: r['status'] for n, r in report.items()})
+    log('N2_EQUIVALENCE_COMPLETE', status=status, out=str(out / N2_FILE), configs={n: r['status'] for n, r in report.items()})
     return 0 if status == 'PASS' else 1
 
 
