@@ -99,5 +99,7 @@ class DirectKOOwningTests(unittest.TestCase):
    elif k in (21,22,23):lines.append('|'+{21:'-crit',22:'-supereffective',23:'-resisted'}[k]+'|'+ident[int(w[3])])
    elif k==2:lines.append(f'|-damage|{ident[int(w[3])]}|0 fnt')
    elif k==3:lines.append('|faint|'+ident[int(w[3])])
+   elif k==life.TURNLOOP_PREFIX:
+    self.assertEqual(w.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0]);lines.extend(['|','|t:|1'])
    else:self.fail('unrepresented KO reference '+str(k))
   _,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.catalog));return np.array([e.words() for p in packets for e in p.events],np.int32)
