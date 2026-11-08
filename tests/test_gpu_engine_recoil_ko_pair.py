@@ -126,13 +126,13 @@ class RecoilKOPairTests(unittest.TestCase):
   _,packets=public_wire.project_lines(wire,lines,**v4.wire_kwargs(self.f.catalog))
   return np.asarray([e.words()for packet in packets for e in packet.events],np.int32)
  def test_default_source_and_capability_are_separate(self):
-  before=ast.parse(subprocess.check_output(['git','show','076d6814:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
+  before=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));after=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(before)
   self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
   for file,names in [('engine_execution_completeness.py',('emitted','consume_frame_device')),('engine_direct_hit_controls.py',('validate_write_device',))]:
-   old=ast.parse(subprocess.check_output(['git','show','076d6814:gpu_engine/'+file],text=True));new=ast.parse(Path('gpu_engine/'+file).read_text())
+   old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file],text=True));new=ast.parse(Path('gpu_engine/'+file).read_text())
    for name in names:self.assertEqual(ast.dump(next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name)),ast.dump(next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)))
 
- def test_worker_forwards_same_rules_only_to_recoil(self):
+ def test_worker_forwards_same_rules_to_recoil_and_thunder_wave(self):
   tree=ast.parse(Path('src/pokezero/v5_worker.py').read_text())
   loop=next(n for n in ast.walk(tree)if isinstance(n,ast.For)and isinstance(n.target,ast.Tuple)and [x.id for x in n.target.elts if isinstance(x,ast.Name)]==['name','move','module','function'])
   calls=[]
@@ -146,8 +146,8 @@ class RecoilKOPairTests(unittest.TestCase):
   self.assertEqual(len(calls),5)
   for name,kw in calls:
    self.assertIs(kw['engine_catalog'],catalog);self.assertIs(kw['metadata'],metadata)
-   self.assertEqual(set(kw),{'engine_catalog','metadata','source_rules'}if name=='compile_recoil'else {'engine_catalog','metadata'})
-   if name=='compile_recoil':self.assertIs(kw['source_rules'],original)
+   self.assertEqual(set(kw),{'engine_catalog','metadata','source_rules'}if name in ('compile_recoil','compile_thunder_wave')else {'engine_catalog','metadata'})
+   if name in ('compile_recoil','compile_thunder_wave'):self.assertIs(kw['source_rules'],original)
   calls.clear();metadata['vocabulary']['moves']=[]
   exec(compile(ast.fix_missing_locations(ast.Module(body=[loop],type_ignores=[])),'<original-worker-loop>','exec'),env)
   self.assertEqual(calls,[])

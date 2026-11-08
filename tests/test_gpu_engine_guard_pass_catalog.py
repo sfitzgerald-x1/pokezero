@@ -129,7 +129,9 @@ class GuardPassTests(unittest.TestCase):
         e.check_catalog(self.catalog)
         with self.assertRaisesRegex(ValueError,'cannot be traced'):jax.jit(lambda:e.check_catalog(self.catalog))()
     with self.assertRaisesRegex(ValueError,'cannot be traced'):jax.jit(lambda:e.check_catalog(self.catalog))()
-    old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));new=ast.parse(Path(d.__file__).read_text())
+    old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_retained_encoder_driver.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','4bc12b59:gpu_engine/engine_retained_encoder_driver.py'],text=True))
+    current=ast.parse(Path(d.__file__).read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_retained_encoder_driver.py'],text=True))
+    self.assertEqual(ast.dump(current),ast.dump(integrated))
     fn=lambda tree,name:next(n for n in tree.body if isinstance(n,ast.FunctionDef)and n.name==name)
     class EraseObservationScopes(ast.NodeTransformer):
         def visit_With(self,node):

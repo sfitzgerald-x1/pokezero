@@ -91,8 +91,8 @@ class SleepTalkOwningTests(unittest.TestCase):
   return s,after,before,side,t,c,consumers,initial.cursor
 
  def test_original_source_default_numerics_and_called_writer_chronology(self):
-  witness._source();self.assertEqual(len(witness.SOURCE_PINS),85)
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  witness._source();self.assertEqual(len(witness.SOURCE_PINS),88)
+  old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(old);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
   script=r'''const d=require(process.argv[1]+'/dist/sim/dex.js').Dex.mod('gen3'),lines=[],p={statusState:{time:3},hasAbility:()=>false,toString:()=> 'p2a: Actor',moveSlots:[{id:'sleeptalk',pp:8},{id:'surf',pp:7},{id:'rest',pp:8}]};const b={effectState:{skippedTime:0},add:(...a)=>lines.push('|'+a.map(String).join('|')),sample:xs=>xs[0],dex:d,actions:{useMove:id=>lines.push('|move|p2a: Actor|'+d.moves.get(id).name+'|p1a: Target|[from] '+d.conditions.get('sleeptalk').name)}};d.conditions.get('slp').onBeforeMove.call(b,p,null,d.moves.get('sleeptalk'));lines.push('|move|p2a: Actor|Sleep Talk|p2a: Actor');d.moves.get('sleeptalk').onHit.call(b,p);console.log(JSON.stringify({time:p.statusState.time,skipped:b.effectState.skippedTime,lines}));'''
   got=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(got,dict(time=2,skipped=1,lines=['|cant|p2a: Actor|slp','|move|p2a: Actor|Sleep Talk|p2a: Actor','|move|p2a: Actor|Surf|p1a: Target|[from] sleeptalk']))
   # Source-only import-order smoke; no constructor, sampler or model call.
@@ -123,8 +123,14 @@ class SleepTalkOwningTests(unittest.TestCase):
     changed=c._replace(raw=c.raw.at[0,1,column].add(delta),**({'selected_slot':c.selected_slot.at[0].add(2)}if variant=='slot'else{'roll':c.roll.at[0].add(3)}))
     self.assertTrue(bool(cb.owned(bad,0)[0]));self.assertFalse(bool(cb.captured_matches(bad,changed)[0]))
 
- def test_distinct_called_rest_source_pool_and_prior_unknown_remain_refused(self):
-  for variant in('rest','struggle','prior'):
+ def test_declared_rest_failure_selection_does_not_claim_the_child_effect(self):
+  s,after,_,_,t,c,_,_=self.component(chosen='rest')
+  self.assertTrue(bool(cb.captured_matches(t,c).all()));self.assertEqual(t.count.tolist(),[3]*8)
+  self.assertEqual(c.called.tolist(),[self.metadata['vocabulary']['moves'].index('rest')]*8)
+  self.assertEqual(t.words[:,2,0].tolist(),[1]*8) # Child MOVE only; no Rest effect receipt.
+  np.testing.assert_array_equal(s.hp,after.hp)
+ def test_unsupported_child_pool_and_prior_unknown_remain_refused(self):
+  for variant in('struggle','prior'):
    with self.subTest(variant=variant):
     s,after,before,side,t,c,_,_=self.component(chosen=variant if variant!='prior'else'surf',poison=variant=='prior')
     self.assertFalse(bool(cb.captured_matches(t,c).any()));self.assertEqual(t.count.tolist(),[0]*8)

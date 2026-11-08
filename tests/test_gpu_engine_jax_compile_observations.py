@@ -113,7 +113,8 @@ class CompileObservationTests(unittest.TestCase):
     if isinstance(n.target,ast.Tuple)and ast.unparse(n.target)=='(owner, observer)'and ast.unparse(n.iter)=='enumerate(self.session.state.observers)':n.target=n.target.elts[1];n.iter=n.iter.args[0]
     return self.generic_visit(n)
   for file in('engine_retained_encoder_driver.py','benchmark_capture_gap_census.py'):
-   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/'+file],text=True));new=Erase().visit(ast.parse(Path('gpu_engine',file).read_text()));self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(new,include_attributes=False),file)
+   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/'+file],text=True));new=Erase().visit(ast.parse(subprocess.check_output(['git','show','685ec88c:gpu_engine/'+file],text=True)));self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(new,include_attributes=False),file)
+   self.assertEqual(ast.dump(ast.parse(Path('gpu_engine',file).read_text())),ast.dump(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/'+file],text=True))),file)
  def test_actual_installed_public_api_and_event_source_contract_without_backend(self):
   self.p.stop()
   try:

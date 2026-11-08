@@ -51,6 +51,11 @@ class DirectHitFullRuntimeTests(unittest.TestCase):
                     self.assertEqual(kind,int(inputs.Kind.ABILITY))
                     self.assertEqual(raw.tolist(),[35,-1,-1,-1,-1,0,0,0,0,0])
                     lines.extend(['|','|t:|1'])
+                elif kind==inputs.Kind.ABILITY and rawkind==24:
+                    # Pressure Start is an owner-only silent protocol reveal.
+                    # The peer's semantic envelope deliberately emits no line.
+                    if int(stream.causal.owner[row])==target:
+                        lines.append(f'|-ability|{active[target]}|Pressure|[silent]')
                 elif kind==inputs.Kind.SWITCH:
                     name=self.f.catalog.species.names[p[1]];label=f'p{target+1}a: '+name
                     active[target]=label

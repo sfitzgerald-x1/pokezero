@@ -133,14 +133,15 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
         equal_tree(self,driver._leech_history(runtime,core,pubs,healthy),proof(*args))
 
     def test_once_prepared_dynamic_call_scope_and_all_original_boundaries(self):
-        old=ast.parse(subprocess.check_output(['git','show',BASE+':'+str(SOURCE)],text=True));current=ast.parse(SOURCE.read_text())
+        old=ast.parse(subprocess.check_output(['git','show',BASE+':'+str(SOURCE)],text=True));current=ast.parse(subprocess.check_output(['git','show','7e958020:'+str(SOURCE)],text=True))
+        actual=ast.parse(SOURCE.read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:'+str(SOURCE)],text=True));self.assertEqual(ast.dump(actual),ast.dump(integrated))
         def functions(t):return {n.name:n for n in t.body if isinstance(n,ast.FunctionDef)}
         before,after=functions(old),functions(current)
         allowed={'prepare','_leech_history','_prepare_leech_history_proof','_checked_leech_history_proof'}
         for name,node in before.items():
             if name=='_frame':
-                reference=functions(ast.parse(subprocess.check_output(['git','show','974a4cebab4629043944e922ebe5af1d4da49e5b:gpu_engine/engine_retained_encoder_driver.py'],text=True)))
-                self.assertEqual(ast.dump(reference[name]),ast.dump(after[name]),name)
+                reference=functions(ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_retained_encoder_driver.py'],text=True)))
+                self.assertEqual(ast.dump(reference[name]),ast.dump(functions(actual)[name]),name)
             elif name not in allowed:self.assertEqual(ast.dump(node),ast.dump(after[name]),name)
         preparation=deepcopy(after['prepare'])
         def added(node):
@@ -161,7 +162,7 @@ class LeechHistoryJitReuseTests(unittest.TestCase):
             self.assertEqual(jit.call_count,1)
         # No helper, physics, catalog or admission code is changed.
         for name in ('engine_leech_seed_callbacks.py','transition.py','state.py','v4_encoder.py'):
-            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('974a4cebab4629043944e922ebe5af1d4da49e5b'if name=='transition.py'else BASE)+':gpu_engine/'+name]))
+            self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
 
 
 if __name__=='__main__':unittest.main()

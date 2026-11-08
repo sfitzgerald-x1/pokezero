@@ -22,7 +22,12 @@ class HostTimingTests(unittest.TestCase):
   tree=ast.parse(Path(c.__file__).read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef)and n.name=='_Runtime')
   advance=next(n for n in cls.body if isinstance(n,ast.FunctionDef)and n.name=='advance')
   calls=[n for n in ast.walk(advance)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and n.func.attr=='latest_diagnostics']
-  self.assertEqual(len(calls),1)
+  self.assertEqual(len(calls),0)
+  atomic=[n for n in ast.walk(advance)if isinstance(n,ast.Call)and isinstance(n.func,ast.Attribute)and ast.unparse(n.func)=='self.driver.advance']
+  self.assertEqual(len(atomic),1)
+  self.assertIs(next(k.value.value for k in atomic[0].keywords if k.arg=='return_diagnostics'),True)
+  unpack=next(n for n in ast.walk(advance)if isinstance(n,ast.Assign)and ast.unparse(n.targets[0])=='(result, d)')
+  self.assertEqual(ast.unparse(unpack.value),'(advanced.result, advanced.diagnostics)')
  def test_source_union_across_contexts_keeps_engine_and_timing_separate(self):
   ledger=c.Ledger(c.Plan(),np.arange(1,2049,dtype=np.int32))
   for domain,row in [('capture',0),('capture-context',0),('capture-context',1)]:ledger._count('census',domain,'site:5',row,0,{})
@@ -78,7 +83,7 @@ class HostTimingTests(unittest.TestCase):
   self.assertEqual(stripped,original)
   json.dumps(actual,allow_nan=False)
   for path in('engine_retained_encoder_driver.py','transition.py'):
-   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','a8034bc27e083b156f525d69defa673c6908a25b:gpu_engine/'+path]))
+   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+path]))
   # Both physical sources remain exact at the reviewed current composition;
   # historical ac13 preceded the separately reviewed built-in timing/inputs.
 
