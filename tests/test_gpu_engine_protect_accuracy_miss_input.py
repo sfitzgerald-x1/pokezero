@@ -86,7 +86,9 @@ class ProtectAccuracyMissInputTests(unittest.TestCase):
   z=j.zeros(8,j.int32);yes=j.ones(8,bool)
   for pp,ww in[(p._replace(caller_move=None),w),(p._replace(caller_move=z+self.metadata['vocabulary']['moves'].index('sleeptalk')),w),(p._replace(before=p.before._replace(accuracy_hit=yes)),w),(p._replace(before=p.before._replace(sub_hp=z+25)),w),(p,w._replace(enduring=yes)),(p,w._replace(immune=yes,numerator=z)),(p,w._replace(new_hp=z+99)),(p._replace(absorbed=p.absorbed._replace(blocked=yes)),w),(p._replace(context=p.context._replace(data=p.context.data._replace(protect=None))),w)]:self.assertFalse(bool(nd.scheduled(pp,ww).any()))
   with self.assertRaises(ValueError):nd.scheduled(p._replace(caller_move=j.broadcast_to(p.move,(8,8))),w)
-  oldtree=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(Path('gpu_engine/transition.py').read_text());baseline=dump_default_program(oldtree);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  oldtree=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/transition.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','a8034bc2:gpu_engine/transition.py'],text=True));baseline=dump_default_program(oldtree);self.assertEqual(dump_default_program(new),baseline);assert_hp_rng_mutations_detected(self,new,baseline)
+  current=ast.parse(Path('gpu_engine/transition.py').read_text());integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated));assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
   # Existing pre-Protect accuracy capture is before numeric Protect hit &=.
   text=Path('gpu_engine/transition.py').read_text();self.assertLess(text.index('_direct_accuracy_hit=hit'),text.index('protect_callbacks.begin_block'));self.assertLess(text.index('protect_callbacks.begin_block'),text.index('hit &= ~(protected'))
   witness._source()

@@ -201,10 +201,16 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
 
     def test_default_numeric_ast_parent_identity_and_detect_changed_residual_input(self):
         old=ast.parse(subprocess.check_output(['git','show','df4c0dc5:gpu_engine/transition.py'],text=True))
-        new=ast.parse(Path(t.__file__).read_text())
+        # The original registration proof and the full integrated source are
+        # separate contracts; later physical features are not observer erasures.
+        new=ast.parse(subprocess.check_output(['git','show','88b5a071:gpu_engine/transition.py'],text=True))
         baseline=dump_default_program(old)
         self.assertEqual(dump_default_program(new),baseline)
         assert_hp_rng_mutations_detected(self,new,baseline)
+        current=ast.parse(Path(t.__file__).read_text())
+        integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+        self.assertEqual(ast.dump(current),ast.dump(integrated))
+        assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
 
 
 

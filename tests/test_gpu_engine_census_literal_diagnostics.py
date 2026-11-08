@@ -60,7 +60,7 @@ class LiteralCensusDiagnosticsTests(unittest.TestCase):
   self.assertIs(self.record(bad,active),bad)
  def test_original_transition_program_and_guard_exact_after_diagnostic_call_removal(self):
   old=ast.parse(subprocess.check_output(['git','show','5b702e55:gpu_engine/transition.py'],text=True))
-  new=ast.parse(Path('gpu_engine/transition.py').read_text())
+  new=ast.parse(subprocess.check_output(['git','show','bd70ffa6:gpu_engine/transition.py'],text=True))
   class RemoveDiagnostic(ast.NodeTransformer):
    def visit_ImportFrom(self,node):
     return None if any(a.asname=='_residual_diagnostics'for a in node.names)else node
@@ -69,10 +69,13 @@ class LiteralCensusDiagnosticsTests(unittest.TestCase):
     if isinstance(call,ast.Call)and isinstance(call.func,ast.Attribute)and isinstance(call.func.value,ast.Name)and call.func.value.id=='_residual_diagnostics':return None
     return self.generic_visit(node)
   self.assertEqual(ast.dump(old,include_attributes=False),ast.dump(RemoveDiagnostic().visit(new),include_attributes=False))
+  current=ast.parse(Path('gpu_engine/transition.py').read_text())
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated))
   body=Path('gpu_engine/transition.py').read_text();start=body.index('_status_guard_valid=');record=body.index('_public_trace=_residual_diagnostics.record_residual_on_tape');emit=body.index('_public_trace=status_residual_callbacks.record_status_residual_device')
   self.assertLess(start,record);self.assertLess(record,emit)
   for path in ('engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_status_residual_callbacks.py'):
-   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','5b702e55:gpu_engine/'+path]))
+   self.assertEqual(Path('gpu_engine',path).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+path]))
  def test_cold_import_orders_build_only(self):
   modules=['gpu_engine.benchmark_capture_gap_census','gpu_engine.engine_lifecycle_event_device','gpu_engine.engine_full_v4_event_device']
   for order in (modules,modules[::-1]):

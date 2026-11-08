@@ -1,4 +1,3 @@
-from gpu_engine_default_observer_ast import assert_frozen_function_overlay
 """Inert source/serialization diagnostics only; no engine turn or FULL."""
 import ast,copy,hashlib,subprocess,unittest
 from pathlib import Path
@@ -71,9 +70,9 @@ class BatonStartDiagnosticsTests(unittest.TestCase):
  def test_observer_only_ast_source_defaults_and_pins(self):
   dump=lambda n:ast.dump(n,include_attributes=False)
   old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(subprocess.check_output(['git','show','47f8dd99dd600388ecd72932068c7308f1f8136f:gpu_engine/engine_baton_pass_callbacks.py'],text=True))
-  # The historical observer-only delta predates the reviewed dormant ability
-  # family. Bind the CURRENT helper exactly to that separate source review.
-  self.assertEqual(Path('gpu_engine/engine_baton_pass_callbacks.py').read_bytes(),subprocess.check_output(['git','show','71d551bfcc17cc8c05bd9bf8b985baec83b5b30d:gpu_engine/engine_baton_pass_callbacks.py']))
+  # The historical observer-only delta predates later ability families.
+  # Bind the complete current helper separately to the integrated source.
+  self.assertEqual(Path('gpu_engine/engine_baton_pass_callbacks.py').read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py']))
   class Remove(ast.NodeTransformer):
    def visit_FunctionDef(self,n):return None if n.name=='_start_diagnostics'else self.generic_visit(n)
    def visit_Assign(self,n):
@@ -91,9 +90,7 @@ class BatonStartDiagnosticsTests(unittest.TestCase):
    def visit_Call(self,n):n.keywords=[k for k in n.keywords if k.arg!='baton_start_predicate_scope'];return self.generic_visit(n)
   self.assertEqual(dump(old),dump(RemoveCensus().visit(new)))
   for name in('transition.py','state.py','baton.py','engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py'):
-   if name=='engine_retained_encoder_driver.py':
-    assert_frozen_function_overlay(self,'gpu_engine/'+name,'7e9580207defb397e81313d0ace17d38eb8a6aea',{'_frame':'974a4cebab4629043944e922ebe5af1d4da49e5b'})
-   else:self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('bca26eaa00a63eccedf26cd4c62da4bae76c2584'if name=='engine_kernel_frame_risk.py'else '974a4cebab4629043944e922ebe5af1d4da49e5b'if name in('transition.py','engine_execution_completeness.py','engine_full_v4_event_device.py')else BASE)+':gpu_engine/'+name]),name)
+   self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]),name)
   for f,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('ordinary_law.py','MAPPING_PINS'),('conditional_law.py','MAPPING_PINS')]:
    t=ast.parse(Path('gpu_engine',f).read_text());pins=ast.literal_eval(next(n.value for n in t.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id==key for x in n.targets)))
    for name,v in pins.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),v)

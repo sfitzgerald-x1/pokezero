@@ -144,12 +144,29 @@ class KernelRiskCallsitesTests(unittest.TestCase):
             self.assertEqual(changed.refusal.tolist(),[1025,1]*4)
 
     def test_all_nineteen_named_cutpoints_are_present_in_owned_actual_sources(self):
-        names=set()
+        names=set();calls=set()
         for filename in ('transition.py','secondary.py','entry.py'):
             tree=ast.parse(Path(t.__file__).with_name(filename).read_text())
             for node in ast.walk(tree):
+                if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and isinstance(node.func.value,ast.Name) and node.func.value.id=='kernel_risks':
+                    calls.add(node.func.attr)
                 if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr=='branch_on_tape':
                     names.add(node.args[1].attr)
+        # Five former generic visits now validate typed SAME-call captures.
+        # Follow their actual wrappers to the observer's exact Branch literal;
+        # do not remove those cutpoints from the required inventory.
+        helpers=ast.parse(Path(r.__file__).read_text())
+        functions={node.name:node for node in helpers.body if isinstance(node,ast.FunctionDef)}
+        for stem,branch in (('self_heal','SELF_HEAL'),('substitute','SUBSTITUTE'),
+                            ('primary_status','PRIMARY_STATUS'),('self_boost','SELF_BOOST'),('spikes','SPIKES')):
+            wrapper=stem+'_on_tape';observer='observe_'+stem+'_device'
+            self.assertIn(wrapper,calls)
+            delegated=[node for node in ast.walk(functions[wrapper]) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='_on_tape']
+            self.assertEqual(len(delegated),1)
+            self.assertEqual(delegated[0].args[1].id,observer)
+            observed=[node.args[3] for node in ast.walk(functions[observer]) if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='_observe']
+            self.assertEqual([ast.unparse(node) for node in observed],['Branch.'+branch])
+            names.add(branch)
         self.assertEqual(names,{x.name for x in list(r.Branch)[5:]})
 
 

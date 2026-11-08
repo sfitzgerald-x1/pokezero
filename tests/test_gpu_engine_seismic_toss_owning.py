@@ -76,7 +76,14 @@ class SeismicTossOwningTests(unittest.TestCase):
   closed=risks.compile_risks(self.producer,self.account);self.assertTrue(int(closed.device.selected_risk[move])&risks.NON_WEATHER)
   with self.assertRaises(ValueError):direct.check_compiled(replace(self.hit))
   with self.assertRaises(ValueError):jax.jit(lambda dummy:direct.check_compiled(self.hit))(j.array(0))
-  before=ast.parse(subprocess.check_output(['git','show','38626f8a:gpu_engine/transition.py'],text=True));after=__import__('test_gpu_engine_v5_hypothetical_profile').normalized_hypothetical_default(Path('gpu_engine/transition.py').read_text(),as_tree=True);baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  # Preserve the original fixed-level observer proof, before later features.
+  before=ast.parse(subprocess.check_output(['git','show','38626f8a:gpu_engine/transition.py'],text=True))
+  after=ast.parse(subprocess.check_output(['git','show','1c02d5d6:gpu_engine/transition.py'],text=True))
+  baseline=dump_default_program(before);self.assertEqual(baseline,dump_default_program(after));assert_hp_rng_mutations_detected(self,after,baseline)
+  current=ast.parse(Path('gpu_engine/transition.py').read_text())
+  integrated=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/transition.py'],text=True))
+  self.assertEqual(ast.dump(current),ast.dump(integrated))
+  assert_hp_rng_mutations_detected(self,current,dump_default_program(integrated))
  def test_actual_fixed_level_write_preserves_numeric_rng_unused_flags_and_both_full_drains(self):
   state,cursor,consumers=self.initial();state=state._replace(types=state.types.at[1,:,:,0].set(3));actual=self.play(state,cursor)
   plain=tr.step_with_chance(state,j.zeros((2,2),j.int32),self.table,self.chance(2));self.same(actual.step.state,plain.state)

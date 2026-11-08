@@ -111,7 +111,10 @@ class TurnLoopPrefixTests(unittest.TestCase):
         folder=Path(life.__file__).parent
         for name in ('transition.py','entry.py','mechanics.py','state.py'):
             original=subprocess.check_output(['git','show','93c88ae5:'+str(Path('gpu_engine')/name)])
-            self.assertEqual((folder/name).read_bytes(),original)
+            historical=subprocess.check_output(['git','show','27fa443a:'+str(Path('gpu_engine')/name)])
+            self.assertEqual(historical,original)
+            integrated=subprocess.check_output(['git','show','b8092a85:'+str(Path('gpu_engine')/name)])
+            self.assertEqual((folder/name).read_bytes(),integrated)
         for name,digest in witness.SOURCE_PINS.items():
             self.assertEqual(hashlib.sha256((folder/name).read_bytes()).hexdigest(),digest,name)
 
