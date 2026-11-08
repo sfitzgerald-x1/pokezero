@@ -1247,6 +1247,15 @@ class CalibrationTests(unittest.TestCase):
         value = asyncio.run(panel.calibrate(self.root, pairs=[(0, 1), (2, 3)], dispatch_function=run))
         self.assertEqual((value['status'], value['iterations_observable'], value['ratios'], value['games']), ('UNMEASURABLE', False, None, dict(solo=1, concurrent=0)))
 
+    def test_too_few_moves_is_insufficient_never_measured(self):
+        panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=2, **self.kwargs)
+        rates = dict(solo={'8x500ms': 100., '2x1000ms': 200.}, concurrent={'8x500ms': 95., '2x1000ms': 190.})
+        run, _ = self.fake_dispatch(rates)
+        for setting in ('solo', 'concurrent'):
+            asyncio.run(run(panel.calibration_packets(self.root, setting=setting)[:7], pairs=[(0, 1)], servers={'RAW': None}, after=lambda p: None))
+        value = panel.calibration_summary(self.root)   # 7 games: 280 rated moves per stratum and setting, under the 300 floor
+        self.assertEqual((value['status'], value['ratios'], value['strata']['8x500ms']['solo']['moves']), ('INSUFFICIENT', None, 280))
+
     def test_calibration_is_unmeasurable_only_when_no_game_reports_true(self):
         panel.calibration_init(self.root, band=dict(CALIBRATION_BAND), lanes=1, **self.kwargs)
         rates = dict(solo={'8x500ms': 100., '2x1000ms': 200.}, concurrent={'8x500ms': 100., '2x1000ms': 200.})
