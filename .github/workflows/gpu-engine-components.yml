@@ -26,10 +26,14 @@ concurrency:
 jobs:
   cpu-component-shards:
     name: CPU component shard ${{ matrix.shard }}
-    runs-on: ubuntu-latest
+    # Repository configuration can select isolated high-memory Linux runners
+    # for one branch without rerouting unrelated pull requests.
+    # The default remains the hosted runner; test/compiler settings stay below.
+    runs-on: ${{ fromJSON((github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_RUNNER) || '"ubuntu-latest"') }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
+      max-parallel: ${{ fromJSON((github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_MAX_PARALLEL) || '16') }}
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     env:
@@ -60,6 +64,25 @@ jobs:
           ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
           path: .ci/pokemon-showdown
           persist-credentials: false
+      - name: Verify isolated CPU runner memory
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          physical = int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemTotal:'))) * 1024
+          limits = []
+          for name in ('/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'):
+              path = Path(name)
+              if path.exists():
+                  value = path.read_text().strip()
+                  if value != 'max':
+                      limits.append(int(value))
+          effective = min([physical] + limits)
+          print(json.dumps(dict(physical_bytes=physical, cgroup_limits=limits, effective_bytes=effective)))
+          if effective < 128 * 1024**3:
+              raise SystemExit('isolated CPU correctness runner requires at least 128 GiB RAM')
+          PY
       - name: Verify complete and disjoint shard selection
         run: python -m unittest tests.test_gpu_component_shards -v
       - name: Install CPU test environment and build pinned source oracle
@@ -75,6 +98,7 @@ jobs:
             --source-commit-label f76228a1354b5d0f307ca2d16101294ad3a2308b \
             --teams 1024 --seed-start 650200000 --out "$POKEZERO_GPU_TEAM_POOL"
       - name: Add swap headroom for complete CPU JIT compilation
+        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
           swapon --show --bytes
