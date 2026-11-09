@@ -12,9 +12,12 @@ class LineTests(unittest.TestCase):
     def test_comparable_drops_noise_and_shows_foul_plays_hp_as_our_seat_saw_it(self):
         env = ['|t:|179', '|', '|request|{}', '|switch|p2a: Lapras|Lapras, L78, M|300/300', '|-ability|p2a: Raikou|Pressure|[silent]',
                '|move|p1a: Wailord|Toxic|p2a: Lapras', '|-damage|p2a: Lapras|282/300 tox|[from] psn', '|-damage|p1a: Wailord|400/438',
-               '|inactive|Battle timer is ON', '|upkeep', '|turn|2']
+               '|inactive|Battle timer is ON', '|-hint|In Gen 3, Intimidate does not activate', '|-sidestart|p1: PokeZero p1|Spikes', '|upkeep', '|turn|2']
         self.assertEqual(jr.comparable(env, 'p2'), ['|switch|p2a: Lapras|Lapras, L78, M|100/100', '|move|p1a: Wailord|Toxic|p2a: Lapras',
-                                                     '|-damage|p2a: Lapras|94/100 tox|[from] psn', '|-damage|p1a: Wailord|400/438', '|upkeep', '|turn|2'])
+                                                     '|-damage|p2a: Lapras|94/100 tox|[from] psn', '|-damage|p1a: Wailord|400/438', '|-sidestart|p1|Spikes',
+                                                     '|upkeep', '|turn|2'])
+        self.assertEqual(jr.comparable(['|-sidestart|p1: PokeZeroBot|Spikes'], 'p2'), jr.comparable(['|-sidestart|p1: PokeZero p1|Spikes'], 'p2'))
+        self.assertEqual(jr.comparable(['|-activate|p1a: Lugia|move: Struggle', '|move|p1a: Lugia|Struggle|p2a: X'], 'p2'), ['|move|p1a: Lugia|Struggle|p2a: X'])
 
     def test_implied_choice(self):
         self.assertEqual(jr.implied_choice(['|switch|p1a: Wailord|Wailord|438/438', '|move|p2a: Lapras|Ice Beam|p1a: Wailord'], 'p2'), 'move icebeam')

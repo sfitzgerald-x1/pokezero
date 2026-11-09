@@ -42,7 +42,8 @@ from gpu_engine import fp_reply_data as data_mod
 SCHEMA = 'v2s-fp-journal-rebuild.v1'
 SKIP_KINDS = frozenset(('t:', 'request', 'player', 'j', 'J', 'l', 'L', 'n', 'c', 'chat', 'raw', 'html', 'uhtml', 'uhtmlchange',
                         'inactive', 'inactiveoff', 'gametype', 'gen', 'tier', 'rule', 'teamsize', 'title', 'timer', 'seed', 'debug',
-                        'win', 'tie', 'message', 'bigerror', 'error', 'badge', 'name', 'split'))
+                        'win', 'tie', 'message', 'bigerror', 'error', 'badge', 'name', 'split', '-hint'))
+SIDE = re.compile(r'^(p[1-4]): .*$')   # a side named by its player ('p1: PokeZeroBot' live, 'p1: PokeZero p1' in the env)
 HP_FIELD = {'switch': 4, 'drag': 4, 'replace': 4, '-damage': 3, '-heal': 3, '-sethp': 3}
 
 
@@ -66,16 +67,18 @@ def public_condition(text):
 
 
 def comparable(lines, fp):
-    """Battle lines as our seat saw them: SKIP_KINDS, [silent] and blank lines dropped, Foul Play's conditions at the public
-    percent."""
+    """Battle lines as our seat saw them: SKIP_KINDS (with -hint), [silent] and blank lines dropped, a side named by its player
+    ('p1: PokeZeroBot') as 'p1', Foul Play's conditions at the public percent."""
     out = []
     for line in lines:
         if not line.startswith('|') or line.strip() == '|':continue
         parts = line.split('|')
         if parts[1] in SKIP_KINDS or '[silent]' in parts[3:]:continue   # silent lines (Gen 3 Pressure) reach the omniscient stream only
+        if parts[1] == '-activate' and 'move: Struggle' in parts[3:]:continue   # 'has no moves left': sent to its own side only
+        parts = [SIDE.sub(r'\1', x) for x in parts]   # usernames differ between the live players and the env
         index = HP_FIELD.get(parts[1])
         if index is not None and len(parts) > index and parts[2].strip()[:2] == fp:
-            parts = list(parts);parts[index] = public_condition(parts[index])
+            parts[index] = public_condition(parts[index])
         out.append('|'.join(parts))
     return out
 
