@@ -121,6 +121,34 @@ def j_zero_err():
 MODULES = dict(identity=_identity, chance=_chance, negative_control=_negative_control, observe=_observe, step=_step)
 GENERATED = {'observe', 'step'}
 
+# Parametrized modules, 'prefix:argument' (e.g. 'phase:F', 'chain:gen-A-E+hand-FG', 'hook:observe@all').
+# Each provider lives in its own file and is imported lazily: 'module:function', where
+# function(argument, context) returns (jax_fn, cuda_fn) like a GENERATED module. A bare name in
+# PROVIDERS (no ':argument') is passed argument ''.
+PROVIDERS = {
+    'phase': 'gpu_engine.v2e_phases:diff_phase',
+    'chain': 'gpu_engine.v2e_phases:diff_chain',
+    'tap_identity': 'gpu_engine.v2e_phases:diff_tap_identity',
+    'hook': 'gpu_engine.v2e_hook_taps:diff_hook',
+}
+
+
+def resolve(name):
+    """(factory, takes_context) for a module name: a MODULES key or a PROVIDERS 'prefix[:argument]'."""
+    if name in MODULES:return MODULES[name], name in GENERATED
+    prefix, _, argument = name.partition(':')
+    if prefix not in PROVIDERS:raise KeyError(f'unknown module {name!r}: not in MODULES and no provider for {prefix!r}')
+    import importlib
+    module, _, function = PROVIDERS[prefix].partition(':')
+    provider = getattr(importlib.import_module(module), function)
+    return (lambda context: provider(argument, context)), True
+
+
+def module_name(name):
+    """argparse type: refuses names resolve() can't place, without importing a provider."""
+    if name in MODULES or name.partition(':')[0] in PROVIDERS:return name
+    raise argparse.ArgumentTypeError(f'unknown module {name!r} (MODULES: {sorted(MODULES)}; providers: {sorted(PROVIDERS)})')
+
 
 # ---------------------------------------------------------------------------
 
@@ -132,7 +160,8 @@ def load_shard(path):
 
 def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=16, lanes=0):
     import jax
-    jax_fn, cuda_fn = MODULES[module](dict(context, template=template)) if module in GENERATED else MODULES[module]()
+    factory, takes_context = resolve(module)
+    jax_fn, cuda_fn = factory(dict(context, template=template)) if takes_context else factory()
     treedef = jax.tree.structure(template)
     jitted = {}
     def call(fn_name, fn, *args):
@@ -162,7 +191,7 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
                 lane = int(np.flatnonzero(any_lane)[0]);leaf = next(n for n, d in diffs.items() if np.asarray(d).reshape(-1)[min(lane, np.asarray(d).size - 1)])
                 first = dict(shard=str(path), tick=tick, lane=lane, leaf=leaf)
                 rows = np.flatnonzero(any_lane)[:repro_lanes]
-                np.savez_compressed(Path(out) / f'repro-{module}.npz', lanes=rows, **{f'l{i:03d}': x[rows] for i, x in enumerate(leaves)})
+                np.savez_compressed(Path(out) / f"repro-{module.replace(':', '_').replace('@', '_').replace('+', '_')}.npz", lanes=rows, **{f'l{i:03d}': x[rows] for i, x in enumerate(leaves)})
                 log('FIRST_DIFFERENCE', module=module, **first)
     seconds = time.perf_counter() - begin
     return dict(module=module, shards=len(shard_paths), lane_steps=compared, lane_steps_differing=differing,
@@ -172,7 +201,7 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('modules', nargs='+', choices=tuple(MODULES))
+    parser.add_argument('modules', nargs='+', type=module_name, help='MODULES names, or provider forms such as phase:F, chain:<spec>, tap_identity, hook:<name>@<line|all>')
     parser.add_argument('--config', required=True)
     parser.add_argument('--reference-run', required=True)
     parser.add_argument('--shards', required=True, help='directory of capture shards')
