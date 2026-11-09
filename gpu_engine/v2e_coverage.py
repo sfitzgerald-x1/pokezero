@@ -24,6 +24,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import re
 import time
 
 import numpy as np
@@ -130,36 +131,46 @@ class Features:
         return stacked, mask, usable
 
 
+def path_of(name):
+    """The path a per-occurrence feature belongs to: the site without its `#<occurrence>` suffix (a hook site reached in
+    both action orders or in every residual event is one path)."""
+    return re.sub(r'#\d+$', '', name)
+
+
 def summarize(counts, lanes, union, rare):
-    """Per group: {feature: count, share}, the rare list and the union factors."""
+    """Per group: {feature: count, share} per tapped occurrence, the per-path aggregation over occurrences, the rare
+    paths (aggregated count under `rare`) and the union factors."""
     out = {}
     for g in cz.GROUPS:
         features = {name: dict(count=int(c), lane_share=int(c) / lanes if lanes else None) for name, c in sorted(counts[g].items(), key=lambda kv: (-kv[1], kv[0]))}
-        out[g] = dict(features=features, rare=[name for name, r in features.items() if r['count'] < rare], union=union.get(g))
+        paths = collections.Counter()
+        for name, c in counts[g].items():paths[path_of(name)] += int(c)
+        paths = {name: dict(count=c, lane_share=c / lanes if lanes else None) for name, c in sorted(paths.items(), key=lambda kv: (-kv[1], kv[0]))}
+        out[g] = dict(features=features, paths=paths, rare=[name for name, r in paths.items() if r['count'] < rare], union=union.get(g))
     return out
 
 
 def markdown(report):
     out = [f"# Coverage over {report['shards']} shards, {report['lane_steps']:,} lane-steps", '',
-        '| Group | Exact paths | Paths under {rare} | Union factor (exact masks) | Union factor (design cost model) | Distinct classes per warp (mean / p90) |'.format(rare=report['rare']),
-        '| --- | ---: | ---: | ---: | ---: | --- |']
+        '| Group | Tapped occurrences | Paths (occurrences merged) | Paths under {rare} | Union factor (exact masks) | Union factor (design cost model) | Distinct classes per warp (mean / p90) |'.format(rare=report['rare']),
+        '| --- | ---: | ---: | ---: | ---: | ---: | --- |']
     for g, row in report['groups'].items():
         u = row['union'] or {}
-        out.append(f"| {g} | {len(row['features'])} | {len(row['rare'])} | {u.get('raw_union_factor', float('nan')):.3f} | "
+        out.append(f"| {g} | {len(row['features'])} | {len(row['paths'])} | {len(row['rare'])} | {u.get('raw_union_factor', float('nan')):.3f} | "
             f"{(u.get('union_factor_design_uniform') or float('nan')):.3f} | {u.get('distinct_classes_per_warp', {}).get('mean', float('nan')):.1f} / {u.get('distinct_classes_per_warp', {}).get('p90', float('nan'))} |")
     out += ['', f"Weighted union factor (exact masks, census weights when given): {report.get('weighted_raw_union_factor')}", '',
         '## Paths with fewer than {rare} occurrences (synthetic-lane candidates)'.format(rare=report['rare']), '', '| Group | Path | Count |', '| --- | --- | ---: |']
     for g, row in report['groups'].items():
-        for name in row['rare']:out.append(f"| {g} | `{name}` | {row['features'][name]['count']} |")
+        for name in row['rare']:out.append(f"| {g} | `{name}` | {row['paths'][name]['count']} |")
     out += ['', '## Key paths', '', '| Group | Path | Count | Lane share |', '| --- | --- | ---: | ---: |']
     for g, row in report['groups'].items():
-        for name, r in row['features'].items():
+        for name, r in row['paths'].items():
             if name.startswith(('hook:switch_decision', 'hook:install', 'hook:baton_copy', 'hook:drag', 'hook:port_count', 'mech:pursuit', 'mech:phazing', 'mech:baton', 'step:')):
                 out.append(f"| {g} | `{name}` | {r['count']:,} | {100 * (r['lane_share'] or 0):.2f}% |")
-    out += ['', '## All paths', '']
+    out += ['', '## All paths (occurrences merged; per-occurrence counts in coverage.json `features`)', '']
     for g, row in report['groups'].items():
         out += [f'### {g}', '', '| Path | Count | Lane share |', '| --- | ---: | ---: |']
-        out += [f"| `{name}` | {r['count']:,} | {100 * (r['lane_share'] or 0):.2f}% |" for name, r in row['features'].items()]
+        out += [f"| `{name}` | {r['count']:,} | {100 * (r['lane_share'] or 0):.2f}% |" for name, r in row['paths'].items()]
         out.append('')
     return '\n'.join(out) + '\n'
 
