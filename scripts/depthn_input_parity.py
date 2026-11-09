@@ -15,7 +15,9 @@ Subcommands (`depthn_input_parity.py capture|torch|report ...`):
 capture (GPU pod: the exact server replay). Selection from the RR re-pricer rows (--rr-rows rows-*.jsonl): the disagree set is
 every row with replay COMPLETE whose argmax of root.root_logits over root.root_legal (lowest index on ties) differs from
 live.greedy_action_index; the control set an equal-size random.Random(--select-seed) sample of the agreeing rows (keys in
-(ordinal, decision_index) order). The battles holding selected decisions are sharded (--shard I --shards N over their ordinals,
+(ordinal, decision_index) order). Or --select-decisions FILE: exactly the listed (ordinal, decision_index) pairs (a JSON list of
+pairs or objects, or JSONL objects: re-pricer rows filtered by jq as they are), each labelled disagree or control by the same
+rule (every pair needs a COMPLETE row). The battles holding selected decisions are sharded (--shard I --shards N over their ordinals,
 then --battles / --limit-battles for smoke runs) and replayed whole, in decision order, by scripts/depthn_rr_reprice.main itself
 (its parser and server flags, tree guard, identity check, warmup and session replay; everything after the capture flags passes
 through to it, with --cells set to this shard's battles and --out to <out>/replay). Two module globals of the re-pricer are swapped
@@ -194,6 +196,41 @@ def select(rows, seed):
                 server_top=argmax_legal(r['root_logits'], r['root_legal']), battle_id=r['battle_id'])
     counts = dict(rows=len(rows), complete=sum(r['replay_status'] == 'COMPLETE' for r in rows), disagree=len(c['disagree']), agree=len(agree),
         control=len(control), unclassified=len(c['unclassified']), unclassified_reasons=dict(collections.Counter(x[1] for x in c['unclassified'])))
+    return selected, counts
+
+
+def read_decisions(path):
+    """The (ordinal, decision_index) pairs of a --select-decisions file: a JSON list of [ordinal, decision_index] pairs or of objects
+    with those keys, or JSONL, one such object per line (extra keys ignored: re-pricer rows filtered by jq work as they are), in
+    file order without repeats; ValueError on anything else."""
+    text = Path(path).read_text();stripped = text.strip()
+    try:items = json.loads(stripped) if stripped.startswith('[') else [json.loads(x) for x in text.splitlines() if x.strip()]
+    except json.JSONDecodeError as error:raise ValueError(f'{path}: neither a JSON list nor JSONL ({error})') from None
+    pairs = []
+    for item in items:
+        pair = (item.get('ordinal'), item.get('decision_index')) if isinstance(item, dict) else tuple(item) if isinstance(item, (list, tuple)) else None
+        if pair is None or len(pair) != 2 or any(type(x) is not int for x in pair):raise ValueError(f'{path}: (ordinal, decision_index) integers required, got {item!r}')
+        if pair not in pairs:pairs.append(pair)
+    if not pairs:raise ValueError(f'{path}: no decision')
+    return pairs
+
+
+def select_decisions(rows, pairs):
+    """select's output for exactly `pairs` ((ordinal, decision_index), from read_decisions): each its row's set by classify's rule
+    (disagree: the server prior's argmax over root_legal differs from the live greedy; control: it agrees), so the report reads
+    them as it reads a sampled selection; plus counts. ValueError when a pair has no row or no classifiable row (replay COMPLETE,
+    root prior and live greedy present)."""
+    by = {(r['ordinal'], r['decision_index']): r for r in rows}
+    missing = [p for p in pairs if p not in by]
+    if missing:raise ValueError(f'{len(missing)} selected decisions have no re-pricer row: {missing[:10]}')
+    c = classify([by[p] for p in pairs]);bad = c['unclassified']
+    if bad:raise ValueError(f'{len(bad)} selected decisions cannot be classified: {bad[:10]}')
+    sets = dict.fromkeys(c['disagree'], 'disagree');sets.update(dict.fromkeys(c['agree'], 'control'));selected = {}
+    for k in sorted(pairs):
+        r = by[k];selected[k] = dict(set=sets[k], live_greedy=r['live_greedy'], root_logits=r['root_logits'], root_legal=r['root_legal'],
+            server_top=argmax_legal(r['root_logits'], r['root_legal']), battle_id=r['battle_id'])
+    counts = dict(rows=len(rows), explicit=len(pairs), disagree=len(c['disagree']), control=len(c['agree']), agree=len(c['agree']), unclassified=0,
+        unclassified_reasons={}, complete=len(pairs))
     return selected, counts
 
 
@@ -489,7 +526,10 @@ def capture_parser():
         'selected decisions (module docstring). Every other argument goes to scripts/depthn_rr_reprice.py (its server flags, --run-directory, --arm, '
         '--warmup-requests, --compilation-cache, --tree-commit, --max-decisions).')
     p.add_argument('--rr-rows', nargs='+', required=True, help='the RR re-pricer rows (rows-*.jsonl of every shard)')
-    p.add_argument('--select-seed', type=int, required=True, help='the control sample\'s seed')
+    pick = p.add_mutually_exclusive_group(required=True)
+    pick.add_argument('--select-seed', type=int, help='the control sample\'s seed (every disagreeing decision and an equal control sample)')
+    pick.add_argument('--select-decisions', metavar='FILE', help='exactly these (ordinal, decision_index) pairs (read_decisions\' formats), each '
+        'labelled disagree or control by the same rule')
     p.add_argument('--out', required=True, help='a new directory')
     p.add_argument('--shard', type=int, default=0);p.add_argument('--shards', type=int, default=1)
     p.add_argument('--battles', type=int, nargs='+', metavar='ORD', help='only these battles (of this shard)')
@@ -505,12 +545,15 @@ def capture_main(argv):
     if args.limit_battles is not None and args.limit_battles < 1:p.error('--limit-battles must be >= 1')
     try:check_reprice_hooks();check_build_call_site()
     except RuntimeError as error:raise SystemExit(f'depthn_input_parity: {error}')
-    rows = rr_rows(args.rr_rows);selected, counts = select(rows, args.select_seed)
+    rows = rr_rows(args.rr_rows)
+    try:selected, counts = select(rows, args.select_seed) if args.select_decisions is None else select_decisions(rows, read_decisions(args.select_decisions))
+    except (ValueError, OSError) as error:raise SystemExit(f'depthn_input_parity: {error}')
     battles = shard_battles(selected, args.shard, args.shards, battles=args.battles, limit=args.limit_battles)
     if not battles:raise SystemExit('depthn_input_parity: no battle in this shard')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     listing = [dict(ordinal=k[0], decision_index=k[1], **v) for k, v in sorted(selected.items())]
     write_json(out / 'selection.json', dict(counts=counts, select_seed=args.select_seed, rr_rows={str(x): file_sha256(x) for x in sorted(args.rr_rows)},
+        select_decisions=None if args.select_decisions is None else dict(path=str(args.select_decisions), sha256=file_sha256(args.select_decisions)),
         selection_sha256=hashlib.sha256(encode(listing).encode()).hexdigest(), decisions=listing))
     mine = {k: v for k, v in selected.items() if k[0] in set(battles)}
     reprice = rest + ['--cells', *map(str, battles), '--shard', '0', '--shards', '1', '--out', str(out / 'replay')]

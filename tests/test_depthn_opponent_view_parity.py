@@ -540,16 +540,17 @@ class CaptureTests(unittest.TestCase):
     def test_every_world_kind_is_completed_with_its_decisions_lines_before_its_view(self):
         calls = []
 
-        def complete(state, public, owner, lines):   # marks the carry: the view's categorical [0, 0] reads the marker
-            calls.append((int(np.asarray(public['w'])), owner, lines))
+        def complete(state, public, owner, lines, root=None):   # marks the carry: the view's categorical [0, 0] reads the marker
+            calls.append((int(np.asarray(public['w'])), owner, lines, root))
             if int(np.asarray(public['w'])) == 1:raise ValueError('PEER_REQUEST_ORDER_UNAVAILABLE stand-in')
-            return dict(w=jnp.asarray(int(np.asarray(public['w'])) + 200))
+            return state, dict(w=jnp.asarray(int(np.asarray(public['w'])) + 200))
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             ctx, count, constructor, seen, out, stdout = self.run_cell(tmp, stack, complete=complete)
             rows = P.read_rows(out / 'positions-0.jsonl')
             with np.load(out / 'arrays-0-1001.npz') as data:arrays = {k: np.asarray(data[k]) for k in data.files}
         self.assertEqual(count, 3);self.assertEqual(len(calls), 3 * 4)   # true, true_private, sampled_0, sampled_1 per position
         self.assertEqual([c[0] for c in calls[:4]], [99, 99, 0, 1]);self.assertTrue(all(c[1] == 0 for c in calls))
+        self.assertTrue(all(c[3] is None for c in calls))   # the fake root carries no public carry: the Pressure count has no base
         first = rows[0];lines = calls[0][2]
         self.assertTrue(lines and lines[-1].startswith('|request|'))   # the decision's own prefix, its last line the own request
         self.assertEqual(arrays['view_categorical'][0, :3, 0, 0].tolist(), [299, 299, 200])   # completed carries; sampled_1's raised
@@ -711,13 +712,14 @@ class ReportMathTests(unittest.TestCase):
         self.assertEqual(P.redact(env, ())['numeric'].tolist(), env['numeric'].tolist())
         b2 = P.redact(env, ('self_hazard_credit',));self.assertEqual(float(b2['numeric'][0, 0, 115]), 0.)
 
-    def test_the_report_redacts_both_sides_with_the_four_documented_redactions_by_default(self):
-        self.assertEqual(set(P.DEFAULT_REDACTIONS), {'last_damage_taken', 'last_damage_dealt', 'hp_percent', 'self_hazard_credit'})
+    def test_the_report_redacts_both_sides_with_the_five_documented_redactions_by_default(self):
+        self.assertEqual(set(P.DEFAULT_REDACTIONS), {'last_damage_taken', 'last_damage_dealt', 'hp_percent', 'self_hazard_credit', 'opp_hazard_credit'})
         env, view = toy(4);env, view = env['numeric'], view['numeric']
         env[0, 1, 39] = .3   # the env's side of a redacted cell (the opponent's exact own loss)
         view[1, 9, 38] = .2   # the view's side of a redacted cell
         env[2, 0, 115] = .05   # the opponent's exact Spikes losses: the fourth redaction
         env[3, 8, 0] = 263 / 300;view[3, 8, 0] = .88   # an exact fraction against the public percent
+        env[3, 0, 116] = .02;view[3, 0, 116] = .0213   # the opponent's view of our Spikes losses: exact sum against per-hit percents
         with tempfile.TemporaryDirectory() as tmp:
             capture = Path(tmp) / 'capture';capture.mkdir();n = len(env);t = np.tile(TOKEN_TYPES, (n, 1)).astype(np.int16)
             np.savez(capture / 'arrays-0-1.npz', kinds=np.asarray(['true']), env_numeric=env, env_categorical=np.zeros((n, 23, 41), np.int32), env_token_type=t,
@@ -733,7 +735,7 @@ class ReportMathTests(unittest.TestCase):
         self.assertEqual(report['parity']['true']['exact']['numeric'], 0.)   # every position differs somewhere
         self.assertEqual(report['parity_redacted']['true']['exact']['observation_and_legal'], 1.)   # exact except the four, both sides redacted
         self.assertEqual(sorted(report['redactions']), sorted(P.DEFAULT_REDACTIONS))
-        self.assertEqual((sorted(one['redactions']), one['parity_redacted']['true']['exact']['numeric']), (['hp_percent'], .25))   # --redact selects
+        self.assertEqual((sorted(one['redactions']), one['parity_redacted']['true']['exact']['numeric']), (['hp_percent'], 0.))   # --redact selects
         self.assertIn('Exact match except the documented redactions', markdown)
 
     def test_empty_kind(self):

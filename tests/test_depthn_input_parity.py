@@ -129,6 +129,24 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual((counts['disagree'], counts['agree'], counts['control'], counts['unclassified']), (2, 3, 2, 2))
         self.assertEqual(chosen[1, 1]['server_top'], 1)
 
+    def test_explicit_decisions_are_read_selected_and_labelled_by_the_same_rule(self):
+        legal = [True, True, False, True] + [False] * 5;tie = [1., 2., 9., 2.] + [0.] * 5
+        rows = [dict(ordinal=1, decision_index=i, battle_id='b', replay_status='COMPLETE', root_logits=tie, root_legal=legal, live_greedy=g, live_source='search',
+            source='x') for i, g in enumerate([1, 3, 0, 1, 1])] + [dict(ordinal=1, decision_index=5, battle_id='b', replay_status='REFUSED', root_logits=tie,
+            root_legal=legal, live_greedy=1, live_source='search', source='x')]
+        with tempfile.TemporaryDirectory() as tmp:
+            listed = Path(tmp) / 'pairs.json';listed.write_text(json.dumps([[1, 2], [1, 0], [1, 2]]))
+            jsonl = Path(tmp) / 'rows.jsonl'   # re-pricer rows filtered by jq: extra keys ignored
+            jsonl.write_text(''.join(json.dumps(dict(ordinal=1, decision_index=i, replay=dict(status='COMPLETE'))) + '\n' for i in (3, 1)))
+            bad = Path(tmp) / 'bad.json';bad.write_text(json.dumps([[1, '2']]))
+            self.assertEqual(P.read_decisions(listed), [(1, 2), (1, 0)]);self.assertEqual(P.read_decisions(jsonl), [(1, 3), (1, 1)])
+            with self.assertRaisesRegex(ValueError, 'integers'):P.read_decisions(bad)
+        chosen, counts = P.select_decisions(rows, [(1, 2), (1, 0), (1, 1)])
+        self.assertEqual({k: v['set'] for k, v in chosen.items()}, {(1, 0): 'control', (1, 1): 'disagree', (1, 2): 'disagree'})
+        self.assertEqual((counts['explicit'], counts['disagree'], counts['control']), (3, 2, 1));self.assertEqual(chosen[1, 1]['server_top'], 1)
+        with self.assertRaisesRegex(ValueError, 'no re-pricer row'):P.select_decisions(rows, [(2, 0)])
+        with self.assertRaisesRegex(ValueError, 'cannot be classified'):P.select_decisions(rows, [(1, 5)])
+
     def test_seed_determinism_and_equal_size(self):
         legal = [True] * 9;logits = [float(a) for a in range(9)]   # server top 8
         rows = [dict(ordinal=o, decision_index=i, battle_id='b', replay_status='COMPLETE', root_logits=logits, root_legal=legal,
@@ -368,6 +386,21 @@ class MainTests(unittest.TestCase):
         self.assertTrue(P.bit_equal(loaded['root__logits'], np.asarray(priced_logits(), np.float32)))
         self.assertEqual((summary['selected_in_shard'], summary['recorded'], summary['captured'], summary['path2_exact']), (2, 2, 2, 2))
         self.assertEqual((summary['missing'], summary['errors'], summary['interrupted'], summary['reprice_exit']), ([], [], False, 0))
+
+    def test_capture_selects_explicit_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, rows = self.run_directory(tmp);out = Path(tmp) / 'cap';server = RT.BASE + RT.CHAMPION + ['--run-directory', str(root)]
+            pairs = Path(tmp) / 'pairs.jsonl';pairs.write_text(json.dumps(dict(ordinal=1001, decision_index=3)) + '\n')
+            with ExitStack() as stack:
+                self.patches(stack, RT.fake_search(B2Constructor(refuse={4})))
+                code = P.main(['capture', '--rr-rows', str(rows), '--select-decisions', str(pairs), '--out', str(out), *server])
+            selection = json.loads((out / 'selection.json').read_text())
+            index = [json.loads(x) for x in (out / 'index.jsonl').read_text().splitlines()]
+        self.assertEqual(code, 0);self.assertEqual([(d['decision_index'], d['set']) for d in selection['decisions']], [(3, 'control')])
+        self.assertEqual((selection['select_seed'], selection['select_decisions']['path']), (None, str(pairs)))
+        self.assertEqual([(e['decision_index'], e['captured']) for e in index], [(3, True)])
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):   # one selection only
+            P.main(['capture', '--rr-rows', 'x', '--select-seed', '1', '--select-decisions', str(pairs), '--out', 'o'])
 
     def test_capture_refuses_reprice_selection_flags(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

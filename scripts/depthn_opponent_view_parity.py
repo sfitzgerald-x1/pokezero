@@ -78,10 +78,11 @@ exact-match share per key (numeric, categorical, token types, attention, legal) 
 opponent (7-12) tokens match up to order; per token, per numeric column and per categorical column the share of positions
 that differ and the max |diff|; every differing (token, column) cell ranked (beyond --tolerance share, then exact share,
 then max |diff|) with examples from both sides; legal-lane disagreement both ways; the sampled worlds' views against the true
-world's. parity_redacted: the same comparison after the documented redactions (REDACTIONS, --redact; default all four:
+world's. parity_redacted: the same comparison after the documented redactions (REDACTIONS, --redact; default all five:
 LAST_DAMAGE_TAKEN on self0, LAST_DAMAGE_DEALT on opp0-5 and SELF_HAZARD_CREDIT on the field token zeroed, the opponent's exact
-own-HP history, redacted by design; HP_FRACTION on opp0-5 at Showdown's public percent) on both sides, so "exact except the four
-documented redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
+own-HP history, redacted by design; HP_FRACTION on opp0-5 at Showdown's public percent; OPP_HAZARD_CREDIT on the field token
+zeroed, the env's exact-HP sum against the view's per-hit public percents) on both sides, so "exact except the five documented
+redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
 numeric columns through showdown.V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX and the NUMERIC_* writer names (as
 engine_device_observation.column_manifest names them), categorical columns through the CATEGORY_* layout. Written as
 summary.json and summary.md in --out.
@@ -517,15 +518,17 @@ class OpponentView:
 
 
 class Completion:
-    """constructor_worlds' carry completion of one world, as prepare_roots applies it to the live worlds (the fills, the peer's
-    request order and the owner's shown Spikes credit from the decision's own lines), with the live constructor's tables:
-    (state, public, owner, lines) -> completed public. The sampler's WorldSet and the true world are built before it."""
+    """constructor_worlds' carry completion of one world, as prepare_roots applies it to the live worlds (complete_carry: the
+    fills, and from the decision's own lines the peer's request order, the owner's shown Spikes credit, Baton Pass arrivals,
+    the peer's count of the owner's PP against its own Pressure from the root's own carry, the peer tracer's base ability),
+    with the live constructor's tables: (state, public, owner, lines, root) -> (state, public). The sampler's WorldSet and the
+    true world are built before it."""
     def __init__(self, constructor):
         from gpu_engine import constructor_worlds as cw
         self.cw, self.tables = cw, cw.constructor_carry_tables(constructor)
 
-    def __call__(self, state, public, owner, lines):
-        return self.cw.complete_public(state, public, self.tables, owner, facts=self.cw.line_facts(lines, owner))
+    def __call__(self, state, public, owner, lines, root=None):
+        return self.cw.complete_carry(state, public, self.tables, owner, facts=self.cw.line_facts(lines, owner), root=root)
 
 
 def make_completion(search):
@@ -648,10 +651,11 @@ class Replay:
             try:self.env.close()
             finally:self.env = None
 
-    def view(self, state, public, owner, lines=None):
-        """The opponent view of one world, its carry completed first when the replay completes (lines: the decision's)."""
+    def view(self, state, public, owner, lines=None, root=None):
+        """The opponent view of one world, its carry completed first when the replay completes (lines: the decision's; root: its
+        root's own public carry)."""
         import jax
-        if self.complete is not None:public = self.complete(state, public, owner, lines)
+        if self.complete is not None:state, public = self.complete(state, public, owner, lines, root)
         state, public = jax.device_get((state, public))
         return self.views(state, public, owner)
 
@@ -665,6 +669,7 @@ def describe_position(ctx, cell, game, row, alignment, capture, response, table,
     elif call.error is not None:notes.append(f'sample raised: {call.error}'[:300])
     else:
         owner = int(call.named['detached'].address.owner);foe = 1 - owner;lines = tuple(call.named['lines'])
+        root = getattr(call.named['detached'], 'public', None)
         if f'p{foe + 1}' != game['fp']:notes.append(f'the constructor\'s opponent p{foe + 1} is not Foul Play {game["fp"]}')
         made = call.result
         try:
@@ -674,19 +679,19 @@ def describe_position(ctx, cell, game, row, alignment, capture, response, table,
             world, info = None, dict(reason=f'{type(error).__name__}: {error}'[:300])
         worlds['true'] = info
         if world is not None and world.state is not None:
-            try:views['true'] = ctx.view(world.state, world.public, owner, lines)
+            try:views['true'] = ctx.view(world.state, world.public, owner, lines, root)
             except Exception as error:notes.append(f'true view: {type(error).__name__}: {error}'[:300])
             try:
                 state, overlay_notes = overlay_private(world.state, foe, table[alignment['round']]['fp_request'], ctx.vocabulary)
                 worlds['true_private'] = dict(notes=overlay_notes)
-                views['true_private'] = ctx.view(state, world.public, owner, lines)
+                views['true_private'] = ctx.view(state, world.public, owner, lines, root)
             except Exception as error:notes.append(f'true_private: {type(error).__name__}: {error}'[:300])
         for i in range(ctx.sampled_worlds):
             w = made.worlds[i] if made is not None and i < len(made.worlds) else None
             worlds[f'sampled_{i}'] = None if w is None else dict(index=w.index, kernel_seed=w.kernel_seed, refusals=list(w.refusals),
                 constructed=w.state is not None)
             if w is not None and w.state is not None:
-                try:views[f'sampled_{i}'] = ctx.view(w.state, w.public, owner, lines)
+                try:views[f'sampled_{i}'] = ctx.view(w.state, w.public, owner, lines, root)
                 except Exception as error:notes.append(f'sampled_{i} view: {type(error).__name__}: {error}'[:300])
     arrays = position_arrays(fpr, views, kinds)
     record = dict(schema=POSITION_SCHEMA, shard=ctx.shard, ordinal=cell['ordinal'], seed=game['seed'], seat=cell.get('seat'), fp=game['fp'], ours=game['ours'],
@@ -960,10 +965,13 @@ REDACTIONS = {
     'hp_percent': ('tokens 7-12 numeric 0 HP_FRACTION at Showdown\'s public percent: ceil(100 x), capped at 99 below max, 0 if fainted', 0,
         tuple(OPPONENT_TOKENS)),
     'self_hazard_credit': ('field numeric 115 SELF_HAZARD_CREDIT -> 0: the opponent\'s exact Spikes losses, redacted by design', 115, (0,)),
+    'opp_hazard_credit': ('field numeric 116 OPP_HAZARD_CREDIT -> 0: the opponent\'s view of our Spikes losses, the env\'s exact-HP sum against '
+        'the view\'s per-hit public percents (at most 0.007 apart)', 116, (0,)),
 }
-# All four by default: the first, second and fourth are device_public_teacher.REPLY_HISTORY_APPROXIMATION's columns (the
-# opponent's exact own-HP history, never borrowed); the third is the opponent's public view of our HP.
-DEFAULT_REDACTIONS = ('last_damage_taken', 'last_damage_dealt', 'hp_percent', 'self_hazard_credit')
+# All five by default: the first, second and fourth are device_public_teacher.REPLY_HISTORY_APPROXIMATION's columns (the
+# opponent's exact own-HP history, never borrowed); the third is the opponent's public view of our HP; the fifth the precision
+# of its view of our Spikes losses (constructor_worlds.fill_owner_spikes sums the device's per-hit public percents).
+DEFAULT_REDACTIONS = ('last_damage_taken', 'last_damage_dealt', 'hp_percent', 'self_hazard_credit', 'opp_hazard_credit')
 
 
 def public_percent(x):
