@@ -1015,6 +1015,6741 @@ struct TrackerView {
   }
 };
 
+// ---- phase carries (v2e_phases_spec.json, oracle digest 26c75043921140365bd1145fe04845dfaf5e42f75036c7366dacf951faeaf5ea): C_<boundary>, members in carry order = FFI operand order.
+
+// ---- C_b0: carry at b0 (line None, occurrence 0): entry of step_with_chance
+struct C_b0 {
+  static constexpr uint64_t kDigest = 0x0e86f10613f771baull;
+  static constexpr const char* kDigestHex = "0e86f10613f771baa957e53042672a79d2ea8a3c1e8edbae4ef77d649ac6b5be";
+  static constexpr int kLeaves = 153;
+  Leaf<int32_t, 2, 6> state_species;   // arg 0: state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> state_level;   // arg 1: state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> state_hidden_power_type;   // arg 2: state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> state_hidden_power_power;   // arg 3: state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> state_happiness;   // arg 4: state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> state_gender;   // arg 5: state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> state_types;   // arg 6: state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> state_base_types;   // arg 7: state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> state_stats;   // arg 8: state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> state_hp;   // arg 9: state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> state_max_hp;   // arg 10: state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> state_status;   // arg 11: state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> state_status_counter;   // arg 12: state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> state_sleep_skipped;   // arg 13: state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> state_rest_origin;   // arg 14: state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> state_moves;   // arg 15: state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> state_pp;   // arg 16: state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> state_disabled;   // arg 17: state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> state_choice_move;   // arg 18: state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> state_last_move;   // arg 19: state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> state_last_action_kind;   // arg 20: state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> state_last_action_index;   // arg 21: state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> state_encore_move;   // arg 22: state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> state_encore_counter;   // arg 23: state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> state_charge_move;   // arg 24: state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> state_charge_counter;   // arg 25: state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> state_item;   // arg 26: state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> state_ability;   // arg 27: state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> state_base_ability;   // arg 28: state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> state_boosts;   // arg 29: state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> state_volatile;   // arg 30: state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> state_confusion_counter;   // arg 31: state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> state_protect_counter;   // arg 32: state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> state_substitute_hp;   // arg 33: state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> state_active;   // arg 34: state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> state_entry_pending;   // arg 35: state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> state_active_turns;   // arg 36: state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> state_trapped;   // arg 37: state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> state_trap_source;   // arg 38: state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> state_forced_switch;   // arg 39: state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> state_baton_pass;   // arg 40: state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> state_queued_actor;   // arg 41: state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> state_queued_actions;   // arg 42: state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> state_queued_stall;   // arg 43: state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> state_pending_residual;   // arg 44: state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> state_residual_draws;   // arg 45: state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> state_phazing_draws;   // arg 46: state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> state_secondary_draws;   // arg 47: state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> state_sleep_talk_draws;   // arg 48: state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> state_replacement_count;   // arg 49: state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> state_spikes;   // arg 50: state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> state_wish_counter;   // arg 51: state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> state_wish_amount;   // arg 52: state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> state_weather;   // arg 53: state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> state_weather_counter;   // arg 54: state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> state_turn;   // arg 55: state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> state_keys;   // arg 56: state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> state_done;   // arg 57: state.done bool[] (source state, '.done')
+  Leaf<int32_t> state_winner;   // arg 58: state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> state_truant_loaf;   // arg 59: state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<int32_t, 2> actions;   // arg 60: actions int32[2] (source actions, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 61: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 62: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 63: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 64: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 65: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 66: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 67: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 68: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 69: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 70: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 71: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 72: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 73: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 74: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 75: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 76: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 77: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 78: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 79: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 80: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 81: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 82: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 83: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 84: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 85: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 86: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 87: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 88: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 89: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 90: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 91: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 92: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 93: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 94: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 95: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 96: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 97: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 98: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 99: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 100: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 101: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 102: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 103: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 104: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 105: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 106: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 107: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 108: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 109: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 110: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 111: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 112: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 113: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 114: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 115: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 116: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 117: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 118: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 119: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 120: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 121: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 122: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 123: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 124: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 125: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 126: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 127: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 128: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 129: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 130: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 131: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 132: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 133: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 134: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 135: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 136: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 137: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 138: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 139: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 140: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 141: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 142: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 143: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 144: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 145: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 146: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  Leaf<int32_t, 2, 12> chance_inputs_draws;   // arg 147: chance_inputs.draws int32[2, 12] (source chance, '.draws')
+  Leaf<int32_t, 2> chance_inputs_phazing;   // arg 148: chance_inputs.phazing int32[2] (source chance, '.phazing')
+  Leaf<int32_t, 2> chance_inputs_secondary;   // arg 149: chance_inputs.secondary int32[2] (source chance, '.secondary')
+  Leaf<int32_t, 2> chance_inputs_sleep_talk;   // arg 150: chance_inputs.sleep_talk int32[2] (source chance, '.sleep_talk')
+  Leaf<int32_t, 2> chance_inputs_entry_ties;   // arg 151: chance_inputs.entry_ties int32[2] (source chance, '.entry_ties')
+  Leaf<int32_t> chance_inputs_initial_tie;   // arg 152: chance_inputs.initial_tie int32[] (source chance, '.initial_tie')
+  static constexpr int arg_state_species = 0;
+  static constexpr int arg_state_level = 1;
+  static constexpr int arg_state_hidden_power_type = 2;
+  static constexpr int arg_state_hidden_power_power = 3;
+  static constexpr int arg_state_happiness = 4;
+  static constexpr int arg_state_gender = 5;
+  static constexpr int arg_state_types = 6;
+  static constexpr int arg_state_base_types = 7;
+  static constexpr int arg_state_stats = 8;
+  static constexpr int arg_state_hp = 9;
+  static constexpr int arg_state_max_hp = 10;
+  static constexpr int arg_state_status = 11;
+  static constexpr int arg_state_status_counter = 12;
+  static constexpr int arg_state_sleep_skipped = 13;
+  static constexpr int arg_state_rest_origin = 14;
+  static constexpr int arg_state_moves = 15;
+  static constexpr int arg_state_pp = 16;
+  static constexpr int arg_state_disabled = 17;
+  static constexpr int arg_state_choice_move = 18;
+  static constexpr int arg_state_last_move = 19;
+  static constexpr int arg_state_last_action_kind = 20;
+  static constexpr int arg_state_last_action_index = 21;
+  static constexpr int arg_state_encore_move = 22;
+  static constexpr int arg_state_encore_counter = 23;
+  static constexpr int arg_state_charge_move = 24;
+  static constexpr int arg_state_charge_counter = 25;
+  static constexpr int arg_state_item = 26;
+  static constexpr int arg_state_ability = 27;
+  static constexpr int arg_state_base_ability = 28;
+  static constexpr int arg_state_boosts = 29;
+  static constexpr int arg_state_volatile = 30;
+  static constexpr int arg_state_confusion_counter = 31;
+  static constexpr int arg_state_protect_counter = 32;
+  static constexpr int arg_state_substitute_hp = 33;
+  static constexpr int arg_state_active = 34;
+  static constexpr int arg_state_entry_pending = 35;
+  static constexpr int arg_state_active_turns = 36;
+  static constexpr int arg_state_trapped = 37;
+  static constexpr int arg_state_trap_source = 38;
+  static constexpr int arg_state_forced_switch = 39;
+  static constexpr int arg_state_baton_pass = 40;
+  static constexpr int arg_state_queued_actor = 41;
+  static constexpr int arg_state_queued_actions = 42;
+  static constexpr int arg_state_queued_stall = 43;
+  static constexpr int arg_state_pending_residual = 44;
+  static constexpr int arg_state_residual_draws = 45;
+  static constexpr int arg_state_phazing_draws = 46;
+  static constexpr int arg_state_secondary_draws = 47;
+  static constexpr int arg_state_sleep_talk_draws = 48;
+  static constexpr int arg_state_replacement_count = 49;
+  static constexpr int arg_state_spikes = 50;
+  static constexpr int arg_state_wish_counter = 51;
+  static constexpr int arg_state_wish_amount = 52;
+  static constexpr int arg_state_weather = 53;
+  static constexpr int arg_state_weather_counter = 54;
+  static constexpr int arg_state_turn = 55;
+  static constexpr int arg_state_keys = 56;
+  static constexpr int arg_state_done = 57;
+  static constexpr int arg_state_winner = 58;
+  static constexpr int arg_state_truant_loaf = 59;
+  static constexpr int arg_actions = 60;
+  static constexpr int arg_trackers_physical_to_public = 61;
+  static constexpr int arg_trackers_active_physical = 62;
+  static constexpr int arg_trackers_active_slot = 63;
+  static constexpr int arg_trackers_next_slot = 64;
+  static constexpr int arg_trackers_own_order = 65;
+  static constexpr int arg_trackers_species = 66;
+  static constexpr int arg_trackers_level = 67;
+  static constexpr int arg_trackers_gender = 68;
+  static constexpr int arg_trackers_hp_percent = 69;
+  static constexpr int arg_trackers_status = 70;
+  static constexpr int arg_trackers_boosts = 71;
+  static constexpr int arg_trackers_present = 72;
+  static constexpr int arg_trackers_fainted = 73;
+  static constexpr int arg_trackers_turn = 74;
+  static constexpr int arg_trackers_weather = 75;
+  static constexpr int arg_trackers_spikes = 76;
+  static constexpr int arg_trackers_error = 77;
+  static constexpr int arg_trackers_observed_moves = 78;
+  static constexpr int arg_trackers_pp_used = 79;
+  static constexpr int arg_trackers_last_moves = 80;
+  static constexpr int arg_trackers_tendencies = 81;
+  static constexpr int arg_trackers_belief_mask = 82;
+  static constexpr int arg_trackers_shown_ability = 83;
+  static constexpr int arg_trackers_shown_item = 84;
+  static constexpr int arg_trackers_shown_types = 85;
+  static constexpr int arg_trackers_borrowed_ability = 86;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 87;
+  static constexpr int arg_trackers_mon_features_encore_turns = 88;
+  static constexpr int arg_trackers_mon_features_item_swapped = 89;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 91;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 92;
+  static constexpr int arg_trackers_mon_features_moves_shown = 93;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 94;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 95;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 96;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 98;
+  static constexpr int arg_trackers_mon_features_stall_counter = 99;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 100;
+  static constexpr int arg_trackers_mon_features_sub_present = 101;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 102;
+  static constexpr int arg_trackers_mon_features_switches = 103;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 104;
+  static constexpr int arg_trackers_mon_features_turns_active = 105;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 106;
+  static constexpr int arg_trackers_field_features_weather_permanent = 107;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 108;
+  static constexpr int arg_trackers_field_features_wish_pending = 109;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 110;
+  static constexpr int arg_trackers_field_features_wish_turns = 111;
+  static constexpr int arg_trackers_original_ability = 112;
+  static constexpr int arg_trackers_damage_exact_dealt = 113;
+  static constexpr int arg_trackers_damage_exact_taken = 114;
+  static constexpr int arg_trackers_public_volatiles = 115;
+  static constexpr int arg_trackers_item_removed = 116;
+  static constexpr int arg_trackers_tendency_moved = 117;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 118;
+  static constexpr int arg_trackers_tendency_switches = 119;
+  static constexpr int arg_trackers_tendency_opportunities = 120;
+  static constexpr int arg_trackers_tendency_matchup = 121;
+  static constexpr int arg_trackers_damage_history_hp = 122;
+  static constexpr int arg_trackers_damage_history_maximum = 123;
+  static constexpr int arg_trackers_damage_history_taken = 124;
+  static constexpr int arg_trackers_damage_history_dealt = 125;
+  static constexpr int arg_trackers_negative_items_percent = 126;
+  static constexpr int arg_trackers_negative_items_known = 127;
+  static constexpr int arg_trackers_visible_belief_pin = 128;
+  static constexpr int arg_trackers_visible_belief_pin_active = 129;
+  static constexpr int arg_trackers_visible_belief_conflicts = 130;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 131;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 133;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 135;
+  static constexpr int arg_trackers_public_port_holder = 136;
+  static constexpr int arg_trackers_public_port_victims = 137;
+  static constexpr int arg_trackers_public_port_known = 138;
+  static constexpr int arg_trackers_public_port_loaf = 139;
+  static constexpr int arg_trackers_public_port_traced = 140;
+  static constexpr int arg_trackers_public_port_skip_flip = 141;
+  static constexpr int arg_trackers_public_port_post_upkeep = 142;
+  static constexpr int arg_trackers_public_port_hazards = 143;
+  static constexpr int arg_trackers_public_port_blocked = 144;
+  static constexpr int arg_trackers_public_port_pursuit = 145;
+  static constexpr int arg_trackers_public_port_weather = 146;
+  static constexpr int arg_chance_inputs_draws = 147;
+  static constexpr int arg_chance_inputs_phazing = 148;
+  static constexpr int arg_chance_inputs_secondary = 149;
+  static constexpr int arg_chance_inputs_sleep_talk = 150;
+  static constexpr int arg_chance_inputs_entry_ties = 151;
+  static constexpr int arg_chance_inputs_initial_tie = 152;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b0 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b0 v;
+    v.state_species.p = static_cast<int32_t*>(bufs[0]); v.state_species.lanes = lanes;
+    v.state_level.p = static_cast<int32_t*>(bufs[1]); v.state_level.lanes = lanes;
+    v.state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.state_hidden_power_type.lanes = lanes;
+    v.state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.state_hidden_power_power.lanes = lanes;
+    v.state_happiness.p = static_cast<int32_t*>(bufs[4]); v.state_happiness.lanes = lanes;
+    v.state_gender.p = static_cast<int32_t*>(bufs[5]); v.state_gender.lanes = lanes;
+    v.state_types.p = static_cast<int32_t*>(bufs[6]); v.state_types.lanes = lanes;
+    v.state_base_types.p = static_cast<int32_t*>(bufs[7]); v.state_base_types.lanes = lanes;
+    v.state_stats.p = static_cast<int32_t*>(bufs[8]); v.state_stats.lanes = lanes;
+    v.state_hp.p = static_cast<int32_t*>(bufs[9]); v.state_hp.lanes = lanes;
+    v.state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.state_max_hp.lanes = lanes;
+    v.state_status.p = static_cast<int32_t*>(bufs[11]); v.state_status.lanes = lanes;
+    v.state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.state_status_counter.lanes = lanes;
+    v.state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.state_sleep_skipped.lanes = lanes;
+    v.state_rest_origin.p = static_cast<bool*>(bufs[14]); v.state_rest_origin.lanes = lanes;
+    v.state_moves.p = static_cast<int32_t*>(bufs[15]); v.state_moves.lanes = lanes;
+    v.state_pp.p = static_cast<int32_t*>(bufs[16]); v.state_pp.lanes = lanes;
+    v.state_disabled.p = static_cast<bool*>(bufs[17]); v.state_disabled.lanes = lanes;
+    v.state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.state_choice_move.lanes = lanes;
+    v.state_last_move.p = static_cast<int32_t*>(bufs[19]); v.state_last_move.lanes = lanes;
+    v.state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.state_last_action_kind.lanes = lanes;
+    v.state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.state_last_action_index.lanes = lanes;
+    v.state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.state_encore_move.lanes = lanes;
+    v.state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.state_encore_counter.lanes = lanes;
+    v.state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.state_charge_move.lanes = lanes;
+    v.state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.state_charge_counter.lanes = lanes;
+    v.state_item.p = static_cast<int32_t*>(bufs[26]); v.state_item.lanes = lanes;
+    v.state_ability.p = static_cast<int32_t*>(bufs[27]); v.state_ability.lanes = lanes;
+    v.state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.state_base_ability.lanes = lanes;
+    v.state_boosts.p = static_cast<int32_t*>(bufs[29]); v.state_boosts.lanes = lanes;
+    v.state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.state_volatile.lanes = lanes;
+    v.state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.state_confusion_counter.lanes = lanes;
+    v.state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.state_protect_counter.lanes = lanes;
+    v.state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.state_substitute_hp.lanes = lanes;
+    v.state_active.p = static_cast<int32_t*>(bufs[34]); v.state_active.lanes = lanes;
+    v.state_entry_pending.p = static_cast<bool*>(bufs[35]); v.state_entry_pending.lanes = lanes;
+    v.state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.state_active_turns.lanes = lanes;
+    v.state_trapped.p = static_cast<bool*>(bufs[37]); v.state_trapped.lanes = lanes;
+    v.state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.state_trap_source.lanes = lanes;
+    v.state_forced_switch.p = static_cast<bool*>(bufs[39]); v.state_forced_switch.lanes = lanes;
+    v.state_baton_pass.p = static_cast<bool*>(bufs[40]); v.state_baton_pass.lanes = lanes;
+    v.state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.state_queued_actor.lanes = lanes;
+    v.state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.state_queued_actions.lanes = lanes;
+    v.state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.state_queued_stall.lanes = lanes;
+    v.state_pending_residual.p = static_cast<bool*>(bufs[44]); v.state_pending_residual.lanes = lanes;
+    v.state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.state_residual_draws.lanes = lanes;
+    v.state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.state_phazing_draws.lanes = lanes;
+    v.state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.state_secondary_draws.lanes = lanes;
+    v.state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.state_sleep_talk_draws.lanes = lanes;
+    v.state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.state_replacement_count.lanes = lanes;
+    v.state_spikes.p = static_cast<int32_t*>(bufs[50]); v.state_spikes.lanes = lanes;
+    v.state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.state_wish_counter.lanes = lanes;
+    v.state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.state_wish_amount.lanes = lanes;
+    v.state_weather.p = static_cast<int32_t*>(bufs[53]); v.state_weather.lanes = lanes;
+    v.state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.state_weather_counter.lanes = lanes;
+    v.state_turn.p = static_cast<int32_t*>(bufs[55]); v.state_turn.lanes = lanes;
+    v.state_keys.p = static_cast<uint32_t*>(bufs[56]); v.state_keys.lanes = lanes;
+    v.state_done.p = static_cast<bool*>(bufs[57]); v.state_done.lanes = lanes;
+    v.state_winner.p = static_cast<int32_t*>(bufs[58]); v.state_winner.lanes = lanes;
+    v.state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.state_truant_loaf.lanes = lanes;
+    v.actions.p = static_cast<int32_t*>(bufs[60]); v.actions.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[61]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[62]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[65]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[66]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[67]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[68]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[69]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[70]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[71]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[72]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[73]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[74]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[75]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[76]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[77]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[78]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[79]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[80]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[81]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[82]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[83]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[86]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[87]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[90]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[92]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[107]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[108]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[109]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[110]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[112]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[113]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[115]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[116]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[117]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[118]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[122]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[124]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[126]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[127]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[128]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[129]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[130]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[131]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[133]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[134]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[136]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[137]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[143]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[144]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[146]); v.trackers_public_port_weather.lanes = lanes;
+    v.chance_inputs_draws.p = static_cast<int32_t*>(bufs[147]); v.chance_inputs_draws.lanes = lanes;
+    v.chance_inputs_phazing.p = static_cast<int32_t*>(bufs[148]); v.chance_inputs_phazing.lanes = lanes;
+    v.chance_inputs_secondary.p = static_cast<int32_t*>(bufs[149]); v.chance_inputs_secondary.lanes = lanes;
+    v.chance_inputs_sleep_talk.p = static_cast<int32_t*>(bufs[150]); v.chance_inputs_sleep_talk.lanes = lanes;
+    v.chance_inputs_entry_ties.p = static_cast<int32_t*>(bufs[151]); v.chance_inputs_entry_ties.lanes = lanes;
+    v.chance_inputs_initial_tie.p = static_cast<int32_t*>(bufs[152]); v.chance_inputs_initial_tie.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.state_species.dbg = dbg;
+    v.state_level.dbg = dbg;
+    v.state_hidden_power_type.dbg = dbg;
+    v.state_hidden_power_power.dbg = dbg;
+    v.state_happiness.dbg = dbg;
+    v.state_gender.dbg = dbg;
+    v.state_types.dbg = dbg;
+    v.state_base_types.dbg = dbg;
+    v.state_stats.dbg = dbg;
+    v.state_hp.dbg = dbg;
+    v.state_max_hp.dbg = dbg;
+    v.state_status.dbg = dbg;
+    v.state_status_counter.dbg = dbg;
+    v.state_sleep_skipped.dbg = dbg;
+    v.state_rest_origin.dbg = dbg;
+    v.state_moves.dbg = dbg;
+    v.state_pp.dbg = dbg;
+    v.state_disabled.dbg = dbg;
+    v.state_choice_move.dbg = dbg;
+    v.state_last_move.dbg = dbg;
+    v.state_last_action_kind.dbg = dbg;
+    v.state_last_action_index.dbg = dbg;
+    v.state_encore_move.dbg = dbg;
+    v.state_encore_counter.dbg = dbg;
+    v.state_charge_move.dbg = dbg;
+    v.state_charge_counter.dbg = dbg;
+    v.state_item.dbg = dbg;
+    v.state_ability.dbg = dbg;
+    v.state_base_ability.dbg = dbg;
+    v.state_boosts.dbg = dbg;
+    v.state_volatile.dbg = dbg;
+    v.state_confusion_counter.dbg = dbg;
+    v.state_protect_counter.dbg = dbg;
+    v.state_substitute_hp.dbg = dbg;
+    v.state_active.dbg = dbg;
+    v.state_entry_pending.dbg = dbg;
+    v.state_active_turns.dbg = dbg;
+    v.state_trapped.dbg = dbg;
+    v.state_trap_source.dbg = dbg;
+    v.state_forced_switch.dbg = dbg;
+    v.state_baton_pass.dbg = dbg;
+    v.state_queued_actor.dbg = dbg;
+    v.state_queued_actions.dbg = dbg;
+    v.state_queued_stall.dbg = dbg;
+    v.state_pending_residual.dbg = dbg;
+    v.state_residual_draws.dbg = dbg;
+    v.state_phazing_draws.dbg = dbg;
+    v.state_secondary_draws.dbg = dbg;
+    v.state_sleep_talk_draws.dbg = dbg;
+    v.state_replacement_count.dbg = dbg;
+    v.state_spikes.dbg = dbg;
+    v.state_wish_counter.dbg = dbg;
+    v.state_wish_amount.dbg = dbg;
+    v.state_weather.dbg = dbg;
+    v.state_weather_counter.dbg = dbg;
+    v.state_turn.dbg = dbg;
+    v.state_keys.dbg = dbg;
+    v.state_done.dbg = dbg;
+    v.state_winner.dbg = dbg;
+    v.state_truant_loaf.dbg = dbg;
+    v.actions.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+    v.chance_inputs_draws.dbg = dbg;
+    v.chance_inputs_phazing.dbg = dbg;
+    v.chance_inputs_secondary.dbg = dbg;
+    v.chance_inputs_sleep_talk.dbg = dbg;
+    v.chance_inputs_entry_ties.dbg = dbg;
+    v.chance_inputs_initial_tie.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+
+// ---- C_b1: carry at b1 (line 511, occurrence 0): speed = _speeds(work,table)
+struct C_b1 {
+  static constexpr uint64_t kDigest = 0x4dac10d51ee758ebull;
+  static constexpr const char* kDigestHex = "4dac10d51ee758ebdc55a3de2a591604b66641b47a485fe069c1689e1a03be41";
+  static constexpr int kLeaves = 172;
+  Leaf<int32_t, 2, 6> state_species;   // arg 0: state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> state_level;   // arg 1: state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> state_hidden_power_type;   // arg 2: state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> state_hidden_power_power;   // arg 3: state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> state_happiness;   // arg 4: state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> state_gender;   // arg 5: state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> state_types;   // arg 6: state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> state_base_types;   // arg 7: state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> state_stats;   // arg 8: state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> state_hp;   // arg 9: state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> state_max_hp;   // arg 10: state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> state_status;   // arg 11: state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> state_status_counter;   // arg 12: state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> state_sleep_skipped;   // arg 13: state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> state_rest_origin;   // arg 14: state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> state_moves;   // arg 15: state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> state_pp;   // arg 16: state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> state_disabled;   // arg 17: state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> state_choice_move;   // arg 18: state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> state_last_move;   // arg 19: state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> state_last_action_kind;   // arg 20: state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> state_last_action_index;   // arg 21: state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> state_encore_move;   // arg 22: state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> state_encore_counter;   // arg 23: state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> state_charge_move;   // arg 24: state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> state_charge_counter;   // arg 25: state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> state_item;   // arg 26: state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> state_ability;   // arg 27: state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> state_base_ability;   // arg 28: state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> state_boosts;   // arg 29: state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> state_volatile;   // arg 30: state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> state_confusion_counter;   // arg 31: state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> state_protect_counter;   // arg 32: state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> state_substitute_hp;   // arg 33: state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> state_active;   // arg 34: state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> state_entry_pending;   // arg 35: state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> state_active_turns;   // arg 36: state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> state_trapped;   // arg 37: state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> state_trap_source;   // arg 38: state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> state_forced_switch;   // arg 39: state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> state_baton_pass;   // arg 40: state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> state_queued_actor;   // arg 41: state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> state_queued_actions;   // arg 42: state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> state_queued_stall;   // arg 43: state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> state_pending_residual;   // arg 44: state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> state_residual_draws;   // arg 45: state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> state_phazing_draws;   // arg 46: state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> state_secondary_draws;   // arg 47: state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> state_sleep_talk_draws;   // arg 48: state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> state_replacement_count;   // arg 49: state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> state_spikes;   // arg 50: state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> state_wish_counter;   // arg 51: state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> state_wish_amount;   // arg 52: state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> state_weather;   // arg 53: state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> state_weather_counter;   // arg 54: state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> state_turn;   // arg 55: state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> state_keys;   // arg 56: state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> state_done;   // arg 57: state.done bool[] (source state, '.done')
+  Leaf<int32_t> state_winner;   // arg 58: state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> state_truant_loaf;   // arg 59: state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<int32_t, 2> actions;   // arg 60: actions int32[2] (source actions, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 61: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 62: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 63: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 64: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 65: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 66: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 67: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 68: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 69: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 70: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 71: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 72: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 73: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 74: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 75: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 76: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 77: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 78: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 79: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 80: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 81: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 82: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 83: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 84: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 85: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 86: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 87: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 88: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 89: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 90: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 91: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 92: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 93: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 94: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 95: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 96: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 97: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 98: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 99: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 100: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 101: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 102: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 103: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 104: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 105: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 106: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 107: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 108: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 109: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 110: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 111: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 112: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 113: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 114: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 115: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 116: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 117: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 118: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 119: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 120: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 121: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 122: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 123: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 124: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 125: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 126: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 127: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 128: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 129: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 130: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 131: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 132: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 133: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 134: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 135: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 136: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 137: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 138: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 139: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 140: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 141: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 142: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 143: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 144: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 145: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 146: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  Leaf<int32_t, 2> chance_inputs_entry_ties;   // arg 147: chance_inputs.entry_ties int32[2] (source chance, '.entry_ties')
+  Leaf<bool> replacement;   // arg 148: replacement bool[] (source local, '')
+  Leaf<bool, 2> requested;   // arg 149: requested bool[2] (source local, '')
+  Leaf<bool> invalid;   // arg 150: invalid bool[] (source local, '')
+  Leaf<bool> resuming;   // arg 151: resuming bool[] (source local, '')
+  Leaf<int32_t, 2, 12> draws;   // arg 152: draws int32[2, 12] (source local, '')
+  Leaf<int32_t, 2> phazing_draws;   // arg 153: phazing_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> secondary_draws;   // arg 154: secondary_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> sleep_talk_draws;   // arg 155: sleep_talk_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> age;   // arg 156: age int32[2] (source local, '')
+  Leaf<int32_t, 2, 6> work_hp;   // arg 157: work.hp int32[2, 6] (source local, '.hp')
+  Leaf<int32_t, 2, 6> work_status;   // arg 158: work.status int32[2, 6] (source local, '.status')
+  Leaf<int32_t, 2, 6> work_status_counter;   // arg 159: work.status_counter int32[2, 6] (source local, '.status_counter')
+  Leaf<int32_t, 2, 6> work_sleep_skipped;   // arg 160: work.sleep_skipped int32[2, 6] (source local, '.sleep_skipped')
+  Leaf<bool, 2, 6> work_rest_origin;   // arg 161: work.rest_origin bool[2, 6] (source local, '.rest_origin')
+  Leaf<int32_t, 2, 6> work_item;   // arg 162: work.item int32[2, 6] (source local, '.item')
+  Leaf<int32_t, 2, 6> work_ability;   // arg 163: work.ability int32[2, 6] (source local, '.ability')
+  Leaf<int32_t, 2, 6, 7> work_boosts;   // arg 164: work.boosts int32[2, 6, 7] (source local, '.boosts')
+  Leaf<int32_t, 2, 6> work_confusion_counter;   // arg 165: work.confusion_counter int32[2, 6] (source local, '.confusion_counter')
+  Leaf<bool, 2> work_entry_pending;   // arg 166: work.entry_pending bool[2] (source local, '.entry_pending')
+  Leaf<int32_t> work_weather;   // arg 167: work.weather int32[] (source local, '.weather')
+  Leaf<int32_t> work_weather_counter;   // arg 168: work.weather_counter int32[] (source local, '.weather_counter')
+  Leaf<uint32_t, 2> work_keys;   // arg 169: work.keys uint32[2] (source local, '.keys')
+  Leaf<bool, 2, 6> work_truant_loaf;   // arg 170: work.truant_loaf bool[2, 6] (source local, '.truant_loaf')
+  Leaf<bool> live;   // arg 171: live bool[] (source local, '')
+  static constexpr int arg_state_species = 0;
+  static constexpr int arg_state_level = 1;
+  static constexpr int arg_state_hidden_power_type = 2;
+  static constexpr int arg_state_hidden_power_power = 3;
+  static constexpr int arg_state_happiness = 4;
+  static constexpr int arg_state_gender = 5;
+  static constexpr int arg_state_types = 6;
+  static constexpr int arg_state_base_types = 7;
+  static constexpr int arg_state_stats = 8;
+  static constexpr int arg_state_hp = 9;
+  static constexpr int arg_state_max_hp = 10;
+  static constexpr int arg_state_status = 11;
+  static constexpr int arg_state_status_counter = 12;
+  static constexpr int arg_state_sleep_skipped = 13;
+  static constexpr int arg_state_rest_origin = 14;
+  static constexpr int arg_state_moves = 15;
+  static constexpr int arg_state_pp = 16;
+  static constexpr int arg_state_disabled = 17;
+  static constexpr int arg_state_choice_move = 18;
+  static constexpr int arg_state_last_move = 19;
+  static constexpr int arg_state_last_action_kind = 20;
+  static constexpr int arg_state_last_action_index = 21;
+  static constexpr int arg_state_encore_move = 22;
+  static constexpr int arg_state_encore_counter = 23;
+  static constexpr int arg_state_charge_move = 24;
+  static constexpr int arg_state_charge_counter = 25;
+  static constexpr int arg_state_item = 26;
+  static constexpr int arg_state_ability = 27;
+  static constexpr int arg_state_base_ability = 28;
+  static constexpr int arg_state_boosts = 29;
+  static constexpr int arg_state_volatile = 30;
+  static constexpr int arg_state_confusion_counter = 31;
+  static constexpr int arg_state_protect_counter = 32;
+  static constexpr int arg_state_substitute_hp = 33;
+  static constexpr int arg_state_active = 34;
+  static constexpr int arg_state_entry_pending = 35;
+  static constexpr int arg_state_active_turns = 36;
+  static constexpr int arg_state_trapped = 37;
+  static constexpr int arg_state_trap_source = 38;
+  static constexpr int arg_state_forced_switch = 39;
+  static constexpr int arg_state_baton_pass = 40;
+  static constexpr int arg_state_queued_actor = 41;
+  static constexpr int arg_state_queued_actions = 42;
+  static constexpr int arg_state_queued_stall = 43;
+  static constexpr int arg_state_pending_residual = 44;
+  static constexpr int arg_state_residual_draws = 45;
+  static constexpr int arg_state_phazing_draws = 46;
+  static constexpr int arg_state_secondary_draws = 47;
+  static constexpr int arg_state_sleep_talk_draws = 48;
+  static constexpr int arg_state_replacement_count = 49;
+  static constexpr int arg_state_spikes = 50;
+  static constexpr int arg_state_wish_counter = 51;
+  static constexpr int arg_state_wish_amount = 52;
+  static constexpr int arg_state_weather = 53;
+  static constexpr int arg_state_weather_counter = 54;
+  static constexpr int arg_state_turn = 55;
+  static constexpr int arg_state_keys = 56;
+  static constexpr int arg_state_done = 57;
+  static constexpr int arg_state_winner = 58;
+  static constexpr int arg_state_truant_loaf = 59;
+  static constexpr int arg_actions = 60;
+  static constexpr int arg_trackers_physical_to_public = 61;
+  static constexpr int arg_trackers_active_physical = 62;
+  static constexpr int arg_trackers_active_slot = 63;
+  static constexpr int arg_trackers_next_slot = 64;
+  static constexpr int arg_trackers_own_order = 65;
+  static constexpr int arg_trackers_species = 66;
+  static constexpr int arg_trackers_level = 67;
+  static constexpr int arg_trackers_gender = 68;
+  static constexpr int arg_trackers_hp_percent = 69;
+  static constexpr int arg_trackers_status = 70;
+  static constexpr int arg_trackers_boosts = 71;
+  static constexpr int arg_trackers_present = 72;
+  static constexpr int arg_trackers_fainted = 73;
+  static constexpr int arg_trackers_turn = 74;
+  static constexpr int arg_trackers_weather = 75;
+  static constexpr int arg_trackers_spikes = 76;
+  static constexpr int arg_trackers_error = 77;
+  static constexpr int arg_trackers_observed_moves = 78;
+  static constexpr int arg_trackers_pp_used = 79;
+  static constexpr int arg_trackers_last_moves = 80;
+  static constexpr int arg_trackers_tendencies = 81;
+  static constexpr int arg_trackers_belief_mask = 82;
+  static constexpr int arg_trackers_shown_ability = 83;
+  static constexpr int arg_trackers_shown_item = 84;
+  static constexpr int arg_trackers_shown_types = 85;
+  static constexpr int arg_trackers_borrowed_ability = 86;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 87;
+  static constexpr int arg_trackers_mon_features_encore_turns = 88;
+  static constexpr int arg_trackers_mon_features_item_swapped = 89;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 91;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 92;
+  static constexpr int arg_trackers_mon_features_moves_shown = 93;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 94;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 95;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 96;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 98;
+  static constexpr int arg_trackers_mon_features_stall_counter = 99;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 100;
+  static constexpr int arg_trackers_mon_features_sub_present = 101;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 102;
+  static constexpr int arg_trackers_mon_features_switches = 103;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 104;
+  static constexpr int arg_trackers_mon_features_turns_active = 105;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 106;
+  static constexpr int arg_trackers_field_features_weather_permanent = 107;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 108;
+  static constexpr int arg_trackers_field_features_wish_pending = 109;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 110;
+  static constexpr int arg_trackers_field_features_wish_turns = 111;
+  static constexpr int arg_trackers_original_ability = 112;
+  static constexpr int arg_trackers_damage_exact_dealt = 113;
+  static constexpr int arg_trackers_damage_exact_taken = 114;
+  static constexpr int arg_trackers_public_volatiles = 115;
+  static constexpr int arg_trackers_item_removed = 116;
+  static constexpr int arg_trackers_tendency_moved = 117;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 118;
+  static constexpr int arg_trackers_tendency_switches = 119;
+  static constexpr int arg_trackers_tendency_opportunities = 120;
+  static constexpr int arg_trackers_tendency_matchup = 121;
+  static constexpr int arg_trackers_damage_history_hp = 122;
+  static constexpr int arg_trackers_damage_history_maximum = 123;
+  static constexpr int arg_trackers_damage_history_taken = 124;
+  static constexpr int arg_trackers_damage_history_dealt = 125;
+  static constexpr int arg_trackers_negative_items_percent = 126;
+  static constexpr int arg_trackers_negative_items_known = 127;
+  static constexpr int arg_trackers_visible_belief_pin = 128;
+  static constexpr int arg_trackers_visible_belief_pin_active = 129;
+  static constexpr int arg_trackers_visible_belief_conflicts = 130;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 131;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 133;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 135;
+  static constexpr int arg_trackers_public_port_holder = 136;
+  static constexpr int arg_trackers_public_port_victims = 137;
+  static constexpr int arg_trackers_public_port_known = 138;
+  static constexpr int arg_trackers_public_port_loaf = 139;
+  static constexpr int arg_trackers_public_port_traced = 140;
+  static constexpr int arg_trackers_public_port_skip_flip = 141;
+  static constexpr int arg_trackers_public_port_post_upkeep = 142;
+  static constexpr int arg_trackers_public_port_hazards = 143;
+  static constexpr int arg_trackers_public_port_blocked = 144;
+  static constexpr int arg_trackers_public_port_pursuit = 145;
+  static constexpr int arg_trackers_public_port_weather = 146;
+  static constexpr int arg_chance_inputs_entry_ties = 147;
+  static constexpr int arg_replacement = 148;
+  static constexpr int arg_requested = 149;
+  static constexpr int arg_invalid = 150;
+  static constexpr int arg_resuming = 151;
+  static constexpr int arg_draws = 152;
+  static constexpr int arg_phazing_draws = 153;
+  static constexpr int arg_secondary_draws = 154;
+  static constexpr int arg_sleep_talk_draws = 155;
+  static constexpr int arg_age = 156;
+  static constexpr int arg_work_hp = 157;
+  static constexpr int arg_work_status = 158;
+  static constexpr int arg_work_status_counter = 159;
+  static constexpr int arg_work_sleep_skipped = 160;
+  static constexpr int arg_work_rest_origin = 161;
+  static constexpr int arg_work_item = 162;
+  static constexpr int arg_work_ability = 163;
+  static constexpr int arg_work_boosts = 164;
+  static constexpr int arg_work_confusion_counter = 165;
+  static constexpr int arg_work_entry_pending = 166;
+  static constexpr int arg_work_weather = 167;
+  static constexpr int arg_work_weather_counter = 168;
+  static constexpr int arg_work_keys = 169;
+  static constexpr int arg_work_truant_loaf = 170;
+  static constexpr int arg_live = 171;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b1 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b1 v;
+    v.state_species.p = static_cast<int32_t*>(bufs[0]); v.state_species.lanes = lanes;
+    v.state_level.p = static_cast<int32_t*>(bufs[1]); v.state_level.lanes = lanes;
+    v.state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.state_hidden_power_type.lanes = lanes;
+    v.state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.state_hidden_power_power.lanes = lanes;
+    v.state_happiness.p = static_cast<int32_t*>(bufs[4]); v.state_happiness.lanes = lanes;
+    v.state_gender.p = static_cast<int32_t*>(bufs[5]); v.state_gender.lanes = lanes;
+    v.state_types.p = static_cast<int32_t*>(bufs[6]); v.state_types.lanes = lanes;
+    v.state_base_types.p = static_cast<int32_t*>(bufs[7]); v.state_base_types.lanes = lanes;
+    v.state_stats.p = static_cast<int32_t*>(bufs[8]); v.state_stats.lanes = lanes;
+    v.state_hp.p = static_cast<int32_t*>(bufs[9]); v.state_hp.lanes = lanes;
+    v.state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.state_max_hp.lanes = lanes;
+    v.state_status.p = static_cast<int32_t*>(bufs[11]); v.state_status.lanes = lanes;
+    v.state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.state_status_counter.lanes = lanes;
+    v.state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.state_sleep_skipped.lanes = lanes;
+    v.state_rest_origin.p = static_cast<bool*>(bufs[14]); v.state_rest_origin.lanes = lanes;
+    v.state_moves.p = static_cast<int32_t*>(bufs[15]); v.state_moves.lanes = lanes;
+    v.state_pp.p = static_cast<int32_t*>(bufs[16]); v.state_pp.lanes = lanes;
+    v.state_disabled.p = static_cast<bool*>(bufs[17]); v.state_disabled.lanes = lanes;
+    v.state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.state_choice_move.lanes = lanes;
+    v.state_last_move.p = static_cast<int32_t*>(bufs[19]); v.state_last_move.lanes = lanes;
+    v.state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.state_last_action_kind.lanes = lanes;
+    v.state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.state_last_action_index.lanes = lanes;
+    v.state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.state_encore_move.lanes = lanes;
+    v.state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.state_encore_counter.lanes = lanes;
+    v.state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.state_charge_move.lanes = lanes;
+    v.state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.state_charge_counter.lanes = lanes;
+    v.state_item.p = static_cast<int32_t*>(bufs[26]); v.state_item.lanes = lanes;
+    v.state_ability.p = static_cast<int32_t*>(bufs[27]); v.state_ability.lanes = lanes;
+    v.state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.state_base_ability.lanes = lanes;
+    v.state_boosts.p = static_cast<int32_t*>(bufs[29]); v.state_boosts.lanes = lanes;
+    v.state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.state_volatile.lanes = lanes;
+    v.state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.state_confusion_counter.lanes = lanes;
+    v.state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.state_protect_counter.lanes = lanes;
+    v.state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.state_substitute_hp.lanes = lanes;
+    v.state_active.p = static_cast<int32_t*>(bufs[34]); v.state_active.lanes = lanes;
+    v.state_entry_pending.p = static_cast<bool*>(bufs[35]); v.state_entry_pending.lanes = lanes;
+    v.state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.state_active_turns.lanes = lanes;
+    v.state_trapped.p = static_cast<bool*>(bufs[37]); v.state_trapped.lanes = lanes;
+    v.state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.state_trap_source.lanes = lanes;
+    v.state_forced_switch.p = static_cast<bool*>(bufs[39]); v.state_forced_switch.lanes = lanes;
+    v.state_baton_pass.p = static_cast<bool*>(bufs[40]); v.state_baton_pass.lanes = lanes;
+    v.state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.state_queued_actor.lanes = lanes;
+    v.state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.state_queued_actions.lanes = lanes;
+    v.state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.state_queued_stall.lanes = lanes;
+    v.state_pending_residual.p = static_cast<bool*>(bufs[44]); v.state_pending_residual.lanes = lanes;
+    v.state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.state_residual_draws.lanes = lanes;
+    v.state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.state_phazing_draws.lanes = lanes;
+    v.state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.state_secondary_draws.lanes = lanes;
+    v.state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.state_sleep_talk_draws.lanes = lanes;
+    v.state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.state_replacement_count.lanes = lanes;
+    v.state_spikes.p = static_cast<int32_t*>(bufs[50]); v.state_spikes.lanes = lanes;
+    v.state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.state_wish_counter.lanes = lanes;
+    v.state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.state_wish_amount.lanes = lanes;
+    v.state_weather.p = static_cast<int32_t*>(bufs[53]); v.state_weather.lanes = lanes;
+    v.state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.state_weather_counter.lanes = lanes;
+    v.state_turn.p = static_cast<int32_t*>(bufs[55]); v.state_turn.lanes = lanes;
+    v.state_keys.p = static_cast<uint32_t*>(bufs[56]); v.state_keys.lanes = lanes;
+    v.state_done.p = static_cast<bool*>(bufs[57]); v.state_done.lanes = lanes;
+    v.state_winner.p = static_cast<int32_t*>(bufs[58]); v.state_winner.lanes = lanes;
+    v.state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.state_truant_loaf.lanes = lanes;
+    v.actions.p = static_cast<int32_t*>(bufs[60]); v.actions.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[61]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[62]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[65]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[66]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[67]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[68]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[69]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[70]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[71]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[72]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[73]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[74]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[75]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[76]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[77]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[78]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[79]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[80]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[81]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[82]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[83]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[86]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[87]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[90]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[92]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[107]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[108]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[109]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[110]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[112]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[113]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[115]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[116]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[117]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[118]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[122]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[124]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[126]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[127]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[128]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[129]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[130]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[131]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[133]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[134]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[136]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[137]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[143]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[144]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[146]); v.trackers_public_port_weather.lanes = lanes;
+    v.chance_inputs_entry_ties.p = static_cast<int32_t*>(bufs[147]); v.chance_inputs_entry_ties.lanes = lanes;
+    v.replacement.p = static_cast<bool*>(bufs[148]); v.replacement.lanes = lanes;
+    v.requested.p = static_cast<bool*>(bufs[149]); v.requested.lanes = lanes;
+    v.invalid.p = static_cast<bool*>(bufs[150]); v.invalid.lanes = lanes;
+    v.resuming.p = static_cast<bool*>(bufs[151]); v.resuming.lanes = lanes;
+    v.draws.p = static_cast<int32_t*>(bufs[152]); v.draws.lanes = lanes;
+    v.phazing_draws.p = static_cast<int32_t*>(bufs[153]); v.phazing_draws.lanes = lanes;
+    v.secondary_draws.p = static_cast<int32_t*>(bufs[154]); v.secondary_draws.lanes = lanes;
+    v.sleep_talk_draws.p = static_cast<int32_t*>(bufs[155]); v.sleep_talk_draws.lanes = lanes;
+    v.age.p = static_cast<int32_t*>(bufs[156]); v.age.lanes = lanes;
+    v.work_hp.p = static_cast<int32_t*>(bufs[157]); v.work_hp.lanes = lanes;
+    v.work_status.p = static_cast<int32_t*>(bufs[158]); v.work_status.lanes = lanes;
+    v.work_status_counter.p = static_cast<int32_t*>(bufs[159]); v.work_status_counter.lanes = lanes;
+    v.work_sleep_skipped.p = static_cast<int32_t*>(bufs[160]); v.work_sleep_skipped.lanes = lanes;
+    v.work_rest_origin.p = static_cast<bool*>(bufs[161]); v.work_rest_origin.lanes = lanes;
+    v.work_item.p = static_cast<int32_t*>(bufs[162]); v.work_item.lanes = lanes;
+    v.work_ability.p = static_cast<int32_t*>(bufs[163]); v.work_ability.lanes = lanes;
+    v.work_boosts.p = static_cast<int32_t*>(bufs[164]); v.work_boosts.lanes = lanes;
+    v.work_confusion_counter.p = static_cast<int32_t*>(bufs[165]); v.work_confusion_counter.lanes = lanes;
+    v.work_entry_pending.p = static_cast<bool*>(bufs[166]); v.work_entry_pending.lanes = lanes;
+    v.work_weather.p = static_cast<int32_t*>(bufs[167]); v.work_weather.lanes = lanes;
+    v.work_weather_counter.p = static_cast<int32_t*>(bufs[168]); v.work_weather_counter.lanes = lanes;
+    v.work_keys.p = static_cast<uint32_t*>(bufs[169]); v.work_keys.lanes = lanes;
+    v.work_truant_loaf.p = static_cast<bool*>(bufs[170]); v.work_truant_loaf.lanes = lanes;
+    v.live.p = static_cast<bool*>(bufs[171]); v.live.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.state_species.dbg = dbg;
+    v.state_level.dbg = dbg;
+    v.state_hidden_power_type.dbg = dbg;
+    v.state_hidden_power_power.dbg = dbg;
+    v.state_happiness.dbg = dbg;
+    v.state_gender.dbg = dbg;
+    v.state_types.dbg = dbg;
+    v.state_base_types.dbg = dbg;
+    v.state_stats.dbg = dbg;
+    v.state_hp.dbg = dbg;
+    v.state_max_hp.dbg = dbg;
+    v.state_status.dbg = dbg;
+    v.state_status_counter.dbg = dbg;
+    v.state_sleep_skipped.dbg = dbg;
+    v.state_rest_origin.dbg = dbg;
+    v.state_moves.dbg = dbg;
+    v.state_pp.dbg = dbg;
+    v.state_disabled.dbg = dbg;
+    v.state_choice_move.dbg = dbg;
+    v.state_last_move.dbg = dbg;
+    v.state_last_action_kind.dbg = dbg;
+    v.state_last_action_index.dbg = dbg;
+    v.state_encore_move.dbg = dbg;
+    v.state_encore_counter.dbg = dbg;
+    v.state_charge_move.dbg = dbg;
+    v.state_charge_counter.dbg = dbg;
+    v.state_item.dbg = dbg;
+    v.state_ability.dbg = dbg;
+    v.state_base_ability.dbg = dbg;
+    v.state_boosts.dbg = dbg;
+    v.state_volatile.dbg = dbg;
+    v.state_confusion_counter.dbg = dbg;
+    v.state_protect_counter.dbg = dbg;
+    v.state_substitute_hp.dbg = dbg;
+    v.state_active.dbg = dbg;
+    v.state_entry_pending.dbg = dbg;
+    v.state_active_turns.dbg = dbg;
+    v.state_trapped.dbg = dbg;
+    v.state_trap_source.dbg = dbg;
+    v.state_forced_switch.dbg = dbg;
+    v.state_baton_pass.dbg = dbg;
+    v.state_queued_actor.dbg = dbg;
+    v.state_queued_actions.dbg = dbg;
+    v.state_queued_stall.dbg = dbg;
+    v.state_pending_residual.dbg = dbg;
+    v.state_residual_draws.dbg = dbg;
+    v.state_phazing_draws.dbg = dbg;
+    v.state_secondary_draws.dbg = dbg;
+    v.state_sleep_talk_draws.dbg = dbg;
+    v.state_replacement_count.dbg = dbg;
+    v.state_spikes.dbg = dbg;
+    v.state_wish_counter.dbg = dbg;
+    v.state_wish_amount.dbg = dbg;
+    v.state_weather.dbg = dbg;
+    v.state_weather_counter.dbg = dbg;
+    v.state_turn.dbg = dbg;
+    v.state_keys.dbg = dbg;
+    v.state_done.dbg = dbg;
+    v.state_winner.dbg = dbg;
+    v.state_truant_loaf.dbg = dbg;
+    v.actions.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+    v.chance_inputs_entry_ties.dbg = dbg;
+    v.replacement.dbg = dbg;
+    v.requested.dbg = dbg;
+    v.invalid.dbg = dbg;
+    v.resuming.dbg = dbg;
+    v.draws.dbg = dbg;
+    v.phazing_draws.dbg = dbg;
+    v.secondary_draws.dbg = dbg;
+    v.sleep_talk_draws.dbg = dbg;
+    v.age.dbg = dbg;
+    v.work_hp.dbg = dbg;
+    v.work_status.dbg = dbg;
+    v.work_status_counter.dbg = dbg;
+    v.work_sleep_skipped.dbg = dbg;
+    v.work_rest_origin.dbg = dbg;
+    v.work_item.dbg = dbg;
+    v.work_ability.dbg = dbg;
+    v.work_boosts.dbg = dbg;
+    v.work_confusion_counter.dbg = dbg;
+    v.work_entry_pending.dbg = dbg;
+    v.work_weather.dbg = dbg;
+    v.work_weather_counter.dbg = dbg;
+    v.work_keys.dbg = dbg;
+    v.work_truant_loaf.dbg = dbg;
+    v.live.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+
+// ---- C_b2: carry at b2 (line 566, occurrence 0): bench = bench_indices(state.active)
+struct C_b2 {
+  static constexpr uint64_t kDigest = 0x54cd7f5c502d26ddull;
+  static constexpr const char* kDigestHex = "54cd7f5c502d26dd2e77fcb1e90b387be51b601d793a87aa9e12f2fa4b7cfaee";
+  static constexpr int kLeaves = 186;
+  Leaf<int32_t, 2, 6> state_species;   // arg 0: state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> state_level;   // arg 1: state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> state_hidden_power_type;   // arg 2: state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> state_hidden_power_power;   // arg 3: state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> state_happiness;   // arg 4: state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> state_gender;   // arg 5: state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> state_types;   // arg 6: state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> state_base_types;   // arg 7: state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> state_stats;   // arg 8: state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> state_hp;   // arg 9: state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> state_max_hp;   // arg 10: state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> state_status;   // arg 11: state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> state_status_counter;   // arg 12: state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> state_sleep_skipped;   // arg 13: state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> state_rest_origin;   // arg 14: state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> state_moves;   // arg 15: state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> state_pp;   // arg 16: state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> state_disabled;   // arg 17: state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> state_choice_move;   // arg 18: state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> state_last_move;   // arg 19: state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> state_last_action_kind;   // arg 20: state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> state_last_action_index;   // arg 21: state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> state_encore_move;   // arg 22: state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> state_encore_counter;   // arg 23: state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> state_charge_move;   // arg 24: state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> state_charge_counter;   // arg 25: state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> state_item;   // arg 26: state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> state_ability;   // arg 27: state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> state_base_ability;   // arg 28: state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> state_boosts;   // arg 29: state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> state_volatile;   // arg 30: state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> state_confusion_counter;   // arg 31: state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> state_protect_counter;   // arg 32: state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> state_substitute_hp;   // arg 33: state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> state_active;   // arg 34: state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> state_entry_pending;   // arg 35: state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> state_active_turns;   // arg 36: state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> state_trapped;   // arg 37: state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> state_trap_source;   // arg 38: state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> state_forced_switch;   // arg 39: state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> state_baton_pass;   // arg 40: state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> state_queued_actor;   // arg 41: state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> state_queued_actions;   // arg 42: state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> state_queued_stall;   // arg 43: state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> state_pending_residual;   // arg 44: state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> state_residual_draws;   // arg 45: state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> state_phazing_draws;   // arg 46: state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> state_secondary_draws;   // arg 47: state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> state_sleep_talk_draws;   // arg 48: state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> state_replacement_count;   // arg 49: state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> state_spikes;   // arg 50: state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> state_wish_counter;   // arg 51: state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> state_wish_amount;   // arg 52: state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> state_weather;   // arg 53: state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> state_weather_counter;   // arg 54: state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> state_turn;   // arg 55: state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> state_keys;   // arg 56: state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> state_done;   // arg 57: state.done bool[] (source state, '.done')
+  Leaf<int32_t> state_winner;   // arg 58: state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> state_truant_loaf;   // arg 59: state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<int32_t, 2> actions;   // arg 60: actions int32[2] (source actions, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 61: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 62: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 63: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 64: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 65: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 66: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 67: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 68: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 69: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 70: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 71: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 72: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 73: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 74: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 75: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 76: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 77: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 78: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 79: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 80: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 81: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 82: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 83: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 84: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 85: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 86: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 87: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 88: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 89: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 90: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 91: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 92: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 93: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 94: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 95: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 96: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 97: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 98: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 99: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 100: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 101: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 102: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 103: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 104: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 105: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 106: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 107: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 108: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 109: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 110: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 111: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 112: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 113: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 114: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 115: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 116: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 117: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 118: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 119: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 120: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 121: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 122: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 123: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 124: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 125: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 126: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 127: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 128: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 129: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 130: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 131: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 132: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 133: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 134: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 135: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 136: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 137: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 138: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 139: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 140: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 141: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 142: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 143: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 144: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 145: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 146: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  Leaf<int32_t, 2> chance_inputs_entry_ties;   // arg 147: chance_inputs.entry_ties int32[2] (source chance, '.entry_ties')
+  Leaf<bool> replacement;   // arg 148: replacement bool[] (source local, '')
+  Leaf<bool> invalid;   // arg 149: invalid bool[] (source local, '')
+  Leaf<bool> resuming;   // arg 150: resuming bool[] (source local, '')
+  Leaf<int32_t, 2, 12> draws;   // arg 151: draws int32[2, 12] (source local, '')
+  Leaf<int32_t, 2> phazing_draws;   // arg 152: phazing_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> secondary_draws;   // arg 153: secondary_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> sleep_talk_draws;   // arg 154: sleep_talk_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> age;   // arg 155: age int32[2] (source local, '')
+  Leaf<int32_t, 2, 6> work_hp;   // arg 156: work.hp int32[2, 6] (source local, '.hp')
+  Leaf<int32_t, 2, 6> work_status;   // arg 157: work.status int32[2, 6] (source local, '.status')
+  Leaf<int32_t, 2, 6> work_status_counter;   // arg 158: work.status_counter int32[2, 6] (source local, '.status_counter')
+  Leaf<int32_t, 2, 6> work_sleep_skipped;   // arg 159: work.sleep_skipped int32[2, 6] (source local, '.sleep_skipped')
+  Leaf<bool, 2, 6> work_rest_origin;   // arg 160: work.rest_origin bool[2, 6] (source local, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> work_pp;   // arg 161: work.pp int32[2, 6, 4] (source local, '.pp')
+  Leaf<int32_t, 2, 6> work_choice_move;   // arg 162: work.choice_move int32[2, 6] (source local, '.choice_move')
+  Leaf<int32_t, 2, 6> work_last_move;   // arg 163: work.last_move int32[2, 6] (source local, '.last_move')
+  Leaf<int32_t, 2> work_last_action_kind;   // arg 164: work.last_action_kind int32[2] (source local, '.last_action_kind')
+  Leaf<int32_t, 2> work_last_action_index;   // arg 165: work.last_action_index int32[2] (source local, '.last_action_index')
+  Leaf<int32_t, 2, 6> work_item;   // arg 166: work.item int32[2, 6] (source local, '.item')
+  Leaf<int32_t, 2, 6> work_ability;   // arg 167: work.ability int32[2, 6] (source local, '.ability')
+  Leaf<int32_t, 2, 6, 7> work_boosts;   // arg 168: work.boosts int32[2, 6, 7] (source local, '.boosts')
+  Leaf<uint32_t, 2, 6> work_volatile;   // arg 169: work.volatile uint32[2, 6] (source local, '.volatile')
+  Leaf<int32_t, 2, 6> work_confusion_counter;   // arg 170: work.confusion_counter int32[2, 6] (source local, '.confusion_counter')
+  Leaf<int32_t, 2, 6> work_substitute_hp;   // arg 171: work.substitute_hp int32[2, 6] (source local, '.substitute_hp')
+  Leaf<bool, 2> work_entry_pending;   // arg 172: work.entry_pending bool[2] (source local, '.entry_pending')
+  Leaf<int32_t> work_weather;   // arg 173: work.weather int32[] (source local, '.weather')
+  Leaf<int32_t> work_weather_counter;   // arg 174: work.weather_counter int32[] (source local, '.weather_counter')
+  Leaf<uint32_t, 2> work_keys;   // arg 175: work.keys uint32[2] (source local, '.keys')
+  Leaf<bool, 2, 6> work_truant_loaf;   // arg 176: work.truant_loaf bool[2, 6] (source local, '.truant_loaf')
+  Leaf<int32_t, 2> speed;   // arg 177: speed int32[2] (source local, '')
+  Leaf<bool, 2> switches;   // arg 178: switches bool[2] (source local, '')
+  Leaf<int32_t> saved_actor;   // arg 179: saved_actor int32[] (source local, '')
+  Leaf<int32_t, 2> slot;   // arg 180: slot int32[2] (source local, '')
+  Leaf<bool, 2> struggle;   // arg 181: struggle bool[2] (source local, '')
+  Leaf<int32_t, 2> moves;   // arg 182: moves int32[2] (source local, '')
+  Leaf<bool, 2> pursuit_used;   // arg 183: pursuit_used bool[2] (source local, '')
+  Leaf<bool> pursuit_faint;   // arg 184: pursuit_faint bool[] (source local, '')
+  Leaf<bool> live;   // arg 185: live bool[] (source local, '')
+  static constexpr int arg_state_species = 0;
+  static constexpr int arg_state_level = 1;
+  static constexpr int arg_state_hidden_power_type = 2;
+  static constexpr int arg_state_hidden_power_power = 3;
+  static constexpr int arg_state_happiness = 4;
+  static constexpr int arg_state_gender = 5;
+  static constexpr int arg_state_types = 6;
+  static constexpr int arg_state_base_types = 7;
+  static constexpr int arg_state_stats = 8;
+  static constexpr int arg_state_hp = 9;
+  static constexpr int arg_state_max_hp = 10;
+  static constexpr int arg_state_status = 11;
+  static constexpr int arg_state_status_counter = 12;
+  static constexpr int arg_state_sleep_skipped = 13;
+  static constexpr int arg_state_rest_origin = 14;
+  static constexpr int arg_state_moves = 15;
+  static constexpr int arg_state_pp = 16;
+  static constexpr int arg_state_disabled = 17;
+  static constexpr int arg_state_choice_move = 18;
+  static constexpr int arg_state_last_move = 19;
+  static constexpr int arg_state_last_action_kind = 20;
+  static constexpr int arg_state_last_action_index = 21;
+  static constexpr int arg_state_encore_move = 22;
+  static constexpr int arg_state_encore_counter = 23;
+  static constexpr int arg_state_charge_move = 24;
+  static constexpr int arg_state_charge_counter = 25;
+  static constexpr int arg_state_item = 26;
+  static constexpr int arg_state_ability = 27;
+  static constexpr int arg_state_base_ability = 28;
+  static constexpr int arg_state_boosts = 29;
+  static constexpr int arg_state_volatile = 30;
+  static constexpr int arg_state_confusion_counter = 31;
+  static constexpr int arg_state_protect_counter = 32;
+  static constexpr int arg_state_substitute_hp = 33;
+  static constexpr int arg_state_active = 34;
+  static constexpr int arg_state_entry_pending = 35;
+  static constexpr int arg_state_active_turns = 36;
+  static constexpr int arg_state_trapped = 37;
+  static constexpr int arg_state_trap_source = 38;
+  static constexpr int arg_state_forced_switch = 39;
+  static constexpr int arg_state_baton_pass = 40;
+  static constexpr int arg_state_queued_actor = 41;
+  static constexpr int arg_state_queued_actions = 42;
+  static constexpr int arg_state_queued_stall = 43;
+  static constexpr int arg_state_pending_residual = 44;
+  static constexpr int arg_state_residual_draws = 45;
+  static constexpr int arg_state_phazing_draws = 46;
+  static constexpr int arg_state_secondary_draws = 47;
+  static constexpr int arg_state_sleep_talk_draws = 48;
+  static constexpr int arg_state_replacement_count = 49;
+  static constexpr int arg_state_spikes = 50;
+  static constexpr int arg_state_wish_counter = 51;
+  static constexpr int arg_state_wish_amount = 52;
+  static constexpr int arg_state_weather = 53;
+  static constexpr int arg_state_weather_counter = 54;
+  static constexpr int arg_state_turn = 55;
+  static constexpr int arg_state_keys = 56;
+  static constexpr int arg_state_done = 57;
+  static constexpr int arg_state_winner = 58;
+  static constexpr int arg_state_truant_loaf = 59;
+  static constexpr int arg_actions = 60;
+  static constexpr int arg_trackers_physical_to_public = 61;
+  static constexpr int arg_trackers_active_physical = 62;
+  static constexpr int arg_trackers_active_slot = 63;
+  static constexpr int arg_trackers_next_slot = 64;
+  static constexpr int arg_trackers_own_order = 65;
+  static constexpr int arg_trackers_species = 66;
+  static constexpr int arg_trackers_level = 67;
+  static constexpr int arg_trackers_gender = 68;
+  static constexpr int arg_trackers_hp_percent = 69;
+  static constexpr int arg_trackers_status = 70;
+  static constexpr int arg_trackers_boosts = 71;
+  static constexpr int arg_trackers_present = 72;
+  static constexpr int arg_trackers_fainted = 73;
+  static constexpr int arg_trackers_turn = 74;
+  static constexpr int arg_trackers_weather = 75;
+  static constexpr int arg_trackers_spikes = 76;
+  static constexpr int arg_trackers_error = 77;
+  static constexpr int arg_trackers_observed_moves = 78;
+  static constexpr int arg_trackers_pp_used = 79;
+  static constexpr int arg_trackers_last_moves = 80;
+  static constexpr int arg_trackers_tendencies = 81;
+  static constexpr int arg_trackers_belief_mask = 82;
+  static constexpr int arg_trackers_shown_ability = 83;
+  static constexpr int arg_trackers_shown_item = 84;
+  static constexpr int arg_trackers_shown_types = 85;
+  static constexpr int arg_trackers_borrowed_ability = 86;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 87;
+  static constexpr int arg_trackers_mon_features_encore_turns = 88;
+  static constexpr int arg_trackers_mon_features_item_swapped = 89;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 91;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 92;
+  static constexpr int arg_trackers_mon_features_moves_shown = 93;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 94;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 95;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 96;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 98;
+  static constexpr int arg_trackers_mon_features_stall_counter = 99;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 100;
+  static constexpr int arg_trackers_mon_features_sub_present = 101;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 102;
+  static constexpr int arg_trackers_mon_features_switches = 103;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 104;
+  static constexpr int arg_trackers_mon_features_turns_active = 105;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 106;
+  static constexpr int arg_trackers_field_features_weather_permanent = 107;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 108;
+  static constexpr int arg_trackers_field_features_wish_pending = 109;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 110;
+  static constexpr int arg_trackers_field_features_wish_turns = 111;
+  static constexpr int arg_trackers_original_ability = 112;
+  static constexpr int arg_trackers_damage_exact_dealt = 113;
+  static constexpr int arg_trackers_damage_exact_taken = 114;
+  static constexpr int arg_trackers_public_volatiles = 115;
+  static constexpr int arg_trackers_item_removed = 116;
+  static constexpr int arg_trackers_tendency_moved = 117;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 118;
+  static constexpr int arg_trackers_tendency_switches = 119;
+  static constexpr int arg_trackers_tendency_opportunities = 120;
+  static constexpr int arg_trackers_tendency_matchup = 121;
+  static constexpr int arg_trackers_damage_history_hp = 122;
+  static constexpr int arg_trackers_damage_history_maximum = 123;
+  static constexpr int arg_trackers_damage_history_taken = 124;
+  static constexpr int arg_trackers_damage_history_dealt = 125;
+  static constexpr int arg_trackers_negative_items_percent = 126;
+  static constexpr int arg_trackers_negative_items_known = 127;
+  static constexpr int arg_trackers_visible_belief_pin = 128;
+  static constexpr int arg_trackers_visible_belief_pin_active = 129;
+  static constexpr int arg_trackers_visible_belief_conflicts = 130;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 131;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 133;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 135;
+  static constexpr int arg_trackers_public_port_holder = 136;
+  static constexpr int arg_trackers_public_port_victims = 137;
+  static constexpr int arg_trackers_public_port_known = 138;
+  static constexpr int arg_trackers_public_port_loaf = 139;
+  static constexpr int arg_trackers_public_port_traced = 140;
+  static constexpr int arg_trackers_public_port_skip_flip = 141;
+  static constexpr int arg_trackers_public_port_post_upkeep = 142;
+  static constexpr int arg_trackers_public_port_hazards = 143;
+  static constexpr int arg_trackers_public_port_blocked = 144;
+  static constexpr int arg_trackers_public_port_pursuit = 145;
+  static constexpr int arg_trackers_public_port_weather = 146;
+  static constexpr int arg_chance_inputs_entry_ties = 147;
+  static constexpr int arg_replacement = 148;
+  static constexpr int arg_invalid = 149;
+  static constexpr int arg_resuming = 150;
+  static constexpr int arg_draws = 151;
+  static constexpr int arg_phazing_draws = 152;
+  static constexpr int arg_secondary_draws = 153;
+  static constexpr int arg_sleep_talk_draws = 154;
+  static constexpr int arg_age = 155;
+  static constexpr int arg_work_hp = 156;
+  static constexpr int arg_work_status = 157;
+  static constexpr int arg_work_status_counter = 158;
+  static constexpr int arg_work_sleep_skipped = 159;
+  static constexpr int arg_work_rest_origin = 160;
+  static constexpr int arg_work_pp = 161;
+  static constexpr int arg_work_choice_move = 162;
+  static constexpr int arg_work_last_move = 163;
+  static constexpr int arg_work_last_action_kind = 164;
+  static constexpr int arg_work_last_action_index = 165;
+  static constexpr int arg_work_item = 166;
+  static constexpr int arg_work_ability = 167;
+  static constexpr int arg_work_boosts = 168;
+  static constexpr int arg_work_volatile = 169;
+  static constexpr int arg_work_confusion_counter = 170;
+  static constexpr int arg_work_substitute_hp = 171;
+  static constexpr int arg_work_entry_pending = 172;
+  static constexpr int arg_work_weather = 173;
+  static constexpr int arg_work_weather_counter = 174;
+  static constexpr int arg_work_keys = 175;
+  static constexpr int arg_work_truant_loaf = 176;
+  static constexpr int arg_speed = 177;
+  static constexpr int arg_switches = 178;
+  static constexpr int arg_saved_actor = 179;
+  static constexpr int arg_slot = 180;
+  static constexpr int arg_struggle = 181;
+  static constexpr int arg_moves = 182;
+  static constexpr int arg_pursuit_used = 183;
+  static constexpr int arg_pursuit_faint = 184;
+  static constexpr int arg_live = 185;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b2 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b2 v;
+    v.state_species.p = static_cast<int32_t*>(bufs[0]); v.state_species.lanes = lanes;
+    v.state_level.p = static_cast<int32_t*>(bufs[1]); v.state_level.lanes = lanes;
+    v.state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.state_hidden_power_type.lanes = lanes;
+    v.state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.state_hidden_power_power.lanes = lanes;
+    v.state_happiness.p = static_cast<int32_t*>(bufs[4]); v.state_happiness.lanes = lanes;
+    v.state_gender.p = static_cast<int32_t*>(bufs[5]); v.state_gender.lanes = lanes;
+    v.state_types.p = static_cast<int32_t*>(bufs[6]); v.state_types.lanes = lanes;
+    v.state_base_types.p = static_cast<int32_t*>(bufs[7]); v.state_base_types.lanes = lanes;
+    v.state_stats.p = static_cast<int32_t*>(bufs[8]); v.state_stats.lanes = lanes;
+    v.state_hp.p = static_cast<int32_t*>(bufs[9]); v.state_hp.lanes = lanes;
+    v.state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.state_max_hp.lanes = lanes;
+    v.state_status.p = static_cast<int32_t*>(bufs[11]); v.state_status.lanes = lanes;
+    v.state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.state_status_counter.lanes = lanes;
+    v.state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.state_sleep_skipped.lanes = lanes;
+    v.state_rest_origin.p = static_cast<bool*>(bufs[14]); v.state_rest_origin.lanes = lanes;
+    v.state_moves.p = static_cast<int32_t*>(bufs[15]); v.state_moves.lanes = lanes;
+    v.state_pp.p = static_cast<int32_t*>(bufs[16]); v.state_pp.lanes = lanes;
+    v.state_disabled.p = static_cast<bool*>(bufs[17]); v.state_disabled.lanes = lanes;
+    v.state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.state_choice_move.lanes = lanes;
+    v.state_last_move.p = static_cast<int32_t*>(bufs[19]); v.state_last_move.lanes = lanes;
+    v.state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.state_last_action_kind.lanes = lanes;
+    v.state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.state_last_action_index.lanes = lanes;
+    v.state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.state_encore_move.lanes = lanes;
+    v.state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.state_encore_counter.lanes = lanes;
+    v.state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.state_charge_move.lanes = lanes;
+    v.state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.state_charge_counter.lanes = lanes;
+    v.state_item.p = static_cast<int32_t*>(bufs[26]); v.state_item.lanes = lanes;
+    v.state_ability.p = static_cast<int32_t*>(bufs[27]); v.state_ability.lanes = lanes;
+    v.state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.state_base_ability.lanes = lanes;
+    v.state_boosts.p = static_cast<int32_t*>(bufs[29]); v.state_boosts.lanes = lanes;
+    v.state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.state_volatile.lanes = lanes;
+    v.state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.state_confusion_counter.lanes = lanes;
+    v.state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.state_protect_counter.lanes = lanes;
+    v.state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.state_substitute_hp.lanes = lanes;
+    v.state_active.p = static_cast<int32_t*>(bufs[34]); v.state_active.lanes = lanes;
+    v.state_entry_pending.p = static_cast<bool*>(bufs[35]); v.state_entry_pending.lanes = lanes;
+    v.state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.state_active_turns.lanes = lanes;
+    v.state_trapped.p = static_cast<bool*>(bufs[37]); v.state_trapped.lanes = lanes;
+    v.state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.state_trap_source.lanes = lanes;
+    v.state_forced_switch.p = static_cast<bool*>(bufs[39]); v.state_forced_switch.lanes = lanes;
+    v.state_baton_pass.p = static_cast<bool*>(bufs[40]); v.state_baton_pass.lanes = lanes;
+    v.state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.state_queued_actor.lanes = lanes;
+    v.state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.state_queued_actions.lanes = lanes;
+    v.state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.state_queued_stall.lanes = lanes;
+    v.state_pending_residual.p = static_cast<bool*>(bufs[44]); v.state_pending_residual.lanes = lanes;
+    v.state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.state_residual_draws.lanes = lanes;
+    v.state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.state_phazing_draws.lanes = lanes;
+    v.state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.state_secondary_draws.lanes = lanes;
+    v.state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.state_sleep_talk_draws.lanes = lanes;
+    v.state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.state_replacement_count.lanes = lanes;
+    v.state_spikes.p = static_cast<int32_t*>(bufs[50]); v.state_spikes.lanes = lanes;
+    v.state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.state_wish_counter.lanes = lanes;
+    v.state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.state_wish_amount.lanes = lanes;
+    v.state_weather.p = static_cast<int32_t*>(bufs[53]); v.state_weather.lanes = lanes;
+    v.state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.state_weather_counter.lanes = lanes;
+    v.state_turn.p = static_cast<int32_t*>(bufs[55]); v.state_turn.lanes = lanes;
+    v.state_keys.p = static_cast<uint32_t*>(bufs[56]); v.state_keys.lanes = lanes;
+    v.state_done.p = static_cast<bool*>(bufs[57]); v.state_done.lanes = lanes;
+    v.state_winner.p = static_cast<int32_t*>(bufs[58]); v.state_winner.lanes = lanes;
+    v.state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.state_truant_loaf.lanes = lanes;
+    v.actions.p = static_cast<int32_t*>(bufs[60]); v.actions.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[61]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[62]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[65]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[66]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[67]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[68]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[69]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[70]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[71]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[72]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[73]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[74]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[75]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[76]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[77]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[78]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[79]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[80]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[81]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[82]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[83]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[86]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[87]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[90]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[92]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[107]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[108]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[109]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[110]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[112]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[113]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[115]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[116]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[117]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[118]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[122]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[124]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[126]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[127]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[128]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[129]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[130]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[131]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[133]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[134]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[136]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[137]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[143]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[144]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[146]); v.trackers_public_port_weather.lanes = lanes;
+    v.chance_inputs_entry_ties.p = static_cast<int32_t*>(bufs[147]); v.chance_inputs_entry_ties.lanes = lanes;
+    v.replacement.p = static_cast<bool*>(bufs[148]); v.replacement.lanes = lanes;
+    v.invalid.p = static_cast<bool*>(bufs[149]); v.invalid.lanes = lanes;
+    v.resuming.p = static_cast<bool*>(bufs[150]); v.resuming.lanes = lanes;
+    v.draws.p = static_cast<int32_t*>(bufs[151]); v.draws.lanes = lanes;
+    v.phazing_draws.p = static_cast<int32_t*>(bufs[152]); v.phazing_draws.lanes = lanes;
+    v.secondary_draws.p = static_cast<int32_t*>(bufs[153]); v.secondary_draws.lanes = lanes;
+    v.sleep_talk_draws.p = static_cast<int32_t*>(bufs[154]); v.sleep_talk_draws.lanes = lanes;
+    v.age.p = static_cast<int32_t*>(bufs[155]); v.age.lanes = lanes;
+    v.work_hp.p = static_cast<int32_t*>(bufs[156]); v.work_hp.lanes = lanes;
+    v.work_status.p = static_cast<int32_t*>(bufs[157]); v.work_status.lanes = lanes;
+    v.work_status_counter.p = static_cast<int32_t*>(bufs[158]); v.work_status_counter.lanes = lanes;
+    v.work_sleep_skipped.p = static_cast<int32_t*>(bufs[159]); v.work_sleep_skipped.lanes = lanes;
+    v.work_rest_origin.p = static_cast<bool*>(bufs[160]); v.work_rest_origin.lanes = lanes;
+    v.work_pp.p = static_cast<int32_t*>(bufs[161]); v.work_pp.lanes = lanes;
+    v.work_choice_move.p = static_cast<int32_t*>(bufs[162]); v.work_choice_move.lanes = lanes;
+    v.work_last_move.p = static_cast<int32_t*>(bufs[163]); v.work_last_move.lanes = lanes;
+    v.work_last_action_kind.p = static_cast<int32_t*>(bufs[164]); v.work_last_action_kind.lanes = lanes;
+    v.work_last_action_index.p = static_cast<int32_t*>(bufs[165]); v.work_last_action_index.lanes = lanes;
+    v.work_item.p = static_cast<int32_t*>(bufs[166]); v.work_item.lanes = lanes;
+    v.work_ability.p = static_cast<int32_t*>(bufs[167]); v.work_ability.lanes = lanes;
+    v.work_boosts.p = static_cast<int32_t*>(bufs[168]); v.work_boosts.lanes = lanes;
+    v.work_volatile.p = static_cast<uint32_t*>(bufs[169]); v.work_volatile.lanes = lanes;
+    v.work_confusion_counter.p = static_cast<int32_t*>(bufs[170]); v.work_confusion_counter.lanes = lanes;
+    v.work_substitute_hp.p = static_cast<int32_t*>(bufs[171]); v.work_substitute_hp.lanes = lanes;
+    v.work_entry_pending.p = static_cast<bool*>(bufs[172]); v.work_entry_pending.lanes = lanes;
+    v.work_weather.p = static_cast<int32_t*>(bufs[173]); v.work_weather.lanes = lanes;
+    v.work_weather_counter.p = static_cast<int32_t*>(bufs[174]); v.work_weather_counter.lanes = lanes;
+    v.work_keys.p = static_cast<uint32_t*>(bufs[175]); v.work_keys.lanes = lanes;
+    v.work_truant_loaf.p = static_cast<bool*>(bufs[176]); v.work_truant_loaf.lanes = lanes;
+    v.speed.p = static_cast<int32_t*>(bufs[177]); v.speed.lanes = lanes;
+    v.switches.p = static_cast<bool*>(bufs[178]); v.switches.lanes = lanes;
+    v.saved_actor.p = static_cast<int32_t*>(bufs[179]); v.saved_actor.lanes = lanes;
+    v.slot.p = static_cast<int32_t*>(bufs[180]); v.slot.lanes = lanes;
+    v.struggle.p = static_cast<bool*>(bufs[181]); v.struggle.lanes = lanes;
+    v.moves.p = static_cast<int32_t*>(bufs[182]); v.moves.lanes = lanes;
+    v.pursuit_used.p = static_cast<bool*>(bufs[183]); v.pursuit_used.lanes = lanes;
+    v.pursuit_faint.p = static_cast<bool*>(bufs[184]); v.pursuit_faint.lanes = lanes;
+    v.live.p = static_cast<bool*>(bufs[185]); v.live.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.state_species.dbg = dbg;
+    v.state_level.dbg = dbg;
+    v.state_hidden_power_type.dbg = dbg;
+    v.state_hidden_power_power.dbg = dbg;
+    v.state_happiness.dbg = dbg;
+    v.state_gender.dbg = dbg;
+    v.state_types.dbg = dbg;
+    v.state_base_types.dbg = dbg;
+    v.state_stats.dbg = dbg;
+    v.state_hp.dbg = dbg;
+    v.state_max_hp.dbg = dbg;
+    v.state_status.dbg = dbg;
+    v.state_status_counter.dbg = dbg;
+    v.state_sleep_skipped.dbg = dbg;
+    v.state_rest_origin.dbg = dbg;
+    v.state_moves.dbg = dbg;
+    v.state_pp.dbg = dbg;
+    v.state_disabled.dbg = dbg;
+    v.state_choice_move.dbg = dbg;
+    v.state_last_move.dbg = dbg;
+    v.state_last_action_kind.dbg = dbg;
+    v.state_last_action_index.dbg = dbg;
+    v.state_encore_move.dbg = dbg;
+    v.state_encore_counter.dbg = dbg;
+    v.state_charge_move.dbg = dbg;
+    v.state_charge_counter.dbg = dbg;
+    v.state_item.dbg = dbg;
+    v.state_ability.dbg = dbg;
+    v.state_base_ability.dbg = dbg;
+    v.state_boosts.dbg = dbg;
+    v.state_volatile.dbg = dbg;
+    v.state_confusion_counter.dbg = dbg;
+    v.state_protect_counter.dbg = dbg;
+    v.state_substitute_hp.dbg = dbg;
+    v.state_active.dbg = dbg;
+    v.state_entry_pending.dbg = dbg;
+    v.state_active_turns.dbg = dbg;
+    v.state_trapped.dbg = dbg;
+    v.state_trap_source.dbg = dbg;
+    v.state_forced_switch.dbg = dbg;
+    v.state_baton_pass.dbg = dbg;
+    v.state_queued_actor.dbg = dbg;
+    v.state_queued_actions.dbg = dbg;
+    v.state_queued_stall.dbg = dbg;
+    v.state_pending_residual.dbg = dbg;
+    v.state_residual_draws.dbg = dbg;
+    v.state_phazing_draws.dbg = dbg;
+    v.state_secondary_draws.dbg = dbg;
+    v.state_sleep_talk_draws.dbg = dbg;
+    v.state_replacement_count.dbg = dbg;
+    v.state_spikes.dbg = dbg;
+    v.state_wish_counter.dbg = dbg;
+    v.state_wish_amount.dbg = dbg;
+    v.state_weather.dbg = dbg;
+    v.state_weather_counter.dbg = dbg;
+    v.state_turn.dbg = dbg;
+    v.state_keys.dbg = dbg;
+    v.state_done.dbg = dbg;
+    v.state_winner.dbg = dbg;
+    v.state_truant_loaf.dbg = dbg;
+    v.actions.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+    v.chance_inputs_entry_ties.dbg = dbg;
+    v.replacement.dbg = dbg;
+    v.invalid.dbg = dbg;
+    v.resuming.dbg = dbg;
+    v.draws.dbg = dbg;
+    v.phazing_draws.dbg = dbg;
+    v.secondary_draws.dbg = dbg;
+    v.sleep_talk_draws.dbg = dbg;
+    v.age.dbg = dbg;
+    v.work_hp.dbg = dbg;
+    v.work_status.dbg = dbg;
+    v.work_status_counter.dbg = dbg;
+    v.work_sleep_skipped.dbg = dbg;
+    v.work_rest_origin.dbg = dbg;
+    v.work_pp.dbg = dbg;
+    v.work_choice_move.dbg = dbg;
+    v.work_last_move.dbg = dbg;
+    v.work_last_action_kind.dbg = dbg;
+    v.work_last_action_index.dbg = dbg;
+    v.work_item.dbg = dbg;
+    v.work_ability.dbg = dbg;
+    v.work_boosts.dbg = dbg;
+    v.work_volatile.dbg = dbg;
+    v.work_confusion_counter.dbg = dbg;
+    v.work_substitute_hp.dbg = dbg;
+    v.work_entry_pending.dbg = dbg;
+    v.work_weather.dbg = dbg;
+    v.work_weather_counter.dbg = dbg;
+    v.work_keys.dbg = dbg;
+    v.work_truant_loaf.dbg = dbg;
+    v.speed.dbg = dbg;
+    v.switches.dbg = dbg;
+    v.saved_actor.dbg = dbg;
+    v.slot.dbg = dbg;
+    v.struggle.dbg = dbg;
+    v.moves.dbg = dbg;
+    v.pursuit_used.dbg = dbg;
+    v.pursuit_faint.dbg = dbg;
+    v.live.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+
+// ---- C_b3: carry at b3 (line 669, occurrence 0): else:work = _lum_update(work,table,live,_device_public=_device_public)
+struct C_b3 {
+  static constexpr uint64_t kDigest = 0xab98a03a59c2ae16ull;
+  static constexpr const char* kDigestHex = "ab98a03a59c2ae167fca0eb0e187580e7f354e44fbc8f059789caf276f922ebf";
+  static constexpr int kLeaves = 195;
+  Leaf<int32_t, 2, 6> state_species;   // arg 0: state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> state_level;   // arg 1: state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> state_hidden_power_type;   // arg 2: state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> state_hidden_power_power;   // arg 3: state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> state_happiness;   // arg 4: state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> state_gender;   // arg 5: state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> state_types;   // arg 6: state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> state_base_types;   // arg 7: state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> state_stats;   // arg 8: state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> state_hp;   // arg 9: state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> state_max_hp;   // arg 10: state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> state_status;   // arg 11: state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> state_status_counter;   // arg 12: state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> state_sleep_skipped;   // arg 13: state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> state_rest_origin;   // arg 14: state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> state_moves;   // arg 15: state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> state_pp;   // arg 16: state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> state_disabled;   // arg 17: state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> state_choice_move;   // arg 18: state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> state_last_move;   // arg 19: state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> state_last_action_kind;   // arg 20: state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> state_last_action_index;   // arg 21: state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> state_encore_move;   // arg 22: state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> state_encore_counter;   // arg 23: state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> state_charge_move;   // arg 24: state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> state_charge_counter;   // arg 25: state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> state_item;   // arg 26: state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> state_ability;   // arg 27: state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> state_base_ability;   // arg 28: state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> state_boosts;   // arg 29: state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> state_volatile;   // arg 30: state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> state_confusion_counter;   // arg 31: state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> state_protect_counter;   // arg 32: state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> state_substitute_hp;   // arg 33: state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> state_active;   // arg 34: state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> state_entry_pending;   // arg 35: state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> state_active_turns;   // arg 36: state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> state_trapped;   // arg 37: state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> state_trap_source;   // arg 38: state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> state_forced_switch;   // arg 39: state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> state_baton_pass;   // arg 40: state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> state_queued_actor;   // arg 41: state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> state_queued_actions;   // arg 42: state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> state_queued_stall;   // arg 43: state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> state_pending_residual;   // arg 44: state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> state_residual_draws;   // arg 45: state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> state_phazing_draws;   // arg 46: state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> state_secondary_draws;   // arg 47: state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> state_sleep_talk_draws;   // arg 48: state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> state_replacement_count;   // arg 49: state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> state_spikes;   // arg 50: state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> state_wish_counter;   // arg 51: state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> state_wish_amount;   // arg 52: state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> state_weather;   // arg 53: state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> state_weather_counter;   // arg 54: state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> state_turn;   // arg 55: state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> state_keys;   // arg 56: state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> state_done;   // arg 57: state.done bool[] (source state, '.done')
+  Leaf<int32_t> state_winner;   // arg 58: state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> state_truant_loaf;   // arg 59: state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<int32_t, 2> actions;   // arg 60: actions int32[2] (source actions, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 61: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 62: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 63: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 64: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 65: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 66: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 67: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 68: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 69: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 70: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 71: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 72: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 73: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 74: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 75: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 76: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 77: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 78: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 79: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 80: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 81: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 82: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 83: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 84: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 85: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 86: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 87: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 88: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 89: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 90: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 91: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 92: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 93: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 94: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 95: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 96: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 97: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 98: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 99: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 100: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 101: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 102: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 103: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 104: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 105: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 106: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 107: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 108: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 109: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 110: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 111: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 112: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 113: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 114: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 115: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 116: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 117: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 118: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 119: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 120: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 121: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 122: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 123: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 124: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 125: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 126: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 127: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 128: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 129: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 130: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 131: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 132: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 133: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 134: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 135: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 136: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 137: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 138: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 139: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 140: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 141: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 142: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 143: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 144: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 145: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 146: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  Leaf<bool> replacement;   // arg 147: replacement bool[] (source local, '')
+  Leaf<bool> invalid;   // arg 148: invalid bool[] (source local, '')
+  Leaf<bool> resuming;   // arg 149: resuming bool[] (source local, '')
+  Leaf<int32_t, 2, 12> draws;   // arg 150: draws int32[2, 12] (source local, '')
+  Leaf<int32_t, 2> phazing_draws;   // arg 151: phazing_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> secondary_draws;   // arg 152: secondary_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> sleep_talk_draws;   // arg 153: sleep_talk_draws int32[2] (source local, '')
+  Leaf<int32_t, 2, 6, 2> work_types;   // arg 154: work.types int32[2, 6, 2] (source local, '.types')
+  Leaf<int32_t, 2, 6> work_hp;   // arg 155: work.hp int32[2, 6] (source local, '.hp')
+  Leaf<int32_t, 2, 6> work_status;   // arg 156: work.status int32[2, 6] (source local, '.status')
+  Leaf<int32_t, 2, 6> work_status_counter;   // arg 157: work.status_counter int32[2, 6] (source local, '.status_counter')
+  Leaf<int32_t, 2, 6> work_sleep_skipped;   // arg 158: work.sleep_skipped int32[2, 6] (source local, '.sleep_skipped')
+  Leaf<bool, 2, 6> work_rest_origin;   // arg 159: work.rest_origin bool[2, 6] (source local, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> work_pp;   // arg 160: work.pp int32[2, 6, 4] (source local, '.pp')
+  Leaf<int32_t, 2, 6> work_choice_move;   // arg 161: work.choice_move int32[2, 6] (source local, '.choice_move')
+  Leaf<int32_t, 2, 6> work_last_move;   // arg 162: work.last_move int32[2, 6] (source local, '.last_move')
+  Leaf<int32_t, 2> work_last_action_kind;   // arg 163: work.last_action_kind int32[2] (source local, '.last_action_kind')
+  Leaf<int32_t, 2> work_last_action_index;   // arg 164: work.last_action_index int32[2] (source local, '.last_action_index')
+  Leaf<int32_t, 2, 6> work_encore_move;   // arg 165: work.encore_move int32[2, 6] (source local, '.encore_move')
+  Leaf<int32_t, 2, 6> work_encore_counter;   // arg 166: work.encore_counter int32[2, 6] (source local, '.encore_counter')
+  Leaf<int32_t, 2, 6> work_charge_move;   // arg 167: work.charge_move int32[2, 6] (source local, '.charge_move')
+  Leaf<int32_t, 2, 6> work_charge_counter;   // arg 168: work.charge_counter int32[2, 6] (source local, '.charge_counter')
+  Leaf<int32_t, 2, 6> work_item;   // arg 169: work.item int32[2, 6] (source local, '.item')
+  Leaf<int32_t, 2, 6> work_ability;   // arg 170: work.ability int32[2, 6] (source local, '.ability')
+  Leaf<int32_t, 2, 6, 7> work_boosts;   // arg 171: work.boosts int32[2, 6, 7] (source local, '.boosts')
+  Leaf<uint32_t, 2, 6> work_volatile;   // arg 172: work.volatile uint32[2, 6] (source local, '.volatile')
+  Leaf<int32_t, 2, 6> work_confusion_counter;   // arg 173: work.confusion_counter int32[2, 6] (source local, '.confusion_counter')
+  Leaf<int32_t, 2, 6> work_protect_counter;   // arg 174: work.protect_counter int32[2, 6] (source local, '.protect_counter')
+  Leaf<int32_t, 2, 6> work_substitute_hp;   // arg 175: work.substitute_hp int32[2, 6] (source local, '.substitute_hp')
+  Leaf<int32_t, 2> work_active;   // arg 176: work.active int32[2] (source local, '.active')
+  Leaf<bool, 2> work_entry_pending;   // arg 177: work.entry_pending bool[2] (source local, '.entry_pending')
+  Leaf<int32_t, 2> work_active_turns;   // arg 178: work.active_turns int32[2] (source local, '.active_turns')
+  Leaf<int32_t, 2, 6> work_trap_source;   // arg 179: work.trap_source int32[2, 6] (source local, '.trap_source')
+  Leaf<bool, 2> work_baton_pass;   // arg 180: work.baton_pass bool[2] (source local, '.baton_pass')
+  Leaf<int32_t> work_weather;   // arg 181: work.weather int32[] (source local, '.weather')
+  Leaf<int32_t> work_weather_counter;   // arg 182: work.weather_counter int32[] (source local, '.weather_counter')
+  Leaf<uint32_t, 2> work_keys;   // arg 183: work.keys uint32[2] (source local, '.keys')
+  Leaf<bool, 2, 6> work_truant_loaf;   // arg 184: work.truant_loaf bool[2, 6] (source local, '.truant_loaf')
+  Leaf<int32_t, 2> speed;   // arg 185: speed int32[2] (source local, '')
+  Leaf<bool, 2> switches;   // arg 186: switches bool[2] (source local, '')
+  Leaf<int32_t> saved_actor;   // arg 187: saved_actor int32[] (source local, '')
+  Leaf<int32_t, 2> slot;   // arg 188: slot int32[2] (source local, '')
+  Leaf<bool, 2> struggle;   // arg 189: struggle bool[2] (source local, '')
+  Leaf<int32_t, 2> moves;   // arg 190: moves int32[2] (source local, '')
+  Leaf<bool, 2> pursuit_used;   // arg 191: pursuit_used bool[2] (source local, '')
+  Leaf<bool> pursuit_faint;   // arg 192: pursuit_faint bool[] (source local, '')
+  Leaf<bool> switch_faint;   // arg 193: switch_faint bool[] (source local, '')
+  Leaf<bool> live;   // arg 194: live bool[] (source local, '')
+  static constexpr int arg_state_species = 0;
+  static constexpr int arg_state_level = 1;
+  static constexpr int arg_state_hidden_power_type = 2;
+  static constexpr int arg_state_hidden_power_power = 3;
+  static constexpr int arg_state_happiness = 4;
+  static constexpr int arg_state_gender = 5;
+  static constexpr int arg_state_types = 6;
+  static constexpr int arg_state_base_types = 7;
+  static constexpr int arg_state_stats = 8;
+  static constexpr int arg_state_hp = 9;
+  static constexpr int arg_state_max_hp = 10;
+  static constexpr int arg_state_status = 11;
+  static constexpr int arg_state_status_counter = 12;
+  static constexpr int arg_state_sleep_skipped = 13;
+  static constexpr int arg_state_rest_origin = 14;
+  static constexpr int arg_state_moves = 15;
+  static constexpr int arg_state_pp = 16;
+  static constexpr int arg_state_disabled = 17;
+  static constexpr int arg_state_choice_move = 18;
+  static constexpr int arg_state_last_move = 19;
+  static constexpr int arg_state_last_action_kind = 20;
+  static constexpr int arg_state_last_action_index = 21;
+  static constexpr int arg_state_encore_move = 22;
+  static constexpr int arg_state_encore_counter = 23;
+  static constexpr int arg_state_charge_move = 24;
+  static constexpr int arg_state_charge_counter = 25;
+  static constexpr int arg_state_item = 26;
+  static constexpr int arg_state_ability = 27;
+  static constexpr int arg_state_base_ability = 28;
+  static constexpr int arg_state_boosts = 29;
+  static constexpr int arg_state_volatile = 30;
+  static constexpr int arg_state_confusion_counter = 31;
+  static constexpr int arg_state_protect_counter = 32;
+  static constexpr int arg_state_substitute_hp = 33;
+  static constexpr int arg_state_active = 34;
+  static constexpr int arg_state_entry_pending = 35;
+  static constexpr int arg_state_active_turns = 36;
+  static constexpr int arg_state_trapped = 37;
+  static constexpr int arg_state_trap_source = 38;
+  static constexpr int arg_state_forced_switch = 39;
+  static constexpr int arg_state_baton_pass = 40;
+  static constexpr int arg_state_queued_actor = 41;
+  static constexpr int arg_state_queued_actions = 42;
+  static constexpr int arg_state_queued_stall = 43;
+  static constexpr int arg_state_pending_residual = 44;
+  static constexpr int arg_state_residual_draws = 45;
+  static constexpr int arg_state_phazing_draws = 46;
+  static constexpr int arg_state_secondary_draws = 47;
+  static constexpr int arg_state_sleep_talk_draws = 48;
+  static constexpr int arg_state_replacement_count = 49;
+  static constexpr int arg_state_spikes = 50;
+  static constexpr int arg_state_wish_counter = 51;
+  static constexpr int arg_state_wish_amount = 52;
+  static constexpr int arg_state_weather = 53;
+  static constexpr int arg_state_weather_counter = 54;
+  static constexpr int arg_state_turn = 55;
+  static constexpr int arg_state_keys = 56;
+  static constexpr int arg_state_done = 57;
+  static constexpr int arg_state_winner = 58;
+  static constexpr int arg_state_truant_loaf = 59;
+  static constexpr int arg_actions = 60;
+  static constexpr int arg_trackers_physical_to_public = 61;
+  static constexpr int arg_trackers_active_physical = 62;
+  static constexpr int arg_trackers_active_slot = 63;
+  static constexpr int arg_trackers_next_slot = 64;
+  static constexpr int arg_trackers_own_order = 65;
+  static constexpr int arg_trackers_species = 66;
+  static constexpr int arg_trackers_level = 67;
+  static constexpr int arg_trackers_gender = 68;
+  static constexpr int arg_trackers_hp_percent = 69;
+  static constexpr int arg_trackers_status = 70;
+  static constexpr int arg_trackers_boosts = 71;
+  static constexpr int arg_trackers_present = 72;
+  static constexpr int arg_trackers_fainted = 73;
+  static constexpr int arg_trackers_turn = 74;
+  static constexpr int arg_trackers_weather = 75;
+  static constexpr int arg_trackers_spikes = 76;
+  static constexpr int arg_trackers_error = 77;
+  static constexpr int arg_trackers_observed_moves = 78;
+  static constexpr int arg_trackers_pp_used = 79;
+  static constexpr int arg_trackers_last_moves = 80;
+  static constexpr int arg_trackers_tendencies = 81;
+  static constexpr int arg_trackers_belief_mask = 82;
+  static constexpr int arg_trackers_shown_ability = 83;
+  static constexpr int arg_trackers_shown_item = 84;
+  static constexpr int arg_trackers_shown_types = 85;
+  static constexpr int arg_trackers_borrowed_ability = 86;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 87;
+  static constexpr int arg_trackers_mon_features_encore_turns = 88;
+  static constexpr int arg_trackers_mon_features_item_swapped = 89;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 91;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 92;
+  static constexpr int arg_trackers_mon_features_moves_shown = 93;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 94;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 95;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 96;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 98;
+  static constexpr int arg_trackers_mon_features_stall_counter = 99;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 100;
+  static constexpr int arg_trackers_mon_features_sub_present = 101;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 102;
+  static constexpr int arg_trackers_mon_features_switches = 103;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 104;
+  static constexpr int arg_trackers_mon_features_turns_active = 105;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 106;
+  static constexpr int arg_trackers_field_features_weather_permanent = 107;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 108;
+  static constexpr int arg_trackers_field_features_wish_pending = 109;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 110;
+  static constexpr int arg_trackers_field_features_wish_turns = 111;
+  static constexpr int arg_trackers_original_ability = 112;
+  static constexpr int arg_trackers_damage_exact_dealt = 113;
+  static constexpr int arg_trackers_damage_exact_taken = 114;
+  static constexpr int arg_trackers_public_volatiles = 115;
+  static constexpr int arg_trackers_item_removed = 116;
+  static constexpr int arg_trackers_tendency_moved = 117;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 118;
+  static constexpr int arg_trackers_tendency_switches = 119;
+  static constexpr int arg_trackers_tendency_opportunities = 120;
+  static constexpr int arg_trackers_tendency_matchup = 121;
+  static constexpr int arg_trackers_damage_history_hp = 122;
+  static constexpr int arg_trackers_damage_history_maximum = 123;
+  static constexpr int arg_trackers_damage_history_taken = 124;
+  static constexpr int arg_trackers_damage_history_dealt = 125;
+  static constexpr int arg_trackers_negative_items_percent = 126;
+  static constexpr int arg_trackers_negative_items_known = 127;
+  static constexpr int arg_trackers_visible_belief_pin = 128;
+  static constexpr int arg_trackers_visible_belief_pin_active = 129;
+  static constexpr int arg_trackers_visible_belief_conflicts = 130;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 131;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 133;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 135;
+  static constexpr int arg_trackers_public_port_holder = 136;
+  static constexpr int arg_trackers_public_port_victims = 137;
+  static constexpr int arg_trackers_public_port_known = 138;
+  static constexpr int arg_trackers_public_port_loaf = 139;
+  static constexpr int arg_trackers_public_port_traced = 140;
+  static constexpr int arg_trackers_public_port_skip_flip = 141;
+  static constexpr int arg_trackers_public_port_post_upkeep = 142;
+  static constexpr int arg_trackers_public_port_hazards = 143;
+  static constexpr int arg_trackers_public_port_blocked = 144;
+  static constexpr int arg_trackers_public_port_pursuit = 145;
+  static constexpr int arg_trackers_public_port_weather = 146;
+  static constexpr int arg_replacement = 147;
+  static constexpr int arg_invalid = 148;
+  static constexpr int arg_resuming = 149;
+  static constexpr int arg_draws = 150;
+  static constexpr int arg_phazing_draws = 151;
+  static constexpr int arg_secondary_draws = 152;
+  static constexpr int arg_sleep_talk_draws = 153;
+  static constexpr int arg_work_types = 154;
+  static constexpr int arg_work_hp = 155;
+  static constexpr int arg_work_status = 156;
+  static constexpr int arg_work_status_counter = 157;
+  static constexpr int arg_work_sleep_skipped = 158;
+  static constexpr int arg_work_rest_origin = 159;
+  static constexpr int arg_work_pp = 160;
+  static constexpr int arg_work_choice_move = 161;
+  static constexpr int arg_work_last_move = 162;
+  static constexpr int arg_work_last_action_kind = 163;
+  static constexpr int arg_work_last_action_index = 164;
+  static constexpr int arg_work_encore_move = 165;
+  static constexpr int arg_work_encore_counter = 166;
+  static constexpr int arg_work_charge_move = 167;
+  static constexpr int arg_work_charge_counter = 168;
+  static constexpr int arg_work_item = 169;
+  static constexpr int arg_work_ability = 170;
+  static constexpr int arg_work_boosts = 171;
+  static constexpr int arg_work_volatile = 172;
+  static constexpr int arg_work_confusion_counter = 173;
+  static constexpr int arg_work_protect_counter = 174;
+  static constexpr int arg_work_substitute_hp = 175;
+  static constexpr int arg_work_active = 176;
+  static constexpr int arg_work_entry_pending = 177;
+  static constexpr int arg_work_active_turns = 178;
+  static constexpr int arg_work_trap_source = 179;
+  static constexpr int arg_work_baton_pass = 180;
+  static constexpr int arg_work_weather = 181;
+  static constexpr int arg_work_weather_counter = 182;
+  static constexpr int arg_work_keys = 183;
+  static constexpr int arg_work_truant_loaf = 184;
+  static constexpr int arg_speed = 185;
+  static constexpr int arg_switches = 186;
+  static constexpr int arg_saved_actor = 187;
+  static constexpr int arg_slot = 188;
+  static constexpr int arg_struggle = 189;
+  static constexpr int arg_moves = 190;
+  static constexpr int arg_pursuit_used = 191;
+  static constexpr int arg_pursuit_faint = 192;
+  static constexpr int arg_switch_faint = 193;
+  static constexpr int arg_live = 194;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b3 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b3 v;
+    v.state_species.p = static_cast<int32_t*>(bufs[0]); v.state_species.lanes = lanes;
+    v.state_level.p = static_cast<int32_t*>(bufs[1]); v.state_level.lanes = lanes;
+    v.state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.state_hidden_power_type.lanes = lanes;
+    v.state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.state_hidden_power_power.lanes = lanes;
+    v.state_happiness.p = static_cast<int32_t*>(bufs[4]); v.state_happiness.lanes = lanes;
+    v.state_gender.p = static_cast<int32_t*>(bufs[5]); v.state_gender.lanes = lanes;
+    v.state_types.p = static_cast<int32_t*>(bufs[6]); v.state_types.lanes = lanes;
+    v.state_base_types.p = static_cast<int32_t*>(bufs[7]); v.state_base_types.lanes = lanes;
+    v.state_stats.p = static_cast<int32_t*>(bufs[8]); v.state_stats.lanes = lanes;
+    v.state_hp.p = static_cast<int32_t*>(bufs[9]); v.state_hp.lanes = lanes;
+    v.state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.state_max_hp.lanes = lanes;
+    v.state_status.p = static_cast<int32_t*>(bufs[11]); v.state_status.lanes = lanes;
+    v.state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.state_status_counter.lanes = lanes;
+    v.state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.state_sleep_skipped.lanes = lanes;
+    v.state_rest_origin.p = static_cast<bool*>(bufs[14]); v.state_rest_origin.lanes = lanes;
+    v.state_moves.p = static_cast<int32_t*>(bufs[15]); v.state_moves.lanes = lanes;
+    v.state_pp.p = static_cast<int32_t*>(bufs[16]); v.state_pp.lanes = lanes;
+    v.state_disabled.p = static_cast<bool*>(bufs[17]); v.state_disabled.lanes = lanes;
+    v.state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.state_choice_move.lanes = lanes;
+    v.state_last_move.p = static_cast<int32_t*>(bufs[19]); v.state_last_move.lanes = lanes;
+    v.state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.state_last_action_kind.lanes = lanes;
+    v.state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.state_last_action_index.lanes = lanes;
+    v.state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.state_encore_move.lanes = lanes;
+    v.state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.state_encore_counter.lanes = lanes;
+    v.state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.state_charge_move.lanes = lanes;
+    v.state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.state_charge_counter.lanes = lanes;
+    v.state_item.p = static_cast<int32_t*>(bufs[26]); v.state_item.lanes = lanes;
+    v.state_ability.p = static_cast<int32_t*>(bufs[27]); v.state_ability.lanes = lanes;
+    v.state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.state_base_ability.lanes = lanes;
+    v.state_boosts.p = static_cast<int32_t*>(bufs[29]); v.state_boosts.lanes = lanes;
+    v.state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.state_volatile.lanes = lanes;
+    v.state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.state_confusion_counter.lanes = lanes;
+    v.state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.state_protect_counter.lanes = lanes;
+    v.state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.state_substitute_hp.lanes = lanes;
+    v.state_active.p = static_cast<int32_t*>(bufs[34]); v.state_active.lanes = lanes;
+    v.state_entry_pending.p = static_cast<bool*>(bufs[35]); v.state_entry_pending.lanes = lanes;
+    v.state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.state_active_turns.lanes = lanes;
+    v.state_trapped.p = static_cast<bool*>(bufs[37]); v.state_trapped.lanes = lanes;
+    v.state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.state_trap_source.lanes = lanes;
+    v.state_forced_switch.p = static_cast<bool*>(bufs[39]); v.state_forced_switch.lanes = lanes;
+    v.state_baton_pass.p = static_cast<bool*>(bufs[40]); v.state_baton_pass.lanes = lanes;
+    v.state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.state_queued_actor.lanes = lanes;
+    v.state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.state_queued_actions.lanes = lanes;
+    v.state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.state_queued_stall.lanes = lanes;
+    v.state_pending_residual.p = static_cast<bool*>(bufs[44]); v.state_pending_residual.lanes = lanes;
+    v.state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.state_residual_draws.lanes = lanes;
+    v.state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.state_phazing_draws.lanes = lanes;
+    v.state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.state_secondary_draws.lanes = lanes;
+    v.state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.state_sleep_talk_draws.lanes = lanes;
+    v.state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.state_replacement_count.lanes = lanes;
+    v.state_spikes.p = static_cast<int32_t*>(bufs[50]); v.state_spikes.lanes = lanes;
+    v.state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.state_wish_counter.lanes = lanes;
+    v.state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.state_wish_amount.lanes = lanes;
+    v.state_weather.p = static_cast<int32_t*>(bufs[53]); v.state_weather.lanes = lanes;
+    v.state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.state_weather_counter.lanes = lanes;
+    v.state_turn.p = static_cast<int32_t*>(bufs[55]); v.state_turn.lanes = lanes;
+    v.state_keys.p = static_cast<uint32_t*>(bufs[56]); v.state_keys.lanes = lanes;
+    v.state_done.p = static_cast<bool*>(bufs[57]); v.state_done.lanes = lanes;
+    v.state_winner.p = static_cast<int32_t*>(bufs[58]); v.state_winner.lanes = lanes;
+    v.state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.state_truant_loaf.lanes = lanes;
+    v.actions.p = static_cast<int32_t*>(bufs[60]); v.actions.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[61]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[62]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[65]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[66]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[67]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[68]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[69]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[70]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[71]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[72]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[73]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[74]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[75]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[76]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[77]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[78]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[79]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[80]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[81]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[82]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[83]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[86]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[87]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[90]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[92]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[107]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[108]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[109]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[110]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[112]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[113]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[115]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[116]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[117]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[118]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[122]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[124]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[126]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[127]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[128]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[129]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[130]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[131]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[133]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[134]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[136]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[137]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[143]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[144]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[146]); v.trackers_public_port_weather.lanes = lanes;
+    v.replacement.p = static_cast<bool*>(bufs[147]); v.replacement.lanes = lanes;
+    v.invalid.p = static_cast<bool*>(bufs[148]); v.invalid.lanes = lanes;
+    v.resuming.p = static_cast<bool*>(bufs[149]); v.resuming.lanes = lanes;
+    v.draws.p = static_cast<int32_t*>(bufs[150]); v.draws.lanes = lanes;
+    v.phazing_draws.p = static_cast<int32_t*>(bufs[151]); v.phazing_draws.lanes = lanes;
+    v.secondary_draws.p = static_cast<int32_t*>(bufs[152]); v.secondary_draws.lanes = lanes;
+    v.sleep_talk_draws.p = static_cast<int32_t*>(bufs[153]); v.sleep_talk_draws.lanes = lanes;
+    v.work_types.p = static_cast<int32_t*>(bufs[154]); v.work_types.lanes = lanes;
+    v.work_hp.p = static_cast<int32_t*>(bufs[155]); v.work_hp.lanes = lanes;
+    v.work_status.p = static_cast<int32_t*>(bufs[156]); v.work_status.lanes = lanes;
+    v.work_status_counter.p = static_cast<int32_t*>(bufs[157]); v.work_status_counter.lanes = lanes;
+    v.work_sleep_skipped.p = static_cast<int32_t*>(bufs[158]); v.work_sleep_skipped.lanes = lanes;
+    v.work_rest_origin.p = static_cast<bool*>(bufs[159]); v.work_rest_origin.lanes = lanes;
+    v.work_pp.p = static_cast<int32_t*>(bufs[160]); v.work_pp.lanes = lanes;
+    v.work_choice_move.p = static_cast<int32_t*>(bufs[161]); v.work_choice_move.lanes = lanes;
+    v.work_last_move.p = static_cast<int32_t*>(bufs[162]); v.work_last_move.lanes = lanes;
+    v.work_last_action_kind.p = static_cast<int32_t*>(bufs[163]); v.work_last_action_kind.lanes = lanes;
+    v.work_last_action_index.p = static_cast<int32_t*>(bufs[164]); v.work_last_action_index.lanes = lanes;
+    v.work_encore_move.p = static_cast<int32_t*>(bufs[165]); v.work_encore_move.lanes = lanes;
+    v.work_encore_counter.p = static_cast<int32_t*>(bufs[166]); v.work_encore_counter.lanes = lanes;
+    v.work_charge_move.p = static_cast<int32_t*>(bufs[167]); v.work_charge_move.lanes = lanes;
+    v.work_charge_counter.p = static_cast<int32_t*>(bufs[168]); v.work_charge_counter.lanes = lanes;
+    v.work_item.p = static_cast<int32_t*>(bufs[169]); v.work_item.lanes = lanes;
+    v.work_ability.p = static_cast<int32_t*>(bufs[170]); v.work_ability.lanes = lanes;
+    v.work_boosts.p = static_cast<int32_t*>(bufs[171]); v.work_boosts.lanes = lanes;
+    v.work_volatile.p = static_cast<uint32_t*>(bufs[172]); v.work_volatile.lanes = lanes;
+    v.work_confusion_counter.p = static_cast<int32_t*>(bufs[173]); v.work_confusion_counter.lanes = lanes;
+    v.work_protect_counter.p = static_cast<int32_t*>(bufs[174]); v.work_protect_counter.lanes = lanes;
+    v.work_substitute_hp.p = static_cast<int32_t*>(bufs[175]); v.work_substitute_hp.lanes = lanes;
+    v.work_active.p = static_cast<int32_t*>(bufs[176]); v.work_active.lanes = lanes;
+    v.work_entry_pending.p = static_cast<bool*>(bufs[177]); v.work_entry_pending.lanes = lanes;
+    v.work_active_turns.p = static_cast<int32_t*>(bufs[178]); v.work_active_turns.lanes = lanes;
+    v.work_trap_source.p = static_cast<int32_t*>(bufs[179]); v.work_trap_source.lanes = lanes;
+    v.work_baton_pass.p = static_cast<bool*>(bufs[180]); v.work_baton_pass.lanes = lanes;
+    v.work_weather.p = static_cast<int32_t*>(bufs[181]); v.work_weather.lanes = lanes;
+    v.work_weather_counter.p = static_cast<int32_t*>(bufs[182]); v.work_weather_counter.lanes = lanes;
+    v.work_keys.p = static_cast<uint32_t*>(bufs[183]); v.work_keys.lanes = lanes;
+    v.work_truant_loaf.p = static_cast<bool*>(bufs[184]); v.work_truant_loaf.lanes = lanes;
+    v.speed.p = static_cast<int32_t*>(bufs[185]); v.speed.lanes = lanes;
+    v.switches.p = static_cast<bool*>(bufs[186]); v.switches.lanes = lanes;
+    v.saved_actor.p = static_cast<int32_t*>(bufs[187]); v.saved_actor.lanes = lanes;
+    v.slot.p = static_cast<int32_t*>(bufs[188]); v.slot.lanes = lanes;
+    v.struggle.p = static_cast<bool*>(bufs[189]); v.struggle.lanes = lanes;
+    v.moves.p = static_cast<int32_t*>(bufs[190]); v.moves.lanes = lanes;
+    v.pursuit_used.p = static_cast<bool*>(bufs[191]); v.pursuit_used.lanes = lanes;
+    v.pursuit_faint.p = static_cast<bool*>(bufs[192]); v.pursuit_faint.lanes = lanes;
+    v.switch_faint.p = static_cast<bool*>(bufs[193]); v.switch_faint.lanes = lanes;
+    v.live.p = static_cast<bool*>(bufs[194]); v.live.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.state_species.dbg = dbg;
+    v.state_level.dbg = dbg;
+    v.state_hidden_power_type.dbg = dbg;
+    v.state_hidden_power_power.dbg = dbg;
+    v.state_happiness.dbg = dbg;
+    v.state_gender.dbg = dbg;
+    v.state_types.dbg = dbg;
+    v.state_base_types.dbg = dbg;
+    v.state_stats.dbg = dbg;
+    v.state_hp.dbg = dbg;
+    v.state_max_hp.dbg = dbg;
+    v.state_status.dbg = dbg;
+    v.state_status_counter.dbg = dbg;
+    v.state_sleep_skipped.dbg = dbg;
+    v.state_rest_origin.dbg = dbg;
+    v.state_moves.dbg = dbg;
+    v.state_pp.dbg = dbg;
+    v.state_disabled.dbg = dbg;
+    v.state_choice_move.dbg = dbg;
+    v.state_last_move.dbg = dbg;
+    v.state_last_action_kind.dbg = dbg;
+    v.state_last_action_index.dbg = dbg;
+    v.state_encore_move.dbg = dbg;
+    v.state_encore_counter.dbg = dbg;
+    v.state_charge_move.dbg = dbg;
+    v.state_charge_counter.dbg = dbg;
+    v.state_item.dbg = dbg;
+    v.state_ability.dbg = dbg;
+    v.state_base_ability.dbg = dbg;
+    v.state_boosts.dbg = dbg;
+    v.state_volatile.dbg = dbg;
+    v.state_confusion_counter.dbg = dbg;
+    v.state_protect_counter.dbg = dbg;
+    v.state_substitute_hp.dbg = dbg;
+    v.state_active.dbg = dbg;
+    v.state_entry_pending.dbg = dbg;
+    v.state_active_turns.dbg = dbg;
+    v.state_trapped.dbg = dbg;
+    v.state_trap_source.dbg = dbg;
+    v.state_forced_switch.dbg = dbg;
+    v.state_baton_pass.dbg = dbg;
+    v.state_queued_actor.dbg = dbg;
+    v.state_queued_actions.dbg = dbg;
+    v.state_queued_stall.dbg = dbg;
+    v.state_pending_residual.dbg = dbg;
+    v.state_residual_draws.dbg = dbg;
+    v.state_phazing_draws.dbg = dbg;
+    v.state_secondary_draws.dbg = dbg;
+    v.state_sleep_talk_draws.dbg = dbg;
+    v.state_replacement_count.dbg = dbg;
+    v.state_spikes.dbg = dbg;
+    v.state_wish_counter.dbg = dbg;
+    v.state_wish_amount.dbg = dbg;
+    v.state_weather.dbg = dbg;
+    v.state_weather_counter.dbg = dbg;
+    v.state_turn.dbg = dbg;
+    v.state_keys.dbg = dbg;
+    v.state_done.dbg = dbg;
+    v.state_winner.dbg = dbg;
+    v.state_truant_loaf.dbg = dbg;
+    v.actions.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+    v.replacement.dbg = dbg;
+    v.invalid.dbg = dbg;
+    v.resuming.dbg = dbg;
+    v.draws.dbg = dbg;
+    v.phazing_draws.dbg = dbg;
+    v.secondary_draws.dbg = dbg;
+    v.sleep_talk_draws.dbg = dbg;
+    v.work_types.dbg = dbg;
+    v.work_hp.dbg = dbg;
+    v.work_status.dbg = dbg;
+    v.work_status_counter.dbg = dbg;
+    v.work_sleep_skipped.dbg = dbg;
+    v.work_rest_origin.dbg = dbg;
+    v.work_pp.dbg = dbg;
+    v.work_choice_move.dbg = dbg;
+    v.work_last_move.dbg = dbg;
+    v.work_last_action_kind.dbg = dbg;
+    v.work_last_action_index.dbg = dbg;
+    v.work_encore_move.dbg = dbg;
+    v.work_encore_counter.dbg = dbg;
+    v.work_charge_move.dbg = dbg;
+    v.work_charge_counter.dbg = dbg;
+    v.work_item.dbg = dbg;
+    v.work_ability.dbg = dbg;
+    v.work_boosts.dbg = dbg;
+    v.work_volatile.dbg = dbg;
+    v.work_confusion_counter.dbg = dbg;
+    v.work_protect_counter.dbg = dbg;
+    v.work_substitute_hp.dbg = dbg;
+    v.work_active.dbg = dbg;
+    v.work_entry_pending.dbg = dbg;
+    v.work_active_turns.dbg = dbg;
+    v.work_trap_source.dbg = dbg;
+    v.work_baton_pass.dbg = dbg;
+    v.work_weather.dbg = dbg;
+    v.work_weather_counter.dbg = dbg;
+    v.work_keys.dbg = dbg;
+    v.work_truant_loaf.dbg = dbg;
+    v.speed.dbg = dbg;
+    v.switches.dbg = dbg;
+    v.saved_actor.dbg = dbg;
+    v.slot.dbg = dbg;
+    v.struggle.dbg = dbg;
+    v.moves.dbg = dbg;
+    v.pursuit_used.dbg = dbg;
+    v.pursuit_faint.dbg = dbg;
+    v.switch_faint.dbg = dbg;
+    v.live.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+
+// ---- C_b4: carry at b4 (line 689, occurrence 0): _faint_before_hp=work.hp
+struct C_b4 {
+  static constexpr uint64_t kDigest = 0xbe981f135c519681ull;
+  static constexpr const char* kDigestHex = "be981f135c5196810d69280ad04dd5c1abc6c8c8256473554c4d7ff38690cfbb";
+  static constexpr int kLeaves = 197;
+  Leaf<int32_t, 2, 6> state_species;   // arg 0: state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> state_level;   // arg 1: state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> state_hidden_power_type;   // arg 2: state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> state_hidden_power_power;   // arg 3: state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> state_happiness;   // arg 4: state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> state_gender;   // arg 5: state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> state_types;   // arg 6: state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> state_base_types;   // arg 7: state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> state_stats;   // arg 8: state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> state_hp;   // arg 9: state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> state_max_hp;   // arg 10: state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> state_status;   // arg 11: state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> state_status_counter;   // arg 12: state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> state_sleep_skipped;   // arg 13: state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> state_rest_origin;   // arg 14: state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> state_moves;   // arg 15: state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> state_pp;   // arg 16: state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> state_disabled;   // arg 17: state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> state_choice_move;   // arg 18: state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> state_last_move;   // arg 19: state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> state_last_action_kind;   // arg 20: state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> state_last_action_index;   // arg 21: state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> state_encore_move;   // arg 22: state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> state_encore_counter;   // arg 23: state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> state_charge_move;   // arg 24: state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> state_charge_counter;   // arg 25: state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> state_item;   // arg 26: state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> state_ability;   // arg 27: state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> state_base_ability;   // arg 28: state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> state_boosts;   // arg 29: state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> state_volatile;   // arg 30: state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> state_confusion_counter;   // arg 31: state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> state_protect_counter;   // arg 32: state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> state_substitute_hp;   // arg 33: state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> state_active;   // arg 34: state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> state_entry_pending;   // arg 35: state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> state_active_turns;   // arg 36: state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> state_trapped;   // arg 37: state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> state_trap_source;   // arg 38: state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> state_forced_switch;   // arg 39: state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> state_baton_pass;   // arg 40: state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> state_queued_actor;   // arg 41: state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> state_queued_actions;   // arg 42: state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> state_queued_stall;   // arg 43: state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> state_pending_residual;   // arg 44: state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> state_residual_draws;   // arg 45: state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> state_phazing_draws;   // arg 46: state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> state_secondary_draws;   // arg 47: state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> state_sleep_talk_draws;   // arg 48: state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> state_replacement_count;   // arg 49: state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> state_spikes;   // arg 50: state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> state_wish_counter;   // arg 51: state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> state_wish_amount;   // arg 52: state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> state_weather;   // arg 53: state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> state_weather_counter;   // arg 54: state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> state_turn;   // arg 55: state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> state_keys;   // arg 56: state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> state_done;   // arg 57: state.done bool[] (source state, '.done')
+  Leaf<int32_t> state_winner;   // arg 58: state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> state_truant_loaf;   // arg 59: state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<int32_t, 2> actions;   // arg 60: actions int32[2] (source actions, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 61: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 62: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 63: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 64: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 65: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 66: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 67: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 68: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 69: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 70: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 71: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 72: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 73: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 74: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 75: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 76: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 77: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 78: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 79: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 80: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 81: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 82: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 83: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 84: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 85: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 86: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 87: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 88: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 89: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 90: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 91: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 92: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 93: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 94: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 95: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 96: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 97: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 98: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 99: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 100: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 101: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 102: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 103: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 104: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 105: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 106: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 107: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 108: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 109: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 110: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 111: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 112: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 113: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 114: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 115: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 116: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 117: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 118: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 119: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 120: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 121: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 122: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 123: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 124: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 125: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 126: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 127: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 128: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 129: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 130: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 131: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 132: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 133: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 134: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 135: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 136: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 137: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 138: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 139: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 140: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 141: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 142: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 143: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 144: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 145: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 146: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  Leaf<bool> replacement;   // arg 147: replacement bool[] (source local, '')
+  Leaf<bool> invalid;   // arg 148: invalid bool[] (source local, '')
+  Leaf<bool> resuming;   // arg 149: resuming bool[] (source local, '')
+  Leaf<int32_t, 2, 12> draws;   // arg 150: draws int32[2, 12] (source local, '')
+  Leaf<int32_t, 2> phazing_draws;   // arg 151: phazing_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> secondary_draws;   // arg 152: secondary_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> sleep_talk_draws;   // arg 153: sleep_talk_draws int32[2] (source local, '')
+  Leaf<int32_t, 2, 6, 2> work_types;   // arg 154: work.types int32[2, 6, 2] (source local, '.types')
+  Leaf<int32_t, 2, 6> work_hp;   // arg 155: work.hp int32[2, 6] (source local, '.hp')
+  Leaf<int32_t, 2, 6> work_status;   // arg 156: work.status int32[2, 6] (source local, '.status')
+  Leaf<int32_t, 2, 6> work_status_counter;   // arg 157: work.status_counter int32[2, 6] (source local, '.status_counter')
+  Leaf<int32_t, 2, 6> work_sleep_skipped;   // arg 158: work.sleep_skipped int32[2, 6] (source local, '.sleep_skipped')
+  Leaf<bool, 2, 6> work_rest_origin;   // arg 159: work.rest_origin bool[2, 6] (source local, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> work_pp;   // arg 160: work.pp int32[2, 6, 4] (source local, '.pp')
+  Leaf<int32_t, 2, 6> work_choice_move;   // arg 161: work.choice_move int32[2, 6] (source local, '.choice_move')
+  Leaf<int32_t, 2, 6> work_last_move;   // arg 162: work.last_move int32[2, 6] (source local, '.last_move')
+  Leaf<int32_t, 2> work_last_action_kind;   // arg 163: work.last_action_kind int32[2] (source local, '.last_action_kind')
+  Leaf<int32_t, 2> work_last_action_index;   // arg 164: work.last_action_index int32[2] (source local, '.last_action_index')
+  Leaf<int32_t, 2, 6> work_encore_move;   // arg 165: work.encore_move int32[2, 6] (source local, '.encore_move')
+  Leaf<int32_t, 2, 6> work_encore_counter;   // arg 166: work.encore_counter int32[2, 6] (source local, '.encore_counter')
+  Leaf<int32_t, 2, 6> work_charge_move;   // arg 167: work.charge_move int32[2, 6] (source local, '.charge_move')
+  Leaf<int32_t, 2, 6> work_charge_counter;   // arg 168: work.charge_counter int32[2, 6] (source local, '.charge_counter')
+  Leaf<int32_t, 2, 6> work_item;   // arg 169: work.item int32[2, 6] (source local, '.item')
+  Leaf<int32_t, 2, 6> work_ability;   // arg 170: work.ability int32[2, 6] (source local, '.ability')
+  Leaf<int32_t, 2, 6, 7> work_boosts;   // arg 171: work.boosts int32[2, 6, 7] (source local, '.boosts')
+  Leaf<uint32_t, 2, 6> work_volatile;   // arg 172: work.volatile uint32[2, 6] (source local, '.volatile')
+  Leaf<int32_t, 2, 6> work_confusion_counter;   // arg 173: work.confusion_counter int32[2, 6] (source local, '.confusion_counter')
+  Leaf<int32_t, 2, 6> work_protect_counter;   // arg 174: work.protect_counter int32[2, 6] (source local, '.protect_counter')
+  Leaf<int32_t, 2, 6> work_substitute_hp;   // arg 175: work.substitute_hp int32[2, 6] (source local, '.substitute_hp')
+  Leaf<int32_t, 2> work_active;   // arg 176: work.active int32[2] (source local, '.active')
+  Leaf<bool, 2> work_entry_pending;   // arg 177: work.entry_pending bool[2] (source local, '.entry_pending')
+  Leaf<int32_t, 2> work_active_turns;   // arg 178: work.active_turns int32[2] (source local, '.active_turns')
+  Leaf<int32_t, 2, 6> work_trap_source;   // arg 179: work.trap_source int32[2, 6] (source local, '.trap_source')
+  Leaf<bool, 2> work_baton_pass;   // arg 180: work.baton_pass bool[2] (source local, '.baton_pass')
+  Leaf<int32_t> work_weather;   // arg 181: work.weather int32[] (source local, '.weather')
+  Leaf<int32_t> work_weather_counter;   // arg 182: work.weather_counter int32[] (source local, '.weather_counter')
+  Leaf<uint32_t, 2> work_keys;   // arg 183: work.keys uint32[2] (source local, '.keys')
+  Leaf<bool, 2, 6> work_truant_loaf;   // arg 184: work.truant_loaf bool[2, 6] (source local, '.truant_loaf')
+  Leaf<bool, 2> switches;   // arg 185: switches bool[2] (source local, '')
+  Leaf<int32_t> saved_actor;   // arg 186: saved_actor int32[] (source local, '')
+  Leaf<int32_t, 2> slot;   // arg 187: slot int32[2] (source local, '')
+  Leaf<bool, 2> struggle;   // arg 188: struggle bool[2] (source local, '')
+  Leaf<int32_t, 2> moves;   // arg 189: moves int32[2] (source local, '')
+  Leaf<bool, 2> pursuit_used;   // arg 190: pursuit_used bool[2] (source local, '')
+  Leaf<int32_t> first;   // arg 191: first int32[] (source local, '')
+  Leaf<int32_t> placeholders;   // arg 192: placeholders int32[] (source local, '')
+  Leaf<bool> moves_cancelled;   // arg 193: moves_cancelled bool[] (source local, '')
+  Leaf<int32_t, 2, 6> old_stall;   // arg 194: old_stall int32[2, 6] (source local, '')
+  Leaf<int32_t, 2> saved_stall;   // arg 195: saved_stall int32[2] (source local, '')
+  Leaf<bool> live;   // arg 196: live bool[] (source local, '')
+  static constexpr int arg_state_species = 0;
+  static constexpr int arg_state_level = 1;
+  static constexpr int arg_state_hidden_power_type = 2;
+  static constexpr int arg_state_hidden_power_power = 3;
+  static constexpr int arg_state_happiness = 4;
+  static constexpr int arg_state_gender = 5;
+  static constexpr int arg_state_types = 6;
+  static constexpr int arg_state_base_types = 7;
+  static constexpr int arg_state_stats = 8;
+  static constexpr int arg_state_hp = 9;
+  static constexpr int arg_state_max_hp = 10;
+  static constexpr int arg_state_status = 11;
+  static constexpr int arg_state_status_counter = 12;
+  static constexpr int arg_state_sleep_skipped = 13;
+  static constexpr int arg_state_rest_origin = 14;
+  static constexpr int arg_state_moves = 15;
+  static constexpr int arg_state_pp = 16;
+  static constexpr int arg_state_disabled = 17;
+  static constexpr int arg_state_choice_move = 18;
+  static constexpr int arg_state_last_move = 19;
+  static constexpr int arg_state_last_action_kind = 20;
+  static constexpr int arg_state_last_action_index = 21;
+  static constexpr int arg_state_encore_move = 22;
+  static constexpr int arg_state_encore_counter = 23;
+  static constexpr int arg_state_charge_move = 24;
+  static constexpr int arg_state_charge_counter = 25;
+  static constexpr int arg_state_item = 26;
+  static constexpr int arg_state_ability = 27;
+  static constexpr int arg_state_base_ability = 28;
+  static constexpr int arg_state_boosts = 29;
+  static constexpr int arg_state_volatile = 30;
+  static constexpr int arg_state_confusion_counter = 31;
+  static constexpr int arg_state_protect_counter = 32;
+  static constexpr int arg_state_substitute_hp = 33;
+  static constexpr int arg_state_active = 34;
+  static constexpr int arg_state_entry_pending = 35;
+  static constexpr int arg_state_active_turns = 36;
+  static constexpr int arg_state_trapped = 37;
+  static constexpr int arg_state_trap_source = 38;
+  static constexpr int arg_state_forced_switch = 39;
+  static constexpr int arg_state_baton_pass = 40;
+  static constexpr int arg_state_queued_actor = 41;
+  static constexpr int arg_state_queued_actions = 42;
+  static constexpr int arg_state_queued_stall = 43;
+  static constexpr int arg_state_pending_residual = 44;
+  static constexpr int arg_state_residual_draws = 45;
+  static constexpr int arg_state_phazing_draws = 46;
+  static constexpr int arg_state_secondary_draws = 47;
+  static constexpr int arg_state_sleep_talk_draws = 48;
+  static constexpr int arg_state_replacement_count = 49;
+  static constexpr int arg_state_spikes = 50;
+  static constexpr int arg_state_wish_counter = 51;
+  static constexpr int arg_state_wish_amount = 52;
+  static constexpr int arg_state_weather = 53;
+  static constexpr int arg_state_weather_counter = 54;
+  static constexpr int arg_state_turn = 55;
+  static constexpr int arg_state_keys = 56;
+  static constexpr int arg_state_done = 57;
+  static constexpr int arg_state_winner = 58;
+  static constexpr int arg_state_truant_loaf = 59;
+  static constexpr int arg_actions = 60;
+  static constexpr int arg_trackers_physical_to_public = 61;
+  static constexpr int arg_trackers_active_physical = 62;
+  static constexpr int arg_trackers_active_slot = 63;
+  static constexpr int arg_trackers_next_slot = 64;
+  static constexpr int arg_trackers_own_order = 65;
+  static constexpr int arg_trackers_species = 66;
+  static constexpr int arg_trackers_level = 67;
+  static constexpr int arg_trackers_gender = 68;
+  static constexpr int arg_trackers_hp_percent = 69;
+  static constexpr int arg_trackers_status = 70;
+  static constexpr int arg_trackers_boosts = 71;
+  static constexpr int arg_trackers_present = 72;
+  static constexpr int arg_trackers_fainted = 73;
+  static constexpr int arg_trackers_turn = 74;
+  static constexpr int arg_trackers_weather = 75;
+  static constexpr int arg_trackers_spikes = 76;
+  static constexpr int arg_trackers_error = 77;
+  static constexpr int arg_trackers_observed_moves = 78;
+  static constexpr int arg_trackers_pp_used = 79;
+  static constexpr int arg_trackers_last_moves = 80;
+  static constexpr int arg_trackers_tendencies = 81;
+  static constexpr int arg_trackers_belief_mask = 82;
+  static constexpr int arg_trackers_shown_ability = 83;
+  static constexpr int arg_trackers_shown_item = 84;
+  static constexpr int arg_trackers_shown_types = 85;
+  static constexpr int arg_trackers_borrowed_ability = 86;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 87;
+  static constexpr int arg_trackers_mon_features_encore_turns = 88;
+  static constexpr int arg_trackers_mon_features_item_swapped = 89;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 91;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 92;
+  static constexpr int arg_trackers_mon_features_moves_shown = 93;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 94;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 95;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 96;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 98;
+  static constexpr int arg_trackers_mon_features_stall_counter = 99;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 100;
+  static constexpr int arg_trackers_mon_features_sub_present = 101;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 102;
+  static constexpr int arg_trackers_mon_features_switches = 103;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 104;
+  static constexpr int arg_trackers_mon_features_turns_active = 105;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 106;
+  static constexpr int arg_trackers_field_features_weather_permanent = 107;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 108;
+  static constexpr int arg_trackers_field_features_wish_pending = 109;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 110;
+  static constexpr int arg_trackers_field_features_wish_turns = 111;
+  static constexpr int arg_trackers_original_ability = 112;
+  static constexpr int arg_trackers_damage_exact_dealt = 113;
+  static constexpr int arg_trackers_damage_exact_taken = 114;
+  static constexpr int arg_trackers_public_volatiles = 115;
+  static constexpr int arg_trackers_item_removed = 116;
+  static constexpr int arg_trackers_tendency_moved = 117;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 118;
+  static constexpr int arg_trackers_tendency_switches = 119;
+  static constexpr int arg_trackers_tendency_opportunities = 120;
+  static constexpr int arg_trackers_tendency_matchup = 121;
+  static constexpr int arg_trackers_damage_history_hp = 122;
+  static constexpr int arg_trackers_damage_history_maximum = 123;
+  static constexpr int arg_trackers_damage_history_taken = 124;
+  static constexpr int arg_trackers_damage_history_dealt = 125;
+  static constexpr int arg_trackers_negative_items_percent = 126;
+  static constexpr int arg_trackers_negative_items_known = 127;
+  static constexpr int arg_trackers_visible_belief_pin = 128;
+  static constexpr int arg_trackers_visible_belief_pin_active = 129;
+  static constexpr int arg_trackers_visible_belief_conflicts = 130;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 131;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 133;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 135;
+  static constexpr int arg_trackers_public_port_holder = 136;
+  static constexpr int arg_trackers_public_port_victims = 137;
+  static constexpr int arg_trackers_public_port_known = 138;
+  static constexpr int arg_trackers_public_port_loaf = 139;
+  static constexpr int arg_trackers_public_port_traced = 140;
+  static constexpr int arg_trackers_public_port_skip_flip = 141;
+  static constexpr int arg_trackers_public_port_post_upkeep = 142;
+  static constexpr int arg_trackers_public_port_hazards = 143;
+  static constexpr int arg_trackers_public_port_blocked = 144;
+  static constexpr int arg_trackers_public_port_pursuit = 145;
+  static constexpr int arg_trackers_public_port_weather = 146;
+  static constexpr int arg_replacement = 147;
+  static constexpr int arg_invalid = 148;
+  static constexpr int arg_resuming = 149;
+  static constexpr int arg_draws = 150;
+  static constexpr int arg_phazing_draws = 151;
+  static constexpr int arg_secondary_draws = 152;
+  static constexpr int arg_sleep_talk_draws = 153;
+  static constexpr int arg_work_types = 154;
+  static constexpr int arg_work_hp = 155;
+  static constexpr int arg_work_status = 156;
+  static constexpr int arg_work_status_counter = 157;
+  static constexpr int arg_work_sleep_skipped = 158;
+  static constexpr int arg_work_rest_origin = 159;
+  static constexpr int arg_work_pp = 160;
+  static constexpr int arg_work_choice_move = 161;
+  static constexpr int arg_work_last_move = 162;
+  static constexpr int arg_work_last_action_kind = 163;
+  static constexpr int arg_work_last_action_index = 164;
+  static constexpr int arg_work_encore_move = 165;
+  static constexpr int arg_work_encore_counter = 166;
+  static constexpr int arg_work_charge_move = 167;
+  static constexpr int arg_work_charge_counter = 168;
+  static constexpr int arg_work_item = 169;
+  static constexpr int arg_work_ability = 170;
+  static constexpr int arg_work_boosts = 171;
+  static constexpr int arg_work_volatile = 172;
+  static constexpr int arg_work_confusion_counter = 173;
+  static constexpr int arg_work_protect_counter = 174;
+  static constexpr int arg_work_substitute_hp = 175;
+  static constexpr int arg_work_active = 176;
+  static constexpr int arg_work_entry_pending = 177;
+  static constexpr int arg_work_active_turns = 178;
+  static constexpr int arg_work_trap_source = 179;
+  static constexpr int arg_work_baton_pass = 180;
+  static constexpr int arg_work_weather = 181;
+  static constexpr int arg_work_weather_counter = 182;
+  static constexpr int arg_work_keys = 183;
+  static constexpr int arg_work_truant_loaf = 184;
+  static constexpr int arg_switches = 185;
+  static constexpr int arg_saved_actor = 186;
+  static constexpr int arg_slot = 187;
+  static constexpr int arg_struggle = 188;
+  static constexpr int arg_moves = 189;
+  static constexpr int arg_pursuit_used = 190;
+  static constexpr int arg_first = 191;
+  static constexpr int arg_placeholders = 192;
+  static constexpr int arg_moves_cancelled = 193;
+  static constexpr int arg_old_stall = 194;
+  static constexpr int arg_saved_stall = 195;
+  static constexpr int arg_live = 196;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b4 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b4 v;
+    v.state_species.p = static_cast<int32_t*>(bufs[0]); v.state_species.lanes = lanes;
+    v.state_level.p = static_cast<int32_t*>(bufs[1]); v.state_level.lanes = lanes;
+    v.state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.state_hidden_power_type.lanes = lanes;
+    v.state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.state_hidden_power_power.lanes = lanes;
+    v.state_happiness.p = static_cast<int32_t*>(bufs[4]); v.state_happiness.lanes = lanes;
+    v.state_gender.p = static_cast<int32_t*>(bufs[5]); v.state_gender.lanes = lanes;
+    v.state_types.p = static_cast<int32_t*>(bufs[6]); v.state_types.lanes = lanes;
+    v.state_base_types.p = static_cast<int32_t*>(bufs[7]); v.state_base_types.lanes = lanes;
+    v.state_stats.p = static_cast<int32_t*>(bufs[8]); v.state_stats.lanes = lanes;
+    v.state_hp.p = static_cast<int32_t*>(bufs[9]); v.state_hp.lanes = lanes;
+    v.state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.state_max_hp.lanes = lanes;
+    v.state_status.p = static_cast<int32_t*>(bufs[11]); v.state_status.lanes = lanes;
+    v.state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.state_status_counter.lanes = lanes;
+    v.state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.state_sleep_skipped.lanes = lanes;
+    v.state_rest_origin.p = static_cast<bool*>(bufs[14]); v.state_rest_origin.lanes = lanes;
+    v.state_moves.p = static_cast<int32_t*>(bufs[15]); v.state_moves.lanes = lanes;
+    v.state_pp.p = static_cast<int32_t*>(bufs[16]); v.state_pp.lanes = lanes;
+    v.state_disabled.p = static_cast<bool*>(bufs[17]); v.state_disabled.lanes = lanes;
+    v.state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.state_choice_move.lanes = lanes;
+    v.state_last_move.p = static_cast<int32_t*>(bufs[19]); v.state_last_move.lanes = lanes;
+    v.state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.state_last_action_kind.lanes = lanes;
+    v.state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.state_last_action_index.lanes = lanes;
+    v.state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.state_encore_move.lanes = lanes;
+    v.state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.state_encore_counter.lanes = lanes;
+    v.state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.state_charge_move.lanes = lanes;
+    v.state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.state_charge_counter.lanes = lanes;
+    v.state_item.p = static_cast<int32_t*>(bufs[26]); v.state_item.lanes = lanes;
+    v.state_ability.p = static_cast<int32_t*>(bufs[27]); v.state_ability.lanes = lanes;
+    v.state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.state_base_ability.lanes = lanes;
+    v.state_boosts.p = static_cast<int32_t*>(bufs[29]); v.state_boosts.lanes = lanes;
+    v.state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.state_volatile.lanes = lanes;
+    v.state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.state_confusion_counter.lanes = lanes;
+    v.state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.state_protect_counter.lanes = lanes;
+    v.state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.state_substitute_hp.lanes = lanes;
+    v.state_active.p = static_cast<int32_t*>(bufs[34]); v.state_active.lanes = lanes;
+    v.state_entry_pending.p = static_cast<bool*>(bufs[35]); v.state_entry_pending.lanes = lanes;
+    v.state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.state_active_turns.lanes = lanes;
+    v.state_trapped.p = static_cast<bool*>(bufs[37]); v.state_trapped.lanes = lanes;
+    v.state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.state_trap_source.lanes = lanes;
+    v.state_forced_switch.p = static_cast<bool*>(bufs[39]); v.state_forced_switch.lanes = lanes;
+    v.state_baton_pass.p = static_cast<bool*>(bufs[40]); v.state_baton_pass.lanes = lanes;
+    v.state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.state_queued_actor.lanes = lanes;
+    v.state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.state_queued_actions.lanes = lanes;
+    v.state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.state_queued_stall.lanes = lanes;
+    v.state_pending_residual.p = static_cast<bool*>(bufs[44]); v.state_pending_residual.lanes = lanes;
+    v.state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.state_residual_draws.lanes = lanes;
+    v.state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.state_phazing_draws.lanes = lanes;
+    v.state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.state_secondary_draws.lanes = lanes;
+    v.state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.state_sleep_talk_draws.lanes = lanes;
+    v.state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.state_replacement_count.lanes = lanes;
+    v.state_spikes.p = static_cast<int32_t*>(bufs[50]); v.state_spikes.lanes = lanes;
+    v.state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.state_wish_counter.lanes = lanes;
+    v.state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.state_wish_amount.lanes = lanes;
+    v.state_weather.p = static_cast<int32_t*>(bufs[53]); v.state_weather.lanes = lanes;
+    v.state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.state_weather_counter.lanes = lanes;
+    v.state_turn.p = static_cast<int32_t*>(bufs[55]); v.state_turn.lanes = lanes;
+    v.state_keys.p = static_cast<uint32_t*>(bufs[56]); v.state_keys.lanes = lanes;
+    v.state_done.p = static_cast<bool*>(bufs[57]); v.state_done.lanes = lanes;
+    v.state_winner.p = static_cast<int32_t*>(bufs[58]); v.state_winner.lanes = lanes;
+    v.state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.state_truant_loaf.lanes = lanes;
+    v.actions.p = static_cast<int32_t*>(bufs[60]); v.actions.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[61]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[62]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[65]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[66]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[67]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[68]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[69]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[70]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[71]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[72]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[73]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[74]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[75]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[76]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[77]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[78]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[79]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[80]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[81]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[82]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[83]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[86]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[87]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[90]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[92]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[107]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[108]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[109]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[110]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[112]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[113]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[115]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[116]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[117]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[118]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[122]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[124]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[126]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[127]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[128]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[129]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[130]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[131]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[133]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[134]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[136]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[137]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[143]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[144]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[146]); v.trackers_public_port_weather.lanes = lanes;
+    v.replacement.p = static_cast<bool*>(bufs[147]); v.replacement.lanes = lanes;
+    v.invalid.p = static_cast<bool*>(bufs[148]); v.invalid.lanes = lanes;
+    v.resuming.p = static_cast<bool*>(bufs[149]); v.resuming.lanes = lanes;
+    v.draws.p = static_cast<int32_t*>(bufs[150]); v.draws.lanes = lanes;
+    v.phazing_draws.p = static_cast<int32_t*>(bufs[151]); v.phazing_draws.lanes = lanes;
+    v.secondary_draws.p = static_cast<int32_t*>(bufs[152]); v.secondary_draws.lanes = lanes;
+    v.sleep_talk_draws.p = static_cast<int32_t*>(bufs[153]); v.sleep_talk_draws.lanes = lanes;
+    v.work_types.p = static_cast<int32_t*>(bufs[154]); v.work_types.lanes = lanes;
+    v.work_hp.p = static_cast<int32_t*>(bufs[155]); v.work_hp.lanes = lanes;
+    v.work_status.p = static_cast<int32_t*>(bufs[156]); v.work_status.lanes = lanes;
+    v.work_status_counter.p = static_cast<int32_t*>(bufs[157]); v.work_status_counter.lanes = lanes;
+    v.work_sleep_skipped.p = static_cast<int32_t*>(bufs[158]); v.work_sleep_skipped.lanes = lanes;
+    v.work_rest_origin.p = static_cast<bool*>(bufs[159]); v.work_rest_origin.lanes = lanes;
+    v.work_pp.p = static_cast<int32_t*>(bufs[160]); v.work_pp.lanes = lanes;
+    v.work_choice_move.p = static_cast<int32_t*>(bufs[161]); v.work_choice_move.lanes = lanes;
+    v.work_last_move.p = static_cast<int32_t*>(bufs[162]); v.work_last_move.lanes = lanes;
+    v.work_last_action_kind.p = static_cast<int32_t*>(bufs[163]); v.work_last_action_kind.lanes = lanes;
+    v.work_last_action_index.p = static_cast<int32_t*>(bufs[164]); v.work_last_action_index.lanes = lanes;
+    v.work_encore_move.p = static_cast<int32_t*>(bufs[165]); v.work_encore_move.lanes = lanes;
+    v.work_encore_counter.p = static_cast<int32_t*>(bufs[166]); v.work_encore_counter.lanes = lanes;
+    v.work_charge_move.p = static_cast<int32_t*>(bufs[167]); v.work_charge_move.lanes = lanes;
+    v.work_charge_counter.p = static_cast<int32_t*>(bufs[168]); v.work_charge_counter.lanes = lanes;
+    v.work_item.p = static_cast<int32_t*>(bufs[169]); v.work_item.lanes = lanes;
+    v.work_ability.p = static_cast<int32_t*>(bufs[170]); v.work_ability.lanes = lanes;
+    v.work_boosts.p = static_cast<int32_t*>(bufs[171]); v.work_boosts.lanes = lanes;
+    v.work_volatile.p = static_cast<uint32_t*>(bufs[172]); v.work_volatile.lanes = lanes;
+    v.work_confusion_counter.p = static_cast<int32_t*>(bufs[173]); v.work_confusion_counter.lanes = lanes;
+    v.work_protect_counter.p = static_cast<int32_t*>(bufs[174]); v.work_protect_counter.lanes = lanes;
+    v.work_substitute_hp.p = static_cast<int32_t*>(bufs[175]); v.work_substitute_hp.lanes = lanes;
+    v.work_active.p = static_cast<int32_t*>(bufs[176]); v.work_active.lanes = lanes;
+    v.work_entry_pending.p = static_cast<bool*>(bufs[177]); v.work_entry_pending.lanes = lanes;
+    v.work_active_turns.p = static_cast<int32_t*>(bufs[178]); v.work_active_turns.lanes = lanes;
+    v.work_trap_source.p = static_cast<int32_t*>(bufs[179]); v.work_trap_source.lanes = lanes;
+    v.work_baton_pass.p = static_cast<bool*>(bufs[180]); v.work_baton_pass.lanes = lanes;
+    v.work_weather.p = static_cast<int32_t*>(bufs[181]); v.work_weather.lanes = lanes;
+    v.work_weather_counter.p = static_cast<int32_t*>(bufs[182]); v.work_weather_counter.lanes = lanes;
+    v.work_keys.p = static_cast<uint32_t*>(bufs[183]); v.work_keys.lanes = lanes;
+    v.work_truant_loaf.p = static_cast<bool*>(bufs[184]); v.work_truant_loaf.lanes = lanes;
+    v.switches.p = static_cast<bool*>(bufs[185]); v.switches.lanes = lanes;
+    v.saved_actor.p = static_cast<int32_t*>(bufs[186]); v.saved_actor.lanes = lanes;
+    v.slot.p = static_cast<int32_t*>(bufs[187]); v.slot.lanes = lanes;
+    v.struggle.p = static_cast<bool*>(bufs[188]); v.struggle.lanes = lanes;
+    v.moves.p = static_cast<int32_t*>(bufs[189]); v.moves.lanes = lanes;
+    v.pursuit_used.p = static_cast<bool*>(bufs[190]); v.pursuit_used.lanes = lanes;
+    v.first.p = static_cast<int32_t*>(bufs[191]); v.first.lanes = lanes;
+    v.placeholders.p = static_cast<int32_t*>(bufs[192]); v.placeholders.lanes = lanes;
+    v.moves_cancelled.p = static_cast<bool*>(bufs[193]); v.moves_cancelled.lanes = lanes;
+    v.old_stall.p = static_cast<int32_t*>(bufs[194]); v.old_stall.lanes = lanes;
+    v.saved_stall.p = static_cast<int32_t*>(bufs[195]); v.saved_stall.lanes = lanes;
+    v.live.p = static_cast<bool*>(bufs[196]); v.live.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.state_species.dbg = dbg;
+    v.state_level.dbg = dbg;
+    v.state_hidden_power_type.dbg = dbg;
+    v.state_hidden_power_power.dbg = dbg;
+    v.state_happiness.dbg = dbg;
+    v.state_gender.dbg = dbg;
+    v.state_types.dbg = dbg;
+    v.state_base_types.dbg = dbg;
+    v.state_stats.dbg = dbg;
+    v.state_hp.dbg = dbg;
+    v.state_max_hp.dbg = dbg;
+    v.state_status.dbg = dbg;
+    v.state_status_counter.dbg = dbg;
+    v.state_sleep_skipped.dbg = dbg;
+    v.state_rest_origin.dbg = dbg;
+    v.state_moves.dbg = dbg;
+    v.state_pp.dbg = dbg;
+    v.state_disabled.dbg = dbg;
+    v.state_choice_move.dbg = dbg;
+    v.state_last_move.dbg = dbg;
+    v.state_last_action_kind.dbg = dbg;
+    v.state_last_action_index.dbg = dbg;
+    v.state_encore_move.dbg = dbg;
+    v.state_encore_counter.dbg = dbg;
+    v.state_charge_move.dbg = dbg;
+    v.state_charge_counter.dbg = dbg;
+    v.state_item.dbg = dbg;
+    v.state_ability.dbg = dbg;
+    v.state_base_ability.dbg = dbg;
+    v.state_boosts.dbg = dbg;
+    v.state_volatile.dbg = dbg;
+    v.state_confusion_counter.dbg = dbg;
+    v.state_protect_counter.dbg = dbg;
+    v.state_substitute_hp.dbg = dbg;
+    v.state_active.dbg = dbg;
+    v.state_entry_pending.dbg = dbg;
+    v.state_active_turns.dbg = dbg;
+    v.state_trapped.dbg = dbg;
+    v.state_trap_source.dbg = dbg;
+    v.state_forced_switch.dbg = dbg;
+    v.state_baton_pass.dbg = dbg;
+    v.state_queued_actor.dbg = dbg;
+    v.state_queued_actions.dbg = dbg;
+    v.state_queued_stall.dbg = dbg;
+    v.state_pending_residual.dbg = dbg;
+    v.state_residual_draws.dbg = dbg;
+    v.state_phazing_draws.dbg = dbg;
+    v.state_secondary_draws.dbg = dbg;
+    v.state_sleep_talk_draws.dbg = dbg;
+    v.state_replacement_count.dbg = dbg;
+    v.state_spikes.dbg = dbg;
+    v.state_wish_counter.dbg = dbg;
+    v.state_wish_amount.dbg = dbg;
+    v.state_weather.dbg = dbg;
+    v.state_weather_counter.dbg = dbg;
+    v.state_turn.dbg = dbg;
+    v.state_keys.dbg = dbg;
+    v.state_done.dbg = dbg;
+    v.state_winner.dbg = dbg;
+    v.state_truant_loaf.dbg = dbg;
+    v.actions.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+    v.replacement.dbg = dbg;
+    v.invalid.dbg = dbg;
+    v.resuming.dbg = dbg;
+    v.draws.dbg = dbg;
+    v.phazing_draws.dbg = dbg;
+    v.secondary_draws.dbg = dbg;
+    v.sleep_talk_draws.dbg = dbg;
+    v.work_types.dbg = dbg;
+    v.work_hp.dbg = dbg;
+    v.work_status.dbg = dbg;
+    v.work_status_counter.dbg = dbg;
+    v.work_sleep_skipped.dbg = dbg;
+    v.work_rest_origin.dbg = dbg;
+    v.work_pp.dbg = dbg;
+    v.work_choice_move.dbg = dbg;
+    v.work_last_move.dbg = dbg;
+    v.work_last_action_kind.dbg = dbg;
+    v.work_last_action_index.dbg = dbg;
+    v.work_encore_move.dbg = dbg;
+    v.work_encore_counter.dbg = dbg;
+    v.work_charge_move.dbg = dbg;
+    v.work_charge_counter.dbg = dbg;
+    v.work_item.dbg = dbg;
+    v.work_ability.dbg = dbg;
+    v.work_boosts.dbg = dbg;
+    v.work_volatile.dbg = dbg;
+    v.work_confusion_counter.dbg = dbg;
+    v.work_protect_counter.dbg = dbg;
+    v.work_substitute_hp.dbg = dbg;
+    v.work_active.dbg = dbg;
+    v.work_entry_pending.dbg = dbg;
+    v.work_active_turns.dbg = dbg;
+    v.work_trap_source.dbg = dbg;
+    v.work_baton_pass.dbg = dbg;
+    v.work_weather.dbg = dbg;
+    v.work_weather_counter.dbg = dbg;
+    v.work_keys.dbg = dbg;
+    v.work_truant_loaf.dbg = dbg;
+    v.switches.dbg = dbg;
+    v.saved_actor.dbg = dbg;
+    v.slot.dbg = dbg;
+    v.struggle.dbg = dbg;
+    v.moves.dbg = dbg;
+    v.pursuit_used.dbg = dbg;
+    v.first.dbg = dbg;
+    v.placeholders.dbg = dbg;
+    v.moves_cancelled.dbg = dbg;
+    v.old_stall.dbg = dbg;
+    v.saved_stall.dbg = dbg;
+    v.live.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+
+// ---- C_b5: carry at b5 (line 689, occurrence 1): _faint_before_hp=work.hp
+struct C_b5 {
+  static constexpr uint64_t kDigest = 0xcb5aca8a2ed40221ull;
+  static constexpr const char* kDigestHex = "cb5aca8a2ed40221c89b2a5aed998666f618bed519f085b6de9a354a450129ec";
+  static constexpr int kLeaves = 206;
+  Leaf<int32_t, 2, 6> state_species;   // arg 0: state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> state_level;   // arg 1: state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> state_hidden_power_type;   // arg 2: state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> state_hidden_power_power;   // arg 3: state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> state_happiness;   // arg 4: state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> state_gender;   // arg 5: state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> state_types;   // arg 6: state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> state_base_types;   // arg 7: state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> state_stats;   // arg 8: state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> state_hp;   // arg 9: state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> state_max_hp;   // arg 10: state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> state_status;   // arg 11: state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> state_status_counter;   // arg 12: state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> state_sleep_skipped;   // arg 13: state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> state_rest_origin;   // arg 14: state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> state_moves;   // arg 15: state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> state_pp;   // arg 16: state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> state_disabled;   // arg 17: state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> state_choice_move;   // arg 18: state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> state_last_move;   // arg 19: state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> state_last_action_kind;   // arg 20: state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> state_last_action_index;   // arg 21: state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> state_encore_move;   // arg 22: state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> state_encore_counter;   // arg 23: state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> state_charge_move;   // arg 24: state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> state_charge_counter;   // arg 25: state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> state_item;   // arg 26: state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> state_ability;   // arg 27: state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> state_base_ability;   // arg 28: state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> state_boosts;   // arg 29: state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> state_volatile;   // arg 30: state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> state_confusion_counter;   // arg 31: state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> state_protect_counter;   // arg 32: state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> state_substitute_hp;   // arg 33: state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> state_active;   // arg 34: state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> state_entry_pending;   // arg 35: state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> state_active_turns;   // arg 36: state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> state_trapped;   // arg 37: state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> state_trap_source;   // arg 38: state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> state_forced_switch;   // arg 39: state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> state_baton_pass;   // arg 40: state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> state_queued_actor;   // arg 41: state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> state_queued_actions;   // arg 42: state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> state_queued_stall;   // arg 43: state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> state_pending_residual;   // arg 44: state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> state_residual_draws;   // arg 45: state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> state_phazing_draws;   // arg 46: state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> state_secondary_draws;   // arg 47: state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> state_sleep_talk_draws;   // arg 48: state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> state_replacement_count;   // arg 49: state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> state_spikes;   // arg 50: state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> state_wish_counter;   // arg 51: state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> state_wish_amount;   // arg 52: state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> state_weather;   // arg 53: state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> state_weather_counter;   // arg 54: state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> state_turn;   // arg 55: state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> state_keys;   // arg 56: state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> state_done;   // arg 57: state.done bool[] (source state, '.done')
+  Leaf<int32_t> state_winner;   // arg 58: state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> state_truant_loaf;   // arg 59: state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<int32_t, 2> actions;   // arg 60: actions int32[2] (source actions, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 61: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 62: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 63: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 64: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 65: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 66: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 67: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 68: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 69: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 70: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 71: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 72: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 73: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 74: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 75: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 76: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 77: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 78: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 79: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 80: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 81: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 82: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 83: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 84: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 85: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 86: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 87: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 88: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 89: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 90: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 91: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 92: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 93: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 94: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 95: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 96: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 97: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 98: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 99: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 100: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 101: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 102: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 103: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 104: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 105: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 106: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 107: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 108: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 109: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 110: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 111: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 112: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 113: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 114: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 115: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 116: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 117: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 118: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 119: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 120: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 121: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 122: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 123: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 124: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 125: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 126: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 127: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 128: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 129: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 130: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 131: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 132: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 133: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 134: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 135: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 136: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 137: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 138: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 139: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 140: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 141: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 142: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 143: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 144: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 145: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 146: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  Leaf<bool> replacement;   // arg 147: replacement bool[] (source local, '')
+  Leaf<bool> invalid;   // arg 148: invalid bool[] (source local, '')
+  Leaf<bool> resuming;   // arg 149: resuming bool[] (source local, '')
+  Leaf<int32_t, 2, 12> draws;   // arg 150: draws int32[2, 12] (source local, '')
+  Leaf<int32_t, 2> phazing_draws;   // arg 151: phazing_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> secondary_draws;   // arg 152: secondary_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> sleep_talk_draws;   // arg 153: sleep_talk_draws int32[2] (source local, '')
+  Leaf<int32_t, 2, 6, 2> work_types;   // arg 154: work.types int32[2, 6, 2] (source local, '.types')
+  Leaf<int32_t, 2, 6> work_hp;   // arg 155: work.hp int32[2, 6] (source local, '.hp')
+  Leaf<int32_t, 2, 6> work_status;   // arg 156: work.status int32[2, 6] (source local, '.status')
+  Leaf<int32_t, 2, 6> work_status_counter;   // arg 157: work.status_counter int32[2, 6] (source local, '.status_counter')
+  Leaf<int32_t, 2, 6> work_sleep_skipped;   // arg 158: work.sleep_skipped int32[2, 6] (source local, '.sleep_skipped')
+  Leaf<bool, 2, 6> work_rest_origin;   // arg 159: work.rest_origin bool[2, 6] (source local, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> work_pp;   // arg 160: work.pp int32[2, 6, 4] (source local, '.pp')
+  Leaf<int32_t, 2, 6> work_choice_move;   // arg 161: work.choice_move int32[2, 6] (source local, '.choice_move')
+  Leaf<int32_t, 2, 6> work_last_move;   // arg 162: work.last_move int32[2, 6] (source local, '.last_move')
+  Leaf<int32_t, 2> work_last_action_kind;   // arg 163: work.last_action_kind int32[2] (source local, '.last_action_kind')
+  Leaf<int32_t, 2> work_last_action_index;   // arg 164: work.last_action_index int32[2] (source local, '.last_action_index')
+  Leaf<int32_t, 2, 6> work_encore_move;   // arg 165: work.encore_move int32[2, 6] (source local, '.encore_move')
+  Leaf<int32_t, 2, 6> work_encore_counter;   // arg 166: work.encore_counter int32[2, 6] (source local, '.encore_counter')
+  Leaf<int32_t, 2, 6> work_charge_move;   // arg 167: work.charge_move int32[2, 6] (source local, '.charge_move')
+  Leaf<int32_t, 2, 6> work_charge_counter;   // arg 168: work.charge_counter int32[2, 6] (source local, '.charge_counter')
+  Leaf<int32_t, 2, 6> work_item;   // arg 169: work.item int32[2, 6] (source local, '.item')
+  Leaf<int32_t, 2, 6> work_ability;   // arg 170: work.ability int32[2, 6] (source local, '.ability')
+  Leaf<int32_t, 2, 6, 7> work_boosts;   // arg 171: work.boosts int32[2, 6, 7] (source local, '.boosts')
+  Leaf<uint32_t, 2, 6> work_volatile;   // arg 172: work.volatile uint32[2, 6] (source local, '.volatile')
+  Leaf<int32_t, 2, 6> work_confusion_counter;   // arg 173: work.confusion_counter int32[2, 6] (source local, '.confusion_counter')
+  Leaf<int32_t, 2, 6> work_protect_counter;   // arg 174: work.protect_counter int32[2, 6] (source local, '.protect_counter')
+  Leaf<int32_t, 2, 6> work_substitute_hp;   // arg 175: work.substitute_hp int32[2, 6] (source local, '.substitute_hp')
+  Leaf<int32_t, 2> work_active;   // arg 176: work.active int32[2] (source local, '.active')
+  Leaf<bool, 2> work_entry_pending;   // arg 177: work.entry_pending bool[2] (source local, '.entry_pending')
+  Leaf<int32_t, 2> work_active_turns;   // arg 178: work.active_turns int32[2] (source local, '.active_turns')
+  Leaf<bool, 2> work_trapped;   // arg 179: work.trapped bool[2] (source local, '.trapped')
+  Leaf<int32_t, 2, 6> work_trap_source;   // arg 180: work.trap_source int32[2, 6] (source local, '.trap_source')
+  Leaf<bool, 2> work_baton_pass;   // arg 181: work.baton_pass bool[2] (source local, '.baton_pass')
+  Leaf<int32_t, 2> work_spikes;   // arg 182: work.spikes int32[2] (source local, '.spikes')
+  Leaf<int32_t, 2> work_wish_counter;   // arg 183: work.wish_counter int32[2] (source local, '.wish_counter')
+  Leaf<int32_t, 2> work_wish_amount;   // arg 184: work.wish_amount int32[2] (source local, '.wish_amount')
+  Leaf<int32_t> work_weather;   // arg 185: work.weather int32[] (source local, '.weather')
+  Leaf<int32_t> work_weather_counter;   // arg 186: work.weather_counter int32[] (source local, '.weather_counter')
+  Leaf<uint32_t, 2> work_keys;   // arg 187: work.keys uint32[2] (source local, '.keys')
+  Leaf<bool, 2, 6> work_truant_loaf;   // arg 188: work.truant_loaf bool[2, 6] (source local, '.truant_loaf')
+  Leaf<bool, 2> switches;   // arg 189: switches bool[2] (source local, '')
+  Leaf<int32_t> saved_actor;   // arg 190: saved_actor int32[] (source local, '')
+  Leaf<int32_t, 2> slot;   // arg 191: slot int32[2] (source local, '')
+  Leaf<bool, 2> struggle;   // arg 192: struggle bool[2] (source local, '')
+  Leaf<int32_t, 2> moves;   // arg 193: moves int32[2] (source local, '')
+  Leaf<bool, 2> pursuit_used;   // arg 194: pursuit_used bool[2] (source local, '')
+  Leaf<int32_t> first;   // arg 195: first int32[] (source local, '')
+  Leaf<int32_t> placeholders;   // arg 196: placeholders int32[] (source local, '')
+  Leaf<bool> moves_cancelled;   // arg 197: moves_cancelled bool[] (source local, '')
+  Leaf<bool, 2> protected_;   // arg 198: protected bool[2] (source local, '')
+  Leaf<bool, 2> enduring;   // arg 199: enduring bool[2] (source local, '')
+  Leaf<int32_t, 2, 6> old_stall;   // arg 200: old_stall int32[2, 6] (source local, '')
+  Leaf<int32_t, 2> saved_stall;   // arg 201: saved_stall int32[2] (source local, '')
+  Leaf<int32_t> queued_actor;   // arg 202: queued_actor int32[] (source local, '')
+  Leaf<bool> paused;   // arg 203: paused bool[] (source local, '')
+  Leaf<bool, 2> displaced;   // arg 204: displaced bool[2] (source local, '')
+  Leaf<bool> live;   // arg 205: live bool[] (source local, '')
+  static constexpr int arg_state_species = 0;
+  static constexpr int arg_state_level = 1;
+  static constexpr int arg_state_hidden_power_type = 2;
+  static constexpr int arg_state_hidden_power_power = 3;
+  static constexpr int arg_state_happiness = 4;
+  static constexpr int arg_state_gender = 5;
+  static constexpr int arg_state_types = 6;
+  static constexpr int arg_state_base_types = 7;
+  static constexpr int arg_state_stats = 8;
+  static constexpr int arg_state_hp = 9;
+  static constexpr int arg_state_max_hp = 10;
+  static constexpr int arg_state_status = 11;
+  static constexpr int arg_state_status_counter = 12;
+  static constexpr int arg_state_sleep_skipped = 13;
+  static constexpr int arg_state_rest_origin = 14;
+  static constexpr int arg_state_moves = 15;
+  static constexpr int arg_state_pp = 16;
+  static constexpr int arg_state_disabled = 17;
+  static constexpr int arg_state_choice_move = 18;
+  static constexpr int arg_state_last_move = 19;
+  static constexpr int arg_state_last_action_kind = 20;
+  static constexpr int arg_state_last_action_index = 21;
+  static constexpr int arg_state_encore_move = 22;
+  static constexpr int arg_state_encore_counter = 23;
+  static constexpr int arg_state_charge_move = 24;
+  static constexpr int arg_state_charge_counter = 25;
+  static constexpr int arg_state_item = 26;
+  static constexpr int arg_state_ability = 27;
+  static constexpr int arg_state_base_ability = 28;
+  static constexpr int arg_state_boosts = 29;
+  static constexpr int arg_state_volatile = 30;
+  static constexpr int arg_state_confusion_counter = 31;
+  static constexpr int arg_state_protect_counter = 32;
+  static constexpr int arg_state_substitute_hp = 33;
+  static constexpr int arg_state_active = 34;
+  static constexpr int arg_state_entry_pending = 35;
+  static constexpr int arg_state_active_turns = 36;
+  static constexpr int arg_state_trapped = 37;
+  static constexpr int arg_state_trap_source = 38;
+  static constexpr int arg_state_forced_switch = 39;
+  static constexpr int arg_state_baton_pass = 40;
+  static constexpr int arg_state_queued_actor = 41;
+  static constexpr int arg_state_queued_actions = 42;
+  static constexpr int arg_state_queued_stall = 43;
+  static constexpr int arg_state_pending_residual = 44;
+  static constexpr int arg_state_residual_draws = 45;
+  static constexpr int arg_state_phazing_draws = 46;
+  static constexpr int arg_state_secondary_draws = 47;
+  static constexpr int arg_state_sleep_talk_draws = 48;
+  static constexpr int arg_state_replacement_count = 49;
+  static constexpr int arg_state_spikes = 50;
+  static constexpr int arg_state_wish_counter = 51;
+  static constexpr int arg_state_wish_amount = 52;
+  static constexpr int arg_state_weather = 53;
+  static constexpr int arg_state_weather_counter = 54;
+  static constexpr int arg_state_turn = 55;
+  static constexpr int arg_state_keys = 56;
+  static constexpr int arg_state_done = 57;
+  static constexpr int arg_state_winner = 58;
+  static constexpr int arg_state_truant_loaf = 59;
+  static constexpr int arg_actions = 60;
+  static constexpr int arg_trackers_physical_to_public = 61;
+  static constexpr int arg_trackers_active_physical = 62;
+  static constexpr int arg_trackers_active_slot = 63;
+  static constexpr int arg_trackers_next_slot = 64;
+  static constexpr int arg_trackers_own_order = 65;
+  static constexpr int arg_trackers_species = 66;
+  static constexpr int arg_trackers_level = 67;
+  static constexpr int arg_trackers_gender = 68;
+  static constexpr int arg_trackers_hp_percent = 69;
+  static constexpr int arg_trackers_status = 70;
+  static constexpr int arg_trackers_boosts = 71;
+  static constexpr int arg_trackers_present = 72;
+  static constexpr int arg_trackers_fainted = 73;
+  static constexpr int arg_trackers_turn = 74;
+  static constexpr int arg_trackers_weather = 75;
+  static constexpr int arg_trackers_spikes = 76;
+  static constexpr int arg_trackers_error = 77;
+  static constexpr int arg_trackers_observed_moves = 78;
+  static constexpr int arg_trackers_pp_used = 79;
+  static constexpr int arg_trackers_last_moves = 80;
+  static constexpr int arg_trackers_tendencies = 81;
+  static constexpr int arg_trackers_belief_mask = 82;
+  static constexpr int arg_trackers_shown_ability = 83;
+  static constexpr int arg_trackers_shown_item = 84;
+  static constexpr int arg_trackers_shown_types = 85;
+  static constexpr int arg_trackers_borrowed_ability = 86;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 87;
+  static constexpr int arg_trackers_mon_features_encore_turns = 88;
+  static constexpr int arg_trackers_mon_features_item_swapped = 89;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 91;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 92;
+  static constexpr int arg_trackers_mon_features_moves_shown = 93;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 94;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 95;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 96;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 98;
+  static constexpr int arg_trackers_mon_features_stall_counter = 99;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 100;
+  static constexpr int arg_trackers_mon_features_sub_present = 101;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 102;
+  static constexpr int arg_trackers_mon_features_switches = 103;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 104;
+  static constexpr int arg_trackers_mon_features_turns_active = 105;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 106;
+  static constexpr int arg_trackers_field_features_weather_permanent = 107;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 108;
+  static constexpr int arg_trackers_field_features_wish_pending = 109;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 110;
+  static constexpr int arg_trackers_field_features_wish_turns = 111;
+  static constexpr int arg_trackers_original_ability = 112;
+  static constexpr int arg_trackers_damage_exact_dealt = 113;
+  static constexpr int arg_trackers_damage_exact_taken = 114;
+  static constexpr int arg_trackers_public_volatiles = 115;
+  static constexpr int arg_trackers_item_removed = 116;
+  static constexpr int arg_trackers_tendency_moved = 117;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 118;
+  static constexpr int arg_trackers_tendency_switches = 119;
+  static constexpr int arg_trackers_tendency_opportunities = 120;
+  static constexpr int arg_trackers_tendency_matchup = 121;
+  static constexpr int arg_trackers_damage_history_hp = 122;
+  static constexpr int arg_trackers_damage_history_maximum = 123;
+  static constexpr int arg_trackers_damage_history_taken = 124;
+  static constexpr int arg_trackers_damage_history_dealt = 125;
+  static constexpr int arg_trackers_negative_items_percent = 126;
+  static constexpr int arg_trackers_negative_items_known = 127;
+  static constexpr int arg_trackers_visible_belief_pin = 128;
+  static constexpr int arg_trackers_visible_belief_pin_active = 129;
+  static constexpr int arg_trackers_visible_belief_conflicts = 130;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 131;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 133;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 135;
+  static constexpr int arg_trackers_public_port_holder = 136;
+  static constexpr int arg_trackers_public_port_victims = 137;
+  static constexpr int arg_trackers_public_port_known = 138;
+  static constexpr int arg_trackers_public_port_loaf = 139;
+  static constexpr int arg_trackers_public_port_traced = 140;
+  static constexpr int arg_trackers_public_port_skip_flip = 141;
+  static constexpr int arg_trackers_public_port_post_upkeep = 142;
+  static constexpr int arg_trackers_public_port_hazards = 143;
+  static constexpr int arg_trackers_public_port_blocked = 144;
+  static constexpr int arg_trackers_public_port_pursuit = 145;
+  static constexpr int arg_trackers_public_port_weather = 146;
+  static constexpr int arg_replacement = 147;
+  static constexpr int arg_invalid = 148;
+  static constexpr int arg_resuming = 149;
+  static constexpr int arg_draws = 150;
+  static constexpr int arg_phazing_draws = 151;
+  static constexpr int arg_secondary_draws = 152;
+  static constexpr int arg_sleep_talk_draws = 153;
+  static constexpr int arg_work_types = 154;
+  static constexpr int arg_work_hp = 155;
+  static constexpr int arg_work_status = 156;
+  static constexpr int arg_work_status_counter = 157;
+  static constexpr int arg_work_sleep_skipped = 158;
+  static constexpr int arg_work_rest_origin = 159;
+  static constexpr int arg_work_pp = 160;
+  static constexpr int arg_work_choice_move = 161;
+  static constexpr int arg_work_last_move = 162;
+  static constexpr int arg_work_last_action_kind = 163;
+  static constexpr int arg_work_last_action_index = 164;
+  static constexpr int arg_work_encore_move = 165;
+  static constexpr int arg_work_encore_counter = 166;
+  static constexpr int arg_work_charge_move = 167;
+  static constexpr int arg_work_charge_counter = 168;
+  static constexpr int arg_work_item = 169;
+  static constexpr int arg_work_ability = 170;
+  static constexpr int arg_work_boosts = 171;
+  static constexpr int arg_work_volatile = 172;
+  static constexpr int arg_work_confusion_counter = 173;
+  static constexpr int arg_work_protect_counter = 174;
+  static constexpr int arg_work_substitute_hp = 175;
+  static constexpr int arg_work_active = 176;
+  static constexpr int arg_work_entry_pending = 177;
+  static constexpr int arg_work_active_turns = 178;
+  static constexpr int arg_work_trapped = 179;
+  static constexpr int arg_work_trap_source = 180;
+  static constexpr int arg_work_baton_pass = 181;
+  static constexpr int arg_work_spikes = 182;
+  static constexpr int arg_work_wish_counter = 183;
+  static constexpr int arg_work_wish_amount = 184;
+  static constexpr int arg_work_weather = 185;
+  static constexpr int arg_work_weather_counter = 186;
+  static constexpr int arg_work_keys = 187;
+  static constexpr int arg_work_truant_loaf = 188;
+  static constexpr int arg_switches = 189;
+  static constexpr int arg_saved_actor = 190;
+  static constexpr int arg_slot = 191;
+  static constexpr int arg_struggle = 192;
+  static constexpr int arg_moves = 193;
+  static constexpr int arg_pursuit_used = 194;
+  static constexpr int arg_first = 195;
+  static constexpr int arg_placeholders = 196;
+  static constexpr int arg_moves_cancelled = 197;
+  static constexpr int arg_protected_ = 198;
+  static constexpr int arg_enduring = 199;
+  static constexpr int arg_old_stall = 200;
+  static constexpr int arg_saved_stall = 201;
+  static constexpr int arg_queued_actor = 202;
+  static constexpr int arg_paused = 203;
+  static constexpr int arg_displaced = 204;
+  static constexpr int arg_live = 205;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b5 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b5 v;
+    v.state_species.p = static_cast<int32_t*>(bufs[0]); v.state_species.lanes = lanes;
+    v.state_level.p = static_cast<int32_t*>(bufs[1]); v.state_level.lanes = lanes;
+    v.state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.state_hidden_power_type.lanes = lanes;
+    v.state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.state_hidden_power_power.lanes = lanes;
+    v.state_happiness.p = static_cast<int32_t*>(bufs[4]); v.state_happiness.lanes = lanes;
+    v.state_gender.p = static_cast<int32_t*>(bufs[5]); v.state_gender.lanes = lanes;
+    v.state_types.p = static_cast<int32_t*>(bufs[6]); v.state_types.lanes = lanes;
+    v.state_base_types.p = static_cast<int32_t*>(bufs[7]); v.state_base_types.lanes = lanes;
+    v.state_stats.p = static_cast<int32_t*>(bufs[8]); v.state_stats.lanes = lanes;
+    v.state_hp.p = static_cast<int32_t*>(bufs[9]); v.state_hp.lanes = lanes;
+    v.state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.state_max_hp.lanes = lanes;
+    v.state_status.p = static_cast<int32_t*>(bufs[11]); v.state_status.lanes = lanes;
+    v.state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.state_status_counter.lanes = lanes;
+    v.state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.state_sleep_skipped.lanes = lanes;
+    v.state_rest_origin.p = static_cast<bool*>(bufs[14]); v.state_rest_origin.lanes = lanes;
+    v.state_moves.p = static_cast<int32_t*>(bufs[15]); v.state_moves.lanes = lanes;
+    v.state_pp.p = static_cast<int32_t*>(bufs[16]); v.state_pp.lanes = lanes;
+    v.state_disabled.p = static_cast<bool*>(bufs[17]); v.state_disabled.lanes = lanes;
+    v.state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.state_choice_move.lanes = lanes;
+    v.state_last_move.p = static_cast<int32_t*>(bufs[19]); v.state_last_move.lanes = lanes;
+    v.state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.state_last_action_kind.lanes = lanes;
+    v.state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.state_last_action_index.lanes = lanes;
+    v.state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.state_encore_move.lanes = lanes;
+    v.state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.state_encore_counter.lanes = lanes;
+    v.state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.state_charge_move.lanes = lanes;
+    v.state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.state_charge_counter.lanes = lanes;
+    v.state_item.p = static_cast<int32_t*>(bufs[26]); v.state_item.lanes = lanes;
+    v.state_ability.p = static_cast<int32_t*>(bufs[27]); v.state_ability.lanes = lanes;
+    v.state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.state_base_ability.lanes = lanes;
+    v.state_boosts.p = static_cast<int32_t*>(bufs[29]); v.state_boosts.lanes = lanes;
+    v.state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.state_volatile.lanes = lanes;
+    v.state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.state_confusion_counter.lanes = lanes;
+    v.state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.state_protect_counter.lanes = lanes;
+    v.state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.state_substitute_hp.lanes = lanes;
+    v.state_active.p = static_cast<int32_t*>(bufs[34]); v.state_active.lanes = lanes;
+    v.state_entry_pending.p = static_cast<bool*>(bufs[35]); v.state_entry_pending.lanes = lanes;
+    v.state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.state_active_turns.lanes = lanes;
+    v.state_trapped.p = static_cast<bool*>(bufs[37]); v.state_trapped.lanes = lanes;
+    v.state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.state_trap_source.lanes = lanes;
+    v.state_forced_switch.p = static_cast<bool*>(bufs[39]); v.state_forced_switch.lanes = lanes;
+    v.state_baton_pass.p = static_cast<bool*>(bufs[40]); v.state_baton_pass.lanes = lanes;
+    v.state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.state_queued_actor.lanes = lanes;
+    v.state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.state_queued_actions.lanes = lanes;
+    v.state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.state_queued_stall.lanes = lanes;
+    v.state_pending_residual.p = static_cast<bool*>(bufs[44]); v.state_pending_residual.lanes = lanes;
+    v.state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.state_residual_draws.lanes = lanes;
+    v.state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.state_phazing_draws.lanes = lanes;
+    v.state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.state_secondary_draws.lanes = lanes;
+    v.state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.state_sleep_talk_draws.lanes = lanes;
+    v.state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.state_replacement_count.lanes = lanes;
+    v.state_spikes.p = static_cast<int32_t*>(bufs[50]); v.state_spikes.lanes = lanes;
+    v.state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.state_wish_counter.lanes = lanes;
+    v.state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.state_wish_amount.lanes = lanes;
+    v.state_weather.p = static_cast<int32_t*>(bufs[53]); v.state_weather.lanes = lanes;
+    v.state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.state_weather_counter.lanes = lanes;
+    v.state_turn.p = static_cast<int32_t*>(bufs[55]); v.state_turn.lanes = lanes;
+    v.state_keys.p = static_cast<uint32_t*>(bufs[56]); v.state_keys.lanes = lanes;
+    v.state_done.p = static_cast<bool*>(bufs[57]); v.state_done.lanes = lanes;
+    v.state_winner.p = static_cast<int32_t*>(bufs[58]); v.state_winner.lanes = lanes;
+    v.state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.state_truant_loaf.lanes = lanes;
+    v.actions.p = static_cast<int32_t*>(bufs[60]); v.actions.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[61]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[62]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[65]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[66]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[67]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[68]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[69]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[70]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[71]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[72]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[73]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[74]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[75]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[76]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[77]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[78]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[79]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[80]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[81]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[82]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[83]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[86]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[87]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[90]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[92]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[107]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[108]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[109]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[110]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[112]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[113]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[115]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[116]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[117]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[118]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[122]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[124]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[126]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[127]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[128]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[129]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[130]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[131]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[133]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[134]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[136]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[137]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[143]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[144]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[146]); v.trackers_public_port_weather.lanes = lanes;
+    v.replacement.p = static_cast<bool*>(bufs[147]); v.replacement.lanes = lanes;
+    v.invalid.p = static_cast<bool*>(bufs[148]); v.invalid.lanes = lanes;
+    v.resuming.p = static_cast<bool*>(bufs[149]); v.resuming.lanes = lanes;
+    v.draws.p = static_cast<int32_t*>(bufs[150]); v.draws.lanes = lanes;
+    v.phazing_draws.p = static_cast<int32_t*>(bufs[151]); v.phazing_draws.lanes = lanes;
+    v.secondary_draws.p = static_cast<int32_t*>(bufs[152]); v.secondary_draws.lanes = lanes;
+    v.sleep_talk_draws.p = static_cast<int32_t*>(bufs[153]); v.sleep_talk_draws.lanes = lanes;
+    v.work_types.p = static_cast<int32_t*>(bufs[154]); v.work_types.lanes = lanes;
+    v.work_hp.p = static_cast<int32_t*>(bufs[155]); v.work_hp.lanes = lanes;
+    v.work_status.p = static_cast<int32_t*>(bufs[156]); v.work_status.lanes = lanes;
+    v.work_status_counter.p = static_cast<int32_t*>(bufs[157]); v.work_status_counter.lanes = lanes;
+    v.work_sleep_skipped.p = static_cast<int32_t*>(bufs[158]); v.work_sleep_skipped.lanes = lanes;
+    v.work_rest_origin.p = static_cast<bool*>(bufs[159]); v.work_rest_origin.lanes = lanes;
+    v.work_pp.p = static_cast<int32_t*>(bufs[160]); v.work_pp.lanes = lanes;
+    v.work_choice_move.p = static_cast<int32_t*>(bufs[161]); v.work_choice_move.lanes = lanes;
+    v.work_last_move.p = static_cast<int32_t*>(bufs[162]); v.work_last_move.lanes = lanes;
+    v.work_last_action_kind.p = static_cast<int32_t*>(bufs[163]); v.work_last_action_kind.lanes = lanes;
+    v.work_last_action_index.p = static_cast<int32_t*>(bufs[164]); v.work_last_action_index.lanes = lanes;
+    v.work_encore_move.p = static_cast<int32_t*>(bufs[165]); v.work_encore_move.lanes = lanes;
+    v.work_encore_counter.p = static_cast<int32_t*>(bufs[166]); v.work_encore_counter.lanes = lanes;
+    v.work_charge_move.p = static_cast<int32_t*>(bufs[167]); v.work_charge_move.lanes = lanes;
+    v.work_charge_counter.p = static_cast<int32_t*>(bufs[168]); v.work_charge_counter.lanes = lanes;
+    v.work_item.p = static_cast<int32_t*>(bufs[169]); v.work_item.lanes = lanes;
+    v.work_ability.p = static_cast<int32_t*>(bufs[170]); v.work_ability.lanes = lanes;
+    v.work_boosts.p = static_cast<int32_t*>(bufs[171]); v.work_boosts.lanes = lanes;
+    v.work_volatile.p = static_cast<uint32_t*>(bufs[172]); v.work_volatile.lanes = lanes;
+    v.work_confusion_counter.p = static_cast<int32_t*>(bufs[173]); v.work_confusion_counter.lanes = lanes;
+    v.work_protect_counter.p = static_cast<int32_t*>(bufs[174]); v.work_protect_counter.lanes = lanes;
+    v.work_substitute_hp.p = static_cast<int32_t*>(bufs[175]); v.work_substitute_hp.lanes = lanes;
+    v.work_active.p = static_cast<int32_t*>(bufs[176]); v.work_active.lanes = lanes;
+    v.work_entry_pending.p = static_cast<bool*>(bufs[177]); v.work_entry_pending.lanes = lanes;
+    v.work_active_turns.p = static_cast<int32_t*>(bufs[178]); v.work_active_turns.lanes = lanes;
+    v.work_trapped.p = static_cast<bool*>(bufs[179]); v.work_trapped.lanes = lanes;
+    v.work_trap_source.p = static_cast<int32_t*>(bufs[180]); v.work_trap_source.lanes = lanes;
+    v.work_baton_pass.p = static_cast<bool*>(bufs[181]); v.work_baton_pass.lanes = lanes;
+    v.work_spikes.p = static_cast<int32_t*>(bufs[182]); v.work_spikes.lanes = lanes;
+    v.work_wish_counter.p = static_cast<int32_t*>(bufs[183]); v.work_wish_counter.lanes = lanes;
+    v.work_wish_amount.p = static_cast<int32_t*>(bufs[184]); v.work_wish_amount.lanes = lanes;
+    v.work_weather.p = static_cast<int32_t*>(bufs[185]); v.work_weather.lanes = lanes;
+    v.work_weather_counter.p = static_cast<int32_t*>(bufs[186]); v.work_weather_counter.lanes = lanes;
+    v.work_keys.p = static_cast<uint32_t*>(bufs[187]); v.work_keys.lanes = lanes;
+    v.work_truant_loaf.p = static_cast<bool*>(bufs[188]); v.work_truant_loaf.lanes = lanes;
+    v.switches.p = static_cast<bool*>(bufs[189]); v.switches.lanes = lanes;
+    v.saved_actor.p = static_cast<int32_t*>(bufs[190]); v.saved_actor.lanes = lanes;
+    v.slot.p = static_cast<int32_t*>(bufs[191]); v.slot.lanes = lanes;
+    v.struggle.p = static_cast<bool*>(bufs[192]); v.struggle.lanes = lanes;
+    v.moves.p = static_cast<int32_t*>(bufs[193]); v.moves.lanes = lanes;
+    v.pursuit_used.p = static_cast<bool*>(bufs[194]); v.pursuit_used.lanes = lanes;
+    v.first.p = static_cast<int32_t*>(bufs[195]); v.first.lanes = lanes;
+    v.placeholders.p = static_cast<int32_t*>(bufs[196]); v.placeholders.lanes = lanes;
+    v.moves_cancelled.p = static_cast<bool*>(bufs[197]); v.moves_cancelled.lanes = lanes;
+    v.protected_.p = static_cast<bool*>(bufs[198]); v.protected_.lanes = lanes;
+    v.enduring.p = static_cast<bool*>(bufs[199]); v.enduring.lanes = lanes;
+    v.old_stall.p = static_cast<int32_t*>(bufs[200]); v.old_stall.lanes = lanes;
+    v.saved_stall.p = static_cast<int32_t*>(bufs[201]); v.saved_stall.lanes = lanes;
+    v.queued_actor.p = static_cast<int32_t*>(bufs[202]); v.queued_actor.lanes = lanes;
+    v.paused.p = static_cast<bool*>(bufs[203]); v.paused.lanes = lanes;
+    v.displaced.p = static_cast<bool*>(bufs[204]); v.displaced.lanes = lanes;
+    v.live.p = static_cast<bool*>(bufs[205]); v.live.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.state_species.dbg = dbg;
+    v.state_level.dbg = dbg;
+    v.state_hidden_power_type.dbg = dbg;
+    v.state_hidden_power_power.dbg = dbg;
+    v.state_happiness.dbg = dbg;
+    v.state_gender.dbg = dbg;
+    v.state_types.dbg = dbg;
+    v.state_base_types.dbg = dbg;
+    v.state_stats.dbg = dbg;
+    v.state_hp.dbg = dbg;
+    v.state_max_hp.dbg = dbg;
+    v.state_status.dbg = dbg;
+    v.state_status_counter.dbg = dbg;
+    v.state_sleep_skipped.dbg = dbg;
+    v.state_rest_origin.dbg = dbg;
+    v.state_moves.dbg = dbg;
+    v.state_pp.dbg = dbg;
+    v.state_disabled.dbg = dbg;
+    v.state_choice_move.dbg = dbg;
+    v.state_last_move.dbg = dbg;
+    v.state_last_action_kind.dbg = dbg;
+    v.state_last_action_index.dbg = dbg;
+    v.state_encore_move.dbg = dbg;
+    v.state_encore_counter.dbg = dbg;
+    v.state_charge_move.dbg = dbg;
+    v.state_charge_counter.dbg = dbg;
+    v.state_item.dbg = dbg;
+    v.state_ability.dbg = dbg;
+    v.state_base_ability.dbg = dbg;
+    v.state_boosts.dbg = dbg;
+    v.state_volatile.dbg = dbg;
+    v.state_confusion_counter.dbg = dbg;
+    v.state_protect_counter.dbg = dbg;
+    v.state_substitute_hp.dbg = dbg;
+    v.state_active.dbg = dbg;
+    v.state_entry_pending.dbg = dbg;
+    v.state_active_turns.dbg = dbg;
+    v.state_trapped.dbg = dbg;
+    v.state_trap_source.dbg = dbg;
+    v.state_forced_switch.dbg = dbg;
+    v.state_baton_pass.dbg = dbg;
+    v.state_queued_actor.dbg = dbg;
+    v.state_queued_actions.dbg = dbg;
+    v.state_queued_stall.dbg = dbg;
+    v.state_pending_residual.dbg = dbg;
+    v.state_residual_draws.dbg = dbg;
+    v.state_phazing_draws.dbg = dbg;
+    v.state_secondary_draws.dbg = dbg;
+    v.state_sleep_talk_draws.dbg = dbg;
+    v.state_replacement_count.dbg = dbg;
+    v.state_spikes.dbg = dbg;
+    v.state_wish_counter.dbg = dbg;
+    v.state_wish_amount.dbg = dbg;
+    v.state_weather.dbg = dbg;
+    v.state_weather_counter.dbg = dbg;
+    v.state_turn.dbg = dbg;
+    v.state_keys.dbg = dbg;
+    v.state_done.dbg = dbg;
+    v.state_winner.dbg = dbg;
+    v.state_truant_loaf.dbg = dbg;
+    v.actions.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+    v.replacement.dbg = dbg;
+    v.invalid.dbg = dbg;
+    v.resuming.dbg = dbg;
+    v.draws.dbg = dbg;
+    v.phazing_draws.dbg = dbg;
+    v.secondary_draws.dbg = dbg;
+    v.sleep_talk_draws.dbg = dbg;
+    v.work_types.dbg = dbg;
+    v.work_hp.dbg = dbg;
+    v.work_status.dbg = dbg;
+    v.work_status_counter.dbg = dbg;
+    v.work_sleep_skipped.dbg = dbg;
+    v.work_rest_origin.dbg = dbg;
+    v.work_pp.dbg = dbg;
+    v.work_choice_move.dbg = dbg;
+    v.work_last_move.dbg = dbg;
+    v.work_last_action_kind.dbg = dbg;
+    v.work_last_action_index.dbg = dbg;
+    v.work_encore_move.dbg = dbg;
+    v.work_encore_counter.dbg = dbg;
+    v.work_charge_move.dbg = dbg;
+    v.work_charge_counter.dbg = dbg;
+    v.work_item.dbg = dbg;
+    v.work_ability.dbg = dbg;
+    v.work_boosts.dbg = dbg;
+    v.work_volatile.dbg = dbg;
+    v.work_confusion_counter.dbg = dbg;
+    v.work_protect_counter.dbg = dbg;
+    v.work_substitute_hp.dbg = dbg;
+    v.work_active.dbg = dbg;
+    v.work_entry_pending.dbg = dbg;
+    v.work_active_turns.dbg = dbg;
+    v.work_trapped.dbg = dbg;
+    v.work_trap_source.dbg = dbg;
+    v.work_baton_pass.dbg = dbg;
+    v.work_spikes.dbg = dbg;
+    v.work_wish_counter.dbg = dbg;
+    v.work_wish_amount.dbg = dbg;
+    v.work_weather.dbg = dbg;
+    v.work_weather_counter.dbg = dbg;
+    v.work_keys.dbg = dbg;
+    v.work_truant_loaf.dbg = dbg;
+    v.switches.dbg = dbg;
+    v.saved_actor.dbg = dbg;
+    v.slot.dbg = dbg;
+    v.struggle.dbg = dbg;
+    v.moves.dbg = dbg;
+    v.pursuit_used.dbg = dbg;
+    v.first.dbg = dbg;
+    v.placeholders.dbg = dbg;
+    v.moves_cancelled.dbg = dbg;
+    v.protected_.dbg = dbg;
+    v.enduring.dbg = dbg;
+    v.old_stall.dbg = dbg;
+    v.saved_stall.dbg = dbg;
+    v.queued_actor.dbg = dbg;
+    v.paused.dbg = dbg;
+    v.displaced.dbg = dbg;
+    v.live.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+
+// ---- C_b6: carry at b6 (line 1689, occurrence 0): turn_context = live & (~replacement | state.pending_residual)
+struct C_b6 {
+  static constexpr uint64_t kDigest = 0x8898b2484fca1c8dull;
+  static constexpr const char* kDigestHex = "8898b2484fca1c8d87f04db669586f674d6b2dd23a46223076d6190d02429caf";
+  static constexpr int kLeaves = 194;
+  Leaf<int32_t, 2, 6> state_species;   // arg 0: state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> state_level;   // arg 1: state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> state_hidden_power_type;   // arg 2: state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> state_hidden_power_power;   // arg 3: state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> state_happiness;   // arg 4: state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> state_gender;   // arg 5: state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> state_types;   // arg 6: state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> state_base_types;   // arg 7: state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> state_stats;   // arg 8: state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> state_hp;   // arg 9: state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> state_max_hp;   // arg 10: state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> state_status;   // arg 11: state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> state_status_counter;   // arg 12: state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> state_sleep_skipped;   // arg 13: state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> state_rest_origin;   // arg 14: state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> state_moves;   // arg 15: state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> state_pp;   // arg 16: state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> state_disabled;   // arg 17: state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> state_choice_move;   // arg 18: state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> state_last_move;   // arg 19: state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> state_last_action_kind;   // arg 20: state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> state_last_action_index;   // arg 21: state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> state_encore_move;   // arg 22: state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> state_encore_counter;   // arg 23: state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> state_charge_move;   // arg 24: state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> state_charge_counter;   // arg 25: state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> state_item;   // arg 26: state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> state_ability;   // arg 27: state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> state_base_ability;   // arg 28: state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> state_boosts;   // arg 29: state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> state_volatile;   // arg 30: state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> state_confusion_counter;   // arg 31: state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> state_protect_counter;   // arg 32: state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> state_substitute_hp;   // arg 33: state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> state_active;   // arg 34: state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> state_entry_pending;   // arg 35: state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> state_active_turns;   // arg 36: state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> state_trapped;   // arg 37: state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> state_trap_source;   // arg 38: state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> state_forced_switch;   // arg 39: state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> state_baton_pass;   // arg 40: state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> state_queued_actor;   // arg 41: state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> state_queued_actions;   // arg 42: state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> state_queued_stall;   // arg 43: state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> state_pending_residual;   // arg 44: state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> state_residual_draws;   // arg 45: state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> state_phazing_draws;   // arg 46: state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> state_secondary_draws;   // arg 47: state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> state_sleep_talk_draws;   // arg 48: state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> state_replacement_count;   // arg 49: state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> state_spikes;   // arg 50: state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> state_wish_counter;   // arg 51: state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> state_wish_amount;   // arg 52: state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> state_weather;   // arg 53: state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> state_weather_counter;   // arg 54: state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> state_turn;   // arg 55: state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> state_keys;   // arg 56: state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> state_done;   // arg 57: state.done bool[] (source state, '.done')
+  Leaf<int32_t> state_winner;   // arg 58: state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> state_truant_loaf;   // arg 59: state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<int32_t, 2> actions;   // arg 60: actions int32[2] (source actions, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 61: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 62: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 63: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 64: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 65: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 66: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 67: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 68: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 69: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 70: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 71: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 72: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 73: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 74: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 75: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 76: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 77: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 78: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 79: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 80: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 81: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 82: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 83: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 84: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 85: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 86: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 87: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 88: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 89: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 90: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 91: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 92: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 93: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 94: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 95: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 96: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 97: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 98: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 99: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 100: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 101: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 102: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 103: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 104: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 105: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 106: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 107: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 108: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 109: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 110: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 111: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 112: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 113: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 114: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 115: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 116: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 117: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 118: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 119: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 120: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 121: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 122: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 123: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 124: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 125: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 126: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 127: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 128: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 129: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 130: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 131: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 132: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 133: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 134: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 135: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 136: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 137: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 138: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 139: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 140: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 141: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 142: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 143: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 144: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 145: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 146: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  Leaf<bool> replacement;   // arg 147: replacement bool[] (source local, '')
+  Leaf<bool> invalid;   // arg 148: invalid bool[] (source local, '')
+  Leaf<bool> resuming;   // arg 149: resuming bool[] (source local, '')
+  Leaf<int32_t, 2, 12> draws;   // arg 150: draws int32[2, 12] (source local, '')
+  Leaf<int32_t, 2> phazing_draws;   // arg 151: phazing_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> secondary_draws;   // arg 152: secondary_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> sleep_talk_draws;   // arg 153: sleep_talk_draws int32[2] (source local, '')
+  Leaf<int32_t, 2, 6, 2> work_types;   // arg 154: work.types int32[2, 6, 2] (source local, '.types')
+  Leaf<int32_t, 2, 6> work_hp;   // arg 155: work.hp int32[2, 6] (source local, '.hp')
+  Leaf<int32_t, 2, 6> work_status;   // arg 156: work.status int32[2, 6] (source local, '.status')
+  Leaf<int32_t, 2, 6> work_status_counter;   // arg 157: work.status_counter int32[2, 6] (source local, '.status_counter')
+  Leaf<int32_t, 2, 6> work_sleep_skipped;   // arg 158: work.sleep_skipped int32[2, 6] (source local, '.sleep_skipped')
+  Leaf<bool, 2, 6> work_rest_origin;   // arg 159: work.rest_origin bool[2, 6] (source local, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> work_pp;   // arg 160: work.pp int32[2, 6, 4] (source local, '.pp')
+  Leaf<int32_t, 2, 6> work_choice_move;   // arg 161: work.choice_move int32[2, 6] (source local, '.choice_move')
+  Leaf<int32_t, 2, 6> work_last_move;   // arg 162: work.last_move int32[2, 6] (source local, '.last_move')
+  Leaf<int32_t, 2> work_last_action_kind;   // arg 163: work.last_action_kind int32[2] (source local, '.last_action_kind')
+  Leaf<int32_t, 2> work_last_action_index;   // arg 164: work.last_action_index int32[2] (source local, '.last_action_index')
+  Leaf<int32_t, 2, 6> work_encore_move;   // arg 165: work.encore_move int32[2, 6] (source local, '.encore_move')
+  Leaf<int32_t, 2, 6> work_encore_counter;   // arg 166: work.encore_counter int32[2, 6] (source local, '.encore_counter')
+  Leaf<int32_t, 2, 6> work_charge_move;   // arg 167: work.charge_move int32[2, 6] (source local, '.charge_move')
+  Leaf<int32_t, 2, 6> work_charge_counter;   // arg 168: work.charge_counter int32[2, 6] (source local, '.charge_counter')
+  Leaf<int32_t, 2, 6> work_item;   // arg 169: work.item int32[2, 6] (source local, '.item')
+  Leaf<int32_t, 2, 6> work_ability;   // arg 170: work.ability int32[2, 6] (source local, '.ability')
+  Leaf<int32_t, 2, 6, 7> work_boosts;   // arg 171: work.boosts int32[2, 6, 7] (source local, '.boosts')
+  Leaf<uint32_t, 2, 6> work_volatile;   // arg 172: work.volatile uint32[2, 6] (source local, '.volatile')
+  Leaf<int32_t, 2, 6> work_confusion_counter;   // arg 173: work.confusion_counter int32[2, 6] (source local, '.confusion_counter')
+  Leaf<int32_t, 2, 6> work_protect_counter;   // arg 174: work.protect_counter int32[2, 6] (source local, '.protect_counter')
+  Leaf<int32_t, 2, 6> work_substitute_hp;   // arg 175: work.substitute_hp int32[2, 6] (source local, '.substitute_hp')
+  Leaf<int32_t, 2> work_active;   // arg 176: work.active int32[2] (source local, '.active')
+  Leaf<bool, 2> work_entry_pending;   // arg 177: work.entry_pending bool[2] (source local, '.entry_pending')
+  Leaf<int32_t, 2> work_active_turns;   // arg 178: work.active_turns int32[2] (source local, '.active_turns')
+  Leaf<bool, 2> work_trapped;   // arg 179: work.trapped bool[2] (source local, '.trapped')
+  Leaf<int32_t, 2, 6> work_trap_source;   // arg 180: work.trap_source int32[2, 6] (source local, '.trap_source')
+  Leaf<bool, 2> work_baton_pass;   // arg 181: work.baton_pass bool[2] (source local, '.baton_pass')
+  Leaf<int32_t, 2> work_spikes;   // arg 182: work.spikes int32[2] (source local, '.spikes')
+  Leaf<int32_t, 2> work_wish_counter;   // arg 183: work.wish_counter int32[2] (source local, '.wish_counter')
+  Leaf<int32_t, 2> work_wish_amount;   // arg 184: work.wish_amount int32[2] (source local, '.wish_amount')
+  Leaf<int32_t> work_weather;   // arg 185: work.weather int32[] (source local, '.weather')
+  Leaf<int32_t> work_weather_counter;   // arg 186: work.weather_counter int32[] (source local, '.weather_counter')
+  Leaf<uint32_t, 2> work_keys;   // arg 187: work.keys uint32[2] (source local, '.keys')
+  Leaf<bool, 2, 6> work_truant_loaf;   // arg 188: work.truant_loaf bool[2, 6] (source local, '.truant_loaf')
+  Leaf<int32_t> placeholders;   // arg 189: placeholders int32[] (source local, '')
+  Leaf<int32_t, 2> saved_stall;   // arg 190: saved_stall int32[2] (source local, '')
+  Leaf<int32_t> queued_actor;   // arg 191: queued_actor int32[] (source local, '')
+  Leaf<bool> paused;   // arg 192: paused bool[] (source local, '')
+  Leaf<bool> live;   // arg 193: live bool[] (source local, '')
+  static constexpr int arg_state_species = 0;
+  static constexpr int arg_state_level = 1;
+  static constexpr int arg_state_hidden_power_type = 2;
+  static constexpr int arg_state_hidden_power_power = 3;
+  static constexpr int arg_state_happiness = 4;
+  static constexpr int arg_state_gender = 5;
+  static constexpr int arg_state_types = 6;
+  static constexpr int arg_state_base_types = 7;
+  static constexpr int arg_state_stats = 8;
+  static constexpr int arg_state_hp = 9;
+  static constexpr int arg_state_max_hp = 10;
+  static constexpr int arg_state_status = 11;
+  static constexpr int arg_state_status_counter = 12;
+  static constexpr int arg_state_sleep_skipped = 13;
+  static constexpr int arg_state_rest_origin = 14;
+  static constexpr int arg_state_moves = 15;
+  static constexpr int arg_state_pp = 16;
+  static constexpr int arg_state_disabled = 17;
+  static constexpr int arg_state_choice_move = 18;
+  static constexpr int arg_state_last_move = 19;
+  static constexpr int arg_state_last_action_kind = 20;
+  static constexpr int arg_state_last_action_index = 21;
+  static constexpr int arg_state_encore_move = 22;
+  static constexpr int arg_state_encore_counter = 23;
+  static constexpr int arg_state_charge_move = 24;
+  static constexpr int arg_state_charge_counter = 25;
+  static constexpr int arg_state_item = 26;
+  static constexpr int arg_state_ability = 27;
+  static constexpr int arg_state_base_ability = 28;
+  static constexpr int arg_state_boosts = 29;
+  static constexpr int arg_state_volatile = 30;
+  static constexpr int arg_state_confusion_counter = 31;
+  static constexpr int arg_state_protect_counter = 32;
+  static constexpr int arg_state_substitute_hp = 33;
+  static constexpr int arg_state_active = 34;
+  static constexpr int arg_state_entry_pending = 35;
+  static constexpr int arg_state_active_turns = 36;
+  static constexpr int arg_state_trapped = 37;
+  static constexpr int arg_state_trap_source = 38;
+  static constexpr int arg_state_forced_switch = 39;
+  static constexpr int arg_state_baton_pass = 40;
+  static constexpr int arg_state_queued_actor = 41;
+  static constexpr int arg_state_queued_actions = 42;
+  static constexpr int arg_state_queued_stall = 43;
+  static constexpr int arg_state_pending_residual = 44;
+  static constexpr int arg_state_residual_draws = 45;
+  static constexpr int arg_state_phazing_draws = 46;
+  static constexpr int arg_state_secondary_draws = 47;
+  static constexpr int arg_state_sleep_talk_draws = 48;
+  static constexpr int arg_state_replacement_count = 49;
+  static constexpr int arg_state_spikes = 50;
+  static constexpr int arg_state_wish_counter = 51;
+  static constexpr int arg_state_wish_amount = 52;
+  static constexpr int arg_state_weather = 53;
+  static constexpr int arg_state_weather_counter = 54;
+  static constexpr int arg_state_turn = 55;
+  static constexpr int arg_state_keys = 56;
+  static constexpr int arg_state_done = 57;
+  static constexpr int arg_state_winner = 58;
+  static constexpr int arg_state_truant_loaf = 59;
+  static constexpr int arg_actions = 60;
+  static constexpr int arg_trackers_physical_to_public = 61;
+  static constexpr int arg_trackers_active_physical = 62;
+  static constexpr int arg_trackers_active_slot = 63;
+  static constexpr int arg_trackers_next_slot = 64;
+  static constexpr int arg_trackers_own_order = 65;
+  static constexpr int arg_trackers_species = 66;
+  static constexpr int arg_trackers_level = 67;
+  static constexpr int arg_trackers_gender = 68;
+  static constexpr int arg_trackers_hp_percent = 69;
+  static constexpr int arg_trackers_status = 70;
+  static constexpr int arg_trackers_boosts = 71;
+  static constexpr int arg_trackers_present = 72;
+  static constexpr int arg_trackers_fainted = 73;
+  static constexpr int arg_trackers_turn = 74;
+  static constexpr int arg_trackers_weather = 75;
+  static constexpr int arg_trackers_spikes = 76;
+  static constexpr int arg_trackers_error = 77;
+  static constexpr int arg_trackers_observed_moves = 78;
+  static constexpr int arg_trackers_pp_used = 79;
+  static constexpr int arg_trackers_last_moves = 80;
+  static constexpr int arg_trackers_tendencies = 81;
+  static constexpr int arg_trackers_belief_mask = 82;
+  static constexpr int arg_trackers_shown_ability = 83;
+  static constexpr int arg_trackers_shown_item = 84;
+  static constexpr int arg_trackers_shown_types = 85;
+  static constexpr int arg_trackers_borrowed_ability = 86;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 87;
+  static constexpr int arg_trackers_mon_features_encore_turns = 88;
+  static constexpr int arg_trackers_mon_features_item_swapped = 89;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 91;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 92;
+  static constexpr int arg_trackers_mon_features_moves_shown = 93;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 94;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 95;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 96;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 98;
+  static constexpr int arg_trackers_mon_features_stall_counter = 99;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 100;
+  static constexpr int arg_trackers_mon_features_sub_present = 101;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 102;
+  static constexpr int arg_trackers_mon_features_switches = 103;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 104;
+  static constexpr int arg_trackers_mon_features_turns_active = 105;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 106;
+  static constexpr int arg_trackers_field_features_weather_permanent = 107;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 108;
+  static constexpr int arg_trackers_field_features_wish_pending = 109;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 110;
+  static constexpr int arg_trackers_field_features_wish_turns = 111;
+  static constexpr int arg_trackers_original_ability = 112;
+  static constexpr int arg_trackers_damage_exact_dealt = 113;
+  static constexpr int arg_trackers_damage_exact_taken = 114;
+  static constexpr int arg_trackers_public_volatiles = 115;
+  static constexpr int arg_trackers_item_removed = 116;
+  static constexpr int arg_trackers_tendency_moved = 117;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 118;
+  static constexpr int arg_trackers_tendency_switches = 119;
+  static constexpr int arg_trackers_tendency_opportunities = 120;
+  static constexpr int arg_trackers_tendency_matchup = 121;
+  static constexpr int arg_trackers_damage_history_hp = 122;
+  static constexpr int arg_trackers_damage_history_maximum = 123;
+  static constexpr int arg_trackers_damage_history_taken = 124;
+  static constexpr int arg_trackers_damage_history_dealt = 125;
+  static constexpr int arg_trackers_negative_items_percent = 126;
+  static constexpr int arg_trackers_negative_items_known = 127;
+  static constexpr int arg_trackers_visible_belief_pin = 128;
+  static constexpr int arg_trackers_visible_belief_pin_active = 129;
+  static constexpr int arg_trackers_visible_belief_conflicts = 130;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 131;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 133;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 135;
+  static constexpr int arg_trackers_public_port_holder = 136;
+  static constexpr int arg_trackers_public_port_victims = 137;
+  static constexpr int arg_trackers_public_port_known = 138;
+  static constexpr int arg_trackers_public_port_loaf = 139;
+  static constexpr int arg_trackers_public_port_traced = 140;
+  static constexpr int arg_trackers_public_port_skip_flip = 141;
+  static constexpr int arg_trackers_public_port_post_upkeep = 142;
+  static constexpr int arg_trackers_public_port_hazards = 143;
+  static constexpr int arg_trackers_public_port_blocked = 144;
+  static constexpr int arg_trackers_public_port_pursuit = 145;
+  static constexpr int arg_trackers_public_port_weather = 146;
+  static constexpr int arg_replacement = 147;
+  static constexpr int arg_invalid = 148;
+  static constexpr int arg_resuming = 149;
+  static constexpr int arg_draws = 150;
+  static constexpr int arg_phazing_draws = 151;
+  static constexpr int arg_secondary_draws = 152;
+  static constexpr int arg_sleep_talk_draws = 153;
+  static constexpr int arg_work_types = 154;
+  static constexpr int arg_work_hp = 155;
+  static constexpr int arg_work_status = 156;
+  static constexpr int arg_work_status_counter = 157;
+  static constexpr int arg_work_sleep_skipped = 158;
+  static constexpr int arg_work_rest_origin = 159;
+  static constexpr int arg_work_pp = 160;
+  static constexpr int arg_work_choice_move = 161;
+  static constexpr int arg_work_last_move = 162;
+  static constexpr int arg_work_last_action_kind = 163;
+  static constexpr int arg_work_last_action_index = 164;
+  static constexpr int arg_work_encore_move = 165;
+  static constexpr int arg_work_encore_counter = 166;
+  static constexpr int arg_work_charge_move = 167;
+  static constexpr int arg_work_charge_counter = 168;
+  static constexpr int arg_work_item = 169;
+  static constexpr int arg_work_ability = 170;
+  static constexpr int arg_work_boosts = 171;
+  static constexpr int arg_work_volatile = 172;
+  static constexpr int arg_work_confusion_counter = 173;
+  static constexpr int arg_work_protect_counter = 174;
+  static constexpr int arg_work_substitute_hp = 175;
+  static constexpr int arg_work_active = 176;
+  static constexpr int arg_work_entry_pending = 177;
+  static constexpr int arg_work_active_turns = 178;
+  static constexpr int arg_work_trapped = 179;
+  static constexpr int arg_work_trap_source = 180;
+  static constexpr int arg_work_baton_pass = 181;
+  static constexpr int arg_work_spikes = 182;
+  static constexpr int arg_work_wish_counter = 183;
+  static constexpr int arg_work_wish_amount = 184;
+  static constexpr int arg_work_weather = 185;
+  static constexpr int arg_work_weather_counter = 186;
+  static constexpr int arg_work_keys = 187;
+  static constexpr int arg_work_truant_loaf = 188;
+  static constexpr int arg_placeholders = 189;
+  static constexpr int arg_saved_stall = 190;
+  static constexpr int arg_queued_actor = 191;
+  static constexpr int arg_paused = 192;
+  static constexpr int arg_live = 193;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b6 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b6 v;
+    v.state_species.p = static_cast<int32_t*>(bufs[0]); v.state_species.lanes = lanes;
+    v.state_level.p = static_cast<int32_t*>(bufs[1]); v.state_level.lanes = lanes;
+    v.state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.state_hidden_power_type.lanes = lanes;
+    v.state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.state_hidden_power_power.lanes = lanes;
+    v.state_happiness.p = static_cast<int32_t*>(bufs[4]); v.state_happiness.lanes = lanes;
+    v.state_gender.p = static_cast<int32_t*>(bufs[5]); v.state_gender.lanes = lanes;
+    v.state_types.p = static_cast<int32_t*>(bufs[6]); v.state_types.lanes = lanes;
+    v.state_base_types.p = static_cast<int32_t*>(bufs[7]); v.state_base_types.lanes = lanes;
+    v.state_stats.p = static_cast<int32_t*>(bufs[8]); v.state_stats.lanes = lanes;
+    v.state_hp.p = static_cast<int32_t*>(bufs[9]); v.state_hp.lanes = lanes;
+    v.state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.state_max_hp.lanes = lanes;
+    v.state_status.p = static_cast<int32_t*>(bufs[11]); v.state_status.lanes = lanes;
+    v.state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.state_status_counter.lanes = lanes;
+    v.state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.state_sleep_skipped.lanes = lanes;
+    v.state_rest_origin.p = static_cast<bool*>(bufs[14]); v.state_rest_origin.lanes = lanes;
+    v.state_moves.p = static_cast<int32_t*>(bufs[15]); v.state_moves.lanes = lanes;
+    v.state_pp.p = static_cast<int32_t*>(bufs[16]); v.state_pp.lanes = lanes;
+    v.state_disabled.p = static_cast<bool*>(bufs[17]); v.state_disabled.lanes = lanes;
+    v.state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.state_choice_move.lanes = lanes;
+    v.state_last_move.p = static_cast<int32_t*>(bufs[19]); v.state_last_move.lanes = lanes;
+    v.state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.state_last_action_kind.lanes = lanes;
+    v.state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.state_last_action_index.lanes = lanes;
+    v.state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.state_encore_move.lanes = lanes;
+    v.state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.state_encore_counter.lanes = lanes;
+    v.state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.state_charge_move.lanes = lanes;
+    v.state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.state_charge_counter.lanes = lanes;
+    v.state_item.p = static_cast<int32_t*>(bufs[26]); v.state_item.lanes = lanes;
+    v.state_ability.p = static_cast<int32_t*>(bufs[27]); v.state_ability.lanes = lanes;
+    v.state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.state_base_ability.lanes = lanes;
+    v.state_boosts.p = static_cast<int32_t*>(bufs[29]); v.state_boosts.lanes = lanes;
+    v.state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.state_volatile.lanes = lanes;
+    v.state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.state_confusion_counter.lanes = lanes;
+    v.state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.state_protect_counter.lanes = lanes;
+    v.state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.state_substitute_hp.lanes = lanes;
+    v.state_active.p = static_cast<int32_t*>(bufs[34]); v.state_active.lanes = lanes;
+    v.state_entry_pending.p = static_cast<bool*>(bufs[35]); v.state_entry_pending.lanes = lanes;
+    v.state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.state_active_turns.lanes = lanes;
+    v.state_trapped.p = static_cast<bool*>(bufs[37]); v.state_trapped.lanes = lanes;
+    v.state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.state_trap_source.lanes = lanes;
+    v.state_forced_switch.p = static_cast<bool*>(bufs[39]); v.state_forced_switch.lanes = lanes;
+    v.state_baton_pass.p = static_cast<bool*>(bufs[40]); v.state_baton_pass.lanes = lanes;
+    v.state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.state_queued_actor.lanes = lanes;
+    v.state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.state_queued_actions.lanes = lanes;
+    v.state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.state_queued_stall.lanes = lanes;
+    v.state_pending_residual.p = static_cast<bool*>(bufs[44]); v.state_pending_residual.lanes = lanes;
+    v.state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.state_residual_draws.lanes = lanes;
+    v.state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.state_phazing_draws.lanes = lanes;
+    v.state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.state_secondary_draws.lanes = lanes;
+    v.state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.state_sleep_talk_draws.lanes = lanes;
+    v.state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.state_replacement_count.lanes = lanes;
+    v.state_spikes.p = static_cast<int32_t*>(bufs[50]); v.state_spikes.lanes = lanes;
+    v.state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.state_wish_counter.lanes = lanes;
+    v.state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.state_wish_amount.lanes = lanes;
+    v.state_weather.p = static_cast<int32_t*>(bufs[53]); v.state_weather.lanes = lanes;
+    v.state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.state_weather_counter.lanes = lanes;
+    v.state_turn.p = static_cast<int32_t*>(bufs[55]); v.state_turn.lanes = lanes;
+    v.state_keys.p = static_cast<uint32_t*>(bufs[56]); v.state_keys.lanes = lanes;
+    v.state_done.p = static_cast<bool*>(bufs[57]); v.state_done.lanes = lanes;
+    v.state_winner.p = static_cast<int32_t*>(bufs[58]); v.state_winner.lanes = lanes;
+    v.state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.state_truant_loaf.lanes = lanes;
+    v.actions.p = static_cast<int32_t*>(bufs[60]); v.actions.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[61]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[62]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[65]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[66]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[67]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[68]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[69]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[70]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[71]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[72]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[73]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[74]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[75]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[76]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[77]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[78]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[79]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[80]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[81]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[82]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[83]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[86]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[87]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[90]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[92]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[107]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[108]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[109]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[110]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[112]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[113]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[115]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[116]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[117]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[118]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[122]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[124]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[126]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[127]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[128]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[129]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[130]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[131]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[133]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[134]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[136]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[137]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[143]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[144]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[146]); v.trackers_public_port_weather.lanes = lanes;
+    v.replacement.p = static_cast<bool*>(bufs[147]); v.replacement.lanes = lanes;
+    v.invalid.p = static_cast<bool*>(bufs[148]); v.invalid.lanes = lanes;
+    v.resuming.p = static_cast<bool*>(bufs[149]); v.resuming.lanes = lanes;
+    v.draws.p = static_cast<int32_t*>(bufs[150]); v.draws.lanes = lanes;
+    v.phazing_draws.p = static_cast<int32_t*>(bufs[151]); v.phazing_draws.lanes = lanes;
+    v.secondary_draws.p = static_cast<int32_t*>(bufs[152]); v.secondary_draws.lanes = lanes;
+    v.sleep_talk_draws.p = static_cast<int32_t*>(bufs[153]); v.sleep_talk_draws.lanes = lanes;
+    v.work_types.p = static_cast<int32_t*>(bufs[154]); v.work_types.lanes = lanes;
+    v.work_hp.p = static_cast<int32_t*>(bufs[155]); v.work_hp.lanes = lanes;
+    v.work_status.p = static_cast<int32_t*>(bufs[156]); v.work_status.lanes = lanes;
+    v.work_status_counter.p = static_cast<int32_t*>(bufs[157]); v.work_status_counter.lanes = lanes;
+    v.work_sleep_skipped.p = static_cast<int32_t*>(bufs[158]); v.work_sleep_skipped.lanes = lanes;
+    v.work_rest_origin.p = static_cast<bool*>(bufs[159]); v.work_rest_origin.lanes = lanes;
+    v.work_pp.p = static_cast<int32_t*>(bufs[160]); v.work_pp.lanes = lanes;
+    v.work_choice_move.p = static_cast<int32_t*>(bufs[161]); v.work_choice_move.lanes = lanes;
+    v.work_last_move.p = static_cast<int32_t*>(bufs[162]); v.work_last_move.lanes = lanes;
+    v.work_last_action_kind.p = static_cast<int32_t*>(bufs[163]); v.work_last_action_kind.lanes = lanes;
+    v.work_last_action_index.p = static_cast<int32_t*>(bufs[164]); v.work_last_action_index.lanes = lanes;
+    v.work_encore_move.p = static_cast<int32_t*>(bufs[165]); v.work_encore_move.lanes = lanes;
+    v.work_encore_counter.p = static_cast<int32_t*>(bufs[166]); v.work_encore_counter.lanes = lanes;
+    v.work_charge_move.p = static_cast<int32_t*>(bufs[167]); v.work_charge_move.lanes = lanes;
+    v.work_charge_counter.p = static_cast<int32_t*>(bufs[168]); v.work_charge_counter.lanes = lanes;
+    v.work_item.p = static_cast<int32_t*>(bufs[169]); v.work_item.lanes = lanes;
+    v.work_ability.p = static_cast<int32_t*>(bufs[170]); v.work_ability.lanes = lanes;
+    v.work_boosts.p = static_cast<int32_t*>(bufs[171]); v.work_boosts.lanes = lanes;
+    v.work_volatile.p = static_cast<uint32_t*>(bufs[172]); v.work_volatile.lanes = lanes;
+    v.work_confusion_counter.p = static_cast<int32_t*>(bufs[173]); v.work_confusion_counter.lanes = lanes;
+    v.work_protect_counter.p = static_cast<int32_t*>(bufs[174]); v.work_protect_counter.lanes = lanes;
+    v.work_substitute_hp.p = static_cast<int32_t*>(bufs[175]); v.work_substitute_hp.lanes = lanes;
+    v.work_active.p = static_cast<int32_t*>(bufs[176]); v.work_active.lanes = lanes;
+    v.work_entry_pending.p = static_cast<bool*>(bufs[177]); v.work_entry_pending.lanes = lanes;
+    v.work_active_turns.p = static_cast<int32_t*>(bufs[178]); v.work_active_turns.lanes = lanes;
+    v.work_trapped.p = static_cast<bool*>(bufs[179]); v.work_trapped.lanes = lanes;
+    v.work_trap_source.p = static_cast<int32_t*>(bufs[180]); v.work_trap_source.lanes = lanes;
+    v.work_baton_pass.p = static_cast<bool*>(bufs[181]); v.work_baton_pass.lanes = lanes;
+    v.work_spikes.p = static_cast<int32_t*>(bufs[182]); v.work_spikes.lanes = lanes;
+    v.work_wish_counter.p = static_cast<int32_t*>(bufs[183]); v.work_wish_counter.lanes = lanes;
+    v.work_wish_amount.p = static_cast<int32_t*>(bufs[184]); v.work_wish_amount.lanes = lanes;
+    v.work_weather.p = static_cast<int32_t*>(bufs[185]); v.work_weather.lanes = lanes;
+    v.work_weather_counter.p = static_cast<int32_t*>(bufs[186]); v.work_weather_counter.lanes = lanes;
+    v.work_keys.p = static_cast<uint32_t*>(bufs[187]); v.work_keys.lanes = lanes;
+    v.work_truant_loaf.p = static_cast<bool*>(bufs[188]); v.work_truant_loaf.lanes = lanes;
+    v.placeholders.p = static_cast<int32_t*>(bufs[189]); v.placeholders.lanes = lanes;
+    v.saved_stall.p = static_cast<int32_t*>(bufs[190]); v.saved_stall.lanes = lanes;
+    v.queued_actor.p = static_cast<int32_t*>(bufs[191]); v.queued_actor.lanes = lanes;
+    v.paused.p = static_cast<bool*>(bufs[192]); v.paused.lanes = lanes;
+    v.live.p = static_cast<bool*>(bufs[193]); v.live.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.state_species.dbg = dbg;
+    v.state_level.dbg = dbg;
+    v.state_hidden_power_type.dbg = dbg;
+    v.state_hidden_power_power.dbg = dbg;
+    v.state_happiness.dbg = dbg;
+    v.state_gender.dbg = dbg;
+    v.state_types.dbg = dbg;
+    v.state_base_types.dbg = dbg;
+    v.state_stats.dbg = dbg;
+    v.state_hp.dbg = dbg;
+    v.state_max_hp.dbg = dbg;
+    v.state_status.dbg = dbg;
+    v.state_status_counter.dbg = dbg;
+    v.state_sleep_skipped.dbg = dbg;
+    v.state_rest_origin.dbg = dbg;
+    v.state_moves.dbg = dbg;
+    v.state_pp.dbg = dbg;
+    v.state_disabled.dbg = dbg;
+    v.state_choice_move.dbg = dbg;
+    v.state_last_move.dbg = dbg;
+    v.state_last_action_kind.dbg = dbg;
+    v.state_last_action_index.dbg = dbg;
+    v.state_encore_move.dbg = dbg;
+    v.state_encore_counter.dbg = dbg;
+    v.state_charge_move.dbg = dbg;
+    v.state_charge_counter.dbg = dbg;
+    v.state_item.dbg = dbg;
+    v.state_ability.dbg = dbg;
+    v.state_base_ability.dbg = dbg;
+    v.state_boosts.dbg = dbg;
+    v.state_volatile.dbg = dbg;
+    v.state_confusion_counter.dbg = dbg;
+    v.state_protect_counter.dbg = dbg;
+    v.state_substitute_hp.dbg = dbg;
+    v.state_active.dbg = dbg;
+    v.state_entry_pending.dbg = dbg;
+    v.state_active_turns.dbg = dbg;
+    v.state_trapped.dbg = dbg;
+    v.state_trap_source.dbg = dbg;
+    v.state_forced_switch.dbg = dbg;
+    v.state_baton_pass.dbg = dbg;
+    v.state_queued_actor.dbg = dbg;
+    v.state_queued_actions.dbg = dbg;
+    v.state_queued_stall.dbg = dbg;
+    v.state_pending_residual.dbg = dbg;
+    v.state_residual_draws.dbg = dbg;
+    v.state_phazing_draws.dbg = dbg;
+    v.state_secondary_draws.dbg = dbg;
+    v.state_sleep_talk_draws.dbg = dbg;
+    v.state_replacement_count.dbg = dbg;
+    v.state_spikes.dbg = dbg;
+    v.state_wish_counter.dbg = dbg;
+    v.state_wish_amount.dbg = dbg;
+    v.state_weather.dbg = dbg;
+    v.state_weather_counter.dbg = dbg;
+    v.state_turn.dbg = dbg;
+    v.state_keys.dbg = dbg;
+    v.state_done.dbg = dbg;
+    v.state_winner.dbg = dbg;
+    v.state_truant_loaf.dbg = dbg;
+    v.actions.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+    v.replacement.dbg = dbg;
+    v.invalid.dbg = dbg;
+    v.resuming.dbg = dbg;
+    v.draws.dbg = dbg;
+    v.phazing_draws.dbg = dbg;
+    v.secondary_draws.dbg = dbg;
+    v.sleep_talk_draws.dbg = dbg;
+    v.work_types.dbg = dbg;
+    v.work_hp.dbg = dbg;
+    v.work_status.dbg = dbg;
+    v.work_status_counter.dbg = dbg;
+    v.work_sleep_skipped.dbg = dbg;
+    v.work_rest_origin.dbg = dbg;
+    v.work_pp.dbg = dbg;
+    v.work_choice_move.dbg = dbg;
+    v.work_last_move.dbg = dbg;
+    v.work_last_action_kind.dbg = dbg;
+    v.work_last_action_index.dbg = dbg;
+    v.work_encore_move.dbg = dbg;
+    v.work_encore_counter.dbg = dbg;
+    v.work_charge_move.dbg = dbg;
+    v.work_charge_counter.dbg = dbg;
+    v.work_item.dbg = dbg;
+    v.work_ability.dbg = dbg;
+    v.work_boosts.dbg = dbg;
+    v.work_volatile.dbg = dbg;
+    v.work_confusion_counter.dbg = dbg;
+    v.work_protect_counter.dbg = dbg;
+    v.work_substitute_hp.dbg = dbg;
+    v.work_active.dbg = dbg;
+    v.work_entry_pending.dbg = dbg;
+    v.work_active_turns.dbg = dbg;
+    v.work_trapped.dbg = dbg;
+    v.work_trap_source.dbg = dbg;
+    v.work_baton_pass.dbg = dbg;
+    v.work_spikes.dbg = dbg;
+    v.work_wish_counter.dbg = dbg;
+    v.work_wish_amount.dbg = dbg;
+    v.work_weather.dbg = dbg;
+    v.work_weather_counter.dbg = dbg;
+    v.work_keys.dbg = dbg;
+    v.work_truant_loaf.dbg = dbg;
+    v.placeholders.dbg = dbg;
+    v.saved_stall.dbg = dbg;
+    v.queued_actor.dbg = dbg;
+    v.paused.dbg = dbg;
+    v.live.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+
+// ---- C_b7: carry at b7 (line 2041, occurrence 0): work=linking.prune(work)
+struct C_b7 {
+  static constexpr uint64_t kDigest = 0x42ee0e9c6e27adf1ull;
+  static constexpr const char* kDigestHex = "42ee0e9c6e27adf1ab6b74572a342b723c5db6c8d032648eafc95e7c2e225f7a";
+  static constexpr int kLeaves = 196;
+  Leaf<int32_t, 2, 6> state_species;   // arg 0: state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> state_level;   // arg 1: state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> state_hidden_power_type;   // arg 2: state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> state_hidden_power_power;   // arg 3: state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> state_happiness;   // arg 4: state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> state_gender;   // arg 5: state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> state_types;   // arg 6: state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> state_base_types;   // arg 7: state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> state_stats;   // arg 8: state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> state_hp;   // arg 9: state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> state_max_hp;   // arg 10: state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> state_status;   // arg 11: state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> state_status_counter;   // arg 12: state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> state_sleep_skipped;   // arg 13: state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> state_rest_origin;   // arg 14: state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> state_moves;   // arg 15: state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> state_pp;   // arg 16: state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> state_disabled;   // arg 17: state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> state_choice_move;   // arg 18: state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> state_last_move;   // arg 19: state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> state_last_action_kind;   // arg 20: state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> state_last_action_index;   // arg 21: state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> state_encore_move;   // arg 22: state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> state_encore_counter;   // arg 23: state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> state_charge_move;   // arg 24: state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> state_charge_counter;   // arg 25: state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> state_item;   // arg 26: state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> state_ability;   // arg 27: state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> state_base_ability;   // arg 28: state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> state_boosts;   // arg 29: state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> state_volatile;   // arg 30: state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> state_confusion_counter;   // arg 31: state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> state_protect_counter;   // arg 32: state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> state_substitute_hp;   // arg 33: state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> state_active;   // arg 34: state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> state_entry_pending;   // arg 35: state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> state_active_turns;   // arg 36: state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> state_trapped;   // arg 37: state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> state_trap_source;   // arg 38: state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> state_forced_switch;   // arg 39: state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> state_baton_pass;   // arg 40: state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> state_queued_actor;   // arg 41: state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> state_queued_actions;   // arg 42: state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> state_queued_stall;   // arg 43: state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> state_pending_residual;   // arg 44: state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> state_residual_draws;   // arg 45: state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> state_phazing_draws;   // arg 46: state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> state_secondary_draws;   // arg 47: state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> state_sleep_talk_draws;   // arg 48: state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> state_replacement_count;   // arg 49: state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> state_spikes;   // arg 50: state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> state_wish_counter;   // arg 51: state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> state_wish_amount;   // arg 52: state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> state_weather;   // arg 53: state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> state_weather_counter;   // arg 54: state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> state_turn;   // arg 55: state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> state_keys;   // arg 56: state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> state_done;   // arg 57: state.done bool[] (source state, '.done')
+  Leaf<int32_t> state_winner;   // arg 58: state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> state_truant_loaf;   // arg 59: state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<int32_t, 2> actions;   // arg 60: actions int32[2] (source actions, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 61: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 62: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 63: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 64: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 65: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 66: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 67: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 68: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 69: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 70: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 71: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 72: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 73: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 74: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 75: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 76: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 77: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 78: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 79: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 80: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 81: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 82: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 83: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 84: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 85: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 86: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 87: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 88: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 89: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 90: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 91: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 92: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 93: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 94: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 95: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 96: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 97: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 98: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 99: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 100: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 101: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 102: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 103: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 104: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 105: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 106: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 107: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 108: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 109: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 110: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 111: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 112: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 113: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 114: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 115: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 116: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 117: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 118: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 119: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 120: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 121: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 122: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 123: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 124: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 125: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 126: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 127: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 128: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 129: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 130: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 131: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 132: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 133: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 134: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 135: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 136: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 137: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 138: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 139: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 140: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 141: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 142: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 143: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 144: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 145: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 146: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  Leaf<bool> replacement;   // arg 147: replacement bool[] (source local, '')
+  Leaf<bool> invalid;   // arg 148: invalid bool[] (source local, '')
+  Leaf<bool> resuming;   // arg 149: resuming bool[] (source local, '')
+  Leaf<int32_t, 2, 12> draws;   // arg 150: draws int32[2, 12] (source local, '')
+  Leaf<int32_t, 2> phazing_draws;   // arg 151: phazing_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> secondary_draws;   // arg 152: secondary_draws int32[2] (source local, '')
+  Leaf<int32_t, 2> sleep_talk_draws;   // arg 153: sleep_talk_draws int32[2] (source local, '')
+  Leaf<int32_t, 2, 6, 2> work_types;   // arg 154: work.types int32[2, 6, 2] (source local, '.types')
+  Leaf<int32_t, 2, 6> work_hp;   // arg 155: work.hp int32[2, 6] (source local, '.hp')
+  Leaf<int32_t, 2, 6> work_status;   // arg 156: work.status int32[2, 6] (source local, '.status')
+  Leaf<int32_t, 2, 6> work_status_counter;   // arg 157: work.status_counter int32[2, 6] (source local, '.status_counter')
+  Leaf<int32_t, 2, 6> work_sleep_skipped;   // arg 158: work.sleep_skipped int32[2, 6] (source local, '.sleep_skipped')
+  Leaf<bool, 2, 6> work_rest_origin;   // arg 159: work.rest_origin bool[2, 6] (source local, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> work_pp;   // arg 160: work.pp int32[2, 6, 4] (source local, '.pp')
+  Leaf<int32_t, 2, 6> work_choice_move;   // arg 161: work.choice_move int32[2, 6] (source local, '.choice_move')
+  Leaf<int32_t, 2, 6> work_last_move;   // arg 162: work.last_move int32[2, 6] (source local, '.last_move')
+  Leaf<int32_t, 2> work_last_action_kind;   // arg 163: work.last_action_kind int32[2] (source local, '.last_action_kind')
+  Leaf<int32_t, 2> work_last_action_index;   // arg 164: work.last_action_index int32[2] (source local, '.last_action_index')
+  Leaf<int32_t, 2, 6> work_encore_move;   // arg 165: work.encore_move int32[2, 6] (source local, '.encore_move')
+  Leaf<int32_t, 2, 6> work_encore_counter;   // arg 166: work.encore_counter int32[2, 6] (source local, '.encore_counter')
+  Leaf<int32_t, 2, 6> work_charge_move;   // arg 167: work.charge_move int32[2, 6] (source local, '.charge_move')
+  Leaf<int32_t, 2, 6> work_charge_counter;   // arg 168: work.charge_counter int32[2, 6] (source local, '.charge_counter')
+  Leaf<int32_t, 2, 6> work_item;   // arg 169: work.item int32[2, 6] (source local, '.item')
+  Leaf<int32_t, 2, 6> work_ability;   // arg 170: work.ability int32[2, 6] (source local, '.ability')
+  Leaf<int32_t, 2, 6, 7> work_boosts;   // arg 171: work.boosts int32[2, 6, 7] (source local, '.boosts')
+  Leaf<uint32_t, 2, 6> work_volatile;   // arg 172: work.volatile uint32[2, 6] (source local, '.volatile')
+  Leaf<int32_t, 2, 6> work_confusion_counter;   // arg 173: work.confusion_counter int32[2, 6] (source local, '.confusion_counter')
+  Leaf<int32_t, 2, 6> work_protect_counter;   // arg 174: work.protect_counter int32[2, 6] (source local, '.protect_counter')
+  Leaf<int32_t, 2, 6> work_substitute_hp;   // arg 175: work.substitute_hp int32[2, 6] (source local, '.substitute_hp')
+  Leaf<int32_t, 2> work_active;   // arg 176: work.active int32[2] (source local, '.active')
+  Leaf<bool, 2> work_entry_pending;   // arg 177: work.entry_pending bool[2] (source local, '.entry_pending')
+  Leaf<int32_t, 2> work_active_turns;   // arg 178: work.active_turns int32[2] (source local, '.active_turns')
+  Leaf<bool, 2> work_trapped;   // arg 179: work.trapped bool[2] (source local, '.trapped')
+  Leaf<int32_t, 2, 6> work_trap_source;   // arg 180: work.trap_source int32[2, 6] (source local, '.trap_source')
+  Leaf<bool, 2> work_baton_pass;   // arg 181: work.baton_pass bool[2] (source local, '.baton_pass')
+  Leaf<int32_t, 2> work_spikes;   // arg 182: work.spikes int32[2] (source local, '.spikes')
+  Leaf<int32_t, 2> work_wish_counter;   // arg 183: work.wish_counter int32[2] (source local, '.wish_counter')
+  Leaf<int32_t, 2> work_wish_amount;   // arg 184: work.wish_amount int32[2] (source local, '.wish_amount')
+  Leaf<int32_t> work_weather;   // arg 185: work.weather int32[] (source local, '.weather')
+  Leaf<int32_t> work_weather_counter;   // arg 186: work.weather_counter int32[] (source local, '.weather_counter')
+  Leaf<uint32_t, 2> work_keys;   // arg 187: work.keys uint32[2] (source local, '.keys')
+  Leaf<bool, 2, 6> work_truant_loaf;   // arg 188: work.truant_loaf bool[2, 6] (source local, '.truant_loaf')
+  Leaf<int32_t> placeholders;   // arg 189: placeholders int32[] (source local, '')
+  Leaf<int32_t, 2> saved_stall;   // arg 190: saved_stall int32[2] (source local, '')
+  Leaf<int32_t> queued_actor;   // arg 191: queued_actor int32[] (source local, '')
+  Leaf<bool> turn_context;   // arg 192: turn_context bool[] (source local, '')
+  Leaf<bool> defer_residual;   // arg 193: defer_residual bool[] (source local, '')
+  Leaf<bool> residual_ready;   // arg 194: residual_ready bool[] (source local, '')
+  Leaf<bool> live;   // arg 195: live bool[] (source local, '')
+  static constexpr int arg_state_species = 0;
+  static constexpr int arg_state_level = 1;
+  static constexpr int arg_state_hidden_power_type = 2;
+  static constexpr int arg_state_hidden_power_power = 3;
+  static constexpr int arg_state_happiness = 4;
+  static constexpr int arg_state_gender = 5;
+  static constexpr int arg_state_types = 6;
+  static constexpr int arg_state_base_types = 7;
+  static constexpr int arg_state_stats = 8;
+  static constexpr int arg_state_hp = 9;
+  static constexpr int arg_state_max_hp = 10;
+  static constexpr int arg_state_status = 11;
+  static constexpr int arg_state_status_counter = 12;
+  static constexpr int arg_state_sleep_skipped = 13;
+  static constexpr int arg_state_rest_origin = 14;
+  static constexpr int arg_state_moves = 15;
+  static constexpr int arg_state_pp = 16;
+  static constexpr int arg_state_disabled = 17;
+  static constexpr int arg_state_choice_move = 18;
+  static constexpr int arg_state_last_move = 19;
+  static constexpr int arg_state_last_action_kind = 20;
+  static constexpr int arg_state_last_action_index = 21;
+  static constexpr int arg_state_encore_move = 22;
+  static constexpr int arg_state_encore_counter = 23;
+  static constexpr int arg_state_charge_move = 24;
+  static constexpr int arg_state_charge_counter = 25;
+  static constexpr int arg_state_item = 26;
+  static constexpr int arg_state_ability = 27;
+  static constexpr int arg_state_base_ability = 28;
+  static constexpr int arg_state_boosts = 29;
+  static constexpr int arg_state_volatile = 30;
+  static constexpr int arg_state_confusion_counter = 31;
+  static constexpr int arg_state_protect_counter = 32;
+  static constexpr int arg_state_substitute_hp = 33;
+  static constexpr int arg_state_active = 34;
+  static constexpr int arg_state_entry_pending = 35;
+  static constexpr int arg_state_active_turns = 36;
+  static constexpr int arg_state_trapped = 37;
+  static constexpr int arg_state_trap_source = 38;
+  static constexpr int arg_state_forced_switch = 39;
+  static constexpr int arg_state_baton_pass = 40;
+  static constexpr int arg_state_queued_actor = 41;
+  static constexpr int arg_state_queued_actions = 42;
+  static constexpr int arg_state_queued_stall = 43;
+  static constexpr int arg_state_pending_residual = 44;
+  static constexpr int arg_state_residual_draws = 45;
+  static constexpr int arg_state_phazing_draws = 46;
+  static constexpr int arg_state_secondary_draws = 47;
+  static constexpr int arg_state_sleep_talk_draws = 48;
+  static constexpr int arg_state_replacement_count = 49;
+  static constexpr int arg_state_spikes = 50;
+  static constexpr int arg_state_wish_counter = 51;
+  static constexpr int arg_state_wish_amount = 52;
+  static constexpr int arg_state_weather = 53;
+  static constexpr int arg_state_weather_counter = 54;
+  static constexpr int arg_state_turn = 55;
+  static constexpr int arg_state_keys = 56;
+  static constexpr int arg_state_done = 57;
+  static constexpr int arg_state_winner = 58;
+  static constexpr int arg_state_truant_loaf = 59;
+  static constexpr int arg_actions = 60;
+  static constexpr int arg_trackers_physical_to_public = 61;
+  static constexpr int arg_trackers_active_physical = 62;
+  static constexpr int arg_trackers_active_slot = 63;
+  static constexpr int arg_trackers_next_slot = 64;
+  static constexpr int arg_trackers_own_order = 65;
+  static constexpr int arg_trackers_species = 66;
+  static constexpr int arg_trackers_level = 67;
+  static constexpr int arg_trackers_gender = 68;
+  static constexpr int arg_trackers_hp_percent = 69;
+  static constexpr int arg_trackers_status = 70;
+  static constexpr int arg_trackers_boosts = 71;
+  static constexpr int arg_trackers_present = 72;
+  static constexpr int arg_trackers_fainted = 73;
+  static constexpr int arg_trackers_turn = 74;
+  static constexpr int arg_trackers_weather = 75;
+  static constexpr int arg_trackers_spikes = 76;
+  static constexpr int arg_trackers_error = 77;
+  static constexpr int arg_trackers_observed_moves = 78;
+  static constexpr int arg_trackers_pp_used = 79;
+  static constexpr int arg_trackers_last_moves = 80;
+  static constexpr int arg_trackers_tendencies = 81;
+  static constexpr int arg_trackers_belief_mask = 82;
+  static constexpr int arg_trackers_shown_ability = 83;
+  static constexpr int arg_trackers_shown_item = 84;
+  static constexpr int arg_trackers_shown_types = 85;
+  static constexpr int arg_trackers_borrowed_ability = 86;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 87;
+  static constexpr int arg_trackers_mon_features_encore_turns = 88;
+  static constexpr int arg_trackers_mon_features_item_swapped = 89;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 91;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 92;
+  static constexpr int arg_trackers_mon_features_moves_shown = 93;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 94;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 95;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 96;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 98;
+  static constexpr int arg_trackers_mon_features_stall_counter = 99;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 100;
+  static constexpr int arg_trackers_mon_features_sub_present = 101;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 102;
+  static constexpr int arg_trackers_mon_features_switches = 103;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 104;
+  static constexpr int arg_trackers_mon_features_turns_active = 105;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 106;
+  static constexpr int arg_trackers_field_features_weather_permanent = 107;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 108;
+  static constexpr int arg_trackers_field_features_wish_pending = 109;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 110;
+  static constexpr int arg_trackers_field_features_wish_turns = 111;
+  static constexpr int arg_trackers_original_ability = 112;
+  static constexpr int arg_trackers_damage_exact_dealt = 113;
+  static constexpr int arg_trackers_damage_exact_taken = 114;
+  static constexpr int arg_trackers_public_volatiles = 115;
+  static constexpr int arg_trackers_item_removed = 116;
+  static constexpr int arg_trackers_tendency_moved = 117;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 118;
+  static constexpr int arg_trackers_tendency_switches = 119;
+  static constexpr int arg_trackers_tendency_opportunities = 120;
+  static constexpr int arg_trackers_tendency_matchup = 121;
+  static constexpr int arg_trackers_damage_history_hp = 122;
+  static constexpr int arg_trackers_damage_history_maximum = 123;
+  static constexpr int arg_trackers_damage_history_taken = 124;
+  static constexpr int arg_trackers_damage_history_dealt = 125;
+  static constexpr int arg_trackers_negative_items_percent = 126;
+  static constexpr int arg_trackers_negative_items_known = 127;
+  static constexpr int arg_trackers_visible_belief_pin = 128;
+  static constexpr int arg_trackers_visible_belief_pin_active = 129;
+  static constexpr int arg_trackers_visible_belief_conflicts = 130;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 131;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 133;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 135;
+  static constexpr int arg_trackers_public_port_holder = 136;
+  static constexpr int arg_trackers_public_port_victims = 137;
+  static constexpr int arg_trackers_public_port_known = 138;
+  static constexpr int arg_trackers_public_port_loaf = 139;
+  static constexpr int arg_trackers_public_port_traced = 140;
+  static constexpr int arg_trackers_public_port_skip_flip = 141;
+  static constexpr int arg_trackers_public_port_post_upkeep = 142;
+  static constexpr int arg_trackers_public_port_hazards = 143;
+  static constexpr int arg_trackers_public_port_blocked = 144;
+  static constexpr int arg_trackers_public_port_pursuit = 145;
+  static constexpr int arg_trackers_public_port_weather = 146;
+  static constexpr int arg_replacement = 147;
+  static constexpr int arg_invalid = 148;
+  static constexpr int arg_resuming = 149;
+  static constexpr int arg_draws = 150;
+  static constexpr int arg_phazing_draws = 151;
+  static constexpr int arg_secondary_draws = 152;
+  static constexpr int arg_sleep_talk_draws = 153;
+  static constexpr int arg_work_types = 154;
+  static constexpr int arg_work_hp = 155;
+  static constexpr int arg_work_status = 156;
+  static constexpr int arg_work_status_counter = 157;
+  static constexpr int arg_work_sleep_skipped = 158;
+  static constexpr int arg_work_rest_origin = 159;
+  static constexpr int arg_work_pp = 160;
+  static constexpr int arg_work_choice_move = 161;
+  static constexpr int arg_work_last_move = 162;
+  static constexpr int arg_work_last_action_kind = 163;
+  static constexpr int arg_work_last_action_index = 164;
+  static constexpr int arg_work_encore_move = 165;
+  static constexpr int arg_work_encore_counter = 166;
+  static constexpr int arg_work_charge_move = 167;
+  static constexpr int arg_work_charge_counter = 168;
+  static constexpr int arg_work_item = 169;
+  static constexpr int arg_work_ability = 170;
+  static constexpr int arg_work_boosts = 171;
+  static constexpr int arg_work_volatile = 172;
+  static constexpr int arg_work_confusion_counter = 173;
+  static constexpr int arg_work_protect_counter = 174;
+  static constexpr int arg_work_substitute_hp = 175;
+  static constexpr int arg_work_active = 176;
+  static constexpr int arg_work_entry_pending = 177;
+  static constexpr int arg_work_active_turns = 178;
+  static constexpr int arg_work_trapped = 179;
+  static constexpr int arg_work_trap_source = 180;
+  static constexpr int arg_work_baton_pass = 181;
+  static constexpr int arg_work_spikes = 182;
+  static constexpr int arg_work_wish_counter = 183;
+  static constexpr int arg_work_wish_amount = 184;
+  static constexpr int arg_work_weather = 185;
+  static constexpr int arg_work_weather_counter = 186;
+  static constexpr int arg_work_keys = 187;
+  static constexpr int arg_work_truant_loaf = 188;
+  static constexpr int arg_placeholders = 189;
+  static constexpr int arg_saved_stall = 190;
+  static constexpr int arg_queued_actor = 191;
+  static constexpr int arg_turn_context = 192;
+  static constexpr int arg_defer_residual = 193;
+  static constexpr int arg_residual_ready = 194;
+  static constexpr int arg_live = 195;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b7 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b7 v;
+    v.state_species.p = static_cast<int32_t*>(bufs[0]); v.state_species.lanes = lanes;
+    v.state_level.p = static_cast<int32_t*>(bufs[1]); v.state_level.lanes = lanes;
+    v.state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.state_hidden_power_type.lanes = lanes;
+    v.state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.state_hidden_power_power.lanes = lanes;
+    v.state_happiness.p = static_cast<int32_t*>(bufs[4]); v.state_happiness.lanes = lanes;
+    v.state_gender.p = static_cast<int32_t*>(bufs[5]); v.state_gender.lanes = lanes;
+    v.state_types.p = static_cast<int32_t*>(bufs[6]); v.state_types.lanes = lanes;
+    v.state_base_types.p = static_cast<int32_t*>(bufs[7]); v.state_base_types.lanes = lanes;
+    v.state_stats.p = static_cast<int32_t*>(bufs[8]); v.state_stats.lanes = lanes;
+    v.state_hp.p = static_cast<int32_t*>(bufs[9]); v.state_hp.lanes = lanes;
+    v.state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.state_max_hp.lanes = lanes;
+    v.state_status.p = static_cast<int32_t*>(bufs[11]); v.state_status.lanes = lanes;
+    v.state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.state_status_counter.lanes = lanes;
+    v.state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.state_sleep_skipped.lanes = lanes;
+    v.state_rest_origin.p = static_cast<bool*>(bufs[14]); v.state_rest_origin.lanes = lanes;
+    v.state_moves.p = static_cast<int32_t*>(bufs[15]); v.state_moves.lanes = lanes;
+    v.state_pp.p = static_cast<int32_t*>(bufs[16]); v.state_pp.lanes = lanes;
+    v.state_disabled.p = static_cast<bool*>(bufs[17]); v.state_disabled.lanes = lanes;
+    v.state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.state_choice_move.lanes = lanes;
+    v.state_last_move.p = static_cast<int32_t*>(bufs[19]); v.state_last_move.lanes = lanes;
+    v.state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.state_last_action_kind.lanes = lanes;
+    v.state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.state_last_action_index.lanes = lanes;
+    v.state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.state_encore_move.lanes = lanes;
+    v.state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.state_encore_counter.lanes = lanes;
+    v.state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.state_charge_move.lanes = lanes;
+    v.state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.state_charge_counter.lanes = lanes;
+    v.state_item.p = static_cast<int32_t*>(bufs[26]); v.state_item.lanes = lanes;
+    v.state_ability.p = static_cast<int32_t*>(bufs[27]); v.state_ability.lanes = lanes;
+    v.state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.state_base_ability.lanes = lanes;
+    v.state_boosts.p = static_cast<int32_t*>(bufs[29]); v.state_boosts.lanes = lanes;
+    v.state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.state_volatile.lanes = lanes;
+    v.state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.state_confusion_counter.lanes = lanes;
+    v.state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.state_protect_counter.lanes = lanes;
+    v.state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.state_substitute_hp.lanes = lanes;
+    v.state_active.p = static_cast<int32_t*>(bufs[34]); v.state_active.lanes = lanes;
+    v.state_entry_pending.p = static_cast<bool*>(bufs[35]); v.state_entry_pending.lanes = lanes;
+    v.state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.state_active_turns.lanes = lanes;
+    v.state_trapped.p = static_cast<bool*>(bufs[37]); v.state_trapped.lanes = lanes;
+    v.state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.state_trap_source.lanes = lanes;
+    v.state_forced_switch.p = static_cast<bool*>(bufs[39]); v.state_forced_switch.lanes = lanes;
+    v.state_baton_pass.p = static_cast<bool*>(bufs[40]); v.state_baton_pass.lanes = lanes;
+    v.state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.state_queued_actor.lanes = lanes;
+    v.state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.state_queued_actions.lanes = lanes;
+    v.state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.state_queued_stall.lanes = lanes;
+    v.state_pending_residual.p = static_cast<bool*>(bufs[44]); v.state_pending_residual.lanes = lanes;
+    v.state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.state_residual_draws.lanes = lanes;
+    v.state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.state_phazing_draws.lanes = lanes;
+    v.state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.state_secondary_draws.lanes = lanes;
+    v.state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.state_sleep_talk_draws.lanes = lanes;
+    v.state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.state_replacement_count.lanes = lanes;
+    v.state_spikes.p = static_cast<int32_t*>(bufs[50]); v.state_spikes.lanes = lanes;
+    v.state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.state_wish_counter.lanes = lanes;
+    v.state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.state_wish_amount.lanes = lanes;
+    v.state_weather.p = static_cast<int32_t*>(bufs[53]); v.state_weather.lanes = lanes;
+    v.state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.state_weather_counter.lanes = lanes;
+    v.state_turn.p = static_cast<int32_t*>(bufs[55]); v.state_turn.lanes = lanes;
+    v.state_keys.p = static_cast<uint32_t*>(bufs[56]); v.state_keys.lanes = lanes;
+    v.state_done.p = static_cast<bool*>(bufs[57]); v.state_done.lanes = lanes;
+    v.state_winner.p = static_cast<int32_t*>(bufs[58]); v.state_winner.lanes = lanes;
+    v.state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.state_truant_loaf.lanes = lanes;
+    v.actions.p = static_cast<int32_t*>(bufs[60]); v.actions.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[61]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[62]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[65]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[66]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[67]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[68]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[69]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[70]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[71]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[72]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[73]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[74]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[75]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[76]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[77]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[78]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[79]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[80]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[81]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[82]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[83]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[86]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[87]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[90]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[92]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[107]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[108]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[109]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[110]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[112]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[113]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[115]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[116]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[117]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[118]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[122]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[124]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[126]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[127]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[128]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[129]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[130]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[131]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[133]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[134]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[136]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[137]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[143]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[144]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[146]); v.trackers_public_port_weather.lanes = lanes;
+    v.replacement.p = static_cast<bool*>(bufs[147]); v.replacement.lanes = lanes;
+    v.invalid.p = static_cast<bool*>(bufs[148]); v.invalid.lanes = lanes;
+    v.resuming.p = static_cast<bool*>(bufs[149]); v.resuming.lanes = lanes;
+    v.draws.p = static_cast<int32_t*>(bufs[150]); v.draws.lanes = lanes;
+    v.phazing_draws.p = static_cast<int32_t*>(bufs[151]); v.phazing_draws.lanes = lanes;
+    v.secondary_draws.p = static_cast<int32_t*>(bufs[152]); v.secondary_draws.lanes = lanes;
+    v.sleep_talk_draws.p = static_cast<int32_t*>(bufs[153]); v.sleep_talk_draws.lanes = lanes;
+    v.work_types.p = static_cast<int32_t*>(bufs[154]); v.work_types.lanes = lanes;
+    v.work_hp.p = static_cast<int32_t*>(bufs[155]); v.work_hp.lanes = lanes;
+    v.work_status.p = static_cast<int32_t*>(bufs[156]); v.work_status.lanes = lanes;
+    v.work_status_counter.p = static_cast<int32_t*>(bufs[157]); v.work_status_counter.lanes = lanes;
+    v.work_sleep_skipped.p = static_cast<int32_t*>(bufs[158]); v.work_sleep_skipped.lanes = lanes;
+    v.work_rest_origin.p = static_cast<bool*>(bufs[159]); v.work_rest_origin.lanes = lanes;
+    v.work_pp.p = static_cast<int32_t*>(bufs[160]); v.work_pp.lanes = lanes;
+    v.work_choice_move.p = static_cast<int32_t*>(bufs[161]); v.work_choice_move.lanes = lanes;
+    v.work_last_move.p = static_cast<int32_t*>(bufs[162]); v.work_last_move.lanes = lanes;
+    v.work_last_action_kind.p = static_cast<int32_t*>(bufs[163]); v.work_last_action_kind.lanes = lanes;
+    v.work_last_action_index.p = static_cast<int32_t*>(bufs[164]); v.work_last_action_index.lanes = lanes;
+    v.work_encore_move.p = static_cast<int32_t*>(bufs[165]); v.work_encore_move.lanes = lanes;
+    v.work_encore_counter.p = static_cast<int32_t*>(bufs[166]); v.work_encore_counter.lanes = lanes;
+    v.work_charge_move.p = static_cast<int32_t*>(bufs[167]); v.work_charge_move.lanes = lanes;
+    v.work_charge_counter.p = static_cast<int32_t*>(bufs[168]); v.work_charge_counter.lanes = lanes;
+    v.work_item.p = static_cast<int32_t*>(bufs[169]); v.work_item.lanes = lanes;
+    v.work_ability.p = static_cast<int32_t*>(bufs[170]); v.work_ability.lanes = lanes;
+    v.work_boosts.p = static_cast<int32_t*>(bufs[171]); v.work_boosts.lanes = lanes;
+    v.work_volatile.p = static_cast<uint32_t*>(bufs[172]); v.work_volatile.lanes = lanes;
+    v.work_confusion_counter.p = static_cast<int32_t*>(bufs[173]); v.work_confusion_counter.lanes = lanes;
+    v.work_protect_counter.p = static_cast<int32_t*>(bufs[174]); v.work_protect_counter.lanes = lanes;
+    v.work_substitute_hp.p = static_cast<int32_t*>(bufs[175]); v.work_substitute_hp.lanes = lanes;
+    v.work_active.p = static_cast<int32_t*>(bufs[176]); v.work_active.lanes = lanes;
+    v.work_entry_pending.p = static_cast<bool*>(bufs[177]); v.work_entry_pending.lanes = lanes;
+    v.work_active_turns.p = static_cast<int32_t*>(bufs[178]); v.work_active_turns.lanes = lanes;
+    v.work_trapped.p = static_cast<bool*>(bufs[179]); v.work_trapped.lanes = lanes;
+    v.work_trap_source.p = static_cast<int32_t*>(bufs[180]); v.work_trap_source.lanes = lanes;
+    v.work_baton_pass.p = static_cast<bool*>(bufs[181]); v.work_baton_pass.lanes = lanes;
+    v.work_spikes.p = static_cast<int32_t*>(bufs[182]); v.work_spikes.lanes = lanes;
+    v.work_wish_counter.p = static_cast<int32_t*>(bufs[183]); v.work_wish_counter.lanes = lanes;
+    v.work_wish_amount.p = static_cast<int32_t*>(bufs[184]); v.work_wish_amount.lanes = lanes;
+    v.work_weather.p = static_cast<int32_t*>(bufs[185]); v.work_weather.lanes = lanes;
+    v.work_weather_counter.p = static_cast<int32_t*>(bufs[186]); v.work_weather_counter.lanes = lanes;
+    v.work_keys.p = static_cast<uint32_t*>(bufs[187]); v.work_keys.lanes = lanes;
+    v.work_truant_loaf.p = static_cast<bool*>(bufs[188]); v.work_truant_loaf.lanes = lanes;
+    v.placeholders.p = static_cast<int32_t*>(bufs[189]); v.placeholders.lanes = lanes;
+    v.saved_stall.p = static_cast<int32_t*>(bufs[190]); v.saved_stall.lanes = lanes;
+    v.queued_actor.p = static_cast<int32_t*>(bufs[191]); v.queued_actor.lanes = lanes;
+    v.turn_context.p = static_cast<bool*>(bufs[192]); v.turn_context.lanes = lanes;
+    v.defer_residual.p = static_cast<bool*>(bufs[193]); v.defer_residual.lanes = lanes;
+    v.residual_ready.p = static_cast<bool*>(bufs[194]); v.residual_ready.lanes = lanes;
+    v.live.p = static_cast<bool*>(bufs[195]); v.live.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.state_species.dbg = dbg;
+    v.state_level.dbg = dbg;
+    v.state_hidden_power_type.dbg = dbg;
+    v.state_hidden_power_power.dbg = dbg;
+    v.state_happiness.dbg = dbg;
+    v.state_gender.dbg = dbg;
+    v.state_types.dbg = dbg;
+    v.state_base_types.dbg = dbg;
+    v.state_stats.dbg = dbg;
+    v.state_hp.dbg = dbg;
+    v.state_max_hp.dbg = dbg;
+    v.state_status.dbg = dbg;
+    v.state_status_counter.dbg = dbg;
+    v.state_sleep_skipped.dbg = dbg;
+    v.state_rest_origin.dbg = dbg;
+    v.state_moves.dbg = dbg;
+    v.state_pp.dbg = dbg;
+    v.state_disabled.dbg = dbg;
+    v.state_choice_move.dbg = dbg;
+    v.state_last_move.dbg = dbg;
+    v.state_last_action_kind.dbg = dbg;
+    v.state_last_action_index.dbg = dbg;
+    v.state_encore_move.dbg = dbg;
+    v.state_encore_counter.dbg = dbg;
+    v.state_charge_move.dbg = dbg;
+    v.state_charge_counter.dbg = dbg;
+    v.state_item.dbg = dbg;
+    v.state_ability.dbg = dbg;
+    v.state_base_ability.dbg = dbg;
+    v.state_boosts.dbg = dbg;
+    v.state_volatile.dbg = dbg;
+    v.state_confusion_counter.dbg = dbg;
+    v.state_protect_counter.dbg = dbg;
+    v.state_substitute_hp.dbg = dbg;
+    v.state_active.dbg = dbg;
+    v.state_entry_pending.dbg = dbg;
+    v.state_active_turns.dbg = dbg;
+    v.state_trapped.dbg = dbg;
+    v.state_trap_source.dbg = dbg;
+    v.state_forced_switch.dbg = dbg;
+    v.state_baton_pass.dbg = dbg;
+    v.state_queued_actor.dbg = dbg;
+    v.state_queued_actions.dbg = dbg;
+    v.state_queued_stall.dbg = dbg;
+    v.state_pending_residual.dbg = dbg;
+    v.state_residual_draws.dbg = dbg;
+    v.state_phazing_draws.dbg = dbg;
+    v.state_secondary_draws.dbg = dbg;
+    v.state_sleep_talk_draws.dbg = dbg;
+    v.state_replacement_count.dbg = dbg;
+    v.state_spikes.dbg = dbg;
+    v.state_wish_counter.dbg = dbg;
+    v.state_wish_amount.dbg = dbg;
+    v.state_weather.dbg = dbg;
+    v.state_weather_counter.dbg = dbg;
+    v.state_turn.dbg = dbg;
+    v.state_keys.dbg = dbg;
+    v.state_done.dbg = dbg;
+    v.state_winner.dbg = dbg;
+    v.state_truant_loaf.dbg = dbg;
+    v.actions.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+    v.replacement.dbg = dbg;
+    v.invalid.dbg = dbg;
+    v.resuming.dbg = dbg;
+    v.draws.dbg = dbg;
+    v.phazing_draws.dbg = dbg;
+    v.secondary_draws.dbg = dbg;
+    v.sleep_talk_draws.dbg = dbg;
+    v.work_types.dbg = dbg;
+    v.work_hp.dbg = dbg;
+    v.work_status.dbg = dbg;
+    v.work_status_counter.dbg = dbg;
+    v.work_sleep_skipped.dbg = dbg;
+    v.work_rest_origin.dbg = dbg;
+    v.work_pp.dbg = dbg;
+    v.work_choice_move.dbg = dbg;
+    v.work_last_move.dbg = dbg;
+    v.work_last_action_kind.dbg = dbg;
+    v.work_last_action_index.dbg = dbg;
+    v.work_encore_move.dbg = dbg;
+    v.work_encore_counter.dbg = dbg;
+    v.work_charge_move.dbg = dbg;
+    v.work_charge_counter.dbg = dbg;
+    v.work_item.dbg = dbg;
+    v.work_ability.dbg = dbg;
+    v.work_boosts.dbg = dbg;
+    v.work_volatile.dbg = dbg;
+    v.work_confusion_counter.dbg = dbg;
+    v.work_protect_counter.dbg = dbg;
+    v.work_substitute_hp.dbg = dbg;
+    v.work_active.dbg = dbg;
+    v.work_entry_pending.dbg = dbg;
+    v.work_active_turns.dbg = dbg;
+    v.work_trapped.dbg = dbg;
+    v.work_trap_source.dbg = dbg;
+    v.work_baton_pass.dbg = dbg;
+    v.work_spikes.dbg = dbg;
+    v.work_wish_counter.dbg = dbg;
+    v.work_wish_amount.dbg = dbg;
+    v.work_weather.dbg = dbg;
+    v.work_weather_counter.dbg = dbg;
+    v.work_keys.dbg = dbg;
+    v.work_truant_loaf.dbg = dbg;
+    v.placeholders.dbg = dbg;
+    v.saved_stall.dbg = dbg;
+    v.queued_actor.dbg = dbg;
+    v.turn_context.dbg = dbg;
+    v.defer_residual.dbg = dbg;
+    v.residual_ready.dbg = dbg;
+    v.live.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+
+// ---- C_b8: carry at b8 (line None, occurrence 0): return of step_with_chance (PublicStepResult)
+struct C_b8 {
+  static constexpr uint64_t kDigest = 0x8e3976a0b84e1a70ull;
+  static constexpr const char* kDigestHex = "8e3976a0b84e1a70bfb61fa2e13d13a872251b835debda4985d0b59cf5e99fa2";
+  static constexpr int kLeaves = 148;
+  Leaf<int32_t, 2, 6> step_state_species;   // arg 0: step.state.species int32[2, 6] (source state, '.species')
+  Leaf<int32_t, 2, 6> step_state_level;   // arg 1: step.state.level int32[2, 6] (source state, '.level')
+  Leaf<int32_t, 2, 6> step_state_hidden_power_type;   // arg 2: step.state.hidden_power_type int32[2, 6] (source state, '.hidden_power_type')
+  Leaf<int32_t, 2, 6> step_state_hidden_power_power;   // arg 3: step.state.hidden_power_power int32[2, 6] (source state, '.hidden_power_power')
+  Leaf<int32_t, 2, 6> step_state_happiness;   // arg 4: step.state.happiness int32[2, 6] (source state, '.happiness')
+  Leaf<int32_t, 2, 6> step_state_gender;   // arg 5: step.state.gender int32[2, 6] (source state, '.gender')
+  Leaf<int32_t, 2, 6, 2> step_state_types;   // arg 6: step.state.types int32[2, 6, 2] (source state, '.types')
+  Leaf<int32_t, 2, 6, 2> step_state_base_types;   // arg 7: step.state.base_types int32[2, 6, 2] (source state, '.base_types')
+  Leaf<int32_t, 2, 6, 6> step_state_stats;   // arg 8: step.state.stats int32[2, 6, 6] (source state, '.stats')
+  Leaf<int32_t, 2, 6> step_state_hp;   // arg 9: step.state.hp int32[2, 6] (source state, '.hp')
+  Leaf<int32_t, 2, 6> step_state_max_hp;   // arg 10: step.state.max_hp int32[2, 6] (source state, '.max_hp')
+  Leaf<int32_t, 2, 6> step_state_status;   // arg 11: step.state.status int32[2, 6] (source state, '.status')
+  Leaf<int32_t, 2, 6> step_state_status_counter;   // arg 12: step.state.status_counter int32[2, 6] (source state, '.status_counter')
+  Leaf<int32_t, 2, 6> step_state_sleep_skipped;   // arg 13: step.state.sleep_skipped int32[2, 6] (source state, '.sleep_skipped')
+  Leaf<bool, 2, 6> step_state_rest_origin;   // arg 14: step.state.rest_origin bool[2, 6] (source state, '.rest_origin')
+  Leaf<int32_t, 2, 6, 4> step_state_moves;   // arg 15: step.state.moves int32[2, 6, 4] (source state, '.moves')
+  Leaf<int32_t, 2, 6, 4> step_state_pp;   // arg 16: step.state.pp int32[2, 6, 4] (source state, '.pp')
+  Leaf<bool, 2, 6, 4> step_state_disabled;   // arg 17: step.state.disabled bool[2, 6, 4] (source state, '.disabled')
+  Leaf<int32_t, 2, 6> step_state_choice_move;   // arg 18: step.state.choice_move int32[2, 6] (source state, '.choice_move')
+  Leaf<int32_t, 2, 6> step_state_last_move;   // arg 19: step.state.last_move int32[2, 6] (source state, '.last_move')
+  Leaf<int32_t, 2> step_state_last_action_kind;   // arg 20: step.state.last_action_kind int32[2] (source state, '.last_action_kind')
+  Leaf<int32_t, 2> step_state_last_action_index;   // arg 21: step.state.last_action_index int32[2] (source state, '.last_action_index')
+  Leaf<int32_t, 2, 6> step_state_encore_move;   // arg 22: step.state.encore_move int32[2, 6] (source state, '.encore_move')
+  Leaf<int32_t, 2, 6> step_state_encore_counter;   // arg 23: step.state.encore_counter int32[2, 6] (source state, '.encore_counter')
+  Leaf<int32_t, 2, 6> step_state_charge_move;   // arg 24: step.state.charge_move int32[2, 6] (source state, '.charge_move')
+  Leaf<int32_t, 2, 6> step_state_charge_counter;   // arg 25: step.state.charge_counter int32[2, 6] (source state, '.charge_counter')
+  Leaf<int32_t, 2, 6> step_state_item;   // arg 26: step.state.item int32[2, 6] (source state, '.item')
+  Leaf<int32_t, 2, 6> step_state_ability;   // arg 27: step.state.ability int32[2, 6] (source state, '.ability')
+  Leaf<int32_t, 2, 6> step_state_base_ability;   // arg 28: step.state.base_ability int32[2, 6] (source state, '.base_ability')
+  Leaf<int32_t, 2, 6, 7> step_state_boosts;   // arg 29: step.state.boosts int32[2, 6, 7] (source state, '.boosts')
+  Leaf<uint32_t, 2, 6> step_state_volatile;   // arg 30: step.state.volatile uint32[2, 6] (source state, '.volatile')
+  Leaf<int32_t, 2, 6> step_state_confusion_counter;   // arg 31: step.state.confusion_counter int32[2, 6] (source state, '.confusion_counter')
+  Leaf<int32_t, 2, 6> step_state_protect_counter;   // arg 32: step.state.protect_counter int32[2, 6] (source state, '.protect_counter')
+  Leaf<int32_t, 2, 6> step_state_substitute_hp;   // arg 33: step.state.substitute_hp int32[2, 6] (source state, '.substitute_hp')
+  Leaf<int32_t, 2> step_state_active;   // arg 34: step.state.active int32[2] (source state, '.active')
+  Leaf<bool, 2> step_state_entry_pending;   // arg 35: step.state.entry_pending bool[2] (source state, '.entry_pending')
+  Leaf<int32_t, 2> step_state_active_turns;   // arg 36: step.state.active_turns int32[2] (source state, '.active_turns')
+  Leaf<bool, 2> step_state_trapped;   // arg 37: step.state.trapped bool[2] (source state, '.trapped')
+  Leaf<int32_t, 2, 6> step_state_trap_source;   // arg 38: step.state.trap_source int32[2, 6] (source state, '.trap_source')
+  Leaf<bool, 2> step_state_forced_switch;   // arg 39: step.state.forced_switch bool[2] (source state, '.forced_switch')
+  Leaf<bool, 2> step_state_baton_pass;   // arg 40: step.state.baton_pass bool[2] (source state, '.baton_pass')
+  Leaf<int32_t> step_state_queued_actor;   // arg 41: step.state.queued_actor int32[] (source state, '.queued_actor')
+  Leaf<int32_t, 2> step_state_queued_actions;   // arg 42: step.state.queued_actions int32[2] (source state, '.queued_actions')
+  Leaf<int32_t, 2> step_state_queued_stall;   // arg 43: step.state.queued_stall int32[2] (source state, '.queued_stall')
+  Leaf<bool> step_state_pending_residual;   // arg 44: step.state.pending_residual bool[] (source state, '.pending_residual')
+  Leaf<int32_t, 2, 12> step_state_residual_draws;   // arg 45: step.state.residual_draws int32[2, 12] (source state, '.residual_draws')
+  Leaf<int32_t, 2> step_state_phazing_draws;   // arg 46: step.state.phazing_draws int32[2] (source state, '.phazing_draws')
+  Leaf<int32_t, 2> step_state_secondary_draws;   // arg 47: step.state.secondary_draws int32[2] (source state, '.secondary_draws')
+  Leaf<int32_t, 2> step_state_sleep_talk_draws;   // arg 48: step.state.sleep_talk_draws int32[2] (source state, '.sleep_talk_draws')
+  Leaf<int32_t> step_state_replacement_count;   // arg 49: step.state.replacement_count int32[] (source state, '.replacement_count')
+  Leaf<int32_t, 2> step_state_spikes;   // arg 50: step.state.spikes int32[2] (source state, '.spikes')
+  Leaf<int32_t, 2> step_state_wish_counter;   // arg 51: step.state.wish_counter int32[2] (source state, '.wish_counter')
+  Leaf<int32_t, 2> step_state_wish_amount;   // arg 52: step.state.wish_amount int32[2] (source state, '.wish_amount')
+  Leaf<int32_t> step_state_weather;   // arg 53: step.state.weather int32[] (source state, '.weather')
+  Leaf<int32_t> step_state_weather_counter;   // arg 54: step.state.weather_counter int32[] (source state, '.weather_counter')
+  Leaf<int32_t> step_state_turn;   // arg 55: step.state.turn int32[] (source state, '.turn')
+  Leaf<uint32_t, 2> step_state_keys;   // arg 56: step.state.keys uint32[2] (source state, '.keys')
+  Leaf<bool> step_state_done;   // arg 57: step.state.done bool[] (source state, '.done')
+  Leaf<int32_t> step_state_winner;   // arg 58: step.state.winner int32[] (source state, '.winner')
+  Leaf<bool, 2, 6> step_state_truant_loaf;   // arg 59: step.state.truant_loaf bool[2, 6] (source state, '.truant_loaf')
+  Leaf<bool> step_invalid_actions;   // arg 60: step.invalid_actions bool[] (source local, '')
+  Leaf<int32_t> step_placeholder_moves;   // arg 61: step.placeholder_moves int32[] (source local, '')
+  Leaf<int32_t, 2, 6> trackers_physical_to_public;   // arg 62: trackers.physical_to_public int32[2, 6] (source trackers, '.physical_to_public')
+  Leaf<int32_t, 2> trackers_active_physical;   // arg 63: trackers.active_physical int32[2] (source trackers, '.active_physical')
+  Leaf<int32_t, 2> trackers_active_slot;   // arg 64: trackers.active_slot int32[2] (source trackers, '.active_slot')
+  Leaf<int32_t, 2> trackers_next_slot;   // arg 65: trackers.next_slot int32[2] (source trackers, '.next_slot')
+  Leaf<int32_t, 2, 6> trackers_own_order;   // arg 66: trackers.own_order int32[2, 6] (source trackers, '.own_order')
+  Leaf<int32_t, 2, 6> trackers_species;   // arg 67: trackers.species int32[2, 6] (source trackers, '.species')
+  Leaf<int32_t, 2, 6> trackers_level;   // arg 68: trackers.level int32[2, 6] (source trackers, '.level')
+  Leaf<int32_t, 2, 6> trackers_gender;   // arg 69: trackers.gender int32[2, 6] (source trackers, '.gender')
+  Leaf<int32_t, 2, 6> trackers_hp_percent;   // arg 70: trackers.hp_percent int32[2, 6] (source trackers, '.hp_percent')
+  Leaf<int32_t, 2, 6> trackers_status;   // arg 71: trackers.status int32[2, 6] (source trackers, '.status')
+  Leaf<int32_t, 2, 6, 7> trackers_boosts;   // arg 72: trackers.boosts int32[2, 6, 7] (source trackers, '.boosts')
+  Leaf<bool, 2, 6> trackers_present;   // arg 73: trackers.present bool[2, 6] (source trackers, '.present')
+  Leaf<bool, 2, 6> trackers_fainted;   // arg 74: trackers.fainted bool[2, 6] (source trackers, '.fainted')
+  Leaf<int32_t> trackers_turn;   // arg 75: trackers.turn int32[] (source trackers, '.turn')
+  Leaf<int32_t> trackers_weather;   // arg 76: trackers.weather int32[] (source trackers, '.weather')
+  Leaf<int32_t, 2> trackers_spikes;   // arg 77: trackers.spikes int32[2] (source trackers, '.spikes')
+  Leaf<int32_t> trackers_error;   // arg 78: trackers.error int32[] (source trackers, '.error')
+  Leaf<int32_t, 2, 6, 4> trackers_observed_moves;   // arg 79: trackers.observed_moves int32[2, 6, 4] (source trackers, '.observed_moves')
+  Leaf<int32_t, 2, 6, 4> trackers_pp_used;   // arg 80: trackers.pp_used int32[2, 6, 4] (source trackers, '.pp_used')
+  Leaf<int32_t, 2, 6> trackers_last_moves;   // arg 81: trackers.last_moves int32[2, 6] (source trackers, '.last_moves')
+  Leaf<int32_t, 2, 6, 2> trackers_tendencies;   // arg 82: trackers.tendencies int32[2, 6, 2] (source trackers, '.tendencies')
+  Leaf<uint32_t, 2, 6, 2> trackers_belief_mask;   // arg 83: trackers.belief_mask uint32[2, 6, 2] (source trackers, '.belief_mask')
+  Leaf<int32_t, 2, 6> trackers_shown_ability;   // arg 84: trackers.shown_ability int32[2, 6] (source trackers, '.shown_ability')
+  Leaf<int32_t, 2, 6> trackers_shown_item;   // arg 85: trackers.shown_item int32[2, 6] (source trackers, '.shown_item')
+  Leaf<int32_t, 2, 6, 2> trackers_shown_types;   // arg 86: trackers.shown_types int32[2, 6, 2] (source trackers, '.shown_types')
+  Leaf<int32_t, 2, 6> trackers_borrowed_ability;   // arg 87: trackers.borrowed_ability int32[2, 6] (source trackers, '.borrowed_ability')
+  Leaf<int32_t, 2, 6> trackers_mon_features_confusion_turns;   // arg 88: trackers.mon_features['confusion_turns'] int32[2, 6] (source trackers, ".mon_features['confusion_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_encore_turns;   // arg 89: trackers.mon_features['encore_turns'] int32[2, 6] (source trackers, ".mon_features['encore_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_item_swapped;   // arg 90: trackers.mon_features['item_swapped'] int32[2, 6] (source trackers, ".mon_features['item_swapped']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_dealt;   // arg 91: trackers.mon_features['last_damage_dealt'] float32[2, 6] (source trackers, ".mon_features['last_damage_dealt']")
+  Leaf<float, 2, 6> trackers_mon_features_last_damage_taken;   // arg 92: trackers.mon_features['last_damage_taken'] float32[2, 6] (source trackers, ".mon_features['last_damage_taken']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_meanlook_trap;   // arg 93: trackers.mon_features['meanlook_trap'] int32[2, 6] (source trackers, ".mon_features['meanlook_trap']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_moves_shown;   // arg 94: trackers.mon_features['moves_shown'] int32[2, 6] (source trackers, ".mon_features['moves_shown']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_rest_sleep;   // arg 95: trackers.mon_features['rest_sleep'] int32[2, 6] (source trackers, ".mon_features['rest_sleep']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_cant_pending;   // arg 96: trackers.mon_features['sleep_cant_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_cant_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_skipped_turns;   // arg 97: trackers.mon_features['sleep_skipped_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_skipped_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_turns;   // arg 98: trackers.mon_features['sleep_turns'] int32[2, 6] (source trackers, ".mon_features['sleep_turns']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sleep_usable_pending;   // arg 99: trackers.mon_features['sleep_usable_pending'] int32[2, 6] (source trackers, ".mon_features['sleep_usable_pending']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stall_counter;   // arg 100: trackers.mon_features['stall_counter'] int32[2, 6] (source trackers, ".mon_features['stall_counter']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_stayed_and_attacked;   // arg 101: trackers.mon_features['stayed_and_attacked'] int32[2, 6] (source trackers, ".mon_features['stayed_and_attacked']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_sub_present;   // arg 102: trackers.mon_features['sub_present'] int32[2, 6] (source trackers, ".mon_features['sub_present']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switched_before_attack;   // arg 103: trackers.mon_features['switched_before_attack'] int32[2, 6] (source trackers, ".mon_features['switched_before_attack']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_switches;   // arg 104: trackers.mon_features['switches'] int32[2, 6] (source trackers, ".mon_features['switches']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_toxic_stage;   // arg 105: trackers.mon_features['toxic_stage'] int32[2, 6] (source trackers, ".mon_features['toxic_stage']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active;   // arg 106: trackers.mon_features['turns_active'] int32[2, 6] (source trackers, ".mon_features['turns_active']")
+  Leaf<int32_t, 2, 6> trackers_mon_features_turns_active_total;   // arg 107: trackers.mon_features['turns_active_total'] int32[2, 6] (source trackers, ".mon_features['turns_active_total']")
+  Leaf<bool> trackers_field_features_weather_permanent;   // arg 108: trackers.field_features['weather_permanent'] bool[] (source trackers, ".field_features['weather_permanent']")
+  Leaf<int32_t> trackers_field_features_weather_upkeeps;   // arg 109: trackers.field_features['weather_upkeeps'] int32[] (source trackers, ".field_features['weather_upkeeps']")
+  Leaf<bool, 2> trackers_field_features_wish_pending;   // arg 110: trackers.field_features['wish_pending'] bool[2] (source trackers, ".field_features['wish_pending']")
+  Leaf<int32_t, 2> trackers_field_features_wish_set_turn;   // arg 111: trackers.field_features['wish_set_turn'] int32[2] (source trackers, ".field_features['wish_set_turn']")
+  Leaf<int32_t, 2> trackers_field_features_wish_turns;   // arg 112: trackers.field_features['wish_turns'] int32[2] (source trackers, ".field_features['wish_turns']")
+  Leaf<int32_t, 2, 6> trackers_original_ability;   // arg 113: trackers.original_ability int32[2, 6] (source trackers, '.original_ability')
+  Leaf<float, 2, 6> trackers_damage_exact_dealt;   // arg 114: trackers.damage_exact_dealt float32[2, 6] (source trackers, '.damage_exact_dealt')
+  Leaf<float, 2, 6> trackers_damage_exact_taken;   // arg 115: trackers.damage_exact_taken float32[2, 6] (source trackers, '.damage_exact_taken')
+  Leaf<bool, 2, 6, 40> trackers_public_volatiles;   // arg 116: trackers.public_volatiles bool[2, 6, 40] (source trackers, '.public_volatiles')
+  Leaf<bool, 2, 6> trackers_item_removed;   // arg 117: trackers.item_removed bool[2, 6] (source trackers, '.item_removed')
+  Leaf<bool, 2> trackers_tendency_moved;   // arg 118: trackers.tendency.moved bool[2] (source trackers, '.tendency.moved')
+  Leaf<int32_t, 2> trackers_tendency_opportunity_turn;   // arg 119: trackers.tendency.opportunity_turn int32[2] (source trackers, '.tendency.opportunity_turn')
+  Leaf<int32_t, 2> trackers_tendency_switches;   // arg 120: trackers.tendency.switches int32[2] (source trackers, '.tendency.switches')
+  Leaf<int32_t, 2> trackers_tendency_opportunities;   // arg 121: trackers.tendency.opportunities int32[2] (source trackers, '.tendency.opportunities')
+  Leaf<int32_t, 2, 6, 6, 2> trackers_tendency_matchup;   // arg 122: trackers.tendency.matchup int32[2, 6, 6, 2] (source trackers, '.tendency.matchup')
+  Leaf<int32_t, 2> trackers_damage_history_hp;   // arg 123: trackers.damage_history.hp int32[2] (source trackers, '.damage_history.hp')
+  Leaf<int32_t, 2> trackers_damage_history_maximum;   // arg 124: trackers.damage_history.maximum int32[2] (source trackers, '.damage_history.maximum')
+  Leaf<float, 2, 2, 2> trackers_damage_history_taken;   // arg 125: trackers.damage_history.taken float32[2, 2, 2] (source trackers, '.damage_history.taken')
+  Leaf<float, 2, 2, 2> trackers_damage_history_dealt;   // arg 126: trackers.damage_history.dealt float32[2, 2, 2] (source trackers, '.damage_history.dealt')
+  Leaf<int32_t, 2, 6> trackers_negative_items_percent;   // arg 127: trackers.negative_items.percent int32[2, 6] (source trackers, '.negative_items.percent')
+  Leaf<bool, 2, 6> trackers_negative_items_known;   // arg 128: trackers.negative_items.known bool[2, 6] (source trackers, '.negative_items.known')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_pin;   // arg 129: trackers.visible_belief.pin uint32[2, 6, 2] (source trackers, '.visible_belief.pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_pin_active;   // arg 130: trackers.visible_belief.pin_active bool[2, 6] (source trackers, '.visible_belief.pin_active')
+  Leaf<int32_t, 2, 6> trackers_visible_belief_conflicts;   // arg 131: trackers.visible_belief.conflicts int32[2, 6] (source trackers, '.visible_belief.conflicts')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_hard;   // arg 132: trackers.visible_belief.visible_hard uint32[2, 6, 2] (source trackers, '.visible_belief.visible_hard')
+  Leaf<uint32_t, 2, 6, 2> trackers_visible_belief_visible_pin;   // arg 133: trackers.visible_belief.visible_pin uint32[2, 6, 2] (source trackers, '.visible_belief.visible_pin')
+  Leaf<bool, 2, 6> trackers_visible_belief_visible_pin_active;   // arg 134: trackers.visible_belief.visible_pin_active bool[2, 6] (source trackers, '.visible_belief.visible_pin_active')
+  Leaf<uint32_t, 2, 6, 3> trackers_visible_belief_excluded_abilities;   // arg 135: trackers.visible_belief.excluded_abilities uint32[2, 6, 3] (source trackers, '.visible_belief.excluded_abilities')
+  Leaf<uint32_t, 2, 6, 5> trackers_visible_belief_excluded_items;   // arg 136: trackers.visible_belief.excluded_items uint32[2, 6, 5] (source trackers, '.visible_belief.excluded_items')
+  Leaf<int32_t, 2> trackers_public_port_holder;   // arg 137: trackers.public_port.holder int32[2] (source trackers, '.public_port.holder')
+  Leaf<bool, 2, 6> trackers_public_port_victims;   // arg 138: trackers.public_port.victims bool[2, 6] (source trackers, '.public_port.victims')
+  Leaf<bool, 2> trackers_public_port_known;   // arg 139: trackers.public_port.known bool[2] (source trackers, '.public_port.known')
+  Leaf<bool, 2> trackers_public_port_loaf;   // arg 140: trackers.public_port.loaf bool[2] (source trackers, '.public_port.loaf')
+  Leaf<bool, 2> trackers_public_port_traced;   // arg 141: trackers.public_port.traced bool[2] (source trackers, '.public_port.traced')
+  Leaf<bool, 2> trackers_public_port_skip_flip;   // arg 142: trackers.public_port.skip_flip bool[2] (source trackers, '.public_port.skip_flip')
+  Leaf<bool> trackers_public_port_post_upkeep;   // arg 143: trackers.public_port.post_upkeep bool[] (source trackers, '.public_port.post_upkeep')
+  Leaf<float, 2, 2, 2> trackers_public_port_hazards;   // arg 144: trackers.public_port.hazards float32[2, 2, 2] (source trackers, '.public_port.hazards')
+  Leaf<int32_t, 2> trackers_public_port_blocked;   // arg 145: trackers.public_port.blocked int32[2] (source trackers, '.public_port.blocked')
+  Leaf<int32_t, 2> trackers_public_port_pursuit;   // arg 146: trackers.public_port.pursuit int32[2] (source trackers, '.public_port.pursuit')
+  Leaf<bool, 2, 3, 2> trackers_public_port_weather;   // arg 147: trackers.public_port.weather bool[2, 3, 2] (source trackers, '.public_port.weather')
+  static constexpr int arg_step_state_species = 0;
+  static constexpr int arg_step_state_level = 1;
+  static constexpr int arg_step_state_hidden_power_type = 2;
+  static constexpr int arg_step_state_hidden_power_power = 3;
+  static constexpr int arg_step_state_happiness = 4;
+  static constexpr int arg_step_state_gender = 5;
+  static constexpr int arg_step_state_types = 6;
+  static constexpr int arg_step_state_base_types = 7;
+  static constexpr int arg_step_state_stats = 8;
+  static constexpr int arg_step_state_hp = 9;
+  static constexpr int arg_step_state_max_hp = 10;
+  static constexpr int arg_step_state_status = 11;
+  static constexpr int arg_step_state_status_counter = 12;
+  static constexpr int arg_step_state_sleep_skipped = 13;
+  static constexpr int arg_step_state_rest_origin = 14;
+  static constexpr int arg_step_state_moves = 15;
+  static constexpr int arg_step_state_pp = 16;
+  static constexpr int arg_step_state_disabled = 17;
+  static constexpr int arg_step_state_choice_move = 18;
+  static constexpr int arg_step_state_last_move = 19;
+  static constexpr int arg_step_state_last_action_kind = 20;
+  static constexpr int arg_step_state_last_action_index = 21;
+  static constexpr int arg_step_state_encore_move = 22;
+  static constexpr int arg_step_state_encore_counter = 23;
+  static constexpr int arg_step_state_charge_move = 24;
+  static constexpr int arg_step_state_charge_counter = 25;
+  static constexpr int arg_step_state_item = 26;
+  static constexpr int arg_step_state_ability = 27;
+  static constexpr int arg_step_state_base_ability = 28;
+  static constexpr int arg_step_state_boosts = 29;
+  static constexpr int arg_step_state_volatile = 30;
+  static constexpr int arg_step_state_confusion_counter = 31;
+  static constexpr int arg_step_state_protect_counter = 32;
+  static constexpr int arg_step_state_substitute_hp = 33;
+  static constexpr int arg_step_state_active = 34;
+  static constexpr int arg_step_state_entry_pending = 35;
+  static constexpr int arg_step_state_active_turns = 36;
+  static constexpr int arg_step_state_trapped = 37;
+  static constexpr int arg_step_state_trap_source = 38;
+  static constexpr int arg_step_state_forced_switch = 39;
+  static constexpr int arg_step_state_baton_pass = 40;
+  static constexpr int arg_step_state_queued_actor = 41;
+  static constexpr int arg_step_state_queued_actions = 42;
+  static constexpr int arg_step_state_queued_stall = 43;
+  static constexpr int arg_step_state_pending_residual = 44;
+  static constexpr int arg_step_state_residual_draws = 45;
+  static constexpr int arg_step_state_phazing_draws = 46;
+  static constexpr int arg_step_state_secondary_draws = 47;
+  static constexpr int arg_step_state_sleep_talk_draws = 48;
+  static constexpr int arg_step_state_replacement_count = 49;
+  static constexpr int arg_step_state_spikes = 50;
+  static constexpr int arg_step_state_wish_counter = 51;
+  static constexpr int arg_step_state_wish_amount = 52;
+  static constexpr int arg_step_state_weather = 53;
+  static constexpr int arg_step_state_weather_counter = 54;
+  static constexpr int arg_step_state_turn = 55;
+  static constexpr int arg_step_state_keys = 56;
+  static constexpr int arg_step_state_done = 57;
+  static constexpr int arg_step_state_winner = 58;
+  static constexpr int arg_step_state_truant_loaf = 59;
+  static constexpr int arg_step_invalid_actions = 60;
+  static constexpr int arg_step_placeholder_moves = 61;
+  static constexpr int arg_trackers_physical_to_public = 62;
+  static constexpr int arg_trackers_active_physical = 63;
+  static constexpr int arg_trackers_active_slot = 64;
+  static constexpr int arg_trackers_next_slot = 65;
+  static constexpr int arg_trackers_own_order = 66;
+  static constexpr int arg_trackers_species = 67;
+  static constexpr int arg_trackers_level = 68;
+  static constexpr int arg_trackers_gender = 69;
+  static constexpr int arg_trackers_hp_percent = 70;
+  static constexpr int arg_trackers_status = 71;
+  static constexpr int arg_trackers_boosts = 72;
+  static constexpr int arg_trackers_present = 73;
+  static constexpr int arg_trackers_fainted = 74;
+  static constexpr int arg_trackers_turn = 75;
+  static constexpr int arg_trackers_weather = 76;
+  static constexpr int arg_trackers_spikes = 77;
+  static constexpr int arg_trackers_error = 78;
+  static constexpr int arg_trackers_observed_moves = 79;
+  static constexpr int arg_trackers_pp_used = 80;
+  static constexpr int arg_trackers_last_moves = 81;
+  static constexpr int arg_trackers_tendencies = 82;
+  static constexpr int arg_trackers_belief_mask = 83;
+  static constexpr int arg_trackers_shown_ability = 84;
+  static constexpr int arg_trackers_shown_item = 85;
+  static constexpr int arg_trackers_shown_types = 86;
+  static constexpr int arg_trackers_borrowed_ability = 87;
+  static constexpr int arg_trackers_mon_features_confusion_turns = 88;
+  static constexpr int arg_trackers_mon_features_encore_turns = 89;
+  static constexpr int arg_trackers_mon_features_item_swapped = 90;
+  static constexpr int arg_trackers_mon_features_last_damage_dealt = 91;
+  static constexpr int arg_trackers_mon_features_last_damage_taken = 92;
+  static constexpr int arg_trackers_mon_features_meanlook_trap = 93;
+  static constexpr int arg_trackers_mon_features_moves_shown = 94;
+  static constexpr int arg_trackers_mon_features_rest_sleep = 95;
+  static constexpr int arg_trackers_mon_features_sleep_cant_pending = 96;
+  static constexpr int arg_trackers_mon_features_sleep_skipped_turns = 97;
+  static constexpr int arg_trackers_mon_features_sleep_turns = 98;
+  static constexpr int arg_trackers_mon_features_sleep_usable_pending = 99;
+  static constexpr int arg_trackers_mon_features_stall_counter = 100;
+  static constexpr int arg_trackers_mon_features_stayed_and_attacked = 101;
+  static constexpr int arg_trackers_mon_features_sub_present = 102;
+  static constexpr int arg_trackers_mon_features_switched_before_attack = 103;
+  static constexpr int arg_trackers_mon_features_switches = 104;
+  static constexpr int arg_trackers_mon_features_toxic_stage = 105;
+  static constexpr int arg_trackers_mon_features_turns_active = 106;
+  static constexpr int arg_trackers_mon_features_turns_active_total = 107;
+  static constexpr int arg_trackers_field_features_weather_permanent = 108;
+  static constexpr int arg_trackers_field_features_weather_upkeeps = 109;
+  static constexpr int arg_trackers_field_features_wish_pending = 110;
+  static constexpr int arg_trackers_field_features_wish_set_turn = 111;
+  static constexpr int arg_trackers_field_features_wish_turns = 112;
+  static constexpr int arg_trackers_original_ability = 113;
+  static constexpr int arg_trackers_damage_exact_dealt = 114;
+  static constexpr int arg_trackers_damage_exact_taken = 115;
+  static constexpr int arg_trackers_public_volatiles = 116;
+  static constexpr int arg_trackers_item_removed = 117;
+  static constexpr int arg_trackers_tendency_moved = 118;
+  static constexpr int arg_trackers_tendency_opportunity_turn = 119;
+  static constexpr int arg_trackers_tendency_switches = 120;
+  static constexpr int arg_trackers_tendency_opportunities = 121;
+  static constexpr int arg_trackers_tendency_matchup = 122;
+  static constexpr int arg_trackers_damage_history_hp = 123;
+  static constexpr int arg_trackers_damage_history_maximum = 124;
+  static constexpr int arg_trackers_damage_history_taken = 125;
+  static constexpr int arg_trackers_damage_history_dealt = 126;
+  static constexpr int arg_trackers_negative_items_percent = 127;
+  static constexpr int arg_trackers_negative_items_known = 128;
+  static constexpr int arg_trackers_visible_belief_pin = 129;
+  static constexpr int arg_trackers_visible_belief_pin_active = 130;
+  static constexpr int arg_trackers_visible_belief_conflicts = 131;
+  static constexpr int arg_trackers_visible_belief_visible_hard = 132;
+  static constexpr int arg_trackers_visible_belief_visible_pin = 133;
+  static constexpr int arg_trackers_visible_belief_visible_pin_active = 134;
+  static constexpr int arg_trackers_visible_belief_excluded_abilities = 135;
+  static constexpr int arg_trackers_visible_belief_excluded_items = 136;
+  static constexpr int arg_trackers_public_port_holder = 137;
+  static constexpr int arg_trackers_public_port_victims = 138;
+  static constexpr int arg_trackers_public_port_known = 139;
+  static constexpr int arg_trackers_public_port_loaf = 140;
+  static constexpr int arg_trackers_public_port_traced = 141;
+  static constexpr int arg_trackers_public_port_skip_flip = 142;
+  static constexpr int arg_trackers_public_port_post_upkeep = 143;
+  static constexpr int arg_trackers_public_port_hazards = 144;
+  static constexpr int arg_trackers_public_port_blocked = 145;
+  static constexpr int arg_trackers_public_port_pursuit = 146;
+  static constexpr int arg_trackers_public_port_weather = 147;
+  // Bind from an array of kLeaves buffer pointers in leaf order (the FFI operands), every leaf with `lanes` rows.
+  V2E_LAYOUT_HD static C_b8 bind(void* const* bufs, int64_t lanes, uint32_t* dbg = nullptr) {
+    C_b8 v;
+    v.step_state_species.p = static_cast<int32_t*>(bufs[0]); v.step_state_species.lanes = lanes;
+    v.step_state_level.p = static_cast<int32_t*>(bufs[1]); v.step_state_level.lanes = lanes;
+    v.step_state_hidden_power_type.p = static_cast<int32_t*>(bufs[2]); v.step_state_hidden_power_type.lanes = lanes;
+    v.step_state_hidden_power_power.p = static_cast<int32_t*>(bufs[3]); v.step_state_hidden_power_power.lanes = lanes;
+    v.step_state_happiness.p = static_cast<int32_t*>(bufs[4]); v.step_state_happiness.lanes = lanes;
+    v.step_state_gender.p = static_cast<int32_t*>(bufs[5]); v.step_state_gender.lanes = lanes;
+    v.step_state_types.p = static_cast<int32_t*>(bufs[6]); v.step_state_types.lanes = lanes;
+    v.step_state_base_types.p = static_cast<int32_t*>(bufs[7]); v.step_state_base_types.lanes = lanes;
+    v.step_state_stats.p = static_cast<int32_t*>(bufs[8]); v.step_state_stats.lanes = lanes;
+    v.step_state_hp.p = static_cast<int32_t*>(bufs[9]); v.step_state_hp.lanes = lanes;
+    v.step_state_max_hp.p = static_cast<int32_t*>(bufs[10]); v.step_state_max_hp.lanes = lanes;
+    v.step_state_status.p = static_cast<int32_t*>(bufs[11]); v.step_state_status.lanes = lanes;
+    v.step_state_status_counter.p = static_cast<int32_t*>(bufs[12]); v.step_state_status_counter.lanes = lanes;
+    v.step_state_sleep_skipped.p = static_cast<int32_t*>(bufs[13]); v.step_state_sleep_skipped.lanes = lanes;
+    v.step_state_rest_origin.p = static_cast<bool*>(bufs[14]); v.step_state_rest_origin.lanes = lanes;
+    v.step_state_moves.p = static_cast<int32_t*>(bufs[15]); v.step_state_moves.lanes = lanes;
+    v.step_state_pp.p = static_cast<int32_t*>(bufs[16]); v.step_state_pp.lanes = lanes;
+    v.step_state_disabled.p = static_cast<bool*>(bufs[17]); v.step_state_disabled.lanes = lanes;
+    v.step_state_choice_move.p = static_cast<int32_t*>(bufs[18]); v.step_state_choice_move.lanes = lanes;
+    v.step_state_last_move.p = static_cast<int32_t*>(bufs[19]); v.step_state_last_move.lanes = lanes;
+    v.step_state_last_action_kind.p = static_cast<int32_t*>(bufs[20]); v.step_state_last_action_kind.lanes = lanes;
+    v.step_state_last_action_index.p = static_cast<int32_t*>(bufs[21]); v.step_state_last_action_index.lanes = lanes;
+    v.step_state_encore_move.p = static_cast<int32_t*>(bufs[22]); v.step_state_encore_move.lanes = lanes;
+    v.step_state_encore_counter.p = static_cast<int32_t*>(bufs[23]); v.step_state_encore_counter.lanes = lanes;
+    v.step_state_charge_move.p = static_cast<int32_t*>(bufs[24]); v.step_state_charge_move.lanes = lanes;
+    v.step_state_charge_counter.p = static_cast<int32_t*>(bufs[25]); v.step_state_charge_counter.lanes = lanes;
+    v.step_state_item.p = static_cast<int32_t*>(bufs[26]); v.step_state_item.lanes = lanes;
+    v.step_state_ability.p = static_cast<int32_t*>(bufs[27]); v.step_state_ability.lanes = lanes;
+    v.step_state_base_ability.p = static_cast<int32_t*>(bufs[28]); v.step_state_base_ability.lanes = lanes;
+    v.step_state_boosts.p = static_cast<int32_t*>(bufs[29]); v.step_state_boosts.lanes = lanes;
+    v.step_state_volatile.p = static_cast<uint32_t*>(bufs[30]); v.step_state_volatile.lanes = lanes;
+    v.step_state_confusion_counter.p = static_cast<int32_t*>(bufs[31]); v.step_state_confusion_counter.lanes = lanes;
+    v.step_state_protect_counter.p = static_cast<int32_t*>(bufs[32]); v.step_state_protect_counter.lanes = lanes;
+    v.step_state_substitute_hp.p = static_cast<int32_t*>(bufs[33]); v.step_state_substitute_hp.lanes = lanes;
+    v.step_state_active.p = static_cast<int32_t*>(bufs[34]); v.step_state_active.lanes = lanes;
+    v.step_state_entry_pending.p = static_cast<bool*>(bufs[35]); v.step_state_entry_pending.lanes = lanes;
+    v.step_state_active_turns.p = static_cast<int32_t*>(bufs[36]); v.step_state_active_turns.lanes = lanes;
+    v.step_state_trapped.p = static_cast<bool*>(bufs[37]); v.step_state_trapped.lanes = lanes;
+    v.step_state_trap_source.p = static_cast<int32_t*>(bufs[38]); v.step_state_trap_source.lanes = lanes;
+    v.step_state_forced_switch.p = static_cast<bool*>(bufs[39]); v.step_state_forced_switch.lanes = lanes;
+    v.step_state_baton_pass.p = static_cast<bool*>(bufs[40]); v.step_state_baton_pass.lanes = lanes;
+    v.step_state_queued_actor.p = static_cast<int32_t*>(bufs[41]); v.step_state_queued_actor.lanes = lanes;
+    v.step_state_queued_actions.p = static_cast<int32_t*>(bufs[42]); v.step_state_queued_actions.lanes = lanes;
+    v.step_state_queued_stall.p = static_cast<int32_t*>(bufs[43]); v.step_state_queued_stall.lanes = lanes;
+    v.step_state_pending_residual.p = static_cast<bool*>(bufs[44]); v.step_state_pending_residual.lanes = lanes;
+    v.step_state_residual_draws.p = static_cast<int32_t*>(bufs[45]); v.step_state_residual_draws.lanes = lanes;
+    v.step_state_phazing_draws.p = static_cast<int32_t*>(bufs[46]); v.step_state_phazing_draws.lanes = lanes;
+    v.step_state_secondary_draws.p = static_cast<int32_t*>(bufs[47]); v.step_state_secondary_draws.lanes = lanes;
+    v.step_state_sleep_talk_draws.p = static_cast<int32_t*>(bufs[48]); v.step_state_sleep_talk_draws.lanes = lanes;
+    v.step_state_replacement_count.p = static_cast<int32_t*>(bufs[49]); v.step_state_replacement_count.lanes = lanes;
+    v.step_state_spikes.p = static_cast<int32_t*>(bufs[50]); v.step_state_spikes.lanes = lanes;
+    v.step_state_wish_counter.p = static_cast<int32_t*>(bufs[51]); v.step_state_wish_counter.lanes = lanes;
+    v.step_state_wish_amount.p = static_cast<int32_t*>(bufs[52]); v.step_state_wish_amount.lanes = lanes;
+    v.step_state_weather.p = static_cast<int32_t*>(bufs[53]); v.step_state_weather.lanes = lanes;
+    v.step_state_weather_counter.p = static_cast<int32_t*>(bufs[54]); v.step_state_weather_counter.lanes = lanes;
+    v.step_state_turn.p = static_cast<int32_t*>(bufs[55]); v.step_state_turn.lanes = lanes;
+    v.step_state_keys.p = static_cast<uint32_t*>(bufs[56]); v.step_state_keys.lanes = lanes;
+    v.step_state_done.p = static_cast<bool*>(bufs[57]); v.step_state_done.lanes = lanes;
+    v.step_state_winner.p = static_cast<int32_t*>(bufs[58]); v.step_state_winner.lanes = lanes;
+    v.step_state_truant_loaf.p = static_cast<bool*>(bufs[59]); v.step_state_truant_loaf.lanes = lanes;
+    v.step_invalid_actions.p = static_cast<bool*>(bufs[60]); v.step_invalid_actions.lanes = lanes;
+    v.step_placeholder_moves.p = static_cast<int32_t*>(bufs[61]); v.step_placeholder_moves.lanes = lanes;
+    v.trackers_physical_to_public.p = static_cast<int32_t*>(bufs[62]); v.trackers_physical_to_public.lanes = lanes;
+    v.trackers_active_physical.p = static_cast<int32_t*>(bufs[63]); v.trackers_active_physical.lanes = lanes;
+    v.trackers_active_slot.p = static_cast<int32_t*>(bufs[64]); v.trackers_active_slot.lanes = lanes;
+    v.trackers_next_slot.p = static_cast<int32_t*>(bufs[65]); v.trackers_next_slot.lanes = lanes;
+    v.trackers_own_order.p = static_cast<int32_t*>(bufs[66]); v.trackers_own_order.lanes = lanes;
+    v.trackers_species.p = static_cast<int32_t*>(bufs[67]); v.trackers_species.lanes = lanes;
+    v.trackers_level.p = static_cast<int32_t*>(bufs[68]); v.trackers_level.lanes = lanes;
+    v.trackers_gender.p = static_cast<int32_t*>(bufs[69]); v.trackers_gender.lanes = lanes;
+    v.trackers_hp_percent.p = static_cast<int32_t*>(bufs[70]); v.trackers_hp_percent.lanes = lanes;
+    v.trackers_status.p = static_cast<int32_t*>(bufs[71]); v.trackers_status.lanes = lanes;
+    v.trackers_boosts.p = static_cast<int32_t*>(bufs[72]); v.trackers_boosts.lanes = lanes;
+    v.trackers_present.p = static_cast<bool*>(bufs[73]); v.trackers_present.lanes = lanes;
+    v.trackers_fainted.p = static_cast<bool*>(bufs[74]); v.trackers_fainted.lanes = lanes;
+    v.trackers_turn.p = static_cast<int32_t*>(bufs[75]); v.trackers_turn.lanes = lanes;
+    v.trackers_weather.p = static_cast<int32_t*>(bufs[76]); v.trackers_weather.lanes = lanes;
+    v.trackers_spikes.p = static_cast<int32_t*>(bufs[77]); v.trackers_spikes.lanes = lanes;
+    v.trackers_error.p = static_cast<int32_t*>(bufs[78]); v.trackers_error.lanes = lanes;
+    v.trackers_observed_moves.p = static_cast<int32_t*>(bufs[79]); v.trackers_observed_moves.lanes = lanes;
+    v.trackers_pp_used.p = static_cast<int32_t*>(bufs[80]); v.trackers_pp_used.lanes = lanes;
+    v.trackers_last_moves.p = static_cast<int32_t*>(bufs[81]); v.trackers_last_moves.lanes = lanes;
+    v.trackers_tendencies.p = static_cast<int32_t*>(bufs[82]); v.trackers_tendencies.lanes = lanes;
+    v.trackers_belief_mask.p = static_cast<uint32_t*>(bufs[83]); v.trackers_belief_mask.lanes = lanes;
+    v.trackers_shown_ability.p = static_cast<int32_t*>(bufs[84]); v.trackers_shown_ability.lanes = lanes;
+    v.trackers_shown_item.p = static_cast<int32_t*>(bufs[85]); v.trackers_shown_item.lanes = lanes;
+    v.trackers_shown_types.p = static_cast<int32_t*>(bufs[86]); v.trackers_shown_types.lanes = lanes;
+    v.trackers_borrowed_ability.p = static_cast<int32_t*>(bufs[87]); v.trackers_borrowed_ability.lanes = lanes;
+    v.trackers_mon_features_confusion_turns.p = static_cast<int32_t*>(bufs[88]); v.trackers_mon_features_confusion_turns.lanes = lanes;
+    v.trackers_mon_features_encore_turns.p = static_cast<int32_t*>(bufs[89]); v.trackers_mon_features_encore_turns.lanes = lanes;
+    v.trackers_mon_features_item_swapped.p = static_cast<int32_t*>(bufs[90]); v.trackers_mon_features_item_swapped.lanes = lanes;
+    v.trackers_mon_features_last_damage_dealt.p = static_cast<float*>(bufs[91]); v.trackers_mon_features_last_damage_dealt.lanes = lanes;
+    v.trackers_mon_features_last_damage_taken.p = static_cast<float*>(bufs[92]); v.trackers_mon_features_last_damage_taken.lanes = lanes;
+    v.trackers_mon_features_meanlook_trap.p = static_cast<int32_t*>(bufs[93]); v.trackers_mon_features_meanlook_trap.lanes = lanes;
+    v.trackers_mon_features_moves_shown.p = static_cast<int32_t*>(bufs[94]); v.trackers_mon_features_moves_shown.lanes = lanes;
+    v.trackers_mon_features_rest_sleep.p = static_cast<int32_t*>(bufs[95]); v.trackers_mon_features_rest_sleep.lanes = lanes;
+    v.trackers_mon_features_sleep_cant_pending.p = static_cast<int32_t*>(bufs[96]); v.trackers_mon_features_sleep_cant_pending.lanes = lanes;
+    v.trackers_mon_features_sleep_skipped_turns.p = static_cast<int32_t*>(bufs[97]); v.trackers_mon_features_sleep_skipped_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_turns.p = static_cast<int32_t*>(bufs[98]); v.trackers_mon_features_sleep_turns.lanes = lanes;
+    v.trackers_mon_features_sleep_usable_pending.p = static_cast<int32_t*>(bufs[99]); v.trackers_mon_features_sleep_usable_pending.lanes = lanes;
+    v.trackers_mon_features_stall_counter.p = static_cast<int32_t*>(bufs[100]); v.trackers_mon_features_stall_counter.lanes = lanes;
+    v.trackers_mon_features_stayed_and_attacked.p = static_cast<int32_t*>(bufs[101]); v.trackers_mon_features_stayed_and_attacked.lanes = lanes;
+    v.trackers_mon_features_sub_present.p = static_cast<int32_t*>(bufs[102]); v.trackers_mon_features_sub_present.lanes = lanes;
+    v.trackers_mon_features_switched_before_attack.p = static_cast<int32_t*>(bufs[103]); v.trackers_mon_features_switched_before_attack.lanes = lanes;
+    v.trackers_mon_features_switches.p = static_cast<int32_t*>(bufs[104]); v.trackers_mon_features_switches.lanes = lanes;
+    v.trackers_mon_features_toxic_stage.p = static_cast<int32_t*>(bufs[105]); v.trackers_mon_features_toxic_stage.lanes = lanes;
+    v.trackers_mon_features_turns_active.p = static_cast<int32_t*>(bufs[106]); v.trackers_mon_features_turns_active.lanes = lanes;
+    v.trackers_mon_features_turns_active_total.p = static_cast<int32_t*>(bufs[107]); v.trackers_mon_features_turns_active_total.lanes = lanes;
+    v.trackers_field_features_weather_permanent.p = static_cast<bool*>(bufs[108]); v.trackers_field_features_weather_permanent.lanes = lanes;
+    v.trackers_field_features_weather_upkeeps.p = static_cast<int32_t*>(bufs[109]); v.trackers_field_features_weather_upkeeps.lanes = lanes;
+    v.trackers_field_features_wish_pending.p = static_cast<bool*>(bufs[110]); v.trackers_field_features_wish_pending.lanes = lanes;
+    v.trackers_field_features_wish_set_turn.p = static_cast<int32_t*>(bufs[111]); v.trackers_field_features_wish_set_turn.lanes = lanes;
+    v.trackers_field_features_wish_turns.p = static_cast<int32_t*>(bufs[112]); v.trackers_field_features_wish_turns.lanes = lanes;
+    v.trackers_original_ability.p = static_cast<int32_t*>(bufs[113]); v.trackers_original_ability.lanes = lanes;
+    v.trackers_damage_exact_dealt.p = static_cast<float*>(bufs[114]); v.trackers_damage_exact_dealt.lanes = lanes;
+    v.trackers_damage_exact_taken.p = static_cast<float*>(bufs[115]); v.trackers_damage_exact_taken.lanes = lanes;
+    v.trackers_public_volatiles.p = static_cast<bool*>(bufs[116]); v.trackers_public_volatiles.lanes = lanes;
+    v.trackers_item_removed.p = static_cast<bool*>(bufs[117]); v.trackers_item_removed.lanes = lanes;
+    v.trackers_tendency_moved.p = static_cast<bool*>(bufs[118]); v.trackers_tendency_moved.lanes = lanes;
+    v.trackers_tendency_opportunity_turn.p = static_cast<int32_t*>(bufs[119]); v.trackers_tendency_opportunity_turn.lanes = lanes;
+    v.trackers_tendency_switches.p = static_cast<int32_t*>(bufs[120]); v.trackers_tendency_switches.lanes = lanes;
+    v.trackers_tendency_opportunities.p = static_cast<int32_t*>(bufs[121]); v.trackers_tendency_opportunities.lanes = lanes;
+    v.trackers_tendency_matchup.p = static_cast<int32_t*>(bufs[122]); v.trackers_tendency_matchup.lanes = lanes;
+    v.trackers_damage_history_hp.p = static_cast<int32_t*>(bufs[123]); v.trackers_damage_history_hp.lanes = lanes;
+    v.trackers_damage_history_maximum.p = static_cast<int32_t*>(bufs[124]); v.trackers_damage_history_maximum.lanes = lanes;
+    v.trackers_damage_history_taken.p = static_cast<float*>(bufs[125]); v.trackers_damage_history_taken.lanes = lanes;
+    v.trackers_damage_history_dealt.p = static_cast<float*>(bufs[126]); v.trackers_damage_history_dealt.lanes = lanes;
+    v.trackers_negative_items_percent.p = static_cast<int32_t*>(bufs[127]); v.trackers_negative_items_percent.lanes = lanes;
+    v.trackers_negative_items_known.p = static_cast<bool*>(bufs[128]); v.trackers_negative_items_known.lanes = lanes;
+    v.trackers_visible_belief_pin.p = static_cast<uint32_t*>(bufs[129]); v.trackers_visible_belief_pin.lanes = lanes;
+    v.trackers_visible_belief_pin_active.p = static_cast<bool*>(bufs[130]); v.trackers_visible_belief_pin_active.lanes = lanes;
+    v.trackers_visible_belief_conflicts.p = static_cast<int32_t*>(bufs[131]); v.trackers_visible_belief_conflicts.lanes = lanes;
+    v.trackers_visible_belief_visible_hard.p = static_cast<uint32_t*>(bufs[132]); v.trackers_visible_belief_visible_hard.lanes = lanes;
+    v.trackers_visible_belief_visible_pin.p = static_cast<uint32_t*>(bufs[133]); v.trackers_visible_belief_visible_pin.lanes = lanes;
+    v.trackers_visible_belief_visible_pin_active.p = static_cast<bool*>(bufs[134]); v.trackers_visible_belief_visible_pin_active.lanes = lanes;
+    v.trackers_visible_belief_excluded_abilities.p = static_cast<uint32_t*>(bufs[135]); v.trackers_visible_belief_excluded_abilities.lanes = lanes;
+    v.trackers_visible_belief_excluded_items.p = static_cast<uint32_t*>(bufs[136]); v.trackers_visible_belief_excluded_items.lanes = lanes;
+    v.trackers_public_port_holder.p = static_cast<int32_t*>(bufs[137]); v.trackers_public_port_holder.lanes = lanes;
+    v.trackers_public_port_victims.p = static_cast<bool*>(bufs[138]); v.trackers_public_port_victims.lanes = lanes;
+    v.trackers_public_port_known.p = static_cast<bool*>(bufs[139]); v.trackers_public_port_known.lanes = lanes;
+    v.trackers_public_port_loaf.p = static_cast<bool*>(bufs[140]); v.trackers_public_port_loaf.lanes = lanes;
+    v.trackers_public_port_traced.p = static_cast<bool*>(bufs[141]); v.trackers_public_port_traced.lanes = lanes;
+    v.trackers_public_port_skip_flip.p = static_cast<bool*>(bufs[142]); v.trackers_public_port_skip_flip.lanes = lanes;
+    v.trackers_public_port_post_upkeep.p = static_cast<bool*>(bufs[143]); v.trackers_public_port_post_upkeep.lanes = lanes;
+    v.trackers_public_port_hazards.p = static_cast<float*>(bufs[144]); v.trackers_public_port_hazards.lanes = lanes;
+    v.trackers_public_port_blocked.p = static_cast<int32_t*>(bufs[145]); v.trackers_public_port_blocked.lanes = lanes;
+    v.trackers_public_port_pursuit.p = static_cast<int32_t*>(bufs[146]); v.trackers_public_port_pursuit.lanes = lanes;
+    v.trackers_public_port_weather.p = static_cast<bool*>(bufs[147]); v.trackers_public_port_weather.lanes = lanes;
+#if defined(V2E_LAYOUT_DEBUG)
+    v.step_state_species.dbg = dbg;
+    v.step_state_level.dbg = dbg;
+    v.step_state_hidden_power_type.dbg = dbg;
+    v.step_state_hidden_power_power.dbg = dbg;
+    v.step_state_happiness.dbg = dbg;
+    v.step_state_gender.dbg = dbg;
+    v.step_state_types.dbg = dbg;
+    v.step_state_base_types.dbg = dbg;
+    v.step_state_stats.dbg = dbg;
+    v.step_state_hp.dbg = dbg;
+    v.step_state_max_hp.dbg = dbg;
+    v.step_state_status.dbg = dbg;
+    v.step_state_status_counter.dbg = dbg;
+    v.step_state_sleep_skipped.dbg = dbg;
+    v.step_state_rest_origin.dbg = dbg;
+    v.step_state_moves.dbg = dbg;
+    v.step_state_pp.dbg = dbg;
+    v.step_state_disabled.dbg = dbg;
+    v.step_state_choice_move.dbg = dbg;
+    v.step_state_last_move.dbg = dbg;
+    v.step_state_last_action_kind.dbg = dbg;
+    v.step_state_last_action_index.dbg = dbg;
+    v.step_state_encore_move.dbg = dbg;
+    v.step_state_encore_counter.dbg = dbg;
+    v.step_state_charge_move.dbg = dbg;
+    v.step_state_charge_counter.dbg = dbg;
+    v.step_state_item.dbg = dbg;
+    v.step_state_ability.dbg = dbg;
+    v.step_state_base_ability.dbg = dbg;
+    v.step_state_boosts.dbg = dbg;
+    v.step_state_volatile.dbg = dbg;
+    v.step_state_confusion_counter.dbg = dbg;
+    v.step_state_protect_counter.dbg = dbg;
+    v.step_state_substitute_hp.dbg = dbg;
+    v.step_state_active.dbg = dbg;
+    v.step_state_entry_pending.dbg = dbg;
+    v.step_state_active_turns.dbg = dbg;
+    v.step_state_trapped.dbg = dbg;
+    v.step_state_trap_source.dbg = dbg;
+    v.step_state_forced_switch.dbg = dbg;
+    v.step_state_baton_pass.dbg = dbg;
+    v.step_state_queued_actor.dbg = dbg;
+    v.step_state_queued_actions.dbg = dbg;
+    v.step_state_queued_stall.dbg = dbg;
+    v.step_state_pending_residual.dbg = dbg;
+    v.step_state_residual_draws.dbg = dbg;
+    v.step_state_phazing_draws.dbg = dbg;
+    v.step_state_secondary_draws.dbg = dbg;
+    v.step_state_sleep_talk_draws.dbg = dbg;
+    v.step_state_replacement_count.dbg = dbg;
+    v.step_state_spikes.dbg = dbg;
+    v.step_state_wish_counter.dbg = dbg;
+    v.step_state_wish_amount.dbg = dbg;
+    v.step_state_weather.dbg = dbg;
+    v.step_state_weather_counter.dbg = dbg;
+    v.step_state_turn.dbg = dbg;
+    v.step_state_keys.dbg = dbg;
+    v.step_state_done.dbg = dbg;
+    v.step_state_winner.dbg = dbg;
+    v.step_state_truant_loaf.dbg = dbg;
+    v.step_invalid_actions.dbg = dbg;
+    v.step_placeholder_moves.dbg = dbg;
+    v.trackers_physical_to_public.dbg = dbg;
+    v.trackers_active_physical.dbg = dbg;
+    v.trackers_active_slot.dbg = dbg;
+    v.trackers_next_slot.dbg = dbg;
+    v.trackers_own_order.dbg = dbg;
+    v.trackers_species.dbg = dbg;
+    v.trackers_level.dbg = dbg;
+    v.trackers_gender.dbg = dbg;
+    v.trackers_hp_percent.dbg = dbg;
+    v.trackers_status.dbg = dbg;
+    v.trackers_boosts.dbg = dbg;
+    v.trackers_present.dbg = dbg;
+    v.trackers_fainted.dbg = dbg;
+    v.trackers_turn.dbg = dbg;
+    v.trackers_weather.dbg = dbg;
+    v.trackers_spikes.dbg = dbg;
+    v.trackers_error.dbg = dbg;
+    v.trackers_observed_moves.dbg = dbg;
+    v.trackers_pp_used.dbg = dbg;
+    v.trackers_last_moves.dbg = dbg;
+    v.trackers_tendencies.dbg = dbg;
+    v.trackers_belief_mask.dbg = dbg;
+    v.trackers_shown_ability.dbg = dbg;
+    v.trackers_shown_item.dbg = dbg;
+    v.trackers_shown_types.dbg = dbg;
+    v.trackers_borrowed_ability.dbg = dbg;
+    v.trackers_mon_features_confusion_turns.dbg = dbg;
+    v.trackers_mon_features_encore_turns.dbg = dbg;
+    v.trackers_mon_features_item_swapped.dbg = dbg;
+    v.trackers_mon_features_last_damage_dealt.dbg = dbg;
+    v.trackers_mon_features_last_damage_taken.dbg = dbg;
+    v.trackers_mon_features_meanlook_trap.dbg = dbg;
+    v.trackers_mon_features_moves_shown.dbg = dbg;
+    v.trackers_mon_features_rest_sleep.dbg = dbg;
+    v.trackers_mon_features_sleep_cant_pending.dbg = dbg;
+    v.trackers_mon_features_sleep_skipped_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_turns.dbg = dbg;
+    v.trackers_mon_features_sleep_usable_pending.dbg = dbg;
+    v.trackers_mon_features_stall_counter.dbg = dbg;
+    v.trackers_mon_features_stayed_and_attacked.dbg = dbg;
+    v.trackers_mon_features_sub_present.dbg = dbg;
+    v.trackers_mon_features_switched_before_attack.dbg = dbg;
+    v.trackers_mon_features_switches.dbg = dbg;
+    v.trackers_mon_features_toxic_stage.dbg = dbg;
+    v.trackers_mon_features_turns_active.dbg = dbg;
+    v.trackers_mon_features_turns_active_total.dbg = dbg;
+    v.trackers_field_features_weather_permanent.dbg = dbg;
+    v.trackers_field_features_weather_upkeeps.dbg = dbg;
+    v.trackers_field_features_wish_pending.dbg = dbg;
+    v.trackers_field_features_wish_set_turn.dbg = dbg;
+    v.trackers_field_features_wish_turns.dbg = dbg;
+    v.trackers_original_ability.dbg = dbg;
+    v.trackers_damage_exact_dealt.dbg = dbg;
+    v.trackers_damage_exact_taken.dbg = dbg;
+    v.trackers_public_volatiles.dbg = dbg;
+    v.trackers_item_removed.dbg = dbg;
+    v.trackers_tendency_moved.dbg = dbg;
+    v.trackers_tendency_opportunity_turn.dbg = dbg;
+    v.trackers_tendency_switches.dbg = dbg;
+    v.trackers_tendency_opportunities.dbg = dbg;
+    v.trackers_tendency_matchup.dbg = dbg;
+    v.trackers_damage_history_hp.dbg = dbg;
+    v.trackers_damage_history_maximum.dbg = dbg;
+    v.trackers_damage_history_taken.dbg = dbg;
+    v.trackers_damage_history_dealt.dbg = dbg;
+    v.trackers_negative_items_percent.dbg = dbg;
+    v.trackers_negative_items_known.dbg = dbg;
+    v.trackers_visible_belief_pin.dbg = dbg;
+    v.trackers_visible_belief_pin_active.dbg = dbg;
+    v.trackers_visible_belief_conflicts.dbg = dbg;
+    v.trackers_visible_belief_visible_hard.dbg = dbg;
+    v.trackers_visible_belief_visible_pin.dbg = dbg;
+    v.trackers_visible_belief_visible_pin_active.dbg = dbg;
+    v.trackers_visible_belief_excluded_abilities.dbg = dbg;
+    v.trackers_visible_belief_excluded_items.dbg = dbg;
+    v.trackers_public_port_holder.dbg = dbg;
+    v.trackers_public_port_victims.dbg = dbg;
+    v.trackers_public_port_known.dbg = dbg;
+    v.trackers_public_port_loaf.dbg = dbg;
+    v.trackers_public_port_traced.dbg = dbg;
+    v.trackers_public_port_skip_flip.dbg = dbg;
+    v.trackers_public_port_post_upkeep.dbg = dbg;
+    v.trackers_public_port_hazards.dbg = dbg;
+    v.trackers_public_port_blocked.dbg = dbg;
+    v.trackers_public_port_pursuit.dbg = dbg;
+    v.trackers_public_port_weather.dbg = dbg;
+#else
+    (void)dbg;
+#endif
+    return v;
+  }
+};
+// phases: A b0->b1, BC b1->b2, D b2->b3, E0 b3->b4, E_order0 b4->b5, E_order1 b5->b6, F b6->b7, G b7->b8
+
 // ---- EngineTables: struct-of-arrays over one packed buffer (gpu_engine.v2e_layout.pack_tables builds it, in this order).
 struct EngineTables {
   static constexpr uint64_t kDigest = 0x12c40f6cf803f9b5ull;
@@ -2461,7 +9196,7 @@ struct EngineTables {
 
 // Header-wide digest: sha256 over every struct digest above, in order (gpu_engine.v2e_layout.layout_digest). A handler that
 // binds several structs checks this one against the `layout_digest` attribute Python computes from the live pytrees.
-constexpr uint64_t kLayoutDigest = 0x1b1bf8d402b4114aull;
-constexpr const char* kLayoutDigestHex = "1b1bf8d402b4114a10902caf0e9ed272a0e2dee5f144de1cf62e721c228499e3";
+constexpr uint64_t kLayoutDigest = 0xb225c2cb82a22f14ull;
+constexpr const char* kLayoutDigestHex = "b225c2cb82a22f1443bacebb5329ff420e45d6be4856d4b8b8e0af96500aac3b";
 
 }  // namespace v2e_layout

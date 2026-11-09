@@ -195,8 +195,13 @@ class SpecFormatTest(unittest.TestCase):
         b0 = {e['name'] for e in spec['boundaries'][0]['carry']}
         self.assertTrue({'state.hp', 'actions'} <= b0)
         self.assertTrue(any(n.startswith('trackers.') for n in b0) and any(n.startswith('chance_inputs.') for n in b0))
-        for b in spec['boundaries']:
-            for e in b['carry']:self.assertTrue(e['name'].startswith(('state', 'actions', 'trackers', 'chance_inputs')) or e['source'] == 'local', e)
+        prefix = dict(state='state.', actions='actions', trackers='trackers.', chance='chance_inputs.')
+        for b in spec['boundaries'][:-1]:
+            for e in b['carry']:
+                if e['source'] != 'local':self.assertTrue(e['name'].startswith(prefix[e['source']]), e)
+        for e in spec['boundaries'][-1]['carry']:   # b8: the output paths, keystr without the leading dot
+            self.assertEqual('.' + e['name'], e['output_path'])
+            self.assertTrue(e['name'].startswith(('step.state.', 'step.', 'trackers.')), e)
 
 
 class ChainSpecTest(unittest.TestCase):
