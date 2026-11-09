@@ -50,11 +50,17 @@ observation_window_to_torch (window 1: [1,1,23,...], history_mask [[True]], lega
 _masked_action_probabilities and greedy by _greedy_action_index (both imported); RawPolicy.select_action on the same observation must
 agree. Path 1 is B2's encoding, path 4 the world-0 encoding's 23-token prefix.
 
-report (CPU): summary.json and summary.md over the capture directories and torch JSONL files: the gate (path 1 reproduces the live
-greedy on >= 99.5% of decisions, path 2 reproduces root_logits bit for bit, else HARNESS_NOT_EXACT with the misses), per path and set
-the argmax agreement with the live greedy and the server prior and max |dlogit| over legal actions against path 1 and the recorded
-prior (p50/p95/max), the B2 vs world-0 encoding diff (per key, token, column and (section, kind, column) cell, by set, ranked by
-the disagree/control share ratio, tagged by side and information status), the cross-world diff, and the attribution.
+report (CPU): summary.json and summary.md over the capture directories and torch JSONL files. Exclusions (report-side; selection
+is the capture's): a selected decision whose live greedy is illegal under root_legal, or whose re-pricer row (replay/rows-*.jsonl)
+carries a live_problem (duplicated or missing telemetry row, live prefix differing from the capture's), is excluded from the analysis
+and counted. The gate (`gate`) accounts for every selected decision: coverage (all captured), path 2 bit for bit (logits and value),
+selection (the replay's root prior and live greedy are the selection's), replay parity (action_equal and q_equal where the live actor
+searched), torch (a row per analysed decision, select_action agreeing on both paths) and path 1 (the live greedy reproduced on >=
+99.5%); any failure is HARNESS_NOT_EXACT with the misses, and "exact on k/n" counts the selected decisions passing every per-decision
+check. Then per path and set the argmax agreement with the live greedy and the server prior and max |dlogit| over legal actions
+against path 1 and the recorded prior (p50/p95/max), the B2 vs world-0 encoding diff (per key, token, column and (section, kind,
+column) cell, by set, ranked by excess share (disagree share minus control share), tagged by side and information status; a
+differing structural-zero cell is an anomaly), the cross-world diff, the attribution, and the torch runs' environment.
 """
 import argparse
 import collections
@@ -62,6 +68,7 @@ from contextlib import contextmanager
 import dis
 import hashlib
 import inspect
+import io
 import json
 import math
 import os
@@ -623,6 +630,7 @@ class ActorRuntime:
         odd = {k: (self.state[k], v) for k, v in WANT_PRECISION.items() if self.state[k] != v}
         if odd or model.training or result.model_config.window_size != 1:raise RuntimeError(f'the live actor\'s torch preconditions do not hold: {odd}')
         self.torch, self.policy = torch, policy
+        self.environment = dict(torch_config=torch.__config__.show(), torch_parallel=torch.__config__.parallel_info())
 
     def run(self, arrays, legal):
         from pokezero.neural_policy import _greedy_action_index, _masked_action_probabilities
@@ -638,6 +646,49 @@ class ActorRuntime:
         return dict(logits=logits, probabilities=list(values), greedy=greedy, value=value, select_action=chosen, select_agrees=chosen == greedy)
 
 
+CPU_KEYS = ('model name', 'cpu model', 'CPU implementer', 'CPU architecture', 'CPU variant', 'CPU part', 'CPU revision', 'Features', 'flags')
+
+
+def cpu_description():
+    """The first value of each CPU_KEYS line of /proc/cpuinfo (Linux), and the processor count; {} elsewhere."""
+    out = {}
+    try:
+        with open('/proc/cpuinfo') as stream:
+            for line in stream:
+                key, _, value = line.partition(':');key = key.strip()
+                if key in CPU_KEYS and key not in out:out[key] = value.strip()[:400]
+    except OSError:pass
+    return dict(out, processors=os.cpu_count())
+
+
+def numpy_blas():
+    """numpy's build dependencies (BLAS / LAPACK) from np.show_config, as a dict where numpy can give one, else its text."""
+    try:return np.show_config(mode='dicts').get('Build Dependencies')
+    except TypeError:
+        from contextlib import redirect_stdout
+        text = io.StringIO()
+        with redirect_stdout(text):np.show_config()
+        return text.getvalue()[:4000]
+
+
+def git_tree(*paths):
+    """{path: tree or blob sha at HEAD} of this checkout (None where git cannot say)."""
+    out = {}
+    for path in paths:
+        try:out[path] = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', f'HEAD:{path}' if path else 'HEAD'], text=True,
+            stderr=subprocess.DEVNULL).strip()
+        except (OSError, subprocess.CalledProcessError):out[path] = None
+    return out
+
+
+def host_environment():
+    """Where the torch paths ran: CPU architecture and model, numpy's BLAS, the checkout's HEAD and src / gpu_engine trees."""
+    import platform
+    trees = git_tree('', 'src', 'gpu_engine')
+    return dict(machine=platform.machine(), processor=platform.processor(), platform=platform.platform(), python=sys.version, cpu=cpu_description(),
+        numpy=np.__version__, numpy_blas=numpy_blas(), head=trees[''], src_tree=trees['src'], gpu_engine_tree=trees['gpu_engine'])
+
+
 def torch_main(argv):
     p = argparse.ArgumentParser(prog='depthn_input_parity.py torch', allow_abbrev=False)
     p.add_argument('--capture', nargs='+', required=True, help='capture directories')
@@ -649,7 +700,7 @@ def torch_main(argv):
     if digest != args.checkpoint_sha256:raise SystemExit(f'depthn_input_parity: {args.checkpoint} is {digest}, not {args.checkpoint_sha256}')
     runtime = ActorRuntime(args.checkpoint, digest);entries = capture_entries(args.capture);n = 0;clock = time.perf_counter()
     write_json(str(args.out) + '.header.json', dict(argv=list(argv), checkpoint=str(args.checkpoint), checkpoint_sha256=digest, precision=runtime.state,
-        captures=list(args.capture), decisions=len(entries)))
+        captures=list(args.capture), decisions=len(entries), environment=dict(host_environment(), **getattr(runtime, 'environment', {}))))
     with open(args.out, 'x') as stream:
         for entry, arrays in decision_arrays(entries):
             if args.limit is not None and n >= args.limit:break
@@ -740,7 +791,9 @@ def feature_tags(section, kind, column, names, reason):
     elif kind == 'numeric' and any(n.startswith(('OPP_', 'STAT_')) or n.endswith('_OPP') for n in names):side = 'opponent'
     else:side = 'field'
     if kind in ('numeric', 'categorical') and str(reason or '').startswith('structurally'):
-        return side, 'none', 'structural zero for this token section (device encoder column manifest)'
+        return side, 'none', 'structural zero for this token section (device encoder column manifest); a difference here is an anomaly'
+    if str(reason or '').startswith('unavailable hidden'):
+        return side, 'opponent-unrevealed', 'manifest: hidden opponent facts (written zero by the device encoder)'
     if section == 'stats':return side, 'public', 'opponent-tendency counters from the public battle history'
     if section == 'field':
         if any(n.endswith('HAZARD_EXPECTED') for n in names):return side, 'unknown', 'manifest: own request facts + public belief (mixed)'
@@ -843,19 +896,65 @@ def path_metrics(decisions, path):
         dlogit_vs_recorded=quantiles([max_gap(d['logits'][path], d['logits'].get(2), d['legal']) for d in have if 2 in d['logits']]))
 
 
-def gate(entries, decisions):
-    """Path 1 reproduces the live greedy on >= GATE_PATH1 of the decisions it covers; path 2 reproduces every captured root prior
-    bit for bit. dict(verdict HARNESS_EXACT / HARNESS_NOT_EXACT, both checks, the misses)."""
-    p1 = [(e, d) for e, d in zip(entries, decisions) if 1 in d['logits']]
-    p1_miss = [dict(ordinal=e['ordinal'], decision_index=e['decision_index'], set=e['set'], live=d['live'], path1=d['action'][1]) for e, d in p1 if d['action'][1] != d['live']]
-    captured = [e for e in entries if e.get('captured')]
-    p2_miss = [dict(ordinal=e['ordinal'], decision_index=e['decision_index'], set=e['set'], path2=e.get('path2')) for e in captured
-        if not (e.get('path2') and e['path2'].get('logits_equal') and e['path2'].get('value_equal'))]
-    rate = 1 - len(p1_miss) / len(p1) if p1 else None
-    ok1 = rate is not None and rate >= GATE_PATH1;ok2 = bool(captured) and not p2_miss
-    return dict(verdict='HARNESS_EXACT' if ok1 and ok2 else 'HARNESS_NOT_EXACT',
-        path1=dict(n=len(p1), reproduced=len(p1) - len(p1_miss), share=rate, threshold=GATE_PATH1, passed=ok1, misses=p1_miss),
-        path2=dict(n=len(captured), bit_exact=len(captured) - len(p2_miss), passed=ok2, misses=p2_miss))
+def gate(entries, torch_rows, *, selected=None, excluded=None):
+    """Every selected decision accounted for, and the harness exact on the rest (summary.md's gate). `entries`: every index entry;
+    `selected`: the selection's keys (default: the entries'); `excluded`: {key: reasons} (report-side exclusions). Checks:
+    coverage (every selected decision captured, none unexpected); path2 (every captured root prior re-run bit for bit, logits and
+    value); selection (the replay's root prior and live greedy are the selection's, for every captured decision); replay_parity
+    (action_equal and q_equal on every analysed decision the live actor searched); torch (a torch row for every analysed decision,
+    RawPolicy.select_action agreeing with the greedy on both paths); path1 (the live greedy reproduced on >= GATE_PATH1 of the
+    analysed decisions). exact_on: analysed decisions passing every per-decision check, out of the selected."""
+    excluded = excluded or {};key = lambda e: (e['ordinal'], e['decision_index'])
+    by = {key(e): e for e in entries};selected = set(by) if selected is None else set(selected)
+    captured = sorted(k for k, e in by.items() if e.get('captured') and k in selected)
+    analysed = [k for k in captured if k not in excluded]
+    address = lambda k: dict(ordinal=k[0], decision_index=k[1], set=by[k]['set'] if k in by else None)
+    path2 = lambda e: bool(e.get('path2') and e['path2'].get('logits_equal') and e['path2'].get('value_equal'))
+    selection = lambda e: bool(e.get('root_logits_match_selection') and e.get('live_greedy_matches_selection'))
+    searched = lambda e: bool((e.get('parity') or {}).get('live_searched') and (e.get('parity') or {}).get('replay_complete'))
+    parity = lambda e: not searched(e) or bool(e['parity'].get('action_equal') and e['parity'].get('q_equal'))
+    agrees = lambda k: k in torch_rows and all(torch_rows[k][p].get('select_agrees') for p in ('path1', 'path4'))
+    missing, unexpected = sorted(selected - set(captured)), sorted(set(by) - selected)
+    checks = dict(
+        coverage=dict(selected=len(selected), captured=len(captured), excluded=len(captured) - len(analysed), analysed=len(analysed),
+            missing=[address(k) for k in missing], unexpected=[address(k) for k in unexpected], passed=bool(selected) and not missing and not unexpected),
+        path2=dict(n=len(captured), misses=[dict(address(k), path2=by[k].get('path2')) for k in captured if not path2(by[k])]),
+        selection=dict(n=len(captured), misses=[dict(address(k), root_logits=by[k].get('root_logits_match_selection'),
+            live_greedy=by[k].get('live_greedy_matches_selection')) for k in captured if not selection(by[k])]),
+        replay_parity=dict(n=sum(searched(by[k]) for k in analysed), misses=[dict(address(k), parity=by[k].get('parity')) for k in analysed if not parity(by[k])]),
+        torch=dict(n=len(analysed), misses=[dict(address(k), torch_row=k in torch_rows, select_agrees=None if k not in torch_rows else
+            {p: torch_rows[k][p].get('select_agrees') for p in ('path1', 'path4')}) for k in analysed if not agrees(k)]))
+    for name in ('path2', 'selection', 'replay_parity', 'torch'):checks[name]['passed'] = bool(checks[name]['n']) and not checks[name]['misses'] if name != 'replay_parity' else not checks[name]['misses']
+    p1 = [k for k in analysed if k in torch_rows]
+    misses = [dict(address(k), live=by[k]['selection']['live_greedy'], path1=torch_rows[k]['path1']['greedy']) for k in p1
+        if torch_rows[k]['path1']['greedy'] != by[k]['selection']['live_greedy']]
+    rate = 1 - len(misses) / len(p1) if p1 else None
+    checks['path1'] = dict(n=len(p1), reproduced=len(p1) - len(misses), share=rate, threshold=GATE_PATH1, passed=rate is not None and rate >= GATE_PATH1, misses=misses)
+    exact = sum(path2(by[k]) and selection(by[k]) and parity(by[k]) and agrees(k) for k in analysed)
+    return dict(verdict='HARNESS_EXACT' if all(c['passed'] for c in checks.values()) else 'HARNESS_NOT_EXACT', exact_on=dict(k=exact, n=len(selected)),
+        failed=[name for name, c in checks.items() if not c['passed']], excluded_reasons=dict(collections.Counter(r.split(':')[0] for k in captured
+        for r in excluded.get(k, ()))), **checks)
+
+
+def exclusions(selection_decisions, problems):
+    """{key: reasons} of the selected decisions the analysis excludes: the live greedy illegal under the root's legal mask
+    ('live_greedy_illegal'), or the re-pricer's live join flagged ('live_problem: <text>': a duplicated telemetry row, a missing one
+    or a live prefix that differs from the capture's). `problems`: {key: live_problem} from the replay rows."""
+    out = {}
+    for d in selection_decisions:
+        k = (d['ordinal'], d['decision_index']);g, legal = d.get('live_greedy'), d.get('root_legal')
+        if type(g) is int and legal is not None and not (0 <= g < len(legal) and legal[g]):out.setdefault(k, []).append('live_greedy_illegal')
+        if problems.get(k):out.setdefault(k, []).append(f'live_problem: {problems[k]}')
+    return out
+
+
+def replay_problems(directories):
+    """{(ordinal, decision_index): live_problem} over the captures' re-pricer rows (replay/rows-*.jsonl)."""
+    out = {}
+    for d in map(Path, directories):
+        for path in sorted((d / 'replay').glob('rows-*.jsonl')):
+            for r in read_jsonl(path):out[r['ordinal'], r['decision_index']] = r.get('live_problem')
+    return out
 
 
 class Tally:
@@ -870,27 +969,35 @@ class Tally:
         return self.counts[name][feature] / self.n[name] if self.n[name] else None
 
     def ranked(self, label=lambda f: {}):
-        """Every feature that differs somewhere, by the disagree/control share ratio (Jeffreys-smoothed for ranking: (d + .5) /
-        (n_d + 1) over (c + .5) / (n_c + 1)), then the disagree count."""
+        """Every feature that differs somewhere, by excess share (disagree share minus control share), then the disagree/control
+        ratio Jeffreys-smoothed ((d + .5) / (n_d + 1) over (c + .5) / (n_c + 1)), then the disagree count."""
         nd, nc = self.n['disagree'], self.n['control'];rows = []
         for f in set(self.counts['disagree']) | set(self.counts['control']):
             d, c = self.counts['disagree'][f], self.counts['control'][f]
             ds, cs = (d / nd if nd else None), (c / nc if nc else None)
             rows.append(dict(feature=list(f) if isinstance(f, tuple) else f, **label(f), disagree=d, control=c, disagree_share=ds, control_share=cs,
-                ratio=None if not cs else ds / cs, control_zero=c == 0, smoothed_ratio=((d + .5) / (nd + 1)) / ((c + .5) / (nc + 1))))
-        return sorted(rows, key=lambda r: (-r['smoothed_ratio'], -r['disagree'], str(r['feature'])))
+                excess_share=None if ds is None or cs is None else ds - cs, ratio=None if not cs else ds / cs, control_zero=c == 0,
+                smoothed_ratio=((d + .5) / (nd + 1)) / ((c + .5) / (nc + 1))))
+        return sorted(rows, key=lambda r: (-(r['excess_share'] if r['excess_share'] is not None else -math.inf), -r['smoothed_ratio'], -r['disagree'],
+            str(r['feature'])))
 
     def table(self, features):
         return [dict(feature=f, **{s: self.counts[s][f] for s in SETS}, **{f'{s}_share': self.share(s, f) for s in SETS}) for f in features]
 
 
-def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None):
-    """The summary dict (module docstring) over capture entries, {(ordinal, decision_index): torch row} and the arrays."""
-    cells = feature_layout(manifest);tokens = token_layout()
-    label = lambda f: dict(names=cells[f]['names'], side=cells[f]['side'], info=cells[f]['info'], group=cells[f]['group']) if f in cells else {}
-    usable = [e for e in entries if e.get('root_legal') is not None]
+def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None, selected=None, excluded=None, torch_runtime=None):
+    """The summary dict (module docstring) over capture entries, {(ordinal, decision_index): torch row}, the arrays, the selected keys
+    and the report-side exclusions (gate)."""
+    cells = feature_layout(manifest);tokens = token_layout();excluded = excluded or {}
+    label = lambda f: dict(names=cells[f]['names'], side=cells[f]['side'], info=cells[f]['info'], group=cells[f]['group'],
+        anomaly=cells[f]['info'] == 'none') if f in cells else {}
+    chosen = None if selected is None else set(selected)
+    usable = [e for e in entries if e.get('captured') and e.get('root_legal') is not None and (e['ordinal'], e['decision_index']) not in excluded
+        and (chosen is None or (e['ordinal'], e['decision_index']) in chosen)]
     decisions = [decision_paths(e, torch_rows.get((e['ordinal'], e['decision_index']))) for e in usable]
-    out = dict(schema=SUMMARY_SCHEMA, gate=gate(usable, decisions), paths={}, coverage=coverage, selection=selection)
+    out = dict(schema=SUMMARY_SCHEMA, gate=gate(entries, torch_rows, selected=selected, excluded=excluded), paths={}, coverage=coverage, selection=selection,
+        excluded=[dict(ordinal=k[0], decision_index=k[1], reasons=v) for k, v in sorted(excluded.items())], torch_runtime=torch_runtime,
+        caveats=CAVEATS)
     for path, what in PATHS.items():
         out['paths'][str(path)] = dict(what=what, **{s: path_metrics([d for e, d in zip(usable, decisions) if e['set'] == s], path) for s in SETS})
     # Encoding diff: B2 against the world-0 prefix.
@@ -909,12 +1016,13 @@ def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None)
             if diff['max_numeric_diff'] < 1e-6:noise[name, 'max_numeric_diff_below_1e-6'] += 1
             if diff['max_numeric_diff'] < 1e-6 and all(diff['keys'][k] for k in B2_KEYS[1:]):noise[name, 'numeric_only_below_1e-6'] += 1
         bit_only[name] += diff['bit_only']
+    ranked = cell.ranked(label)
     out['encoding_diff'] = dict(compared=compared, decisions=dict(keys.n),
         keys=keys.table(list(B2_KEYS)),
         tokens=[dict(r, label=tokens[r['feature']]['label']) for r in tok.table(list(range(TOKENS)))],
         numeric_columns=[dict(r, names=cells['own', 'numeric', r['feature']]['names'], group=cells['own', 'numeric', r['feature']]['group']) for r in num.table(list(range(NUMERIC)))],
         categorical_columns=[dict(r, names=cells['own', 'categorical', r['feature']]['names']) for r in cat.table(list(range(CATEGORICAL)))],
-        ranked_cells=cell.ranked(label), ranked_tokens=[dict(r, label=tokens[r['feature']]['label']) for r in tok.ranked()],
+        ranked_cells=ranked, anomalies=[r for r in ranked if r.get('anomaly')], ranked_tokens=[dict(r, label=tokens[r['feature']]['label']) for r in tok.ranked()],
         ranked_numeric_columns=num.ranked(lambda c: dict(names=cells['own', 'numeric', c]['names'])),
         ranked_categorical_columns=cat.ranked(lambda c: dict(names=cells['own', 'categorical', c]['names'])),
         by_tag=tag.ranked(), float_noise={f'{s}:{k}': v for (s, k), v in sorted(noise.items())}, bit_only_decisions=dict(bit_only))
@@ -928,8 +1036,9 @@ def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None)
             if {'prefix_differs': not c['prefix_equal'], 'full_differs': not c['full_equal'], 'value_differs': not c['value_equal'],
                 'reference_not_reproduced': not c.get('reference_reproduces_root_inputs', True)}[k]])
         cross_cells.add(e['set'], crossworld_cells(c))
+    ranked = cross_cells.ranked(label)
     out['crossworld'] = dict(roots=dict(worlds_compared), any_difference=cross.table(['prefix_differs', 'full_differs', 'value_differs', 'reference_not_reproduced']),
-        ranked_cells=cross_cells.ranked(label), turn1_input_check=TURN1_INPUT_CHECK)
+        ranked_cells=ranked, anomalies=[r for r in ranked if r.get('anomaly')], turn1_input_check=TURN1_INPUT_CHECK)
     # Attribution (descriptive).
     attr = {}
     for s in SETS:
@@ -942,13 +1051,16 @@ def report(entries, torch_rows, *, manifest=None, selection=None, coverage=None)
     out['attribution'] = dict(attr, reading='path3_agrees_live_share high in the disagree set: the inputs carry the disagreement (the server model '
         'reproduces the actor on the actor\'s encoding); path4_disagrees_live_share high: the world-0 encoding moves the actor too. Both low: the model '
         '(bf16 champion vs torch fp32) carries it.')
+    rows = [r for k, r in torch_rows.items() if k not in excluded]
+    out['torch'] = dict(rows=len(torch_rows), b2_legal_equals_root_legal=dict(collections.Counter(str(r.get('b2_legal_equals_root_legal')) for r in rows)),
+        select_agrees={p: dict(collections.Counter(str(r[p].get('select_agrees')) for r in rows)) for p in ('path1', 'path4')})
     out['replay'] = dict(entries=len(entries), captured=sum(bool(e.get('captured')) for e in entries),
         action_equal=sum(bool((e.get('parity') or {}).get('action_equal')) for e in entries), q_equal=sum(bool((e.get('parity') or {}).get('q_equal')) for e in entries),
         root_logits_match_selection=sum(bool(e.get('root_logits_match_selection')) for e in entries),
         live_greedy_matches_selection=sum(bool(e.get('live_greedy_matches_selection')) for e in entries),
         b2_view_equal=sum(bool((e.get('b2_view') or {}).get('equal')) for e in entries), path3_invalid=sum(bool(e.get('path3')) and not e['path3']['valid'] for e in entries),
         path3_lossy=sum(bool(e.get('path3') and e['path3']['lossy_keys']) for e in entries),
-        torch_select_disagrees=sum(not r[p]['select_agrees'] for r in torch_rows.values() for p in ('path1', 'path4')),
+        recorded_float32_inexact=sum(e.get('recorded_float32_exact') is False for e in entries),
         errors=[dict(ordinal=e['ordinal'], decision_index=e['decision_index'], errors=e['errors']) for e in entries if e.get('errors')])
     out['layout'] = dict(tokens=tokens, cells=[dict(v) for v in cells.values()], manifest='installed (capture)' if manifest is not None else 'static (names only)',
         tag_rules=TAG_RULES)
@@ -963,23 +1075,48 @@ TURN1_INPUT_CHECK = ('device_depth2_pricer.make_turn1_stage.turn1 (the depth-N p
     'differs: <key>"), its block refuses (depthn_backups.refusal_summary cause "pre") and DepthNLiveSearch._search refuses the root. So no priced, '
     'COMPLETE root can carry a cross-world difference in values; only == -equal bits (+0.0 / -0.0) can survive. NaN never compares equal and refuses.')
 TAG_RULES = ('Side: tokens 1-6 and 13-21 own, 7-12 opponent; field (token 0) and stats (token 22) columns by name (SELF_/_SELF/STAT_MY_ own, '
-    'OPP_/_OPP/STAT_ opponent, else field). Status: structurally-not-applicable cells of the device encoder\'s column manifest "none"; stats token '
-    'public (tendency counters from the public history); field token public except *_HAZARD_EXPECTED unknown (the manifest: own request facts + public '
-    'belief); action tokens own-private (own moveset, PP, switch targets); opponent tokens opponent-unrevealed on the belief columns '
+    'OPP_/_OPP/STAT_ opponent, else field). Status: structurally-not-applicable cells of the device encoder\'s column manifest "none" (a difference '
+    'there is flagged as an anomaly); cells whose manifest reason is "unavailable hidden" (the opponent\'s ACTUAL_* stats) opponent-unrevealed; stats '
+    'token public (tendency counters from the public history); field token public except *_HAZARD_EXPECTED unknown (the manifest: own request facts + '
+    'public belief); action tokens own-private (own moveset, PP, switch targets); opponent tokens opponent-unrevealed on the belief columns '
     '(public_belief_features NUMERIC/CATEGORY_COLUMNS, public_expected_stats, TRAPPER_ALIVE) else opponent-revealed; own tokens own-private for '
     'ACTUAL_*, POSSIBLE_ABILITY/ITEM_COUNT, LEGAL and the belief ability/item/move buckets, public for boosts, volatiles, last move and traced ability, '
     'unknown otherwise (request-exact values whose visibility depends on reveal history); token_type / attention / history_mask unknown.')
+CAVEATS = ('The control set is a random sample of the agreeing decisions: it is not matched on request kind, turn or battle phase, so a feature '
+    'that tracks those can show an excess share without carrying the disagreement.',
+    'A path-1 miss (torch on B2\'s encoding not reproducing the live greedy) may itself be a finding rather than a harness fault: the constructor '
+    'folds the protocol prefix in chunks without the request lines, while the live actor (JaxBackend.ingest) flushes its fold at every request '
+    'boundary, so B2\'s root encoding inside the constructor can differ from the actor\'s own.')
 
 
 def markdown(s):
-    """summary.md: the gate, the four paths, the encoding diff (top cells and tags), the cross-world diff and the attribution."""
+    """summary.md: coverage and the gate, the four paths, the encoding diff (top cells, tags, anomalies), the cross-world diff, the
+    attribution and the caveats."""
     pct = lambda x: '-' if x is None else f'{100 * x:.1f}%'
     num = lambda x: '-' if x is None else f'{x:.4g}'
-    g = s['gate'];lines = ['# DepthN root prior vs live greedy: input parity', '', f'**Gate: {g["verdict"]}**', '',
-        f'- path 1 reproduces the live greedy: {g["path1"]["reproduced"]}/{g["path1"]["n"]} ({pct(g["path1"]["share"])}; threshold {pct(GATE_PATH1)})',
-        f'- path 2 reproduces the recorded prior bit for bit: {g["path2"]["bit_exact"]}/{g["path2"]["n"]}']
-    for name in ('path1', 'path2'):
-        if g[name]['misses']:lines.append(f'- {name} misses ({len(g[name]["misses"])}): ' + ', '.join(f'{m["ordinal"]}/{m["decision_index"]}' for m in g[name]['misses'][:40]))
+    where = lambda ms: ', '.join(f'{m["ordinal"]}/{m["decision_index"]}' for m in ms[:40]) + (f' (+{len(ms) - 40} more)' if len(ms) > 40 else '')
+    ratio = lambda r: 'inf' if r['control_zero'] and r['disagree'] else num(r['ratio'])
+    g = s['gate'];c = g['coverage']
+    lines = ['# DepthN root prior vs live greedy: input parity', '', f'**Gate: {g["verdict"]}** (exact on {g["exact_on"]["k"]}/{g["exact_on"]["n"]} '
+        f'selected decisions; failed: {", ".join(g["failed"]) or "none"})', '', '## Coverage', '',
+        f'- selected {c["selected"]}, captured {c["captured"]}, missing {len(c["missing"])}, unexpected {len(c["unexpected"])}',
+        f'- excluded {c["excluded"]} ({g["excluded_reasons"] or "none"}), analysed {c["analysed"]}']
+    if c['missing']:lines.append(f'- missing: {where(c["missing"])}')
+    cov = s.get('coverage') or {}
+    for d in cov.get('captures') or ():lines.append(f'- capture {d["directory"]}: selected in shard {d.get("selected_in_shard")}, recorded {d.get("recorded")}, '
+        f'captured {d.get("captured")}, path 2 exact {d.get("path2_exact")}, missing {d.get("missing")}, errors {d.get("errors")}, interrupted {d.get("interrupted")}')
+    lines += ['', '## Gate', '', '| check | n | misses | passed |', '|---|---|---|---|']
+    for name in ('path2', 'selection', 'replay_parity', 'torch'):lines.append(f'| {name} | {g[name]["n"]} | {len(g[name]["misses"])} | {g[name]["passed"]} |')
+    lines.append(f'| path1 (live greedy reproduced, threshold {pct(GATE_PATH1)}) | {g["path1"]["n"]} | {len(g["path1"]["misses"])} ({pct(g["path1"]["share"])} '
+        f'reproduced) | {g["path1"]["passed"]} |')
+    for name in ('path1', 'path2', 'selection', 'replay_parity', 'torch'):
+        if g[name]['misses']:lines.append(f'- {name} misses: {where(g[name]["misses"])}')
+    t = s.get('torch') or {}
+    lines += ['', f'torch: b2_legal_equals_root_legal {t.get("b2_legal_equals_root_legal")}; select_agrees {t.get("select_agrees")}']
+    for h in s.get('torch_runtime') or ():
+        e = h.get('environment') or {}
+        lines.append(f'- torch run {h.get("path")}: {e.get("machine")} {(e.get("cpu") or {}).get("model name") or (e.get("cpu") or {}).get("CPU part")}, '
+            f'precision {h.get("precision")}, src tree {e.get("src_tree")}')
     lines += ['', '## Paths', '', '| path | set | n | = live greedy | = server prior | max dlogit vs path 1 p50 / p95 / max | vs recorded p50 / p95 / max |', '|---|---|---|---|---|---|---|']
     for p, row in s['paths'].items():
         for name in SETS:
@@ -995,22 +1132,24 @@ def markdown(s):
     lines += ['', '## Encoding diff: B2 vs world-0 prefix', '', f'decisions compared: {e["compared"]} ({e["decisions"]})', '', '| key | disagree | control |', '|---|---|---|']
     lines += [f'| {r["feature"]} differs | {r["disagree"]} ({pct(r["disagree_share"])}) | {r["control"]} ({pct(r["control_share"])}) |' for r in e['keys']]
     lines += ['', f'float noise: {e["float_noise"]}; bit-only (values equal): {e["bit_only_decisions"]}', '', '### By tag', '',
-        '| tag | disagree | control | ratio |', '|---|---|---|---|']
+        '| tag | disagree | control | excess | ratio |', '|---|---|---|---|---|']
     lines += [f'| {r["feature"][0]}: {r["feature"][1]} | {r["disagree"]} ({pct(r["disagree_share"])}) | {r["control"]} ({pct(r["control_share"])}) | '
-        f'{"inf" if r["control_zero"] and r["disagree"] else num(r["ratio"])} |' for r in e['by_tag']]
-    lines += ['', '### Top cells (section, kind, column) by disagree/control ratio', '', '| cell | names | side | status | disagree | control | ratio |', '|---|---|---|---|---|---|---|']
-    lines += [f'| {r["feature"][0]} {r["feature"][1]} {r["feature"][2]} | {", ".join(r.get("names", []))} | {r.get("side")} | {r.get("info")} | '
-        f'{r["disagree"]} ({pct(r["disagree_share"])}) | {r["control"]} ({pct(r["control_share"])}) | {"inf" if r["control_zero"] and r["disagree"] else num(r["ratio"])} |'
-        for r in e['ranked_cells'][:40]]
+        f'{pct(r["excess_share"])} | {ratio(r)} |' for r in e['by_tag']]
+    cells = lambda rows: [f'| {r["feature"][0]} {r["feature"][1]} {r["feature"][2]} | {", ".join(r.get("names", []))} | {r.get("side")} | {r.get("info")}'
+        f'{" (ANOMALY)" if r.get("anomaly") else ""} | {r["disagree"]} ({pct(r["disagree_share"])}) | {r["control"]} ({pct(r["control_share"])}) | '
+        f'{pct(r["excess_share"])} | {ratio(r)} |' for r in rows]
+    head = ['| cell | names | side | status | disagree | control | excess | ratio |', '|---|---|---|---|---|---|---|---|']
+    lines += ['', '### Top cells (section, kind, column) by excess share', ''] + head + cells(e['ranked_cells'][:40])
+    lines += ['', f'### Anomalies: structural-zero cells that differ ({len(e["anomalies"])})', '']
+    if e['anomalies']:lines += head + cells(e['anomalies'][:40])
     lines += ['', '### Tokens', '', '| token | disagree | control |', '|---|---|---|']
     lines += [f'| {r["feature"]} {r["label"]} | {pct(r["disagree_share"])} | {pct(r["control_share"])} |' for r in e['tokens']]
-    c = s['crossworld']
-    lines += ['', '## Cross-world: our own view across the worlds of a root', '', f'roots compared: {c["roots"]}', '', '| difference | disagree | control |', '|---|---|---|']
-    lines += [f'| {r["feature"]} | {r["disagree"]} ({pct(r["disagree_share"])}) | {r["control"]} ({pct(r["control_share"])}) |' for r in c['any_difference']]
-    if c['ranked_cells']:
-        lines += ['', '| cell | names | side | status | disagree | control |', '|---|---|---|---|---|---|']
-        lines += [f'| {r["feature"]} | {", ".join(r.get("names", []))} | {r.get("side")} | {r.get("info")} | {r["disagree"]} | {r["control"]} |' for r in c['ranked_cells'][:40]]
-    lines += ['', c['turn1_input_check'], '', '## Replay', '', json.dumps({k: v for k, v in s['replay'].items() if k != 'errors'}), '',
+    x = s['crossworld']
+    lines += ['', '## Cross-world: our own view across the worlds of a root', '', f'roots compared: {x["roots"]}', '', '| difference | disagree | control |', '|---|---|---|']
+    lines += [f'| {r["feature"]} | {r["disagree"]} ({pct(r["disagree_share"])}) | {r["control"]} ({pct(r["control_share"])}) |' for r in x['any_difference']]
+    if x['ranked_cells']:lines += [''] + head + cells(x['ranked_cells'][:40])
+    lines += ['', x['turn1_input_check'], '', '## Caveats', ''] + [f'- {c}' for c in s['caveats']]
+    lines += ['', '## Replay', '', json.dumps({k: v for k, v in s['replay'].items() if k != 'errors'}), '',
         f'errors: {len(s["replay"]["errors"])}', '', '## Tag rules', '', TAG_RULES, f'Manifest: {s["layout"]["manifest"]}.', '']
     return '\n'.join(lines)
 
@@ -1019,12 +1158,17 @@ def report_main(argv):
     p = argparse.ArgumentParser(prog='depthn_input_parity.py report', allow_abbrev=False)
     p.add_argument('--capture', nargs='+', required=True);p.add_argument('--torch', nargs='*', default=[]);p.add_argument('--out', required=True, help='a new directory')
     args = p.parse_args(argv)
-    entries = capture_entries(args.capture);torch_rows = {}
+    entries = capture_entries(args.capture);torch_rows, runtimes = {}, []
     for path in args.torch:
         for r in read_jsonl(path):
             key = (r['ordinal'], r['decision_index'])
             if key in torch_rows:raise SystemExit(f'depthn_input_parity: torch row {key} twice')
             torch_rows[key] = r
+        header = Path(str(path) + '.header.json')
+        if header.exists():
+            h = json.loads(header.read_text());env = dict(h.get('environment') or {});env.pop('torch_config', None)
+            runtimes.append(dict(path=str(path), precision=h.get('precision'), checkpoint_sha256=h.get('checkpoint_sha256'), environment=env,
+                torch_config=(h.get('environment') or {}).get('torch_config')))
     manifest, summaries = None, []
     for d in map(Path, args.capture):
         summary = json.loads((d / 'capture-summary.json').read_text()) if (d / 'capture-summary.json').exists() else {}
@@ -1032,13 +1176,20 @@ def report_main(argv):
             missing=len(summary.get('missing') or ()), errors=len(summary.get('errors') or ())))
         manifest = manifest or summary.get('installed_manifest')
     selection = json.loads((Path(args.capture[0]) / 'selection.json').read_text())
-    coverage = dict(selected=selection['counts'], selected_decisions=len(selection['decisions']), entries=len(entries), torch_rows=len(torch_rows),
-        captures=summaries, not_in_captures=len({(d['ordinal'], d['decision_index']) for d in selection['decisions']} - {(e['ordinal'], e['decision_index']) for e in entries}))
+    selected = {(d['ordinal'], d['decision_index']) for d in selection['decisions']}
+    problems = {k: v for k, v in replay_problems(args.capture).items() if k in selected}
+    for e in entries:   # an index that carries the re-pricer's live_problem itself takes precedence
+        if 'live_problem' in e:problems[e['ordinal'], e['decision_index']] = e['live_problem']
+    excluded = exclusions(selection['decisions'], problems)
+    coverage = dict(selected=selection['counts'], selected_decisions=len(selected), entries=len(entries), torch_rows=len(torch_rows), captures=summaries,
+        not_in_captures=len(selected - {(e['ordinal'], e['decision_index']) for e in entries}), replay_rows_with_live_problem=sum(bool(v) for v in problems.values()))
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
-    s = report(entries, torch_rows, manifest=manifest, selection=dict(counts=selection['counts'], select_seed=selection['select_seed']), coverage=coverage)
+    s = report(entries, torch_rows, manifest=manifest, selection=dict(counts=selection['counts'], select_seed=selection['select_seed']), coverage=coverage,
+        selected=selected, excluded=excluded, torch_runtime=runtimes)
     write_json(out / 'summary.json', s)
     with (out / 'summary.md').open('x') as stream:stream.write(markdown(s))
-    print(json.dumps(dict(done=str(out), verdict=s['gate']['verdict'], attribution={k: s['attribution'][k] for k in SETS})), flush=True)
+    print(json.dumps(dict(done=str(out), verdict=s['gate']['verdict'], exact_on=s['gate']['exact_on'], failed=s['gate']['failed'],
+        attribution={k: s['attribution'][k] for k in SETS})), flush=True)
     return 0
 
 
