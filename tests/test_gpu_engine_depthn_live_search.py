@@ -503,6 +503,68 @@ class LiveSearchTests(unittest.TestCase):
             live.DepthNLiveSearch(constructor=other,pricers=self.pricers[8],params=PARAMS,binding=self.cw.binding,recipe=self.cw.recipe,tree_commit=TREE)
 
 
+class ReplyPriorTests(unittest.TestCase):
+    """depthn_live_server --reply-archive: the reply model's logits on the same worlds' peer inputs replace root_peer_logits
+    before averaging (br_fp); the champion's own averaging is reported beside it. LiveSearchTests' harness, not its tests."""
+    setUpClass = classmethod(LiveSearchTests.setUpClass.__func__);make_pricers = classmethod(LiveSearchTests.make_pricers.__func__)
+    setUp, search, outcome, run_batch = LiveSearchTests.setUp, LiveSearchTests.search, LiveSearchTests.outcome, LiveSearchTests.run_batch
+
+    def outcomes(self, n):return {(f'r{i}', 0):self.outcome(i) for i in range(n)}
+
+    def test_the_champion_as_reply_model_plays_averaging_exactly(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        reqs = [request(f'r{i}', 0, stream=30 + i) for i in range(3)]
+        plain, _ = self.run_batch(self.search(), reqs, self.outcomes(3))
+        rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])), reqs, self.outcomes(3))
+        self.assertTrue(any(r['status'] == 'COMPLETE' for r in rows))
+        for a, b in zip(plain, rows):
+            encode(b);self.assertEqual(set(b), KEYS | {'reply_prior'});self.assertNotIn('reply_prior', a)
+            self.assertEqual((b['status'], b['action_index'], b['q_values']), (a['status'], a['action_index'], a['q_values']))
+            if b['status'] == 'COMPLETE':
+                self.assertEqual((b['reply_prior']['operator'], b['reply_prior']['champion_action_index'], b['reply_prior']['champion_q_values']),
+                                 ('br_fp', a['action_index'], a['q_values']))
+            else:self.assertIsNone(b['reply_prior'])
+
+    def test_another_reply_model_plays_averaging_on_its_logits(self):
+        from collections import namedtuple
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        Out = namedtuple('Out', 'policy_logits');champion = self.evaluator
+        class Negated:
+            identity = ('champion', 'cd' * 32, 'bfloat16')
+            def __call__(self, params, inputs):return Out(-champion(params, inputs).policy_logits)
+        calls, real = [], live.decide
+        def recording(blocks, root_logits, root_legal):calls.append((blocks, tuple(root_legal)));return real(blocks, root_logits, root_legal)
+        reqs = [request(f'r{i}', 0, stream=40 + i) for i in range(4)]
+        with patch.object(live, 'decide', recording):
+            rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, Negated(), PARAMS[0])), reqs, self.outcomes(4))
+        complete = [r for r in rows if r['status'] == 'COMPLETE'];self.assertTrue(complete)
+        self.assertEqual(len(calls), 2 * len(complete))   # per priced root: the champion's averaging (reported), then br_fp's
+        moved = 0
+        for row, (blocks, legal) in zip(complete, calls[0::2]):
+            flat = [original.WorldPrices(w.opponent_requested, w.opponent_legal, tuple(-x for x in w.opponent_logits) if w.opponent_requested
+                                         else w.opponent_logits, w.joint_values) for pair in blocks for w in pair]
+            want = hedge.averaging(flat, legal)
+            self.assertEqual((row['action_index'], row['q_values']), (hedge.top_action(want.strategy), list(want.q)))
+            moved += row['q_values'] != row['reply_prior']['champion_q_values']
+        self.assertGreater(moved, 0, 'a negated reply prior should move some root\'s q')
+
+    def test_apply_replaces_requested_worlds_only_and_a_failure_refuses_the_root(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        rp = ReplyPrior(None, self.evaluator, PARAMS[0], views=lambda *a:None)
+        grid = ((0.,) * 9,) * 9
+        asked = original.WorldPrices(True, (True,) * 9, (0.,) * 9, grid);waiting = original.WorldPrices(False, (False,) * 9, (1.,) + (0.,) * 8, grid)
+        with patch.object(ReplyPrior, 'logits', return_value=np.arange(36, dtype=np.float32).reshape(4, 9)):
+            out, seconds = rp.apply([(asked, waiting), (None, asked)], [NS()] * 4, 0)
+            self.assertEqual(out[0][0].opponent_logits, tuple(float(x) for x in range(9)));self.assertEqual(out[0][1], waiting)
+            self.assertIsNone(out[1][0]);self.assertEqual(out[1][1].opponent_logits, tuple(float(x) for x in range(27, 36)))
+            self.assertGreaterEqual(seconds, 0.)
+            with self.assertRaises(ValueError):rp.apply([(asked, waiting)], [NS()] * 3, 0)
+        with patch.object(ReplyPrior, 'apply', side_effect=RuntimeError('boom')):
+            rows, _ = self.run_batch(self.search(reply=rp), [request('r0', 0, stream=50)], self.outcomes(1))
+        self.assertEqual((rows[0]['status'], rows[0]['cause'], rows[0]['refusal']), ('REFUSED', 'depthn_refused', 'REPLY_PRIOR_ERROR: RuntimeError: boom'))
+        with self.assertRaises(ValueError):self.search(reply=object())
+
+
 def world(values,*,opponent=None,logits=None):
     """WorldPrices with the given action -> {reply: value} rows; `opponent` the legal replies (None: a waiting opponent, column 0)."""
     jv=[[None]*9 for _ in range(9)]

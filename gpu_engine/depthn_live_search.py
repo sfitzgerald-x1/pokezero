@@ -246,10 +246,12 @@ def _real(x):
 
 class DepthNLiveSearch:
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
-            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=()):
+            archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),reply=None):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
-        arrival clock (time.monotonic)."""
+        arrival clock (time.monotonic). `reply`: a depthn_reply_prior.ReplyPrior or None; with one, every priced root's
+        requested worlds use the reply model's logits in place of root_peer_logits, so the averaging played is br_fp (the
+        champion's averaging action is reported beside it); every response then carries reply_prior."""
         W=constructor.count;self.rung=next((r for r,w in RUNGS.items()if w==W),None)
         if self.rung is None:raise ValueError(f'a constructor of W in {tuple(RUNGS.values())} worlds required, got {W!r}')
         self.W,self.K=W,W//2;self.buckets=tuple(sorted(pricers))
@@ -277,7 +279,9 @@ class DepthNLiveSearch:
         self.constructor,self.pricers,self.params,self.binding,self.recipe=constructor,dict(pricers),params,binding,recipe
         self.tree_commit,self.min_price_seconds,self.max_requests,self.session_cap=tree_commit,float(min_price_seconds),max_requests,session_cap
         self.archive_sha256=archive_sha256 or getattr(self.forward,'archive_sha256',None)or ident[1]
-        self.device,self.clock=device,clock
+        from .depthn_reply_prior import ReplyPrior
+        if reply is not None and not isinstance(reply,ReplyPrior):raise ValueError('reply: a depthn_reply_prior.ReplyPrior or None required')
+        self.device,self.clock,self.reply=device,clock,reply
         self.battles=OrderedDict();self.evicted=0;self.warm=None
         self.pricer_identity=dict(engine='DepthNPricer',depth=DEPTH,k=[WIDTH,WIDTH],k1=[WIDTH,WIDTH],selection='prior',W=W,K=self.K,
             buckets=list(self.buckets),capacities=[b*self.K for b in self.buckets],fixed_capacity=True,block_lanes=first.block_lanes,
@@ -299,7 +303,7 @@ class DepthNLiveSearch:
             timings=dict.fromkeys(STAGES),
             batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
-            tree_commit=self.tree_commit,pricer=dict(self.pricer_identity))
+            tree_commit=self.tree_commit,pricer=dict(self.pricer_identity),**({}if self.reply is None else dict(reply_prior=None)))
 
     @staticmethod
     def _problem(request):
@@ -385,6 +389,7 @@ class DepthNLiveSearch:
             try:frame,_=cw.price(pricer,made,self.binding,self.recipe,self.params)
             finally:children,seam_notes=observer.observed()if observer is not None else([],['the pricer has no observer seam'])
         t_price=time.perf_counter();results=[];causes=backups.refusal_summary(frame)['roots']if made.requests else()
+        items={p['request_id']:item for(_,p,_),item in zip(todo,prepared)}
         by_id={p['request_id']:p for _,p,_ in todo};labels=getattr(observer,'labels',guard_inputs.child_labels)if made.requests else None
         for root in made.roots:
             view=dict(root_view_source=root.get('root_view_source'),b2_view=wire_b2_view(root.get('b2_view')))
@@ -393,7 +398,17 @@ class DepthNLiveSearch:
             if any(block):results.append(dict(base,status='REFUSED',refusal=next(c for c in block if c)));continue   # DepthN's rule: a refused block refuses the root
             try:blocks=[backups.backup(frame,r,backups.learner_max)for r in root['rows']]   # WorldPrices: averaging's value and logit rules
             except ValueError as error:results.append(dict(base,status='REFUSED',refusal=f'AVERAGING_ERROR: {error}'));continue
+            reply=None
+            if self.reply is not None:   # br_fp: the reply model's logits on the same worlds; the champion's averaging is reported
+                item=items[root['request_id']]
+                try:replied,seconds=self.reply.apply(blocks,item.made.worlds,int(item.detached.address.owner))
+                except FATAL:raise
+                except Exception as error:results.append(dict(base,status='REFUSED',refusal=f'REPLY_PRIOR_ERROR: {type(error).__name__}: {error}'));continue
+                champion=decide(blocks,root['root_logits'],root['root_legal'])
+                reply=dict(operator='br_fp',seconds=seconds,champion_action_index=champion['action_index'],champion_q_values=champion['q_values'])
+                blocks=replied
             decision=decide(blocks,root['root_logits'],root['root_legal'])
+            if reply is not None:decision['reply_prior']=reply
             if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
                 decision['action_index'],labels)
             results.append(dict(base,**decision))
@@ -411,7 +426,8 @@ class DepthNLiveSearch:
             if i in gates:out[i]=dict(base,cause=gates[i][0],refusal=gates[i][1])
             elif result['status']=='COMPLETE':
                 out[i]=dict(base,**{k:result[k]for k in('status','action_index','q_values','completed_q','policy_target','root_value','action_mean_q',
-                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided)
+                    'action_policy_target','mean_q_agrees','reduction_note','effect_guard')},decision_seconds=decided,
+                    **({}if self.reply is None else dict(reply_prior=result.get('reply_prior'))))
             else:out[i]=dict(base,cause=refusal_cause(result['refusal']),refusal=result['refusal'])
         return out
 
