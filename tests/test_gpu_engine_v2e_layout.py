@@ -320,7 +320,9 @@ int main() {
   // writable follows the scatter rule: wrap once, in range or dropped
   std::printf("%d %d %d %d %d\n", (int)leaf.writable(0), (int)leaf.writable(0, -1), (int)leaf.writable(0, -3), (int)leaf.writable(0, 2), (int)leaf.writable(0, 1));
   // get_fill at a lane: in range reads, out of range fills INT_MIN; clamps counted
-  std::printf("%d %d %u\n", leaf.get_fill(0, 1, -1), leaf.get_fill(0, 1, 6) == INT32_MIN, dbg[0]);
+  // sequence the reads: argument evaluation order is unspecified, and get_fill updates dbg
+  const int32_t wrapped = leaf.get_fill(0, 1, -1); const bool filled = leaf.get_fill(0, 1, 6) == INT32_MIN; const uint32_t clamps = dbg[0];
+  std::printf("%d %d %u\n", wrapped, (int)filled, clamps);
   return 0;
 }
 ''')
