@@ -1156,13 +1156,15 @@ def effect_stats(values, *, keep_support_differs=False):
     Decisions whose legal sets differ (support_differs: the statistics cover only the common lanes) are excluded
     unless keep_support_differs, and counted; so are non-finite values (the NaN guard), counted as `nonfinite`. With
     the per-decision dropped_b/dropped_a fields, the dropped mass is summarized (b's prior on lanes illegal in a, and
-    the reverse); positions written before those fields count as `dropped_unavailable`."""
+    the reverse); positions written before those fields count as `dropped_unavailable`. A decision whose views share no
+    legal lane (effect() is None, e.g. one side not requested) is counted as `no_common_lane`, never dropped silently."""
+    no_common = sum(v is None for v in values)
     values = [v for v in values if v]
     differs = [v for v in values if v.get('support_differs')]
     kept = values if keep_support_differs else [v for v in values if not v.get('support_differs')]
     finite = [v for v in kept if _finite_effect(v)]
     out = dict(n=len(finite), support_differs=len(differs), excluded_support_differs=0 if keep_support_differs else len(differs),
-        nonfinite=len(kept) - len(finite))
+        nonfinite=len(kept) - len(finite), no_common_lane=no_common)
     if finite:
         kl = np.asarray([v['kl'] for v in finite]);tv = np.asarray([v['tv'] for v in finite]);dp = np.asarray([v['max_abs_dp'] for v in finite])
         out.update(kl_median=float(np.median(kl)), kl_p95=float(np.quantile(kl, .95)), kl_max=float(kl.max()),
@@ -1230,7 +1232,8 @@ def summarize_effect(P):
             'reply-prior input, real physical indices), l = the true team in the offline layout (bench encounter order, source '
             'move order; not literally a searched world, whose hidden members are sampled), b = the real foe view after the named '
             'redactions; champion forward as the offline pricer\'s reply prior. Decisions whose legal sets differ are excluded '
-            'from every group and reported in their own row; non-finite values are excluded and counted')
+            'from every group and reported in their own row; non-finite values and decisions with no common legal lane are '
+            'excluded and counted')
 
 
 def summarize_residual(P):
@@ -1443,17 +1446,17 @@ def render(summary):
     head = e['headline']['primary']
     lines += ['', '## Reply-prior effect of the peer order (champion forward, identity-aligned lanes)', '', e['definition'], '',
         '**Headline (order only: the peer view differs only by bench order):** n %s, KL median %s, p95 %s, max %s, top-1 flip share %s, '
-        'mean TV %s (legal sets differ: %s excluded; non-finite: %s)' % (head.get('n', 0), fmt(head.get('kl_median')), fmt(head.get('kl_p95')),
-            fmt(head.get('kl_max')), fmt(head.get('top1_flip_share')), fmt(head.get('tv_mean')), head.get('excluded_support_differs', 0),
-            head.get('nonfinite', 0)), '',
+        'mean TV %s (legal sets differ: %s excluded; non-finite: %s; no common legal lane: %s)' % (head.get('n', 0), fmt(head.get('kl_median')),
+            fmt(head.get('kl_p95')), fmt(head.get('kl_max')), fmt(head.get('top1_flip_share')), fmt(head.get('tv_mean')),
+            head.get('excluded_support_differs', 0), head.get('nonfinite', 0), head.get('no_common_lane', 0)), '',
         '| group | n | KL median | KL p95 | KL max | top-1 flip share | mean TV | mean max abs dp | excl. legal differs | non-finite '
-        '| layout n | layout KL median | layout KL p95 | layout flip share |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+        '| no common lane | layout n | layout KL median | layout KL p95 | layout flip share |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     for g in e['groups'] + [e['support_differs']]:
         a_, l_ = g['primary'], g['layout']
-        lines.append('| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %d | %s | %s | %s |' % (g['group'], a_.get('n', 0), fmt(a_.get('kl_median')),
+        lines.append('| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %d | %s | %s | %s |' % (g['group'], a_.get('n', 0), fmt(a_.get('kl_median')),
             fmt(a_.get('kl_p95')), fmt(a_.get('kl_max')), fmt(a_.get('top1_flip_share')), fmt(a_.get('tv_mean')), fmt(a_.get('max_abs_dp_mean')),
-            a_.get('excluded_support_differs', 0), a_.get('nonfinite', 0), l_.get('n', 0), fmt(l_.get('kl_median')), fmt(l_.get('kl_p95')),
-            fmt(l_.get('top1_flip_share'))))
+            a_.get('excluded_support_differs', 0), a_.get('nonfinite', 0), a_.get('no_common_lane', 0), l_.get('n', 0), fmt(l_.get('kl_median')),
+            fmt(l_.get('kl_p95')), fmt(l_.get('top1_flip_share'))))
     sd = e['support_differs']['primary']
     lines += ['', '- legal sets differ: %s decisions; dropped mass, b\'s prior on lanes illegal in a: mean %s, max %s; a\'s on lanes '
         'illegal in b: mean %s, max %s; positions without the dropped-mass fields: %s' % (sd.get('n', 0), fmt(sd.get('dropped_b_mean')),

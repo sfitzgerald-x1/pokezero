@@ -782,6 +782,17 @@ class EffectReportTests(unittest.TestCase):
         again = json.loads(json.dumps(P))
         self.assertEqual(parity.summarize_effect(again)['headline']['primary']['nonfinite'], 2)
 
+    def test_no_common_legal_lane_is_counted_not_dropped(self):
+        # e.g. the world's foe not requested while the real one is: effect() is None; the group counts it apart from n.
+        legal = np.asarray([True] + [False] * 8)
+        self.assertIsNone(parity.effect(np.zeros(9), legal, np.zeros(9), ~legal))
+        lone = effect_position(.1);lone['peer']['effect']['primary'] = None;lone['peer']['effect']['layout'] = None
+        s = parity.summarize_effect([lone, effect_position(.2)]);head = s['headline']['primary']
+        self.assertEqual((head['n'], head['no_common_lane'], head['nonfinite']), (1, 1, 0))
+        self.assertEqual(s['headline']['layout']['no_common_lane'], 1)
+        self.assertEqual({g['group']: g['primary']['no_common_lane'] for g in s['groups']}['all compared'], 1)
+        self.assertIn('no common legal lane: 1', parity.render(dict(parity.summarize([], []), peer_order_effect=s)))
+
 
 class ReportTests(unittest.TestCase):
     def shard(self, root, name, shard, **meta):
