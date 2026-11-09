@@ -209,6 +209,17 @@ class ListingTest(unittest.TestCase):
         self.assertEqual(sorted(pruned.lines), [2, 3, 10, 11, 12, 15, 16, 17, 18, 19, 22])
         self.assertEqual(sorted(pruned.static_headers), [11]);self.assertEqual(sorted(pruned.unknown_headers), [15])
         self.assertEqual(LS.reached_calls(module, pruned), {('helper', 'g')})
+        text = LS.render(module, pruned, {'stand_in': {2, 3, 10}})
+        self.assertIn('    2: def f(', text);self.assertIn('   11:~    if _device_public', text, 'a line without equations is marked ~')
+        code2 = ['def g(table, x):', '    if table.items is not None:', '        return x', '    return x + 1', '', 'def h(table, x, original=True):',
+            '    y = x if table.items is not None else 0', '    return y if original else 1']
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'stand_in2.py';path.write_text('\n'.join(code2) + '\n');module2 = LS.Module('stand_in2', path)
+        facts = LS.Facts({'table': {'items'}, 'belief': set()})
+        g = LS.prune_function(module2, module2.functions['g'], facts)
+        self.assertEqual(sorted(g.lines), [1, 2, 3], 'the statement after a statically taken return is dead');self.assertEqual(sorted(g.dropped), [4])
+        h = LS.prune_function(module2, module2.functions['h'], LS.Facts({'table': {'items'}, 'belief': set()}, {'original': True}))
+        self.assertIn('else-branch', h.notes[7]);self.assertIn('else-branch', h.notes[8])
 
     def test_real_step_pruning(self):
         from gpu_engine import v2e_listing as LS

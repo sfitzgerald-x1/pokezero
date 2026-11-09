@@ -315,7 +315,7 @@ def render(module, pruned, trace_lines=None):
     """The reading copy: `NNNN: source`. With trace lines, a line that produced no equation in the traced jaxpr (control
     flow, aliasing, Python-only work) is marked `NNNN:~ source`; a conditional expression whose test is static gets a
     trailing `## note`."""
-    have = set(trace_lines.get(pruned.module, {})) if trace_lines else None
+    have = set(trace_lines.get(module.name, ())) if trace_lines is not None else None
     out = []
     for n in sorted(pruned.lines):
         mark = '~' if have is not None and n not in have else ' '
