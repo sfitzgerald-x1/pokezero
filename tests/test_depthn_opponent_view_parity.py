@@ -491,13 +491,13 @@ def fake_true_world(seen):
 
 
 class CaptureTests(unittest.TestCase):
-    def run_cell(self, tmp, stack, *, env=None):
+    def run_cell(self, tmp, stack, *, env=None, complete=None):
         root = Path(tmp) / 'run';write_cell(root);out = Path(tmp) / 'out';out.mkdir()
         RT.pricing(stack);stack.enter_context(patch.object(pw, 'sample', fake_sample))
         seen = [];stack.enter_context(patch.object(P, 'build_true_world', fake_true_world(seen)))
         constructor = SamplingConstructor();env = FakeEnv() if env is None else env
         ctx = P.Replay(run=root, search=RT.fake_search(constructor), views=fake_view, fp_rows={1001: fp_rows()}, vocabulary=RT.VOCABULARY,
-            environment_factory=lambda: env, sampled_worlds=2, shard=0, out=out)
+            environment_factory=lambda: env, sampled_worlds=2, shard=0, out=out, complete=complete)
         with (out / 'positions-0.jsonl').open('x') as stream, patch('sys.stdout', new_callable=io.StringIO) as stdout:
             ctx.stream = stream;count = P.capture_cell(ctx, P._rr().cell_of(root, 1001))
         return ctx, count, constructor, seen, out, stdout.getvalue()
@@ -536,6 +536,24 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(report['parity']['sampled_1']['categorical_cells'][0]['column_name'], 'PRIMARY')
         self.assertEqual(report['sampled_vs_true']['sampled_0']['exact']['numeric'], 1.)
         self.assertEqual(report['alignment']['env_equals_fp_reply_all'], 1.);self.assertEqual(report['worlds']['true']['kernel_seed_is_world0s'], {'True': 3})
+
+    def test_every_world_kind_is_completed_with_its_decisions_lines_before_its_view(self):
+        calls = []
+
+        def complete(state, public, owner, lines):   # marks the carry: the view's categorical [0, 0] reads the marker
+            calls.append((int(np.asarray(public['w'])), owner, lines))
+            if int(np.asarray(public['w'])) == 1:raise ValueError('PEER_REQUEST_ORDER_UNAVAILABLE stand-in')
+            return dict(w=jnp.asarray(int(np.asarray(public['w'])) + 200))
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            ctx, count, constructor, seen, out, stdout = self.run_cell(tmp, stack, complete=complete)
+            rows = P.read_rows(out / 'positions-0.jsonl')
+            with np.load(out / 'arrays-0-1001.npz') as data:arrays = {k: np.asarray(data[k]) for k in data.files}
+        self.assertEqual(count, 3);self.assertEqual(len(calls), 3 * 4)   # true, true_private, sampled_0, sampled_1 per position
+        self.assertEqual([c[0] for c in calls[:4]], [99, 99, 0, 1]);self.assertTrue(all(c[1] == 0 for c in calls))
+        first = rows[0];lines = calls[0][2]
+        self.assertTrue(lines and lines[-1].startswith('|request|'))   # the decision's own prefix, its last line the own request
+        self.assertEqual(arrays['view_categorical'][0, :3, 0, 0].tolist(), [299, 299, 200])   # completed carries; sampled_1's raised
+        self.assertFalse(arrays['view_valid'][0, 3]);self.assertTrue(any('sampled_1 view' in n and 'PEER_REQUEST_ORDER' in n for n in first['notes']))
 
     def test_a_game_the_env_cannot_replay_is_a_cell_error_before_anything_is_sent(self):
         class Broken(FakeEnv):
@@ -589,6 +607,7 @@ class MainTests(unittest.TestCase):
             stack.enter_context(patch.object(P, 'capture_options', return_value=args));stack.enter_context(patch.object(P, 'tree_state', return_value=dict(head='h')))
             stack.enter_context(patch.object(P, 'FpReplyRows', return_value=fpr));stack.enter_context(patch.object(P, 'OpponentView', return_value=fake_view))
             stack.enter_context(patch.object(P, 'make_environment', side_effect=lambda config: envs.append(config) or FakeEnv()))
+            stack.enter_context(patch.object(P, 'make_completion', return_value=None))   # the fake worlds' carries are kept as built
             stack.enter_context(patch.object(server, 'read_requests', return_value=[dict(saved=1)]));stack.enter_context(patch.object(server, 'build', return_value=search))
             stack.enter_context(patch.object(server, 'header', return_value=header))
             with patch('sys.stdout', new_callable=io.StringIO):code = P.main(['capture'])
@@ -606,6 +625,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 0);self.assertEqual(warmed, [[dict(saved=1)]]);self.assertEqual(envs, ['owning-config'])
         self.assertEqual(files, ['arrays-0-1001.npz', 'header-0.json', 'positions-0.jsonl', 'summary-0.json'])
         self.assertEqual((header['kinds'], header['tree'], header['cells'][0]['ordinal']), (['true', 'true_private', 'sampled_0', 'sampled_1'], dict(head='h'), 1001))
+        self.assertIs(header['carry_completion'], False)
         self.assertEqual((summary['positions'], summary['sent'], summary['skipped_single_legal'], summary['not_aligned'], summary['cell_errors'], summary['interrupted'],
             summary['cells_replayed']), (3, 4, 1, dict(fp_not_requested=1), [], False, 1))
         self.assertEqual(len(positions), 3);self.assertEqual(report['capture']['not_aligned'], dict(fp_not_requested=1))
@@ -673,6 +693,23 @@ class ReportMathTests(unittest.TestCase):
         view['numeric'][2, 1:7] = view['numeric'][2, 1:7][::-1].copy()   # numeric rows permuted without their categorical rows: not a permutation
         s = P.diff_stats(env, view, tolerance=1e-5)
         self.assertAlmostEqual(s['order']['self'], 2 / 3);self.assertEqual(s['order']['opponent'], 1.);self.assertAlmostEqual(s['exact']['numeric'], 1 / 3)
+
+    def test_the_redactions_apply_to_both_sides(self):
+        env, view = toy(4)
+        env['numeric'][0, 1, 39] = .3;env['numeric'][1, 8, 38] = .2   # exact private losses the view redacts
+        env['numeric'][2, 9, 0] = 263 / 300;view['numeric'][2, 9, 0] = .88   # an exact fraction against the public percent
+        env['numeric'][3, 7, 0] = .995;view['numeric'][3, 7, 0] = .99   # below max: capped at 99
+        view['numeric'][3, 10, 0] = .07;env['numeric'][3, 10, 0] = np.float32(.07)   # float32 k/100 stays k
+        view['numeric'][1, 2, 39] = .1   # LAST_DAMAGE_TAKEN off self0 is NOT redacted
+        a, b = P.redact(env), P.redact(view)
+        self.assertEqual((float(a['numeric'][0, 1, 39]), float(a['numeric'][1, 8, 38]), float(a['numeric'][2, 9, 0]), float(a['numeric'][3, 7, 0])),
+            (0., 0., float(np.float32(.88)), float(np.float32(.99))))
+        np.testing.assert_array_equal(P.public_percent([0, 1e-9, .5, .995, 1., np.nan]), [0, .01, .5, .99, 1., np.nan])
+        s = P.diff_stats(a, b, tolerance=1e-5)
+        self.assertEqual(s['exact']['numeric'], .75);self.assertEqual(int(np.argmax(s['numeric_cell_share'].reshape(-1))), 2 * 132 + 39)   # the self1 cell
+        raw = P.diff_stats(env, view, tolerance=1e-5);self.assertEqual(raw['exact']['numeric'], 0.)
+        self.assertEqual(P.redact(env, ())['numeric'].tolist(), env['numeric'].tolist())
+        b2 = P.redact(env, ('self_hazard_credit',));self.assertEqual(float(b2['numeric'][0, 0, 115]), 0.)
 
     def test_empty_kind(self):
         env, view = toy(0)

@@ -4,7 +4,7 @@
 usage: depthn_opponent_view_parity.py capture <the live server's flags> --collection RUN --fp-reply-data FPR --out DIR
            (--cells ORD... | --sample N --sample-seed S) [--shard I --shards N] [--max-positions N] [--sampled-worlds 2]
        depthn_opponent_view_parity.py report --capture DIR [DIR ...] --out DIR [--top 30] [--examples 3] [--tolerance 1e-5]
-           [--vocabulary vocabulary.json]
+           [--vocabulary vocabulary.json] [--redact NAME ...]
 
 Why. pi_FP (the Foul Play reply model) reads Foul Play's own env observation, LocalShowdownEnv.observe(Foul Play), v4: 23 tokens
 x 132 numeric / 41 categorical. The RR diagnostic will feed it the search's per-world opponent view instead: per world,
@@ -60,8 +60,12 @@ Capture (one GPU; the live server's build, as scripts/depthn_rr_reprice.py repla
     against the source maximum otherwise). The public carry is untouched. This separates the materializer's hidden-state
     draws from encoder gaps.
   - sampled_0 .. sampled_{n-1} (--sampled-worlds, default 2): the constructor's own worlds of this decision.
-  Each world's view: jax.device_get((state, public)), then _make_views on the live pricers' shared executor
-  (search.pricers[bucket].executor, as the re-pricer obtains it).
+  Each world's view: its public carry completed as prepare_roots completes the live worlds (Completion:
+  constructor_worlds.complete_public with the constructor's tables and constructor_worlds.line_facts of the decision's own
+  lines: the fills, the opponent's request order, the owner's shown Spikes credit; the sampler's WorldSet and the true world
+  are built before any completion; header carry_completion), then jax.device_get((state, public)) and _make_views on the live
+  pricers' shared executor (search.pricers[bucket].executor, as the re-pricer obtains it). A world whose completion raises
+  (constructor_worlds.PeerOrderUnavailable: the live server refuses that root) has no view, its reason in the notes.
 - Output (--out, a new directory): arrays-<shard>-<ordinal>.npz per cell (env_*: the reply row's numeric [n,23,132],
   categorical [n,23,41], token types, attention [n,23] and legal [n,9]; view_*: the same per world kind [n,K,...], view_valid
   and view_error [n,K]; kinds [K]; ordinal, round, decision_index, turn [n]), positions-<shard>.jsonl (one row per position:
@@ -74,7 +78,9 @@ exact-match share per key (numeric, categorical, token types, attention, legal) 
 opponent (7-12) tokens match up to order; per token, per numeric column and per categorical column the share of positions
 that differ and the max |diff|; every differing (token, column) cell ranked (beyond --tolerance share, then exact share,
 then max |diff|) with examples from both sides; legal-lane disagreement both ways; the sampled worlds' views against the true
-world's. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
+world's. parity_redacted: the same comparison after the documented redactions (REDACTIONS, --redact; default the three:
+LAST_DAMAGE_TAKEN on self0 and LAST_DAMAGE_DEALT on opp0-5 zeroed, HP_FRACTION on opp0-5 at Showdown's public percent) on both
+sides, so "exact except the redactions" is reported directly. Names: tokens field / self0-5 / opp0-5 / move0-3 / switch0-4 / tendency_stats (engine_device_observation.TOKEN_TYPES),
 numeric columns through showdown.V4_NUMERIC_LEGACY_INDEX_BY_NEW_INDEX and the NUMERIC_* writer names (as
 engine_device_observation.column_manifest names them), categorical columns through the CATEGORY_* layout. Written as
 summary.json and summary.md in --out.
@@ -509,6 +515,22 @@ class OpponentView:
         return view_arrays(peer, inputs)
 
 
+class Completion:
+    """constructor_worlds' carry completion of one world, as prepare_roots applies it to the live worlds (the fills, the peer's
+    request order and the owner's shown Spikes credit from the decision's own lines), with the live constructor's tables:
+    (state, public, owner, lines) -> completed public. The sampler's WorldSet and the true world are built before it."""
+    def __init__(self, constructor):
+        from gpu_engine import constructor_worlds as cw
+        self.cw, self.tables = cw, cw.constructor_carry_tables(constructor)
+
+    def __call__(self, state, public, owner, lines):
+        return self.cw.complete_public(state, public, self.tables, owner, facts=self.cw.line_facts(lines, owner))
+
+
+def make_completion(search):
+    return Completion(search.constructor)
+
+
 # The sampler wrapper --------------------------------------------------------------------------------------------------------------
 @dataclass
 class SampleCall:
@@ -601,6 +623,7 @@ class Replay:
     vocabulary: object
     environment_factory: object
     sampled_worlds: int = 2
+    complete: object = None   # Completion (capture_main); None: the worlds' carries as built (tests on fake carries)
     max_positions: object = None
     shard: int = 0
     out: object = None
@@ -624,8 +647,10 @@ class Replay:
             try:self.env.close()
             finally:self.env = None
 
-    def view(self, state, public, owner):
+    def view(self, state, public, owner, lines=None):
+        """The opponent view of one world, its carry completed first when the replay completes (lines: the decision's)."""
         import jax
+        if self.complete is not None:public = self.complete(state, public, owner, lines)
         state, public = jax.device_get((state, public))
         return self.views(state, public, owner)
 
@@ -638,7 +663,7 @@ def describe_position(ctx, cell, game, row, alignment, capture, response, table,
     if call is None:notes.append('no constructor sample call (the root was refused before sampling)')
     elif call.error is not None:notes.append(f'sample raised: {call.error}'[:300])
     else:
-        owner = int(call.named['detached'].address.owner);foe = 1 - owner
+        owner = int(call.named['detached'].address.owner);foe = 1 - owner;lines = tuple(call.named['lines'])
         if f'p{foe + 1}' != game['fp']:notes.append(f'the constructor\'s opponent p{foe + 1} is not Foul Play {game["fp"]}')
         made = call.result
         try:
@@ -648,19 +673,19 @@ def describe_position(ctx, cell, game, row, alignment, capture, response, table,
             world, info = None, dict(reason=f'{type(error).__name__}: {error}'[:300])
         worlds['true'] = info
         if world is not None and world.state is not None:
-            try:views['true'] = ctx.view(world.state, world.public, owner)
+            try:views['true'] = ctx.view(world.state, world.public, owner, lines)
             except Exception as error:notes.append(f'true view: {type(error).__name__}: {error}'[:300])
             try:
                 state, overlay_notes = overlay_private(world.state, foe, table[alignment['round']]['fp_request'], ctx.vocabulary)
                 worlds['true_private'] = dict(notes=overlay_notes)
-                views['true_private'] = ctx.view(state, world.public, owner)
+                views['true_private'] = ctx.view(state, world.public, owner, lines)
             except Exception as error:notes.append(f'true_private: {type(error).__name__}: {error}'[:300])
         for i in range(ctx.sampled_worlds):
             w = made.worlds[i] if made is not None and i < len(made.worlds) else None
             worlds[f'sampled_{i}'] = None if w is None else dict(index=w.index, kernel_seed=w.kernel_seed, refusals=list(w.refusals),
                 constructed=w.state is not None)
             if w is not None and w.state is not None:
-                try:views[f'sampled_{i}'] = ctx.view(w.state, w.public, owner)
+                try:views[f'sampled_{i}'] = ctx.view(w.state, w.public, owner, lines)
                 except Exception as error:notes.append(f'sampled_{i} view: {type(error).__name__}: {error}'[:300])
     arrays = position_arrays(fpr, views, kinds)
     record = dict(schema=POSITION_SCHEMA, shard=ctx.shard, ordinal=cell['ordinal'], seed=game['seed'], seat=cell.get('seat'), fp=game['fp'], ours=game['ours'],
@@ -792,14 +817,14 @@ def capture_main(argv):
     config = search.constructor.owning_config
     ctx = Replay(run=Path(args.collection), search=search, views=OpponentView(search.pricers[search.buckets[0]].executor), fp_rows=rows,
         vocabulary=search.constructor.metadata['vocabulary'], environment_factory=lambda: make_environment(config), sampled_worlds=args.sampled_worlds,
-        max_positions=args.max_positions, shard=shard, out=out)
+        complete=make_completion(search), max_positions=args.max_positions, shard=shard, out=out)
     write_json(out / f'header-{shard}.json', dict(argv=list(argv), tree=tree, run_header=header, live_identity=rr.LIVE_IDENTITY, warmup=warm,
         warmup_requests=len(saved), build_seconds=build_seconds, warmup_seconds=warmup_seconds, cells=cells, collection=str(args.collection),
         fp_reply_data=str(args.fp_reply_data), fp_reply_shards=[p.name for p in fpr.paths], fp_reply_documents=fpr.documents,
         fp_reply_rows={str(o): len(r) for o, r in rows.items()}, kinds=list(ctx.kinds), rung=args.rung, shard=shard, shards=args.shards,
         max_positions=args.max_positions, sample=args.sample, sample_seed=args.sample_seed, jax_version=jax.__version__,
         devices=[f'{d.platform}:{d.device_kind}' for d in jax.devices()], python=sys.version, environment={k: os.environ.get(k) for k in rr.ENVIRONMENT},
-        pid=os.getpid()))
+        pid=os.getpid(), carry_completion=ctx.complete is not None))
     started, finished = time.perf_counter(), False
     try:
         with (out / f'positions-{shard}.jsonl').open('x') as stream:
@@ -925,6 +950,36 @@ def kind_summary(env, view, keys, *, tolerance, top, examples, labels, numeric, 
         legal=dict(env_only=[int(x) for x in s['legal_lane_env_only']], view_only=[int(x) for x in s['legal_lane_view_only']]), first_mismatches=mismatched)
 
 
+# The documented redactions of the opponent view (constructor_worlds' module docstring): applied to BOTH sides before comparing, so
+# "exact except the redactions" is reported directly (parity_redacted). (numeric column, tokens).
+REDACTIONS = {
+    'last_damage_taken': ('token 1 (self0) numeric 39 LAST_DAMAGE_TAKEN -> 0: the opponent\'s exact own loss, redacted by design', 39, (1,)),
+    'last_damage_dealt': ('tokens 7-12 numeric 38 LAST_DAMAGE_DEALT -> 0: the exact loss of the opponent\'s victims, redacted by design', 38,
+        tuple(OPPONENT_TOKENS)),
+    'hp_percent': ('tokens 7-12 numeric 0 HP_FRACTION at Showdown\'s public percent: ceil(100 x), capped at 99 below max, 0 if fainted', 0,
+        tuple(OPPONENT_TOKENS)),
+    'self_hazard_credit': ('field numeric 115 SELF_HAZARD_CREDIT -> 0: the opponent\'s exact Spikes losses, redacted by design (not a default)', 115, (0,)),
+}
+DEFAULT_REDACTIONS = ('last_damage_taken', 'last_damage_dealt', 'hp_percent')
+
+
+def public_percent(x):
+    """HP fractions at Showdown's public percent (ceil(100 x), capped at 99 below max, 0 at 0); NaN kept."""
+    x = np.asarray(x, np.float64);p = np.ceil(np.round(x * 100, 4))   # rounded first: k/100 in float32 stays k
+    p = np.where(x < 1, np.minimum(p, 99), p);p = np.where(x > 0, np.maximum(p, 1), 0)   # any positive HP shows at least 1%
+    return np.where(np.isnan(x), np.nan, p / 100)
+
+
+def redact(side, names=DEFAULT_REDACTIONS):
+    """A copy of one side (side_of's dict) with the named REDACTIONS applied to its numeric features."""
+    numeric = np.array(side['numeric'], copy=True)
+    for name in names:
+        _, column, tokens = REDACTIONS[name];tokens = list(tokens)
+        if name == 'hp_percent':numeric[:, tokens, column] = public_percent(numeric[:, tokens, column]).astype(numeric.dtype)
+        else:numeric[:, tokens, column] = np.where(np.isnan(numeric[:, tokens, column]), np.nan, 0)
+    return dict(side, numeric=numeric)
+
+
 def side_of(data, prefix, k=None, mask=None):
     out = {name: data[f'{prefix}_{name}'] if k is None else data[f'{prefix}_{name}'][:, k] for name in SIDES}
     return out if mask is None else {name: v[mask] for name, v in out.items()}
@@ -986,16 +1041,21 @@ def capture_counts(summaries):
     return out
 
 
-def build_report(directories, *, tolerance=1e-5, top=30, examples=3, vocabulary=None):
+def build_report(directories, *, tolerance=1e-5, top=30, examples=3, vocabulary=None, redactions=DEFAULT_REDACTIONS):
+    unknown = [r for r in redactions if r not in REDACTIONS]
+    if unknown:raise ValueError(f'unknown redactions {unknown}: {sorted(REDACTIONS)}')
     rows, summaries, kinds, data = load_captures(directories)
     labels, numeric, categorical, decode = token_labels(), numeric_names(), categorical_names(), vocabulary_decoder(vocabulary)
     keys = {k: data[k] for k in ('ordinal', 'round', 'decision_index', 'turn')};env = side_of(data, 'env')
     out = dict(schema=REPORT_SCHEMA, captures=[str(d) for d in directories], positions=int(len(data['ordinal'])), kinds=list(kinds), tolerance=tolerance,
-        capture=capture_counts(summaries), alignment=alignment_summary(rows), worlds=world_summary(rows, data, kinds), parity={}, sampled_vs_true={})
+        capture=capture_counts(summaries), alignment=alignment_summary(rows), worlds=world_summary(rows, data, kinds), parity={}, sampled_vs_true={},
+        redactions={r: REDACTIONS[r][0] for r in redactions}, parity_redacted={})
     common = dict(tolerance=tolerance, top=top, examples=examples, labels=labels, numeric=numeric, categorical=categorical, decode=decode)
     for k, kind in enumerate(kinds):
         valid = data['view_valid'][:, k]
         out['parity'][kind] = kind_summary(side_of(data, 'env', mask=valid), side_of(data, 'view', k, valid), {n: v[valid] for n, v in keys.items()}, **common)
+        out['parity_redacted'][kind] = kind_summary(redact(side_of(data, 'env', mask=valid), redactions), redact(side_of(data, 'view', k, valid), redactions),
+            {n: v[valid] for n, v in keys.items()}, **common)
     if 'true' in kinds:
         t = kinds.index('true')
         for k, kind in enumerate(kinds):
@@ -1035,6 +1095,14 @@ def render_markdown(summary, *, top=30):
         e = p['exact']
         out.append(f'| {kind} | {p["positions"]} | {_f(e["observation_and_legal"])} | {_f(e["observation"])} | {_f(e["numeric"])} | {_f(e["numeric_within_tolerance"])} | '
             f'{_f(e["categorical"])} | {_f(e["token_type"])} | {_f(e["attention"])} | {_f(e["legal"])} | {_f(p["order"]["self"])} | {_f(p["order"]["opponent"])} |')
+    if s.get('parity_redacted'):
+        out += ['', '## Exact match except the redactions (applied to both sides)', '', *[f'- {k}: {v}' for k, v in s['redactions'].items()], '',
+            '| kind | positions | observation + legal | observation | numeric | categorical | legal | remaining numeric cells (top 5) | remaining categorical cells (top 5) |',
+            '|---|---|---|---|---|---|---|---|---|']
+        for kind, p in s['parity_redacted'].items():
+            e = p['exact'];cells = lambda xs: '; '.join(f'{x["token_label"]}.{x["column_name"]} {_f(x["share"])}' for x in xs[:5]) or '-'
+            out.append(f'| {kind} | {p["positions"]} | {_f(e["observation_and_legal"])} | {_f(e["observation"])} | {_f(e["numeric"])} | {_f(e["categorical"])} | '
+                f'{_f(e["legal"])} | {cells(p["numeric_cells"])} | {cells(p["categorical_cells"])} |')
     for kind, p in s['parity'].items():
         out += ['', f'## {kind}: differing features', '', f'Numeric cells, ranked (beyond-tolerance share, then share, then max |diff|); {len(p["numeric_cells"])} cells differ.', '',
             '| # | token | column | name | share | beyond tol | max abs diff | examples (ordinal/round: env -> view) |', '|---|---|---|---|---|---|---|---|']
@@ -1074,13 +1142,16 @@ def report_main(argv):
     p.add_argument('--top', type=int, default=30);p.add_argument('--examples', type=int, default=3)
     p.add_argument('--tolerance', type=float, default=1e-5, help='numeric |diff| above this counts as "beyond tolerance" (default 1e-5)')
     p.add_argument('--vocabulary', help='the champion\'s vocabulary document, to decode categorical ids in examples')
+    p.add_argument('--redact', nargs='*', choices=sorted(REDACTIONS), default=list(DEFAULT_REDACTIONS),
+        help='the redactions parity_redacted applies to both sides (default: ' + ' '.join(DEFAULT_REDACTIONS) + ')')
     args = p.parse_args(argv)
     if args.top < 1 or args.examples < 0 or not args.tolerance >= 0:p.error('--top >= 1, --examples >= 0, --tolerance >= 0 required')
-    summary = build_report(args.capture, tolerance=args.tolerance, top=args.top, examples=args.examples, vocabulary=args.vocabulary)
+    summary = build_report(args.capture, tolerance=args.tolerance, top=args.top, examples=args.examples, vocabulary=args.vocabulary, redactions=tuple(args.redact))
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     write_json(out / 'summary.json', summary)
     with (out / 'summary.md').open('x') as stream:stream.write(render_markdown(summary, top=args.top))
-    print(dumps(dict(done=str(out), positions=summary['positions'], exact={k: v['exact']['observation_and_legal'] for k, v in summary['parity'].items()})), flush=True)
+    print(dumps(dict(done=str(out), positions=summary['positions'], exact={k: v['exact']['observation_and_legal'] for k, v in summary['parity'].items()},
+        exact_except_redactions={k: v['exact']['observation_and_legal'] for k, v in summary['parity_redacted'].items()})), flush=True)
     return 0
 
 
