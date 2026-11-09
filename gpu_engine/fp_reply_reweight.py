@@ -32,9 +32,12 @@ on the true view (an oracle), is still reported.
 Stats: each world's attack, defense, special attack, special defense and speed are the ones the Gen 3 generator gives that set
 (85 EVs, 31 IVs or the Hidden Power type's IVs, and attack dumped when the set has no physical damaging move -- the type decides
 a Hidden Power's class), from the species' base stats and level, but only when the same formula reproduces Foul Play's true
-stats exactly (otherwise every world keeps the true stats, counted, and rows that relied on such evidence are flagged).
+stats exactly (otherwise every world keeps the true stats, counted, and rows that relied on such evidence are left out of the
+gate and reported separately).
 Approximations, an optimistic context for a live sampler: only the active mon's set varies in a world (the bench is Foul Play's
-true team, which Foul Play knows); HP and shared moves' PP and disabled flags stay the true set's; the Tier-2 and investment
+true team, which Foul Play knows); HP and shared moves' PP and disabled flags stay the true set's (max HP can differ by a few
+points between candidates: HP EV trims for Substitute with Flail / Reversal / Endeavor, Belly Drum and pinch berries, and
+Hidden Power types with an HP IV of 30); the Tier-2 and investment
 annotations read Foul Play's first request, not the substituted one; new Hidden Power moves are named with power 70 and
 Return / Frustration with 102.
 Checks, counted per shard: the unchanged request through the substituted snapshot encodes exactly as env.observe(fp); the true
@@ -114,11 +117,11 @@ console.log(JSON.stringify(out));
 STATS = ('atk', 'def', 'spa', 'spd', 'spe')
 
 
-def generator_tables(showdown_root):
+def generator_tables(showdown_root, node='node'):
     """From Showdown's Gen 3 dex: fixed-damage moves (the generator counts them as neither physical nor special) and each type's
     Hidden Power IVs."""
     import subprocess
-    out = subprocess.run(['node', '-e', GEN3_TABLES_SCRIPT, str(Path(showdown_root).resolve())], check=True, capture_output=True,
+    out = subprocess.run([str(node), '-e', GEN3_TABLES_SCRIPT, str(Path(showdown_root).resolve())], check=True, capture_output=True,
                          text=True, timeout=60)
     tables = json.loads(out.stdout)
     return dict(fixed_damage=frozenset(tables['fixed_damage']), hp_ivs={k: dict(v) for k, v in tables['hp_ivs'].items()})
@@ -410,7 +413,7 @@ def run(args):
         if not base['belief_set_source']:checks['skipped_no_belief_source'] += 1;continue
         if config_key is None:config_key = key
         elif key != config_key:checks['skipped_other_runtime'] += 1;continue
-        if dex is None:dex = load_showdown_dex_cached(base['showdown_root']);tables = generator_tables(base['showdown_root'])
+        if dex is None:dex = load_showdown_dex_cached(base['showdown_root']);tables = generator_tables(base['showdown_root'], base['node_binary'])
         if env is None:
             env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=base['showdown_root'], node_binary=base['node_binary'],
                 observation_spec=observation_spec_from_model_config(result.model_config),
@@ -452,9 +455,16 @@ def summarize(mons, decisions, calib):
     out['coverage'] = dict(truth_in_candidates=float(mons['truth_in'].mean()), truth_in_when_ambiguous=float(mons['truth_in'][multi].mean()),
                            ambiguous_share=float(multi.mean()), mean_distinct_when_ambiguous=float(mons['distinct'][multi].mean()),
                            incomplete_evidence_share=float(mons['incomplete'][multi].mean()))
-    measured = multi & mons['truth_in'] & (mons['evidence'] > 0) & ~mons['incomplete'];every = np.ones(int(measured.sum()), bool)
+    # gate rows: ambiguous, true set among the candidates, some evidence, every candidate scored on all of it, and none of that
+    # evidence from a decision whose worlds kept Foul Play's true stats (the generator formula didn't reproduce them)
+    eligible = multi & mons['truth_in'] & (mons['evidence'] > 0)
+    measured = eligible & ~mons['incomplete'] & mons['stats_aligned'];every = np.ones(int(measured.sum()), bool)
     out['measured_rows'] = int(measured.sum());out['measured_seeds'] = int(len(np.unique(mons['seed'][measured])))
-    out['excluded_incomplete_rows'] = int((multi & mons['truth_in'] & (mons['evidence'] > 0) & mons['incomplete']).sum())
+    out['excluded_incomplete_rows'] = int((eligible & mons['incomplete']).sum())
+    out['excluded_stats_not_aligned_rows'] = int((eligible & ~mons['incomplete'] & ~mons['stats_aligned']).sum())
+    unaligned = eligible & ~mons['incomplete'] & ~mons['stats_aligned']
+    out['delta_stats_not_aligned_diagnostic'] = dict(rows=int(unaligned.sum()), **probe_mod.cluster_bootstrap(
+        mons['log_post_1.0'][unaligned] - mons['log_prior'][unaligned], mons['seed'][unaligned], [np.ones(int(unaligned.sum()), bool)], lambda a: a))
     out['delta_log_p_true'] = {}
     if not measured.any():out['gate5'] = None;return out
     for beta in BETAS:
@@ -471,8 +481,7 @@ def summarize(mons, decisions, calib):
     out['delta_by_evidence_count'] = by_evidence
     for name, mask in (('candidates_differ_only_in_hidden_power_type', mons['hidden_power_only']),
                        ('candidates_differ_beyond_hidden_power_type', ~mons['hidden_power_only']),
-                       ('attack_dump_varies', mons['attack_dump_varies']), ('attack_dump_constant', ~mons['attack_dump_varies']),
-                       ('stats_aligned', mons['stats_aligned']), ('stats_not_aligned', ~mons['stats_aligned'])):
+                       ('attack_dump_varies', mons['attack_dump_varies']), ('attack_dump_constant', ~mons['attack_dump_varies'])):
         m = measured & mask
         out[f'delta_{name}'] = dict(rows=int(m.sum()), **probe_mod.cluster_bootstrap(
             mons['log_post_1.0'][m] - mons['log_prior'][m], mons['seed'][m], [np.ones(int(m.sum()), bool)], lambda a: a))
@@ -486,15 +495,13 @@ def summarize(mons, decisions, calib):
             out['set_calibration'][name] = dict(ece=data_mod.calibration_error(p, y.astype(bool)), brier=float(((p - y) ** 2).mean()),
                                                 mean_p=float(p.mean()), true_share=float(y.mean()))
     d = decisions;finite = np.isfinite(d['nll_prior']) & np.isfinite(d['nll_post_1.0']) & np.isfinite(d['nll_true'])
-    has = (d['evidence'] > 0) & ~d['incomplete'] & finite;one = np.ones(int(has.sum()), bool)
+    has = (d['evidence'] > 0) & ~d['incomplete'] & finite & d['stats_aligned'];one = np.ones(int(has.sum()), bool)
     pred = dict(rows=int(has.sum()), excluded_infinite_rows=int((~finite).sum()), excluded_incomplete_rows=int((d['incomplete'] & finite).sum()),
+                excluded_stats_not_aligned_rows=int(((d['evidence'] > 0) & ~d['incomplete'] & finite & ~d['stats_aligned']).sum()),
                 nll_true_view=float(d['nll_true'][has].mean()), nll_prior_mixture=float(d['nll_prior'][has].mean()))
     for beta in BETAS:pred[f'nll_post_mixture_{beta}'] = float(d[f'nll_post_{beta}'][has].mean())
     pred['post_minus_prior'] = probe_mod.cluster_bootstrap(d['nll_post_1.0'][has] - d['nll_prior'][has], d['seed'][has], [one], lambda a: a)
     pred['post_minus_true_view'] = probe_mod.cluster_bootstrap(d['nll_post_1.0'][has] - d['nll_true'][has], d['seed'][has], [one], lambda a: a)
-    aligned = has & d['stats_aligned']
-    pred['post_minus_prior_stats_aligned'] = dict(rows=int(aligned.sum()), **probe_mod.cluster_bootstrap(
-        d['nll_post_1.0'][aligned] - d['nll_prior'][aligned], d['seed'][aligned], [np.ones(int(aligned.sum()), bool)], lambda a: a))
     pred['all_decisions'] = dict(rows=int(finite.sum()), nll_true_view=float(d['nll_true'][finite].mean()),
                                  nll_prior_mixture=float(d['nll_prior'][finite].mean()), nll_post_mixture=float(d['nll_post_1.0'][finite].mean()))
     out['predictive'] = pred
