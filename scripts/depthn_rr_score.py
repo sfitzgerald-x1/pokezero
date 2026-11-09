@@ -45,12 +45,21 @@ pi_w^T = softmax(root_peer_logits / T) over the kept lanes, T = inf uniform; a w
 D = R(op) - R(greedy), 0 when op is
 greedy. noise_gated plays averaging's a* only when a* != greedy and mean_w gap > k sd_w(gap) / sqrt(W), gap_w =
 Q_w(a*) - Q_w(greedy); world_lcb plays argmax q(a) - kappa sd_w(Q_w(a)) / sqrt(W) (sample sd; Q_w(a) = sum_b pi_w(b) G_w[a][b]).
+Guards (the live actor's, through pokezero.depthn_effect_guard's own functions): every operator but greedy plays greedy where
+the own-recharge guard trips on its choice (an override INTO a recharge move greedy did not choose: root.own_moves) or
+UNREPRESENTED_EFFECT does (the row's effect_guard record: (b) at the root, or (c) on that operator's own choice); a root the
+replay refused OPPONENT_RECHARGE_UNREPRESENTED has no priced worlds (greedy plays, never scored; counted). Every table above
+is under the guards. The guard section (summary.json guard, summary.md "Effect guard") reports the (b) share of priced roots
+per tier and for the union (turn-1 and turn-2-added parts apart), (c) per operator, the primary result (RR on unguarded roots,
+(b) false), RR on the guarded roots with the raw choices for context, a tier-B-legal split of the unguarded roots, the
+sensitivity rows ((a) holds, neither (b) nor any operator's (c)), and above_20pct when the guarded share exceeds 20%.
 Statistics: D is summed per battle (ordinal); mean and SE over battles; a t interval with battles - 1 df at 90% for the
 mean per-battle sum. The per-decision mean D is sum D / decisions, and its interval is the per-battle one divided by
 the mean decisions per battle (the same t statistic, so the same signs). Parity, over every row searched live (source 'search'):
 the replay is COMPLETE, averaging recomputed from the captured worlds plays the live search action, and its q equals the
 replay's q_values exactly after a JSON round trip. Below 99% the verdict is PARITY_FAILED: no candidate is selected, as for
-GATE_FAILED. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
+GATE_FAILED. --parity-mode replay (a replay on a modified tree, e.g. a fixed server): every replay-COMPLETE row is held to
+the replay's own action and q_values instead of the live action. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
 External reply prior (--reply-prior, for a Foul Play reply model): rows {ordinal, decision_index, world, logits[9]} add
 external_br (averaging with pi_w = softmax of the external logits over the kept lanes) and external_mix alpha (0.25, 0.5,
 0.75: alpha * external + (1 - alpha) * the champion's pi_w), reported only, never candidates. A waiting world needs no
@@ -77,11 +86,13 @@ for _path in (str(_ROOT), str(_ROOT / 'src')):
 from gpu_engine import search_hedge as hedge  # noqa: E402
 from pokezero import v5_gumbel as original  # noqa: E402
 from pokezero.phase_d_owning_capture import read_capture  # noqa: E402
+from pokezero import depthn_effect_guard as effect_guard  # noqa: E402
 
 SCHEMA = 'pokezero.depthn-rr-score.v1'
 LEVEL = .90
 OVERRIDE_MIN = .05
 PARITY_MIN = .99
+PARITY_MODES = ('live', 'replay')   # live: against the live search (the default); replay: the replay against itself (a modified tree)
 PRIOR_C = (.02, .05, .1, .2, .5)
 NOISE_K = (1, 2)
 LCB_KAPPA = (.5, 1, 2)
@@ -100,6 +111,8 @@ CANDIDATES = SETTINGS[2:]   # selection excludes greedy and averaging
 EXTERNAL_SETTINGS = ('external_br',) + tuple(f'external_mix:alpha={a}' for a in EXTERNAL_ALPHA)
 REPLY_PRIOR_FIELDS = dict(ordinal='ordinal', decision_index='decision_index', world='world', logits='logits')
 WAITING = (1.,) + (0.,) * 8   # a waiting opponent: column 0 at mass 1
+GUARD_SHARE_FLAG = .20   # the summary flags a guarded share of priced roots above this
+OWN_RECHARGE, UNREPRESENTED = 'OWN_RECHARGE_UNREPRESENTED', effect_guard.CAUSE
 
 # ---- the re-pricer's field names (scripts/depthn_rr_reprice.py, row schema pokezero.depthn-rr-reprice.row.v1 at f9e143ae),
 # in one place: a rename is a one-line change here ----
@@ -112,7 +125,8 @@ ROW_FIELDS = dict(
     live_cause=('live', 'cause'), replay_status=('replay', 'status'), replay_cause=('replay', 'cause'),
     replay_action=('replay', 'action_index'), replay_q=('replay', 'q_values'),
     action_equal=('parity', 'action_equal'), q_equal=('parity', 'q_equal'),
-    root_logits=('root', 'root_logits'), root_legal=('root', 'root_legal'), worlds=('worlds',))
+    root_logits=('root', 'root_logits'), root_legal=('root', 'root_legal'), worlds=('worlds',),
+    own_moves=('root', 'own_moves'), refusal_cause=('root', 'refusal_cause'), effect_guard=('effect_guard',))
 WORLD_FIELDS = dict(
     requested=('opponent_requested',), kept=('kept',), logits=('root_peer_logits',), grid=('grid',), refusals=('refusals',),
     active_slot=('opponent', 'active_slot'), active_species=('opponent', 'active_species'), active_moves=('opponent', 'active_moves'),
@@ -464,6 +478,21 @@ def operators(worlds, gs, average, greedy, root_logits, root_legal, target, fail
     return out, fallback
 
 
+def guard_choices(choices, greedy, own_moves, record):
+    """Every operator's choice after the live actor's guards (pokezero.depthn_effect_guard, the same functions): greedy plays
+    where the own-recharge guard (an override INTO a recharge move greedy did not choose) or UNREPRESENTED_EFFECT ((b) at the
+    root, or (c) on this operator's own choice) trips. Returns ({name: played choice}, {name: [causes] or None}); greedy is
+    never guarded; `record` None (a row without the guard) applies the recharge guard alone."""
+    played, causes = {}, {}
+    for name, choice in choices.items():
+        if name == 'greedy' or choice is None:played[name], causes[name] = choice, None;continue
+        why = []
+        if effect_guard.recharge_guarded(own_moves, choice, greedy):why.append(OWN_RECHARGE)
+        if record is not None and effect_guard.trips(record, choice)['tripped']:why.append(UNREPRESENTED)
+        played[name], causes[name] = (greedy if why else choice), (why or None)
+    return played, causes
+
+
 def band(p):
     for name, upper in BANDS:
         if p < upper:return name
@@ -518,15 +547,17 @@ def q_json_equal(q, replay_q):
     return all(x is None and y is None or x is not None and type(y) in (int, float) and float(x) == float(y) for x, y in zip(mine, replay_q))
 
 
-def parity_row(decision, base, reason):
-    """A live-searched row's parity: dict(match, action_equal, q_equal, cause). A replay that is not COMPLETE, a row whose
-    averaging cannot be recomputed, a recomputed action other than the live one, or a recomputed q other than the replay's
-    q_values is a mismatch."""
+def parity_row(decision, base, reason, mode='live'):
+    """A row's parity: dict(match, action_equal, q_equal, cause). mode 'live' (a live-searched row): a replay that is not
+    COMPLETE, a row whose averaging cannot be recomputed, a recomputed action other than the live one, or a recomputed q other
+    than the replay's q_values is a mismatch. mode 'replay' (a replay-COMPLETE row of a replay on a modified tree, whose
+    decisions legitimately differ from live): the recomputed action is held to the replay's own action instead of the live one."""
+    if mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
     if decision['replay_status'] != 'COMPLETE':
         return dict(match=False, action_equal=None, q_equal=None, cause=f"replay_{decision['replay_status']}:{decision['replay_cause']}")
     if base is None:return dict(match=False, action_equal=None, q_equal=None, cause='recompute_' + reason)
-    live = decision['live_action']
-    action_equal = type(live) is int and live == hedge.top_action(base.average.strategy)
+    reference = decision['live_action'] if mode == 'live' else decision['replay_action']
+    action_equal = type(reference) is int and reference == hedge.top_action(base.average.strategy)
     q_equal = q_json_equal(base.average.q, decision['replay_q'])
     cause = None if action_equal and q_equal else 'q_differs' if action_equal else 'action_differs' if q_equal else 'action_and_q_differ'
     return dict(match=cause is None, action_equal=action_equal, q_equal=q_equal, cause=cause)
@@ -542,10 +573,12 @@ def score_decision(decision, reply, target, failures, base=None, external=None):
     legal, logits, worlds, gs, prior, average = base.legal, base.logits, base.worlds, base.grids, base.prior, base.average
     greedy = decision['greedy_action']
     if type(greedy) is not int or not 0 <= greedy < 9 or not legal[greedy]:raise Unscorable('greedy_missing')
-    choices, fallback = operators(worlds, gs, average, greedy, logits, legal, target, failures)
+    raw, fallback = operators(worlds, gs, average, greedy, logits, legal, target, failures)
     external_missing = None
     if external is not None:
-        found, external_missing = external_operators(gs, worlds, external);choices.update(found)
+        found, external_missing = external_operators(gs, worlds, external);raw.update(found)
+    record = decision.get('effect_guard') if type(decision.get('effect_guard')) is dict else None
+    choices, guards = guard_choices(raw, greedy, decision.get('own_moves'), record)
     lanes, drops = [], {}
     if reply.cause is None:
         for w, (world, facts) in enumerate(zip(worlds, decision['worlds'])):
@@ -555,19 +588,33 @@ def score_decision(decision, reply, target, failures, base=None, external=None):
     observed = reply.cause is None and bool(lanes)
     r_dropped = realized(worlds, lanes, legal) if observed else None
     r_filled = r_dropped if observed else list(average.q)
-    ops = {}
-    for name, choice in choices.items():
+    def entry_of(choice):
         entry = dict(choice=choice, prior=None, band=None, R=dict(dropped=None, pi_filled=None), D=dict(dropped=None, pi_filled=None))
         if choice is not None:
             entry.update(prior=prior[choice], band=band(prior[choice]))
             for scoring, r in (('dropped', r_dropped), ('pi_filled', r_filled)):
                 if r is None:continue
                 entry['R'][scoring] = r[choice];entry['D'][scoring] = 0. if choice == greedy else r[choice] - r[greedy]
-        ops[name] = entry
+        return entry
+    ops, raw_ops = {}, {}
+    for name, choice in choices.items():ops[name] = dict(entry_of(choice), raw_choice=raw[name], guard_causes=guards[name])
+    for name, choice in raw.items():raw_ops[name] = entry_of(choice)
     greedy_argmax = argmax(logits, [a for a in range(9) if legal[a]])
-    return dict(observed=observed, unmapped=reply.cause is None and not lanes, mapped_worlds=[list(x) for x in lanes],
+    return dict(observed=observed, unmapped=reply.cause is None and not lanes, mapped_worlds=[list(x) for x in lanes], raw_operators=raw_ops,
+                guard=None if record is None else guard_facts(record, raw),
                 world_drops=drops, R=dict(dropped=r_dropped, pi_filled=r_filled), operators=ops, averaging_q=list(average.q),
                 greedy_argmax=greedy_argmax, target_fallback=fallback, worlds=len(worlds), external_missing_worlds=external_missing)
+
+
+def guard_facts(record, raw):
+    """A root's guard facts for the report: (b) at turn 1 / turn 2, the tiers of its (b) reasons per source, (a), tier-B
+    legality, and per operator whether (c) trips on its raw choice."""
+    tiers = lambda source: sorted({r['tier'] for r in record.get('reasons') or () if r.get('source') == source and r.get('tier')})
+    turn2 = any(r.get('source') == 'turn2' for r in record.get('reasons') or ())   # a priced turn-2 reason, not an unavailable capture
+    return dict(b=bool(record['b']), b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')), turn2=turn2, tiers_turn1=tiers('turn1'),
+                tiers_turn2=tiers('turn2'), unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in record.get('reasons') or ()),
+                a=bool(record.get('a')), tier_b_legal=bool(record.get('tier_b_legal')),
+                c={name: effect_guard.trips(record, choice)['c'] for name, choice in raw.items() if choice is not None})
 
 
 # ---- statistics ----
@@ -617,6 +664,43 @@ def metrics(records, settings=SETTINGS):
                 by_request_kind={k: {name: operator_metric(population(pop, scoring, kind=k), name, scoring) for name in settings} for k in kinds},
                 by_prior_band={b: {name: operator_metric(pop, name, scoring, b) for name in settings} for b, _ in BANDS})
     return out
+
+
+def operator_table(records, settings):
+    """{scoring: {operator: operator_metric}} over all of `records` (both halves)."""
+    return {scoring: {name: operator_metric(population(records, scoring), name, scoring) for name in settings} for scoring in SCORINGS}
+
+
+def guard_report(records, settings, opponent_recharge=0):
+    """The effect guard over the scored (priced) roots that carry its record (module docstring): its share of them per tier
+    and for the union, turn-1 and turn-2-added parts apart, (c) per operator; the primary result, RR on the unguarded roots
+    ((b) false; every guard still applies per operator); RR on the guarded roots with the raw (unguarded) choices, for
+    context; the unguarded roots split by tier-B legality; the sensitivity rows ((a) holds, neither (b) nor any operator's (c))."""
+    have = [r for r in records if r['guard'] is not None];n = len(have);share = lambda k: k / n if n else None
+    g = lambda r: r['guard'];b = [r for r in have if g(r)['b']];unguarded = [r for r in have if not g(r)['b']]
+    def part(test1, test2):
+        t1 = sum(bool(test1(r)) for r in have);added = sum(bool(test2(r)) and not test1(r) for r in have)
+        return dict(turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added), total=t1 + added, share=share(t1 + added))
+    tiers = {t: part(lambda r, t=t: t in g(r)['tiers_turn1'], lambda r, t=t: t in g(r)['tiers_turn2']) for t in ('A', 'C')}
+    union = part(lambda r: g(r)['b_turn1'], lambda r: g(r).get('turn2', g(r)['b_turn2']))
+    # (b) without a turn-1 or a priced turn-2 reason: an unavailable turn-2 capture or an error record (fail closed): its own part
+    error = sum(g(r)['b'] and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2']) for r in have)
+    union.update(unavailable_or_error=error, unavailable_or_error_share=share(error), total=union['total'] + error, share=share(union['total'] + error))
+    c = {name: dict(c_only=sum(g(r)['c'].get(name, False) and not g(r)['b'] for r in have),
+                    union=sum(g(r)['b'] or g(r)['c'].get(name, False) for r in have)) for name in settings}
+    for v in c.values():v.update(union_share=share(v['union']))
+    sensitive = [r for r in have if g(r)['a'] and not g(r)['b'] and not any(g(r)['c'].values())]
+    raw = lambda rs: [dict(r, ops=r['raw_ops']) for r in rs]
+    return dict(priced_roots=n, without_record=len(records) - n, opponent_recharge_refused=opponent_recharge, threshold=effect_guard.THRESHOLD,
+        union=union, tiers=tiers, unavailable=sum(g(r)['unavailable'] for r in have), c=c,
+        guarded_share=union['share'], above_20pct=union['share'] is not None and union['share'] > GUARD_SHARE_FLAG,
+        max_union_with_c_share=max((v['union_share'] for v in c.values() if v['union_share'] is not None), default=None),
+        primary=dict(roots=len(unguarded), table=operator_table(unguarded, settings)),
+        guarded_context=dict(roots=len(b), table=operator_table(raw(b), settings)),
+        tier_b=dict(legal=dict(roots=sum(g(r)['tier_b_legal'] for r in unguarded), table=operator_table([r for r in unguarded if g(r)['tier_b_legal']], settings)),
+                    not_legal=dict(roots=sum(not g(r)['tier_b_legal'] for r in unguarded),
+                                   table=operator_table([r for r in unguarded if not g(r)['tier_b_legal']], settings))),
+        sensitivity=dict(roots=len(sensitive), share=share(len(sensitive)), table=operator_table(sensitive, settings)))
 
 
 def validation_gate(table):
@@ -702,6 +786,7 @@ class Coverage:
         self.unmapped = 0;self.mapped_hist = collections.Counter();self.drops = collections.Counter()
         self.target_fallbacks = 0;self.failures = collections.Counter();self.no_half = 0;self.seen = set()
         self.external = None   # with --reply-prior: Counter(decisions, missing_decisions, missing_worlds)
+        self.opponent_recharge = 0   # rows refused OPPONENT_RECHARGE_UNREPRESENTED: no priced worlds, greedy plays (D = 0), never scored
 
     def add_parity(self, check):
         self.parity['rows'] += 1;self.parity['matches'] += check['match']
@@ -715,8 +800,12 @@ class Coverage:
         return dict(
             searched_decisions=self.rows, duplicate_rows=self.duplicates, arms=dict(self.arms), live_sources=dict(self.sources),
             replay_complete=self.replay_complete, scored=scored, excluded=dict(self.excluded),
-            parity=dict(rule=(f'every row searched live (source search): replay COMPLETE, averaging recomputed from the captured worlds '
-                              f'plays the live search action_index, and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}'),
+            parity=dict(mode=getattr(self, 'parity_mode', 'live'), rule=(
+                (f'every row searched live (source search): replay COMPLETE, averaging recomputed from the captured worlds '
+                 f'plays the live search action_index, and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}')
+                if getattr(self, 'parity_mode', 'live') == 'live' else
+                (f'replay mode (a modified tree): every replay-COMPLETE row; averaging recomputed from the captured worlds plays the '
+                 f"replay's own action_index and its q equals the replay q_values after a JSON round trip; >= {PARITY_MIN:.0%}")),
                         live_searched=p['rows'], matches=p['matches'], rate=share(p['matches'], p['rows']),
                         action_equal=p['action_equal'], action_rate=share(p['action_equal'], p['rows']),
                         q_equal=p['q_equal'], q_rate=share(p['q_equal'], p['rows']), mismatches_by_cause=dict(self.parity_causes),
@@ -750,7 +839,7 @@ def half_of(seed):
     return None if type(seed) is not int else 'even' if seed % 2 == 0 else 'odd'
 
 
-def process(decision, run, coverage, prior=None):
+def process(decision, run, coverage, prior=None, parity_mode='live'):
     """One row: (decisions.jsonl entry, compact record or None). `prior`: load_reply_prior's dict, or None."""
     coverage.rows += 1
     ordinal, index = decision['ordinal'], decision['decision_index']
@@ -763,6 +852,7 @@ def process(decision, run, coverage, prior=None):
     coverage.arms[str(cell['arm'])] += 1;coverage.sources[str(decision['source'])] += 1
     address.update(seed=seed, half=half, arm=cell['arm'])
     complete = decision['replay_status'] == 'COMPLETE';searched = decision['source'] == 'search'
+    if decision.get('refusal_cause') == 'OPPONENT_RECHARGE_UNREPRESENTED':coverage.opponent_recharge += 1   # every operator plays greedy
     coverage.replay_complete += complete
     if searched != complete:
         coverage.status_mismatches[f"replay_{decision['replay_status']}:{decision['replay_cause']}" if searched
@@ -770,7 +860,8 @@ def process(decision, run, coverage, prior=None):
     base = reason = None
     try:base = recompute(decision)
     except Unscorable as error:reason = error.reason
-    parity = parity_row(decision, base, reason) if searched else None
+    checked = searched if parity_mode == 'live' else complete   # replay mode: every replay-COMPLETE row, held to itself
+    parity = parity_row(decision, base, reason, parity_mode) if checked else None
     if parity is not None:coverage.add_parity(parity)
     address.update(parity=parity)
     if base is None:
@@ -799,24 +890,27 @@ def process(decision, run, coverage, prior=None):
                  censored=reply.cause is not None, unmapped=scored['unmapped'], observed=scored['observed'],
                  mapped_worlds=scored['mapped_worlds'], world_drops={str(k): v for k, v in scored['world_drops'].items()},
                  live_action=decision['live_action'], averaging_action=chosen, greedy_action=decision['greedy_action'],
-                 greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops,
+                 greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops, guard=scored['guard'],
                  external_missing_worlds=scored['external_missing_worlds'])
     record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'], fp_requested=reply.kind != 'wait',
-                  ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops.items()})
+                  ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops.items()},
+                  raw_ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in scored['raw_operators'].items()},
+                  guard=scored['guard'])
     return entry, record
 
 
-def score_run(rows, run_directory, out, reply_prior=None):
+def score_run(rows, run_directory, out, reply_prior=None, parity_mode='live'):
     """Score every row into the new directory `out`; returns the summary. `reply_prior`: an external reply prior JSONL
     (load_reply_prior) adding the reported-only EXTERNAL_SETTINGS operators."""
     prior = None if reply_prior is None else load_reply_prior(reply_prior)
     settings = SETTINGS + (EXTERNAL_SETTINGS if prior is not None else ())
     out = Path(out);out.mkdir(parents=True, exist_ok=False)
-    run, coverage, records = RunDirectory(run_directory), Coverage(), []
+    if parity_mode not in PARITY_MODES:raise ValueError(f'parity mode in {PARITY_MODES} required')
+    run, coverage, records = RunDirectory(run_directory), Coverage(), [];coverage.parity_mode = parity_mode
     if prior is not None:coverage.external = collections.Counter()
     with (out / 'decisions.jsonl').open('x') as stream:
         for decision in load_rows(rows):
-            entry, record = process(decision, run, coverage, prior)
+            entry, record = process(decision, run, coverage, prior, parity_mode)
             stream.write(json.dumps(entry) + '\n')
             if record is not None:records.append(record)
     table = metrics(records, settings);cover = coverage.report(records)
@@ -825,10 +919,11 @@ def score_run(rows, run_directory, out, reply_prior=None):
     # world (pi_w is column 0's unit mass), so R is averaging's own per-world value over them: exactly its q, and averaging's
     # D >= 0, when every world waits.
     requested = metrics([r for r in records if r['fp_requested']], settings)
+    guard = guard_report(records, settings, coverage.opponent_recharge)
     summary = dict(schema=SCHEMA, inputs=dict(rows=[str(Path(p).resolve()) for p in rows], run_directory=str(Path(run_directory).resolve()),
                                               reply_prior=None if reply_prior is None else str(Path(reply_prior).resolve())),
                    settings=list(settings), candidates=list(CANDIDATES), reported_only=[n for n in settings if n in EXTERNAL_SETTINGS], level=LEVEL, override_min=OVERRIDE_MIN, parity_min=PARITY_MIN,
-                   bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table, metrics_fp_requested=requested)
+                   bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table, metrics_fp_requested=requested, guard=guard)
     (out / 'summary.json').write_text(json.dumps(summary, indent=1) + '\n')
     (out / 'summary.md').write_text(markdown(summary))
     return summary
@@ -902,6 +997,7 @@ def markdown(summary):
         out += [f"## {scoring}, all: by prior band of the setting's action", '', HEADER.replace('| setting |', '| setting / band |')]
         out += [_metric_row(f'{name} / {b}', m[name]) for b, m in table[scoring]['all']['by_prior_band'].items() for name in settings
                 if m[name]['decisions']] + ['']
+    out += guard_markdown(summary['guard'], settings)
     requested = summary['metrics_fp_requested']
     out += ["# Reported view: decisions where Foul Play was requested (no 'wait' decisions; the gate and selection above are unchanged)", '']
     for scoring in SCORINGS:
@@ -912,6 +1008,34 @@ def markdown(summary):
     return '\n'.join(out) + '\n'
 
 
+def guard_markdown(guard, settings):
+    """summary.md's effect-guard section."""
+    if guard is None:return []
+    u, t = guard['union'], guard['tiers']
+    out = ['# Effect guard (UNREPRESENTED_EFFECT; every operator plays greedy where a guard trips)', '',
+           f"- priced roots with the guard record: {guard['priced_roots']} (without one: {guard['without_record']}); refused "
+           f"OPPONENT_RECHARGE_UNREPRESENTED (no priced worlds, greedy plays): {guard['opponent_recharge_refused']}",
+           f"- (b) guarded share: {_pct(guard['guarded_share'])} (turn 1 {_pct(u['turn1_share'])}, turn 2 added {_pct(u['turn2_added_share'])}, "
+           f"turn-2 capture unavailable or guard error {_pct(u['unavailable_or_error_share'])})"
+           + (f"; **above {GUARD_SHARE_FLAG:.0%}**" if guard['above_20pct'] else ''),
+           f"- largest (b) or (c) share over the operators: {_pct(guard['max_union_with_c_share'])}", '',
+           '| tier | turn 1 | turn 2 added | total share |', '|---|---|---|---|']
+    out += [f"| {k} | {v['turn1']} ({_pct(v['turn1_share'])}) | {v['turn2_added']} ({_pct(v['turn2_added_share'])}) | {_pct(v['share'])} |" for k, v in t.items()]
+    out += [f"| unavailable or error | - | - | {u['unavailable_or_error']} ({_pct(u['unavailable_or_error_share'])}) |",
+            f"| union | {u['turn1']} ({_pct(u['turn1_share'])}) | {u['turn2_added']} ({_pct(u['turn2_added_share'])}) | {_pct(u['share'])} |", '',
+            '| setting | (c) only roots | (b) or (c) share |', '|---|---|---|']
+    out += [f"| {name} | {guard['c'][name]['c_only']} | {_pct(guard['c'][name]['union_share'])} |" for name in settings if name in guard['c']]
+    for title, block in ((f"Primary: RR on unguarded roots ({guard['primary']['roots']})", guard['primary']['table']),
+                         (f"Guarded roots, raw choices for context ({guard['guarded_context']['roots']})", guard['guarded_context']['table']),
+                         (f"Unguarded, tier-B move legal ({guard['tier_b']['legal']['roots']})", guard['tier_b']['legal']['table']),
+                         (f"Unguarded, no tier-B move legal ({guard['tier_b']['not_legal']['roots']})", guard['tier_b']['not_legal']['table']),
+                         (f"Sensitivity: (a) holds, neither (b) nor (c) ({guard['sensitivity']['roots']}, {_pct(guard['sensitivity']['share'])})",
+                          guard['sensitivity']['table'])):
+        for scoring in SCORINGS:
+            out += ['', f'## {title}: {scoring}', '', HEADER] + [_metric_row(name, block[scoring][name]) for name in settings]
+    return out + ['']
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     parser.add_argument('--rows', nargs='+', required=True, help="the re-pricer's rows-*.jsonl")
@@ -919,8 +1043,11 @@ def main(argv=None):
     parser.add_argument('--out', required=True, help='a new output directory')
     parser.add_argument('--reply-prior', help='optional JSONL of external reply logits per (ordinal, decision_index, world): adds the '
                                               'reported-only external_br and external_mix operators')
+    parser.add_argument('--parity-mode', choices=PARITY_MODES, default='live',
+                        help="live (default): parity against the live search; replay: the replay against itself, for a replay on a "
+                             "modified tree whose decisions legitimately differ from live")
     args = parser.parse_args(argv)
-    summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior)
+    summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior, args.parity_mode)
     cover = summary['coverage']
     print(json.dumps(dict(verdict=summary['verdict'], scored=cover['scored'], parity=cover['parity']['rate'],
                           gate=summary['gate']['passed'], chosen=summary['selection']['chosen'], out=str(Path(args.out).resolve()))))

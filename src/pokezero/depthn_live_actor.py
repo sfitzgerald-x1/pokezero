@@ -27,6 +27,15 @@ COMPLETE response and names the guarded lane (recharge_guard). An override AWAY
 from a recharge move greedy chose stays allowed. The recharge turn itself is
 single-legal and never searched.
 
+Unrepresented effects (the lead's decision): a COMPLETE response carries the
+server's effect guard (pokezero.depthn_effect_guard: the guard record, with a
+bool `tripped`; the client refuses a COMPLETE response without one,
+server_error). When it tripped, greedy is played, source greedy_fallback, cause
+UNREPRESENTED_EFFECT, the full response kept. The opponent-recharge refusal
+(the server refuses the root) and the own-recharge guard stay as they are: when
+several guards trip the first cause stands (OWN_RECHARGE_UNREPRESENTED before
+UNREPRESENTED_EFFECT) and guard_causes lists every guard that tripped.
+
 Against design note section 6: greedy logits/probabilities are NOT logged. The
 champion's raw policy is pinned with record_policy_distribution=False, and
 neither the observation nor the encode path carries them. Each row keeps what an
@@ -62,7 +71,7 @@ SERVER_CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server
 # The certified bf16 champion archive (gpu_engine/declared_bounds/champion-9375-bf16-*.json).
 CHAMPION_ARCHIVE_SHA256='e450515351bce1497ab50a712955fe17b761bbb5f424b23ec299e96cda5b165c'
 OWN_RECHARGE='OWN_RECHARGE_UNREPRESENTED'
-CAUSES=SERVER_CAUSES+('timeout','connection_error','illegal_action','bad_q',OWN_RECHARGE)
+CAUSES=SERVER_CAUSES+('timeout','connection_error','illegal_action','bad_q',OWN_RECHARGE,'UNREPRESENTED_EFFECT')
 SOURCES=('search','greedy_fallback','single_legal','raw_arm')
 REQUEST_KINDS=('move','switch','forced')
 Q_BOUND=1.+1e-9
@@ -140,6 +149,9 @@ class Client:
         status,cause=response.get('status'),response.get('cause')
         if not (status=='COMPLETE'and cause is None or status=='REFUSED'and cause in SERVER_CAUSES):
             raise ValueError('literal status and declared refusal cause required')
+        guard=response.get('effect_guard')
+        if status=='COMPLETE'and(type(guard)is not dict or type(guard.get('tripped'))is not bool):
+            raise ValueError('a COMPLETE response carries the effect guard record (bool tripped)')
         # Finite JSON only (NaN, Infinity and 1e999 never reach play or telemetry), checked
         # at the depth the decision row will hold it: the row nests the response once.
         encoded(dict(search=response))
@@ -174,45 +186,9 @@ def searched_action(response,observation):
     return action,None
 
 
-# Showdown's Gen 3 move table (Dex.forGen(3)): every standard move with flags.recharge. The engine's move metadata carries no
-# recharge flag, so the set is pinned here and checked against Showdown's table by the tests; the Gen 3 random-battle pool
-# holds Hyper Beam only (Slaking), the other three are listed so the guard does not depend on the pool.
-RECHARGE_MOVES=frozenset(('hyperbeam','blastburn','hydrocannon','frenzyplant'))
-
-
-def _move_id(value):
-    return ''.join(c for c in value.lower()if c.isascii()and c.isalnum())
-
-
-def own_moves(request_line):
-    """The owner's move id on each action lane 0-3, from its |request| line: active[0].moves in request order (the lane
-    order: showdown._legal_action_mask), each normalized like a Showdown id (its 'id', else its 'move'), None on a lane
-    without a move (a forceSwitch or wait request has no active row: four Nones). None for a line that is not a JSON
-    |request| object."""
-    if type(request_line)is not str or not request_line.startswith('|request|'):return None
-    try:packet=json.loads(request_line[len('|request|'):])
-    except ValueError:return None
-    if type(packet)is not dict:return None
-    active=packet.get('active');active=active[0]if type(active)is list and active and type(active[0])is dict else {}
-    moves=active.get('moves');moves=moves if type(moves)is list else []
-    out=[]
-    for lane in range(4):
-        move=moves[lane]if lane<len(moves)and type(moves[lane])is dict else {}
-        name=next((move[k]for k in ('id','move')if type(move.get(k))is str and _move_id(move[k])),None)
-        out.append(None if name is None else _move_id(name))
-    return tuple(out)
-
-
-def recharge_lane(moves,action):
-    """True when `action` is a move lane whose own move is a recharge move (RECHARGE_MOVES); False for a switch lane, an
-    unknown move or unknown moves (None)."""
-    return moves is not None and type(action)is int and 0<=action<4 and moves[action]in RECHARGE_MOVES
-
-
-def recharge_guarded(moves,searched,greedy):
-    """The own-recharge guard: True when the searched action goes INTO a recharge move greedy did not choose (play greedy).
-    An override away from greedy's recharge move, or the same action, is never guarded."""
-    return searched!=greedy and recharge_lane(moves,searched)and not recharge_lane(moves,greedy)
+# RECHARGE_MOVES, own_moves, recharge_lane and recharge_guarded live in the shared guard module (depthn_effect_guard), the
+# one the re-pricer and the RR scorer import too; they are re-exported here under their old names.
+from .depthn_effect_guard import CAUSE as EFFECT_GUARD,RECHARGE_MOVES,own_moves,recharge_guarded,recharge_lane  # noqa: E402,F401
 
 
 def battle_turn(lines):
@@ -261,7 +237,7 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
             # The search request leaves now (its budget counts from encode), the greedy forward runs meanwhile.
             searching=None if client is None or kind=='forced'else searcher.submit(client.request,snapshot,decision_index=index,started=started)
             greedy=fallback.select_action(observation,rng=rng);greedy_seconds=clock()-entered
-            response=action=cause=guard=None
+            response=action=cause=guard=None;guards=[]
             if client is None:source='raw_arm'
             elif kind=='forced':source='single_legal'
             else:
@@ -271,7 +247,9 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
                     moves=own_moves(snapshot.own_request_line);base=int(greedy.action_index)
                     if recharge_guarded(moves,action,base):
                         guard=dict(searched_action=action,searched_move=moves[action],greedy_move=moves[base]if 0<=base<4 else None)
-                        action,cause=None,OWN_RECHARGE
+                        guards.append(OWN_RECHARGE)
+                    if (response.get('effect_guard')or {}).get('tripped')is True:guards.append(EFFECT_GUARD)
+                    if guards:action,cause=None,guards[0]   # the first cause stands; guard_causes keeps them all
                 source='search'if action is not None else'greedy_fallback'
             if action is not None:
                 decision=PolicyDecision(action,policy_id,action_probability=1.,value_estimate=float(response['q_values'][action]),
@@ -289,7 +267,8 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
                 greedy=dict(action_index=greedy.action_index,policy_id=greedy.policy_id,action_probability=greedy.action_probability,
                     value_estimate=greedy.value_estimate,seconds=greedy_seconds),
                 search=response,played_action_index=decision.action_index,source=source,cause=cause,
-                search_differs=None if action is None else action!=greedy.action_index,recharge_guard=guard,select_seconds=clock()-started)
+                search_differs=None if action is None else action!=greedy.action_index,recharge_guard=guard,guard_causes=guards,
+                select_seconds=clock()-started)
             try:blob=encoded(row)
             except Exception as error:
                 if response is None:raise
@@ -301,7 +280,7 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
                 source,cause='greedy_fallback','server_error'
                 decision=replace(greedy,metadata={**dict(greedy.metadata),'depthn_live':dict(arm=arm,source=source,cause=cause,request_id=rid)})
                 row.update(search=response,played_action_index=decision.action_index,source=source,cause=cause,search_differs=None,
-                    recharge_guard=None,archive_sha256=archive_sha256,archive_source='pinned')
+                    recharge_guard=None,guard_causes=[],archive_sha256=archive_sha256,archive_source='pinned')
                 blob=encoded(row)
             emit(blob)
             return decision

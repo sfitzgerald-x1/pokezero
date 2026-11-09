@@ -296,7 +296,7 @@ class OwnMovesTests(unittest.TestCase):
             [False, True, False, False]))
         self.assertEqual({k: out['root'][k] for k in ('decided', 'root_logits', 'opponent_recharge', 'refusal_cause')},
             dict(decided=True, root_logits=list(LOGITS), opponent_recharge=False, refusal_cause=None))
-        with patch.object(R.actor, 'RECHARGE_MOVES', frozenset({'earthquake'})):   # the live actor's one set, read at call time
+        with patch.object(R.actor, 'RECHARGE_MOVES', frozenset({'earthquake'})):   # the live guards' one set (depthn_effect_guard), read at call time
             moved = R.decision_row(dict(ordinal=1), row, request, response, .1, found, detail, shard=0, capture_seconds=0.)
         self.assertEqual(moved['root']['own_recharge_lanes'], [False, False, True, False])
         self.assertEqual(detail['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL)))   # the capture is not mutated

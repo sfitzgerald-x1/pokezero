@@ -54,9 +54,9 @@ tree guard) on the live inputs.
     disagreement is recorded (kept_matches_peer_legal false), never raised.
   - Guard fields: every sent row's `root` (a dict on every row; `decided` false for a root that never reached decide, whose
     root_logits and root_legal are then null) holds own_moves: the owner's move id on each action lane 0-3, read from the
-    request's own_request_line by the live actor's own depthn_live_actor.own_moves (None on a lane without a move);
-    own_recharge_lanes: depthn_live_actor.recharge_lane on each move lane 0-3 (true when its move is in
-    depthn_live_actor.RECHARGE_MOVES, the one set the live actor's guard uses, imported from it and recorded in the header
+    request's own_request_line by the live guards' own depthn_effect_guard.own_moves (the live actor's) (None on a lane without a move);
+    own_recharge_lanes: depthn_effect_guard.recharge_lane on each move lane 0-3 (true when its move is in
+    depthn_effect_guard.RECHARGE_MOVES, the one set the live actor's guard uses, imported from it and recorded in the header
     as recharge_moves; a switch lane is never a recharge move); opponent_recharge: the peer must recharge at the root by
     constructor_worlds.line_facts on the request's lines (B2's rule), whatever the replayed tree does with it; and
     refusal_cause: null for a COMPLETE replay, else the constructor's RootRefusal kind when prepare_roots refused the root
@@ -64,6 +64,11 @@ tree guard) on the live inputs.
     OPPONENT_RECHARGE_UNREPRESENTED has no priced worlds: the live actor plays greedy there. A scorer applies the
     live actor's own-recharge guard (recharge_guarded: never an override INTO a recharge move greedy did not choose) to
     every operator's choice against the live join's greedy_action_index with them.
+  - Effect guard: the row's effect_guard is the replayed response's own (the live search's UNREPRESENTED_EFFECT record,
+    pokezero.depthn_effect_guard, read through the pricers' observer seam in the same process_many call, so one pass gives the
+    row and its turn-2 priors): tripped, b (turn 1 / turn 2), c for the search's own choice, the reasons, the (a) flag,
+    tier_b_legal, our guarded lanes, the conditions per side and the masses of every watched move (turn 1 per side and world,
+    turn 2 per side, world and cell); None for a root the replay did not decide. The RR scorer applies it per operator.
   - Peer inputs (peer-inputs-<shard>.npz, every run): per decided root, each constructed world's depth-0 peer inputs, the
     fourth output of device_depth2_pricer._make_views(executor)(state, public, owner) on the completed world (the tensors
     the pricer's turn 1 evaluates root_peer_logits from), and that view's peer legal mask. Self-check: the worlds are
@@ -119,7 +124,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:sys.path.insert(0, str(ROOT))
 from scripts import depthn_live_bench as bench   # noqa: E402
 from gpu_engine import constructor_worlds as cw, depthn_live_search as live   # noqa: E402
-from pokezero import depthn_live_actor as actor, phase_d_owning_capture as owning   # noqa: E402
+from pokezero import depthn_effect_guard as actor, phase_d_owning_capture as owning   # noqa: E402   (the live guards' one module)
 
 server = bench.server
 ROW_SCHEMA = 'pokezero.depthn-rr-reprice.row.v1'
@@ -632,7 +637,8 @@ def decision_row(cell, row, request, response, wall, found, detail, *, shard, ca
     out = dict(schema=ROW_SCHEMA, shard=shard, ordinal=cell['ordinal'], seat=cell.get('seat'), seed=cell.get('seed'), battle_id=row['battle_id'],
         owner=row['owner'], stream_id=row['stream_id'], decision_index=row['decision_index'], generation=row['generation'],
         prefix_sha256=row['prefix_sha256'], request_count=count, capture_turn=row.get('turn'), replay=replay, live=found,
-        live_problem=live_problem, parity=parity(response, found), capture_seconds=capture_seconds, **dict(detail, root=root))
+        live_problem=live_problem, parity=parity(response, found), capture_seconds=capture_seconds, effect_guard=response.get('effect_guard'),
+        **dict(detail, root=root))
     # A COMPLETE decision went through decide; a root that reached prepare (its prepare_seconds) through prepare_roots.
     checks = [w['peer_self_check'] for w in out['worlds'] if 'peer_self_check' in w]
     out['peer_inputs_check'] = None if not checks else dict(checked=sum(c is not None for c in checks), equal=sum(c is True for c in checks),
@@ -650,7 +656,7 @@ def opponent_recharge(request):
     return None if owner is None else bool(cw.line_facts(request['lines'], owner).recharge[1 - owner])
 
 
-BULK = ('worlds', 'root', 'prepared')   # per-world grids and facts: written, not kept for the summary
+BULK = ('worlds', 'root', 'prepared', 'effect_guard')   # per-world grids and facts: written, not kept for the summary
 
 
 def encode_row(row):
