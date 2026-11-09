@@ -902,9 +902,10 @@ class DefinitiveEndToEndTests(EndToEndTests):
         rows = self.rows(run, random.Random(11));weights, prior = [], []
         for row in rows:
             key = (row['ordinal'], row['decision_index'])
+            if row['worlds'] is None:   # a refused root: no guard record by construction (the live actor refused it)
+                row['root'] = dict(decided=False, root_logits=None, root_legal=None, refusal_cause='OPPONENT_RECHARGE_UNREPRESENTED');continue
             row['effect_guard'] = guard_record(turn1=[('knockoff', 'A')] if key in guarded else (), a=key in a_only, tier_b=key in tier_b)
-            if row['root'] is not None:row['root']['own_moves'] = OWN_MOVES
-            if row['worlds'] is None:continue
+            row['root']['own_moves'] = OWN_MOVES
             for w, world in enumerate(row['worlds']):
                 if key != (1, 1):weights.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, loglik=-w * slope))
                 if row['ordinal'] == 0:world['reply_peer_logits'] = world['root_peer_logits'][::-1]
@@ -928,6 +929,11 @@ class DefinitiveEndToEndTests(EndToEndTests):
         self.assertNotIn('averaging', summary['reported_only']);self.assertIn('tempered:T=2', summary['reported_only'])
         self.assertIn('rnr:lam=0.25', summary['reported_only']);self.assertNotIn('rnr:lam=0.5', summary['reported_only'])
         self.assertEqual((cover['scored'], cover['excluded']), (5, {'replay_REFUSED': 1, 'world_weights_missing': 1}))
+        # the refused root without a record keeps the screen set's accounting: excluded by its replay status, not effect_guard_missing
+        self.assertEqual(summary['guard']['opponent_recharge_refused'], 1)
+        with redirect_stdout(io.StringIO()):S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'screen')])
+        screen = json.loads((self.root / 'screen' / 'summary.json').read_text())['coverage']
+        self.assertEqual((screen['scored'], screen['excluded']), (6, {'replay_REFUSED': 1}))
         w = cover['world_weights']   # loglik -w/4 at beta .5: p_w ∝ r^w, r = e^(-1/8), ESS = (sum r^w)^2 / sum r^2w ~ 12.2 on every root
         self.assertEqual(w['roots'], 5);self.assertAlmostEqual(w['median_ess'], 12.2, places=1);self.assertEqual(w['share_ess_under_2'], 0.)
         self.assertAlmostEqual(w['median_max_weight'], (1 - math.exp(-1 / 8)) / (1 - math.exp(-2)), places=12)

@@ -77,7 +77,9 @@ Definitive operator set (--operator-set definitive; the screen's set above stays
   choices given world w's sets (--world-weights rows {ordinal, decision_index, world, loglik}); a decision missing a world's
   loglik is unscorable ('world_weights_missing').
 - Guards: the guards above, unchanged, on every operator of the set (their raw choices are kept beside the guarded ones).
-  A definitive row must carry the effect_guard record ('effect_guard_missing' otherwise), so every scored root is guarded.
+  A replay-COMPLETE row with priced worlds must carry the effect_guard record ('effect_guard_missing' otherwise), so every
+  scored root is guarded; a refused root carries none by construction and keeps the screen set's accounting (excluded by
+  its replay status, as before; greedy played it live).
 - Scope: the gate, selection (even seeds) and confirmation (odd seeds) run on the unguarded roots (the record's (b) false),
   the guard section's primary population; every operator's own (c) still applies there. The guard section's context,
   tier-B and sensitivity tables are reported beside it, never deciding.
@@ -686,6 +688,8 @@ def score_decision(decision, reply, target, failures, base=None, external=None, 
     if type(greedy) is not int or not 0 <= greedy < 9 or not legal[greedy]:raise Unscorable('greedy_missing')
     record = decision.get('effect_guard') if type(decision.get('effect_guard')) is dict else None
     if definitive is not None:   # every input before any operator, so a missing one leaves the decision out of all of them
+        # only replay-COMPLETE rows with priced worlds get here (recompute): a refused root (OPPONENT_RECHARGE_UNREPRESENTED,
+        # a constructor refusal, root.decided false) carries no record by construction and keeps its replay exclusion
         if record is None:raise Unscorable('effect_guard_missing')
         model = reply_logits_of(decision, worlds, definitive['prior']);logliks = logliks_of(definitive['weights'], len(worlds))
     raw, fallback = operators(worlds, gs, average, greedy, logits, legal, target, failures)
