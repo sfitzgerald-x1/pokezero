@@ -40,7 +40,9 @@ Scorings: dropped (censored and unmapped decisions excluded) and pi_filled (thos
 q(a) = sum_w 1/16 sum_b pi_w(b) G_w[a][b]). A decision is scored when its replay is COMPLETE, every world is priced for
 every legal action against every kept reply, and the live greedy action is legal. Operators on the same grids: greedy
 (live), averaging, bayes_hedge lam 0 and 0.5, prior_regularized c, noise_gated k, world_lcb kappa, target_argmax (the
-live policy_target; argmax of root_logits + q, the same target, when it is missing). D = R(op) - R(greedy), 0 when op is
+live policy_target; argmax of root_logits + q, the same target, when it is missing), tempered T (2, 4, inf: averaging with
+pi_w^T = softmax(root_peer_logits / T) over the kept lanes, T = inf uniform; a waiting world keeps column 0 at mass 1).
+D = R(op) - R(greedy), 0 when op is
 greedy. noise_gated plays averaging's a* only when a* != greedy and mean_w gap > k sd_w(gap) / sqrt(W), gap_w =
 Q_w(a*) - Q_w(greedy); world_lcb plays argmax q(a) - kappa sd_w(Q_w(a)) / sqrt(W) (sample sd; Q_w(a) = sum_b pi_w(b) G_w[a][b]).
 Statistics: D is summed per battle (ordinal); mean and SE over battles; a t interval with battles - 1 df at 90% for the
@@ -49,6 +51,10 @@ the mean decisions per battle (the same t statistic, so the same signs). Parity,
 the replay is COMPLETE, averaging recomputed from the captured worlds plays the live search action, and its q equals the
 replay's q_values exactly after a JSON round trip. Below 99% the verdict is PARITY_FAILED: no candidate is selected, as for
 GATE_FAILED. Also reported, never gating: every table restricted to decisions where Foul Play was requested (no 'wait').
+External reply prior (--reply-prior, for a Foul Play reply model): rows {ordinal, decision_index, world, logits[9]} add
+external_br (averaging with pi_w = softmax of the external logits over the kept lanes) and external_mix alpha (0.25, 0.5,
+0.75: alpha * external + (1 - alpha) * the champion's pi_w), reported only, never candidates. A waiting world needs no
+logits; a decision missing any requested world's logits is excluded from those operators and counted.
 
 Run from the repository root with the venv that has numpy and scipy:
   python scripts/depthn_rr_score.py --rows ROWS/rows-*.jsonl --run-directory RUN --out NEW_DIRECTORY
@@ -84,9 +90,16 @@ CAUSES = ('ko_first', 'sleep_para_flinch', 'other')
 SLEEP_PARA_FLINCH = frozenset(('slp', 'par', 'flinch', 'frz'))
 SCORINGS = ('dropped', 'pi_filled')
 HALVES = ('all', 'even', 'odd')
+TEMPER_T = (2, 4, math.inf)
+EXTERNAL_ALPHA = (.25, .5, .75)
 SETTINGS = (('greedy', 'averaging', 'bayes_hedge:lam=0', 'blend:lam=0.5') + tuple(f'prior_regularized:c={c}' for c in PRIOR_C)
-            + tuple(f'noise_gated:k={k}' for k in NOISE_K) + tuple(f'world_lcb:kappa={k}' for k in LCB_KAPPA) + ('target_argmax',))
+            + tuple(f'noise_gated:k={k}' for k in NOISE_K) + tuple(f'world_lcb:kappa={k}' for k in LCB_KAPPA) + ('target_argmax',)
+            + tuple(f'tempered:T={t}' for t in TEMPER_T))
 CANDIDATES = SETTINGS[2:]   # selection excludes greedy and averaging
+# With --reply-prior only, and reported only (never candidates, so the gate, selection and confirmation do not depend on it).
+EXTERNAL_SETTINGS = ('external_br',) + tuple(f'external_mix:alpha={a}' for a in EXTERNAL_ALPHA)
+REPLY_PRIOR_FIELDS = dict(ordinal='ordinal', decision_index='decision_index', world='world', logits='logits')
+WAITING = (1.,) + (0.,) * 8   # a waiting opponent: column 0 at mass 1
 
 # ---- the re-pricer's field names (scripts/depthn_rr_reprice.py, row schema pokezero.depthn-rr-reprice.row.v1 at f9e143ae),
 # in one place: a rename is a one-line change here ----
@@ -346,6 +359,70 @@ def per_world_q(gs):
     return [{a: math.fsum(g.prior[k] * g.values[i, k] for k in range(len(g.replies))) for i, a in enumerate(g.actions)} for g in gs]
 
 
+def prior_q(gs, priors):
+    """q(a) = sum_w 1/W sum_b priors[w][b] G_w[a][b] over each grid's replies (its kept lanes, or the waiting column 0), summed
+    exactly as search_hedge.averaging sums (fsum, world-major), so averaging's own priors give its q bit for bit."""
+    count = len(gs)
+    return {a: math.fsum(priors[w][b] * g.values[i, k] / count for w, g in enumerate(gs) for k, b in enumerate(g.replies))
+            for i, a in enumerate(gs[0].actions)}
+
+
+def tempered_prior(world, t):
+    """pi_w^T: softmax(root_peer_logits / T) over the kept lanes, with v5_gumbel._probabilities' masking (T = inf: uniform
+    over them; T = 1: averaging's own prior); a waiting world keeps column 0 at mass 1."""
+    if not world.opponent_requested:return WAITING
+    return original._probabilities((0.,) * 9 if t == math.inf else tuple(x / t for x in world.opponent_logits), world.opponent_legal)
+
+
+def tempered(gs, worlds, t):
+    """The tempered operator's q (dict over our legal actions) and its argmax, lowest index on ties."""
+    q = prior_q(gs, [tempered_prior(w, t) for w in worlds])
+    return q, argmax(q, sorted(q))
+
+
+def external_prior(world, logits, alpha=None):
+    """The external reply prior over the kept lanes (softmax of its logits, _probabilities' masking), mixed as
+    alpha * external + (1 - alpha) * the champion's pi_w when alpha is given; a waiting world keeps column 0 at mass 1."""
+    if not world.opponent_requested:return WAITING
+    external = original._probabilities(logits, world.opponent_legal)
+    if alpha is None:return external
+    own = original._probabilities(world.opponent_logits, world.opponent_legal)
+    return tuple(alpha * e + (1. - alpha) * o for e, o in zip(external, own))
+
+
+def external_operators(gs, worlds, external):
+    """({EXTERNAL_SETTINGS name: action or None}, the requested worlds without external logits). A waiting world needs none;
+    any requested world without them excludes the decision from every external operator."""
+    missing = [w for w, world in enumerate(worlds) if world.opponent_requested and w not in external]
+    if missing:return dict.fromkeys(EXTERNAL_SETTINGS), missing
+    out = {}
+    for name, alpha in (('external_br', None),) + tuple((f'external_mix:alpha={a}', a) for a in EXTERNAL_ALPHA):
+        q = prior_q(gs, [external_prior(world, external.get(w), alpha) for w, world in enumerate(worlds)])
+        out[name] = argmax(q, sorted(q))
+    return out, missing
+
+
+def load_reply_prior(path):
+    """{(ordinal, decision_index): {world: logits}} from a JSONL of rows {ordinal, decision_index, world (the row's block-order
+    world index), logits: nine finite reals (the opponent's reply lanes; lanes outside a world's kept set are ignored)}.
+    A malformed or duplicated row raises."""
+    from array import array
+    f = REPLY_PRIOR_FIELDS;out = {}
+    with open(path, 'rb') as stream:
+        for number, raw in enumerate(stream, 1):
+            if not raw.strip():continue
+            row = json.loads(raw)
+            key = tuple(row.get(f[k]) if type(row) is dict else None for k in ('ordinal', 'decision_index', 'world'))
+            logits = row.get(f['logits']) if type(row) is dict else None
+            if (any(type(k) is not int for k in key) or type(logits) is not list or len(logits) != 9
+                    or any(type(x) not in (int, float) or not math.isfinite(x) for x in logits)):
+                raise ValueError(f'{path}:{number}: integer ordinal, decision_index and world and nine finite logits required')
+            worlds = out.setdefault(key[:2], {})
+            if key[2] in worlds:raise ValueError(f'{path}:{number}: duplicate (ordinal, decision_index, world) {key}')
+            worlds[key[2]] = array('d', logits)
+    return out
+
+
 def noise_gated(qw, chosen, greedy, k):
     """Averaging's choice only when it differs from greedy and the per-world gap's mean exceeds k standard errors."""
     if chosen == greedy:return greedy
@@ -383,6 +460,7 @@ def operators(worlds, gs, average, greedy, root_logits, root_legal, target, fail
     spread = {a: statistics.stdev([x[a] for x in qw]) / math.sqrt(len(qw)) for a in qw[0]}
     for kappa in LCB_KAPPA:out[f'world_lcb:kappa={kappa}'] = world_lcb(average.q, spread, kappa)
     out['target_argmax'], fallback = target_argmax(target, root_legal, root_logits, average.q)
+    for t in TEMPER_T:out[f'tempered:T={t}'] = tempered(gs, worlds, t)[1]
     return out, fallback
 
 
@@ -457,13 +535,17 @@ def parity_row(decision, base, reason):
 def parity_passed(matches, total):return total > 0 and matches / total >= PARITY_MIN
 
 
-def score_decision(decision, reply, target, failures, base=None):
-    """The scored decision: operators' choices and R under both scorings; raises Unscorable."""
+def score_decision(decision, reply, target, failures, base=None, external=None):
+    """The scored decision: operators' choices and R under both scorings; raises Unscorable. `external` is None without
+    --reply-prior, else this decision's {world: logits} (possibly empty): the EXTERNAL_SETTINGS operators join."""
     base = recompute(decision) if base is None else base
     legal, logits, worlds, gs, prior, average = base.legal, base.logits, base.worlds, base.grids, base.prior, base.average
     greedy = decision['greedy_action']
     if type(greedy) is not int or not 0 <= greedy < 9 or not legal[greedy]:raise Unscorable('greedy_missing')
     choices, fallback = operators(worlds, gs, average, greedy, logits, legal, target, failures)
+    external_missing = None
+    if external is not None:
+        found, external_missing = external_operators(gs, worlds, external);choices.update(found)
     lanes, drops = [], {}
     if reply.cause is None:
         for w, (world, facts) in enumerate(zip(worlds, decision['worlds'])):
@@ -485,7 +567,7 @@ def score_decision(decision, reply, target, failures, base=None):
     greedy_argmax = argmax(logits, [a for a in range(9) if legal[a]])
     return dict(observed=observed, unmapped=reply.cause is None and not lanes, mapped_worlds=[list(x) for x in lanes],
                 world_drops=drops, R=dict(dropped=r_dropped, pi_filled=r_filled), operators=ops, averaging_q=list(average.q),
-                greedy_argmax=greedy_argmax, target_fallback=fallback, worlds=len(worlds))
+                greedy_argmax=greedy_argmax, target_fallback=fallback, worlds=len(worlds), external_missing_worlds=external_missing)
 
 
 # ---- statistics ----
@@ -521,7 +603,7 @@ def population(records, scoring, half='all', kind=None):
             and (kind is None or r['kind'] == kind)]
 
 
-def metrics(records):
+def metrics(records, settings=SETTINGS):
     """{scoring: {half: {operators, by_request_kind, by_prior_band}}} over the compact decision records."""
     kinds = sorted({r['kind'] for r in records if r['kind'] is not None})
     out = {}
@@ -531,9 +613,9 @@ def metrics(records):
             pop = population(records, scoring, half)
             out[scoring][half] = dict(
                 decisions=len(pop), battles=len({r['ordinal'] for r in pop}),
-                operators={name: operator_metric(pop, name, scoring) for name in SETTINGS},
-                by_request_kind={k: {name: operator_metric(population(pop, scoring, kind=k), name, scoring) for name in SETTINGS} for k in kinds},
-                by_prior_band={b: {name: operator_metric(pop, name, scoring, b) for name in SETTINGS} for b, _ in BANDS})
+                operators={name: operator_metric(pop, name, scoring) for name in settings},
+                by_request_kind={k: {name: operator_metric(population(pop, scoring, kind=k), name, scoring) for name in settings} for k in kinds},
+                by_prior_band={b: {name: operator_metric(pop, name, scoring, b) for name in settings} for b, _ in BANDS})
     return out
 
 
@@ -619,6 +701,7 @@ class Coverage:
         self.kind = collections.defaultdict(lambda: collections.Counter());self.causes = collections.Counter()
         self.unmapped = 0;self.mapped_hist = collections.Counter();self.drops = collections.Counter()
         self.target_fallbacks = 0;self.failures = collections.Counter();self.no_half = 0;self.seen = set()
+        self.external = None   # with --reply-prior: Counter(decisions, missing_decisions, missing_worlds)
 
     def add_parity(self, check):
         self.parity['rows'] += 1;self.parity['matches'] += check['match']
@@ -655,7 +738,11 @@ class Coverage:
             world_drop_reasons=dict(self.drops), target_argmax_fallbacks=self.target_fallbacks, operator_failures=dict(self.failures),
             halves=dict(even=dict(battles=battles['even'], decisions=sum(r['half'] == 'even' for r in records)),
                         odd=dict(battles=battles['odd'], decisions=sum(r['half'] == 'odd' for r in records)), no_seed=self.no_half),
-            fp_requested=dict(note="decisions whose reply is not 'wait'", decisions=sum(r['fp_requested'] for r in records)))
+            fp_requested=dict(note="decisions whose reply is not 'wait'", decisions=sum(r['fp_requested'] for r in records)),
+            external_prior=None if self.external is None else dict(
+                note='scored decisions; one missing a requested world\'s external logits is excluded from the external operators',
+                scored=self.external['decisions'], with_logits=self.external['decisions'] - self.external['missing_decisions'],
+                excluded=self.external['missing_decisions'], missing_worlds=self.external['missing_worlds']))
 
 
 def half_of(seed):
@@ -663,8 +750,8 @@ def half_of(seed):
     return None if type(seed) is not int else 'even' if seed % 2 == 0 else 'odd'
 
 
-def process(decision, run, coverage):
-    """One row: (decisions.jsonl entry, compact record or None)."""
+def process(decision, run, coverage, prior=None):
+    """One row: (decisions.jsonl entry, compact record or None). `prior`: load_reply_prior's dict, or None."""
     coverage.rows += 1
     ordinal, index = decision['ordinal'], decision['decision_index']
     address = dict(ordinal=ordinal, battle_id=decision['battle_id'], owner=decision['owner'], decision_index=index,
@@ -690,7 +777,8 @@ def process(decision, run, coverage):
         coverage.excluded[reason] += 1
         return dict(address, scored=False, reason=reason), None
     reply = reply_for(run.capture(ordinal), decision)
-    try:scored = score_decision(decision, reply, run.policy_target(ordinal, index), coverage.failures, base)
+    external = None if prior is None else prior.get((ordinal, index), {})
+    try:scored = score_decision(decision, reply, run.policy_target(ordinal, index), coverage.failures, base, external)
     except Unscorable as error:
         coverage.excluded[error.reason] += 1
         return dict(address, scored=False, reason=error.reason), None
@@ -704,33 +792,42 @@ def process(decision, run, coverage):
     else:coverage.mapped_hist[len(scored['mapped_worlds'])] += 1
     coverage.unmapped += scored['unmapped'];coverage.target_fallbacks += scored['target_fallback'];coverage.no_half += half is None
     for why in scored['world_drops'].values():coverage.drops[why] += 1
+    if external is not None:
+        missing = scored['external_missing_worlds']
+        coverage.external['decisions'] += 1;coverage.external['missing_decisions'] += bool(missing);coverage.external['missing_worlds'] += len(missing)
     entry = dict(address, scored=True, reply=dict(kind=reply.kind, id=reply.id, cause=reply.cause, detail=reply.detail),
                  censored=reply.cause is not None, unmapped=scored['unmapped'], observed=scored['observed'],
                  mapped_worlds=scored['mapped_worlds'], world_drops={str(k): v for k, v in scored['world_drops'].items()},
                  live_action=decision['live_action'], averaging_action=chosen, greedy_action=decision['greedy_action'],
-                 greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops)
+                 greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops,
+                 external_missing_worlds=scored['external_missing_worlds'])
     record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'], fp_requested=reply.kind != 'wait',
                   ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops.items()})
     return entry, record
 
 
-def score_run(rows, run_directory, out):
-    """Score every row into the new directory `out`; returns the summary."""
+def score_run(rows, run_directory, out, reply_prior=None):
+    """Score every row into the new directory `out`; returns the summary. `reply_prior`: an external reply prior JSONL
+    (load_reply_prior) adding the reported-only EXTERNAL_SETTINGS operators."""
+    prior = None if reply_prior is None else load_reply_prior(reply_prior)
+    settings = SETTINGS + (EXTERNAL_SETTINGS if prior is not None else ())
     out = Path(out);out.mkdir(parents=True, exist_ok=False)
     run, coverage, records = RunDirectory(run_directory), Coverage(), []
+    if prior is not None:coverage.external = collections.Counter()
     with (out / 'decisions.jsonl').open('x') as stream:
         for decision in load_rows(rows):
-            entry, record = process(decision, run, coverage)
+            entry, record = process(decision, run, coverage, prior)
             stream.write(json.dumps(entry) + '\n')
             if record is not None:records.append(record)
-    table = metrics(records);cover = coverage.report(records)
+    table = metrics(records, settings);cover = coverage.report(records)
     outcome = decide(table, cover['parity']['passed'])
     # Reported only (the gate and selection use `metrics`): without 'wait' decisions. There every mapped world is a waiting
     # world (pi_w is column 0's unit mass), so R is averaging's own per-world value over them: exactly its q, and averaging's
     # D >= 0, when every world waits.
-    requested = metrics([r for r in records if r['fp_requested']])
-    summary = dict(schema=SCHEMA, inputs=dict(rows=[str(Path(p).resolve()) for p in rows], run_directory=str(Path(run_directory).resolve())),
-                   settings=list(SETTINGS), candidates=list(CANDIDATES), level=LEVEL, override_min=OVERRIDE_MIN, parity_min=PARITY_MIN,
+    requested = metrics([r for r in records if r['fp_requested']], settings)
+    summary = dict(schema=SCHEMA, inputs=dict(rows=[str(Path(p).resolve()) for p in rows], run_directory=str(Path(run_directory).resolve()),
+                                              reply_prior=None if reply_prior is None else str(Path(reply_prior).resolve())),
+                   settings=list(settings), candidates=list(CANDIDATES), reported_only=[n for n in settings if n in EXTERNAL_SETTINGS], level=LEVEL, override_min=OVERRIDE_MIN, parity_min=PARITY_MIN,
                    bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table, metrics_fp_requested=requested)
     (out / 'summary.json').write_text(json.dumps(summary, indent=1) + '\n')
     (out / 'summary.md').write_text(markdown(summary))
@@ -757,6 +854,7 @@ HEADER = '| setting | override | mean D | 90% CI | per-battle mean D | battles |
 
 def markdown(summary):
     cover, table, gate, selection, confirmation = (summary[k] for k in ('coverage', 'metrics', 'gate', 'selection', 'confirmation'))
+    settings = summary['settings']
     out = ['# RR (realized-reply re-pricing) score', '', f"**Verdict: {summary['verdict']}**", '',
            f"- Parity (rows searched live: replay COMPLETE, recomputed averaging's action == live, q == replay q): "
            f"{cover['parity']['matches']}/{cover['parity']['live_searched']} = {_pct(cover['parity']['rate'])} "
@@ -776,6 +874,7 @@ def markdown(summary):
             f"| parity mismatches by cause | {cover['parity']['mismatches_by_cause']} |",
             f"| status mismatches by cause | {cover['status_mismatches']['by_cause']} |",
             f"| decisions with Foul Play requested (not 'wait') | {cover['fp_requested']['decisions']} |",
+            f"| external reply prior (reported-only operators) | {cover['external_prior'] or 'not given'} |",
             f"| averaging == replay action | {_pct(cover['averaging_equals_replay_action']['rate'])} |",
             f"| greedy check disagreements | {cover['greedy_check']['disagreements']} |",
             f"| censored | {cover['censored']['count']} ({_pct(cover['censored']['share'])}) |",
@@ -797,11 +896,11 @@ def markdown(summary):
         for half in HALVES:
             block = table[scoring][half]
             out += [f"## {scoring}, {half} ({block['battles']} battles, {block['decisions']} decisions)", '', HEADER]
-            out += [_metric_row(name, block['operators'][name]) for name in SETTINGS] + ['']
+            out += [_metric_row(name, block['operators'][name]) for name in settings] + ['']
         out += [f'## {scoring}, all: by request_kind', '', HEADER.replace('| setting |', '| setting / kind |')]
-        out += [_metric_row(f'{name} / {k}', m[name]) for k, m in table[scoring]['all']['by_request_kind'].items() for name in SETTINGS] + ['']
+        out += [_metric_row(f'{name} / {k}', m[name]) for k, m in table[scoring]['all']['by_request_kind'].items() for name in settings] + ['']
         out += [f"## {scoring}, all: by prior band of the setting's action", '', HEADER.replace('| setting |', '| setting / band |')]
-        out += [_metric_row(f'{name} / {b}', m[name]) for b, m in table[scoring]['all']['by_prior_band'].items() for name in SETTINGS
+        out += [_metric_row(f'{name} / {b}', m[name]) for b, m in table[scoring]['all']['by_prior_band'].items() for name in settings
                 if m[name]['decisions']] + ['']
     requested = summary['metrics_fp_requested']
     out += ["# Reported view: decisions where Foul Play was requested (no 'wait' decisions; the gate and selection above are unchanged)", '']
@@ -809,7 +908,7 @@ def markdown(summary):
         for half in HALVES:
             block = requested[scoring][half]
             out += [f"## requested only: {scoring}, {half} ({block['battles']} battles, {block['decisions']} decisions)", '', HEADER]
-            out += [_metric_row(name, block['operators'][name]) for name in SETTINGS] + ['']
+            out += [_metric_row(name, block['operators'][name]) for name in settings] + ['']
     return '\n'.join(out) + '\n'
 
 
@@ -818,8 +917,10 @@ def main(argv=None):
     parser.add_argument('--rows', nargs='+', required=True, help="the re-pricer's rows-*.jsonl")
     parser.add_argument('--run-directory', required=True, help='the live screen run directory (results/, telemetry/, owning-wire/)')
     parser.add_argument('--out', required=True, help='a new output directory')
+    parser.add_argument('--reply-prior', help='optional JSONL of external reply logits per (ordinal, decision_index, world): adds the '
+                                              'reported-only external_br and external_mix operators')
     args = parser.parse_args(argv)
-    summary = score_run(args.rows, args.run_directory, args.out)
+    summary = score_run(args.rows, args.run_directory, args.out, args.reply_prior)
     cover = summary['coverage']
     print(json.dumps(dict(verdict=summary['verdict'], scored=cover['scored'], parity=cover['parity']['rate'],
                           gate=summary['gate']['passed'], chosen=summary['selection']['chosen'], out=str(Path(args.out).resolve()))))

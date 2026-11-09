@@ -656,7 +656,146 @@ class EndToEndTests(unittest.TestCase):
         self.assertIsNone(decisions[3]['parity'])
         text = (out / 'summary.md').read_text()
         self.assertTrue(text.startswith('# RR'));self.assertIn('requested only: dropped, all', text)
+        # Without --reply-prior: no external operators anywhere; tempered is scored like the others.
+        self.assertEqual(summary['settings'], list(S.SETTINGS));self.assertEqual(summary['reported_only'], [])
+        self.assertIsNone(cover['external_prior']);self.assertNotIn('external_br', first['operators'])
+        self.assertEqual(summary['metrics']['pi_filled']['all']['operators']['tempered:T=inf']['decisions'], 6)
         with self.assertRaises(FileExistsError):S.score_run([str(path)], str(run), str(out))
+
+    def test_main_with_reply_prior(self):
+        run = self.root / 'run'
+        for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True)
+        rows = self.rows(run, random.Random(11))
+        path = self.root / 'rows-0.jsonl';path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        prior = []
+        for row in rows:
+            if row['worlds'] is None or row['live']['request_kind'] == 'switch':continue   # the forced switch's worlds all wait: none needed
+            if (row['ordinal'], row['decision_index']) == (1, 1):continue   # no logits at all: excluded
+            for w, world in enumerate(row['worlds']):
+                if (row['ordinal'], row['decision_index'], w) == (0, 1, 3):continue   # one requested world missing: excluded
+                prior.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, logits=world['root_peer_logits'][::-1]))
+        prior_path = self.root / 'prior.jsonl';prior_path.write_text(''.join(json.dumps(r) + '\n' for r in prior))
+        out = self.root / 'out'
+        with redirect_stdout(io.StringIO()):
+            S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--reply-prior', str(prior_path)])
+        summary = json.loads((out / 'summary.json').read_text())
+        self.assertEqual(summary['settings'], list(S.SETTINGS + S.EXTERNAL_SETTINGS))
+        self.assertEqual(summary['reported_only'], list(S.EXTERNAL_SETTINGS));self.assertEqual(summary['candidates'], list(S.CANDIDATES))
+        external = summary['coverage']['external_prior']
+        self.assertEqual((external['scored'], external['with_logits'], external['excluded'], external['missing_worlds']), (6, 4, 2, 17))
+        for name in S.EXTERNAL_SETTINGS:self.assertEqual(summary['metrics']['pi_filled']['all']['operators'][name]['decisions'], 4)
+        self.assertEqual(summary['metrics']['pi_filled']['all']['operators']['averaging']['decisions'], 6)
+        decisions = [json.loads(x) for x in (out / 'decisions.jsonl').read_text().splitlines()]
+        self.assertEqual(decisions[1]['external_missing_worlds'], [3]);self.assertIsNone(decisions[1]['operators']['external_br']['choice'])
+        self.assertEqual(decisions[2]['external_missing_worlds'], []);self.assertIsNotNone(decisions[2]['operators']['external_br']['choice'])
+        self.assertIn('external_mix:alpha=0.5', (out / 'summary.md').read_text())
+
+
+class TemperedTests(unittest.TestCase):
+    """Sixteen worlds, our legal actions 0, 1, 2, 4 and 6, kept sets that differ by world, and four waiting worlds."""
+
+    def setUp(self):
+        rng = random.Random(5);self.legal = legal_mask(0, 1, 2, 4, 6);worlds = []
+        for w in range(16):
+            if w % 4 == 3:worlds.append(world_row(lambda a, b: round(rng.uniform(-1, 1), 4), requested=False, root_legal=self.legal));continue
+            kept = legal_mask(*sorted(rng.sample(range(9), rng.randint(1, 9))))
+            worlds.append(world_row(lambda a, b: round(rng.uniform(-1, 1), 4), root_legal=self.legal, kept=kept,
+                                    logits=[rng.uniform(-4, 4) for _ in range(9)]))
+        self.rows = worlds;self.base = S.recompute(decision(worlds, root_legal=self.legal))
+
+    def test_t1_reproduces_averaging_exactly(self):
+        q, action = S.tempered(self.base.grids, self.base.worlds, 1)
+        self.assertEqual(q, {a: self.base.average.q[a] for a in range(9) if self.legal[a]})
+        self.assertEqual(action, hedge.top_action(self.base.average.strategy))
+
+    def test_t_inf_is_uniform_over_kept_lanes(self):
+        q, _ = S.tempered(self.base.grids, self.base.worlds, math.inf)
+        for a in q:
+            hand = 0.
+            for world in self.rows:
+                g = world['grid']
+                lanes = [b for b in range(9) if world['kept'][b]] if world['opponent_requested'] else [0]
+                hand += sum(g[a][b] for b in lanes) / len(lanes) / 16
+            self.assertAlmostEqual(q[a], hand, places=12)
+
+    def test_t2_by_hand(self):
+        q, _ = S.tempered(self.base.grids, self.base.worlds, 2)
+        for a in q:
+            hand = 0.
+            for world in self.rows:
+                g = world['grid']
+                if not world['opponent_requested']:hand += g[a][0] / 16;continue
+                weights = {b: math.exp(world['root_peer_logits'][b] / 2) for b in range(9) if world['kept'][b]};total = sum(weights.values())
+                hand += sum(weights[b] / total * g[a][b] for b in weights) / 16
+            self.assertAlmostEqual(q[a], hand, places=12)
+
+    def test_waiting_world_is_unaffected_by_t(self):
+        for world in self.base.worlds:
+            if not world.opponent_requested:
+                for t in (1, 2, 4, math.inf):self.assertEqual(S.tempered_prior(world, t), S.WAITING)
+        waiting = S.recompute(decision(waiting_worlds([{0: .3, 1: -.2, 2: .1, 4: .5, 6: 0.}] * 16, self.legal), root_legal=self.legal))
+        for t in (2, 4, math.inf):
+            self.assertEqual(S.tempered(waiting.grids, waiting.worlds, t)[0], {a: waiting.average.q[a] for a in range(9) if self.legal[a]})
+
+    def test_temperature_moves_the_action(self):
+        # Replies 0 (prior .95) and 1; action 0: [.5, -.8], action 1: [.1, .1]. q0 at T = 1, 2, 4, inf: .435, .257, .079, -.15.
+        legal = legal_mask(0, 1);cells = {0: (.5, -.8), 1: (.1, .1)}
+        worlds = [world_row(lambda a, b: cells[a][b], root_legal=legal, kept=legal_mask(0, 1), logits=[math.log(.95), math.log(.05)] + [0.] * 7)] * 16
+        out = S.score_decision(decision(worlds, greedy=1, root_legal=legal), S.censored('other', ''), None, collections.Counter())
+        c = {n: o['choice'] for n, o in out['operators'].items()}
+        self.assertEqual((c['averaging'], c['tempered:T=2'], c['tempered:T=4'], c['tempered:T=inf']), (0, 0, 1, 1))
+
+    def test_tempered_is_a_candidate_after_the_existing_settings(self):
+        self.assertEqual(S.SETTINGS[-4:], ('target_argmax', 'tempered:T=2', 'tempered:T=4', 'tempered:T=inf'))
+        self.assertEqual(S.CANDIDATES, S.SETTINGS[2:])
+        self.assertFalse(set(S.EXTERNAL_SETTINGS) & set(S.CANDIDATES))
+
+
+class ExternalPriorTests(unittest.TestCase):
+    def setUp(self):self.directory = TemporaryDirectory();self.root = Path(self.directory.name)
+
+    def tearDown(self):self.directory.cleanup()
+
+    def write(self, rows):
+        path = self.root / f'prior-{len(list(self.root.iterdir()))}.jsonl'
+        path.write_text(''.join((r if type(r) is str else json.dumps(r)) + '\n' for r in rows));return path
+
+    def test_load(self):
+        prior = S.load_reply_prior(self.write([dict(ordinal=3, decision_index=1, world=w, logits=[float(w)] * 9) for w in (0, 5)] + ['']))
+        self.assertEqual(set(prior), {(3, 1)});self.assertEqual(sorted(prior[3, 1]), [0, 5]);self.assertEqual(list(prior[3, 1][5]), [5.] * 9)
+        bad = (dict(ordinal=3, decision_index=1, world=0, logits=[0.] * 8), dict(ordinal=3, decision_index=1, world='0', logits=[0.] * 9),
+               '{"ordinal": 3, "decision_index": 1, "world": 0, "logits": [NaN, 0, 0, 0, 0, 0, 0, 0, 0]}')
+        for row in bad:
+            with self.assertRaises(ValueError):S.load_reply_prior(self.write([row]))
+        with self.assertRaises(ValueError):S.load_reply_prior(self.write([dict(ordinal=3, decision_index=1, world=0, logits=[0.] * 9)] * 2))
+
+    def worlds(self, n=4):
+        legal = legal_mask(0, 1);cells = {0: (.5, -.8), 1: (.1, .1)}
+        rows = [world_row(lambda a, b: cells[a][b], root_legal=legal, kept=legal_mask(0, 1), logits=[math.log(.95), math.log(.05)] + [0.] * 7)] * n
+        return legal, S.recompute(decision(rows, root_legal=legal))
+
+    def test_external_br_on_the_champions_logits_is_averaging(self):
+        legal, base = self.worlds()
+        priors = [S.external_prior(w, w.opponent_logits) for w in base.worlds]
+        self.assertEqual(S.prior_q(base.grids, priors), {a: base.average.q[a] for a in (0, 1)})
+        found, missing = S.external_operators(base.grids, base.worlds, {w: base.worlds[w].opponent_logits for w in range(4)})
+        self.assertEqual((found['external_br'], missing), (hedge.top_action(base.average.strategy), []))
+
+    def test_external_and_mixes(self):
+        # The champion predicts reply 0 (.95), the external model reply 1 (.95). P(reply 0) under the alpha mix: .725, .5, .275.
+        legal, base = self.worlds()
+        found, _ = S.external_operators(base.grids, base.worlds, {w: [math.log(.05), math.log(.95)] + [0.] * 7 for w in range(4)})
+        self.assertEqual(found, {'external_br': 1, 'external_mix:alpha=0.25': 0, 'external_mix:alpha=0.5': 1, 'external_mix:alpha=0.75': 1})
+        mixed = S.external_prior(base.worlds[0], [math.log(.05), math.log(.95)] + [0.] * 7, .25)
+        self.assertAlmostEqual(mixed[0], .725);self.assertEqual(mixed[2:], (0.,) * 7)
+
+    def test_missing_worlds_exclude_and_waiting_worlds_need_none(self):
+        legal, base = self.worlds()
+        found, missing = S.external_operators(base.grids, base.worlds, {w: [0.] * 9 for w in (0, 1, 3)})
+        self.assertEqual((found, missing), (dict.fromkeys(S.EXTERNAL_SETTINGS), [2]))
+        waiting = S.recompute(decision(waiting_worlds([{0: .3, 1: .1}] * 4, legal), root_legal=legal))
+        found, missing = S.external_operators(waiting.grids, waiting.worlds, {})
+        self.assertEqual((set(found.values()), missing), ({0}, []))
 
 
 if __name__ == '__main__':
