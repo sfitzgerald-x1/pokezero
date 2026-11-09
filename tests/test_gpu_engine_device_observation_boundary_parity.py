@@ -173,13 +173,14 @@ class DeviceBoundaryParityTests(unittest.TestCase):
         from gpu_engine import public_active as a, public_mon_state as m
         catalog=a.compile_active(self.catalog.vocabulary);t=catalog.device;sb=self.catalog.species.device.binding
         box=dict(state=a.initialize(1,t,species_binding=sb),mons=m.initialize(1,species_binding=sb))
-        def fact(op,side=-1,value=0):
+        def fact(op,side=-1,value=0,slot=0,bp=False):
             st,mons=box['state'],box['mons']
             if op==a.ARRIVE:
-                mons,ok=m.arrive(mons,side=side,slot=0,encounter=1,species=1,source_species=0,level=80,gender=0,
-                    hp_numerator=100,hp_denominator=100,status=0);self.assertTrue(bool(ok.all()));box['mons']=mons
+                mons,ok=m.arrive(mons,side=side,slot=slot,encounter=slot+1,species=slot+1,source_species=0,level=80,gender=0,
+                    hp_numerator=100,hp_denominator=100,status=0,kind=m.BATON_PASS if bp else m.SWITCH)
+                self.assertTrue(bool(ok.all()));box['mons']=mons
             enc=0 if side<0 else int(mons.encounter[0,side,int(mons.active[0,side])])
-            st,ok=a.apply(st,t,mons,operation=op,side=side,encounter=enc,value=value,producer_binding=t.binding)
+            st,ok=a.apply(st,t,mons,operation=op,side=side,encounter=enc,value=value,baton_pass=bp,producer_binding=t.binding)
             self.assertTrue(bool(ok.all()),op);box['state']=st
         def project():
             return a.project(box['state'],t,box['mons'],expected_vocabulary=t.vocabulary_binding)
@@ -222,6 +223,46 @@ class DeviceBoundaryParityTests(unittest.TestCase):
         # Without the clear (the old device) the fainted active's bag and clocks stayed visible.
         old=h.Context(before,self.tables.belief);h.observe(old,after,yes)
         self.assertFalse(self.compare_active(old.trackers,expected,a,equal=False))
+
+    def test_mean_look_clears_on_both_seats_at_every_arrival_like_b2(self):
+        """B2 ARRIVE (public_active.py:246) clears Mean Look on both seats, Baton Pass included.
+
+        Showdown agrees for a switch or drag (the linked trapped/trapper volatiles drop) but keeps
+        the trap through Baton Pass in both directions (gen3: noCopy false; copyVolatileFrom relinks).
+        The device matches B2 there on purpose (lead decision; the stale recharge bit precedent)."""
+        import json,os
+        root=os.environ['POKEZERO_SHOWDOWN_ROOT']
+        code="""const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');
+function mon(species){return {name:species,species,ability:'Pressure',item:'',moves:['meanlook','batonpass','roar','splash'],nature:'Hardy',
+ level:80,gender:'M',evs:{hp:84,atk:84,def:84,spa:84,spd:84,spe:84},ivs:{hp:31,atk:31,def:31,spa:31,spd:31,spe:31}};}
+function run(choices){const b=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
+ b.setPlayer('p1',{name:'A',team:[mon('Umbreon'),mon('Espeon')]});b.setPlayer('p2',{name:'B',team:[mon('Pikachu'),mon('Raichu')]});
+ for(const [x,y] of choices)b.makeChoices(x,y);const req=b.sides[1].activeRequest;
+ return {trapped:!!req.active[0].trapped,volatile:!!b.sides[1].active[0].volatiles.trapped};}
+console.log(JSON.stringify({switch:run([['move 1','move 4'],['switch 2','move 4']]),drag:run([['move 1','move 4'],['move 4','move 3']]),
+ victim_baton:run([['move 1','move 4'],['move 4','move 2'],['','switch 2']]),trapper_baton:run([['move 1','move 4'],['move 2','move 4'],['switch 2','']])}));"""
+        showdown=json.loads(subprocess.check_output(['node','-e',code,root],text=True))
+        self.assertEqual({k:v['trapped'] for k,v in showdown.items()},
+            dict(switch=False,drag=False,victim_baton=True,trapper_baton=True))
+        for kind,side,bp in (('switch',0,False),('drag',0,False),('victim_baton',1,True),('trapper_baton',0,True)):
+            a,catalog,fact,project=self.b2_active()
+            state=self.state();c=h.initialize(state,self.tables.belief);yes=j.ones(2,bool)
+            fact(a.ARRIVE,0);fact(a.ARRIVE,1);fact(a.TRAPPED,1);fact(a.STALL_ATTEMPT,1,1);fact(a.STALL_SUCCESS,1)
+            for name,value in (('meanlook_trap',1),('stall_counter',1)):
+                h.feature(c,1,state.active[:,1],name,j.full(2,value,j.int32),yes)
+            self.compare_active(c.trackers,project(),a)
+            self.assertTrue(bool(project().numeric[0,1,a.NUMERIC_COLUMNS[a.CORE.index('MEANLOOK_TRAP')]]))
+            fact(a.ARRIVE,side,slot=1,bp=bp)
+            old=state.active[:,side];after=state._replace(active=state.active.at[:,side].set(1))
+            if kind=='drag':h.drag(c,state,after,side,None,yes)
+            else:
+                h.install(c,after,side,yes)
+                if bp:h.baton_copy(c,after,side,old,yes)
+                h.withdraw(c,after,side,old,yes)
+            expected=project();self.compare_active(c.trackers,expected,a)
+            self.assertFalse(bool(expected.numeric[0,:,a.NUMERIC_COLUMNS[a.CORE.index('MEANLOOK_TRAP')]].any()),kind)
+            # Showdown's request says trapped after a Baton Pass; B2 and the device both show 0 (the quirk).
+            self.assertEqual(showdown[kind]['trapped'],bp,kind)
 
     def test_entry_reveals_follow_showdowns_shared_lines(self):
         import json,os

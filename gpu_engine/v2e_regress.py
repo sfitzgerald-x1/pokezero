@@ -32,7 +32,8 @@ tracker entries on lanes where an active faints (meanlook_trap: the actives'
 entries). Leaves the faint rule explains are removed from the lane-step's
 changes; any other changed leaf on it still needs an involved effect. PR0's
 remaining changes (the Intimidate and weather reveal gates, the Color Change
-type revert on departure) are the `PR0` plug-in.
+type revert on departure, the Mean Look clear on both seats at every arrival)
+are the `PR0` plug-in; its Mean Look predicate also reads the tracker pre-value.
 
 The involvement superset resolves the executed move as the engine does (slot,
 charge, standing or same-turn Encore, Struggle, a resumed queued action, every
@@ -72,6 +73,9 @@ FAINT_CLEAR_MON = ('confusion_turns', 'encore_turns', 'wrap_trap_turns', 'stall_
 FAINT_CLEAR_SEATS = ('meanlook_trap',)
 FAINT_CLEAR_LEAVES = tuple(['trackers.public_volatiles'] + [f"trackers.mon_features['{k}']" for k in FAINT_CLEAR_MON + FAINT_CLEAR_SEATS])
 PUBLIC_ORDER = 'trackers.public_order'
+MEANLOOK = "trackers.mon_features['meanlook_trap']"
+PRE_TRACKERS = (MEANLOOK,)
+TRAP_MOVES = ('meanlook', 'spiderweb', 'block')
 DEFAULT_DESTINY_BOND = 64
 SLEEP_MOVES = ('spore', 'hypnosis', 'sleeppowder', 'sing', 'lovelykiss', 'grasswhistle')
 
@@ -224,6 +228,8 @@ class Pre:
     """Numpy view of a migrated pre-state plus the move resolution of the step."""
     def __init__(self, named, vocab, sleep_talk_callable, struggle_mask, *, destiny_bond=DEFAULT_DESTINY_BOND):
         self.s = {k[len('state.'):]: np.asarray(v) for k, v in named.items() if k.startswith('state.')}
+        # Tracker pre-values a predicate may read (PRE_TRACKERS): a public flag can outlive its engine link.
+        self.t = {k[len('trackers.'):]: np.asarray(v) for k, v in named.items() if k.startswith('trackers.')}
         self.actions = np.asarray(named['actions']);self.vocab = vocab;self.destiny_bond = destiny_bond
         self.lanes = self.actions.shape[0];self.ids = {m: i for i, m in enumerate(vocab['moves'])}
         self.sleep_talk_callable = np.asarray(sleep_talk_callable);self.struggle = np.asarray(struggle_mask)
@@ -347,6 +353,19 @@ def entering_ability(*names):
     return predicate
 
 
+def meanlook_arrival(p):
+    """PR0 Mean Look arrival clear (B2, Baton quirk included): any arrival clears both seats'
+    public flag. Involved on both sides when a side may install this step and a flag may be set:
+    one in the tracker pre-state (it can outlive the engine link), an engine trap link, or a
+    trapping move this step."""
+    held = np.zeros((p.lanes, 2), bool)
+    if MEANLOOK[len('trackers.'):] in p.t:held |= (p.t[MEANLOOK[len('trackers.'):]] > 0).any(-1)
+    if 'trap_source' in p.s:held |= (p.s['trap_source'] >= 0).any(-1)
+    held |= p.side_uses(*TRAP_MOVES)
+    lane = installs(p).any(-1) & held.any(-1)
+    return np.repeat(lane[:, None], 2, axis=1)
+
+
 def type_revert(p):
     """PR0 Kecleon revert: a departing active with a live type overlay (types != base types),
     or a Color Change active that a same-step hit may change before it departs (Pursuit)."""
@@ -373,6 +392,7 @@ FAMILIES = {
              r"^trackers\.mon_features\['item_swapped'\]$"),
     'reveal': (r'^trackers\.(shown_ability|original_ability|borrowed_ability|belief_mask)$', r'^trackers\.visible_belief\.'),
     'types': (r'^trackers\.shown_types$',),
+    'meanlook': (r"^trackers\.mon_features\['meanlook_trap'\]$",),
     'all': (r'.*',),
 }
 ALL = dict(user=('all',), target=('all',), glob=('all',))
@@ -398,6 +418,8 @@ ALLOWED = {
     'intimidate_reveal': dict(user=('reveal',), target=(), glob=()),
     'weather_reveal': dict(user=('reveal',), target=(), glob=()),
     'type_revert': dict(user=('types',), target=(), glob=()),
+    # B2 clears the flag on both seats at an arrival; both sides are actors.
+    'meanlook_arrival': dict(user=('meanlook',), target=('meanlook',), glob=()),
 }
 
 
@@ -412,7 +434,8 @@ PLUGINS = {
     # PR0's public_order and faint-clear rules are special rules (see the docstring);
     # these are its remaining tracker changes.
     'PR0': dict(intimidate_reveal=entering_ability('intimidate'),
-                weather_reveal=entering_ability('drizzle', 'drought', 'sandstream'), type_revert=type_revert),
+                weather_reveal=entering_ability('drizzle', 'drought', 'sandstream'), type_revert=type_revert,
+                meanlook_arrival=meanlook_arrival),
     'A1': dict(curse=move('curse'), superpower=move('superpower'), charm=move('charm'), lovelykiss=move('lovelykiss'),
                aromatherapy=move('aromatherapy'), refresh=move('refresh'), sleep_clause=sleep_clause,
                sleep_immunity=sleep_immunity),
@@ -774,7 +797,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
                 bad = replay != result['public_order'][:real]                         # [L,2,6]
                 diff[:, position[PUBLIC_ORDER]] = bad.any(-1)
             struggle = ~np.asarray(usable(_state_only(named, template, real))).any(-1)
-            pre = Pre({n: np.asarray(named[n])[:real] for n in named if n.startswith('state.') or n == 'actions'},
+            pre = Pre({n: np.asarray(named[n])[:real] for n in named if n.startswith('state.') or n == 'actions' or n in PRE_TRACKERS},
                 vocab, callable_moves, struggle, destiny_bond=destiny_bond)
             involved = {k: np.asarray(f(pre), bool) for k, f in table.items()}       # [L,2] actor sides
             done = np.asarray(named['state.done'])[:real]

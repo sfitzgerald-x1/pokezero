@@ -210,6 +210,16 @@ def install(c,state,side,use,*,initial=False):
     for name in ('turns_active','confusion_turns','encore_turns','stall_counter','sub_present','meanlook_trap',
                  'sleep_skipped_turns','sleep_cant_pending','sleep_usable_pending','toxic_stage'):
         c=feature(c,side,p,name,j.zeros(b,j.int32),use)
+    # Every arrival (switch, replacement, drag, Baton target) clears the public Mean
+    # Look flag on BOTH seats, matching B2 (public_active.py:246, ARRIVE ignores
+    # baton_pass) and the champion parser (src/pokezero/showdown.py:2752-2770).
+    # Known B2 quirk, kept deliberately (lead decision, as for the stale recharge
+    # bit): Showdown is right to release the trap on a switch or drag (the linked
+    # trapped/trapper volatiles drop), but gen3 keeps it through Baton Pass in
+    # both directions (gen4 conditions trapped/trapper noCopy:false, copied and
+    # relinked by sim/pokemon.ts copyVolatileFrom:1247-1262), and the engine
+    # follows Showdown there (baton.py:29-35). baton_copy therefore never carries it.
+    c=feature(c,1-side,_li.take(state.active,r,1-side),'meanlook_trap',j.zeros(b,j.int32),use)
     c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,j.full((b,),-1,j.int32),use))
     td=c.trackers.tendency
     c=c._replace(trackers=c.trackers._replace(tendency=td._replace(
@@ -621,7 +631,8 @@ def baton_copy(c,state,side,outgoing,use):
     allowed=j.asarray([name in names for name in VOLATILE_NAMES])
     bag=_li.take(c.trackers.public_volatiles,r,side,src)&allowed[None,:]
     c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
-    for name in ('confusion_turns','sub_present','meanlook_trap'):
+    # Not meanlook_trap: B2 clears it at every arrival, Baton included (see install).
+    for name in ('confusion_turns','sub_present'):
         value=_li.take(c.trackers.mon_features[name],r,side,src)
         c=feature(c,side,p,name,value,use)
     c=c._replace(trackers=_write(c.trackers,'last_moves',side,p,j.full_like(p,-2),use))

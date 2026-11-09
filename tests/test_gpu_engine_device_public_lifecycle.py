@@ -204,5 +204,62 @@ class TypeRevertTests(unittest.TestCase):
         self.assertEqual(c.trackers.shown_types[:, 1, 0].tolist(), [[0, 0]] * 2)
 
 
+class MeanLookArrivalTests(unittest.TestCase):
+    """B2 clears Mean Look on both seats at every arrival (public_active.py:246), Baton included.
+
+    Showdown keeps the trap through Baton Pass (a known B2 quirk the device matches on purpose)."""
+    def trapped(self, b=3):
+        s = state(b);c = h.initialize(s, tables());yes = j.ones(b, bool)
+        set_active(c, s, 1, dict(meanlook_trap=1, stall_counter=2), yes)      # side 1 is trapped by side 0
+        set_active(c, s, 0, dict(meanlook_trap=1), yes)                       # (and side 0 too: both seats clear)
+        return s, c
+
+    def flags(self, c, s):
+        f = c.trackers.mon_features['meanlook_trap'];r = j.arange(len(s.done))
+        return [[int(f[i, side, int(c.trackers.active_slot[i, side])]) for side in (0, 1)] for i in range(len(s.done))]
+
+    def arrive(self, c, s, side, incoming, use, *, baton=False):
+        old = s.active[:, side];after = s._replace(active=s.active.at[:, side].set(incoming))
+        h.install(c, after, side, use)
+        if baton:h.baton_copy(c, after, side, old, use)
+        h.withdraw(c, after, side, old, use)
+        return after
+
+    def test_switch_and_replacement_arrivals_clear_both_seats(self):
+        s, c = self.trapped();use = j.array([True, False, True])
+        self.arrive(c, s, 0, j.full(3, 2, j.int32), use)                     # the trapper switches out
+        self.assertEqual(self.flags(c, s._replace(active=s.active.at[:, 0].set(j.array([2, 0, 2], j.int32)))),
+                         [[0, 0], [1, 1], [0, 0]])
+        # The other seat keeps its other clocks; only Mean Look is a both-seat clear.
+        self.assertEqual(c.trackers.mon_features['stall_counter'][:, 1, 0].tolist(), [2, 2, 2])
+
+    def test_drag_clears_both_seats(self):
+        s, c = self.trapped(2)
+        after = s._replace(active=s.active.at[:, 0].set(3))
+        h.drag(c, s, after, 0, None, j.array([True, False]))
+        self.assertEqual(c.trackers.mon_features['meanlook_trap'][:, 1, 0].tolist(), [0, 1])
+
+    def test_baton_target_clears_both_seats_in_both_directions(self):
+        for passer in (0, 1):
+            s, c = self.trapped(2);yes = j.ones(2, bool)
+            after = self.arrive(c, s, passer, j.full(2, 4, j.int32), yes, baton=True)
+            self.assertEqual(self.flags(c, after), [[0, 0], [0, 0]], passer)
+        # Other Baton-transferable public state still rides the pass.
+        s, c = self.trapped(2);yes = j.ones(2, bool)
+        set_active(c, s, 1, dict(sub_present=1, confusion_turns=2), yes)
+        after = self.arrive(c, s, 1, j.full(2, 4, j.int32), yes, baton=True)
+        f = c.trackers.mon_features;slot = int(c.trackers.active_slot[0, 1])
+        self.assertEqual((int(f['sub_present'][0, 1, slot]), int(f['confusion_turns'][0, 1, slot]),
+                          int(f['meanlook_trap'][0, 1, slot])), (1, 2, 0))
+
+    def test_jitted_vector_seat_install_clears_the_other_seat_per_row(self):
+        s, c = self.trapped(2)
+        side = j.array([0, 1], j.int32);incoming = j.array([2, 3], j.int32)
+        after = s._replace(active=s.active.at[j.arange(2), side].set(incoming))
+        out = jax.jit(lambda t, st, sd: h.install(h.Context(t, tables()), st, sd, j.ones(2, bool)).trackers)(c.trackers, after, side)
+        f = out.mon_features['meanlook_trap']
+        self.assertEqual((int(f[0, 1, 0]), int(f[1, 0, 0])), (0, 0))          # each row's other seat
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -248,6 +248,23 @@ class DigestAndRuleTests(unittest.TestCase):
         wrong = post.copy();wrong[0, 2, 0] = True
         self.assertEqual(faint_rule(entries, {vol: wrong}, {vol: base}, fainted, p2p, slots), (entries, []))
 
+    def test_pr0_meanlook_arrival_predicate_reads_the_tracker_pre_value(self):
+        from gpu_engine.v2e_regress import Pre, PLUGINS, lane_verdict, MEANLOOK
+        L = 5;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);MEAN = len(VOCAB['moves'])
+        s['trap_source'] = np.full((L, 2, 6), -1, np.int32);flag = np.zeros((L, 2, 6), np.int32)
+        flag[0, 1, 0] = 1;actions[0, 0] = 5                                 # lane 0: a stale public flag, a switch
+        flag[1, 1, 0] = 1                                                   # lane 1: a flag, no arrival
+        s['trap_source'][2, 1, 0] = 0;s['forced_switch'][2, 0] = True       # lane 2: an engine link, a replacement
+        actions[3, 1] = 6                                                   # lane 3: an arrival, no trap anywhere
+        s['moves'][4, 0, 0, 0] = MEAN;actions[4, 1] = 4                     # lane 4: Mean Look this step, a switch
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions;named[MEANLOOK] = flag
+        p = Pre(named, dict(VOCAB, moves=VOCAB['moves'] + ['meanlook']), np.append(CALLABLE, False), np.zeros((L, 2), bool))
+        both, no = [True, True], [False, False]
+        self.assertEqual(PLUGINS['PR0']['meanlook_arrival'](p).tolist(), [both, no, both, no, both])
+        self.assertEqual(lane_verdict({(MEANLOOK, 0), (MEANLOOK, 1)}, {'meanlook_arrival': [0, 1]}, None)[0], [])
+        self.assertEqual(lane_verdict({('trackers.shown_ability', 1)}, {'meanlook_arrival': [0, 1]}, None)[0],
+                         [('trackers.shown_ability', 1)])
+
     def test_allowed_fields_are_side_aware(self):
         from gpu_engine.v2e_regress import lane_verdict
         effects = {'curse': [0]}
