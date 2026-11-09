@@ -7,8 +7,11 @@ f76228a1 battle (gpu_engine/effect_probe.cjs). Every request step sends the
 same semantic chance tape (pokezero.gpu_chance_tape.v2) to both engines, then
 compares the post-step states on the fields of the fidelity-patch design 5.1.
 Fields whose engine leaf does not exist yet (perish_counter and so on) are
-compared only when present on both sides. Unresolved chance roles count as
-failures. Output: OUT/<move>.json per scenario with a per-case diff list, and
+always compared, against the engine's neutral value (0, -1 or False), so a
+scenario reports MISMATCH until the PR that adds the state; a scenario's
+`require_fields` names engine fields that must exist. Unresolved chance roles,
+and any unaudited start-of-battle randomness (lead speed ties, gender, Quick
+Claw), count as failures. Output: OUT/<move>.json per scenario with a per-case diff list, and
 OUT/summary.json.
 
 Pool rows come from gpu_engine/team_rows.cjs (generate_teams.cjs's row builder)
@@ -38,8 +41,9 @@ SLEEP_CLAUSE_FORMAT = 'gen3customgame@@@sleepclausemod'
 STATUS = ['', 'par', 'brn', 'psn', 'tox', 'slp', 'frz']
 DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
 EFFECT_BOUNDS = (16, 16, 4, 2)
-# Neutral tape: no thaw, no full paralysis, hits, no crit, top damage roll,
-# no secondary, protect succeeds, side 0 wins ties. Scenarios override fields.
+# Neutral tape: no thaw, no full paralysis, hits, no crit, the minimum (85%)
+# damage roll (draws[5]=0 -> random(16)=15), no secondary, protect succeeds,
+# side 0 wins ties. Scenarios override fields.
 DEFAULT_ROW = [0, 99, 99, 0, 15, 0, 0, 0, 0, 0, 0, 0]
 DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99, 99], sleep_talk=[0, 0],
                     effect=[[15, 0, 0, 0], [15, 0, 0, 0]])
@@ -47,14 +51,18 @@ DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99,
 DEFAULT_AUX = dict(phazing=[0, 0], entry_ties=[0, 0], initial_tie=0)
 BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2)
 DESTINY_BOND_NAME = 'DESTINY_BOND'
-# Optional engine leaves (added by later PRs) -> Showdown snapshot accessors.
+# Design 5.1 fields an engine may not have yet: Showdown accessor and the engine's
+# neutral value used while the leaf is absent.
 OPTIONAL = {
-    'perish_counter': lambda v: v['perishsong'] or 0,
-    'yawn_counter': lambda v: v['yawn'] or 0,
-    'partial_trap_counter': lambda v: (v['partiallytrapped'] or {}).get('duration') or 0,
-    'partial_trap_source': lambda v: -1 if v['partiallytrapped'] is None else v['partiallytrapped']['source'],
-    'recharge_counter': lambda v: v['mustrecharge'] or 0,
+    'perish_counter': (lambda v: v['perishsong'] or 0, 0),
+    'yawn_counter': (lambda v: v['yawn'] or 0, 0),
+    'partial_trap_counter': (lambda v: (v['partiallytrapped'] or {}).get('duration') or 0, 0),
+    'partial_trap_source': (lambda v: -1 if v['partiallytrapped'] is None else v['partiallytrapped']['source'], -1),
+    'recharge_counter': (lambda v: v['mustrecharge'] or 0, 0),
 }
+# require_fields names: the OPTIONAL leaves, item_knocked, destiny_bond (state.DESTINY_BOND)
+# and effect (ChanceInputs.effect).
+REQUIRABLE = tuple(OPTIONAL) + ('item_knocked', 'destiny_bond', 'effect')
 
 
 # ---------------------------------------------------------------------------
@@ -74,9 +82,12 @@ def load_scenario(path):
     for axis in scenario.get('axes', []):
         if not axis.get('values') or not axis.get('field'):raise ValueError(f'{path}: axis {axis.get("name")} needs field and values')
         for value in axis['values']:_check_value(axis['field'], value)
+    for field, value in scenario.get('tape', {}).items():_check_value(field, value)
     for step, fields in scenario.get('tape_steps', {}).items():
         int(step)
         for field, value in fields.items():_check_value(field, value)
+    unknown = sorted(set(scenario.get('require_fields', ())) - set(REQUIRABLE))
+    if unknown:raise ValueError(f'{path}: unknown require_fields {unknown}; choose from {REQUIRABLE}')
     scenario.setdefault('format', SLEEP_CLAUSE_FORMAT)
     scenario.setdefault('seed', [1, 2, 3, 4])
     scenario.setdefault('axes', [])
@@ -162,8 +173,11 @@ def requested_seats(state):
     return (~forced.any(axis=1)[:, None] | forced) & ~np.asarray(state['done'])[:, None]
 
 
-def compare_lane(view, snapshot, vocab, *, mask, optional=(), destiny_bond=None):
-    """Differences between one engine lane (numpy dict) and one Showdown snapshot."""
+def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None):
+    """Differences between one engine lane (numpy dict) and one Showdown snapshot.
+
+    Every design 5.1 field is compared; an engine leaf that does not exist yet is
+    read as its neutral value (OPTIONAL, item_knocked False, Destiny Bond False)."""
     diffs = []
     def check(field, showdown, engine):
         if showdown != engine:diffs.append(dict(field=field, showdown=showdown, engine=engine))
@@ -180,7 +194,7 @@ def compare_lane(view, snapshot, vocab, *, mask, optional=(), destiny_bond=None)
             if alive and mon['status'] == 'slp':
                 check(p + 'status_counter', mon['status_time'], int(view['status_counter'][side, slot]))
             check(p + 'item', mon['item'], _name(vocab, 'items', view['item'][side, slot]))
-            if 'item_knocked' in view:check(p + 'item_knocked', mon['item_knocked'], bool(view['item_knocked'][side, slot]))
+            check(p + 'item_knocked', mon['item_knocked'], bool(view['item_knocked'][side, slot]) if 'item_knocked' in view else False)
             check(p + 'pp', mon['pp'], [int(x) for x in view['pp'][side, slot, :len(mon['pp'])]])
         if sd['active'] != active or sd['active'] is None:continue
         # Active-only fields: Showdown clears volatiles and stages on switch-out.
@@ -193,10 +207,10 @@ def compare_lane(view, snapshot, vocab, *, mask, optional=(), destiny_bond=None)
         check(p + 'encore_counter', (v['encore'] or {}).get('duration') or 0, int(view['encore_counter'][side, active]))
         check(p + 'encore_move', (v['encore'] or {}).get('move') or '', _name(vocab, 'moves', view['encore_move'][side, active]))
         check(p + 'substitute_hp', v['substitute'] or 0, int(view['substitute_hp'][side, active]))
-        for name in optional:
-            check(p + name, OPTIONAL[name](v), int(view[name][side, active]))
-        if destiny_bond is not None:
-            check(p + 'destiny_bond', v['destinybond'], bool(int(view['volatile'][side, active]) & destiny_bond))
+        for name, (read, neutral) in OPTIONAL.items():
+            check(p + name, read(v), int(view[name][side, active]) if name in view else neutral)
+        check(p + 'destiny_bond', v['destinybond'],
+              bool(int(view['volatile'][side, active]) & destiny_bond) if destiny_bond is not None else False)
     for side in range(2):
         check(f'{side}:mask', snapshot['sides'][side]['mask'], [bool(x) for x in mask[side]])
     done = bool(view['done'])
@@ -264,6 +278,9 @@ class Engine:
         self.mask = jax.jit(lambda s: transition.action_mask(s, self.table))
         self.destiny_bond = getattr(state_module, DESTINY_BOND_NAME, None)
         self.optional = tuple(n for n in OPTIONAL if n in state_module.BattleState._fields)
+        self.fields = set(self.optional) | ({'item_knocked'} if 'item_knocked' in state_module.BattleState._fields else set())
+        self.fields |= ({'destiny_bond'} if self.destiny_bond is not None else set())
+        self.fields |= ({'effect'} if 'effect' in transition.ChanceInputs._fields else set())
         self.has_effect = 'effect' in transition.ChanceInputs._fields
 
     def start(self, rows):
@@ -303,6 +320,11 @@ def lane_view(arrays, lane):
 # ---------------------------------------------------------------------------
 
 def run_scenario(scenario, engine, showdown, metadata):
+    missing = sorted(set(scenario.get('require_fields', ())) - engine.fields)
+    if missing:
+        return dict(schema=RESULT_SCHEMA, move=scenario['move'], format=scenario['format'], cases=0,
+            status_counts={'MISSING_ENGINE_FIELDS': 1}, missing_engine_fields=missing, expectation=scenario.get('expect'),
+            expectation_met=False, expectation_detail=f'engine lacks required fields {missing}', results=[])
     prepared = showdown.ask(cmd='prepare', teams=scenario['teams'])
     if prepared['vocabulary'] != metadata['vocabulary']:raise ValueError('probe vocabulary differs from the pool metadata')
     cases = enumerate_cases(scenario)
@@ -312,12 +334,17 @@ def run_scenario(scenario, engine, showdown, metadata):
     state = engine.start(prepared['rows'])
     arrays, mask = engine.views(state)
     records = []
+    # Start-of-battle randomness runs on the seeded PRNG but is audited: anything
+    # beyond inert gender and the no-Quick-Claw roll (a lead Speed tie, a real
+    # Quick Claw, gender that matters) makes the case unresolved.
+    initial_random = [e for e in started['audit'] if e['kind'] in ('INITIAL_RANDOM', 'UNRESOLVED')]
     for i, case in enumerate(cases):
         diffs = compare_lane(lane_view(arrays, i), started['snapshots'][i], vocab, mask=mask[i],
-            optional=engine.optional, destiny_bond=engine.destiny_bond)
+            destiny_bond=engine.destiny_bond)
         records.append(dict(case_id=case['case_id'], assignment=case['assignment'], status=None, initial_diffs=diffs,
             initial_audit=started['audit'], steps=[], last_tape=None, last_aux=None, live=True))
-        if diffs:records[-1].update(status='INITIAL_MISMATCH', live=False)
+        if initial_random:records[-1].update(status='UNRESOLVED_INITIAL_CHANCE', live=False)
+        elif diffs:records[-1].update(status='INITIAL_MISMATCH', live=False)
     for step, script in enumerate(scenario['script']):
         if not any(r['live'] for r in records):break
         pending = np.asarray(state.pending_residual)
@@ -358,7 +385,7 @@ def run_scenario(scenario, engine, showdown, metadata):
             if invalid[i]:
                 record.update(status='ENGINE_INVALID_ACTION', live=False);continue
             entry['diffs'] = compare_lane(lane_view(arrays, i), sd['snapshot'], vocab, mask=mask[i],
-                optional=engine.optional, destiny_bond=engine.destiny_bond)
+                destiny_bond=engine.destiny_bond)
             if entry['diffs']:entry['showdown_log_tail'] = sd['snapshot']['log_tail']
             if sd['snapshot']['ended'] or bool(arrays['done'][i]):record['live'] = False
     for record in records:
@@ -373,7 +400,8 @@ def run_scenario(scenario, engine, showdown, metadata):
     for record in records:counts[record['status']] = counts.get(record['status'], 0) + 1
     return dict(schema=RESULT_SCHEMA, move=scenario['move'], format=scenario['format'], cases=len(records),
         status_counts=counts, expectation=scenario.get('expect'), expectation_met=met, expectation_detail=reason,
-        compared_optional_fields=list(engine.optional), destiny_bond_compared=engine.destiny_bond is not None,
+        engine_fields=sorted(engine.fields), neutral_engine_fields=sorted(set(REQUIRABLE) - engine.fields - {'effect'}),
+        require_fields=scenario.get('require_fields', []),
         effect_stream_in_engine=engine.has_effect, sets=prepared['sets'], script=scenario['script'],
         axes=scenario.get('axes', []), results=records)
 

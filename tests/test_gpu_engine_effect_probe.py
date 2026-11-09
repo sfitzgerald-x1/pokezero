@@ -66,7 +66,8 @@ class PureTests(unittest.TestCase):
         self.assertEqual(loaded['format'], probe.SLEEP_CLAUSE_FORMAT);self.assertEqual(loaded['expect'], dict(exact=True))
         bad = [scenario(schema='x'), dict(scenario(), teams=[[]] * 2), scenario(axes=[dict(name='a', field='draws.0.6', values=[100])]),
                scenario(axes=[dict(name='a', field='effect.0.3', values=[2])]), scenario(axes=[dict(name='a', field='nope.0', values=[0])]),
-               scenario(axes=[dict(name='a', field='draws.0', values=[0])]), scenario(tape_steps={'0': {'secondary.2': 0}})]
+               scenario(axes=[dict(name='a', field='draws.0', values=[0])]), scenario(tape_steps={'0': {'secondary.2': 0}}),
+               scenario(tape={'draws.1.4': 16}), scenario(tape={'phazing.0': 60}), scenario(tape={'initial_tie': 2})]
         for i, data in enumerate(bad):
             with self.subTest(i=i), self.assertRaises((ValueError, KeyError)):probe.load_scenario(self.write(data))
 
@@ -101,15 +102,27 @@ class PureTests(unittest.TestCase):
         mask = MASK.copy();mask[1, 4] = False
         self.assertEqual([d['field'] for d in probe.compare_lane(view(), snapshot(), VOCAB, mask=mask)], ['1:mask'])
 
-    def test_optional_fields_only_when_present(self):
+    def test_absent_engine_fields_compare_as_neutral_values(self):
         sd = snapshot();sd['sides'][0]['mons'][0]['volatiles']['perishsong'] = 3
         sd['sides'][0]['mons'][0]['volatiles']['destinybond'] = True
-        self.assertEqual(probe.compare_lane(view(), sd, VOCAB, mask=MASK), [])
-        v = view();v['perish_counter'] = np.zeros((2, 6), np.int32)
-        fields = [d['field'] for d in probe.compare_lane(v, sd, VOCAB, mask=MASK, optional=('perish_counter',), destiny_bond=64)]
-        self.assertEqual(fields, ['0:0:perish_counter', '0:0:destiny_bond'])
-        v['perish_counter'][0, 0] = 3;v['volatile'][0, 0] = 64
-        self.assertEqual(probe.compare_lane(v, sd, VOCAB, mask=MASK, optional=('perish_counter',), destiny_bond=64), [])
+        sd['sides'][1]['mons'][2]['item_knocked'] = True
+        sd['sides'][1]['mons'][0]['volatiles']['partiallytrapped'] = dict(duration=4, source=0)
+        fields = [d['field'] for d in probe.compare_lane(view(), sd, VOCAB, mask=MASK)]
+        self.assertEqual(sorted(fields), ['0:0:destiny_bond', '0:0:perish_counter', '1:0:partial_trap_counter',
+                                          '1:0:partial_trap_source', '1:2:item_knocked'])
+        v = view();v['perish_counter'] = np.zeros((2, 6), np.int32);v['perish_counter'][0, 0] = 3;v['volatile'][0, 0] = 64
+        v['item_knocked'] = np.zeros((2, 6), bool);v['item_knocked'][1, 2] = True
+        v['partial_trap_counter'] = np.zeros((2, 6), np.int32);v['partial_trap_counter'][1, 0] = 4
+        v['partial_trap_source'] = np.full((2, 6), -1, np.int32);v['partial_trap_source'][1, 0] = 0
+        self.assertEqual(probe.compare_lane(v, sd, VOCAB, mask=MASK, destiny_bond=64), [])
+
+    def test_require_fields_are_validated(self):
+        loaded = probe.load_scenario(self.write(scenario(require_fields=['perish_counter', 'destiny_bond'])))
+        self.assertEqual(loaded['require_fields'], ['perish_counter', 'destiny_bond'])
+        with self.assertRaises(ValueError):probe.load_scenario(self.write(scenario(require_fields=['perish'])))
+        engine = type('E', (), dict(fields=set(), lanes=16))()
+        result = probe.run_scenario(dict(loaded, expect=dict(exact=True)), engine, None, None)
+        self.assertEqual(result['status_counts'], {'MISSING_ENGINE_FIELDS': 1});self.assertFalse(result['expectation_met'])
 
     def test_expectation_judge(self):
         exact = dict(case_id='a', assignment=dict(hit=99), status='EXACT', steps=[dict(diffs=[])])
@@ -144,6 +157,11 @@ class ShowdownSideTests(unittest.TestCase):
             self.assertEqual(prepared['vocabulary']['moves'][prepared['rows'][0][0]['moves'][0]], 'thunderbolt')
             started = sd.ask(cmd='start', format=data['format'], seed=data['seed'], cases=2, sets=prepared['sets'])
             self.assertEqual([s['sides'][0]['active'] for s in started['snapshots']], [0, 0])
+            self.assertEqual({e['kind'] for e in started['audit']} - {'INERT_GENDER', 'INERT_QUICK_CLAW_ROLL'}, set())
+            mirror = [prepared['sets'][1][0]] + prepared['sets'][0][1:]                      # equal-Speed leads
+            tie = sd.ask(cmd='start', format=data['format'], seed=data['seed'], cases=1, sets=[mirror, prepared['sets'][1]])
+            self.assertIn('INITIAL_RANDOM', {e['kind'] for e in tie['audit']})
+            started = sd.ask(cmd='start', format=data['format'], seed=data['seed'], cases=2, sets=prepared['sets'])
             tape, _ = probe.step_inputs(data, dict(assignment=dict(par=0, full_para=99)), 0)
             tapes = [dict(schema=probe.TAPE_SCHEMA, nonce=f'test:{i}', **tape) for i in range(2)]
             tapes[1]['secondary'] = [99, 99]

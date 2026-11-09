@@ -16,10 +16,11 @@ function setup(root) {
   const {PRNG} = require(path.join(root, 'dist/sim/prng.js'));
   const pool = rows.load(root);
   const levels = JSON.parse(fs.readFileSync(path.join(root, 'dist/data/random-battles/gen3/sets.json'), 'utf8'));
-  let tape = null, audit = [];
-  require('./chance_hooks.cjs').install(Battle, PRNG, () => tape, row => audit.push(row), () => null,
+  let tape = null, audit = [], initializing = null;
+  require('./chance_hooks.cjs').install(Battle, PRNG, () => tape, row => audit.push(row), () => initializing,
     path.join(root, 'dist/sim/pokemon.js'));
-  return {Battle, pool, levels, setTape(value) {tape = value;}, takeAudit() {const a = audit; audit = []; return a;}};
+  return {Battle, pool, levels, setTape(value) {tape = value;}, setInitializing(value) {initializing = value;},
+    takeAudit() {const a = audit; audit = []; return a;}};
 }
 
 // Authored set -> complete set: the randbats level for the species unless given,
@@ -117,14 +118,21 @@ function main() {
     },
     start(cmd) {
       env.setTape(null); env.takeAudit();
-      battles = Array.from({length:cmd.cases}, () => {
-        const b = new env.Battle({formatid:cmd.format, seed:cmd.seed});
-        cmd.sets.forEach((team, s) => b.setPlayer(`p${s + 1}`, {name:`p${s + 1}`, team:team.map(x => ({...x}))}));
-        for (const side of b.sides) side.pokemon.forEach((p, i) => {p.pzIndex = i;});
-        return b;
-      });
-      // Start-of-battle randomness (switch-in order, gender) uses the seeded PRNG;
-      // the first tape is installed only at the first step. Audit is returned.
+      // Start-of-battle randomness uses the seeded PRNG but is audited by the chance
+      // hooks: an M/F gender draw is inert unless a set uses Attract or Cute Charm,
+      // the end-of-turn Quick Claw roll is inert without a Quick Claw holder, and
+      // any other draw (a lead Speed tie) is reported as INITIAL_RANDOM.
+      const genderSensitive = cmd.sets.some(team => team.some(set =>
+        set.moves.includes('attract') || env.pool.toID(set.ability) === 'cutecharm'));
+      env.setInitializing({allow_inert_gender: !genderSensitive});
+      try {
+        battles = Array.from({length:cmd.cases}, () => {
+          const b = new env.Battle({formatid:cmd.format, seed:cmd.seed});
+          cmd.sets.forEach((team, s) => b.setPlayer(`p${s + 1}`, {name:`p${s + 1}`, team:team.map(x => ({...x}))}));
+          for (const side of b.sides) side.pokemon.forEach((p, i) => {p.pzIndex = i;});
+          return b;
+        });
+      } finally {env.setInitializing(null);}
       return {snapshots:battles.map(snapshot), audit:env.takeAudit()};
     },
     step(cmd) {
