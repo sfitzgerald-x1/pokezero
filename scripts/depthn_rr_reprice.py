@@ -178,6 +178,7 @@ def parser():
 
 def options(argv=None):
     p = parser();args = p.parse_args(argv);server.evaluators.check_arguments(p, args);server.check_precision_environment(p, args)
+    server.check_reply_arguments(p, args)   # br_fp replays (--reply-archive with its two sha256 flags), as the server checks them
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     for name in BENCH_ONLY:
         if getattr(args, name, None):p.error(f'--{name.replace("_", "-")} is the bench\'s; cells come from --cells or --sample')
@@ -623,7 +624,7 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None):
 
 
 REPLAY_FIELDS = ('q_values', 'completed_q', 'policy_target', 'root_value', 'action_mean_q', 'action_policy_target', 'reduction_note', 'block_causes',
-    'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view')
+    'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view', 'reply_prior')   # reply_prior: --reply-archive (br_fp) only
 
 
 def decision_row(cell, row, request, response, wall, found, detail, *, shard, capture_seconds, live_problem=None):

@@ -23,8 +23,12 @@ def legal(*actions):
 class FakeEnv:
     """Scripted rounds: each round is {player: (legal tuple, request)}; the battle ends with `winner` after the last round."""
 
-    def __init__(self, rounds, winner):
-        self.rounds, self.winner, self.steps = rounds, winner, []
+    def __init__(self, rounds, winner, lines=None):
+        self.rounds, self.winner, self.steps, self.lines = rounds, winner, [], lines   # lines[i]: protocol lines before round i
+
+    @property
+    def protocol_lines(self):
+        return tuple(x for chunk in (self.lines or ())[:self.i + 1] for x in chunk)
 
     def reset(self, *, seed):
         self.seed, self.i, self.steps = seed, 0, []
@@ -105,6 +109,15 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual([r['turn'] for r in rows], [1, 2])
         self.assertEqual(env.steps, [{OUR_SEAT: 0, FP_SEAT: 2}, {OUR_SEAT: 1, FP_SEAT: 5}])
         self.assertEqual((parity, decided), (1, 2))   # greedy 0 matches; greedy 4 vs the fake argmax 1 doesn't
+        self.assertEqual([r['fp_opp_hazard_credit'] for r in rows], [0, 0])
+
+    def test_rows_carry_foul_plays_view_of_our_spikes_losses_at_their_decision(self):
+        env = FakeEnv(two_rounds(), OUR_SEAT, lines=[SPIKES_LINES[:2], SPIKES_LINES[2:7]])
+        rows, _, _ = d.replay(env, FakePolicy(), game(), rng=None)
+        self.assertEqual([r['fp_opp_hazard_credit'] for r in rows], [np.float32(np.float32(.12) * np.float32(1 / 6)),
+                                                                      d.fp_view_opp_hazard_credit(SPIKES_LINES[:7], OUR_SEAT)])
+        self.assertAlmostEqual(float(rows[1]['fp_opp_hazard_credit']), .23 / 6, places=7)
+        self.assertEqual([r['spikes_unknown_before'] for r in rows], [False, False])
 
     def test_request_compare_ignores_rqid_and_username_but_not_the_team(self):
         bad = game(our_requests=['|request|' + json.dumps(request('z')), '|request|' + json.dumps(request('b'))])
@@ -335,6 +348,128 @@ class PeerViewRedactionTests(unittest.TestCase):
         with self.assertRaises(SystemExit):t.redact_peer_view(np.zeros((2, 22, 132), np.float32))
 
 
+# Spikes hits on our seat (p1), shown drops 12, 11, 12, 100: 300/300 -> 263/300 is 100% -> 88%; 298/299 -> 261/299 is 99% (a damaged
+# mon never shows 100) -> 88%; 263/300 -> 226/300 is 88% -> 76%; a 20 HP Pichu KO'd is 100%. Their side's hit, a Rest heal and a
+# Thunderbolt KO sit between.
+SPIKES_LINES = (
+    '|switch|p1a: Golem|Golem, L83, M|300/300', '|-damage|p1a: Golem|263/300|[from] Spikes', '|turn|2',
+    '|switch|p2a: Zapdos|Zapdos, L74|250/250', '|-damage|p2a: Zapdos|219/250|[from] Spikes',
+    '|switch|p1a: Snorlax|Snorlax, L70, M|298/299', '|-damage|p1a: Snorlax|261/299|[from] Spikes',
+    '|-heal|p1a: Snorlax|299/299 slp|[from] move: Rest', '|switch|p1a: Golem|Golem, L83, M|263/300',
+    '|-damage|p1a: Golem|226/300|[from] Spikes', '|move|p2a: Zapdos|Thunderbolt|p1a: Golem', '|-damage|p1a: Golem|0 fnt',
+    '|faint|p1a: Golem', '|switch|p1a: Pichu|Pichu, L100|20/20', '|-damage|p1a: Pichu|0 fnt|[from] Spikes')
+
+
+class HazardCreditTests(unittest.TestCase):
+    def test_shown_percent_is_item_3s_public_percent(self):
+        for top in range(1, 801):
+            hp = np.arange(top + 1)
+            shown = np.array([d.shown_percent(h, top) for h in hp])
+            np.testing.assert_array_equal(shown, np.round(t.public_percent((hp / top).astype(np.float32)).astype(np.float64) * 100))
+        self.assertEqual((d.shown_percent(263, 300), d.shown_percent(299, 300), d.shown_percent(0, 300)), (88, 99, 0))
+
+    def test_spikes_hits_read_each_hit_against_the_mons_previous_exact_hp(self):
+        self.assertEqual(d.spikes_hits(SPIKES_LINES, 'p1'), [(300, 263, 300), (298, 261, 299), (263, 226, 300), (20, 0, 20)])
+        self.assertEqual(d.spikes_hits(SPIKES_LINES, 'p2'), [(250, 219, 250)])
+        self.assertIsNone(d.spikes_hits(SPIKES_LINES[1:], 'p1'))   # the first hit's previous HP is not on the lines
+        self.assertEqual(d.spikes_hits(('|request|{"side": {}}', '|turn|1'), 'p1'), [])
+
+    def test_credit_sums_public_percent_drops_with_twosum_then_divides_by_six(self):
+        # drops 12, 11, 12, 100 percent: 1.35 of a mon
+        got = d.fp_view_opp_hazard_credit(SPIKES_LINES, 'p1');self.assertEqual(got.dtype, np.float32)
+        high = low = np.float32(0)
+        for drop in (12, 11, 12, 100):high, low = d.two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1 / 100)))
+        self.assertEqual(got, np.float32(np.float32(high + low) * np.float32(1 / 6)))
+        self.assertAlmostEqual(float(got), 1.35 / 6, places=6)
+        exact = (37 / 300 + 37 / 299 + 37 / 300 + 1.) / 6   # the env's own value: our exact fractions
+        self.assertGreater(abs(float(got) - exact), 1e-4)
+        self.assertEqual(d.fp_view_opp_hazard_credit(SPIKES_LINES[1:], 'p1'), np.float32(0))
+        self.assertEqual(d.fp_view_opp_hazard_credit(SPIKES_LINES * 6, 'p1'), np.float32(1))   # clipped at 1, as the device
+
+    def test_twosum_compensates_a_long_float32_sum(self):
+        high = low = np.float32(0);naive = np.float32(0)
+        for _ in range(997):high, low = d.two_sum_add(high, low, np.float32(.01));naive = np.float32(naive + np.float32(.01))
+        self.assertEqual(np.float32(high + low), np.float32(997 * np.float64(np.float32(.01))))
+        self.assertNotEqual(naive, np.float32(high + low))
+        self.assertEqual(d.two_sum_add(np.float32(.5), np.float32(0), np.float32(0)), (np.float32(.5), np.float32(0)))
+
+    def test_peer_view_v2_zeroes_self_credit_and_writes_the_public_opp_credit(self):
+        rng = np.random.default_rng(0);numeric = rng.random((5, 23, 132)).astype(np.float32);before = numeric.copy()
+        credit = rng.random(5).astype(np.float32);v1 = t.redact_peer_view(before.copy())
+        t.redact_peer_view(numeric, 'peer-view-v2', credit)
+        self.assertTrue((numeric[:, 0, 115] == 0).all());np.testing.assert_array_equal(numeric[:, 0, 116], credit)
+        changed = numeric != v1;changed[:, 0, 115:117] = False;self.assertFalse(changed.any())
+        arrays = dict(numeric_features=before.copy(), fp_opp_hazard_credit=credit)
+        np.testing.assert_array_equal(t.apply_redaction(arrays, 'peer-view-v2')['numeric_features'], numeric)
+        self.assertIs(t.apply_redaction(dict(numeric_features=before), None)['numeric_features'], before)
+        with self.assertRaises(SystemExit):t.redact_peer_view(before.copy(), 'peer-view-v2')
+        with self.assertRaises(SystemExit):t.redact_peer_view(before.copy(), 'peer-view-v2', credit[:4])
+        with self.assertRaises(SystemExit):t.redact_peer_view(before.copy(), 'peer-view-v3')
+
+
+@unittest.skipUnless(__import__('importlib').util.find_spec('jax'), 'jax not installed')
+class HazardCreditDeviceTests(unittest.TestCase):
+    """fp_view_opp_hazard_credit against the device's own pieces: engine_device_trackers._percent, engine_device_damage_history._add
+    and engine_device_features' clip(value / 6, 0, 1) under jit, the GPU-built peer views' arithmetic (the live root's
+    fill_owner_spikes divides per hit eagerly on the CPU and can be one ulp away); against device values recorded by the
+    48-cell opponent-view run; and spikes_hits against the constructor's own parser (line_facts' owner_spikes)."""
+
+    def test_spikes_hits_equal_the_constructors_owner_spikes(self):
+        from gpu_engine import constructor_worlds as cw
+        rng = np.random.default_rng(11);cases = [SPIKES_LINES, SPIKES_LINES[1:], SPIKES_LINES[:7]]
+        for _ in range(300):   # random hit / heal / switch / faint sequences, both seats
+            lines, hp = [], {}
+            for _ in range(int(rng.integers(1, 12))):
+                seat = f'p{int(rng.integers(1, 3))}';mon = f'{seat}a: Mon{int(rng.integers(0, 3))}';top = int(rng.integers(20, 400))
+                kind = rng.choice(['switch', 'spikes', 'heal', 'faint', 'turn'])
+                now = int(rng.integers(0, top + 1))
+                if kind == 'switch':lines.append(f'|switch|{mon}|Mon, L80|{now}/{top}')
+                elif kind == 'spikes':lines.append(f'|-damage|{mon}|' + (f'{now}/{top}' if now else '0 fnt') + '|[from] Spikes')
+                elif kind == 'heal':lines.append(f'|-heal|{mon}|{now}/{top}|[from] item: Leftovers')
+                elif kind == 'faint':lines.append(f'|faint|{mon}')
+                else:lines.append(f'|turn|{int(rng.integers(1, 30))}')
+            cases.append(tuple(lines))
+        for lines in cases:
+            for owner, seat in ((0, 'p1'), (1, 'p2')):
+                theirs = cw.line_facts(list(lines), owner).owner_spikes
+                mine = d.spikes_hits(lines, seat)
+                self.assertEqual(None if mine is None else [tuple(x) for x in mine], None if theirs is None else [tuple(x) for x in theirs], lines)
+
+    def test_matches_the_device_rule_bit_for_bit(self):
+        import jax.numpy as jnp
+        from gpu_engine import engine_device_damage_history as history
+        from gpu_engine import engine_device_trackers as trackers
+        import jax
+        # engine_device_features' field readout as the device runs it: inside a jitted program, where XLA turns / 6. into a
+        # multiplication by the float32 reciprocal (op-by-op eager JAX divides exactly)
+        readout = jax.jit(lambda pair: jnp.clip(jnp.nan_to_num(pair.sum()) / 6., 0., 1.))
+        per_hit = jax.jit(lambda drop: jnp.asarray(drop, jnp.float32) / 100)   # engine_device_public_port.spikes' drop / 100, jitted
+        rng = np.random.default_rng(7)
+        for trial in range(600):
+            top = int(rng.integers(1, 801));hits = []
+            for _ in range(int(rng.integers(1, 40 if trial % 2 else 6))):   # half the sequences stay under the clip at 1
+                before = int(rng.integers(0, top + 1));hits.append((before, int(rng.integers(0, before + 1)), top))
+            pair = jnp.zeros(2, jnp.float32);high = low = np.float32(0)
+            for before, after, maximum in hits:
+                drop = max(0, int(trackers._percent(before, maximum)) - int(trackers._percent(after, maximum)))
+                self.assertEqual(drop, max(0, d.shown_percent(before, maximum) - d.shown_percent(after, maximum)))
+                pair = history._add(pair, per_hit(drop))
+                high, low = d.two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1 / 100)))
+            np.testing.assert_array_equal(np.asarray(pair), np.array([high, low], np.float32))
+            device = float(readout(pair))
+            lines = [x for before, after, maximum in hits for x in (f'|switch|p1a: Mon|Mon, L80|{before}/{maximum}',
+                                                                    f'|-damage|p1a: Mon|{after}/{maximum}|[from] Spikes')]
+            self.assertEqual(d.fp_view_opp_hazard_credit(lines, 'p1'), np.float32(device))
+        # device values from the 48-cell check (battles 215, 543): its / 100 and / 6. are float32 reciprocal multiplications
+        for hits, want in ((((199, 167, 263), (30, 0, 310)), 0.03666666895151138),
+                           (((199, 167, 263), (30, 0, 310), (316, 277, 316)), 0.05666666477918625),
+                           (((272, 238, 272), (296, 259, 296), (278, 244, 278), (269, 236, 269), (54, 20, 278), (266, 233, 266),
+                             (37, 3, 278), (238, 205, 266), (54, 20, 278), (237, 204, 266), (295, 258, 296)), 0.2199999988079071)):
+            lines = [x for before, after, maximum in hits for x in (f'|switch|p1a: Mon|Mon, L80|{before}/{maximum}',
+                                                                    f'|-damage|p1a: Mon|{after}/{maximum}|[from] Spikes')]
+            self.assertEqual(d.fp_view_opp_hazard_credit(lines, 'p1'), np.float32(want))
+
+
 class ReweightHelperTests(unittest.TestCase):
     def test_set_keys_match_request_ids_to_variant_names(self):
         row = _rw_request()['side']['pokemon'][0]
@@ -456,6 +591,91 @@ class RecalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(fit['class_bias'][2] - fit['class_bias'][0], .5, delta=.2)
         self.assertEqual(probs.shape, (n, 9));np.testing.assert_allclose(probs.sum(1), 1., rtol=1e-5)
         self.assertLess(t.nll(probs[1::2], labels[1::2]), t.nll(sharp[1::2], labels[1::2]))
+
+
+class BuilderViewReplayTests(unittest.TestCase):
+    """replay --views: a builder failure or a builder view whose masks differ from env.observe's is a BuilderMismatch."""
+
+    class Env(FakeEnv):
+        def observe(self, player):
+            return SimpleNamespace(legal_action_mask=self._round()[player][0], player=player, token_type_ids=(1, 2), attention_mask=(True, True))
+
+    def setUp(self):
+        self.saved = d.choice_action, d.builder_views;d.choice_action = fake_choice_action
+
+    def tearDown(self):
+        d.choice_action, d.builder_views = self.saved
+
+    def run_with(self, builder):
+        d.builder_views = builder
+        return d.replay(self.Env(two_rounds(), OUR_SEAT), FakePolicy(), game(), rng=None, views=dict())
+
+    def test_agreeing_views_are_recorded(self):
+        same = lambda env, player, request, seed, views: dict(b=env.observe(player))
+        rows, _, _ = self.run_with(same);self.assertEqual([sorted(r['views']) for r in rows], [['b'], ['b']])
+
+    def test_a_mask_difference_or_a_builder_error_is_a_builder_mismatch(self):
+        def other_legal(env, player, request, seed, views):
+            o = env.observe(player);return dict(b=SimpleNamespace(token_type_ids=o.token_type_ids, attention_mask=o.attention_mask, legal_action_mask=legal(0)))
+        with self.assertRaisesRegex(d.BuilderMismatch, 'legal_action_mask differs'):self.run_with(other_legal)
+        def broken(env, player, request, seed, views):raise KeyError('slot')
+        with self.assertRaisesRegex(d.BuilderMismatch, 'KeyError'):self.run_with(broken)
+
+
+class ViewsAndSplitTests(unittest.TestCase):
+    def test_split_rows_fixed_test_late_block_validation_and_train(self):
+        seed = np.array([10, 10, 21, 33, 40, 51, 62, 70, 33]);ordinal = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9])   # seed 33: games 4 and 9
+        rows = t.split_rows(dict(seed=seed, ordinal=ordinal), test_seeds=[10, 70], late_from=6)
+        self.assertEqual({k: v.tolist() for k, v in rows.items()}, dict(train=[3, 4, 8], val=[2], test=[0, 1, 7], late=[5, 6]))   # 33 stays whole
+        default = t.split_rows(dict(seed=seed, ordinal=ordinal))
+        self.assertEqual(default['test'].tolist(), [0, 1, 4, 7]);self.assertNotIn('late', default)
+
+    def test_saved_probabilities_compare_only_on_the_same_rows(self):
+        import tempfile
+        arrays = dict(ordinal=np.array([1, 1, 2]), seed=np.array([5, 5, 6]), label=np.array([0, 2, 1]), round=np.array([1, 2, 1]))
+        probs = np.array([[.5, .5], [.2, .8]], np.float32)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'late-probs.npz';t.save_probs(path, arrays, np.array([0, 2]), probs, model='m.pt', view='b', redaction=None)
+            self.assertTrue(np.array_equal(t.compared_probs(path, arrays, np.array([0, 2])), probs))
+            saved = np.load(path);self.assertEqual((str(saved['model']), str(saved['view']), str(saved['redaction'])), ('m.pt', 'b', 'None'))
+            with self.assertRaises(SystemExit):t.compared_probs(path, arrays, np.array([1, 2]))
+
+    def test_use_view_swaps_the_inputs_needs_them_and_drops_the_others(self):
+        arrays = dict(numeric_features=np.zeros(2), categorical_ids=np.zeros(2), numeric_features_b=np.ones(2), categorical_ids_b=np.ones(2),
+                      numeric_features_k=np.full(2, 2.), categorical_ids_k=np.full(2, 2.))
+        with self.assertRaises(SystemExit):t.use_view(dict(numeric_features=np.zeros(2), categorical_ids=np.zeros(2)), 'k')
+        t.use_view(arrays, 'b');self.assertEqual((arrays['numeric_features'].tolist(), arrays['categorical_ids'].tolist()), ([1., 1.], [1., 1.]))
+        self.assertEqual(sorted(arrays), ['categorical_ids', 'numeric_features'])
+        env = dict(numeric_features=np.zeros(2), categorical_ids=np.zeros(2), numeric_features_b=np.ones(2), categorical_ids_b=np.ones(2))
+        self.assertIs(t.use_view(env, 'env'), env);self.assertEqual(env['numeric_features'].tolist(), [0., 0.]);self.assertNotIn('numeric_features_b', env)
+
+    def test_late_from_needs_test_seeds(self):
+        with self.assertRaises(SystemExit):t.main(['data', 'out', '--checkpoint', 'x.pt', '--late-from', '5'])
+
+    def test_test_seeds_must_be_integers_present_in_the_data(self):
+        import tempfile
+        arrays = dict(seed=np.array([10, 10, 20]))
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'seeds.json'
+            for bad in ('[]', '["10"]', '{"10": 1}', '[true]', '[10, 30]'):
+                path.write_text(bad)
+                with self.assertRaises(SystemExit):t.read_test_seeds(path, arrays)
+            path.write_text('[10]');self.assertEqual(t.read_test_seeds(path, arrays), [10])
+
+    def test_the_split_record_refuses_scoring_fitted_seeds_as_held_out(self):
+        seed = np.array([10, 21, 33, 40, 51, 62]);ordinal = np.arange(6)
+        arrays = dict(seed=seed, ordinal=ordinal);rows = t.split_rows(arrays, test_seeds=[10], late_from=5)
+        record = t.split_record(arrays, rows, 'rule', [10], 5)
+        self.assertEqual(record['fit_seeds'], [21, 33, 40, 51]);self.assertEqual((record['test_seeds'], record['late_from']), ([10], 5))
+        self.assertEqual(t.held_out_overlap(dict(split=record), arrays, rows), [])
+        default = t.split_rows(arrays)   # test: seeds 10, 40 (% 10 == 0); 40 was fitted
+        self.assertEqual(t.held_out_overlap(dict(split=record), arrays, default), [40])
+        self.assertIsNone(t.held_out_overlap(dict(view='env'), arrays, default));self.assertIsNone(t.held_out_overlap(None, arrays, default))
+
+    def test_the_k_view_keeps_only_the_opponents_silent_ability_lines(self):
+        from gpu_engine import g3rb_views as gv
+        lines = ['|-ability|p2a: Snorlax|Pressure|[silent]', '|-activate|p2a: Snorlax|move: Struggle', '|-hint|x']
+        self.assertEqual(gv.seat_lines(lines, 'p1'), []);self.assertEqual(gv.seat_lines(lines, 'p1', keep_silent_ability=True), lines[:1])
 
 
 if __name__ == '__main__':

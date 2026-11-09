@@ -1,6 +1,7 @@
 """Foul Play reply dataset: replay each collected game through the training env and record Foul Play's own view at its decisions.
 
 usage: python -m gpu_engine.fp_reply_data COLLECTION OUT_DIR --checkpoint PT [--shard I --shards N] [--limit GAMES]
+       [--max-ordinal N] [--views] [--extras]
        python -m gpu_engine.fp_reply_data --report OUT_DIR [--split all|test]
 
 Input, read-only: a Foul Play choice collection (the engine session's fp_collect.py, RAW champion vs Foul Play with
@@ -24,7 +25,16 @@ MAX_CONSECUTIVE_ENV_ERRORS in a row abort the shard.
 Reported, not a drop: encoder parity, the champion's argmax on our seat's env observation against the recorded greedy action.
 Games whose battle seed is in the screen band (2103400000 to 2103400999) are skipped: RR scores operators on those roots.
 Output per shard: shard-<I>.npz, one row per Foul Play decision (the observation arrays, legal mask, label, the champion's
-probabilities and value on Foul Play's view, round, turn, request kind, game ordinal and seed), and shard-<I>.json (counts).
+probabilities and value on Foul Play's view, round, turn, request kind, game ordinal and seed, and fp_opp_hazard_credit: the
+OPP_HAZARD_CREDIT Foul Play itself sees, fp_view_opp_hazard_credit, which peer-view-v2 writes over the env's exact value), and
+shard-<I>.json (counts; spikes_unknown_before counts rows where one of our Spikes hits had no previous HP on the lines, credit 0;
+hazard_credit_rows_differ and hazard_credit_max_abs_gap_vs_env compare fp_opp_hazard_credit with the env's own column).
+--max-ordinal N reads only games of ordinal <= N (a frozen set while the collection grows; a game still running at build time
+joins a later build, so freeze at an ordinal below which every game has finished). --views also records the builder's views of
+each Foul Play decision (builder_views; numeric_features_<kind>, categorical_ids_<kind> for VIEW_KINDS): b is the seat's view as
+Showdown sends it at public precision; k is b keeping the opponent's [silent] ability lines (it still drops the opponent's
+Struggle activation and -hint). A builder failure, or a builder view whose masks differ from env.observe's, skips the game
+(BuilderMismatch; consecutive ones abort the shard). The shard summary records max_ordinal and views.
 """
 import argparse
 import collections
@@ -121,6 +131,91 @@ def hp_fraction(request):
     return float('nan')
 
 
+# Foul Play's view of our Spikes losses (peer-view-v2's OPP_HAZARD_CREDIT) ------------------------------------------------------------
+# The env's OPP_HAZARD_CREDIT in Foul Play's view sums our exact HP fractions lost to Spikes (showdown.py's hazard_damage_suffered,
+# read off the omniscient stream). Foul Play sees our HP only as Showdown's public percent, and the search's peer view (the
+# constructor's fill_owner_spikes, the device's engine_device_public_port.spikes) sums each hit's public-percent drop / 100 in float32
+# with a compensated (TwoSum) sum. fp_view_opp_hazard_credit is that rule on the env's own lines, written as the feature value,
+# with the device's jitted float32 arithmetic (the GPU-built peer views, e.g. the 48-cell capture). The live root's
+# fill_owner_spikes runs its per-hit / 100 eagerly on the CPU, an exactly rounded division: on about 1% of rows that is one
+# float32 ulp (~1e-9) away from this value, immaterial for the reply model.
+SWITCH_KINDS = ('switch', 'drag', 'replace')
+HAZARD_CREDIT_DIVISOR = 6.   # engine_device_features.FIELD_FIELDS['opp_hazard_credit'] and showdown's / _TEAM_SIZE
+OPP_HAZARD_CREDIT_COLUMN = 116   # field token 0's numeric column: showdown.v4_numeric_index(NUMERIC_OPP_HAZARD_CREDIT)
+
+
+def shown_percent(hp, maximum):
+    """Showdown's public HP percent (sim/pokemon.ts getHealth with HP percentages): ceil(100 hp / max), 99 for a damaged mon that
+    would show 100, 0 when fainted; integer arithmetic, as engine_device_trackers._percent."""
+    top = max(int(maximum), 1);hp = min(max(int(hp), 0), top)
+    shown = (100 * hp + top - 1) // top
+    return 99 if hp < top and shown == 100 else shown
+
+
+def _condition(text):
+    """(hp, max HP or None) of a protocol condition ('263/300', '263/300 par', '0 fnt'); None when unreadable."""
+    head = (str(text).split() or [''])[0]
+    if head == '0':return 0, None
+    hp, sep, top = head.partition('/')
+    try:return (int(hp), int(top)) if sep else None
+    except ValueError:return None
+
+
+def spikes_hits(lines, seat):
+    """seat's ('p1' / 'p2') Spikes hits in protocol order, each (hp before, hp after, max HP), from exact-HP lines (the env's
+    omniscient stream, or the seat's own); the previous HP is the mon's last |switch| / |drag| / |replace| / |-damage| / |-heal| /
+    |-sethp| condition. None when a hit's previous HP or max HP is not on the lines (the search side then leaves the credit 0)."""
+    hp = {};hits = []
+    for line in lines:
+        parts = str(line).split('|')
+        if len(parts) < 4 or parts[0] != '':continue
+        kind = parts[1];side, _, name = parts[2].partition(':')
+        if side.strip()[:2] != seat:continue
+        name = name.strip()
+        if kind in SWITCH_KINDS:
+            if len(parts) > 4:
+                condition = _condition(parts[4])
+                if condition is None:hp.pop(name, None)
+                else:hp[name] = condition
+        elif kind in ('-damage', '-heal', '-sethp'):
+            condition = _condition(parts[3])
+            if condition is None:hp.pop(name, None);continue
+            new, maximum = condition;before = hp.get(name)
+            if maximum is None:maximum = before[1] if before else None
+            if kind == '-damage' and any(x.strip().lower() == '[from] spikes' for x in parts[4:]):
+                if before is None or maximum is None:return None
+                hits.append((before[0], new, maximum))
+            hp[name] = (new, maximum)
+    return hits
+
+
+def two_sum_add(high, low, value):
+    """engine_device_damage_history._add on one float32 (high, low) pair: TwoSum, each operation rounded to float32; value <= 0 is a
+    no-op."""
+    f = np.float32;high, low, value = f(high), f(low), f(value)
+    if not value > 0:return high, low
+    total = f(high + value);recovered = f(total - high)
+    error = f(f(high - f(total - recovered)) + f(value - recovered))
+    correction = f(low + error);new_high = f(total + correction)
+    return new_high, f(correction - f(new_high - total))
+
+
+def fp_view_opp_hazard_credit(lines, victim):
+    """Foul Play's OPP_HAZARD_CREDIT feature value (v4 field token 0, numeric column 116) for victim = our seat ('p1' / 'p2'):
+    clip((high + low) * float32(1/6), 0, 1) in float32 of the TwoSum over our Spikes hits of
+    (shown_percent(before) - shown_percent(after)) * float32(1/100); 0 when a hit's previous HP is unknown, as the search side
+    leaves it. Both divisions are the float32 reciprocal multiplications XLA compiles the device's jitted `/ 100` and `/ 6.`
+    into (10 * float32(0.01) rounds to 0.099999994, not 0.1): a correctly rounded division is one ulp off on 21 of the 48-cell
+    check's 1,622 rows. The live root's fill_owner_spikes divides the per-hit drop eagerly on the CPU (exactly rounded), so
+    there this value can be one ulp off (module comment above)."""
+    hits = spikes_hits(lines, victim);high = low = np.float32(0)
+    for before, after, maximum in hits or ():
+        drop = max(0, shown_percent(before, maximum) - shown_percent(after, maximum))
+        high, low = two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1. / 100)))
+    value = np.float32(np.float32(high + low) * np.float32(1. / HAZARD_CREDIT_DIVISOR))
+    return np.float32(min(max(value, np.float32(0)), np.float32(1)))
+
+
 def action_classes(request, legal, dex):
     """Per action index: DAMAGING or STATUS for the active's moves (by dex category), SWITCH for switches, ILLEGAL otherwise."""
     moves = [m.get('id') for m in ((request.get('active') or [{}])[0].get('moves') or ())]
@@ -144,7 +239,32 @@ def opponent_head_logits(model, observation, torch):
     return [float(x) for x in output.opponent_action_logits[0]]
 
 
-def replay(env, policy, game, rng, extras=None):
+VIEW_KINDS = ('b', 'k')   # b: the seat-filtered builder view; k: the same keeping the opponent's [silent] ability lines
+
+
+class BuilderMismatch(Exception):
+    """A builder view of the game failed or disagrees with env.observe's masks: the game is skipped (Mismatch) and counted toward
+    MAX_CONSECUTIVE_ENV_ERRORS, so a builder that always fails aborts the shard instead of emptying it."""
+
+
+def builder_views(env, player, request, seed, views):
+    """{kind: observation} of `player`'s view rebuilt from what it received (gpu_engine.g3rb_views.seat_lines on the env's lines) and
+    its true request by pokezero.policy_opponent_view.build_policy_opponent_view: 'b' drops the lines the other side never gets
+    (the opponent's [silent] ability lines, its Struggle activation, -hint) and shows the opponent's HP and damage at the public
+    percent; 'k' keeps the opponent's [silent] ability lines. views: dict(source, spec, masks, vocab, dex)."""
+    from gpu_engine import g3rb_views as gv
+    from pokezero.policy_opponent_view import build_policy_opponent_view
+    lines = [l for l in env.protocol_lines if l.startswith('|') and not l.startswith('|request|')]
+    out = {}
+    for kind in VIEW_KINDS:
+        view = build_policy_opponent_view(public_lines=gv.seat_lines(lines, player, keep_silent_ability=kind == 'k'),
+            hp_visibility={'p1': 'exact', 'p2': 'exact'}, sampled_self_request=request, opponent_slot=player, battle_id='fp-view',
+            battle_seed=int(seed), format_id=gv.FORMAT, set_source=views['source'], spec=views['spec'], feature_masks=views['masks'])
+        out[kind] = view.observation(category_vocab=views['vocab'], dex=views['dex'])
+    return out
+
+
+def replay(env, policy, game, rng, extras=None, views=None):
     """Replay one game; returns (Foul Play rows, our-seat parity hits, our-seat decisions). Raises Mismatch on any check.
     extras (dict(dex, model, torch)) adds per Foul Play row: its action classes and label class, both actives' HP fractions, and
     9375's opponent_action_head logits from our seat's view in the same round (NaN when our seat isn't requested)."""
@@ -168,12 +288,23 @@ def replay(env, policy, game, rng, extras=None):
                 if decoded != action:
                     raise Mismatch(f'Foul Play choice {entry.get("choice")!r} decodes to {decoded}, not its action {action}, round {round_}')
                 request = env._latest_requests.get(player) or {}
+                lines = env.protocol_lines
                 fp_row = dict(observation=observation, label=action, probs=probs, value=decision.value_estimate,
-                              round=round_, turn=int(env._latest_turn), forced=bool(request.get('forceSwitch')), choice=entry.get('choice'))
+                              round=round_, turn=int(env._latest_turn), forced=bool(request.get('forceSwitch')), choice=entry.get('choice'),
+                              fp_opp_hazard_credit=fp_view_opp_hazard_credit(lines, game['ours']),
+                              spikes_unknown_before=spikes_hits(lines, game['ours']) is None)
                 if extras is not None:
                     classes = action_classes(request, observation.legal_action_mask, extras['dex'])
                     fp_row.update(candidate_class=classes, label_class=classes[action], own_hp=hp_fraction(request),
                                   opp_hp=hp_fraction(env._latest_requests.get(game['ours']) or {}))
+                if views is not None:   # --views: the builder's views of the same decision (fp_reply_train --view)
+                    try:fp_row['views'] = builder_views(env, player, request, game['seed'], views)
+                    except (ValueError, KeyError, IndexError, TypeError) as error:   # as g3rb_views catches the same builder
+                        raise BuilderMismatch(f'builder view, round {round_}: {type(error).__name__}: {error}')
+                    for kind, other in fp_row['views'].items():   # fp_reply_train --view swaps only the features: masks must agree
+                        for name in ('token_type_ids', 'attention_mask', 'legal_action_mask'):
+                            if not np.array_equal(np.asarray(getattr(other, name)), np.asarray(getattr(observation, name))):
+                                raise BuilderMismatch(f'builder view {kind}, round {round_}: {name} differs from env.observe')
                 rows.append(fp_row)
                 actions[player] = action
             else:
@@ -205,7 +336,7 @@ def build(args):
     torch.set_num_threads(1)
     collection, out = Path(args.collection), Path(args.out);out.mkdir(parents=True, exist_ok=True)
     paths = sorted(glob.glob(str(collection / 'results' / '*.json')), key=lambda p: int(Path(p).stem))
-    paths = [p for p in paths if int(Path(p).stem) % args.shards == args.shard]
+    paths = [p for p in paths if int(Path(p).stem) % args.shards == args.shard and (not args.max_ordinal or int(Path(p).stem) <= args.max_ordinal)]
     if args.limit:paths = paths[:args.limit]
     sha = checkpoint_file_sha256(args.checkpoint)
     model, result = load_transformer_checkpoint(args.checkpoint, map_location='cpu');model.eval()
@@ -215,10 +346,10 @@ def build(args):
     if args.extras:
         from pokezero.dex import load_showdown_dex_cached
         extras = dict(model=model, torch=torch, dex=None)
-    env = None;config_key = None;rng = random.Random(0)
+    env = None;config_key = None;rng = random.Random(0);views = None
     counts = collections.Counter();mismatches = collections.Counter();examples = {}
     columns = collections.defaultdict(list);parity_hits = 0;parity_total = 0;started = time.time()
-    seats = collections.Counter();consecutive_errors = 0
+    seats = collections.Counter();consecutive_errors = 0;hazard_gap = 0.
     for path in paths:
         game, skip = load_game(collection, path)
         if game is None:counts[f'skipped_{skip}'] += 1;continue
@@ -233,10 +364,23 @@ def build(args):
                 category_vocab=category_vocab_from_model_config(result.model_config, base['showdown_root']),
                 feature_masks=feature_masks_from_model_config(result.model_config),
                 set_belief_source=bool(base['belief_set_source'])))
-        try:rows, parity, decided = replay(env, policy, game, rng, extras)
+        if args.views and not base['belief_set_source']:   # the builder always reads the set source: env's beliefs would differ
+            raise SystemExit('--views needs games played with belief_set_source (the builder views always use the random-battle sets)')
+        if args.views and views is None:   # the builder views' inputs: the same spec, masks and vocabulary as env.observe
+            from pokezero.dex import load_showdown_dex_cached
+            from pokezero.randbat import load_gen3_randbat_source_cached
+            views = dict(source=load_gen3_randbat_source_cached(base['showdown_root']), dex=load_showdown_dex_cached(base['showdown_root']),
+                         spec=observation_spec_from_model_config(result.model_config), masks=feature_masks_from_model_config(result.model_config),
+                         vocab=category_vocab_from_model_config(result.model_config, base['showdown_root']))
+        try:rows, parity, decided = replay(env, policy, game, rng, extras, views)
         except Mismatch as error:
             reason = re.sub(r"'[^']*'|\"[^\"]*\"|\d+", '#', str(error));consecutive_errors = 0
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)));continue
+        except BuilderMismatch as error:   # the env is fine (no reset); a systematic builder failure still aborts the shard
+            reason = re.sub(r"'[^']*'|\"[^\"]*\"|\d+", '#', str(error));consecutive_errors += 1
+            mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)[:500]))
+            if consecutive_errors >= MAX_CONSECUTIVE_ENV_ERRORS:raise SystemExit(f'{consecutive_errors} consecutive builder-view failures: {examples[reason]}')
+            continue
         except (LocalShowdownError, ValueError, KeyError) as error:   # one bad game, not the shard; the env may be wedged
             reason = f'env error {type(error).__name__}'
             mismatches[reason] += 1;examples.setdefault(reason, dict(ordinal=game['ordinal'], detail=str(error)[:500]))
@@ -252,9 +396,21 @@ def build(args):
             columns['token_type_ids'].append(np.asarray(observation.token_type_ids, np.int16))
             columns['attention_mask'].append(np.asarray(observation.attention_mask, bool))
             columns['legal'].append(np.asarray(observation.legal_action_mask, bool))
+            for kind, other in (row.get('views') or {}).items():   # the builder views; their masks must be env.observe's
+                columns[f'numeric_features_{kind}'].append(np.asarray(other.numeric_features, np.float32))
+                columns[f'categorical_ids_{kind}'].append(np.asarray(other.categorical_ids, np.int32))
+                for name in ('token_type_ids', 'attention_mask', 'legal_action_mask'):
+                    counts[f'view_{kind}_{name}_differs'] += not np.array_equal(np.asarray(getattr(other, name)), np.asarray(getattr(observation, name)))
+                counts[f'view_{kind}_categorical_differs'] += not np.array_equal(np.asarray(other.categorical_ids), np.asarray(observation.categorical_ids))
+                counts[f'view_{kind}_numeric_differs'] += not np.array_equal(np.asarray(other.numeric_features), np.asarray(observation.numeric_features))
+                counts[f'view_{kind}_rows'] += 1
             columns['probs'].append(np.asarray(row['probs'], np.float32))
             columns['value'].append(np.float32(row['value'] if row['value'] is not None else np.nan))
             for key_ in ('label', 'round', 'turn', 'forced'):columns[key_].append(row[key_])
+            columns['fp_opp_hazard_credit'].append(np.float32(row['fp_opp_hazard_credit']))
+            counts['spikes_unknown_before'] += row['spikes_unknown_before']
+            gap = abs(float(row['fp_opp_hazard_credit']) - float(columns['numeric_features'][-1][0, OPP_HAZARD_CREDIT_COLUMN]))
+            counts['hazard_credit_rows_differ'] += gap > 0;hazard_gap = max(hazard_gap, gap)
             if extras is not None:
                 columns['candidate_class'].append(np.asarray(row['candidate_class'], np.int8));columns['label_class'].append(row['label_class'])
                 columns['own_hp'].append(np.float32(row['own_hp']));columns['opp_hp'].append(np.float32(row['opp_hp']))
@@ -266,13 +422,15 @@ def build(args):
                                   mismatched=sum(mismatches.values()), seconds=round(time.time() - started, 1))), flush=True)
     if env is not None:env.close()
     arrays = {k: np.stack(v) if k in ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask', 'legal', 'probs',
-                                      'candidate_class', 'opp_head_logits')
+                                      'candidate_class', 'opp_head_logits') or k.startswith(('numeric_features_', 'categorical_ids_'))
               else np.asarray(v) for k, v in columns.items()}
     np.savez(out / f'shard-{args.shard}.npz', **arrays)
     summary = dict(schema='v2s-fp-reply-data.v1', collection=str(collection), checkpoint=str(args.checkpoint), checkpoint_sha256=sha,
-                   shard=args.shard, shards=args.shards, results_seen=len(paths), **counts, mismatched=sum(mismatches.values()),
+                   shard=args.shard, shards=args.shards, max_ordinal=args.max_ordinal or None, views=list(VIEW_KINDS) if args.views else None,
+                   results_seen=len(paths), **counts, mismatched=sum(mismatches.values()),
                    mismatch_reasons=dict(mismatches), mismatch_examples=examples, foul_play_seat_games=dict(seats),
                    encoder_parity=dict(hits=parity_hits, decisions=parity_total, share=parity_hits / parity_total if parity_total else None),
+                   hazard_credit_max_abs_gap_vs_env=hazard_gap,
                    shapes={k: list(v.shape) for k, v in arrays.items()}, seconds=round(time.time() - started, 1))
     (out / f'shard-{args.shard}.json').write_text(json.dumps(summary, indent=1) + '\n')
     print(json.dumps(dict(event='SHARD_DONE', **{k: summary[k] for k in ('shard', 'games', 'decisions', 'mismatched', 'seconds')
@@ -337,6 +495,9 @@ def main(argv=None):
     parser.add_argument('--checkpoint');parser.add_argument('--shard', type=int, default=0);parser.add_argument('--shards', type=int, default=1)
     parser.add_argument('--limit', type=int, default=0)
     parser.add_argument('--extras', action='store_true', help="also record action classes, HP and our view's opponent-head logits")
+    parser.add_argument('--max-ordinal', type=int, default=0, help='only games of ordinal <= this (a frozen set while the collection grows)')
+    parser.add_argument('--views', action='store_true', help="also record the builder's views of each Foul Play decision (VIEW_KINDS: "
+                        "numeric_features_<k> / categorical_ids_<k>; fp_reply_train --view)")
     parser.add_argument('--report', metavar='OUT_DIR');parser.add_argument('--split', choices=('all', 'test', 'val', 'train'), default='all')
     args = parser.parse_args(argv)
     if args.report:report(args.report, args.split);return 0

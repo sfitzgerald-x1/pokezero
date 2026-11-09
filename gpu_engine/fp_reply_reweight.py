@@ -254,11 +254,12 @@ def same_observation(a, b):
     return all(np.array_equal(np.asarray(getattr(a, k)), np.asarray(getattr(b, k))) for k in (*OBS_DTYPES, 'legal_action_mask'))
 
 
-def score(model, observations, labels, torch, redaction=None):
-    """log q(label | observation) under π_FP per observation (-inf for a None or illegal label), on π_FP's own redaction."""
+def score(model, observations, labels, torch, redaction=None, opp_hazard_credit=None):
+    """log q(label | observation) under π_FP per observation (-inf for a None or illegal label), on π_FP's own redaction
+    (peer-view-v2: opp_hazard_credit, one float for every observation, from the same lines)."""
     arrays = {k: np.stack([np.asarray(getattr(o, k), t) for o in observations]) for k, t in OBS_DTYPES.items()}
-    if redaction == 'peer-view-v1':train_mod.redact_peer_view(arrays['numeric_features'])
-    elif redaction is not None:raise SystemExit(f'unknown redaction {redaction!r}')
+    if opp_hazard_credit is not None:arrays['fp_opp_hazard_credit'] = np.full(len(observations), opp_hazard_credit, np.float32)
+    train_mod.apply_redaction(arrays, redaction)
     arrays['legal'] = np.stack([np.asarray(o.legal_action_mask, bool) for o in observations])
     arrays['label'] = np.array([0 if y is None else y for y in labels])
     rows = np.arange(len(observations))
@@ -270,8 +271,11 @@ def score(model, observations, labels, torch, redaction=None):
     return logq
 
 
-def replay_game(env, model, game, dex, torch, tables, redaction=None):
-    """One game: (mon rows, decision rows, calibration rows, check counts)."""
+def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=None, extra_variants=None):
+    """One game: (mon rows, decision rows, calibration rows, check counts). on_ours(decision_index, round, evidence, evidence_n,
+    misaligned), when given, is called at each of our seat's decisions before it is stepped: the evidence then holds every
+    Foul Play choice made public in earlier rounds (fp_reply_evidence's export). extra_variants(species id), when given, is
+    more sets to score for the active mon beyond the belief engine's candidates (measure)."""
     fp, ours_seat = game['fp'], game['ours'];env.reset(seed=game['seed']);checks = collections.Counter();misaligned = set()
     journal = dict(game['journal']);ours = 0;round_ = 0
     evidence = collections.defaultdict(dict);evidence_n = collections.Counter();mons, decisions, calib = [], [], []
@@ -287,6 +291,7 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None):
                 captured = game['our_requests'][ours]
                 if captured is None or data_mod._request_body(captured) != data_mod._request_body(json.dumps(env._latest_requests.get(player))):
                     raise data_mod.Mismatch(f'our request differs from the capture at decision {ours}')
+                if on_ours is not None:on_ours(ours, round_, evidence, evidence_n, misaligned)
                 actions[player] = int(game['our_actions'][ours]);ours += 1;continue
             entry = journal.pop(round_, None)
             if entry is None:raise data_mod.Mismatch(f'Foul Play requested in round {round_} without a journal entry')
@@ -294,19 +299,21 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None):
             if data_mod.choice_action(env, player, entry.get('choice')) != action:
                 raise data_mod.Mismatch(f'Foul Play choice {entry.get("choice")!r} does not decode to {action}, round {round_}')
             actions[player] = action
+            if entry.get('tag') == 'fill':checks['fill_skipped'] += 1;continue   # a rebuilt journal's placeholder: drives the replay, never evidence
             request = env._latest_requests.get(fp)
             if first is None:first = env._first_requests.get(fp) or request
             if request.get('forceSwitch'):checks['forced_skipped'] += 1;continue
             pending = measure(env, model, game, dex, torch, checks, request, first, action, round_, evidence, evidence_n, mons, decisions, calib,
-                              tables, misaligned, redaction)
+                              tables, misaligned, redaction, extra_variants)
         before = len(env._lines);env.step(actions)
         if pending is not None:
-            mon, keys, logq, act, move, aligned = pending
+            mon, keys, logq, act, move, aligned, skipped = pending
             observed = public_choice(env._lines[before:], fp, act, move);decisions[-1]['observed'] = observed
             if observed:
                 evidence_n[mon] += 1
                 if not aligned:misaligned.add(mon)
                 for k, lq in zip(keys, logq):evidence[mon][k] = evidence[mon].get(k, 0.) + lq
+                for k in skipped:evidence[mon][k] = float('nan')   # an extra set this round could not score: never complete again
         round_ += 1
         if round_ > data_mod.MAX_ROUNDS:raise data_mod.Mismatch('runaway replay')
     if journal:raise data_mod.Mismatch(f'{len(journal)} journal entries never requested')
@@ -316,7 +323,7 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None):
 
 
 def measure(env, model, game, dex, torch, checks, request, first, action, round_, evidence, evidence_n, mons, decisions, calib,
-            tables, misaligned, redaction=None):
+            tables, misaligned, redaction=None, extra_variants=None):
     fp = game['fp'];turn = int(env._latest_turn)
     baseline = env.observe(fp)   # also syncs the belief engine with this round's protocol lines
     truth = {species_of(r): (r.get('ident'), request_key(r)) for r in first['side']['pokemon']}
@@ -366,10 +373,27 @@ def measure(env, model, game, dex, torch, checks, request, first, action, round_
         with substituted_request(env, fp, world):observations.append(env.observe(fp))
         labels.append(label_map[action])
         if k == true_key:checks['true_world_differs'] += not same_observation(observations[-1], baseline)
+    if replaced_disabled:
+        if not same_observation(env.observe(fp), baseline):checks['observe_changed_by_worlds'] += 1
+        checks['replaced_disabled_slot_skipped'] += 1;return None
+    # sets beyond the candidates (extra_variants): scored in their own batch, so the candidates' log q stay bit-identical; one
+    # whose new move would take a disabled slot is skipped alone
+    extra_keys, extra_observations, extra_labels, skipped = [], [], [], []
+    for variant in (extra_variants(active) if extra_variants is not None else ()):
+        k = variant_key(variant)
+        if k in representative or k in extra_keys:continue
+        stats = generator_stats(species.base_stats, level, list(k[0]), dex, tables) if aligned else None
+        world, label_map, disabled = world_request(request, first_row, variant, dex, stats)
+        if disabled:checks['extra_variant_disabled_skipped'] += 1;skipped.append(k);continue   # its evidence is incomplete from here
+        with substituted_request(env, fp, world):extra_observations.append(env.observe(fp))
+        extra_keys.append(k);extra_labels.append(label_map[action])
     if not same_observation(env.observe(fp), baseline):checks['observe_changed_by_worlds'] += 1
-    if replaced_disabled:checks['replaced_disabled_slot_skipped'] += 1;return None
-    logq = score(model, observations + [baseline], labels + [action], torch, redaction);true_logq = logq[-1];logq = logq[:-1]
+    credit = data_mod.fp_view_opp_hazard_credit(env.protocol_lines, game['ours']) if redaction == 'peer-view-v2' else None
+    logq = score(model, observations + [baseline], labels + [action], torch, redaction, credit);true_logq = logq[-1];logq = logq[:-1]
     by_key = dict(zip(distinct, logq));checks['worlds'] += len(distinct)
+    if extra_keys:
+        extra_logq = score(model, extra_observations, extra_labels, torch, redaction, credit);checks['extra_variants_scored'] += len(extra_keys)
+        distinct = distinct + extra_keys;logq = np.concatenate([logq, extra_logq])
     row = dict(seed=game['seed'], ordinal=game['ordinal'], turn=turn, round=round_, worlds=len(distinct), truth_in=true_key in by_key,
                evidence=evidence_n[active], incomplete=bool(evidence_n[active]) and any(k not in evidence[active] for k in distinct),
                stats_aligned=aligned and active not in misaligned,
@@ -380,7 +404,7 @@ def measure(env, model, game, dex, torch, checks, request, first, action, round_
         if beta == 1.:row['nll_prior'] = float(-logsumexp(log_prior + q))
         row[f'nll_post_{beta}'] = float(-logsumexp(log_post + q))
     decisions.append(row)
-    return active, distinct, logq, action, chosen_move(request, action), aligned
+    return active, distinct, logq, action, chosen_move(request, action), aligned, skipped
 
 
 def run(args):

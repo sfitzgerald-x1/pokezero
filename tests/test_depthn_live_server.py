@@ -171,6 +171,25 @@ class ServerTests(unittest.TestCase):
             for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
             S.build(args)
         self.assertEqual((made['peer_view_b'],made['redact_private_reveals']),(True,False))   # the search applies the implied redaction
+        self.assertIsNone(made['reply'])   # br_fp off by default: the champion's own averaging
+        from gpu_engine import depthn_reply_prior as rp
+        reply=['--reply-archive','r.npz','--reply-archive-sha256','e'*64,'--reply-checkpoint-sha256','f'*64]
+        with patch.dict(os.environ,PINNED):args=S.options(base+reply)
+        loaded=[]
+        with ExitStack()as stack:
+            for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:loaded.append((path,kw))or NS(params='reply')),
+                    (rp,'ReplyPrior',lambda executor,model,mode:('reply-prior',executor,model.params,mode))):
+                stack.enter_context(patch.object(target,name,side_effect=value))
+            self.assertEqual(S.build(args),'search')
+        self.assertEqual(loaded,[('r.npz',dict(expected_archive_sha256='e'*64,expected_checkpoint_sha256='f'*64,precision=S.evaluators.PRECISIONS['bf16']))])
+        self.assertEqual(made['reply'][0],'reply-prior');self.assertEqual((made['reply'][2],made['reply'][3]),('reply','eager'))
+        with patch.dict(os.environ,PINNED):args=S.options(base+reply+['--peer-view-b'])   # both: br_fp on view b's worlds
+        with ExitStack()as stack:
+            for target,name,value in stand_ins+((S.evaluators,'load',lambda path,**kw:NS(params='reply')),
+                    (rp,'ReplyPrior',lambda executor,model,mode:('reply-prior',executor,model.params,mode))):
+                stack.enter_context(patch.object(target,name,side_effect=value))
+            S.build(args)
+        self.assertEqual((made['peer_view_b'],made['reply'][0]),(True,'reply-prior'))
 
     def test_the_matmul_precision_is_hard_pinned(self):
         """The environment is checked before anything loads; JAX's own setting again in build, before any input or champion."""
@@ -240,6 +259,15 @@ class ServerTests(unittest.TestCase):
         on=S.header(args,NS(vars(search),peer_view_b=True,redact_private_reveals=True))   # view b's search: the redaction it implies is on
         self.assertEqual((on['peer_view_b'],on['redact_private_reveals']),(True,True))
         self.assertIs(S.options(base+champion+['--peer-view-b']).peer_view_b,True);self.assertIs(S.options(base+champion).peer_view_b,False)
+        self.assertNotIn('root_operator',S.header(args,search))
+        reply=['--reply-archive','r.npz','--reply-archive-sha256','e'*64,'--reply-checkpoint-sha256','f'*64]
+        self.assertEqual({k:S.header(S.options(base+champion+reply),search)[k]for k in('root_operator','reply_archive_sha256','reply_checkpoint_sha256')},
+            dict(root_operator='br_fp',reply_archive_sha256='e'*64,reply_checkpoint_sha256='f'*64))
+        self.assertEqual(S.header(S.options(base+champion+reply+['--reply-views','check']),search)['reply_views'],'check')
+        for bad in(reply[:2],reply[:4],reply[:2]+['--reply-archive-sha256','x'*64,'--reply-checkpoint-sha256','f'*64],['--reply-views','jit']):
+            with self.subTest(bad=bad),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+champion+bad)
+        both=S.header(S.options(base+champion+reply+['--peer-view-b']),NS(vars(search),peer_view_b=True,redact_private_reveals=True))
+        self.assertEqual((both['root_operator'],both['peer_view_b'],both['redact_private_reveals']),('br_fp',True,True))
         for bad in(base,base+champion[:2],base+champion+['--max-requests','5'],base+champion+['--buckets','0,1'],base+champion+['--rung','R1'],
                 base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion,
                 base+champion+['--batch-wait-seconds','.5'],base+champion+['--queue-limit','2'],base+champion+['--refuse-classes','nap']):   # the last two: Codex's queue checks, before any load
