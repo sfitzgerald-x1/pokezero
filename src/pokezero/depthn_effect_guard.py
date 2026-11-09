@@ -24,8 +24,11 @@ The guard trips on (b) or (c):
 `evaluate` returns the record: tripped (for the search's own choice), b (b_turn1, b_turn2), c, reasons (per move x side x
 source: turn1 / turn2 / choice, with the max mass, the tier and the effect class), the (a) flag (a guarded move legal for
 either side at turn 1 in any world: reporting only), tier_b_legal, our guarded lanes, the conditions per side and the masses
-of every GUARDED or TIER_B move (turn 1 per side and world, turn 2 per side, world and cell). A turn-2 capture that is
-missing while some turn-1 cell expanded fails closed: (b) trips with source turn2_unavailable.
+of every GUARDED or TIER_B move (turn 1 per side and world, turn 2 per side, world and cell a * 9 + b with our lane a and the
+reply b, each turn-2 entry also carrying `guarded` (this guard's own decision at that child), the move's `tier` and its `user`
+species). A turn-2 capture that is missing while some turn-1 cell expanded fails closed: (b) trips with source
+turn2_unavailable. `reach` (report only) weighs those turn-2 masses by the root and reply priors (the lead's narrower scope):
+exact from `guarded`, bounds for an older record without it.
 
 Lane labels follow the encoder (engine_device_observation.encode): move lanes 0-3 are the active's four moves in slot order,
 except lane 0 alone (the charge move) while one charges and lane 0 alone (Struggle) when no move is usable; switch lanes
@@ -228,6 +231,11 @@ def guarded(move, side, user, *, other=None):
 
 
 # Masses and lanes --------------------------------------------------------------------------------------------------------------
+def tier_of(move):
+    """A watched move's tier: 'A' or 'C' (GUARDED), 'B' (TIER_B), else None."""
+    return GUARDED[move][0] if move in GUARDED else 'B' if move in TIER_B else None
+
+
 def masses(logits, legal):
     """The prior over the legal lanes: softmax of `logits` restricted to `legal` (9 each), in float64 with math.fsum; 0 on
     an illegal lane; all zeros when no lane is legal or a legal logit is not finite."""
@@ -266,11 +274,12 @@ def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice
             if source == 'turn1':
                 if move in TIER_B:b_moves.add(move)
                 elif guarded(move, side, user, other=other):a_moves.add(move)
+            hit = guarded(move, side, user, other=other)
             if p[lane] > 0:
                 item = dict(side=side_name, world=world, move=move, mass=p[lane])
-                if cell is not None:item['cell'] = cell
+                if cell is not None:   # turn 2: the guard's own decision at this child (reach), the move's tier and its user
+                    item.update(cell=cell, guarded=hit is not None, tier=tier_of(move), user=user)
                 recorded[source].append(item)
-            hit = guarded(move, side, user, other=other)
             if hit is not None and p[lane] >= threshold:note(move, side_name, source, p[lane], world, cell, *hit)
     own, opp = cond['own'], cond['opp']
     lanes_masses('own', own, own['active'], own_turn1['lanes'], own_turn1['logits'], own_turn1['legal'], 'turn1', other=opp)
@@ -296,6 +305,54 @@ def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice
         tier_b_legal=bool(b_moves), tier_b_moves=sorted(b_moves), own_lanes=list(own_turn1['lanes']),
         own_guarded_lanes=[None if g is None else list(g) for g in own_guarded], conditions=cond, masses=recorded,
         turn2_available=turn2_available)
+
+
+# Reach (report only): the expected turn-2 guarded mass under the search's own root and reply priors ------------------------------
+def _psychoboost(record, side):
+    """Psycho Boost's condition for `side` from the record's root conditions: its Deoxys form's White Herb (a turn-2 child keeps
+    the root's item facts; only Deoxys formes know the move), the pool's default for an opponent the root never saw."""
+    members = ((record.get('conditions') or {}).get(side) or {}).get('members') or {}
+    herbs = [bool(m.get('white_herb')) for species, m in members.items() if species in WHITE_HERB_SPECIES]
+    return any(herbs) if herbs else side == 'opp'
+
+
+def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
+    """The guard's turn-2 reach (the lead's narrower, report-only scope), per side s:
+    M_s = sum_w p_w sum_(a,b) pi_own(a) pi_peer,w(b) q_(w,ab),s, with q the side's turn-2 prior mass on moves guarded for it at
+    child cell a*9 + b of world w (record['masses']['turn2']), pi_own our root prior (root_logits over root_legal), pi_peer,w
+    world w's turn-1 peer prior (its root_peer_logits over kept; a world whose opponent waits has the single reply 0 at mass 1:
+    the pricer expands its cells (a, 0)), p_w uniform over the priced worlds. `worlds`: the row's worlds in block order, each
+    dict(requested, logits, kept, priced=True). Exact when every turn-2 entry carries `guarded` (the guard's own decision at
+    that child); otherwise bounds: lower counts tier A and Psycho Boost (its condition is the root's item facts), upper every
+    tier-C mass as guarded. tripped: True / False when the bounds (or the exact M) agree about THRESHOLD on either side, None
+    when they straddle it; a record without its turn-2 masses (an error record, an unavailable capture) trips, fail closed."""
+    out = dict(exact=None, m_own=None, m_opp=None, m_own_lower=None, m_own_upper=None, m_opp_lower=None, m_opp_upper=None, tiers=None,
+        tripped=True, tripped_lower=True, tripped_upper=True, unavailable=True)
+    entries = ((record or {}).get('masses') or {}).get('turn2')
+    if entries is None or not record.get('turn2_available', True):return out
+    priced = [w for w, x in enumerate(worlds) if x is not None and x.get('priced', True)]
+    if not priced:return out
+    own = masses(root_logits, root_legal);p = 1 / len(priced)
+    peer = {w: (masses(worlds[w]['logits'], worlds[w]['kept']) if worlds[w].get('requested') else [1.] + [0.] * 8) for w in priced}
+    exact = all('guarded' in e for e in entries)
+    sums = {scope: {side: {'A': [], 'C': []} for side in ('own', 'opp')} for scope in ('lower', 'upper')}
+    for e in entries:
+        tier = tier_of(e['move']);w = e['world']
+        if tier not in ('A', 'C') or w not in peer:continue
+        a, b = divmod(int(e['cell']), 9);weight = p * own[a] * peer[w][b] * float(e['mass'])
+        if not weight:continue
+        if exact:counted = dict(lower=e['guarded'], upper=e['guarded'])
+        else:counted = dict(lower=tier == 'A' or e['move'] == 'psychoboost' and _psychoboost(record, e['side']), upper=True)
+        for scope, yes in counted.items():
+            if yes:sums[scope][e['side']][tier].append(weight)
+    tiers = {scope: {side: {t: math.fsum(v) for t, v in per.items()} for side, per in sides.items()} for scope, sides in sums.items()}
+    m = {(scope, side): math.fsum(tiers[scope][side].values()) for scope in tiers for side in ('own', 'opp')}
+    lower, upper = (max(m[(scope, 'own')], m[(scope, 'opp')]) >= threshold for scope in ('lower', 'upper'))
+    out.update(exact=exact, m_own_lower=m[('lower', 'own')], m_own_upper=m[('upper', 'own')], m_opp_lower=m[('lower', 'opp')],
+        m_opp_upper=m[('upper', 'opp')], tiers=tiers, tripped_lower=lower, tripped_upper=upper, tripped=True if lower else False if not upper else None,
+        unavailable=False)
+    if exact:out.update(m_own=m[('lower', 'own')], m_opp=m[('lower', 'opp')])
+    return out
 
 
 def error_record(error):

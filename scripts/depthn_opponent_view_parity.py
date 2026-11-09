@@ -562,8 +562,9 @@ def showdown_percent(hp, maximum):
 def recompute_opp_hazard_credit(lines, owner):
     """Field 116 (the opponent's OPP_HAZARD_CREDIT) recomputed from the decision's own lines the way
     constructor_worlds.fill_owner_spikes builds the view's: each of our Spikes hits (constructor_worlds.line_facts' owner_spikes:
-    the exact HP before and after) at Showdown's public percent drop / 100 in float32, accumulated by the device's compensated
-    float32 sum (engine_device_damage_history._add, here in numpy), then the encoder's column value min(1, max(0, sum / 6)).
+    the exact HP before and after) at Showdown's public percent drop times float32(1/100) (XLA compiles the device's division
+    by 100 to that reciprocal multiply), accumulated by the device's compensated float32 sum (engine_device_damage_history._add,
+    here in numpy), then the encoder's column value min(1, max(0, sum * float32(1/6))), the readout's own reciprocal multiply.
     NaN when a hit's previous HP is not on the lines; 0 without a hit. It shares line_facts with the fill, so the report's use
     of it is a self-consistency check (the percent rule and the summation are this function's own), not Foul Play's value."""
     from gpu_engine import constructor_worlds as cw
@@ -571,11 +572,11 @@ def recompute_opp_hazard_credit(lines, owner):
     if hits is None:return np.float32(np.nan)
     f = np.float32;high, low = f(0), f(0)
     for before, after, maximum in hits:
-        value = f(max(0, showdown_percent(before, maximum) - showdown_percent(after, maximum))) / f(100)
+        value = f(f(max(0, showdown_percent(before, maximum) - showdown_percent(after, maximum))) * f(1 / 100))   # XLA's reciprocal multiply
         if not value > 0:continue
         total = f(high + value);recovered = f(total - high);error = f(f(high - f(total - recovered)) + f(value - recovered))
         correction = f(low + error);new_high = f(total + correction);low = f(correction - f(new_high - total));high = new_high
-    return f(np.clip(f(high + low) / f(6), 0, 1))
+    return f(np.clip(f(f(high + low) * f(1 / 6)), 0, 1))   # the readout's float32 reciprocal multiply, as XLA compiles x / 6
 
 
 # The sampler wrapper --------------------------------------------------------------------------------------------------------------
