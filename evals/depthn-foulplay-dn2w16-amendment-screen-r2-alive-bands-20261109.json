@@ -1,0 +1,79 @@
+{
+ "addendum_to": [
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json",
+   "sha256": "5e53654231abc940461decde4cdfa6b85ce89f22e20ff0ea7f9e626ea1855a75"
+  },
+  {
+   "path": "evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json",
+   "sha256": "b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e"
+  }
+ ],
+ "application": "scripts/depthn_screen_amended_verdict.py --run-binding <the screen-r2 adoption record> <its sha256> --run-amendment <this file> <its sha256>: the screen-r2 binding requires this record (pinned in RUN_AMENDMENTS), and the final-fairness gate then runs as scripts/depthn_fairness_final.py final_gate(..., bands='exact'). The drift diagnosis is scripts/depthn_fairness_final.py window --alive-bands exact. The four adopted rule files, their logic and their sha256s are unchanged.",
+ "computed_before": "No outcome statistic of screen-r2 has been computed or inspected: no score, win, paired difference, interval or bound, of either arm. This amendment is derived from fairness data only (Foul Play iteration rates, their budget strata, turns and alive counts): flag-1 (100 pairs, ratio, weighted 0.937, acknowledged benign), flag-2 (150 pairs, drift, window 216, weighted 1.112), the flag-1 diagnosis (finer 1.045, within), the flag-2 window diagnosis (finer 1.088, not within) and the whole-run diagnosis at 150 pairs (finer 1.0515, not within; final_gate on the same data: difference 0.05155), cited by sha256 in evidence. In the finer re-stratification the matched strata read 0.98-1.01; every large deviation sits in the coarse 1-2 alive endgame buckets, which pool one and two alive Pokemon. The panel was stopped at flag-2; the result files were counted by name only (panel_state), never read for this record.",
+ "decided_by": "the lead (search, V2, CUDA): one outcome-blind amendment, then resume",
+ "declaration": "evals/depthn-foulplay-dn2w16-declaration-r2-20261109.json",
+ "declaration_sha256": "45cbb471c07ccf9059fa15b519a0e6f9f2b3424a2c4338a4dfdd39d951b7ad41",
+ "evidence": [
+  {
+   "path": "/out/screen-r2/state/fairness/screen/flag-1.json",
+   "sha256": "308ffcf4baa408025e7fd2d16ca2537033c9c2ba6f1dc93634f7900a588ae45b",
+   "what": "flag 1: 100 pairs, reason ratio, weighted 0.937"
+  },
+  {
+   "path": "/out/screen-r2/state/fairness/screen/ack-1.json",
+   "sha256": "e5e3d7e8a236b67b2e3d6a78e5919c09960d47eee6b7f70733744f68b31ac2f2",
+   "what": "flag 1 acknowledged benign by the lead"
+  },
+  {
+   "path": "/out/screen-r2/state/fairness/screen/flag-2.json",
+   "sha256": "c34585fcdd62d3206e46cd190e9ff75a1c185f2daedfc73cf07d76cb68fe598f",
+   "what": "flag 2: 150 pairs, reason drift, window 216, weighted 1.112"
+  },
+  {
+   "path": "/out/screen-r2-fairness-diag-flag1.json",
+   "sha256": "9912e62ce910bb5ada4c51c81c2d72f55cab3d4213a6967b5d9c7b99ad319805",
+   "what": "flag-1 diagnosis, coarse alive buckets: finer 1.045, within"
+  },
+  {
+   "path": "/out/screen-r2-fairness-diag-flag2.json",
+   "sha256": "a9148a242fa44e093931b7336d94edf72569e557520463558517f2e7b186b9d5",
+   "what": "flag-2 window diagnosis (window 216), coarse alive buckets: finer 1.088, not within"
+  },
+  {
+   "path": "/out/screen-r2-fairness-diag-cum150.json",
+   "sha256": "6d9d3a37c91bdd906c99c2f21f60296ccd2ebea7bbc19b2f1b1f110676f6c29d",
+   "what": "whole run at 150 pairs, coarse alive buckets: finer 1.0515, not within; final_gate on the same data: difference 0.05155"
+  }
+ ],
+ "evidence_note": "the three diagnoses come from screen-r1's pre-registered fairness_diag.py (the lead's script, a pod-local copy, run unchanged); /out is the cluster's /out mount, as in the declaration",
+ "made_at_utc": "2026-11-09T19:13:26Z",
+ "panel_state": {
+  "combined_sha256": "9662013073b5769f8beb5a252da3239aa0ab0f6e9f300660e349e43ea9074fe6",
+  "completions_jsonl_sha256": "bdb297adbfc2d3c62297be13d620072cbdda7cb36895ed21e65edb58be753d1e",
+  "computed_at_utc": "2026-11-09T19:10:51Z",
+  "condition": "the panel stopped and no worker running",
+  "fairness_screen_sha256": "e17a69981d02825e113df673c149a656318c9f46b9af94b69ce1c0d349839c3c",
+  "method": "in /out/screen-r2: completions_jsonl_sha256 = sha256 of state/completions.jsonl; fairness_screen_sha256 = sha256 of the files of state/fairness/screen/ concatenated in name order (ack-1.json, checks.jsonl, flag-1.json, flag-2.json); result_names_sha256 = sha256 of the newline-joined sorted names of results/ (`ls | sort`; names only, never contents); combined_sha256 = sha256 of '<completions> <fairness> <names>' (the three hex digests, space-separated) with a trailing newline",
+  "result_files": 328,
+  "result_names_sha256": "ab464c69a14c5060db2018cf894585d5fb1660976c37b0af98b385bd9ff9bb8b"
+ },
+ "replaces": "for screen-r2 only: the final-fairness gate's and the drift diagnosis's alive buckets 1-2 / 3-4 / 5-6 per side (the final-fairness amendment, b2fccc25)",
+ "rule": {
+  "alive_bands": [
+   "1",
+   "2",
+   "3-4",
+   "5-6"
+  ],
+  "drift_diagnosis": "a fairness window's diagnosis (scripts/depthn_fairness_final.py window --alive-bands exact) stratifies the same way",
+  "final_fairness": "the final-fairness gate (scripts/depthn_fairness_final.py final_gate with bands='exact') stratifies by budget stratum x turn band x our and their exact alive bands {1}, {2}, {3-4}, {5-6}, with the official sparse-cell merge (pokezero.depthn_live_fairness.reading); |difference| > 5%: VOID_FAIRNESS",
+  "tolerance": 0.05,
+  "unchanged": "everything else: the tolerance (5%), the panel's in-run checkpoint (the declared arm_fairness), the four adopted rules otherwise, the screen rule, breakage, latency rule and confidence"
+ },
+ "run": {
+  "run_directory": "/out/screen-r2",
+  "tree_commit": "712cf20b683d69c98a290040bb98120ed6372b1e"
+ },
+ "schema": "depthn-foulplay-panel.amendment.v1"
+}

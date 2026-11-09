@@ -219,6 +219,8 @@ class AmendedVerdictTests(unittest.TestCase):
 
 ADOPTION = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json'
 R2_DECLARATION = EVALS/'depthn-foulplay-dn2w16-declaration-r2-20261109.json'
+ALIVE = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json'
+EXACT_FAIR = dict(FAIR, alive_bands='exact')   # the exact-bands final gate's shape
 R2_DECLARATION_SHA256 = '45cbb471c07ccf9059fa15b519a0e6f9f2b3424a2c4338a4dfdd39d951b7ad41'
 R2_TREE = '712cf20b683d69c98a290040bb98120ed6372b1e'
 # screen-r1's verdicts through the CLI on the seeded fixtures below, written by the script before --run-binding existed (5ca04a4b's)
@@ -243,6 +245,7 @@ class RunBindingTests(unittest.TestCase):
         self.files = {k: (p, json.loads(p.read_bytes()), hashlib.sha256(p.read_bytes()).hexdigest())
                       for k, p in (('amendment', AMENDMENT), ('addendum', ADDENDUM), ('both', BOTH), ('final', FINAL))}
         self.adoption = json.loads(ADOPTION.read_bytes());self.adoption_sha = hashlib.sha256(ADOPTION.read_bytes()).hexdigest()
+        self.alive = json.loads(ALIVE.read_bytes());self.alive_sha = hashlib.sha256(ALIVE.read_bytes()).hexdigest()
 
     def tearDown(self):self.directory.cleanup()
 
@@ -264,15 +267,16 @@ class RunBindingTests(unittest.TestCase):
         argv += ['--run-directory', str(self.root), '--output', str(self.root/'verdict.json')]
         return argv + (['--run-binding', str(ADOPTION), self.adoption_sha] if binding else []) + list(extra)
 
-    def main(self, argv, rewrite):
-        """V.main with read_bound rewriting the run directory of `rewrite` (the committed amendment or adoption record) to this one."""
+    def main(self, argv, *rewrite, gate=FAIR):
+        """V.main with read_bound rewriting the run directory of each of `rewrite` (committed records) to this one, and the final
+        fairness gate returning `gate` (its call kept in self.gate)."""
         from unittest import mock
         from scripts import depthn_fairness_final
         real = V.read_bound
         def here(p, digest):
             value = real(p, digest)
-            return dict(value, run=dict(value['run'], run_directory=str(self.root.resolve()))) if Path(p) == rewrite else value
-        with mock.patch.object(V, 'read_bound', side_effect=here), mock.patch.object(depthn_fairness_final, 'final_gate', return_value=FAIR), \
+            return dict(value, run=dict(value['run'], run_directory=str(self.root.resolve()))) if Path(p) in rewrite else value
+        with mock.patch.object(V, 'read_bound', side_effect=here), mock.patch.object(depthn_fairness_final, 'final_gate', return_value=gate) as self.gate, \
                 mock.patch('sys.stdout'):
             return V.main(argv)
 
@@ -305,6 +309,7 @@ class RunBindingTests(unittest.TestCase):
                 plain = self.run_verdict(scenario(self.root, *case), unbound=True)
                 self.assertEqual((bound.pop('run_binding_sha256'), bound.pop('run_binding')), (self.adoption_sha, dict(declaration_sha256=R2_DECLARATION_SHA256,
                     run_directory=here, tree_commit=R2_TREE)))
+                self.assertEqual(bound.pop('run_amendments'), {})   # none given here (the CLI requires screen-r2's: its gate only)
                 self.assertEqual((bound.pop('tree_commit'), plain.pop('tree_commit')), (R2_TREE, TREE));self.assertEqual(bound, plain)
 
     def test_the_binding_refuses_another_declaration_directory_or_tree(self):
@@ -324,17 +329,54 @@ class RunBindingTests(unittest.TestCase):
         path.write_text(json.dumps(cell))   # a screen-r1 result file in the bound run
         with self.assertRaisesRegex(ValueError, 'another panel, declaration or cell'):self.run_verdict(value)
 
-    def test_the_cli_binds_screen_r2_through_the_committed_record_only(self):
+    def test_the_cli_binds_screen_r2_through_the_committed_records_only(self):
         value = scenario(self.root, *SCENARIOS[0], declaration=R2_DECLARATION_SHA256, tree=R2_TREE)
-        argv = self.cli(value)
+        argv = self.cli(value, '--run-amendment', str(ALIVE), self.alive_sha)
         with self.assertRaisesRegex(SystemExit, "bound run's"):V.main(argv)   # this temporary directory is not /out/screen-r2
         with self.assertRaisesRegex(SystemExit, 'committed run binding'):V.main([x if x != self.adoption_sha else '0'*64 for x in argv])
-        self.assertEqual(self.main(argv, ADOPTION), 0)
+        with self.assertRaisesRegex(SystemExit, 'requires exactly'):self.main(self.cli(value), ADOPTION, ALIVE, gate=EXACT_FAIR)   # the amendment is required
+        with self.assertRaisesRegex(SystemExit, 'requires exactly'):self.main([x if x != self.alive_sha else '0'*64 for x in argv], ADOPTION, ALIVE)
+        self.assertEqual(self.main(argv, ADOPTION, ALIVE, gate=EXACT_FAIR), 0)
+        self.assertEqual((self.gate.call_args.args, self.gate.call_args.kwargs), ((str(self.root), 'DN2W16', 500), dict(bands='exact')))   # the amended gate
         written = json.loads((self.root/'verdict.json').read_text())
-        self.assertEqual((written['run_binding_sha256'], written['run_binding']['declaration_sha256'], written['tree_commit'], written['decision']),
-                         (self.adoption_sha, R2_DECLARATION_SHA256, R2_TREE, 'CONTINUE_TO_2000'))
+        self.assertEqual((written['run_binding_sha256'], written['run_binding']['declaration_sha256'], written['tree_commit'], written['decision'],
+                          written['run_amendments'], written['final_fairness']['alive_bands']),
+                         (self.adoption_sha, R2_DECLARATION_SHA256, R2_TREE, 'CONTINUE_TO_2000', dict(alive_bands=self.alive_sha), 'exact'))
+        argv[argv.index('--output') + 1] = str(self.root/'again.json')   # a coarse gate result under the amendment is refused
+        with self.assertRaisesRegex(ValueError, 'exact alive bands'):self.main(argv, ADOPTION, ALIVE)
         unbound = self.cli(value, binding=False);unbound[unbound.index('--output') + 1] = str(self.root/'r1.json')
         with self.assertRaisesRegex(ValueError, "readout's declaration"):self.main(unbound, AMENDMENT)   # screen-r1's rules alone refuse r2's readout
+        self.assertEqual(self.gate.call_args.kwargs, {})   # screen-r1's gate: the default (coarse) bucketing
+        with self.assertRaisesRegex(SystemExit, 'needs its --run-binding'):V.main(unbound + ['--run-amendment', str(ALIVE), self.alive_sha])
+
+    def test_the_alive_bands_amendment_record(self):
+        a = self.alive
+        self.assertEqual((V.RUN_AMENDMENTS[self.adoption_sha], a['schema'], a['declaration_sha256'], a['run']),
+                         (dict(alive_bands=self.alive_sha), V.AMENDMENT_SCHEMA, R2_DECLARATION_SHA256, dict(run_directory='/out/screen-r2', tree_commit=R2_TREE)))
+        self.assertEqual({x['sha256'] for x in a['addendum_to']}, {self.adoption_sha, self.files['final'][2]})
+        self.assertEqual((a['rule']['alive_bands'], a['rule']['tolerance']), (V.EXACT_ALIVE_BANDS, .05))
+        self.assertEqual(sorted(a['panel_state']), ['combined_sha256', 'completions_jsonl_sha256', 'computed_at_utc', 'condition',
+            'fairness_screen_sha256', 'method', 'result_files', 'result_names_sha256'])
+        state = a['panel_state'];text = f"{state['completions_jsonl_sha256']} {state['fairness_screen_sha256']} {state['result_names_sha256']}\n"
+        self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), state['combined_sha256'])   # the combined hash follows its stated method
+        self.assertEqual(len(a['evidence']), 6);self.assertTrue(all(len(x['sha256']) == 64 for x in a['evidence']))
+
+    def test_the_alive_bands_amendment_needs_the_exact_gate_and_this_run(self):
+        value = scenario(self.root, *SCENARIOS[0], declaration=R2_DECLARATION_SHA256, tree=R2_TREE)
+        alive = dict(self.alive, run=dict(self.alive['run'], run_directory=str(self.root.resolve())))
+        f = self.files
+        go = lambda record=alive, gate=EXACT_FAIR, **kw: V.verdict(value, f['amendment'][1], self.root, readout_sha256='r'*64,
+            amendment_sha256=f['amendment'][2], addendum=f['addendum'][1], addendum_sha256=f['addendum'][2], both=f['both'][1],
+            both_sha256=f['both'][2], final=f['final'][1], final_sha256=f['final'][2], final_fairness=gate,
+            **dict(dict(binding=self.binding(), binding_sha256=self.adoption_sha, run_amendments=dict(alive_bands=(record, self.alive_sha))), **kw))
+        out = go();self.assertEqual((out['decision'], out['run_amendments']), ('CONTINUE_TO_2000', dict(alive_bands=self.alive_sha)))
+        self.assertEqual(go(gate=dict(EXACT_FAIR, within=False))['decision'], 'VOID_FAIRNESS')
+        with self.assertRaisesRegex(ValueError, 'exact alive bands'):go(gate=FAIR)
+        for bad in (dict(alive, declaration_sha256=DECLARATION_SHA256), dict(alive, run=dict(alive['run'], tree_commit=TREE)),
+                    dict(alive, addendum_to=alive['addendum_to'][1:]), dict(alive, rule=dict(alive['rule'], alive_bands=['1-2', '3-4', '5-6'])),
+                    dict(alive, run=dict(alive['run'], run_directory='/out/screen-r1'))):
+            with self.assertRaisesRegex(ValueError, 'alive-bands amendment of the bound run'):go(bad)
+        with self.assertRaisesRegex(ValueError, 'need their run binding'):go(binding=None, binding_sha256=None)
 
 
 if __name__ == '__main__':

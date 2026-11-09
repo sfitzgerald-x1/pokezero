@@ -26,6 +26,10 @@ evals/depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json): it ado
 supplies the run directory, the declaration sha256 the readout and every result file must carry, and the readout's tree commit, in
 place of the rule files' run fields; the rule logic is unchanged and still read from the rule files, whose own chain (each addendum's
 declaration and addendum_to) is checked as before. Without --run-binding the script is screen-r1's, byte for byte.
+A binding may require run amendments (RUN_AMENDMENTS, each given by --run-amendment PATH SHA256): screen-r2's requires its alive-bands
+amendment (evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json), under which the final fairness gate
+(depthn_fairness_final.final_gate) stratifies by exact alive bands 1 / 2 / 3-4 / 5-6 per side; the verdict checks the gate's result
+says so. The tolerance and every other rule are unchanged.
 Only the standard library and scipy (the declared estimator's own t quantile). Writes the verdict once with --output.
 """
 import argparse
@@ -47,6 +51,9 @@ PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea66
               final='b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e')
 ADOPTION_SCHEMA = 'depthn-foulplay-panel.amendment-adoption.v1'
 RUN_BINDINGS = dict(screen_r2='5e53654231abc940461decde4cdfa6b85ce89f22e20ff0ea7f9e626ea1855a75')   # committed adoption records (the CLI refuses others)
+# the run amendments each binding requires, {kind: committed sha256} (the CLI refuses a missing, extra or other one)
+RUN_AMENDMENTS = {RUN_BINDINGS['screen_r2']: dict(alive_bands='6b8a5b3d6f5b46981f99d03f4f6063e91780afef2cf0ede56e3de9af4796b754')}
+EXACT_ALIVE_BANDS = ['1', '2', '3-4', '5-6']
 CAUSES = (('round cap', 'round_cap'), ('foul-play challenge', 'foulplay_challenge_timeout'), ('foul-play choice', 'foulplay_choice_timeout'))
 
 
@@ -118,13 +125,33 @@ def run_fields(binding, binding_sha256, rule_shas):
     return binding['declaration_sha256'], run['run_directory'], run['tree_commit']
 
 
+def check_alive_bands(record, record_sha256, *, binding_sha256, declaration_sha256, run_directory, tree_commit):
+    """ValueError unless `record` is the alive-bands amendment of this bound run: an amendment of its declaration, run directory and
+    tree, an addendum to its binding, with the exact bands."""
+    run = record.get('run') if type(record.get('run')) is dict else {}
+    if (record.get('schema') != AMENDMENT_SCHEMA or record.get('declaration_sha256') != declaration_sha256
+            or run.get('run_directory') != run_directory or run.get('tree_commit') != tree_commit
+            or binding_sha256 not in {x.get('sha256') for x in record.get('addendum_to') or () if type(x) is dict}
+            or (record.get('rule') or {}).get('alive_bands') != EXACT_ALIVE_BANDS):
+        raise ValueError(f'the alive-bands amendment of the bound run required ({record_sha256})')
+
+
 def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha256, addendum, addendum_sha256, both, both_sha256,
-            final, final_sha256, final_fairness, binding=None, binding_sha256=None):
+            final, final_sha256, final_fairness, binding=None, binding_sha256=None, run_amendments=None):
     """The amended verdict (module docstring). `binding`: a run binding (the adoption record) whose run fields replace the rule
-    files' (screen-r1's); None: screen-r1, unchanged."""
+    files' (screen-r1's); None: screen-r1, unchanged. `run_amendments`: {kind: (record, sha256)}, the run amendments the binding
+    requires (alive_bands: the final fairness gate's result must be the exact-bands one)."""
+    run_amendments = run_amendments or {}
+    if run_amendments and binding is None:raise ValueError('run amendments need their run binding')
     if binding is not None:
         declaration_sha256, bound_directory, tree_commit = run_fields(binding, binding_sha256, [amendment_sha256, addendum_sha256, both_sha256, final_sha256])
         if str(Path(run_directory).resolve()) != bound_directory:raise ValueError('the bound run\'s directory required')
+        if set(run_amendments) - {'alive_bands'}:raise ValueError(f'unknown run amendments {sorted(set(run_amendments) - {"alive_bands"})}')
+        if 'alive_bands' in run_amendments:
+            check_alive_bands(*run_amendments['alive_bands'], binding_sha256=binding_sha256, declaration_sha256=declaration_sha256,
+                              run_directory=bound_directory, tree_commit=tree_commit)
+            if type(final_fairness) is not dict or final_fairness.get('alive_bands') != 'exact':
+                raise ValueError('the alive-bands amendment needs the final fairness gate over exact alive bands')
     else:declaration_sha256, tree_commit = amendment.get('declaration_sha256'), (amendment.get('run') or {}).get('tree_commit')
     if amendment.get('schema') != AMENDMENT_SCHEMA or readout.get('declaration_sha256') != declaration_sha256:
         raise ValueError('an amendment of this readout\'s declaration required')
@@ -184,7 +211,8 @@ def verdict(readout, amendment, run_directory, *, readout_sha256, amendment_sha2
     else:decision = 'BAR_MET' if met and not breakage else 'BAR_NOT_MET'
     paired = paired or {}
     bound_run = {} if binding is None else dict(run_binding_sha256=binding_sha256,
-        run_binding=dict(declaration_sha256=declaration_sha256, run_directory=bound_directory, tree_commit=tree_commit))
+        run_binding=dict(declaration_sha256=declaration_sha256, run_directory=bound_directory, tree_commit=tree_commit),
+        run_amendments={kind: sha for kind, (_, sha) in sorted(run_amendments.items())})
     return dict(**bound_run, schema=VERDICT_SCHEMA, amendment_sha256=amendment_sha256, addendum_sha256=addendum_sha256, both_sha256=both_sha256,
         final_sha256=final_sha256, final_fairness=final_fairness,
         readout_sha256=readout_sha256, tree_commit=readout['tree']['commit'], bar_met=None if screen or void or readout['decision'] in KEPT else met,
@@ -207,10 +235,12 @@ def main(argv=None):
     p.add_argument('--output', help='write the verdict once here')
     p.add_argument('--run-binding', nargs=2, metavar=('PATH', 'SHA256'), help='a run binding (adoption record) pinned in RUN_BINDINGS: '
         'its run directory, declaration sha256 and tree commit replace the rule files\' (screen-r1\'s)')
+    p.add_argument('--run-amendment', nargs=2, action='append', default=[], metavar=('PATH', 'SHA256'),
+        help='a run amendment the binding requires (RUN_AMENDMENTS; screen-r2: its alive-bands amendment)')
     args = p.parse_args(argv)
     for name, given in (('amendment', args.amendment_sha256), ('addendum', args.addendum_sha256), ('both', args.both_sha256), ('final', args.final_sha256)):
         if given != PINNED[name]:raise SystemExit(f'--{name}-sha256 must be the committed file\'s {PINNED[name]}')
-    amendment = read_bound(args.amendment, args.amendment_sha256);binding = binding_sha256 = None
+    amendment = read_bound(args.amendment, args.amendment_sha256);binding = binding_sha256 = None;run_amendments = {}
     if args.run_binding is not None:
         path, binding_sha256 = args.run_binding
         if binding_sha256 not in RUN_BINDINGS.values():raise SystemExit(f'--run-binding must be a committed run binding: {sorted(RUN_BINDINGS.values())}')
@@ -218,15 +248,23 @@ def main(argv=None):
         try:directory = run_fields(binding, binding_sha256, list(PINNED.values()))[1]
         except ValueError as error:raise SystemExit(str(error))
         if str(Path(args.run_directory).resolve()) != directory:raise SystemExit('--run-directory must be the bound run\'s')
+        required = RUN_AMENDMENTS.get(binding_sha256, {});kinds = {sha: kind for kind, sha in required.items()}
+        given = [sha for _, sha in args.run_amendment]
+        if sorted(given) != sorted(required.values()):
+            raise SystemExit(f'--run-amendment: this binding requires exactly {sorted(required.items())}, got {sorted(given)}')
+        run_amendments = {kinds[sha]: (read_bound(path, sha), sha) for path, sha in args.run_amendment}
+    elif args.run_amendment:raise SystemExit('--run-amendment needs its --run-binding')
     elif str(Path(args.run_directory).resolve()) != amendment['run']['run_directory']:raise SystemExit('--run-directory must be the amended run\'s')
     from scripts import depthn_fairness_final   # the run's tree (pokezero) on the path
     readout = read_bound(args.readout, args.readout_sha256)
-    final_fairness = depthn_fairness_final.final_gate(args.run_directory, readout['arm'], readout['paired_cells'])
+    if 'alive_bands' in run_amendments:   # the amended gate (exact alive bands)
+        final_fairness = depthn_fairness_final.final_gate(args.run_directory, readout['arm'], readout['paired_cells'], bands='exact')
+    else:final_fairness = depthn_fairness_final.final_gate(args.run_directory, readout['arm'], readout['paired_cells'])
     value = verdict(readout, read_bound(args.amendment, args.amendment_sha256), args.run_directory,
         readout_sha256=args.readout_sha256, amendment_sha256=args.amendment_sha256, addendum=read_bound(args.addendum, args.addendum_sha256),
         addendum_sha256=args.addendum_sha256, both=read_bound(args.both, args.both_sha256), both_sha256=args.both_sha256,
         final=read_bound(args.final, args.final_sha256), final_sha256=args.final_sha256, final_fairness=final_fairness,
-        **({} if binding is None else dict(binding=binding, binding_sha256=binding_sha256)))
+        **({} if binding is None else dict(binding=binding, binding_sha256=binding_sha256, run_amendments=run_amendments)))
     text = json.dumps(value, indent=1, sort_keys=True) + '\n'
     if args.output:
         with open(args.output, 'x') as f:f.write(text)

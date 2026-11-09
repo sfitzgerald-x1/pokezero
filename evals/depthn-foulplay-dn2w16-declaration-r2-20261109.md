@@ -63,8 +63,10 @@ Was screen-r1's result caused by the broken search inputs, or does search lose t
      --both evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json --both-sha256 98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13 \
      --final evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json --final-sha256 b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e \
      --run-binding evals/depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json 5e53654231abc940461decde4cdfa6b85ce89f22e20ff0ea7f9e626ea1855a75 \
+     --run-amendment evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json 6b8a5b3d6f5b46981f99d03f4f6063e91780afef2cf0ede56e3de9af4796b754 \
      --run-directory /out/screen-r2 --output /out/screen-r2/amended-verdict.json
    ```
+   **Alive-bands amendment (made during the run, outcome-blind).** At fairness flag 2 (150 pairs, drift), the lead amended the final-fairness gate and the drift diagnosis for screen-r2 only: they stratify by exact alive bands {1}, {2}, {3-4}, {5-6} per side × budget stratum × turn band, with the official sparse-cell merge; the 5% tolerance and the panel's in-run checkpoint are unchanged. The record, `evals/depthn-foulplay-dn2w16-amendment-screen-r2-alive-bands-20261109.json` (sha256 `6b8a5b3d6f5b46981f99d03f4f6063e91780afef2cf0ede56e3de9af4796b754`), attests that no outcome statistic of screen-r2 had been computed or inspected, cites the flags and diagnoses by sha256 and hashes the panel state. The screen-r2 binding requires it (`--run-amendment`, pinned by the CLI).
    **No extension.** screen-r2 is a 500-cell screen; no extension to 2,000 cells is declared. screen-r1's extension amendment (`8a708ebb…`) is specific to screen-r1 and is not adopted. A `CONTINUE_TO_2000` verdict goes to the lead for a separate, pre-registered decision.
 6. **Footprint:** the same as screen-r1.
    - 4 GPUs, with 3 DN2W16 server processes per GPU (12) behind the sticky proxy;
