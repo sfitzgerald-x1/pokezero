@@ -92,6 +92,10 @@ SCHEMA = 'pokezero.depthn-rr-score.v1'
 LEVEL = .90
 OVERRIDE_MIN = .05
 PARITY_MIN = .99
+# How to read D (stated at the top of every summary.md): R is the champion's priced value, so D > 0 is a priced gain, not a
+# live result; the gate is the RR's validation, which must reproduce the live harm before the RR may select anything.
+SIGN_NOTE = ('Reading: D = R(op) - R(greedy) in the champion\'s priced values; D > 0 = priced above greedy. The validation gate '
+             'needs averaging\'s upper 90% bound < 0 (the RR reproducing the live harm) before any operator is selected.')
 PARITY_MODES = ('live', 'replay')   # live: against the live search (the default); replay: the replay against itself (a modified tree)
 PRIOR_C = (.02, .05, .1, .2, .5)
 NOISE_K = (1, 2)
@@ -950,7 +954,7 @@ HEADER = '| setting | override | mean D | 90% CI | per-battle mean D | battles |
 def markdown(summary):
     cover, table, gate, selection, confirmation = (summary[k] for k in ('coverage', 'metrics', 'gate', 'selection', 'confirmation'))
     settings = summary['settings']
-    out = ['# RR (realized-reply re-pricing) score', '', f"**Verdict: {summary['verdict']}**", '',
+    out = ['# RR (realized-reply re-pricing) score', '', SIGN_NOTE, '', f"**Verdict: {summary['verdict']}**", '',
            f"- Parity (rows searched live: replay COMPLETE, recomputed averaging's action == live, q == replay q): "
            f"{cover['parity']['matches']}/{cover['parity']['live_searched']} = {_pct(cover['parity']['rate'])} "
            f"(required >= {_pct(PARITY_MIN)}): {'ok' if cover['parity']['passed'] else 'PARITY_FAILED'}",

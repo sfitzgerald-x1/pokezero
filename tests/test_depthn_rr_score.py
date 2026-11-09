@@ -665,6 +665,9 @@ class EndToEndTests(unittest.TestCase):
         self.assertIsNone(decisions[3]['parity'])
         text = (out / 'summary.md').read_text()
         self.assertTrue(text.startswith('# RR'));self.assertIn('requested only: dropped, all', text)
+        # The reading of D is stated before the verdict: a priced gain, and the gate as the RR's validation.
+        self.assertEqual(text.splitlines()[2], S.SIGN_NOTE)
+        self.assertIn('D > 0 = priced above greedy', S.SIGN_NOTE);self.assertIn('upper 90% bound < 0', S.SIGN_NOTE)
         # Without --reply-prior: no external operators anywhere; tempered is scored like the others.
         self.assertEqual(summary['settings'], list(S.SETTINGS));self.assertEqual(summary['reported_only'], [])
         self.assertIsNone(cover['external_prior']);self.assertNotIn('external_br', first['operators'])
