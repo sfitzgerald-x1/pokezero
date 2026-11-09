@@ -809,14 +809,15 @@ class DefinitiveEndToEndTests(EndToEndTests):
 
     def test_main_with_reply_prior(self):pass
 
-    def definitive_inputs(self, slope, unrepresented=()):
+    def definitive_inputs(self, slope, unrepresented=(), tier_b=(), turn1=()):
         run = self.root / 'run'
         for sub in ('results', 'telemetry', 'owning-wire'):(run / sub).mkdir(parents=True, exist_ok=True)
         rows = self.rows(run, random.Random(11));weights, prior = [], []
         for row in rows:
             if row['root'] is not None:
-                row['root'].update(guards(opponent_recharge=(row['ordinal'], row['decision_index']) == (1, 0),
-                                          unrepresented_effect=(row['ordinal'], row['decision_index']) in unrepresented))
+                key = (row['ordinal'], row['decision_index'])
+                row['root'].update(guards(opponent_recharge=key == (1, 0), unrepresented_effect=key in unrepresented),
+                                   unrepresented_tier_b=key in tier_b, unrepresented_turn1_legal=key in turn1)
             if row['worlds'] is None:continue
             for w, world in enumerate(row['worlds']):
                 if (row['ordinal'], row['decision_index']) != (1, 1):weights.append(dict(ordinal=row['ordinal'], decision_index=row['decision_index'], world=w, loglik=-w * slope))
@@ -858,23 +859,28 @@ class DefinitiveEndToEndTests(EndToEndTests):
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
             S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(self.root / 'out2'), '--operator-set', 'definitive'])
 
-    def test_unrepresented_effect_roots_pause_above_ten_percent(self):
-        run, path, wpath, ppath = self.definitive_inputs(.25, unrepresented={(0, 0)})   # 1 of 5 scored roots: 20%
+    def test_unrepresented_effect_roots_leave_the_scope_and_splits_are_reported(self):
+        run, path, wpath, ppath = self.definitive_inputs(.25, unrepresented={(0, 0)}, tier_b={(0, 2), (0, 3)}, turn1={(0, 3)})
         out = self.root / 'out'
         with redirect_stdout(io.StringIO()):
             S.main(['--rows', str(path), '--run-directory', str(run), '--out', str(out), '--operator-set', 'definitive',
                     '--world-weights', str(wpath), '--reply-prior', str(ppath)])
         summary = json.loads((out / 'summary.json').read_text());g = summary['coverage']['guards']
-        self.assertEqual((g['unrepresented_effect_roots'], g['unrepresented_effect_share']), (1, .2))
-        self.assertIn(summary['verdict'], ('PAUSED_UNREPRESENTED_EFFECT', 'PARITY_FAILED'))
-        self.assertIsNone(summary['selection']['chosen'])
+        self.assertEqual((g['unrepresented_effect_roots'], g['unrepresented_effect_share']), (1, .2))   # no pause rule any more
+        self.assertNotIn('PAUSED', summary['verdict'])
+        for name in summary['settings']:self.assertEqual(summary['metrics']['pi_filled']['all']['operators'][name]['decisions'], 4, name)
         self.assertEqual(summary['metrics_unrepresented_effect_unguarded']['pi_filled']['all']['decisions'], 1)
+        splits = summary['scope_splits'];self.assertEqual((splits['scoped_roots'], splits['guarded_roots'], splits['a_only_roots']), (4, 1, 1))
+        self.assertEqual({k: v['pi_filled']['all']['decisions'] for k, v in splits['tier_b'].items()}, {'False': 2, 'True': 2})
+        self.assertEqual(splits['a_only_excluded']['pi_filled']['all']['decisions'], 3)
+        self.assertIn('without an unrepresented effect', summary['scope'])
+        text = (out / 'summary.md').read_text()
+        self.assertIn('tier-B split: tier-B effect', text);self.assertIn('(a)-only sensitivity', text)
         decisions = {(d['ordinal'], d['decision_index']): d for d in map(json.loads, (out / 'decisions.jsonl').read_text().splitlines())}
         root = decisions[(0, 0)];self.assertTrue(root['guard']['unrepresented_effect'])
         self.assertEqual({op['choice'] for op in root['operators'].values()}, {root['greedy_action']})
         self.assertEqual(set(root['unguarded_operators']), set(root['operators']))
-        self.assertIn('Context only: unrepresented-effect roots', (out / 'summary.md').read_text())
-        self.assertEqual(S.verdict(True, dict(passed=True), dict(chosen=None), dict(passed=False), paused=True), 'PAUSED_UNREPRESENTED_EFFECT')
+        self.assertIn('Context only: unrepresented-effect roots', text)
 
     def test_steep_weights_report_beta_quarter_and_dropped_battles_leave_every_operator(self):
         run, path, wpath, ppath = self.definitive_inputs(4.)   # ESS ~ 1 at beta .5

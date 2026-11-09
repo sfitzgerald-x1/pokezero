@@ -68,13 +68,16 @@ Definitive operator set (--operator-set definitive; the screen's set above stays
   choices given world w's sets (--world-weights rows {ordinal, decision_index, world, loglik}); a decision missing a world's
   loglik is unscorable ('world_weights_missing'). Their mean effective world count (1 / sum p_w^2) is reported.
 - Guards, on every operator (the live search's guards): a root whose opponent must recharge (root.opponent_recharge) or
-  that carries an audited unrepresented effect (root.unrepresented_effect: recharge, Destiny Bond, Transform, Yawn, Wrap,
-  Perish Song, Trick lock and the move table's other single-move effects, legal for either side at turn 1 or >= 5% of either
-  side's turn-2 prior in some world) is played greedy by every operator; an operator choice other than greedy in one of our
-  recharge lanes (root.own_recharge_lanes, bool[4] from the live actor's RECHARGE_MOVES) is replaced by greedy. A row without
-  these fields is unscorable ('guards_missing'). Replacements are counted per operator and reason; the unrepresented-effect
-  roots are also scored with each operator's unguarded choice, reported for context only; when they are more than 10% of
-  the scored roots the verdict is PAUSED_UNREPRESENTED_EFFECT and nothing is selected (the lead decides).
+  that carries an unrepresented effect (root.unrepresented_effect, set by the re-pricer from the parity session's move table:
+  arms (b) a world's turn-2 prior >= 5% on one for either side, or (c) its state condition, over tier A and tier C) is played
+  greedy by every operator; an operator choice other than greedy in one of our recharge lanes (root.own_recharge_lanes,
+  bool[4] from the live actor's RECHARGE_MOVES) is replaced by greedy. A row without these fields is unscorable
+  ('guards_missing'). Replacements are counted per operator and reason.
+- Scope: the definitive result (gate, selection on even seeds, confirmation on odd) is over the roots WITHOUT an
+  unrepresented effect. Reported beside it, never deciding: the guarded roots scored with each operator's unguarded choice;
+  the scoped result split by root.unrepresented_tier_b (a tier-B effect by the same arms); and an "(a)-only" sensitivity
+  row, the scoped result without the roots whose only flag is root.unrepresented_turn1_legal (an effect legal for either
+  side at turn 1). The splits need those fields on every scored row and are left out otherwise.
 - Candidates: bayes_hedge:lam=0, blend:lam=0.5, br_fp, rnr:lam=0.5 and both reweighted operators. Every other setting is
   reported only. Gate, selection (even seeds) and confirmation (odd seeds) are the screen's rules over these candidates.
 - Reweighting diagnostics per root (one weight vector serves both reweighted operators): the effective world count
@@ -137,7 +140,6 @@ DEFINITIVE_SETTINGS = SETTINGS + ('br_fp',) + tuple(f'rnr:lam={lam}' for lam in 
 DEFINITIVE_CANDIDATES = ('bayes_hedge:lam=0', 'blend:lam=0.5', 'br_fp', 'rnr:lam=0.5') + REWEIGHTED
 WORLD_WEIGHT_FIELDS = dict(ordinal='ordinal', decision_index='decision_index', world='world', loglik='loglik')
 GUARD_REASONS = ('opponent_recharge_root', 'unrepresented_effect_root', 'own_recharge_override')
-UNREPRESENTED_PAUSE_SHARE = .10   # above this share of scored roots under the unrepresented-effect guard, the RR pauses
 LOW_BETA = .25
 LOW_BETA_REWEIGHTED = (f'reweighted_averaging:beta={LOW_BETA}', f'reweighted_br_fp:beta={LOW_BETA}')
 LOW_BETA_IF_MEDIAN_ESS_UNDER = 4.
@@ -158,7 +160,8 @@ ROW_FIELDS = dict(
     action_equal=('parity', 'action_equal'), q_equal=('parity', 'q_equal'),
     root_logits=('root', 'root_logits'), root_legal=('root', 'root_legal'), worlds=('worlds',),
     opponent_recharge=('root', 'opponent_recharge'), own_recharge_lanes=('root', 'own_recharge_lanes'),
-    unrepresented_effect=('root', 'unrepresented_effect'))
+    unrepresented_effect=('root', 'unrepresented_effect'), unrepresented_tier_b=('root', 'unrepresented_tier_b'),
+    unrepresented_turn1_legal=('root', 'unrepresented_turn1_legal'))
 WORLD_FIELDS = dict(
     requested=('opponent_requested',), kept=('kept',), logits=('root_peer_logits',), grid=('grid',), refusals=('refusals',),
     active_slot=('opponent', 'active_slot'), active_species=('opponent', 'active_species'), active_moves=('opponent', 'active_moves'),
@@ -800,21 +803,20 @@ def confirm(table, setting):
     return dict(setting=setting, pi_filled=pi, dropped=dropped, checks=checks, passed=all(checks.values()))
 
 
-def verdict(parity_ok, gate, selection, confirmation, paused=False):
+def verdict(parity_ok, gate, selection, confirmation):
     if not parity_ok:return 'PARITY_FAILED'
-    if paused:return 'PAUSED_UNREPRESENTED_EFFECT'
     if not gate['passed']:return 'GATE_FAILED'
     if selection['chosen'] is None:return 'NO_CANDIDATE'
     return 'PASS' if confirmation['passed'] else 'FAIL'
 
 
-def decide(table, parity_ok, candidates=CANDIDATES, paused=False):
-    """Gate, selection and confirmation; no candidate is selected when parity or the gate fails, or when the run is paused."""
+def decide(table, parity_ok, candidates=CANDIDATES):
+    """Gate, selection and confirmation; no candidate is selected when parity or the gate fails."""
     gate = validation_gate(table)
-    selection = select(table, candidates) if parity_ok and gate['passed'] and not paused else dict(chosen=None, candidates=None)
+    selection = select(table, candidates) if parity_ok and gate['passed'] else dict(chosen=None, candidates=None)
     confirmation = None if selection['chosen'] is None else confirm(table, selection['chosen'])
     return dict(gate=gate, selection=selection, confirmation=confirmation,
-                verdict=verdict(parity_ok, gate, selection, confirmation or dict(passed=False), paused))
+                verdict=verdict(parity_ok, gate, selection, confirmation or dict(passed=False)))
 
 
 # ---- the live run directory ----
@@ -909,7 +911,6 @@ class Coverage:
                 decisions=self.guards['decisions'], opponent_recharge_roots=self.guards['opponent_recharge_roots'],
                 unrepresented_effect_roots=self.guards['unrepresented_effect_roots'],
                 unrepresented_effect_share=self.guards['unrepresented_effect_roots'] / self.guards['decisions'] if self.guards['decisions'] else None,
-                unrepresented_pause_above=UNREPRESENTED_PAUSE_SHARE,
                 with_own_recharge_lanes=self.guards['with_own_recharge_lanes'],
                 replaced={f'{name}:{reason}': n for (name, reason), n in sorted(self.replaced.items())}),
             world_weights=None if self.guards is None else self.weight_report(),
@@ -998,7 +999,10 @@ def process(decision, run, coverage, prior=None, weights=None, definitive=False)
                  unguarded_operators=scored['unguarded_operators'])
     compact = lambda table: {n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in table.items()}
     record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'], fp_requested=reply.kind != 'wait',
-                  ops=compact(ops), unguarded=None if scored['unguarded_operators'] is None else compact(scored['unguarded_operators']))
+                  ops=compact(ops), unguarded=None if scored['unguarded_operators'] is None else compact(scored['unguarded_operators']),
+                  unrepresented=bool((scored['guard'] or {}).get('unrepresented_effect')),
+                  tier_b=decision['unrepresented_tier_b'] if type(decision['unrepresented_tier_b']) is bool else None,
+                  turn1_legal=decision['unrepresented_turn1_legal'] if type(decision['unrepresented_turn1_legal']) is bool else None)
     return entry, record
 
 
@@ -1037,16 +1041,23 @@ def score_run(rows, run_directory, out, reply_prior=None, operator_set='screen',
             if record is not None:records.append(record)
     cover = coverage.report(records)
     if definitive and cover['world_weights']['low_beta_reported']:settings = settings + LOW_BETA_REWEIGHTED
-    table = metrics(records, settings)
-    share = (cover['guards'] or {}).get('unrepresented_effect_share')
-    paused = definitive and share is not None and share > UNREPRESENTED_PAUSE_SHARE
-    outcome = decide(table, cover['parity']['passed'], candidates, paused)
+    scoped = [r for r in records if not r.get('unrepresented')]   # the definitive scope: roots without an unrepresented effect
+    table = metrics(scoped, settings)
+    outcome = decide(table, cover['parity']['passed'], candidates)
     guarded = [dict(r, ops=r['unguarded']) for r in records if r.get('unguarded') is not None]
     unguarded_context = metrics(guarded, settings) if definitive else None
+    splits = None
+    if definitive:
+        splits = dict(scoped_roots=len(scoped), guarded_roots=len(guarded))
+        if scoped and all(type(r['tier_b']) is bool for r in scoped):
+            splits['tier_b'] = {str(flag): metrics([r for r in scoped if r['tier_b'] is flag], settings) for flag in (False, True)}
+        if scoped and all(type(r['turn1_legal']) is bool for r in scoped):
+            splits['a_only_excluded'] = metrics([r for r in scoped if not r['turn1_legal']], settings)
+            splits['a_only_roots'] = sum(r['turn1_legal'] for r in scoped)
     # Reported only (the gate and selection use `metrics`): without 'wait' decisions. There every mapped world is a waiting
     # world (pi_w is column 0's unit mass), so R is averaging's own per-world value over them: exactly its q, and averaging's
     # D >= 0, when every world waits.
-    requested = metrics([r for r in records if r['fp_requested']], settings)
+    requested = metrics([r for r in scoped if r['fp_requested']], settings)
     reported = [n for n in settings if n not in candidates and n not in ('greedy', 'averaging')] if definitive else \
         [n for n in settings if n in EXTERNAL_SETTINGS]
     summary = dict(schema=SCHEMA, operator_set=operator_set, scoring_rule=SCORING_RULE,
@@ -1056,7 +1067,8 @@ def score_run(rows, run_directory, out, reply_prior=None, operator_set='screen',
                                drop_battles=None if drop_battles is None else str(Path(drop_battles).resolve())),
                    settings=list(settings), candidates=list(candidates), reported_only=reported, level=LEVEL, override_min=OVERRIDE_MIN, parity_min=PARITY_MIN,
                    bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table, metrics_fp_requested=requested,
-                   metrics_unrepresented_effect_unguarded=unguarded_context)
+                   metrics_unrepresented_effect_unguarded=unguarded_context, scope_splits=splits,
+                   scope=None if not definitive else 'roots without an unrepresented effect (root.unrepresented_effect false)')
     (out / 'summary.json').write_text(json.dumps(summary, indent=1) + '\n')
     (out / 'summary.md').write_text(markdown(summary))
     return summary
@@ -1084,6 +1096,7 @@ def markdown(summary):
     cover, table, gate, selection, confirmation = (summary[k] for k in ('coverage', 'metrics', 'gate', 'selection', 'confirmation'))
     settings = summary['settings']
     out = ['# RR (realized-reply re-pricing) score', '', f"**Verdict: {summary['verdict']}** (operator set: {summary['operator_set']})", '',
+           f"Scope: {summary.get('scope') or 'every scored root'}", '',
            f"Scoring rule: {summary['scoring_rule']}", '',
            f"Dropped battles (no operator scores them): {cover['dropped_battles']['battles']} {cover['dropped_battles']['by_reason']}", '',
            f"- Parity (rows searched live: replay COMPLETE, recomputed averaging's action == live, q == replay q): "
@@ -1141,6 +1154,14 @@ def markdown(summary):
         out += [f"## Context only: unrepresented-effect roots scored with each operator's unguarded choice ({block['battles']} battles, "
                 f"{block['decisions']} decisions; every operator played greedy there)", '', HEADER]
         out += [_metric_row(name, block['operators'][name]) for name in settings] + ['']
+    splits = summary.get('scope_splits') or {}
+    for label, block in ([('tier-B split: no tier-B effect', (splits.get('tier_b') or {}).get('False')),
+                          ('tier-B split: tier-B effect', (splits.get('tier_b') or {}).get('True')),
+                          ('(a)-only sensitivity: without roots flagged only by (a)', splits.get('a_only_excluded'))]):
+        if block is None:continue
+        b = block['pi_filled']['all']
+        out += [f"## Reported: {label} ({b['battles']} battles, {b['decisions']} decisions)", '', HEADER]
+        out += [_metric_row(name, b['operators'][name]) for name in settings] + ['']
     requested = summary['metrics_fp_requested']
     out += ["# Reported view: decisions where Foul Play was requested (no 'wait' decisions; the gate and selection above are unchanged)", '']
     for scoring in SCORINGS:
