@@ -13,9 +13,11 @@ with unsettled tests. Pod supplement results (--pod) fill only tests the CI
 runs did not settle, with provenance `pod`.
 
 `pod-run` is that supplement: it runs a list of test modules on a given tree
-through the CI entry point (scripts/run_gpu_component_shard.run_process_blocks:
-one fresh, rediscovered process per block, the CI case-isolation classes) with
-the CI environment variables, and writes the settled results in the same form.
+through the CI entry point itself (scripts/run_gpu_component_shard.py
+--index <the module's block> --count <discovery blocks> --process-blocks with
+the CI case-isolation classes, so parent and child discover the full suite as
+in CI) with the CI environment variables, and writes the settled results in
+the same form.
 The pod is not the CI runner (CPU, platform, timing), and the result records it.
 
 `diff` compares a PR (runs and/or pod results) with a baseline: new failing IDs
@@ -323,20 +325,22 @@ def supplement_modules(args):
 # ---------------------------------------------------------------------------
 # Pod supplement.
 
-DRIVER = r'''
-import importlib.util, json, sys, unittest
+# Lists the component suite's discovery blocks exactly as the CI entry point does
+# (start_dir tests/, pattern test_gpu_engine*.py) and the module each block holds.
+BLOCK_MAP = r'''
+import json, sys, unittest
 from pathlib import Path
-tree, module, isolate = Path(sys.argv[1]), sys.argv[2], json.loads(sys.argv[3])
-spec = importlib.util.spec_from_file_location('run_gpu_component_shard', tree / 'scripts/run_gpu_component_shard.py')
-runner = importlib.util.module_from_spec(spec);spec.loader.exec_module(runner)
-sys.path.insert(0, str(tree))
-pattern = module + '.py'
-discovered = unittest.defaultTestLoader.discover(start_dir=str(tree / 'tests'), pattern=pattern)
-blocks = len(list(discovered))
-print(json.dumps({"shard": 0, "count": 1, "discovery_blocks": blocks, "selected_blocks": list(range(blocks)),
-    "test_cases": discovered.countTestCases(), "pod_module": module}), flush=True)
-sys.exit(runner.run_process_blocks(discovered, 0, 1, start_dir=tree / 'tests', pattern=pattern,
-    isolate_standard_classes=[c for c in isolate if c.split('.')[0] == module]))
+tree = Path(sys.argv[1]);sys.path.insert(0, str(tree))
+discovered = unittest.defaultTestLoader.discover(start_dir=str(tree / 'tests'), pattern='test_gpu_engine*.py')
+def ids(node):
+    if isinstance(node, unittest.TestCase):return [unittest.TestCase.id(node)]
+    return [i for child in node for i in ids(child)]
+blocks = []
+for block in discovered:
+    names = ids(block)
+    modules = sorted({n.rsplit('.', 1)[-1] if n.startswith('unittest.loader._FailedTest.') else n.split('.')[0] for n in names})
+    blocks.append(modules)
+print(json.dumps(blocks))
 '''
 
 
@@ -362,12 +366,32 @@ def pod_run(args):
     dirty = bool(_git(['-C', str(tree), 'status', '--porcelain', '--', 'gpu_engine', 'tests', 'src', 'scripts']).strip())
     if dirty and not args.allow_dirty:raise SystemExit('the tree is dirty; commit it or pass --allow-dirty')
     function_modules = Tree(path=tree).function_modules();env = pod_environment(args, tree)
+    listed = subprocess.run([sys.executable, '-c', BLOCK_MAP, str(tree)], cwd=tree, env=env, capture_output=True, text=True)
+    if listed.returncode:raise SystemExit(f'block discovery failed: {listed.stderr[-2000:]}')
+    blocks = json.loads(listed.stdout.strip().splitlines()[-1]);index = {}
+    for i, mods in enumerate(blocks):
+        for mod in mods:index.setdefault(mod, i)
+    unmapped = [m for m in modules if m not in index]
+    if unmapped:raise SystemExit(f'modules without a discovery block: {unmapped}')
+    isolate = [a for c in CI_ISOLATE for a in ('--isolate-standard-class', c)]
+
+    reused = []
 
     def one(module):
         begin = time.perf_counter();path = logs / f'{module}.log'
+        previous = Path(args.reuse_logs) / f'{module}.log' if args.reuse_logs else None
+        if previous and previous.exists() and 'process_blocks_terminal' in previous.read_text():
+            # A finished run of the same tree (an interrupted pod-run): reuse its log as is.
+            path.write_text(previous.read_text());reused.append(module)
+            parsed = parse_log(path.read_text().splitlines(), function_modules, plain=True).get('', _empty())
+            return module, dict(returncode=0 if '"passed": true' in path.read_text() else 1, timed_out=False, reused=True,
+                seconds=None, settled=parsed['settled'], unsettled=sorted(parsed['unsettled']),
+                blocks=len(parsed['selected_blocks']), blocks_finished=len(parsed['blocks_finished']))
+        # The CI entry point itself, selecting this module's block: --index i --count <blocks>.
+        command = [sys.executable, '-u', str(tree / 'scripts/run_gpu_component_shard.py'), '--index', str(index[module]),
+                   '--count', str(len(blocks)), '--process-blocks', *isolate]
         with path.open('w') as stream:
-            process = subprocess.Popen([sys.executable, '-u', '-c', DRIVER, str(tree), module, json.dumps(CI_ISOLATE)],
-                cwd=tree, env=env, stdout=stream, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command, cwd=tree, env=env, stdout=stream, stderr=subprocess.STDOUT)
             try:code = process.wait(timeout=args.timeout)
             except subprocess.TimeoutExpired:
                 process.kill();process.wait();code = None
@@ -390,7 +414,10 @@ def pod_run(args):
         capture_output=True, text=True, env=env).stdout.split()
     node = subprocess.run(['node', '--version'], capture_output=True, text=True).stdout.strip()
     data = dict(schema=SCHEMA + '.pod', tree=str(tree), tree_commit=commit, tree_dirty=dirty, modules=modules,
-        entry_point='scripts/run_gpu_component_shard.run_process_blocks (fresh process per block, CI isolation classes)',
+        entry_point=('scripts/run_gpu_component_shard.py --index <block> --count <blocks> --process-blocks '
+                     '--isolate-standard-class <CI classes>; full CI discovery in parent and child'),
+        discovery_blocks=len(blocks), module_blocks={m: index[m] for m in modules},
+        reused_logs=dict(directory=str(args.reuse_logs), modules=sorted(reused)) if args.reuse_logs else None,
         environment=dict(python=platform.python_version(), machine=platform.machine(), jax_numpy=versions, node=node,
             team_pool=str(args.team_pool), showdown_root=str(args.showdown_root), jobs=args.jobs, timeout=args.timeout,
             note='pod, not the CI runner: CPU model, core count and timing differ'),
@@ -467,6 +494,7 @@ def main(argv=None):
     r.add_argument('--showdown-root', required=True)
     r.add_argument('--jobs', type=int, default=8);r.add_argument('--timeout', type=float, default=3 * 3600)
     r.add_argument('--allow-dirty', action='store_true')
+    r.add_argument('--reuse-logs', default=None, help='log directory of an interrupted pod-run of the same tree; finished modules are reused')
     d = sub.add_parser('diff', help='new failing IDs of a PR against a baseline')
     d.add_argument('--baseline', required=True)
     d.add_argument('--pr-run', action='append', default=None)
