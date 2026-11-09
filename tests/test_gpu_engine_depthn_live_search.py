@@ -548,13 +548,28 @@ class ReplyPriorTests(unittest.TestCase):
             moved += row['q_values'] != row['reply_prior']['champion_q_values']
         self.assertGreater(moved, 0, 'a negated reply prior should move some root\'s q')
 
+    def test_jit_views_reproduce_the_eager_path_and_check_reports_them(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        reqs = [request(f'r{i}', 0, stream=60 + i) for i in range(3)]
+        eager, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])), reqs, self.outcomes(3))
+        jitted, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='jit')), reqs, self.outcomes(3))
+        checked, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='check')), reqs, self.outcomes(3))
+        for e, j, c in zip(eager, jitted, checked):
+            self.assertEqual((j['status'], j['action_index']), (e['status'], e['action_index']))
+            self.assertEqual((c['action_index'], c['q_values']), (e['action_index'], e['q_values']))   # check plays eager
+            if e['status'] != 'COMPLETE':continue
+            for name, value in (('eager', e), ('jit', j)):self.assertEqual(value['reply_prior']['views'], name)
+            r = c['reply_prior'];self.assertEqual(r['views'], 'check');self.assertEqual(r['jit_action_index'], j['action_index'])
+            self.assertLessEqual(r['jit_max_abs_logit_diff'], 1e-5)
+        with self.assertRaises(ValueError):ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='fast')
+
     def test_apply_replaces_requested_worlds_only_and_a_failure_refuses_the_root(self):
         from gpu_engine.depthn_reply_prior import ReplyPrior
         rp = ReplyPrior(None, self.evaluator, PARAMS[0], views=lambda *a:None)
         grid = ((0.,) * 9,) * 9
         asked = original.WorldPrices(True, (True,) * 9, (0.,) * 9, grid);waiting = original.WorldPrices(False, (False,) * 9, (1.,) + (0.,) * 8, grid)
         with patch.object(ReplyPrior, 'logits', return_value=np.arange(36, dtype=np.float32).reshape(4, 9)):
-            out, seconds = rp.apply([(asked, waiting), (None, asked)], [NS()] * 4, 0)
+            out, seconds, check = rp.apply([(asked, waiting), (None, asked)], [NS()] * 4, 0);self.assertIsNone(check)
             self.assertEqual(out[0][0].opponent_logits, tuple(float(x) for x in range(9)));self.assertEqual(out[0][1], waiting)
             self.assertIsNone(out[1][0]);self.assertEqual(out[1][1].opponent_logits, tuple(float(x) for x in range(27, 36)))
             self.assertGreaterEqual(seconds, 0.)

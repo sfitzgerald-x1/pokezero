@@ -214,6 +214,8 @@ def parser():
         'world\'s peer view replace root_peer_logits before averaging; default off (the champion\'s own averaging)')
     p.add_argument('--reply-archive-sha256',help='sha256 of --reply-archive\'s bytes (required with it)')
     p.add_argument('--reply-checkpoint-sha256',help='the reply export\'s checkpoint sha256 (required with --reply-archive)')
+    p.add_argument('--reply-views',choices=('eager','jit','check'),default='eager',help='how --reply-archive builds the peer inputs: eager '
+        '(default; bit-exact with the RR re-pricer), jit (one vmapped program per root), or check (eager plays; jit reported beside)')
     p.add_argument('--matmul-precision',choices=('highest','high','default'),default='highest',
         help='the pinned JAX default matmul precision (default highest, the gates\' certified precision); the server refuses to start '
         'unless JAX_DEFAULT_MATMUL_PRECISION and JAX\'s own setting both name it')
@@ -279,7 +281,7 @@ def build(args):
         from gpu_engine.depthn_reply_prior import ReplyPrior
         model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
             expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
-        reply=ReplyPrior(executor,model)
+        reply=ReplyPrior(executor,model,mode=args.reply_views)
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
         max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,reply=reply)
@@ -294,7 +296,7 @@ def header(args,search):
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
         **({}if not getattr(args,'reply_archive',None)else dict(root_operator='br_fp',reply_archive_sha256=args.reply_archive_sha256,
-            reply_checkpoint_sha256=args.reply_checkpoint_sha256)),
+            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views)),
         jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision)
 
 

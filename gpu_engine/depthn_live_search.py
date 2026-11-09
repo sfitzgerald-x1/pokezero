@@ -401,11 +401,14 @@ class DepthNLiveSearch:
             reply=None
             if getattr(self,'reply',None)is not None:   # br_fp: the reply model's logits on the same worlds; the champion's averaging is reported
                 item=items[root['request_id']]
-                try:replied,seconds=self.reply.apply(blocks,item.made.worlds,int(item.detached.address.owner))
+                try:replied,seconds,check=self.reply.apply(blocks,item.made.worlds,int(item.detached.address.owner))
                 except FATAL:raise
                 except Exception as error:results.append(dict(base,status='REFUSED',refusal=f'REPLY_PRIOR_ERROR: {type(error).__name__}: {error}'));continue
                 champion=decide(blocks,root['root_logits'],root['root_legal'])
-                reply=dict(operator='br_fp',seconds=seconds,champion_action_index=champion['action_index'],champion_q_values=champion['q_values'])
+                reply=dict(operator='br_fp',views=self.reply.mode,seconds=seconds,champion_action_index=champion['action_index'],champion_q_values=champion['q_values'])
+                if check is not None:   # --reply-views check: the jitted views' logits, averaged and reported beside (eager plays)
+                    alt=decide(check['blocks'],root['root_logits'],root['root_legal'])
+                    reply.update(jit_action_index=alt['action_index'],jit_q_values=alt['q_values'],jit_max_abs_logit_diff=check['max_abs_logit_diff'])
                 blocks=replied
             decision=decide(blocks,root['root_logits'],root['root_legal'])
             if reply is not None:decision['reply_prior']=reply
