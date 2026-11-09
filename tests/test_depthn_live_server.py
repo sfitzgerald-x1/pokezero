@@ -159,6 +159,12 @@ class ServerTests(unittest.TestCase):
             for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
             self.assertEqual(S.build(args),'search')
         self.assertEqual((made['refuse_classes'],made['max_requests'],made['session_cap'],made['tree_commit'],made['binding']),(('wish','sleep'),2,64,'t'*40,'binding'))
+        self.assertIs(made['redact_private_reveals'],False)   # off by default
+        with patch.dict(os.environ,PINNED):args=S.options(base+['--redact-private-reveals'])
+        with ExitStack()as stack:
+            for target,name,value in stand_ins:stack.enter_context(patch.object(target,name,side_effect=value))
+            S.build(args)
+        self.assertIs(made['redact_private_reveals'],True)
 
     def test_the_matmul_precision_is_hard_pinned(self):
         """The environment is checked before anything loads; JAX's own setting again in build, before any input or champion."""
@@ -222,6 +228,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(S.options(base+champion).refuse_classes,())
         search=NS(tree_commit='t',rung='DN2W8',max_requests=4,min_price_seconds=1.,session_cap=256,refuse_classes=('forced_switch','wish'),pricer_identity={})
         self.assertEqual(S.header(args,search)['refuse_classes'],['forced_switch','wish'])   # recorded in READY and the telemetry header
+        self.assertIs(S.header(args,search)['redact_private_reveals'],False)
+        self.assertIs(S.header(args,NS(vars(search),redact_private_reveals=True))['redact_private_reveals'],True)
         for bad in(base,base+champion[:2],base+champion+['--max-requests','5'],base+champion+['--buckets','0,1'],base+champion+['--rung','R1'],
                 base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion,
                 base+champion+['--batch-wait-seconds','.5'],base+champion+['--queue-limit','2'],base+champion+['--refuse-classes','nap']):   # the last two: Codex's queue checks, before any load

@@ -103,6 +103,31 @@ dict keys and leaves two members None). This module turns prepared roots into De
     fires on real lines. fix_peer_base_ability (the carry's public original over its borrowed ability, peer only) never
     does for a tracer: B2's fold records the tracer's running copy and the DONOR's original, never the tracer's own
     ability (pokezero.belief._trace_copy_source; public_abilities.trace_copy).
+  - Private reveals (redact_private_reveals; OFF by default: prepare_roots' and the live search's redact_private_reveals,
+    the server's and the re-pricer's --redact-private-reveals): Showdown sends Gen 3 Pressure's start line to the holder's
+    side alone. At the pinned sim (pokerena/vendor/pokemon-showdown f76228a13), data/mods/gen3/abilities.ts:145-150,
+    pressure.onStart: this.addSplit(pokemon.side.id, ['-ability', pokemon, 'Pressure', '[silent]']); sim/battle.ts:3104-3112,
+    addSplit(side, secret, shared?) with no shared part pushes |split|<side>, the secret line and an EMPTY shared line;
+    sim/battle.ts:33 and 35-59, extractChannelMessages gives a split's secret line to that player's channel (and the
+    omniscient one) and its shared line to every other channel, skipping an empty one; sim/battle-stream.ts:434-441,
+    getPlayerStreams sends each player its own channel. It is the only ability line Gen 3 sends this way (every other
+    addSplit there is not an ability line, and add() with a function part always has a shared line). Our wire carries it
+    for our own members, Foul Play's never for its own; B2's fold records it as a revealed ability
+    (public_abilities.reveal), from_b2 copies ctx.abilities.original into the carry's original_ability and
+    shown_ability, so the PEER's view of the owner side (engine_device_trackers' view reads the observer's FOE side)
+    showed it (REVEALED_ABILITY, the ability belief category), where live Foul Play never sees it (the device hooks agree:
+    engine_device_public_hooks' install never shares Pressure's start). line_facts records, per owner member, the
+    abilities the lines reveal only on that side-private form (|-ability|<own member>|X|[silent], no other tag) and on no
+    public line (a non-silent or tagged -ability line, a [from] ability: X attribution, a Trace copy's or Role Play's
+    [of] member); redact_private_reveals clears original_ability (and shown_ability where it shows the same ability and no
+    borrowed one runs) at those members' public slots on the owner side only. borrowed_ability is never touched (a running
+    copy is always public in Gen 3, and the owner's own view reads it). The owner's own view (its own members come from the
+    engine state), the root prior (B2's encoding) and the guard's conditions (the lines) do not change; only the peer's
+    view of the owner side does. Not redacted: B2's belief hard mask (the carry's belief_mask / visible_belief), which
+    public_context.rebuild narrows by the revealed abilities of both sides; it differs only for a species whose sets differ
+    in ability (in Gen 3 random battles, Aerodactyl: Rock Head / Pressure), and the world carry holds no unnarrowed base to
+    restore. prepare_roots records per root (Prepared.private_reveals, the live rows' private_reveals) what the lines
+    revealed privately, the members the carry shows from it and what it redacted.
   The peer's own ability and item belief columns otherwise need nothing: the encoder writes the observer's own Pokemon's
   from the world's engine state (engine_device_observation.encode: base_ability and item as belief:possible_ability / item
   categories, in own_order), as the env writes a player's own (showdown._encode_pokemon_tokens' self rule: the request's
@@ -322,7 +347,8 @@ def world_completer(constructor):
     """The completion prepare_roots and build apply to each world of this constructor: (world, owner, facts=None) -> world,
     facts the root's LineFacts (None: the fills only, no peer order or owner Spikes credit)."""
     tables=constructor_carry_tables(constructor)
-    return lambda world,owner,facts=None,root=None:complete_world(world,tables,owner,facts=facts,root=root)
+    return lambda world,owner,facts=None,root=None,redact_private_reveals=False:complete_world(world,tables,owner,facts=facts,root=root,
+        redact_private_reveals=redact_private_reveals)
 
 
 def _host(x):return np.asarray(jax.device_get(x))
@@ -429,13 +455,17 @@ class LineFacts:
     side, whether its active must recharge (B2's public_active.project_line: set by -mustrecharge, cleared by that side's
     |cant| recharge, arrival or faint); tracers: per side, the normalized species of each member that announced Trace (the
     SUBJECT of an -ability line tagged [from] ability: Trace: Showdown's setAbility line
-    |-ability|<tracer>|<copied>|<tracer's own ability>|[from] ability: Trace|[of] <donor>), sorted."""
+    |-ability|<tracer>|<copied>|<tracer's own ability>|[from] ability: Trace|[of] <donor>), sorted; private_reveals: per side,
+    the (species, ability) pairs of the OWNER's members whose ability the lines reveal only on side-private lines (a line of
+    the owner's own seat |-ability|<member>|<ability>|[silent] with no other tag: Showdown's addSplit form, which reaches
+    the owner's side alone, module docstring) and no public line attributes to it, sorted; the peer side is always ()."""
     peer_switches:tuple
     owner_spikes:tuple|None
     baton:tuple=(False,False)
     owner_moves:tuple=()
     recharge:tuple=(False,False)   # per side (p1, p2): its active must recharge (B2's public_active rule, line_facts)
     tracers:tuple=((),())          # per side (p1, p2): the species that announced Trace on the lines (line_facts)
+    private_reveals:tuple=((),())  # per side (p1, p2): (species, ability) revealed to the owner's side alone (line_facts)
 
 
 def _seat_name(field):
@@ -457,11 +487,15 @@ def line_facts(lines,owner):
     own,peer=f'p{owner+1}',f'p{2-owner}';switches=[];spikes=[];hp={};complete=True
     species={};active={'p1':'','p2':''};alive={'p1':False,'p2':False};pending=set();baton={'p1':False,'p2':False}
     transformed=set();original_pressure=set();running_pressure=set();moves=[];recharge={'p1':False,'p2':False}
-    tracers={'p1':set(),'p2':set()}
+    tracers={'p1':set(),'p2':set()};private=set();public=set()   # (seat, species, ability): side-private / public ability lines
+    member=lambda seat,name:species.get((seat,name))or normalize_id(name)
     for line in lines:
         parts=str(line).split('|')
         if len(parts)<3 or parts[0]!='':continue
         kind=parts[1];seat,name=_seat_name(parts[2]);tags=[x.strip().lower()for x in parts[4:]]
+        if len(parts)>=4 and seat in active:
+            for found in _ability_attributions(kind,seat,member(seat,name),parts,tags,member):
+                (private if found[0]=='private'else public).add(found[1:])
         if kind=='faint'and seat in alive:alive[seat]=recharge[seat]=False   # |faint|IDENT: three fields
         if kind=='-mustrecharge'and seat in recharge:recharge[seat]=True   # |-mustrecharge|IDENT
         if kind=='cant'and seat in recharge and len(parts)>3 and normalize_id(parts[3])=='recharge':recharge[seat]=False
@@ -496,8 +530,31 @@ def line_facts(lines,owner):
                 if before is None or maximum is None:complete=False
                 else:spikes.append((before[0],new,maximum))
             hp[name]=(new,maximum)
+    hidden=tuple(sorted((who,ability)for side,who,ability in private if side==own and(side,who,ability)not in public))
     return LineFacts(tuple(switches),tuple(spikes)if complete else None,(baton['p1'],baton['p2']),tuple(moves),(recharge['p1'],recharge['p2']),
-        (tuple(sorted(tracers['p1'])),tuple(sorted(tracers['p2']))))
+        (tuple(sorted(tracers['p1'])),tuple(sorted(tracers['p2']))),(hidden,())if own=='p1'else((),hidden))
+
+
+def _ability_attributions(kind,seat,subject,parts,tags,member):
+    """('private' or 'public', seat, species, ability) per ability attribution of one protocol line (line_facts): an -ability
+    line of exactly |-ability|<subject>|<ability>|[silent] is side-private (Showdown's Gen 3 Pressure start,
+    data/mods/gen3/abilities.ts:148 at f76228a13: addSplit(pokemon.side.id, ['-ability', pokemon, 'Pressure', '[silent]']) with no
+    shared line, so the other side's channel skips it: sim/battle.ts addSplit and extractChannelMessages); any other -ability line
+    reveals its ability publicly for its subject and for an [of] member (a Trace copy's donor, Role Play's target); a
+    [from] ability: X tag reveals X publicly for the line's subject and its [of] member. Over-attribution only keeps a
+    reveal public (the conservative side: the redaction then leaves it as B2 shows it)."""
+    of=[x.strip()[4:].strip()for x in parts[4:]if x.strip().lower().startswith('[of]')]
+    others=[_seat_name(x)for x in of];others=[(s,member(s,n))for s,n in others if s in('p1','p2')]
+    out=[]
+    if kind=='-ability':
+        ability=normalize_id(parts[3])
+        if tags==['[silent]']:out.append(('private',seat,subject,ability))
+        else:out+=[('public',seat,subject,ability)]+[('public',s,who,ability)for s,who in others]
+    for t in tags:
+        if t.startswith('[from] ability:'):
+            ability=normalize_id(t[len('[from] ability:'):])
+            out+=[('public',seat,subject,ability)]+[('public',s,who,ability)for s,who in others]
+    return out
 
 
 def _member(names,want,where):
@@ -677,37 +734,99 @@ def fix_trace_base_ability(state,owner,facts,tables):
     return state if np.array_equal(new,base)else state._replace(base_ability=jnp.asarray(new))
 
 
-def complete_public(state,public,tables,owner,*,facts=None,root=None):
+def private_reveal_slots(public,owner,facts,tables):
+    """(matched, unmatched) for the owner's side-private reveals (facts.private_reveals[owner]) on a public carry: matched
+    = [(public slot, species, ability id)] whose original_ability shows that ability (what B2's fold recorded from the
+    private line, from_b2's copy); unmatched = [(species, ability, reason)]: 'no_member' (no public slot of the owner joins
+    the species, as order_peer joins), 'not_shown' (the carry does not show it: nothing to redact) or 'unknown_ability' (the
+    name is outside the engine vocabulary). CarryLayoutError on another layout."""
+    want=facts.private_reveals[owner]if facts is not None else()
+    if not want:return[],[]
+    if not tables.species_names or not tables.ability_names:raise CarryLayoutError('CarryTables.species_names and ability_names required')
+    b=_trackers(public)
+    for name,value in(('species',public.species),('original_ability',public.original_ability)):_leaf(value,(b,2,6),np.int32,name)
+    n=len(tables.species_names);species=_host(public.species)[0,owner];original=_host(public.original_ability)[0,owner]
+    names=[tables.species_names[int(x)]if 0<int(x)<n else''for x in species];matched,unmatched=[],[]
+    for who,ability in want:
+        slot=_name_index(names,who)
+        aid=tables.ability_names.index(ability)if ability in tables.ability_names else None
+        if aid is None or aid==0:unmatched.append((who,ability,'unknown_ability'))
+        elif slot is None:unmatched.append((who,ability,'no_member'))
+        elif int(original[slot])!=aid:unmatched.append((who,ability,'not_shown'))
+        else:matched.append((slot,who,aid))
+    return matched,unmatched
+
+
+def redact_private_reveals(public,owner,facts,tables):
+    """The public carry with the owner's side-private ability reveals cleared (module docstring, Private reveals): per
+    private_reveal_slots match, original_ability[owner, slot] = 0, and shown_ability[owner, slot] = 0 where it shows the same
+    ability and no borrowed ability runs. borrowed_ability is never touched: a running copy is always public in Gen 3 (a
+    Trace copy's [from] ability: Trace line, Role Play's line), and the owner's own view reads it. Only the peer's view of the
+    owner side reads these columns (engine_device_trackers' view takes the observer's FOE side), so the owner's view, the root
+    prior and the guard's conditions are unchanged. The peer side is never touched. Pure; the same carry when nothing
+    changes (a second pass is a no-op)."""
+    matched,_=private_reveal_slots(public,owner,facts,tables)
+    if not matched:return public
+    b=_trackers(public)
+    for name,value in(('shown_ability',public.shown_ability),('borrowed_ability',public.borrowed_ability)):_leaf(value,(b,2,6),np.int32,name)
+    original,shown,borrowed=(_host(x).copy()for x in(public.original_ability,public.shown_ability,public.borrowed_ability))
+    before=(original.copy(),shown.copy())
+    for slot,_,aid in matched:
+        original[0,owner,slot]=0
+        if int(shown[0,owner,slot])==aid and int(borrowed[0,owner,slot])==0:shown[0,owner,slot]=0
+    if np.array_equal(before[0],original)and np.array_equal(before[1],shown):return public
+    return public._replace(original_ability=jnp.asarray(original),shown_ability=jnp.asarray(shown))
+
+
+def private_reveal_record(public,owner,facts,tables,enabled):
+    """The root's private-reveal record (rows' private_reveals): enabled (the --redact-private-reveals flag), found (the
+    lines' side-private reveals of the owner: species, ability), applicable (the members the root's carry shows from them:
+    species, ability, public slot; redacted in every world when enabled), redacted (applicable when enabled, else []) and
+    unmatched (species, ability, reason: nothing redacted). None without the root's LineFacts."""
+    if facts is None:return None
+    found=[dict(species=who,ability=ability)for who,ability in facts.private_reveals[owner]]
+    matched,unmatched=private_reveal_slots(public,owner,facts,tables)if found else([],[])
+    applicable=[dict(species=who,ability=tables.ability_names[aid],slot=slot)for slot,who,aid in matched]
+    return dict(enabled=bool(enabled),found=found,applicable=applicable,redacted=list(applicable)if enabled else[],
+        unmatched=[dict(species=who,ability=ability,reason=why)for who,ability,why in unmatched])
+
+
+def complete_public(state,public,tables,owner,*,facts=None,root=None,redact_private_reveals=False):
     """A constructor world's public carry completed (module docstring): fill_shown_types, fill_negative_items,
-    orient_credits, and with the root's LineFacts order_peer, fill_owner_spikes, fill_baton, fill_recharge and (with the root's
-    own carry, `root`) fill_peer_pressure. Pure; the same carry when nothing changes. CarryLayoutError on another carry layout,
-    PeerOrderUnavailable when the peer order cannot be joined."""
+    orient_credits, and with the root's LineFacts order_peer, fill_owner_spikes, fill_baton, fill_recharge, (with the root's
+    own carry, `root`) fill_peer_pressure and, when `redact_private_reveals`, redact_private_reveals. Pure; the same carry
+    when nothing changes. CarryLayoutError on another carry layout, PeerOrderUnavailable when the peer order cannot be joined."""
     _trackers(public)
     done=orient_credits(fill_negative_items(fill_shown_types(state,public,tables)),owner)
     if facts is not None:
         done=fill_recharge(fill_baton(fill_owner_spikes(order_peer(state,done,owner,facts,tables),owner,facts),facts),facts)
         done=fill_peer_pressure(state,done,owner,facts,tables,root)
+        if redact_private_reveals:done=_redact(done,owner,facts,tables)
     return done
 
 
-def complete_carry(state,public,tables,owner,*,facts=None,root=None):
+_redact=redact_private_reveals   # complete_public's keyword of the same name shadows it there
+
+
+def complete_carry(state,public,tables,owner,*,facts=None,root=None,redact_private_reveals=False):
     """(state, public) of one constructor world completed: fix_peer_base_ability and (with the root's LineFacts)
     fix_trace_base_ability on the state first, then complete_public on
     the carry against the CORRECTED state (fill_peer_pressure reads the peer's base abilities: a Trace holder running a
     copied Pressure has Trace as its own ability, so earlier moves against it are not recharged, and a second pass, which
     sees the corrected state, gives the same carry)."""
     fixed=fix_trace_base_ability(fix_peer_base_ability(state,public,owner),owner,facts,tables)
-    return fixed,complete_public(fixed,public,tables,owner,facts=facts,root=root)
+    return fixed,complete_public(fixed,public,tables,owner,facts=facts,root=root,redact_private_reveals=redact_private_reveals)
 
 
-def complete_world(world,tables,owner,*,facts=None,root=None):
+def complete_world(world,tables,owner,*,facts=None,root=None,redact_private_reveals=False):
     """A constructor world completed (complete_carry), `owner` the root's owner, `facts` its LineFacts (None: the fills
-    only) and `root` the root's own public carry (the peer Pressure count's base); a refused world (no state) and an
-    already completed one are returned as they are. Pure: the world's other leaves are the same objects."""
+    only), `root` the root's own public carry (the peer Pressure count's base) and `redact_private_reveals` the private-reveal
+    redaction (off by default); a refused world (no state) and an already completed one are returned as they are. Pure: the
+    world's other leaves are the same objects."""
     if world.state is None:return world
     public=world.public
     _trackers(public,f'world {world.index} public carry')
-    state,done=complete_carry(world.state,public,tables,owner,facts=facts,root=root)
+    state,done=complete_carry(world.state,public,tables,owner,facts=facts,root=root,redact_private_reveals=redact_private_reveals)
     return world if done is public and state is world.state else replace(world,state=state,public=done)
 
 
@@ -796,6 +915,7 @@ class Prepared:
     seconds:float
     binding:object
     facts:object=None
+    private_reveals:object=None   # private_reveal_record (None: no LineFacts, or a Prepared made elsewhere: no redaction)
 
 
 @dataclass(frozen=True)
@@ -808,21 +928,31 @@ class RootRefusal:
     binding:object
 
 
-def _complete(complete,world,owner,facts,root=None):
-    return complete(world,owner)if facts is None else complete(world,owner,facts=facts,root=root)
+def _complete(complete,world,owner,facts,root=None,redact=False):
+    if facts is None:return complete(world,owner)
+    if redact:return complete(world,owner,facts=facts,root=root,redact_private_reveals=True)
+    return complete(world,owner,facts=facts,root=root)
 
 
-def _completed(made,complete,owner,facts=None,root=None):
+def _completed(made,complete,owner,facts=None,root=None,redact=False):
     """The world set with every constructed world completed; the same object when no world changes."""
-    worlds=tuple(w if w.state is None else _complete(complete,w,owner,facts,root)for w in made.worlds)
+    worlds=tuple(w if w.state is None else _complete(complete,w,owner,facts,root,redact)for w in made.worlds)
     return made if all(a is b for a,b in zip(worlds,made.worlds))else replace(made,worlds=worlds)
 
 
-def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu'):
+def _redacting(item):
+    """Whether a Prepared's completion redacts private reveals (its record's flag; build applies the same completion)."""
+    return bool((getattr(item,'private_reveals',None)or{}).get('enabled'))
+
+
+def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu',redact_private_reveals=False):
     """prepare() per protocol request (index start_index + i) under `device` (default the CPU; None keeps the process
-    default), each world's carry completed (world_completer, module docstring) and its arrays synced before its clock
-    stops. Returns one Prepared or RootRefusal per request, each stamped with constructor_binding(constructor) (build
-    refuses a stamp other than its constructor's). CarryLayoutError (the completion) is never a refusal."""
+    default), each world's carry completed (world_completer, module docstring; with `redact_private_reveals`, the
+    private-reveal redaction too, off by default) and its arrays synced before its clock stops. Returns one Prepared (with
+    its private_reveal_record when the request has lines) or RootRefusal per request, each stamped with
+    constructor_binding(constructor) (build refuses a stamp other than its constructor's). CarryLayoutError (the completion)
+    is never a refusal."""
+    if type(redact_private_reveals)is not bool:raise ValueError('redact_private_reveals must be a bool')
     stamp=constructor_binding(constructor)
     if device is None:context=nullcontext()
     else:
@@ -845,11 +975,15 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu'):
             facts=None if lines is None else line_facts(lines,detached.address.owner)
             if facts is not None and facts.recharge[1-detached.address.owner]:   # module docstring: never priced
                 out.append(RootRefusal(rid,OPPONENT_RECHARGE,OPPONENT_RECHARGE_DETAIL,time.perf_counter()-clock,stamp));continue
-            try:made=_completed(made,complete,detached.address.owner,facts,getattr(detached,'public',None))
+            # the record reads the root's own carry (from_b2's: every world's public knowledge before completion)
+            owner=detached.address.owner
+            reveals=None if facts is None else private_reveal_record(getattr(detached,'public',None),owner,facts,
+                constructor_carry_tables(constructor)if facts.private_reveals[owner]else None,redact_private_reveals)
+            try:made=_completed(made,complete,detached.address.owner,facts,getattr(detached,'public',None),redact_private_reveals)
             except PeerOrderUnavailable as error:
                 out.append(RootRefusal(rid,'PEER_REQUEST_ORDER_UNAVAILABLE',str(error),time.perf_counter()-clock,stamp));continue
             jax.block_until_ready([(w.state,w.public)for w in made.worlds if w.state is not None])
-            out.append(Prepared(rid,detached,made,tuple(map(bool,legal)),time.perf_counter()-clock,stamp,facts))
+            out.append(Prepared(rid,detached,made,tuple(map(bool,legal)),time.perf_counter()-clock,stamp,facts,reveals))
     return tuple(out)
 
 
@@ -978,14 +1112,14 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
                 refused_worlds=None,refused_world_share=None));continue
         if complete is None:complete=world_completer(constructor)
         # A world without a state always names its refusal, so it stays this root's refusal (the pricer refuses the frame otherwise).
-        try:worlds=tuple(_complete(complete,w,detached.address.owner,item.facts,getattr(detached,'public',None))if w.state is not None else w if w.refusals else replace(w,refusals=(UNNAMED,))
-            for w in made.worlds)
+        try:worlds=tuple(_complete(complete,w,detached.address.owner,item.facts,getattr(detached,'public',None),_redacting(item))if w.state is not None
+            else w if w.refusals else replace(w,refusals=(UNNAMED,))for w in made.worlds)
         except PeerOrderUnavailable as error:
             roots.append(dict(base,status='REFUSED',reason=_constructor_reason('PEER_REQUEST_ORDER_UNAVAILABLE',str(error)),constructed=0,refused_worlds=None,
                 refused_world_share=None));continue
         refused=tuple(w.index for w in worlds if w.state is None);kinds=';'.join(sorted({r for w in worlds for r in w.refusals}))
         base.update(address=(detached.address.stream,detached.address.frame,detached.address.owner),constructed=W-len(refused),refused_worlds=refused,
-            refused_world_share=len(refused)/W)
+            refused_world_share=len(refused)/W,private_reveals=getattr(item,'private_reveals',None))
         first=next((w for w in worlds if w.state is not None),None)
         if first is None or only_complete and refused:
             roots.append(dict(base,status='REFUSED',reason='WORLD_CONSTRUCTOR_REFUSED:'+kinds));continue

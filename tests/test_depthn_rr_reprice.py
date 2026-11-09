@@ -315,6 +315,12 @@ class OwnMovesTests(unittest.TestCase):
         other = R.decision_row(dict(ordinal=1), row, request, dict(response, status='REFUSED', cause='depthn_refused'), .1, found,
             dict(detail, root=None), shard=0, capture_seconds=0.)
         self.assertEqual((other['root']['refusal_cause'], other['root']['opponent_recharge'], other['peer_inputs_check']), ('depthn_refused', False, None))
+        # private_reveals: the response's own record (constructor_worlds.private_reveal_record), None when the response has none
+        record = dict(enabled=True, found=[dict(species='zapdos', ability='pressure')], applicable=[dict(species='zapdos', ability='pressure', slot=1)],
+            redacted=[dict(species='zapdos', ability='pressure', slot=1)], unmatched=[])
+        self.assertEqual(R.decision_row(dict(ordinal=1), row, request, dict(response, private_reveals=record), .1, found, detail, shard=0,
+            capture_seconds=0.)['private_reveals'], record)
+        self.assertIsNone(out['private_reveals'])
 
 
 class JoinTests(unittest.TestCase):

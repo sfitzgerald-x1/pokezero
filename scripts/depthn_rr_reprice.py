@@ -70,6 +70,9 @@ tree guard) on the live inputs.
     any-cell arm kept for analysis (any_cell_turn2 / _b / _tripped), c for the search's own choice, the reasons, the (a) flag,
     tier_b_legal, our guarded lanes, the conditions per side and the masses of every watched move (turn 1 per side and world,
     turn 2 per side, world and cell); None for a root the replay did not decide. The RR scorer applies it per operator.
+  - Private reveals: the row's private_reveals is the replayed response's own (constructor_worlds.private_reveal_record:
+    enabled (--redact-private-reveals, off by default), found, applicable, redacted, unmatched); None for a root prepare()
+    did not build. scripts/depthn_private_reveal_effect.py compares a run with the flag against one without.
   - Peer inputs (peer-inputs-<shard>.npz, every run): per decided root, each constructed world's depth-0 peer inputs, the
     fourth output of device_depth2_pricer._make_views(executor)(state, public, owner) on the completed world (the tensors
     the pricer's turn 1 evaluates root_peer_logits from), and that view's peer legal mask. Self-check: the worlds are
@@ -640,7 +643,7 @@ def decision_row(cell, row, request, response, wall, found, detail, *, shard, ca
         owner=row['owner'], stream_id=row['stream_id'], decision_index=row['decision_index'], generation=row['generation'],
         prefix_sha256=row['prefix_sha256'], request_count=count, capture_turn=row.get('turn'), replay=replay, live=found,
         live_problem=live_problem, parity=parity(response, found), capture_seconds=capture_seconds, effect_guard=response.get('effect_guard'),
-        **dict(detail, root=root))
+        private_reveals=response.get('private_reveals'), **dict(detail, root=root))
     # A COMPLETE decision went through decide; a root that reached prepare (its prepare_seconds) through prepare_roots.
     checks = [w['peer_self_check'] for w in out['worlds'] if 'peer_self_check' in w]
     out['peer_inputs_check'] = None if not checks else dict(checked=sum(c is not None for c in checks), equal=sum(c is True for c in checks),
