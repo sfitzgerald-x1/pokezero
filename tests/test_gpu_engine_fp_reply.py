@@ -379,7 +379,7 @@ class HazardCreditTests(unittest.TestCase):
         got = d.fp_view_opp_hazard_credit(SPIKES_LINES, 'p1');self.assertEqual(got.dtype, np.float32)
         high = low = np.float32(0)
         for drop in (12, 11, 12, 100):high, low = d.two_sum_add(high, low, np.float32(drop) / np.float32(100))
-        self.assertEqual(got, np.float32(np.float32(high + low) / np.float32(6)))
+        self.assertEqual(got, np.float32(np.float32(high + low) * np.float32(1 / 6)))
         self.assertAlmostEqual(float(got), 1.35 / 6, places=6)
         exact = (37 / 300 + 37 / 299 + 37 / 300 + 1.) / 6   # the env's own value: our exact fractions
         self.assertGreater(abs(float(got) - exact), 1e-4)
@@ -410,16 +410,21 @@ class HazardCreditTests(unittest.TestCase):
 @unittest.skipUnless(__import__('importlib').util.find_spec('jax'), 'jax not installed')
 class HazardCreditDeviceTests(unittest.TestCase):
     """fp_view_opp_hazard_credit against the device's own pieces: engine_device_trackers._percent, engine_device_damage_history._add
-    and engine_device_features' clip(value / 6, 0, 1), the rule the search's peer view (fill_owner_spikes) runs."""
+    and engine_device_features' clip(value / 6, 0, 1) under jit, the rule the search's peer view (fill_owner_spikes) runs; and
+    against device values recorded by the 48-cell opponent-view run."""
 
     def test_matches_the_device_rule_bit_for_bit(self):
         import jax.numpy as jnp
         from gpu_engine import engine_device_damage_history as history
         from gpu_engine import engine_device_trackers as trackers
+        import jax
+        # engine_device_features' field readout as the device runs it: inside a jitted program, where XLA turns / 6. into a
+        # multiplication by the float32 reciprocal (op-by-op eager JAX divides exactly)
+        readout = jax.jit(lambda pair: jnp.clip(jnp.nan_to_num(pair.sum()) / 6., 0., 1.))
         rng = np.random.default_rng(7)
-        for _ in range(300):
+        for trial in range(600):
             top = int(rng.integers(1, 801));hits = []
-            for _ in range(int(rng.integers(1, 40))):
+            for _ in range(int(rng.integers(1, 40 if trial % 2 else 6))):   # half the sequences stay under the clip at 1
                 before = int(rng.integers(0, top + 1));hits.append((before, int(rng.integers(0, before + 1)), top))
             pair = jnp.zeros(2, jnp.float32);high = low = np.float32(0)
             for before, after, maximum in hits:
@@ -428,10 +433,17 @@ class HazardCreditDeviceTests(unittest.TestCase):
                 pair = history._add(pair, jnp.asarray(drop, jnp.float32) / 100)
                 high, low = d.two_sum_add(high, low, np.float32(drop) / np.float32(100))
             np.testing.assert_array_equal(np.asarray(pair), np.array([high, low], np.float32))
-            device = float(jnp.clip(jnp.nan_to_num(pair.sum()) / 6., 0., 1.))
+            device = float(readout(pair))
             lines = [x for before, after, maximum in hits for x in (f'|switch|p1a: Mon|Mon, L80|{before}/{maximum}',
                                                                     f'|-damage|p1a: Mon|{after}/{maximum}|[from] Spikes')]
             self.assertEqual(d.fp_view_opp_hazard_credit(lines, 'p1'), np.float32(device))
+        # the 48-cell check's 1-ulp rows (battles 215, 543): the device's x / 6. is x * float32(1/6), not a rounded division
+        for hits, want in ((((199, 167, 263), (30, 0, 310)), 0.03666666895151138),
+                           (((272, 238, 272), (296, 259, 296), (278, 244, 278), (269, 236, 269), (54, 20, 278), (266, 233, 266),
+                             (37, 3, 278), (238, 205, 266), (54, 20, 278), (237, 204, 266), (295, 258, 296)), 0.2199999988079071)):
+            lines = [x for before, after, maximum in hits for x in (f'|switch|p1a: Mon|Mon, L80|{before}/{maximum}',
+                                                                    f'|-damage|p1a: Mon|{after}/{maximum}|[from] Spikes')]
+            self.assertEqual(d.fp_view_opp_hazard_credit(lines, 'p1'), np.float32(want))
 
 
 class ReweightHelperTests(unittest.TestCase):
