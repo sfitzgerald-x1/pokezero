@@ -226,6 +226,7 @@ def check_reply_arguments(p,args):
     """--reply-archive and its two sha256 flags go together, as 64-hex sha256s (the server's and the re-pricer's options)."""
     reply=[getattr(args,k,None)for k in('reply_archive','reply_archive_sha256','reply_checkpoint_sha256')]
     if any(reply)and not all(reply):p.error('--reply-archive, --reply-archive-sha256 and --reply-checkpoint-sha256 go together')
+    if not any(reply)and getattr(args,'reply_views','eager')!='eager':p.error('--reply-views goes with --reply-archive')
     if all(reply)and not all(type(x)is str and len(x)==64 and all(c in'0123456789abcdef'for c in x)for x in reply[1:]):
         p.error('--reply-archive-sha256 and --reply-checkpoint-sha256 must be 64-hex sha256s')
 

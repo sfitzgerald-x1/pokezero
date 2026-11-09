@@ -88,9 +88,12 @@ class ReplyPrior:
         if len(flat) != len(worlds):raise ValueError(f'{len(flat)} priced worlds for {len(worlds)} constructed')
         reply = self.jit_logits(worlds, owner) if self.mode == 'jit' else self.logits(worlds, owner)
         out = self.substitute(blocks, reply);seconds = time.perf_counter() - started;check = None
-        if self.mode == 'check':
-            other = self.jit_logits(worlds, owner)
-            asked = [i for i, w in enumerate(flat) if w is not None and w.opponent_requested]
-            diff = float(np.max(np.abs(other[asked].astype(np.float64) - reply[asked]))) if asked else 0.
-            check = dict(blocks=self.substitute(blocks, other), max_abs_logit_diff=diff)
+        if self.mode == 'check':   # eager plays: a failure of the jitted side is recorded, never a refusal of the root
+            try:
+                other = self.jit_logits(worlds, owner)
+                asked = [i for i, w in enumerate(flat) if w is not None and w.opponent_requested]
+                diff = float(np.max(np.abs(other[asked].astype(np.float64) - reply[asked]))) if asked else 0.
+                check = dict(blocks=self.substitute(blocks, other), max_abs_logit_diff=diff)
+            except Exception as error:
+                check = dict(error=f'{type(error).__name__}: {str(error)[:200]}')
         return out, seconds, check

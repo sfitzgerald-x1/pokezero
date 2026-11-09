@@ -281,7 +281,7 @@ class DepthNLiveSearch:
         self.archive_sha256=archive_sha256 or getattr(self.forward,'archive_sha256',None)or ident[1]
         from .depthn_reply_prior import ReplyPrior
         if reply is not None and not isinstance(reply,ReplyPrior):raise ValueError('reply: a depthn_reply_prior.ReplyPrior or None required')
-        self.device,self.clock,self.reply=device,clock,reply
+        self.device,self.clock,self.reply=device,clock,reply;self.reply_completed=0   # roots the reply prior completed (warmup's check)
         self.battles=OrderedDict();self.evicted=0;self.warm=None
         self.pricer_identity=dict(engine='DepthNPricer',depth=DEPTH,k=[WIDTH,WIDTH],k1=[WIDTH,WIDTH],selection='prior',W=W,K=self.K,
             buckets=list(self.buckets),capacities=[b*self.K for b in self.buckets],fixed_capacity=True,block_lanes=first.block_lanes,
@@ -407,11 +407,14 @@ class DepthNLiveSearch:
                 champion=decide(blocks,root['root_logits'],root['root_legal'])
                 reply=dict(operator='br_fp',views=self.reply.mode,seconds=seconds,champion_action_index=champion['action_index'],champion_q_values=champion['q_values'])
                 if check is not None:   # --reply-views check: the jitted views' logits, averaged and reported beside (eager plays)
-                    alt=decide(check['blocks'],root['root_logits'],root['root_legal'])
-                    reply.update(jit_action_index=alt['action_index'],jit_q_values=alt['q_values'],jit_max_abs_logit_diff=check['max_abs_logit_diff'])
+                    if check.get('error'):reply.update(jit_error=check['error'])
+                    else:
+                        alt=decide(check['blocks'],root['root_logits'],root['root_legal'])
+                        reply.update(jit_action_index=alt['action_index'],jit_q_values=alt['q_values'],jit_max_abs_logit_diff=check['max_abs_logit_diff'])
                 blocks=replied
             decision=decide(blocks,root['root_logits'],root['root_legal'])
-            if reply is not None:decision['reply_prior']=reply
+            if reply is not None:
+                decision['reply_prior']=reply;self.reply_completed+=decision['status']=='COMPLETE'
             if decision['status']=='COMPLETE':decision['effect_guard']=self._effect_guard(frame,root,made,by_id[root['request_id']],children,seam_notes,
                 decision['action_index'],labels)
             results.append(dict(base,**decision))
@@ -496,7 +499,7 @@ class DepthNLiveSearch:
             if not isinstance(r,dict)or any(k not in r for k in keys):raise ValueError('saved requests with '+', '.join(keys)+' required')
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
-        started=time.perf_counter();self.carry=None;self.warming=True
+        started=time.perf_counter();self.carry=None;self.warming=True;self.reply_completed=0
         try:report=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
         finally:self.warming=False;self.reset_sessions()
         missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
@@ -504,6 +507,8 @@ class DepthNLiveSearch:
         if missing or labels is None:
             raise RuntimeError(f'warmup: the effect guard\'s label gather did not compile for buckets {missing} (P1 children) or the root worlds '
                 f'({"missing" if labels is None else "ok"})')
+        if getattr(self,'reply',None)is not None and not self.reply_completed:   # a reply archive that fails on every root never reaches READY
+            raise RuntimeError('warmup: the reply prior completed no warmup root (every one refused REPLY_PRIOR_ERROR or refused before it)')
         signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
         if self.carry is None or signatures!={self.carry['signature']}:
             raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')

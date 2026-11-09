@@ -239,7 +239,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual({k:S.header(S.options(base+champion+reply),search)[k]for k in('root_operator','reply_archive_sha256','reply_checkpoint_sha256')},
             dict(root_operator='br_fp',reply_archive_sha256='e'*64,reply_checkpoint_sha256='f'*64))
         self.assertEqual(S.header(S.options(base+champion+reply+['--reply-views','check']),search)['reply_views'],'check')
-        for bad in(reply[:2],reply[:4],reply[:2]+['--reply-archive-sha256','x'*64,'--reply-checkpoint-sha256','f'*64]):
+        for bad in(reply[:2],reply[:4],reply[:2]+['--reply-archive-sha256','x'*64,'--reply-checkpoint-sha256','f'*64],['--reply-views','jit']):
             with self.subTest(bad=bad),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):S.options(base+champion+bad)
         for bad in(base,base+champion[:2],base+champion+['--max-requests','5'],base+champion+['--buckets','0,1'],base+champion+['--rung','R1'],
                 base+champion[:2]+['--champion-archive-sha256','x'*64,'--champion-checkpoint-sha256','d'*64],base[:-2]+champion,

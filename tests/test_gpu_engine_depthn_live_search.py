@@ -563,6 +563,34 @@ class ReplyPriorTests(unittest.TestCase):
             self.assertLessEqual(r['jit_max_abs_logit_diff'], 1e-5)
         with self.assertRaises(ValueError):ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='fast')
 
+    def test_the_reply_prior_sees_the_priced_worlds_in_block_order_for_either_owner(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        seen, real = [], ReplyPrior.apply
+        def recording(rp, blocks, worlds, owner):
+            seen.append(([w.index for w in worlds], len([w for pair in blocks for w in pair]), owner));return real(rp, blocks, worlds, owner)
+        reqs = [request('o1', 0, stream=70), request('o2', 0, stream=71, owner='p2')]
+        with patch.object(ReplyPrior, 'apply', recording):
+            rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])), reqs,
+                                     {('o1', 0): self.outcome(0), ('o2', 0): self.outcome(1)})
+        self.assertTrue(seen)
+        for indices, priced, owner in seen:self.assertEqual((indices, priced), (list(range(priced)), priced))   # world i is block-order world i
+        self.assertEqual({owner for *_, owner in seen} <= {0, 1}, True)
+
+    def test_warmup_refuses_ready_when_the_reply_prior_never_completes(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        outcomes = {('w0', 0):self.outcome(0), ('w1', 0):self.outcome(1)}
+        with Codex(outcomes), patch.object(ReplyPrior, 'apply', side_effect=RuntimeError('broken archive')), \
+                self.assertRaisesRegex(RuntimeError, 'reply prior completed no warmup root'):
+            self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])).warmup([request('w0', 0), request('w1', 0)])
+        with Codex(outcomes):self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0])).warmup([request('w0', 0), request('w1', 0)])
+
+    def test_a_jit_failure_in_check_mode_is_recorded_and_eager_plays(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        with patch.object(ReplyPrior, 'jit_logits', side_effect=RuntimeError('no compile')):
+            rows, _ = self.run_batch(self.search(reply=ReplyPrior(self.executor, self.evaluator, PARAMS[0], mode='check')),
+                                     [request('c0', 0, stream=80)], {('c0', 0):self.outcome(0)})
+        self.assertEqual(rows[0]['status'], 'COMPLETE');self.assertEqual(rows[0]['reply_prior']['jit_error'], 'RuntimeError: no compile')
+
     def test_apply_replaces_requested_worlds_only_and_a_failure_refuses_the_root(self):
         from gpu_engine.depthn_reply_prior import ReplyPrior
         rp = ReplyPrior(None, self.evaluator, PARAMS[0], views=lambda *a:None)
