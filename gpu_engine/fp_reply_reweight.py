@@ -271,10 +271,11 @@ def score(model, observations, labels, torch, redaction=None, opp_hazard_credit=
     return logq
 
 
-def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=None):
+def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=None, extra_variants=None):
     """One game: (mon rows, decision rows, calibration rows, check counts). on_ours(decision_index, round, evidence, evidence_n,
     misaligned), when given, is called at each of our seat's decisions before it is stepped: the evidence then holds every
-    Foul Play choice made public in earlier rounds (fp_reply_evidence's export)."""
+    Foul Play choice made public in earlier rounds (fp_reply_evidence's export). extra_variants(species id), when given, is
+    more sets to score for the active mon beyond the belief engine's candidates (measure)."""
     fp, ours_seat = game['fp'], game['ours'];env.reset(seed=game['seed']);checks = collections.Counter();misaligned = set()
     journal = dict(game['journal']);ours = 0;round_ = 0
     evidence = collections.defaultdict(dict);evidence_n = collections.Counter();mons, decisions, calib = [], [], []
@@ -303,7 +304,7 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=No
             if first is None:first = env._first_requests.get(fp) or request
             if request.get('forceSwitch'):checks['forced_skipped'] += 1;continue
             pending = measure(env, model, game, dex, torch, checks, request, first, action, round_, evidence, evidence_n, mons, decisions, calib,
-                              tables, misaligned, redaction)
+                              tables, misaligned, redaction, extra_variants)
         before = len(env._lines);env.step(actions)
         if pending is not None:
             mon, keys, logq, act, move, aligned = pending
@@ -321,7 +322,7 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=No
 
 
 def measure(env, model, game, dex, torch, checks, request, first, action, round_, evidence, evidence_n, mons, decisions, calib,
-            tables, misaligned, redaction=None):
+            tables, misaligned, redaction=None, extra_variants=None):
     fp = game['fp'];turn = int(env._latest_turn)
     baseline = env.observe(fp)   # also syncs the belief engine with this round's protocol lines
     truth = {species_of(r): (r.get('ident'), request_key(r)) for r in first['side']['pokemon']}
@@ -371,11 +372,27 @@ def measure(env, model, game, dex, torch, checks, request, first, action, round_
         with substituted_request(env, fp, world):observations.append(env.observe(fp))
         labels.append(label_map[action])
         if k == true_key:checks['true_world_differs'] += not same_observation(observations[-1], baseline)
+    if replaced_disabled:
+        if not same_observation(env.observe(fp), baseline):checks['observe_changed_by_worlds'] += 1
+        checks['replaced_disabled_slot_skipped'] += 1;return None
+    # sets beyond the candidates (extra_variants): scored in their own batch, so the candidates' log q stay bit-identical; one
+    # whose new move would take a disabled slot is skipped alone
+    extra_keys, extra_observations, extra_labels = [], [], []
+    for variant in (extra_variants(active) if extra_variants is not None else ()):
+        k = variant_key(variant)
+        if k in representative or k in extra_keys:continue
+        stats = generator_stats(species.base_stats, level, list(k[0]), dex, tables) if aligned else None
+        world, label_map, disabled = world_request(request, first_row, variant, dex, stats)
+        if disabled:checks['extra_variant_disabled_skipped'] += 1;continue
+        with substituted_request(env, fp, world):extra_observations.append(env.observe(fp))
+        extra_keys.append(k);extra_labels.append(label_map[action])
     if not same_observation(env.observe(fp), baseline):checks['observe_changed_by_worlds'] += 1
-    if replaced_disabled:checks['replaced_disabled_slot_skipped'] += 1;return None
     credit = data_mod.fp_view_opp_hazard_credit(env.protocol_lines, game['ours']) if redaction == 'peer-view-v2' else None
     logq = score(model, observations + [baseline], labels + [action], torch, redaction, credit);true_logq = logq[-1];logq = logq[:-1]
     by_key = dict(zip(distinct, logq));checks['worlds'] += len(distinct)
+    if extra_keys:
+        extra_logq = score(model, extra_observations, extra_labels, torch, redaction, credit);checks['extra_variants_scored'] += len(extra_keys)
+        distinct = distinct + extra_keys;logq = np.concatenate([logq, extra_logq])
     row = dict(seed=game['seed'], ordinal=game['ordinal'], turn=turn, round=round_, worlds=len(distinct), truth_in=true_key in by_key,
                evidence=evidence_n[active], incomplete=bool(evidence_n[active]) and any(k not in evidence[active] for k in distinct),
                stats_aligned=aligned and active not in misaligned,
