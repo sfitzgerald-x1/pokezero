@@ -17,6 +17,9 @@ batch in sidecar order, as the re-pricer's self-check stacks them, through Champ
 2. The reply model (π_FP-red2's champion_evaluator export) on the same batches: one JSONL row per world whose opponent is
    requested, {ordinal, decision_index, world, logits[9]} (depthn_rr_score.py --reply-prior's format; a waiting world
    needs none). OUT.summary.json records the archives, the precision, the self-check counts and every sidecar's header.
+Bit equality needs the re-pricer's executables: pass --compilation-cache a COPY of the re-pricer's JAX compilation cache
+(its --compilation-cache directory). A fresh compile re-autotunes the GPU kernels and lands about 1e-6 away (seen on the
+definitive RR, November 9: 1,255 of 97,248 equal without the cache, 97,248 of 97,248 with a copy).
 """
 import argparse
 import collections
@@ -102,9 +105,14 @@ def main(argv=None):
         p.add_argument(f'--{who}-archive', required=True);p.add_argument(f'--{who}-archive-sha256', required=True)
         p.add_argument(f'--{who}-checkpoint-sha256', required=True)
     p.add_argument('--precision', choices=('bf16', 'f32'), default='bf16', help="both archives' forward precision (the live champion's is bf16)")
+    p.add_argument('--compilation-cache', help="a copy of the re-pricer's JAX compilation cache (its executables, so the self-check can be bit-exact)")
     args = p.parse_args(argv)
     out = Path(args.out)
     if out.exists():p.error(f'{out} exists')
+    if args.compilation_cache:
+        import jax
+        jax.config.update('jax_compilation_cache_dir', str(Path(args.compilation_cache).resolve()))
+        jax.config.update('jax_persistent_cache_min_compile_time_secs', 0)
     root = Path(__file__).resolve().parents[1]
     for path in (str(root), str(root / 'src')):
         if path not in sys.path:sys.path.insert(0, path)
@@ -117,6 +125,7 @@ def main(argv=None):
                     precision=precision)
     rows, summary = reply_prior((read_sidecar(x) for x in sorted(args.peer_inputs)), jax_forward(champion), jax_forward(reply))
     summary.update(peer_inputs=sorted(str(Path(x).resolve()) for x in args.peer_inputs), precision=args.precision,
+                   compilation_cache=None if not args.compilation_cache else str(Path(args.compilation_cache).resolve()),
                    champion=dict(archive=args.champion_archive, archive_sha256=args.champion_archive_sha256, checkpoint_sha256=args.champion_checkpoint_sha256),
                    reply=dict(archive=args.reply_archive, archive_sha256=args.reply_archive_sha256, checkpoint_sha256=args.reply_checkpoint_sha256,
                               marker=reply.meta.get('extra')))
