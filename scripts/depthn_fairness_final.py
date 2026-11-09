@@ -17,6 +17,12 @@ rates only, never outcomes. Needs the run's tree on the path (pokezero.depthn_li
   prefix whose completed pairs reach `pairs`, as the panel's checkpoint was evaluated; or a recorded flag's window and pairs), screen
   pairs only: the declared reading (budget stratum x turn band, the panel's own cell_moves and arm_fairness rule; it reproduces the
   flag's weighted ratio) and the finer reading under the chosen bucketing. Fairness data only: no score is read.
+- Screen-r3's rule (`--rule r3`; depthn_live_fairness.RULE_R3: budget stratum x turn band x our and their exact alive bands, the sparse
+  merge at 120 moves per arm within each (budget, ours, theirs) group, and minimum support: a merged cell enters the weighted ratio only
+  with 120 rated moves in each arm). final_gate_r3: fairness.reading under RULE_R3 over every COMPLETE cell of both arms within the first
+  `limit` pairs, the moves as the panel reads them (depthn_live_panel.cell_moves under the rule); within when |difference| <= 5%; it
+  reports each arm's supported share. `window --rule r3` reads the declared reading (and the finer one) under RULE_R3. The alive counts
+  come from depthn_live_fairness.round_states (rounds here is that function), so every reader shares one definition.
 """
 import argparse
 import sys
@@ -34,13 +40,14 @@ from pokezero.phase_d_saved_roots import band as turn_band  # noqa: E402
 
 TOLERANCE = .05
 AGE_BUCKETS = ((0, 120), (120, 300), (300, 600), (600, None))
-ALIVE_BANDS = dict(coarse=('1-2', '3-4', '5-6'), exact=('1', '2', '3-4', '5-6'))   # per side; 'coarse' is the default
+ALIVE_BANDS = dict(coarse=('1-2', '3-4', '5-6'), exact=fairness.ALIVE_BANDS)   # per side; 'coarse' is the default
+RULES = dict(default=None, r3=fairness.RULE_R3)   # --rule: the default (RULE: the declared reading; the coarse/exact final gate) or screen-r3's
 
 
 def alive_bucket(n, bands='coarse'):
     """A side's alive count's bucket: coarse 1-2 / 3-4 / 5-6 (the default), exact 1 / 2 / 3-4 / 5-6 (0 joins the lowest bucket)."""
     if bands == 'coarse':return '1-2' if n <= 2 else '3-4' if n <= 4 else '5-6'
-    if bands == 'exact':return '1' if n <= 1 else '2' if n == 2 else '3-4' if n <= 4 else '5-6'
+    if bands == 'exact':return fairness.alive_band(n)
     raise ValueError(f'alive bands in {sorted(ALIVE_BANDS)} required, got {bands!r}')
 
 
@@ -49,25 +56,7 @@ def age_bucket(seconds):
         if hi is None or seconds < hi:return f'{lo}+' if hi is None else f'{lo}-{hi}'
 
 
-def rounds(capture):
-    """Per round of the owner's capture: (turn, our alive, their alive); None without a capture."""
-    if capture is None or not Path(capture).exists():return None
-    out, turn, faints, owner = [], 0, collections.Counter(), None
-    for raw in Path(capture).read_bytes().split(b'\n'):
-        try:row = json.loads(raw)
-        except ValueError:continue
-        if type(row) is not dict or row.get('event') != 'WIRE':continue
-        for line in row.get('lines') or ():
-            if line.startswith('|turn|'):
-                value = line.split('|')[2];turn = int(value) if value.isascii() and value.isdigit() else turn
-            elif line.startswith('|faint|'):faints[line.split('|')[2][:2]] += 1
-            elif line.startswith('|request|'):
-                if owner is None:
-                    try:owner = (json.loads(line[len('|request|'):]).get('side') or {}).get('id')
-                    except ValueError:owner = None
-                other = 'p2' if owner == 'p1' else 'p1'
-                out.append((turn, 6 - faints[owner], 6 - faints[other]))
-    return out
+rounds = fairness.round_states   # per round of the owner's capture: (turn, our alive, their alive); None without a capture
 
 
 def add_cell(arms, by_age, run, result, *, with_age=False, bands='coarse'):
@@ -101,9 +90,13 @@ def pooled(run_directory, search_arm, limit, *, with_age=False, bands='coarse'):
     return arms, by_age
 
 
+SUPPORT_KEYS = ('supported_cells', 'unsupported_cells', 'supported_moves', 'supported_share')   # a reading under minimum support (RULE_R3)
+
+
 def summary(reading):
     return dict(weighted_ratio=reading['weighted_ratio'], difference=reading['difference'], unstratified_ratio=reading['unstratified_ratio'],
-        moves=reading['moves'], cells=len(reading['cells']), excluded_cells=reading['excluded_cells'])
+        moves=reading['moves'], cells=len(reading['cells']), excluded_cells=reading['excluded_cells'],
+        **{k: reading[k] for k in SUPPORT_KEYS if k in reading})
 
 
 def final_gate(run_directory, search_arm, limit, *, bands='coarse'):
@@ -127,6 +120,25 @@ def final_gate(run_directory, search_arm, limit, *, bands='coarse'):
     return out
 
 
+def final_gate_r3(run_directory, search_arm, limit):
+    """Screen-r3's final gate (module docstring): fairness.reading under RULE_R3 over every COMPLETE cell of both arms within the first
+    `limit` pairs, each cell's moves as the panel reads them under that rule; within when |difference| <= 5% (none: not within)."""
+    from pokezero import depthn_live_panel as panel
+    run, rule = Path(run_directory), fairness.RULE_R3;cells = {'RAW': [], search_arm: []}
+    for path in sorted((run / 'results').glob('*.json')):
+        result = json.loads(path.read_bytes());cell = result.get('cell') or {}
+        if (result.get('status') != 'COMPLETE' or cell.get('arm') not in cells or type(cell.get('pair_ordinal')) is not int
+                or not 0 <= cell['pair_ordinal'] < limit):continue
+        cells[cell['arm']].append(panel.cell_moves(run, cell['ordinal'], result, rule))
+    value = fairness.reading(fairness.pool(cells['RAW']), fairness.pool(cells[search_arm]), rule)
+    within = value['difference'] is not None and abs(value['difference']) <= TOLERANCE
+    return dict(rule=f'screen-r3 arm fairness (RULE_R3: budget stratum x turn band x our and their exact alive bands 1 / 2 / 3-4 / 5-6; '
+        f'sparse turn bands merged at {rule["min_cell_moves"]} moves per arm; a cell enters the weighted ratio only with '
+        f'{rule["min_support_moves"]} rated moves in each arm) over the whole run; |difference| > {TOLERANCE:.0%}: VOID_FAIRNESS',
+        arm_fairness=json.loads(json.dumps(rule)), limit=limit, tolerance=TOLERANCE, within=within, difference=value['difference'],
+        supported_share=value['supported_share'], reading=value)
+
+
 def window_entries(run_directory, start, *, end=None, pairs=None, search_arm, limit):
     """The panel's completion log entries [start:end) with pair_ordinal < limit (the screen), as a fairness window holds them; with
     `pairs` instead of `end`, the shortest such prefix whose completed pairs (both arms) reach `pairs` (where the panel evaluated that
@@ -148,24 +160,27 @@ def window_entries(run_directory, start, *, end=None, pairs=None, search_arm, li
 
 def window_diagnosis(run_directory, search_arm, start, *, end=None, pairs=None, limit=500, bands='coarse', rule=None):
     """The fairness reading of one window of the completion log (module docstring): the declared reading (the panel's cell_moves,
-    `rule` the declared arm_fairness, default depthn_live_fairness.RULE) and the finer reading under `bands`. Fairness data only."""
+    `rule` the declared arm_fairness, default depthn_live_fairness.RULE) and the finer reading under `bands`, both read under `rule`
+    (another rule than RULE is named in the result's arm_fairness). Fairness data only."""
     from pokezero import depthn_live_panel as panel
     if bands not in ALIVE_BANDS:raise ValueError(f'alive bands in {sorted(ALIVE_BANDS)} required, got {bands!r}')
     run = Path(run_directory);entries, stop = window_entries(run, start, end=end, pairs=pairs, search_arm=search_arm, limit=limit)
     rule = fairness.RULE if rule is None else rule
-    declared = {arm: fairness.pool([panel.cell_moves(run, e['ordinal']) for e in entries if e['arm'] == arm]) for arm in ('RAW', search_arm)}
+    declared = {arm: fairness.pool([panel.cell_moves(run, e['ordinal'], rule=rule) for e in entries if e['arm'] == arm]) for arm in ('RAW', search_arm)}
     arms = {'RAW': dict(rated=[], moves=0, band_from_round=0), search_arm: dict(rated=[], moves=0, band_from_round=0)}
     by_age = collections.defaultdict(list)
     for e in entries:
         if e['arm'] in arms:add_cell(arms, by_age, run, panel.read_result(run, e['ordinal']), bands=bands)
     coarse = fairness.reading(declared['RAW'], declared[search_arm], rule);finer = fairness.reading(arms['RAW'], arms[search_arm], rule)
-    return dict(scope='fairness data only (Foul Play iteration rates, alive counts and turns); no score is read',
+    out = dict(scope='fairness data only (Foul Play iteration rates, alive counts and turns); no score is read',
         window=dict(start=start, end=stop, cells=len(entries), completed_pairs=panel.completed_pairs(entries, search_arm), limit=limit),
         alive_bands=bands, tolerance=TOLERANCE,
         declared=dict(summary(coarse), coverage_difference=coarse['coverage_difference']),
         finer=dict(summary(finer), within=finer['difference'] is not None and abs(finer['difference']) <= TOLERANCE, cell_ratios=[
-            dict(stratum=c['stratum'], bands=c['bands'], raw_moves=c['raw_moves'], search_moves=c['search_moves'], ratio=c['ratio'])
-            for c in finer['cells']]))
+            dict(stratum=c['stratum'], bands=c['bands'], raw_moves=c['raw_moves'], search_moves=c['search_moves'], ratio=c['ratio'],
+                 **({'supported': c['supported']} if 'supported' in c else {})) for c in finer['cells']]))
+    if rule != fairness.RULE:out['arm_fairness'] = json.loads(json.dumps(rule))
+    return out
 
 
 def main(argv=None):
@@ -175,7 +190,8 @@ def main(argv=None):
     window = sub.add_parser('window', help='a windowed drift diagnosis over the completion log')
     for q in (gate, window):
         q.add_argument('--run-directory', required=True);q.add_argument('--arm', required=True, help='the search arm (e.g. DN2W16)')
-        q.add_argument('--alive-bands', choices=sorted(ALIVE_BANDS), default='coarse', help='alive bucketing (default coarse: 1-2 / 3-4 / 5-6)')
+        q.add_argument('--alive-bands', choices=sorted(ALIVE_BANDS), help='alive bucketing (default coarse: 1-2 / 3-4 / 5-6)')
+        q.add_argument('--rule', choices=sorted(RULES), default='default', help='the arm fairness rule (default: RULE; r3: screen-r3\'s RULE_R3)')
         q.add_argument('--output', help='also write the result here (a new file)')
     gate.add_argument('--limit', type=int, default=500, help='the readout\'s paired cells (default 500, the screen)')
     window.add_argument('--start', type=int, help='the window\'s first completion-log index (a flag\'s window: its acknowledgement\'s log length)')
@@ -184,7 +200,10 @@ def main(argv=None):
     window.add_argument('--flag', type=int, help='take start and pairs from state/fairness/screen/flag-N.json')
     window.add_argument('--limit', type=int, default=500, help='screen pairs only: pair_ordinal < limit (default 500)')
     args = p.parse_args(argv)
-    if args.command == 'final':value = final_gate(args.run_directory, args.arm, args.limit, bands=args.alive_bands)
+    if args.command == 'final' and args.rule == 'r3':
+        if args.alive_bands not in (None, 'exact'):p.error('final --rule r3 reads RULE_R3\'s exact alive bands')
+        value = final_gate_r3(args.run_directory, args.arm, args.limit)
+    elif args.command == 'final':value = final_gate(args.run_directory, args.arm, args.limit, bands=args.alive_bands or 'coarse')
     else:
         start, pairs, flag = args.start, args.pairs, None
         if args.flag is not None:
@@ -192,7 +211,8 @@ def main(argv=None):
             if start is not None and start != flag['window']:p.error(f"--start {start} is not flag {args.flag}'s window {flag['window']}")
             start = flag['window'];pairs = flag['pairs'] if pairs is None and args.end is None else pairs
         if start is None:p.error('--start or --flag required')
-        value = window_diagnosis(args.run_directory, args.arm, start, end=args.end, pairs=pairs, limit=args.limit, bands=args.alive_bands)
+        value = window_diagnosis(args.run_directory, args.arm, start, end=args.end, pairs=pairs, limit=args.limit,
+                                 bands=args.alive_bands or 'coarse', rule=RULES[args.rule])
         if flag is not None:
             recorded = (flag.get('reading') or {}).get('weighted_ratio')
             value['flag'] = dict(number=args.flag, recorded_weighted_ratio=recorded, reproduced=recorded == value['declared']['weighted_ratio'])

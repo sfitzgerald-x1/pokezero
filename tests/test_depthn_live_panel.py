@@ -24,6 +24,7 @@ from pokezero import phase_d_ladder_panel as ladder
 from pokezero import phase_d_owning_capture as capture
 from pokezero.live_protocol_actor import ActorContract
 from tests import test_depthn_live_actor as actor_tests
+from tests.test_depthn_fairness_r3 import lopsided_capture
 from tests import test_phase_d_ladder_panel as ladder_fixture
 from tests import test_phase_d_prerequisites as fixture
 
@@ -88,7 +89,7 @@ PROVENANCE = dict(
 
 
 def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, calibration_sha='c'*64,
-                provenance=PROVENANCE):
+                provenance=PROVENANCE, arm_fairness=None):
     return dict(schema=panel.SCHEMA, provenance=copy.deepcopy(provenance), ladder_declaration_sha256=ladder_sha256, expected_searched_share=copy.deepcopy(expected),
         foulplay_move_wall=copy.deepcopy(MOVE_WALL), actor=copy.deepcopy(ACTOR), server_tree_commit=SERVER_TREE,
         search_choice=dict(arm=arms[1], cell_commit='8'*40, evidence=[dict(path='cells/w16.json', sha256='4'*64), dict(path='out/w16-pairs.jsonl', sha256='5'*64)],
@@ -104,13 +105,13 @@ def declaration(ladder_sha256, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadlin
         screen_rule=panel.SCREEN_RULE, breakage=dict(panel.BREAKAGE, latency_p95_max_seconds=deadline), matmul_precision='highest',
         screen_latency_rule=copy.deepcopy(panel.LATENCY_RULE), bench_p95_wall_seconds=1.39,
         bench_source=dict(path='bench/w8-sessions/summary.json', sha256='e'*64), server_processes_per_gpu=1,
-        interleave=panel.INTERLEAVE, arm_fairness=dict(panel.ARM_FAIRNESS))
+        interleave=panel.INTERLEAVE, arm_fairness=dict(panel.ARM_FAIRNESS) if arm_fairness is None else copy.deepcopy(arm_fairness))
 
 
-def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS):
+def make_run(directory, arms=('RAW', 'DN2W8'), expected=EXPECTED, deadline=3., observable=True, ratios=RATIOS, arm_fairness=None):
     root = Path(directory).resolve(); inputs = root/'inputs'
     lad = ladder_fixture.declaration(); calibration = calibration_fixture(panel.sha(lad), observable=observable, ratios=ratios)
-    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration)); base = dict(BASE)
+    d = declaration(panel.sha(lad), arms, expected, deadline, observable, ratios, panel.sha(calibration), arm_fairness=arm_fairness); base = dict(BASE)
     for name, value in (('ladder', lad), ('declaration', d), ('base', base), ('calibration', calibration)):
         panel.write_new(inputs/f'{name}.json', value)
     run = panel.init(root/'run', declaration=inputs/'declaration.json', declaration_sha256=panel.sha(d),
@@ -1502,6 +1503,90 @@ class FairnessMonitorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'FLAG_ARM_FAIRNESS'): panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=screen)
         self.assertEqual(panel.acknowledge_arm_fairness(self.root, cause='benign', note='transient host event')['phase'], 'extension')
         self.assertEqual(len(panel.pending(self.root, arm='DN2W8', limit=2000, resume=True, screen=screen)), 10)
+
+
+class FairnessR3Tests(unittest.TestCase):
+    """Screen-r3's declared rule (depthn_live_fairness.RULE_R3): exact alive bands from the owner capture and minimum support, at the
+    Monitor's checkpoints (cumulative and drift) and in the readout."""
+    def setUp(self):
+        self.directory = TemporaryDirectory()
+        self.root, self.run, self.d, self.lad = make_run(self.directory.name, arm_fairness=json.loads(json.dumps(fairness.RULE_R3)))
+        self.raws, self.searches = panel.cells(self.lad, 'RAW'), panel.cells(self.lad, 'DN2W8')
+
+    def tearDown(self): self.directory.cleanup()
+
+    def play(self, monitor, ks, *, search_rate, lopsided_pairs=(), rounds=30, lopsided_from=20):
+        """Pairs ks, RAW then search: each cell's owner capture (one request per round; in lopsided_pairs, ours 1 vs theirs 2 from round
+        lopsided_from) and its Foul Play rates (RAW 100; the search arm search_rate, doubled in the lopsided endgame)."""
+        reasons = []
+        for k in ks:
+            lopsided = lopsided_from if k in lopsided_pairs else None
+            for cell in (self.raws[k], self.searches[k]):
+                lopsided_capture(self.root/'owning-wire'/f"{cell['ordinal']}.jsonl", rounds, lopsided)
+                rate = (lambda r: 100.) if cell['arm'] == 'RAW' else (lambda r: search_rate * (2. if lopsided is not None and r >= lopsided else 1.))
+                think = [dict(round=r, stratum='2x1000ms', iterations_per_budget_second=rate(r), wait_seconds=.4, overlap_seconds=.6) for r in range(rounds)]
+                panel.write_new(self.root/'claims'/f"{cell['ordinal']}.json", {})
+                write_cell(self.root, cell, self.run['declaration_sha256'], score=1., rows=[decision_row(cell, 0, source='raw_arm' if cell['arm'] == 'RAW' else 'search')],
+                           think=think)
+                reasons.append(monitor(completed(self.root, cell)))
+        return reasons
+
+    def window_moves(self, ks, rule):
+        return {arm: fairness.pool([panel.cell_moves(self.root, c['ordinal'], rule=rule) for k in ks for c in (self.raws[k], self.searches[k]) if c['arm'] == arm])
+                for arm in ('RAW', 'DN2W8')}
+
+    def state(self): return panel.fairness_state(self.root, 'screen')
+
+    def test_validate_accepts_rule_and_rule_r3_only(self):
+        for rule in (fairness.RULE, fairness.RULE_R3):
+            with self.subTest(rule=rule['strata']):
+                self.assertEqual(panel.validate(json.loads(json.dumps(declaration('a'*64, arm_fairness=rule))))['arm_fairness'], rule)
+        self.assertEqual(panel.load(self.root)[2]['arm_fairness'], fairness.RULE_R3)   # init accepted the JSON declaration
+        for rule in (dict(fairness.RULE_R3, min_support_moves=60), dict(fairness.RULE_R3, min_cell_moves=30), dict(fairness.RULE_R3, ratio_tolerance=.1),
+                     dict(fairness.RULE_R3, alive_bands=['1-2', '3-4', '5-6']), dict(fairness.RULE, alive_bands=['1', '2', '3-4', '5-6']),
+                     dict(fairness.RULE, min_support_moves=120), {k: v for k, v in fairness.RULE_R3.items() if k != 'min_support_moves'},
+                     dict(fairness.RULE_R3, strata=fairness.RULE['strata']), [fairness.RULE], {}, 'RULE_R3'):
+            d = declaration('a'*64, arm_fairness=rule)
+            with self.subTest(rule=rule), self.assertRaises(ValueError): panel.validate(d)
+
+    def test_a_sparse_lopsided_cell_flags_the_cumulative_checkpoint_only_without_minimum_support(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        lopsided = range(11)   # 11 games x 10 endgame moves: 110 per arm (ours 1 vs theirs 2), the search arm's rate doubled there
+        self.assertEqual(set(self.play(monitor, range(50), search_rate=100., lopsided_pairs=lopsided)), {None})
+        check, = self.state()['checks']; self.assertEqual(self.state()['flags'], [])
+        self.assertEqual((check['pairs'], check['floors'], check['reason'], check['weighted_ratio']), (50, True, None, 1.))
+        labelled, plain = self.window_moves(range(50), fairness.RULE_R3), self.window_moves(range(50), fairness.RULE)
+        self.assertIn('2x1000ms|ours 1|theirs 2', {s for s, _, _ in labelled['DN2W8']['rated']})
+        exact = fairness.reading(labelled['RAW'], labelled['DN2W8'], fairness.RULE)   # the alive labels without minimum support (RULE's merge)
+        self.assertEqual(fairness.flag(exact, fairness.RULE), 'ratio'); self.assertAlmostEqual(exact['difference'], 220/3000)
+        r3 = fairness.reading(labelled['RAW'], labelled['DN2W8'], fairness.RULE_R3)
+        self.assertEqual((r3['weighted_ratio'], r3['moves']), (check['weighted_ratio'], check['moves']))   # the checkpoint read the alive labels
+        self.assertNotEqual(fairness.reading(plain['RAW'], plain['DN2W8'], fairness.RULE_R3)['weighted_ratio'], check['weighted_ratio'])
+        value = panel.readout(self.root, arm='DN2W8', limit=500)['arm_fairness']
+        reading = value['phases']['screen']['reading']
+        self.assertEqual(value['rule'], fairness.RULE_R3)
+        self.assertEqual((reading['weighted_ratio'], reading['supported_cells'], reading['unsupported_cells']), (1., 4, 1))
+        self.assertEqual(reading['supported_share'], dict(RAW=1390/1500, search=1390/1500))
+        unsupported, = [c for c in reading['cells'] if not c['supported']]
+        self.assertEqual((unsupported['stratum'], unsupported['raw_moves'], unsupported['ratio']), ('2x1000ms|ours 1|theirs 2', 110, 2.))
+
+    def test_the_drift_checkpoint_reads_under_the_declared_rule(self):
+        monitor = panel.Monitor(self.root, search_arm='DN2W8')
+        self.assertEqual(self.play(monitor, range(50), search_rate=106.)[-1], 'FLAG_ARM_FAIRNESS')   # a uniform 6%: flags under RULE_R3 too
+        self.assertAlmostEqual(self.state()['flags'][0]['reading']['difference'], .06)
+        self.assertEqual(self.state()['flags'][0]['reading']['supported_share'], dict(RAW=1., search=1.))
+        ack = panel.acknowledge_arm_fairness(self.root, cause='benign', note='residual position mix after a host restart')
+        self.assertEqual(set(self.play(monitor, range(50, 100), search_rate=106., lopsided_pairs=range(50, 61))), {None})
+        checks = self.state()['checks']; self.assertEqual([(c['window'], c['pairs'], c['reason']) for c in checks], [(0, 50, 'ratio'), (100, 50, None)])
+        self.assertAlmostEqual(checks[1]['difference'], .06)
+        labelled = self.window_moves(range(50, 100), fairness.RULE_R3)   # without minimum support the sparse cell would re-flag: drift
+        self.assertEqual(fairness.flag(fairness.reading(labelled['RAW'], labelled['DN2W8'], fairness.RULE), fairness.RULE, ack), 'drift')
+
+    def test_a_cell_without_a_capture_counts_six_alive_by_round(self):
+        result = dict(source_game=dict(opponent_think=think(3, 100)))
+        value = panel.cell_moves(self.root, 12345, result, fairness.RULE_R3)
+        self.assertEqual((value['rated'], value['band_from_round']), ([('2x1000ms|ours 5-6|theirs 5-6', 0, 100.)]*3, 3))
+        self.assertEqual(panel.cell_moves(self.root, 12345, result), fairness.moves(result))   # the default rule: unchanged
 
 
 class CalibrationTests(unittest.TestCase):
