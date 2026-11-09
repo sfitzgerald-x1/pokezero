@@ -1,0 +1,705 @@
+"""RR (realized-reply re-pricing): score every searched DN2W16 decision against Foul Play's actual reply. CPU only.
+
+Inputs: the re-pricer's rows (scripts/depthn_rr_reprice.py; one JSON line per decision sent to the server, with its 16
+re-priced depth-2 worlds) and the live run directory (results/<ordinal>.json: cell.seed and cell.arm;
+telemetry/<ordinal>.jsonl: search.policy_target by decision_index; owning-wire/<ordinal>.jsonl: the owner's capture).
+Output: --out, a new directory holding summary.json, summary.md and decisions.jsonl. Needs numpy and scipy (bayes_hedge's
+HiGHS LP and the t quantile); importing gpu_engine.search_hedge and pokezero.v5_gumbel pulls in no JAX.
+
+Foul Play's reply b_FP (proxy (a), the lead's rules), from the owner's capture:
+- The decision's request is the owner's request_count-th |request| line (phase_d_owning_capture.read_capture's alignment;
+  its ROOT rows cross-check decision_index -> request_count, and a mismatch censors the decision as 'other').
+- Window: the lines after that request through the end of the turn (the next |turn| line, exclusive, or the end of the
+  capture). Showdown sends each turn's log BEFORE the next requests, so these are the lines that resolve the decision.
+  The window runs past an owner request inside the turn (our own Baton Pass replacement, a wait request) so a slower Foul
+  Play's move after it is still seen; Foul Play's faint replacements always follow its faint, which decides first.
+- Forced-switch decision (the own request has forceSwitch; else request_kind 'switch'): Foul Play's |switch| before the
+  window's first |move| line is its reply (both sides replacing); otherwise Foul Play was not asked: 'wait'.
+- Otherwise the first decisive Foul Play event in the window:
+  its first |move| line (move id, lowercase alphanumerics, Hidden Power collapsed; Sleep Talk/Metronome callers come
+  before the called move's [from] line, and locked turns' [from]lockedmove lines are the chosen move);
+  its |switch| before any move line: voluntary switch (species from the details, as an id); after a move line: censored
+  'other'; |drag| is never a choice;
+  |-activate|<fp>a: ...|move: Pursuit (our Pursuit hitting its switch first): censored 'other';
+  its |faint| before it acted: censored 'ko_first', or the earlier |cant| reason's cause.
+  A |cant| line waits for a later move line (Sleep Talk follows |cant|...|slp|); without one the decision is censored:
+  slp, par, flinch, frz -> 'sleep_para_flinch'; anything else (recharge, Truant, a |cant| naming a move such as Disable or
+  Taunt, no Foul Play event at all, a missing or invalid capture) -> 'other'.
+Mapping b_FP into world w (row world facts): a move to the lane b in 0-3 with move_targets[b] == the slot s holding it
+in active_moves and legal[b] (Struggle, or the world's charge_move: lane 0 if legal, the lane that stands for them); a switch to the lane b in 4-8 with switch_targets[b-4] == the
+unfainted party slot of that species and legal[b]; 'wait' to column 0 of a world whose opponent was not requested. A
+world is also dropped when that column is unpriced for any legal action of ours, so every action's R uses the same
+worlds. R(a) = the uniform mean over the mapped worlds of G_w[a][b_w]. 0 mapped worlds: 'unmapped' (not censored).
+
+Scorings: dropped (censored and unmapped decisions excluded) and pi_filled (those decisions use averaging's own
+q(a) = sum_w 1/16 sum_b pi_w(b) G_w[a][b]). A decision is scored when its replay is COMPLETE, every world is priced for
+every legal action against every kept reply, and the live greedy action is legal. Operators on the same grids: greedy
+(live), averaging, bayes_hedge lam 0 and 0.5, prior_regularized c, noise_gated k, world_lcb kappa, target_argmax (the
+live policy_target; argmax of root_logits + q, the same target, when it is missing). D = R(op) - R(greedy), 0 when op is
+greedy. noise_gated plays averaging's a* only when a* != greedy and mean_w gap > k sd_w(gap) / sqrt(W), gap_w =
+Q_w(a*) - Q_w(greedy); world_lcb plays argmax q(a) - kappa sd_w(Q_w(a)) / sqrt(W) (sample sd; Q_w(a) = sum_b pi_w(b) G_w[a][b]).
+Statistics: D is summed per battle (ordinal); mean and SE over battles; a t interval with battles - 1 df at 90% for the
+mean per-battle sum. The per-decision mean D is sum D / decisions, and its interval is the per-battle one divided by
+the mean decisions per battle (the same t statistic, so the same signs). Parity (averaging == the live search action, over the
+decisions searched live: source 'search') below 99% is PARITY_FAILED: no candidate is selected, as for GATE_FAILED.
+
+Run from the repository root with the venv that has numpy and scipy:
+  python scripts/depthn_rr_score.py --rows ROWS/rows-*.jsonl --run-directory RUN --out NEW_DIRECTORY
+"""
+import argparse
+import collections
+from dataclasses import dataclass
+from functools import lru_cache
+import json
+import math
+from pathlib import Path
+import re
+import statistics
+import sys
+
+_ROOT = Path(__file__).resolve().parents[1]
+for _path in (str(_ROOT), str(_ROOT / 'src')):
+    if _path not in sys.path:sys.path.insert(0, _path)
+
+from gpu_engine import search_hedge as hedge  # noqa: E402
+from pokezero import v5_gumbel as original  # noqa: E402
+from pokezero.phase_d_owning_capture import read_capture  # noqa: E402
+
+SCHEMA = 'pokezero.depthn-rr-score.v1'
+LEVEL = .90
+OVERRIDE_MIN = .05
+PARITY_MIN = .99
+PRIOR_C = (.02, .05, .1, .2, .5)
+NOISE_K = (1, 2)
+LCB_KAPPA = (.5, 1, 2)
+BANDS = (('<1%', .01), ('1-5%', .05), ('5-20%', .2), ('20-50%', .5), ('>=50%', math.inf))
+CAUSES = ('ko_first', 'sleep_para_flinch', 'other')
+SLEEP_PARA_FLINCH = frozenset(('slp', 'par', 'flinch', 'frz'))
+SCORINGS = ('dropped', 'pi_filled')
+HALVES = ('all', 'even', 'odd')
+SETTINGS = (('greedy', 'averaging', 'bayes_hedge:lam=0', 'blend:lam=0.5') + tuple(f'prior_regularized:c={c}' for c in PRIOR_C)
+            + tuple(f'noise_gated:k={k}' for k in NOISE_K) + tuple(f'world_lcb:kappa={k}' for k in LCB_KAPPA) + ('target_argmax',))
+CANDIDATES = SETTINGS[2:]   # selection excludes greedy and averaging
+
+# ---- the re-pricer's field names (scripts/depthn_rr_reprice.py, row schema pokezero.depthn-rr-reprice.row.v1 at f9e143ae),
+# in one place: a rename is a one-line change here ----
+ROW_FIELDS = dict(
+    ordinal=('ordinal',), battle_id=('battle_id',), owner=('owner',), decision_index=('decision_index',),
+    request_count=('request_count',),
+    source=('live', 'source'), live_action=('live', 'search_action_index'), live_q=('live', 'search_q_values'),
+    greedy_action=('live', 'greedy_action_index'), request_kind=('live', 'request_kind'), turn=('live', 'turn'),
+    played_action=('live', 'played_action_index'),
+    replay_status=('replay', 'status'), replay_action=('replay', 'action_index'), replay_q=('replay', 'q_values'),
+    action_equal=('parity', 'action_equal'), q_equal=('parity', 'q_equal'),
+    root_logits=('root', 'root_logits'), root_legal=('root', 'root_legal'), worlds=('worlds',))
+WORLD_FIELDS = dict(
+    requested=('opponent_requested',), kept=('kept',), logits=('root_peer_logits',), grid=('grid',), refusals=('refusals',),
+    active_slot=('opponent', 'active_slot'), active_species=('opponent', 'active_species'), active_moves=('opponent', 'active_moves'),
+    charge_move=('opponent', 'charge_move'), party=('opponent', 'party'),
+    move_targets=('peer', 'move_targets'), switch_targets=('peer', 'switch_targets'), legal=('peer', 'legal'))
+PARTY_FIELDS = dict(slot='slot', species='species', fainted='fainted')   # one party member (a dict per slot)
+
+
+def _field(value, path):
+    for key in path:
+        if type(value) is not dict:return None
+        value = value.get(key)
+    return value
+
+
+def _world(w):
+    out = {k: _field(w, p) for k, p in WORLD_FIELDS.items()};party = out.pop('party')
+    out['party_species'] = out['fainted'] = None
+    if type(party) is list and all(type(m) is dict for m in party):
+        slots = {m.get(PARTY_FIELDS['slot']) if type(m.get(PARTY_FIELDS['slot'])) is int else i: m for i, m in enumerate(party)}
+        members = [slots.get(s) or {} for s in range(max(slots) + 1)] if slots else []
+        out['party_species'] = [m.get(PARTY_FIELDS['species']) for m in members]
+        out['fainted'] = [m.get(PARTY_FIELDS['fainted']) for m in members]
+    return out
+
+
+def normalize(row):
+    """One re-pricer row in this scorer's names (ROW_FIELDS / WORLD_FIELDS); a missing field is None."""
+    out = {k: _field(row, p) for k, p in ROW_FIELDS.items()}
+    worlds = out['worlds']
+    out['worlds'] = None if type(worlds) is not list else [None if type(w) is not dict else _world(w) for w in worlds]
+    return out
+
+
+def load_rows(paths):
+    """The only reader of re-pricer rows: each JSONL row of `paths`, normalized."""
+    for path in paths:
+        with open(path, 'rb') as stream:
+            for raw in stream:
+                if raw.strip():yield normalize(json.loads(raw))
+
+
+# ---- Foul Play's reply from the owner's capture ----
+
+@dataclass(frozen=True)
+class Reply:
+    kind: str | None     # 'move', 'switch' or 'wait'; None when censored
+    id: str | None       # the move or species Showdown id
+    cause: str | None    # censored: one of CAUSES
+    detail: str          # what decided it (audit)
+
+
+def censored(cause, detail):return Reply(None, None, cause, detail)
+
+
+def showdown_id(name):
+    """Lowercase alphanumerics; every Hidden Power variant is 'hiddenpower'."""
+    value = re.sub('[^a-z0-9]', '', str(name).lower())
+    return 'hiddenpower' if value.startswith('hiddenpower') else value
+
+
+def _who(ident):return ident.split(':', 1)[0].strip()
+
+
+def _cant_cause(reason):return 'sleep_para_flinch' if reason in SLEEP_PARA_FLINCH else 'other'
+
+
+def turn_window(lines, request_count):
+    """(the owner's request_count-th |request| line, the lines after it up to the next |turn| line), or None."""
+    seen = 0
+    for i, line in enumerate(lines):
+        if line.startswith('|request|'):
+            seen += 1
+            if seen == request_count:
+                window = []
+                for later in lines[i + 1:]:
+                    if later.startswith('|turn|'):break
+                    window.append(later)
+                return line, window
+    return None
+
+
+def forced_request(request_line):
+    """True when the own request is a forceSwitch, False when not, None when it cannot be read."""
+    try:request = json.loads(request_line[len('|request|'):])
+    except ValueError:return None
+    if type(request) is not dict:return None
+    force = request.get('forceSwitch')
+    return bool(force) and any(force)
+
+
+def fp_reply(window, owner, forced):
+    """Foul Play's reply to one decision from its turn window (module docstring)."""
+    fp = ('p2' if owner == 'p1' else 'p1') + 'a'
+    if forced:
+        for line in window:
+            parts = line.split('|')
+            if len(parts) < 3:continue
+            if parts[1] == 'move':break
+            if parts[1] == 'switch' and _who(parts[2]) == fp:return Reply('switch', showdown_id(parts[3].split(',')[0]), None, 'replacement_switch')
+        return Reply('wait', None, None, 'not_requested')
+    moved, cant = False, None
+    for line in window:
+        parts = line.split('|')
+        if len(parts) < 3:continue
+        kind, who = parts[1], _who(parts[2])
+        if kind == 'move':
+            if who == fp:return Reply('move', showdown_id(parts[3]), None, 'after_cant:' + cant if cant is not None else 'move')
+            moved = True
+        elif who != fp:continue
+        elif kind == 'switch':
+            if moved:return censored('other', 'switch_after_move')
+            return Reply('switch', showdown_id(parts[3].split(',')[0]), None, 'voluntary_switch')
+        elif kind == '-activate' and len(parts) > 3 and parts[3] == 'move: Pursuit':return censored('other', 'pursuit_on_switch')
+        elif kind == 'cant' and cant is None:cant = '|'.join(parts[3:])
+        elif kind == 'faint':
+            if cant is not None:return censored(_cant_cause(cant), 'cant:' + cant)
+            return censored('ko_first', 'faint_before_acting')
+    if cant is not None:return censored(_cant_cause(cant), 'cant:' + cant)
+    return censored('other', 'no_fp_action')
+
+
+@dataclass(frozen=True)
+class Capture:
+    lines: tuple | None
+    roots: dict          # decision_index -> request_count, from read_capture's ROOT rows
+    owner: str | None
+    error: str | None
+
+
+@lru_cache(maxsize=4)
+def load_capture(path):
+    """read_capture validates the chain and gives the ROOT alignment; the durable WIRE rows give every line, including
+    those after the last root."""
+    path = Path(path)
+    if not path.exists():return Capture(None, {}, None, 'capture_missing')
+    try:
+        roots, owner = {}, None
+        for root in read_capture(path):roots[root['decision_index']] = root['request_count'];owner = root['owner']
+    except (ValueError, KeyError, TypeError):return Capture(None, {}, None, 'capture_invalid')
+    lines = []
+    for raw in path.read_bytes().split(b'\n')[:-1]:   # an unterminated tail is never durable (read_capture's rule)
+        row = json.loads(raw)
+        if row.get('event') == 'BEGIN':owner = row.get('owner')
+        elif row.get('event') == 'WIRE':lines.extend(row['lines'])
+    return Capture(tuple(lines), roots, owner, None)
+
+
+def reply_for(capture, decision):
+    if capture.error is not None:return censored('other', capture.error)
+    if capture.owner != decision['owner']:return censored('other', 'owner_mismatch')
+    expected = capture.roots.get(decision['decision_index'])
+    if expected is not None and expected != decision['request_count']:return censored('other', 'request_misaligned')
+    found = turn_window(capture.lines, decision['request_count']) if type(decision['request_count']) is int else None
+    if found is None:return censored('other', 'request_missing')
+    line, window = found
+    forced = forced_request(line)
+    if forced is None:forced = decision['request_kind'] == 'switch'
+    return fp_reply(window, decision['owner'], forced)
+
+
+# ---- mapping b_FP into each world ----
+
+def map_world(reply, facts, world, root_legal):
+    """(lane, None) or (None, why this world is dropped)."""
+    if reply.kind == 'wait':
+        if world.opponent_requested:return None, 'wait_but_requested'
+        lane = 0
+    else:
+        if not world.opponent_requested:return None, 'reply_but_waiting'
+        legal = facts.get('legal')
+        if type(legal) is not list or len(legal) != 9:return None, 'facts_missing'
+        if reply.kind == 'move':
+            if reply.id == 'struggle' or reply.id == facts.get('charge_move'):   # lane 0 also stands for Struggle or the charge
+                if not legal[0]:return None, 'move_not_legal'
+                lane = 0
+            else:
+                moves, targets = facts.get('active_moves'), facts.get('move_targets')
+                if type(moves) is not list or type(targets) is not list:return None, 'facts_missing'
+                slots = [s for s, m in enumerate(moves) if m == reply.id]
+                if not slots:return None, 'move_missing'
+                lanes = [b for b in range(4) if b < len(targets) and targets[b] in slots and legal[b]]
+                if not lanes:return None, 'move_not_legal'
+                lane = lanes[0]
+        else:
+            party, fainted, targets = facts.get('party_species'), facts.get('fainted'), facts.get('switch_targets')
+            if type(party) is not list or type(fainted) is not list or type(targets) is not list:return None, 'facts_missing'
+            slots = [p for p, s in enumerate(party) if s == reply.id]
+            if not slots:return None, 'species_missing'
+            alive = [p for p in slots if not (p < len(fainted) and fainted[p])]
+            if not alive:return None, 'species_fainted'
+            lanes = [b for b in range(4, 9) if b - 4 < len(targets) and targets[b - 4] in alive and legal[b]]
+            if not lanes:return None, 'switch_not_legal'
+            lane = lanes[0]
+    if any(root_legal[a] and world.joint_values[a][lane] is None for a in range(9)):return None, 'unpriced'
+    return lane, None
+
+
+def realized(worlds, mapped, root_legal):
+    """R(a): the uniform mean over the mapped (world, lane) pairs of G_w[a][lane]; None on illegal actions."""
+    return [math.fsum(worlds[w].joint_values[a][b] for w, b in mapped) / len(mapped) if root_legal[a] else None for a in range(9)]
+
+
+# ---- operators ----
+
+def argmax(values, actions):
+    """Highest value over `actions`, lowest index on ties."""
+    return max(actions, key=lambda a: (values[a], -a))
+
+
+def per_world_q(gs):
+    """Q_w(a) = sum_b pi_w(b) G_w[a][b] per world: the grid's reply prior over kept replies, or the waiting column 0."""
+    return [{a: math.fsum(g.prior[k] * g.values[i, k] for k in range(len(g.replies))) for i, a in enumerate(g.actions)} for g in gs]
+
+
+def noise_gated(qw, chosen, greedy, k):
+    """Averaging's choice only when it differs from greedy and the per-world gap's mean exceeds k standard errors."""
+    if chosen == greedy:return greedy
+    gaps = [q[chosen] - q[greedy] for q in qw]
+    return chosen if statistics.fmean(gaps) > k * statistics.stdev(gaps) / math.sqrt(len(gaps)) else greedy
+
+
+def world_lcb(q, spread, kappa):
+    """argmax over the legal actions of q(a) - kappa * sd_w(Q_w(a)) / sqrt(W); q is averaging's (= mean_w Q_w(a))."""
+    return argmax({a: q[a] - (kappa * s if kappa else 0.) for a, s in spread.items()}, sorted(spread))
+
+
+def target_argmax(target, root_legal, root_logits, q):
+    """(the live policy_target's argmax over the legal actions, False), or (argmax of root_logits + q, True) without it."""
+    actions = [a for a in range(9) if root_legal[a]]
+    if (type(target) is list and len(target) == 9
+            and all(type(target[a]) in (int, float) and math.isfinite(target[a]) for a in actions)):return argmax(target, actions), False
+    return argmax({a: float(root_logits[a]) + q[a] for a in actions}, actions), True
+
+
+def _hedge_top(worlds, legal, lam):
+    choice = hedge.bayes_hedge(worlds, legal, lam=lam)
+    return None if choice is None else hedge.top_action(choice.strategy)
+
+
+def operators(worlds, gs, average, greedy, root_logits, root_legal, target, failures):
+    """Every SETTINGS choice on one decision's grids (None when that operator failed; counted in `failures`)."""
+    chosen = hedge.top_action(average.strategy);qw = per_world_q(gs)
+    out = {'greedy': greedy, 'averaging': chosen}
+    for name, lam in (('bayes_hedge:lam=0', 0.), ('blend:lam=0.5', .5)):
+        try:out[name] = _hedge_top(worlds, root_legal, lam)
+        except ValueError:out[name] = None;failures[name] += 1
+    for c in PRIOR_C:out[f'prior_regularized:c={c}'] = hedge.top_action(hedge.prior_regularized(average, root_logits, root_legal, c).strategy)
+    for k in NOISE_K:out[f'noise_gated:k={k}'] = noise_gated(qw, chosen, greedy, k)
+    spread = {a: statistics.stdev([x[a] for x in qw]) / math.sqrt(len(qw)) for a in qw[0]}
+    for kappa in LCB_KAPPA:out[f'world_lcb:kappa={kappa}'] = world_lcb(average.q, spread, kappa)
+    out['target_argmax'], fallback = target_argmax(target, root_legal, root_logits, average.q)
+    return out, fallback
+
+
+def band(p):
+    for name, upper in BANDS:
+        if p < upper:return name
+
+
+# ---- one decision ----
+
+class Unscorable(Exception):
+    def __init__(self, reason):super().__init__(reason);self.reason = reason
+
+
+def world_prices(decision):
+    """The row's worlds as v5_gumbel.WorldPrices(opponent_requested, kept, root_peer_logits, grid), as depthn_backups builds
+    them for search_hedge (kept is the reply set: pi_w is the softmax of root_peer_logits over it)."""
+    worlds = decision['worlds']
+    if not worlds or any(w is None for w in worlds):raise Unscorable('world_missing')
+    if any(w['grid'] is None for w in worlds):raise Unscorable('world_unpriced')
+    try:return tuple(original.WorldPrices(w['requested'], tuple(w['kept']), tuple(w['logits']), w['grid']) for w in worlds)
+    except (ValueError, TypeError):raise Unscorable('world_invalid') from None
+
+
+def score_decision(decision, reply, target, failures):
+    """The scored decision: operators' choices and R under both scorings; raises Unscorable."""
+    if decision['replay_status'] != 'COMPLETE':raise Unscorable(f"replay_{decision['replay_status']}")
+    legal, logits = decision['root_legal'], decision['root_logits']
+    if type(legal) is not list or len(legal) != 9 or any(type(x) is not bool for x in legal) or not any(legal):raise Unscorable('root_legal_invalid')
+    if type(logits) is not list or len(logits) != 9:raise Unscorable('root_logits_invalid')
+    legal = tuple(legal)
+    greedy = decision['greedy_action']
+    if type(greedy) is not int or not 0 <= greedy < 9 or not legal[greedy]:raise Unscorable('greedy_missing')
+    worlds = world_prices(decision)
+    gs = hedge.grids(worlds, legal)
+    if gs is None:raise Unscorable('unpriced_cell')
+    try:prior = original._probabilities(logits, legal)
+    except ValueError:raise Unscorable('root_logits_invalid') from None
+    average = hedge.averaging(worlds, legal)
+    choices, fallback = operators(worlds, gs, average, greedy, logits, legal, target, failures)
+    lanes, drops = [], {}
+    if reply.cause is None:
+        for w, (world, facts) in enumerate(zip(worlds, decision['worlds'])):
+            lane, why = map_world(reply, facts, world, legal)
+            if lane is None:drops[w] = why
+            else:lanes.append((w, lane))
+    observed = reply.cause is None and bool(lanes)
+    r_dropped = realized(worlds, lanes, legal) if observed else None
+    r_filled = r_dropped if observed else list(average.q)
+    ops = {}
+    for name, choice in choices.items():
+        entry = dict(choice=choice, prior=None, band=None, R=dict(dropped=None, pi_filled=None), D=dict(dropped=None, pi_filled=None))
+        if choice is not None:
+            entry.update(prior=prior[choice], band=band(prior[choice]))
+            for scoring, r in (('dropped', r_dropped), ('pi_filled', r_filled)):
+                if r is None:continue
+                entry['R'][scoring] = r[choice];entry['D'][scoring] = 0. if choice == greedy else r[choice] - r[greedy]
+        ops[name] = entry
+    greedy_argmax = argmax(logits, [a for a in range(9) if legal[a]])
+    return dict(observed=observed, unmapped=reply.cause is None and not lanes, mapped_worlds=[list(x) for x in lanes],
+                world_drops=drops, R=dict(dropped=r_dropped, pi_filled=r_filled), operators=ops, averaging_q=list(average.q),
+                greedy_argmax=greedy_argmax, target_fallback=fallback, worlds=len(worlds))
+
+
+# ---- statistics ----
+
+def cluster_ci(groups, level=LEVEL):
+    """Mean D with a cluster-robust t interval: D summed per battle, then the mean and SE over battles (t, battles - 1 df).
+    `mean`/`ci90` are per decision (sum D / decisions; the per-battle interval over mean decisions per battle)."""
+    sums = [math.fsum(v) for v in groups.values() if v];m = len(sums);n = sum(len(v) for v in groups.values())
+    out = dict(mean=None, ci90=None, battles=m, decisions=n, per_battle_mean=None, per_battle_se=None, per_battle_ci90=None)
+    if not n:return out
+    per_battle = math.fsum(sums) / m;scale = m / n
+    out.update(mean=math.fsum(sums) / n, per_battle_mean=per_battle)
+    if m >= 2:
+        from scipy.stats import t
+        se = statistics.stdev(sums) / math.sqrt(m);half = float(t.ppf(.5 + level / 2, m - 1)) * se
+        out.update(per_battle_se=se, per_battle_ci90=[per_battle - half, per_battle + half],
+                   ci90=[(per_battle - half) * scale, (per_battle + half) * scale])
+    return out
+
+
+def operator_metric(records, name, scoring, band_name=None):
+    groups, overrides, n = collections.defaultdict(list), 0, 0
+    for r in records:
+        choice, d, b = r['ops'][name]
+        d = d[0] if scoring == 'dropped' else d[1]
+        if choice is None or d is None or band_name is not None and b != band_name:continue
+        groups[r['ordinal']].append(d);n += 1;overrides += choice != r['ops']['greedy'][0]
+    return dict(override=overrides / n if n else None, **cluster_ci(groups))
+
+
+def population(records, scoring, half='all', kind=None):
+    return [r for r in records if (half == 'all' or r['half'] == half) and (scoring == 'pi_filled' or r['observed'])
+            and (kind is None or r['kind'] == kind)]
+
+
+def metrics(records):
+    """{scoring: {half: {operators, by_request_kind, by_prior_band}}} over the compact decision records."""
+    kinds = sorted({r['kind'] for r in records if r['kind'] is not None})
+    out = {}
+    for scoring in SCORINGS:
+        out[scoring] = {}
+        for half in HALVES:
+            pop = population(records, scoring, half)
+            out[scoring][half] = dict(
+                decisions=len(pop), battles=len({r['ordinal'] for r in pop}),
+                operators={name: operator_metric(pop, name, scoring) for name in SETTINGS},
+                by_request_kind={k: {name: operator_metric(population(pop, scoring, kind=k), name, scoring) for name in SETTINGS} for k in kinds},
+                by_prior_band={b: {name: operator_metric(pop, name, scoring, b) for name in SETTINGS} for b, _ in BANDS})
+    return out
+
+
+def validation_gate(table):
+    m = table['pi_filled']['all']['operators']['averaging'];upper = None if m['ci90'] is None else m['ci90'][1]
+    return dict(rule='averaging D under pi_filled, all decisions: upper 90% bound < 0', mean=m['mean'], ci90=m['ci90'],
+                battles=m['battles'], decisions=m['decisions'], passed=upper is not None and upper < 0)
+
+
+def select(table):
+    """Even-seed battles under pi_filled: the highest mean D among CANDIDATES with override >= 5% (declared order on ties)."""
+    even, rows, best = table['pi_filled']['even']['operators'], [], None
+    for name in CANDIDATES:
+        m = even[name];eligible = m['override'] is not None and m['override'] >= OVERRIDE_MIN and m['mean'] is not None
+        rows.append(dict(setting=name, override=m['override'], mean=m['mean'], ci90=m['ci90'], eligible=eligible))
+        if eligible and (best is None or m['mean'] > best['mean']):best = rows[-1]
+    return dict(chosen=None if best is None else best['setting'], candidates=rows)
+
+
+def confirm(table, setting):
+    """Odd-seed battles: PASS when the lower 90% bound is > 0 under pi_filled and dropped and the pi_filled override >= 5%."""
+    pi, dropped = table['pi_filled']['odd']['operators'][setting], table['dropped']['odd']['operators'][setting]
+    lower = {s: None if m['ci90'] is None else m['ci90'][0] for s, m in (('pi_filled', pi), ('dropped', dropped))}
+    checks = dict(pi_filled_lower_above_0=lower['pi_filled'] is not None and lower['pi_filled'] > 0,
+                  dropped_lower_above_0=lower['dropped'] is not None and lower['dropped'] > 0,
+                  override_at_least_5pct=pi['override'] is not None and pi['override'] >= OVERRIDE_MIN)
+    return dict(setting=setting, pi_filled=pi, dropped=dropped, checks=checks, passed=all(checks.values()))
+
+
+def verdict(parity_passed, gate, selection, confirmation):
+    if not parity_passed:return 'PARITY_FAILED'
+    if not gate['passed']:return 'GATE_FAILED'
+    if selection['chosen'] is None:return 'NO_CANDIDATE'
+    return 'PASS' if confirmation['passed'] else 'FAIL'
+
+
+def decide(table, parity_passed):
+    """Gate, selection and confirmation; no candidate is selected when parity or the gate fails."""
+    gate = validation_gate(table)
+    selection = select(table) if parity_passed and gate['passed'] else dict(chosen=None, candidates=None)
+    confirmation = None if selection['chosen'] is None else confirm(table, selection['chosen'])
+    return dict(gate=gate, selection=selection, confirmation=confirmation,
+                verdict=verdict(parity_passed, gate, selection, confirmation or dict(passed=False)))
+
+
+# ---- the live run directory ----
+
+class RunDirectory:
+    def __init__(self, root):self.root = Path(root);self._cells = {};self._targets = {}
+
+    def cell(self, ordinal):
+        if ordinal not in self._cells:
+            path = self.root / 'results' / f'{ordinal}.json'
+            cell = (json.loads(path.read_bytes()).get('cell') or {}) if path.exists() else {}
+            self._cells[ordinal] = dict(seed=cell.get('seed'), arm=cell.get('arm'))
+        return self._cells[ordinal]
+
+    def policy_target(self, ordinal, decision_index):
+        if ordinal not in self._targets:
+            targets, path = {}, self.root / 'telemetry' / f'{ordinal}.jsonl'
+            if path.exists():
+                for raw in path.read_bytes().split(b'\n'):
+                    try:row = json.loads(raw)
+                    except ValueError:continue
+                    if type(row) is dict and type(row.get('decision_index')) is int:
+                        target = (row.get('search') or {}).get('policy_target')
+                        targets[row['decision_index']] = tuple(target) if type(target) is list else None
+            self._targets[ordinal] = targets
+        target = self._targets[ordinal].get(decision_index)
+        return None if target is None else list(target)
+
+    def capture(self, ordinal):return load_capture(str(self.root / 'owning-wire' / f'{ordinal}.jsonl'))
+
+
+# ---- the run ----
+
+class Coverage:
+    def __init__(self):
+        self.rows = 0;self.duplicates = 0;self.arms = collections.Counter();self.sources = collections.Counter()
+        self.replay_complete = 0;self.excluded = collections.Counter();self.parity = [0, 0];self.replay_agree = [0, 0]
+        self.greedy_disagree = [];self.replies = collections.Counter();self.details = collections.Counter()
+        self.kind = collections.defaultdict(lambda: collections.Counter());self.causes = collections.Counter()
+        self.unmapped = 0;self.mapped_hist = collections.Counter();self.drops = collections.Counter()
+        self.target_fallbacks = 0;self.failures = collections.Counter();self.no_half = 0;self.seen = set()
+
+    def report(self, records):
+        scored = len(records);share = lambda a, b: a / b if b else None
+        battles = {h: len({r['ordinal'] for r in records if r['half'] == h}) for h in ('even', 'odd')}
+        return dict(
+            searched_decisions=self.rows, duplicate_rows=self.duplicates, arms=dict(self.arms), live_sources=dict(self.sources),
+            replay_complete=self.replay_complete, scored=scored, excluded=dict(self.excluded),
+            parity=dict(rule=f'averaging top action == live search action_index, >= {PARITY_MIN:.0%}', with_live_action=self.parity[1],
+                        matches=self.parity[0], rate=share(*self.parity), passed=self.parity[1] > 0 and self.parity[0] / self.parity[1] >= PARITY_MIN),
+            averaging_equals_replay_action=dict(with_replay_action=self.replay_agree[1], matches=self.replay_agree[0], rate=share(*self.replay_agree)),
+            greedy_check=dict(rule='live greedy == argmax of root_logits over root_legal (lowest index on ties)',
+                              disagreements=len(self.greedy_disagree), examples=self.greedy_disagree[:20]),
+            replies=dict(self.replies),
+            censored=dict(count=sum(self.causes.values()), share=share(sum(self.causes.values()), scored),
+                          by_request_kind={k: dict(decisions=c['decisions'], censored=c['censored'], share=share(c['censored'], c['decisions']))
+                                           for k, c in sorted(self.kind.items(), key=lambda x: str(x[0]))},
+                          by_cause={c: dict(count=self.causes[c], share=share(self.causes[c], scored)) for c in CAUSES}),
+            reply_details=dict(self.details),
+            unmapped=dict(count=self.unmapped, share=share(self.unmapped, scored)),
+            mapped_worlds=dict(note='uncensored decisions: the number of worlds b_FP maps into',
+                               histogram={str(k): self.mapped_hist[k] for k in sorted(self.mapped_hist)}),
+            world_drop_reasons=dict(self.drops), target_argmax_fallbacks=self.target_fallbacks, operator_failures=dict(self.failures),
+            halves=dict(even=dict(battles=battles['even'], decisions=sum(r['half'] == 'even' for r in records)),
+                        odd=dict(battles=battles['odd'], decisions=sum(r['half'] == 'odd' for r in records)), no_seed=self.no_half))
+
+
+def process(decision, run, coverage):
+    """One row: (decisions.jsonl entry, compact record or None)."""
+    coverage.rows += 1
+    ordinal, index = decision['ordinal'], decision['decision_index']
+    address = dict(ordinal=ordinal, battle_id=decision['battle_id'], owner=decision['owner'], decision_index=index,
+                   request_count=decision['request_count'], turn=decision['turn'], request_kind=decision['request_kind'],
+                   source=decision['source'])
+    if (ordinal, index) in coverage.seen:coverage.duplicates += 1;return dict(address, scored=False, reason='duplicate_row'), None
+    coverage.seen.add((ordinal, index))
+    cell = run.cell(ordinal);seed = cell['seed']
+    half = ('even' if seed % 2 == 0 else 'odd') if type(seed) is int else None
+    coverage.arms[str(cell['arm'])] += 1;coverage.sources[str(decision['source'])] += 1
+    address.update(seed=seed, half=half, arm=cell['arm'])
+    coverage.replay_complete += decision['replay_status'] == 'COMPLETE'
+    try:
+        reply = reply_for(run.capture(ordinal), decision) if decision['replay_status'] == 'COMPLETE' else None
+        scored = score_decision(decision, reply, run.policy_target(ordinal, index), coverage.failures)
+    except Unscorable as error:
+        coverage.excluded[error.reason] += 1
+        return dict(address, scored=False, reason=error.reason), None
+    ops = scored['operators'];chosen = ops['averaging']['choice']
+    live = decision['live_action'];parity = None if decision['source'] != 'search' or type(live) is not int else live == chosen
+    if parity is not None:coverage.parity[0] += parity;coverage.parity[1] += 1
+    if type(decision['replay_action']) is int:coverage.replay_agree[0] += decision['replay_action'] == chosen;coverage.replay_agree[1] += 1
+    if scored['greedy_argmax'] != decision['greedy_action']:
+        coverage.greedy_disagree.append(dict(ordinal=ordinal, decision_index=index, live=decision['greedy_action'], argmax=scored['greedy_argmax']))
+    coverage.replies[reply.kind or 'censored'] += 1;coverage.details[reply.detail] += 1
+    kind = coverage.kind[decision['request_kind']];kind['decisions'] += 1;kind['censored'] += reply.cause is not None
+    if reply.cause is not None:coverage.causes[reply.cause] += 1
+    else:coverage.mapped_hist[len(scored['mapped_worlds'])] += 1
+    coverage.unmapped += scored['unmapped'];coverage.target_fallbacks += scored['target_fallback'];coverage.no_half += half is None
+    for why in scored['world_drops'].values():coverage.drops[why] += 1
+    entry = dict(address, scored=True, reply=dict(kind=reply.kind, id=reply.id, cause=reply.cause, detail=reply.detail),
+                 censored=reply.cause is not None, unmapped=scored['unmapped'], observed=scored['observed'],
+                 mapped_worlds=scored['mapped_worlds'], world_drops={str(k): v for k, v in scored['world_drops'].items()},
+                 live_action=live, averaging_action=chosen, parity=parity, greedy_action=decision['greedy_action'],
+                 greedy_argmax=scored['greedy_argmax'], target_fallback=scored['target_fallback'], R=scored['R'], operators=ops)
+    record = dict(ordinal=ordinal, half=half, kind=decision['request_kind'], observed=scored['observed'],
+                  ops={n: (o['choice'], (o['D']['dropped'], o['D']['pi_filled']), o['band']) for n, o in ops.items()})
+    return entry, record
+
+
+def score_run(rows, run_directory, out):
+    """Score every row into the new directory `out`; returns the summary."""
+    out = Path(out);out.mkdir(parents=True, exist_ok=False)
+    run, coverage, records = RunDirectory(run_directory), Coverage(), []
+    with (out / 'decisions.jsonl').open('x') as stream:
+        for decision in load_rows(rows):
+            entry, record = process(decision, run, coverage)
+            stream.write(json.dumps(entry) + '\n')
+            if record is not None:records.append(record)
+    table = metrics(records);cover = coverage.report(records)
+    outcome = decide(table, cover['parity']['passed'])
+    summary = dict(schema=SCHEMA, inputs=dict(rows=[str(Path(p).resolve()) for p in rows], run_directory=str(Path(run_directory).resolve())),
+                   settings=list(SETTINGS), candidates=list(CANDIDATES), level=LEVEL, override_min=OVERRIDE_MIN, parity_min=PARITY_MIN,
+                   bands=[b for b, _ in BANDS], **outcome, coverage=cover, metrics=table)
+    (out / 'summary.json').write_text(json.dumps(summary, indent=1) + '\n')
+    (out / 'summary.md').write_text(markdown(summary))
+    return summary
+
+
+# ---- summary.md ----
+
+def _num(x, signed=True):return '-' if x is None else (f'{x:+.4f}' if signed else f'{x:.4f}')
+
+
+def _pct(x):return '-' if x is None else f'{100 * x:.1f}%'
+
+
+def _ci(ci):return '-' if ci is None else f'[{ci[0]:+.4f}, {ci[1]:+.4f}]'
+
+
+def _metric_row(label, m):
+    return f"| {label} | {_pct(m['override'])} | {_num(m['mean'])} | {_ci(m['ci90'])} | {_num(m['per_battle_mean'])} | {m['battles']} | {m['decisions']} |"
+
+
+HEADER = '| setting | override | mean D | 90% CI | per-battle mean D | battles | decisions |\n|---|---|---|---|---|---|---|'
+
+
+def markdown(summary):
+    cover, table, gate, selection, confirmation = (summary[k] for k in ('coverage', 'metrics', 'gate', 'selection', 'confirmation'))
+    out = ['# RR (realized-reply re-pricing) score', '', f"**Verdict: {summary['verdict']}**", '',
+           f"- Parity (averaging == live search action): {cover['parity']['matches']}/{cover['parity']['with_live_action']} "
+           f"= {_pct(cover['parity']['rate'])} (required >= {_pct(PARITY_MIN)}): {'ok' if cover['parity']['passed'] else 'FAILED'}",
+           f"- Gate (averaging D, pi_filled, all decisions, upper 90% bound < 0): mean {_num(gate['mean'])}, CI {_ci(gate['ci90'])}: "
+           f"{'passed' if gate['passed'] else 'GATE_FAILED'}",
+           f"- Selected (even seeds, pi_filled, override >= {_pct(OVERRIDE_MIN)}, highest mean D): {selection['chosen'] or 'none'}"]
+    if confirmation is not None:
+        out.append(f"- Confirmation (odd seeds): pi_filled CI {_ci(confirmation['pi_filled']['ci90'])}, dropped CI "
+                   f"{_ci(confirmation['dropped']['ci90'])}, override {_pct(confirmation['pi_filled']['override'])}: "
+                   f"{'PASS' if confirmation['passed'] else 'FAIL'}")
+    out += ['', '## Coverage', '', '| item | value |', '|---|---|',
+            f"| searched decisions (rows) | {cover['searched_decisions']} |", f"| replay COMPLETE | {cover['replay_complete']} |",
+            f"| scored | {cover['scored']} |", f"| excluded | {cover['excluded']} |",
+            f"| parity | {cover['parity']['matches']}/{cover['parity']['with_live_action']} ({_pct(cover['parity']['rate'])}) |",
+            f"| averaging == replay action | {_pct(cover['averaging_equals_replay_action']['rate'])} |",
+            f"| greedy check disagreements | {cover['greedy_check']['disagreements']} |",
+            f"| censored | {cover['censored']['count']} ({_pct(cover['censored']['share'])}) |",
+            f"| unmapped | {cover['unmapped']['count']} ({_pct(cover['unmapped']['share'])}) |",
+            f"| replies | {cover['replies']} |", f"| target_argmax fallbacks | {cover['target_argmax_fallbacks']} |",
+            f"| operator failures | {cover['operator_failures']} |", f"| halves | {cover['halves']} |", '',
+            '| censored by request_kind | decisions | censored | share |', '|---|---|---|---|']
+    out += [f"| {k} | {c['decisions']} | {c['censored']} | {_pct(c['share'])} |" for k, c in cover['censored']['by_request_kind'].items()]
+    out += ['', '| censored cause | count | share of scored |', '|---|---|---|']
+    out += [f"| {c} | {v['count']} | {_pct(v['share'])} |" for c, v in cover['censored']['by_cause'].items()]
+    out += ['', '| mapped worlds | decisions |', '|---|---|'] + [f'| {k} | {v} |' for k, v in cover['mapped_worlds']['histogram'].items()]
+    out += ['', f"World drop reasons: {cover['world_drop_reasons']}", '']
+    if selection['candidates']:
+        out += ['## Selection (even seeds, pi_filled)', '', '| setting | override | mean D | 90% CI | eligible |', '|---|---|---|---|---|']
+        out += [f"| {r['setting']} | {_pct(r['override'])} | {_num(r['mean'])} | {_ci(r['ci90'])} | {'yes' if r['eligible'] else 'no'} |"
+                for r in selection['candidates']]
+        out.append('')
+    for scoring in SCORINGS:
+        for half in HALVES:
+            block = table[scoring][half]
+            out += [f"## {scoring}, {half} ({block['battles']} battles, {block['decisions']} decisions)", '', HEADER]
+            out += [_metric_row(name, block['operators'][name]) for name in SETTINGS] + ['']
+        out += [f'## {scoring}, all: by request_kind', '', HEADER.replace('| setting |', '| setting / kind |')]
+        out += [_metric_row(f'{name} / {k}', m[name]) for k, m in table[scoring]['all']['by_request_kind'].items() for name in SETTINGS] + ['']
+        out += [f"## {scoring}, all: by prior band of the setting's action", '', HEADER.replace('| setting |', '| setting / band |')]
+        out += [_metric_row(f'{name} / {b}', m[name]) for b, m in table[scoring]['all']['by_prior_band'].items() for name in SETTINGS
+                if m[name]['decisions']] + ['']
+    return '\n'.join(out) + '\n'
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
+    parser.add_argument('--rows', nargs='+', required=True, help="the re-pricer's rows-*.jsonl")
+    parser.add_argument('--run-directory', required=True, help='the live screen run directory (results/, telemetry/, owning-wire/)')
+    parser.add_argument('--out', required=True, help='a new output directory')
+    args = parser.parse_args(argv)
+    summary = score_run(args.rows, args.run_directory, args.out)
+    cover = summary['coverage']
+    print(json.dumps(dict(verdict=summary['verdict'], scored=cover['scored'], parity=cover['parity']['rate'],
+                          gate=summary['gate']['passed'], chosen=summary['selection']['chosen'], out=str(Path(args.out).resolve()))))
+    return 0
+
+
+if __name__ == '__main__':sys.exit(main())
