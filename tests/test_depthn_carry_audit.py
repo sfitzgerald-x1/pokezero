@@ -204,6 +204,24 @@ class MeasureTests(unittest.TestCase):
         f = A.root_measures(row(1, 0), None, quiet)['effects']['recharge']
         self.assertTrue(f['b1']);self.assertFalse(f['b2'] or f['b'])   # the turn-2 record decides (b); b1 stays as the proxy column
 
+    def test_unlabelled_turn2_cells_never_clear_b(self):
+        """A CAPTURED record with unlabelled cells cannot say (b) is false: without a hit (b) falls back to the proxy, marked; a hit
+        still decides; the summary counts the rows and cells."""
+        partial = lambda masses: dict(worlds=[dict(mass=dict(own={}, opp=masses), own_max={}, unlabelled=3), dict(mass=dict(own={}, opp={}), own_max={})])
+        f = A.root_measures(row(1, 0), None, partial({}))['effects']['recharge']   # Hyper Beam holds ~39% of our root prior: the proxy trips
+        self.assertEqual((f['b2'], f['b2_unlabelled_fallback'], f['b'], f['b_source']), (None, True, f['b1'], 'proxy_unlabelled'))
+        self.assertTrue(f['b'])
+        hit = A.root_measures(row(1, 0), None, partial({'hyperbeam': [[4, .3]]}))['effects']['recharge']
+        self.assertEqual((hit['b2'], hit['b2_unlabelled_fallback'], hit['b_source']), (True, False, 'turn2'))
+        rows = [row(1, 0), row(1, 1)]
+        turn2 = {(1, 0): dict(prefix_sha256='1-0', replay_action_index=1, turn2=dict(status='CAPTURED', **partial({}))),
+            (1, 1): dict(prefix_sha256='1-1', replay_action_index=1, turn2=dict(status='CAPTURED', worlds=[dict(mass=dict(own={}, opp={}), own_max={})]))}
+        s = A.audit(iter(rows), None, turn2)
+        self.assertEqual((s['turn2_join']['unlabelled_rows'], s['turn2_join']['unlabelled_cells']), (1, 3))
+        r = s['effects']['recharge']['b']
+        self.assertEqual((r['turn2_rows'], r['proxy_rows'], r['unlabelled_fallback_rows']), (1, 1, 1))
+        self.assertIn('unlabelled turn-2 cells 1 (3 cells', A.markdown(s))
+
     def test_decision_rule_and_guard(self):
         rows = [row(1, i, own=('rest', 'earthquake', 'toxic', 'protect')) for i in range(98)]
         rows += [row(2, 0, search=0, greedy=1), row(2, 1, search=0, greedy=1)]   # two overrides into Hyper Beam: 2 / 100

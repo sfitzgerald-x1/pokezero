@@ -140,7 +140,8 @@ def conditions(lines, owner, own_request_line=None):
             species = _species(parts[3]);names[(seat, name)] = species;sides[seat]['active'] = species
             m = sides[seat]['members'].setdefault(species, _member())
             if len(parts) > 4:
-                m['fainted'], status = _condition(parts[4]);_set_status(m, status, None)
+                m['fainted'], status = _condition(parts[4])
+                if status != m['status']:_set_status(m, status, 'other' if status == 'slp' else None)   # an unchanged status keeps its source
             continue
         m, species = member(seat, name)
         tags = [x.strip().lower() for x in parts[3:]]
@@ -168,11 +169,7 @@ def conditions(lines, owner, own_request_line=None):
             m['white_herb'] = move_id(row.get('item') or '') == 'whiteherb'
             m['guts'] = move_id(row.get('ability') or row.get('baseAbility') or '') == 'guts'
             if row.get('active') is True:sides[own]['active'] = species
-    for seat in seats:
-        for species, m in sides[seat]['members'].items():
-            if seat == opp:
-                if m['white_herb'] is None:m['white_herb'] = species in WHITE_HERB_SPECIES
-                if m['guts'] is None:m['guts'] = True   # every pool Facade user has Guts (public pool fact)
+    for species, m in sides[opp]['members'].items():_opponent_defaults(species, m)
     out = {}
     for key, seat in (('own', own), ('opp', opp)):
         other = sides[opp if seat == own else own]['members'].values()
@@ -183,17 +180,27 @@ def conditions(lines, owner, own_request_line=None):
     return out
 
 
+def _opponent_defaults(species, m):
+    """The opponent's public pool facts on a member whose item or ability is not known otherwise: Deoxys and Deoxys-Attack hold
+    White Herb, every pool Facade user has Guts."""
+    if m['white_herb'] is None:m['white_herb'] = species in WHITE_HERB_SPECIES
+    if m['guts'] is None:m['guts'] = True
+    return m
+
+
 def _set_status(m, status, source):
     m['status'] = status;m['sleep_source'] = source if status == 'slp' else None
 
 
-def child_side(side, members):
+def child_side(side, members, *, opponent=False):
     """A side's conditions at a turn-2 child: the root's `side` (item and ability facts) with the child's own statuses,
-    `members` [(species, status code, alive, rest_origin)] read from the child state (the opponent's sleep source: rest_origin)."""
+    `members` [(species, status code, alive, rest_origin)] read from the child state (the sleep source: rest_origin). A member
+    the root does not know (an unrevealed opponent in this world) takes the opponent's pool facts when `opponent`."""
     out = dict(side, members={s: dict(m) for s, m in side['members'].items()})
     for species, code, alive, rest in members:
         if not species:continue
         m = out['members'].setdefault(species, _member())
+        if opponent:_opponent_defaults(species, m)
         m['status'] = STATUS_CODES.get(int(code), '');m['fainted'] = not alive
         m['sleep_source'] = ('rest' if rest else 'other') if m['status'] == 'slp' else None
     out['party_statused'] = any(not m['fainted'] and m['status'] for m in out['members'].values())

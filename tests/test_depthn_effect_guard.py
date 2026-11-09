@@ -50,6 +50,21 @@ class SleepClauseTests(unittest.TestCase):
         hit = G.conditions(BASE + ['|-status|p1a: Breloom|slp'], 0, request([('Breloom', '100/100 slp', '', 'effectspore')]))
         self.assertTrue(hit['opp']['sleep_clause'])
 
+    def test_a_rest_sleep_keeps_its_source_across_a_switch(self):
+        """Review B2: a Rester that switches out and comes back asleep ('100/100 slp' on its switch or drag line) is still Rest's
+        sleeper, on either seat; a sleeper first seen on a switch line counts."""
+        for seat, owner, kind in (('p2', 0, 'switch'), ('p2', 0, 'drag'), ('p1', 1, 'switch'), ('p1', 1, 'drag'), ('p1', 0, 'switch'), ('p2', 1, 'drag')):
+            with self.subTest(seat=seat, kind=kind):
+                lines = BASE + [f'|move|{seat}a: Snorlax|Rest|{seat}a: Snorlax', f'|-status|{seat}a: Snorlax|slp|[from] move: Rest', '|turn|2',
+                    f'|switch|{seat}a: Gengar|Gengar, L80|100/100', '|turn|3', f'|{kind}|{seat}a: Snorlax|Snorlax, L80|100/100 slp', '|turn|4']
+                if seat == 'p1':lines = [x.replace('p1a: Breloom', 'p1a: Snorlax').replace('Breloom, L80', 'Snorlax, L80') for x in lines]
+                c = G.conditions(lines, owner, None)
+                rester = 'opp' if (seat == 'p2') == (owner == 0) else 'own'
+                self.assertEqual(c[rester]['members']['snorlax']['sleep_source'], 'rest')
+                self.assertFalse(c['opp' if rester == 'own' else 'own']['sleep_clause'])
+        unknown = G.conditions([switch('p1', 'Breloom'), switch('p2', 'Snorlax', '100/100 slp')], 0, None)
+        self.assertTrue(unknown['own']['sleep_clause'])   # no Rest seen: a non-allied source, conservatively
+
     def test_the_guard_reads_the_clause_for_sleep_moves_only(self):
         c = G.conditions(BASE + ['|-status|p2a: Snorlax|slp'], 0, request(OURS))
         self.assertEqual(G.guarded('spore', c['own'], 'breloom', other=c['opp']), ('C', 'status'))
@@ -89,6 +104,18 @@ class UserConditionTests(unittest.TestCase):
         self.assertIsNone(G.guarded('refresh', cured['opp'], 'swellow'))
         slept = G.conditions([switch('p1', 'Ursaring'), switch('p2', 'Swellow'), '|-status|p2a: Swellow|slp'], 0, request(ours))
         self.assertIsNone(G.guarded('facade', slept['opp'], 'swellow'))   # Facade does not double while asleep
+
+    def test_an_unrevealed_opponent_at_a_child_takes_the_pool_facts(self):
+        """Review B1: a world's opponent member the root never saw (sampled) takes the pool's White Herb (Deoxys formes) and
+        Guts (Facade users) at its turn-2 child, as a revealed one does at the root; ours never take them."""
+        c = G.conditions(BASE, 0, request(OURS))
+        herb = G.child_side(c['opp'], [('deoxysattack', 0, True, False)], opponent=True)
+        self.assertEqual(G.guarded('psychoboost', herb, 'deoxysattack'), ('C', 'self_stat_drop'))
+        guts = G.child_side(c['opp'], [('ursaring', 2, True, False)], opponent=True)   # burned at turn 1 in this child
+        self.assertEqual(G.guarded('facade', guts, 'ursaring'), ('C', 'other'))
+        self.assertIsNone(G.guarded('facade', G.child_side(c['opp'], [('ursaring', 0, True, False)], opponent=True), 'ursaring'))
+        ours = G.child_side(c['own'], [('deoxys', 0, True, False), ('ursaring', 2, True, False)])
+        self.assertEqual((G.guarded('psychoboost', ours, 'deoxys'), G.guarded('facade', ours, 'ursaring')), (None, None))
 
     def test_aromatherapy_reads_the_party(self):
         c = G.conditions([switch('p1', 'Meganium'), switch('p2', 'Vileplume'), '|-status|p2a: Vileplume|psn', switch('p2', 'Bellossom')], 0,

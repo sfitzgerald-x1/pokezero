@@ -27,6 +27,16 @@ def fake_labels(states, *, children_only=False, peer_moves=(SURF, TACKLE, REST, 
         usable=np.ones((n, 2, 4), bool), party=party, status=np.zeros((n, 2, 6), np.int32), alive=np.ones((n, 2, 6), bool), rest=np.zeros((n, 2, 6), bool))
 
 
+def varied_labels(states, *, seat=1, sleeper=None, move=SURF):
+    """Labels that vary per row and per seat: on P1's flat children (N > 16) `seat` knows `move` on lane 0 only on the rows whose
+    lane (row % 81) is odd (tackle elsewhere; the other seat tackle/rest/protect everywhere), and seat `sleeper`'s slot 0 sleeps."""
+    out = fake_labels(states, peer_moves=(TACKLE, REST, PROTECT, 0));n = out['moves'].shape[0]
+    out['moves'][:, seat, 0] = TACKLE
+    if n > 16:out['moves'][(np.arange(n) % dn.LANES) % 2 == 1, seat, 0] = move
+    if sleeper is not None:out['status'][:, sleeper, 0] = 5
+    return out
+
+
 class SeamTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -68,12 +78,13 @@ class SeamTests(unittest.TestCase):
         broken = self.make(gi.ObservedDepthNPricer, labels=lambda states: 1 / 0);_, frame_broken, (none, why) = self.price(broken, observe=True)
         self.cw.assert_frames_equal(reference, frame_broken);self.assertEqual((none, why[0][:30]), ([], 'P1 children: ZeroDivisionError'))
 
-    def record(self, labels, *, children=None, choice=None, lines=(), request_line=None):
+    def record(self, labels, *, children=None, choice=None, lines=(), request_line=None, entry=('A', 'test', None), found_out=None):
         pricer = self.make(gi.ObservedDepthNPricer, labels=labels);b, frame, (found, notes) = self.price(pricer, observe=True)
+        if found_out is not None:found_out.extend(found)
         root = b.roots[0];worlds = [w for r in root['rows'] for w in b.worlds.pairs[r]]
         request = dict(lines=list(lines), own_request_line=request_line)
         with ExitStack() as stack:   # surf guarded (tier A) for the test: the fixture pool has no guarded move
-            stack.enter_context(patch.dict(G.GUARDED, surf=('A', 'test', None)));stack.enter_context(patch.object(G, 'WATCHED', G.WATCHED | {'surf'}))
+            stack.enter_context(patch.dict(G.GUARDED, surf=entry));stack.enter_context(patch.object(G, 'WATCHED', G.WATCHED | {'surf'}))
             return gi.effect_record(frame, root, worlds, found if children is None else children, request, 0, self.cw.metadata['vocabulary'], choice,
                 labels=labels, notes=notes), frame, root
 
@@ -95,6 +106,33 @@ class SeamTests(unittest.TestCase):
         self.assertEqual((clear['tripped'], clear['reasons'], clear['a']), (False, [], False))
         missing, _, _ = self.record(lambda s: fake_labels(s, peer_moves=(TACKLE, REST, PROTECT, 0)), children=[])
         self.assertEqual((missing['tripped'], [x['source'] for x in missing['reasons']]), (True, ['turn2_unavailable']))   # fail closed
+
+    def test_turn_2_reads_each_cells_own_child_row(self):
+        """Each expanded cell reads the child row its lane holds (P1 row w, lane l: w*81 + l, through lane_cell), not w*81 + cell: the
+        peer's Surf sits on odd lanes only, so the guarded (world, cell) set is exactly theirs."""
+        found = [];record, frame, root = self.record(varied_labels, found_out=found)
+        lane_cell = found[0]['lane_cell'];expected = set();discriminating = False
+        for k, r in enumerate(root['rows']):
+            for jw in (0, 1):
+                w = 2 * r + jw
+                for lane in range(dn.LANES):
+                    cell = int(lane_cell[w, lane])
+                    if cell >= dn.LANES:continue
+                    discriminating |= lane % 2 != cell % 2
+                    a, b = divmod(cell, 9)
+                    if (lane % 2 == 1 and int(frame.t1_status[r, jw, a, b]) == 2 and bool(frame.t1_peer_requested[r, jw, a, b])
+                            and bool(frame.t1_peer_legal[r, jw, a, b][0])):expected.add((2 * k + jw, cell))
+        got = {(m['world'], m['cell']) for m in record['masses']['turn2'] if m['move'] == 'surf' and m['side'] == 'opp'}
+        self.assertTrue(discriminating and expected);self.assertEqual(got, expected)
+        self.assertEqual((record['b_turn1'], record['b_turn2']), (False, True))
+
+    def test_each_side_at_a_child_reads_its_own_seat(self):
+        """Our Surf is a sleep move here (Sleep Clause): guarded at a child only while the OPPONENT's seat has a sleeper there."""
+        clause = ('C', 'status', 'sleep_clause')
+        theirs, _, _ = self.record(lambda s: varied_labels(s, seat=0, sleeper=1), entry=clause)
+        self.assertEqual({(x['move'], x['side'], x['source']) for x in theirs['reasons']}, {('surf', 'own', 'turn2')})
+        ours, _, _ = self.record(lambda s: varied_labels(s, seat=0, sleeper=0), entry=clause)   # only our own seat sleeps: no clause
+        self.assertEqual(ours['reasons'], [])
 
     def test_c_reads_our_requests_lanes(self):
         line = '|request|{"side":{"id":"p1","pokemon":[{"ident":"p1: Alpha","details":"Alpha, L80","condition":"100/100","active":true}]},' \

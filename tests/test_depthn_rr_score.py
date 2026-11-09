@@ -750,13 +750,17 @@ class GuardTests(unittest.TestCase):
         facts = lambda r, c=False: S.guard_facts(r, {'averaging': 0 if c else 4, 'greedy': 1})
         records = [record(0, facts(guard_record(turn1=[('curse', 'A')])), d=0.), record(1, facts(guard_record(turn2=[('spore', 'C')])), d=0.),
                    record(2, facts(guard_record(a=True, tier_b=True))), record(3, facts(guard_record(lanes=(('A', 'x'), None, None, None)), c=True)),
-                   record(4, None)]
+                   record(4, None), record(5, facts(S.effect_guard.error_record('unreadable')), d=0.)]
         g = S.guard_report(records, S.SETTINGS, opponent_recharge=2)
-        self.assertEqual((g['priced_roots'], g['without_record'], g['opponent_recharge_refused']), (4, 1, 2))
-        self.assertEqual((g['union']['turn1'], g['union']['turn2_added'], g['union']['total'], g['guarded_share']), (1, 1, 2, .5))
+        self.assertEqual((g['priced_roots'], g['without_record'], g['opponent_recharge_refused']), (5, 1, 2))
+        # the error record (b, neither turn-1 nor turn-2 reasons) is its own part of the guarded share
+        self.assertEqual((g['union']['turn1'], g['union']['turn2_added'], g['union']['unavailable_or_error'], g['union']['total'], g['guarded_share']),
+            (1, 1, 1, 3, .6))
         self.assertEqual((g['tiers']['A']['turn1'], g['tiers']['C']['turn2_added']), (1, 1));self.assertTrue(g['above_20pct'])
-        self.assertEqual((g['c']['averaging']['c_only'], g['c']['averaging']['union_share']), (1, .75))
-        self.assertEqual((g['primary']['roots'], g['guarded_context']['roots'], g['tier_b']['legal']['roots'], g['sensitivity']['roots']), (2, 2, 1, 1))
+        self.assertEqual((g['c']['averaging']['c_only'], g['c']['averaging']['union_share']), (1, .8))
+        self.assertEqual((g['primary']['roots'], g['guarded_context']['roots'], g['tier_b']['legal']['roots'], g['sensitivity']['roots']), (2, 3, 1, 1))
+        alone = S.guard_report([record(0, facts(guard_record())), record(1, facts(S.effect_guard.error_record('x')))], S.SETTINGS)
+        self.assertEqual((alone['guarded_share'], alone['above_20pct'], alone['union']['unavailable_or_error']), (.5, True, 1))   # errors alone flag
         self.assertAlmostEqual(g['guarded_context']['table']['pi_filled']['averaging']['mean'], .3)   # raw choices for context
         self.assertAlmostEqual(g['primary']['table']['pi_filled']['averaging']['mean'], .1)
         text = '\n'.join(S.guard_markdown(g, S.SETTINGS))

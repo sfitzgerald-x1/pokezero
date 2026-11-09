@@ -478,26 +478,39 @@ class DepthNLiveSearch:
             pool.append({k:r[k]for k in keys})
         if not pool:raise ValueError('at least one saved request required')
         started=time.perf_counter();self.carry=None;self.warming=True
-        try:report=self._warm_buckets(pool);self._hold_to_reference(pool)
+        try:report=self._warm_buckets(pool);labels=self._hold_to_reference(pool)
         finally:self.warming=False;self.reset_sessions()
+        missing=[b for b in self.buckets if isinstance(self.pricers[b],guard_inputs.ObservedDepthNPricer)
+            and 2*b*self.K*dn.LANES not in self.pricers[b].label_rows]
+        if missing or labels is None:
+            raise RuntimeError(f'warmup: the effect guard\'s label gather did not compile for buckets {missing} (P1 children) or the root worlds '
+                f'({"missing" if labels is None else "ok"})')
         signatures={k[-1][2]for k in self.programs if type(k[-1])is tuple and k[-1][:2]==('worlds',cw.SOURCE)}
         if self.carry is None or signatures!={self.carry['signature']}:
             raise RuntimeError(f'warmup: the recorded carry signature {None if self.carry is None else self.carry["signature"]} is not the warmed programs\' {sorted(signatures)}')
         self.warm=dict(buckets=report,programs=len(self.programs),seconds=time.perf_counter()-started,carry_signature=self.carry['signature'],
-            carry_reference=self.carry['root'])
+            carry_reference=self.carry['root'],labels=dict(p1_rows={b:2*b*self.K*dn.LANES for b in self.buckets},root_rows=labels))
         return self.warm
 
     def _hold_to_reference(self,pool):
         """Every warmup root, not only those of the windows that priced: prepared once more (fresh sessions and attempts), each
-        fully constructed one held to the carry reference; RuntimeError naming every root that differs."""
+        fully constructed one held to the carry reference; RuntimeError naming every root that differs. The first one's stacked
+        worlds also go through the effect guard's label gather (its root-world shape, [W, 1, ...], compiles here whether or not
+        a warmup root decided); returns that row count (None without a fully constructed root)."""
         self.reset_sessions()
         requests=[dict(r,schema=SCHEMA,request_id=f'warmup-structure-{j}')for j,r in enumerate(pool)]
-        odd=[]
+        odd=[];labels=None;tried=False;gather=getattr(self.pricers[self.buckets[0]],'labels',guard_inputs.child_labels)
         for request,item in zip(requests,cw.prepare_roots(self.constructor,requests,device=self.device)):
             if type(item)is not cw.Prepared or not item.made.fully_constructed:continue
+            if not tried:
+                tried=True
+                try:jax.block_until_ready(gather(guard_inputs.stack_worlds(item.made.worlds)));labels=len(item.made.worlds)
+                except FATAL:raise
+                except Exception:labels=None   # warmup then refuses READY: the gather does not run on these worlds
             diff=self._structure(item,request,None)
             if diff:odd.append(f'{request["battle_id"]}/{request["decision_index"]}: {diff}')
         if odd:raise RuntimeError(f'warmup: every warmup root must share one carry structure; against the reference root {self.carry["root"]}: '+'; '.join(odd))
+        return labels
 
     def _warm_buckets(self,pool):
         report={}

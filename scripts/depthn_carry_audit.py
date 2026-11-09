@@ -410,7 +410,10 @@ def root_measures(row, wire, turn2, *, threshold=THRESHOLD):
     search = replay.get('action_index') if priced else None
     played = (row.get('live') or {}).get('played_action_index')
     move_at = lambda a: own_moves[a] if type(a) is int and 0 <= a < 4 else None
-    out = dict(priced=priced, own_source=own_source, greedy_source=greedy_source, own_species=own_species, effects={})
+    # Cells the turn-2 capture expanded but could not label (no P1 child for them): a CAPTURED record with any cannot say (b) is
+    # false, only that it is true; without a hit it falls back to the proxy and says so (b_source 'proxy_unlabelled').
+    unlabelled = None if turn2 is None else sum(int(w.get('unlabelled') or 0) for w in turn2.get('worlds') or ())
+    out = dict(priced=priced, own_source=own_source, greedy_source=greedy_source, own_species=own_species, unlabelled_cells=unlabelled, effects={})
     for e in EFFECTS:
         M = set(e.moves);own_lanes = [i for i in range(4) if own_moves[i] in M]
         a_own = any(legal[i] for i in own_lanes)
@@ -425,11 +428,12 @@ def root_measures(row, wire, turn2, *, threshold=THRESHOLD):
         flags = dict(a_own=a_own, a_opp=bool(opp_worlds), opp_worlds=opp_worlds, opp_species=sorted(s for s in opp_species if s),
             b1_own=b1_own, b1_opp=b1_opp, b1=priced and max(b1_own, b1_opp) >= threshold)
         if turn2 is not None:
-            own2, opp2, argmax = turn2_masses(turn2, e.moves)
-            flags.update(b2_own=own2, b2_opp=opp2, b2=priced and max(own2, opp2) >= threshold, b_max=priced and argmax > 0, b_max_cells=argmax)
-        else:flags.update(b2_own=None, b2_opp=None, b2=None, b_max=None, b_max_cells=None)
+            own2, opp2, argmax = turn2_masses(turn2, e.moves);b2 = priced and max(own2, opp2) >= threshold
+            fallback = bool(unlabelled) and not b2   # unlabelled cells may hide the move: no turn-2 verdict, the proxy decides
+            flags.update(b2_own=own2, b2_opp=opp2, b2=None if fallback else b2, b_max=priced and argmax > 0, b_max_cells=argmax, b2_unlabelled_fallback=fallback)
+        else:flags.update(b2_own=None, b2_opp=None, b2=None, b_max=None, b_max_cells=None, b2_unlabelled_fallback=False)
         flags['b'] = flags['b2'] if flags['b2'] is not None else flags['b1']
-        flags['b_source'] = 'turn2' if flags['b2'] is not None else 'proxy'
+        flags['b_source'] = 'turn2' if flags['b2'] is not None else 'proxy_unlabelled' if flags['b2_unlabelled_fallback'] else 'proxy'
         into = lambda chosen: (priced and type(chosen) is int and type(greedy) is int and chosen != greedy and move_at(chosen) in M
             and move_at(greedy) not in M)
         flags.update(c=into(search), c_live=type(played) is int and type(greedy) is int and played != greedy and move_at(played) in M
@@ -489,6 +493,7 @@ def audit(rows, wire, turn2=None, *, threshold=THRESHOLD, decision_share=DECISIO
         counts['priced'] += 1;sources[m['own_source']] += 1;greedy_sources[m['greedy_source']] += 1
         if entry is not None:
             join['joined'] += 1
+            if m['unlabelled_cells']:join['unlabelled_rows'] += 1;join['unlabelled_cells'] += m['unlabelled_cells']
             if entry.get('replay_action_index') != (row.get('replay') or {}).get('action_index'):join['replay_action_differs'] += 1
         else:join['proxy'] += 1
         g = (row.get('live') or {}).get('greedy_action_index');root = row.get('root') or {}
@@ -502,7 +507,7 @@ def audit(rows, wire, turn2=None, *, threshold=THRESHOLD, decision_share=DECISIO
             f = m['effects'][e.id];t = tally[e.id]
             for name in ('a_own', 'a_opp', 'b1', 'c', 'c_live', 'search_is', 'greedy_is', 'd_own', 'd_opp'):t[name] += bool(f[name])
             t['a'] += f['a_own'] or f['a_opp'];t['d'] += bool(f['d_own'] or f['d_opp']);t['d_known'] += f['d_own'] is not None;t['b'] += bool(f['b'])
-            t['b_turn2_rows'] += f['b2'] is not None
+            t['b_turn2_rows'] += f['b2'] is not None;t['b2_unlabelled_fallback'] += f['b2_unlabelled_fallback']
             if f['b2'] is not None:
                 t['b2'] += f['b2'];t['b2_own'] += f['b2_own'] >= threshold;t['b2_opp'] += f['b2_opp'] >= threshold;t['b_max'] += bool(f['b_max'])
             t['b1_own'] += f['b1_own'] >= threshold;t['b1_opp'] += f['b1_opp'] >= threshold
@@ -523,6 +528,7 @@ def audit(rows, wire, turn2=None, *, threshold=THRESHOLD, decision_share=DECISIO
         effects[e.id] = dict(moves=list(e.moves), pool_species=list(e.pool_species),
             a=dict(roots=t['a'], own=t['a_own'], opp=t['a_opp'], share=share(t['a'], priced)),
             b=dict(roots=t['b'], share=share(t['b'], priced), turn2_rows=t['b_turn2_rows'], proxy_rows=priced - t['b_turn2_rows'],
+                unlabelled_fallback_rows=t['b2_unlabelled_fallback'],
                 source='turn2' if t['b_turn2_rows'] == priced else 'proxy' if not t['b_turn2_rows'] else 'turn2+proxy'),
             b_turn2=None if not t['b_turn2_rows'] else dict(roots=t['b2'], own=t['b2_own'], opp=t['b2_opp'], rows=t['b_turn2_rows'],
                 share=share(t['b2'], t['b_turn2_rows']), learner_max_rows=t['b_max']),
@@ -553,7 +559,9 @@ def markdown(summary):
     lines += [f"Rows {c.get('rows', 0)}, priced roots (replay COMPLETE) {s['priced_roots']}. Own moves: {s['own_move_sources']}. "
         f"Greedy: {s['greedy_sources']} (live greedy = root-prior argmax on {c.get('greedy_live_equals_prior_argmax', 0)}/{c.get('greedy_live_rows', 0)}). "
         f"Turn-2 records: {j.get('records', 0)}, joined {j.get('joined', 0)}, proxy {j.get('proxy', 0)}, prefix mismatches {j.get('prefix_mismatch', 0)}, "
-        f"not captured {j.get('not_captured', 0)}, replay action differs {j.get('replay_action_differs', 0)}.", '']
+        f"not captured {j.get('not_captured', 0)}, replay action differs {j.get('replay_action_differs', 0)}; joined with unlabelled turn-2 cells "
+        f"{j.get('unlabelled_rows', 0)} ({j.get('unlabelled_cells', 0)} cells: where those records find no hit, (b) falls back to the proxy, "
+        "source proxy_unlabelled).", '']
     if s['owning_wire_errors']:lines += [f"Owning-wire read errors: {len(s['owning_wire_errors'])} battles ({sorted(s['owning_wire_errors'])[:10]}).", '']
     e = s.get('enumeration')
     if e:

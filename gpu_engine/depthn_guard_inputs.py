@@ -54,7 +54,7 @@ class ObservedDepthNPricer(dn.DepthNPricer):
     observing = False
 
     def __init__(self, *arguments, labels=child_labels, **keywords):
-        super().__init__(*arguments, **keywords);self.labels = labels;self.children = [];self.notes = []
+        super().__init__(*arguments, **keywords);self.labels = labels;self.children = [];self.notes = [];self.label_rows = set()
 
     def _program(self, key, build, *args):
         compiled = super()._program(key, build, *args)
@@ -66,6 +66,7 @@ class ObservedDepthNPricer(dn.DepthNPricer):
             try:
                 if not isinstance(out, dict) or 'states' not in out or 'lane_cell' not in out:raise KeyError('P1 output without states / lane_cell')
                 pricer.children.append(dict(lane_cell=out['lane_cell'], labels=pricer.labels(out['states'])))
+                pricer.label_rows.add(int(np.shape(out['lane_cell'])[0]) * LANES)   # the gathered shape (warmup checks it compiled)
             except Exception as error:pricer.notes.append(f'P1 children: {type(error).__name__}: {error}'[:300])
             return out
         return run
@@ -167,7 +168,7 @@ def effect_record(frame, root, worlds, children, request, owner, vocabulary, cho
                     if not any(m in guard.WATCHED for m in lanes):continue   # nothing to weigh at this child
                     if sides is None:
                         sides = dict(own_side=guard.child_side(cond['own'], side_members(child['labels'], row, owner, names)),
-                            opp_side=guard.child_side(cond['opp'], side_members(child['labels'], row, 1 - owner, names)))
+                            opp_side=guard.child_side(cond['opp'], side_members(child['labels'], row, 1 - owner, names), opponent=True))
                     turn2.append(dict(world=world, cell=cell, side=side, lanes=lanes, user=user, logits=[float(x) for x in logits[r, jw, a, b]],
                         legal=[bool(x) for x in legal[r, jw, a, b]], **sides))
     record = guard.evaluate(cond, own_turn1=own_turn1, peer_turn1=peer, turn2=turn2, turn2_available=not (expanded and (child is None or missing)),

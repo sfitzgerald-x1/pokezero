@@ -610,7 +610,8 @@ def guard_facts(record, raw):
     """A root's guard facts for the report: (b) at turn 1 / turn 2, the tiers of its (b) reasons per source, (a), tier-B
     legality, and per operator whether (c) trips on its raw choice."""
     tiers = lambda source: sorted({r['tier'] for r in record.get('reasons') or () if r.get('source') == source and r.get('tier')})
-    return dict(b=bool(record['b']), b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')), tiers_turn1=tiers('turn1'),
+    turn2 = any(r.get('source') == 'turn2' for r in record.get('reasons') or ())   # a priced turn-2 reason, not an unavailable capture
+    return dict(b=bool(record['b']), b_turn1=bool(record.get('b_turn1')), b_turn2=bool(record.get('b_turn2')), turn2=turn2, tiers_turn1=tiers('turn1'),
                 tiers_turn2=tiers('turn2'), unavailable=any(r.get('source') in ('turn2_unavailable', 'guard_error') for r in record.get('reasons') or ()),
                 a=bool(record.get('a')), tier_b_legal=bool(record.get('tier_b_legal')),
                 c={name: effect_guard.trips(record, choice)['c'] for name, choice in raw.items() if choice is not None})
@@ -681,7 +682,10 @@ def guard_report(records, settings, opponent_recharge=0):
         t1 = sum(bool(test1(r)) for r in have);added = sum(bool(test2(r)) and not test1(r) for r in have)
         return dict(turn1=t1, turn1_share=share(t1), turn2_added=added, turn2_added_share=share(added), total=t1 + added, share=share(t1 + added))
     tiers = {t: part(lambda r, t=t: t in g(r)['tiers_turn1'], lambda r, t=t: t in g(r)['tiers_turn2']) for t in ('A', 'C')}
-    union = part(lambda r: g(r)['b_turn1'], lambda r: g(r)['b_turn2'])
+    union = part(lambda r: g(r)['b_turn1'], lambda r: g(r).get('turn2', g(r)['b_turn2']))
+    # (b) without a turn-1 or a priced turn-2 reason: an unavailable turn-2 capture or an error record (fail closed): its own part
+    error = sum(g(r)['b'] and not g(r)['b_turn1'] and not g(r).get('turn2', g(r)['b_turn2']) for r in have)
+    union.update(unavailable_or_error=error, unavailable_or_error_share=share(error), total=union['total'] + error, share=share(union['total'] + error))
     c = {name: dict(c_only=sum(g(r)['c'].get(name, False) and not g(r)['b'] for r in have),
                     union=sum(g(r)['b'] or g(r)['c'].get(name, False) for r in have)) for name in settings}
     for v in c.values():v.update(union_share=share(v['union']))
@@ -1011,13 +1015,14 @@ def guard_markdown(guard, settings):
     out = ['# Effect guard (UNREPRESENTED_EFFECT; every operator plays greedy where a guard trips)', '',
            f"- priced roots with the guard record: {guard['priced_roots']} (without one: {guard['without_record']}); refused "
            f"OPPONENT_RECHARGE_UNREPRESENTED (no priced worlds, greedy plays): {guard['opponent_recharge_refused']}",
-           f"- (b) guarded share: {_pct(guard['guarded_share'])} (turn 1 {_pct(u['turn1_share'])}, turn 2 added {_pct(u['turn2_added_share'])}); "
-           f"turn-2 capture unavailable or guard error: {guard['unavailable']}"
+           f"- (b) guarded share: {_pct(guard['guarded_share'])} (turn 1 {_pct(u['turn1_share'])}, turn 2 added {_pct(u['turn2_added_share'])}, "
+           f"turn-2 capture unavailable or guard error {_pct(u['unavailable_or_error_share'])})"
            + (f"; **above {GUARD_SHARE_FLAG:.0%}**" if guard['above_20pct'] else ''),
            f"- largest (b) or (c) share over the operators: {_pct(guard['max_union_with_c_share'])}", '',
            '| tier | turn 1 | turn 2 added | total share |', '|---|---|---|---|']
     out += [f"| {k} | {v['turn1']} ({_pct(v['turn1_share'])}) | {v['turn2_added']} ({_pct(v['turn2_added_share'])}) | {_pct(v['share'])} |" for k, v in t.items()]
-    out += [f"| union | {u['turn1']} ({_pct(u['turn1_share'])}) | {u['turn2_added']} ({_pct(u['turn2_added_share'])}) | {_pct(u['share'])} |", '',
+    out += [f"| unavailable or error | - | - | {u['unavailable_or_error']} ({_pct(u['unavailable_or_error_share'])}) |",
+            f"| union | {u['turn1']} ({_pct(u['turn1_share'])}) | {u['turn2_added']} ({_pct(u['turn2_added_share'])}) | {_pct(u['share'])} |", '',
             '| setting | (c) only roots | (b) or (c) share |', '|---|---|---|']
     out += [f"| {name} | {guard['c'][name]['c_only']} | {_pct(guard['c'][name]['union_share'])} |" for name in settings if name in guard['c']]
     for title, block in ((f"Primary: RR on unguarded roots ({guard['primary']['roots']})", guard['primary']['table']),
