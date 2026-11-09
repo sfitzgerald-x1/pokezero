@@ -163,6 +163,12 @@ def digests(description, spec=None):
     return {name: (digest64(entries), digest_hex(entries)) for name, entries in structs(description, spec).items()}
 
 
+def digest_attr(d64):
+    """The `layout_digest` FFI attribute for a kDigest value: the same 64 bits as a numpy int64 (XLA FFI attributes have no
+    unsigned 64-bit type); the handler compares static_cast<uint64_t>(attribute) with kDigest."""
+    return np.int64(d64 - 2**64 if d64 >= 2**63 else d64)
+
+
 # ---------------------------------------------------------------------------
 # Table packing (host side).
 
@@ -611,14 +617,15 @@ __global__ void point_kernel(T* x, const int32_t* idx, const U* v, T* got, uint8
 
 // Every probe handler: x [B, D...] T, idx [B, R] int32, v [B] U -> out [B, D...] T (x after set), got [B] T, kept [B] u8,
 // dbg [2] u32 (clamps, drops), err [1] u32 (kStaleLayout when layout_digest differs from TrackerView::kDigest, else 0).
+// layout_digest arrives as int64 (gpu_engine.v2e_layout.digest_attr): XLA FFI attributes have no unsigned 64-bit type.
 template <class T, class U, int... D>
-static ffi::Error PointImpl(cudaStream_t stream, uint64_t layout_digest, ffi::AnyBuffer x, ffi::AnyBuffer idx, ffi::AnyBuffer v,
+static ffi::Error PointImpl(cudaStream_t stream, int64_t layout_digest, ffi::AnyBuffer x, ffi::AnyBuffer idx, ffi::AnyBuffer v,
                             ffi::Result<ffi::AnyBuffer> out, ffi::Result<ffi::AnyBuffer> got, ffi::Result<ffi::AnyBuffer> kept,
                             ffi::Result<ffi::Buffer<ffi::U32>> dbg, ffi::Result<ffi::Buffer<ffi::U32>> err) {
   constexpr int64_t per_lane = LeafBase<T, D...>::kPerLane;
   const int64_t lanes = static_cast<int64_t>(x.element_count()) / per_lane;
   cudaMemsetAsync(dbg->typed_data(), 0, 2 * sizeof(uint32_t), stream);
-  if (layout_digest != TrackerView::kDigest) {
+  if (static_cast<uint64_t>(layout_digest) != TrackerView::kDigest) {   // the attribute is the digest as int64 (digest_attr)
     const uint32_t stale = kStaleLayout;
     cudaMemcpyAsync(err->typed_data(), &stale, sizeof(uint32_t), cudaMemcpyHostToDevice, stream);
     return ffi::Error::Success();   // refused: the buffers are not touched
@@ -636,7 +643,7 @@ static ffi::Error PointImpl(cudaStream_t stream, uint64_t layout_digest, ffi::An
 
 #define V2E_PROBE_HANDLER(NAME, ...)                                                                                   \
   XLA_FFI_DEFINE_HANDLER_SYMBOL(NAME, (PointImpl<__VA_ARGS__>),                                                        \
-                                ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>().Attr<uint64_t>("layout_digest") \
+                                ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>().Attr<int64_t>("layout_digest") \
                                     .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()                   \
                                     .Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>()                   \
                                     .Ret<ffi::Buffer<ffi::U32>>().Ret<ffi::Buffer<ffi::U32>>(),                          \
@@ -868,7 +875,7 @@ def cmd_probe(args):
         name = f'V2eLayoutProbe_{case_name(t, u, dims)}';lanes = x.shape[0]
         shapes = (jax.ShapeDtypeStruct(x.shape, x.dtype), jax.ShapeDtypeStruct((lanes,), x.dtype), jax.ShapeDtypeStruct((lanes,), np.uint8),
             jax.ShapeDtypeStruct((2,), np.uint32), jax.ShapeDtypeStruct((1,), np.uint32))
-        out = jax.ffi.ffi_call(f'v2e_layout_probe_{digest}_{name}', shapes)(j.asarray(x), j.asarray(idx), j.asarray(v), layout_digest=np.uint64(layout_digest))
+        out = jax.ffi.ffi_call(f'v2e_layout_probe_{digest}_{name}', shapes)(j.asarray(x), j.asarray(idx), j.asarray(v), layout_digest=digest_attr(layout_digest))
         return [np.asarray(o) for o in out]
     all_equal = True
     for n, (t, u, dims) in enumerate(cases):
