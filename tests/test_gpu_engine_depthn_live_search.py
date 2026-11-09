@@ -361,8 +361,12 @@ class LiveSearchTests(unittest.TestCase):
         guard=rows[0]['effect_guard'];encode(rows[0])
         self.assertEqual((rows[0]['status'],guard['tripped'],guard['b_turn1'],guard['b_turn2'],guard['choice']),('COMPLETE',True,True,True,rows[0]['action_index']))
         self.assertEqual({(x['move'],x['side'])for x in guard['reasons']},{('surf','opp')});self.assertEqual(guard['turn2_cells']['p1_captures'],1)
+        # the live rule (reach): M_opp over the frame's own priors trips the turn-2 arm; the any-cell arm is kept for analysis
+        self.assertEqual((guard['rule'],guard['arms'],guard['m_own'],guard['any_cell_b'],guard['any_cell_tripped']),('reach',['turn1','reach'],0.,True,True))
+        self.assertGreaterEqual(guard['m_opp'],G.THRESHOLD);self.assertEqual(guard['reach']['m_opp'],guard['m_opp'])
         self.assertEqual((rows[1]['status'],rows[1]['effect_guard']),('REFUSED',None))
         self.assertEqual((clear[0]['status'],clear[0]['effect_guard']['tripped'],clear[0]['effect_guard']['reasons']),('COMPLETE',False,[]))
+        self.assertEqual((clear[0]['effect_guard']['m_own'],clear[0]['effect_guard']['m_opp'],clear[0]['effect_guard']['arms']),(0.,0.,[]))
 
     def test_a_root_whose_opponent_must_recharge_is_constructor_refused(self):
         """The lead's decision: the peer's -mustrecharge on the owner's lines refuses the root in prepare_roots (cause

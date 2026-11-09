@@ -16,19 +16,26 @@ the moves whose missing effect carries over into the price (the lead's decision)
   the request; the opponent's: its public statuses).
 TIER_B (irontail, signalbeam, steelwing, meteormash: chance secondaries) is never guarded, only reported (tier_b_legal).
 
-The guard trips on (b) or (c):
-- (b) in any constructed world, either side's prior puts >= THRESHOLD of its mass on a lane whose move is guarded for that
-  side: at turn 1 (our root prior over our legal lanes; the peer's prior per world) or at turn 2 (the pricer's own turn-2
-  priors, per expanded cell, each side's lanes read from that child's state);
+The guard trips on (b) or (c) (RULE 'reach', the lead's live rule from screen-r2):
+- (b) turn 1: in any constructed world, either side's turn-1 prior puts >= THRESHOLD of its mass on a lane whose move is
+  guarded for that side (our root prior over our legal lanes; the peer's prior per world);
+- (b) turn 2, the reach: M_own >= THRESHOLD or M_opp >= THRESHOLD, M_s = sum_w p_w sum_(a,b) pi_own(a) pi_peer,w(b)
+  q_(w,ab),s, q the side's turn-2 prior mass at child cell a*9 + b of world w on moves guarded for it at that child (tier A,
+  tier C under that child's own conditions: each recorded entry's `guarded`), pi_own our root prior, pi_peer,w world w's
+  turn-1 reply prior (a waiting world: reply 0 at mass 1), p_w uniform over the priced worlds (`reach`, exact here);
 - (c) our chosen action is a move lane whose move is guarded for us (for the RR, per operator on its own choice: trips).
-`evaluate` returns the record: tripped (for the search's own choice), b (b_turn1, b_turn2), c, reasons (per move x side x
+The earlier any-cell turn-2 arm (either side's turn-2 prior >= THRESHOLD on a guarded lane at ANY expanded cell) is kept in
+every record for analysis only: any_cell_turn2, any_cell_b and any_cell_tripped.
+`evaluate` returns the record: tripped (for the search's own choice), b (b_turn1, b_turn2: the reach arm), c, m_own and m_opp
+(the reach M; reach: their arm's own summary), arms (which tripped: turn1, reach, unavailable, choice; error for an error
+record), the any-cell fields above, reasons (per move x side x
 source: turn1 / turn2 / choice, with the max mass, the tier and the effect class), the (a) flag (a guarded move legal for
 either side at turn 1 in any world: reporting only), tier_b_legal, our guarded lanes, the conditions per side and the masses
 of every GUARDED or TIER_B move (turn 1 per side and world, turn 2 per side, world and cell a * 9 + b with our lane a and the
 reply b, each turn-2 entry also carrying `guarded` (this guard's own decision at that child), the move's `tier` and its `user`
-species). A turn-2 capture that is missing while some turn-1 cell expanded fails closed: (b) trips with source
-turn2_unavailable. `reach` (report only) weighs those turn-2 masses by the root and reply priors (the lead's narrower scope):
-exact from `guarded`, bounds for an older record without it.
+species). A turn-2 capture that is missing while some turn-1 cell expanded fails closed: (b) trips (the reach is
+unavailable; the any-cell arm's source turn2_unavailable). `reach` weighs those turn-2 masses by the root and reply priors:
+exact from `guarded` (the live arm), bounds for an older record without it (the RR's report on old rows).
 
 Lane labels follow the encoder (engine_device_observation.encode): move lanes 0-3 are the active's four moves in slot order,
 except lane 0 alone (the charge move) while one charges and lane 0 alone (Struggle) when no move is usable; switch lanes
@@ -40,6 +47,7 @@ import math
 SCHEMA = 'pokezero.depthn-effect-guard.v1'
 THRESHOLD = .05
 CAUSE = 'UNREPRESENTED_EFFECT'
+RULE = 'reach'   # the live turn-2 arm: the reach M_s (screen-r2); records before it used the any-cell arm (any_cell_* now)
 
 # move id -> (tier, effect class, condition) ; tier A conditions are None.
 GUARDED = {
@@ -298,9 +306,20 @@ def evaluate(cond, *, own_turn1, peer_turn1, turn2, turn2_available=True, choice
     if c_hit:
         tier, effect = own_guarded[choice];note(own_turn1['lanes'][choice], 'own', 'choice', 1., tier=tier, effect=effect)
     reasons = sorted(({**r, 'worlds': sorted(r['worlds'])} for r in found.values()), key=lambda r: (str(r['source']), str(r['side']), str(r['move'])))
-    b_turn1 = any(r['source'] == 'turn1' for r in reasons);b_turn2 = any(r['source'] in ('turn2', 'turn2_unavailable') for r in reasons)
-    b = b_turn1 or b_turn2
-    return dict(schema=SCHEMA, threshold=threshold, tripped=b or c_hit, b=b, b_turn1=b_turn1, b_turn2=b_turn2, c=c_hit, choice=choice,
+    b_turn1 = any(r['source'] == 'turn1' for r in reasons)
+    any_cell_turn2 = any(r['source'] in ('turn2', 'turn2_unavailable') for r in reasons)   # the pre-reach rule, kept for analysis
+    # The live turn-2 arm: the reach M_s over the recorded turn-2 masses (their per-child `guarded`), our root prior and each
+    # world's reply prior (a waiting world: reply 0), p_w uniform over the worlds peer_turn1 lists (the priced worlds).
+    by_world = {w['world']: dict(requested=w.get('requested', True), logits=w['logits'], kept=w['legal']) for w in peer_turn1}
+    worlds = [by_world.get(i) for i in range(max(by_world) + 1)] if by_world else []
+    r = reach(dict(masses=recorded, turn2_available=turn2_available, conditions=cond), own_turn1['logits'], own_turn1['legal'], worlds, threshold=threshold)
+    b_turn2 = bool(r['tripped']);b = b_turn1 or b_turn2
+    arms = [name for name, hit in (('turn1', b_turn1), ('reach', b_turn2 and not r['unavailable']), ('unavailable', r['unavailable']),
+        ('choice', c_hit)) if hit]
+    return dict(schema=SCHEMA, rule=RULE, threshold=threshold, tripped=b or c_hit, b=b, b_turn1=b_turn1, b_turn2=b_turn2, c=c_hit, choice=choice,
+        m_own=r['m_own'], m_opp=r['m_opp'], arms=arms,
+        reach=dict(m_own=r['m_own'], m_opp=r['m_opp'], tripped=r['tripped'], unavailable=r['unavailable'], tiers=None if r['tiers'] is None else r['tiers']['lower']),
+        any_cell_turn2=any_cell_turn2, any_cell_b=b_turn1 or any_cell_turn2, any_cell_tripped=b_turn1 or any_cell_turn2 or c_hit,
         reasons=reasons, tiers=sorted({r['tier'] for r in reasons if r['tier']}), a=bool(a_moves), a_moves=sorted(a_moves),
         tier_b_legal=bool(b_moves), tier_b_moves=sorted(b_moves), own_lanes=list(own_turn1['lanes']),
         own_guarded_lanes=[None if g is None else list(g) for g in own_guarded], conditions=cond, masses=recorded,
@@ -332,6 +351,11 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
         tripped=True, tripped_lower=True, tripped_upper=True, unavailable=True)
     entries = ((record or {}).get('masses') or {}).get('turn2')
     if entries is None or not record.get('turn2_available', True):return out
+    if not entries:   # no turn-2 mass on any watched move: M is 0 whatever the worlds
+        zero = {side: {'A': 0., 'C': 0.} for side in ('own', 'opp')}
+        out.update(exact=True, m_own=0., m_opp=0., m_own_lower=0., m_own_upper=0., m_opp_lower=0., m_opp_upper=0.,
+            tiers=dict(lower=zero, upper={k: dict(v) for k, v in zero.items()}), tripped=False, tripped_lower=False, tripped_upper=False, unavailable=False)
+        return out
     priced = [w for w, x in enumerate(worlds) if x is not None and x.get('priced', True)]
     if not priced:return out
     own = masses(root_logits, root_legal);p = 1 / len(priced)
@@ -359,7 +383,9 @@ def reach(record, root_logits, root_legal, worlds, *, threshold=THRESHOLD):
 
 def error_record(error):
     """The fail-closed record of a root whose guard inputs could not be read: tripped, with the error."""
-    return dict(schema=SCHEMA, threshold=THRESHOLD, tripped=True, b=True, b_turn1=False, b_turn2=False, c=False, choice=None,
+    return dict(schema=SCHEMA, rule=RULE, threshold=THRESHOLD, tripped=True, b=True, b_turn1=False, b_turn2=False, c=False, choice=None,
+        m_own=None, m_opp=None, arms=['error'], reach=dict(m_own=None, m_opp=None, tripped=True, unavailable=True, tiers=None),
+        any_cell_turn2=False, any_cell_b=True, any_cell_tripped=True,
         reasons=[dict(move=None, side=None, source='guard_error', tier=None, effect_class=None, max_mass=None, worlds=[])], tiers=[], a=False,
         a_moves=[], tier_b_legal=False, tier_b_moves=[], own_lanes=None, own_guarded_lanes=None, conditions=None, masses=None,
         turn2_available=False, error=str(error)[:500])
