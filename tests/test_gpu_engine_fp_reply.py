@@ -9,6 +9,7 @@ import numpy as np
 
 from gpu_engine import fp_reply_data as d
 from gpu_engine import fp_reply_train as t
+from gpu_engine import fp_reply_probe as probe
 
 FP_SEAT, OUR_SEAT = 'p2', 'p1'
 
@@ -246,6 +247,33 @@ class CurveAndBootstrapTests(unittest.TestCase):
         out = t.game_bootstrap(dict(a=p, b=p, c=q), arrays, np.arange(n), (('a', 'b'), ('c', 'a')), draws=400)
         self.assertEqual(out['a - b']['interval_90'], [0., 0.])
         low, high = out['c - a']['interval_90'];self.assertLess(low, out['c - a']['mean']);self.assertGreater(high, out['c - a']['mean'])
+
+
+class ProbeHelperTests(unittest.TestCase):
+    def test_extras_helpers(self):
+        request = {'side': {'pokemon': [{'active': False, 'condition': '10/20'}, {'active': True, 'condition': '30/120 par'}]},
+                   'active': [{'moves': [{'id': 'tackle'}, {'id': 'toxic'}]}]}
+        self.assertEqual(d.hp_fraction(request), .25);self.assertEqual(d.hp_fraction({'side': {'pokemon': [{'active': True, 'condition': '0 fnt'}]}}), 0.)
+        dex = SimpleNamespace(move_info=lambda m: SimpleNamespace(category='Status' if m == 'toxic' else 'Physical'))
+        self.assertEqual(d.action_classes(request, legal(0, 1, 5), dex), [0, 1, -1, -1, -1, 2, -1, -1, -1])
+
+    def test_sequences_features_and_masked_softmax(self):
+        arrays = dict(label=np.array([0, 4, 1]), label_class=np.array([0, 2, 1]), candidate_class=np.array([[0, 1, -1, -1, 2, -1, -1, -1, -1]] * 3),
+                      own_hp=np.array([1., .5, np.nan]), opp_hp=np.array([.2, .3, .4]), forced=np.array([False, True, False]))
+        x = probe.step_features(arrays)
+        np.testing.assert_allclose(x[1], [0, 0, 1, 1, 1, 1, .5, .3, 1], rtol=1e-6);self.assertEqual(x[2, 6], 0.)
+        runs = probe.game_sequences(np.array([5, 5, 7, 7, 7]), np.array([4, 0, 2, 1]))
+        self.assertEqual([r.tolist() for r in runs], [[0, 1], [2, 4]])
+        p = probe.masked_softmax(np.array([[0., 1., 5.]]), np.array([[True, True, False]]))
+        self.assertAlmostEqual(p[0, 2], 0.);self.assertAlmostEqual(p[0, 1], np.e / (1 + np.e))
+
+    def test_cluster_bootstrap_difference_of_subset_means(self):
+        values = np.array([1., 3., 2., 4., 0., 0., 5., 1., 2., 2.]);clusters = np.repeat(np.arange(5), 2)
+        late = np.tile([True, False], 5);early = ~late
+        out = probe.cluster_bootstrap(values, clusters, [late, early], lambda a, b: a - b, draws=300)
+        self.assertAlmostEqual(out['mean'], values[late].mean() - values[early].mean())
+        self.assertLessEqual(out['interval_90'][0], out['mean']);self.assertGreaterEqual(out['interval_90'][1], out['mean'])
+        self.assertIsNone(probe.cluster_bootstrap(values[:4], clusters[:4], [late[:4]], lambda a: a)['interval_90'])
 
 
 @unittest.skipUnless(__import__('importlib').util.find_spec('torch'), 'torch not installed')
