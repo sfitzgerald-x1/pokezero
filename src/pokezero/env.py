@@ -10,6 +10,11 @@ from .observation import PokeZeroObservationV0
 PlayerId = str
 BattleFormat = str
 DEFAULT_BATTLE_START_OVERRIDE_FORMAT: BattleFormat = "gen3customgame"
+# Custom Game plus Showdown's appended Sleep Clause Mod rule (the GPU-engine comparator).
+SLEEP_CLAUSE_BATTLE_START_OVERRIDE_FORMAT: BattleFormat = "gen3customgame@@@sleepclausemod"
+BATTLE_START_OVERRIDE_FORMATS: frozenset[BattleFormat] = frozenset(
+    {DEFAULT_BATTLE_START_OVERRIDE_FORMAT, SLEEP_CLAUSE_BATTLE_START_OVERRIDE_FORMAT}
+)
 
 
 @dataclass(frozen=True)
@@ -22,10 +27,10 @@ class BattleStartOverride:
 
     def __post_init__(self) -> None:
         format_id = str(self.format_id)
-        if format_id != DEFAULT_BATTLE_START_OVERRIDE_FORMAT:
+        if format_id not in BATTLE_START_OVERRIDE_FORMATS:
             raise ValueError(
-                "BattleStartOverride currently requires "
-                f"{DEFAULT_BATTLE_START_OVERRIDE_FORMAT!r} so packed teams are honored."
+                "BattleStartOverride currently requires one of "
+                f"{sorted(BATTLE_START_OVERRIDE_FORMATS)!r} so packed teams are honored."
             )
         normalized: dict[PlayerId, str] = {}
         for player, team in self.player_teams.items():
