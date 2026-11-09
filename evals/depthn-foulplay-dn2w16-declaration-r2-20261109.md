@@ -1,6 +1,6 @@
 # screen-r2: DN2W16 against our RAW arm on the fixed search tree (declaration notes)
 
-**Pre-registered panel declaration:** `depthn-foulplay-dn2w16-declaration-r2-20261109.json`, sha256 `f065fee350d9c9a27eb0c29595bec2292ca669ec47ff1e9defad71b97e9141a6`. The panel validates it with the exact same keys and rules as screen-r1's (`depthn-foulplay-dn2w16-declaration-20261108.json`). The panel's schema is closed, so it can't carry the extra conditions below; this note records them.
+**Pre-registered panel declaration:** `depthn-foulplay-dn2w16-declaration-r2-20261109.json`, sha256 `45cbb471c07ccf9059fa15b519a0e6f9f2b3424a2c4338a4dfdd39d951b7ad41`. The panel validates it with the exact same keys and rules as screen-r1's (`depthn-foulplay-dn2w16-declaration-20261108.json`). The panel's schema is closed, so it can't carry the extra conditions below; this note records them.
 
 ## What screen-r2 asks
 Was screen-r1's result caused by the broken search inputs, or does search lose to Foul Play anyway? screen-r2 runs the same operator (DN2W16, ARGMAX_MEAN_COMPLETED_Q, 3 s cap) on the corrected tree, against Foul Play, on screen-r1's seeds.
@@ -8,7 +8,8 @@ Was screen-r1's result caused by the broken search inputs, or does search lose t
 ## The arms and the tree
 - **Arms:** RAW and DN2W16, interleaved as before (`ALTERNATE_ARMS_BY_PAIR_ORDINAL_LEAD_AT_MOST_CONCURRENCY`). 500 paired cells from the ladder declaration's deterministic cell order, the same seeds as screen-r1.
 - **RAW is re-run, not reused.** The live actor module changed with the guards, so the harness hashes differ. A RAW baseline from the same time is also cleaner.
-- **Servers** run `server_tree_commit` = `c7808ad90f16d1338112e364487508f2042f198b`. Dispatch runs the declaration commit `5ca04a4b6eb0ba62f619fa5944d4737b52b5ad96`, which differs from the server tree by the declaration JSON alone, as the panel's `server_tree_check` requires. This follows screen-r1, where the servers ran 77235041 and dispatch ran its declaration commit 1aaa75f9. This note and the amendment adoption record are pre-registered in later commits, pushed before dispatch; neither is part of the dispatch tree.
+- **Servers** run `server_tree_commit` = `c7808ad90f16d1338112e364487508f2042f198b`. Dispatch runs the declaration commit `712cf20b683d69c98a290040bb98120ed6372b1e`, which differs from the server tree by the declaration JSON alone, as the panel's `server_tree_check` requires. This follows screen-r1, where the servers ran 77235041 and dispatch ran its declaration commit 1aaa75f9. This note and the amendment adoption record are pre-registered in later commits, pushed before dispatch; neither is part of the dispatch tree.
+- **The first dispatch commit was superseded before any cell ran.** `5ca04a4b` (declaration sha256 `f065fee3…`) declared the actor's warm p95 from the pre-flight's DN2W16 arm; `panel.init`'s `check_preflight` requires the RAW arm's, so init refused it. No cell ran and `/out/screen-r2` was never created. `712cf20b` changes only `actor.warm_p95_seconds` (to the RAW arm's encode 0.04189746100018965 s and greedy 0.3835921959980624 s).
 - **The tree contains:**
   - the root-view and constructor-carry fixes (#1865);
   - the `UNREPRESENTED_EFFECT` guard (#1867);
@@ -41,7 +42,7 @@ Was screen-r1's result caused by the broken search inputs, or does search lose t
 
    **Equivalence:** on screen-r1's 160 RR battles, the live rule agrees with the report-only reach bounds on every root that isn't ambiguous: lower trips 641/641, upper passes 4,816/4,816, and M lies within its bounds on 6,440/6,440. It trips on 17.2% of priced roots.
 4. **Guard latency:** at the live shape (bucket 1, W16), 306 decisions on the server tree, the guard adds p50 30.5 ms, p95 59.7 ms and p99 71.9 ms. The bar is p95 ≤ 100 ms. The 3 s cap holds with everything on.
-5. **Decision rules are screen-r1's, as amended.** The official readout is the panel's. The verdict is `scripts/depthn_screen_amended_verdict.py --run-binding` applied to it, with screen-r1's four committed amendments, which the CLI pins by sha256. They are adopted unchanged for screen-r2 by `evals/depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json` (sha256 `fa582d862964bbbf6a6ffd4d5c97c970fdd424af2986d792edeaef8fd4fc21b8`, also pinned by the CLI), which binds them to this declaration's sha256, the run directory `/out/screen-r2` and the dispatch tree `5ca04a4b`, and which is committed before any screen-r2 cell exists:
+5. **Decision rules are screen-r1's, as amended.** The official readout is the panel's. The verdict is `scripts/depthn_screen_amended_verdict.py --run-binding` applied to it, with screen-r1's four committed amendments, which the CLI pins by sha256. They are adopted unchanged for screen-r2 by `evals/depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json` (sha256 `5e53654231abc940461decde4cdfa6b85ce89f22e20ff0ea7f9e626ea1855a75`, also pinned by the CLI), which binds them to this declaration's sha256, the run directory `/out/screen-r2` and the dispatch tree `712cf20b`, and which is committed before any screen-r2 cell exists:
 
    | amendment | sha256 |
    |---|---|
@@ -52,7 +53,7 @@ Was screen-r1's result caused by the broken search inputs, or does search lose t
 
    The screen rule, bar, breakage, latency rule, confidence 0.9 and arm fairness are unchanged.
 
-   The official readout is computed from a clean checkout of the dispatch commit (`5ca04a4b`), because the panel holds a readout's
+   The official readout is computed from a clean checkout of the dispatch commit (`712cf20b`), because the panel holds a readout's
    tree to the run's tree. The verdict then runs from a checkout of this branch, from the repository root, with the root on the path:
    ```
    PYTHONPATH=src:. python scripts/depthn_screen_amended_verdict.py \
@@ -61,7 +62,7 @@ Was screen-r1's result caused by the broken search inputs, or does search lose t
      --addendum evals/depthn-foulplay-dn2w16-amendment-harm-mirror-20261108.json --addendum-sha256 dbce9a54223969a213a3e584fd2e01bbe259ebad7530678fbba7cd38ecd9539f \
      --both evals/depthn-foulplay-dn2w16-amendment-both-bounds-20261108.json --both-sha256 98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13 \
      --final evals/depthn-foulplay-dn2w16-amendment-final-fairness-20261108.json --final-sha256 b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e \
-     --run-binding evals/depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json fa582d862964bbbf6a6ffd4d5c97c970fdd424af2986d792edeaef8fd4fc21b8 \
+     --run-binding evals/depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json 5e53654231abc940461decde4cdfa6b85ce89f22e20ff0ea7f9e626ea1855a75 \
      --run-directory /out/screen-r2 --output /out/screen-r2/amended-verdict.json
    ```
    **No extension.** screen-r2 is a 500-cell screen; no extension to 2,000 cells is declared. screen-r1's extension amendment (`8a708ebb…`) is specific to screen-r1 and is not adopted. A `CONTINUE_TO_2000` verdict goes to the lead for a separate, pre-registered decision.
@@ -75,7 +76,7 @@ Was screen-r1's result caused by the broken search inputs, or does search lose t
 |---|---|---|
 | Calibration | `5f3ef007c59aefa7…` | MEASURED; ratios 2×1000 ms 1.130 and 4×500 ms 0.902 (screen-r1: 1.058 and 0.924). Foul Play's iteration rates match screen-r1's within a few percent. |
 | Move walls | `46750c78…` | from the calibration games |
-| Pre-flight on the server tree | `389b71b5…` | 24 games, outcome-blind. Search wall p50 1.87 s, p95 2.52 s; first decisions within the warm p99. Searched share 75.0% of non-timeout decisions; timeouts 0.44%. Fallbacks: guard 70, constructor 99. The warm greedy p95 is 0.560 s, higher than screen-r1's 0.269 s; it is descriptive and feeds no rule. |
+| Pre-flight on the server tree | `389b71b5…` | 24 games, outcome-blind. Search wall p50 1.87 s, p95 2.52 s; first decisions within the warm p99. Searched share 75.0% of non-timeout decisions; timeouts 0.44%. Fallbacks: guard 70, constructor 99. The declared warm p95 is the pre-flight's RAW arm's (as `check_preflight` requires): encode 0.042 s, greedy 0.384 s, against screen-r1's greedy 0.269 s; it is descriptive and feeds no rule. |
 
 ## Known caveat (one-sided)
 Showdown sends Gen 3 Pressure's start line only to the holder's own side (`data/mods/gen3/abilities.ts` `addSplit`). Our wire carries it for our own Pressure Pokémon, and the constructor's peer view inherits it as a revealed ability. Live Foul Play never sees it.

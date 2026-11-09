@@ -46,7 +46,7 @@ PINNED = dict(amendment='c4ff30a25a573f90fdd02957b40fb8307d8b87b56dfbfe60d85ea66
               both='98e6120f30565c0b40d423504aa0d07a2929b2207551a5c901adb7579d361e13',
               final='b2fccc253136b2bce3125cc773973c7186a0dff6a5ff8e6825a5618d6268050e')
 ADOPTION_SCHEMA = 'depthn-foulplay-panel.amendment-adoption.v1'
-RUN_BINDINGS = dict(screen_r2='fa582d862964bbbf6a6ffd4d5c97c970fdd424af2986d792edeaef8fd4fc21b8')   # committed adoption records (the CLI refuses others)
+RUN_BINDINGS = dict(screen_r2='5e53654231abc940461decde4cdfa6b85ce89f22e20ff0ea7f9e626ea1855a75')   # committed adoption records (the CLI refuses others)
 CAUSES = (('round cap', 'round_cap'), ('foul-play challenge', 'foulplay_challenge_timeout'), ('foul-play choice', 'foulplay_choice_timeout'))
 
 

@@ -26,11 +26,11 @@
   }
  ],
  "application": "scripts/depthn_screen_amended_verdict.py --run-binding <this file> <its sha256> applies the four adopted rule files (each pinned by sha256 in the script, their rule text unchanged) to screen-r2's official readout and result files. This record supplies the run they bind to: the run directory, the declaration sha256 every result file and the readout must carry, and the readout's tree commit, in place of the four files' screen-r1 run fields (their own run fields and declaration sha256 stay as committed and still chain the four files to one another).",
- "computed_before": "Nothing: this record is committed before any screen-r2 cell exists. No cell, latency, fairness, paired, score or outcome statistic of screen-r2 has been computed; its dispatch does not depend on this record.",
+ "computed_before": "Nothing: this record is committed before any screen-r2 cell exists (the first dispatch attempt, on 5ca04a4b, was refused at panel.init before any cell or run directory existed). No cell, latency, fairness, paired, score or outcome statistic of screen-r2 has been computed; its dispatch does not depend on this record.",
  "decided_by": "the lead (search, V2, CUDA): screen-r2 uses screen-r1's decision rules as amended, unchanged",
  "declaration": "evals/depthn-foulplay-dn2w16-declaration-r2-20261109.json",
- "declaration_sha256": "f065fee350d9c9a27eb0c29595bec2292ca669ec47ff1e9defad71b97e9141a6",
- "made_at_utc": "2026-11-09T17:32:44Z",
+ "declaration_sha256": "45cbb471c07ccf9059fa15b519a0e6f9f2b3424a2c4338a4dfdd39d951b7ad41",
+ "made_at_utc": "2026-11-09T17:48:00Z",
  "not_adopted": [
   {
    "path": "evals/depthn-foulplay-dn2w16-amendment-extension-20261108.json",
@@ -39,10 +39,10 @@
   }
  ],
  "run": {
-  "dispatch_note": "the dispatch tree is the declaration commit (the server tree c7808ad9 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires and as screen-r1 did); this record and the declaration note are pre-registered in later commits pushed before dispatch",
+  "dispatch_note": "the dispatch tree is the declaration commit (the server tree c7808ad9 plus the declaration JSON alone, as depthn_live_panel.server_tree_check requires and as screen-r1 did); this record and the declaration note are pre-registered in later commits pushed before dispatch. The first dispatch commit, 5ca04a4b (declaration sha256 f065fee3...), was superseded before any cell ran: panel.init refused it (check_preflight requires the actor's warm p95 from the pre-flight's RAW arm), so /out/screen-r2 was never created",
   "run_directory": "/out/screen-r2",
   "server_tree_commit": "c7808ad90f16d1338112e364487508f2042f198b",
-  "tree_commit": "5ca04a4b6eb0ba62f619fa5944d4737b52b5ad96"
+  "tree_commit": "712cf20b683d69c98a290040bb98120ed6372b1e"
  },
  "schema": "depthn-foulplay-panel.amendment-adoption.v1"
 }

@@ -219,9 +219,9 @@ class AmendedVerdictTests(unittest.TestCase):
 
 ADOPTION = EVALS/'depthn-foulplay-dn2w16-amendment-screen-r2-adoption-20261109.json'
 R2_DECLARATION = EVALS/'depthn-foulplay-dn2w16-declaration-r2-20261109.json'
-R2_DECLARATION_SHA256 = 'f065fee350d9c9a27eb0c29595bec2292ca669ec47ff1e9defad71b97e9141a6'
-R2_TREE = '5ca04a4b6eb0ba62f619fa5944d4737b52b5ad96'
-# screen-r1's verdicts through the CLI on the seeded fixtures below, written by the script before --run-binding existed (5ca04a4b)
+R2_DECLARATION_SHA256 = '45cbb471c07ccf9059fa15b519a0e6f9f2b3424a2c4338a4dfdd39d951b7ad41'
+R2_TREE = '712cf20b683d69c98a290040bb98120ed6372b1e'
+# screen-r1's verdicts through the CLI on the seeded fixtures below, written by the script before --run-binding existed (5ca04a4b's)
 R1_GOLDEN = ('cbd3d50968409d4377c655b728fa21fc7066864b67f0520df13c491c708ef7ff', 'ec66ae8fefde34105d34b5ae60abd36d67a5e141fcab307cca7a1c89bd4df9fd',
              '2cfa4290e607ecae972d6d4f421c91837c7d6aefa2e19dfb6deb3863198d723f', '79efc9bf948b415393d879b7fc6f0e1ceb367afdbd7e69e4d0d2322549c7fc8e')
 SCENARIOS = ((4, 500, .5, .5, None, 'CONTINUE_TO_2000', (), False), (1, 500, .5, .5, 'unknown', 'STOP_BREAKAGE', ('unknown_cells',), False),
