@@ -270,8 +270,10 @@ def score(model, observations, labels, torch, redaction=None):
     return logq
 
 
-def replay_game(env, model, game, dex, torch, tables, redaction=None):
-    """One game: (mon rows, decision rows, calibration rows, check counts)."""
+def replay_game(env, model, game, dex, torch, tables, redaction=None, on_ours=None):
+    """One game: (mon rows, decision rows, calibration rows, check counts). on_ours(decision_index, round, evidence, evidence_n,
+    misaligned), when given, is called at each of our seat's decisions before it is stepped: the evidence then holds every
+    Foul Play choice made public in earlier rounds (fp_reply_evidence's export)."""
     fp, ours_seat = game['fp'], game['ours'];env.reset(seed=game['seed']);checks = collections.Counter();misaligned = set()
     journal = dict(game['journal']);ours = 0;round_ = 0
     evidence = collections.defaultdict(dict);evidence_n = collections.Counter();mons, decisions, calib = [], [], []
@@ -287,6 +289,7 @@ def replay_game(env, model, game, dex, torch, tables, redaction=None):
                 captured = game['our_requests'][ours]
                 if captured is None or data_mod._request_body(captured) != data_mod._request_body(json.dumps(env._latest_requests.get(player))):
                     raise data_mod.Mismatch(f'our request differs from the capture at decision {ours}')
+                if on_ours is not None:on_ours(ours, round_, evidence, evidence_n, misaligned)
                 actions[player] = int(game['our_actions'][ours]);ours += 1;continue
             entry = journal.pop(round_, None)
             if entry is None:raise data_mod.Mismatch(f'Foul Play requested in round {round_} without a journal entry')
