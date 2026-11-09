@@ -51,9 +51,10 @@ dict keys and leaves two members None). This module turns prepared roots into De
     engine stays consistent; the owner's own order (from_b2: the request's) is unchanged. A switch-in that does not join
     exactly one revealed member, or a last switch-in that is not the world's peer active, refuses the root
     (PeerOrderUnavailable: PEER_REQUEST_ORDER_UNAVAILABLE). Every prepare_roots caller gets this refusal as a RootRefusal
-    of that kind, whose build reason is constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE:<detail>: the live search counts it
-    constructor_refused; the D3 gate's R1-C (d3_depthn_gate.constructor_roots, prepare_roots per roster root) treats it as a
-    root that did not fully construct (listed among the selection's refused roots, never selected).
+    of that kind, whose build reason is constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE:<detail> (build's own refusal of
+    it uses the same reason): the live search counts it constructor_refused; the D3 gate's R1-C
+    (d3_depthn_gate.constructor_roots, prepare_roots per roster root) treats it as a root that did not fully construct
+    (listed among the selection's refused roots, never selected).
   - the peer's OPP_HAZARD_CREDIT (fill_owner_spikes): from_b2 fills only hazards[owner, exact] and hazards[foe, shown]
     (phase_d_live_worlds.py:415), so hazards[owner, shown], the peer's view of the owner's Spikes losses, read 0. The
     device's shown half is the per-hit sum of (_percent(hp) - _percent(new)) / 100 (engine_device_public_port.spikes);
@@ -68,13 +69,22 @@ dict keys and leaves two members None). This module turns prepared roots into De
     That rule is the env's pending flag: a passer that faints to Pursuit before its recipient arrives leaves the flag
     set, so the env and the fill mark the next switch a Baton Pass arrival where the device (no baton_copy) may not;
     very rare.
+  - roots whose opponent must recharge are REFUSED, OPPONENT_RECHARGE_UNREPRESENTED (the lead's decision): the GPU engine has
+    no recharge or locked-move state, so a world would let the recharging opponent act on its recharge turn. The facts are
+    line_facts' recharge for the peer side (B2's rule, below); prepare_roots refuses such a root before completing or
+    pricing it (a RootRefusal, constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:..., counted constructor_refused) and
+    build refuses one it is handed with the same reason. The live actor then plays greedy. The owner's own recharge turn
+    is single-legal (the request offers only the recharge pseudo-move) and is never sent.
   - a recharging active (fill_recharge): B2 holds "must recharge" beside its volatile bag and merges it in only when it
     encodes, so from_b2's copy of the bag lacked it and the encoder showed no volatile:mustrecharge (15 owner-view roots of
     the 160-battle replay: a Hyper Beam user's next decision). The lines carry B2's rule (-mustrecharge sets it; the side's
     |cant| recharge, arrival or faint clears it), so the bit is set on that side's active, both sides. In search: no
     device hook writes or clears the bit and the engine has no recharge turn, so at every node after the root it stays set
     on that Pokemon while it stays in (the install hook's bag reset clears it on a switch), whether or not it would still
-    have to recharge there.
+    have to recharge there. With the refusal above the fill is inert for every priced root: the opponent's recharge refuses
+    the root before completion, and the owner's recharge turn is never searched. It is kept (not removed) for the
+    opponent-view parity harness (scripts/depthn_opponent_view_parity.py), which runs complete_carry on the worlds of every
+    captured position, refused roots included, and compares their views with B2's and the env's.
   - the peer's count of the owner's PP (fill_peer_pressure): from_b2 copies B2's uses, which charge an owner move twice only
     against a PUBLIC Pressure (public_abilities.move_context); Gen 3 Pressure is silent, and the peer knows its own
     ability, so the device move hook (the receiving observer's own active ability) and the env charge twice whenever the
@@ -375,6 +385,16 @@ def orient_credits(public,owner):
 # A public switch-in (Baton Pass's included: its recipient arrives on a |switch| line). |replace| counts as one: it never occurs in
 # Gen 3; in Gen 5+ it ends an Illusion without moving anyone, so this rule is Gen 3's only.
 SWITCH_KINDS=('switch','drag','replace')
+
+
+OPPONENT_RECHARGE='OPPONENT_RECHARGE_UNREPRESENTED'
+OPPONENT_RECHARGE_DETAIL='the opponent\'s active must recharge (line_facts.recharge) and the engine has no recharge turn'
+
+
+def _constructor_reason(kind,detail=''):
+    """build's reason for a root refused in this layer: RootRefusal's own format (constructor-root:<kind>[:<detail>]), so the live
+    search counts it constructor_refused (depthn_live_search.refusal_cause) whichever of prepare_roots or build refuses it."""
+    return 'constructor-root:'+kind+(':'+detail if detail and detail!=kind else '')
 
 
 class PeerOrderUnavailable(ValueError):
@@ -701,6 +721,8 @@ def prepare_roots(constructor,protocol_requests,*,start_index=0,device='cpu'):
             if complete is None:complete=world_completer(constructor)
             lines=request.get('lines')if isinstance(request,dict)else None
             facts=None if lines is None else line_facts(lines,detached.address.owner)
+            if facts is not None and facts.recharge[1-detached.address.owner]:   # module docstring: never priced
+                out.append(RootRefusal(rid,OPPONENT_RECHARGE,OPPONENT_RECHARGE_DETAIL,time.perf_counter()-clock,stamp));continue
             try:made=_completed(made,complete,detached.address.owner,facts,getattr(detached,'public',None))
             except PeerOrderUnavailable as error:
                 out.append(RootRefusal(rid,'PEER_REQUEST_ORDER_UNAVAILABLE',str(error),time.perf_counter()-clock,stamp));continue
@@ -821,20 +843,24 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
     for index,item in enumerate(prepared):
         base=dict(index=index,request_id=item.request_id,prepare_seconds=item.seconds,worlds=W,rows=())
         if type(item)is RootRefusal:
-            roots.append(dict(base,status='REFUSED',reason='constructor-root:'+item.kind+(':'+item.detail if item.detail and item.detail!=item.kind else ''),
-                constructed=0,refused_worlds=None,refused_world_share=None));continue
+            roots.append(dict(base,status='REFUSED',reason=_constructor_reason(item.kind,item.detail),constructed=0,refused_worlds=None,
+                refused_world_share=None));continue
         if type(item)is not Prepared:raise ValueError('prepare_roots output required')
         made,detached=item.made,item.detached
         if (made.requested_worlds!=W or len(made.worlds)!=W or len(made.seeds)!=W or made.root is not detached
                 or tuple(w.index for w in made.worlds)!=tuple(range(W))):
             raise ValueError('a world set of the declared budget, worlds 0..W-1, for its own root required')
         if detached.source_binding_sha256!=binding.source_binding_sha256:raise ValueError('root source binding differs from the pricer\'s')
-        # A world without a state always names its refusal, so it stays this root's refusal (the pricer refuses the frame otherwise).
+        if item.facts is not None and item.facts.recharge[1-detached.address.owner]:   # a Prepared made elsewhere: module docstring
+            roots.append(dict(base,status='REFUSED',reason=_constructor_reason(OPPONENT_RECHARGE,OPPONENT_RECHARGE_DETAIL),constructed=0,
+                refused_worlds=None,refused_world_share=None));continue
         if complete is None:complete=world_completer(constructor)
+        # A world without a state always names its refusal, so it stays this root's refusal (the pricer refuses the frame otherwise).
         try:worlds=tuple(_complete(complete,w,detached.address.owner,item.facts,getattr(detached,'public',None))if w.state is not None else w if w.refusals else replace(w,refusals=(UNNAMED,))
             for w in made.worlds)
         except PeerOrderUnavailable as error:
-            roots.append(dict(base,status='REFUSED',reason=f'PEER_REQUEST_ORDER_UNAVAILABLE: {error}',constructed=0,refused_worlds=None,refused_world_share=None));continue
+            roots.append(dict(base,status='REFUSED',reason=_constructor_reason('PEER_REQUEST_ORDER_UNAVAILABLE',str(error)),constructed=0,refused_worlds=None,
+                refused_world_share=None));continue
         refused=tuple(w.index for w in worlds if w.state is None);kinds=';'.join(sorted({r for w in worlds for r in w.refusals}))
         base.update(address=(detached.address.stream,detached.address.frame,detached.address.owner),constructed=W-len(refused),refused_worlds=refused,
             refused_world_share=len(refused)/W)

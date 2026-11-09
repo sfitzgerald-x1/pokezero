@@ -564,9 +564,40 @@ class ConstructorWorldsTests(unittest.TestCase):
         with patch.object(cw,'world_completer',return_value=refuse),self.forward_patch():   # build applies the root's own facts again
             b=cw.build(constructor,out,pricer,PARAMS,binding=self.binding,recipe=self.recipe)
             unread=cw.build(constructor,[replace(out[0],facts=None)],pricer,PARAMS,binding=self.binding,recipe=self.recipe)
-        self.assertEqual([r['status']for r in b.roots],['REFUSED','REFUSED']);self.assertTrue(b.roots[0]['reason'].startswith('PEER_REQUEST_ORDER_UNAVAILABLE: the last'))
-        self.assertEqual(b.roots[1]['reason'][:47],'constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE')
+        self.assertEqual([r['status']for r in b.roots],['REFUSED','REFUSED'])
+        # build's own refusal and prepare_roots' RootRefusal carry the same reason format, so the live search counts both constructor_refused.
+        self.assertEqual(b.roots[0]['reason'],'constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE:the last public switch-in is not the world\'s peer active')
+        self.assertEqual(b.roots[1]['reason'][:55],'constructor-root:PEER_REQUEST_ORDER_UNAVAILABLE:nobody:')
+        from gpu_engine.depthn_live_search import refusal_cause
+        self.assertEqual({refusal_cause(r['reason'])for r in b.roots},{'constructor_refused'})
         self.assertEqual(unread.roots[0]['status'],'PRICED')   # the same root without facts: nothing to refuse
+
+    def test_a_root_whose_opponent_must_recharge_is_refused_before_completion_or_pricing(self):
+        """The lead's decision: the engine has no recharge turn, so a root whose opponent (the peer) must recharge is refused,
+        OPPONENT_RECHARGE_UNREPRESENTED, in prepare_roots (before the completion runs) and in build (a Prepared made elsewhere);
+        both reasons count constructor_refused. The owner's own recharge does not refuse the root."""
+        from gpu_engine.depthn_live_search import refusal_cause
+        W=2;roots={k:self.made(i,owner,self.modes(i,W))for i,(k,owner)in enumerate((('peer',0),('own',0),('spent',0),('peer1',1)))}
+        beam=lambda seat:[f'|move|{seat}a: Snorlax|Hyper Beam|{"p2"if seat=="p1"else"p1"}a: Snorlax',f'|-mustrecharge|{seat}a: Snorlax','|turn|2']
+        lines={'peer':beam('p2'),'own':beam('p1'),'spent':beam('p2')+['|cant|p2a: Snorlax|recharge','|turn|3'],'peer1':beam('p1')}
+        calls=[]
+        def complete(world,owner,facts=None,root=None):calls.append((owner,facts.recharge));return world
+        constructor=self.constructor(W)
+        with patch.object(ProtocolConstructor,'prepare',side_effect=lambda r,i:roots[r['request_id']]),patch.object(cw,'world_completer',return_value=complete):
+            out=cw.prepare_roots(constructor,[dict(request_id=k,lines=lines[k])for k in roots])
+        self.assertEqual([type(x).__name__ for x in out],['RootRefusal','Prepared','Prepared','RootRefusal'])
+        for x in(out[0],out[3]):
+            self.assertEqual((x.kind,x.request_id),('OPPONENT_RECHARGE_UNREPRESENTED',x.request_id));self.assertIn('recharge',x.detail)
+        self.assertEqual((out[1].facts.recharge,out[2].facts.recharge),((True,False),(False,False)))   # own recharge; the opponent's, spent
+        self.assertEqual(calls,[(0,(True,False))]*W+[(0,(False,False))]*W)   # the refused roots never reach the completion
+        refused=lambda x:replace(x,facts=replace(x.facts,recharge=(False,True)))   # a Prepared whose facts say the peer must recharge
+        pricer=self.pricer(carry_executor(),depth=2,k_own=(2,),k_opp=(2,),capacity=2)
+        with patch.object(cw,'world_completer',return_value=complete),self.forward_patch():
+            calls.clear();b=cw.build(constructor,[out[0],refused(out[1]),out[1],out[3]],pricer,PARAMS,binding=self.binding,recipe=self.recipe)
+        self.assertEqual([r['status']for r in b.roots],['REFUSED','REFUSED','PRICED','REFUSED']);self.assertEqual(calls,[(0,(True,False))]*W)
+        self.assertEqual({r['reason']for r in b.roots if r['status']=='REFUSED'},
+            {'constructor-root:OPPONENT_RECHARGE_UNREPRESENTED:'+cw.OPPONENT_RECHARGE_DETAIL})
+        self.assertEqual({refusal_cause(r['reason'])for r in b.roots if r['status']=='REFUSED'},{'constructor_refused'})
 
     def test_a_reduction_error_refuses_its_root_only(self):
         """reduce_completed_q's range check raises when a block's completed-Q rounds outside [-1, 1]: here action 0 wins against

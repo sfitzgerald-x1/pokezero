@@ -44,6 +44,12 @@ tree guard) on the live inputs.
       (move:<id> through move_targets, switch:<species> through switch_targets). The grid's column b is this lane space.
     Per world, when the opponent is requested, kept must equal the peer legal lanes (and opponent_requested any of them): a
     disagreement is recorded (kept_matches_peer_legal false), never raised.
+  - The row's root (a decision that went through decide) also holds own_moves: the owner's move id on each action lane 0-3,
+    read from the request's own_request_line by the live actor's own depthn_live_actor.own_moves (None on a lane without a
+    move), and own_recharge_lanes: depthn_live_actor.recharge_lane on each of the nine action lanes (true on a move lane
+    whose move is in depthn_live_actor.RECHARGE_MOVES, the one set the live guard uses; switch lanes 4-8 always false). A
+    scorer applies the live actor's own-recharge guard (recharge_guarded: never an override INTO a recharge move greedy did
+    not choose) to every operator's choice against the live join's greedy_action_index with them.
 - Live join: the cell's telemetry/<ordinal>.jsonl row of the same decision_index (the actor's index): source,
   search.action_index / q_values / status / cause, greedy.action_index, request_kind, turn, played_action_index; its
   prefix_sha256 is held to the capture's. Parity over the decisions searched live (source 'search') and COMPLETE in the
@@ -78,7 +84,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:sys.path.insert(0, str(ROOT))
 from scripts import depthn_live_bench as bench   # noqa: E402
 from gpu_engine import constructor_worlds as cw, depthn_live_search as live   # noqa: E402
-from pokezero import phase_d_owning_capture as owning   # noqa: E402
+from pokezero import depthn_live_actor as actor, phase_d_owning_capture as owning   # noqa: E402
 
 server = bench.server
 ROW_SCHEMA = 'pokezero.depthn-rr-reprice.row.v1'
@@ -472,6 +478,10 @@ def decision_row(cell, row, request, response, wall, found, detail, *, shard, ca
     replay = bench.record(None, cell['ordinal'], address, response, wall, request=request, turn=bench.turn_of(request['lines']))
     replay.update({k: response.get(k) for k in REPLAY_FIELDS}, request_id=response.get('request_id'))
     for key in ('roster', 'ordinal', 'address'):replay.pop(key, None)
+    if detail['root'] is not None:   # the live actor's own-recharge guard inputs (module docstring)
+        moves = actor.own_moves(request.get('own_request_line'))
+        detail = dict(detail, root=dict(detail['root'], own_moves=None if moves is None else list(moves),
+            own_recharge_lanes=None if moves is None else [actor.recharge_lane(moves, lane) for lane in range(9)]))
     count = row.get('request_count')
     if count is None:count = sum(x.startswith('|request|') for x in request['lines'])
     out = dict(schema=ROW_SCHEMA, shard=shard, ordinal=cell['ordinal'], seat=cell.get('seat'), seed=cell.get('seed'), battle_id=row['battle_id'],

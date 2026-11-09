@@ -209,6 +209,31 @@ class FactsTests(unittest.TestCase):
         self.assertEqual(R.lane_labels(charged, dict(peer, legal=[True] + [False] * 8))[0], 'move:solarbeam')
 
 
+class OwnMovesTests(unittest.TestCase):
+    def test_decision_rows_carry_the_own_moves_and_recharge_lanes_of_a_decided_root(self):
+        """root.own_moves / root.own_recharge_lanes: the live actor's own_moves and recharge_lane on the request's own_request_line,
+        so a scorer can apply the actor's own-recharge guard to every operator; a root never decided keeps root None."""
+        raw = json.loads(BT.own_request(False)[len('|request|'):])
+        raw['active'][0]['moves'] = [dict(id=m, move=m, pp=5, maxpp=5) for m in ('bodyslam', 'hyperbeam', 'earthquake')]
+        line = '|request|' + json.dumps(raw)
+        row = dict(battle_id='b', owner='p1', stream_id=1, decision_index=0, generation=1, prefix_sha256='0' * 64, turn=1, request_count=1)
+        request = dict(row, lines=['|turn|1', line], own_request_line=line)
+        response = dict(status='COMPLETE', action_index=1, q_values=[.1] * 9, cause=None, request_id='r')
+        detail = dict(root=dict(root_logits=list(LOGITS), root_legal=list(LEGAL)), prepared=None, worlds=[], notes=[], kept_disagreements=0)
+        found = dict(source='search', search_action_index=1, search_q_values=[.1] * 9, greedy_action_index=0)
+        out = R.decision_row(dict(ordinal=1), row, request, response, .1, found, detail, shard=0, capture_seconds=0.)
+        self.assertEqual((out['root']['own_moves'], out['root']['own_recharge_lanes']), (['bodyslam', 'hyperbeam', 'earthquake', None],
+            [False, True] + [False] * 7))
+        self.assertEqual(detail['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL)))   # the capture is not mutated
+        from pokezero.depthn_live_actor import recharge_guarded   # the scorer's guard on this row: the live search went INTO Hyper Beam
+        self.assertTrue(recharge_guarded(out['root']['own_moves'], found['search_action_index'], found['greedy_action_index']))
+        unread = R.decision_row(dict(ordinal=1), row, dict(request, own_request_line=None), response, .1, found, detail, shard=0, capture_seconds=0.)
+        self.assertEqual((unread['root']['own_moves'], unread['root']['own_recharge_lanes']), (None, None))
+        refused = R.decision_row(dict(ordinal=1), row, request, dict(response, status='REFUSED', cause='constructor_refused'), .1, found,
+            dict(detail, root=None), shard=0, capture_seconds=0.)
+        self.assertIsNone(refused['root'])
+
+
 class JoinTests(unittest.TestCase):
     def test_q_equal_is_exact_after_a_json_round_trip(self):
         q = [.1 + .2, None, -1 / 3, 1., None, None, None, None, None]
@@ -485,7 +510,8 @@ class MainTests(unittest.TestCase):
         self.assertEqual((rows[-1]['replay']['root_view_source'], rows[-1]['replay']['b2_view']), (None, None))   # constructor-refused: never built
         self.assertEqual((first['replay']['status'], first['replay']['action_index'], first['replay']['q_values']), ('COMPLETE', want['action_index'],
             json.loads(json.dumps(want['q_values']))))
-        self.assertEqual(first['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL)))
+        self.assertEqual(first['root'], dict(root_logits=list(LOGITS), root_legal=list(LEGAL), own_moves=['m0', 'm1', 'm2', 'm3'],
+            own_recharge_lanes=[False] * 9))   # the own request's lanes 0-3 (BT.own_request: moves m0..m3)
         self.assertEqual(len(first['worlds']), 16)
         for w, row in enumerate(first['worlds']):
             self.assertEqual((row['world'], row['index'], row['seed'], row['kernel_seed'], row['constructed']), (w, w, 500 + w, 1000 + w, True))
