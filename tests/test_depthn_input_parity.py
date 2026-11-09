@@ -481,7 +481,7 @@ class CaptureEdgeTests(unittest.TestCase):
         def build(*a, **k):
             out = fake_build(*a, **k);out.roots = tuple(dict(r, root_value=float(np.float32(r['root_value']) + np.float32(1e-3))) for r in out.roots);return out
         response, record = self.capture_one(build=build)
-        self.assertEqual(response['status'], 'COMPLETE');self.assertEqual(record['path2'], dict(logits_equal=True, value_equal=False, valid=True))
+        self.assertEqual(response['status'], 'COMPLETE');self.assertEqual(record['path2'], dict(logits_equal=True, value_equal=False, valid=True, inputs='world0'))
         self.assertTrue(record['recorded_float32_exact'])
 
     def test_recorded_prior_not_float32(self):
