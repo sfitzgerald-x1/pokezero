@@ -350,11 +350,17 @@ print(json.dumps(blocks))
 '''
 
 
+# The component workflow's env (.github/workflows/gpu-engine-components.yml); nothing else is
+# inherited from the caller except what a process needs to start (PATH for python/node, HOME, a locale).
+CI_ENV_KEEP = ('PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'USER')
+
+
 def pod_environment(args, tree):
-    env = dict(os.environ)
+    env = {k: os.environ[k] for k in CI_ENV_KEEP if k in os.environ}
     env.update(JAX_PLATFORMS='cpu', PYTHONPATH=f'{tree}/src:{tree}', OMP_NUM_THREADS='2', OPENBLAS_NUM_THREADS='2',
         XLA_FLAGS='--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3',
         POKEZERO_GPU_TEAM_POOL=str(args.team_pool), POKEZERO_SHOWDOWN_ROOT=str(args.showdown_root), PYTHONUNBUFFERED='1')
+    env.setdefault('LANG', 'C.UTF-8')
     return env
 
 
@@ -426,7 +432,9 @@ def pod_run(args):
         reused_logs=dict(directory=str(args.reuse_logs), modules=sorted(reused)) if args.reuse_logs else None,
         environment=dict(python=platform.python_version(), machine=platform.machine(), jax_numpy=versions, node=node,
             team_pool=str(args.team_pool), showdown_root=str(args.showdown_root), jobs=args.jobs, timeout=args.timeout,
-            note='pod, not the CI runner: CPU model, core count and timing differ'),
+            variables={k: v for k, v in sorted(env.items()) if k != 'PATH'}, path=env.get('PATH'),
+            dropped=sorted(k for k in os.environ if k not in env),
+            note='pod, not the CI runner: CPU model, core count and timing differ; only CI variables are set'),
         results={m: {k: v for k, v in r.items() if k != 'settled'} for m, r in results.items()},
         settled=settled, unsettled=unsettled, failing=sorted(t for t, v in settled.items() if v == 'fail'))
     out.write_text(json.dumps(data, indent=1) + '\n')
@@ -446,27 +454,46 @@ def read_ids(path):
 def diff(args):
     baseline = read_ids(args.baseline)
     sidecar_path = Path(args.baseline).with_suffix('.json')
-    base_settled = json.loads(sidecar_path.read_text()).get('settled_outcomes') if sidecar_path.exists() else None
-    tree = tree_from(args);function_modules = tree.function_modules() if tree else None
+    sidecar = json.loads(sidecar_path.read_text()) if sidecar_path.exists() else {}
+    base_settled = sidecar.get('settled_outcomes');base_provenance = sidecar.get('provenance', {})
+    tree, tree_note = tree_from(args), None
+    if tree is None and args.pr_run:
+        # Default to the PR head; module coverage cannot be judged without a tree.
+        try:
+            meta = load_run(args.pr_run[0], repo=args.repo, log_dir=args.log_dir)[0] if not args.log else {}
+            head = meta.get('headSha')
+            tree = Tree(ref=head, patterns=args.pattern or DEFAULT_PATTERNS) if head else None
+        except (subprocess.CalledProcessError, OSError):tree = None
+        tree_note = 'tree defaulted to the PR head' if tree else 'no tree: module coverage unknown'
+    function_modules = tree.function_modules() if tree else None
     summaries, parsed = collect(args.pr_run or [], args=args, function_modules=function_modules) if args.pr_run else ([], [])
     pods = [read_pod(p) for p in args.pr_pod or ()]
     outcome, unsettled = settle(summaries, parsed, pods)
     for test in sorted(read_ids(args.pr_ids) if args.pr_ids else ()):
         outcome.setdefault(test, ('fail', dict(source='ids')))
     pr_failing = {t for t, (v, _) in outcome.items() if v == 'fail'}
-    new = sorted(t for t in pr_failing - baseline if base_settled is None or t in base_settled)
-    unknown_base = sorted(t for t in pr_failing - baseline if base_settled is not None and t not in base_settled)
+    # A failing test outside the baseline list is a new failure, whether the baseline
+    # settled it as a pass or never had an outcome for it (a new or unsettled test).
+    new = sorted(pr_failing - baseline)
+    without_baseline = sorted(t for t in new if base_settled is not None and t not in base_settled)
     fixed = sorted(t for t in baseline - pr_failing if t in outcome)
+    on_pod = sorted(t for t in pr_failing & baseline if base_provenance.get(t, {}).get('source') == 'pod')
     cover = coverage(tree, outcome, unsettled)
     incomplete_jobs = [f"{s['run']}:{name}" for s in summaries for name in s['incomplete_jobs']]
+    # A job a pod result covers completely is not incomplete for the verdict.
+    covered = set().union(*(set(p['modules']) for p in pods)) if pods else set()
     unsettled_modules = sorted({module_of(t) for t in unsettled}
                                | set((cover or {}).get('modules_never_reached', ())))
-    complete = not unsettled_modules and not unknown_base and (args.pr_ids is not None or bool(summaries or pods))
+    open_jobs = [j for j in incomplete_jobs if not (cover is not None and not unsettled_modules)]
+    runs_given = bool(summaries or pods)
+    complete = (not unsettled_modules and not open_jobs and (args.pr_ids is not None or runs_given)
+                and (cover is not None or not runs_given))
     status = 'NEW_FAILURES' if new else ('PASSED' if complete else 'INCOMPLETE')
-    report = dict(status=status, new_failing=new, new_failing_with_unsettled_baseline=unknown_base, fixed=fixed,
-        pr_failing=len(pr_failing), baseline_failing=len(baseline), pr_incomplete_jobs=incomplete_jobs,
-        unsettled_modules=unsettled_modules, unsettled_tests=sorted(unsettled),
-        provenance={t: outcome[t][1] for t in sorted(pr_failing - baseline)}, passed=status == 'PASSED')
+    report = dict(status=status, new_failing=new, new_failing_without_baseline_outcome=without_baseline, fixed=fixed,
+        accepted_on_pod_baseline=on_pod, pr_failing=len(pr_failing), baseline_failing=len(baseline),
+        pr_incomplete_jobs=incomplete_jobs, unresolved_incomplete_jobs=open_jobs, unsettled_modules=unsettled_modules,
+        unsettled_tests=sorted(unsettled), tree=None if tree is None else tree.commit, tree_note=tree_note,
+        pod_modules=sorted(covered), provenance={t: outcome[t][1] for t in new}, passed=status == 'PASSED')
     print(json.dumps(report, indent=1))
     return {'PASSED': 0, 'NEW_FAILURES': 1, 'INCOMPLETE': 2}[status]
 

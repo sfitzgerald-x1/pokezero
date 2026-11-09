@@ -120,8 +120,29 @@ class ExtractDiffTests(unittest.TestCase):
         self.assertEqual(code, 0)
         (self.tmp / 'new.txt').write_text('test_x.A.test_a\n')                   # settled pass in the baseline
         self.assertEqual(run_main('diff', '--baseline', base, '--pr-ids', self.tmp / 'new.txt'), 1)
-        (self.tmp / 'unknown.txt').write_text('test_q.Q.test_q\n')               # never settled in the baseline
-        self.assertEqual(run_main('diff', '--baseline', base, '--pr-ids', self.tmp / 'unknown.txt'), 2)
+        (self.tmp / 'unknown.txt').write_text('test_q.Q.test_q\n')               # no baseline outcome: still a new failure
+        self.assertEqual(run_main('diff', '--baseline', base, '--pr-ids', self.tmp / 'unknown.txt'), 1)
+
+    def test_dead_jobs_without_a_tree_are_incomplete(self):
+        logs = self.tmp / 'logs';logs.mkdir()
+        # One job finished, one was killed between blocks (exit 143 after `Ran`), one was
+        # cancelled before printing anything (absent from --log-failed).
+        lines = [('ok', '{"process_block": 0, "case_index": null, "declared_count": 1}'), ('ok', 'test_a (test_x.A.test_a) ... ok'),
+                 ('ok', 'Ran 1 test in 0.1s'), ('dead', '{"process_block": 1, "case_index": null, "declared_count": 1}'),
+                 ('dead', 'test_q (test_x.Q.test_q) ... ok'), ('dead', 'Ran 1 test in 0.1s'),
+                 ('dead', '##[error]Process completed with exit code 143.')]
+        (logs / 'run-77.log').write_text(''.join(f'{j}\tRun\t{T}{t}\n' for j, t in lines))
+        (logs / 'run-77.json').write_text(json.dumps(dict(headSha='f' * 40, jobs=[dict(name='ok', conclusion='success'),
+            dict(name='dead', conclusion='failure'), dict(name='gone', conclusion='cancelled')])))
+        (self.tmp / 'empty.txt').write_text('')
+        code = run_main('--log-dir', logs, 'diff', '--baseline', self.tmp / 'empty.txt', '--pr-run', '77')
+        self.assertEqual(code, 2)                                                 # no tree: dead jobs block a pass
+        code = run_main('--log-dir', logs, 'diff', '--baseline', self.tmp / 'empty.txt', '--pr-run', '77',
+                        '--tree', self.tmp / 'tree', '--pattern', 'test_x.py')
+        self.assertEqual(code, 0)                                                 # every expected module settled
+        code = run_main('--log-dir', logs, 'diff', '--baseline', self.tmp / 'empty.txt', '--pr-run', '77',
+                        '--tree', self.tmp / 'tree', '--pattern', 'test_*.py')
+        self.assertEqual(code, 2)                                                 # the cancelled job's modules unreached
 
 
 if __name__ == '__main__':
