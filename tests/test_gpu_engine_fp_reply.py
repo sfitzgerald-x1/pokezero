@@ -1,4 +1,5 @@
 """Foul Play reply dataset and model helpers on hand-made inputs; no Showdown, checkpoint or device."""
+import copy
 import json
 import tempfile
 import unittest
@@ -9,6 +10,8 @@ import numpy as np
 
 from gpu_engine import fp_reply_data as d
 from gpu_engine import fp_reply_train as t
+from gpu_engine import fp_reply_probe as probe
+from gpu_engine import fp_reply_reweight as rw
 
 FP_SEAT, OUR_SEAT = 'p2', 'p1'
 
@@ -248,6 +251,176 @@ class CurveAndBootstrapTests(unittest.TestCase):
         low, high = out['c - a']['interval_90'];self.assertLess(low, out['c - a']['mean']);self.assertGreater(high, out['c - a']['mean'])
 
 
+class ProbeHelperTests(unittest.TestCase):
+    def test_extras_helpers(self):
+        request = {'side': {'pokemon': [{'active': False, 'condition': '10/20'}, {'active': True, 'condition': '30/120 par'}]},
+                   'active': [{'moves': [{'id': 'tackle'}, {'id': 'toxic'}]}]}
+        self.assertEqual(d.hp_fraction(request), .25);self.assertEqual(d.hp_fraction({'side': {'pokemon': [{'active': True, 'condition': '0 fnt'}]}}), 0.)
+        dex = SimpleNamespace(move_info=lambda m: SimpleNamespace(category='Status' if m == 'toxic' else 'Physical'))
+        self.assertEqual(d.action_classes(request, legal(0, 1, 5), dex), [0, 1, -1, -1, -1, 2, -1, -1, -1])
+
+    def test_sequences_features_and_masked_softmax(self):
+        arrays = dict(label=np.array([0, 4, 1]), label_class=np.array([0, 2, 1]), candidate_class=np.array([[0, 1, -1, -1, 2, -1, -1, -1, -1]] * 3),
+                      own_hp=np.array([1., .5, np.nan]), opp_hp=np.array([.2, .3, .4]), forced=np.array([False, True, False]))
+        x = probe.step_features(arrays)
+        np.testing.assert_allclose(x[1], [0, 0, 1, 1, 1, 1, .5, .3, 1], rtol=1e-6);self.assertEqual(x[2, 6], 0.)
+        runs = probe.game_sequences(np.array([5, 5, 7, 7, 7]), np.array([4, 0, 2, 1]))
+        self.assertEqual([r.tolist() for r in runs], [[0, 1], [2, 4]])
+        p = probe.masked_softmax(np.array([[0., 1., 5.]]), np.array([[True, True, False]]))
+        self.assertAlmostEqual(p[0, 2], 0.);self.assertAlmostEqual(p[0, 1], np.e / (1 + np.e))
+
+    def test_cluster_bootstrap_difference_of_subset_means(self):
+        values = np.array([1., 3., 2., 4., 0., 0., 5., 1., 2., 2.]);clusters = np.repeat(np.arange(5), 2)
+        late = np.tile([True, False], 5);early = ~late
+        out = probe.cluster_bootstrap(values, clusters, [late, early], lambda a, b: a - b, draws=300)
+        self.assertAlmostEqual(out['mean'], values[late].mean() - values[early].mean())
+        self.assertLessEqual(out['interval_90'][0], out['mean']);self.assertGreaterEqual(out['interval_90'][1], out['mean'])
+        self.assertIsNone(probe.cluster_bootstrap(values[:4], clusters[:4], [late[:4]], lambda a: a)['interval_90'])
+        empty = probe.cluster_bootstrap(values, clusters, [late, np.zeros(10, bool)], lambda a, b: a - b, draws=10)
+        self.assertIsNone(empty['mean']);self.assertIsNone(empty['interval_90'])
+
+    def test_dataset_collection_must_be_one_collection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'shard-0.json').write_text(json.dumps({'collection': '/c/one'}))
+            (Path(tmp) / 'shard-1.json').write_text(json.dumps({'collection': '/c/one'}))
+            self.assertEqual(probe.dataset_collection(tmp), '/c/one')
+            (Path(tmp) / 'shard-2.json').write_text(json.dumps({'collection': '/c/two'}))
+            with self.assertRaises(SystemExit):probe.dataset_collection(tmp)
+
+    def test_fit_rows_exclude_test_and_games_pi_fp_trained_on(self):
+        # seed % 10: 0 test, 1 val, else train; (seed // 10) % 4 == 0 for 402, 403 and 41 (early stopping when fitting on unseen games)
+        seed = np.array([10, 11, 12, 13, 402, 403, 411, 41]);ordinal = np.arange(8);split = d.split_of(seed)
+        fit, stop = probe.fit_rows(split, ordinal, seed)
+        self.assertEqual(fit.tolist(), [2, 3, 4, 5]);self.assertEqual(stop.tolist(), [1, 6, 7])
+        with tempfile.TemporaryDirectory() as tmp:
+            np.savez(Path(tmp) / 'shard-0.npz', ordinal=np.array([2, 4, 1, 0]), seed=np.array([12, 402, 11, 10]))
+            np.savez(Path(tmp) / 'shard-1.npz', label=np.zeros(0))
+            seen = probe.seen_ordinals(tmp)
+        self.assertEqual(seen, {2, 4})
+        fit, stop = probe.fit_rows(split, ordinal, seed, seen)
+        self.assertEqual(fit.tolist(), [1, 3, 6]);self.assertEqual(stop.tolist(), [5, 7])
+
+
+
+def _rw_request(item='leftovers', locked=False):
+    entries = [{'move': n, 'id': i, 'pp': p, 'maxpp': 16, 'target': 'normal', 'disabled': d}
+               for n, i, p, d in (('Earthquake', 'earthquake', 14, False), ('Sludge Bomb', 'sludgebomb', 16, False),
+                                  ('Crunch', 'crunch', 16, False), ('Flamethrower', 'flamethrower', 16, True))]
+    if locked:entries = entries[:1]
+    return {'active': [{'moves': entries}], 'side': {'pokemon': [
+        {'ident': 'p2: Seviper', 'details': 'Seviper, L88, M', 'active': True, 'moves': ['earthquake', 'sludgebomb', 'crunch', 'flamethrower'],
+         'baseAbility': 'shedskin', 'ability': None, 'item': item},
+        {'ident': 'p2: Milotic', 'details': 'Milotic, L77, M', 'active': False, 'moves': ['surf'], 'baseAbility': 'marvelscale', 'item': 'leftovers'}]}}
+
+
+RW_DEX = SimpleNamespace(move_info=lambda m: SimpleNamespace(name={'hiddenpower': 'Hidden Power', 'toxic': 'Toxic'}.get(m, m.title()),
+                                                             max_pp={'hiddenpower': 24, 'toxic': 16}.get(m, 8), target='normal'))
+
+
+class PeerViewRedactionTests(unittest.TestCase):
+    def test_public_percent_matches_showdowns_integer_rule_on_float32_fractions(self):
+        maxhp = np.concatenate([np.full(m + 1, m) for m in range(1, 801)]);hp = np.concatenate([np.arange(m + 1) for m in range(1, 801)])
+        exact = -(-100 * hp // maxhp);exact = np.where((hp < maxhp) & (exact == 100), 99, exact)
+        got = t.public_percent((hp / maxhp).astype(np.float32))
+        self.assertEqual(got.dtype, np.float32);np.testing.assert_array_equal(np.round(got.astype(np.float64) * 100).astype(int), exact)
+        np.testing.assert_allclose(t.public_percent(np.float32([0.939873, 0.94, 0.999, 1., 0.])), [.94, .94, .99, 1., 0.], rtol=1e-6)
+
+    def test_redaction_touches_only_the_three_peer_view_columns(self):
+        rng = np.random.default_rng(0);numeric = rng.random((5, 23, 132)).astype(np.float32);before = numeric.copy()
+        t.redact_peer_view(numeric)
+        self.assertTrue((numeric[:, 1, 39] == 0).all());self.assertTrue((numeric[:, 7:13, 38] == 0).all())
+        np.testing.assert_allclose(numeric[:, 7:13, 0], t.public_percent(before[:, 7:13, 0]))
+        changed = numeric != before;changed[:, 1, 39] = changed[:, 7:13, 38] = changed[:, 7:13, 0] = False
+        self.assertFalse(changed.any());self.assertEqual(before[:, 0, 39].tolist(), numeric[:, 0, 39].tolist())
+        with self.assertRaises(SystemExit):t.redact_peer_view(np.zeros((2, 22, 132), np.float32))
+
+
+class ReweightHelperTests(unittest.TestCase):
+    def test_set_keys_match_request_ids_to_variant_names(self):
+        row = _rw_request()['side']['pokemon'][0]
+        variant = {'moves': ['crunch', 'earthquake', 'flamethrower', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Leftovers'}
+        self.assertEqual(rw.request_key(row), rw.variant_key(variant))
+        self.assertEqual(rw.move_key('Hidden Power Steel 70'), 'hiddenpowersteel');self.assertEqual(rw.species_of(row), 'seviper')
+        self.assertEqual(rw.move_key('return102'), 'return');self.assertEqual(rw.request_move_id('return'), 'return102')
+        self.assertEqual(rw.request_move_id('hiddenpowergrass'), 'hiddenpowergrass')
+        self.assertEqual(rw.fresh_move_entry(RW_DEX, 'return'), {'move': 'Return 102', 'id': 'return', 'pp': 8, 'maxpp': 8,
+                                                                 'target': 'normal', 'disabled': False})
+
+    def test_world_request_keeps_shared_slots_and_fills_new_moves_fresh(self):
+        request = _rw_request();first = copy.deepcopy(request['side']['pokemon'][0])
+        variant = {'moves': ['crunch', 'earthquake', 'hiddenpowergrass', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Choice Band'}
+        world, labels, replaced_disabled = rw.world_request(request, first, variant, RW_DEX)
+        row = world['side']['pokemon'][0];self.assertTrue(replaced_disabled)   # flamethrower's slot is disabled in the true request
+        self.assertEqual(row['moves'], ['earthquake', 'sludgebomb', 'crunch', 'hiddenpowergrass'])
+        self.assertEqual(world['active'][0]['moves'][:3], request['active'][0]['moves'][:3])
+        self.assertEqual(world['active'][0]['moves'][3], {'move': 'Hidden Power Grass 70', 'id': 'hiddenpower', 'pp': 24, 'maxpp': 24,
+                                                          'target': 'normal', 'disabled': True})
+        self.assertEqual((row['item'], row['baseAbility']), ('choiceband', 'shedskin'));self.assertEqual(labels, [0, 1, 2, None, 4, 5, 6, 7, 8])
+        self.assertEqual(request['side']['pokemon'][0]['moves'][3], 'flamethrower')   # input untouched
+        powered = _rw_request();powered['side']['pokemon'][0]['moves'][2] = 'return102'
+        world, labels, _ = rw.world_request(powered, first, {'moves': ['earthquake', 'frustration', 'return', 'sludgebomb']}, RW_DEX)
+        self.assertEqual(world['side']['pokemon'][0]['moves'], ['earthquake', 'sludgebomb', 'return102', 'frustration102'])
+        same, labels, replaced_disabled = rw.world_request(request, first, {'moves': first['moves'], 'ability': 'Shed Skin', 'item': 'Leftovers'}, RW_DEX)
+        self.assertEqual(same, request);self.assertEqual(labels, list(range(9)));self.assertFalse(replaced_disabled)
+
+    def test_hidden_power_types_are_one_family_the_protocol_cannot_split(self):
+        request = _rw_request();request['side']['pokemon'][0]['moves'][1] = 'hiddenpowerfire'
+        request['active'][0]['moves'][1] = {'move': 'Hidden Power Fire 70', 'id': 'hiddenpower', 'pp': 20, 'maxpp': 24, 'target': 'normal', 'disabled': False}
+        first = copy.deepcopy(request['side']['pokemon'][0])
+        variant = {'moves': ['crunch', 'earthquake', 'flamethrower', 'hiddenpowergrass'], 'ability': 'Shed Skin', 'item': 'Leftovers'}
+        world, labels, replaced_disabled = rw.world_request(request, first, variant, RW_DEX)
+        self.assertEqual(world['side']['pokemon'][0]['moves'], ['earthquake', 'hiddenpowergrass', 'crunch', 'flamethrower'])
+        self.assertEqual(world['active'][0]['moves'][1], {'move': 'Hidden Power Grass 70', 'id': 'hiddenpower', 'pp': 20, 'maxpp': 24,
+                                                          'target': 'normal', 'disabled': False})   # PP used is public; the type isn't
+        self.assertEqual(labels[1], 1);self.assertFalse(replaced_disabled)   # a chosen Hidden Power Fire is a Hidden Power in this world
+        _, labels, _ = rw.world_request(request, first, {'moves': ['crunch', 'earthquake', 'flamethrower', 'toxic']}, RW_DEX)
+        self.assertIsNone(labels[1])   # a set without Hidden Power can't have used it
+        self.assertEqual(rw.family('hiddenpowergrass'), 'hiddenpower');self.assertEqual(rw.family('toxic'), 'toxic')
+        fire, grass = rw.variant_key({'moves': ['crunch', 'hiddenpowerfire']}), rw.variant_key({'moves': ['crunch', 'hiddenpowergrass']})
+        self.assertNotEqual(fire, grass);self.assertEqual(rw.family_key(fire), rw.family_key(grass))
+
+    def test_generator_stats_dump_attack_without_a_physical_damaging_move(self):
+        cats = {'flamethrower': 'Special', 'hiddenpowerfire': 'Special', 'hiddenpowerground': 'Physical', 'earthquake': 'Physical',
+                'seismictoss': 'Physical', 'toxic': 'Status'}
+        dex = SimpleNamespace(move_info=lambda m: SimpleNamespace(gen3_category=cats[m]) if m in cats else None)
+        tables = dict(fixed_damage=frozenset({'seismictoss'}), hp_ivs={'fire': {'atk': 30, 'spa': 30, 'spe': 30}, 'ground': {'spa': 30, 'spd': 30}})
+        base = dict(atk=100, **{'def': 80}, spa=90, spd=70, spe=60)
+        special = rw.generator_stats(base, 50, ['flamethrower', 'hiddenpowerfire', 'toxic', 'seismictoss'], dex, tables)
+        self.assertEqual(special['atk'], (200 + 2) * 50 // 100 + 5)          # EV 0, IV 30 - 28
+        self.assertEqual(special['spa'], (180 + 30 + 21) * 50 // 100 + 5)    # Hidden Power Fire's IV
+        physical = rw.generator_stats(base, 50, ['flamethrower', 'hiddenpowerground', 'toxic'], dex, tables)
+        self.assertEqual(physical['atk'], (200 + 31 + 21) * 50 // 100 + 5);self.assertEqual(physical['spd'], (140 + 30 + 21) * 50 // 100 + 5)
+        self.assertEqual(rw.generator_stats(base, 50, ['flamethrower', 'toxic'], dex, tables)['atk'], 200 * 50 // 100 + 5)   # IV 0
+        self.assertTrue(rw.attack_dumped(['flamethrower', 'seismictoss'], dex, tables))
+        self.assertFalse(rw.attack_dumped(['flamethrower', 'earthquake'], dex, tables))
+        self.assertEqual(rw.level_of({'details': 'Seviper, L88, M'}), 88);self.assertEqual(rw.level_of({'details': 'Mew'}), 100)
+        request = _rw_request();first = copy.deepcopy(request['side']['pokemon'][0])
+        world, _, _ = rw.world_request(request, first, {'moves': first['moves']}, RW_DEX, {'atk': 106})
+        self.assertEqual(world['side']['pokemon'][0]['stats'], {'atk': 106})
+
+    def test_world_request_leaves_a_public_item_change_and_a_locked_move(self):
+        first = _rw_request()['side']['pokemon'][0]
+        variant = {'moves': ['crunch', 'earthquake', 'toxic', 'sludgebomb'], 'ability': 'Shed Skin', 'item': 'Choice Band'}
+        world, _, _ = rw.world_request(_rw_request(item=''), first, variant, RW_DEX)
+        self.assertEqual(world['side']['pokemon'][0]['item'], '')
+        locked = _rw_request(locked=True);world, labels, _ = rw.world_request(locked, first, variant, RW_DEX)
+        self.assertEqual(world['active'], locked['active']);self.assertEqual(labels[0], 0)
+        self.assertEqual(rw.chosen_move(locked, 0), 'earthquake');self.assertIsNone(rw.chosen_move(locked, 5))
+
+    def test_public_choice_needs_the_chosen_move_or_a_switch_from_foul_plays_side(self):
+        lines = ['|move|p2a: Seviper|Hidden Power|p1a: Swellow', '|move|p1a: Swellow|Aerial Ace|p2a: Seviper']
+        self.assertTrue(rw.public_choice(lines, 'p2', 3, 'hiddenpowergrass'));self.assertFalse(rw.public_choice(lines, 'p2', 0, 'earthquake'))
+        self.assertFalse(rw.public_choice(['|move|p2a: Snorlax|Body Slam|p1a: X|[from]Sleep Talk'], 'p2', 1, 'bodyslam'))
+        self.assertFalse(rw.public_choice(['|cant|p2a: Seviper|par'], 'p2', 0, 'earthquake'))
+        self.assertTrue(rw.public_choice(['|switch|p2a: Milotic|Milotic, L77, M|273/273'], 'p2', 5, None))
+
+    def test_set_posterior_weights_the_uniform_prior_by_the_likelihood(self):
+        a, b = 'A', 'B';keys, prior, post = rw.set_posterior([a, a, b], {a: np.log(.5), b: np.log(.25)}, 1.)
+        self.assertEqual(keys, [a, b]);np.testing.assert_allclose(np.exp(prior), [2 / 3, 1 / 3]);np.testing.assert_allclose(np.exp(post), [.8, .2])
+        _, _, half = rw.set_posterior([a, b], {a: np.log(.5)}, .5);np.testing.assert_allclose(np.exp(half), [.5 ** .5, 1.] / np.sum([.5 ** .5, 1.]))
+        _, prior, post = rw.set_posterior([a, b], {a: -np.inf, b: -np.inf}, 1.);np.testing.assert_allclose(post, prior)
+        self.assertAlmostEqual(rw.logsumexp([np.log(.2), np.log(.3)]), np.log(.5));self.assertEqual(rw.logsumexp([-np.inf]), -np.inf)
+
 @unittest.skipUnless(__import__('importlib').util.find_spec('torch'), 'torch not installed')
 class RecalibrationTests(unittest.TestCase):
     def test_widen_repeats_the_single_position_row_and_sets_the_window(self):
@@ -269,6 +442,20 @@ class RecalibrationTests(unittest.TestCase):
         fit, apply = t.recalibrate(sharp, labels, legality, torch)
         self.assertAlmostEqual(fit['temperature'], 3., delta=.3);self.assertAlmostEqual(fit['switch_bias'], 0., delta=.15)
         self.assertLess(t.nll(apply(sharp, legality), labels), t.nll(sharp, labels))
+
+    def test_static_control_recovers_temperature_and_class_bias_on_its_rows(self):
+        import torch
+        rng = np.random.default_rng(1);n = 4000;logits = rng.normal(size=(n, 9));legality = np.ones((n, 9), bool)
+        classes = np.tile(np.array([0, 0, 1, 1, 2, 2, 2, 2, 2]), (n, 1))
+        true = np.exp(logits + .5 * (classes == 2));true /= true.sum(1, keepdims=True)
+        labels = np.array([rng.choice(9, p=p) for p in true])
+        sharp = np.exp(2 * logits);sharp /= sharp.sum(1, keepdims=True)
+        rows = np.arange(0, n, 2)
+        fit, probs = probe.static_fit(np.log(sharp).astype(np.float32), classes, legality, labels, rows, torch)
+        self.assertAlmostEqual(fit['temperature'], 2., delta=.3)
+        self.assertAlmostEqual(fit['class_bias'][2] - fit['class_bias'][0], .5, delta=.2)
+        self.assertEqual(probs.shape, (n, 9));np.testing.assert_allclose(probs.sum(1), 1., rtol=1e-5)
+        self.assertLess(t.nll(probs[1::2], labels[1::2]), t.nll(sharp[1::2], labels[1::2]))
 
 
 if __name__ == '__main__':
