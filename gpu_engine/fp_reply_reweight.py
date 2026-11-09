@@ -369,7 +369,7 @@ def measure(env, model, game, dex, torch, checks, request, first, action, round_
         if k == true_key:checks['true_world_differs'] += not same_observation(observations[-1], baseline)
     if not same_observation(env.observe(fp), baseline):checks['observe_changed_by_worlds'] += 1
     if replaced_disabled:checks['replaced_disabled_slot_skipped'] += 1;return None
-    credit = data_mod.fp_view_opp_hazard_credit(env.protocol_lines, ours_seat) if redaction == 'peer-view-v2' else None
+    credit = data_mod.fp_view_opp_hazard_credit(env.protocol_lines, game['ours']) if redaction == 'peer-view-v2' else None
     logq = score(model, observations + [baseline], labels + [action], torch, redaction, credit);true_logq = logq[-1];logq = logq[:-1]
     by_key = dict(zip(distinct, logq));checks['worlds'] += len(distinct)
     row = dict(seed=game['seed'], ordinal=game['ordinal'], turn=turn, round=round_, worlds=len(distinct), truth_in=true_key in by_key,
