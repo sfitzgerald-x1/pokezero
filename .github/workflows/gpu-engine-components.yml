@@ -13,7 +13,9 @@ on:
       - 'tests/data/gpu_accuracy_events_catalog.json'
       - 'tests/data/gpu_ordinary_switch_catalog.json'
       - 'scripts/run_gpu_component_shard.py'
+      - 'scripts/run_component_memory_check.py'
       - 'tests/test_gpu_component_shards.py'
+      - 'tests/test_component_memory_check.py'
       - '.github/workflows/gpu-engine-components.yml'
 
 permissions:
@@ -42,9 +44,9 @@ jobs:
       PYTHONPATH: src:.
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '2'
-      # JAXLIB 0.12.0 CPU correctness checks retain their complete JIT workload.
-      # Bound codegen concurrency while retaining normal optimized execution
-      # of the complete large frames in these correctness checks.
+      # Default for ordinary cases and discovery. The named full-driver cases
+      # below get their approved low-optimization flags in fresh child
+      # processes only; every original JIT, input and assertion is retained.
       XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3'
       POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
       POKEZERO_GPU_TEAM_POOL: ${{ github.workspace }}/.ci/gpu-component-teams.npz
@@ -85,7 +87,7 @@ jobs:
               raise SystemExit('isolated CPU correctness runner requires at least 128 GiB RAM')
           PY
       - name: Verify complete and disjoint shard selection
-        run: python -m unittest tests.test_gpu_component_shards -v
+        run: python -m unittest tests.test_gpu_component_shards tests.test_component_memory_check -v
       - name: Install CPU test environment and build pinned source oracle
         run: |
           python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
@@ -124,23 +126,45 @@ jobs:
           awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
           swapon --show --bytes
       - name: Run component shard without optional skips
+        id: components
         run: |
           set -o pipefail
           python -c 'import jax; print("Component test devices:", jax.devices())'
+          # Private runner configuration can retain flushed samples on durable
+          # storage. No storage or cluster location belongs in this workflow.
+          ci_memory_dir="${CPU_COMPONENT_MEMORY_DIR:-$RUNNER_TEMP/component-memory}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/shard-${{ matrix.shard }}"
+          mkdir -p "$ci_memory_dir"
+          echo "memory_report_dir=$ci_memory_dir" >> "$GITHUB_OUTPUT"
           # Keep original custom suites intact. These heavy plain classes have
           # independent cases: release its process heap before the next case,
           # including fresh original module/class fixtures for every case.
-          python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 16 --process-blocks \
+          python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
+            --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
+            python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 16 --process-blocks \
             --isolate-standard-class test_gpu_engine_execution_runtime_plumbing.ExecutionRuntimePlumbingTests \
             --isolate-standard-class test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests \
+            --low-optimization-case test_gpu_engine_color_change_owning.ColorChangeOwningTests.test_actual_original_frame_both_views_public_types_requests_and_physics \
+            --low-optimization-case test_gpu_engine_bulk_up_owning.BulkUpOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
+            --low-optimization-case test_gpu_engine_belly_drum_owning.BellyDrumOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
+            --low-optimization-case test_gpu_engine_primary_plain_status_owning.PrimaryPlainStatusTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
+            --low-optimization-case test_gpu_engine_status_kernel_owner_drain.StatusKernelOwnerDrainTests.test_actual_kernel_status_spans_drain_both_original_owner_consumers \
+            --low-optimization-case test_gpu_engine_rough_skin_owning.RoughSkinTests.test_actual_kernel_contact_write_both_full_and_legacy_physics \
             --resource-interval-seconds 30 2>&1 \
-            | tee /tmp/gpu-components.log
+            | tee /tmp/gpu-components.log "$ci_memory_dir/component.log"
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
             echo '::error::component tests skipped required JAX, source oracle or real-team fixture'
             exit 1
           fi
           # These are CPU correctness checks, not GPU timing, full-game fidelity,
           # move-coverage qualification, strength evidence or a go/no-go result.
+
+      - name: Retain CPU memory report and samples
+        if: ${{ always() && steps.components.outputs.memory_report_dir != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-memory-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ steps.components.outputs.memory_report_dir }}
+          if-no-files-found: error
 
   cpu-components:
     if: ${{ always() }}
