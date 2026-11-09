@@ -417,6 +417,15 @@ class ParityTests(unittest.TestCase):
         self.worlds[0]['grid'] = None
         self.assertEqual(self.check(live_action=self.action, replay_q=self.q)['cause'], 'recompute_world_unpriced')
 
+    def test_replay_mode_holds_the_replay_to_itself(self):
+        row = decision(self.worlds, root_legal=self.legal, live_action=1 - self.action, replay_action=self.action, replay_q=self.q)
+        base = S.recompute(row)
+        self.assertEqual(S.parity_row(row, base, None)['cause'], 'action_differs')   # live mode: the live action differs
+        self.assertEqual(S.parity_row(row, base, None, 'replay'), dict(match=True, action_equal=True, q_equal=True, cause=None))
+        off = decision(self.worlds, root_legal=self.legal, live_action=self.action, replay_action=1 - self.action, replay_q=self.q)
+        self.assertEqual(S.parity_row(off, S.recompute(off), None, 'replay')['cause'], 'action_differs')
+        with self.assertRaises(ValueError):S.parity_row(row, base, None, 'other')
+
     def test_threshold_is_99_percent_inclusive(self):
         self.assertTrue(S.parity_passed(99, 100))
         self.assertFalse(S.parity_passed(98, 100))
