@@ -193,13 +193,14 @@ def two_sum_add(high, low, value):
 def fp_view_opp_hazard_credit(lines, victim):
     """Foul Play's OPP_HAZARD_CREDIT feature value (v4 field token 0, numeric column 116) for victim = our seat ('p1' / 'p2'):
     clip((high + low) * float32(1/6), 0, 1) in float32 of the TwoSum over our Spikes hits of
-    (shown_percent(before) - shown_percent(after)) / 100; 0 when a hit's previous HP is unknown, as the search side leaves it.
-    The readout multiplies by float32(1/6): XLA compiles the device's `value / 6.` into a multiplication by the float32
-    reciprocal, which differs from a correctly rounded division by one ulp on some values (the 48-cell check's 19 rows)."""
+    (shown_percent(before) - shown_percent(after)) * float32(1/100); 0 when a hit's previous HP is unknown, as the search side
+    leaves it. Both divisions are the float32 reciprocal multiplications XLA compiles the device's `/ 100` and `/ 6.` into
+    (10 * float32(0.01) rounds to 0.099999994, not 0.1): a correctly rounded division is one ulp off on 21 of the 48-cell
+    check's 1,622 rows."""
     hits = spikes_hits(lines, victim);high = low = np.float32(0)
     for before, after, maximum in hits or ():
         drop = max(0, shown_percent(before, maximum) - shown_percent(after, maximum))
-        high, low = two_sum_add(high, low, np.float32(drop) / np.float32(100))
+        high, low = two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1. / 100)))
     value = np.float32(np.float32(high + low) * np.float32(1. / HAZARD_CREDIT_DIVISOR))
     return np.float32(min(max(value, np.float32(0)), np.float32(1)))
 

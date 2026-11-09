@@ -114,7 +114,7 @@ class ReplayTests(unittest.TestCase):
     def test_rows_carry_foul_plays_view_of_our_spikes_losses_at_their_decision(self):
         env = FakeEnv(two_rounds(), OUR_SEAT, lines=[SPIKES_LINES[:2], SPIKES_LINES[2:7]])
         rows, _, _ = d.replay(env, FakePolicy(), game(), rng=None)
-        self.assertEqual([r['fp_opp_hazard_credit'] for r in rows], [np.float32(.12) / np.float32(6),
+        self.assertEqual([r['fp_opp_hazard_credit'] for r in rows], [np.float32(np.float32(.12) * np.float32(1 / 6)),
                                                                       d.fp_view_opp_hazard_credit(SPIKES_LINES[:7], OUR_SEAT)])
         self.assertAlmostEqual(float(rows[1]['fp_opp_hazard_credit']), .23 / 6, places=7)
         self.assertEqual([r['spikes_unknown_before'] for r in rows], [False, False])
@@ -378,7 +378,7 @@ class HazardCreditTests(unittest.TestCase):
         # drops 12, 11, 12, 100 percent: 1.35 of a mon
         got = d.fp_view_opp_hazard_credit(SPIKES_LINES, 'p1');self.assertEqual(got.dtype, np.float32)
         high = low = np.float32(0)
-        for drop in (12, 11, 12, 100):high, low = d.two_sum_add(high, low, np.float32(drop) / np.float32(100))
+        for drop in (12, 11, 12, 100):high, low = d.two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1 / 100)))
         self.assertEqual(got, np.float32(np.float32(high + low) * np.float32(1 / 6)))
         self.assertAlmostEqual(float(got), 1.35 / 6, places=6)
         exact = (37 / 300 + 37 / 299 + 37 / 300 + 1.) / 6   # the env's own value: our exact fractions
@@ -421,6 +421,7 @@ class HazardCreditDeviceTests(unittest.TestCase):
         # engine_device_features' field readout as the device runs it: inside a jitted program, where XLA turns / 6. into a
         # multiplication by the float32 reciprocal (op-by-op eager JAX divides exactly)
         readout = jax.jit(lambda pair: jnp.clip(jnp.nan_to_num(pair.sum()) / 6., 0., 1.))
+        per_hit = jax.jit(lambda drop: jnp.asarray(drop, jnp.float32) / 100)   # engine_device_public_port.spikes' drop / 100, jitted
         rng = np.random.default_rng(7)
         for trial in range(600):
             top = int(rng.integers(1, 801));hits = []
@@ -430,15 +431,16 @@ class HazardCreditDeviceTests(unittest.TestCase):
             for before, after, maximum in hits:
                 drop = max(0, int(trackers._percent(before, maximum)) - int(trackers._percent(after, maximum)))
                 self.assertEqual(drop, max(0, d.shown_percent(before, maximum) - d.shown_percent(after, maximum)))
-                pair = history._add(pair, jnp.asarray(drop, jnp.float32) / 100)
-                high, low = d.two_sum_add(high, low, np.float32(drop) / np.float32(100))
+                pair = history._add(pair, per_hit(drop))
+                high, low = d.two_sum_add(high, low, np.float32(np.float32(drop) * np.float32(1 / 100)))
             np.testing.assert_array_equal(np.asarray(pair), np.array([high, low], np.float32))
             device = float(readout(pair))
             lines = [x for before, after, maximum in hits for x in (f'|switch|p1a: Mon|Mon, L80|{before}/{maximum}',
                                                                     f'|-damage|p1a: Mon|{after}/{maximum}|[from] Spikes')]
             self.assertEqual(d.fp_view_opp_hazard_credit(lines, 'p1'), np.float32(device))
-        # the 48-cell check's 1-ulp rows (battles 215, 543): the device's x / 6. is x * float32(1/6), not a rounded division
+        # device values from the 48-cell check (battles 215, 543): its / 100 and / 6. are float32 reciprocal multiplications
         for hits, want in ((((199, 167, 263), (30, 0, 310)), 0.03666666895151138),
+                           (((199, 167, 263), (30, 0, 310), (316, 277, 316)), 0.05666666477918625),
                            (((272, 238, 272), (296, 259, 296), (278, 244, 278), (269, 236, 269), (54, 20, 278), (266, 233, 266),
                              (37, 3, 278), (238, 205, 266), (54, 20, 278), (237, 204, 266), (295, 258, 296)), 0.2199999988079071)):
             lines = [x for before, after, maximum in hits for x in (f'|switch|p1a: Mon|Mon, L80|{before}/{maximum}',
