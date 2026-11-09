@@ -614,7 +614,7 @@ def describe(capture, peer_lanes, vocabulary, peer_inputs=None, key=None):
 
 
 REPLAY_FIELDS = ('q_values', 'completed_q', 'policy_target', 'root_value', 'action_mean_q', 'action_policy_target', 'reduction_note', 'block_causes',
-    'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view')
+    'world_refusals', 'bucket', 'batch_size', 'tree_commit', 'root_view_source', 'b2_view', 'reply_prior')   # reply_prior: --reply-archive (br_fp) only
 
 
 def decision_row(cell, row, request, response, wall, found, detail, *, shard, capture_seconds, live_problem=None):
